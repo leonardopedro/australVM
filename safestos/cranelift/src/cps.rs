@@ -42,6 +42,15 @@ impl<'a> CpsReader<'a> {
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
+    pub fn read_u64(&mut self) -> Result<u64, String> {
+        if self.pos + 8 > self.data.len() {
+            return Err("EOF".to_string());
+        }
+        let bytes = &self.data[self.pos..self.pos+8];
+        self.pos += 8;
+        Ok(u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]))
+    }
+
     pub fn read_u8(&mut self) -> Result<u8, String> {
         if self.pos >= self.data.len() {
             return Err("EOF".to_string());
@@ -167,21 +176,31 @@ fn compile_function(
         vars.insert(format!("param_{}", i), val);
     }
     
-    // Body
+    // Read body
     let body_len = reader.read_u32()?;
     let body_start = reader.pos;
     
-    // Emit till we hit return or end
+    // CPS format: expressions followed by return marker
+    let mut last_value = None;
+    
     while reader.pos < body_start + body_len as usize {
-        let result = emit_instruction(jit, reader, &mut builder, block, &mut vars)?;
-        let is_return = matches!(reader.peek_u8(), Some(0x07));
+        let peek = reader.peek_u8();
         
-        if is_return {
-            // Handled by 0x07 case
-            break;
+        if peek == Some(0x07) {
+            // Hit return marker
+            if reader.read_u8().is_err() { return Err("bad".to_string()); } // consume 0x07
+            
+            // Return the last expression value
+            if let Some(val) = last_value {
+                builder.ins().return_(&[val]);
+                // IMPORTANT: No more instructions after return!
+                break;
+            } else {
+                return Err("Return without value".to_string());
+            }
         } else {
-            // Non-terminating - need a value but nothing to do with it
-            // This is CPS, so values flow via variables
+            // Regular expression
+            last_value = Some(emit_instruction(jit, reader, &mut builder, block, &mut vars)?);
         }
     }
     
@@ -203,11 +222,11 @@ fn emit_instruction(
 ) -> Result<cranelift::codegen::ir::Value, String> {
     let opcode = reader.read_u8()?;
     
-    match opcode {
-        0x01 => {
-            let val = reader.read_u32()? as i64;
-            Ok(builder.ins().iconst(types::I64, val))
-        }
+        match opcode {
+            0x01 => {
+                let val = reader.read_u64()? as i64;
+                Ok(builder.ins().iconst(types::I64, val))
+            }
         
         0x02 => {
             let name = reader.read_string()?;

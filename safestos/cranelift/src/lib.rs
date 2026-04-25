@@ -84,9 +84,14 @@ pub extern "C" fn compile_to_function(
         match cps::compile_cps_to_clif(jit, ir_slice) {
             Ok(cf) => {
                 if jit.finalize_definitions().is_err() {
+                    eprintln!("CPS: jit.finalize_definitions() failed");
                     return std::ptr::null();
                 }
                 jit.get_finalized_function(cf.id) as *const c_void
+            }
+            Err(e) => {
+                eprintln!("CPS compile error: {}", e);
+                std::ptr::null()
             }
             Err(_) => std::ptr::null(),
         }
