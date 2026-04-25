@@ -32,6 +32,12 @@ open Entrypoint
 open ExportInstantiation
 open HtmlError
 
+(* Phase 7: CPS JIT Integration *)
+open Compiler_cps
+open CpsGen
+
+let use_cps_jit = ref false
+
 let append_import_to_interface (ci: concrete_module_interface) (import: concrete_import_list): concrete_module_interface =
   let (ConcreteModuleInterface (mn, docstring, imports, decls)) = ci in
   if equal_module_name mn pervasive_module_name then
@@ -167,10 +173,37 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
           let _ = check_module_linearity typed in
           let env: env = extract_bodies env typed in
           let (env, mono): (env * mono_module) = monomorphize env typed in
-          let unit: c_unit = gen_module env mono in
-          let unit_code: string = render_unit unit in
-          let code: string = (compiler_code c) ^ "\n" ^ unit_code in
-          Compiler (env, code)))
+          
+          (* Phase 7: CPS JIT Integration Path *)
+          if !use_cps_jit then begin
+            try
+              let funcs = Compiler_cps.compile_module_cps mono in
+              if List.length funcs > 0 then
+                let binary = CpsGen.serialize_functions funcs in
+                let fn_ptr = CamlCompiler_rust_bridge.compile_mast binary in
+                Printf.printf "CPS JIT: Compiled %d functions\n" (List.length funcs);
+                Compiler (env, CUnit ("cps_" ^ mod_name_string name, []))
+              else begin
+                Printf.printf "CPS JIT: No functions, falling back to C\n";
+                let unit: c_unit = gen_module env mono in
+                let unit_code: string = render_unit unit in
+                let code: string = (compiler_code c) ^ "\n" ^ unit_code in
+                Compiler (env, code)
+              end
+            with exn ->
+              Printf.printf "CPS JIT Error: %s, falling back to C\n" (Printexc.to_string exn);
+              let unit: c_unit = gen_module env mono in
+              let unit_code: string = render_unit unit in
+              let code: string = (compiler_code c) ^ "\n" ^ unit_code in
+              Compiler (env, code)
+          end
+          else begin
+            (* Original C codegen path *)
+            let unit: c_unit = gen_module env mono in
+            let unit_code: string = render_unit unit in
+            let code: string = (compiler_code c) ^ "\n" ^ unit_code in
+            Compiler (env, code)
+          end))
 
 let rec compile_multiple c modules =
   match modules with
