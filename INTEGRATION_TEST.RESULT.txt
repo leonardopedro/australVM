@@ -1,0 +1,40 @@
+================================================================================
+INTEGRATION TEST: SUCCESS!
+================================================================================
+
+Date: 2026-04-25 11:50
+Commit: bf512430
+
+Test: end-to-end compilation pipeline
+Input: Binary CPS IR (35 bytes)
+Output: Native function returning 42
+
+Pipeline:
+1. Binary CPS IR → /tmp/test.cps
+   [31 53 50 43 01 00 00 00 04 00 00 00 74 65 73 74 00 00 00 00 01 0a 00 00 
+    00 01 2a 00 00 00 00 00 00 00 07]
+   = magic, 1 function, "test", 0 params, return i64, 10-byte body
+   
+2. Rust Bridge: compile_to_function()
+   - Initializes Cranelift JIT
+   - Parses CPS IR
+   - Generates Cranelift IR
+   - Emits native code: iconst(42), return(42)
+   
+3. Native Execution:
+   - Function pointer: 0x5a9e73c7b000
+   - Call: fn()
+   - Result: 42
+
+Verification: ✅ PASSED
+
+Key files supporting:
+- lib/CpsGen.ml (OCaml CPS generator)
+- lib/CamlCompiler_rust_bridge.ml (FFI bridge)
+- lib/rust_bridge.c (C stub)
+- safestos/cranelift/src/cps.rs (Rust compiler)
+- safestos/cranelift/src/lib.rs (FFI API)
+
+Status: Phase 5 COMPLETE with working integration!
+
+================================================================================
