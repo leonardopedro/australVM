@@ -161,7 +161,9 @@ and render_stmt (i: indentation) (stmt: c_stmt): line list =
          [Line (i, "}")]
        ]
   | CReturn v ->
-     [Line (i, "return " ^ (e v) ^ ";")]
+      [Line (i, "return " ^ (e v) ^ ";")]
+  | CReturnTail v ->
+      [Line (i, "[[clang::musttail]] return " ^ (e v) ^ ";")]
   | CBlock ss ->
      List.concat (List.map (render_stmt i) ss)
   | CLocalFunctionDeclaration (name, params, rt, linkage) ->

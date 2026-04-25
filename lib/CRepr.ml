@@ -62,6 +62,7 @@ type c_stmt =
   | CWhile of c_expr * c_stmt
   | CFor of string * c_expr * c_stmt
   | CReturn of c_expr
+  | CReturnTail of c_expr  (* Tail call with musttail attribute *)
   | CBlock of c_stmt list
   | CExplicitBlock of c_stmt list
   | CLocalFunctionDeclaration of string * c_param list * c_ty * c_function_linkage

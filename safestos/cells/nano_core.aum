@@ -1,0 +1,77 @@
+-- SafestOS Nano Core Cell
+-- The root cell that loads mod_mgmt
+
+module body Nano_Core is
+    -- Import the capability system types
+    -- In reality these would come from stdlib
+    
+    -- State: linear state for this cell
+    record State : Linear is
+        env: Natural_64;  -- Placeholder for CapEnv
+        mod_mgmt_id: Natural_64;
+        counter: Natural_64;
+    end record;
+    
+    -- Cell protocol: alloc
+    function cell_alloc() : State is
+        return State(
+            env => 0,
+            mod_mgmt_id => 0,
+            counter => 0
+        );
+    end;
+    
+    -- Cell protocol: step
+    -- Returns a decision: run another cell, pause, or halt
+    -- For simplicity, we return a boolean indicating if we should pause
+    function cell_step(st: &mut State) : Boolean is
+        -- Increment counter
+        st.counter := st.counter + 1;
+        
+        print("Nano_Core: counter = ");
+        printLn(st.counter);
+        
+        -- After 3 steps, decide to pause
+        if st.counter >= 3 then
+            return True;  -- Signal pause
+        else
+            return False; -- Continue
+        end if;
+    end;
+    
+    -- Cell protocol: save (for pausing)
+    -- This consumes the linear state
+    function cell_save(st: State, s: Serializer) : Unit is
+        -- Serialize all fields
+        -- In real implementation: s.save_u64(st.env)
+        -- For now: just acknowledge
+        printLn("Nano_Core: saving state");
+    end;
+    
+    -- Cell protocol: restore (for resume/hot-swap)
+    function cell_restore(d: Deserializer) : State is
+        -- Read deserialized state
+        return State(
+            env => 0,
+            mod_mgmt_id => 0,
+            counter => 0  -- Would read from deserializer
+        );
+    end;
+    
+    -- Simple print utilities (would be FFI in real implementation)
+    function print(s: String) : Unit is
+        -- Stub: would call runtime
+        null;
+    end;
+    
+    function printLn(s: String) : Unit is
+        -- Stub: would call runtime
+        null;
+    end;
+    
+    -- Counter increment for testing
+    function increment(st: &mut State) : Unit is
+        st.counter := st.counter + 1;
+    end;
+    
+end module body.

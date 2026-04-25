@@ -1,16 +1,34 @@
 (ocamllex Lexer)
-(menhir
- (modules Parser))
+;(menhir
+;  (modules Parser))
 
 (library
- (name austral_core)
- (public_name austral.austral_core)
- (synopsis "The bootstrapping compiler for Austral.")
- (libraries unix str sexplib zarith yojson)
- (preprocess (pps ppx_deriving.eq ppx_deriving.show ppx_sexp_conv))
- (flags
-  ;menhir generates instances of the "unused rec flag"
-  ; warning
-  (:standard -w -39)))
+  (name austral_core)
+  (public_name austral.austral_core)
+  (synopsis "The bootstrapping compiler for Austral.")
+  (libraries unix str sexplib zarith yojson)
+  (preprocess (pps ppx_deriving.eq ppx_deriving.show ppx_sexp_conv))
+  (flags
+   ;menhir generates instances of the "unused rec flag"
+   ; warning
+   (:standard -w -39)))
+
+; OCaml library with C FFI for SafestOS
+(library
+  (name austral_caml)
+  (public_name austral.austral_caml)
+  (synopsis "OCaml compiler with C FFI for SafestOS")
+  (libraries austral_core caml)
+  (c_names CamlCompiler_stubs)
+  (c_flags -O2)
+  (ocamlc_flags -ccopt -fPIC))
+
+; Pure C wrapper layer for the compiler
+(library
+  (name austral_c)
+  (public_name austral.austral_c)
+  (synopsis "C interface to Austral compiler")
+  (kind foreign)
+  (archives :standard)
 
 (documentation)

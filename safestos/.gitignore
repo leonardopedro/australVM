@@ -1,0 +1,32 @@
+# Build artifacts
+*.o
+*.so
+*.a
+*.d
+
+# Executables
+/test_*
+/test_*
+/test_bridge
+test_*
+
+# Generated IR/artifacts
+cells/*.so
+compiler/compile_cell
+lib/libaustral_cranelift_bridge.so
+
+# Cranelift
+cranelift/target/
+cranelift/Cargo.lock
+
+# Temporary files
+*.tmp
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

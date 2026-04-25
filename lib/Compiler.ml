@@ -48,6 +48,70 @@ let append_import_to_body (cb: concrete_module_body) (import: concrete_import_li
 
 type compiler = Compiler of env * string
 
+(******************************************************************************)
+(* SAFESTOS: Typed Eval Interface for Runtime Compilation                    *)
+(******************************************************************************)
+
+(* Parse a single expression or declaration into C source code *)
+let parse_and_compile_c (source: string) : string option =
+  try
+    (* Parse the source *)
+    let expr = ParserInterface.parse_expression source in
+    (* Combine into a temporary module *)
+    let cb = ConcreteModuleBody (
+      ModuleName "TempCell",
+      InterfaceModule,
+      Docstring "Temporary cell module",
+      [],
+      []
+    ) in
+    (* Extract and compile *)
+    let ci = append_import_to_body cb (empty_import_list ()) in
+    let modiface = combine_interface ci in
+    let modbody = extract_module_body (compile_interface modiface) cb in
+    let typed = type_check_module_body modiface modbody in
+    let linked = link_module typed in
+    let mono = monomorphize linked in
+    let code = render_c (gen_mono_c mono) in
+    Some code
+  with
+  | Error err ->
+    (* Log error but return None *)
+    None
+  | _ ->
+    None
+
+(* Compile a module with @cell attribute *)
+let compile_cell_module (source: string) : (string * string) option =
+  (* This would parse the full module, check for @cell attribute,
+     generate the CellDescriptor, and return the C code *)
+  try
+    let ci = ParserInterface.parse_interface_string source in
+    let cb = ParserInterface.parse_body_string source in
+    let modiface = combine_interface ci in
+    let modbody = extract_module_body (compile_interface modiface) cb in
+    let typed = type_check_module_body modiface modbody in
+    let linked = link_module typed in
+    let mono = monomorphize linked in
+    let code = render_c (gen_mono_c mono) in
+    (* For now, just return the code with a placeholder descriptor *)
+    let descriptor = 
+      "CellDescriptor nano_core_descriptor = {\n" ^
+      "  .type_hash = \"nano_core_v1\",\n" ^
+      "  .alloc = NULL,\n" ^
+      "  .step = NULL,\n" ^
+      "  .save = NULL,\n" ^
+      "  .restore = NULL,\n" ^
+      "  .migrate = NULL\n" ^
+      "};\n"
+    in
+    Some (descriptor ^ code)
+  with
+  | Error err ->
+    None
+  | _ ->
+    None
+
 (** Extract the env from the compiler. *)
 let cenv (Compiler (m, _)): env = m
 

@@ -1,0 +1,22 @@
+[package]
+name = "austral_cranelift_bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# Use latest stable Cranelift (0.131)
+cranelift = "0.131"
+cranelift-jit = "0.131"
+cranelift-module = "0.131"
+cranelift-native = "0.131"
+cranelift-codegen = "0.131"
+cranelift-frontend = "0.131"
+target-lexicon = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

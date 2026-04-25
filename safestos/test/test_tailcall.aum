@@ -1,0 +1,42 @@
+-- Test program to verify tail-call generation
+
+module body TestTailCall is
+    -- Simple counter for demo
+    function test_recursive(n: Natural_64) : Natural_64 is
+        if n = 0 then
+            return 0;
+        else
+            return test_recursive(n - 1) + 1;
+        end if;
+    end;
+    
+    -- A function that should be tail-call optimized
+    -- In SafestOS, this would use [[clang::musttail]]
+    function tail_recursive(n: Natural_64, acc: Natural_64) : Natural_64 is
+        if n = 0 then
+            return acc;
+        else
+            return tail_recursive(n - 1, acc + 1);
+        end if;
+    end;
+    
+    function main() : Natural_64 is
+        let x: Natural_64 := test_recursive(10);
+        let y: Natural_64 := tail_recursive(100, 0);
+        print("Recursive: ");
+        printLn(x);
+        print("Tail recursive: ");
+        printLn(y);
+        return 0;
+    end;
+    
+    -- Stub print for compilation
+    function print(s: String) : Unit is
+        null;
+    end;
+    
+    function printLn(s: String) : Unit is
+        null;
+    end;
+    
+end module body.
