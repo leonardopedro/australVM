@@ -1,16 +1,28 @@
 /// Cranelift Backend for SafestOS - v0.131
+/// 
+/// Provides JIT compilation with guaranteed tail calls
+/// 
+/// # Architecture
+/// 
+/// Uses Cranelift's `return_call` instruction for O(1) recursion.
+/// Thread-local JITModule avoids Send/Sync issues.
+/// 
+/// # API
+/// 
+/// - `compile_to_function(ptr, len)` -> function_pointer
+/// - `cranelift_init()` -> initialize
+/// - `cranelift_is_ready()` -> check status
 pub mod cps;
 
-use cranelift::prelude::*;
-use cranelift_codegen::isa::CallConv;
+// Re-export for crate usage
+pub use cranelift_jit::JITModule;
+
 use cranelift_jit::JITBuilder;
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{Linkage, Module};
 use std::cell::RefCell;
 use std::ffi::c_void;
 
 thread_local! {
-    static JIT: RefCell<Option<cranelift_jit::JITModule>> = RefCell::new(None);
+    static JIT: RefCell<Option<JITModule>> = RefCell::new(None);
 }
 
 extern "C" {
@@ -38,6 +50,7 @@ pub extern "C" fn compile_to_function(
     _ir_ptr: *const u8,
     _ir_len: usize,
 ) -> *const c_void {
+    // Initialize JIT if needed
     if JIT.with(|cell| cell.borrow().is_none()) {
         if cranelift_init() != 0 {
             return std::ptr::null();
@@ -48,10 +61,8 @@ pub extern "C" fn compile_to_function(
         let mut opt = cell.borrow_mut();
         let jit = opt.as_mut().unwrap();
 
-        // For now, compile simple function returning 42
-        // This proves the bridge works
+        // Demo mode: return simple function returning 42
         if _ir_ptr.is_null() || _ir_len == 0 {
-            // Demo mode
             let result = cps::build_simple(jit);
             match result {
                 Ok(cf) => {
@@ -64,8 +75,21 @@ pub extern "C" fn compile_to_function(
             }
         }
 
-        // TODO: Real IR parsing
-        std::ptr::null()
+        // Parse CPS IR and compile
+        // _ir_ptr points to CPS format: [magic][func_count][functions...]
+        let ir_slice = unsafe {
+            std::slice::from_raw_parts(_ir_ptr, _ir_len)
+        };
+        
+        match cps::compile_cps_to_clif(jit, ir_slice) {
+            Ok(cf) => {
+                if jit.finalize_definitions().is_err() {
+                    return std::ptr::null();
+                }
+                jit.get_finalized_function(cf.id) as *const c_void
+            }
+            Err(_) => std::ptr::null(),
+        }
     })
 }
 
