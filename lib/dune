@@ -1,17 +1,13 @@
 (ocamllex Lexer)
-;(menhir
-;  (modules Parser))
 
+; Core Austral compiler
 (library
   (name austral_core)
   (public_name austral.austral_core)
   (synopsis "The bootstrapping compiler for Austral.")
   (libraries unix str sexplib zarith yojson)
   (preprocess (pps ppx_deriving.eq ppx_deriving.show ppx_sexp_conv))
-  (flags
-   ;menhir generates instances of the "unused rec flag"
-   ; warning
-   (:standard -w -39)))
+  (flags :standard -w -39))
 
 ; OCaml library with C FFI for SafestOS
 (library
@@ -19,16 +15,31 @@
   (public_name austral.austral_caml)
   (synopsis "OCaml compiler with C FFI for SafestOS")
   (libraries austral_core caml)
-  (c_names CamlCompiler_stubs)
-  (c_flags -O2)
-  (ocamlc_flags -ccopt -fPIC))
+  (foreign_stubs
+    (language c)
+    (names CamlCompiler_stubs)
+    (flags :standard -fPIC)))
 
-; Pure C wrapper layer for the compiler
+; CPS IR Generator
 (library
-  (name austral_c)
-  (public_name austral.austral_c)
-  (synopsis "C interface to Austral compiler")
-  (kind foreign)
-  (archives :standard)
+  (name austral_cps_gen)
+  (libraries austral_core austral_caml)
+  (modules CpsGen))
+
+; Rust Cranelift Bridge (includes RustBridge test module)
+(library
+  (name austral_rust_bridge)
+  (libraries austral_core austral_caml austral_cps_gen)
+  (modules CamlCompiler_rust_bridge RustBridge CamlCompiler_bridge)
+  (foreign_stubs
+    (language c)
+    (names rust_bridge)
+    (flags :standard -fPIC -ldl -L../cranelift/target/release -laustral_cranelift_bridge)))
+
+; CPS Generator Test
+(executable
+  (name test_cps)
+  (libraries austral_core austral_caml austral_cps_gen)
+  (modules CpsGen_test))
 
 (documentation)
