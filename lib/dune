@@ -1,27 +1,21 @@
 (ocamllex Lexer)
 
-; Core Austral compiler
+(menhir
+ (modules Parser))
+
+; Core Austral compiler (includes CPS extensions)
 (library
   (name austral_core)
   (public_name austral.austral_core)
   (synopsis "The bootstrapping compiler for Austral.")
   (libraries unix str sexplib zarith yojson)
   (preprocess (pps ppx_deriving.eq ppx_deriving.show ppx_sexp_conv))
-  (flags :standard -w -39)
+  (flags
+   ;menhir generates instances of the "unused rec flag"
+   ; warning
+   (:standard -w -39))
   (modules
-    AbstractionPass BodyExtractionPass BuiltIn CRenderer CRepr Cst CstUtil
-    Cli CliEngine CliParser CliUtil CodeGen CombiningPass Common Compiler
-    DeclIdSet DesugarBorrows DesugarPaths DesugaringPass Entrypoint Env
-    EnvExtras EnvTypes EnvUtils Error ErrorText Escape ExportInstantiation
-    ExtractionPass HtmlError Id Identifier IdentifierMap IdentifierSet
-    ImportResolution Imports LexEnv LiftControlPass LinearityCheck
-    ModuleNameSet MonoType MonoTypeBindings Monomorphize MtastUtil
-    Names ParserInterface Qualifier Region RegionMap Reporter ReturnCheck
-    SourceContext Span Stages StringSet TailCallAnalysis TailCallUtil
-    TastUtil Type TypeBindings TypeCheckExpr TypeClasses TypeErrors
-    TypeMatch TypeParameter TypeParameters TypeParser TypeReplace
-    TypeSignature TypeStripping TypeSystem TypeVarSet TypingPass Util Version
-  ))
+    :standard \ CamlCompiler CamlCompiler_rust_bridge))
 
 ; OCaml library with C FFI for SafestOS
 (library
@@ -35,20 +29,16 @@
     (flags :standard -fPIC))
   (modules CamlCompiler))
 
-; CPS IR Generator
-(library
-  (name austral_cps_gen)
-  (libraries austral_core austral_caml)
-  (modules CpsGen Compiler_cps))
-
 ; Rust Cranelift Bridge
 (library
   (name austral_rust_bridge)
-  (libraries austral_core austral_caml austral_cps_gen)
+  (public_name austral.austral_rust_bridge)
+  (synopsis "Rust Cranelift JIT bridge for SafestOS")
+  (libraries austral_core austral_caml)
   (modules CamlCompiler_rust_bridge)
   (foreign_stubs
     (language c)
     (names rust_bridge)
-    (flags :standard -fPIC -ldl -L../cranelift/target/release -laustral_cranelift_bridge)))
+    (flags :standard -fPIC -ldl -L../safestos/cranelift/target/release -laustral_cranelift_bridge)))
 
 (documentation)

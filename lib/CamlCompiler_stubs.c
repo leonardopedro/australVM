@@ -38,7 +38,7 @@ value austral_compile_to_c(value source) {
     
     result = caml_callback(*closure, source);
     
-    /* Result is string option - extract if Some *)
+    /* Result is string option - extract if Some */
     if (Is_block(result)) {
         /* Some(s) -> return string */
         opt = Field(result, 0);

@@ -11,6 +11,7 @@ open Stages
 open CpsGen
 open Identifier
 open Id
+open MonoType
 
 (* We need Mtast module explicitly *)
 module Mt = Mtast
@@ -20,24 +21,18 @@ module Mt = Mtast
 (******************************************************************************)
 
 (* Convert qident to string for CPS function names *)
-let qident_to_string (q: qident): string =
-  let (QN (_, name)) = q in
-  identifier_string name
+let qident_to_string q =
+  Identifier.qident_debug_name q
 
 (* Convert mono_ty to CPS type (simplified for now) *)
-let rec mono_ty_to_cps_type (ty: Mt.mono_ty): CpsGen.cps_type =
+let rec mono_ty_to_cps_type (ty: mono_ty): CpsGen.cps_type =
   match ty with
-  | Mt.MonoNamed (QN (_, name)) ->
-      let name_str = identifier_string name in
-      (match name_str with
-       | "Int64" -> I64
-       | "Int32" -> I32
-       | "Bool" -> Bool
-       | _ -> I64)  (* Default to i64 *)
-  | Mt.MonoInteger -> I64
-  | Mt.MonoBool -> Bool
-  | Mt.MonoUnit -> Unit
-  | _ -> I64  (* Fallback for complex types *)
+  | MonoInteger _ -> I64
+  | MonoBoolean -> Bool
+  | MonoUnit -> Unit
+  | MonoDoubleFloat -> F64
+  | MonoSingleFloat -> F64
+  | _ -> I64
 
 (******************************************************************************)
 (* MAST → CPS EXPRESSION CONVERSION *)
@@ -54,17 +49,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MFloatConstant s -> FloatLit (float_of_string s)
   | Mt.MStringConstant s -> StringLit (Escape.unescape_string s)
   | Mt.MConstVar (q, _) -> Var (qident_to_string q)
-  | Mt.MParamVar (id, _) -> Var (identifier_string id)
-  | Mt.MLocalVar (id, _) -> Var (identifier_string id)
-  | Mt.MTemporary (id, _) -> Var (identifier_string id)
-  | Mt.MGenericFunVar (id, _) -> Var (mono_id_string id)
-  | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ string_of_int (id_to_int id))
+  | Mt.MParamVar (id, _) -> Var (ident_string id)
+  | Mt.MLocalVar (id, _) -> Var (ident_string id)
+  | Mt.MTemporary (id, _) -> Var (ident_string id)
+  | Mt.MGenericFunVar (id, _) -> Var (show_mono_id id)
+  | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ show_decl_id id)
   | Mt.MConcreteFuncall (_, q, args, _) ->
       let name = qident_to_string q in
       let args = List.map convert_expr args in
       App (name, args)
   | Mt.MGenericFuncall (id, args, _) ->
-      let name = mono_id_string id in
+      let name = show_mono_id id in
       let args = List.map convert_expr args in
       App (name, args)
   | Mt.MConcreteMethodCall (_, q, args, _) ->
@@ -72,11 +67,11 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       let args = List.map convert_expr args in
       App (name, args)
   | Mt.MGenericMethodCall (_, id, args, _) ->
-      let name = mono_id_string id in
+      let name = show_mono_id id in
       let args = List.map convert_expr args in
       App (name, args)
   | Mt.MFptrCall (id, args, _) ->
-      let name = identifier_string id in
+      let name = ident_string id in
       let args = List.map convert_expr args in
       App (name, args)
   | Mt.MCast (e, _) -> convert_expr e
@@ -84,12 +79,12 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       let left = convert_expr e1 in
       let right = convert_expr e2 in
       (match op with
-       | LT -> CmpLt (left, right)
-       | GT -> CmpGt (left, right)
-       | LTE -> CmpLte (left, right)
-       | GTE -> CmpGte (left, right)
-       | EQ -> CmpEq (left, right)
-       | NEQ -> CmpNeq (left, right))
+       | LessThan -> CmpLt (left, right)
+       | GreaterThan -> CmpGt (left, right)
+       | LessThanOrEqual -> CmpLte (left, right)
+       | GreaterThanOrEqual -> CmpGte (left, right)
+       | Equal -> CmpEq (left, right)
+       | NotEqual -> CmpNeq (left, right))
   | Mt.MConjunction (e1, e2) ->
       let left = convert_expr e1 in
       let right = convert_expr e2 in
@@ -98,6 +93,7 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       let left = convert_expr e1 in
       let right = convert_expr e2 in
       Or (left, right)
+  | _ -> IntLit 0L
 
 (******************************************************************************)
 (* MAST → CPS STATEMENT CONVERSION *)
@@ -107,7 +103,7 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
   match stmt with
   | Mt.MSkip -> Skip
   | Mt.MLet (id, _, body) ->
-      let var_name = identifier_string id in
+      let var_name = ident_string id in
       (* Initialize with 0 as placeholder, will be assigned later *)
       Let (var_name, IntLit 0L, convert_stmt body)
   | Mt.MDestructure (_, _, _) -> failwith "Destructure not yet supported"
@@ -145,11 +141,11 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       let expr = convert_expr expr in
       Return expr
   | Mt.MLetTmp (id, _, expr) ->
-      let name = identifier_string id in
+      let name = ident_string id in
       let expr = convert_expr expr in
       Let (name, expr, Skip)
   | Mt.MAssignTmp (id, expr) ->
-      let name = identifier_string id in
+      let name = ident_string id in
       let expr = convert_expr expr in
       Assign (name, expr)
 
@@ -160,8 +156,8 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
 let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
   match decl with
   | Mt.MFunction (_, name, params, ret_ty, body) ->
-      let func_name = identifier_string name in
-      let param_names = List.map (fun (id, _) -> identifier_string id) params in
+      let func_name = ident_string name in
+      let param_names = List.map (fun (Mtast.MValueParameter (id, _)) -> ident_string id) params in
       let return_type = mono_ty_to_cps_type ret_ty in
       let body_stmt = convert_stmt body in
       Some {
@@ -171,14 +167,11 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
         body = body_stmt
       }
       
-  | Mt.MFunctionMonomorph (_, params, ret_ty, body) ->
-      (* Monomorphized function - need to get unique name from mono_id *)
-      (* For now, skip - will be handled in full implementation *)
-      None
+  | Mt.MFunctionMonomorph _ -> None
       
   | Mt.MConstant (_, name, ty, expr) ->
       (* Constants can be treated as 0-parameter functions *)
-      let const_name = identifier_string name in
+      let const_name = ident_string name in
       let return_type = mono_ty_to_cps_type ty in
       let body_expr = convert_expr expr in
       let body_stmt = Return body_expr in
@@ -233,11 +226,11 @@ let debug_print_mono_module (mono_module: Mt.mono_module) =
       List.iter (function
         | Mt.MFunction (_, name, params, _, _) ->
             Printf.printf "  Function: %s (params: %d)\n" 
-              (identifier_string name) (List.length params)
+              (ident_string name) (List.length params)
         | Mt.MConstant (_, name, _, _) ->
-            Printf.printf "  Constant: %s\n" (identifier_string name)
+            Printf.printf "  Constant: %s\n" (ident_string name)
         | Mt.MRecord (_, name, _) ->
-            Printf.printf "  Record: %s\n" (identifier_string name)
+            Printf.printf "  Record: %s\n" (ident_string name)
         | _ -> Printf.printf "  Other declaration\n"
       ) decls
 
@@ -247,6 +240,6 @@ let debug_print_cps_functions (funcs: CpsGen.function_def list) =
     Printf.printf "  %s(%s) -> " 
       func.name (String.concat ", " func.params);
     Printf.printf "%s\n" (match func.return_type with
-      | I64 -> "I64" | I32 -> "I32" | Bool -> "Bool" | Unit -> "Unit" | String -> "String");
+      | I64 -> "I64" | I32 -> "I32" | Bool -> "Bool" | Unit -> "Unit" | String -> "String" | F64 -> "F64");
     Printf.printf "    Body: %s\n" (CpsGen.string_of_stmt func.body)
   ) funcs

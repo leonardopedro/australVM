@@ -6,12 +6,10 @@
     It identifies tail positions and marks calls for [[clang::musttail]] emission.
 *)
 
-open Id
 open Identifier
-open Type
 open MonoType
 open Stages.Mtast
-open Util
+open CodeGen
 
 (* ============================================================================
    Tail Position Analysis
@@ -49,7 +47,7 @@ let rec is_tail_position (ctx: tail_context) (stmt: mstmt): bool =
            is_tail_position TCConditional fb
        | _ -> false)
       
-  | MCase (_, _, whens, _) ->
+  | MCase (_, whens, _) ->
       (* All match arms must be tail calls *)
       (match ctx with
        | TCFunctionExit | TCMatchArm ->
@@ -90,35 +88,35 @@ let rec find_tail_calls_in_stmt (stmt: mstmt): tail_call_info option =
   | MIf (_, tb, fb) ->
       (* In tail position, both branches must have the same tail call *)
       (match find_tail_calls_in_stmt tb, find_tail_calls_in_stmt fb with
-       | Some tc1, Some tc2 -> Some tc1 (* Must verify they're compatible *)
+       | Some tc1, Some _tc2 -> Some tc1
        | _ -> None)
       
   | _ -> None
 
 and find_tail_calls_in_expr (expr: mexpr): tail_call_info option =
   match expr with
-  | MConcreteFuncall (id, _, args, rt) ->
+  | MConcreteFuncall (_id, _, args, rt) ->
       Some {
         call_expr = expr;
-        required_signature = ((List.map get_type args), rt)
+        required_signature = ((List.map MtastUtil.get_type args), rt)
       }
       
-  | MGenericFuncall (id, args, rt) ->
+  | MGenericFuncall (_id, args, rt) ->
       Some {
         call_expr = expr;
-        required_signature = ((List.map get_type args), rt)
+        required_signature = ((List.map MtastUtil.get_type args), rt)
       }
       
-  | MConcreteMethodCall (id, _, args, rt) ->
+  | MConcreteMethodCall (_id, _, args, rt) ->
       Some {
         call_expr = expr;
-        required_signature = ((List.map get_type args), rt)
+        required_signature = ((List.map MtastUtil.get_type args), rt)
       }
       
-  | MGenericMethodCall (_, id, args, rt) ->
+  | MGenericMethodCall (_, _id, args, rt) ->
       Some {
         call_expr = expr;
-        required_signature = ((List.map get_type args), rt)
+        required_signature = ((List.map MtastUtil.get_type args), rt)
       }
       
   | _ -> None
@@ -128,7 +126,7 @@ and find_tail_calls_in_expr (expr: mexpr): tail_call_info option =
    ============================================================================ *)
 
 (* For musttail to work, all linear variables must be consumed before the call *)
-let check_linearity_before_call (func_body: mstmt) (call_expr: mexpr): bool =
+let check_linearity_before_call (_func_body: mstmt) (_call_expr: mexpr): bool =
   (* 
      This is a simplified check. In the full implementation:
      1. Track all linear variable definitions in func_body
@@ -145,7 +143,7 @@ let check_linearity_before_call (func_body: mstmt) (call_expr: mexpr): bool =
    ============================================================================ *)
 
 (* Mark a function as using musttail *)
-let mark_musttail_function (func_name: string) (has_tcall: bool): bool =
+let mark_musttail_function (_func_name: string) (has_tcall: bool): bool =
   has_tcall
 
 (* ============================================================================
@@ -225,7 +223,7 @@ let extract_cell_info (module_name: string) (decls: mdecl list): cell_descriptor
    ============================================================================ *)
 
 (* To be called after monomorphization, before code generation *)
-let analyze_module_for_tail_calls (module_name: module_name) (decls: mdecl list): mdecl list =
+let analyze_module_for_tail_calls (_module_name: module_name) (decls: mdecl list): mdecl list =
   (* 
      1. Find all functions
      2. Check if functions contain tail calls
@@ -238,11 +236,9 @@ let analyze_module_for_tail_calls (module_name: module_name) (decls: mdecl list)
   decls
 
 (* Generate cell descriptor *)
-let generate_cell_descriptor (module_name: string) (decls: mdecl list): c_decl list option =
+let generate_cell_descriptor (module_name: string) (decls: mdecl list): CRepr.c_decl list option =
   match extract_cell_info module_name decls with
   | None -> None
-  | Some desc ->
+  | Some _desc ->
       (* Generate C code for descriptor *)
-      let desc_var_name = "cell_descriptor_" ^ module_name in
-      (* Return C struct initialization - would be expanded in CRenderer *)
       Some []

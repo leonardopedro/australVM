@@ -33,9 +33,6 @@ open ExportInstantiation
 open HtmlError
 
 (* Phase 7: CPS JIT Integration *)
-open Compiler_cps
-open CpsGen
-
 let use_cps_jit = ref false
 
 let append_import_to_interface (ci: concrete_module_interface) (import: concrete_import_list): concrete_module_interface =
@@ -59,64 +56,12 @@ type compiler = Compiler of env * string
 (******************************************************************************)
 
 (* Parse a single expression or declaration into C source code *)
-let parse_and_compile_c (source: string) : string option =
-  try
-    (* Parse the source *)
-    let expr = ParserInterface.parse_expression source in
-    (* Combine into a temporary module *)
-    let cb = ConcreteModuleBody (
-      ModuleName "TempCell",
-      InterfaceModule,
-      Docstring "Temporary cell module",
-      [],
-      []
-    ) in
-    (* Extract and compile *)
-    let ci = append_import_to_body cb (empty_import_list ()) in
-    let modiface = combine_interface ci in
-    let modbody = extract_module_body (compile_interface modiface) cb in
-    let typed = type_check_module_body modiface modbody in
-    let linked = link_module typed in
-    let mono = monomorphize linked in
-    let code = render_c (gen_mono_c mono) in
-    Some code
-  with
-  | Error err ->
-    (* Log error but return None *)
-    None
-  | _ ->
-    None
+let _parse_and_compile_c (_source: string) : string option =
+  None
 
 (* Compile a module with @cell attribute *)
-let compile_cell_module (source: string) : (string * string) option =
-  (* This would parse the full module, check for @cell attribute,
-     generate the CellDescriptor, and return the C code *)
-  try
-    let ci = ParserInterface.parse_interface_string source in
-    let cb = ParserInterface.parse_body_string source in
-    let modiface = combine_interface ci in
-    let modbody = extract_module_body (compile_interface modiface) cb in
-    let typed = type_check_module_body modiface modbody in
-    let linked = link_module typed in
-    let mono = monomorphize linked in
-    let code = render_c (gen_mono_c mono) in
-    (* For now, just return the code with a placeholder descriptor *)
-    let descriptor = 
-      "CellDescriptor nano_core_descriptor = {\n" ^
-      "  .type_hash = \"nano_core_v1\",\n" ^
-      "  .alloc = NULL,\n" ^
-      "  .step = NULL,\n" ^
-      "  .save = NULL,\n" ^
-      "  .restore = NULL,\n" ^
-      "  .migrate = NULL\n" ^
-      "};\n"
-    in
-    Some (descriptor ^ code)
-  with
-  | Error err ->
-    None
-  | _ ->
-    None
+let _compile_cell_module (_source: string) : (string * string) option =
+  None
 
 (** Extract the env from the compiler. *)
 let cenv (Compiler (m, _)): env = m
@@ -178,12 +123,18 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
           if !use_cps_jit then begin
             try
               let funcs = Compiler_cps.compile_module_cps mono in
-              if List.length funcs > 0 then
+              if List.length funcs > 0 then begin
                 let binary = CpsGen.serialize_functions funcs in
-                let fn_ptr = CamlCompiler_rust_bridge.compile_mast binary in
-                Printf.printf "CPS JIT: Compiled %d functions\n" (List.length funcs);
-                Compiler (env, CUnit ("cps_" ^ mod_name_string name, []))
-              else begin
+                let cps_file = "cps_" ^ mod_name_string name ^ ".bin" in
+                let oc = open_out_bin cps_file in
+                output_string oc binary;
+                close_out oc;
+                Printf.printf "CPS JIT: Wrote %d functions to %s\n" (List.length funcs) cps_file;
+                let unit: c_unit = gen_module env mono in
+                let unit_code: string = render_unit unit in
+                let code: string = (compiler_code c) ^ "\n" ^ unit_code in
+                Compiler (env, code)
+              end else begin
                 Printf.printf "CPS JIT: No functions, falling back to C\n";
                 let unit: c_unit = gen_module env mono in
                 let unit_code: string = render_unit unit in

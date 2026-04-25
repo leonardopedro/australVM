@@ -6,11 +6,9 @@
 *)
 
 open Identifier
-open Type
-open MonoType
+open Id
 open Stages.Mtast
 open CRepr
-open Util
 
 (* Cell module information *)
 type cell_info = {
@@ -63,33 +61,32 @@ let extract_cell_info (module_name: module_name) (decls: mdecl list): cell_info 
     
     (* Find state record *)
     let state_type = List.find_map (function
-      | MRecord (id, name, _, _, _) when ident_string name = "State" -> Some name
+      | MRecord (_, name, _) when ident_string name = "State" -> Some name
       | _ -> None
     ) decls in
     
     match (alloc_id, step_id, save_id, restore_id) with
     | (Some alloc, Some step, Some save, Some restore) ->
         Some {
-          module_name = module_name_to_string module_name;
+          module_name = make_ident (mod_name_string module_name);
           state_type;
           alloc_func = Some alloc;
           step_func = Some step;
           save_func = Some save;
           restore_func = Some restore;
-          type_hash = "hash_" ^ (module_name_to_string module_name);
+          type_hash = "hash_" ^ (mod_name_string module_name);
           required_caps = ["CAP_ENV"];
         }
     | _ -> None
 
 (* Generate C code for cell descriptor *)
 let generate_cell_descriptor (info: cell_info): c_decl list =
-  (* Generate the get_cell_descriptor function that returns the descriptor *)
-  let desc_name = "cell_descriptor_" ^ info.module_name in
-  let type_info_name = "typeinfo_" ^ info.module_name in
+  let _ = "cell_descriptor_" ^ ident_string info.module_name in
+  let _ = "typeinfo_" ^ ident_string info.module_name in
   
   (* Generate type info *)
   let type_info_struct = CStructDefinition (
-    Desc ("Type info for " ^ info.module_name),
+    Desc ("Type info"),
     CStruct (Some "TypeInfo", [
       CSlot ("name", CPointer (CNamedType "char"));
       CSlot ("required_caps", CNamedType "uint64_t");
@@ -106,7 +103,7 @@ let generate_cell_descriptor (info: cell_info): c_decl list =
   
   (* We'll generate a simplified descriptor *)
   let desc_func = CFunctionDefinition (
-    Desc ("Get cell descriptor for " ^ info.module_name),
+    Desc ("Get cell descriptor"),
     "get_cell_descriptor",
     [],
     CPointer (CNamedType "CellDescriptor"),
@@ -116,6 +113,6 @@ let generate_cell_descriptor (info: cell_info): c_decl list =
   [type_info_struct; desc_func]
 
 (* Generate wrapper functions for cell protocol *)
-let generate_cell_wrappers (info: cell_info): c_decl list =
+let generate_cell_wrappers (_info: cell_info): c_decl list =
   (* These wrappers glue Austral functions to C CellDescriptor protocol *)
   []

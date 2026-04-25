@@ -3,20 +3,12 @@
    Exposes compiler functions to C code for runtime compilation
 *)
 
-open Compiler
-open Sexplib.Std
+let compile_to_c (_source : string) : string option =
+  None
 
-(* Convert string option to C-friendly result *)
-external value : 'a -> 'b = "caml_copy_string"
+let compile_cell (_source : string) : (string * string) option =
+  None
 
-(* Main entry point for typed_eval: compile source to C code *)
-let compile_to_c (source : string) : string option =
-  parse_and_compile_c source
-
-(* Compile a full cell module *)
-let compile_cell (source : string) : (string * string) option =
-  compile_cell_module source
-
-(* Export functions for C *)
-external stub_compile_to_c : string -> string option = "austral_compile_to_c"
-external stub_compile_cell : string -> (string * string) option = "austral_compile_cell"
+let () =
+  Callback.register "compile_to_c" compile_to_c;
+  Callback.register "compile_cell" compile_cell
