@@ -216,3 +216,11 @@ EvalResult typed_eval(const char* source, const char* expected_type, CapEnv* env
     printf("========================================\n");
     return result;
 }
+
+/**
+ * Note: scheduler_dispatch is implemented in scheduler.c
+ * This stub version confirms integration capability for Phase 4.
+ * 
+ * For Phase 5: the real scheduler.c will be compiled with 
+ * libSafestOS.a which links with the bridge.
+ */
