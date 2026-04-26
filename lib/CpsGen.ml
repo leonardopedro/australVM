@@ -172,29 +172,52 @@ let rec serialize_cps_expr w expr =
       write_u32 w (Int32.of_int (List.length args));
       List.iter (serialize_cps_expr w) args
   | CmpLt (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x10
+      write_u8 w 0x10;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | CmpGt (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x11
+      write_u8 w 0x11;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | CmpLte (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x12
+      write_u8 w 0x12;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | CmpGte (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x13
+      write_u8 w 0x13;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | CmpEq (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x14
+      write_u8 w 0x14;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | CmpNeq (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x15
+      write_u8 w 0x15;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | And (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x16
+      write_u8 w 0x16;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | Or (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x17
+      write_u8 w 0x17;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | Add (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      write_u8 w 0x05;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | Sub (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x06
+      write_u8 w 0x06;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | Mul (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x18
+      write_u8 w 0x18;
+      serialize_cps_expr w a;
+      serialize_cps_expr w b
   | Not e ->
-      serialize_cps_expr w e; write_u8 w 0x19
+      write_u8 w 0x19;
+      serialize_cps_expr w e
 
 and serialize_cps_stmt w = function
   | Skip -> ()
