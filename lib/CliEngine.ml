@@ -77,7 +77,8 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit } ->
+     Compiler.use_cps_jit := use_cps_jit;
      exec_compile modules target error_reporting_mode
 
 and print_usage _: unit =
@@ -110,6 +111,7 @@ and print_compile_usage _: unit =
   print_endline "                    format `<module name>:<function name>`.";
   print_endline "    --no-entrypoint  Don't compile an entrypoint. Incompatible with";
   print_endline "                    `bin` target.";
+  print_endline "    --use-cps-jit   Use CPS JIT compilation pipeline.";
   print_endline "";
   print_endline "Positional arguments:";
   print_endline "    module    Of the form 'file.aui,file.aum' for modules with";

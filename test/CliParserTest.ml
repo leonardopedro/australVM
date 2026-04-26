@@ -35,7 +35,8 @@ let test_compile_default _ =
                                        bin_path = "out";
                                        entrypoint = Entrypoint (make_mod_name "Foo", make_ident "main")
                                      };
-                          error_reporting_mode = ErrorReportPlain
+                          error_reporting_mode = ErrorReportPlain;
+                          use_cps_jit = false
                         }
   in
   assert_bool "commands are equal" (equal_cmd cmd expected)

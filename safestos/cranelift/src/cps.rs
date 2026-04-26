@@ -1,7 +1,21 @@
 /// CPS → Cranelift with Tail Call Support
-/// 
-/// This module compiles a simple CPS IR format to Cranelift IR with
-/// guaranteed O(1) stack space via tail calls.
+///
+/// Compiles CPS IR binary format to Cranelift IR with guaranteed O(1)
+/// stack space via tail calls.
+///
+/// IR Format:
+/// [magic: u32 = 0x43505331][functions: u32]
+/// For each function:
+///   [name_len: u32][name: u8*][params: u32][return_type: u8][body_len: u32][body: u8*]
+///
+/// Instructions:
+/// 0x01: IntLit(value: i64)
+/// 0x02: Var(name: string)
+/// 0x03: Let(name, value, body)
+/// 0x04: App(func, args...)
+/// 0x05: Add(a, b)
+/// 0x06: Sub(a, b)
+/// 0x07: Return(value)
 
 use cranelift::prelude::*;
 use cranelift_module::{FuncId, Linkage, Module};
@@ -9,20 +23,20 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::JITModule;
 use std::collections::HashMap;
 
-// CallConv is not in prelude in 0.131
-// It's in cranelift_codegen::isa
 use cranelift_codegen::isa::CallConv;
 
-/// Magic bytes to identify valid CPS IR
 const CPS_MAGIC: u32 = 0x43505331;
 
-/// Compiled function handle
 pub struct CompiledFunc {
     pub name: String,
     pub id: FuncId,
 }
 
-/// Binary CPS IR reader
+pub struct CompiledModule {
+    pub functions: Vec<CompiledFunc>,
+    pub name_map: HashMap<String, FuncId>,
+}
+
 pub struct CpsReader<'a> {
     data: &'a [u8],
     pos: usize,
@@ -37,7 +51,7 @@ impl<'a> CpsReader<'a> {
         if self.pos + 4 > self.data.len() {
             return Err("EOF".to_string());
         }
-        let bytes = &self.data[self.pos..self.pos+4];
+        let bytes = &self.data[self.pos..self.pos + 4];
         self.pos += 4;
         Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
@@ -46,9 +60,12 @@ impl<'a> CpsReader<'a> {
         if self.pos + 8 > self.data.len() {
             return Err("EOF".to_string());
         }
-        let bytes = &self.data[self.pos..self.pos+8];
+        let bytes = &self.data[self.pos..self.pos + 8];
         self.pos += 8;
-        Ok(u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]))
+        Ok(u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
     }
 
     pub fn read_u8(&mut self) -> Result<u8, String> {
@@ -65,10 +82,9 @@ impl<'a> CpsReader<'a> {
         if self.pos + len > self.data.len() {
             return Err("EOF".to_string());
         }
-        let bytes = &self.data[self.pos..self.pos+len];
+        let bytes = &self.data[self.pos..self.pos + len];
         self.pos += len;
-        String::from_utf8(bytes.to_vec())
-            .map_err(|_| "Invalid UTF8".to_string())
+        String::from_utf8(bytes.to_vec()).map_err(|_| "Invalid UTF8".to_string())
     }
 
     pub fn peek_u8(&self) -> Option<u8> {
@@ -78,16 +94,26 @@ impl<'a> CpsReader<'a> {
             None
         }
     }
+
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
+    }
 }
 
-/// Simple demo: fn() -> i64 { return 42; }
-pub fn build_simple(
-    jit: &mut JITModule,
-) -> Result<CompiledFunc, String> {
+struct FuncHeader {
+    name: String,
+    params: u32,
+    param_names: Vec<String>,
+    body_offset: usize,
+    body_len: u32,
+}
+
+pub fn build_simple(jit: &mut JITModule) -> Result<CompiledFunc, String> {
     let mut sig = Signature::new(CallConv::triple_default(&target_lexicon::Triple::host()));
     sig.returns.push(AbiParam::new(types::I64));
 
-    let func_id = jit.declare_function("return_42", Linkage::Local, &sig)
+    let func_id = jit
+        .declare_function("return_42", Linkage::Local, &sig)
         .map_err(|e| format!("Declare: {:?}", e))?;
 
     let mut ctx = cranelift::codegen::Context::new();
@@ -105,141 +131,306 @@ pub fn build_simple(
     jit.define_function(func_id, &mut ctx)
         .map_err(|e| format!("Define: {:?}", e))?;
 
-    Ok(CompiledFunc { name: "return_42".to_string(), id: func_id })
+    Ok(CompiledFunc {
+        name: "return_42".to_string(),
+        id: func_id,
+    })
 }
 
-/// Compile CPS IR to Cranelift
-/// 
-/// IR format:
-/// [magic: u32 = 0x43505331][functions: u32]
-/// For each function:
-///   [name_len][name][params][return_type][body_len][body...]
-/// 
-/// Instructions:
-/// 0x01: IntLit(value: i64)
-/// 0x02: Var(name: string)
-/// 0x03: Let(name, value, body)
-/// 0x04: App(func, args...) [followed by 0x07 for tail call]
-/// 0x05: Add(a, b)
-/// 0x06: Sub(a, b)
-/// 0x07: Return(value)
+/// Compile entire CPS IR module to Cranelift
+///
+/// Three-pass approach:
+/// 1. Parse all function headers
+/// 2. Declare all functions (so they can reference each other)
+/// 3. Define all function bodies
 pub fn compile_cps_to_clif(
     jit: &mut JITModule,
     ir_data: &[u8],
-) -> Result<CompiledFunc, String> {
+) -> Result<CompiledModule, String> {
     let mut reader = CpsReader::new(ir_data);
-    
+
     if reader.read_u32()? != CPS_MAGIC {
         return Err("Invalid magic".to_string());
     }
-    
+
     let func_count = reader.read_u32()?;
     if func_count == 0 {
         return Err("No functions".to_string());
     }
-    
-    // For now, compile just the first function
-    compile_function(jit, &mut reader)
+
+    // Pass 1: Parse headers
+    let mut headers: Vec<FuncHeader> = Vec::new();
+    for _ in 0..func_count {
+        let name = reader.read_string()?;
+        let params = reader.read_u32()?;
+        let _return_type = reader.read_u8()?;
+        let mut param_names = Vec::new();
+        for _ in 0..params {
+            param_names.push(reader.read_string()?);
+        }
+        let body_len = reader.read_u32()?;
+        let body_offset = reader.pos;
+
+        headers.push(FuncHeader {
+            name,
+            params,
+            param_names,
+            body_offset,
+            body_len,
+        });
+
+        reader.pos = body_offset + body_len as usize;
+    }
+
+    // Pass 2: Declare all functions
+    let mut name_map: HashMap<String, FuncId> = HashMap::new();
+    let mut func_ids: Vec<FuncId> = Vec::new();
+
+    for header in &headers {
+        let mut sig =
+            Signature::new(CallConv::triple_default(&target_lexicon::Triple::host()));
+        for _ in 0..header.params {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        sig.returns.push(AbiParam::new(types::I64));
+
+        let func_id = jit
+            .declare_function(&header.name, Linkage::Local, &sig)
+            .map_err(|e| format!("Declare {:?}: {:?}", header.name, e))?;
+
+        name_map.insert(header.name.clone(), func_id);
+        func_ids.push(func_id);
+    }
+
+    // Also scan for external function references and declare them as imports
+    // (We do this in a pre-scan of the body data)
+    let mut import_names: HashMap<String, u32> = HashMap::new();
+    for header in &headers {
+        let body_data =
+            &ir_data[header.body_offset..header.body_offset + header.body_len as usize];
+        scan_for_calls(body_data, &name_map, &mut import_names);
+    }
+
+    // Declare imports
+    let mut import_map: HashMap<String, FuncId> = HashMap::new();
+    for (name, arg_count) in &import_names {
+        let mut sig =
+            Signature::new(CallConv::triple_default(&target_lexicon::Triple::host()));
+        for _ in 0..*arg_count {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        sig.returns.push(AbiParam::new(types::I64));
+
+        let func_id = jit
+            .declare_function(name, Linkage::Import, &sig)
+            .map_err(|e| format!("Declare import {:?}: {:?}", name, e))?;
+        import_map.insert(name.clone(), func_id);
+    }
+
+    // Pass 3: Define all function bodies
+    let mut compiled = Vec::new();
+
+    for (i, header) in headers.iter().enumerate() {
+        let func_id = func_ids[i];
+        let body_data =
+            &ir_data[header.body_offset..header.body_offset + header.body_len as usize];
+
+        eprintln!("CPS: Defining function '{}' (params={}, body_len={})", header.name, header.params, header.body_len);
+
+        define_function(
+            jit,
+            func_id,
+            &header.name,
+            header.params,
+            &header.param_names,
+            body_data,
+            &name_map,
+            &import_map,
+        )?;
+
+        compiled.push(CompiledFunc {
+            name: header.name.clone(),
+            id: func_id,
+        });
+    }
+
+    Ok(CompiledModule {
+        functions: compiled,
+        name_map,
+    })
 }
 
-fn compile_function(
+/// Scan body data for App instructions referencing external functions
+fn scan_for_calls(
+    body_data: &[u8],
+    name_map: &HashMap<String, FuncId>,
+    imports: &mut HashMap<String, u32>,
+) {
+    let mut reader = CpsReader::new(body_data);
+    while reader.remaining() > 0 {
+        match reader.peek_u8() {
+            None => break,
+            Some(opcode) => {
+                // Consume the opcode
+                if reader.read_u8().is_err() {
+                    break;
+                }
+                match opcode {
+                    0x01 => {
+                        // IntLit: skip 8 bytes
+                        if reader.read_u64().is_err() {
+                            break;
+                        }
+                    }
+                    0x02 => {
+                        // Var: skip string
+                        if reader.read_string().is_err() {
+                            break;
+                        }
+                    }
+                    0x03 => {
+                        // Let: skip name, then value and body continue
+                        if reader.read_string().is_err() {
+                            break;
+                        }
+                        // value and body are subsequent instructions, continue loop
+                    }
+                    0x04 => {
+                        // App: read func name and arg count
+                        let func_name = match reader.read_string() {
+                            Ok(n) => n,
+                            Err(_) => break,
+                        };
+                        let arg_count = match reader.read_u32() {
+                            Ok(n) => n,
+                            Err(_) => break,
+                        };
+                        if !name_map.contains_key(&func_name) && !imports.contains_key(&func_name)
+                        {
+                            imports.insert(func_name, arg_count);
+                        }
+                        // Args are subsequent instructions, continue loop
+                        let _ = arg_count; // consumed above
+                    }
+                    0x05 | 0x06 => {
+                        // Add/Sub: two sub-expressions follow
+                    }
+                    0x07 => {
+                        // Return: one sub-expression follows
+                    }
+                    _ => break,
+                }
+            }
+        }
+    }
+}
+
+/// Define a single function body
+fn define_function(
     jit: &mut JITModule,
-    reader: &mut CpsReader,
-) -> Result<CompiledFunc, String> {
-    let name = reader.read_string()?;
-    let params = reader.read_u32()?;
-    let _return_type = reader.read_u8()?; // Currently always I64
-    
-    // Signature
+    func_id: FuncId,
+    _name: &str,
+    params: u32,
+    param_names: &[String],
+    body_data: &[u8],
+    name_map: &HashMap<String, FuncId>,
+    import_map: &HashMap<String, FuncId>,
+) -> Result<(), String> {
     let mut sig = Signature::new(CallConv::triple_default(&target_lexicon::Triple::host()));
     for _ in 0..params {
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
-    
-    let func_id = jit.declare_function(&name, Linkage::Local, &sig)
-        .map_err(|e| format!("Declare {:?}: {:?}", name, e))?;
-    
+
     let mut ctx = cranelift::codegen::Context::new();
     ctx.func.signature = sig;
+
     let mut func_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
-    
-    // Entry block
-    let block = builder.create_block();
-    builder.switch_to_block(block);
-    
-    // Parameters
-    let mut vars = HashMap::new();
+
+    let entry_block = builder.create_block();
+    builder.switch_to_block(entry_block);
+    builder.seal_block(entry_block);
+
+    let mut vars: HashMap<String, Value> = HashMap::new();
+
     for i in 0..params {
-        let val = builder.block_params(block)[i as usize];
-        vars.insert(format!("param_{}", i), val);
+        let val = builder.append_block_param(entry_block, types::I64);
+        let pname = param_names.get(i as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("param_{}", i));
+        vars.insert(pname, val);
     }
-    
-    // Read body
-    let body_len = reader.read_u32()?;
-    let body_start = reader.pos;
-    
-    // CPS format: expressions followed by return marker
-    let mut last_value = None;
-    
-    while reader.pos < body_start + body_len as usize {
-        let peek = reader.peek_u8();
-        
-        if peek == Some(0x07) {
-            // Hit return marker
-            if reader.read_u8().is_err() { return Err("bad".to_string()); } // consume 0x07
-            
-            // Return the last expression value
-            if let Some(val) = last_value {
+
+    let mut reader = CpsReader::new(body_data);
+    let mut last_value: Option<Value> = None;
+
+    while reader.remaining() > 0 {
+        match reader.peek_u8() {
+            Some(0x07) => {
+                reader.read_u8()?;
+                let val = emit_expr(jit, &mut reader, &mut builder, &mut vars, name_map, import_map)?;
                 builder.ins().return_(&[val]);
-                // IMPORTANT: No more instructions after return!
+                last_value = Some(val);
                 break;
-            } else {
-                return Err("Return without value".to_string());
             }
-        } else {
-            // Regular expression
-            last_value = Some(emit_instruction(jit, reader, &mut builder, block, &mut vars)?);
+            Some(_) => {
+                last_value = Some(emit_expr(
+                    jit,
+                    &mut reader,
+                    &mut builder,
+                    &mut vars,
+                    name_map,
+                    import_map,
+                )?);
+            }
+            None => break,
         }
     }
-    
-    builder.seal_block(block);
+
+    if last_value.is_none() {
+        let zero = builder.ins().iconst(types::I64, 0);
+        builder.ins().return_(&[zero]);
+    }
+
+    builder.seal_block(entry_block);
     builder.finalize();
-    
+
     jit.define_function(func_id, &mut ctx)
-        .map_err(|e| format!("Define: {:?}", e))?;
-    
-    Ok(CompiledFunc { name, id: func_id })
+        .map_err(|e| format!("Define {:?}: {:?}", _name, e))?;
+
+    Ok(())
 }
 
-fn emit_instruction(
+/// Emit a single expression
+fn emit_expr(
     jit: &mut JITModule,
     reader: &mut CpsReader,
     builder: &mut FunctionBuilder,
-    block: cranelift::codegen::ir::Block,
-    vars: &mut HashMap<String, cranelift::codegen::ir::Value>,
-) -> Result<cranelift::codegen::ir::Value, String> {
+    vars: &mut HashMap<String, Value>,
+    name_map: &HashMap<String, FuncId>,
+    import_map: &HashMap<String, FuncId>,
+) -> Result<Value, String> {
     let opcode = reader.read_u8()?;
-    
-        match opcode {
-            0x01 => {
-                let val = reader.read_u64()? as i64;
-                Ok(builder.ins().iconst(types::I64, val))
-            }
-        
+
+    match opcode {
+        0x01 => {
+            let val = reader.read_u64()? as i64;
+            Ok(builder.ins().iconst(types::I64, val))
+        }
+
         0x02 => {
             let name = reader.read_string()?;
             vars.get(&name)
                 .cloned()
                 .ok_or_else(|| format!("Undefined var: {}", name))
         }
-        
+
         0x03 => {
             let name = reader.read_string()?;
-            let value = emit_instruction(jit, reader, builder, block, vars)?;
+            let value = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
             let old = vars.insert(name.clone(), value);
-            let result = emit_instruction(jit, reader, builder, block, vars)?;
+            let result = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
             if let Some(v) = old {
                 vars.insert(name, v);
             } else {
@@ -247,76 +438,139 @@ fn emit_instruction(
             }
             Ok(result)
         }
-        
+
         0x04 => {
             let func_name = reader.read_string()?;
             let arg_count = reader.read_u32()?;
             let mut args = Vec::new();
-            
+
             for _ in 0..arg_count {
-                args.push(emit_instruction(jit, reader, builder, block, vars)?);
+                args.push(emit_expr(jit, reader, builder, vars, name_map, import_map)?);
             }
-            
-            // Check if next is Return = tail call
-            let is_tail = matches!(reader.peek_u8(), Some(0x07));
-            
-            // Declare/call function
-            let mut sig = Signature::new(CallConv::triple_default(&target_lexicon::Triple::host()));
-            for _ in 0..arg_count {
-                sig.params.push(AbiParam::new(types::I64));
-            }
-            sig.returns.push(AbiParam::new(types::I64));
-            
-            let func_ref = jit.declare_function(&func_name, Linkage::Local, &sig)
-                .map_err(|e| format!("Declare {:?}: {:?}", func_name, e))?;
-            let imported = jit.declare_func_in_func(func_ref, &mut builder.func);
-            
-            if is_tail {
-                // THIS IS THE KEY: return_call = O(1) stack!
-                builder.ins().return_call(imported, &args);
-                Ok(builder.ins().iconst(types::I64, 0)) // Won't execute
+
+            // Resolve function reference
+            let func_ref = if let Some(&fid) = name_map.get(&func_name) {
+                jit.declare_func_in_func(fid, builder.func)
+            } else if let Some(&fid) = import_map.get(&func_name) {
+                jit.declare_func_in_func(fid, builder.func)
             } else {
-                let call = builder.ins().call(imported, &args);
-                Ok(builder.inst_results(call)[0])
+                // Unknown function — return 0 as stub
+                eprintln!("CPS WARN: unknown function '{}', stubbing", func_name);
+                return Ok(builder.ins().iconst(types::I64, 0));
+            };
+
+            let is_tail = matches!(reader.peek_u8(), Some(0x07));
+
+            if is_tail {
+                builder.ins().return_call(func_ref, &args);
+                Ok(builder.ins().iconst(types::I64, 0))
+            } else {
+                let call = builder.ins().call(func_ref, &args);
+                let results = builder.inst_results(call);
+                if results.is_empty() {
+                    // Void call — return 0
+                    Ok(builder.ins().iconst(types::I64, 0))
+                } else {
+                    Ok(results[0])
+                }
             }
         }
-        
+
         0x05 => {
-            let a = emit_instruction(jit, reader, builder, block, vars)?;
-            let b = emit_instruction(jit, reader, builder, block, vars)?;
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
             Ok(builder.ins().iadd(a, b))
         }
-        
+
         0x06 => {
-            let a = emit_instruction(jit, reader, builder, block, vars)?;
-            let b = emit_instruction(jit, reader, builder, block, vars)?;
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
             Ok(builder.ins().isub(a, b))
         }
-        
+
+        0x10 => {
+            // CmpLt: returns 1 if a < b, 0 otherwise
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let cmp = builder.ins().icmp(IntCC::SignedLessThan, a, b);
+            Ok(builder.ins().uextend(types::I64, cmp))
+        }
+
+        0x11 => {
+            // CmpGt
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
+            Ok(builder.ins().uextend(types::I64, cmp))
+        }
+
+        0x12 => {
+            // CmpLte: a <= b  <=>  !(a > b)
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
+            let not_cmp = builder.ins().bxor_imm(cmp, 1);
+            Ok(builder.ins().uextend(types::I64, not_cmp))
+        }
+
+        0x13 => {
+            // CmpGte: a >= b  <=>  !(a < b)
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let cmp = builder.ins().icmp(IntCC::SignedLessThan, a, b);
+            let not_cmp = builder.ins().bxor_imm(cmp, 1);
+            Ok(builder.ins().uextend(types::I64, not_cmp))
+        }
+
+        0x14 => {
+            // CmpEq
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let cmp = builder.ins().icmp(IntCC::Equal, a, b);
+            Ok(builder.ins().uextend(types::I64, cmp))
+        }
+
+        0x15 => {
+            // CmpNeq
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let cmp = builder.ins().icmp(IntCC::NotEqual, a, b);
+            Ok(builder.ins().uextend(types::I64, cmp))
+        }
+
+        0x16 => {
+            // And
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            Ok(builder.ins().band(a, b))
+        }
+
+        0x17 => {
+            // Or
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            Ok(builder.ins().bor(a, b))
+        }
+
+        0x18 => {
+            // Mul
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            let b = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            Ok(builder.ins().imul(a, b))
+        }
+
+        0x19 => {
+            // Not
+            let a = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
+            Ok(builder.ins().bxor_imm(a, 1))
+        }
+
         0x07 => {
-            let val = emit_instruction(jit, reader, builder, block, vars)?;
+            let val = emit_expr(jit, reader, builder, vars, name_map, import_map)?;
             builder.ins().return_(&[val]);
             Ok(builder.ins().iconst(types::I64, 0))
         }
-        
+
         _ => Err(format!("Unknown opcode: {:#x}", opcode)),
     }
-}
-
-/// Helper to declare functions for recursive calls
-pub fn declare_func(
-    jit: &mut JITModule,
-    name: &str,
-    params: u32,
-) -> Result<cranelift::codegen::ir::FuncRef, String> {
-    let mut sig = Signature::new(CallConv::triple_default(&target_lexicon::Triple::host()));
-    for _ in 0..params {
-        sig.params.push(AbiParam::new(types::I64));
-    }
-    sig.returns.push(AbiParam::new(types::I64));
-    
-    let func_id = jit.declare_function(name, Linkage::Local, &sig)
-        .map_err(|e| format!("Declare {:?}: {:?}", name, e))?;
-    
-    Ok(jit.declare_func_in_func(func_id, &mut cranelift::codegen::Context::new().func))
 }

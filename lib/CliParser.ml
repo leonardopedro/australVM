@@ -102,8 +102,9 @@ type cmd =
       modules: mod_source list;
       target: target;
       error_reporting_mode: error_reporting_mode;
+      use_cps_jit: bool;
     }
-[@@deriving eq]
+  [@@deriving eq]
 
 let check_leftovers (arglist: arglist): unit =
   if (arglist_size arglist) > 0 then
@@ -211,13 +212,19 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
   let (arglist, modules): (arglist * string list) = pop_positional arglist in
   let modules: mod_source list = List.map parse_mod_source modules in
   let (arglist, error_reporting_mode) = parse_error_reporting_mode arglist in
+  (* Parse --use-cps-jit flag *)
+  let (use_cps_jit, arglist) =
+    match pop_bool_flag arglist "use-cps-jit" with
+    | Some arglist -> (true, arglist)
+    | None -> (false, arglist)
+  in
   (* There must be at least one module. *)
   if ((List.length modules) < 1) then
     Errors.missing_module ()
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

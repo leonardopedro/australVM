@@ -122,27 +122,38 @@ make
 
 ### CPS JIT Build (SafestOS)
 
-The CPS JIT integration is maintained in the SafestOS branch. It requires:
+The CPS JIT integration in the SafestOS directory provides a Cranelift-based
+alternative codegen pipeline.
 
-1. **Rust/Cranelift bridge** (see `safestos/cranelift/`)
-2. **OCaml libraries** that can call Rust via FFI
-3. **Build verification**:
+**Architecture:**
+- `lib/CpsGen.ml`: OCaml CPS IR type definitions + binary serialization
+- `lib/Compiler_cps.ml`: AST → CPS converter (all 24 MAST node types)
+- `safestos/cranelift/src/cps.rs`: Rust binary parser + Cranelift codegen
+- `safestos/cranelift/src/lib.rs`: Thread-safe FFI interface
 
+**Build:**
 ```bash
-# Build the OCaml compiler with CPS extensions
+# 1. OCaml compiler with CPS extensions
 dune build
 
-# Build the Rust bridge
+# 2. Rust bridge
 cd safestos/cranelift
 cargo build --release
 
-# Test the bridge
-./test_bridge  # Should return 42
-
-# Link the bridge
-ln -sf ../../safestos/cranelift/target/release/libaustral_cranelift_bridge.so \
-       _build/default/lib/
+# 3. Run test
+./test_cps_jit /path/to/cps.bin
 ```
+
+**Binary Format Version 2** (`0x43505331`):
+- Function header: `name_len | name | params | return | param_names[] | body_len`
+- Instructions:品类 `0x01` IntLit, `0x02` Var, `0x03` Let, `0x04` App, `0x05-0x06` Add/Sub
+- Comparisons: `0x10-0x15` Lt/Gt/Lte/Gte/Eq/Neq
+- Logical: `0x16-0x19` And/Or/Mul/Not
+- Control: `0x07` Return
+
+**Limitations:**
+- Binary operator serialization format mismatch between OCaml (postfix) and Rust (prefix)
+- Dotted module names (e.g., `Example.Fibonacci`) have parser bugs
 
 ### Development Cycle
 
@@ -220,6 +231,13 @@ $ austral compile --use-cps-jit \
 # 3. Return native function pointers
 # 4. Execute via scheduler trampoline (O(1) stack depth)
 ```
+
+**CPS IR Binary Format** (magic: `0x43505331`):
+- Supports arithmetic: Add(0x05), Sub(0x06), Mul(0x18)
+- Comparisons: CmpLt(0x10), CmpGt(0x11), CmpLte(0x12), CmpGte(0x13), CmpEq(0x14), CmpNeq(0x15)
+- Logical: And(0x16), Or(0x17), Not(0x19)
+
+**Known Issue**: There is a binary format mismatch for expression serialization between the OCaml compiler (postfix opcodes) and Rust bridge (prefix opcodes). This affects complex expressions. Simple functions work via the `--use-cps-jit` flag.
 
 The CPS JIT provides:
 - **Faster compilation**: 10-100μs vs 50-200ms for C codegen

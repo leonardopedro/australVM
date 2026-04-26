@@ -1,20 +1,19 @@
 /// Cranelift Backend for SafestOS - v0.131
-/// 
+///
 /// Provides JIT compilation with guaranteed tail calls
-/// 
+///
 /// # Architecture
-/// 
+///
 /// Uses Cranelift's `return_call` instruction for O(1) recursion.
 /// Thread-local JITModule avoids Send/Sync issues.
-/// 
+///
 /// # API
-/// 
+///
 /// - `compile_to_function(ptr, len)` -> function_pointer
 /// - `cranelift_init()` -> initialize
 /// - `cranelift_is_ready()` -> check status
 pub mod cps;
 
-// Re-export for crate usage
 pub use cranelift_jit::JITModule;
 
 use cranelift_jit::JITBuilder;
@@ -23,10 +22,6 @@ use std::ffi::c_void;
 
 thread_local! {
     static JIT: RefCell<Option<JITModule>> = RefCell::new(None);
-}
-
-extern "C" {
-    fn scheduler_dispatch() -> !;
 }
 
 #[no_mangle]
@@ -38,17 +33,23 @@ pub extern "C" fn cranelift_init() -> i32 {
 
         let resolver = |_libcall: cranelift_codegen::ir::LibCall| String::new();
         let mut builder = JITBuilder::new(Box::new(resolver)).unwrap();
-        builder.symbol("scheduler_dispatch", scheduler_dispatch as *const u8);
         let jit = cranelift_jit::JITModule::new(builder);
         cell.replace(Some(jit));
         0
     })
 }
 
+/// Compile CPS IR binary to native code.
+///
+/// Returns a function pointer to the LAST function defined in the IR
+/// (which is typically `main`).
+///
+/// The IR format is:
+/// [magic: u32 = 0x43505331][functions: u32][functions...]
 #[no_mangle]
 pub extern "C" fn compile_to_function(
-    _ir_ptr: *const u8,
-    _ir_len: usize,
+    ir_ptr: *const u8,
+    ir_len: usize,
 ) -> *const c_void {
     // Initialize JIT if needed
     if JIT.with(|cell| cell.borrow().is_none()) {
@@ -57,43 +58,85 @@ pub extern "C" fn compile_to_function(
         }
     }
 
+    if ir_ptr.is_null() || ir_len == 0 {
+        return std::ptr::null();
+    }
+
     JIT.with(|cell| {
         let mut opt = cell.borrow_mut();
         let jit = opt.as_mut().unwrap();
 
-        // Demo mode: return simple function returning 42
-        if _ir_ptr.is_null() || _ir_len == 0 {
-            let result = cps::build_simple(jit);
-            match result {
-                Ok(cf) => {
-                    if jit.finalize_definitions().is_err() {
-                        return std::ptr::null();
-                    }
-                    return jit.get_finalized_function(cf.id) as *const c_void;
-                }
-                Err(_) => return std::ptr::null(),
-            }
-        }
+        let ir_slice = unsafe { std::slice::from_raw_parts(ir_ptr, ir_len) };
 
-        // Parse CPS IR and compile
-        // _ir_ptr points to CPS format: [magic][func_count][functions...]
-        let ir_slice = unsafe {
-            std::slice::from_raw_parts(_ir_ptr, _ir_len)
-        };
-        
         match cps::compile_cps_to_clif(jit, ir_slice) {
-            Ok(cf) => {
+            Ok(module) => {
                 if jit.finalize_definitions().is_err() {
                     eprintln!("CPS: jit.finalize_definitions() failed");
                     return std::ptr::null();
                 }
-                jit.get_finalized_function(cf.id) as *const c_void
+
+                // Return the last function (usually main)
+                if let Some(last) = module.functions.last() {
+                    jit.get_finalized_function(last.id) as *const c_void
+                } else {
+                    std::ptr::null()
+                }
             }
             Err(e) => {
                 eprintln!("CPS compile error: {}", e);
                 std::ptr::null()
             }
-            Err(_) => std::ptr::null(),
+        }
+    })
+}
+
+/// Compile CPS IR and return a specific function by name.
+#[no_mangle]
+pub extern "C" fn compile_to_function_named(
+    ir_ptr: *const u8,
+    ir_len: usize,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> *const c_void {
+    if JIT.with(|cell| cell.borrow().is_none()) {
+        if cranelift_init() != 0 {
+            return std::ptr::null();
+        }
+    }
+
+    if ir_ptr.is_null() || ir_len == 0 || name_ptr.is_null() {
+        return std::ptr::null();
+    }
+
+    let ir_slice = unsafe { std::slice::from_raw_parts(ir_ptr, ir_len) };
+    let name_slice = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    let func_name = match std::str::from_utf8(name_slice) {
+        Ok(s) => s.to_string(),
+        Err(_) => return std::ptr::null(),
+    };
+
+    JIT.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        let jit = opt.as_mut().unwrap();
+
+        match cps::compile_cps_to_clif(jit, ir_slice) {
+            Ok(module) => {
+                if jit.finalize_definitions().is_err() {
+                    eprintln!("CPS: jit.finalize_definitions() failed");
+                    return std::ptr::null();
+                }
+
+                if let Some(&func_id) = module.name_map.get(&func_name) {
+                    jit.get_finalized_function(func_id) as *const c_void
+                } else {
+                    eprintln!("CPS: function '{}' not found", func_name);
+                    std::ptr::null()
+                }
+            }
+            Err(e) => {
+                eprintln!("CPS compile error: {}", e);
+                std::ptr::null()
+            }
         }
     })
 }

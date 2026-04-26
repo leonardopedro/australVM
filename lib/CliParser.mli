@@ -46,11 +46,9 @@ type cmd =
   (** Print usage of the compile command. *)
   | WholeProgramCompile of {
       modules: mod_source list;
-      (** The list of modules to compile in order. *)
       target: target;
-      (** The compiler's target. *)
       error_reporting_mode: error_reporting_mode;
-      (** Whether to report errors in plain text or JSON. *)
+      use_cps_jit: bool;
     }
   (** Whole program compilation using the C backend. *)
 [@@deriving eq]

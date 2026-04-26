@@ -172,29 +172,29 @@ let rec serialize_cps_expr w expr =
       write_u32 w (Int32.of_int (List.length args));
       List.iter (serialize_cps_expr w) args
   | CmpLt (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x10
   | CmpGt (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x11
   | CmpLte (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x12
   | CmpGte (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x13
   | CmpEq (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x14
   | CmpNeq (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x15
   | And (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x16
   | Or (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x17
   | Add (a, b) ->
       serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
   | Sub (a, b) ->
       serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x06
   | Mul (a, b) ->
-      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x05
+      serialize_cps_expr w a; serialize_cps_expr w b; write_u8 w 0x18
   | Not e ->
-      serialize_cps_expr w e
+      serialize_cps_expr w e; write_u8 w 0x19
 
 and serialize_cps_stmt w = function
   | Skip -> ()
@@ -235,11 +235,10 @@ let serialize_function_def w func =
     | Unit -> 0x00
     | String -> 0x04
     | F64 -> 0x05);
-  let temp_w = create_writer () in
   List.iter (fun pname ->
-    write_u8 temp_w 0x02;
-    write_string temp_w pname
+    write_string w pname
   ) func.params;
+  let temp_w = create_writer () in
   serialize_cps_stmt temp_w func.body;
   let body_bytes = to_bytes temp_w in
   write_u32 w (Int32.of_int (Bytes.length body_bytes));
