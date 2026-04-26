@@ -308,9 +308,15 @@ let rec compile_expr w ctx expr =
   | MComparison (op, lhs, rhs) ->
       compile_binop w op lhs rhs
 
-  | MIfExpression (cond, tbranch, _) ->
+  | MIfExpression (cond, tbranch, fbranch) ->
       compile_expr w ctx cond;
-      compile_expr w ctx tbranch
+      write_u8 w 0x02;
+      let pos = Buffer.length w.buf in
+      write_u32 w 0l;
+      compile_expr w ctx tbranch;
+      let skip_len = Buffer.length w.buf - pos - 4 in
+      Buffer.blit (Bytes.of_int32_le (Int32.of_int skip_len)) 0 w.buf pos 4;
+      compile_expr w ctx fbranch
 
   | MDeref expr ->
       write_u8 w 0x09;
