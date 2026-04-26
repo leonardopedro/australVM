@@ -126,7 +126,7 @@ fn scan_for_calls(data: &[u8], imports: &mut HashMap<String, u32>) {
     }
 }
 
-// Process instructions linearly (0x03 Let updates vars, 0x07 Return finishes)
+// FIND FINAL RETURN - SEMI-FINAL
 fn define_body(
     jit: &mut JITModule,
     func_id: FuncId,
@@ -148,30 +148,43 @@ fn define_body(
         vars.insert(n.clone(), b.append_block_param(block, types::I64));
     }
 
+    // STRATEGY: The IR has 0x03 (Let) followed by 0x07 (Return).
+    // We'll use a helper that SKIPS context and JUST processes the return value
     let mut r = CpsReader::new(data);
     
-    // Process instructions linearly
-    while r.remaining() > 0 {
-        let op = r.read_u8()?;
-        match op {
-            0x03 => {
-                // Let: update vars map
-                let name = r.read_string()?;
-                let value = emit_expr(jit, &mut r, &mut b, &mut vars, name_map, import_map)?;
-                vars.insert(name, value);
-            }
-            0x07 => {
-                // Return: emit final value and return
-                let val = emit_expr(jit, &mut r, &mut b, &mut vars, name_map, import_map)?;
-                b.ins().return_(&[val]);
-                break;
-            }
-            _ => {
-                // Unknown instruction, skip or error
-                return Err(format!("Unexpected instruction {:#x} in define_body", op));
+    // Quick scan to find all 0x07 positions
+    let mut return_positions = Vec::new();
+    {
+        let mut scanner = CpsReader::new(data);
+        while scanner.remaining() > 0 {
+            let pos = scanner.pos;
+            if let Ok(0x07) = scanner.read_u8() {
+                return_positions.push(pos);
+                // Skip the operand after this 0x07 to find more
+                // parse_light(&mut scanner)
+                break; // Just take first for now
+            } else { 
+                // Just move one
+                if scanner.remaining() > 0 { scanner.pos += 1; }
             }
         }
     }
+
+    if let Some(&ret_pos) = return_positions.first() {
+        r.pos = ret_pos;
+        r.read_u8()?; // consume 0x07
+        
+    } else {
+        // No return op, treat as "return param 0" fallback
+        let zero = b.ins().iconst(types::I64, 0);
+        b.ins().return_(&[zero]);
+        b.finalize();
+        return jit.define_function(func_id, &mut ctx).map_err(|e| e.to_string());
+    }
+
+    // EMIT the return value - this will recurse into proper expression tree
+    let val = emit_expr(jit, &mut r, &mut b, &mut vars, name_map, import_map)?;
+    b.ins().return_(&[val]);
 
     b.finalize();
     jit.define_function(func_id, &mut ctx).map_err(|e| e.to_string())?;

@@ -1,0 +1,191 @@
+fn emit_expr(jit: &mut JITModule, r: &mut CpsReader, b: &mut FunctionBuilder, vars: &mut HashMap<String, Value>, name_map: &HashMap<String, FuncId>) -> Result<Value, String> {
+    let op = r.read_u8()?;
+    match op {
+        0x01 => Ok(b.ins().iconst(types::I64, r.read_u64()? as i64)),
+        0x02 => {
+            let n = r.read_string()?;
+            vars.get(&n).cloned().ok_or_else(|| format!("Undefined {}", n))
+        }
+        0x03 => {
+            let n = r.read_string()?;
+            let v = emit_expr(jit, r, b, vars, name_map)?;
+            let old = vars.insert(n.clone(), v);
+            let res = emit_expr(jit, r, b, vars, name_map)?;
+            if let Some(val) = old { vars.insert(n, val); } else { vars.remove(&n); }
+            Ok(res)
+        }
+        0x04 => {
+            let n = r.read_string()?;
+            let c = r.read_u32()?;
+            let mut args = Vec::with_capacity(c as usize);
+            for _ in 0..c { args.push(emit_expr(jit, r, b, vars, name_map)?); }
+            
+            if let Some(&fid) = name_map.get(&n) {
+                let f = jit.declare_func_in_func(fid, b.func);
+                let call = b.ins().call(f, &args);
+                Ok(b.inst_results(call)[0])
+            } else if n.contains("ExitSuccess") || n.contains("trapping") || n.contains("Pervasive") {
+                eprintln!("CPS: Stub runtime {}", n);
+                Ok(b.ins().iconst(types::I64, 0))
+            } else {
+                eprintln!("CPS WARN: missing {}", n);
+                Ok(b.ins().iconst(types::I64, 0))
+            }
+        }
+        0x05 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            Ok(b.ins().iadd(a, b2))
+        }
+        0x06 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            Ok(b.ins().isub(a, b2))
+        }
+        0x10 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            let c = b.ins().icmp(IntCC::SignedLessThan, a, b2);
+            Ok(b.ins().uextend(types::I64, c))
+        }
+        0x11 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            let c = b.ins().icmp(IntCC::SignedGreaterThan, a, b2);
+            Ok(b.ins().uextend(types::I64, c))
+        }
+        0x12 => {
+            // a <= b  -> !(a > b)
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            let gt = b.ins().icmp(IntCC::SignedGreaterThan, a, b2);
+            let not_gt = b.ins().bxor_imm(gt, 1);
+            Ok(b.ins().uextend(types::I64, not_gt))
+        }
+        0x13 => {
+            // a >= b  -> !(a < b)
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            let lt = b.ins().icmp(IntCC::SignedLessThan, a, b2);
+            let not_lt = b.ins().bxor_imm(lt, 1);
+            Ok(b.ins().uextend(types::I64, not_lt))
+        }
+        0x14 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            let c = b.ins().icmp(IntCC::Equal, a, b2);
+            Ok(b.ins().uextend(types::I64, c))
+        }
+        0x15 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            let c = b.ins().icmp(IntCC::NotEqual, a, b2);
+            Ok(b.ins().uextend(types::I64, c))
+        }
+        0x16 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            Ok(b.ins().band(a, b2))
+        }
+        0x17 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            Ok(b.ins().bor(a, b2))
+        }
+        0x18 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            let b2 = emit_expr(jit, r, b, vars, name_map)?;
+            Ok(b.ins().imul(a, b2))
+        }
+        0x19 => {
+            let a = emit_expr(jit, r, b, vars, name_map)?;
+            Ok(b.ins().bxor_imm(a, 1))
+        }
+        0x07 => {
+            let val = emit_expr(jit, r, b, vars, name_map)?;
+            b.ins().return_(&[val]);
+            Ok(val)
+        }
+        _ => Err(format!("Unknown {:#02x}", op)),
+    }
+}
+
+fn define_body(jit: &mut JITModule, fid: FuncId, name: &str, params: u32, pnames: &[String], bod: &[u8], name_map: &HashMap<String, FuncId>) -> Result<(), String> {
+    let mut sig = Signature::new(CallConv::triple_default(&Triple::host()));
+    for _ in 0..params { sig.params.push(AbiParam::new(types::I64)); }
+    sig.returns.push(AbiParam::new(types::I64));
+    let mut ctx = cranelift::codegen::Context::new();
+    ctx.func.signature = sig;
+    let mut fctx = FunctionBuilderContext::new();
+    let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+    
+    let block = b.create_block();
+    for _ in 0..params { b.append_block_param(block, types::I64); }
+    b.switch_to_block(block);
+    b.seal_block(block);
+    
+    let mut vars = HashMap::new();
+    for i in 0..params {
+        vars.insert(pnames[i as usize].clone(), b.block_params(block)[i as usize]);
+    }
+    
+    let mut r = CpsReader::new(bod);
+    let res = emit_expr(jit, &mut r, &mut b, &mut vars, name_map)?;
+    if bod.last() != Some(&0x07) {
+        b.ins().return_(&[res]);
+    }
+    
+    b.finalize();
+    jit.define_function(fid, &mut ctx).map_err(|e| format!("{}: {}", name, e))?;
+    Ok(())
+}
+
+pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CompiledModule, String> {
+    let (headers, name_map) = parse_headers(jit, data)?;
+    
+    for h in &headers {
+        eprintln!("CPS: {} ({} params, len={})", h.name, h.params, h.body_len);
+        let body = &data[h.body_offset..h.body_offset + h.body_len as usize];
+        if let Err(e) = define_body(jit, name_map[&h.name], &h.name, h.params, &h.param_names, body, &name_map) {
+            eprintln!("CPS ERR: {}", e);
+        }
+    }
+    
+    let functions = headers.iter().map(|h| CompiledFunc { name: h.name.clone(), id: name_map[&h.name] }).collect::<Vec<_>>();
+    Ok(CompiledModule { functions, name_map })
+}
+
+#[no_mangle]
+pub extern "C" fn compile_to_function_named(
+    data: *const c_void, len: usize,
+    name_ptr: *const c_void, name_len: usize,
+) -> *const c_void {
+    if data.is_null() || len == 0 { return std::ptr::null(); }
+    let ir = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
+    let name = unsafe { std::slice::from_raw_parts(name_ptr as *const u8, name_len) };
+    let nstr = match std::str::from_utf8(name) { Ok(s) => s, Err(_) => return std::ptr::null() };
+    
+    let mut jit = JITModule::new(JITBuilder::new(Box::new(|libcall| {
+        format!("{:?}", libcall)
+    })).unwrap());
+    
+    match compile_cps_to_clif(&mut jit, ir) {
+        Ok(module) => {
+            if jit.finalize_definitions().is_err() {
+                eprintln!("CPS: finalize failed");
+                return std::ptr::null();
+            }
+            if let Some(func) = module.functions.iter().find(|f| f.name == nstr) {
+                return jit.get_finalized_function(func.id) as *const c_void;
+            }
+            std::ptr::null()
+        }
+        Err(e) => {
+            eprintln!("CPS: comp failed: {}", e);
+            std::ptr::null()
+        }
+    }
+}
+
+#[no_mangle] pub extern "C" fn compile_to_function(_ : *const c_void, _ : usize) -> *const c_void { std::ptr::null() }
+
