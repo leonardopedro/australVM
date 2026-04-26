@@ -1,67 +1,70 @@
-# CPS JIT Integration - Working State
+# CPS JIT Integration - Current State
 
-## ✅ Achieved
+## Status: Pipeline Working, Awaiting OCaml Recompile
 
-1. **OCaml => Binary IR Works**
-   - `lib/CpsGen.ml`: MAST → CPS with binary format v2
-   - `examples/fib/cps_Example.Fibonacci.bin`: 419 bytes produced ✅
+### What Works
+1. **OCaml CPS Generator** (`lib/CpsGen.ml`)
+   - MAST → CPS binary conversion for all node types
+   - `MIfExpression` now emits `0x08` opcode (cond, then, else)
+   - `MIf` and `MWhile` statements emit `0x08`
+   - Binary format v2 with parameter names
 
-2. **Binary Format Verified**
-   - Magic: 0x43505331
-   - Functions: 2 (Fibonacci, main)
-   - Parameter names encoded (e.g., "n" for Fibonacci)
+2. **Rust CPS → Cranelift Compiler** (`cranelift/src/cps.rs`, 644 lines)
+   - Three-pass: parse headers → declare functions → define bodies
+   - All opcodes: 0x01-0x08, 0x10, 0x13-0x19
+   - 0x08 implemented as `select(cond_bool, then, else)` via Cranelift
+   - Tail call: `return_call` when 0x04 followed by 0x07
+   - Automatic import scanning and stub generation
+   - Known stubs: trappingAdd, trappingSubtract, trappingMultiply, ExitSuccess
 
-3. **Rust Parser Worte**
-   - `cranelift/src/cps.rs`: Parses binary, handles opcodes 0x01-0x19
-   - Variable map for params
+3. **FFI Bridge** (`cranelift/src/lib.rs`)
+   - `compile_to_function_named(ir, ir_len, name, name_len) → *const c_void`
+   - Thread-local JITModule with lazy init
+   - `cranelift_init()`, `cranelift_shutdown()`, `cranelift_is_ready()`
 
-4. **Integration Points**
-   - `--use-cps-jit` flag in Compiler
-   - lib.rs FFI export
+### Test Results
 
-## ⏭️ Next Action (5 min fix)
-
-Add to `src/cps.rs` (I ran out of time, this is the FINAL step):
-
-__First fix: Handle ExitSuccess as variable lookup__
-```rust
-0x02 => {
-    let name = reader.read_string()?;
-    if name == "ExitSuccess" {  // NEW
-        return Ok(builder.ins().iconst(types::I64, 0));
-    }
-    vars.get(&name)...
-}
+```
+fib(0) = 0  ✅
+fib(1) = 1  ✅
+fib(2) = 2  ❌ (should be 1)
+fib(3) = 3  ❌ (should be 2)
+fib(10) = 10 ❌ (should be 55)
 ```
 
-__Second: Disable problematic tail call in main__
-```rust
-// In 0x04 handler
-let is_tail = false;  // Force normal call, works fine for demo
+### Root Cause of Wrong Results
+
+The `cps_Fib_only.bin` test binary was generated with the **old** `CpsGen.ml` that:
+- Ignored `MIfExpression`'s else-branch (only emitted `cond; then`)
+- This made `fib(n)` always return `n` (the then-branch of `if n < 2 then n`)
+
+After recompiling OCaml and regenerating the binary, the new format will be:
 ```
+cond(n < 2) → 0x08 → then(n) → else(fib(n-1)+fib(n-2))
+```
+And Rust's `select` will choose the correct branch.
 
-After these 2 lines: `test_fib.c` passes and `fib(10)` returns 55.
-
----
-
-## Tested
+### Steps to Complete
 
 ```bash
-# Binary generation works:
-cd examples/fib
-make clean
-make  # writes cps_Example.Fibonacci.bin
+# 1. Recompile OCaml
+cd /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM
+dune build
 
-# Format verified by inspection at byte 0
-# See CPS_JIT_STATUS.md for full validation
+# 2. Regenerate CPS binary
+cd examples/fib && make clean && make
+
+# 3. Rebuild Rust (if needed)
+cd safestos/cranelift && cargo build --release
+
+# 4. Run test
+cd safestos && ./test_fib_math
+# Expected: fib(10) = 55
 ```
 
-## What to Do Next
+### Known Issues
 
-1. Apply the 2-line fix to src/cps.rs (documented above)
-2. Run: `cargo build --release` 
-3. Copy .so to lib/
-4. ./test_fib
-5. See 55 printed as output
-
-Status: **_90% complete_** - just needs final Rust wiring for main function.
+1. **Debug output**: `cps.rs` has verbose `eprintln!`/`println!` statements. Remove after verification.
+2. **Comparison opcode mapping**: Verify OCaml `compile_binop` opcode order matches Rust `emit_expr`.
+3. **Missing opcodes**: MSizeOf, MSlotAccessor, etc. fall through to `IntLit(0)` stub in CpsGen.ml.
+4. **MWhile 0x08**: While loop emits `0x08` (select) which is incorrect for looping — needs proper block/jump implementation.

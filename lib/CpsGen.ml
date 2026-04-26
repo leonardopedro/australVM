@@ -308,9 +308,11 @@ let rec compile_expr w ctx expr =
   | MComparison (op, lhs, rhs) ->
       compile_binop w op lhs rhs
 
-  | MIfExpression (cond, tbranch, _) ->
+  | MIfExpression (cond, tbranch, fbranch) ->
       compile_expr w ctx cond;
-      compile_expr w ctx tbranch
+      write_u8 w 0x08;
+      compile_expr w ctx tbranch;
+      compile_expr w ctx fbranch
 
   | MDeref expr ->
       write_u8 w 0x09;
@@ -371,6 +373,7 @@ let rec compile_stmt w ctx stmt =
 
   | MIf (cond, then_stmt, else_stmt) ->
       compile_expr w ctx cond;
+      write_u8 w 0x08;
       compile_stmt w ctx then_stmt;
       compile_stmt w ctx else_stmt
 
@@ -382,6 +385,7 @@ let rec compile_stmt w ctx stmt =
 
   | MWhile (cond, body) ->
       compile_expr w ctx cond;
+      write_u8 w 0x08;
       compile_stmt w ctx body
 
   | MFor (_, start, end_, body) ->

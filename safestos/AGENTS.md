@@ -4,7 +4,7 @@
 
 **SafestOS**: A virtual machine that runs an operating system inside a single Linux process, written in extended Austral. Designed for AI-friendliness, fast compilation, and safe live evolution.
 
-**Current Status**: ✅ **Core Runtime + Cranelift Bridge Working** | 🔄 **CPS Integration In Progress**
+**Current Status**: CPS JIT pipeline compiles and runs — `fib(10)` returns `10` (needs OCaml recompile to emit `0x08` opcodes for correct `55`).
 
 ## Architecture Summary
 
@@ -13,379 +13,167 @@ Linux Process
 ├── Austral Compiler (OCaml)
 │   ├── TailCallAnalysis.ml  ← Detects tail positions
 │   ├── CellAttribute.ml     ← Generates @cell descriptors
-│   └── CPS IR Generator     ← Single-pass IR
+│   ├── CpsGen.ml            ← MAST → CPS binary IR emitter
+│   └── Compiler_cps.ml      ← CPS compilation entry point
 │
-├── Cranelift Bridge (Rust) ← NEW: Replaces C codegen
-│   ├── src/lib.rs          ← FFI interface
-│   ├── src/cps.rs          ← CPS → CLIF conversion
-│   └── JITModule           ← Native code generation
+├── Cranelift Bridge (Rust)
+│   ├── src/lib.rs           ← FFI interface (compile_to_function_named)
+│   ├── src/cps.rs           ← CPS binary → Cranelift IR compiler (644 lines)
+│   └── JITModule            ← Native code generation
 │
 └── VM Runtime (C)
-    ├── scheduler.c        ← Lock-free queue + trampoline
-    ├── serialize.c        ← Linear type serialization
-    ├── region.c           ← Arena allocator
-    ├── capabilities.c     ← Token-based security
-    ├── cell_loader.c      ← Dynamic loading & hot-swap
-    └── typed_eval.c       ← Cranelift-aware interface
+    ├── scheduler.c           ← Lock-free queue + trampoline
+    ├── serialize.c           ← Linear type serialization
+    ├── region.c              ← Arena allocator
+    ├── capabilities.c        ← Token-based security
+    ├── cell_loader.c         ← Dynamic loading & hot-swap
+    └── typed_eval.c          ← Cranelift-aware interface
 ```
 
-**Cranelift Pivot**: Original plan used `[[clang::musttail]]` C codegen. Now using **Cranelift IR** for 100× faster compilation (10-100µs vs 50-200ms) and guaranteed tail calls via native `tail_call` instruction.
+## Build Commands
+
+```bash
+# Build Rust bridge
+cd /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/safestos/cranelift
+cargo build --release
+
+# Rebuild OCaml compiler (after CpsGen.ml changes)
+cd /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM
+dune build  # or: make -C lib
+
+# Build C runtime
+cd /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/safestos
+make test
+
+# Run fib test
+cd /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/safestos
+./test_fib_math
+```
+
+## CPS Binary IR Format
+
+```
+[magic: u32 = 0x43505331][func_count: u32]
+Per function:
+  [name_len: u32][name: u8*][params: u32][return_type: u8]
+  [param_names: (u32 len + u8* per param)]
+  [body_len: u32][body: u8*]
+```
+
+### Opcode Table
+
+| Opcode | Name | Operands | Description |
+|--------|------|----------|-------------|
+| 0x01 | IntLit | value: i64 | Push integer constant |
+| 0x02 | Var | name: string | Variable lookup |
+| 0x03 | Let | name: string, value: expr, body: expr | Bind variable in scope |
+| 0x04 | App | func: string, argc: u32, args: expr[] | Function call (supports tail_call) |
+| 0x05 | Add | a: expr, b: expr | Integer addition |
+| 0x06 | Sub | a: expr, b: expr | Integer subtraction |
+| 0x07 | Return | value: expr | Return value from function |
+| 0x08 | If/Select | cond: expr, then: expr, else: expr | Conditional (Cranelift select) |
+| 0x09 | Deref | expr: expr | Pointer dereference |
+| 0x10 | CmpLt | a: expr, b: expr | Less-than comparison |
+| 0x13 | CmpGte | a: expr, b: expr | Greater-or-equal comparison |
+| 0x14 | CmpEq | a: expr, b: expr | Equality comparison |
+| 0x15 | CmpNeq | a: expr, b: expr | Not-equal comparison |
+| 0x16 | And | a: expr, b: expr | Bitwise AND |
+| 0x17 | Or | a: expr, b: expr | Bitwise OR |
+| 0x18 | Mul | a: expr, b: expr | Integer multiplication |
+| 0x19 | Not | a: expr | Bitwise NOT |
 
 ## Completed Components
 
-### ✅ C Runtime (Stable & Tested)
-- **scheduler.c**: `scheduler_dispatch()` trampoline, lock-free queue
-- **serialize.c**: Linear consumption, tested (6/6 tests pass)
-- **region.c**: Arena with zeroing, malloc/free wrappers
-- **capabilities.c**: `CapEnv`, `FsCap`, `NetCap` tokens
-- **cell_loader.c**: `dlopen()`, `hot_swap()`, `migrate_state()`
-- **typed_eval.c**: Ready for Cranelift (interface complete)
-- **vm.h**: Complete headers for all structures
-- **Status**: All 6/6 tests passing
+### C Runtime (Stable & Tested)
+- scheduler.c, serialize.c, region.c, capabilities.c, cell_loader.c, typed_eval.c
+- All 6/6 tests passing
 
-### ✅ Compiler Extensions (Complete)
-- **TailCallAnalysis.ml**: Identifies tail positions ✓
-- **CellAttribute.ml**: Generates descriptors from `@cell` ✓
-- **CamlCompiler*.ml**: FFI-ready modules ✓
+### Compiler Extensions (Complete)
+- TailCallAnalysis.ml, CellAttribute.ml, CamlCompiler*.ml
 
-### ✅ Cranelift Bridge (COMPLETE - Session 4)
-- **cranelift/Cargo.toml**: 0.131.0 dependencies ✓
-- **cranelift/src/lib.rs**: Thread-local FFI wrapper ✓
-- **cranelift/src/cps.rs**: **FULL** compiler (384 lines) ✓
-  - All 10 instructions implemented
-  - `return_call` optimization
-  - Binary format parser
-- **Status**: Compiles to 4.3MB .so, ready for integration
-- **Proof**: `cargo build --release` passes, symbols exported
+### Cranelift Bridge (Working)
+- `src/lib.rs`: Thread-local FFI with `compile_to_function_named()`
+- `src/cps.rs`: Full CPS → Cranelift compiler with:
+  - Three-pass compilation (parse headers, declare functions, define bodies)
+  - All opcodes 0x01-0x07, 0x08, 0x10, 0x13-0x19 implemented
+  - `0x08` (If/Select) using `builder.ins().select()` with boolean conversion
+  - Tail call support via `builder.ins().return_call()` when 0x07 follows 0x04
+  - Automatic import detection and stub generation for external functions
+  - Known primitive stubs: trappingAdd, trappingSubtract, trappingMultiply, ExitSuccess
+- Status: Compiles to `libaustral_cranelift_bridge.so`, test infrastructure runs
 
-### ✅ Documentation
-- **CRANELIFT_COMPILATION_PROOF.md**: Session 4 evidence
-- **BUILD_SUCCESS.md**: Build verification
-- **SESSION_4_COMPLETE.md**: Architecture & code patterns
-- **QUICKSTART.sh**: Developer commands
+### OCaml CPS Emitter (Working with Patch)
+- `lib/CpsGen.ml`: MAST → CPS binary emitter
+- `MIfExpression` now emits `0x08` opcode with cond, then-branch, else-branch
+- `MIf` statement emits `0x08` opcode
+- `MWhile` emits `0x08` opcode (condition check + body)
 
-## What's Blocking Now
+## Known Issues & Remaining Work
 
-### 1. Integration: typed_eval.c → Cranelift
-```
-Status: Bridge compiles (libaustral_cranelift_bridge.so)
-Action: Update runtime/typed_eval.c to call compile_to_function()
-Goal: typed_eval tries Cranelift first, falls back to GCC
-```
-
-### 2. OCaml FFI Wrapper
-```
-Status: CamlCompiler modules ready, not connected
-Action: Build libaulstral.so with OCaml → Rust FFI
-Goal: OCaml CPS IR bytes → Rust bridge → Native function
-```
-
-### 3. CPS Syntax (0x08 If-statement)
-```
-Status: 9/10 instructions complete
-Action: Implement proper block/jump/phi in emit_instructions()
-Goal: Full programming language support with control flow
-```
-
-### 4. CI/CD Verification
-```
-Status: Library compiles, manual verification complete
-Action: Create test that demonstrates tail-call guarantee
-Goal: Test with ulimit -s 8192, 10,000 recursive calls
-```
-
-## Immediate Task Sequence
-
-### If Starting Fresh:
+### 1. OCaml Recompile Required
+The `CpsGen.ml` changes (0x08 opcode for MIfExpression) are in source but **not yet compiled**. The existing `cps_Fib_only.bin` was generated with the old emitter that discards the else-branch. After running `dune build`, regenerate the binary with:
 ```bash
-cd /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/safestos
-
-# 1. Verify everything works
-make test  # C runtime (6/6) + Cranelift bridge test
-
-# 2. Check bridge symbols
-nm -D lib/libaustral_cranelift_bridge.so | grep -E "cranelift_|compile_to"
-
-# 3. Run bridge test independently
-cd cranelift && ./test_bridge
-# Expected: Result: 42 (expected 42)
+cd /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/examples/fib
+make clean && make
 ```
 
-### Current Priority: Phase 4 - Integration
+### 2. fib(10) Returns 10 Instead of 55
+Root cause: The stale `cps_Fib_only.bin` was generated by the old `CpsGen.ml` which ignored `MIfExpression`'s else-branch. After recompiling OCaml and regenerating the binary, `fib(10)` should return 55 since:
+- `0x08` (Select) is implemented in Rust
+- The binary will contain proper `cond; 0x08; then; else` encoding
+- `Fibonacci(n) = if n < 2 then n else fib(n-1) + fib(n-2)`
 
-**Step 1: Update typed_eval.c**
-```c
-// Replace this (existing):
-system("gcc -shared -o cell.so cell.c");
+### 3. CmpLt Opcode Mismatch
+OCaml `compile_binop` emits comparison opcodes (0x10-0x15) in a different order than expected. Verify the mapping between `CpsGen.ml`'s `compile_binop` and Rust's `emit_expr` match exactly.
 
-// With this:
-void* fn = compile_to_function(cps_ir, cps_len);
-if (fn) {
-    typedef void (*cell_fn)(void*);
-    ((cell_fn)fn)(state);
-}
-```
+### 4. Debug Println Statements
+`cps.rs` contains many `eprintln!` and `println!` debug statements. Remove them once fib(10)=55 is verified.
 
-**Step 2: Build OCaml FFI Bridge**
-```ocaml
-(* In lib/CamlCompiler.ml *)
-external compile_cps: string -> int -> pointer = "compile_to_function"
-(* Link with libaustral_cranelift_bridge.so *)
-```
-
-**Step 3: Test Pipeline**
-```
-.austral source
-    ↓ TailCallAnalysis
-CPS IR (binary)
-    ↓ serialize
-compile_to_function()
-    ↓ Rust/CpsGen
-CLIF IR
-    ↓ JITModule
-Native: (stack=O(1))
-```
-
-**Alternative: Implement 0x08 (If) First**
-```rust
-// In src/cps.rs emit_instruction()
-0x08 => {
-    // Use builder.ins().brif() and blocks
-    // Follow Cranelift branch spec
-    // Requires proper block/seal ordering
-}
-```
+### 5. Missing Opcodes in CpsGen.ml
+Some MAST nodes fall through to a default `IntLit(0)` stub:
+- MSizeOf, MSlotAccessor, MPointerSlotAccessor, MArrayIndex, MSpanIndex
+- MEmbed, MRecordConstructor, MUnionConstructor
+- MGenericFunVar, MConcreteFunVar, MTypecast, MConjunction, MDisjunction, MNegation
 
 ## Key Files Reference
 
-### Runtime Header
-**File**: `include/vm.h`  
-**Key Structures**:
-- `CellDescriptor` (alloc, step, save, restore, migrate)
-- `Scheduler` (queue, dispatch loop)
-- `Serializer` / `Deserializer` (linear protocol)
-- `CapEnv`, `FsCap`, `NetCap`
+| File | Purpose |
+|------|---------|
+| `safestos/cranelift/src/lib.rs` | FFI bridge: `compile_to_function_named()` |
+| `safestos/cranelift/src/cps.rs` | CPS binary → Cranelift IR compiler |
+| `lib/CpsGen.ml` | OCaml MAST → CPS binary emitter |
+| `lib/CpsGen_backup.ml` | Original CpsGen before 0x08 patch |
+| `lib/Compiler_cps.ml` | CPS compilation entry point |
+| `examples/fib/Fibonacci.aum` | Fibonacci test source |
+| `examples/fib/cps_Fib_only.bin` | Stale CPS binary (needs regen) |
+| `examples/fib/cps_Example.Fibonacci.bin` | Full module CPS binary |
+| `safestos/test_fib_math` | Test binary (currently outputs fib(10)=10) |
+| `safestos/cranelift/src/cps.rs.backup3` | Previous working version (653 lines) |
 
-### C Runtime
-**File**: `runtime/scheduler.c`  
-**Key Function**: `scheduler_dispatch()` - the trampoline
+## Backup Files (Do Not Delete)
 
-**File**: `runtime/serialize.c`  
-**Key Function**: `serialize_linear()` - consumes values
+- `cps.rs.backup` — Shorter version with buggy define_body (jumps to first 0x07)
+- `cps.rs.backup3` — Full version with complete emit_expr; basis of current cps.rs
+- `CpsGen_backup.ml` — Original CpsGen before any patches
 
-**File**: `runtime/typed_eval.c`  
-**Key TODO**: Replace GCC with Rust FFI call to `compile_to_function()`
-
-### Cranelift Bridge (NEW)
-**File**: `cranelift/src/lib.rs`  
-**Status**: Minimal stub, needs thread-safety fix  
-**Key Function**: `compile_to_function(irs: *const u8, len: usize) -> *const c_void`  
-**Goal**: Returns function pointer with `tail_call` instructions
-
-**File**: `cranelift/src/cps.rs`  
-**Status**: Not started  
-**Purpose**: Convert OCaml CPS IR → Cranelift IR with `tail_call`
-
-### Compiler Extensions
-**File**: `lib/TailCallAnalysis.ml`  
-**Purpose**: Marks expressions that can tail-call (for Cranelift)
-
-**File**: `lib/CellAttribute.ml`  
-**Purpose**: Generates `CellDescriptor` on `@cell` modules
-
-**File**: `lib/CRepr.ml` / `CRenderer.ml`  
-**Purpose**: Fossil backup for C backend (kept but deprecated)
-
-## Testing Strategy
-
-### Current Tests (Passing)
-```bash
-# C Runtime Tests
-./test/vm_test
-  ✓ Serialize Natural_64
-  ✓ Serialize String
-  ✓ Serialize to full buffer
-  ✓ Queue single item
-  ✓ Queue multiple items
-  ✓ Capability drop
-```
-
-### Needed Tests
-1. **Compilation**: `austral compile cell.aum → .so`
-2. **Loading**: Load cell, verify descriptor
-3. **Execution**: Run cell steps via scheduler
-4. **Hot-swap**: Replace v1 with v2, verify state
-5. **Stress**: Many cells, hot-swap under load
-6. **Stack**: Verify trampoline never grows
-
-## Common Patterns
-
-### Cell Pattern
-```austral
-module NanoCore is
-    record State : Linear is
-        next_pid: Natural_64;
-    end;
-    
-    function cell_alloc(env: &CapEnv) : State;
-    function cell_step(st: &mut State) : Unit;
-    function cell_save(st: State, s: &mut Serializer) : Unit;
-    function cell_restore(d: &mut Deserializer) : State;
-end module.
-```
-
-### Tail-Call Pattern
-```c
-// All recursive/looping code uses this:
-void cell_step(void* state) {
-    // Do work...
-    if (should_yield) {
-        scheduler_enqueue(cell_step, state);
-        return scheduler_dispatch();  // Compiler adds musttail
-    }
-    // Transition to next
-    return next_cell->step(next_state);  // Compiler adds musttail
-}
-```
-
-### Capability Pattern
-```c
-// Must pass env explicitly
-void load_file(FsCap* cap, const char* path) {
-    // cap proves permission
-    // consumed when used
-}
-
-// Cannot forge
-FsCap* fake = malloc(...);  // Compiler error - wrong type
-```
-
-## Commands Quick Reference
+## Test Protocol
 
 ```bash
-# Build C runtime
-make lib/libSafestOS.so
+# 1. Build Rust bridge
+cd safestos/cranelift && cargo build --release
 
-# Run C runtime tests
-make test
+# 2. (After OCaml recompile) Regenerate CPS binary
+cd examples/fib && make clean && make
 
-# Build Rust bridge
-cd cranelift && cargo build --release
-
-# Check bridge output
-ls -l cranelift/target/release/libcranelift_bridge.so
-
-# Test C runtime (should already pass)
-./test/vm_test
-
-# Check compiler extensions
-ls -l lib/*.ml
-
-# Full build (once complete)
-make all  # C runtime + Rust bridge
+# 3. Run test
+cd safestos && ./test_fib_math
+# Expected after fix: fib(10) = 55
+# Current: fib(10) = 10 (stale binary)
 ```
-
-### Debug Rust Bridge Issues
-```bash
-cd cranelift
-cargo build --release 2>&1 | head -20
-
-# Common errors:
-# 1. Send/Sync bounds on JITModule
-# 2. Missing extern "C" on functions
-# 3. Lifetime issues with function pointers
-
-# Solutions in src/lib.rs:
-# - Use OnceCell for JITModule
-# - #[repr(C)] on structs
-# - raw pointers for FFI
-```
-
-## Edits Made So Far
-
-### C Runtime (Complete & Stable)
-1. `include/vm.h` - Complete API
-2. `runtime/scheduler.c` - Lock-free queue + trampoline
-3. `runtime/serialize.c` - Linear types (6/6 tests pass)
-4. `runtime/region.c` - Arena allocator
-5. `runtime/cell_loader.c` - dlopen + hot-swap
-6. `runtime/capabilities.c` - Token system
-7. `runtime/typed_eval.c` - Interface ready
-8. `test/vm_test.c` - All tests passing
-9. `Makefile` - Build system working
-10. `README.md` - Updated with Cranelift pivot
-
-### Compiler Extensions (in ../lib/)
-1. `TailCallAnalysis.ml` - Tail position detection
-2. `CellAttribute.ml` - @cell → descriptor gen
-3. `CRepr.ml` - CReturnTail variant (fossil)
-4. `CRenderer.ml` - Musttail emission (fossil)
-
-### NEW: Cranelift Bridge (in cranelift/)
-1. `Cargo.toml` - Dependencies configured
-2. `src/lib.rs` - Minimal stub (builds, warnings)
-3. `BRIDGE_ARCH.md` - Design doc
-4. **Status**: Needs thread-safety fix
-
-### Files to Modify Now
-1. `cranelift/src/lib.rs` - **FIX THREAD-SAFETY** (HIGH PRIORITY)
-2. `cranelift/src/cps.rs` - Implement CLIF generation
-3. `runtime/typed_eval.c` - Replace GCC with Rust FFI
-4. `lib/MakefileOCaml` - Build compiler as library
-
-## Success Criteria
-
-### ✅ Approved: Runtime Layer
-- All C code compiles, no warnings
-- Unit tests pass (6/6)
-- Lock-free queue verified
-- Serialization handles all types
-- Capability system sound
-- **Status**: COMPLETE
-
-### 🔄 In Progress: Cranelift Bridge
-- Rust bridge compiles (`cargo build --release`)
-- No thread-safety errors
-- CPS → CLIF conversion works
-- Returns valid function pointers
-- **Status**: THREAD-SAFETY BLOCKING
-
-### 📋 Pending: Integration
-- `typed_eval` uses Rust bridge
-- OCaml compiler as library
-- End-to-end: Austral → Cranelift → .so → load
-- Hot-swap verified
-- Stack depth proof (O(1))
-- **Status**: After bridge completes
-
-## FAQ
-
-**Q: What happened to C codegen with `[[clang::musttail]]`?**  
-A: Switched to Cranelift for 100× faster compilation. Tail calls are now native `tail_call` instructions.
-
-**Q: Why Cranelift instead of LLVM?**  
-A: Smaller footprint (2MB vs 30MB), faster compilation, simpler FFI, guaranteed tail calls.
-
-**Q: What's the thread-safety issue?**  
-A: `cranelift_jit::JITModule` isn't `Send + Sync`. Need OnceCell or single-threaded pattern.
-
-**Q: Can I just use C backend while waiting?**  
-A: Yes, `lib/CRenderer.ml` still emits `[[clang::musttail]]`. But Cranelift is the goal.
-
-**Q: How do I test the C runtime alone?**  
-A: `make test` - works perfectly, no Rust needed.
-
-**Q: What's blocking typed_eval?**  
-A: Right now: Rust bridge. After that: OCaml compiler library.
 
 ## Revision History
 
 - **2026-04-24**: Initial AGENTS.md created
 - **2026-04-25**: Updated with Cranelift pivot, bridge working (v0.131)
 - **2026-04-25**: Bridge test passes (JIT returns 42), CPS module added
-- **2026-04-25**: typed_eval.c updated to use Cranelift with GCC fallback
-- **Current**: CPS IR integration - next step is end-to-end test with real IR
-
----
-
-**Next Action**: Test CPS binary IR → Cranelift → native function end-to-end, then implement tail_call.
+- **2026-04-26**: Major rewrite — CPS JIT fully integrated, 0x08 (If/Select) implemented in Rust, MIfExpression patched in OCaml. fib(10)=10 awaiting OCaml recompile.

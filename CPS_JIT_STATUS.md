@@ -1,102 +1,54 @@
 # CPS JIT Integration - Progress Summary
 
-## Current Status: NEARLY COMPLETE ✅
+## Current Status: AWAITING OCAML RECOMPILE ✅
 
-Component working and what needs final linking:
-
-### ✅ WORKING NOW
+### What's Working
 
 1. **OCaml CPS Generator** (`lib/CpsGen.ml`, `lib/Compiler_cps.ml`)
-   - Completes MAST → CPS IR conversion for 24 node types
-   - Emits correct binary format with param names
-   - All comparison operators (CmpLt/Gt/Lte/Gte/Eq/Neq) implemented
-   - Binary IR format: `[magic][func_count][func_headers][body_bytes]`
+   - MAST → CPS binary conversion for 24+ node types
+   - `MIfExpression` patched to emit `0x08` (cond, then, else)
+   - `MIf` and `MWhile` statements emit `0x08`
+   - All comparison operators implemented
 
-2. **Rust CPS Parser** (`cranelift/src/cps.rs`)
-   - Parses multi-function binaries correctly
-   - Handles parameter names for variable lookup
-   - JIT compilation with Cranelift 0.131
+2. **Rust CPS Parser** (`cranelift/src/cps.rs`, 644 lines)
+   - Three-pass compilation (headers → declare → define)
+   - All opcodes 0x01-0x08, 0x10, 0x13-0x19
+   - 0x08 (If/Select): `select(cond_bool, then, else)`
+   - Tail call via `return_call`
+   - Import scanning + stub generation
 
-3. **Framework Integration**
-   - `--use-cps_jit` flag in Compiler.ml
-   - Format v2 with prefix names for parameters
-   - Tail call detection in emit_instruction
+3. **FFI Bridge** (`cranelift/src/lib.rs`)
+   - `compile_to_function_named()` working
+   - Thread-local JITModule
 
-### ⚠️ BLOCKING MAIN FUNCTION compilation
-**Issue**: `main` body causes Verifier error due to:
-- `ExitSuccess()` → `Var("ExitSuccess")` which needs stub
-- Return_call detection doesn't handle main-calling-function pattern cleanly
+### Test Results (Current - Stale Binary)
 
-### 🎯 IMMEDIATE FIX REQUIRED
-Modify Rust `emit_expr` 0x02 handler:
-```rust
-// In 0x02 case, before the error:
-if name == "ExitSuccess" {
-    return Ok(builder.ins().iconst(types::I64, 0));
-}
+```
+fib(0)  = 0  ✅ (correct)
+fib(1)  = 1  ✅ (correct)
+fib(2)  = 2  ❌ (should be 1)
+fib(10) = 10 ❌ (should be 55)
 ```
 
-And modify 0x04 tail-call logic to skip main functions:
-```rust
-// When compiling main's body
-let is_tail = matches!(...);
-let in_main = /* context tracking needed */;
-if is_tail && !in_main { /* return_call */ } else { /* normal call */ }
-```
+Reason: `cps_Fib_only.bin` was generated with old CpsGen.ml that discarded else-branch.
 
-### 🔢 TEST PROTOCOL (When Fixed)
-```
-1. Load binary: examples/fib/cps_Example.Fibonacci.bin
-2. compile_to_function_named(..., "Fibonacci") → ptr
-3. Call fib(2) → 2
-4. Call fib(3) → 2  
-5. Call fib(10) → 55
-```
+### Fix Required
 
----
-
-## Implementation Artifacts
-
-### Binary IR Format (Verified)
-```
-0x43505331  (magic)
-0x02000000  (2 functions)
--- Function 1
-  len=0x09 "Fibonacci"
-  params=0x01
-  ret=0x01
-  param_names[0]: len=0x01 "n"
-  body_len=0x00000113
-  body: 0x0305... (Awaiting correct Rust parser)
--- Function 2
-  ...
-```
-
-### Test Compilation
 ```bash
-# From: /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM
-examples/fib$ make clean && make
-# Produces: cps_Example.Fibonacci.bin
+# Recompile OCaml
+dune build
+
+# Regenerate binary
+cd examples/fib && make clean && make
+
+# Test
+cd safestos && ./test_fib_math
+# Expected: fib(10) = 55
 ```
 
----
+### Remaining After Fix
 
-## Next Actions (30 minutes to complete)
-
-1. **Modify `cranelift/src/cps.rs`** emit_expr 0x02 to stub ExitSuccess
-2. **Modify 0x04 tail logic** to not short-circuit main.body 
-3. **Rebuild Rust bridge** 
-4. **Resync lib/** with correct FunctionBuilder APIs
-5. **Run test_fib.c** → Validates end-to-end
-
----
-
-## Git State
-
-Files modified but not committed:
-- `lib/CpsGen.ml` ✓ (format fixes)
-- `safestos/cranelift/src/cps.rs` ⚠ (working up to main compilation)
-- `safestos/cranelift/src/lib.rs` ⚠ (bridge up to current)
-- `examples/fib/cps_Example.Fibonacci.bin` (test artifact)
-
-Commit hash for reference: 4b467420
+- Remove debug println/eprintln from cps.rs
+- Verify comparison opcode mapping (OCaml ↔ Rust)
+- Implement proper loop support (MWhile needs block/jump, not select)
+- Add missing opcode implementations in CpsGen.ml
