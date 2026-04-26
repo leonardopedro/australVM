@@ -1,24 +1,12 @@
-/// Cranelift Backend for SafestOS - v0.131
-///
-/// Provides JIT compilation with guaranteed tail calls
-///
-/// # Architecture
-///
-/// Uses Cranelift's `return_call` instruction for O(1) recursion.
-/// Thread-local JITModule avoids Send/Sync issues.
-///
-/// # API
-///
-/// - `compile_to_function(ptr, len)` -> function_pointer
-/// - `cranelift_init()` -> initialize
-/// - `cranelift_is_ready()` -> check status
-pub mod cps;
-
-pub use cranelift_jit::JITModule;
-
-use cranelift_jit::JITBuilder;
+/// Minimal Cranelift-CPS bridge compatible with HEAD version of cps.rs
+use cranelift::prelude::*;
+use cranelift_jit::{JITModule, JITBuilder};
+use cranelift_module::{FuncId, Linkage, Module};
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::collections::HashMap;
+
+pub mod cps;
 
 thread_local! {
     static JIT: RefCell<Option<JITModule>> = RefCell::new(None);
@@ -30,28 +18,26 @@ pub extern "C" fn cranelift_init() -> i32 {
         if cell.borrow().is_some() {
             return 0;
         }
-
+        
+        // No external symbols
         let resolver = |_libcall: cranelift_codegen::ir::LibCall| String::new();
-        let mut builder = JITBuilder::new(Box::new(resolver)).unwrap();
-        let jit = cranelift_jit::JITModule::new(builder);
-        cell.replace(Some(jit));
-        0
+        match JITBuilder::new(Box::new(resolver)) {
+            Ok(builder) => {
+                let jit = JITModule::new(builder);
+                cell.replace(Some(jit));
+                0
+            }
+            Err(_) => 1,
+        }
     })
 }
 
-/// Compile CPS IR binary to native code.
-///
-/// Returns a function pointer to the LAST function defined in the IR
-/// (which is typically `main`).
-///
-/// The IR format is:
-/// [magic: u32 = 0x43505331][functions: u32][functions...]
+/// Compile first function from CPS binary
 #[no_mangle]
 pub extern "C" fn compile_to_function(
     ir_ptr: *const u8,
     ir_len: usize,
 ) -> *const c_void {
-    // Initialize JIT if needed
     if JIT.with(|cell| cell.borrow().is_none()) {
         if cranelift_init() != 0 {
             return std::ptr::null();
@@ -62,12 +48,13 @@ pub extern "C" fn compile_to_function(
         return std::ptr::null();
     }
 
+    let ir_slice = unsafe { std::slice::from_raw_parts(ir_ptr, ir_len) };
+
     JIT.with(|cell| {
         let mut opt = cell.borrow_mut();
         let jit = opt.as_mut().unwrap();
 
-        let ir_slice = unsafe { std::slice::from_raw_parts(ir_ptr, ir_len) };
-
+        // Compile all functions in the IR
         match cps::compile_cps_to_clif(jit, ir_slice) {
             Ok(module) => {
                 if jit.finalize_definitions().is_err() {
@@ -75,10 +62,13 @@ pub extern "C" fn compile_to_function(
                     return std::ptr::null();
                 }
 
-                // Return the last function (usually main)
-                if let Some(last) = module.functions.last() {
-                    jit.get_finalized_function(last.id) as *const c_void
+                // Get first function (by order in Vec)
+                if let Some(first) = module.functions.first() {
+                    let ptr = jit.get_finalized_function(first.id) as *const c_void;
+                    eprintln!("CPS: Compiled first function '{}' at {:?}", first.name, ptr);
+                    ptr
                 } else {
+                    eprintln!("CPS: No functions in module");
                     std::ptr::null()
                 }
             }
@@ -90,7 +80,7 @@ pub extern "C" fn compile_to_function(
     })
 }
 
-/// Compile CPS IR and return a specific function by name.
+/// Compile named function from CPS binary
 #[no_mangle]
 pub extern "C" fn compile_to_function_named(
     ir_ptr: *const u8,
@@ -110,8 +100,8 @@ pub extern "C" fn compile_to_function_named(
 
     let ir_slice = unsafe { std::slice::from_raw_parts(ir_ptr, ir_len) };
     let name_slice = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
-    let func_name = match std::str::from_utf8(name_slice) {
-        Ok(s) => s.to_string(),
+    let name_str = match std::str::from_utf8(name_slice) {
+        Ok(s) => s.trim_end_matches('\0'),
         Err(_) => return std::ptr::null(),
     };
 
@@ -119,6 +109,7 @@ pub extern "C" fn compile_to_function_named(
         let mut opt = cell.borrow_mut();
         let jit = opt.as_mut().unwrap();
 
+        // Compile all functions
         match cps::compile_cps_to_clif(jit, ir_slice) {
             Ok(module) => {
                 if jit.finalize_definitions().is_err() {
@@ -126,10 +117,13 @@ pub extern "C" fn compile_to_function_named(
                     return std::ptr::null();
                 }
 
-                if let Some(&func_id) = module.name_map.get(&func_name) {
-                    jit.get_finalized_function(func_id) as *const c_void
+                // Look up function by name
+                if let Some(&func_id) = module.name_map.get(name_str) {
+                    let ptr = jit.get_finalized_function(func_id) as *const c_void;
+                    eprintln!("CPS: Compiled function '{}' at {:?}", name_str, ptr);
+                    ptr
                 } else {
-                    eprintln!("CPS: function '{}' not found", func_name);
+                    eprintln!("CPS: Function '{}' not found in name_map: {:?}", name_str, module.name_map.keys());
                     std::ptr::null()
                 }
             }
@@ -141,17 +135,6 @@ pub extern "C" fn compile_to_function_named(
     })
 }
 
-#[no_mangle]
-pub extern "C" fn cranelift_version() -> u32 {
-    0x0083000
-}
-
-#[no_mangle]
-pub extern "C" fn cranelift_is_ready() -> i32 {
-    JIT.with(|cell| if cell.borrow().is_some() { 1 } else { 0 })
-}
-
-#[no_mangle]
-pub extern "C" fn cranelift_shutdown() {
-    JIT.with(|cell| *cell.borrow_mut() = None);
-}
+#[no_mangle] pub extern "C" fn cranelift_version() -> u32 { 0x0083000 }
+#[no_mangle] pub extern "C" fn cranelift_is_ready() -> i32 { JIT.with(|c| if c.borrow().is_some() {1} else {0}) }
+#[no_mangle] pub extern "C" fn cranelift_shutdown() { JIT.with(|c| *c.borrow_mut() = None); }
