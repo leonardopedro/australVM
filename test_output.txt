@@ -1,0 +1,42 @@
+CPS: SUCCESS compiled at 0x5f0a8a550000
+CPS: SUCCESS compiled at 0x5f0a8a555000
+CPS: SUCCESS compiled at 0x5f0a8a557000
+CPS: SUCCESS compiled at 0x5f0a8a559000
+CPS: SUCCESS compiled at 0x5f0a8a55e000
+CPS: SUCCESS compiled at 0x5f0a8a560000
+3
+2
+1
+CPS: SUCCESS compiled at 0x5f0a8a562000
+CPS: SUCCESS compiled at 0x5f0a8a564000
+CPS: SUCCESS compiled at 0x5f0a8a566000
+CPS: SUCCESS compiled at 0x5f0a8a568000
+CPS: compile_to_function_named failed: Tail call to unknown function: SafeFunc
+CPS: compile_to_function_named failed: Cedar Policy Denied: cedar_fail_test cannot call ForbiddenFunc
+Starting JIT manual test...
+Test 1 (Return 42) result: 42
+SUCCESS
+Test 2 (10 + 32) result: 42
+SUCCESS
+Test 3 (fact(5)) result: 120
+SUCCESS
+Test 4 (sum 1 to 10) result: 55
+SUCCESS
+Test 5 (pick(1,2,3)) results: 100, 200, 300
+SUCCESS
+Test 6 (print 3 to 1):
+Test 6 finished (result=0)
+Test 7 (Record Slot) result: 22
+SUCCESS
+Test 8 (Pointer Store/Load) result: 42
+SUCCESS
+Test 9 (Union Just/Nothing): just=99 nothing=-1
+SUCCESS
+Test 10 (Deep Recursion): sum 1..1000 = 500500
+SUCCESS
+Test 11: Loading Cedar policy...
+Test 11 (Cedar Allowed): FAILURE - Compilation error: Tail call to unknown function: SafeFunc
+Test 11 (Cedar Forbidden): SUCCESS (Caught denial)
+Caught Error: Compilation error: Cedar Policy Denied: cedar_fail_test cannot call ForbiddenFunc
+
+JIT manual tests completed.

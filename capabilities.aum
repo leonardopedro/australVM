@@ -60,10 +60,13 @@ module body Capabilities is
         return Some(value => cap);
     end;
 
+    function __au_swap_module(module_id: Int64, new_desc: Address): Int64 is
+        external;
+
     function hot_swap_module(cap: CedarRuntimeCapability, module_id: Int64, new_desc: Address): Unit is
         let { granted: Bool } := cap;
         -- The capability proves we are authorized. Now call the actual runtime hot-swap routine!
-        -- __au_swap_module(module_id, new_desc);
+        let _unused: Int64 := __au_swap_module(module_id, new_desc);
         return nil;
     end;
 

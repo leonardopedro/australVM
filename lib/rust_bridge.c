@@ -18,6 +18,8 @@ extern int64_t execute_function_1(void* ptr, int64_t arg1);
 extern int64_t execute_function_2(void* ptr, int64_t arg1, int64_t arg2);
 extern const char* cranelift_last_error(void);
 extern void cranelift_clear_error(void);
+extern int64_t au_cedar_load_policy(const char* policy);
+extern int64_t au_cedar_check_runtime(const char* p, const char* a, const char* r);
 
 /* OCaml's scheduler_dispatch for linker symbol resolution */
 void scheduler_dispatch(void (*func)(void*), void* state) {
@@ -96,4 +98,16 @@ CAMLprim value ocaml_cranelift_last_error(value unit) {
     some = caml_alloc(1, 0);
     Store_field(some, 0, str);
     CAMLreturn(some); /* Some err_string */
+}
+/* Cedar Policy Management */
+CAMLprim value ocaml_cedar_load_policy(value policy_str) {
+    CAMLparam1(policy_str);
+    int64_t res = au_cedar_load_policy(String_val(policy_str));
+    CAMLreturn(caml_copy_int64(res));
+}
+
+CAMLprim value ocaml_cedar_check_runtime(value p, value a, value r) {
+    CAMLparam3(p, a, r);
+    int64_t res = au_cedar_check_runtime(String_val(p), String_val(a), String_val(r));
+    CAMLreturn(caml_copy_int64(res));
 }

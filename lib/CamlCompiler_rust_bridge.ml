@@ -18,6 +18,8 @@ external c_execute_function : int64 -> int64 = "ocaml_execute_function"
 external c_execute_function_1 : int64 -> int64 -> int64 = "ocaml_execute_function_1"
 external c_execute_function_2 : int64 -> int64 -> int64 -> int64 = "ocaml_execute_function_2"
 external c_last_error : unit -> string option = "ocaml_cranelift_last_error"
+external c_cedar_load_policy : string -> int64 = "ocaml_cedar_load_policy"
+external c_cedar_check_runtime : string -> string -> string -> int64 = "ocaml_cedar_check_runtime"
 
 let bridge_initialized = ref false
 
@@ -82,3 +84,9 @@ let compile_function (name: string) (params: (string * mono_ty) list) (body: mst
 let compile_constant (name: string) (value: int64) : int64 option =
   let body = MReturn (MIntConstant (Int64.to_string value)) in
   compile_function name [] body
+
+let cedar_load_policy (policy: string) : bool =
+  c_cedar_load_policy policy = 1L
+
+let cedar_check (p: string) (a: string) (r: string) : bool =
+  c_cedar_check_runtime p a r = 1L

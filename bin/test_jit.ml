@@ -252,4 +252,42 @@ let () =
         then Printf.printf "SUCCESS\n"
         else Printf.printf "FAILURE\n";
 
-  Printf.printf "Tests finished.\n"
+  (* 12. Test 11: Cedar Static Authorization *)
+  let f11 = {
+    name = "cedar_test";
+    params = [];
+    return_type = I64;
+    body = Return (App ("SafeFunc", []))
+  } in
+  
+  let f12 = {
+    name = "cedar_fail_test";
+    params = [];
+    return_type = I64;
+    body = Return (App ("ForbiddenFunc", []))
+  } in
+
+  (* Load Cedar policy *)
+  let policy = "permit(principal == Module::\"cedar_test\", action == Action::\"Call\", resource == Module::\"SafeFunc\");\n" ^
+               "forbid(principal == Module::\"cedar_fail_test\", action == Action::\"Call\", resource == Module::\"ForbiddenFunc\");" in
+  Printf.printf "Test 11: Loading Cedar policy...\n";
+  if not (cedar_load_policy policy) then
+    Printf.printf "Test 11: Failed to load Cedar policy (Error: %s)\n" (match last_jit_error () with Some s -> s | None -> "Unknown")
+  else begin
+    (* Test allowed call *)
+    let binary11 = serialize_functions [f11] in
+    let (ptr11, err11) = compile_binary binary11 in
+    if ptr11 <> Int64.zero then Printf.printf "Test 11 (Cedar Allowed): SUCCESS (JIT allowed compilation)\n"
+    else Printf.printf "Test 11 (Cedar Allowed): FAILURE - %s\n" (match err11 with Some s -> s | None -> "Unknown");
+
+    (* Test forbidden call *)
+    let binary12 = serialize_functions [f12] in
+    let (ptr12, err12) = compile_binary binary12 in
+    if ptr12 = Int64.zero then begin
+      Printf.printf "Test 11 (Cedar Forbidden): SUCCESS (Caught denial)\n";
+      Printf.printf "Caught Error: %s\n" (match err12 with Some s -> s | None -> "Unknown")
+    end else
+      Printf.printf "Test 11 (Cedar Forbidden): FAILURE (Allowed forbidden call)\n"
+  end;
+
+  Printf.printf "\nJIT manual tests completed.\n"

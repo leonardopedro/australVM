@@ -66,6 +66,7 @@ dependencies = [
 name = "austral_cranelift_bridge"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "cedar-policy",
  "cranelift",
  "cranelift-codegen",

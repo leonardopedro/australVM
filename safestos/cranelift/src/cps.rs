@@ -5,6 +5,20 @@ use cranelift_codegen::settings::Configurable;
 use std::collections::HashMap;
 use cranelift_codegen::ir::FuncRef;
 
+fn check_cedar_permission(caller: &str, callee: &str) -> Result<(), String> {
+    if callee.starts_with("__") || callee.starts_with("au_") || caller == callee {
+        return Ok(());
+    }
+    
+    crate::policy::CEDAR_ENGINE.with(|engine| {
+        match engine.borrow().is_authorized(caller, "Call", callee) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!("Cedar Policy Denied: {} cannot call {}", caller, callee)),
+            Err(e) => Err(format!("Cedar Error: {}", e)),
+        }
+    })
+}
+
 pub struct CpsModule {
     pub name_map: HashMap<String, FuncId>,
 }
@@ -129,6 +143,7 @@ fn emit_expr(
     vars: &mut HashMap<String, Variable>,
     name_map: &HashMap<String, FuncId>,
     import_map: &HashMap<String, FuncId>,
+    caller_name: &str,
 ) -> Result<Value, String> {
     let opcode = reader.read_u8()?;
     match opcode {
@@ -149,8 +164,11 @@ fn emit_expr(
             let arg_count = reader.read_u32()?;
             let mut args = Vec::new();
             for _ in 0..arg_count {
-                args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map)?);
+                args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?);
             }
+            
+            // Cedar Static Check
+            check_cedar_permission(caller_name, &func_name)?;
             
             if func_name == "__slot_get" || func_name == "__ptr_slot_get" {
                 // (ptr, offset) -> val
@@ -225,62 +243,62 @@ fn emit_expr(
             Ok(if results.is_empty() { mgr.builder.ins().iconst(types::I64, 0) } else { results[0] })
         }
         0x05 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             Ok(mgr.builder.ins().iadd(a, b))
         }
         0x06 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             Ok(mgr.builder.ins().isub(a, b))
         }
         0x10 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedLessThan, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x11 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x12 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedLessThanOrEqual, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x13 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x14 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::Equal, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x15 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::NotEqual, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x18 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             Ok(mgr.builder.ins().imul(a, b))
         }
         0x19 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             Ok(mgr.builder.ins().bnot(a))
         }
         0x20 => {
-            let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+            let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             Ok(mgr.builder.ins().load(types::I64, MemFlags::new(), ptr, 0))
         }
         _ => Err(format!("Unknown opcode: 0x{:02x}", opcode)),
@@ -294,6 +312,7 @@ fn emit_stmt_list(
     vars: &mut HashMap<String, Variable>,
     name_map: &HashMap<String, FuncId>,
     import_map: &HashMap<String, FuncId>,
+    caller_name: &str,
 ) -> Result<(), String> {
     while reader.remaining() > 0 {
         if mgr.terminated { return Ok(()); }
@@ -306,8 +325,11 @@ fn emit_stmt_list(
                     let arg_count = reader.read_u32()?;
                     let mut args = Vec::new();
                     for _ in 0..arg_count {
-                        args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map)?);
+                        args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?);
                     }
+
+                    // Cedar Static Check
+                    check_cedar_permission(caller_name, &func_name)?;
 
                     if func_name == "__slot_get" || func_name == "__ptr_slot_get" {
                         let ptr = args[0];
@@ -356,14 +378,14 @@ fn emit_stmt_list(
                     };
                     mgr.emit_return_call(func_ref, &args);
                 } else {
-                    let val = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+                    let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
                     mgr.emit_return(&[val]);
                 }
                 return Ok(());
             }
             Some(0x08) => {
                 reader.read_u8()?;
-                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
                 let zero = mgr.builder.ins().iconst(types::I64, 0);
                 let cond_bool = mgr.builder.ins().icmp(IntCC::NotEqual, cond, zero);
                 
@@ -380,13 +402,13 @@ fn emit_stmt_list(
                 // Then branch
                 mgr.switch_to_block(then_block);
                 let mut then_reader = CpsReader::new(then_data);
-                emit_stmt_list(jit, &mut then_reader, mgr, vars, name_map, import_map)?;
+                emit_stmt_list(jit, &mut then_reader, mgr, vars, name_map, import_map, caller_name)?;
                 mgr.ensure_terminated(Some(merge_block));
                 
                 // Else branch
                 mgr.switch_to_block(else_block);
                 let mut else_reader = CpsReader::new(else_data);
-                emit_stmt_list(jit, &mut else_reader, mgr, vars, name_map, import_map)?;
+                emit_stmt_list(jit, &mut else_reader, mgr, vars, name_map, import_map, caller_name)?;
                 mgr.ensure_terminated(Some(merge_block));
                 
                 // Merge
@@ -403,7 +425,7 @@ fn emit_stmt_list(
                 
                 // Header: check condition
                 mgr.switch_to_block(header_block);
-                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
                 let zero = mgr.builder.ins().iconst(types::I64, 0);
                 let cond_bool = mgr.builder.ins().icmp(IntCC::NotEqual, cond, zero);
                 
@@ -415,7 +437,7 @@ fn emit_stmt_list(
                 // Body
                 mgr.switch_to_block(body_block);
                 let mut body_reader = CpsReader::new(body_data);
-                emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map)?;
+                emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map, caller_name)?;
                 mgr.emit_jump(header_block);
                 
                 // Seal header only after back-edge is added
@@ -428,7 +450,7 @@ fn emit_stmt_list(
             }
             Some(0x0A) => {
                 reader.read_u8()?;
-                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
                 let case_count = reader.read_u32()?;
                 
                 let merge_block = mgr.create_block();
@@ -449,7 +471,7 @@ fn emit_stmt_list(
                     // Match branch
                     mgr.switch_to_block(match_block);
                     let mut body_reader = CpsReader::new(body_data);
-                    emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map)?;
+                    emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map, caller_name)?;
                     mgr.ensure_terminated(Some(merge_block));
                     
                     // Continue to next case
@@ -460,7 +482,7 @@ fn emit_stmt_list(
                 let def_len = reader.read_u32()?;
                 let def_data = reader.read_bytes(def_len as usize)?;
                 let mut def_reader = CpsReader::new(def_data);
-                emit_stmt_list(jit, &mut def_reader, mgr, vars, name_map, import_map)?;
+                emit_stmt_list(jit, &mut def_reader, mgr, vars, name_map, import_map, caller_name)?;
                 mgr.ensure_terminated(Some(merge_block));
                 
                 // Merge
@@ -469,7 +491,7 @@ fn emit_stmt_list(
             Some(0x03) => {
                 reader.read_u8()?;
                 let name = reader.read_string()?;
-                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
                 let var = if let Some(&v) = vars.get(&name) {
                     v
                 } else {
@@ -481,12 +503,12 @@ fn emit_stmt_list(
             }
             Some(0x30) => {
                 reader.read_u8()?;
-                let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
-                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+                let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
                 mgr.builder.ins().store(MemFlags::new(), val, ptr, 0);
             }
             Some(_) => {
-                let _ = emit_expr(jit, reader, mgr, vars, name_map, import_map)?;
+                let _ = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             }
             None => break,
         }
@@ -549,7 +571,7 @@ pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CpsModule
         }
         
         let mut body_reader = CpsReader::new(body_data);
-        emit_stmt_list(jit, &mut body_reader, &mut mgr, &mut vars, &name_map, &import_map)?;
+        emit_stmt_list(jit, &mut body_reader, &mut mgr, &mut vars, &name_map, &import_map, &name)?;
         
         mgr.ensure_terminated(None);
             mgr.seal_all();
