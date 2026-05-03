@@ -84,13 +84,16 @@ let generate_cell_descriptor (info: cell_info): c_decl list =
   let module_name_str = ident_string info.module_name in
   let desc_name = "cell_desc_" ^ module_name_str in
   
-  (* Initialize descriptor with NULLs, to be populated by the loader or JIT *)
+  (* Initialize descriptor to match vm.h layout *)
   let desc_val = CStruct (Some "CellDescriptor", [
-    CSlot ("cell_alloc", CNull);
-    CSlot ("cell_step", CNull);
-    CSlot ("cell_save", CNull);
-    CSlot ("cell_restore", CNull);
-    CSlot ("type_hash", CVar ("0x" ^ info.type_hash));
+    CSlot ("type_hash", CString ("0x" ^ info.type_hash));
+    CSlot ("required_caps", CInt 1L); (* CAP_ENV by default *)
+    CSlot ("alloc", CNull);
+    CSlot ("drop", CNull);
+    CSlot ("step", CNull);
+    CSlot ("save", CNull);
+    CSlot ("restore", CNull);
+    CSlot ("migrate", CNull);
     CSlot ("_jit_fn_ptr", CNull);
   ]) in
 

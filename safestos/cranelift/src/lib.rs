@@ -252,3 +252,12 @@ pub extern "C" fn au_cedar_check_runtime(
         }
     })
 }
+#[no_mangle]
+pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ffi::c_void) {
+    if desc_ptr.is_null() { return; }
+    // Offset of _jit_fn_ptr in CellDescriptor (vm.h) is 64 bytes
+    unsafe {
+        let ptr = desc_ptr.add(64) as *mut *const std::ffi::c_void;
+        *ptr = jit_ptr;
+    }
+}
