@@ -2,7 +2,7 @@ ALL IN THIS REPOSITORY IS WORK IN PROGRESS, MOSTLY AI GENERATED, PROBABLY NOTHIN
 
 # Austral Policy-Driven VM (SafestOS Extension)
 
-A high-performance, secure runtime for Austral based on **Cranelift JIT** and **AWS Cedar**, inspired by the **Theseus OS** architecture.
+A high-performance, secure runtime for Austral (extended with Tail Call Optimization) based on **Cranelift JIT** and **AWS Cedar**, inspired by the **Theseus OS** architecture.
 
 ## 🚀 Current Status: Phase 11 (Policy-Driven OS VM)
 The project has successfully integrated a multi-tier security model combining compile-time linear type checks with JIT-time Cedar policy enforcement.
