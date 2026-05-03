@@ -125,28 +125,44 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
               let funcs = Compiler_cps.compile_module_cps mono in
               if List.length funcs > 0 then begin
                 let binary = CpsGen.serialize_functions funcs in
-                let cps_file = "cps_" ^ mod_name_string name ^ ".bin" in
-                let oc = open_out_bin cps_file in
-                output_string oc binary;
-                close_out oc;
-                Printf.printf "CPS JIT: Wrote %d functions to %s\n" (List.length funcs) cps_file;
+                Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
+                  (List.length funcs) (String.length binary);
+
+                (* Ensure bridge is initialized *)
+                if not (CamlCompiler_rust_bridge.initialize ()) then
+                  Printf.eprintf "CPS JIT: Warning — Rust bridge failed to initialize\n%!";
+
+                (* Call Rust bridge — returns (ptr, error option) *)
+                let (fn_ptr, jit_err) = CamlCompiler_rust_bridge.compile_binary binary in
+                (match jit_err with
+                 | Some msg -> Printf.eprintf "CPS JIT: Compilation error: %s\n%!" msg
+                 | None -> ());
+                if fn_ptr <> Int64.zero then begin
+                  Printf.eprintf "CPS JIT: Compiled at 0x%Lx, executing…\n%!" fn_ptr;
+                  let res = CamlCompiler_rust_bridge.execute_function fn_ptr in
+                  Printf.eprintf "CPS JIT: Execution result: %Ld\n%!" res
+                end;
+
+                (* Always also emit C backend output for linking *)
                 let unit: c_unit = gen_module env mono in
                 let unit_code: string = render_unit unit in
                 let code: string = (compiler_code c) ^ "\n" ^ unit_code in
                 Compiler (env, code)
               end else begin
-                Printf.printf "CPS JIT: No functions, falling back to C\n";
+                Printf.eprintf "CPS JIT: No compilable functions — using C backend\n%!";
                 let unit: c_unit = gen_module env mono in
                 let unit_code: string = render_unit unit in
                 let code: string = (compiler_code c) ^ "\n" ^ unit_code in
                 Compiler (env, code)
               end
             with exn ->
-              Printf.printf "CPS JIT Error: %s, falling back to C\n" (Printexc.to_string exn);
+              Printf.eprintf "CPS JIT: Unhandled exception (%s) — falling back to C\n%!"
+                (Printexc.to_string exn);
               let unit: c_unit = gen_module env mono in
               let unit_code: string = render_unit unit in
               let code: string = (compiler_code c) ^ "\n" ^ unit_code in
               Compiler (env, code)
+
           end
           else begin
             (* Original C codegen path *)

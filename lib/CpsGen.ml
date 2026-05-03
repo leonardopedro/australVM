@@ -58,6 +58,9 @@ let write_string w s =
   write_u32 w (Int32.of_int len);
   Buffer.add_string w.buf s
 
+let write_bytes w b =
+  Buffer.add_bytes w.buf b
+
 let to_bytes w = Buffer.to_bytes w.buf
 
 let magic_number = 0x43505331l
@@ -81,6 +84,7 @@ type cps_expr =
   | StringLit of string
   | Var of string
   | App of string * cps_expr list
+  | Deref of cps_expr
   | CmpLt of cps_expr * cps_expr
   | CmpGt of cps_expr * cps_expr
   | CmpLte of cps_expr * cps_expr
@@ -98,8 +102,10 @@ and cps_stmt =
   | Skip
   | Let of string * cps_expr * cps_stmt
   | Assign of string * cps_expr
+  | Store of cps_expr * cps_expr
   | If of cps_expr * cps_stmt * cps_stmt
   | While of cps_expr * cps_stmt
+  | Match of cps_expr * (int64 * cps_stmt) list * cps_stmt
   | Block of cps_stmt * cps_stmt
   | Discard of cps_expr
   | Return of cps_expr
@@ -122,6 +128,7 @@ let rec string_of_expr = function
   | StringLit s -> "\"" ^ s ^ "\""
   | Var name -> name
   | App (f, args) -> f ^ "(" ^ String.concat ", " (List.map string_of_expr args) ^ ")"
+  | Deref e -> "*(" ^ string_of_expr e ^ ")"
   | CmpLt (a, b) -> "(" ^ string_of_expr a ^ " < " ^ string_of_expr b ^ ")"
   | CmpGt (a, b) -> "(" ^ string_of_expr a ^ " > " ^ string_of_expr b ^ ")"
   | CmpLte (a, b) -> "(" ^ string_of_expr a ^ " <= " ^ string_of_expr b ^ ")"
@@ -139,8 +146,10 @@ and string_of_stmt = function
   | Skip -> "skip"
   | Let (n, v, body) -> "let " ^ n ^ " = " ^ string_of_expr v ^ "; " ^ string_of_stmt body
   | Assign (n, v) -> n ^ " = " ^ string_of_expr v
+  | Store (ptr, v) -> "*(" ^ string_of_expr ptr ^ ") = " ^ string_of_expr v
   | If (c, t, f) -> "if " ^ string_of_expr c ^ " { " ^ string_of_stmt t ^ " } else { " ^ string_of_stmt f ^ " }"
   | While (c, b) -> "while " ^ string_of_expr c ^ " { " ^ string_of_stmt b ^ " }"
+  | Match (c, _, _) -> "match " ^ string_of_expr c ^ " { ... }"
   | Block (a, b) -> string_of_stmt a ^ "; " ^ string_of_stmt b
   | Discard e -> "discard " ^ string_of_expr e
   | Return e -> "return " ^ string_of_expr e
@@ -171,6 +180,9 @@ let rec serialize_cps_expr w expr =
       write_string w fname;
       write_u32 w (Int32.of_int (List.length args));
       List.iter (serialize_cps_expr w) args
+  | Deref e ->
+      write_u8 w 0x20;
+      serialize_cps_expr w e
   | CmpLt (a, b) ->
       write_u8 w 0x10;
       serialize_cps_expr w a;
@@ -229,16 +241,49 @@ and serialize_cps_stmt w = function
   | Assign (name, value) ->
       write_u8 w 0x03;
       write_string w name;
-      serialize_cps_expr w value;
-      write_u8 w 0x02;
-      write_string w name
+      serialize_cps_expr w value
+  | Store (ptr, value) ->
+      write_u8 w 0x30;
+      serialize_cps_expr w ptr;
+      serialize_cps_expr w value
   | If (cond, then_branch, else_branch) ->
+      write_u8 w 0x08;
       serialize_cps_expr w cond;
-      serialize_cps_stmt w then_branch;
-      serialize_cps_stmt w else_branch
+      let then_w = { buf = Buffer.create 64 } in
+      serialize_cps_stmt then_w then_branch;
+      let then_data = Buffer.to_bytes then_w.buf in
+      write_u32 w (Int32.of_int (Bytes.length then_data));
+      write_bytes w then_data;
+      let else_w = { buf = Buffer.create 64 } in
+      serialize_cps_stmt else_w else_branch;
+      let else_data = Buffer.to_bytes else_w.buf in
+      write_u32 w (Int32.of_int (Bytes.length else_data));
+      write_bytes w else_data
   | While (cond, body) ->
+      write_u8 w 0x09;
       serialize_cps_expr w cond;
-      serialize_cps_stmt w body
+      let body_w = { buf = Buffer.create 64 } in
+      serialize_cps_stmt body_w body;
+      let body_data = Buffer.to_bytes body_w.buf in
+      write_u32 w (Int32.of_int (Bytes.length body_data));
+      write_bytes w body_data
+  | Match (cond, cases, default) ->
+      write_u8 w 0x0A;
+      serialize_cps_expr w cond;
+      write_u32 w (Int32.of_int (List.length cases));
+      List.iter (fun (val_, body) ->
+        write_i64 w val_;
+        let body_w = { buf = Buffer.create 64 } in
+        serialize_cps_stmt body_w body;
+        let body_data = Buffer.to_bytes body_w.buf in
+        write_u32 w (Int32.of_int (Bytes.length body_data));
+        write_bytes w body_data
+      ) cases;
+      let def_w = { buf = Buffer.create 64 } in
+      serialize_cps_stmt def_w default;
+      let def_data = Buffer.to_bytes def_w.buf in
+      write_u32 w (Int32.of_int (Bytes.length def_data));
+      write_bytes w def_data
   | Block (a, b) ->
       serialize_cps_stmt w a;
       serialize_cps_stmt w b
@@ -251,6 +296,9 @@ and serialize_cps_stmt w = function
 let serialize_function_def w func =
   write_string w func.name;
   write_u32 w (Int32.of_int (List.length func.params));
+  List.iter (fun pname ->
+    write_string w pname
+  ) func.params;
   write_u8 w (match func.return_type with
     | I64 -> 0x01
     | I32 -> 0x03
@@ -258,21 +306,19 @@ let serialize_function_def w func =
     | Unit -> 0x00
     | String -> 0x04
     | F64 -> 0x05);
-  List.iter (fun pname ->
-    write_string w pname
-  ) func.params;
-  let temp_w = create_writer () in
-  serialize_cps_stmt temp_w func.body;
-  let body_bytes = to_bytes temp_w in
-  write_u32 w (Int32.of_int (Bytes.length body_bytes));
-  Buffer.add_bytes w.buf body_bytes
+  let body_w = create_writer () in
+  serialize_cps_stmt body_w func.body;
+  let body_data = Buffer.to_bytes body_w.buf in
+  let len = Bytes.length body_data in
+  write_u32 w (Int32.of_int len);
+  write_bytes w body_data
 
 let serialize_functions (funcs: function_def list): string =
   let w = create_writer () in
-  write_u32 w magic_number;
+  write_u32 w 0x43505331l;
   write_u32 w (Int32.of_int (List.length funcs));
   List.iter (serialize_function_def w) funcs;
-  Bytes.to_string (to_bytes w)
+  Bytes.to_string (Buffer.to_bytes w.buf)
 
 (*************************************************************************
  * Direct MAST → Binary Compilation (legacy path)
@@ -309,8 +355,8 @@ let rec compile_expr w ctx expr =
       compile_binop w op lhs rhs
 
   | MIfExpression (cond, tbranch, fbranch) ->
-      compile_expr w ctx cond;
       write_u8 w 0x08;
+      compile_expr w ctx cond;
       compile_expr w ctx tbranch;
       compile_expr w ctx fbranch
 
@@ -339,11 +385,17 @@ let rec compile_expr w ctx expr =
       write_i64 w 0L
 
 and compile_binop w op lhs rhs =
+  let opcode = match op with
+    | Equal -> 0x14
+    | NotEqual -> 0x15
+    | LessThan -> 0x10
+    | LessThanOrEqual -> 0x12
+    | GreaterThan -> 0x11
+    | GreaterThanOrEqual -> 0x13
+  in
+  write_u8 w opcode;
   compile_expr w () lhs;
-  compile_expr w () rhs;
-  match op with
-  | Equal | NotEqual | LessThan | LessThanOrEqual | GreaterThan | GreaterThanOrEqual ->
-      write_u8 w 0x05
+  compile_expr w () rhs
 
 and compile_funcall w func_name args =
   write_u8 w 0x04;

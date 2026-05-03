@@ -1,3 +1,7 @@
 (executable
  (name austral)
- (libraries austral_core))
+ (libraries austral_lib))
+
+(executable
+ (name test_jit)
+ (libraries austral_lib austral_core austral_caml austral_cps_gen austral_rust_bridge))

@@ -1,37 +1,99 @@
 /*
  * rust_bridge.c
  * C stub for linking Rust library with OCaml
- * Provides scheduler_dispatch symbol for linking
  */
 
 #include <stdint.h>
+#include <stdio.h>
+#include <caml/mlvalues.h>
+#include <caml/memory.h>
+#include <caml/alloc.h>
 
 /* Forward declaration from Rust bridge */
-extern int64_t rust_bridge_compile(const unsigned char* data, int len);
-extern int rust_bridge_init(void);
-extern int rust_bridge_ready(void);
+extern int64_t compile_to_function(const unsigned char* data, int len);
+extern int64_t cranelift_init(void);
+extern int64_t cranelift_is_ready(void);
+extern int64_t execute_function(void* ptr);
+extern int64_t execute_function_1(void* ptr, int64_t arg1);
+extern int64_t execute_function_2(void* ptr, int64_t arg1, int64_t arg2);
+extern const char* cranelift_last_error(void);
+extern void cranelift_clear_error(void);
 
 /* OCaml's scheduler_dispatch for linker symbol resolution */
 void scheduler_dispatch(void (*func)(void*), void* state) {
-    /* This is called by compiled cells to enqueue work */
-    /* Real implementation is in runtime/scheduler.c */
-    /* This stub ensures linking succeeds */
     if (func) {
         func(state);
     }
 }
 
 /* Support function for OCaml FFI */
-int64_t compile_to_function(const unsigned char* ir_data, int ir_len) {
-    return rust_bridge_compile(ir_data, ir_len);
+CAMLprim value ocaml_compile_to_function(value ir_data, value ir_len) {
+    CAMLparam2(ir_data, ir_len);
+    int64_t ptr = compile_to_function((const unsigned char*)String_val(ir_data), Int_val(ir_len));
+    CAMLreturn(caml_copy_int64(ptr));
 }
 
 /* Initialize bridge */
-int initialize_bridge(void) {
-    return rust_bridge_init();
+CAMLprim value ocaml_initialize_bridge(value unit) {
+    CAMLparam1(unit);
+    int64_t res = cranelift_init();
+    CAMLreturn(caml_copy_int64(res));
 }
 
 /* Check if ready */
-int bridge_is_ready(void) {
-    return rust_bridge_ready();
+CAMLprim value ocaml_bridge_ready(value unit) {
+    CAMLparam1(unit);
+    int64_t res = cranelift_is_ready();
+    CAMLreturn(caml_copy_int64(res));
+}
+
+/* Execute function */
+CAMLprim value ocaml_execute_function(value ptr) {
+    CAMLparam1(ptr);
+    int64_t res = execute_function((void*)Int64_val(ptr));
+    CAMLreturn(caml_copy_int64(res));
+}
+/* Runtime primitives for JIT-compiled code */
+void au_print_int(int64_t i) {
+    printf("%ld\n", i);
+    fflush(stdout);
+}
+
+void au_exit(int64_t code) {
+    printf("Austral: Exit with code %ld\n", code);
+}
+
+void* au_alloc(int64_t size) {
+    return malloc((size_t)size);
+}
+
+void au_free(void* ptr) {
+    free(ptr);
+}
+
+CAMLprim value ocaml_execute_function_1(value ptr, value arg1) {
+    CAMLparam2(ptr, arg1);
+    int64_t res = execute_function_1((void*)Int64_val(ptr), Int64_val(arg1));
+    CAMLreturn(caml_copy_int64(res));
+}
+
+CAMLprim value ocaml_execute_function_2(value ptr, value arg1, value arg2) {
+    CAMLparam3(ptr, arg1, arg2);
+    int64_t res = execute_function_2((void*)Int64_val(ptr), Int64_val(arg1), Int64_val(arg2));
+    CAMLreturn(caml_copy_int64(res));
+}
+
+/* Retrieve last JIT error as an OCaml string option */
+CAMLprim value ocaml_cranelift_last_error(value unit) {
+    CAMLparam1(unit);
+    CAMLlocal2(some, str);
+    const char* err = cranelift_last_error();
+    if (err == NULL) {
+        CAMLreturn(Val_int(0)); /* None */
+    }
+    str = caml_copy_string(err);
+    cranelift_clear_error();
+    some = caml_alloc(1, 0);
+    Store_field(some, 0, str);
+    CAMLreturn(some); /* Some err_string */
 }

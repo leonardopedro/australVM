@@ -22,7 +22,12 @@ module Mt = Mtast
 let qident_to_string q =
   Identifier.qident_debug_name q
 
-let rec mono_ty_to_cps_type (ty: mono_ty): CpsGen.cps_type =
+let ends_with s suffix =
+  let len_s = String.length s in
+  let len_suffix = String.length suffix in
+  len_s >= len_suffix && String.sub s (len_s - len_suffix) len_suffix = suffix
+
+let mono_ty_to_cps_type (ty: mono_ty): CpsGen.cps_type =
   match ty with
   | MonoInteger (_, (Width8 | Width16 | Width32 | Width64 | WidthByteSize | WidthIndex)) -> I64
   | MonoBoolean -> Bool
@@ -38,9 +43,69 @@ let rec mono_ty_to_cps_type (ty: mono_ty): CpsGen.cps_type =
   | MonoFnPtr _ -> I64
   | _ -> I64
 
-(******************************************************************************)
-(* MAST → CPS EXPRESSION CONVERSION *)
-(******************************************************************************)
+let type_size (_ty: mono_ty): int = 8 (* All types currently 8 bytes in JIT *)
+
+let record_layouts = Hashtbl.create 16
+
+let rec find_slot_offset slots target_name current_offset =
+  match slots with
+  | [] -> 0
+  | MonoSlot (name, ty) :: rest ->
+      if Identifier.ident_string name = Identifier.ident_string target_name then
+        current_offset
+      else
+        find_slot_offset rest target_name (current_offset + type_size ty)
+
+let union_layouts = Hashtbl.create 16
+
+let rec find_union_case_offset cases target_tag_name current_offset =
+  match cases with
+  | [] -> 0
+  | MonoCase (name, _) :: rest ->
+      if Identifier.ident_string name = Identifier.ident_string target_tag_name then
+        current_offset
+      else
+        find_union_case_offset rest target_tag_name (current_offset + 1)
+
+let find_record_slot_offset id name =
+  match Hashtbl.find_opt record_layouts id with
+  | Some slots -> find_slot_offset slots name 0
+  | None -> 0
+
+let rec get_expr_type (expr: Mt.mexpr): mono_ty =
+  match expr with
+  | Mt.MNilConstant -> MonoUnit
+  | Mt.MBoolConstant _ -> MonoBoolean
+  | Mt.MIntConstant _ -> MonoInteger (Signed, Width64)
+  | Mt.MFloatConstant _ -> MonoDoubleFloat
+  | Mt.MStringConstant _ -> MonoPointer (MonoInteger (Unsigned, Width8))
+  | Mt.MConstVar (_, ty) -> ty
+  | Mt.MParamVar (_, ty) -> ty
+  | Mt.MLocalVar (_, ty) -> ty
+  | Mt.MTemporary (_, ty) -> ty
+  | Mt.MGenericFunVar (_, ty) -> ty
+  | Mt.MConcreteFunVar (_, ty) -> ty
+  | Mt.MConcreteFuncall (_, _, _, ty) -> ty
+  | Mt.MGenericFuncall (_, _, ty) -> ty
+  | Mt.MConcreteMethodCall (_, _, _, ty) -> ty
+  | Mt.MGenericMethodCall (_, _, _, ty) -> ty
+  | Mt.MFptrCall (_, _, ty) -> ty
+  | Mt.MCast (_, ty) -> ty
+  | Mt.MComparison _ -> MonoBoolean
+  | Mt.MConjunction _ -> MonoBoolean
+  | Mt.MDisjunction _ -> MonoBoolean
+  | Mt.MNegation _ -> MonoBoolean
+  | Mt.MIfExpression (_, then_e, _) -> get_expr_type then_e
+  | Mt.MRecordConstructor (ty, _) -> ty
+  | Mt.MUnionConstructor (ty, _, _) -> ty
+  | Mt.MEmbed (ty, _, _) -> ty
+  | Mt.MDeref e -> (match get_expr_type e with MonoPointer ty | MonoAddress ty | MonoReadRef (ty, _) | MonoWriteRef (ty, _) -> ty | _ -> MonoUnit)
+  | Mt.MTypecast (_, ty) -> ty
+  | Mt.MSizeOf _ -> MonoInteger (Unsigned, Width64)
+  | Mt.MSlotAccessor (_, _, ty) -> ty
+  | Mt.MPointerSlotAccessor (_, _, ty) -> ty
+  | Mt.MArrayIndex (e, _, _) -> (match get_expr_type e with MonoPointer ty | MonoAddress ty | MonoSpan (ty, _) | MonoSpanMut (ty, _) -> ty | _ -> MonoUnit)
+  | Mt.MSpanIndex (e, _, _) -> (match get_expr_type e with MonoPointer ty | MonoAddress ty | MonoSpan (ty, _) | MonoSpanMut (ty, _) -> ty | _ -> MonoUnit)
 
 let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   match expr with
@@ -53,14 +118,28 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       (try FloatLit (float_of_string s)
        with _ -> FloatLit 0.0)
   | Mt.MStringConstant s -> StringLit (Escape.unescape_string s)
-  | Mt.MConstVar (q, _) -> Var (qident_to_string q)
+  | Mt.MConstVar (q, _) -> 
+      let name = qident_to_string q in
+      if ends_with name ":ExitSuccess" || ends_with name ".ExitSuccess" || name = "ExitSuccess" then
+        App ("au_exit", [IntLit 0L])
+      else
+        Var name
   | Mt.MParamVar (id, _) -> Var (ident_string id)
   | Mt.MLocalVar (id, _) -> Var (ident_string id)
   | Mt.MTemporary (id, _) -> Var (ident_string id)
   | Mt.MGenericFunVar (id, _) -> Var (show_mono_id id)
   | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ show_decl_id id)
   | Mt.MConcreteFuncall (_, q, args, _) ->
-      App (qident_to_string q, List.map convert_expr args)
+      let name = qident_to_string q in
+      let is_exit_success = 
+        ends_with name ":ExitSuccess" || 
+        ends_with name ".ExitSuccess" ||
+        name = "ExitSuccess" 
+      in
+      if is_exit_success then
+        App ("au_exit", [IntLit 0L])
+      else
+        App (name, List.map convert_expr args)
   | Mt.MGenericFuncall (id, args, _) ->
       App (show_mono_id id, List.map convert_expr args)
   | Mt.MConcreteMethodCall (_, q, args, _) ->
@@ -85,17 +164,50 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MNegation e -> Not (convert_expr e)
   | Mt.MIfExpression (cond, then_e, else_e) ->
       App ("__if_expr", [convert_expr cond; convert_expr then_e; convert_expr else_e])
-  | Mt.MRecordConstructor (_, fields) ->
-      App ("__record_new", List.map (fun (_, e) -> convert_expr e) fields)
-  | Mt.MUnionConstructor (_, tag, fields) ->
-      App ("__union_new", BoolLit true :: Var (ident_string tag) :: List.map (fun (_, e) -> convert_expr e) fields)
+  | Mt.MRecordConstructor (ty, fields) ->
+      let size = match ty with
+        | MonoNamedType id -> 
+            (match Hashtbl.find_opt record_layouts id with
+             | Some slots -> List.length slots * 8
+             | None -> 8)
+        | _ -> 8
+      in
+      App ("__record_new", IntLit (Int64.of_int size) :: List.map (fun (_, e) -> convert_expr e) fields)
+  | Mt.MUnionConstructor (ty, tag, fields) ->
+      let (tag_idx, size) = match ty with
+        | MonoNamedType id ->
+            (match Hashtbl.find_opt union_layouts id with
+             | Some cases -> 
+                 (* find_union_case_offset compares identifiers, pass raw tag *)
+                 let idx = find_union_case_offset cases tag 0 in
+                 let max_fields = List.fold_left (fun acc (MonoCase (_, s)) -> max acc (List.length s)) 0 cases in
+                 (idx, (max_fields + 1) * 8)
+             | None -> (0, 16))
+        | _ -> (0, 16)
+      in
+      App ("__union_new", IntLit (Int64.of_int size) :: IntLit (Int64.of_int tag_idx) :: List.map (fun (_, e) -> convert_expr e) fields)
   | Mt.MEmbed (_, _code, args) ->
       App ("__embed", List.map convert_expr args)
   | Mt.MDeref e -> App ("__deref", [convert_expr e])
   | Mt.MTypecast (e, _) -> convert_expr e
   | Mt.MSizeOf _ -> IntLit 0L
-  | Mt.MSlotAccessor (e, name, _) -> App ("__slot_get", [convert_expr e; Var (ident_string name)])
-  | Mt.MPointerSlotAccessor (e, name, _) -> App ("__ptr_slot_get", [convert_expr e; Var (ident_string name)])
+  | Mt.MSlotAccessor (e, name, _) -> 
+      let recty = get_expr_type e in
+      let offset = match recty with
+        | MonoNamedType id -> find_record_slot_offset id name
+        | _ -> 0
+      in
+      App ("__slot_get", [convert_expr e; IntLit (Int64.of_int offset)])
+  | Mt.MPointerSlotAccessor (e, name, _) -> 
+      let recty = match get_expr_type e with
+        | MonoPointer ty | MonoAddress ty | MonoReadRef (ty, _) | MonoWriteRef (ty, _) -> ty
+        | _ -> MonoUnit
+      in
+      let offset = match recty with
+        | MonoNamedType id -> find_record_slot_offset id name
+        | _ -> 0
+      in
+      App ("__ptr_slot_get", [convert_expr e; IntLit (Int64.of_int offset)])
   | Mt.MArrayIndex (arr, idx, _) -> App ("__array_index", [convert_expr arr; convert_expr idx])
   | Mt.MSpanIndex (span, idx, _) -> App ("__span_index", [convert_expr span; convert_expr idx])
 
@@ -133,19 +245,42 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       If (convert_expr cond, convert_stmt then_stmt, convert_stmt else_stmt)
   | Mt.MCase (expr, whens, _) ->
       let scrutinee = convert_expr expr in
+      let scrutinee_ty = get_expr_type expr in
       let tmp_name = "__match_scrutinee" in
       let scrutinee_let = Let (tmp_name, scrutinee, Skip) in
-      let case_stmts = List.map (fun (Mtast.MTypedWhen (tag, bindings, body)) ->
-        let tag_check = CmpEq (Var tmp_name, Var (ident_string tag)) in
-        let binding_stmts = List.map (fun (Mtast.MonoBinding { rename; ty; _ }) ->
-          Let (ident_string rename, zero_value (mono_ty_to_cps_type ty), Skip)
+      (* For union types, load the discriminant tag from offset 0 *)
+      let tag_name = "__match_tag" in
+      let tag_load = match scrutinee_ty with
+        | MonoNamedType _ ->
+            (* Union pointer: load tag from offset 0 *)
+            Let (tag_name, App ("__slot_get", [Var tmp_name; IntLit 0L]), Skip)
+        | _ ->
+            (* Primitive: compare directly *)
+            Let (tag_name, Var tmp_name, Skip)
+      in
+      let case_stmts = List.mapi (fun i (Mtast.MTypedWhen (tag, bindings, body)) ->
+        (* Compute the numeric index of this tag in the union layout *)
+        let tag_idx = match scrutinee_ty with
+          | MonoNamedType id ->
+              (match Hashtbl.find_opt union_layouts id with
+               | Some cases -> find_union_case_offset cases tag 0
+               | None -> i)
+          | _ -> i
+        in
+        let tag_check = CmpEq (Var tag_name, IntLit (Int64.of_int tag_idx)) in
+        (* Bind union fields: load from offsets 8, 16, ... *)
+        let binding_stmts = List.mapi (fun j (Mtast.MonoBinding { rename; _ }) ->
+          let offset = (j + 1) * 8 in
+          Let (ident_string rename,
+               App ("__slot_get", [Var tmp_name; IntLit (Int64.of_int offset)]),
+               Skip)
         ) bindings in
         let body_stmt = convert_stmt body in
         let combined = List.fold_right (fun s acc -> Block (s, acc)) binding_stmts body_stmt in
         If (tag_check, combined, Skip)
       ) whens in
       let combined_cases = List.fold_right (fun s acc -> Block (s, acc)) case_stmts Skip in
-      Block (scrutinee_let, combined_cases)
+      Block (scrutinee_let, Block (tag_load, combined_cases))
   | Mt.MWhile (cond, body) ->
       While (convert_expr cond, convert_stmt body)
   | Mt.MFor (id, start_expr, end_expr, body) ->
@@ -234,6 +369,15 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
 let compile_module_cps (mono_module: Mt.mono_module): CpsGen.function_def list =
   match mono_module with
   | Mt.MonoModule (_, decls) ->
+      (* First pass: collect record layouts *)
+      List.iter (function
+        | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
+        | Mt.MUnionMonomorph (id, cases) -> Hashtbl.replace union_layouts id cases
+        | Mt.MRecord (_, _, _) -> () (* FIXME: handle global records if needed *)
+        | Mt.MUnion (_, _, _) -> ()
+        | _ -> ()
+      ) decls;
+      (* Second pass: convert functions *)
       List.filter_map build_cps_function decls
 
 (******************************************************************************)

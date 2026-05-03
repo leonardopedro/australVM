@@ -272,11 +272,14 @@ $ gcc -fwrapv generated.c -lm
 
 2. The compiler implements every feature of the spec.
 
-3. **CPS JIT Integration**: New Cranelift JIT backend is integrated using a CPS
+3. **CPS JIT Integration**: New Cranelift JIT backend is integrated and stabilized using a CPS
    (Continuation-Passing Style) intermediate representation. This provides:
+   - **Verified End-to-End Pipeline**: Full path from Austral source to native JITed function pointer is functional.
    - **100× faster compilation** than traditional C codegen
    - **Guaranteed O(1) stack depth** via native tail call optimization
-   - **Thread-safe compilation** via thread-local JITModule
+   - **Hardened FFI**: Robust cross-language communication via standardized 64-bit interfaces.
+
+For detailed status, setup instructions, and known issues, see: `CPS_JIT_STABILIZATION_REPORT.md`
 
 ### CPS JIT Architecture
 

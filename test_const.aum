@@ -1,0 +1,6 @@
+module body test_const is
+    function main(): ExitCode is
+        let x: Int64 := 42;
+        return ExitSuccess();
+    end;
+end module body.
