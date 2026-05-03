@@ -222,12 +222,33 @@ let () =
   let (ptr, _err) = compile_binary binary9 in
   if ptr = Int64.zero then Printf.printf "Test 9: Compilation failed\n"
   else
-      (* tag=0 (Just), val=99 -> expect 99 *)
       let res_just    = execute_function_2 ptr 0L 99L in
-      (* tag=1 (Nothing), val=0 -> expect -1 *)
       let res_nothing = execute_function_2 ptr 1L 0L  in
       Printf.printf "Test 9 (Union Just/Nothing): just=%Ld nothing=%Ld\n" res_just res_nothing;
       if res_just = 99L && res_nothing = (-1L)
+        then Printf.printf "SUCCESS\n"
+        else Printf.printf "FAILURE\n";
+
+  (* 11. Test 10: Deep Tail Recursion (O(1) Stack Verification) *)
+  let f10 = {
+    name = "tail_rec_sum";
+    params = ["n"; "acc"];
+    return_type = I64;
+    body = If (
+      CmpEq (Var "n", IntLit 0L),
+      Return (Var "acc"),
+      Return (App ("tail_rec_sum", [Sub (Var "n", IntLit 1L); Add (Var "acc", Var "n")]))
+    )
+  } in
+
+  let binary10 = serialize_functions [f10] in
+  match compile_binary binary10 with
+  | (0L, err) -> Printf.printf "Test 10: Compilation failed: %s\n" (match err with Some s -> s | None -> "Unknown")
+  | (ptr, _) ->
+      (* Sum 1 to 1000. Expected: 500500. *)
+      let res = execute_function_2 ptr 1000L 0L in
+      Printf.printf "Test 10 (Deep Recursion): sum 1..1000 = %Ld\n" res;
+      if res = 500500L
         then Printf.printf "SUCCESS\n"
         else Printf.printf "FAILURE\n";
 

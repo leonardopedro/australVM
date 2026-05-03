@@ -2,6 +2,7 @@ use cranelift_jit::{JITModule, JITBuilder};
 use cranelift_module::Module;
 use std::cell::RefCell;
 use std::ffi::{c_void, CString};
+use cranelift_codegen::settings::Configurable;
 
 pub mod cps;
 

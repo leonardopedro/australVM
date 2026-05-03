@@ -1,6 +1,7 @@
 use cranelift::prelude::*;
-use cranelift_jit::JITModule;
+use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_codegen::settings::Configurable;
 use std::collections::HashMap;
 use cranelift_codegen::ir::FuncRef;
 
