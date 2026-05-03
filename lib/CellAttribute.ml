@@ -81,38 +81,41 @@ let extract_cell_info (module_name: module_name) (decls: mdecl list): cell_info 
 
 (* Generate C code for cell descriptor *)
 let generate_cell_descriptor (info: cell_info): c_decl list =
-  let _ = "cell_descriptor_" ^ ident_string info.module_name in
-  let _ = "typeinfo_" ^ ident_string info.module_name in
+  let module_name_str = ident_string info.module_name in
+  let desc_name = "cell_desc_" ^ module_name_str in
   
-  (* Generate type info *)
-  let type_info_struct = CStructDefinition (
-    Desc ("Type info"),
-    CStruct (Some "TypeInfo", [
-      CSlot ("name", CPointer (CNamedType "char"));
-      CSlot ("required_caps", CNamedType "uint64_t");
-    ])
+  (* Initialize descriptor with NULLs, to be populated by the loader or JIT *)
+  let desc_val = CStruct (Some "CellDescriptor", [
+    CSlot ("cell_alloc", CNull);
+    CSlot ("cell_step", CNull);
+    CSlot ("cell_save", CNull);
+    CSlot ("cell_restore", CNull);
+    CSlot ("type_hash", CVar ("0x" ^ info.type_hash));
+    CSlot ("_jit_fn_ptr", CNull);
+  ]) in
+
+  let desc_decl = CVarDefinition (
+    Desc ("Static cell descriptor"),
+    desc_name,
+    CNamedType "CellDescriptor",
+    desc_val
   ) in
-  
-  (* Generate descriptor pointer *)
-  (*
-  let alloc_func = match info.alloc_func with
-    | Some id -> CVar (gen_decl_id id)
-    | None -> CNull
-  in
-  *) (* Simplified for now *)
-  
-  (* We'll generate a simplified descriptor *)
-  let desc_func = CFunctionDefinition (
-    Desc ("Get cell descriptor"),
-    "get_cell_descriptor",
+
+  let get_desc_func = CFunctionDefinition (
+    Desc ("Get cell descriptor for " ^ module_name_str),
+    "get_cell_descriptor_" ^ module_name_str,
     [],
     CPointer (CNamedType "CellDescriptor"),
-    CBlock []
+    CBlock [
+      CReturn (CAddressOf (CVar desc_name))
+    ]
   ) in
   
-  [type_info_struct; desc_func]
+  [desc_decl; get_desc_func]
 
 (* Generate wrapper functions for cell protocol *)
-let generate_cell_wrappers (_info: cell_info): c_decl list =
-  (* These wrappers glue Austral functions to C CellDescriptor protocol *)
+let generate_cell_wrappers (info: cell_info): c_decl list =
+  (* These wrappers glue Austral functions to C CellDescriptor protocol if needed *)
+  (* For JIT, we often resolve these dynamically, but static wrappers are useful too *)
+  let _ = info in
   []

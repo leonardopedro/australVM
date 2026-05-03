@@ -19,23 +19,25 @@ The existing `SafestOS` C runtime natively implements the Theseus-like "Cell" ar
 ## 📋 Task List
 
 ### Task 1: Integrate Cedar into the Rust Bridge
-- Initialize the `cedar_policy` Rust crate within the VM.
-- Create default authorization schema (`PolicySet`, `Entities`) representing VM modules, actions, and resources.
+- [x] Initialize the `cedar_policy` Rust crate within the VM. ✅
+- [x] Create default authorization schema (`PolicySet`, `Entities`) representing VM modules, actions, and resources. ✅
+- [x] JIT-time static check integrated into `cps.rs`. ✅
 
 ### Task 2: Linear Capability Module (Austral)
-- Define `CedarCapability` and other static capabilities as Linear Types in an Austral standard module (`Capabilities.aui`/`.aum`).
-- Implement fast-path minting functions for obvious rules.
-- Implement the `cedar_ask_permission(Action)` wrapper which calls the FFI `au_cedar_check_runtime` for complex policies.
+- [x] Define `CedarRuntimeCapability` and static capabilities in `capabilities.aui`. ✅
+- [x] Implement the `cedar_authorize` wrapper which calls the Rust FFI. ✅
+- [ ] Implement fast-path minting functions for obvious rules.
 
 ### Task 3: Integrating with C Cell Loader
-- Wire the Austral `hot_swap_module` standard library function to call the existing C FFI `cell_swap(CellId, CellDescriptor*)`.
-- Ensure the Cranelift JIT accurately populates the `_jit_fn_ptr` inside the C `CellDescriptor` struct upon module compilation.
-- The C runtime will enforce the struct compatibility, while Cedar + Austral linear types enforce the authorization logic.
+- [x] Wire `hot_swap_module` to call `__au_swap_module` FFI. ✅
+- [x] Update `CellAttribute.ml` to generate valid `CellDescriptor` C structs. ✅
+- [x] Link C runtime (`cell_loader.c`) into Rust bridge via `build.rs`. ✅
+- [ ] Ensure the Cranelift JIT accurately populates the `_jit_fn_ptr` inside the C `CellDescriptor` struct upon module compilation.
 
 ## 🧪 Verification Plan
-1. [ ] **Cedar Compile-Time Denial**: Write a policy denying `ModA` from calling `ModB`, and verify the JIT rejects the binary IR.
+1. [x] **Cedar Compile-Time Denial**: SUCCESS. Verified that `ForbiddenFunc` calls are blocked at JIT-time with `test_jit.exe`. ✅
 2. [ ] **Hot-Swap Success**: Start a long-running loop, swap out the inner function, and verify the loop dynamically executes the new behavior without crashing.
 
 ---
-**Status**: IN PLANNING
+**Status**: IN PROGRESS (Tasks 1 & 2 infrastructure complete)
 **Dependency**: Phase 10 (Completed ✅)

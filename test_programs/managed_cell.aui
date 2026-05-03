@@ -1,0 +1,10 @@
+module ManagedCell is
+    record State is
+        counter: Int64;
+    end;
+
+    function cell_alloc(): Address;
+    function cell_step(state: Address): Unit;
+    function cell_save(state: Address): Address;
+    function cell_restore(state: Address, serialized: Address): Unit;
+end module.
