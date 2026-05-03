@@ -261,3 +261,8 @@ pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ff
         *ptr = jit_ptr;
     }
 }
+
+#[no_mangle]
+pub extern "C" fn au_cell_swap(old_id: u64, new_desc: *mut std::ffi::c_void) -> bool {
+    unsafe { cell_swap(old_id, new_desc) }
+}

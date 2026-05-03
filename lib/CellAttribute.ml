@@ -9,6 +9,7 @@ open Identifier
 open Id
 open Stages.Mtast
 open CRepr
+open Escape
 
 (* Cell module information *)
 type cell_info = {
@@ -84,20 +85,20 @@ let generate_cell_descriptor (info: cell_info): c_decl list =
   let module_name_str = ident_string info.module_name in
   let desc_name = "cell_desc_" ^ module_name_str in
   
-  (* Initialize descriptor to match vm.h layout *)
-  let desc_val = CStruct (Some "CellDescriptor", [
-    CSlot ("type_hash", CString ("0x" ^ info.type_hash));
-    CSlot ("required_caps", CInt 1L); (* CAP_ENV by default *)
-    CSlot ("alloc", CNull);
-    CSlot ("drop", CNull);
-    CSlot ("step", CNull);
-    CSlot ("save", CNull);
-    CSlot ("restore", CNull);
-    CSlot ("migrate", CNull);
-    CSlot ("_jit_fn_ptr", CNull);
-  ]) in
+  (* Initialize descriptor to match vm.h layout using a struct initializer expression *)
+  let desc_val = CStructInitializer [
+    ("type_hash", CString (escape_string ("0x" ^ info.type_hash)));
+    ("required_caps", CInt "1");
+    ("alloc", CVar "NULL");
+    ("drop", CVar "NULL");
+    ("step", CVar "NULL");
+    ("save", CVar "NULL");
+    ("restore", CVar "NULL");
+    ("migrate", CVar "NULL");
+    ("_jit_fn_ptr", CVar "NULL");
+  ] in
 
-  let desc_decl = CVarDefinition (
+  let desc_decl = CConstantDefinition (
     Desc ("Static cell descriptor"),
     desc_name,
     CNamedType "CellDescriptor",

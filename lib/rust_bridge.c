@@ -20,6 +20,9 @@ extern const char* cranelift_last_error(void);
 extern void cranelift_clear_error(void);
 extern int64_t au_cedar_load_policy(const char* policy);
 extern int64_t au_cedar_check_runtime(const char* p, const char* a, const char* r);
+extern void au_set_cell_jit_ptr(void* desc, void* jit);
+extern int au_cell_swap(uint64_t old_id, void* new_desc);
+extern void scheduler_dispatch(void (*func)(void*), void* state);
 
 /* OCaml's scheduler_dispatch for linker symbol resolution */
 void scheduler_dispatch(void (*func)(void*), void* state) {
@@ -110,4 +113,39 @@ CAMLprim value ocaml_cedar_check_runtime(value p, value a, value r) {
     CAMLparam3(p, a, r);
     int64_t res = au_cedar_check_runtime(String_val(p), String_val(a), String_val(r));
     CAMLreturn(caml_copy_int64(res));
+}
+
+CAMLprim value ocaml_set_cell_jit_ptr(value desc, value jit) {
+    CAMLparam2(desc, jit);
+    au_set_cell_jit_ptr((void*)Int64_val(desc), (void*)Int64_val(jit));
+    CAMLreturn(Val_unit);
+}
+
+CAMLprim value ocaml_cell_swap(value old_id, value new_desc) {
+    CAMLparam2(old_id, new_desc);
+    int res = au_cell_swap(Int64_val(old_id), (void*)Int64_val(new_desc));
+    CAMLreturn(Val_int(res));
+}
+
+CAMLprim value ocaml_scheduler_dispatch(value unit) {
+    CAMLparam1(unit);
+    CAMLreturn(Val_unit);
+}
+
+CAMLprim value ocaml_au_alloc(value size) {
+    CAMLparam1(size);
+    void* ptr = malloc(Int64_val(size));
+    CAMLreturn(caml_copy_int64((int64_t)ptr));
+}
+
+CAMLprim value ocaml_load(value ptr) {
+    CAMLparam1(ptr);
+    int64_t val = *(int64_t*)Int64_val(ptr);
+    CAMLreturn(caml_copy_int64(val));
+}
+
+CAMLprim value ocaml_store(value ptr, value val) {
+    CAMLparam2(ptr, val);
+    *(int64_t*)Int64_val(ptr) = Int64_val(val);
+    CAMLreturn(Val_unit);
 }

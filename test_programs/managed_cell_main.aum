@@ -1,0 +1,17 @@
+module ManagedCellMain is
+    import ManagedCell (cell_alloc, cell_step, State);
+    import Austral.Memory (Address);
+
+    function main(): ExitCode is
+        let state: Address[State] := cell_alloc();
+        -- Manually drive the cell for 5 steps
+        cell_step(state);
+        cell_step(state);
+        cell_step(state);
+        cell_step(state);
+        cell_step(state);
+        
+        -- Return success
+        return ExitSuccess();
+    end;
+end module.

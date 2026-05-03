@@ -20,6 +20,12 @@ external c_execute_function_2 : int64 -> int64 -> int64 -> int64 = "ocaml_execut
 external c_last_error : unit -> string option = "ocaml_cranelift_last_error"
 external c_cedar_load_policy : string -> int64 = "ocaml_cedar_load_policy"
 external c_cedar_check_runtime : string -> string -> string -> int64 = "ocaml_cedar_check_runtime"
+external c_set_cell_jit_ptr : int64 -> int64 -> unit = "ocaml_set_cell_jit_ptr"
+external c_cell_swap : int64 -> int64 -> int = "ocaml_cell_swap"
+external c_scheduler_dispatch : unit -> unit = "ocaml_scheduler_dispatch"
+external c_au_alloc : int64 -> int64 = "ocaml_au_alloc"
+external c_load : int64 -> int64 = "ocaml_load"
+external c_store : int64 -> int64 -> unit = "ocaml_store"
 
 let bridge_initialized = ref false
 
@@ -90,3 +96,21 @@ let cedar_load_policy (policy: string) : bool =
 
 let cedar_check (p: string) (a: string) (r: string) : bool =
   c_cedar_check_runtime p a r = 1L
+
+let set_cell_jit_ptr (desc: int64) (jit: int64) : unit =
+  c_set_cell_jit_ptr desc jit
+
+let cell_swap (old_id: int64) (new_desc: int64) : int =
+  c_cell_swap old_id new_desc
+
+let scheduler_dispatch () : unit =
+  c_scheduler_dispatch ()
+
+let au_alloc (size: int64) : int64 =
+  c_au_alloc size
+
+let load (ptr: int64) : int64 =
+  c_load ptr
+
+let store (ptr: int64) (value: int64) : unit =
+  c_store ptr value

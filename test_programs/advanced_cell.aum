@@ -1,0 +1,49 @@
+module AdvancedCell is
+    import Austral.Memory (
+        Address,
+        Pointer,
+        allocate,
+        load,
+        store,
+        nullCheck
+    );
+
+    record State is
+        counter: Int64;
+    end;
+
+    function cell_alloc(): Address[State] is
+        return allocate();
+    end;
+
+    function cell_step(state_addr: Address[State]): Unit is
+        case nullCheck(state_addr) of
+            when Some(ptr: Pointer[State]) do
+                let s: State := load(ptr);
+                -- AdvancedCell increments by 10!
+                let new_s: State := State(counter => s.counter + 10);
+                store(ptr, new_s);
+            when None do
+                nil;
+        end case;
+        return nil;
+    end;
+
+    function cell_save(state_addr: Address[State]): Address[State] is
+        return state_addr;
+    end;
+
+    function cell_restore(state_addr: Address[State], serialized: Address[State]): Unit is
+        case nullCheck(state_addr) of
+            when Some(ptr: Pointer[State]) do
+                case nullCheck(serialized) of
+                    when Some(s_ptr: Pointer[State]) do
+                        let s: State := load(s_ptr);
+                        store(ptr, s);
+                    when None do nil;
+                end case;
+            when None do nil;
+        end case;
+        return nil;
+    end;
+end module.

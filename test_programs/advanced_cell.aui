@@ -1,0 +1,19 @@
+module AdvancedCell is
+    import Austral.Memory (
+        Address,
+        Pointer,
+        allocate,
+        load,
+        store,
+        nullCheck
+    );
+
+    record State is
+        counter: Int64;
+    end;
+
+    function cell_alloc(): Address[State];
+    function cell_step(state: Address[State]): Unit;
+    function cell_save(state: Address[State]): Address[State];
+    function cell_restore(state: Address[State], serialized: Address[State]): Unit;
+end module.
