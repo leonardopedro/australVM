@@ -5,6 +5,10 @@ use std::ffi::{c_void, CString};
 use cranelift_codegen::settings::Configurable;
 
 pub mod cps;
+pub mod policy;
+
+use policy::CEDAR_ENGINE;
+use std::ffi::CStr;
 
 thread_local! {
     static JIT: RefCell<Option<JITModule>> = RefCell::new(None);
@@ -36,6 +40,14 @@ extern "C" {
     fn au_exit(code: i64);
     fn au_alloc(size: i64) -> *mut u8;
     fn au_free(ptr: *mut u8);
+    fn cell_swap(old_id: u64, new_desc: *const c_void) -> bool;
+}
+
+#[no_mangle]
+pub extern "C" fn __au_swap_module(old_id: u64, new_desc: *const c_void) -> i64 {
+    unsafe {
+        if cell_swap(old_id, new_desc) { 1 } else { 0 }
+    }
 }
 
 #[no_mangle]
@@ -192,4 +204,51 @@ pub extern "C" fn execute_function_2(ptr: *const c_void, arg1: i64, arg2: i64) -
     if ptr.is_null() { return -1; }
     let f: fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
     f(arg1, arg2)
+}
+
+#[no_mangle]
+pub extern "C" fn au_cedar_load_policy(policy_str: *const std::ffi::c_char) -> i64 {
+    if policy_str.is_null() {
+        set_last_error("Null pointer passed to au_cedar_load_policy");
+        return 0;
+    }
+    let c_str = unsafe { CStr::from_ptr(policy_str) };
+    let policy = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            set_last_error("Invalid UTF-8 in policy string");
+            return 0;
+        }
+    };
+
+    CEDAR_ENGINE.with(|engine| {
+        match engine.borrow_mut().load_policy(policy) {
+            Ok(_) => 1,
+            Err(e) => {
+                set_last_error(&e);
+                0
+            }
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn au_cedar_check_runtime(
+    principal_ptr: *const std::ffi::c_char,
+    action_ptr: *const std::ffi::c_char,
+    resource_ptr: *const std::ffi::c_char,
+) -> i64 {
+    if principal_ptr.is_null() || action_ptr.is_null() || resource_ptr.is_null() {
+        return 0; // Deny by default on null
+    }
+    let principal = unsafe { CStr::from_ptr(principal_ptr) }.to_string_lossy();
+    let action = unsafe { CStr::from_ptr(action_ptr) }.to_string_lossy();
+    let resource = unsafe { CStr::from_ptr(resource_ptr) }.to_string_lossy();
+
+    CEDAR_ENGINE.with(|engine| {
+        match engine.borrow().is_authorized(&principal, &action, &resource) {
+            Ok(true) => 1,  // Allowed
+            _ => 0,         // Denied or error
+        }
+    })
 }

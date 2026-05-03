@@ -1,0 +1,56 @@
+module Capabilities is
+    -- ========================================================================
+    -- TIER 1: STATIC CAPABILITIES
+    -- These are strictly minted at compile-time or system boot.
+    -- They require NO runtime checks and NEVER interact with Cedar.
+    -- ========================================================================
+    type MemoryPage: Linear;
+    
+    function allocate_page(): MemoryPage;
+    function free_page(page: MemoryPage): Unit;
+
+    -- ========================================================================
+    -- TIER 2: FAST-PATH DYNAMIC CAPABILITIES
+    -- These rely on simple runtime rules (e.g., bounds checking) executed 
+    -- directly in native code for maximum performance.
+    -- ========================================================================
+    type SafeBuffer: Linear;
+
+    -- If `size` > 0 and fits in memory, returns Some(SafeBuffer). 
+    -- Zero Cedar overhead.
+    function create_safe_buffer(size: Int64): Option[SafeBuffer];
+    function drop_safe_buffer(buf: SafeBuffer): Unit;
+
+    -- ========================================================================
+    -- TIER 3: COMPILE-TIME CEDAR CAPABILITIES
+    -- These are static capabilities whose authorization is evaluated by Cedar 
+    -- *during compilation*. If denied, the compiler rejects the module.
+    -- If granted, they have zero runtime overhead.
+    -- ========================================================================
+    type NetworkAccess: Linear;
+    
+    -- The compiler will intercept the invocation of this function and query Cedar.
+    -- If `Module` is not allowed `Action::NetworkAccess`, compilation fails.
+    function acquire_network_access_static(): NetworkAccess;
+    function drop_network_access(cap: NetworkAccess): Unit;
+
+    -- ========================================================================
+    -- TIER 4: RUNTIME CEDAR CAPABILITIES
+    -- For highly dynamic governance where the policy context relies on runtime 
+    -- state (e.g., Hot-Swapping modules based on user session).
+    -- ========================================================================
+    type CedarRuntimeCapability: Linear;
+
+    type Action: Free is
+        case SwapModule;
+        case RuntimeAccess;
+    end;
+
+    -- Asks Cedar policy engine dynamically at runtime.
+    function cedar_authorize(action: Action): Option[CedarRuntimeCapability];
+
+    -- A privileged function that REQUIRES the caller to pass a CedarRuntimeCapability.
+    function hot_swap_module(cap: CedarRuntimeCapability, module_id: Int64, new_desc: Address): Unit;
+
+    function surrender_cedar_capability(cap: CedarRuntimeCapability): Unit;
+end module.

@@ -15,6 +15,7 @@ cranelift-native = "0.131"
 cranelift-codegen = "0.131"
 cranelift-frontend = "0.131"
 target-lexicon = "0.13"
+cedar-policy = "4.10.0"
 
 [profile.release]
 opt-level = 3
