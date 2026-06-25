@@ -1,0 +1,18 @@
+pragma Unsafe_Module;
+
+module TestKernel is
+    import UnferKernel;
+    import Stdio;
+
+    function main(): Int64 is
+        let v = UnferKernel.kernelVersion();
+        Stdio.printf("Kernel Version: %d\n", v);
+        if v == 1 then
+            Stdio.printf("Success: Kernel version is 1\n");
+            0
+        else
+            Stdio.printf("Failure: Kernel version is %d\n", v);
+            1
+        end
+    end;
+end module.

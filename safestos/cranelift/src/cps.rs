@@ -5,18 +5,11 @@ use cranelift_codegen::settings::Configurable;
 use std::collections::HashMap;
 use cranelift_codegen::ir::FuncRef;
 
-fn check_cedar_permission(caller: &str, callee: &str) -> Result<(), String> {
+fn check_call_permission(caller: &str, callee: &str) -> Result<(), String> {
     if callee.starts_with("__") || callee.starts_with("au_") || caller == callee {
         return Ok(());
     }
-    
-    crate::policy::CEDAR_ENGINE.with(|engine| {
-        match engine.borrow().is_authorized(caller, "Call", callee) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(format!("Cedar Policy Denied: {} cannot call {}", caller, callee)),
-            Err(e) => Err(format!("Cedar Error: {}", e)),
-        }
-    })
+    crate::auth::check(caller, "Call", callee)
 }
 
 pub struct CpsModule {
@@ -167,9 +160,9 @@ fn emit_expr(
                 args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?);
             }
             
-            // Cedar Static Check
-            check_cedar_permission(caller_name, &func_name)?;
-            
+            // Authorization check
+            check_call_permission(caller_name, &func_name)?;
+
             if func_name == "__slot_get" || func_name == "__ptr_slot_get" {
                 // (ptr, offset) -> val
                 let ptr = args[0];
@@ -224,8 +217,8 @@ fn emit_expr(
                 jit.declare_func_in_func(fid, mgr.builder.func)
             } else if let Some(&fid) = import_map.get(&func_name) {
                 jit.declare_func_in_func(fid, mgr.builder.func)
-            } else if func_name.starts_with("__") || func_name.starts_with("au_") {
-                // Auto-declare external/internal builtin
+            } else if func_name.starts_with("__") || func_name.starts_with("au_") || func_name.starts_with("uk_") {
+                // Auto-declare external/internal builtin (au_ = runtime, uk_ = unfer kernel)
                 let mut sig = jit.make_signature();
                 for _ in 0..args.len() {
                     sig.params.push(AbiParam::new(types::I64));
@@ -328,8 +321,8 @@ fn emit_stmt_list(
                         args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?);
                     }
 
-                    // Cedar Static Check
-                    check_cedar_permission(caller_name, &func_name)?;
+                    // Authorization check
+                    check_call_permission(caller_name, &func_name)?;
 
                     if func_name == "__slot_get" || func_name == "__ptr_slot_get" {
                         let ptr = args[0];
@@ -364,7 +357,7 @@ fn emit_stmt_list(
                         jit.declare_func_in_func(fid, mgr.builder.func)
                     } else if let Some(&fid) = import_map.get(&func_name) {
                         jit.declare_func_in_func(fid, mgr.builder.func)
-                    } else if func_name.starts_with("__") || func_name.starts_with("au_") {
+                    } else if func_name.starts_with("__") || func_name.starts_with("au_") || func_name.starts_with("uk_") {
                         let mut sig = jit.make_signature();
                         for _ in 0..args.len() {
                             sig.params.push(AbiParam::new(types::I64));

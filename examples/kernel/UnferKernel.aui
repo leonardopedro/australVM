@@ -1,0 +1,27 @@
+import Austral.Memory (
+    Address
+);
+
+module UnferKernel is
+    """
+    Typed Austral bindings for the unfer probability kernel C ABI (`uk_*`).
+    Byte buffers are passed as `Address[Nat8]` (raw pointer) plus an `Int64`
+    length, matching the i64-centric CPS calling convention. Handles are plain
+    `Int64`. Return values follow the kernel convention: `>= 0` success
+    (handle / byte count), `< 0` is `-code` (see unfer docs/PROTOCOL.md).
+    """
+    function kernelVersion(): Int64;
+    function kernelInit(cfg: Address[Nat8], len: Int64): Int64;
+    function kernelModelCreate(spec: Address[Nat8], len: Int64): Int64;
+    function kernelModelFree(model: Int64): Int64;
+    function kernelSetPrior(model: Int64, json: Address[Nat8], len: Int64): Int64;
+    function kernelSetHamiltonian(model: Int64, json: Address[Nat8], len: Int64): Int64;
+    function kernelEvolve(model: Int64, opts: Address[Nat8], len: Int64): Int64;
+    function kernelCondition(model: Int64, event: Address[Nat8], len: Int64): Int64;
+    function kernelEventProbability(model: Int64, event: Address[Nat8], len: Int64): Int64;
+    function kernelObserve(model: Int64, obs: Address[Nat8], len: Int64): Int64;
+    function kernelGetResult(model: Int64, buf: Address[Nat8], cap: Int64): Int64;
+    function kernelLastError(buf: Address[Nat8], cap: Int64): Int64;
+    function kernelSubscribe(model: Int64, query: Address[Nat8], len: Int64): Int64;
+    function kernelPoll(sub: Int64, buf: Address[Nat8], cap: Int64): Int64;
+end module.

@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+# rlib so in-crate binaries (src/bin/modhost.rs) can link the bridge as a normal
+# Rust dependency; cdylib/staticlib remain for the OCaml FFI link.
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 # Use latest stable Cranelift (0.131)
@@ -15,7 +17,15 @@ cranelift-native = "0.131"
 cranelift-codegen = "0.131"
 cranelift-frontend = "0.131"
 target-lexicon = "0.13"
-cedar-policy = "4.10.0"
+cedar-policy = { version = "4.11.2", optional = true }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+unfer_ffi = { path = "../../../unfer/unfer_ffi", optional = true }
+
+[features]
+default = ["cedar", "unfer-kernel"]
+cedar = ["dep:cedar-policy"]
+unfer-kernel = ["dep:unfer_ffi"]
 
 [build-dependencies]
 cc = "1.0"

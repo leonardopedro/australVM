@@ -47,6 +47,26 @@ let type_size (_ty: mono_ty): int = 8 (* All types currently 8 bytes in JIT *)
 
 let record_layouts = Hashtbl.create 16
 
+let union_layouts = Hashtbl.create 16
+
+let foreign_functions = Hashtbl.create 16
+
+(* Secondary lookup keyed by the foreign function's source identifier (e.g.
+   "kernelVersion"). A cross-module call resolves to the *interface*
+   declaration's decl_id, which differs from the *body* declaration that
+   actually carries the `External_Name`. Keying by name as well lets such
+   imported foreign calls still lower to their external symbol (e.g.
+   "uk_version") instead of a qualified Austral name the JIT cannot resolve. *)
+let foreign_functions_by_name = Hashtbl.create 16
+
+let is_foreign_function id =
+  Hashtbl.mem foreign_functions id
+
+let foreign_external_name id =
+  match Hashtbl.find_opt foreign_functions id with
+  | Some name -> name
+  | None -> ""
+
 let rec find_slot_offset slots target_name current_offset =
   match slots with
   | [] -> 0
@@ -55,8 +75,6 @@ let rec find_slot_offset slots target_name current_offset =
         current_offset
       else
         find_slot_offset rest target_name (current_offset + type_size ty)
-
-let union_layouts = Hashtbl.create 16
 
 let rec find_union_case_offset cases target_tag_name current_offset =
   match cases with
@@ -129,7 +147,7 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MTemporary (id, _) -> Var (ident_string id)
   | Mt.MGenericFunVar (id, _) -> Var (show_mono_id id)
   | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ show_decl_id id)
-  | Mt.MConcreteFuncall (_, q, args, _) ->
+  | Mt.MConcreteFuncall (decl_id, q, args, _) ->
       let name = qident_to_string q in
       let is_exit_success = 
         ends_with name ":ExitSuccess" || 
@@ -138,6 +156,11 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       in
       if is_exit_success then
         App ("au_exit", [IntLit 0L])
+      else if Hashtbl.mem foreign_functions decl_id then
+        App (Hashtbl.find foreign_functions decl_id, List.map convert_expr args)
+      else if Hashtbl.mem foreign_functions_by_name (ident_string (original_name q)) then
+        App (Hashtbl.find foreign_functions_by_name (ident_string (original_name q)),
+             List.map convert_expr args)
       else
         App (name, List.map convert_expr args)
   | Mt.MGenericFuncall (id, args, _) ->
@@ -369,10 +392,13 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
 let compile_module_cps (mono_module: Mt.mono_module): CpsGen.function_def list =
   match mono_module with
   | Mt.MonoModule (_, decls) ->
-      (* First pass: collect record layouts *)
+      (* First pass: collect record layouts and foreign function mappings *)
       List.iter (function
         | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
         | Mt.MUnionMonomorph (id, cases) -> Hashtbl.replace union_layouts id cases
+        | Mt.MForeignFunction (id, name, _, _, ext_name) ->
+            Hashtbl.replace foreign_functions id ext_name;
+            Hashtbl.replace foreign_functions_by_name (ident_string name) ext_name
         | Mt.MRecord (_, _, _) -> () (* FIXME: handle global records if needed *)
         | Mt.MUnion (_, _, _) -> ()
         | _ -> ()

@@ -4,10 +4,14 @@ use std::cell::RefCell;
 use std::ffi::{c_void, CString};
 use cranelift_codegen::settings::Configurable;
 
-pub mod cps;
+pub mod auth;
+#[cfg(feature = "cedar")]
 pub mod policy;
+pub mod cps;
 
+#[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;
+#[cfg(feature = "cedar")]
 use std::ffi::CStr;
 
 thread_local! {
@@ -70,6 +74,27 @@ pub extern "C" fn cranelift_init() -> i64 {
             builder.symbol("au_exit",      au_exit      as *const u8);
             builder.symbol("au_alloc",     au_alloc     as *const u8);
             builder.symbol("au_free",      au_free      as *const u8);
+
+            // Register unfer kernel symbols (uk_*) for JIT-compiled modules.
+            // Access is gated by the manifest auth engine — uk_ is NOT in the
+            // check_call_permission whitelist, so modules need explicit grants.
+            #[cfg(feature = "unfer-kernel")]
+            {
+                builder.symbol("uk_version",           unfer_ffi::uk_version           as *const u8);
+                builder.symbol("uk_init",              unfer_ffi::uk_init              as *const u8);
+                builder.symbol("uk_model_create",      unfer_ffi::uk_model_create      as *const u8);
+                builder.symbol("uk_model_free",        unfer_ffi::uk_model_free        as *const u8);
+                builder.symbol("uk_set_prior",         unfer_ffi::uk_set_prior         as *const u8);
+                builder.symbol("uk_set_hamiltonian",   unfer_ffi::uk_set_hamiltonian   as *const u8);
+                builder.symbol("uk_evolve",             unfer_ffi::uk_evolve             as *const u8);
+                builder.symbol("uk_condition",          unfer_ffi::uk_condition          as *const u8);
+                builder.symbol("uk_event_probability", unfer_ffi::uk_event_probability as *const u8);
+                builder.symbol("uk_observe",           unfer_ffi::uk_observe           as *const u8);
+                builder.symbol("uk_get_result",        unfer_ffi::uk_get_result        as *const u8);
+                builder.symbol("uk_last_error",         unfer_ffi::uk_last_error         as *const u8);
+                builder.symbol("uk_subscribe",         unfer_ffi::uk_subscribe         as *const u8);
+                builder.symbol("uk_poll",               unfer_ffi::uk_poll               as *const u8);
+            }
 
             Ok(JITModule::new(builder))
         })() {
@@ -206,6 +231,7 @@ pub extern "C" fn execute_function_2(ptr: *const c_void, arg1: i64, arg2: i64) -
     f(arg1, arg2)
 }
 
+#[cfg(feature = "cedar")]
 #[no_mangle]
 pub extern "C" fn au_cedar_load_policy(policy_str: *const std::ffi::c_char) -> i64 {
     if policy_str.is_null() {
@@ -232,6 +258,7 @@ pub extern "C" fn au_cedar_load_policy(policy_str: *const std::ffi::c_char) -> i
     })
 }
 
+#[cfg(feature = "cedar")]
 #[no_mangle]
 pub extern "C" fn au_cedar_check_runtime(
     principal_ptr: *const std::ffi::c_char,
@@ -252,6 +279,37 @@ pub extern "C" fn au_cedar_check_runtime(
         }
     })
 }
+// When Cedar is compiled out, the OCaml bridge still links against these
+// symbols (it declares `external ... = "ocaml_cedar_load_policy"`). Provide
+// no-op stubs so `--no-default-features` builds remain link-compatible; the
+// active authorizer in that configuration is the `auth.rs` engine (ManifestAuth
+// or AllowAll), not Cedar, so policy loads are intentionally ignored and runtime
+// checks defer to `auth::check` (which returns Allow under the AllowAll default).
+#[cfg(not(feature = "cedar"))]
+#[no_mangle]
+pub extern "C" fn au_cedar_load_policy(_policy_str: *const std::ffi::c_char) -> i64 {
+    1
+}
+
+#[cfg(not(feature = "cedar"))]
+#[no_mangle]
+pub extern "C" fn au_cedar_check_runtime(
+    principal_ptr: *const std::ffi::c_char,
+    action_ptr: *const std::ffi::c_char,
+    resource_ptr: *const std::ffi::c_char,
+) -> i64 {
+    if principal_ptr.is_null() || action_ptr.is_null() || resource_ptr.is_null() {
+        return 0;
+    }
+    let principal = unsafe { std::ffi::CStr::from_ptr(principal_ptr) }.to_string_lossy();
+    let action = unsafe { std::ffi::CStr::from_ptr(action_ptr) }.to_string_lossy();
+    let resource = unsafe { std::ffi::CStr::from_ptr(resource_ptr) }.to_string_lossy();
+    match crate::auth::check(&principal, &action, &resource) {
+        Ok(()) => 1,
+        Err(_) => 0,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ffi::c_void) {
     if desc_ptr.is_null() { return; }
@@ -265,4 +323,17 @@ pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ff
 #[no_mangle]
 pub extern "C" fn au_cell_swap(old_id: u64, new_desc: *mut std::ffi::c_void) -> bool {
     unsafe { cell_swap(old_id, new_desc) }
+}
+
+#[cfg(all(test, feature = "unfer-kernel"))]
+mod tests {
+    #[test]
+    fn uk_version_linkage() {
+        assert_eq!(unfer_ffi::uk_version(), 1);
+    }
+
+    #[test]
+    fn uk_init_linkage() {
+        assert_eq!(unfer_ffi::uk_init(std::ptr::null(), 0), 0);
+    }
 }

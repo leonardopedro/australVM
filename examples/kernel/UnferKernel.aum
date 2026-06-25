@@ -1,0 +1,49 @@
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+
+module body UnferKernel is
+    pragma Foreign_Import(External_Name => "uk_version");
+    function kernelVersion(): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_init");
+    function kernelInit(cfg: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_model_create");
+    function kernelModelCreate(spec: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_model_free");
+    function kernelModelFree(model: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_set_prior");
+    function kernelSetPrior(model: Int64, json: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_set_hamiltonian");
+    function kernelSetHamiltonian(model: Int64, json: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_evolve");
+    function kernelEvolve(model: Int64, opts: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_condition");
+    function kernelCondition(model: Int64, event: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_event_probability");
+    function kernelEventProbability(model: Int64, event: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_observe");
+    function kernelObserve(model: Int64, obs: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_get_result");
+    function kernelGetResult(model: Int64, buf: Address[Nat8], cap: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_last_error");
+    function kernelLastError(buf: Address[Nat8], cap: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_subscribe");
+    function kernelSubscribe(model: Int64, query: Address[Nat8], len: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_poll");
+    function kernelPoll(sub: Int64, buf: Address[Nat8], cap: Int64): Int64 is end;
+end module body.
