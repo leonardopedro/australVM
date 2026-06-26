@@ -162,7 +162,12 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
         App (Hashtbl.find foreign_functions_by_name (ident_string (original_name q)),
              List.map convert_expr args)
       else
-        App (name, List.map convert_expr args)
+        (* Non-foreign call, possibly cross-module (e.g. a module calling
+           UnferKernel::wrapModel). Functions are emitted under their *unqualified*
+           name (build_cps_function uses `ident_string name`) into a flat JIT
+           function table, so the call must use the unqualified name too. The
+           qualified debug name ("UnferKernel::wrapModel") would not resolve. *)
+        App (ident_string (original_name q), List.map convert_expr args)
   | Mt.MGenericFuncall (id, args, _) ->
       App (show_mono_id id, List.map convert_expr args)
   | Mt.MConcreteMethodCall (_, q, args, _) ->
@@ -248,8 +253,18 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
   | Mt.MDestructure (bindings, expr, body) ->
       let tmp_name = "__destructure_tmp" in
       let tmp_let = Let (tmp_name, convert_expr expr, Skip) in
+      (* `__slot_get` takes a numeric byte offset, not the field name. Resolve
+         each field's offset from the record's slot layout, mirroring how
+         MSlotAccessor lowers `record.field`. Passing `Var name` here (the old
+         behaviour) made the JIT look up a non-existent variable named after the
+         field -> "Undefined variable: <field>". *)
+      let recty = get_expr_type expr in
       let binding_stmts = List.map (fun (Mtast.MonoBinding { rename; name; _ }) ->
-        Let (ident_string rename, App ("__slot_get", [Var tmp_name; Var (ident_string name)]), Skip)
+        let offset = match recty with
+          | MonoNamedType id -> find_record_slot_offset id name
+          | _ -> 0
+        in
+        Let (ident_string rename, App ("__slot_get", [Var tmp_name; IntLit (Int64.of_int offset)]), Skip)
       ) bindings in
       let body_stmt = convert_stmt body in
       let combined = List.fold_right (fun s acc -> Block (s, acc)) binding_stmts body_stmt in
@@ -261,9 +276,12 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
        | Var name -> Assign (name, src_expr)
        | _ -> Assign ("__assign_target", src_expr))
   | Mt.MAssignVar (q, src) ->
-      Assign (qident_to_string q, convert_expr src)
+      (* Use the unqualified name: MLet declares the local under `ident_string id`,
+         but the qualified debug name (e.g. "T1::x") would assign a *different*
+         JIT variable, leaving the declared one at its zero-init. *)
+      Assign (ident_string (original_name q), convert_expr src)
   | Mt.MInitialAssign (q, src) ->
-      Assign (qident_to_string q, convert_expr src)
+      Assign (ident_string (original_name q), convert_expr src)
   | Mt.MIf (cond, then_stmt, else_stmt) ->
       If (convert_expr cond, convert_stmt then_stmt, convert_stmt else_stmt)
   | Mt.MCase (expr, whens, _) ->

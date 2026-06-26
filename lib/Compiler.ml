@@ -123,6 +123,8 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
           if !use_cps_jit then begin
             try
               let funcs = Compiler_cps.compile_module_cps mono in
+              (if Sys.getenv_opt "CPS_DEBUG" <> None then
+                 Compiler_cps.debug_print_cps_functions funcs);
               if List.length funcs > 0 then begin
                 let binary = CpsGen.serialize_functions funcs in
                 Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"

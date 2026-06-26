@@ -159,16 +159,30 @@ pub extern "C" fn compile_to_function_named(
                         std::ptr::null()
                     }
                     Ok(_) => {
-                        let func_id = if name_str.is_empty() {
-                            module.name_map.values().next().copied()
+                        // Entry selection. With an explicit name, resolve it. With
+                        // no name (the per-module compile path), execute only the
+                        // conventional `run` entry point if present -- never a
+                        // random function from the module's table. Library modules
+                        // (e.g. UnferKernel) have no `run`: their functions are
+                        // still defined for cross-module linking, but executing one
+                        // with garbage arguments could dereference a non-pointer and
+                        // crash. Returning null here makes the caller skip execution.
+                        let (func_id, quiet_skip) = if name_str.is_empty() {
+                            match module.name_map.get("run").copied() {
+                                Some(fid) => (Some(fid), false),
+                                None => (None, true),
+                            }
                         } else {
-                            module.name_map.get(name_str).copied()
+                            (module.name_map.get(name_str).copied(), false)
                         };
 
                         if let Some(fid) = func_id {
                             let ptr = jit.get_finalized_function(fid) as *const c_void;
                             eprintln!("CPS: SUCCESS compiled at {:?}", ptr);
                             ptr
+                        } else if quiet_skip {
+                            // No entry point to run in this (library) module.
+                            std::ptr::null()
                         } else {
                             let avail: Vec<&String> = module.name_map.keys().collect();
                             let msg = format!(

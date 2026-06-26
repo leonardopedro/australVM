@@ -12,6 +12,19 @@ fn check_call_permission(caller: &str, callee: &str) -> Result<(), String> {
     crate::auth::check(caller, "Call", callee)
 }
 
+/// Declare `name` as an external import with `argc` i64 params returning i64,
+/// returning its `FuncId`. Used for runtime/kernel builtins and for cross-module
+/// Austral calls (resolved by name to a definition in the persistent JITModule).
+fn declare_import(jit: &mut JITModule, name: &str, argc: usize) -> Result<FuncId, String> {
+    let mut sig = jit.make_signature();
+    for _ in 0..argc {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    jit.declare_function(name, Linkage::Import, &sig)
+        .map_err(|e| format!("Failed to declare import {}: {}", name, e))
+}
+
 pub struct CpsModule {
     pub name_map: HashMap<String, FuncId>,
 }
@@ -217,19 +230,16 @@ fn emit_expr(
                 jit.declare_func_in_func(fid, mgr.builder.func)
             } else if let Some(&fid) = import_map.get(&func_name) {
                 jit.declare_func_in_func(fid, mgr.builder.func)
-            } else if func_name.starts_with("__") || func_name.starts_with("au_") || func_name.starts_with("uk_") {
-                // Auto-declare external/internal builtin (au_ = runtime, uk_ = unfer kernel)
-                let mut sig = jit.make_signature();
-                for _ in 0..args.len() {
-                    sig.params.push(AbiParam::new(types::I64));
-                }
-                // Most return i64, some might be void but i64 is safe for now
-                sig.returns.push(AbiParam::new(types::I64));
-                let fid = jit.declare_function(&func_name, cranelift_module::Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare builtin {}: {}", func_name, e))?;
-                jit.declare_func_in_func(fid, mgr.builder.func)
             } else {
-                return Err(format!("Call to unknown function: {}", func_name));
+                // Not defined in this module's table. Declare it as an external
+                // import and let the linker resolve it by name. This covers both
+                // (a) runtime/kernel builtins (au_/uk_/__ registered as native
+                // symbols) and (b) cross-module Austral calls: the callee was
+                // defined (Linkage::Export) when its own module was compiled into
+                // this same persistent JITModule, so an Import of the same name
+                // links to that definition at finalize time.
+                let fid = declare_import(jit, &func_name, args.len())?;
+                jit.declare_func_in_func(fid, mgr.builder.func)
             };
             let call = mgr.builder.ins().call(func_ref, &args);
             let results = mgr.builder.inst_results(call);
@@ -357,17 +367,11 @@ fn emit_stmt_list(
                         jit.declare_func_in_func(fid, mgr.builder.func)
                     } else if let Some(&fid) = import_map.get(&func_name) {
                         jit.declare_func_in_func(fid, mgr.builder.func)
-                    } else if func_name.starts_with("__") || func_name.starts_with("au_") || func_name.starts_with("uk_") {
-                        let mut sig = jit.make_signature();
-                        for _ in 0..args.len() {
-                            sig.params.push(AbiParam::new(types::I64));
-                        }
-                        sig.returns.push(AbiParam::new(types::I64));
-                        let fid = jit.declare_function(&func_name, cranelift_module::Linkage::Import, &sig)
-                            .map_err(|e| format!("Failed to declare builtin {}: {}", func_name, e))?;
-                        jit.declare_func_in_func(fid, mgr.builder.func)
                     } else {
-                        return Err(format!("Tail call to unknown function: {}", func_name));
+                        // External import: builtin or cross-module Austral call
+                        // (see the matching branch in emit_expr).
+                        let fid = declare_import(jit, &func_name, args.len())?;
+                        jit.declare_func_in_func(fid, mgr.builder.func)
                     };
                     mgr.emit_return_call(func_ref, &args);
                 } else {
