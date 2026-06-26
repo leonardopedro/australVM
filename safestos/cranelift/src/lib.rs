@@ -92,8 +92,6 @@ pub extern "C" fn cranelift_init() -> i64 {
                 builder.symbol("uk_observe",           unfer_ffi::uk_observe           as *const u8);
                 builder.symbol("uk_get_result",        unfer_ffi::uk_get_result        as *const u8);
                 builder.symbol("uk_last_error",         unfer_ffi::uk_last_error         as *const u8);
-                builder.symbol("uk_subscribe",         unfer_ffi::uk_subscribe         as *const u8);
-                builder.symbol("uk_poll",               unfer_ffi::uk_poll               as *const u8);
             }
 
             Ok(JITModule::new(builder))

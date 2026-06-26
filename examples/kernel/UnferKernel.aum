@@ -40,10 +40,4 @@ module body UnferKernel is
 
     pragma Foreign_Import(External_Name => "uk_last_error");
     function kernelLastError(buf: Address[Nat8], cap: Int64): Int64 is end;
-
-    pragma Foreign_Import(External_Name => "uk_subscribe");
-    function kernelSubscribe(model: Int64, query: Address[Nat8], len: Int64): Int64 is end;
-
-    pragma Foreign_Import(External_Name => "uk_poll");
-    function kernelPoll(sub: Int64, buf: Address[Nat8], cap: Int64): Int64 is end;
 end module body.

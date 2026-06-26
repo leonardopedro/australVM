@@ -22,6 +22,4 @@ module UnferKernel is
     function kernelObserve(model: Int64, obs: Address[Nat8], len: Int64): Int64;
     function kernelGetResult(model: Int64, buf: Address[Nat8], cap: Int64): Int64;
     function kernelLastError(buf: Address[Nat8], cap: Int64): Int64;
-    function kernelSubscribe(model: Int64, query: Address[Nat8], len: Int64): Int64;
-    function kernelPoll(sub: Int64, buf: Address[Nat8], cap: Int64): Int64;
 end module.
