@@ -41,6 +41,21 @@ module body UnferKernel is
     pragma Foreign_Import(External_Name => "uk_model_free");
     function kernelModelFree(model: Int64): Int64 is end;
 
+    function kernelModelCreateStr(spec: Span[Nat8, Static]): Int64 is
+        -- A Span is represented in the JIT as a heap {data, size} struct, so
+        -- `$1.data`/`$1.size` recover the raw pointer and length the C ABI wants.
+        let addr: Address[Nat8] := @embed(Address[Nat8], "$1.data", spec);
+        let len: Int64 := @embed(Int64, "$1.size", spec);
+        return kernelModelCreate(addr, len);
+    end;
+
+    function kernelEventProbabilityStr(model: Int64, event: Span[Nat8, Static]): Int64 is
+        -- As above, decompose the event-predicate span into pointer + length.
+        let addr: Address[Nat8] := @embed(Address[Nat8], "$1.data", event);
+        let len: Int64 := @embed(Int64, "$1.size", event);
+        return kernelEventProbability(model, addr, len);
+    end;
+
     pragma Foreign_Import(External_Name => "uk_set_prior");
     function kernelSetPrior(model: Int64, json: Address[Nat8], len: Int64): Int64 is end;
 

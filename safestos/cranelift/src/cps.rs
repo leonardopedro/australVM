@@ -304,6 +304,47 @@ fn emit_expr(
             let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
             Ok(mgr.builder.ins().load(types::I64, MemFlags::new(), ptr, 0))
         }
+        0x21 => {
+            // String/byte constant. Embed the bytes in heap memory and yield a
+            // Span value, represented as a pointer to a heap {data@0, size@8}
+            // struct (so `@embed "$1.data"`/`"$1.size"` are slot-0/slot-8 loads,
+            // and the kernel C ABI receives a real (ptr, len) pair after the
+            // module decomposes the span). This sidesteps the by-value 16-byte
+            // au_span_t aggregate, which the i64-centric JIT cannot pass.
+            let len = reader.read_u32()? as usize;
+            let bytes = reader.read_bytes(len)?.to_vec();
+            let alloc_fref = {
+                let mut sig = jit.make_signature();
+                sig.params.push(AbiParam::new(types::I64));
+                sig.returns.push(AbiParam::new(types::I64));
+                let fid = jit
+                    .declare_function("au_alloc", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare au_alloc: {}", e))?;
+                jit.declare_func_in_func(fid, mgr.builder.func)
+            };
+            // Data buffer (at least 1 byte so au_alloc never sees 0).
+            let data_size = mgr.builder.ins().iconst(types::I64, len.max(1) as i64);
+            let data_call = mgr.builder.ins().call(alloc_fref, &[data_size]);
+            let data_ptr = mgr.builder.inst_results(data_call)[0];
+            for (i, &b) in bytes.iter().enumerate() {
+                let bv = mgr.builder.ins().iconst(types::I8, b as i64);
+                mgr.builder
+                    .ins()
+                    .store(MemFlags::new(), bv, data_ptr, i as i32);
+            }
+            // Span struct {data, size}.
+            let span_size = mgr.builder.ins().iconst(types::I64, 16);
+            let span_call = mgr.builder.ins().call(alloc_fref, &[span_size]);
+            let span_ptr = mgr.builder.inst_results(span_call)[0];
+            let len_val = mgr.builder.ins().iconst(types::I64, len as i64);
+            mgr.builder
+                .ins()
+                .store(MemFlags::new(), data_ptr, span_ptr, 0);
+            mgr.builder
+                .ins()
+                .store(MemFlags::new(), len_val, span_ptr, 8);
+            Ok(span_ptr)
+        }
         _ => Err(format!("Unknown opcode: 0x{:02x}", opcode)),
     }
 }

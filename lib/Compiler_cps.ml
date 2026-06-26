@@ -135,7 +135,10 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MFloatConstant s ->
       (try FloatLit (float_of_string s)
        with _ -> FloatLit 0.0)
-  | Mt.MStringConstant s -> StringLit (Escape.unescape_string s)
+  (* escaped_to_string yields the real processed bytes; unescape_string would
+     re-insert C-format escape sequences for quotes/newlines, corrupting the
+     embedded buffer (a JSON literal would gain stray backslashes). *)
+  | Mt.MStringConstant s -> StringLit (Escape.escaped_to_string s)
   | Mt.MConstVar (q, _) -> 
       let name = qident_to_string q in
       if ends_with name ":ExitSuccess" || ends_with name ".ExitSuccess" || name = "ExitSuccess" then
@@ -192,14 +195,14 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MNegation e -> Not (convert_expr e)
   | Mt.MIfExpression (cond, then_e, else_e) ->
       App ("__if_expr", [convert_expr cond; convert_expr then_e; convert_expr else_e])
-  | Mt.MRecordConstructor (ty, fields) ->
-      let size = match ty with
-        | MonoNamedType id -> 
-            (match Hashtbl.find_opt record_layouts id with
-             | Some slots -> List.length slots * 8
-             | None -> 8)
-        | _ -> 8
-      in
+  | Mt.MRecordConstructor (_ty, fields) ->
+      (* Every slot is 8 bytes in the JIT, and the constructor stores exactly one
+         value per field, so the field count is the authoritative size. Don't rely
+         on record_layouts here: concrete (non-generic) records arrive as `MRecord`
+         keyed by decl_id, which the layout pass does not register, so the old
+         lookup silently fell back to 8 bytes and under-allocated multi-field
+         records (heap corruption). *)
+      let size = max (List.length fields * 8) 8 in
       App ("__record_new", IntLit (Int64.of_int size) :: List.map (fun (_, e) -> convert_expr e) fields)
   | Mt.MUnionConstructor (ty, tag, fields) ->
       let (tag_idx, size) = match ty with
@@ -214,8 +217,16 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
         | _ -> (0, 16)
       in
       App ("__union_new", IntLit (Int64.of_int size) :: IntLit (Int64.of_int tag_idx) :: List.map (fun (_, e) -> convert_expr e) fields)
-  | Mt.MEmbed (_, _code, args) ->
-      App ("__embed", List.map convert_expr args)
+  | Mt.MEmbed (_, code, args) ->
+      let cargs = List.map convert_expr args in
+      (* Recognise the Span field accessors used by the standard library and the
+         kernel bindings. A Span is represented in the JIT as a pointer to a heap
+         {data@0, size@8} struct (see the 0x21 string-constant lowering in
+         cps.rs), so `$1.data`/`$1.size` are slot loads. *)
+      (match String.trim code, cargs with
+       | "$1.data", [a] -> App ("__slot_get", [a; IntLit 0L])
+       | "$1.size", [a] -> App ("__slot_get", [a; IntLit 8L])
+       | _ -> App ("__embed", cargs))
   | Mt.MDeref e -> App ("__deref", [convert_expr e])
   | Mt.MTypecast (e, _) -> convert_expr e
   | Mt.MSizeOf _ -> IntLit 0L

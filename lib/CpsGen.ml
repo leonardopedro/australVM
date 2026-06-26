@@ -169,9 +169,13 @@ let rec serialize_cps_expr w expr =
   | FloatLit f ->
       write_u8 w 0x01;
       write_i64 w (Int64.of_float f)
-  | StringLit _ ->
-      write_u8 w 0x01;
-      write_i64 w 0L
+  | StringLit s ->
+      (* 0x21 = string/byte constant. The JIT embeds the bytes in memory and
+         yields a Span pointer (heap {data, size}); see cps.rs. *)
+      write_u8 w 0x21;
+      let bytes = Bytes.of_string s in
+      write_u32 w (Int32.of_int (Bytes.length bytes));
+      write_bytes w bytes
   | Var name ->
       write_u8 w 0x02;
       write_string w name

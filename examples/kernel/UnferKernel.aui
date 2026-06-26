@@ -31,6 +31,21 @@ module UnferKernel is
     function kernelModelFree(model: Int64): Int64;
 
     """
+    Create a model directly from a `Span[Nat8, Static]` (e.g. a JSON string
+    literal): decomposes the span into its data pointer and length and forwards
+    to `kernelModelCreate`. This is the ergonomic entry for module code, which
+    can pass a JSON spec literal without manual pointer/length juggling.
+    """
+    function kernelModelCreateStr(spec: Span[Nat8, Static]): Int64;
+
+    """
+    Compute the probability of an event predicate (given as a `Span[Nat8,
+    Static]` JSON) on a model handle. The kernel computes and stores the
+    probability; the return is the kernel status code (`0` on success).
+    """
+    function kernelEventProbabilityStr(model: Int64, event: Span[Nat8, Static]): Int64;
+
+    """
     Wrap a raw model handle (as returned by `kernelModelCreate`) in a linear
     `Model`. From here the type system tracks the obligation to free it.
     """
