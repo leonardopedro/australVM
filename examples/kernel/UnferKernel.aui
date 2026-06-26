@@ -46,6 +46,13 @@ module UnferKernel is
     function kernelEventProbabilityStr(model: Int64, event: Span[Nat8, Static]): Int64;
 
     """
+    Evolve a model for the duration/options given as a `Span[Nat8, Static]` JSON
+    literal (e.g. `"{\"t\":1.0}"`): decomposes the span into pointer + length and
+    forwards to `kernelEvolve`. The ergonomic evolve entry for module code.
+    """
+    function kernelEvolveStr(model: Int64, opts: Span[Nat8, Static]): Int64;
+
+    """
     Wrap a raw model handle (as returned by `kernelModelCreate`) in a linear
     `Model`. From here the type system tracks the obligation to free it.
     """

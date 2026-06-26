@@ -56,6 +56,13 @@ module body UnferKernel is
         return kernelEventProbability(model, addr, len);
     end;
 
+    function kernelEvolveStr(model: Int64, opts: Span[Nat8, Static]): Int64 is
+        -- Decompose the evolve-options span into pointer + length for the C ABI.
+        let addr: Address[Nat8] := @embed(Address[Nat8], "$1.data", opts);
+        let len: Int64 := @embed(Int64, "$1.size", opts);
+        return kernelEvolve(model, addr, len);
+    end;
+
     pragma Foreign_Import(External_Name => "uk_set_prior");
     function kernelSetPrior(model: Int64, json: Address[Nat8], len: Int64): Int64 is end;
 
