@@ -6,14 +6,48 @@ module UnferKernel is
     """
     Typed Austral bindings for the unfer probability kernel C ABI (`uk_*`).
     Byte buffers are passed as `Address[Nat8]` (raw pointer) plus an `Int64`
-    length, matching the i64-centric CPS calling convention. Handles are plain
-    `Int64`. Return values follow the kernel convention: `>= 0` success
-    (handle / byte count), `< 0` is `-code` (see unfer docs/PROTOCOL.md).
+    length, matching the i64-centric CPS calling convention. Return values
+    follow the kernel convention: `>= 0` success (handle / byte count), `< 0`
+    is `-code` (see unfer docs/PROTOCOL.md).
+
+    Model handles come in two flavours:
+
+      * The raw `Int64` returned by `kernelModelCreate` / consumed by
+        `kernelModelFree` — the direct C ABI, where freeing is caller
+        discipline.
+
+      * `Model`, a **linear** wrapper (P2.7). A `Model` value must be consumed
+        exactly once by `freeModel`: forgetting it is a leak the compiler
+        rejects, and consuming it twice is a use-after-free the compiler
+        rejects. Prefer `Model` in module code; the linear type makes
+        `uk_model_free` an obligation enforced by the type system rather than
+        by convention.
     """
+    type Model: Linear;
+
     function kernelVersion(): Int64;
     function kernelInit(cfg: Address[Nat8], len: Int64): Int64;
     function kernelModelCreate(spec: Address[Nat8], len: Int64): Int64;
     function kernelModelFree(model: Int64): Int64;
+
+    """
+    Wrap a raw model handle (as returned by `kernelModelCreate`) in a linear
+    `Model`. From here the type system tracks the obligation to free it.
+    """
+    function wrapModel(handle: Int64): Model;
+
+    """
+    Read the raw handle out of a borrowed `Model` without consuming it, so a
+    `Model` can drive a sequence of `kernel*` calls before being freed.
+    """
+    generic [R: Region]
+    function modelHandle(model: &[Model, R]): Int64;
+
+    """
+    Consume a linear `Model`, freeing the underlying kernel session via
+    `uk_model_free`. Returns the kernel's status code.
+    """
+    function freeModel(model: Model): Int64;
     function kernelSetPrior(model: Int64, json: Address[Nat8], len: Int64): Int64;
     function kernelSetHamiltonian(model: Int64, json: Address[Nat8], len: Int64): Int64;
     function kernelEvolve(model: Int64, opts: Address[Nat8], len: Int64): Int64;

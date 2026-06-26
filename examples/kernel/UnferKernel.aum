@@ -5,6 +5,30 @@ import Austral.Memory (
 );
 
 module body UnferKernel is
+    -- Linear wrapper over the raw Int64 model handle (P2.7). Because the record
+    -- is in the `Linear` universe, the compiler forces every `Model` value to be
+    -- consumed exactly once -- which, given `freeModel` is the only consumer that
+    -- discharges it, makes calling `uk_model_free` a type-enforced obligation.
+    record Model: Linear is
+        handle: Int64;
+    end;
+
+    function wrapModel(handle: Int64): Model is
+        return Model(handle => handle);
+    end;
+
+    generic [R: Region]
+    function modelHandle(model: &[Model, R]): Int64 is
+        return model->handle;
+    end;
+
+    function freeModel(model: Model): Int64 is
+        -- Destructuring the linear record is what discharges the linear
+        -- obligation; the extracted handle is then handed to the C ABI free.
+        let { handle: Int64 } := model;
+        return kernelModelFree(handle);
+    end;
+
     pragma Foreign_Import(External_Name => "uk_version");
     function kernelVersion(): Int64 is end;
 
