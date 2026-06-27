@@ -349,3 +349,31 @@ mod tests {
         assert_eq!(unfer_ffi::uk_init(std::ptr::null(), 0), 0);
     }
 }
+
+#[cfg(test)]
+mod hotswap_tests {
+    use super::au_cell_swap;
+
+    /// P5 #32: verify the hot-swap gate is callable and guards invalid IDs.
+    ///
+    /// `au_cell_swap` wraps `cell_swap` (cell_loader.c:82) which bounds-checks
+    /// `old_id` against the live `cell_table` (size `cell_count`, starts at 0).
+    /// ID 0 is always out of range; U64::MAX is always out of range. The C
+    /// function therefore returns `false` without touching the table.
+    ///
+    /// Full end-to-end hot-swap (load cell V1 → run → swap to V2 → run again)
+    /// requires a `CellDescriptor` from a compiled `.so` (cell_loader.c:cell_load)
+    /// and is tested at the shell level (`test_integration.sh`); this test
+    /// verifies the Rust→C linkage and the guard path without the C scheduler.
+    #[test]
+    fn hotswap_rejects_invalid_cell_id() {
+        assert!(
+            !au_cell_swap(0, std::ptr::null_mut()),
+            "cell_id 0 is below the 1-indexed table"
+        );
+        assert!(
+            !au_cell_swap(u64::MAX, std::ptr::null_mut()),
+            "cell_id u64::MAX exceeds cell_count (0 at test time)"
+        );
+    }
+}
