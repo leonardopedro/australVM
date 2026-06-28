@@ -45,6 +45,7 @@ extern "C" {
     fn au_alloc(size: i64) -> *mut u8;
     fn au_free(ptr: *mut u8);
     fn cell_swap(old_id: u64, new_desc: *const c_void) -> bool;
+    fn cell_can_replace(old: *const c_void, new: *const c_void) -> bool;
 }
 
 #[no_mangle]
@@ -337,6 +338,14 @@ pub extern "C" fn au_cell_swap(old_id: u64, new_desc: *mut std::ffi::c_void) -> 
     unsafe { cell_swap(old_id, new_desc) }
 }
 
+/// Rust wrapper for the C `cell_can_replace` compatibility gate
+/// (cell_loader.c:63). Returns `true` when the new descriptor is a valid
+/// replacement for the old one: same `type_hash` AND new caps ⊆ old caps.
+/// Used by the hot-swap positive-path test (P5 #32).
+pub fn au_cell_can_replace(old: *const std::ffi::c_void, new: *const std::ffi::c_void) -> bool {
+    unsafe { cell_can_replace(old, new) }
+}
+
 #[cfg(all(test, feature = "unfer-kernel"))]
 mod tests {
     #[test]
@@ -375,5 +384,86 @@ mod hotswap_tests {
             !au_cell_swap(u64::MAX, std::ptr::null_mut()),
             "cell_id u64::MAX exceeds cell_count (0 at test time)"
         );
+    }
+
+    /// P5 #32: verify the hot-swap **compatibility gate** (`cell_can_replace`).
+    ///
+    /// This is the decision function called by `cell_swap` before replacing a
+    /// cell in the live table. It checks: (1) both pointers non-NULL, (2)
+    /// `type_hash` strings match exactly, (3) `new->required_caps` ⊆
+    /// `old->required_caps`. We construct minimal `#[repr(C)]` structs matching
+    /// the first two fields of the C `CellDescriptor` (vm.h:65) — the only
+    /// fields `cell_can_replace` reads — and exercise all four decision paths.
+    use std::ffi::CString;
+    use std::os::raw::c_char;
+
+    #[repr(C)]
+    struct TestCellDesc {
+        type_hash: *const c_char,
+        required_caps: u64,
+    }
+
+    fn desc(hash: &str, caps: u64) -> TestCellDesc {
+        TestCellDesc {
+            type_hash: CString::new(hash).unwrap().into_raw(),
+            required_caps: caps,
+        }
+    }
+
+    fn reclaim(d: &TestCellDesc) {
+        unsafe { let _ = CString::from_raw(d.type_hash as *mut c_char); }
+    }
+
+    #[test]
+    fn hotswap_gate_accepts_compatible() {
+        let old = desc("abc123", 0b111);
+        let new = desc("abc123", 0b101);
+        assert!(
+            super::au_cell_can_replace(
+                &old as *const _ as *const std::ffi::c_void,
+                &new as *const _ as *const std::ffi::c_void,
+            ),
+            "same type_hash + subset caps → compatible"
+        );
+        reclaim(&old);
+        reclaim(&new);
+    }
+
+    #[test]
+    fn hotswap_gate_rejects_null() {
+        assert!(
+            !super::au_cell_can_replace(std::ptr::null(), std::ptr::null()),
+            "NULL descriptors → incompatible"
+        );
+    }
+
+    #[test]
+    fn hotswap_gate_rejects_type_mismatch() {
+        let old = desc("abc123", 0b111);
+        let new = desc("xyz789", 0b111);
+        assert!(
+            !super::au_cell_can_replace(
+                &old as *const _ as *const std::ffi::c_void,
+                &new as *const _ as *const std::ffi::c_void,
+            ),
+            "different type_hash → incompatible"
+        );
+        reclaim(&old);
+        reclaim(&new);
+    }
+
+    #[test]
+    fn hotswap_gate_rejects_caps_escalation() {
+        let old = desc("abc123", 0b101);
+        let new = desc("abc123", 0b111);
+        assert!(
+            !super::au_cell_can_replace(
+                &old as *const _ as *const std::ffi::c_void,
+                &new as *const _ as *const std::ffi::c_void,
+            ),
+            "new caps ⊃ old caps → incompatible (capability escalation)"
+        );
+        reclaim(&old);
+        reclaim(&new);
     }
 }
