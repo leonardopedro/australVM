@@ -15,6 +15,7 @@ typedef struct {
     CellId id;
     CellDescriptor* desc;
     void* handle;
+    void* state;  // Active cell state (allocated via desc->alloc)
 } CellEntry;
 
 #define MAX_CELLS 64
@@ -32,9 +33,6 @@ CellDescriptor* cell_load(const char* name, CapEnv* env __attribute__((unused)))
     if (!handle) {
         const char* error = dlerror();
         printf("[Loader] dlopen failed: %s\n", error);
-        
-        // Fallback: try to compile on-the-fly
-        // In production, this would call typed_eval with file contents
         return NULL;
     }
     
@@ -52,11 +50,49 @@ CellDescriptor* cell_load(const char* name, CapEnv* env __attribute__((unused)))
         cell_table[cell_count].id = cell_count + 1; // Simple ID assignment
         cell_table[cell_count].desc = desc;
         cell_table[cell_count].handle = handle;
+        cell_table[cell_count].state = NULL;  // Not yet allocated
         cell_count++;
+        printf("[Loader] Cell loaded successfully, id=%d\n", cell_count);
+    } else {
+        dlclose(handle);
+        return NULL;
     }
-    
-    printf("[Loader] Cell loaded successfully, id=%d\n", cell_count);
     return desc;
+}
+
+// Allocate state for a loaded cell
+void* cell_alloc_state(CellId id, void* region, CapEnv* env) {
+    if (id < 1 || (int)id > cell_count) return NULL;
+    CellEntry* entry = &cell_table[id - 1];
+    if (!entry->desc || !entry->desc->alloc) return NULL;
+    if (entry->state) return entry->state;  // Already allocated
+    entry->state = entry->desc->alloc(region, env);
+    return entry->state;
+}
+
+// Run one step of a loaded cell
+void cell_run_step(CellId id) {
+    if (id < 1 || (int)id > cell_count) return;
+    CellEntry* entry = &cell_table[id - 1];
+    if (!entry->desc || !entry->desc->step || !entry->state) return;
+    entry->desc->step(entry->state);
+}
+
+// Get the state pointer for a loaded cell (for inspection)
+void* cell_get_state(CellId id) {
+    if (id < 1 || (int)id > cell_count) return NULL;
+    return cell_table[id - 1].state;
+}
+
+// Get the descriptor for a loaded cell
+CellDescriptor* cell_get_descriptor(CellId id) {
+    if (id < 1 || (int)id > cell_count) return NULL;
+    return cell_table[id - 1].desc;
+}
+
+// Get the number of loaded cells
+int cell_count_loaded(void) {
+    return cell_count;
 }
 
 // Type check: verify compatibility
@@ -90,26 +126,54 @@ bool cell_swap(CellId old_id, CellDescriptor* new_desc) {
         return false;
     }
     
-    printf("[Loader] Hot-swapping cell %ld\n", old_id);
+    printf("[Loader] Hot-swapping cell %ld\n", (long)old_id);
     
-    // We assume the old cell is paused and serialized
-    
-    // Step 1: Pause the old cell (orchestrated by mod_mgmt)
-    // - The old cell returns Pause from its step
-    // - Scheduler serializes its state
-    // - State buffer is saved
-    
-    // Step 2: Optionally call migration function
-    if (new_desc->migrate) {
-        printf("[Loader] Migration function present\n");
-        // In real implementation: restore old state with new migrator
+    // Step 1: Save the old cell's state to a serialization buffer
+    void* new_state = NULL;
+    if (old_entry->state && old_desc->save && new_desc->migrate) {
+        // Serialize old state
+        uint8_t ser_buf[4096];
+        Serializer ser;
+        ser_init(&ser, ser_buf, sizeof(ser_buf));
+        old_desc->save(old_entry->state, &ser);
+        
+        // Deserialize into new state via migrate
+        Deserializer des;
+        des_init(&des, ser_buf, ser.size);
+        new_state = new_desc->migrate(old_entry->state, &des);
+        printf("[Loader] State migrated (%zu bytes serialized)\n", ser.size);
+        
+        // Drop old state
+        if (old_desc->drop) {
+            old_desc->drop(old_entry->state);
+        } else {
+            free(old_entry->state);
+        }
+    } else if (old_entry->state && new_desc->migrate) {
+        // No save function — migrate gets the raw old_state
+        new_state = new_desc->migrate(old_entry->state, NULL);
+        printf("[Loader] State migrated (raw pointer)\n");
+        
+        if (old_desc->drop) {
+            old_desc->drop(old_entry->state);
+        } else {
+            free(old_entry->state);
+        }
+    } else {
+        // No state or no migrate — new cell starts fresh
+        printf("[Loader] No migration needed (no state or no migrate fn)\n");
     }
     
-    // Step 3: Replace descriptor
+    // Step 2: Replace descriptor and state
     old_entry->desc = new_desc;
+    old_entry->state = new_state;
     
-    // Step 4: If old cell had a DSO handle, we might close it
-    // but for now, we keep it loaded
+    // Step 3: Close the old shared object handle (if the new descriptor
+    // came from a different .so). We keep the handle if old and new are
+    // from the same .so (e.g. in-process test).
+    // Note: in production, the scheduler ensures the old cell is paused
+    // before we reach here. The new descriptor's step function will be
+    // called on the next scheduler tick.
     
     printf("[Loader] Swap complete\n");
     return true;

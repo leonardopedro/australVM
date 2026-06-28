@@ -63,9 +63,23 @@ cells/nano_core.so: compiler/compile_cell
 		echo "module NanoCore is end module." > cells/nano_core.aum && \
 		./compiler/compile_cell cells/nano_core.aum cells/nano_core.so)
 
+# Hot-swap test cells (P6 B3): V1 and V2 with the same type_hash
+cells/counter_v1.so: cells/counter_v1.c include/vm.h
+	$(CC) $(CFLAGS) $(INCLUDE) -shared -o $@ cells/counter_v1.c $(LDFLAGS)
+	@echo "Built $@"
+
+cells/counter_v2.so: cells/counter_v2.c include/vm.h
+	$(CC) $(CFLAGS) $(INCLUDE) -shared -o $@ cells/counter_v2.c $(LDFLAGS)
+	@echo "Built $@"
+
 # To build actual austral cells (once compiler is integrated):
 cells/%.so: cells/%.aum compiler/compile_cell
 	./compiler/compile_cell $< $@
+
+# End-to-end hot-swap test (P6 B3)
+test/hotswap_e2e: test/hotswap_e2e.c lib/libSafestOS.so cells/counter_v1.so cells/counter_v2.so
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ test/hotswap_e2e.c -L./lib -lSafestOS -ldl -lpthread
+	@echo "Built $@"
 
 # Test executable
 test/vm_test: test/vm_test.c lib/libSafestOS.a
@@ -92,10 +106,15 @@ test: test/vm_test cranelift-test
 	@echo ""
 	@echo "All tests passed! (C runtime + Cranelift bridge)"
 
+# End-to-end hot-swap test (P6 B3)
+hotswap-test: test/hotswap_e2e
+	@echo "Running end-to-end hot-swap test..."
+	LD_LIBRARY_PATH=./lib:$$LD_LIBRARY_PATH ./test/hotswap_e2e
+
 # Clean
 clean:
 	rm -rf $(RUNTIME_OBJS) lib/*.a lib/*.so
-	rm -rf test/vm_test
+	rm -rf test/vm_test test/hotswap_e2e
 	rm -rf compiler/compile_cell
 	rm -rf cells/*.so
 	cd $(CRANELIFT_DIR) && cargo clean 2>/dev/null || true

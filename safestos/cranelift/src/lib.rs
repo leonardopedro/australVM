@@ -371,9 +371,12 @@ mod hotswap_tests {
     /// function therefore returns `false` without touching the table.
     ///
     /// Full end-to-end hot-swap (load cell V1 → run → swap to V2 → run again)
-    /// requires a `CellDescriptor` from a compiled `.so` (cell_loader.c:cell_load)
-    /// and is tested at the shell level (`test_integration.sh`); this test
-    /// verifies the Rust→C linkage and the guard path without the C scheduler.
+    /// is tested at the shell level via `make hotswap-test` in `safestos/`
+    /// (builds `cells/counter_v1.so` + `cells/counter_v2.so`, runs
+    /// `test/hotswap_e2e` which loads V1, steps, swaps to V2 with state
+    /// migration, steps again, and asserts the counter was preserved).
+    /// This Rust test verifies the Rust→C linkage and the guard path
+    /// without the C scheduler.
     #[test]
     fn hotswap_rejects_invalid_cell_id() {
         assert!(

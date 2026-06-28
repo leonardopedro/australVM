@@ -195,6 +195,16 @@ EvalResult typed_eval(const char* source, const char* expected_type, CapEnv* env
 // Hot-swap: replace old cell with new one
 bool cell_swap(CellId old_id, CellDescriptor* new_desc);
 
+// Cell state management (for hot-swap orchestration)
+void* cell_alloc_state(CellId id, void* region, CapEnv* env);
+void  cell_run_step(CellId id);
+void* cell_get_state(CellId id);
+CellDescriptor* cell_get_descriptor(CellId id);
+int  cell_count_loaded(void);
+
+// Cleanup: close all loaded shared objects
+void cell_cleanup(void);
+
 /* ============================================================================
  * 7. Memory Management (Regions)
  * ============================================================================
