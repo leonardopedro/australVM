@@ -6,3 +6,11 @@ error.html
 lib/BuiltInModules.ml
 FAILURES.txt
 result
+
+# Build artifacts from `make hotswap-test` (P5 #32 / P6 B3). The
+# test binary is rebuilt by `make` and removed by `make clean`;
+# the pre-built `integration_demo` and `vm_test` binaries are
+# intentionally committed as the project's "executable
+# documentation" of the end-to-end demo (per the P3 #10 recipe
+# and the docs/MODULES.md "add a module" checklist).
+safestos/test/hotswap_e2e
