@@ -14,3 +14,7 @@ result
 # documentation" of the end-to-end demo (per the P3 #10 recipe
 # and the docs/MODULES.md "add a module" checklist).
 safestos/test/hotswap_e2e
+
+# Rust build artifacts for standalone crates living directly in this repo
+# (arctic_authority/, P11.20 — mirrors safestos/.gitignore's cranelift/target/ entry)
+arctic_authority/target/
