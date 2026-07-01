@@ -1,0 +1,84 @@
+import Austral.Memory (
+    Address
+);
+
+module ZenodoStore is
+    """
+    Typed Austral bindings for the `uz_*` Zenodo-Loro storage C ABI.
+
+    Implements the "Alternative-to-Git" incremental snapshot/delta
+    architecture: a Loro CRDT document is persisted on Zenodo by uploading
+    a full snapshot once and incremental deltas on each subsequent save.
+    The manifest (stored as `manifest.json` on Zenodo) tracks the file
+    sequence and the Loro frontier so the next delta can be generated from
+    the right base.
+
+    All `uz_*` calls follow the same convention as `uk_*`:
+      - return >= 0: success (bytes written / 0 for void ops)
+      - return < 0:  -code (call `storeLastError` for the message)
+
+    Buffer protocol (for `storePull` / `storeManifestJson` /
+    `storeLastError`): probe with `buf=null, cap=0` to get the total
+    bytes needed, allocate, then call again to fill. The implementation
+    copies `min(needed, cap)` bytes and always returns `needed`.
+    """
+
+    """
+    Initialize the Zenodo client from a JSON config string.
+
+    Expected JSON:
+      {"api_key":"TOKEN","sandbox":true,"record_id":null,"squash_after":50}
+
+    `sandbox` defaults to `true`; omit `record_id` (or set to `null`) to
+    create a fresh Zenodo record on the first `uz_push`.
+    Returns 0 on success, -1001 on bad JSON, -5000 on other error.
+    """
+    function storeInit(cfg: Address[Nat8], cfg_len: Int64): Int64;
+
+    """
+    Convenience wrapper: initialize from a static JSON literal.
+    """
+    function storeInitStr(cfg: Span[Nat8, Static]): Int64;
+
+    """
+    Upload a Loro snapshot or delta to Zenodo.
+
+    - `data` / `data_len`: raw Loro document bytes (snapshot on first call,
+      delta on subsequent calls — the Rust side tracks which).
+    - `frontier` / `frontier_len`: opaque Loro frontier bytes to persist in
+      `manifest.json` so the next caller can generate the delta from the
+      right base. Pass null/0 if not using Loro (demo usage).
+
+    First call creates a new Zenodo deposition and publishes it.
+    Subsequent calls create new Zenodo versions (incremental).
+    Every `squash_after` deltas (default 50) a new full snapshot is
+    uploaded and the delta chain is cleared.
+
+    Returns 0 on success, -5000 on network/API failure.
+    """
+    function storePush(
+        data: Address[Nat8]; data_len: Int64;
+        frontier: Address[Nat8]; frontier_len: Int64
+    ): Int64;
+
+    """
+    Download all files in the current record's `file_sequence` from Zenodo,
+    concatenated in order, into `buf`.
+
+    Buffer protocol: returns total bytes needed; copies min(needed, cap) into
+    buf. Returns -5000 on failure.
+    """
+    function storePull(buf: Address[Nat8], cap: Int64): Int64;
+
+    """
+    Return the in-memory manifest JSON (no network call).
+    Buffer protocol: returns total bytes needed.
+    """
+    function storeManifestJson(buf: Address[Nat8], cap: Int64): Int64;
+
+    """
+    Return the last error string from the Zenodo adapter (thread-local).
+    Buffer protocol: returns total bytes needed.
+    """
+    function storeLastError(buf: Address[Nat8], cap: Int64): Int64;
+end module.

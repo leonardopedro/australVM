@@ -1,0 +1,31 @@
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+
+module body ZenodoStore is
+    pragma Foreign_Import(External_Name => "uz_init");
+    function storeInit(cfg: Address[Nat8], cfg_len: Int64): Int64 is end;
+
+    function storeInitStr(cfg: Span[Nat8, Static]): Int64 is
+        let addr: Address[Nat8] := @embed(Address[Nat8], "$1.data", cfg);
+        let len: Int64 := @embed(Int64, "$1.size", cfg);
+        return storeInit(addr, len);
+    end;
+
+    pragma Foreign_Import(External_Name => "uz_push");
+    function storePush(
+        data: Address[Nat8]; data_len: Int64;
+        frontier: Address[Nat8]; frontier_len: Int64
+    ): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uz_pull");
+    function storePull(buf: Address[Nat8], cap: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uz_manifest_json");
+    function storeManifestJson(buf: Address[Nat8], cap: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uz_last_error");
+    function storeLastError(buf: Address[Nat8], cap: Int64): Int64 is end;
+end module body.

@@ -21,11 +21,16 @@ cedar-policy = { version = "4.11.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 unfer_ffi = { path = "../../../unfer/unfer_ffi", optional = true }
+arctic_authority = { path = "../../../arctic_authority", optional = true }
+arctic = { path = "../../../dynamic-arctic", optional = true }
+serde_json = { version = "1", optional = true }
 
 [features]
 default = ["cedar", "unfer-kernel"]
 cedar = ["dep:cedar-policy"]
 unfer-kernel = ["dep:unfer_ffi"]
+zenodo-store = ["dep:unfer_ffi", "unfer_ffi/zenodo"]
+arctic-auth = ["dep:arctic_authority", "dep:arctic", "dep:serde_json"]
 
 [build-dependencies]
 cc = "1.0"

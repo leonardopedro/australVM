@@ -7,6 +7,8 @@ use cranelift_codegen::settings::Configurable;
 pub mod auth;
 #[cfg(feature = "cedar")]
 pub mod policy;
+#[cfg(feature = "arctic-auth")]
+pub mod arctic_auth;
 pub mod cps;
 
 #[cfg(feature = "cedar")]
@@ -93,6 +95,25 @@ pub extern "C" fn cranelift_init() -> i64 {
                 builder.symbol("uk_observe",           unfer_ffi::uk_observe           as *const u8);
                 builder.symbol("uk_get_result",        unfer_ffi::uk_get_result        as *const u8);
                 builder.symbol("uk_last_error",         unfer_ffi::uk_last_error         as *const u8);
+                builder.symbol("uk_snapshot",          unfer_ffi::uk_snapshot          as *const u8);
+                builder.symbol("uk_restore",           unfer_ffi::uk_restore           as *const u8);
+                builder.symbol("uk_subscribe",         unfer_ffi::uk_subscribe         as *const u8);
+                builder.symbol("uk_poll",              unfer_ffi::uk_poll              as *const u8);
+                builder.symbol("uk_bayesian_update",   unfer_ffi::uk_bayesian_update   as *const u8);
+                builder.symbol("uk_belief_propagation",unfer_ffi::uk_belief_propagation as *const u8);
+            }
+
+            // Register Zenodo-Loro storage symbols (uz_*) for modules that
+            // persist Loro CRDT documents on Zenodo with incremental deltas.
+            // Access is gated by the manifest auth engine — modules need
+            // explicit "zenodo" grants in their module.toml.
+            #[cfg(feature = "zenodo-store")]
+            {
+                builder.symbol("uz_init",          unfer_ffi::zenodo::uz_init          as *const u8);
+                builder.symbol("uz_push",          unfer_ffi::zenodo::uz_push          as *const u8);
+                builder.symbol("uz_pull",          unfer_ffi::zenodo::uz_pull          as *const u8);
+                builder.symbol("uz_manifest_json", unfer_ffi::zenodo::uz_manifest_json as *const u8);
+                builder.symbol("uz_last_error",    unfer_ffi::zenodo::uz_last_error    as *const u8);
             }
 
             Ok(JITModule::new(builder))
