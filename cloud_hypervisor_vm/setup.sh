@@ -1,8 +1,14 @@
 #!/bin/bash
 # setup.sh — regenerate a cloud-hypervisor-build-equivalent working directory from
 # upstream sources + the SpectrumOS GPU-sharing patches, so this small recipe (a few
-# hand-authored Nix/shell files + two patches, all committed to this repo) is enough
-# to reproduce the full local build tree without vendoring it.
+# hand-authored Nix/shell files, all committed to this repo) is enough to reproduce
+# the full local build tree without vendoring it.
+#
+# The SpectrumOS patches themselves are fetched from spectrum-os.org at run time
+# (not committed to this repo) — they're a third party's licensed work
+# (Apache-2.0 AND LicenseRef-BSD-3-Clause-Google; see the LICENSES/ files inside
+# the downloaded tarball), so this script downloads them fresh each time rather
+# than vendoring a copy into this git history.
 #
 # What this script does NOT do: build the Nix VM images themselves (that's
 # `nix build .#vm-perf`/`.#vm-sec` via flake.nix, once configuration.nix is in place),
@@ -29,6 +35,20 @@ CROSVM_COMMIT="e36cf699c2253a2901bdda7c8be6a24683e408ee"
 VHOST_REPO="https://github.com/rust-vmm/vhost.git"
 VHOST_COMMIT="eae4f737781af92d306115368937089e429dde18"
 
+# The SpectrumOS GPU-sharing patches. Pin the sha256 alongside the URL so a
+# tampered or silently-changed download is caught rather than applied blindly.
+PATCHES_URL="https://spectrum-os.org/software/cloud-hypervisor/cloud-hypervisor-50.0-spectrum0-patches.tar.gz"
+PATCHES_SHA256="b495216f460e34acd26a83890086d3912672a368325c48e1a6febdb3afac98bc"
+
+PATCHES_DIR="$(mktemp -d)"
+trap 'rm -rf "$PATCHES_DIR"' EXIT
+
+echo "=== Downloading SpectrumOS GPU-sharing patches ==="
+curl -fsSL "$PATCHES_URL" -o "$PATCHES_DIR/patches.tar.gz"
+echo "$PATCHES_SHA256  $PATCHES_DIR/patches.tar.gz" | sha256sum -c -
+tar -xzf "$PATCHES_DIR/patches.tar.gz" -C "$PATCHES_DIR"
+PATCHES_SRC="$PATCHES_DIR/cloud-hypervisor-50.0-spectrum0-patches"
+
 mkdir -p "$TARGET_DIR"
 cd "$TARGET_DIR"
 
@@ -36,13 +56,13 @@ echo "=== Cloning rust-vmm/vhost @ $VHOST_COMMIT ==="
 [ -d vhost ] || git clone "$VHOST_REPO" vhost
 git -C vhost checkout "$VHOST_COMMIT"
 echo "Applying vhost.patch (SpectrumOS, Apache-2.0 AND LicenseRef-BSD-3-Clause-Google)..."
-git -C vhost am --3way "$SCRIPT_DIR/patches/vhost.patch"
+git -C vhost am --3way "$PATCHES_SRC/vhost.patch"
 
 echo "=== Cloning cloud-hypervisor @ $CLOUD_HYPERVISOR_COMMIT ==="
 [ -d cloud-hypervisor ] || git clone "$CLOUD_HYPERVISOR_REPO" cloud-hypervisor
 git -C cloud-hypervisor checkout "$CLOUD_HYPERVISOR_COMMIT"
 echo "Applying cloud-hypervisor.patch ('build: use local vhost', points Cargo.toml at ../vhost)..."
-git -C cloud-hypervisor am --3way "$SCRIPT_DIR/patches/cloud-hypervisor.patch"
+git -C cloud-hypervisor am --3way "$PATCHES_SRC/cloud-hypervisor.patch"
 
 echo "=== Cloning crosvm @ $CROSVM_COMMIT (GPU device backend, vhost-user-gpu) ==="
 [ -d crosvm ] || git clone --recurse-submodules "$CROSVM_REPO" crosvm

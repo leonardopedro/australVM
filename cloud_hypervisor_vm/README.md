@@ -13,17 +13,19 @@ produces.
   share, GPU passthrough, the `agent` user, sshd).
 - `full-stack-vm-launch.sh` / `run-vm.sh` — the launch side: crosvm GPU backend +
   virtiofsd exporters + tap networking + the actual `cloud-hypervisor` invocation.
-- `patches/cloud-hypervisor.patch`, `patches/vhost.patch` — the two SpectrumOS
-  GPU-sharing patches (Alyssa Ross / Unikie, `Apache-2.0 AND
-  LicenseRef-BSD-3-Clause-Google`, see `patches/LICENSES/`) that make
-  `vhost-user-gpu` sharing work against this exact cloud-hypervisor/vhost version
-  pair.
 - `setup.sh` — clones cloud-hypervisor, crosvm, and rust-vmm/vhost at pinned
-  commits, applies the two patches, and builds both binaries — regenerating a
-  working `cloud-hypervisor-build`-equivalent directory from source.
+  commits, **downloads** (does not vendor) the two SpectrumOS GPU-sharing patches,
+  applies them, and builds both binaries — regenerating a working
+  `cloud-hypervisor-build`-equivalent directory from source.
 
 **Not here, and not meant to be committed anywhere** (regenerate with `setup.sh`
 instead):
+- The SpectrumOS patches themselves (`cloud-hypervisor.patch`, `vhost.patch`) — a
+  third party's licensed work (`Apache-2.0 AND LicenseRef-BSD-3-Clause-Google`).
+  `setup.sh` downloads them fresh from
+  `https://spectrum-os.org/software/cloud-hypervisor/cloud-hypervisor-50.0-spectrum0-patches.tar.gz`
+  each run (checksum-pinned — see `setup.sh`'s `PATCHES_SHA256`) rather than
+  keeping a copy in this git history.
 - Full `cloud-hypervisor`/`crosvm`/`vhost` upstream git checkouts (769MB for
   crosvm alone, each with their own extensive `third_party/` trees — these are
   complete other open-source projects with their own licensing/versioning, not
@@ -40,11 +42,12 @@ instead):
 ./setup.sh /path/to/anywhere
 ```
 
-This clones and builds cloud-hypervisor, crosvm, and vhost at the exact commits
-this recipe was last verified against (see `setup.sh`'s pinned-commit header) and
-applies the two patches with `git am`. It does **not** build the Nix VM image or
-launch anything — see the script's own end-of-run message for those next
-(deliberately manual) steps.
+This downloads the SpectrumOS patch tarball (checksum-verified), clones
+cloud-hypervisor, crosvm, and vhost at the exact commits this recipe was last
+verified against (see `setup.sh`'s pinned-commit header), and applies the two
+patches with `git am`. It does **not** build the Nix VM image or launch anything
+— see the script's own end-of-run message for those next (deliberately manual)
+steps.
 
 ## Relationship to `../../unfer/unfer_nixvm/`
 
@@ -63,8 +66,11 @@ Nix *package* of the kernel itself (`packages.x86_64-linux.unfer-ffi`) stays in
 
 - `flake.nix`/`configuration.nix`/`full-stack-vm-launch.sh`/`run-vm.sh`/`setup.sh`:
   original to this project (no upstream license header needed).
-- `patches/*.patch`: SpectrumOS, `Apache-2.0 AND LicenseRef-BSD-3-Clause-Google`
-  (see `patches/LICENSES/`) — copied verbatim, not modified.
+- The SpectrumOS patches (`Apache-2.0 AND LicenseRef-BSD-3-Clause-Google`) are
+  **not vendored here** — `setup.sh` downloads them at run time from
+  spectrum-os.org and applies them directly to the freshly-cloned
+  cloud-hypervisor/vhost checkouts; their own `LICENSES/` files travel with the
+  downloaded tarball, not with this repo.
 - Regenerated via `setup.sh`: `cloud-hypervisor` (Apache-2.0), `crosvm` (BSD-3-Clause,
   Google), `vhost` (Apache-2.0, rust-vmm) — each stays under its own upstream
   license in its own regenerated checkout; none of that code is copied into this
