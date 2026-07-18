@@ -18,3 +18,8 @@ safestos/test/hotswap_e2e
 # Rust build artifacts for standalone crates living directly in this repo
 # (arctic_authority/, P11.20 — mirrors safestos/.gitignore's cranelift/target/ entry)
 arctic_authority/target/
+
+# Lean / lake build artifacts (arctic_authority/verify/)
+.lake/
+
+arctic.md

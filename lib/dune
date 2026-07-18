@@ -55,11 +55,15 @@
   (libraries austral_core austral_caml austral_cps_gen)
   (wrapped false)
   (modules CamlCompiler_rust_bridge)
-  (c_library_flags -L/media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/safestos/cranelift/target/release -laustral_cranelift_bridge)
+  (c_library_flags
+    -L%{env:AUSTRAL_BRIDGE_DIR=../safestos/cranelift/target/release}
+    -laustral_cranelift_bridge)
   (foreign_stubs
     (language c)
     (names rust_bridge)
-    (flags :standard -fPIC -ldl -L/media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/safestos/cranelift/target/release -laustral_cranelift_bridge)))
+    (flags :standard -fPIC -ldl
+      -L%{env:AUSTRAL_BRIDGE_DIR=../safestos/cranelift/target/release}
+      -laustral_cranelift_bridge)))
 
 ; Main Austral compiler entry points - DEPENDS ON JIT
 (library

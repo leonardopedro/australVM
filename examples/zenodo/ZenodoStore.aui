@@ -21,9 +21,7 @@ module ZenodoStore is
     `storeLastError`): probe with `buf=null, cap=0` to get the total
     bytes needed, allocate, then call again to fill. The implementation
     copies `min(needed, cap)` bytes and always returns `needed`.
-    """
 
-    """
     Initialize the Zenodo client from a JSON config string.
 
     Expected JSON:
@@ -57,8 +55,8 @@ module ZenodoStore is
     Returns 0 on success, -5000 on network/API failure.
     """
     function storePush(
-        data: Address[Nat8]; data_len: Int64;
-        frontier: Address[Nat8]; frontier_len: Int64
+        data: Address[Nat8], data_len: Int64,
+        frontier: Address[Nat8], frontier_len: Int64
     ): Int64;
 
     """

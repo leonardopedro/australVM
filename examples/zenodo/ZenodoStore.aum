@@ -16,8 +16,8 @@ module body ZenodoStore is
 
     pragma Foreign_Import(External_Name => "uz_push");
     function storePush(
-        data: Address[Nat8]; data_len: Int64;
-        frontier: Address[Nat8]; frontier_len: Int64
+        data: Address[Nat8], data_len: Int64,
+        frontier: Address[Nat8], frontier_len: Int64
     ): Int64 is end;
 
     pragma Foreign_Import(External_Name => "uz_pull");
