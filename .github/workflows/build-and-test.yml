@@ -6,6 +6,7 @@ on:
       - master
 
 jobs:
+  # ── Upstream OCaml-only CI (unchanged) ────────────────────────────
   build-and-test-linux:
     strategy:
       fail-fast: true
@@ -59,3 +60,125 @@ jobs:
 
       - name: assert executable does not exist
         run: test ! -f austral
+
+  # ── Cranelift JIT + safestos integration stack ────────────────────
+  jit-stack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout australVM
+        uses: actions/checkout@v4
+
+      - name: Checkout unfer as sibling (Cargo.toml path dep ../../../unfer/unfer_ffi)
+        uses: actions/checkout@v4
+        with:
+          repository: anomalyco/unfer
+          path: ../../unfer
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cache cranelift / unfer_ffi build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/safestos/cranelift/target
+            ${{ github.workspace }}/../unfer/target
+          key: jit-${{ runner.os }}-${{ hashFiles('safestos/cranelift/Cargo.lock', 'safestos/cranelift/**/*.rs', 'safestos/cranelift/Cargo.toml') }}
+          restore-keys: |
+            jit-${{ runner.os }}-
+
+      - name: Build cranelift with test-stubs (unit tests)
+        run: cargo build --features test-stubs -p austral_cranelift_bridge
+        working-directory: safestos/cranelift
+
+      - name: Run unit tests (test-stubs)
+        run: cargo test --features test-stubs -p austral_cranelift_bridge
+        working-directory: safestos/cranelift
+
+      - name: Build cranelift release with unfer-kernel
+        run: cargo build --release --features unfer-kernel -p austral_cranelift_bridge
+        working-directory: safestos/cranelift
+
+      - name: Build safestos runtime (libSafestOS.so) + hot-swap cells
+        run: make -C safestos lib/libSafestOS.so cells/counter_v1.so cells/counter_v2.so
+
+      - name: Build hotswap_e2e test binary
+        run: make -C safestos test/hotswap_e2e
+
+      - name: Run hotswap end-to-end test
+        run: LD_LIBRARY_PATH=lib make -C safestos hotswap-test
+
+      - name: Install Nix (for OCaml toolchain)
+        uses: nixbuild/nix-quick-install-action@v30
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-jit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-jit-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build OCaml compiler with JIT bridge
+        run: nix-shell --command 'make bridge && cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $HOME/.local/lib/ 2>/dev/null; LD_LIBRARY_PATH=$HOME/.local/lib dune build bin/ lib/ test/'
+
+      - name: Run OCaml JIT unit tests (JitTest)
+        run: nix-shell --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune runtest'
+
+      - name: Build modhost
+        run: cargo build --release --features unfer-kernel --bin modhost
+        working-directory: safestos/cranelift
+
+      - name: Build unfer_ffi (release, for demo_module)
+        run: cargo build --release -p unfer_ffi
+        working-directory: ${{ github.workspace }}/../unfer
+
+      - name: Run demo_module positive + UK-4001 gate test
+        run: nix-shell --command '
+          HERE="${{ github.workspace }}"
+          UNFER_DIR="$HERE/../unfer"
+          CL_DIR="$HERE/safestos/cranelift"
+          LIBDIR="$CL_DIR/target/release"
+          AUSTRAL="$HERE/_build/default/bin/austral.exe"
+          MODHOST="$CL_DIR/target/release/modhost"
+          MODULE_DIR="$UNFER_DIR/demo_module"
+          MODULE_TOML="$MODULE_DIR/module.toml"
+
+          echo ">> POSITIVE: demo_module via CPS-JIT"
+          JIT_OUT=$(LD_LIBRARY_PATH="$LIBDIR" "$AUSTRAL" compile \
+            "$HERE/examples/kernel/UnferKernel.aui,$HERE/examples/kernel/UnferKernel.aum" \
+            "$MODULE_DIR/src/DemoModule.aui,$MODULE_DIR/src/DemoModule.aum" \
+            --use-cps-jit --target-type=tc 2>&1)
+
+          if echo "$JIT_OUT" | grep -qE "CPS JIT: Execution result: [1-9][0-9]*"; then
+            echo "PASS: demo_module JIT execution succeeded."
+          else
+            echo "FAIL: demo_module JIT execution." >&2
+            echo "$JIT_OUT" >&2
+            exit 1
+          fi
+
+          echo ">> AUTHORIZATION: grant vs. revocation (UK-4001)"
+          MODULE_NAME=$(grep -m1 "^name\s*=" "$MODULE_TOML" | sed "s/.*=\s*\"\(.*\)\"/\1/")
+          DENY_SYM="uk_probability"
+
+          # Positive: full manifest authorizes the symbol
+          if "$MODHOST" authorize "$MODULE_TOML" "$MODULE_NAME" "$DENY_SYM"; then
+            echo "PASS: granted manifest authorizes $DENY_SYM."
+          else
+            echo "FAIL: full manifest should authorize $DENY_SYM." >&2
+            exit 1
+          fi
+
+          # Negative: strip the deny symbol
+          STRIPPED=$(mktemp)
+          trap "rm -f $STRIPPED" EXIT
+          grep -v "$DENY_SYM" "$MODULE_TOML" > "$STRIPPED"
+          if "$MODHOST" authorize "$STRIPPED" "$MODULE_NAME" "$DENY_SYM" 2>/dev/null; then
+            echo "FAIL: stripped manifest must DENY $DENY_SYM." >&2
+            exit 1
+          else
+            echo "PASS: revoking $DENY_SYM denies with UK-4001."
+          fi
+
+          echo "demo_module: ALL TESTS PASSED"
+        '
