@@ -68,12 +68,15 @@ void scheduler_dispatch(void) {
             // In clang: [[clang::musttail]] return fn(state);
             // In gcc: rely on optimization or manual trampoline
             fn(state);
-            return;  // Remove this in clang with musttail
+            // Tail-call chaining: fn(state) should have chain-called
+            // back into scheduler_dispatch, but if it returns normally,
+            // loop back and pick up the next cell.
+            continue;
         } else {
-            // Queue is empty - normally this shouldn't happen
-            // In production, wait on futex or event fd
-            // For now, return to avoid spinning
-            return;
+            // Queue is empty — normally shouldn't happen.
+            // In production, wait on futex or event fd.
+            // PAUSE hint avoids spinning the frontend pipeline.
+            __builtin_ia32_pause();
         }
     }
 }

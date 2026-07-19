@@ -56,13 +56,13 @@
   (wrapped false)
   (modules CamlCompiler_rust_bridge)
   (c_library_flags
-    -L%{env:AUSTRAL_BRIDGE_DIR=../safestos/cranelift/target/release}
+    -L%{env:AUSTRAL_BRIDGE_DIR=../../safestos/cranelift/target/release}
     -laustral_cranelift_bridge)
   (foreign_stubs
     (language c)
     (names rust_bridge)
     (flags :standard -fPIC -ldl
-      -L%{env:AUSTRAL_BRIDGE_DIR=../safestos/cranelift/target/release}
+      -L%{env:AUSTRAL_BRIDGE_DIR=../../safestos/cranelift/target/release}
       -laustral_cranelift_bridge)))
 
 ; Main Austral compiler entry points - DEPENDS ON JIT

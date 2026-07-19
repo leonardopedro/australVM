@@ -76,6 +76,15 @@ pub extern "C" fn cranelift_init() -> i64 {
             builder.symbol("au_alloc",     au_alloc     as *const u8);
             builder.symbol("au_free",      au_free      as *const u8);
 
+            // Register CPS-level intrinsics (handled inline in cps.rs, but
+            // need entries in the symbol table so Cranelift JIT finalization
+            // can find them via dlsym when a function body references them).
+            // These are no-ops — the inline compiler never emits a real call
+            // to them; they're only needed to satisfy the symbol resolver.
+            builder.symbol("__union_new",   au_exit as *const u8);
+            builder.symbol("__record_new",  au_exit as *const u8);
+            builder.symbol("__slot_get",    au_exit as *const u8);
+
             // Register unfer kernel symbols (uk_*) for JIT-compiled modules.
             // Access is gated by the manifest auth engine — uk_ is NOT in the
             // check_call_permission whitelist, so modules need explicit grants.
@@ -241,7 +250,14 @@ pub extern "C" fn compile_to_function_named(
                         // with garbage arguments could dereference a non-pointer and
                         // crash. Returning null here makes the caller skip execution.
                         let (func_id, quiet_skip) = if name_str.is_empty() {
-                            match module.name_map.get("run").copied() {
+                            // Try "run" first (conventional), then "main"
+                            // (entry-point from the Austral compiler), then
+                            // fall back to the first function in the module.
+                            let found = module.name_map.get("run")
+                                .or_else(|| module.name_map.get("main"))
+                                .or_else(|| module.name_map.values().next())
+                                .copied();
+                            match found {
                                 Some(fid) => (Some(fid), false),
                                 None => (None, true),
                             }

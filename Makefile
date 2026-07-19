@@ -22,13 +22,14 @@ $(BIN): $(SRC)
 .PHONY: bridge
 bridge:
 	cargo build --release --manifest-path safestos/cranelift/Cargo.toml
-	AUSTRAL_BRIDGE_DIR=$(BRIDGE_DIR) dune build lib/ bin/
+	AUSTRAL_BRIDGE_DIR=$(CURDIR)/$(BRIDGE_DIR) dune build lib/ bin/
 	cp _build/default/bin/austral.exe $(BIN)
-	@echo "--- Bridge rebuilt: $(BRIDGE_DIR)/libaustral_cranelift_bridge.so"
+	@echo "--- Bridge rebuilt: $(CURDIR)/$(BRIDGE_DIR)/libaustral_cranelift_bridge.so"
 
 .PHONY: test
 test: $(BIN)
-	dune runtest
+	cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $(HOME)/.local/lib/ 2>/dev/null || true
+	LD_LIBRARY_PATH=$(HOME)/.local/lib dune runtest
 
 .PHONY: install
 install: $(BIN)

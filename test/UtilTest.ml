@@ -5,7 +5,7 @@
    SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 *)
 open OUnit2
-open Austral_core.Util
+open Util
 open TestUtil
 
 let test_run_command _ =

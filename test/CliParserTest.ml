@@ -5,9 +5,9 @@
    SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 *)
 open OUnit2
-open Austral_core.Identifier
-open Austral_core.CliUtil
-open Austral_core.CliParser
+open Identifier
+open CliUtil
+open CliParser
 
 let parse_cmd (args: string list): cmd =
   parse (parse_args args)
@@ -39,7 +39,7 @@ let test_compile_default _ =
                           use_cps_jit = false
                         }
   in
-  assert_bool "commands are equal" (equal_cmd cmd expected)
+  assert_equal ~printer:(fun _ -> "cmd") cmd expected
 
 let suite =
   "CliParser" >::: [

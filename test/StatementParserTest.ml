@@ -5,8 +5,8 @@
    SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 *)
 open OUnit2
-open Austral_core.Cst
-open Austral_core.ParserInterface
+open Cst
+open ParserInterface
 open TestUtil
 
 let p = parse_stmt

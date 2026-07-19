@@ -5,8 +5,8 @@
    SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 *)
 open OUnit2
-open Austral_core.CRenderer
-open Austral_core.Escape
+open CRenderer
+open Escape
 
 let r_e = render_expr
 let test_render_bool _ =
