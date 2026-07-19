@@ -4,11 +4,14 @@ use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::HashMap;
 use cranelift_codegen::ir::FuncRef;
 
-fn check_call_permission(caller: &str, callee: &str) -> Result<(), String> {
+fn check_call_permission(caller: &str, module_name: &str, callee: &str) -> Result<(), String> {
     if callee.starts_with("__") || callee.starts_with("au_") || caller == callee {
         return Ok(());
     }
-    crate::auth::check(caller, "Call", callee)
+    // Prefer the module principal if available; fall back to function name
+    // for backwards compatibility with old CPS binaries that lack module headers.
+    let principal = if module_name.is_empty() { caller } else { module_name };
+    crate::auth::check(principal, "Call", callee)
 }
 
 /// Declare `name` as an external import with `argc` i64 params returning i64,
@@ -26,6 +29,7 @@ fn declare_import(jit: &mut JITModule, name: &str, argc: usize) -> Result<FuncId
 
 pub struct CpsModule {
     pub name_map: HashMap<String, FuncId>,
+    pub module_name: String,
 }
 
 pub struct CpsReader<'a> {
@@ -149,6 +153,7 @@ fn emit_expr(
     name_map: &HashMap<String, FuncId>,
     import_map: &HashMap<String, FuncId>,
     caller_name: &str,
+    module_name: &str,
 ) -> Result<Value, String> {
     let opcode = reader.read_u8()?;
     match opcode {
@@ -169,11 +174,11 @@ fn emit_expr(
             let arg_count = reader.read_u32()?;
             let mut args = Vec::new();
             for _ in 0..arg_count {
-                args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?);
+                args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?);
             }
             
-            // Authorization check
-            check_call_permission(caller_name, &func_name)?;
+            // Authorization check (module_name threaded through call chain)
+            check_call_permission(caller_name, module_name, &func_name)?;
 
             if func_name == "__slot_get" || func_name == "__ptr_slot_get" {
                 // (ptr, offset) -> val
@@ -245,62 +250,62 @@ fn emit_expr(
             Ok(if results.is_empty() { mgr.builder.ins().iconst(types::I64, 0) } else { results[0] })
         }
         0x05 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             Ok(mgr.builder.ins().iadd(a, b))
         }
         0x06 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             Ok(mgr.builder.ins().isub(a, b))
         }
         0x10 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedLessThan, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x11 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x12 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedLessThanOrEqual, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x13 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x14 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::Equal, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x15 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             let cmp = mgr.builder.ins().icmp(IntCC::NotEqual, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
         0x18 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+            let b = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             Ok(mgr.builder.ins().imul(a, b))
         }
         0x19 => {
-            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let a = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             Ok(mgr.builder.ins().bnot(a))
         }
         0x20 => {
-            let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+            let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             Ok(mgr.builder.ins().load(types::I64, MemFlags::new(), ptr, 0))
         }
         0x21 => {
@@ -356,6 +361,7 @@ fn emit_stmt_list(
     name_map: &HashMap<String, FuncId>,
     import_map: &HashMap<String, FuncId>,
     caller_name: &str,
+    module_name: &str,
 ) -> Result<(), String> {
     while reader.remaining() > 0 {
         if mgr.terminated { return Ok(()); }
@@ -368,11 +374,11 @@ fn emit_stmt_list(
                     let arg_count = reader.read_u32()?;
                     let mut args = Vec::new();
                     for _ in 0..arg_count {
-                        args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?);
+                        args.push(emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?);
                     }
 
                     // Authorization check
-                    check_call_permission(caller_name, &func_name)?;
+                    check_call_permission(caller_name, module_name, &func_name)?;
 
                     if func_name == "__slot_get" || func_name == "__ptr_slot_get" {
                         let ptr = args[0];
@@ -415,14 +421,14 @@ fn emit_stmt_list(
                     };
                     mgr.emit_return_call(func_ref, &args);
                 } else {
-                    let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                    let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                     mgr.emit_return(&[val]);
                 }
                 return Ok(());
             }
             Some(0x08) => {
                 reader.read_u8()?;
-                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 let zero = mgr.builder.ins().iconst(types::I64, 0);
                 let cond_bool = mgr.builder.ins().icmp(IntCC::NotEqual, cond, zero);
                 
@@ -439,13 +445,13 @@ fn emit_stmt_list(
                 // Then branch
                 mgr.switch_to_block(then_block);
                 let mut then_reader = CpsReader::new(then_data);
-                emit_stmt_list(jit, &mut then_reader, mgr, vars, name_map, import_map, caller_name)?;
+                emit_stmt_list(jit, &mut then_reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 mgr.ensure_terminated(Some(merge_block));
                 
                 // Else branch
                 mgr.switch_to_block(else_block);
                 let mut else_reader = CpsReader::new(else_data);
-                emit_stmt_list(jit, &mut else_reader, mgr, vars, name_map, import_map, caller_name)?;
+                emit_stmt_list(jit, &mut else_reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 mgr.ensure_terminated(Some(merge_block));
                 
                 // Merge
@@ -462,7 +468,7 @@ fn emit_stmt_list(
                 
                 // Header: check condition
                 mgr.switch_to_block(header_block);
-                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 let zero = mgr.builder.ins().iconst(types::I64, 0);
                 let cond_bool = mgr.builder.ins().icmp(IntCC::NotEqual, cond, zero);
                 
@@ -474,7 +480,7 @@ fn emit_stmt_list(
                 // Body
                 mgr.switch_to_block(body_block);
                 let mut body_reader = CpsReader::new(body_data);
-                emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map, caller_name)?;
+                emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 mgr.emit_jump(header_block);
                 
                 // Seal header only after back-edge is added
@@ -487,7 +493,7 @@ fn emit_stmt_list(
             }
             Some(0x0A) => {
                 reader.read_u8()?;
-                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                let cond = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 let case_count = reader.read_u32()?;
                 
                 let merge_block = mgr.create_block();
@@ -508,7 +514,7 @@ fn emit_stmt_list(
                     // Match branch
                     mgr.switch_to_block(match_block);
                     let mut body_reader = CpsReader::new(body_data);
-                    emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map, caller_name)?;
+                    emit_stmt_list(jit, &mut body_reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                     mgr.ensure_terminated(Some(merge_block));
                     
                     // Continue to next case
@@ -519,7 +525,7 @@ fn emit_stmt_list(
                 let def_len = reader.read_u32()?;
                 let def_data = reader.read_bytes(def_len as usize)?;
                 let mut def_reader = CpsReader::new(def_data);
-                emit_stmt_list(jit, &mut def_reader, mgr, vars, name_map, import_map, caller_name)?;
+                emit_stmt_list(jit, &mut def_reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 mgr.ensure_terminated(Some(merge_block));
                 
                 // Merge
@@ -528,7 +534,7 @@ fn emit_stmt_list(
             Some(0x03) => {
                 reader.read_u8()?;
                 let name = reader.read_string()?;
-                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 let var = if let Some(&v) = vars.get(&name) {
                     v
                 } else {
@@ -540,12 +546,12 @@ fn emit_stmt_list(
             }
             Some(0x30) => {
                 reader.read_u8()?;
-                let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
-                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                let ptr = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
+                let val = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
                 mgr.builder.ins().store(MemFlags::new(), val, ptr, 0);
             }
             Some(_) => {
-                let _ = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name)?;
+                let _ = emit_expr(jit, reader, mgr, vars, name_map, import_map, caller_name, module_name)?;
             }
             None => break,
         }
@@ -556,7 +562,15 @@ fn emit_stmt_list(
 pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CpsModule, String> {
     let mut reader = CpsReader::new(data);
     let magic = reader.read_u32()?;
-    if magic != 0x43505331 { return Err(format!("Invalid magic: 0x{:08x}", magic)); }
+    
+    // Module name: v1 (magic 0x43505331) uses the first function's name
+    // as the module principal; v2+ (magic 0x43505332) has an explicit
+    // module name field after the magic.
+    let module_name = match magic {
+        0x43505331 => String::new(), // backwards compat — no module header
+        0x43505332 => reader.read_string()?,
+        _ => return Err(format!("Invalid magic: 0x{:08x}", magic)),
+    };
     
     let func_count = reader.read_u32()?;
     let mut name_map = HashMap::new();
@@ -608,7 +622,7 @@ pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CpsModule
         }
         
         let mut body_reader = CpsReader::new(body_data);
-        emit_stmt_list(jit, &mut body_reader, &mut mgr, &mut vars, &name_map, &import_map, &name)?;
+        emit_stmt_list(jit, &mut body_reader, &mut mgr, &mut vars, &name_map, &import_map, &name, &module_name)?;
         
         mgr.ensure_terminated(None);
             mgr.seal_all();
@@ -624,5 +638,5 @@ pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CpsModule
             .map_err(|e| format!("Define {}: {:?}", name, e))?;
     }
     
-    Ok(CpsModule { name_map })
+    Ok(CpsModule { name_map, module_name })
 }

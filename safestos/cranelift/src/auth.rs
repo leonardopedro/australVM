@@ -106,34 +106,56 @@ pub fn set_auth_engine(engine: Box<dyn AuthorizationEngine>) {
     *auth_lock().write().unwrap_or_else(|e| e.into_inner()) = Some(engine);
 }
 
+/// DenyAll engine — default when no manifest or Cedar is loaded.
+#[derive(Debug, Clone, Default)]
+pub struct DenyAll;
+
+impl AuthorizationEngine for DenyAll {
+    fn authorize(&self, principal: &str, _action: &str, resource: &str) -> Result<Decision, String> {
+        eprintln!(
+            "safestos: no authorization engine installed for '{}' calling '{}' — DENYING by default. \
+             Load a manifest with safestos_load_auth_manifest or pass --allow-all for AllowAll.",
+            principal, resource
+        );
+        Ok(Decision::Deny)
+    }
+}
+
+/// Set the engine that `check()` uses. If never called, `check()` uses
+/// [`DenyAll`] by default (secure). Call [`set_allow_all`] or pass
+/// `--allow-all` to override.
+pub fn set_deny_all() {
+    *auth_lock().write().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(DenyAll));
+}
+
+/// Override to AllowAll (for `--allow-all` flag or test helpers).
+pub fn set_allow_all() {
+    *auth_lock().write().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(AllowAll));
+}
+
 pub fn check(principal: &str, action: &str, resource: &str) -> Result<(), String> {
     if let Ok(read) = auth_lock().read() {
         if let Some(engine) = read.as_ref() {
             return match engine.authorize(principal, action, resource) {
                 Ok(Decision::Allow) => Ok(()),
                 Ok(Decision::Deny) => Err(format!(
-                    "Authorization denied: '{}' cannot '{}' '{}'",
-                    principal, action, resource
+                    "UK-4001: Authorization denied — '{}' is not granted '{}'",
+                    principal, resource
                 )),
                 Err(e) => Err(e),
             };
         }
     }
 
-    #[cfg(feature = "cedar")]
+    // No engine installed at all → use DenyAll by default (secure).
+    // Install a singleton DenyAll so subsequent calls skip this branch.
     {
-        crate::policy::cedar_check(principal, action, resource)
+        let mut write = auth_lock().write().unwrap_or_else(|e| e.into_inner());
+        if write.is_none() {
+            *write = Some(Box::new(DenyAll));
+        }
     }
-    #[cfg(not(feature = "cedar"))]
-    {
-        static WARNED: std::sync::Once = std::sync::Once::new();
-        WARNED.call_once(|| {
-            eprintln!(
-                "safestos: no authorization engine installed, falling back to AllowAll"
-            );
-        });
-        Ok(())
-    }
+    check(principal, action, resource)
 }
 
 #[no_mangle]
