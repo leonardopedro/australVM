@@ -9,11 +9,11 @@ in-process via native `uk_*` symbols registered in the JIT.
 
 - `lib/` — the OCaml Austral compiler. `Compiler.ml` (`use_cps_jit` path),
   `Compiler_cps.ml` (Mtast → CPS IR), `CamlCompiler_rust_bridge.ml` (FFI to the
-  Rust JIT). Build with `dune build lib/ bin/` (the `test/` target has a
-  pre-existing `Austral_core` unbound-module break — ignore it).
+  Rust JIT). Build with `dune build lib/ bin/ test/`.
 - `safestos/cranelift/` — the Rust JIT bridge (`austral_cranelift_bridge`).
   - `src/lib.rs` `cranelift_init()` registers `au_*` runtime symbols and, under
-    feature `unfer-kernel`, all 14 `uk_*` kernel symbols from `unfer_ffi`.
+    feature `unfer-kernel`, all 18 `uk_*` + 5 `uz_*` kernel symbols from
+    `unfer_ffi` (data-driven `UNFER_SYMBOLS`/`ZENODO_SYMBOLS` tables).
   - `src/auth.rs` — `AuthorizationEngine` trait, `ManifestAuthEngine` (TOML
     grants), `AllowAll`, and `safestos_load_auth_manifest()`. Cedar is an
     **optional** backend (`--features cedar`, on by default).

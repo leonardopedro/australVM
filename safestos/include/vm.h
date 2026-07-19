@@ -246,3 +246,4 @@ extern CapEnv cap_env_fork(CapEnv* parent, void* new_namespace);
 extern void cap_drop(CapEnv* env);
 extern bool cap_verify(CapEnv* env);
 extern bool cell_can_replace(CellDescriptor* old, CellDescriptor* new);
+extern void cell_set_jit_fn_ptr(CellDescriptor* desc, void* ptr);

@@ -1,23 +1,36 @@
-
-*~
-# and the docs/MODULES.md "add a module" checklist).
-# (arctic_authority/, P11.20 — mirrors safestos/.gitignore's cranelift/target/ entry)
-arctic_authority/target/
-arctic.md
-austral
-_build
-# Build artifacts from `make hotswap-test` (P5 #32 / P6 B3). The
-calltree.html
-# documentation" of the end-to-end demo (per the P3 #10 recipe
-error.html
-FAILURES.txt
-# intentionally committed as the project's "executable
-.lake/
-# Lean / lake build artifacts (arctic_authority/verify/)
-libaustral_cranelift_bridge.so
-lib/BuiltInModules.ml
+# Build artifacts
+_build/
+target/
 result
-# Rust build artifacts for standalone crates living directly in this repo
+*.o
+*.so
+*.a
+
+# Editor/OS temp files
+*~
+\#*\#
+.DS_Store
+
+# Rust build artifacts
+arctic_authority/target/
+
+# Lean / lake build artifacts
+.lake/
+
+# Generated files
+lib/BuiltInModules.ml
+
+# Test binaries (rebuilt by make)
 safestos/test/hotswap_e2e
-# test binary is rebuilt by `make` and removed by `make clean`;
-# the pre-built `integration_demo` and `vm_test` binaries are
+safestos/cranelift/combined.o
+
+# Stale binary data
+*.bin
+
+# Root-level compiled test binaries
+test_const
+test_cps
+libaustral_cranelift_bridge.so
+
+# Docs/planning artifacts
+docs/history/

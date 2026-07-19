@@ -1,0 +1,16 @@
+Suite: 001-trivial
+Test: 016-jit-hello
+C File: /tmp/austral_e2e_001-trivial_016-jit-hello.c
+Bin File: /tmp/austral_e2e_001-trivial_016-jit-hello.bin
+Austral command: ./austral compile --target-type=c test-programs/suites/001-trivial/016-jit-hello/Test.aum --entrypoint=Test:main --output=/tmp/austral_e2e_001-trivial_016-jit-hello.c --use-cps-jit
+GCC command: 
+Reason: Austral compiler succeeded, but was expected to fail.
+EXPECTED STDERR
+	CPS JIT: Generated 1 functions (64 bytes)
+
+
+
+
+
+
+

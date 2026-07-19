@@ -2,6 +2,12 @@ use cranelift_jit::{JITModule, JITBuilder};
 use std::cell::RefCell;
 use std::ffi::{c_void, CString};
 
+fn cps_debug(msg: &str) {
+    if std::env::var("CPS_DEBUG").is_ok() {
+        eprintln!("CPS: {}", msg);
+    }
+}
+
 pub mod auth;
 #[cfg(feature = "cedar")]
 pub mod policy;
@@ -46,6 +52,7 @@ extern "C" {
     fn au_free(ptr: *mut u8);
     fn cell_swap(old_id: u64, new_desc: *const c_void) -> bool;
     fn cell_can_replace(old: *const c_void, new: *const c_void) -> bool;
+    fn cell_set_jit_fn_ptr(desc: *mut u8, ptr: *const std::ffi::c_void);
 }
 
 #[no_mangle]
@@ -107,7 +114,7 @@ pub extern "C" fn cranelift_init() -> i64 {
             Err(e) => {
                 let msg = format!("JIT init failed: {}", e);
                 set_last_error(&msg);
-                eprintln!("CPS: {}", msg);
+                cps_debug(&msg);
                 0
             }
         }
@@ -237,7 +244,7 @@ pub extern "C" fn compile_to_function_named(
                     Err(e) => {
                         let msg = format!("Finalize failed: {}", e);
                         set_last_error(&msg);
-                        eprintln!("CPS: {}", msg);
+                        cps_debug(&msg);
                         std::ptr::null()
                     }
                     Ok(_) => {
@@ -267,7 +274,7 @@ pub extern "C" fn compile_to_function_named(
 
                         if let Some(fid) = func_id {
                             let ptr = jit.get_finalized_function(fid) as *const c_void;
-                            eprintln!("CPS: SUCCESS compiled at {:?}", ptr);
+                            cps_debug(&format!("SUCCESS compiled at {:?}", ptr));
                             ptr
                         } else if quiet_skip {
                             // No entry point to run in this (library) module.
@@ -281,7 +288,7 @@ pub extern "C" fn compile_to_function_named(
                                      .collect::<Vec<_>>().join(", ")
                             );
                             set_last_error(&msg);
-                            eprintln!("CPS: {}", msg);
+                            cps_debug(&msg);
                             std::ptr::null()
                         }
                     }
@@ -290,7 +297,7 @@ pub extern "C" fn compile_to_function_named(
             Err(e) => {
                 let msg = format!("Compilation error: {}", e);
                 set_last_error(&msg);
-                eprintln!("CPS: compile_to_function_named failed: {}", e);
+                cps_debug(&format!("compile_to_function_named failed: {}", e));
                 std::ptr::null()
             }
         }
@@ -414,10 +421,8 @@ pub extern "C" fn au_cedar_check_runtime(
 #[no_mangle]
 pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ffi::c_void) {
     if desc_ptr.is_null() { return; }
-    // Offset of _jit_fn_ptr in CellDescriptor (vm.h) is 64 bytes
     unsafe {
-        let ptr = desc_ptr.add(64) as *mut *const std::ffi::c_void;
-        *ptr = jit_ptr;
+        cell_set_jit_fn_ptr(desc_ptr, jit_ptr);
     }
 }
 

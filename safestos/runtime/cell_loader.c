@@ -179,6 +179,19 @@ bool cell_swap(CellId old_id, CellDescriptor* new_desc) {
     return true;
 }
 
+// JIT function pointer setter (replaces fragile hardcoded offset in Rust).
+#include <assert.h>
+static_assert(
+    offsetof(struct CellDescriptor, _jit_fn_ptr) > 0,
+    "CellDescriptor._jit_fn_ptr must exist in the struct"
+);
+
+void cell_set_jit_fn_ptr(CellDescriptor* desc, void* ptr) {
+    if (desc) {
+        desc->_jit_fn_ptr = ptr;
+    }
+}
+
 // Cleanup
 void cell_cleanup(void) {
     for (int i = 0; i < cell_count; i++) {

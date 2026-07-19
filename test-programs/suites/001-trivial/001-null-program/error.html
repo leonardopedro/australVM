@@ -1,0 +1,204 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <title>Error Report</title>
+</head>
+<body>
+    <input type='checkbox' id='darkmode-toggle'>
+    <label for='darkmode-toggle' id='darkmode-toggle-lbl'>Dark Mode</label>
+    <div id='container'>
+
+    <div id='main'>
+        <h1>Error Report</h1>
+        <div id='split'>
+            <div id='left'>
+                <h3><code>Generic Error</code>
+                     in module <code>[unknown module]</code></h3>
+                <pre id='description'>There are leftover arguments.</pre>
+            </div>
+
+            <div id='right'>
+                <table class='code_table'>
+        <caption>[Unknown file]</caption>
+        <colgroup>
+            <col class='lines'>
+        </colgroup>
+        <tbody></tbody>
+    </table>
+            </div>
+        </div>
+    </div>
+    <footer>
+        <h3>Quick Links</h3>
+        <div id='footer-list'>
+            <a target='_blank' href='./calltree.html'>
+                Compiler Call Tree</a>
+            <a target='_blank' href='http://austral-lang.org'>
+                austral-lang.org</a>
+            <a target='_blank' href='http://austral-lang.org/spec/spec.html'>
+                Specification</a>
+            <a target='_blank' href='http://github.com/austral/austral'>
+                Language Source</a>
+        <div>
+    </footer>
+    </div> 
+    <style>
+html, body {
+    margin: 0px;
+    padding: 0px;
+    color: var(--fg);
+    height: 100%;
+}
+
+:root {
+    --bg: #ffffff;
+    --fg: #000000;
+    --code-fg: #000;
+    --line-hl: #00000011;
+    --code-bg: #eee;
+    --code-line-num: #ccc;
+    --caption-bg: #bbb;
+    --error-bg: #FF000022;
+}
+
+
+#darkmode-toggle {
+    display: none;
+}
+
+#darkmode-toggle-lbl {
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    padding: 10px;
+    border-radius: 5px;
+    background-color: #ccc;
+    user-select: none;
+}
+
+#darkmode-toggle:checked ~ #darkmode-toggle-lbl {
+    color: white;
+    background-color: #222;
+}
+
+#darkmode-toggle:checked ~ #container {
+    --bg: #111;
+    --fg: #eee;
+    --line-hl: #ffffff11;
+    --code-fg: #eee;
+    --code-bg: #222;
+    --code-line-num: #333;
+    --caption-bg: #444;
+    --error-bg: #FF000044;
+}
+
+#container {
+    color: var(--fg);
+    background-color: var(--bg);
+    min-height: 100%;
+}
+
+h1 {
+    padding-top: 0.67em;
+    padding-bottom: 0.67em;
+    margin: 0px;
+}
+
+caption {
+    background-color: var(--caption-bg);
+    padding: 5px 5px 5px 5px;
+    text-align: left;
+    border-radius: 10px 10px 0px 0px;
+}
+
+.code_table {
+    font-family: monospace;
+    width: 100%;
+    background-color: var(--code-bg);
+    color: var(--code-fg);
+    border-spacing: 0px;
+}
+
+.code_table .lines {
+    background-color: var(--code-line-num);
+    text-align: right;
+}
+
+.code_table .line {
+    text-align: right;
+    padding-right: 5px;
+    width: 30px;
+    user-select: none; /* so that copying code from the block is easier */
+    vertical-align: top;
+}
+
+.code_table tr:hover {
+    background-color: var(--line-hl);
+}
+
+.code_table pre {
+    margin: 0px;
+    text-align: left;
+}
+
+.code_table .error-hl {
+    text-decoration: underline;
+    text-decoration-color: red;
+    background-color: var(--error-bg);
+}
+
+pre {
+    white-space: pre-wrap;
+}
+
+#left {
+    width: 40%;
+}
+
+#right {
+    width: 60%;
+}
+
+
+#main {
+    margin: auto;
+    width: 90%;
+}
+
+#split {
+    display: flex;
+    flex-direction: row;
+    gap: 5%;
+}
+
+code {
+    background-color: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: 5px;
+    padding: 0px 5px 0px 5px;
+}
+
+footer {
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#footer-list {
+    display: flex;
+    margin: auto;
+    flex-wrap: wrap;
+    gap: 10px
+}
+
+#footer-list a {
+    padding: 10px;
+    background-color: var(--caption-bg);
+    border-radius: 10px;
+    color: var(--fg);
+}</style>
+</body>
+</html>
