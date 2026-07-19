@@ -80,39 +80,14 @@ pub extern "C" fn cranelift_init() -> i64 {
             // Access is gated by the manifest auth engine — uk_ is NOT in the
             // check_call_permission whitelist, so modules need explicit grants.
             #[cfg(feature = "unfer-kernel")]
-            {
-                builder.symbol("uk_version",           unfer_ffi::uk_version           as *const u8);
-                builder.symbol("uk_init",              unfer_ffi::uk_init              as *const u8);
-                builder.symbol("uk_model_create",      unfer_ffi::uk_model_create      as *const u8);
-                builder.symbol("uk_model_free",        unfer_ffi::uk_model_free        as *const u8);
-                builder.symbol("uk_set_prior",         unfer_ffi::uk_set_prior         as *const u8);
-                builder.symbol("uk_set_hamiltonian",   unfer_ffi::uk_set_hamiltonian   as *const u8);
-                builder.symbol("uk_evolve",             unfer_ffi::uk_evolve             as *const u8);
-                builder.symbol("uk_condition",          unfer_ffi::uk_condition          as *const u8);
-                builder.symbol("uk_event_probability", unfer_ffi::uk_event_probability as *const u8);
-                builder.symbol("uk_observe",           unfer_ffi::uk_observe           as *const u8);
-                builder.symbol("uk_get_result",        unfer_ffi::uk_get_result        as *const u8);
-                builder.symbol("uk_last_error",         unfer_ffi::uk_last_error         as *const u8);
-                builder.symbol("uk_snapshot",          unfer_ffi::uk_snapshot          as *const u8);
-                builder.symbol("uk_restore",           unfer_ffi::uk_restore           as *const u8);
-                builder.symbol("uk_subscribe",         unfer_ffi::uk_subscribe         as *const u8);
-                builder.symbol("uk_poll",              unfer_ffi::uk_poll              as *const u8);
-                builder.symbol("uk_bayesian_update",   unfer_ffi::uk_bayesian_update   as *const u8);
-                builder.symbol("uk_belief_propagation",unfer_ffi::uk_belief_propagation as *const u8);
-            }
+            register_unfer_symbols(&mut builder);
 
             // Register Zenodo-Loro storage symbols (uz_*) for modules that
             // persist Loro CRDT documents on Zenodo with incremental deltas.
             // Access is gated by the manifest auth engine — modules need
             // explicit "zenodo" grants in their module.toml.
             #[cfg(feature = "zenodo-store")]
-            {
-                builder.symbol("uz_init",          unfer_ffi::zenodo::uz_init          as *const u8);
-                builder.symbol("uz_push",          unfer_ffi::zenodo::uz_push          as *const u8);
-                builder.symbol("uz_pull",          unfer_ffi::zenodo::uz_pull          as *const u8);
-                builder.symbol("uz_manifest_json", unfer_ffi::zenodo::uz_manifest_json as *const u8);
-                builder.symbol("uz_last_error",    unfer_ffi::zenodo::uz_last_error    as *const u8);
-            }
+            register_zenodo_symbols(&mut builder);
 
             Ok(JITModule::new(builder))
         })() {
@@ -128,6 +103,84 @@ pub extern "C" fn cranelift_init() -> i64 {
             }
         }
     })
+}
+
+// ── Data-driven unfer symbol tables ─────────────────────────────────
+//
+// These tables enumerate every uk_*/uz_* symbol the bridge registers.
+// Tests iterate them to auto-sync against unfer's EXPECTED_SYMBOLS.txt.
+
+/// A kernel symbol entry: the name Cranelift JIT modules use (e.g. `uk_evolve`)
+/// and an opaque pointer to the corresponding `pub extern "C" fn` in `unfer_ffi`.
+/// Pointers are stored as `*const u8` because the function signatures differ;
+/// `JITBuilder::symbol()` only needs the address for linking.
+struct KernelSymbol {
+    name: &'static str,
+    addr: *const u8,
+}
+
+// Function pointers are cast to `*const u8` for `JITBuilder::symbol()`.
+// On all Cranelift targets (x86-64, aarch64) function and data pointers
+// have the same size, so the cast is valid.
+
+/// Auto-generated: call `cargo test` to verify this matches
+/// `unfer_ffi/EXPECTED_SYMBOLS.txt`. Adding a new `uk_*` function to unfer
+/// requires adding it here and in the expected-symbols file.
+#[cfg(feature = "unfer-kernel")]
+const UNFER_SYMBOLS: &[KernelSymbol] = &[
+    KernelSymbol { name: "uk_version",           addr: unfer_ffi::uk_version           as *const u8 },
+    KernelSymbol { name: "uk_init",              addr: unfer_ffi::uk_init              as *const u8 },
+    KernelSymbol { name: "uk_model_create",      addr: unfer_ffi::uk_model_create      as *const u8 },
+    KernelSymbol { name: "uk_model_free",        addr: unfer_ffi::uk_model_free        as *const u8 },
+    KernelSymbol { name: "uk_set_prior",         addr: unfer_ffi::uk_set_prior         as *const u8 },
+    KernelSymbol { name: "uk_set_hamiltonian",   addr: unfer_ffi::uk_set_hamiltonian   as *const u8 },
+    KernelSymbol { name: "uk_evolve",            addr: unfer_ffi::uk_evolve             as *const u8 },
+    KernelSymbol { name: "uk_condition",         addr: unfer_ffi::uk_condition          as *const u8 },
+    KernelSymbol { name: "uk_event_probability", addr: unfer_ffi::uk_event_probability as *const u8 },
+    KernelSymbol { name: "uk_observe",           addr: unfer_ffi::uk_observe           as *const u8 },
+    KernelSymbol { name: "uk_get_result",        addr: unfer_ffi::uk_get_result        as *const u8 },
+    KernelSymbol { name: "uk_last_error",        addr: unfer_ffi::uk_last_error         as *const u8 },
+    KernelSymbol { name: "uk_snapshot",          addr: unfer_ffi::uk_snapshot          as *const u8 },
+    KernelSymbol { name: "uk_restore",           addr: unfer_ffi::uk_restore           as *const u8 },
+    KernelSymbol { name: "uk_subscribe",         addr: unfer_ffi::uk_subscribe         as *const u8 },
+    KernelSymbol { name: "uk_poll",              addr: unfer_ffi::uk_poll              as *const u8 },
+    KernelSymbol { name: "uk_bayesian_update",   addr: unfer_ffi::uk_bayesian_update   as *const u8 },
+    KernelSymbol { name: "uk_belief_propagation",addr: unfer_ffi::uk_belief_propagation as *const u8 },
+];
+
+#[cfg(feature = "unfer-kernel")]
+fn register_unfer_symbols(builder: &mut JITBuilder) {
+    for sym in UNFER_SYMBOLS {
+        builder.symbol(sym.name, sym.addr);
+    }
+}
+
+/// Return the set of uk_* symbol names registered in the bridge.
+#[cfg(feature = "unfer-kernel")]
+pub fn registered_unfer_symbols() -> Vec<&'static str> {
+    UNFER_SYMBOLS.iter().map(|s| s.name).collect()
+}
+
+#[cfg(feature = "zenodo-store")]
+const ZENODO_SYMBOLS: &[KernelSymbol] = &[
+    KernelSymbol { name: "uz_init",          addr: unfer_ffi::zenodo::uz_init          as *const u8 },
+    KernelSymbol { name: "uz_push",          addr: unfer_ffi::zenodo::uz_push          as *const u8 },
+    KernelSymbol { name: "uz_pull",          addr: unfer_ffi::zenodo::uz_pull          as *const u8 },
+    KernelSymbol { name: "uz_manifest_json", addr: unfer_ffi::zenodo::uz_manifest_json as *const u8 },
+    KernelSymbol { name: "uz_last_error",    addr: unfer_ffi::zenodo::uz_last_error    as *const u8 },
+];
+
+#[cfg(feature = "zenodo-store")]
+fn register_zenodo_symbols(builder: &mut JITBuilder) {
+    for sym in ZENODO_SYMBOLS {
+        builder.symbol(sym.name, sym.addr);
+    }
+}
+
+/// Return the set of uz_* symbol names registered in the bridge.
+#[cfg(feature = "zenodo-store")]
+pub fn registered_zenodo_symbols() -> Vec<&'static str> {
+    ZENODO_SYMBOLS.iter().map(|s| s.name).collect()
 }
 
 #[no_mangle]
