@@ -32,6 +32,11 @@ unfer-kernel = ["dep:unfer_ffi"]
 zenodo-store = ["dep:unfer_ffi", "unfer_ffi/zenodo"]
 arctic-auth = ["dep:arctic_authority", "dep:arctic", "dep:serde_json"]
 
+# Test helpers: provides stub C runtime symbols (au_alloc, au_free, etc.)
+# so integration tests can link without the real safestos C runtime.
+# Active only when explicitly requested (e.g. `cargo test --features test-stubs`).
+test-stubs = []
+
 [build-dependencies]
 cc = "1.0"
 

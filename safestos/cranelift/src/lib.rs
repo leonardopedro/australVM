@@ -418,6 +418,36 @@ pub fn au_cell_can_replace(old: *const std::ffi::c_void, new: *const std::ffi::c
     unsafe { cell_can_replace(old, new) }
 }
 
+// ── Test stubs for C runtime symbols ───────────────────────────────
+// Integration tests link against libaustral_cranelift_bridge.rlib,
+// which references au_print_int/au_exit/au_alloc/au_free from the C
+// runtime. These stubs satisfy the linker when `--features test-stubs`
+// is active. The real C runtime is linked in production (cdylib/staticlib)
+// via build.rs → cc::Build.
+//
+// Activate with: `cargo test --features test-stubs`
+// Panic-free stubs: Cranelift may call these during JIT init/resolution;
+// any panic crossing `extern "C"` causes SIGABRT ("non-unwinding panic").
+// Return safe defaults instead.
+#[cfg(feature = "test-stubs")]
+mod test_runtime_stubs {
+    #[no_mangle]
+    pub extern "C" fn au_print_int(_i: i64) {}
+
+    #[no_mangle]
+    pub extern "C" fn au_exit(_code: i64) { loop {} } // hang; exit is unreachable in tests
+
+    #[no_mangle]
+    pub extern "C" fn au_alloc(_size: i64) -> *mut u8 {
+        std::ptr::null_mut() // test modules don't need heap allocation
+    }
+
+    #[no_mangle]
+    pub extern "C" fn au_free(_ptr: *mut u8) {
+        // Test stubs never own real C allocations; leaked memory is acceptable.
+    }
+}
+
 #[cfg(all(test, feature = "unfer-kernel"))]
 mod tests {
     #[test]
