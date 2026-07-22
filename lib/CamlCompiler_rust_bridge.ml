@@ -18,6 +18,12 @@ external c_execute_function : int64 -> int64 = "ocaml_execute_function"
 external c_execute_function_1 : int64 -> int64 -> int64 = "ocaml_execute_function_1"
 external c_execute_function_2 : int64 -> int64 -> int64 -> int64 = "ocaml_execute_function_2"
 external c_last_error : unit -> string option = "ocaml_cranelift_last_error"
+external c_lookup_function : string -> int64 = "ocaml_lookup_function"
+external c_list_function_names : unit -> string = "ocaml_list_function_names"
+external c_set_allow_all : unit -> unit = "ocaml_set_allow_all"
+external c_swap_binary : bytes -> int -> int64 = "ocaml_swap_binary"
+
+let set_allow_all () : unit = c_set_allow_all ()
 external c_cedar_load_policy : string -> int64 = "ocaml_cedar_load_policy"
 external c_cedar_check_runtime : string -> string -> string -> int64 = "ocaml_cedar_check_runtime"
 external c_set_cell_jit_ptr : int64 -> int64 -> unit = "ocaml_set_cell_jit_ptr"
@@ -59,6 +65,17 @@ let compile_binary (binary: string) : (int64 * string option) =
     else
       (ptr, None)
 
+let swap_binary (binary: string) : (int64 * string option) =
+  if not (is_ready ()) && not (initialize ()) then
+    (Int64.zero, Some "JIT bridge not initialized")
+  else
+    let binary_bytes = Bytes.of_string binary in
+    let ptr = c_swap_binary binary_bytes (Bytes.length binary_bytes) in
+    if ptr = Int64.zero then
+      (Int64.zero, last_jit_error ())
+    else
+      (ptr, None)
+
 let execute_function (ptr: int64) : int64 =
   c_execute_function ptr
 
@@ -90,6 +107,19 @@ let compile_function (name: string) (params: (string * mono_ty) list) (body: mst
 let compile_constant (name: string) (value: int64) : int64 option =
   let body = MReturn (MIntConstant (Int64.to_string value)) in
   compile_function name [] body
+
+let lookup_function (name: string) : int64 =
+  c_lookup_function name
+
+let list_function_names () : string list =
+  let json = c_list_function_names () in
+  try
+    match Yojson.Basic.from_string json with
+    | `List items -> List.filter_map (function
+        | `String s -> Some s
+        | _ -> None) items
+    | _ -> []
+  with _ -> []
 
 let cedar_load_policy (policy: string) : bool =
   c_cedar_load_policy policy = 1L

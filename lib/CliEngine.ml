@@ -69,6 +69,9 @@ let parse_source_files (mods: mod_source list): (module_source list * source_map
 
 (* Execution *)
 
+(* Stored module sources for hot-swap recompilation *)
+let last_module_sources : (module_source list) ref = ref []
+
 let rec exec (cmd: cmd): unit =
   match cmd with
   | HelpCommand ->
@@ -77,8 +80,10 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all } ->
      Compiler.use_cps_jit := use_cps_jit;
+     Compiler.jit_server_mode := jit_server;
+     if allow_all then CamlCompiler_rust_bridge.set_allow_all ();
      exec_compile modules target error_reporting_mode
 
 and print_usage _: unit =
@@ -121,6 +126,7 @@ and print_compile_usage _: unit =
 and exec_compile (modules: mod_source list) (target: target) (error_reporting_mode: error_reporting_mode): unit =
   (* Parse source files *)
   let (mods, source_map): (module_source list * source_map) = parse_source_files modules in
+  last_module_sources := mods;
   (* Error handling setup *)
   try
     exec_target mods target
@@ -168,7 +174,59 @@ and exec_target (mods: module_source list) (target: target): unit =
   | TypeCheck ->
      (* Compile everything, emit no code. *)
      let _ = compile_multiple empty_compiler mods in
-     ()
+     (* JIT server mode: keep process alive for repeated calls *)
+     if !jit_server_mode then begin
+       Printf.eprintf "CPS JIT: Entering server mode (stdin commands)\n%!";
+       Printf.printf "READY cmd=call|swap|exit\n%!";
+       flush stdout;
+       try
+         while true do
+           let line = try Some (read_line ()) with End_of_file -> None in
+           match line with
+           | None -> exit 0
+           | Some "" -> ()
+           | Some line ->
+               let parts = String.split_on_char ' ' line in
+               (match parts with
+                | ["call"; name] ->
+                    (match Hashtbl.find_opt jit_functions name with
+                     | Some ptr ->
+                         let res = CamlCompiler_rust_bridge.execute_function ptr in
+                         Printf.printf "RESULT %Ld\n%!" res;
+                         flush stdout
+                     | None ->
+                         Printf.printf "ERROR unknown function '%s'\n%!" name;
+                         flush stdout)
+                 | "swap" :: path_spec :: _ ->
+                     let mod_src = parse_mod_source path_spec in
+                     let (new_mods, _) = parse_source_files [mod_src] in
+                     (* Replace the entry for this module in the stored list *)
+                     let all_mods = !last_module_sources in
+                     (* Recompile all modules with the swapped one replaced *)
+                     let combined = List.map (fun m ->
+                       let m_name = match m with
+                         | TwoFileModuleSource { int_filename; _ } -> int_filename
+                         | BodyModuleSource { body_filename; _ } -> body_filename
+                       in
+                       let new_name = match List.hd new_mods with
+                         | TwoFileModuleSource { int_filename; _ } -> int_filename
+                         | BodyModuleSource { body_filename; _ } -> body_filename
+                       in
+                       if m_name = new_name then List.hd new_mods else m
+                     ) all_mods in
+                     if cps_jit_swap_modules combined then
+                       Printf.printf "SWAP_OK\n%!"
+                     else
+                       Printf.printf "SWAP_FAIL\n%!";
+                     flush stdout
+                 | ["exit"] -> exit 0
+                 | _ ->
+                     Printf.printf "ERROR unknown command\n%!";
+                     flush stdout)
+         done
+       with exn ->
+         Printf.eprintf "CPS JIT: Server error: %s\n%!" (Printexc.to_string exn)
+     end
   | Executable { bin_path; entrypoint; } ->
      exec_compile_to_bin mods bin_path entrypoint
   | CStandalone { output_path; entrypoint; } ->

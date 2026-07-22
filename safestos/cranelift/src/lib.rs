@@ -2,6 +2,8 @@ use cranelift_jit::{JITModule, JITBuilder};
 use std::cell::RefCell;
 use std::ffi::{c_void, CString};
 
+pub use cps::CpsModule;
+
 fn cps_debug(msg: &str) {
     if std::env::var("CPS_DEBUG").is_ok() {
         eprintln!("CPS: {}", msg);
@@ -23,6 +25,7 @@ use std::ffi::CStr;
 thread_local! {
     static JIT: RefCell<Option<JITModule>> = RefCell::new(None);
     static LAST_ERROR: RefCell<Option<CString>> = RefCell::new(None);
+    static CURRENT_MODULE: RefCell<Option<CpsModule>> = RefCell::new(None);
 }
 
 fn set_last_error(msg: &str) {
@@ -248,6 +251,10 @@ pub extern "C" fn compile_to_function_named(
                         std::ptr::null()
                     }
                     Ok(_) => {
+                        // Save module handle for re-lookup via lookup_function().
+                        let name_map = module.name_map.clone();
+                        CURRENT_MODULE.with(|m| *m.borrow_mut() = Some(module));
+
                         // Entry selection. With an explicit name, resolve it. With
                         // no name (the per-module compile path), execute only the
                         // conventional `run` entry point if present -- never a
@@ -260,16 +267,16 @@ pub extern "C" fn compile_to_function_named(
                             // Try "run" first (conventional), then "main"
                             // (entry-point from the Austral compiler), then
                             // fall back to the first function in the module.
-                            let found = module.name_map.get("run")
-                                .or_else(|| module.name_map.get("main"))
-                                .or_else(|| module.name_map.values().next())
+                            let found = name_map.get("run")
+                                .or_else(|| name_map.get("main"))
+                                .or_else(|| name_map.values().next())
                                 .copied();
                             match found {
                                 Some(fid) => (Some(fid), false),
                                 None => (None, true),
                             }
                         } else {
-                            (module.name_map.get(name_str).copied(), false)
+                            (name_map.get(name_str).copied(), false)
                         };
 
                         if let Some(fid) = func_id {
@@ -280,7 +287,7 @@ pub extern "C" fn compile_to_function_named(
                             // No entry point to run in this (library) module.
                             std::ptr::null()
                         } else {
-                            let avail: Vec<&String> = module.name_map.keys().collect();
+                            let avail: Vec<&String> = name_map.keys().collect();
                             let msg = format!(
                                 "Function '{}' not found. Available: [{}]",
                                 name_str,
@@ -316,6 +323,166 @@ pub extern "C" fn compile_to_function(ir_ptr: *const u8, ir_len: usize) -> *cons
 }
 #[no_mangle] pub extern "C" fn cranelift_shutdown() {
     JIT.with(|c| *c.borrow_mut() = None);
+    CURRENT_MODULE.with(|m| *m.borrow_mut() = None);
+}
+
+/// Hot-swap: replace the entire JIT module with one compiled from the given
+/// IR binary. All previous function pointers become invalid. Returns the
+/// new `CpsModule` entry function pointer (or null if compilation fails),
+/// and sets `CURRENT_MODULE` to the new module.
+#[no_mangle]
+pub extern "C" fn cranelift_swap_binary(
+    ir_ptr: *const u8,
+    ir_len: usize,
+) -> *const c_void {
+    cranelift_clear_error();
+    if ir_ptr.is_null() || ir_len == 0 {
+        set_last_error("Empty IR passed to swap");
+        return std::ptr::null();
+    }
+    let ir_slice = unsafe { std::slice::from_raw_parts(ir_ptr, ir_len) };
+
+    // Build a fresh JIT — same as cranelift_init() but forced.
+    let mut new_jit = match (|| -> Result<JITModule, String> {
+        let target_builder = cranelift_native::builder()
+            .map_err(|e| format!("Native builder failed: {}", e))?;
+        let flag_builder = cranelift_codegen::settings::builder();
+        let isa = target_builder
+            .finish(cranelift_codegen::settings::Flags::new(flag_builder))
+            .map_err(|e| format!("ISA finish failed: {}", e))?;
+        let mut builder =
+            JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        builder.symbol("au_print_int", au_print_int as *const u8);
+        builder.symbol("au_exit",      au_exit      as *const u8);
+        builder.symbol("au_alloc",     au_alloc     as *const u8);
+        builder.symbol("au_free",      au_free      as *const u8);
+        builder.symbol("__union_new",   au_exit as *const u8);
+        builder.symbol("__record_new",  au_exit as *const u8);
+        builder.symbol("__slot_get",    au_exit as *const u8);
+        #[cfg(feature = "unfer-kernel")]
+        register_unfer_symbols(&mut builder);
+        #[cfg(feature = "zenodo-store")]
+        register_zenodo_symbols(&mut builder);
+        Ok(JITModule::new(builder))
+    })() {
+        Ok(jit) => jit,
+        Err(e) => {
+            let msg = format!("Swap JIT init failed: {}", e);
+            set_last_error(&msg);
+            cps_debug(&msg);
+            return std::ptr::null();
+        }
+    };
+
+    // Compile the new binary into the fresh JIT
+    let (module, entry_ptr) = match cps::compile_cps_to_clif(&mut new_jit, ir_slice) {
+        Ok(module) => {
+            match new_jit.finalize_definitions() {
+                Err(e) => {
+                    let msg = format!("Swap finalize failed: {}", e);
+                    set_last_error(&msg);
+                    cps_debug(&msg);
+                    return std::ptr::null();
+                }
+                Ok(_) => {
+                    let name_map = module.name_map.clone();
+                    // Determine which function to return as entry
+                    let entry_name = name_map.get("run")
+                        .or_else(|| name_map.get("main"))
+                        .or_else(|| name_map.values().next())
+                        .copied();
+                    let ptr = entry_name
+                        .and_then(|fid| {
+                            let p = new_jit.get_finalized_function(fid) as *const c_void;
+                            Some(p)
+                        })
+                        .unwrap_or(std::ptr::null());
+                    (module, ptr)
+                }
+            }
+        }
+        Err(e) => {
+            let msg = format!("Swap compilation error: {}", e);
+            set_last_error(&msg);
+            cps_debug(&msg);
+            return std::ptr::null();
+        }
+    };
+
+    // Replace global state
+    let name_map_len = module.name_map.len();
+    JIT.with(|c| *c.borrow_mut() = Some(new_jit));
+    CURRENT_MODULE.with(|m| *m.borrow_mut() = Some(module));
+
+    cps_debug(&format!("Swap complete: {} functions, entry at {:?}",
+        name_map_len, entry_ptr));
+    entry_ptr
+}
+
+/// Look up a previously compiled function by name. Returns a function pointer
+/// that can be called via `execute_function`, or null if not found.
+/// This does NOT recompile — the function must have been compiled by an earlier
+/// call to `compile_to_function_named` (or `compile_to_function`).
+#[no_mangle]
+pub extern "C" fn lookup_function(
+    name_ptr: *const u8,
+    name_len: usize,
+) -> *const c_void {
+    if name_ptr.is_null() || name_len == 0 {
+        return std::ptr::null();
+    }
+    let slice = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+    let name = match std::str::from_utf8(slice) {
+        Ok(s) => s.trim_end_matches('\0'),
+        Err(_) => return std::ptr::null(),
+    };
+
+    JIT.with(|jit_cell| {
+        CURRENT_MODULE.with(|mod_cell| {
+            let jit = jit_cell.borrow();
+            let jit = jit.as_ref()?;
+            let module = mod_cell.borrow();
+            let module = module.as_ref()?;
+            let fid = module.name_map.get(name)?;
+            let ptr = jit.get_finalized_function(*fid) as *const c_void;
+            Some(ptr)
+        }).unwrap_or(std::ptr::null())
+    })
+}
+
+/// Return the names of all compiled functions as a JSON array string
+/// (e.g. `["run","main"]`). The caller must free the returned string via
+/// `cranelift_free_string`.
+#[no_mangle]
+pub extern "C" fn list_compiled_function_names() -> *mut std::ffi::c_char {
+    CURRENT_MODULE.with(|mod_cell| {
+        let module = mod_cell.borrow();
+        let names: Vec<&String> = match module.as_ref() {
+            Some(m) => m.name_map.keys().collect(),
+            None => vec![],
+        };
+        let json = format!("[{}]",
+            names.iter()
+                .map(|n| format!("\"{}\"", n))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        CString::new(json).unwrap_or_default().into_raw()
+    })
+}
+
+/// Free a string previously returned by `list_compiled_function_names`.
+#[no_mangle]
+pub extern "C" fn cranelift_free_string(s: *mut std::ffi::c_char) {
+    if !s.is_null() {
+        unsafe { let _ = CString::from_raw(s); }
+    }
+}
+
+/// Install AllowAll authorizer (disables all authorization checks).
+#[no_mangle]
+pub extern "C" fn set_allow_all() {
+    crate::auth::set_allow_all();
 }
 
 #[no_mangle]

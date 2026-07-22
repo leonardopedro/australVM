@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <caml/mlvalues.h>
 #include <caml/memory.h>
 #include <caml/alloc.h>
@@ -23,6 +24,11 @@ extern int64_t au_cedar_check_runtime(const char* p, const char* a, const char* 
 extern void au_set_cell_jit_ptr(void* desc, void* jit);
 extern int au_cell_swap(uint64_t old_id, void* new_desc);
 extern void scheduler_dispatch(void (*func)(void*), void* state);
+extern void* lookup_function(const unsigned char* name, int len);
+extern char* list_compiled_function_names(void);
+extern void cranelift_free_string(char* s);
+extern void set_allow_all(void);
+extern void* cranelift_swap_binary(const unsigned char* data, int len);
 
 /* OCaml's scheduler_dispatch for linker symbol resolution */
 void scheduler_dispatch(void (*func)(void*), void* state) {
@@ -148,4 +154,38 @@ CAMLprim value ocaml_store(value ptr, value val) {
     CAMLparam2(ptr, val);
     *(int64_t*)Int64_val(ptr) = Int64_val(val);
     CAMLreturn(Val_unit);
+}
+
+/* Look up a previously compiled function by name. Returns 0 if not found. */
+CAMLprim value ocaml_lookup_function(value name) {
+    CAMLparam1(name);
+    const char* name_str = String_val(name);
+    void* ptr = lookup_function((const unsigned char*)name_str, strlen(name_str));
+    CAMLreturn(caml_copy_int64((int64_t)ptr));
+}
+
+/* Install AllowAll authorizer (bypass manifest checks). */
+CAMLprim value ocaml_set_allow_all(value unit) {
+    CAMLparam1(unit);
+    set_allow_all();
+    CAMLreturn(Val_unit);
+}
+
+/* Hot-swap: replace entire JIT module with new binary. Returns entry ptr (0 on failure). */
+CAMLprim value ocaml_swap_binary(value ir_data, value ir_len) {
+    CAMLparam2(ir_data, ir_len);
+    void* ptr = cranelift_swap_binary((const unsigned char*)String_val(ir_data), Int_val(ir_len));
+    CAMLreturn(caml_copy_int64((int64_t)ptr));
+}
+
+/* List all compiled function names as a JSON string. */
+CAMLprim value ocaml_list_function_names(value unit) {
+    CAMLparam1(unit);
+    char* json = list_compiled_function_names();
+    if (json == NULL) {
+        CAMLreturn(caml_copy_string("[]"));
+    }
+    value result = caml_copy_string(json);
+    cranelift_free_string(json);
+    CAMLreturn(result);
 }

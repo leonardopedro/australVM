@@ -34,6 +34,8 @@ open HtmlError
 
 (* Phase 7: CPS JIT Integration *)
 let use_cps_jit = ref false
+let jit_server_mode = ref false
+let jit_functions : (string, int64) Hashtbl.t = Hashtbl.create 16
 
 let append_import_to_interface (ci: concrete_module_interface) (import: concrete_import_list): concrete_module_interface =
   let (ConcreteModuleInterface (mn, docstring, imports, decls)) = ci in
@@ -134,16 +136,20 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
                 if not (CamlCompiler_rust_bridge.initialize ()) then
                   Printf.eprintf "CPS JIT: Warning — Rust bridge failed to initialize\n%!";
 
-                (* Call Rust bridge — returns (ptr, error option) *)
-                let (fn_ptr, jit_err) = CamlCompiler_rust_bridge.compile_binary binary in
+                (* Compile binary — always compiles all functions into JIT module *)
+                let (_fn_ptr, jit_err) = CamlCompiler_rust_bridge.compile_binary binary in
                 (match jit_err with
                  | Some msg -> Printf.eprintf "CPS JIT: Compilation error: %s\n%!" msg
                  | None -> ());
-                if fn_ptr <> Int64.zero then begin
-                  Printf.eprintf "CPS JIT: Compiled at 0x%Lx, executing…\n%!" fn_ptr;
-                  let res = CamlCompiler_rust_bridge.execute_function fn_ptr in
-                  Printf.eprintf "CPS JIT: Execution result: %Ld\n%!" res
-                end;
+
+                (* Save all compiled function pointers for re-lookup *)
+                let names = CamlCompiler_rust_bridge.list_function_names () in
+                List.iter (fun name ->
+                  let ptr = CamlCompiler_rust_bridge.lookup_function name in
+                  if ptr <> Int64.zero then
+                    Hashtbl.replace jit_functions name ptr
+                ) names;
+                Printf.eprintf "CPS JIT: %d functions compiled\n%!" (Hashtbl.length jit_functions);
 
                 (* Always also emit C backend output for linking *)
                 let unit: c_unit = gen_module env mono in
@@ -178,6 +184,88 @@ let rec compile_multiple c modules =
   match modules with
   | m::rest -> compile_multiple (compile_mod c m) rest
   | [] -> c
+
+(* Hot-swap: recompile all module sources via the CPS-JIT path and replace
+   the running JIT module. The C codegen output is discarded — only the
+   JIT function table is updated. Returns true on success. *)
+let rec cps_jit_swap_modules (mods: module_source list): bool =
+  if not !use_cps_jit then begin
+    Printf.eprintf "CPS JIT: swap requires --use-cps-jit\n%!";
+    false
+  end else
+  try
+    (* Build env starting from empty_env with Pervasive + Memory modules *)
+    let env = ref empty_env in
+    let code = ref prelude_c in
+    let compile_mod_to_env (source: module_source) =
+      let (new_env, _name, combined, int_file_id, body_file_id) =
+        parse_and_combine !env source in
+      env := new_env;
+      let _ = check_ends_in_return combined in
+      let combined = DesugaringPass.desugar combined in
+      let (new_env, linked) = extract !env combined int_file_id body_file_id in
+      env := new_env;
+      let typed = augment_module !env linked in
+      let _ = check_module_linearity typed in
+      let new_env = extract_bodies !env typed in
+      env := new_env;
+      let (new_env, mono) = monomorphize !env typed in
+      env := new_env;
+      let unit: c_unit = gen_module !env mono in
+      let unit_code = render_unit unit in
+      code := !code ^ "\n" ^ unit_code
+    in
+    let make_source is bs = TwoFileModuleSource { int_filename = ""; int_code = is; body_filename = ""; body_code = bs } in
+    compile_mod_to_env (make_source pervasive_interface_source pervasive_body_source);
+    compile_mod_to_env (make_source memory_interface_source memory_body_source);
+    let all_funcs = ref [] in
+    List.iter (fun source ->
+      let (new_env, _name, combined, int_file_id, body_file_id) =
+        parse_and_combine !env source in
+      env := new_env;
+      let _ = check_ends_in_return combined in
+      let combined = DesugaringPass.desugar combined in
+      let (new_env, linked) = extract !env combined int_file_id body_file_id in
+      env := new_env;
+      let typed = augment_module !env linked in
+      let _ = check_module_linearity typed in
+      let new_env = extract_bodies !env typed in
+      env := new_env;
+      let (new_env, mono) = monomorphize !env typed in
+      env := new_env;
+      let funcs = Compiler_cps.compile_module_cps mono in
+      all_funcs := !all_funcs @ funcs
+    ) mods;
+    if List.length !all_funcs > 0 then begin
+      let binary = CpsGen.serialize_functions !all_funcs in
+      Printf.eprintf "CPS JIT: Swap compiled %d functions (%d bytes)\n%!"
+        (List.length !all_funcs) (String.length binary);
+
+      let (_fn_ptr, jit_err) = CamlCompiler_rust_bridge.swap_binary binary in
+      (match jit_err with
+       | Some msg -> Printf.eprintf "CPS JIT: Swap error: %s\n%!" msg; false
+       | None ->
+           (* Update jit_functions hashtable *)
+           Hashtbl.clear jit_functions;
+           let names = CamlCompiler_rust_bridge.list_function_names () in
+           List.iter (fun name ->
+             let ptr = CamlCompiler_rust_bridge.lookup_function name in
+             if ptr <> Int64.zero then
+               Hashtbl.replace jit_functions name ptr
+           ) names;
+           Printf.eprintf "CPS JIT: Swap complete — %d functions ready\n%!"
+             (Hashtbl.length jit_functions);
+           true)
+    end else begin
+      Printf.eprintf "CPS JIT: No CPS functions to swap\n%!";
+      false
+    end
+  with exn ->
+    Printf.eprintf "CPS JIT: Swap failed: %s\n%!"
+      (match exn with
+       | Austral_error error -> render_error_to_plain error
+       | _ -> Printexc.to_string exn);
+    false
 
 let compile_entrypoint c mn i =
   let qi = make_qident (mn, i, i) in

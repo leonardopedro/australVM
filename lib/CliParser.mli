@@ -49,9 +49,14 @@ type cmd =
       target: target;
       error_reporting_mode: error_reporting_mode;
       use_cps_jit: bool;
+      jit_server: bool;
+      allow_all: bool;
     }
   (** Whole program compilation using the C backend. *)
-[@@deriving eq]
 
 (** Parse an argument list into a compiler command. *)
 val parse : arglist -> cmd
+
+(** Parse a module source string (e.g. "file.aui,file.aum" or "file.aum")
+    into a [mod_source]. *)
+val parse_mod_source : string -> mod_source

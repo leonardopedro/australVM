@@ -103,8 +103,9 @@ type cmd =
       target: target;
       error_reporting_mode: error_reporting_mode;
       use_cps_jit: bool;
+      jit_server: bool;
+      allow_all: bool;
     }
-  [@@deriving eq]
 
 let check_leftovers (arglist: arglist): unit =
   if (arglist_size arglist) > 0 then
@@ -218,13 +219,25 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
     | Some arglist -> (true, arglist)
     | None -> (false, arglist)
   in
+  (* Parse --jit-server flag (implies --use-cps-jit) *)
+  let (jit_server, arglist) =
+    match pop_bool_flag arglist "jit-server" with
+    | Some arglist -> (true, arglist)
+    | None -> (false, arglist)
+  in
+  (* Parse --allow-all flag (disables authorization) *)
+  let (allow_all, arglist) =
+    match pop_bool_flag arglist "allow-all" with
+    | Some arglist -> (true, arglist)
+    | None -> (false, arglist)
+  in
   (* There must be at least one module. *)
   if ((List.length modules) < 1) then
     Errors.missing_module ()
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

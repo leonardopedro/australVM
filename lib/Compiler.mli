@@ -33,3 +33,11 @@ val compile_entrypoint : compiler -> module_name -> identifier -> compiler
 val post_compile : compiler -> compiler
 
 val use_cps_jit : bool ref
+val jit_server_mode : bool ref
+
+(** Hash table of compiled JIT function pointers keyed by function name. *)
+val jit_functions : (string, int64) Hashtbl.t
+
+(** Hot-swap: recompile the given module sources via CPS-JIT and replace
+    the running JIT module. Returns true on success. *)
+val cps_jit_swap_modules : module_source list -> bool
