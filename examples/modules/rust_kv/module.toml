@@ -1,0 +1,13 @@
+[module]
+name = "rust_kv"
+version = "0.1.0"
+archetype = "rust_capstd"
+entry = "run"
+
+[grants]
+kernel = ["uk_version"]
+fs = ["data/"]
+net = []
+
+[limits]
+max_ms = 5000

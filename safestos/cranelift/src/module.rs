@@ -13,6 +13,8 @@ pub struct ModuleManifest {
     pub entry: String,
     pub grants: Vec<String>,
     pub effects: Vec<String>,
+    pub fs_grants: Vec<String>,
+    pub net_grants: Vec<String>,
     pub max_ms: Option<u64>,
 }
 
@@ -77,6 +79,26 @@ impl ModuleManifest {
             .and_then(|l| l.get("max_ms"))
             .and_then(|m| m.as_integer())
             .map(|m| m as u64);
+        let fs_grants = v
+            .get("grants")
+            .and_then(|g| g.get("fs"))
+            .and_then(|f| f.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let net_grants = v
+            .get("grants")
+            .and_then(|g| g.get("net"))
+            .and_then(|n| n.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(Self {
             name,
             version,
@@ -85,6 +107,8 @@ impl ModuleManifest {
             entry,
             grants,
             effects,
+            fs_grants,
+            net_grants,
             max_ms,
         })
     }
@@ -208,6 +232,26 @@ impl ModuleHost {
             if !old_grants.contains(g) {
                 return Err(format!(
                     "UK-4001 swap rejected: new module escalates grant '{g}'"
+                ));
+            }
+        }
+
+        let old_fs: std::collections::HashSet<&String> =
+            old_handle.manifest.fs_grants.iter().collect();
+        for g in &new_manifest.fs_grants {
+            if !old_fs.contains(g) {
+                return Err(format!(
+                    "UK-4001 swap rejected: new module escalates fs grant '{g}'"
+                ));
+            }
+        }
+
+        let old_net: std::collections::HashSet<&String> =
+            old_handle.manifest.net_grants.iter().collect();
+        for g in &new_manifest.net_grants {
+            if !old_net.contains(g) {
+                return Err(format!(
+                    "UK-4001 swap rejected: new module escalates net grant '{g}'"
                 ));
             }
         }

@@ -1,0 +1,2 @@
+{"key": "greeting", "value": "hello from rust_kv"}
+{"key": "count", "value": "42"}

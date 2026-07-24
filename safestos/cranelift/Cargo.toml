@@ -25,6 +25,7 @@ arctic_authority = { path = "../../arctic_authority", optional = true }
 arctic = { path = "../../../dynamic-arctic", optional = true }
 serde_json = { version = "1", optional = true }
 frunk = { version = "0.4", optional = true }
+cap-std = { version = "3", optional = true }
 # Tidepool: Haskell effect-stack → Cranelift JIT (separate JIT context, cranelift 0.129.1)
 # Pinned to rev ac0a95ddb07cbb996ba2b5bf1fd0772ca9315ef1.
 # Uncomment when building with --features tidepool (requires network for git fetch):
@@ -41,6 +42,7 @@ unfer-kernel = ["dep:unfer_ffi"]
 zenodo-store = ["dep:unfer_ffi", "unfer_ffi/zenodo"]
 arctic-auth = ["dep:arctic_authority", "dep:arctic", "dep:serde_json"]
 tidepool = ["dep:frunk"]
+capstd = ["dep:cap-std"]
 
 # Test helpers: provides stub C runtime symbols (au_alloc, au_free, etc.)
 # so integration tests can link without the real safestos C runtime.

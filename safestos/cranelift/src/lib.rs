@@ -18,6 +18,7 @@ pub mod arctic_auth;
 pub mod cps;
 pub mod module;
 pub mod tidepool_mod;
+pub mod capstd_mod;
 
 #[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;
