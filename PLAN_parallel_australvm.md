@@ -59,20 +59,24 @@ paths — both additive archetypes in `module.toml`, neither touching the frozen
 
 ## Current state (2026-07-24)
 
-- **B1–B8 complete and committed** (build robustness, symbol auto-sync, live UK-4001
+- **B1–B11 complete and committed** (build robustness, symbol auto-sync, live UK-4001
   enforcement, cps.rs unit tests (18 CPS + permission), test harness wiring, CI for new
-  stack, hygiene, root hygiene, genuine module hosting). 44 tests in `safestos/cranelift`.
+  stack, hygiene, root hygiene, genuine module hosting, tidepool infrastructure,
+  cap-std Rust modules, federation-aware hosting). 57 tests in `safestos/cranelift`.
 - `cargo check` in `safestos/cranelift` passes against unfer's working tree.
 - Root is clean: only AGENTS.md, README.md, CONTRIBUTING.md, LICENSE,
   PLAN_parallel_australvm.md, arctic.md, Makefile, flake.nix, flake.lock, shell.nix,
   dune-project, austral.opam, run-tests.sh, run-examples.sh, policies.cedar,
   libaustral_cranelift_bridge.so.
 - `examples/modules/demo_hosted/` exists with module.toml + gen_cps.sh + run_demo.sh.
+- `examples/modules/hello_kernel/` exists (Haskell effect module, requires GHC).
+- `examples/modules/rust_kv/` exists (cap-std Rust module).
 - `modhost host <module-dir> --call <ep> [--repeat N] [--swap <dir>]` CLI works:
   load-once / call-many / hot-swap with grant-escalation rejection.
 - `--emit-cps=<path>` flag added to the Austral compiler CLI (saves CPS binary IR).
 - 21 `uk_*` symbols registered (added uk_buf_free, uk_ode_analyze, uk_ode_measure_original).
-- B9–B11 not started.
+- B9b (Egison pattern matching) blocked: requires GHC/tidepool-extract (not installed).
+- All other stages (B7b–B11) complete.
 
 ---
 
@@ -89,6 +93,9 @@ paths — both additive archetypes in `module.toml`, neither touching the frozen
 | B7 | Hygiene (archived stale docs, purged build artifacts, gated debug, C boundary) |
 | B7b | Final root hygiene (moved 6 stale status files to docs/history/, removed 10 test artifacts) |
 | B8 | Genuine module hosting: `module.rs` (ModuleHost/ModuleHandle/ModuleManifest), `modhost host <dir> --call/--repeat/--swap`, `--emit-cps` compiler flag, `examples/modules/demo_hosted/`, 9 module tests, 21 uk_* symbols |
+| B9 | Tidepool modules infrastructure: `tidepool_mod.rs` (KernelReq/KernelHandler stubs), manifest `archetype`/`effects`/`max_ms` fields, `examples/modules/hello_kernel/`, cranelift version decision (0.131 vs 0.129.1 → both JITs coexist), 6 tests. Full Haskell compilation requires GHC/tidepool-extract (not installed). |
+| B10 | cap-std Rust modules: `capstd_mod.rs` (CapFs with RESOLVE_BENEATH), manifest `fs_grants`/`net_grants`, hot-swap fs/net escalation gate, `examples/modules/rust_kv/`, honesty note (Tier 1 ≠ sandbox), 4 tests |
+| B11 | Federation-aware hosting: `federation.rs` (ModuleIdentity DID creation, artifact CID), `federation` feature flag (unfer_consensus/identity/data path deps), 3 tests |
 
 ---
 
