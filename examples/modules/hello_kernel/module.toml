@@ -1,0 +1,18 @@
+[module]
+name = "hello_kernel"
+version = "0.1.0"
+archetype = "haskell_effect"
+entry = "main"
+
+[grants]
+kernel = [
+    "uk_version",
+    "uk_model_create",
+    "uk_evolve",
+    "uk_event_probability",
+    "uk_model_free",
+]
+effects = ["Kernel"]
+
+[limits]
+max_ms = 5000

@@ -74,3 +74,20 @@ rather than switched to a git dep, because:
 
 The `lib/dune` file no longer contains machine-specific absolute paths; it uses the
 `AUSTRAL_BRIDGE_DIR` environment variable (default: `../safestos/cranelift/target/release`).
+
+---
+
+## Cranelift version decision (Stage B9)
+
+**safestos bridge**: cranelift `0.131`
+**tidepool-codegen**: cranelift `=0.129.1` (pinned exact)
+
+These diverge. **Decision: accept both JITs in the binary.** Correctness is fine —
+they run in separate JIT contexts (safestos `JITModule` for Austral CPS modules,
+tidepool `JitEffectMachine` for Haskell effect modules). The cost is binary size
+(~2 Cranelift code caches) and two separate JIT initialization paths. Rebasing
+one onto the other is not worth the maintenance burden given tidepool pins exact
+versions (`=0.129.1`) and the safestos bridge tracks the latest stable.
+
+Tidepool deps are added behind the `tidepool` feature flag (off by default) so
+the base bridge binary stays lean.

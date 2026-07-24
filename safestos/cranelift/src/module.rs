@@ -9,8 +9,11 @@ pub struct ModuleManifest {
     pub name: String,
     pub version: String,
     pub archetypes: Vec<String>,
+    pub archetype: String,
     pub entry: String,
     pub grants: Vec<String>,
+    pub effects: Vec<String>,
+    pub max_ms: Option<u64>,
 }
 
 impl ModuleManifest {
@@ -54,12 +57,35 @@ impl ModuleManifest {
                     .collect()
             })
             .unwrap_or_default();
+        let archetype = module
+            .get("archetype")
+            .and_then(|a| a.as_str())
+            .unwrap_or("austral_cps")
+            .to_string();
+        let effects = v
+            .get("grants")
+            .and_then(|g| g.get("effects"))
+            .and_then(|e| e.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let max_ms = v
+            .get("limits")
+            .and_then(|l| l.get("max_ms"))
+            .and_then(|m| m.as_integer())
+            .map(|m| m as u64);
         Ok(Self {
             name,
             version,
             archetypes,
+            archetype,
             entry,
             grants,
+            effects,
+            max_ms,
         })
     }
 }
