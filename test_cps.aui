@@ -1,3 +1,0 @@
-module test_cps is
-    function main(): ExitCode;
-end module.

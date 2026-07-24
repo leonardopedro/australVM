@@ -1,3 +1,0 @@
-module test_const is
-    function main(): ExitCode;
-end module.

@@ -2450,6 +2450,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ode_sirk"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "nested_fock_algebra",
+ "num-complex",
+ "quantrs2-symengine-pure",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2718,6 +2732,7 @@ dependencies = [
  "fock_sirk",
  "nested_fock_algebra",
  "num-complex",
+ "ode_sirk",
  "qfm",
  "serde",
  "serde_json",
@@ -4062,6 +4077,7 @@ dependencies = [
 name = "unfer_ffi"
 version = "0.1.0"
 dependencies = [
+ "ode_sirk",
  "prob_kernel",
  "serde",
  "serde_json",
@@ -4073,6 +4089,7 @@ dependencies = [
 name = "unfer_protocol"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
