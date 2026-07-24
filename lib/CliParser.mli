@@ -51,6 +51,7 @@ type cmd =
       use_cps_jit: bool;
       jit_server: bool;
       allow_all: bool;
+      emit_cps_path: string option;
     }
   (** Whole program compilation using the C backend. *)
 

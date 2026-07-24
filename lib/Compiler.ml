@@ -35,6 +35,7 @@ open HtmlError
 (* Phase 7: CPS JIT Integration *)
 let use_cps_jit = ref false
 let jit_server_mode = ref false
+let emit_cps_path = ref (None: string option)
 let jit_functions : (string, int64) Hashtbl.t = Hashtbl.create 16
 
 let append_import_to_interface (ci: concrete_module_interface) (import: concrete_import_list): concrete_module_interface =
@@ -129,6 +130,11 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
                  Compiler_cps.debug_print_cps_functions funcs);
               if List.length funcs > 0 then begin
                 let binary = CpsGen.serialize_functions funcs in
+                (match !emit_cps_path with
+                 | Some path ->
+                    Compiler_cps.write_cps_binary funcs path;
+                    Printf.eprintf "CPS JIT: Emitted CPS binary to %s\n%!" path
+                 | None -> ());
                 Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
                   (List.length funcs) (String.length binary);
 

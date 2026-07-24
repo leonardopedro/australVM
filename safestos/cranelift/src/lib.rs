@@ -16,6 +16,7 @@ pub mod policy;
 #[cfg(feature = "arctic-auth")]
 pub mod arctic_auth;
 pub mod cps;
+pub mod module;
 
 #[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;
@@ -133,9 +134,9 @@ pub extern "C" fn cranelift_init() -> i64 {
 /// and an opaque pointer to the corresponding `pub extern "C" fn` in `unfer_ffi`.
 /// Pointers are stored as `*const u8` because the function signatures differ;
 /// `JITBuilder::symbol()` only needs the address for linking.
-struct KernelSymbol {
-    name: &'static str,
-    addr: *const u8,
+pub(crate) struct KernelSymbol {
+    pub(crate) name: &'static str,
+    pub(crate) addr: *const u8,
 }
 
 // Function pointers are cast to `*const u8` for `JITBuilder::symbol()`.
@@ -146,7 +147,7 @@ struct KernelSymbol {
 /// `unfer_ffi/EXPECTED_SYMBOLS.txt`. Adding a new `uk_*` function to unfer
 /// requires adding it here and in the expected-symbols file.
 #[cfg(feature = "unfer-kernel")]
-const UNFER_SYMBOLS: &[KernelSymbol] = &[
+pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_version",           addr: unfer_ffi::uk_version           as *const u8 },
     KernelSymbol { name: "uk_init",              addr: unfer_ffi::uk_init              as *const u8 },
     KernelSymbol { name: "uk_model_create",      addr: unfer_ffi::uk_model_create      as *const u8 },
@@ -165,6 +166,9 @@ const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_poll",              addr: unfer_ffi::uk_poll              as *const u8 },
     KernelSymbol { name: "uk_bayesian_update",   addr: unfer_ffi::uk_bayesian_update   as *const u8 },
     KernelSymbol { name: "uk_belief_propagation",addr: unfer_ffi::uk_belief_propagation as *const u8 },
+    KernelSymbol { name: "uk_buf_free",          addr: unfer_ffi::uk_buf_free           as *const u8 },
+    KernelSymbol { name: "uk_ode_analyze",       addr: unfer_ffi::uk_ode_analyze        as *const u8 },
+    KernelSymbol { name: "uk_ode_measure_original", addr: unfer_ffi::uk_ode_measure_original as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]
@@ -181,7 +185,7 @@ pub fn registered_unfer_symbols() -> Vec<&'static str> {
 }
 
 #[cfg(feature = "zenodo-store")]
-const ZENODO_SYMBOLS: &[KernelSymbol] = &[
+pub(crate) const ZENODO_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uz_init",          addr: unfer_ffi::zenodo::uz_init          as *const u8 },
     KernelSymbol { name: "uz_push",          addr: unfer_ffi::zenodo::uz_push          as *const u8 },
     KernelSymbol { name: "uz_pull",          addr: unfer_ffi::zenodo::uz_pull          as *const u8 },

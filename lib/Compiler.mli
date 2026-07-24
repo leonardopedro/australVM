@@ -34,6 +34,7 @@ val post_compile : compiler -> compiler
 
 val use_cps_jit : bool ref
 val jit_server_mode : bool ref
+val emit_cps_path : string option ref
 
 (** Hash table of compiled JIT function pointers keyed by function name. *)
 val jit_functions : (string, int64) Hashtbl.t

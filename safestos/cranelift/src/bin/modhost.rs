@@ -1,21 +1,20 @@
 //! `modhost` — module host for the unfer kernel module system.
 //!
 //! Subcommands:
-//!   authorize <manifest.toml> <module> <uk_symbol>  — check authorization
-//!   host      <austral-path> <module-src>...         — host a compiled module
+//!   authorize   <manifest.toml> <module> <uk_symbol>   — check authorization
+//!   host        <module-dir> --call <ep> [--args ...] [--repeat N] [--swap <dir>]
+//!   host-legacy <austral-path> <module-src>... -- <entrypoint>...
 //!
-//! The `host` subcommand spawns the Austral compiler in JIT-server mode,
-//! compiles the given module(s) once, then accepts `call <entrypoint>`
-//! commands on stdin so the caller can invoke entrypoints without recompiling.
-//!
-//! Usage:
-//!   modhost authorize <manifest.toml> <module> <uk_symbol>
-//!   modhost host <austral-path> <module-src>... -- [call <name>]* <exit>
+//! The `host` subcommand loads a pre-compiled module directory (module.cps +
+//! module.toml), compiles it once via the Cranelift JIT, then calls entrypoints
+//! without recompiling. Supports hot-swap via --swap.
 //!
 //! Exit codes: 0 = success, 1 = denied/error, 2 = usage error.
 
 use austral_cranelift_bridge::auth::{self, ManifestAuthEngine};
+use austral_cranelift_bridge::module::ModuleHost;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Child, Command, ExitCode, Stdio};
 
 fn cmd_authorize(args: &[String]) -> ExitCode {
@@ -43,16 +42,117 @@ fn cmd_authorize(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(reason) => {
-            // Mirrors unfer_protocol code 4001 CallDenied.
             eprintln!("UK-4001 CallDenied: {reason}");
             ExitCode::from(1)
         }
     }
 }
 
-/// Spawn the Austral compiler in JIT-server mode and communicate with it.
-fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[String]) -> ExitCode {
-    // Build the austral command: `austral compile <module>... --jit-server --allow-all --target-type=tc`
+fn cmd_host(args: &[String]) -> ExitCode {
+    let module_dir = Path::new(&args[2]);
+
+    let mut entrypoint = String::from("run");
+    let mut call_args: Vec<i64> = Vec::new();
+    let mut repeat: u64 = 1;
+    let mut swap_dir: Option<String> = None;
+
+    let mut i = 3;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--call" => {
+                i += 1;
+                if i < args.len() {
+                    entrypoint = args[i].clone();
+                }
+            }
+            "--args" => {
+                i += 1;
+                while i < args.len() && !args[i].starts_with("--") {
+                    if let Ok(v) = args[i].parse::<i64>() {
+                        call_args.push(v);
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            "--repeat" => {
+                i += 1;
+                if i < args.len() {
+                    repeat = args[i].parse().unwrap_or(1);
+                }
+            }
+            "--swap" => {
+                i += 1;
+                if i < args.len() {
+                    swap_dir = Some(args[i].clone());
+                }
+            }
+            other => {
+                eprintln!("modhost: unknown option '{other}'");
+                return ExitCode::from(2);
+            }
+        }
+        i += 1;
+    }
+
+    let mut host = ModuleHost::new();
+
+    match host.load(module_dir) {
+        Ok(handle) => {
+            println!(
+                "modhost: loaded '{}' v{} ({} functions, entry='{}')",
+                handle.manifest.name,
+                handle.manifest.version,
+                handle.functions.len(),
+                handle.manifest.entry,
+            );
+        }
+        Err(e) => {
+            eprintln!("modhost: load failed: {e}");
+            return ExitCode::from(1);
+        }
+    }
+
+    if let Some(ref sd) = swap_dir {
+        let module_name = {
+            let h = host.loaded_modules();
+            h[0].to_string()
+        };
+        match host.swap(&module_name, Path::new(sd)) {
+            Ok(()) => println!("modhost: hot-swapped '{module_name}' from {sd}"),
+            Err(e) => {
+                eprintln!("modhost: swap failed: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    let module_name = {
+        let h = host.loaded_modules();
+        h[0].to_string()
+    };
+
+    for call_idx in 0..repeat {
+        if repeat > 1 {
+            println!("--- call {}/{} ---", call_idx + 1, repeat);
+        }
+        match host.call(&module_name, &entrypoint, &call_args) {
+            Ok(result) => println!("{entrypoint}: {result}"),
+            Err(e) => {
+                eprintln!("modhost: call failed: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn spawn_jit_server(
+    austral_path: &str,
+    module_args: &[String],
+    call_args: &[String],
+) -> ExitCode {
     let mut cmd = Command::new(austral_path);
     cmd.arg("compile");
     for m in module_args {
@@ -62,7 +162,6 @@ fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[Str
     cmd.arg("--allow-all");
     cmd.arg("--target-type=tc");
 
-    // Pipe stdin/stdout
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::inherit());
@@ -79,12 +178,9 @@ fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[Str
     let stdout = child.stdout.take().unwrap();
     let mut reader = BufReader::new(stdout);
 
-    // Wait for "READY" line from austral
     let mut ready_line = String::new();
     match reader.read_line(&mut ready_line) {
-        Ok(n) if n > 0 && ready_line.starts_with("READY") => {
-            // All good
-        }
+        Ok(n) if n > 0 && ready_line.starts_with("READY") => {}
         Ok(_) => {
             eprintln!("modhost: unexpected output from austral: {ready_line}");
             let _ = child.kill();
@@ -97,7 +193,6 @@ fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[Str
         }
     }
 
-    // Send call commands and read results
     for target in call_args {
         writeln!(stdin, "call {target}").unwrap();
         let mut result_line = String::new();
@@ -123,7 +218,6 @@ fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[Str
         }
     }
 
-    // Send exit
     let _ = writeln!(stdin, "exit");
     let _ = child.wait();
 
@@ -136,17 +230,29 @@ fn main() -> ExitCode {
     match args.get(1).map(|s| s.as_str()) {
         Some("authorize") => {
             if args.len() != 5 {
-                eprintln!("usage: modhost authorize <manifest.toml> <module> <uk_symbol>");
+                eprintln!(
+                    "usage: modhost authorize <manifest.toml> <module> <uk_symbol>"
+                );
                 return ExitCode::from(2);
             }
             cmd_authorize(&args)
         }
         Some("host") => {
-            if args.len() < 4 {
-                eprintln!("usage: modhost host <austral-path> <module-src>... -- <entrypoint>...");
+            if args.len() < 3 {
+                eprintln!(
+                    "usage: modhost host <module-dir> --call <entrypoint> [--args ...] [--repeat N] [--swap <dir>]"
+                );
                 return ExitCode::from(2);
             }
-            // Parse: modhost host <austral-path> <module-src>... -- <entrypoint>...
+            cmd_host(&args)
+        }
+        Some("host-legacy") => {
+            if args.len() < 4 {
+                eprintln!(
+                    "usage: modhost host-legacy <austral-path> <module-src>... -- <entrypoint>..."
+                );
+                return ExitCode::from(2);
+            }
             let austral_path = &args[2];
             let mut i = 3;
             let mut module_args: Vec<String> = Vec::new();
@@ -176,8 +282,15 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!("usage:");
-            eprintln!("  modhost authorize <manifest.toml> <module> <uk_symbol>");
-            eprintln!("  modhost host <austral-path> <module-src>... -- <entrypoint>...");
+            eprintln!(
+                "  modhost authorize <manifest.toml> <module> <uk_symbol>"
+            );
+            eprintln!(
+                "  modhost host <module-dir> --call <entrypoint> [--args ...] [--repeat N] [--swap <dir>]"
+            );
+            eprintln!(
+                "  modhost host-legacy <austral-path> <module-src>... -- <entrypoint>..."
+            );
             ExitCode::from(2)
         }
     }

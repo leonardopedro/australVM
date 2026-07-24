@@ -105,6 +105,7 @@ type cmd =
       use_cps_jit: bool;
       jit_server: bool;
       allow_all: bool;
+      emit_cps_path: string option;
     }
 
 let check_leftovers (arglist: arglist): unit =
@@ -231,13 +232,19 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
     | Some arglist -> (true, arglist)
     | None -> (false, arglist)
   in
+  (* Parse --emit-cps=<path> flag (save CPS binary IR to file) *)
+  let (emit_cps_path, arglist) =
+    match pop_value_flag arglist "emit-cps" with
+    | Some (arglist, path) -> (Some path, arglist)
+    | None -> (None, arglist)
+  in
   (* There must be at least one module. *)
   if ((List.length modules) < 1) then
     Errors.missing_module ()
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; emit_cps_path = emit_cps_path; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

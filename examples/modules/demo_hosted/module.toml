@@ -1,0 +1,14 @@
+[module]
+name = "demo_hosted"
+version = "0.1.0"
+archetypes = ["actor"]
+entry = "run"
+
+[grants]
+kernel = [
+    "uk_version",
+    "uk_model_create",
+    "uk_evolve",
+    "uk_event_probability",
+    "uk_model_free",
+]

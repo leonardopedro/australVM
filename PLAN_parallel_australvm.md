@@ -12,7 +12,7 @@ Three repos form one system:
   `unfer_identity` (DID). Plan A phases 1 (A1–A5) complete; A6–A10 pending.
 - **australVM** (this repo) — OCaml Austral compiler (full upstream pipeline + `--use-cps-jit`
   path) and `safestos/cranelift` Rust JIT bridge (`austral_cranelift_bridge`) that
-  **statically links `unfer_ffi` via a path dependency**, registers the 18 `uk_*` symbols
+  **statically links `unfer_ffi` via a path dependency**, registers the 21 `uk_*` symbols
   (feature `unfer-kernel`, default on) + 5 `uz_*`, gates foreign calls through
   `AuthorizationEngine` (ManifestAuthEngine / Cedar / arctic threshold), and hosts modules
   via `modhost`.
@@ -52,24 +52,27 @@ paths — both additive archetypes in `module.toml`, neither touching the frozen
 1. **Ownership**: modify only files inside this repo. Cross-repo *reads* are fine (you will
    read `../unfer/unfer_ffi` sources and run `../unfer/demo_module/run_demo.sh`). Cross-repo
    *writes* are forbidden, except steps explicitly marked `[SYNC]`.
-2. **Frozen contract** (additive-only; no renames/removals/signature changes): the 18 `uk_*`
-   + 5 `uz_*` symbols and signatures; `module.toml` grant vocabulary; UK-#### codes.
+2. **Frozen contract** (additive-only; no renames/removals/signature changes): the 21 `uk_*`
+    + 5 `uz_*` symbols and signatures; `module.toml` grant vocabulary; UK-#### codes.
 3. **Commit discipline**: meaningful messages; commit after every stage.
 4. Stages ordered small → large, each with an acceptance command. Do not skip ahead.
 
 ## Current state (2026-07-24)
 
-- **B1–B7 complete and committed** (build robustness, symbol auto-sync, live UK-4001
+- **B1–B8 complete and committed** (build robustness, symbol auto-sync, live UK-4001
   enforcement, cps.rs unit tests (18 CPS + permission), test harness wiring, CI for new
-  stack, hygiene). 46 tests in `safestos/cranelift`.
+  stack, hygiene, root hygiene, genuine module hosting). 44 tests in `safestos/cranelift`.
 - `cargo check` in `safestos/cranelift` passes against unfer's working tree.
-- Root still has ~5 stale `.md` files (BLOCK_4_COMPLETE, BRIDGE_ARCH, BUILD_SUCCESS,
-  SESSION_4_COMPLETE) and stale `.txt` files (FAILURES, FINAL_SUMMARY, INTEGRATION_TEST.RESULT,
-  PROJECT_COMPLETE, WHAT_WE_DID_SO_FAR) — B7 archived the worst but these remain.
-- No `examples/modules/` directory yet (B9/B10 will create it).
-- B8–B10 not started. These are the "genuine module runtime" capstone stages.
-- unfer has grown: `unfer_consensus`, `unfer_identity`, `unfer_data`, `logos`, `ode_sirk`
-  are new crates. The agent now has 20+ ops (federation, DID, content, consensus).
+- Root is clean: only AGENTS.md, README.md, CONTRIBUTING.md, LICENSE,
+  PLAN_parallel_australvm.md, arctic.md, Makefile, flake.nix, flake.lock, shell.nix,
+  dune-project, austral.opam, run-tests.sh, run-examples.sh, policies.cedar,
+  libaustral_cranelift_bridge.so.
+- `examples/modules/demo_hosted/` exists with module.toml + gen_cps.sh + run_demo.sh.
+- `modhost host <module-dir> --call <ep> [--repeat N] [--swap <dir>]` CLI works:
+  load-once / call-many / hot-swap with grant-escalation rejection.
+- `--emit-cps=<path>` flag added to the Austral compiler CLI (saves CPS binary IR).
+- 21 `uk_*` symbols registered (added uk_buf_free, uk_ode_analyze, uk_ode_measure_original).
+- B9–B11 not started.
 
 ---
 
@@ -84,6 +87,8 @@ paths — both additive archetypes in `module.toml`, neither touching the frozen
 | B5 | Test harness wiring (JitTest.ml assertions, ounit2, e2e --use-cps-jit) |
 | B6 | CI for new stack (cranelift JIT + safestos integration jobs) |
 | B7 | Hygiene (archived stale docs, purged build artifacts, gated debug, C boundary) |
+| B7b | Final root hygiene (moved 6 stale status files to docs/history/, removed 10 test artifacts) |
+| B8 | Genuine module hosting: `module.rs` (ModuleHost/ModuleHandle/ModuleManifest), `modhost host <dir> --call/--repeat/--swap`, `--emit-cps` compiler flag, `examples/modules/demo_hosted/`, 9 module tests, 21 uk_* symbols |
 
 ---
 
