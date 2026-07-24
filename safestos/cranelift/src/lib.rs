@@ -19,6 +19,7 @@ pub mod cps;
 pub mod module;
 pub mod tidepool_mod;
 pub mod capstd_mod;
+pub mod federation;
 
 #[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;
