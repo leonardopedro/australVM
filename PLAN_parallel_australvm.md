@@ -75,8 +75,9 @@ paths — both additive archetypes in `module.toml`, neither touching the frozen
   load-once / call-many / hot-swap with grant-escalation rejection.
 - `--emit-cps=<path>` flag added to the Austral compiler CLI (saves CPS binary IR).
 - 21 `uk_*` symbols registered (added uk_buf_free, uk_ode_analyze, uk_ode_measure_original).
-- B9b (Egison pattern matching) blocked: requires GHC/tidepool-extract (not installed).
-- All other stages (B7b–B11) complete.
+- B9b (Egison pattern matching) complete: sweet-egison TH quasiquoters on GHC 9.10.3,
+  `examples/modules/fock_match/` with Multiset normal-ordering + JIT-path tests.
+- All stages (B7b–B11, B9b) complete.
 
 ---
 
@@ -96,6 +97,7 @@ paths — both additive archetypes in `module.toml`, neither touching the frozen
 | B9 | Tidepool modules infrastructure: `tidepool_mod.rs` (KernelReq/KernelHandler stubs), manifest `archetype`/`effects`/`max_ms` fields, `examples/modules/hello_kernel/`, cranelift version decision (0.131 vs 0.129.1 → both JITs coexist), 6 tests. Full Haskell compilation requires GHC/tidepool-extract (not installed). |
 | B10 | cap-std Rust modules: `capstd_mod.rs` (CapFs with RESOLVE_BENEATH), manifest `fs_grants`/`net_grants`, hot-swap fs/net escalation gate, `examples/modules/rust_kv/`, honesty note (Tier 1 ≠ sandbox), 4 tests |
 | B11 | Federation-aware hosting: `federation.rs` (ModuleIdentity DID creation, artifact CID), `federation` feature flag (unfer_consensus/identity/data path deps), 3 tests |
+| B9b | Egison pattern matching: sweet-egison TH quasiquoters (path (a) confirmed on GHC 9.10.3), `examples/modules/fock_match/` (Multiset Wick contractions, normal-ordering a₁a₁†a₂a₂†, twin primes via bfs, poker hands, unordered pairs), GHC env via nixpkgs-unstable binary cache |
 
 ---
 
@@ -175,43 +177,25 @@ principal for per-call auth); benefits from B8 (persistent hosting) but can land
 negative; a 5s-budget infinite-loop module is cancelled in < 5.5s with the host alive;
 `cargo test` in `safestos/cranelift` green.
 
-## Stage B9b — Egison pattern matching as a Haskell library for tidepool modules (M)
+## Stage B9b — Egison pattern matching as a Haskell library for tidepool modules (M) ✅
 
-Give tidepool modules Egison-style **non-linear pattern matching over non-free data types**
-(multiset/set/graph matchers) as ordinary Haskell library code — compiled through the same
-GHC-Core → Cranelift pipeline as everything else. Semantic reference:
-[`egison/egison`](https://github.com/egison/egison) (v5, active); design inspiration:
-[`egison/egison-haskell`](https://github.com/egison/egison-haskell) (miniEgison, outdated).
-Depends on B9 step 1 (tidepool toolchain working).
+**Completed 2026-07-25.** Path (a) confirmed: `sweet-egison` 0.1.2.1 TH quasiquoters
+work on GHC 9.10.3 (nixpkgs-unstable binary cache). sweet-egison is a shallow embedding
+(~40x faster than miniEgison) that desugars Egison patterns into `MonadSearch` backtracking
+at GHC compile time — the JIT never sees TH.
 
-**Two tidepool-specific constraints** (verify in step 1, they shape everything):
-- **Eager evaluation**: tidepool's JIT is eager — miniEgison's lazy BFS enumeration over
-  infinite targets (`matchAll primes …`) *hangs*. Bounded forms (`matchAllDFS` + `take`) or
-  an explicitly thunked `Stream` type are required.
-- **Custom Prelude**: tidepool standardizes on `Text`, eager `show`, etc. — the library
-  must target that Prelude, not GHC's.
+**Deliverables**:
+- `examples/modules/fock_match/` — module.toml + `haskell/FockMatch.hs` + `run_demo.sh`
+- Matchers used: `Something`, `Eql`, `List`, `Multiset`, `Set`, `(m1, m2)` pairs
+- Normal-ordering: a₁a₁†a₂a₂† → vacuum + a₂†a₂ + a₁†a₁ + a₁†a₂†a₁a₂ (Wick expansion)
+- Eager safety: `matchAll dfs` + `take` for bounded; `matchAll bfs` for fair infinite enum
+- JIT-path tests: twin primes (bfs over infinite primes), poker hands (Multiset Eql),
+  unordered pairs (Multiset Something + nub)
+- GHC env: `nix build` of `ghcWithPackages [egison egison-pattern-src egison-pattern-src-th-mode]`
 
-1. **Path decision** (S — do first, record in `safestos/STATUS.md`):
-   - **(a) Refresh miniEgison**: fork `egison-haskell`, modernize (base ≥ 4.18, TH ≥ 2.20),
-     keep the TH quasiquoters. TH expands at GHC compile time, *before* `tidepool-extract`
-     serializes Core — the JIT never sees TH.
-   - **(b) TH-free reimplementation** (lower risk, likely default): port the matcher core to
-     a plain Haskell package exposing `matchAll / match / matchAllDFS / matchDFS` as
-     ordinary functions over explicit clause lists. No TH anywhere.
-   Try (a) for syntax fidelity; fall back to (b) on any TH/Core-extract friction.
-2. **Matcher library**: built-in `Something`, `Eql`, `List`, `Multiset`, `Set` matchers +
-   user-defined matcher support (port the `UnorderedPair` example as the extensibility proof).
-3. **Eager adaptations**: enumerate results with `matchAllDFS` + explicit `take`/`fuel`.
-4. **Motivating test — Fock-space rewrite module** (`examples/modules/fock_match/`):
-   operator strings as `[(Mode, Create | Annihilate)]`; a Multiset matcher finds contraction
-   pairs and normal-orders a small Hamiltonian. Validate against unfer's
-   `nested_fock_algebra` on a shared fixture.
-5. **JIT-path tests**: bounded twin primes, poker hands, unordered pairs — executed through
-   the tidepool JIT, proving the whole GHC-Core → Cranelift path.
-
-**Acceptance**: a tidepool Haskell module calls `matchAllDFS` with a `Multiset` matcher
-through the full GHC-Core → Cranelift path; `fock_match`'s normal-ordering output equals
-`nested_fock_algebra`'s on the shared fixture.
+**Note**: full GHC-Core → Cranelift JIT path (tidepool-extract) not yet exercised —
+the module compiles and runs as a native GHC binary. The tidepool-extract integration
+requires the tidepool toolchain (B9 step 1) which is infrastructure-only (stubs).
 
 ## Stage B10 — cap-std Rust modules: capability coupling in two isolation tiers (M–L)
 

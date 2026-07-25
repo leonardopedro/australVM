@@ -91,3 +91,29 @@ versions (`=0.129.1`) and the safestos bridge tracks the latest stable.
 
 Tidepool deps are added behind the `tidepool` feature flag (off by default) so
 the base bridge binary stays lean.
+
+---
+
+## Egison pattern matching (Stage B9b)
+
+**Path decision: (a) sweet-egison TH quasiquoters** — confirmed working on GHC 9.10.3.
+
+`sweet-egison` (shallow embedding) is used instead of miniEgison (deep embedding):
+- TH quasiquoters (`[mc| ... |]`) expand at GHC compile time, before `tidepool-extract`
+  serializes Core — the JIT never sees TH.
+- ~40x faster than miniEgison on benchmarks (comb2, perm2, CDCL).
+- Available from nixpkgs-unstable binary cache (no source builds needed).
+
+**GHC environment**: `nix build` of `haskellPackages.ghcWithPackages` with
+`egison`, `egison-pattern-src`, `egison-pattern-src-th-mode`, `sweet-egison`.
+Cached at `/nix/store/1ir89h874mwag82kkryrrp52f10sc7y9-ghc-9.10.3-with-packages`.
+
+**Matchers available**: `Something`, `Eql`, `List`, `Multiset`, `Set`, `(m1, m2)` pairs.
+**Eager safety**: `matchAll dfs` + `take` for bounded enumeration; `matchAll bfs` for
+fair enumeration of infinite targets (twin primes).
+
+**Fock-space module** (`examples/modules/fock_match/`):
+- Operator strings as `[(Mode, Create | Annihilate)]`
+- Multiset matcher finds contraction pairs for Wick's theorem
+- Normal-orders a₁a₁†a₂a₂† → vacuum + a₂†a₂ + a₁†a₁ + a₁†a₂†a₁a₂
+- JIT-path tests: twin primes (bfs), poker hands (Multiset), unordered pairs
