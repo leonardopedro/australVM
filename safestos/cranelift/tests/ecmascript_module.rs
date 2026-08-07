@@ -44,11 +44,23 @@ fn find_in_fnm() -> Option<std::path::PathBuf> {
 }
 
 fn make_ecma_module_dir(dir: &Path, name: &str, grants: &[&str], js: &str) {
+    make_ecma_module_dir_full(dir, name, grants, &[], js);
+}
+
+fn make_ecma_module_dir_full(
+    dir: &Path,
+    name: &str,
+    grants: &[&str],
+    effects: &[&str],
+    js: &str,
+) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     let grants_toml: Vec<String> = grants.iter().map(|g| format!("    \"{g}\",")).collect();
+    let effects_toml: Vec<String> = effects.iter().map(|e| format!("    \"{e}\",")).collect();
     let toml = format!(
-        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"ecmascript\"]\narchetype = \"ecmascript\"\nentry = \"src/main.js\"\n\n[grants]\nkernel = [\n{}\n]\n",
-        grants_toml.join("\n")
+        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"ecmascript\"]\narchetype = \"ecmascript\"\nentry = \"src/main.js\"\n\n[grants]\nkernel = [\n{}\n]\neffects = [\n{}\n]\n",
+        grants_toml.join("\n"),
+        effects_toml.join("\n")
     );
     std::fs::write(dir.join("module.toml"), toml).unwrap();
     std::fs::write(dir.join("src/main.js"), js).unwrap();
@@ -204,11 +216,6 @@ fn ecmascript_loopback_denies_ungranted() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// S3 escape-attempt tests: the workerd sidecar must run inside the OS sandbox. We assert on
-/// the child's kernel-visible confinement (rather than re-implementing the sandbox's own
-/// probe): a distinct user namespace, `no_new_privs` set, seccomp active, and a valid
-/// uid/gid mapping. Only meaningful when the `sandbox` feature is on — workerd then runs under
-/// `cranelift/src/sandbox.rs`.
 #[test]
 #[cfg(feature = "sandbox")]
 fn ecmascript_sidecar_os_sandbox_confines_child() {
@@ -263,6 +270,158 @@ fn ecmascript_sidecar_os_sandbox_confines_child() {
     assert!(
         uid_map.lines().count() == 1 && uid_map.trim().starts_with("0 "),
         "uid_map must map namespace root to our uid, got {uid_map:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── S4: deferred approval + local simulation (gatekeeper/client pair) ────
+//
+// Two ECMAScript modules run side by side in one `ModuleHost` (the same process, sharing
+// the kernel action store). The *client* holds the `effects = ["send_notification"]`
+// grant: its `uk_action_submit` returns a provisional (simulated) result immediately and
+// queues a Pending `ActionRecord`. The *gatekeeper* holds the kernel grants to list and
+// resolve actions; it approves the pending record. The client then re-reads and sees the
+// merged `approved` result.
+
+/// Positive flow: submit → provisional result → gatekeeper approves → client sees the
+/// applied result. The effects grant (not the kernel grants) gates submission; the
+/// gatekeeper's `uk_action_apply` resolves the pending record.
+#[test]
+fn ecmascript_effects_deferred_approval_flow() {
+    if !workerd_available() {
+        eprintln!("SKIP: no workerd runtime found (UNFER_WORKERD, $PATH, or fnm); install via `npm install -g workerd`");
+        return;
+    }
+
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let client_dir = std::env::temp_dir().join("ecma_effects_client");
+    let gatekeeper_dir = std::env::temp_dir().join("ecma_effects_gatekeeper");
+    let _ = std::fs::remove_dir_all(&client_dir);
+    let _ = std::fs::remove_dir_all(&gatekeeper_dir);
+
+    let client_js = r#"
+export async function submit(kernel, args) {
+  const handle = await kernel.uk_action_submit({
+    effect: "send_notification",
+    params: { to: "alice" },
+  });
+  const record = await kernel.uk_action_get(handle);
+  return { handle, state: record.state, simulated: record.result.simulated };
+}
+export async function read(kernel, args) {
+  const record = await kernel.uk_action_get(args.handle);
+  return { state: record.state, applied: record.result.applied ?? null };
+}
+"#;
+    // Client: kernel grant exposes the submit/get symbols (harness binding); the effects
+    // grant authorizes THIS effect name at the loopback (two-layer, F5).
+    make_ecma_module_dir_full(
+        &client_dir,
+        "ecma_client",
+        &["uk_action_submit", "uk_action_get"],
+        &["send_notification"],
+        client_js,
+    );
+
+    let gatekeeper_js = r#"
+export async function approve(kernel, args) {
+  const actions = await kernel.uk_action_list();
+  const pending = actions.find(a => a.state === "pending" && a.effect === args.effect);
+  if (!pending) return { applied: false, reason: "no pending action" };
+  await kernel.uk_action_apply(pending.handle);
+  return { applied: true };
+}
+"#;
+    // Gatekeeper: list + resolve are kernel grants; no effects grant needed.
+    make_ecma_module_dir(
+        &gatekeeper_dir,
+        "ecma_gatekeeper",
+        &["uk_action_list", "uk_action_apply"],
+        gatekeeper_js,
+    );
+
+    let mut host = ModuleHost::new();
+    host.load(&client_dir).unwrap();
+    host.load(&gatekeeper_dir).unwrap();
+
+    // 1. Client submits → provisional result, record pending.
+    let body = host.call_json("ecma_client", "submit", "{}").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let result = &v["result"];
+    assert_eq!(result["state"], "pending", "client must see pending record, got {body}");
+    assert_eq!(result["simulated"], true, "provisional result must be simulated, got {body}");
+    let handle = result["handle"].as_i64().expect("action handle");
+
+    // 2. Gatekeeper lists the pending action and approves it.
+    let body = host
+        .call_json("ecma_gatekeeper", "approve", r#"{"effect":"send_notification"}"#)
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["result"]["applied"], true, "gatekeeper must approve, got {body}");
+
+    // 3. Client re-reads → merged applied result.
+    let body = host
+        .call_json("ecma_client", "read", &format!(r#"{{"handle":{handle}}}"#))
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let result = &v["result"];
+    assert_eq!(result["state"], "approved", "client must see approved record, got {body}");
+    assert_eq!(
+        result["applied"],
+        true,
+        "merged result must be the applied one, got {body}"
+    );
+
+    let _ = std::fs::remove_dir_all(&client_dir);
+    let _ = std::fs::remove_dir_all(&gatekeeper_dir);
+}
+
+/// Negative path: a module grants `kernel = ["uk_action_submit"]` but has NO `effects`
+/// grant. The loopback's effects gate (not the harness stub) must deny with UK-4001 —
+/// the effect name the module does not hold is the resource being checked.
+#[test]
+fn ecmascript_effects_deny_when_not_granted() {
+    if !workerd_available() {
+        eprintln!("SKIP: no workerd runtime found (UNFER_WORKERD, $PATH, or fnm); install via `npm install -g workerd`");
+        return;
+    }
+
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let dir = std::env::temp_dir().join("ecma_effects_deny");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let js = r#"
+export async function run(kernel, args) {
+  try {
+    await kernel.uk_action_submit({ effect: "send_notification", params: {} });
+    return { denied: false };
+  } catch (e) {
+    return { denied: true, code: e.ukCode, message: String(e.message) };
+  }
+}
+"#;
+    make_ecma_module_dir_full(
+        &dir,
+        "ecma_effects_deny",
+        &["uk_action_submit"],
+        &[], // no effects grant
+        js,
+    );
+
+    let mut host = ModuleHost::new();
+    host.load(&dir).unwrap();
+
+    let body = host.call_json("ecma_effects_deny", "run", "{}").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let result = &v["result"];
+    assert_eq!(result["denied"], true, "expected denial, got {body}");
+    assert_eq!(result["code"], 4001, "expected UK-4001, got {body}");
+    assert!(
+        result["message"].as_str().unwrap_or("").contains("send_notification"),
+        "denial must name the un-granted effect, got {body}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

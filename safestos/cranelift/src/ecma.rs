@@ -192,7 +192,12 @@ impl EcmaSidecar {
 
         // Host-side capability loopback first (its socket path is baked into config.capnp).
         let loopback_sock = staging.join("kernel-loopback.sock");
-        let loopback = KernelLoopback::start(&module_name, manifest.grants.clone(), &loopback_sock)?;
+        let loopback = KernelLoopback::start(
+            &module_name,
+            manifest.grants.clone(),
+            manifest.effects.clone(),
+            &loopback_sock,
+        )?;
 
         let harness = harness_source();
         std::fs::write(staging.join("harness.mjs"), harness)
@@ -354,7 +359,12 @@ struct KernelLoopback {
 }
 
 impl KernelLoopback {
-    fn start(module_name: &str, grants: Vec<String>, sock_path: &Path) -> Result<Self, String> {
+    fn start(
+        module_name: &str,
+        grants: Vec<String>,
+        effects: Vec<String>,
+        sock_path: &Path,
+    ) -> Result<Self, String> {
         let _ = std::fs::remove_file(sock_path);
         let listener = UnixListener::bind(sock_path).map_err(|e| format!("loopback bind: {e}"))?;
         listener
@@ -364,6 +374,7 @@ impl KernelLoopback {
         let stop_flag = Arc::clone(&stop);
         let module_name = module_name.to_string();
         let grants: Arc<HashSet<String>> = Arc::new(grants.into_iter().collect());
+        let effects: Arc<HashSet<String>> = Arc::new(effects.into_iter().collect());
         let handle = std::thread::spawn(move || {
             let _ = &listener;
             loop {
@@ -374,7 +385,10 @@ impl KernelLoopback {
                     Ok((stream, _)) => {
                         let name = module_name.clone();
                         let grants = Arc::clone(&grants);
-                        std::thread::spawn(move || handle_loopback_conn(&name, &grants, stream));
+                        let effects = Arc::clone(&effects);
+                        std::thread::spawn(move || {
+                            handle_loopback_conn(&name, &grants, &effects, stream);
+                        });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(5));
@@ -398,7 +412,12 @@ impl Drop for KernelLoopback {
     }
 }
 
-fn handle_loopback_conn(module_name: &str, grants: &HashSet<String>, mut stream: UnixStream) {
+fn handle_loopback_conn(
+    module_name: &str,
+    grants: &HashSet<String>,
+    effects: &HashSet<String>,
+    mut stream: UnixStream,
+) {
     let mut request = Vec::new();
     let mut buf = [0u8; 4096];
     let mut total = 0usize;
@@ -459,7 +478,7 @@ fn handle_loopback_conn(module_name: &str, grants: &HashSet<String>, mut stream:
         .map(String::from);
 
     let response = match symbol {
-        Some(sym) => dispatch_loopback(module_name, grants, &sym, &body),
+        Some(sym) => dispatch_loopback(module_name, grants, effects, &sym, &body),
         None => json_response("error", &serde_json::json!({"code": 4000, "message": "bad path"})),
     };
     let _ = stream.write_all(response.as_bytes());
@@ -482,25 +501,20 @@ fn json_response(key: &str, value: &serde_json::Value) -> String {
 
 /// Authorize the symbol (host-side, defense in depth) and marshal the JSON args onto the `uk_*`
 /// C ABI. Returns an HTTP response string.
+///
+/// Two grant namespaces gate the loopback:
+/// * `[grants] kernel = [...]` — every `uk_*` symbol except `uk_action_submit`.
+/// * `[grants] effects = [...]` — the *effect name* a module may submit via `uk_action_submit`.
+///   This is the S4 "effects" namespace: holding `effects = ["send_notification"]` permits
+///   submitting a `send_notification` action without any kernel grant for the symbol.
 fn dispatch_loopback(
     module_name: &str,
     grants: &HashSet<String>,
+    effects: &HashSet<String>,
     symbol: &str,
     body: &str,
 ) -> String {
-    // 1. Default-deny: the module's own granted capability set is authoritative host-side. This
-    //    is a per-sidecar snapshot, independent of the global auth engine (which concurrent
-    //    module loads may overwrite).
-    if !grants.contains(symbol) {
-        return json_response(
-            "error",
-            &serde_json::json!({"code": 4001, "name": "CallDenied", "message": format!(
-                "UK-4001: Authorization denied — '{module_name}' is not granted '{symbol}'"
-            )}),
-        );
-    }
-
-    // 2. JSON args (a JSON array) → uk_* C ABI.
+    // 1. JSON args (a JSON array) → effect-name gate for uk_action_submit, kernel grant otherwise.
     let args: Vec<serde_json::Value> = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(_) => {
@@ -511,7 +525,35 @@ fn dispatch_loopback(
         }
     };
 
-    let out = kernel_dispatch(symbol, &args);
+    if symbol == "uk_action_submit" {
+        // S4: the effects namespace, not the kernel grants, gates submission. The effect
+        // name is `req.effect` of the single request arg.
+        let effect = args
+            .first()
+            .and_then(|a| a.get("effect"))
+            .and_then(|e| e.as_str())
+            .unwrap_or("");
+        if !effects.contains(effect) {
+            return json_response(
+                "error",
+                &serde_json::json!({"code": 4001, "name": "CallDenied", "message": format!(
+                    "UK-4001: Authorization denied — '{module_name}' is not granted effect '{effect}'"
+                )}),
+            );
+        }
+    } else if !grants.contains(symbol) {
+        // Default-deny: the module's own granted capability set is authoritative host-side. This
+        // is a per-sidecar snapshot, independent of the global auth engine (which concurrent
+        // module loads may overwrite).
+        return json_response(
+            "error",
+            &serde_json::json!({"code": 4001, "name": "CallDenied", "message": format!(
+                "UK-4001: Authorization denied — '{module_name}' is not granted '{symbol}'"
+            )}),
+        );
+    }
+
+    let out = kernel_dispatch(module_name, symbol, &args);
     match out {
         Ok(value) => json_response("result", &value),
         Err((code, message)) => json_response(
@@ -578,7 +620,14 @@ fn read_last_error() -> Option<String> {
 
 /// Dispatch one `uk_*` symbol. Each arm encodes the C ABI signature. This is the single place
 /// where JS objects are translated onto the probe-then-copy buffer protocol.
-fn kernel_dispatch(symbol: &str, args: &[serde_json::Value]) -> DispatchResult {
+///
+/// `module_name` is the submitting module's identity: `uk_action_submit` injects it as the
+/// record's `principal` (an audit tag — a worker cannot claim another module's identity).
+fn kernel_dispatch(
+    module_name: &str,
+    symbol: &str,
+    args: &[serde_json::Value],
+) -> DispatchResult {
     match symbol {
         "uk_version" => Ok(serde_json::json!(unfer_ffi::uk_version())),
         "uk_init" => {
@@ -701,6 +750,49 @@ fn kernel_dispatch(symbol: &str, args: &[serde_json::Value]) -> DispatchResult {
             let (p, l) = ptr_len(&json);
             let ret = unfer_ffi::uk_ode_measure_original(model, p, l);
             Ok(serde_json::json!(ret))
+        }
+        // ── S4: deferred approval + local simulation ─────────────────────────
+        // The effects grant gate for uk_action_submit ran in `dispatch_loopback`. Here we
+        // inject the module identity as the record principal (audit tag, F6) and marshal
+        // onto the FFI.
+        "uk_action_submit" => {
+            let mut req = args
+                .get(0)
+                .cloned()
+                .ok_or_else(|| (1001, "uk_action_submit: missing request arg".to_string()))?;
+            if let Some(obj) = req.as_object_mut() {
+                obj.insert("principal".to_string(), serde_json::json!(module_name));
+            }
+            let json = serde_json::to_string(&req).map_err(|e| (1001, e.to_string()))?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_action_submit(p, l))
+        }
+        "uk_action_apply" => {
+            let handle = arg_i64(args, 0)?;
+            ffi_result(unfer_ffi::uk_action_apply(handle))
+        }
+        "uk_action_reject" => {
+            let handle = arg_i64(args, 0)?;
+            ffi_result(unfer_ffi::uk_action_reject(handle))
+        }
+        "uk_action_revert" => {
+            let handle = arg_i64(args, 0)?;
+            ffi_result(unfer_ffi::uk_action_revert(handle))
+        }
+        "uk_action_get" => {
+            let handle = arg_i64(args, 0)?;
+            let out = buf_out(|b, c| unfer_ffi::uk_action_get(handle, b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        "uk_action_list" => {
+            let out = buf_out(|b, c| unfer_ffi::uk_action_list(b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
         }
         other => Err((
             4004,
@@ -865,6 +957,11 @@ fn is_kernel_symbol(sym: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Serializes the `WorkerdPaths::from_env` tests: they mutate the global
+    /// `UNFER_WORKERD` / `UNFER_WORKERD_IMPORT` env vars, which must never run
+    /// concurrently (parallel tests would observe each other's state).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn harness_denies_ungranted_symbol() {
         // The generated harness must only expose granted uk_* symbols; un-granted ones throw
@@ -904,6 +1001,7 @@ mod tests {
     #[test]
     fn from_env_resolves_unfer_workerd_env() {
         // $UNFER_WORKERD + $UNFER_WORKERD_IMPORT set: used verbatim.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join("unfer_wd_env_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
@@ -929,6 +1027,7 @@ mod tests {
     fn from_env_derives_import_dir_from_npm_layout() {
         // $UNFER_WORKERD points at <pkg>/bin/workerd, no $UNFER_WORKERD_IMPORT:
         // import dir must be derived as <pkg>.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join("unfer_wd_npm_layout_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
@@ -951,6 +1050,7 @@ mod tests {
 
     #[test]
     fn from_env_rejects_missing_binary() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             std::env::set_var("UNFER_WORKERD", "/nonexistent/workerd");
             std::env::set_var("UNFER_WORKERD_IMPORT", "/nonexistent");
@@ -962,5 +1062,88 @@ mod tests {
             std::env::remove_var("UNFER_WORKERD");
             std::env::remove_var("UNFER_WORKERD_IMPORT");
         }
+    }
+
+    // ── S4: effects-grant gate on the kernel loopback ──────────────────────
+    //
+    // `dispatch_loopback` gates `uk_action_submit` by the module's `effects` namespace
+    // (not its kernel grants), and every other symbol by the kernel grants. These tests
+    // hit the loopback function directly (no workerd needed).
+
+    #[test]
+    fn loopback_effect_grant_allows_submission() {
+        use std::collections::HashSet;
+        let grants = HashSet::from(["uk_action_list".to_string(), "uk_action_apply".to_string()]);
+        let effects = HashSet::from(["send_notification".to_string()]);
+        let body = r#"[{"effect":"send_notification","params":{"to":"alice"}}]"#;
+        let resp =
+            dispatch_loopback("client_module", &grants, &effects, "uk_action_submit", body);
+        // The gate lets the granted effect through: the loopback returns a `result`
+        // (the action handle), not an error.
+        assert!(
+            resp.contains("\"result\"") && !resp.contains("\"error\""),
+            "granted effect must dispatch, got {resp}"
+        );
+        // The module identity is injected as the record principal (audit tag).
+        let json = resp.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let handle = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v["result"].as_i64());
+        assert!(handle.is_some(), "expected a result handle, got {resp}");
+        // Cross-check via uk_action_get: principal must be the module name.
+        let out = read_last_error(); // ensure clean
+        let _ = out;
+        let needed = unfer_ffi::uk_action_get(handle.unwrap(), std::ptr::null_mut(), 0);
+        let mut buf = vec![0u8; needed as usize];
+        unfer_ffi::uk_action_get(handle.unwrap(), buf.as_mut_ptr(), needed);
+        let record: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(record["principal"], "client_module");
+        assert_eq!(record["effect"], "send_notification");
+        assert_eq!(record["state"], "pending");
+    }
+
+    #[test]
+    fn loopback_effect_grant_denies_unlisted_effect() {
+        use std::collections::HashSet;
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["send_notification".to_string()]);
+        // The module holds `send_notification`, NOT `delete_all`.
+        let body = r#"[{"effect":"delete_all","params":{}}]"#;
+        let resp =
+            dispatch_loopback("client_module", &grants, &effects, "uk_action_submit", body);
+        assert!(resp.contains("\"error\""), "unlisted effect must be denied, got {resp}");
+        assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
+        assert!(resp.contains("delete_all"), "denial must name the effect, got {resp}");
+    }
+
+    #[test]
+    fn loopback_effect_grant_denies_without_effects_namespace() {
+        use std::collections::HashSet;
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        // No `effects` grant at all: even a listed effect is denied.
+        let effects = HashSet::new();
+        let body = r#"[{"effect":"send_notification","params":{}}]"#;
+        let resp =
+            dispatch_loopback("client_module", &grants, &effects, "uk_action_submit", body);
+        assert!(resp.contains("\"error\""), "missing effects grant must deny, got {resp}");
+        assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
+    }
+
+    #[test]
+    fn loopback_kernel_gate_still_applies_to_other_action_symbols() {
+        use std::collections::HashSet;
+        // `uk_action_apply` is NOT in the kernel grants → UK-4001 even though the module
+        // may submit effects.
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["send_notification".to_string()]);
+        let resp = dispatch_loopback(
+            "client_module",
+            &grants,
+            &effects,
+            "uk_action_apply",
+            r#"[1]"#,
+        );
+        assert!(resp.contains("\"error\""), "ungranted kernel symbol must deny, got {resp}");
+        assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
 }

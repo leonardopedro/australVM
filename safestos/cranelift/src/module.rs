@@ -397,6 +397,17 @@ impl ModuleHost {
             }
         }
 
+        // S4: the `effects` grant namespace must not escalate on swap either.
+        let old_effects: std::collections::HashSet<&String> =
+            old_handle.manifest.effects.iter().collect();
+        for g in &new_manifest.effects {
+            if !old_effects.contains(g) {
+                return Err(format!(
+                    "UK-4001 swap rejected: new module escalates effect grant '{g}'"
+                ));
+            }
+        }
+
         let old_net: std::collections::HashSet<&String> =
             old_handle.manifest.net_grants.iter().collect();
         for g in &new_manifest.net_grants {

@@ -176,6 +176,13 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_buf_free",          addr: unfer_ffi::uk_buf_free           as *const u8 },
     KernelSymbol { name: "uk_ode_analyze",       addr: unfer_ffi::uk_ode_analyze        as *const u8 },
     KernelSymbol { name: "uk_ode_measure_original", addr: unfer_ffi::uk_ode_measure_original as *const u8 },
+    // S4: deferred approval + local simulation (effects grant namespace).
+    KernelSymbol { name: "uk_action_submit", addr: unfer_ffi::uk_action_submit     as *const u8 },
+    KernelSymbol { name: "uk_action_apply",  addr: unfer_ffi::uk_action_apply      as *const u8 },
+    KernelSymbol { name: "uk_action_reject", addr: unfer_ffi::uk_action_reject     as *const u8 },
+    KernelSymbol { name: "uk_action_revert", addr: unfer_ffi::uk_action_revert     as *const u8 },
+    KernelSymbol { name: "uk_action_get",    addr: unfer_ffi::uk_action_get        as *const u8 },
+    KernelSymbol { name: "uk_action_list",   addr: unfer_ffi::uk_action_list       as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]
