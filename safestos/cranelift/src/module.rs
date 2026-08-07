@@ -114,25 +114,83 @@ impl ModuleManifest {
     }
 }
 
+/// Active execution backend for a loaded module. S1 upgrades this from the bare
+/// `functions`/`cps_data`/`ecma` fields into a single runtime abstraction so a
+/// `ModuleHandle` carries exactly one backend.
+pub enum IrRuntime {
+    /// CPS binary compiled to native IR via the Cranelift JIT (the default/legacy path).
+    Jit {
+        /// `name -> finalized function pointer` for each exported CPS function.
+        functions: HashMap<String, usize>,
+        /// Raw compiled CPS bytes (retained for introspection / rebuilds).
+        cps_data: Vec<u8>,
+    },
+    /// ECMAScript module served by a workerd sidecar (S1). Calls are JSON-RPC over a
+    /// capability loopback rather than a native function pointer.
+    #[cfg(feature = "ecmascript")]
+    Ecma(crate::ecma::EcmaSidecar),
+}
+
+impl IrRuntime {
+    pub fn is_ecmascript(&self) -> bool {
+        #[cfg(feature = "ecmascript")]
+        {
+            matches!(self, IrRuntime::Ecma(_))
+        }
+        #[cfg(not(feature = "ecmascript"))]
+        {
+            false
+        }
+    }
+
+    pub fn function_ptr(&self, name: &str) -> Option<usize> {
+        match self {
+            IrRuntime::Jit { functions, .. } => functions.get(name).copied(),
+            #[cfg(feature = "ecmascript")]
+            IrRuntime::Ecma(_) => None,
+        }
+    }
+
+    pub fn entrypoint_ptr(&self, entry: &str) -> Option<usize> {
+        self.function_ptr(entry)
+            .or_else(|| self.function_ptr("run"))
+            .or_else(|| self.function_ptr("main"))
+            .or_else(|| match self {
+                IrRuntime::Jit { functions, .. } => functions.values().next().copied(),
+                #[cfg(feature = "ecmascript")]
+                IrRuntime::Ecma(_) => None,
+            })
+    }
+}
+
 pub struct ModuleHandle {
     pub manifest: ModuleManifest,
-    pub functions: HashMap<String, usize>,
-    pub cps_data: Vec<u8>,
+    pub runtime: IrRuntime,
     pub call_count: u64,
 }
 
 impl ModuleHandle {
-    pub fn entrypoint_ptr(&self) -> Option<usize> {
-        self.functions
-            .get(&self.manifest.entry)
-            .or_else(|| self.functions.get("run"))
-            .or_else(|| self.functions.get("main"))
-            .or_else(|| self.functions.values().next())
-            .copied()
+    #[cfg(feature = "ecmascript")]
+    pub fn ecma(&self) -> Option<&crate::ecma::EcmaSidecar> {
+        match &self.runtime {
+            IrRuntime::Ecma(sidecar) => Some(sidecar),
+            IrRuntime::Jit { .. } => None,
+        }
     }
 
-    pub fn function_ptr(&self, name: &str) -> Option<usize> {
-        self.functions.get(name).copied()
+    /// True if this module is served by the workerd ECMAScript backend (S1).
+    pub fn is_ecmascript(&self) -> bool {
+        self.runtime.is_ecmascript()
+    }
+
+    /// Number of `uk_*` symbols / entrypoints in this module (JIT function count; 0 for
+    /// ECMAScript, whose call surface is the granted capability set).
+    pub fn function_count(&self) -> usize {
+        match &self.runtime {
+            IrRuntime::Jit { functions, .. } => functions.len(),
+            #[cfg(feature = "ecmascript")]
+            IrRuntime::Ecma(_) => 0,
+        }
     }
 }
 
@@ -155,20 +213,47 @@ impl ModuleHost {
             .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
         let manifest = ModuleManifest::from_toml_str(&toml_str)?;
 
-        let cps_data = std::fs::read(&cps_path)
-            .map_err(|e| format!("cannot read {}: {e}", cps_path.display()))?;
-
         let engine = ManifestAuthEngine::from_toml_str(&toml_str)
             .map_err(|e| format!("manifest auth error: {e}"))?;
         auth::set_auth_engine(Box::new(engine));
+
+        // ECMAScript archetype: serve the module's JS via a workerd sidecar (S1) instead of
+        // compiling a CPS binary into Cranelift IR.
+        if manifest.archetype == "ecmascript" {
+            #[cfg(feature = "ecmascript")]
+            {
+                let paths = crate::ecma::WorkerdPaths::from_env()?;
+                let sidecar = crate::ecma::EcmaSidecar::spawn(module_dir, &manifest, &paths)?;
+                let name = manifest.name.clone();
+                let handle = ModuleHandle {
+                    manifest,
+                    runtime: IrRuntime::Ecma(sidecar),
+                    call_count: 0,
+                };
+                self.modules.insert(name.clone(), handle);
+                return Ok(self.modules.get(&name).unwrap());
+            }
+            #[cfg(not(feature = "ecmascript"))]
+            {
+                return Err(
+                    "archetype 'ecmascript' requires the 'ecmascript' feature (workerd sidecar)"
+                        .to_string(),
+                );
+            }
+        }
+
+        let cps_data = std::fs::read(&cps_path)
+            .map_err(|e| format!("cannot read {}: {e}", cps_path.display()))?;
 
         let functions = compile_cps_binary(&cps_data)?;
 
         let name = manifest.name.clone();
         let handle = ModuleHandle {
             manifest,
-            functions,
-            cps_data,
+            runtime: IrRuntime::Jit {
+                functions,
+                cps_data,
+            },
             call_count: 0,
         };
         self.modules.insert(name.clone(), handle);
@@ -181,20 +266,86 @@ impl ModuleHost {
         entrypoint: &str,
         args: &[i64],
     ) -> Result<i64, String> {
+        // Resolve the runtime backend once; the ECMAScript path routes i64 args to the
+        // sidecar's JSON RPC, otherwise we invoke the JIT function pointer directly.
+        let is_ecma = {
+            let handle = self
+                .modules
+                .get(module_name)
+                .ok_or_else(|| format!("module '{module_name}' not loaded"))?;
+            handle.is_ecmascript()
+        };
+
+        if is_ecma {
+            #[cfg(feature = "ecmascript")]
+            {
+                // For the ECMAScript backend, `call` uses the JSON RPC path (args are JSON).
+                // Convert the i64 slice to a JSON array for compatibility with the C ABI.
+                let args_json = format!(
+                    "[{}]",
+                    args.iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                let result = self.call_json(module_name, entrypoint, &args_json)?;
+                // The kernel RPC returns a JSON body; extract the numeric `result` field.
+                let v: serde_json::Value = serde_json::from_str(&result)
+                    .map_err(|e| format!("bad kernel response: {e}"))?;
+                if let Some(handle) = self.modules.get_mut(module_name) {
+                    handle.call_count += 1;
+                }
+                return v
+                    .get("result")
+                    .and_then(|r| r.as_i64())
+                    .ok_or_else(|| format!("kernel response has no numeric result: {result}"));
+            }
+            #[cfg(not(feature = "ecmascript"))]
+            {
+                return Err(
+                    "module is ECMAScript but the 'ecmascript' feature is disabled".to_string()
+                );
+            }
+        }
+
         let ptr = {
             let handle = self
                 .modules
                 .get(module_name)
                 .ok_or_else(|| format!("module '{module_name}' not loaded"))?;
             handle
+                .runtime
                 .function_ptr(entrypoint)
                 .ok_or_else(|| {
-                    format!(
-                        "entrypoint '{entrypoint}' not found in module '{module_name}'"
-                    )
+                    format!("entrypoint '{entrypoint}' not found in module '{module_name}'")
                 })?
         };
         let result = unsafe { call_jit_function(ptr, args) };
+        if let Some(handle) = self.modules.get_mut(module_name) {
+            handle.call_count += 1;
+        }
+        Ok(result)
+    }
+
+    /// ECMAScript-backend call path: RPC the workerd sidecar's entrypoint with a JSON payload.
+    /// Returns the raw JSON response body from the worker.
+    #[cfg(feature = "ecmascript")]
+    pub fn call_json(
+        &mut self,
+        module_name: &str,
+        entrypoint: &str,
+        args_json: &str,
+    ) -> Result<String, String> {
+        let sidecar = {
+            let handle = self
+                .modules
+                .get(module_name)
+                .ok_or_else(|| format!("module '{module_name}' not loaded"))?;
+            handle
+                .ecma()
+                .ok_or_else(|| format!("module '{module_name}' is not an ECMAScript module"))?
+        };
+        let result = sidecar.call(entrypoint, args_json)?;
         if let Some(handle) = self.modules.get_mut(module_name) {
             handle.call_count += 1;
         }
@@ -263,13 +414,34 @@ impl ModuleHost {
             .map_err(|e| format!("manifest auth error: {e}"))?;
         auth::set_auth_engine(Box::new(engine));
 
-        let functions = compile_cps_binary(&new_cps_data)?;
-
-        let handle = ModuleHandle {
-            manifest: new_manifest,
-            functions,
-            cps_data: new_cps_data,
-            call_count: 0,
+        let handle = if new_manifest.archetype == "ecmascript" {
+            #[cfg(feature = "ecmascript")]
+            {
+                let paths = crate::ecma::WorkerdPaths::from_env()?;
+                let sidecar = crate::ecma::EcmaSidecar::spawn(new_module_dir, &new_manifest, &paths)?;
+                ModuleHandle {
+                    manifest: new_manifest,
+                    runtime: IrRuntime::Ecma(sidecar),
+                    call_count: 0,
+                }
+            }
+            #[cfg(not(feature = "ecmascript"))]
+            {
+                return Err(
+                    "archetype 'ecmascript' requires the 'ecmascript' feature (workerd sidecar)"
+                        .to_string(),
+                );
+            }
+        } else {
+            let functions = compile_cps_binary(&new_cps_data)?;
+            ModuleHandle {
+                manifest: new_manifest,
+                runtime: IrRuntime::Jit {
+                    functions,
+                    cps_data: new_cps_data,
+                },
+                call_count: 0,
+            }
         };
         self.modules.insert(module_name.to_string(), handle);
         Ok(())

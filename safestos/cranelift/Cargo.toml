@@ -24,6 +24,7 @@ unfer_ffi = { path = "../../../unfer/unfer_ffi", optional = true }
 arctic_authority = { path = "../../arctic_authority", optional = true }
 arctic = { path = "../../../dynamic-arctic", optional = true }
 serde_json = { version = "1", optional = true }
+libc = { version = "0.2", optional = true }
 frunk = { version = "0.4", optional = true }
 cap-std = { version = "3", optional = true }
 unfer_consensus = { path = "../../../unfer/unfer_consensus", optional = true }
@@ -47,6 +48,12 @@ arctic-auth = ["dep:arctic_authority", "dep:arctic", "dep:serde_json"]
 tidepool = ["dep:frunk"]
 capstd = ["dep:cap-std"]
 federation = ["dep:unfer_consensus", "dep:unfer_identity", "dep:unfer_data"]
+# ECMAScript module backend (S1): workerd sidecar supervisor + kernel capability loopback.
+# The workerd binary itself is a sidecar process located via $UNFER_WORKERD (see ecma.rs).
+ecmascript = ["unfer-kernel", "dep:serde_json"]
+# S3: OS sandbox layer — dedicated launcher wrapping the workerd sidecar in user/network/pid
+# namespaces + no_new_privs + seccomp-bpf + Landlock (browser-equivalent, no full VM).
+sandbox = ["ecmascript", "dep:libc"]
 
 # Test helpers: provides stub C runtime symbols (au_alloc, au_free, etc.)
 # so integration tests can link without the real safestos C runtime.
@@ -60,3 +67,7 @@ cc = "1.0"
 opt-level = 3
 lto = true
 strip = true
+
+[[test]]
+name = "ecmascript_module"
+required-features = ["ecmascript"]

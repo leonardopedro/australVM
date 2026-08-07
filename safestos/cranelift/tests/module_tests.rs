@@ -97,8 +97,8 @@ fn load_and_call_multiple_times() {
     let mut host = ModuleHost::new();
     let handle = host.load(&dir).unwrap();
     assert_eq!(handle.manifest.name, "test_load");
-    assert_eq!(handle.functions.len(), 1);
-    assert!(handle.functions.contains_key("run"));
+    assert_eq!(handle.function_count(), 1);
+    assert!(handle.runtime.function_ptr("run").is_some());
 
     for _ in 0..5 {
         let result = host.call("test_load", "run", &[]).unwrap();

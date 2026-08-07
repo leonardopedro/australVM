@@ -20,6 +20,10 @@ pub mod module;
 pub mod tidepool_mod;
 pub mod capstd_mod;
 pub mod federation;
+#[cfg(feature = "ecmascript")]
+pub mod ecma;
+#[cfg(feature = "sandbox")]
+pub mod sandbox;
 
 #[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;

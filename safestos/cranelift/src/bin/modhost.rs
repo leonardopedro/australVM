@@ -2,7 +2,7 @@
 //!
 //! Subcommands:
 //!   authorize   <manifest.toml> <module> <uk_symbol>   — check authorization
-//!   host        <module-dir> --call <ep> [--args ...] [--repeat N] [--swap <dir>]
+//!   host        <module-dir> --call <ep> [--args ...] [--args-json <json>] [--repeat N] [--swap <dir>]
 //!   host-legacy <austral-path> <module-src>... -- <entrypoint>...
 //!
 //! The `host` subcommand loads a pre-compiled module directory (module.cps +
@@ -53,6 +53,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
 
     let mut entrypoint = String::from("run");
     let mut call_args: Vec<i64> = Vec::new();
+    let mut args_json: Option<String> = None;
     let mut repeat: u64 = 1;
     let mut swap_dir: Option<String> = None;
 
@@ -63,6 +64,12 @@ fn cmd_host(args: &[String]) -> ExitCode {
                 i += 1;
                 if i < args.len() {
                     entrypoint = args[i].clone();
+                }
+            }
+            "--args-json" => {
+                i += 1;
+                if i < args.len() {
+                    args_json = Some(args[i].clone());
                 }
             }
             "--args" => {
@@ -103,7 +110,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
                 "modhost: loaded '{}' v{} ({} functions, entry='{}')",
                 handle.manifest.name,
                 handle.manifest.version,
-                handle.functions.len(),
+                handle.function_count(),
                 handle.manifest.entry,
             );
         }
@@ -136,7 +143,20 @@ fn cmd_host(args: &[String]) -> ExitCode {
         if repeat > 1 {
             println!("--- call {}/{} ---", call_idx + 1, repeat);
         }
-        match host.call(&module_name, &entrypoint, &call_args) {
+        let result: Result<String, String> = if let Some(json) = &args_json {
+            #[cfg(feature = "ecmascript")]
+            {
+                host.call_json(&module_name, &entrypoint, json)
+            }
+            #[cfg(not(feature = "ecmascript"))]
+            {
+                let _ = json;
+                Err("--args-json requires the 'ecmascript' feature".to_string())
+            }
+        } else {
+            host.call(&module_name, &entrypoint, &call_args).map(|v| v.to_string())
+        };
+        match result {
             Ok(result) => println!("{entrypoint}: {result}"),
             Err(e) => {
                 eprintln!("modhost: call failed: {e}");
