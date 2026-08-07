@@ -520,6 +520,25 @@ fn dispatch_loopback(
     symbol: &str,
     body: &str,
 ) -> String {
+    dispatch_loopback_as(None, module_name, grants, effects, symbol, body)
+}
+
+/// Like [`dispatch_loopback`], but when `agent_handle` is `Some` the call is attributed to that
+/// sub-agent (S6 `AgentSpawner`): the *fixed bounded grant set* recorded at spawn gates the call
+/// instead of the module's own grants (default-deny), and the audit trail tags the caller as the
+/// agent. An unknown/stopped agent is denied outright.
+///
+/// Every dispatch — granted or denied — sets the thread-local caller identity and appends one
+/// `AuditEntry`, so the human stays accountable for what agents/gadgets attempted.
+#[allow(clippy::too_many_arguments)]
+fn dispatch_loopback_as(
+    agent_handle: Option<i64>,
+    module_name: &str,
+    grants: &HashSet<String>,
+    effects: &HashSet<String>,
+    symbol: &str,
+    body: &str,
+) -> String {
     // 1. JSON args (a JSON array) → effect-name gate for uk_action_submit, kernel grant otherwise.
     let args: Vec<serde_json::Value> = match serde_json::from_str(body) {
         Ok(v) => v,
@@ -531,7 +550,43 @@ fn dispatch_loopback(
         }
     };
 
-    if symbol == "uk_action_submit" {
+    // 2. Resolve the effective grant sets + caller identity (module gadget vs sub-agent).
+    let (eff_grants, eff_effects, caller_from, caller_principal) =
+        if let Some(handle) = agent_handle {
+            match ffi_agent_bounds(handle) {
+                Some((bounds, id)) => (
+                    bounds.kernel.into_iter().collect::<HashSet<_>>(),
+                    bounds.effects.into_iter().collect::<HashSet<_>>(),
+                    "agent",
+                    id,
+                ),
+                // Unknown/stopped agent: default-deny, but still audit the attempt.
+                None => {
+                    let message = format!("agent handle {handle} is unknown or stopped");
+                    let resp = json_response(
+                        "error",
+                        &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
+                    );
+                    set_loopback_caller("agent", &format!("agent-{handle}"));
+                    append_loopback_audit(symbol, &args, false, Some(&message));
+                    unfer_ffi::uk_clear_caller();
+                    return resp;
+                }
+            }
+        } else {
+            (
+                grants.clone(),
+                effects.clone(),
+                "gadget",
+                module_name.to_string(),
+            )
+        };
+
+    set_loopback_caller(caller_from, &caller_principal);
+
+    // 3. Grant gate (default-deny). Denials are audited too — attempts are the most
+    //    important audit entries.
+    let gate_error = if symbol == "uk_action_submit" {
         // S4: the effects namespace, not the kernel grants, gates submission. The effect
         // name is `req.effect` of the single request arg.
         let effect = args
@@ -539,27 +594,42 @@ fn dispatch_loopback(
             .and_then(|a| a.get("effect"))
             .and_then(|e| e.as_str())
             .unwrap_or("");
-        if !effects.contains(effect) {
-            return json_response(
-                "error",
-                &serde_json::json!({"code": 4001, "name": "CallDenied", "message": format!(
-                    "UK-4001: Authorization denied — '{module_name}' is not granted effect '{effect}'"
-                )}),
-            );
+        if !eff_effects.contains(effect) {
+            Some(format!(
+                "UK-4001: Authorization denied — '{caller_principal}' is not granted effect '{effect}'"
+            ))
+        } else {
+            None
         }
-    } else if !grants.contains(symbol) {
-        // Default-deny: the module's own granted capability set is authoritative host-side. This
-        // is a per-sidecar snapshot, independent of the global auth engine (which concurrent
-        // module loads may overwrite).
+    } else if !eff_grants.contains(symbol) {
+        Some(format!(
+            "UK-4001: Authorization denied — '{caller_principal}' is not granted '{symbol}'"
+        ))
+    } else {
+        None
+    };
+    if let Some(message) = gate_error {
+        append_loopback_audit(symbol, &args, false, Some(&message));
+        unfer_ffi::uk_clear_caller();
         return json_response(
             "error",
-            &serde_json::json!({"code": 4001, "name": "CallDenied", "message": format!(
-                "UK-4001: Authorization denied — '{module_name}' is not granted '{symbol}'"
-            )}),
+            &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
         );
     }
 
-    let out = kernel_dispatch(module_name, symbol, &args);
+    // 4. Dispatch. `kernel_dispatch` receives the caller principal (module or agent id) so
+    //    uk_action_submit injects the *actor* as the record principal, not a fixed module name.
+    let out = kernel_dispatch(&caller_principal, symbol, &args);
+    match &out {
+        Ok(_) => append_loopback_audit(symbol, &args, true, None),
+        Err((code, message)) => append_loopback_audit(
+            symbol,
+            &args,
+            false,
+            Some(&format!("UK-{code}: {message}")),
+        ),
+    }
+    unfer_ffi::uk_clear_caller();
     match out {
         Ok(value) => json_response("result", &value),
         Err((code, message)) => json_response(
@@ -567,6 +637,34 @@ fn dispatch_loopback(
             &serde_json::json!({"code": code, "name": "KernelError", "message": message}),
         ),
     }
+}
+
+/// Tag the current thread as the acting caller (S6). Host-internal — a worker cannot
+/// call `uk_set_caller` (no loopback arm), so the identity is host-owned.
+fn set_loopback_caller(from: &str, principal: &str) {
+    let caller = serde_json::json!({ "from": from, "principal": principal });
+    let _ = unfer_ffi::uk_set_caller(&caller.to_string());
+}
+
+/// Serialize an audit entry for the current caller and append it to the kernel trail.
+fn append_loopback_audit(symbol: &str, args: &[serde_json::Value], ok: bool, detail: Option<&str>) {
+    let mut entry = serde_json::json!({ "symbol": symbol, "args": args, "ok": ok });
+    if let Some(d) = detail {
+        entry
+            .as_object_mut()
+            .expect("audit entry is an object")
+            .insert("detail".to_string(), serde_json::json!(d));
+    }
+    let _ = unfer_ffi::uk_audit_append(&entry.to_string());
+}
+
+/// Fetch a sub-agent's bounded grants + live id from the kernel registry. `None` when the
+/// agent is unknown or stopped (→ default-deny).
+fn ffi_agent_bounds(handle: i64) -> Option<(unfer_protocol::GrantSet, String)> {
+    let grants_json = buf_out(|b, c| unfer_ffi::uk_agent_grants(handle, b, c)).ok()?;
+    let grants = serde_json::from_str(grants_json.as_str()?).ok()?;
+    let id = unfer_ffi::uk_agent_id(handle)?;
+    Some((grants, id))
 }
 
 type DispatchResult = Result<serde_json::Value, (u32, String)>;
@@ -645,10 +743,11 @@ fn read_last_error() -> Option<String> {
 /// Dispatch one `uk_*` symbol. Each arm encodes the C ABI signature. This is the single place
 /// where JS objects are translated onto the probe-then-copy buffer protocol.
 ///
-/// `module_name` is the submitting module's identity: `uk_action_submit` injects it as the
-/// record's `principal` (an audit tag — a worker cannot claim another module's identity).
+/// `actor` is the submitting caller's identity (the module name for a gadget, or the sub-agent
+/// id for an agent-attributed call): `uk_action_submit` injects it as the record's `principal`
+/// (an audit tag — a worker cannot claim another module's identity).
 fn kernel_dispatch(
-    module_name: &str,
+    actor: &str,
     symbol: &str,
     args: &[serde_json::Value],
 ) -> DispatchResult {
@@ -790,15 +889,15 @@ fn kernel_dispatch(
         }
         // ── S4: deferred approval + local simulation ─────────────────────────
         // The effects grant gate for uk_action_submit ran in `dispatch_loopback`. Here we
-        // inject the module identity as the record principal (audit tag, F6) and marshal
-        // onto the FFI.
+        // inject the caller identity (`actor`: module name or sub-agent id) as the record
+        // principal (audit tag, F6) and marshal onto the FFI.
         "uk_action_submit" => {
             let mut req = args
                 .get(0)
                 .cloned()
                 .ok_or_else(|| (1001, "uk_action_submit: missing request arg".to_string()))?;
             if let Some(obj) = req.as_object_mut() {
-                obj.insert("principal".to_string(), serde_json::json!(module_name));
+                obj.insert("principal".to_string(), serde_json::json!(actor));
             }
             let json = serde_json::to_string(&req).map_err(|e| (1001, e.to_string()))?;
             let (p, l) = ptr_len(&json);
@@ -826,6 +925,39 @@ fn kernel_dispatch(
         }
         "uk_action_list" => {
             let out = buf_out(|b, c| unfer_ffi::uk_action_list(b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        // ── S6: agent accountability + audit ─────────────────────────────────
+        "uk_audit_list" => {
+            let out = buf_out(|b, c| unfer_ffi::uk_audit_list(b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        "uk_audit_clear" => ffi_result(unfer_ffi::uk_audit_clear()),
+        "uk_agent_spawn" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_agent_spawn(p, l))
+        }
+        "uk_agent_list" => {
+            let out = buf_out(|b, c| unfer_ffi::uk_agent_list(b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        "uk_agent_kill" => {
+            let handle = arg_i64(args, 0)?;
+            ffi_result(unfer_ffi::uk_agent_kill(handle))
+        }
+        "uk_agent_grants" => {
+            let handle = arg_i64(args, 0)?;
+            let out = buf_out(|b, c| unfer_ffi::uk_agent_grants(handle, b, c))?;
             match serde_json::from_str(out.as_str().unwrap_or("")) {
                 Ok(v) => Ok(v),
                 Err(_) => Ok(out),
@@ -1181,6 +1313,183 @@ mod tests {
             r#"[1]"#,
         );
         assert!(resp.contains("\"error\""), "ungranted kernel symbol must deny, got {resp}");
+        assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
+    }
+
+    // ── S6: agent accountability + audit (GatekeeperCaller tags) ───────────
+    //
+    // Every loopback dispatch is audited with the caller's tag; sub-agent calls are
+    // bounded to the fixed grant set recorded at spawn (AgentSpawner enforcement).
+    // The audit trail is kernel-global, so assertions filter by the distinctive probe
+    // principal rather than assuming an empty trail.
+
+    static LOOPBACK_AUDIT_TESTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn read_ffi_audit() -> Vec<serde_json::Value> {
+        let needed = unfer_ffi::uk_audit_list(std::ptr::null_mut(), 0);
+        if needed <= 0 {
+            return Vec::new();
+        }
+        // The audit trail is kernel-global: concurrent loopback dispatches (S4 gadget
+        // tests) append entries while we size-then-fill, so the list can grow mid-read.
+        // Allocate slack and retry until the buffer is large enough, parsing only the
+        // bytes actually written (avoids trailing-NUL parse failures).
+        let mut cap = needed + 4096;
+        loop {
+            let mut buf = vec![0u8; cap as usize];
+            let written = unfer_ffi::uk_audit_list(buf.as_mut_ptr(), cap);
+            if written <= 0 {
+                return Vec::new();
+            }
+            if written <= cap {
+                return serde_json::from_slice::<serde_json::Value>(&buf[..written as usize])
+                    .map(|v| v.as_array().cloned().unwrap_or_default())
+                    .unwrap_or_default();
+            }
+            cap = written + 4096;
+        }
+    }
+
+    fn spawn_agent(name: &str, kernel_grants: &[&str], effect_grants: &[&str]) -> i64 {
+        let kernel: Vec<String> = kernel_grants.iter().map(|s| s.to_string()).collect();
+        let effects: Vec<String> = effect_grants.iter().map(|s| s.to_string()).collect();
+        let spec = serde_json::json!({ "name": name, "grants": { "kernel": kernel, "effects": effects } });
+        let spec_json = spec.to_string();
+        let (p, l) = ptr_len(&spec_json);
+        let h = unfer_ffi::uk_agent_spawn(p, l);
+        assert!(h > 0, "agent spawn must succeed, got {h}");
+        h
+    }
+
+    #[test]
+    fn loopback_audits_module_calls_with_caller_tag() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+        unfer_ffi::uk_audit_clear();
+
+        let grants = HashSet::from(["uk_version".to_string()]);
+        let effects = HashSet::new();
+        // Granted call → audited ok.
+        let resp = dispatch_loopback("audit_probe", &grants, &effects, "uk_version", "[]");
+        assert!(resp.contains("\"result\""), "granted symbol must dispatch, got {resp}");
+        // Denied call → audited too.
+        let resp = dispatch_loopback("audit_probe", &grants, &effects, "uk_evolve", r#"[{"t":0.1}]"#);
+        assert!(resp.contains("\"error\""), "ungranted symbol must deny, got {resp}");
+
+        let entries = read_ffi_audit();
+        let mine: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|e| e["caller"]["principal"] == "audit_probe")
+            .collect();
+        assert_eq!(mine.len(), 2, "expected 2 audited calls from audit_probe: {entries:?}");
+        // Newest first: the denied evolve call, then the granted version call.
+        assert_eq!(mine[0]["symbol"], "uk_evolve");
+        assert_eq!(mine[0]["ok"], false);
+        assert!(mine[0]["detail"].as_str().unwrap().contains("UK-4001"));
+        assert_eq!(mine[0]["caller"]["from"], "gadget");
+        assert_eq!(mine[1]["symbol"], "uk_version");
+        assert_eq!(mine[1]["ok"], true);
+    }
+
+    #[test]
+    fn loopback_audits_action_submit_with_agent_caller() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+        unfer_ffi::uk_audit_clear();
+
+        // A gadget spawns an agent bounded to {uk_action_submit} + the effect; the agent
+        // then submits the action. The ActionRecord must carry the *agent* caller tag and
+        // the agent id as its principal.
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["send_notification".to_string()]);
+        let handle = spawn_agent("analyst", &["uk_action_submit"], &["send_notification"]);
+
+        let body = r#"[{"effect":"send_notification","params":{"to":"eve"}}]"#;
+        let resp = dispatch_loopback_as(
+            Some(handle),
+            "parent_mod",
+            &grants,
+            &effects,
+            "uk_action_submit",
+            body,
+        );
+        assert!(resp.contains("\"result\""), "granted effect must dispatch, got {resp}");
+
+        // The action principal + caller tag must be the agent id.
+        let json = resp.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let handle_i64 = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v["result"].as_i64())
+            .expect("expected an action handle");
+        let needed = unfer_ffi::uk_action_get(handle_i64, std::ptr::null_mut(), 0);
+        let mut buf = vec![0u8; needed as usize];
+        unfer_ffi::uk_action_get(handle_i64, buf.as_mut_ptr(), needed);
+        let record: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        let agent_id = unfer_ffi::uk_agent_id(handle).expect("agent must be live");
+        assert_eq!(record["principal"], serde_json::json!(agent_id));
+        assert_eq!(record["caller"]["from"], "agent");
+        assert_eq!(record["caller"]["principal"], serde_json::json!(agent_id));
+
+        // The audit entry for the submission is tagged with the agent, not the parent.
+        // Filter by the agent's caller principal: the trail is kernel-global and S4
+        // gadget dispatches may append uk_action_submit entries concurrently.
+        let entries = read_ffi_audit();
+        let mine: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|e| e["symbol"] == "uk_action_submit" && e["caller"]["principal"] == agent_id)
+            .collect();
+        assert!(!mine.is_empty(), "action submit must be audited for the agent: {entries:?}");
+        assert_eq!(mine[0]["caller"]["from"], "agent");
+        assert_eq!(mine[0]["caller"]["principal"], serde_json::json!(agent_id));
+    }
+
+    #[test]
+    fn loopback_agent_grant_enforcement_bounded_set() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+        // The agent is bounded to {uk_version} — uk_evolve must be denied host-side even
+        // though the *module* grant set (passed in) contains everything.
+        let grants = HashSet::from(["uk_version".to_string(), "uk_evolve".to_string()]);
+        let effects = HashSet::new();
+        let handle = spawn_agent("bounded", &["uk_version"], &[]);
+
+        let ok = dispatch_loopback_as(
+            Some(handle),
+            "parent_mod",
+            &grants,
+            &effects,
+            "uk_version",
+            "[]",
+        );
+        assert!(ok.contains("\"result\""), "granted agent symbol must dispatch, got {ok}");
+
+        let denied = dispatch_loopback_as(
+            Some(handle),
+            "parent_mod",
+            &grants,
+            &effects,
+            "uk_evolve",
+            r#"[{"t":0.1}]"#,
+        );
+        assert!(denied.contains("\"error\""), "unbounded agent symbol must deny, got {denied}");
+        assert!(denied.contains("4001"), "expected UK-4001, got {denied}");
+    }
+
+    #[test]
+    fn loopback_agent_unknown_handle_denies() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+        let grants = HashSet::from(["uk_version".to_string()]);
+        let effects = HashSet::new();
+        let resp = dispatch_loopback_as(
+            Some(99999),
+            "parent_mod",
+            &grants,
+            &effects,
+            "uk_version",
+            "[]",
+        );
+        assert!(resp.contains("\"error\""), "unknown agent must deny, got {resp}");
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
 }

@@ -186,6 +186,13 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     // S5: .cell blueprint archives (instance isolation + blueprints).
     KernelSymbol { name: "uk_blueprint_export",      addr: unfer_ffi::uk_blueprint_export      as *const u8 },
     KernelSymbol { name: "uk_blueprint_instantiate", addr: unfer_ffi::uk_blueprint_instantiate as *const u8 },
+    // S6: agent accountability + audit (GatekeeperCaller tags, audit trail, AgentSpawner).
+    KernelSymbol { name: "uk_audit_list",     addr: unfer_ffi::uk_audit_list     as *const u8 },
+    KernelSymbol { name: "uk_audit_clear",    addr: unfer_ffi::uk_audit_clear    as *const u8 },
+    KernelSymbol { name: "uk_agent_spawn",    addr: unfer_ffi::uk_agent_spawn    as *const u8 },
+    KernelSymbol { name: "uk_agent_list",     addr: unfer_ffi::uk_agent_list     as *const u8 },
+    KernelSymbol { name: "uk_agent_kill",     addr: unfer_ffi::uk_agent_kill     as *const u8 },
+    KernelSymbol { name: "uk_agent_grants",   addr: unfer_ffi::uk_agent_grants   as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]
