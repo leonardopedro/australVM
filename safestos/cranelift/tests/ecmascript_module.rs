@@ -426,3 +426,196 @@ export async function run(kernel, args) {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ── S5: instance isolation + blueprints ────────────────────────────────
+//
+// `ModuleHost::instantiate` gives every instance of a module its own workerd sidecar (private
+// staging dir + unix sockets + PID), so instances of the same module cannot observe each other's
+// sockets or step on each other's sockets. `instantiate_from_blueprint` materializes the
+// archived module files, spawns a fresh sidecar, and restores the packaged session snapshot —
+// the gate is a snapshot/restore round-trip whose restored state reproduces the original's.
+
+/// Two instances of the SAME module dir: distinct staging dirs, distinct PIDs, both callable.
+#[test]
+fn modulehost_instantiate_isolates_instances() {
+    if !workerd_available() {
+        eprintln!("SKIP: no workerd runtime found (UNFER_WORKERD, $PATH, or fnm); install via `npm install -g workerd`");
+        return;
+    }
+
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let dir = std::env::temp_dir().join("ecma_inst_isolation");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let js = "export async function run(kernel, args) { return { pid_hint: kernel, ok: true }; }";
+    make_ecma_module_dir(&dir, "ecma_inst", &["uk_version"], js);
+
+    let mut host = ModuleHost::new();
+    let k0 = host.instantiate(&dir, "i0").unwrap();
+    let k1 = host.instantiate(&dir, "i1").unwrap();
+    assert_ne!(k0, k1);
+
+    // Distinct staging dirs → distinct main/loopback sockets.
+    let s0 = host.instance(&k0).unwrap().sidecar.staging_dir().to_path_buf();
+    let s1 = host.instance(&k1).unwrap().sidecar.staging_dir().to_path_buf();
+    assert_ne!(s0, s1, "instances must not share a staging dir");
+
+    // Distinct OS processes.
+    let p0 = host.instance(&k0).unwrap().sidecar.child_pid();
+    let p1 = host.instance(&k1).unwrap().sidecar.child_pid();
+    assert_ne!(p0, p1, "instances must be separate sidecar processes");
+
+    // Both instances are independently callable.
+    for key in [&k0, &k1] {
+        let body = host.call_json_instance(key, "run", "{}").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["result"]["ok"], true, "instance {key} failed: {body}");
+    }
+
+    host.drop_instance(&k0).unwrap();
+    host.drop_instance(&k1).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// E2E blueprint round-trip: instantiate → run (creates + evolves a model) → snapshot the
+/// session → package a `.cell` (module files + session) → `instantiate_from_blueprint` →
+/// read the vacuum probability off the RESTORED session → must equal the original's.
+#[test]
+fn modulehost_blueprint_roundtrip_restores_session() {
+    if !workerd_available() {
+        eprintln!("SKIP: no workerd runtime found (UNFER_WORKERD, $PATH, or fnm); install via `npm install -g workerd`");
+        return;
+    }
+
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let dir = std::env::temp_dir().join("ecma_blueprint");
+    let parent = std::env::temp_dir().join("ecma_blueprint_materialized");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&parent);
+
+    let grants = [
+        "uk_model_create",
+        "uk_set_prior",
+        "uk_evolve",
+        "uk_event_probability",
+        "uk_get_result",
+    ];
+    let js = r#"
+export async function run(kernel, args) {
+  const model = await kernel.uk_model_create(args.spec);
+  await kernel.uk_set_prior(model, { kind: "vacuum" });
+  await kernel.uk_evolve(model, { t: 0.05 });
+  await kernel.uk_event_probability(model, { kind: "vacuum" });
+  const result = await kernel.uk_get_result(model);
+  return { handle: model, probability: result.probability };
+}
+export async function read(kernel, args) {
+  await kernel.uk_event_probability(args.handle, { kind: "vacuum" });
+  const result = await kernel.uk_get_result(args.handle);
+  return { probability: result.probability };
+}
+"#;
+    make_ecma_module_dir(&dir, "ecma_bp", &grants, js);
+
+    let mut host = ModuleHost::new();
+    let k0 = host.instantiate(&dir, "i0").unwrap();
+
+    // 1. Run on the original instance → model handle + evolved vacuum probability.
+    let args = format!(r#"{{"spec": {HARMONIC_SPEC}}}"#);
+    let body = host.call_json_instance(&k0, "run", &args).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let result = &v["result"];
+    let model = result["handle"].as_i64().expect("model handle");
+    let p0 = result["probability"].as_f64().unwrap();
+    assert!(p0 > 0.0 && p0 <= 1.0, "probability out of range: {p0}");
+
+    // 2. Snapshot the session the worker created (host-visible via the shared kernel store).
+    let session_json = host.snapshot_session(model).unwrap();
+
+    // 3. Package a .cell with the module files + session snapshot.
+    let module_toml = std::fs::read(dir.join("module.toml")).unwrap();
+    let main_js = std::fs::read(dir.join("src/main.js")).unwrap();
+    let mut builder = unfer_protocol::CellBuilder::new("ecma_bp");
+    builder.set_archetype("ecmascript");
+    builder.set_entry("src/main.js");
+    builder.add_file("module.toml", &module_toml).unwrap();
+    builder.add_file("src/main.js", &main_js).unwrap();
+    builder.set_session(session_json.as_bytes());
+    let cell = builder.build().unwrap();
+
+    // 4. Instantiate a fresh instance from the blueprint: files materialized + session restored.
+    let (k1, restored) = host.instantiate_from_blueprint(&cell, &parent, "i1").unwrap();
+    assert_ne!(k0, k1);
+    let restored = restored.expect("blueprint must restore a session");
+
+    // 5. The restored session reproduces the original's evolved probability.
+    let body = host
+        .call_json_instance(&k1, "read", &format!(r#"{{"handle":{restored}}}"#))
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let p1 = v["result"]["probability"].as_f64().unwrap();
+    assert!(
+        (p1 - p0).abs() < 1e-9,
+        "restored session must reproduce the original state: p0={p0} p1={p1}"
+    );
+
+    // The snapshot→restore→snapshot identity also holds at the JSON level.
+    let resnap = host.snapshot_session(restored).unwrap();
+    assert_eq!(resnap, session_json, "session must round-trip byte-identically");
+
+    host.drop_instance(&k0).unwrap();
+    host.drop_instance(&k1).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// Blueprint with a `../` traversal entry must be rejected before any sidecar spawns (UK-4001).
+#[test]
+fn modulehost_blueprint_rejects_path_traversal() {
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let parent = std::env::temp_dir().join("ecma_bp_traversal");
+    let _ = std::fs::remove_dir_all(&parent);
+
+    let mut builder = unfer_protocol::CellBuilder::new("evil");
+    builder.add_file("module.toml", b"[module]\nname = \"evil\"\n").unwrap();
+    builder.add_file("../escape.txt", b"boom").unwrap();
+    let cell = builder.build().unwrap();
+
+    let mut host = ModuleHost::new();
+    let err = host
+        .instantiate_from_blueprint(&cell, &parent, "i0")
+        .unwrap_err();
+    assert!(
+        err.contains("traversal"),
+        "expected path-traversal rejection, got: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// A blueprint archive without module.toml cannot be instantiated (UK-4100).
+#[test]
+fn modulehost_blueprint_requires_module_toml() {
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let parent = std::env::temp_dir().join("ecma_bp_notoml");
+    let _ = std::fs::remove_dir_all(&parent);
+
+    let mut builder = unfer_protocol::CellBuilder::new("naked");
+    builder.add_file("src/main.js", b"export async function run(){return {};}").unwrap();
+    let cell = builder.build().unwrap();
+
+    let mut host = ModuleHost::new();
+    let err = host
+        .instantiate_from_blueprint(&cell, &parent, "i0")
+        .unwrap_err();
+    assert!(
+        err.contains("no module.toml"),
+        "expected missing-module.toml rejection, got: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}

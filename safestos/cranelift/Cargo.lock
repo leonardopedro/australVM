@@ -185,6 +185,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "frunk",
+ "hex",
  "libc",
  "serde",
  "serde_json",
@@ -194,6 +195,7 @@ dependencies = [
  "unfer_data",
  "unfer_ffi",
  "unfer_identity",
+ "unfer_protocol",
 ]
 
 [[package]]
@@ -4397,6 +4399,7 @@ dependencies = [
 name = "unfer_protocol"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "hex",
  "serde",
  "serde_json",

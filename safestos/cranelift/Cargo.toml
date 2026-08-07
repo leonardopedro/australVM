@@ -24,12 +24,14 @@ unfer_ffi = { path = "../../../unfer/unfer_ffi", optional = true }
 arctic_authority = { path = "../../arctic_authority", optional = true }
 arctic = { path = "../../../dynamic-arctic", optional = true }
 serde_json = { version = "1", optional = true }
+hex = { version = "0.4", optional = true }
 libc = { version = "0.2", optional = true }
 frunk = { version = "0.4", optional = true }
 cap-std = { version = "3", optional = true }
 unfer_consensus = { path = "../../../unfer/unfer_consensus", optional = true }
 unfer_identity = { path = "../../../unfer/unfer_identity", optional = true }
 unfer_data = { path = "../../../unfer/unfer_data", optional = true }
+unfer_protocol = { path = "../../../unfer/unfer_protocol", optional = true }
 # Tidepool: Haskell effect-stack → Cranelift JIT (separate JIT context, cranelift 0.129.1)
 # Pinned to rev ac0a95ddb07cbb996ba2b5bf1fd0772ca9315ef1.
 # Uncomment when building with --features tidepool (requires network for git fetch):
@@ -50,7 +52,7 @@ capstd = ["dep:cap-std"]
 federation = ["dep:unfer_consensus", "dep:unfer_identity", "dep:unfer_data"]
 # ECMAScript module backend (S1): workerd sidecar supervisor + kernel capability loopback.
 # The workerd binary itself is a sidecar process located via $UNFER_WORKERD (see ecma.rs).
-ecmascript = ["unfer-kernel", "dep:serde_json"]
+ecmascript = ["unfer-kernel", "dep:serde_json", "dep:unfer_protocol", "dep:hex"]
 # S3: OS sandbox layer — dedicated launcher wrapping the workerd sidecar in user/network/pid
 # namespaces + no_new_privs + seccomp-bpf + Landlock (browser-equivalent, no full VM).
 sandbox = ["ecmascript", "dep:libc"]

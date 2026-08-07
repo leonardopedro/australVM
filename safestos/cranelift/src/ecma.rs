@@ -166,10 +166,16 @@ pub struct EcmaSidecar {
 }
 
 impl EcmaSidecar {
-    /// Materialize a `config.capnp` + harness, spawn `workerd serve`, and wait until the main
-    /// unix socket accepts connections.
+    /// Materialize a `config.capnp` + harness in `staging_dir`, spawn `workerd serve`, and
+    /// wait until the main unix socket accepts connections.
+    ///
+    /// `module_dir` supplies the entry file and the fs-grant base for the OS sandbox; the
+    /// staging directory is passed separately so that per-instance sidecars (S5/F3) can each
+    /// own a private `config.capnp` + sockets without colliding with siblings of the same
+    /// module.
     pub fn spawn(
         module_dir: &Path,
+        staging_dir: &Path,
         manifest: &ModuleManifest,
         paths: &WorkerdPaths,
     ) -> Result<Self, String> {
@@ -177,7 +183,7 @@ impl EcmaSidecar {
 
         // Staging dir holds config.capnp, harness.mjs and a copy of the entry JS so workerd's
         // `embed "..."` directives resolve relative to the config file.
-        let staging = module_dir.join(".unfer-ecma");
+        let staging = staging_dir.to_path_buf();
         std::fs::create_dir_all(&staging).map_err(|e| format!("staging dir: {e}"))?;
 
         let entry_file = module_dir.join(&manifest.entry);
@@ -608,6 +614,24 @@ fn buf_out(mut f: impl FnMut(*mut u8, i64) -> i64) -> DispatchResult {
     Ok(serde_json::Value::String(s))
 }
 
+/// Binary variant of [`buf_out`]: reads raw bytes (which are not UTF-8 — e.g. a gzip `.cell`
+/// archive) and hex-encodes them so they survive the JSON transport.
+fn buf_out_raw(mut f: impl FnMut(*mut u8, i64) -> i64) -> DispatchResult {
+    let needed = f(std::ptr::null_mut(), 0);
+    if needed < 0 {
+        return Err(((-needed) as u32, read_last_error().unwrap_or_default()));
+    }
+    if needed == 0 {
+        return Ok(serde_json::Value::String(String::new()));
+    }
+    let mut buf = vec![0u8; needed as usize];
+    let n = f(buf.as_mut_ptr(), needed);
+    if n < 0 {
+        return Err(((-n) as u32, read_last_error().unwrap_or_default()));
+    }
+    Ok(serde_json::Value::String(hex::encode(&buf)))
+}
+
 fn read_last_error() -> Option<String> {
     let needed = unfer_ffi::uk_last_error(std::ptr::null_mut(), 0);
     if needed <= 0 {
@@ -708,6 +732,19 @@ fn kernel_dispatch(
             let json = arg_str(args, 0)?;
             let (p, l) = ptr_len(&json);
             ffi_result(unfer_ffi::uk_restore(p, l))
+        }
+        // S5 (F4): .cell blueprint archives. The archive is binary (gzip), so the loopback
+        // transport hex-encodes it: export returns hex, instantiate accepts hex.
+        "uk_blueprint_export" => {
+            let model = arg_i64(args, 0)?;
+            let out = buf_out_raw(|b, c| unfer_ffi::uk_blueprint_export(model, b, c))?;
+            Ok(serde_json::json!({ "cell_hex": out.as_str().unwrap_or("") }))
+        }
+        "uk_blueprint_instantiate" => {
+            let hexed = arg_str(args, 0)?;
+            let bytes = hex::decode(hexed.trim())
+                .map_err(|e| (1001, format!("blueprint hex decode: {e}")))?;
+            ffi_result(unfer_ffi::uk_blueprint_instantiate(bytes.as_ptr(), bytes.len() as i64))
         }
         "uk_subscribe" => {
             let model = arg_i64(args, 0)?;

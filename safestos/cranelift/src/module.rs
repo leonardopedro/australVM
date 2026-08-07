@@ -196,13 +196,45 @@ impl ModuleHandle {
 
 pub struct ModuleHost {
     modules: HashMap<String, ModuleHandle>,
+    /// Per-instance registry (S5/F3): each key is `"{module_name}@{instance_id}"`. Every
+    /// instance owns its own workerd sidecar (own staging dir + unix sockets) and an optional
+    /// kernel `Session` handle (from `instantiate_from_blueprint` / `restore_instance`).
+    #[cfg(feature = "ecmascript")]
+    instances: HashMap<String, ModuleInstance>,
+}
+
+/// One isolated instance of a module: a dedicated workerd sidecar + (optionally) a kernel
+/// session handle. Created by [`ModuleHost::instantiate`] or [`ModuleHost::instantiate_from_blueprint`].
+#[cfg(feature = "ecmascript")]
+pub struct ModuleInstance {
+    pub key: String,
+    pub manifest: ModuleManifest,
+    pub sidecar: crate::ecma::EcmaSidecar,
+    pub dir: std::path::PathBuf,
+    pub session: Option<i64>,
+    pub call_count: u64,
+}
+
+#[cfg(feature = "ecmascript")]
+impl ModuleInstance {
+    pub fn session_handle(&self) -> Option<i64> {
+        self.session
+    }
 }
 
 impl ModuleHost {
     pub fn new() -> Self {
         Self {
             modules: HashMap::new(),
+            #[cfg(feature = "ecmascript")]
+            instances: HashMap::new(),
         }
+    }
+
+    /// Instance key format: `"{module_name}@{instance_id}"`.
+    #[cfg(feature = "ecmascript")]
+    pub fn instance_key(module_name: &str, instance_id: &str) -> String {
+        format!("{module_name}@{instance_id}")
     }
 
     pub fn load(&mut self, module_dir: &Path) -> Result<&ModuleHandle, String> {
@@ -223,7 +255,9 @@ impl ModuleHost {
             #[cfg(feature = "ecmascript")]
             {
                 let paths = crate::ecma::WorkerdPaths::from_env()?;
-                let sidecar = crate::ecma::EcmaSidecar::spawn(module_dir, &manifest, &paths)?;
+                let staging = module_dir.join(".unfer-ecma");
+                let sidecar =
+                    crate::ecma::EcmaSidecar::spawn(module_dir, &staging, &manifest, &paths)?;
                 let name = manifest.name.clone();
                 let handle = ModuleHandle {
                     manifest,
@@ -429,7 +463,13 @@ impl ModuleHost {
             #[cfg(feature = "ecmascript")]
             {
                 let paths = crate::ecma::WorkerdPaths::from_env()?;
-                let sidecar = crate::ecma::EcmaSidecar::spawn(new_module_dir, &new_manifest, &paths)?;
+                let staging = new_module_dir.join(".unfer-ecma");
+                let sidecar = crate::ecma::EcmaSidecar::spawn(
+                    new_module_dir,
+                    &staging,
+                    &new_manifest,
+                    &paths,
+                )?;
                 ModuleHandle {
                     manifest: new_manifest,
                     runtime: IrRuntime::Ecma(sidecar),
@@ -465,6 +505,217 @@ impl ModuleHost {
     pub fn loaded_modules(&self) -> Vec<&str> {
         self.modules.keys().map(|s| s.as_str()).collect()
     }
+
+    // ── S5: per-instance isolation + blueprints ────────────────────────────
+
+    /// Spawn a fresh, isolated instance of an ECMAScript module: its own workerd sidecar with a
+    /// private staging dir + unix sockets, plus a new entry in the instance registry. Returns
+    /// the instance key `"{name}@{instance_id}"`.
+    #[cfg(feature = "ecmascript")]
+    pub fn instantiate(
+        &mut self,
+        module_dir: &std::path::Path,
+        instance_id: &str,
+    ) -> Result<String, String> {
+        let manifest_path = module_dir.join("module.toml");
+        let toml_str = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
+        let manifest = ModuleManifest::from_toml_str(&toml_str)?;
+        if manifest.archetype != "ecmascript" {
+            return Err(format!(
+                "instance isolation requires the 'ecmascript' archetype, got '{}'",
+                manifest.archetype
+            ));
+        }
+
+        let key = Self::instance_key(&manifest.name, instance_id);
+        let staging = module_dir.join(format!(".unfer-ecma-{instance_id}"));
+        let paths = crate::ecma::WorkerdPaths::from_env()?;
+        let sidecar = crate::ecma::EcmaSidecar::spawn(module_dir, &staging, &manifest, &paths)?;
+
+        self.instances.insert(
+            key.clone(),
+            ModuleInstance {
+                key: key.clone(),
+                manifest,
+                sidecar,
+                dir: module_dir.to_path_buf(),
+                session: None,
+                call_count: 0,
+            },
+        );
+        Ok(key)
+    }
+
+    /// Call an instance's entrypoint over its own sidecar's JSON RPC (raw JSON response body).
+    #[cfg(feature = "ecmascript")]
+    pub fn call_json_instance(
+        &mut self,
+        key: &str,
+        entrypoint: &str,
+        args_json: &str,
+    ) -> Result<String, String> {
+        let instance = self
+            .instances
+            .get_mut(key)
+            .ok_or_else(|| format!("instance '{key}' not found"))?;
+        let result = instance.sidecar.call(entrypoint, args_json)?;
+        instance.call_count += 1;
+        Ok(result)
+    }
+
+    /// The kernel `Session` handle bound to an instance (from `instantiate_from_blueprint` or
+    /// `restore_instance`). `None` for instances created by `instantiate` (worker-side models).
+    #[cfg(feature = "ecmascript")]
+    pub fn session_handle(&self, key: &str) -> Option<i64> {
+        self.instances.get(key).and_then(|i| i.session)
+    }
+
+    /// Snapshot a kernel `Session` handle to its `SessionBlob` JSON string (F3 durable
+    /// suspension). The handle may be host-held (an instance session) or worker-created.
+    #[cfg(feature = "ecmascript")]
+    pub fn snapshot_session(&self, handle: i64) -> Result<String, String> {
+        let needed = unfer_ffi::uk_snapshot(handle, std::ptr::null_mut(), 0);
+        if needed < 0 {
+            return Err(read_kernel_error(needed));
+        }
+        let mut buf = vec![0u8; needed as usize];
+        let n = unfer_ffi::uk_snapshot(handle, buf.as_mut_ptr(), needed);
+        if n < 0 {
+            return Err(read_kernel_error(n));
+        }
+        String::from_utf8(buf).map_err(|e| format!("snapshot is not UTF-8: {e}"))
+    }
+
+    /// Bind an existing session snapshot (a `SessionBlob` JSON string from [`Self::snapshot_session`])
+    /// to an instance, so it can resume a suspended computation. Returns the kernel handle.
+    #[cfg(feature = "ecmascript")]
+    pub fn restore_instance(&mut self, key: &str, session_json: &str) -> Result<i64, String> {
+        let handle = unfer_ffi::uk_restore(session_json.as_ptr(), session_json.len() as i64);
+        if handle < 0 {
+            return Err(read_kernel_error(handle));
+        }
+        let instance = self
+            .instances
+            .get_mut(key)
+            .ok_or_else(|| format!("instance '{key}' not found"))?;
+        instance.session = Some(handle);
+        Ok(handle)
+    }
+
+    /// Instantiate a module from a `.cell` blueprint archive (S5/F4, `initialize_from_blueprint`).
+    /// Materializes the archived files into `parent_dir/{name}-{instance_id}`, spawns a fresh
+    /// per-instance sidecar, and — if the archive carries a session snapshot — restores it as the
+    /// instance's session. Returns `(instance_key, session_handle)`.
+    #[cfg(feature = "ecmascript")]
+    pub fn instantiate_from_blueprint(
+        &mut self,
+        cell: &[u8],
+        parent_dir: &std::path::Path,
+        instance_id: &str,
+    ) -> Result<(String, Option<i64>), String> {
+        let parsed = unfer_protocol::Cell::parse(cell)
+            .map_err(|e| format!("UK-4100: bad blueprint archive: {e}"))?;
+
+        // Materialize the archived module files into a per-instance directory.
+        let name = parsed.metadata().name.clone();
+        let dir = parent_dir.join(format!("{name}-{instance_id}"));
+        std::fs::create_dir_all(&dir).map_err(|e| format!("materialize dir: {e}"))?;
+        for (rel, bytes) in parsed.files() {
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            if rel.split('/').any(|c| c == "..") {
+                return Err(format!(
+                    "UK-4001 blueprint rejected: path traversal in archive entry '{rel}'"
+                ));
+            }
+            let dest = dir.join(&rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("materialize {rel}: {e}"))?;
+            }
+            std::fs::write(&dest, bytes).map_err(|e| format!("materialize {rel}: {e}"))?;
+        }
+        if !dir.join("module.toml").exists() {
+            return Err("UK-4100 blueprint rejected: no module.toml in archive".to_string());
+        }
+
+        let toml_str = std::fs::read_to_string(dir.join("module.toml"))
+            .map_err(|e| format!("cannot read materialized module.toml: {e}"))?;
+        let manifest = ModuleManifest::from_toml_str(&toml_str)?;
+        if manifest.archetype != "ecmascript" {
+            return Err(format!(
+                "instance isolation requires the 'ecmascript' archetype, got '{}'",
+                manifest.archetype
+            ));
+        }
+
+        let key = Self::instance_key(&name, instance_id);
+        let staging = dir.join(".unfer-ecma");
+        let paths = crate::ecma::WorkerdPaths::from_env()?;
+        let sidecar = crate::ecma::EcmaSidecar::spawn(&dir, &staging, &manifest, &paths)?;
+
+        let session = match parsed.session() {
+            Some(session_bytes) => {
+                let handle = unfer_ffi::uk_restore(
+                    session_bytes.as_ptr(),
+                    session_bytes.len() as i64,
+                );
+                if handle < 0 {
+                    return Err(read_kernel_error(handle));
+                }
+                Some(handle)
+            }
+            None => None,
+        };
+
+        self.instances.insert(
+            key.clone(),
+            ModuleInstance {
+                key: key.clone(),
+                manifest,
+                sidecar,
+                dir,
+                session,
+                call_count: 0,
+            },
+        );
+        Ok((key, session))
+    }
+
+    /// Access an instance (for tests: inspect staging dir / sidecar PID / session).
+    #[cfg(feature = "ecmascript")]
+    pub fn instance(&self, key: &str) -> Option<&ModuleInstance> {
+        self.instances.get(key)
+    }
+
+    /// Drop an instance, killing its sidecar and releasing its kernel session.
+    #[cfg(feature = "ecmascript")]
+    pub fn drop_instance(&mut self, key: &str) -> Result<(), String> {
+        let instance = self
+            .instances
+            .remove(key)
+            .ok_or_else(|| format!("instance '{key}' not found"))?;
+        if let Some(h) = instance.session {
+            let ret = unfer_ffi::uk_model_free(h);
+            if ret < 0 {
+                return Err(read_kernel_error(ret));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "ecmascript")]
+fn read_kernel_error(ret: i64) -> String {
+    let code = (-ret) as u32;
+    let needed = unfer_ffi::uk_last_error(std::ptr::null_mut(), 0);
+    if needed > 0 {
+        let mut buf = vec![0u8; needed as usize];
+        unfer_ffi::uk_last_error(buf.as_mut_ptr(), needed);
+        if let Ok(s) = String::from_utf8(buf) {
+            return format!("UK-{code}: {s}");
+        }
+    }
+    format!("UK-{code}")
 }
 
 fn compile_cps_binary(data: &[u8]) -> Result<HashMap<String, usize>, String> {

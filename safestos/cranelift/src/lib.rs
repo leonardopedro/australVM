@@ -183,6 +183,9 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_action_revert", addr: unfer_ffi::uk_action_revert     as *const u8 },
     KernelSymbol { name: "uk_action_get",    addr: unfer_ffi::uk_action_get        as *const u8 },
     KernelSymbol { name: "uk_action_list",   addr: unfer_ffi::uk_action_list       as *const u8 },
+    // S5: .cell blueprint archives (instance isolation + blueprints).
+    KernelSymbol { name: "uk_blueprint_export",      addr: unfer_ffi::uk_blueprint_export      as *const u8 },
+    KernelSymbol { name: "uk_blueprint_instantiate", addr: unfer_ffi::uk_blueprint_instantiate as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]
