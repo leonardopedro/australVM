@@ -125,13 +125,13 @@ export async function run(kernel, args) {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// UK-4001 negative path: the module calls a uk_* symbol that is NOT granted. Two independent
-/// layers must both deny:
-/// 1. The capability object (`kernel`) only exposes granted symbols — the harness stubs an
-///    un-granted call to throw UK-4001 (`CallDenied`).
-/// 2. The host-side kernel loopback re-validates `auth::check` (defense in depth).
+/// F5 negative path: the capability object a module receives must be EXACTLY its
+/// `[grants] kernel` set — un-granted `uk_*` symbols are absent (not stubbed, not
+/// enumerable), so a module cannot probe the kernel's full symbol table. The
+/// host-side loopback is the only layer that emits UK-4001 (tested separately in
+/// `ecmascript_loopback_denies_ungranted`).
 #[test]
-fn ecmascript_uk4001_ungranted_symbol() {
+fn ecmascript_capability_exposes_only_granted_symbols() {
     if !workerd_available() {
         eprintln!("SKIP: no workerd runtime found (UNFER_WORKERD, $PATH, or fnm); install via `npm install -g workerd`");
         return;
@@ -139,25 +139,27 @@ fn ecmascript_uk4001_ungranted_symbol() {
 
     use austral_cranelift_bridge::module::ModuleHost;
 
-    let dir = std::env::temp_dir().join("ecma_test_uk4001");
+    let dir = std::env::temp_dir().join("ecma_test_f5");
     let _ = std::fs::remove_dir_all(&dir);
 
     // `uk_model_free` is intentionally NOT in the grants.
     let js = r#"
 export async function run(kernel, args) {
-  // uk_model_free is not granted: the kernel proxy must throw a UK-4001 CallDenied.
-  try {
-    await kernel.uk_model_free(123);
-    return { denied: false };
-  } catch (e) {
-    return { denied: true, code: e.ukCode, message: String(e.message) };
-  }
+  // F5: the capability object is the granted set — un-granted names are absent.
+  const granted = Object.keys(kernel).filter(n => n.startsWith("uk_") || n.startsWith("uz_"));
+  return {
+    versionPresent: typeof kernel.uk_version === "function",
+    createPresent: typeof kernel.uk_model_create === "function",
+    freeAbsent: typeof kernel.uk_model_free === "undefined",
+    freeNotOwn: !("uk_model_free" in kernel),
+    granted,
+  };
 }
 "#;
 
     make_ecma_module_dir(
         &dir,
-        "ecma_uk4001",
+        "ecma_f5",
         &["uk_version", "uk_model_create"],
         js,
     );
@@ -165,15 +167,21 @@ export async function run(kernel, args) {
     let mut host = ModuleHost::new();
     host.load(&dir).unwrap();
 
-    let body = host.call_json("ecma_uk4001", "run", "{}").unwrap();
+    let body = host.call_json("ecma_f5", "run", "{}").unwrap();
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let result = &v["result"];
-    assert_eq!(result["denied"], true, "expected denial, got {body}");
-    assert_eq!(result["code"], 4001, "expected UK-4001, got {body}");
-    assert!(
-        result["message"].as_str().unwrap_or("").contains("UK-4001"),
-        "expected UK-4001 message, got {body}"
-    );
+    assert_eq!(result["versionPresent"], true, "granted symbol must be present, got {body}");
+    assert_eq!(result["createPresent"], true, "granted symbol must be present, got {body}");
+    assert_eq!(result["freeAbsent"], true, "un-granted symbol must be absent, got {body}");
+    assert_eq!(result["freeNotOwn"], true, "un-granted symbol must not be discoverable, got {body}");
+    let granted = result["granted"].as_array().expect("granted names array");
+    assert_eq!(granted.len(), 2, "capability must be exactly the granted set, got {body}");
+    let mut names: Vec<&str> = granted
+        .iter()
+        .filter_map(|g| g.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["uk_model_create", "uk_version"], "capability = grants, got {body}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
