@@ -4,6 +4,32 @@ use std::path::Path;
 use crate::auth::{self, ManifestAuthEngine};
 use crate::cps::CpsModule;
 
+/// S19 (F18): gatekeeper provisioning modes, a replica of cloudflare's `disabled|optional|
+/// `enabled`. A side-effecting module archetype with `[gatekeeper] mode = "disabled"` has its
+/// submissions refused up front; anything else defers the mediation to the human console.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatekeeperMode {
+    Enabled,
+    Optional,
+    Disabled,
+}
+
+impl Default for GatekeeperMode {
+    fn default() -> Self {
+        Self::Enabled
+    }
+}
+
+impl GatekeeperMode {
+    pub fn from_toml(v: &str) -> Self {
+        match v {
+            "disabled" => Self::Disabled,
+            "optional" => Self::Optional,
+            _ => Self::Enabled,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ModuleManifest {
     pub name: String,
@@ -13,6 +39,10 @@ pub struct ModuleManifest {
     pub entry: String,
     pub grants: Vec<String>,
     pub effects: Vec<String>,
+    /// S21 (F20): `[grants] effects` entries may be tables `{ name = "x", effect_kind = "observe" }`
+    /// carrying a trust annotation (`observe` never queues; everything else is a `mutate`). Plain
+    /// string entries grant the effect without an annotation (the kernel defaults them to mutate).
+    pub effect_kinds: Vec<(String, String)>,
     /// F8 `[grants] observers`: other principals this module may read (actions,
     /// audit entries). A module always observes its own principal.
     pub observers: Vec<String>,
@@ -25,6 +55,8 @@ pub struct ModuleManifest {
     pub max_ms: Option<u64>,
     /// `[limits] memory_bytes` — optional memory cap applied via cgroup where writable.
     pub memory_max_bytes: Option<u64>,
+    /// S19 (F18): `[gatekeeper] mode` — side-effect provisioning for gatekeeper modules.
+    pub gatekeeper_mode: GatekeeperMode,
 }
 
 impl ModuleManifest {
@@ -83,6 +115,29 @@ impl ModuleManifest {
                     .collect()
             })
             .unwrap_or_default();
+        // S21 (F20): annotated effect entries `{ name = "...", effect_kind = "observe" }` grant the
+        // name AND carry the trust annotation; plain strings grant without annotation (kernel
+        // treats them as mutations). The annotation is host metadata — never a vetted claim.
+        let effect_kinds = v
+            .get("grants")
+            .and_then(|g| g.get("effects"))
+            .and_then(|e| e.as_array())
+            .map(|a| {
+                let mut out = Vec::new();
+                for item in a {
+                    if let toml::Value::Table(t) = item {
+                        if let Some(name) = t.get("name").and_then(|n| n.as_str()) {
+                            let kind = t
+                                .get("effect_kind")
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("mutate");
+                            out.push((name.to_string(), kind.to_string()));
+                        }
+                    }
+                }
+                out
+            })
+            .unwrap_or_default();
         let observers = v
             .get("grants")
             .and_then(|g| g.get("observers"))
@@ -103,6 +158,12 @@ impl ModuleManifest {
             .and_then(|l| l.get("memory_bytes"))
             .and_then(|m| m.as_integer())
             .map(|m| m as u64);
+        let gatekeeper_mode = v
+            .get("gatekeeper")
+            .and_then(|g| g.get("mode"))
+            .and_then(|m| m.as_str())
+            .map(GatekeeperMode::from_toml)
+            .unwrap_or_default();
         let fs_grants = v
             .get("grants")
             .and_then(|g| g.get("fs"))
@@ -141,12 +202,14 @@ impl ModuleManifest {
             entry,
             grants,
             effects,
+            effect_kinds,
             observers,
             resources,
             fs_grants,
             net_grants,
             max_ms,
             memory_max_bytes,
+            gatekeeper_mode,
         })
     }
 }

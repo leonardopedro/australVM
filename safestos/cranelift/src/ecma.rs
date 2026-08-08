@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::module::ModuleManifest;
+use crate::module::{GatekeeperMode, ModuleManifest};
 
 /// Locations of the workerd runtime, resolved in order:
 /// 1. `UNFER_WORKERD` — explicit path to the `workerd` binary.
@@ -212,6 +212,8 @@ impl EcmaSidecar {
             manifest.observers.clone(),
             manifest.net_grants.clone(),
             manifest.resources.clone(),
+            manifest.effect_kinds.clone(),
+            manifest.gatekeeper_mode,
             &loopback_sock,
         )?;
 
@@ -543,6 +545,10 @@ impl KernelLoopback {
         net: Vec<String>,
         // S18 (F17): the `[grants] resources` namespace introduced to the module this session.
         resources: Vec<String>,
+        // S21 (F20): `[grants] effects` trust annotations `(name, "observe"|"mutate")`.
+        effect_kinds: Vec<(String, String)>,
+        // S19 (F18): the `[gatekeeper] mode` for side-effect provisioning.
+        gatekeeper_mode: GatekeeperMode,
         sock_path: &Path,
     ) -> Result<Self, String> {
         let _ = std::fs::remove_file(sock_path);
@@ -560,6 +566,8 @@ impl KernelLoopback {
         let observers: Arc<HashSet<String>> = Arc::new(observers.into_iter().collect());
         let net: Arc<HashSet<String>> = Arc::new(net.into_iter().collect());
         let resources: Arc<HashSet<String>> = Arc::new(resources.into_iter().collect());
+        let effect_kinds: Arc<Vec<(String, String)>> = Arc::new(effect_kinds);
+        let mode = gatekeeper_mode;
         let handle = std::thread::spawn(move || {
             let _ = &listener;
             loop {
@@ -591,6 +599,7 @@ impl KernelLoopback {
                         let observers = Arc::clone(&observers);
                         let net = Arc::clone(&net);
                         let resources = Arc::clone(&resources);
+                        let effect_kinds = Arc::clone(&effect_kinds);
                         std::thread::spawn(move || {
                             handle_loopback_conn(
                                 &name,
@@ -599,6 +608,8 @@ impl KernelLoopback {
                                 &observers,
                                 &net,
                                 &resources,
+                                &effect_kinds,
+                                mode,
                                 stream,
                             );
                         });
@@ -632,6 +643,44 @@ impl Drop for KernelLoopback {
     }
 }
 
+/// `disabled` gates side-effect submissions off (default-deny); the gatekeeper's human console
+/// is then never surfaced a mediated action. Used by [`handle_loopback_conn`].
+fn gatekeeper_mode_allows_side_effect(mode: GatekeeperMode, symbol: &str) -> bool {
+    if symbol != "uk_action_submit" {
+        return true;
+    }
+    mode != GatekeeperMode::Disabled
+}
+
+#[test]
+fn gatekeeper_modes_gate_action_submit() {
+    // (F18) `disabled` is the only mode that refuses submissions up front.
+    assert!(!gatekeeper_mode_allows_side_effect(GatekeeperMode::Disabled, "uk_action_submit"));
+    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Optional, "uk_action_submit"));
+    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Enabled, "uk_action_submit"));
+    // Console-side symbols never submit side effects.
+    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Disabled, "uk_gate_approve"));
+    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Disabled, "uk_audit_list"));
+}
+
+#[test]
+fn manifest_parses_gatekeeper_mode() {
+    let module_toml = r#"
+[module]
+name = "gated"
+version = "1.0.0"
+entry = "module.js"
+
+[gatekeeper]
+mode = "disabled"
+"#;
+    let m = ModuleManifest::from_toml_str(module_toml).expect("parse");
+    assert_eq!(m.gatekeeper_mode, GatekeeperMode::Disabled);
+    let m2 = ModuleManifest::from_toml_str("[module]\nname=\"x\"\nversion=\"1\"\n[limits]\nmemory_bytes=1\n")
+        .expect("parse");
+    assert_eq!(m2.gatekeeper_mode, GatekeeperMode::Enabled, "absent `[gatekeeper]` defaults to enabled");
+}
+
 fn handle_loopback_conn(
     module_name: &str,
     grants: &HashSet<String>,
@@ -639,6 +688,8 @@ fn handle_loopback_conn(
     observers: &HashSet<String>,
     net: &HashSet<String>,
     resources: &HashSet<String>,
+    effect_kinds: &[(String, String)],
+    gatekeeper_mode: GatekeeperMode,
     mut stream: UnixStream,
 ) {
     let mut request = Vec::new();
@@ -701,17 +752,38 @@ fn handle_loopback_conn(
         .map(String::from);
 
     let response = match symbol {
-        Some(sym) => dispatch_loopback_as(
-            None,
-            module_name,
-            grants,
-            effects,
-            observers,
-            resources,
-            net,
-            &sym,
-            &body,
-        ),
+        Some(sym) => {
+            // S19 (F18): `[gatekeeper] mode = "disabled"` refuses side-effect submissions up
+            // front (nothing to mediate); audited by the caller as a denied attempt.
+            if !gatekeeper_mode_allows_side_effect(gatekeeper_mode, &sym) {
+                let resp = json_response(
+                    "error",
+                    &serde_json::json!({
+                        "code": 4004,
+                        "message": format!("side effects disabled by gatekeeper mode for module '{module_name}'")
+                    }),
+                );
+                append_host_audit(
+                    "uk_security",
+                    false,
+                    &format!("GATEKEEPER_DISABLED module='{module_name}' symbol='{sym}'"),
+                );
+                resp
+            } else {
+                dispatch_loopback_as(
+                    None,
+                    module_name,
+                    grants,
+                    effects,
+                    observers,
+                    resources,
+                    effect_kinds,
+                    net,
+                    &sym,
+                    &body,
+                )
+            }
+        }
         None => json_response("error", &serde_json::json!({"code": 4000, "message": "bad path"})),
     };
     let _ = stream.write_all(response.as_bytes());
@@ -891,6 +963,9 @@ fn loopback_get(host: &str) -> Result<String, String> {
 /// * `[grants] resources = [...]` — the resource-introductions namespace (S18/F17): ids the
 ///   module may exercise via `uk_resource_use`; installed on the caller grant set so the
 ///   intro-surface gate can see them.
+// S23 (F22): per-dispatch trace seq for the observability context (never reset).
+static TRACE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 fn dispatch_loopback(
     module_name: &str,
     grants: &HashSet<String>,
@@ -900,9 +975,10 @@ fn dispatch_loopback(
     symbol: &str,
     body: &str,
 ) -> String {
-    // Keep the public test surface stable: a direct dispatch (no loopback resources) is
-    // simply a caller with no introductions.
+    // Keep the public test surface stable: a direct dispatch (no loopback resources or
+    // trust annotations) is simply a caller with no introductions and no annotations.
     let resources = HashSet::new();
+    let effect_kinds = [];
     dispatch_loopback_as(
         None,
         module_name,
@@ -910,6 +986,7 @@ fn dispatch_loopback(
         effects,
         observers,
         &resources,
+        &effect_kinds,
         net,
         symbol,
         body,
@@ -932,6 +1009,7 @@ fn dispatch_loopback_as(
     effects: &HashSet<String>,
     observers: &HashSet<String>,
     resources: &HashSet<String>,
+    effect_kinds: &[(String, String)],
     net: &HashSet<String>,
     symbol: &str,
     body: &str,
@@ -970,6 +1048,7 @@ fn dispatch_loopback_as(
                     set_loopback_caller("agent", &format!("agent-{handle}"), &unfer_protocol::GrantSet::default());
                     append_loopback_audit(symbol, &args, false, Some(&message));
                     unfer_ffi::uk_clear_caller();
+                    unfer_ffi::uk_observability_clear();
                     return resp;
                 }
             }
@@ -984,11 +1063,37 @@ fn dispatch_loopback_as(
                     effects: effects.iter().cloned().collect(),
                     observers: observers.iter().cloned().collect(),
                     resources: resources.iter().cloned().collect(),
+                    // S21 (F20): the host trust annotations for granted effects (observe vs mutate).
+                    effect_kinds: effect_kinds
+                        .iter()
+                        .map(|(n, k)| unfer_protocol::EffectGrant {
+                            name: n.clone(),
+                            effect_kind: if k == "observe" {
+                                unfer_protocol::EffectKind::Observe
+                            } else {
+                                unfer_protocol::EffectKind::Mutate
+                            },
+                        })
+                        .collect(),
                 },
             )
         };
 
     set_loopback_caller(caller_from, &caller_principal, &caller_grants);
+
+    // S23 (F22): thread a per-call observability context (AsyncLocal analog) into
+    // the dispatcher thread. The kernel embeds these fields into every audit entry
+    // produced during the call (`context.trace_id`, `component`), giving trace id
+    // continuity without a global frontier. Cleared at each exit point alongside
+    // the caller tag.
+    let trace_id = format!(
+        "{}-{:x}",
+        caller_principal,
+        TRACE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    );
+    let _ = unfer_ffi::uk_observability_set(
+        &serde_json::json!({ "trace_id": trace_id, "component": "kernel.audit" }).to_string(),
+    );
 
     // 3. Grant gate (default-deny). Denials are audited too — attempts are the most
     //    important audit entries.
@@ -1040,6 +1145,7 @@ fn dispatch_loopback_as(
     if let Some(message) = gate_error {
         append_loopback_audit(symbol, &args, false, Some(&message));
         unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_observability_clear();
         return json_response(
             "error",
             &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
@@ -1070,6 +1176,7 @@ fn dispatch_loopback_as(
         ),
     }
     unfer_ffi::uk_clear_caller();
+    unfer_ffi::uk_observability_clear();
     match out {
         Ok(value) => json_response("result", &value),
         Err((code, message)) => json_response(
@@ -1375,6 +1482,34 @@ fn kernel_dispatch(
                 Err(_) => Ok(out),
             }
         }
+        // ── S19 (F18): gatekeeper consoles ───────────────────────────────────
+        // The human-gate mediation tier (unfer_protocol gatekeeper records, backported to
+        // 2185-precedence semantics) calls straight into the FFI JSON envelope; the caller
+        // identity (the console agent) is kept as a separate audit track.
+        "uk_gate_list_pending" => {
+            let out = buf_out(|b, c| unfer_ffi::uk_gate_list_pending(b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        "uk_gate_approve" => {
+            let handle = arg_i64(args, 0)?;
+            ffi_result(unfer_ffi::uk_gate_approve(handle))
+        }
+        "uk_gate_reject" => {
+            let handle = arg_i64(args, 0)?;
+            ffi_result(unfer_ffi::uk_gate_reject(handle))
+        }
+        // ── S21 (F20): console-vetted marker. The symbol marshals onto the FFI; only the
+        //    operator hook (nil grants) clears it — a module/agent dispatch is refused
+        //    here with UK-4501 by the FFI's caller-context check (defense in depth).
+        "uk_registry_vetted" => {
+            let principal = arg_str(args, 0)?;
+            let vetted = arg_i64(args, 1)?;
+            let (p, l) = ptr_len(&principal);
+            ffi_result(unfer_ffi::uk_registry_vetted(p, l, vetted))
+        }
         // ── S6: agent accountability + audit ─────────────────────────────────
         "uk_audit_list" => {
             let out = buf_out(|b, c| unfer_ffi::uk_audit_list(b, c))?;
@@ -1674,12 +1809,14 @@ mod tests {
                 "uk_nonexistent".into(),
             ],
             effects: vec![],
+            effect_kinds: vec![],
             observers: vec![],
             resources: vec![],
             fs_grants: vec![],
             net_grants: vec![],
             max_ms: None,
             memory_max_bytes: None,
+            gatekeeper_mode: crate::module::GatekeeperMode::Enabled,
         };
         let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
         assert!(cfg.contains("(name = \"uk_version\", service = \"kernel-loopback\")"));
@@ -1844,6 +1981,308 @@ mod tests {
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
 
+    // ── S19 (F18): gatekeeper console over the loopback ───────────────────
+    //
+    // The human-gate tier is reachable through the same grants-gated endpoint:
+    // the operator console symbols must be granted, and only the gatekeeper
+    // mediates. These tests exercise the full loopback → FFI → queue → audit
+    // path without a workerd sidecar.
+
+    #[test]
+    fn loopback_gatekeeper_console_mediates_approval() {
+        use std::collections::HashSet;
+        // Audit + action stores are process-global; the S6-style lock serializes us
+        // against the other uk_audit_clear() tests (including the denied_no_grant one).
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unfer_ffi::uk_audit_clear();
+        unfer_ffi::uk_clear_caller();
+        let grants = HashSet::from([
+            "uk_action_submit".to_string(),
+            "uk_gate_list_pending".to_string(),
+            "uk_gate_approve".to_string(),
+            "uk_gate_reject".to_string(),
+        ]);
+        let effects = HashSet::from(["send_notification".to_string()]);
+        let observers = HashSet::new();
+        let resources = HashSet::new();
+
+        // A side-effecting export submits with a provisional forecast: lands pending.
+        let req = r#"[{"effect":"send_notification","params":{"to":"ops"},"provisional":{"forecast":true,"threat":"none"}}]"#;
+        let resp = dispatch_loopback(
+            "scan-module",
+            &grants,
+            &effects,
+            &observers,
+            &resources,
+            "uk_action_submit",
+            req,
+        );
+        let body = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let value: serde_json::Value = serde_json::from_str(&body).expect("loopback json");
+        let handle = value["result"]
+            .as_i64()
+            .expect("submission must return the action handle: {value}");
+
+        // The operator console lists the pending action with the forecast carried.
+        let resp = dispatch_loopback(
+            "scan-module",
+            &grants,
+            &effects,
+            &observers,
+            &resources,
+            "uk_gate_list_pending",
+            "[]",
+        );
+        assert!(
+            resp
+                .split_once("\r\n\r\n")
+                .map(|(_, b)| b.to_string())
+                .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+                .map(|v| {
+                    v["result"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter().any(|spot| {
+                                spot[0].as_i64() == Some(handle)
+                                    && spot[1]["effect"] == "send_notification"
+                                    && spot[1]["provisional"]["threat"] == "none"
+                            })
+                        })
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+            "pending console must carry the handle with its forecast, got {resp}"
+        );
+
+        // Human resolution: approve → the queue drains and the audit records it.
+        let approve = dispatch_loopback(
+            "scan-module",
+            &grants,
+            &effects,
+            &observers,
+            &resources,
+            "uk_gate_approve",
+            &format!("[{handle}]"),
+        );
+        assert!(!approve.contains("\"error\""), "approval must resolve, got {approve}");
+
+        let after = dispatch_loopback(
+            "scan-module",
+            &grants,
+            &effects,
+            &observers,
+            &resources,
+            "uk_gate_list_pending",
+            "[]",
+        );
+        let after_body = after
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let after_value: serde_json::Value =
+            serde_json::from_str(&after_body).expect("loopback json");
+        assert!(
+            !after_value["result"]
+                .as_array()
+                .map(|a| a.iter().any(|spot| spot[0].as_i64() == Some(handle)))
+                .unwrap_or(false),
+            "approved action must leave the queue, got {after}"
+        );
+
+        let audits = read_ffi_audit();
+        assert!(
+            audits.iter().any(|e| e["symbol"] == "uk_gate_approve"),
+            "resolution must be audited: {audits:?}"
+        );
+    }
+
+    #[test]
+    fn loopback_gatekeeper_denied_without_grant() {
+        use std::collections::HashSet;
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["notify_admins".to_string()]);
+        // The console gate symbols are not granted → UK-4001 even though effects pass.
+        let observers = HashSet::new();
+        let resources = HashSet::new();
+        let resp = dispatch_loopback(
+            "scan-module",
+            &grants,
+            &effects,
+            &observers,
+            &resources,
+            "uk_gate_list_pending",
+            "[]",
+        );
+        assert!(resp.contains("\"error\""), "ungranted console symbol must deny, got {resp}");
+        assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
+    }
+
+    // ── S21 (F20): trust annotations + console-vetted over the loopback ────
+    //
+    // A gadget's `[grants] effects` table may carry an `effect_kind = "observe"`
+    // Trust annotation; host installs matching `EffectGrant`s on the caller grant
+    // set. Observe-annotated effects apply immediately; granted-but-unannotated
+    // effects stay conservatively `mutate` (queued, human-gated). The vetted
+    // marker is console-owned only — the loopback hook refuses anything else.
+
+    #[test]
+    fn loopback_observe_annotation_auto_applies() {
+        use std::collections::HashSet;
+        unfer_ffi::uk_clear_vetted();
+        unfer_ffi::uk_clear_caller();
+        let effects = HashSet::from(["obs_eff".to_string()]);
+        let effect_kinds = [("obs_eff".to_string(), "observe".to_string())];
+        let req = r#"[{"effect":"obs_eff","params":{"metric":"qps"}}]"#;
+        let resp = dispatch_loopback_as(
+            None,
+            "obs_mod",
+            &HashSet::from(["uk_action_submit".to_string()]),
+            &effects,
+            &HashSet::new(),
+            &HashSet::new(),
+            &effect_kinds,
+            &HashSet::new(),
+            "uk_action_submit",
+            req,
+        );
+        assert!(
+            resp.contains("\"result\"") && !resp.contains("\"error\""),
+            "annotated observe effect must dispatch, got {resp}"
+        );
+        let json = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let handle = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v["result"].as_i64())
+            .expect("observe submission must return a handle");
+        let needed = unfer_ffi::uk_action_get(handle, std::ptr::null_mut(), 0);
+        let mut buf = vec![0u8; needed as usize];
+        unfer_ffi::uk_action_get(handle, buf.as_mut_ptr(), needed);
+        let record: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(
+            record["state"], "approved",
+            "observe annotation auto-applies without approval: {record}"
+        );
+        assert_eq!(record["applied"]["applied"], true);
+        unfer_ffi::uk_clear_caller();
+    }
+
+    #[test]
+    fn loopback_unannotated_mutate_queues_pending() {
+        use std::collections::HashSet;
+        unfer_ffi::uk_clear_vetted();
+        unfer_ffi::uk_clear_caller();
+        let effects = HashSet::from(["del_eff".to_string()]);
+        // Granted but *not* annotated → the conservative default is `mutate`.
+        let effect_kinds: [(String, String); 0] = [];
+        let body = r#"[{"effect":"del_eff","params":{"row":4},"provisional":{"rows":1}}]"#;
+        let resp = dispatch_loopback_as(
+            None,
+            "mut_mod",
+            &HashSet::from(["uk_action_submit".to_string()]),
+            &effects,
+            &HashSet::new(),
+            &HashSet::new(),
+            &effect_kinds,
+            &HashSet::new(),
+            "uk_action_submit",
+            body,
+        );
+        assert!(
+            resp.contains("\"result\""),
+            "granted mutate effect still submits (queued), got {resp}"
+        );
+        let json = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let handle = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v["result"].as_i64())
+            .expect("mutate submission must return a handle");
+        let needed = unfer_ffi::uk_action_get(handle, std::ptr::null_mut(), 0);
+        let mut buf = vec![0u8; needed as usize];
+        unfer_ffi::uk_action_get(handle, buf.as_mut_ptr(), needed);
+        let record: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(
+            record["state"], "pending",
+            "unannotated mutate stays pending: {record}"
+        );
+        assert!(record["applied"].is_null(), "no applied result without approval");
+
+        // Only the human gate promotes it to applied.
+        assert_eq!(unfer_ffi::uk_gate_approve(handle), 0, "gate approval succeeds");
+        let needed = unfer_ffi::uk_action_get(handle, std::ptr::null_mut(), 0);
+        let mut buf = vec![0u8; needed as usize];
+        unfer_ffi::uk_action_get(handle, buf.as_mut_ptr(), needed);
+        let record: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(record["state"], "approved", "approval promotes applied: {record}");
+        assert_eq!(record["applied"]["forecast"]["rows"], 1);
+        unfer_ffi::uk_clear_caller();
+    }
+
+    #[test]
+    fn loopback_module_cannot_ring_vetted() {
+        use std::collections::HashSet;
+        unfer_ffi::uk_clear_vetted();
+        unfer_ffi::uk_clear_caller();
+        // The module is *granted* the symbol — the gate passes — but the FFI's
+        // console-only check must still refuse: only the hook (nil grants) mints.
+        let grants = HashSet::from(["uk_registry_vetted".to_string()]);
+        let resp = dispatch_loopback(
+            "spoof_mod",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_registry_vetted",
+            r#"["victim",1]"#,
+        );
+        assert!(
+            resp.contains("\"error\""),
+            "a module must never ring the vetted marker, got {resp}"
+        );
+        assert!(resp.contains("4501"), "expected UK-4501, got {resp}");
+        unfer_ffi::uk_clear_caller();
+    }
+
+    #[test]
+    fn dispatch_audit_carries_observability_context() {
+        // S23 (F22): every loopback dispatch seeds a per-call observability context
+        // (trace_id + dot-separated owner component) threaded into its audit entry.
+        // Assert on the entry for THIS dispatch by its unique caller principal.
+        use std::collections::HashSet;
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_observability_clear();
+        let grants = HashSet::from(["uk_version".to_string()]);
+        let resp = dispatch_loopback(
+            "audit_trace_probe",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_version",
+            "[]",
+        );
+        assert!(resp.contains("\"result\""), "granted call must dispatch: {resp}");
+        let entries = read_ffi_audit();
+        let mine = entries
+            .iter()
+            .find(|e| e["symbol"] == "uk_version" && e["caller"]["principal"] == "audit_trace_probe")
+            .expect("the probe's dispatch must be audited");
+        let trace = mine["context"]["trace_id"].as_str().expect("trace_id threaded");
+        assert!(!trace.is_empty(), "trace id must be non-empty: {mine:?}");
+        assert!(trace.starts_with("audit_trace_probe-"), "trace names the caller: {trace}");
+        assert_eq!(mine["component"], "kernel.audit", "dot-separated owner component");
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_observability_clear();
+    }
+
     // ── S6: agent accountability + audit (GatekeeperCaller tags) ───────────
     //
     // Every loopback dispatch is audited with the caller's tag; sub-agent calls are
@@ -1942,6 +2381,7 @@ mod tests {
             &effects,
             &observers,
             &HashSet::new(),
+            &[],
             &HashSet::new(),
             "uk_action_submit",
             body,
@@ -1994,6 +2434,7 @@ mod tests {
             &effects,
             &observers,
             &HashSet::new(),
+            &[],
             &HashSet::new(),
             "uk_version",
             "[]",
@@ -2007,6 +2448,7 @@ mod tests {
             &effects,
             &observers,
             &HashSet::new(),
+            &[],
             &HashSet::new(),
             "uk_evolve",
             r#"[{"t":0.1}]"#,
@@ -2029,6 +2471,7 @@ mod tests {
             &effects,
             &observers,
             &HashSet::new(),
+            &[],
             &HashSet::new(),
             "uk_version",
             "[]",
@@ -2063,6 +2506,7 @@ mod tests {
             &effects,
             &observers,
             &granted,
+            &[],
             &HashSet::new(),
             "uk_resource_introduce",
             &format!("[{json_id:?}]"),
@@ -2078,6 +2522,7 @@ mod tests {
             &effects,
             &observers,
             &granted,
+            &[],
             &HashSet::new(),
             "uk_resource_use",
             &format!("[{json_id:?}]"),
@@ -2096,6 +2541,7 @@ mod tests {
             &effects,
             &observers,
             &no_intro,
+            &[],
             &HashSet::new(),
             "uk_resource_use",
             &format!("[{json_id:?}]"),
@@ -2113,6 +2559,7 @@ mod tests {
             &effects,
             &observers,
             &granted,
+            &[],
             &HashSet::new(),
             "uk_resource_forfeit",
             &format!("[{json_id:?}]"),
@@ -2128,6 +2575,7 @@ mod tests {
             &effects,
             &observers,
             &no_intro,
+            &[],
             &HashSet::new(),
             "uk_resource_use",
             &format!("[{json_id:?}]"),
@@ -2434,6 +2882,8 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             vec![],
             vec![],
             vec![],
+            vec![],
+            GatekeeperMode::Enabled,
             &loopback_sock,
         )
             .expect("loopback");
@@ -2533,12 +2983,14 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             entry: "src/main.js".into(),
             grants: vec!["uk_version".into()],
             effects: vec![],
+            effect_kinds: vec![],
             observers: vec![],
             resources: vec![],
             fs_grants: vec![],
             net_grants: vec!["127.0.0.1:8787".into(), "api.example.com".into()],
             max_ms: None,
             memory_max_bytes: None,
+            gatekeeper_mode: crate::module::GatekeeperMode::Enabled,
         };
         let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
         assert!(cfg.contains("net-egress-0"), "first egress service missing: {cfg}");
@@ -2556,12 +3008,14 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             entry: "src/main.js".into(),
             grants: vec!["uk_version".into()],
             effects: vec![],
+            effect_kinds: vec![],
             observers: vec![],
             resources: vec![],
             fs_grants: vec![],
             net_grants: vec![],
             max_ms: None,
             memory_max_bytes: None,
+            gatekeeper_mode: crate::module::GatekeeperMode::Enabled,
         };
         let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
         assert!(!cfg.contains("net-egress"), "empty net must produce no egress: {cfg}");
