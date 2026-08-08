@@ -13,6 +13,7 @@
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -203,6 +204,7 @@ impl EcmaSidecar {
             manifest.grants.clone(),
             manifest.effects.clone(),
             manifest.observers.clone(),
+            manifest.net_grants.clone(),
             &loopback_sock,
         )?;
 
@@ -371,6 +373,7 @@ impl KernelLoopback {
         grants: Vec<String>,
         effects: Vec<String>,
         observers: Vec<String>,
+        net: Vec<String>,
         sock_path: &Path,
     ) -> Result<Self, String> {
         let _ = std::fs::remove_file(sock_path);
@@ -384,6 +387,7 @@ impl KernelLoopback {
         let grants: Arc<HashSet<String>> = Arc::new(grants.into_iter().collect());
         let effects: Arc<HashSet<String>> = Arc::new(effects.into_iter().collect());
         let observers: Arc<HashSet<String>> = Arc::new(observers.into_iter().collect());
+        let net: Arc<HashSet<String>> = Arc::new(net.into_iter().collect());
         let handle = std::thread::spawn(move || {
             let _ = &listener;
             loop {
@@ -396,8 +400,9 @@ impl KernelLoopback {
                         let grants = Arc::clone(&grants);
                         let effects = Arc::clone(&effects);
                         let observers = Arc::clone(&observers);
+                        let net = Arc::clone(&net);
                         std::thread::spawn(move || {
-                            handle_loopback_conn(&name, &grants, &effects, &observers, stream);
+                            handle_loopback_conn(&name, &grants, &effects, &observers, &net, stream);
                         });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -427,6 +432,7 @@ fn handle_loopback_conn(
     grants: &HashSet<String>,
     effects: &HashSet<String>,
     observers: &HashSet<String>,
+    net: &HashSet<String>,
     mut stream: UnixStream,
 ) {
     let mut request = Vec::new();
@@ -489,7 +495,7 @@ fn handle_loopback_conn(
         .map(String::from);
 
     let response = match symbol {
-        Some(sym) => dispatch_loopback(module_name, grants, effects, observers, &sym, &body),
+        Some(sym) => dispatch_loopback(module_name, grants, effects, observers, net, &sym, &body),
         None => json_response("error", &serde_json::json!({"code": 4000, "message": "bad path"})),
     };
     let _ = stream.write_all(response.as_bytes());
@@ -510,6 +516,103 @@ fn json_response(key: &str, value: &serde_json::Value) -> String {
     )
 }
 
+// ── S10: egress boundary (F9) ─────────────────────────────────────────
+
+/// Net-grant matching (S10). An allowlist entry is an *exact* `host` or `host:port`.
+/// Entry without a `:port` matches any port on that host; with one, the requested
+/// port must also be exact. Default-deny: empty allowlist, unknown host, or non-URL
+/// input all return `false`. No substring/regex matching (no `*.example.com`).
+pub fn egress_allowed(host: &str, allowlist: &HashSet<String>) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    let (req_host, req_port) = split_host_port(host);
+    allowlist.iter().any(|entry| {
+        let (grant_host, grant_port) = split_host_port(entry);
+        if grant_host != req_host {
+            return false;
+        }
+        match (grant_port, req_port) {
+            (Some(gp), Some(rp)) => gp == rp,
+            _ => true, // a portless grant covers any port on that host
+        }
+    })
+}
+
+/// Extract `host[:port]` from a URL. Returns `""` for malformed / unrecognized schemes.
+pub fn fetch_host(url: &str) -> &str {
+    // Accept `scheme://host[:port][/path]` — anything else is not a fetch target.
+    let rest = url
+        .split_once("://")
+        .map(|(_, r)| r)
+        .unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() { "" } else { authority }
+}
+
+/// Split `host[:port]`; a trailing `:port` is parsed only when entirely numeric.
+fn split_host_port(hostport: &str) -> (&str, Option<u16>) {
+    match hostport.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+            match port.parse::<u16>() {
+                Ok(p) => (host, Some(p)),
+                Err(_) => (hostport, None),
+            }
+        }
+        _ => (hostport, None),
+    }
+}
+
+/// Loopback-only guard: the offline `uk_fetch` path stays pinned to `127.0.0.1` /
+/// `localhost` / `[::1]` as defense-in-depth even when the net grant is present.
+fn is_loopback_host(host: &str) -> bool {
+    let (h, _) = split_host_port(host);
+    matches!(h, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Minimal loopback HTTP GET (offline `uk_fetch` fixture). Reads up to 1 MiB body.
+fn loopback_get(host: &str) -> Result<String, String> {
+    if !is_loopback_host(host) {
+        return Err(format!("fetch egress restricted to loopback fixture (host '{host}')"));
+    }
+    let (h, port) = split_host_port(host);
+    let addr = match format!("{h}:{}", port.unwrap_or(80)).to_socket_addrs() {
+        Ok(mut addrs) => addrs
+            .next()
+            .ok_or_else(|| format!("resolve {host}: empty address set"))?,
+        Err(e) => return Err(format!("resolve {host}: {e}")),
+    };
+    let mut stream = TcpStream::connect(addr).map_err(|e| format!("connect {host}: {e}"))?;
+    let req = format!(
+        "GET / HTTP/1.1\r\nHost: {h}\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("send: {e}"))?;
+    let mut response = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                response.extend_from_slice(&buf[..n]);
+                if response.len() > 1024 * 1024 {
+                    break;
+                }
+            }
+            Err(e) => return Err(format!("read: {e}")),
+        }
+    }
+    if response.is_empty() {
+        return Err("empty response".to_string());
+    }
+    let body = match response.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(pos) => response[pos + 4..].to_vec(),
+        None => response,
+    };
+    Ok(String::from_utf8_lossy(&body).to_string())
+}
+
 /// Authorize the symbol (host-side, defense in depth) and marshal the JSON args onto the `uk_*`
 /// C ABI. Returns an HTTP response string.
 ///
@@ -520,15 +623,18 @@ fn json_response(key: &str, value: &serde_json::Value) -> String {
 ///   submitting a `send_notification` action without any kernel grant for the symbol.
 /// * `[grants] observers = [...]` — other principals this module may read (F8; the full
 ///   grant set is installed on the caller context so `uk_action_list`/`uk_audit_list` filter).
+/// * `[grants] net = [...]` — the egress allowlist (S10): `uk_fetch` may only target an
+///   exact host[:port] present here; default-deny otherwise.
 fn dispatch_loopback(
     module_name: &str,
     grants: &HashSet<String>,
     effects: &HashSet<String>,
     observers: &HashSet<String>,
+    net: &HashSet<String>,
     symbol: &str,
     body: &str,
 ) -> String {
-    dispatch_loopback_as(None, module_name, grants, effects, observers, symbol, body)
+    dispatch_loopback_as(None, module_name, grants, effects, observers, net, symbol, body)
 }
 
 /// Like [`dispatch_loopback`], but when `agent_handle` is `Some` the call is attributed to that
@@ -546,6 +652,7 @@ fn dispatch_loopback_as(
     grants: &HashSet<String>,
     effects: &HashSet<String>,
     observers: &HashSet<String>,
+    net: &HashSet<String>,
     symbol: &str,
     body: &str,
 ) -> String {
@@ -604,6 +711,17 @@ fn dispatch_loopback_as(
 
     // 3. Grant gate (default-deny). Denials are audited too — attempts are the most
     //    important audit entries.
+    //    S10: `uk_fetch` gates on the *net* namespace (exact host[:port] allowlist),
+    //    not the kernel-grant namespace — a module needs `net = ["host"]` to egress.
+    let fetch_host_grants = if symbol == "uk_fetch" {
+        args.first()
+            .and_then(|a| a.get("url"))
+            .and_then(|u| u.as_str())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        String::new()
+    };
     let gate_error = if symbol == "uk_action_submit" {
         // S4: the effects namespace, not the kernel grants, gates submission. The effect
         // name is `req.effect` of the single request arg.
@@ -615,6 +733,18 @@ fn dispatch_loopback_as(
         if !eff_effects.contains(effect) {
             Some(format!(
                 "UK-4001: Authorization denied — '{caller_principal}' is not granted effect '{effect}'"
+            ))
+        } else {
+            None
+        }
+    } else if symbol == "uk_fetch" {
+        // S10: egress gate — the target host must be on the net allowlist.
+        let host = fetch_host(&fetch_host_grants);
+        if host.is_empty() {
+            Some("UK-4001: uk_fetch requires a url with an explicit scheme://host".to_string())
+        } else if !egress_allowed(host, net) {
+            Some(format!(
+                "UK-4001: Egress denied — '{caller_principal}' has no net grant for host '{host}'"
             ))
         } else {
             None
@@ -639,7 +769,18 @@ fn dispatch_loopback_as(
     //    uk_action_submit injects the *actor* as the record principal, not a fixed module name.
     let out = kernel_dispatch(&caller_principal, symbol, &args);
     match &out {
-        Ok(_) => append_loopback_audit(symbol, &args, true, None),
+        Ok(_) => {
+            // S10: the fetch audit carries the explicit allow action + target host.
+            let detail = if symbol == "uk_fetch" {
+                Some(format!(
+                    "action=allow host='{}'",
+                    fetch_host(&fetch_host_grants)
+                ))
+            } else {
+                None
+            };
+            append_loopback_audit(symbol, &args, true, detail.as_deref());
+        }
         Err((code, message)) => append_loopback_audit(
             symbol,
             &args,
@@ -986,6 +1127,26 @@ fn kernel_dispatch(
                 Err(_) => Ok(out),
             }
         }
+        // ── S10: egress (F9). Host-side gate ran in `dispatch_loopback_as`; this arm performs
+        //    the actual (loopback-fixture) fetch and re-checks loopback as defense-in-depth.
+        //    Real non-loopback egress lives in the workerd external-service bindings generated
+        //    by `config_source` from `net_grants`; the offline path stays loopback-only.
+        "uk_fetch" => {
+            let url = args
+                .first()
+                .and_then(|a| a.get("url"))
+                .and_then(|u| u.as_str())
+                .unwrap_or("")
+                .to_string();
+            let host = fetch_host(&url);
+            if host.is_empty() {
+                return Err((1001, "uk_fetch: missing url".to_string()));
+            }
+            match loopback_get(host) {
+                Ok(body) => Ok(serde_json::json!({ "host": host, "ok": true, "body": body })),
+                Err(e) => Err((4004, format!("uk_fetch {host}: {e}"))),
+            }
+        }
         other => Err((
             4004,
             format!("kernel symbol '{other}' has no loopback marshaling"),
@@ -1034,6 +1195,15 @@ fn config_source(manifest: &ModuleManifest, loopback_sock: &Path, main_sock: &Pa
             bindings.push_str(&format!("         (name = \"{sym}\", service = \"kernel-loopback\"),\n"));
         }
     }
+    // S10: mirror `[grants] net` into workerd external-service bindings. Each allowlisted
+    // host becomes a reachable `external` service name (the host-side loopback still
+    // validates every `uk_fetch` as defense-in-depth). Empty `net` => no egress services.
+    let mut egress_services = String::new();
+    for (i, host) in manifest.net_grants.iter().enumerate() {
+        egress_services.push_str(&format!(
+            "    (name = \"net-egress-{i}\", external = (address = \"http://{host}\", http = ())),\n"
+        ));
+    }
     format!(
         r#"using Workerd = import "/workerd/workerd.capnp";
 
@@ -1051,7 +1221,7 @@ const config :Workerd.Config = (
      )),
     (name = "kernel-loopback",
      external = (address = "unix:{loopback}", http = ())),
-  ],
+{egress_services}  ],
   sockets = [
     (name = "main", address = "unix:{main}", http = (), service = "main"),
   ],
@@ -1275,7 +1445,7 @@ mod tests {
         let observers = HashSet::new();
         let body = r#"[{"effect":"send_notification","params":{"to":"alice"}}]"#;
         let resp =
-            dispatch_loopback("client_module", &grants, &effects, &observers, "uk_action_submit", body);
+            dispatch_loopback("client_module", &grants, &effects, &observers, &HashSet::new(), "uk_action_submit", body);
         // The gate lets the granted effect through: the loopback returns a `result`
         // (the action handle), not an error.
         assert!(
@@ -1309,7 +1479,7 @@ mod tests {
         // The module holds `send_notification`, NOT `delete_all`.
         let body = r#"[{"effect":"delete_all","params":{}}]"#;
         let resp =
-            dispatch_loopback("client_module", &grants, &effects, &observers, "uk_action_submit", body);
+            dispatch_loopback("client_module", &grants, &effects, &observers, &HashSet::new(), "uk_action_submit", body);
         assert!(resp.contains("\"error\""), "unlisted effect must be denied, got {resp}");
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
         assert!(resp.contains("delete_all"), "denial must name the effect, got {resp}");
@@ -1324,7 +1494,7 @@ mod tests {
         let observers = HashSet::new();
         let body = r#"[{"effect":"send_notification","params":{}}]"#;
         let resp =
-            dispatch_loopback("client_module", &grants, &effects, &observers, "uk_action_submit", body);
+            dispatch_loopback("client_module", &grants, &effects, &observers, &HashSet::new(), "uk_action_submit", body);
         assert!(resp.contains("\"error\""), "missing effects grant must deny, got {resp}");
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
@@ -1342,6 +1512,7 @@ mod tests {
             &grants,
             &effects,
             &observers,
+            &HashSet::new(),
             "uk_action_apply",
             r#"[1]"#,
         );
@@ -1404,10 +1575,10 @@ mod tests {
         let effects = HashSet::new();
         let observers = HashSet::new();
         // Granted call → audited ok.
-        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, "uk_version", "[]");
+        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, &HashSet::new(), "uk_version", "[]");
         assert!(resp.contains("\"result\""), "granted symbol must dispatch, got {resp}");
         // Denied call → audited too.
-        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, "uk_evolve", r#"[{"t":0.1}]"#);
+        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, &HashSet::new(), "uk_evolve", r#"[{"t":0.1}]"#);
         assert!(resp.contains("\"error\""), "ungranted symbol must deny, got {resp}");
 
         let entries = read_ffi_audit();
@@ -1446,6 +1617,7 @@ mod tests {
             &grants,
             &effects,
             &observers,
+            &HashSet::new(),
             "uk_action_submit",
             body,
         );
@@ -1496,6 +1668,7 @@ mod tests {
             &grants,
             &effects,
             &observers,
+            &HashSet::new(),
             "uk_version",
             "[]",
         );
@@ -1507,6 +1680,7 @@ mod tests {
             &grants,
             &effects,
             &observers,
+            &HashSet::new(),
             "uk_evolve",
             r#"[{"t":0.1}]"#,
         );
@@ -1527,6 +1701,7 @@ mod tests {
             &grants,
             &effects,
             &observers,
+            &HashSet::new(),
             "uk_version",
             "[]",
         );
@@ -1550,7 +1725,7 @@ mod tests {
         symbol: &str,
         body: &str,
     ) -> (bool, serde_json::Value) {
-        let resp = dispatch_loopback(from, grants, effects, observers, symbol, body);
+        let resp = dispatch_loopback(from, grants, effects, observers, &HashSet::new(), symbol, body);
         let json = resp
             .split_once("\r\n\r\n")
             .map(|(_, b)| b.to_string())
@@ -1573,6 +1748,7 @@ mod tests {
             &a_grants,
             &a_effects,
             &a_obs,
+            &HashSet::new(),
             "uk_action_submit",
             r#"[{"effect":"send_notification","params":{"to":"bob"}}]"#,
         );
@@ -1637,12 +1813,12 @@ mod tests {
 
         // Actor A makes a granted call so it has an audited entry.
         let a_grants = HashSet::from(["uk_version".to_string()]);
-        let r = dispatch_loopback("f8_audit_a", &a_grants, &g_effects, &g_obs, "uk_version", "[]");
+        let r = dispatch_loopback("f8_audit_a", &a_grants, &g_effects, &g_obs, &HashSet::new(), "uk_version", "[]");
         assert!(r.contains("\"result\""), "A must dispatch, got {r}");
 
         // Reader B (no observers) reads the trail: only its OWN entries are visible.
         let b_grants = HashSet::from(["uk_audit_list".to_string(), "uk_version".to_string()]);
-        let r = dispatch_loopback("f8_audit_b", &b_grants, &g_effects, &g_obs, "uk_version", "[]");
+        let r = dispatch_loopback("f8_audit_b", &b_grants, &g_effects, &g_obs, &HashSet::new(), "uk_version", "[]");
         assert!(r.contains("\"result\""), "B must dispatch, got {r}");
         let (ok, v) = dispatch_parse("f8_audit_b", &b_grants, &g_effects, &g_obs, "uk_audit_list", "[]");
         assert!(ok, "audit list must dispatch, got {v}");
@@ -1683,14 +1859,14 @@ mod tests {
 
         // Kernel escalation: agent requests uk_model_create (not held by the module).
         let escalate = r#"[{"name":"upgrader","grants":{"kernel":["uk_model_create"],"effects":[]}}]"#;
-        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, "uk_agent_spawn", escalate);
+        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", escalate);
         assert!(resp.contains("\"error\""), "escalation must be refused, got {resp}");
         assert!(resp.contains("4202"), "expected UK-4202, got {resp}");
 
         // Observer escalation: agent requests an observer right the module doesn't hold.
         let escalate_obs =
             r#"[{"name":"spy","grants":{"kernel":[],"effects":[],"observers":["secret"]}}]"#;
-        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, "uk_agent_spawn", escalate_obs);
+        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", escalate_obs);
         assert!(
             resp.contains("\"error\"") && resp.contains("4202"),
             "observer escalation must be refused, got {resp}"
@@ -1699,7 +1875,191 @@ mod tests {
         // Subset spawn succeeds (agent inherits a subset incl. the module's observers).
         let subset =
             r#"[{"name":"clerk","grants":{"kernel":["uk_version"],"effects":[],"observers":["f8_peer"]}}]"#;
-        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, "uk_agent_spawn", subset);
+        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", subset);
         assert!(resp.contains("\"result\""), "subset spawn must succeed, got {resp}");
+    }
+
+    // ── S10: egress boundary (F9) ─────────────────────────────────────────
+
+    #[test]
+    fn egress_allowed_is_exact_host_match() {
+        let net = HashSet::from(["api.example.com".to_string(), "127.0.0.1:8787".to_string()]);
+        assert!(egress_allowed("api.example.com", &net));
+        assert!(egress_allowed("api.example.com:443", &net)); // portless grant covers any port
+        assert!(egress_allowed("127.0.0.1:8787", &net));
+        assert!(!egress_allowed("127.0.0.1:8788", &net)); // right host, wrong port
+        assert!(!egress_allowed("api.example.org", &net)); // substring must NOT match
+        assert!(!egress_allowed("xapi.example.com", &net)); // prefix must NOT match
+    }
+
+    #[test]
+    fn egress_allowed_default_deny() {
+        let empty = HashSet::new();
+        assert!(!egress_allowed("api.example.com", &empty));
+        assert!(!egress_allowed("", &empty));
+        let net = HashSet::from(["trusted.host".to_string()]);
+        assert!(!egress_allowed("", &net));
+        assert!(!egress_allowed("trusted.host:99999", &net)); // unparsable port -> host mismatch
+    }
+
+    #[test]
+    fn fetch_host_parses_authority() {
+        assert_eq!(fetch_host("http://api.example.com/foo"), "api.example.com");
+        assert_eq!(fetch_host("https://127.0.0.1:8787/x"), "127.0.0.1:8787");
+        assert_eq!(fetch_host("mailto:user@ex.com"), "");
+        assert_eq!(fetch_host("not a url"), "");
+        assert_eq!(fetch_host("http://example.com"), "example.com");
+    }
+
+    #[test]
+    fn config_embeds_net_grants_as_external_services() {
+        let manifest = ModuleManifest {
+            name: "t".into(),
+            version: "0.1.0".into(),
+            archetypes: vec![],
+            archetype: "ecmascript".into(),
+            entry: "src/main.js".into(),
+            grants: vec!["uk_version".into()],
+            effects: vec![],
+            observers: vec![],
+            fs_grants: vec![],
+            net_grants: vec!["127.0.0.1:8787".into(), "api.example.com".into()],
+            max_ms: None,
+        };
+        let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
+        assert!(cfg.contains("net-egress-0"), "first egress service missing: {cfg}");
+        assert!(cfg.contains("http://127.0.0.1:8787"), "loopback grant must be embedded: {cfg}");
+        assert!(cfg.contains("http://api.example.com"), "host grant must be embedded: {cfg}");
+    }
+
+    #[test]
+    fn config_without_net_grants_has_no_egress_services() {
+        let manifest = ModuleManifest {
+            name: "t".into(),
+            version: "0.1.0".into(),
+            archetypes: vec![],
+            archetype: "ecmascript".into(),
+            entry: "src/main.js".into(),
+            grants: vec!["uk_version".into()],
+            effects: vec![],
+            observers: vec![],
+            fs_grants: vec![],
+            net_grants: vec![],
+            max_ms: None,
+        };
+        let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
+        assert!(!cfg.contains("net-egress"), "empty net must produce no egress: {cfg}");
+    }
+
+    #[test]
+    fn uk_fetch_denied_without_net_grant() {
+        let grants = HashSet::from(["uk_fetch".to_string()]);
+        let effects = HashSet::new();
+        let observers = HashSet::new();
+        let net = HashSet::new();
+        let resp = dispatch_loopback(
+            "fetch_probe",
+            &grants,
+            &effects,
+            &observers,
+            &net,
+            "uk_fetch",
+            r#"[{"url":"http://api.example.com/data"}]"#,
+        );
+        assert!(resp.contains("\"error\""), "no net grant => deny, got {resp}");
+        assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
+        assert!(resp.contains("api.example.com"), "denial names the host, got {resp}");
+    }
+
+    #[test]
+    fn fetch_denied_off_allowlist() {
+        let grants = HashSet::from(["uk_fetch".to_string()]);
+        let effects = HashSet::new();
+        let observers = HashSet::new();
+        let net = HashSet::from(["allowed.host".to_string()]);
+        // Loopback host is NOT on the allowlist.
+        let resp = dispatch_loopback(
+            "fetch_probe",
+            &grants,
+            &effects,
+            &observers,
+            &net,
+            "uk_fetch",
+            r#"[{"url":"http://127.0.0.1:9/x"}]"#,
+        );
+        assert!(resp.contains("\"error\"") && resp.contains("4001"), "off-list must deny, got {resp}");
+    }
+
+    #[test]
+    fn fetch_granted_loopback_fixture_succeeds() {
+        // The audit trail is kernel-global and `uk_audit_clear()` in concurrent tests
+        // would wipe this test's entry mid-flight — serialize + clear like the S6 tests.
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unfer_ffi::uk_audit_clear();
+        // Local fixture server (loopback only).
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+        });
+        let host = format!("127.0.0.1:{}", addr.port());
+        let grant = host.clone();
+        let grants = HashSet::from(["uk_fetch".to_string()]);
+        let effects = HashSet::new();
+        let observers = HashSet::new();
+        let net = HashSet::from([grant.to_string()]);
+        let url = format!("http://{host}/fixture");
+        let resp = dispatch_loopback(
+            "fetch_probe",
+            &grants,
+            &effects,
+            &observers,
+            &net,
+            "uk_fetch",
+            &serde_json::json!([{ "url": url }]).to_string(),
+        );
+        serve.join().unwrap();
+        assert!(resp.contains("\"result\""), "granted fixture fetch must succeed, got {resp}");
+        assert!(resp.contains("hello"), "fixture body must be returned, got {resp}");
+        // The audit entry for the egress carries the explicit allow action + host.
+        let entries = read_ffi_audit();
+        let mine: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|e| e["symbol"] == "uk_fetch" && e["caller"]["principal"] == "fetch_probe")
+            .take(2)
+            .collect();
+        assert!(!mine.is_empty(), "fetch egress must be audited: {entries:?}");
+        assert_eq!(mine[0]["ok"], true, "granted fetch must audit as allowed: {entries:?}");
+        assert!(
+            mine[0]["detail"].as_str().unwrap_or("").contains("action=allow"),
+            "audit must record action=allow, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn fetch_granted_non_loopback_stays_offline() {
+        // A granted non-loopback host passes the gate but the offline path refuses to
+        // leave the loopback fixture (defense-in-depth until a real workerd egress is up).
+        let grants = HashSet::from(["uk_fetch".to_string()]);
+        let effects = HashSet::new();
+        let observers = HashSet::new();
+        let net = HashSet::from(["api.example.com".to_string()]);
+        let resp = dispatch_loopback(
+            "fetch_probe",
+            &grants,
+            &effects,
+            &observers,
+            &net,
+            "uk_fetch",
+            r#"[{"url":"http://api.example.com/x"}]"#,
+        );
+        assert!(resp.contains("\"error\""), "non-loopback egress must refuse offline, got {resp}");
+        assert!(
+            resp.contains("loopback fixture"),
+            "refusal must cite the loopback-fixture restriction, got {resp}"
+        );
     }
 }
