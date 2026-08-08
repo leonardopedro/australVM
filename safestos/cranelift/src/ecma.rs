@@ -202,6 +202,7 @@ impl EcmaSidecar {
             &module_name,
             manifest.grants.clone(),
             manifest.effects.clone(),
+            manifest.observers.clone(),
             &loopback_sock,
         )?;
 
@@ -369,6 +370,7 @@ impl KernelLoopback {
         module_name: &str,
         grants: Vec<String>,
         effects: Vec<String>,
+        observers: Vec<String>,
         sock_path: &Path,
     ) -> Result<Self, String> {
         let _ = std::fs::remove_file(sock_path);
@@ -381,6 +383,7 @@ impl KernelLoopback {
         let module_name = module_name.to_string();
         let grants: Arc<HashSet<String>> = Arc::new(grants.into_iter().collect());
         let effects: Arc<HashSet<String>> = Arc::new(effects.into_iter().collect());
+        let observers: Arc<HashSet<String>> = Arc::new(observers.into_iter().collect());
         let handle = std::thread::spawn(move || {
             let _ = &listener;
             loop {
@@ -392,8 +395,9 @@ impl KernelLoopback {
                         let name = module_name.clone();
                         let grants = Arc::clone(&grants);
                         let effects = Arc::clone(&effects);
+                        let observers = Arc::clone(&observers);
                         std::thread::spawn(move || {
-                            handle_loopback_conn(&name, &grants, &effects, stream);
+                            handle_loopback_conn(&name, &grants, &effects, &observers, stream);
                         });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -422,6 +426,7 @@ fn handle_loopback_conn(
     module_name: &str,
     grants: &HashSet<String>,
     effects: &HashSet<String>,
+    observers: &HashSet<String>,
     mut stream: UnixStream,
 ) {
     let mut request = Vec::new();
@@ -484,7 +489,7 @@ fn handle_loopback_conn(
         .map(String::from);
 
     let response = match symbol {
-        Some(sym) => dispatch_loopback(module_name, grants, effects, &sym, &body),
+        Some(sym) => dispatch_loopback(module_name, grants, effects, observers, &sym, &body),
         None => json_response("error", &serde_json::json!({"code": 4000, "message": "bad path"})),
     };
     let _ = stream.write_all(response.as_bytes());
@@ -513,14 +518,17 @@ fn json_response(key: &str, value: &serde_json::Value) -> String {
 /// * `[grants] effects = [...]` — the *effect name* a module may submit via `uk_action_submit`.
 ///   This is the S4 "effects" namespace: holding `effects = ["send_notification"]` permits
 ///   submitting a `send_notification` action without any kernel grant for the symbol.
+/// * `[grants] observers = [...]` — other principals this module may read (F8; the full
+///   grant set is installed on the caller context so `uk_action_list`/`uk_audit_list` filter).
 fn dispatch_loopback(
     module_name: &str,
     grants: &HashSet<String>,
     effects: &HashSet<String>,
+    observers: &HashSet<String>,
     symbol: &str,
     body: &str,
 ) -> String {
-    dispatch_loopback_as(None, module_name, grants, effects, symbol, body)
+    dispatch_loopback_as(None, module_name, grants, effects, observers, symbol, body)
 }
 
 /// Like [`dispatch_loopback`], but when `agent_handle` is `Some` the call is attributed to that
@@ -528,14 +536,16 @@ fn dispatch_loopback(
 /// instead of the module's own grants (default-deny), and the audit trail tags the caller as the
 /// agent. An unknown/stopped agent is denied outright.
 ///
-/// Every dispatch — granted or denied — sets the thread-local caller identity and appends one
-/// `AuditEntry`, so the human stays accountable for what agents/gadgets attempted.
+/// Every dispatch — granted or denied — sets the thread-local caller identity (with the caller's
+/// full grant set, so F8 read surfaces filter by observer) and appends one `AuditEntry`, so the
+/// human stays accountable for what agents/gadgets attempted.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_loopback_as(
     agent_handle: Option<i64>,
     module_name: &str,
     grants: &HashSet<String>,
     effects: &HashSet<String>,
+    observers: &HashSet<String>,
     symbol: &str,
     body: &str,
 ) -> String {
@@ -551,14 +561,17 @@ fn dispatch_loopback_as(
     };
 
     // 2. Resolve the effective grant sets + caller identity (module gadget vs sub-agent).
-    let (eff_grants, eff_effects, caller_from, caller_principal) =
+    //    The full GrantSet (kernel + effects + observers) is installed on the thread-local
+    //    caller so the F8 read surfaces filter by the caller's observer rights.
+    let (eff_grants, eff_effects, caller_from, caller_principal, caller_grants) =
         if let Some(handle) = agent_handle {
             match ffi_agent_bounds(handle) {
                 Some((bounds, id)) => (
-                    bounds.kernel.into_iter().collect::<HashSet<_>>(),
-                    bounds.effects.into_iter().collect::<HashSet<_>>(),
+                    bounds.kernel.iter().cloned().collect::<HashSet<_>>(),
+                    bounds.effects.iter().cloned().collect::<HashSet<_>>(),
                     "agent",
                     id,
+                    bounds,
                 ),
                 // Unknown/stopped agent: default-deny, but still audit the attempt.
                 None => {
@@ -567,7 +580,7 @@ fn dispatch_loopback_as(
                         "error",
                         &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
                     );
-                    set_loopback_caller("agent", &format!("agent-{handle}"));
+                    set_loopback_caller("agent", &format!("agent-{handle}"), &unfer_protocol::GrantSet::default());
                     append_loopback_audit(symbol, &args, false, Some(&message));
                     unfer_ffi::uk_clear_caller();
                     return resp;
@@ -579,10 +592,15 @@ fn dispatch_loopback_as(
                 effects.clone(),
                 "gadget",
                 module_name.to_string(),
+                unfer_protocol::GrantSet {
+                    kernel: grants.iter().cloned().collect(),
+                    effects: effects.iter().cloned().collect(),
+                    observers: observers.iter().cloned().collect(),
+                },
             )
         };
 
-    set_loopback_caller(caller_from, &caller_principal);
+    set_loopback_caller(caller_from, &caller_principal, &caller_grants);
 
     // 3. Grant gate (default-deny). Denials are audited too — attempts are the most
     //    important audit entries.
@@ -639,10 +657,15 @@ fn dispatch_loopback_as(
     }
 }
 
-/// Tag the current thread as the acting caller (S6). Host-internal — a worker cannot
-/// call `uk_set_caller` (no loopback arm), so the identity is host-owned.
-fn set_loopback_caller(from: &str, principal: &str) {
-    let caller = serde_json::json!({ "from": from, "principal": principal });
+/// Tag the current thread as the acting caller (S6) with its full grant set (F8).
+/// Host-internal — a worker cannot call `uk_set_caller` (no loopback arm), so the
+/// identity + grant bound is host-owned.
+fn set_loopback_caller(from: &str, principal: &str, grants: &unfer_protocol::GrantSet) {
+    let caller = serde_json::json!({
+        "from": from,
+        "principal": principal,
+        "grants": grants,
+    });
     let _ = unfer_ffi::uk_set_caller(&caller.to_string());
 }
 
@@ -1155,6 +1178,7 @@ mod tests {
                 "uk_nonexistent".into(),
             ],
             effects: vec![],
+            observers: vec![],
             fs_grants: vec![],
             net_grants: vec![],
             max_ms: None,
@@ -1244,9 +1268,10 @@ mod tests {
         use std::collections::HashSet;
         let grants = HashSet::from(["uk_action_list".to_string(), "uk_action_apply".to_string()]);
         let effects = HashSet::from(["send_notification".to_string()]);
+        let observers = HashSet::new();
         let body = r#"[{"effect":"send_notification","params":{"to":"alice"}}]"#;
         let resp =
-            dispatch_loopback("client_module", &grants, &effects, "uk_action_submit", body);
+            dispatch_loopback("client_module", &grants, &effects, &observers, "uk_action_submit", body);
         // The gate lets the granted effect through: the loopback returns a `result`
         // (the action handle), not an error.
         assert!(
@@ -1276,10 +1301,11 @@ mod tests {
         use std::collections::HashSet;
         let grants = HashSet::from(["uk_action_submit".to_string()]);
         let effects = HashSet::from(["send_notification".to_string()]);
+        let observers = HashSet::new();
         // The module holds `send_notification`, NOT `delete_all`.
         let body = r#"[{"effect":"delete_all","params":{}}]"#;
         let resp =
-            dispatch_loopback("client_module", &grants, &effects, "uk_action_submit", body);
+            dispatch_loopback("client_module", &grants, &effects, &observers, "uk_action_submit", body);
         assert!(resp.contains("\"error\""), "unlisted effect must be denied, got {resp}");
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
         assert!(resp.contains("delete_all"), "denial must name the effect, got {resp}");
@@ -1291,9 +1317,10 @@ mod tests {
         let grants = HashSet::from(["uk_action_submit".to_string()]);
         // No `effects` grant at all: even a listed effect is denied.
         let effects = HashSet::new();
+        let observers = HashSet::new();
         let body = r#"[{"effect":"send_notification","params":{}}]"#;
         let resp =
-            dispatch_loopback("client_module", &grants, &effects, "uk_action_submit", body);
+            dispatch_loopback("client_module", &grants, &effects, &observers, "uk_action_submit", body);
         assert!(resp.contains("\"error\""), "missing effects grant must deny, got {resp}");
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
@@ -1305,10 +1332,12 @@ mod tests {
         // may submit effects.
         let grants = HashSet::from(["uk_action_submit".to_string()]);
         let effects = HashSet::from(["send_notification".to_string()]);
+        let observers = HashSet::new();
         let resp = dispatch_loopback(
             "client_module",
             &grants,
             &effects,
+            &observers,
             "uk_action_apply",
             r#"[1]"#,
         );
@@ -1369,11 +1398,12 @@ mod tests {
 
         let grants = HashSet::from(["uk_version".to_string()]);
         let effects = HashSet::new();
+        let observers = HashSet::new();
         // Granted call → audited ok.
-        let resp = dispatch_loopback("audit_probe", &grants, &effects, "uk_version", "[]");
+        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, "uk_version", "[]");
         assert!(resp.contains("\"result\""), "granted symbol must dispatch, got {resp}");
         // Denied call → audited too.
-        let resp = dispatch_loopback("audit_probe", &grants, &effects, "uk_evolve", r#"[{"t":0.1}]"#);
+        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, "uk_evolve", r#"[{"t":0.1}]"#);
         assert!(resp.contains("\"error\""), "ungranted symbol must deny, got {resp}");
 
         let entries = read_ffi_audit();
@@ -1402,6 +1432,7 @@ mod tests {
         // the agent id as its principal.
         let grants = HashSet::from(["uk_action_submit".to_string()]);
         let effects = HashSet::from(["send_notification".to_string()]);
+        let observers = HashSet::new();
         let handle = spawn_agent("analyst", &["uk_action_submit"], &["send_notification"]);
 
         let body = r#"[{"effect":"send_notification","params":{"to":"eve"}}]"#;
@@ -1410,6 +1441,7 @@ mod tests {
             "parent_mod",
             &grants,
             &effects,
+            &observers,
             "uk_action_submit",
             body,
         );
@@ -1451,6 +1483,7 @@ mod tests {
         // though the *module* grant set (passed in) contains everything.
         let grants = HashSet::from(["uk_version".to_string(), "uk_evolve".to_string()]);
         let effects = HashSet::new();
+        let observers = HashSet::new();
         let handle = spawn_agent("bounded", &["uk_version"], &[]);
 
         let ok = dispatch_loopback_as(
@@ -1458,6 +1491,7 @@ mod tests {
             "parent_mod",
             &grants,
             &effects,
+            &observers,
             "uk_version",
             "[]",
         );
@@ -1468,6 +1502,7 @@ mod tests {
             "parent_mod",
             &grants,
             &effects,
+            &observers,
             "uk_evolve",
             r#"[{"t":0.1}]"#,
         );
@@ -1481,15 +1516,186 @@ mod tests {
         use std::collections::HashSet;
         let grants = HashSet::from(["uk_version".to_string()]);
         let effects = HashSet::new();
+        let observers = HashSet::new();
         let resp = dispatch_loopback_as(
             Some(99999),
             "parent_mod",
             &grants,
             &effects,
+            &observers,
             "uk_version",
             "[]",
         );
         assert!(resp.contains("\"error\""), "unknown agent must deny, got {resp}");
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
+    }
+
+    // ── F8: observer re-check on shared reads ──────────────────────────────
+    //
+    // A bounded caller may read only records/audit entries for its own principal and
+    // any principal listed in `[grants] observers`. The trusted harness sees all. This
+    // closes the S4/S6 leak where any module holding `uk_action_list`/`uk_audit_list`
+    // could enumerate every module's actions and audit args.
+
+    /// Dispatch a loopback call and parse the HTTP JSON body.
+    fn dispatch_parse(
+        from: &str,
+        grants: &HashSet<String>,
+        effects: &HashSet<String>,
+        observers: &HashSet<String>,
+        symbol: &str,
+        body: &str,
+    ) -> (bool, serde_json::Value) {
+        let resp = dispatch_loopback(from, grants, effects, observers, symbol, body);
+        let json = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
+        (v.get("result").is_some(), v)
+    }
+
+    #[test]
+    fn loopback_observers_filter_action_list() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+
+        // Actor A submits an action; the loopback injects its own principal.
+        let a_grants = HashSet::from(["uk_action_submit".to_string()]);
+        let a_effects = HashSet::from(["send_notification".to_string()]);
+        let a_obs = HashSet::new();
+        let resp = dispatch_loopback(
+            "f8_actor_a",
+            &a_grants,
+            &a_effects,
+            &a_obs,
+            "uk_action_submit",
+            r#"[{"effect":"send_notification","params":{"to":"bob"}}]"#,
+        );
+        assert!(resp.contains("\"result\""), "actor must submit, got {resp}");
+        let json = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let handle = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v["result"].as_i64())
+            .expect("expected an action handle");
+
+        // Reader B holds the list/get grants but no observer grant: A's record is
+        // invisible, and `uk_action_get` on A's handle is indistinguishable from a
+        // missing record (UK-4004, no existence oracle).
+        let b_grants = HashSet::from(["uk_action_list".to_string(), "uk_action_get".to_string()]);
+        let b_effects = HashSet::new();
+        let b_obs = HashSet::new();
+        let (ok, v) = dispatch_parse("f8_actor_b", &b_grants, &b_effects, &b_obs, "uk_action_list", "[]");
+        assert!(ok, "list must dispatch, got {v}");
+        let records = v["result"].as_array().expect("list is an array");
+        assert!(
+            records.iter().all(|r| r["principal"] != "f8_actor_a"),
+            "B must not observe A's record: {records:?}"
+        );
+
+        let (ok_get, v_get) = dispatch_parse(
+            "f8_actor_b",
+            &b_grants,
+            &b_effects,
+            &b_obs,
+            "uk_action_get",
+            &format!("[{handle}]"),
+        );
+        assert!(
+            !ok_get && v_get["error"]["code"] == 4004,
+            "B must get UK-4004 reading A's record, got {v_get}"
+        );
+
+        // Reader C declares A as an observer: A's record IS visible.
+        let c_grants = HashSet::from(["uk_action_list".to_string()]);
+        let c_effects = HashSet::new();
+        let c_obs = HashSet::from(["f8_actor_a".to_string()]);
+        let (ok_c, v_c) = dispatch_parse("f8_actor_c", &c_grants, &c_effects, &c_obs, "uk_action_list", "[]");
+        assert!(ok_c, "list must dispatch, got {v_c}");
+        let records_c = v_c["result"].as_array().expect("list is an array");
+        assert!(
+            records_c.iter().any(|r| r["principal"] == "f8_actor_a"),
+            "C (observer of A) must see A's record: {records_c:?}"
+        );
+    }
+
+    #[test]
+    fn loopback_observers_filter_audit_list() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+        unfer_ffi::uk_audit_clear();
+
+        let g_effects = HashSet::new();
+        let g_obs = HashSet::new();
+
+        // Actor A makes a granted call so it has an audited entry.
+        let a_grants = HashSet::from(["uk_version".to_string()]);
+        let r = dispatch_loopback("f8_audit_a", &a_grants, &g_effects, &g_obs, "uk_version", "[]");
+        assert!(r.contains("\"result\""), "A must dispatch, got {r}");
+
+        // Reader B (no observers) reads the trail: only its OWN entries are visible.
+        let b_grants = HashSet::from(["uk_audit_list".to_string(), "uk_version".to_string()]);
+        let r = dispatch_loopback("f8_audit_b", &b_grants, &g_effects, &g_obs, "uk_version", "[]");
+        assert!(r.contains("\"result\""), "B must dispatch, got {r}");
+        let (ok, v) = dispatch_parse("f8_audit_b", &b_grants, &g_effects, &g_obs, "uk_audit_list", "[]");
+        assert!(ok, "audit list must dispatch, got {v}");
+        let entries = v["result"].as_array().expect("audit list is an array");
+        assert!(
+            entries.iter().any(|e| e["caller"]["principal"] == "f8_audit_b"),
+            "B must see its own entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().all(|e| e["caller"]["principal"] != "f8_audit_a"),
+            "B (no observers) must NOT see A's audit entries: {entries:?}"
+        );
+
+        // Reader C declares A as an observer: A's entries ARE visible.
+        let c_grants = HashSet::from(["uk_audit_list".to_string()]);
+        let c_obs = HashSet::from(["f8_audit_a".to_string()]);
+        let (ok_c, v_c) = dispatch_parse("f8_audit_c", &c_grants, &g_effects, &c_obs, "uk_audit_list", "[]");
+        assert!(ok_c, "audit list must dispatch, got {v_c}");
+        let entries_c = v_c["result"].as_array().expect("audit list is an array");
+        assert!(
+            entries_c.iter().any(|e| e["caller"]["principal"] == "f8_audit_a"),
+            "C (observer of A) must see A's audit entries: {entries_c:?}"
+        );
+    }
+
+    #[test]
+    fn loopback_agent_spawn_escalation_enforced_via_loopback() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+
+        // The loopback now installs the module's full bounded grant set on the caller
+        // context, so a module dispatching `uk_agent_spawn` is subject to the same
+        // capability non-escalation as any bounded caller (UK-4202). Subset spawns —
+        // including observer rights the module itself holds — still succeed.
+        let grants = HashSet::from(["uk_agent_spawn".to_string(), "uk_version".to_string()]);
+        let effects = HashSet::new();
+        let observers = HashSet::from(["f8_peer".to_string()]);
+
+        // Kernel escalation: agent requests uk_model_create (not held by the module).
+        let escalate = r#"[{"name":"upgrader","grants":{"kernel":["uk_model_create"],"effects":[]}}]"#;
+        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, "uk_agent_spawn", escalate);
+        assert!(resp.contains("\"error\""), "escalation must be refused, got {resp}");
+        assert!(resp.contains("4202"), "expected UK-4202, got {resp}");
+
+        // Observer escalation: agent requests an observer right the module doesn't hold.
+        let escalate_obs =
+            r#"[{"name":"spy","grants":{"kernel":[],"effects":[],"observers":["secret"]}}]"#;
+        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, "uk_agent_spawn", escalate_obs);
+        assert!(
+            resp.contains("\"error\"") && resp.contains("4202"),
+            "observer escalation must be refused, got {resp}"
+        );
+
+        // Subset spawn succeeds (agent inherits a subset incl. the module's observers).
+        let subset =
+            r#"[{"name":"clerk","grants":{"kernel":["uk_version"],"effects":[],"observers":["f8_peer"]}}]"#;
+        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, "uk_agent_spawn", subset);
+        assert!(resp.contains("\"result\""), "subset spawn must succeed, got {resp}");
     }
 }

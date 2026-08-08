@@ -44,7 +44,7 @@ fn find_in_fnm() -> Option<std::path::PathBuf> {
 }
 
 fn make_ecma_module_dir(dir: &Path, name: &str, grants: &[&str], js: &str) {
-    make_ecma_module_dir_full(dir, name, grants, &[], js);
+    make_ecma_module_dir_full(dir, name, grants, &[], &[], js);
 }
 
 fn make_ecma_module_dir_full(
@@ -52,15 +52,18 @@ fn make_ecma_module_dir_full(
     name: &str,
     grants: &[&str],
     effects: &[&str],
+    observers: &[&str],
     js: &str,
 ) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     let grants_toml: Vec<String> = grants.iter().map(|g| format!("    \"{g}\",")).collect();
     let effects_toml: Vec<String> = effects.iter().map(|e| format!("    \"{e}\",")).collect();
+    let observers_toml: Vec<String> = observers.iter().map(|o| format!("    \"{o}\",")).collect();
     let toml = format!(
-        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"ecmascript\"]\narchetype = \"ecmascript\"\nentry = \"src/main.js\"\n\n[grants]\nkernel = [\n{}\n]\neffects = [\n{}\n]\n",
+        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"ecmascript\"]\narchetype = \"ecmascript\"\nentry = \"src/main.js\"\n\n[grants]\nkernel = [\n{}\n]\neffects = [\n{}\n]\nobservers = [\n{}\n]\n",
         grants_toml.join("\n"),
-        effects_toml.join("\n")
+        effects_toml.join("\n"),
+        observers_toml.join("\n")
     );
     std::fs::write(dir.join("module.toml"), toml).unwrap();
     std::fs::write(dir.join("src/main.js"), js).unwrap();
@@ -322,6 +325,7 @@ export async function read(kernel, args) {
         "ecma_client",
         &["uk_action_submit", "uk_action_get"],
         &["send_notification"],
+        &[],
         client_js,
     );
 
@@ -334,11 +338,15 @@ export async function approve(kernel, args) {
   return { applied: true };
 }
 "#;
-    // Gatekeeper: list + resolve are kernel grants; no effects grant needed.
-    make_ecma_module_dir(
+    // Gatekeeper: list + resolve are kernel grants; no effects grant needed. F8: it
+    // declares `observers = ["ecma_client"]` so its `uk_action_list` view includes the
+    // client's records (a module can only read principals it may observe).
+    make_ecma_module_dir_full(
         &gatekeeper_dir,
         "ecma_gatekeeper",
         &["uk_action_list", "uk_action_apply"],
+        &[],
+        &["ecma_client"],
         gatekeeper_js,
     );
 
@@ -378,6 +386,129 @@ export async function approve(kernel, args) {
     let _ = std::fs::remove_dir_all(&gatekeeper_dir);
 }
 
+// ── F8: observer re-check closes the cross-module read leak ──────────────
+//
+// A module holding `uk_action_list`/`uk_action_get` may only read records for its
+// own principal and any principal listed in `[grants] observers`. A snooping module
+// with no observer grant sees nothing of another module's actions, and `uk_action_get`
+// on a foreign handle is indistinguishable from a missing record.
+
+/// A module with `uk_action_list` + `uk_action_get` but NO observer grant cannot see
+/// another module's pending action; a third module that declares the actor as an
+/// observer can.
+#[test]
+fn ecmascript_observers_filter_action_reads() {
+    if !workerd_available() {
+        eprintln!("SKIP: no workerd runtime found (UNFER_WORKERD, $PATH, or fnm); install via `npm install -g workerd`");
+        return;
+    }
+
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let client_dir = std::env::temp_dir().join("ecma_f8_client");
+    let snoop_dir = std::env::temp_dir().join("ecma_f8_snoop");
+    let observer_dir = std::env::temp_dir().join("ecma_f8_observer");
+    for d in [&client_dir, &snoop_dir, &observer_dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    let client_js = r#"
+export async function submit(kernel, args) {
+  const handle = await kernel.uk_action_submit({
+    effect: "send_notification",
+    params: { to: "mallory" },
+  });
+  const record = await kernel.uk_action_get(handle);
+  return { handle, state: record.state };
+}
+"#;
+    make_ecma_module_dir_full(
+        &client_dir,
+        "f8_client",
+        &["uk_action_submit", "uk_action_get"],
+        &["send_notification"],
+        &[],
+        client_js,
+    );
+
+    let snoop_js = r#"
+export async function list(kernel, args) {
+  const actions = await kernel.uk_action_list();
+  return { seen: actions.map(a => a.principal) };
+}
+export async function read(kernel, args) {
+  try {
+    const record = await kernel.uk_action_get(args.handle);
+    return { ok: true, principal: record.principal };
+  } catch (e) {
+    return { ok: false, code: e.ukCode };
+  }
+}
+"#;
+    make_ecma_module_dir(
+        &snoop_dir,
+        "f8_snoop",
+        &["uk_action_list", "uk_action_get"],
+        snoop_js,
+    );
+
+    let observer_js = r#"
+export async function list(kernel, args) {
+  const actions = await kernel.uk_action_list();
+  return { seen: actions.map(a => a.principal) };
+}
+"#;
+    make_ecma_module_dir_full(
+        &observer_dir,
+        "f8_observer",
+        &["uk_action_list"],
+        &[],
+        &["f8_client"],
+        observer_js,
+    );
+
+    let mut host = ModuleHost::new();
+    host.load(&client_dir).unwrap();
+    host.load(&snoop_dir).unwrap();
+    host.load(&observer_dir).unwrap();
+
+    // 1. Client submits → pending record, own read works.
+    let body = host.call_json("f8_client", "submit", "{}").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["result"]["state"], "pending", "client must see pending, got {body}");
+    let handle = v["result"]["handle"].as_i64().expect("action handle");
+
+    // 2. Snoop (no observer grant) sees nothing of the client's records.
+    let body = host.call_json("f8_snoop", "list", "{}").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let seen = v["result"]["seen"].as_array().expect("seen array");
+    assert!(
+        !seen.iter().any(|p| p == "f8_client"),
+        "snoop must not observe f8_client's record, got {body}"
+    );
+
+    // 3. Snoop's uk_action_get on the foreign handle is indistinguishable from missing.
+    let body = host
+        .call_json("f8_snoop", "read", &format!(r#"{{"handle":{handle}}}"#))
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["result"]["ok"], false, "snoop must be denied, got {body}");
+    assert_eq!(v["result"]["code"], 4004, "expected UK-4004, got {body}");
+
+    // 4. Observer (declared observer of f8_client) can see the record.
+    let body = host.call_json("f8_observer", "list", "{}").unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let seen = v["result"]["seen"].as_array().expect("seen array");
+    assert!(
+        seen.iter().any(|p| p == "f8_client"),
+        "observer of f8_client must see its record, got {body}"
+    );
+
+    for d in [&client_dir, &snoop_dir, &observer_dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
 /// Negative path: a module grants `kernel = ["uk_action_submit"]` but has NO `effects`
 /// grant. The loopback's effects gate (not the harness stub) must deny with UK-4001 —
 /// the effect name the module does not hold is the resource being checked.
@@ -408,6 +539,7 @@ export async function run(kernel, args) {
         "ecma_effects_deny",
         &["uk_action_submit"],
         &[], // no effects grant
+        &[],
         js,
     );
 

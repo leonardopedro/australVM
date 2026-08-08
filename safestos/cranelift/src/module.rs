@@ -13,6 +13,9 @@ pub struct ModuleManifest {
     pub entry: String,
     pub grants: Vec<String>,
     pub effects: Vec<String>,
+    /// F8 `[grants] observers`: other principals this module may read (actions,
+    /// audit entries). A module always observes its own principal.
+    pub observers: Vec<String>,
     pub fs_grants: Vec<String>,
     pub net_grants: Vec<String>,
     pub max_ms: Option<u64>,
@@ -74,6 +77,16 @@ impl ModuleManifest {
                     .collect()
             })
             .unwrap_or_default();
+        let observers = v
+            .get("grants")
+            .and_then(|g| g.get("observers"))
+            .and_then(|o| o.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
         let max_ms = v
             .get("limits")
             .and_then(|l| l.get("max_ms"))
@@ -107,6 +120,7 @@ impl ModuleManifest {
             entry,
             grants,
             effects,
+            observers,
             fs_grants,
             net_grants,
             max_ms,
