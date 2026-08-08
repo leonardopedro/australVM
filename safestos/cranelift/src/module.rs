@@ -18,7 +18,10 @@ pub struct ModuleManifest {
     pub observers: Vec<String>,
     pub fs_grants: Vec<String>,
     pub net_grants: Vec<String>,
+    /// `[limits] max_ms` — per-call deadline for the host↔sidecar RPC (default 5 s).
     pub max_ms: Option<u64>,
+    /// `[limits] memory_bytes` — optional memory cap applied via cgroup where writable.
+    pub memory_max_bytes: Option<u64>,
 }
 
 impl ModuleManifest {
@@ -92,6 +95,11 @@ impl ModuleManifest {
             .and_then(|l| l.get("max_ms"))
             .and_then(|m| m.as_integer())
             .map(|m| m as u64);
+        let memory_max_bytes = v
+            .get("limits")
+            .and_then(|l| l.get("memory_bytes"))
+            .and_then(|m| m.as_integer())
+            .map(|m| m as u64);
         let fs_grants = v
             .get("grants")
             .and_then(|g| g.get("fs"))
@@ -124,6 +132,7 @@ impl ModuleManifest {
             fs_grants,
             net_grants,
             max_ms,
+            memory_max_bytes,
         })
     }
 }
@@ -810,5 +819,39 @@ unsafe fn call_jit_function(ptr: usize, args: &[i64]) -> i64 {
             }
             f(a[0], a[1], a[2], a[3])
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModuleManifest;
+
+    #[test]
+    fn parses_limits_table() {
+        let toml = r#"
+[module]
+name = "m"
+[grants]
+kernel = ["uk_audit"]
+[limits]
+max_ms = 2500
+memory_bytes = 134217728
+"#;
+        let m = ModuleManifest::from_toml_str(toml).expect("parse");
+        assert_eq!(m.max_ms, Some(2500));
+        assert_eq!(m.memory_max_bytes, Some(134217728));
+    }
+
+    #[test]
+    fn limits_default_absent() {
+        let toml = r#"
+[module]
+name = "m"
+[grants]
+kernel = ["uk_audit"]
+"#;
+        let m = ModuleManifest::from_toml_str(toml).expect("parse");
+        assert_eq!(m.max_ms, None);
+        assert_eq!(m.memory_max_bytes, None);
     }
 }

@@ -164,6 +164,8 @@ pub struct EcmaSidecar {
     loopback: KernelLoopback,
     staging: PathBuf,
     module_name: String,
+    /// S14 (F13): per-call deadline for the host↔sidecar RPC (`[limits] max_ms`, default 5 s).
+    call_deadline: Duration,
     _supervisor: Arc<AtomicBool>,
 }
 
@@ -182,6 +184,9 @@ impl EcmaSidecar {
         paths: &WorkerdPaths,
     ) -> Result<Self, String> {
         let module_name = manifest.name.clone();
+        // S14 (F13): `[limits] max_ms` per-call deadline, default 5 s. `[limits] memory_bytes`
+        // flows into the SandboxProfile above and the cgroup below (degraded, writable-only).
+        let call_deadline = Duration::from_millis(manifest.max_ms.unwrap_or(5000));
 
         // Staging dir holds config.capnp, harness.mjs and a copy of the entry JS so workerd's
         // `embed "..."` directives resolve relative to the config file.
@@ -260,7 +265,7 @@ impl EcmaSidecar {
                 let profile = crate::sandbox::SandboxProfile {
                     writable_dirs: writable,
                     readable_dirs: readable,
-                    memory_max_bytes: None,
+                    memory_max_bytes: manifest.memory_max_bytes, // S14: `[limits] memory_bytes`
                 };
                 let bin = paths.bin.clone();
                 let make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync> =
@@ -282,6 +287,8 @@ impl EcmaSidecar {
                     loopback,
                     staging,
                     module_name,
+                    call_deadline,
+                    manifest.memory_max_bytes,
                 );
             }
         }
@@ -296,7 +303,15 @@ impl EcmaSidecar {
                     .spawn()
                     .map_err(|e| format!("spawn workerd: {e} (bin={})", bin.display()))
             });
-        Self::spawn_with_supervisor(make_child, main_sock, loopback, staging, module_name)
+        Self::spawn_with_supervisor(
+            make_child,
+            main_sock,
+            loopback,
+            staging,
+            module_name,
+            call_deadline,
+            manifest.memory_max_bytes,
+        )
     }
 
     /// Spawn the initial child, hand it to a supervisor thread (S12) that respawns it on
@@ -307,8 +322,12 @@ impl EcmaSidecar {
         loopback: KernelLoopback,
         staging: PathBuf,
         module_name: String,
+        call_deadline: Duration,
+        memory_max_bytes: Option<u64>,
     ) -> Result<Self, String> {
         let initial = make_child()?;
+        let initial_pid = initial.id();
+        Self::apply_memory_cgroup(initial_pid, memory_max_bytes);
         let slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(initial)));
         let quit = Arc::new(AtomicBool::new(false));
 
@@ -317,7 +336,7 @@ impl EcmaSidecar {
         let sup_quit = Arc::clone(&quit);
         let sup_name = module_name.clone();
         std::thread::spawn(move || {
-            Self::supervise_loop(sup_slot, sup_make, sup_quit, &sup_name);
+            Self::supervise_loop(sup_slot, sup_make, sup_quit, &sup_name, memory_max_bytes);
         });
 
         let sidecar = Self {
@@ -326,6 +345,7 @@ impl EcmaSidecar {
             loopback,
             staging,
             module_name,
+            call_deadline,
             _supervisor: quit,
         };
         sidecar.loopback.set_expected_pid(
@@ -349,6 +369,7 @@ impl EcmaSidecar {
         make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync>,
         quit: Arc<AtomicBool>,
         module_name: &str,
+        memory_max_bytes: Option<u64>,
     ) {
         let mut backoff = Duration::from_millis(100);
         loop {
@@ -371,6 +392,8 @@ impl EcmaSidecar {
             append_host_audit("uk_kernel", false, &format!("KERNEL_DOWN module='{module_name}'"));
             match make_child() {
                 Ok(newc) => {
+                    let new_pid = newc.id();
+                    Self::apply_memory_cgroup(new_pid, memory_max_bytes);
                     *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(newc);
                     append_host_audit(
                         "uk_kernel",
@@ -419,6 +442,21 @@ impl EcmaSidecar {
         }
     }
 
+    /// Apply `[limits] memory_bytes` as a cgroup v2 memory cap for the child pid when a
+    /// writable cgroup fs is available. Degrades silently (no cap) otherwise — no root.
+    fn apply_memory_cgroup(child_pid: u32, memory_max_bytes: Option<u64>) {
+        let Some(bytes) = memory_max_bytes else { return };
+        if bytes == 0 {
+            return;
+        }
+        let dir = PathBuf::from(format!("/sys/fs/cgroup/unfer-{child_pid}"));
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let _ = std::fs::write(dir.join("memory.max"), bytes.to_string());
+        let _ = std::fs::write(dir.join("cgroup.procs"), child_pid.to_string());
+    }
+
     /// RPC the sidecar's entrypoint: `POST /unfer/call` with `{"entrypoint":..,"args":..}`.
     /// Returns the JSON body of the response.
     pub fn call(&self, entrypoint: &str, args_json: &str) -> Result<String, String> {
@@ -426,7 +464,23 @@ impl EcmaSidecar {
             r#"{{"entrypoint":{0:?},"args":{1}}}"#,
             entrypoint, args_json
         );
-        http_post(&self.main_sock, "/unfer/call", &body)
+        let result = http_post(&self.main_sock, "/unfer/call", &body, Some(self.call_deadline));
+        // S14 (F13): a deadline hit means the module is unresponsive (busy loop) — record it and
+        // kill the child so the supervisor can respawn a fresh, healthy sidecar.
+        if let Err(e) = &result {
+            if e.contains("recv") && (e.contains("timeout") || e.contains("unavailable")) {
+                append_host_audit(
+                    "uk_kernel",
+                    false,
+                    &format!("CALL_DEADLINE module='{}': {e}", self.module_name),
+                );
+                let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(child) = guard.as_mut() {
+                    let _ = child.kill();
+                }
+            }
+        }
+        result
     }
 
     pub fn loopback_sock(&self) -> &Path {
@@ -1349,9 +1403,22 @@ fn read_child_stderr(child: &mut Child) -> Option<String> {
     Some(s)
 }
 
-/// `POST /path` to a unix socket, return the response body.
-fn http_post(sock: &Path, path: &str, body: &str) -> Result<String, String> {
+/// `POST /path` to a unix socket, return the response body. `read_timeout` bounds the recv
+/// phase so a runaway worker (busy loop) surfaces as `recv: ..timed out` → the caller's per-call
+/// deadline (S14 / F13) rather than an unbounded host-side block.
+fn http_post(
+    sock: &Path,
+    path: &str,
+    body: &str,
+    read_timeout: Option<Duration>,
+) -> Result<String, String> {
     let mut stream = UnixStream::connect(sock).map_err(|e| format!("connect {}: {e}", sock.display()))?;
+    if let Some(d) = read_timeout {
+        // set_read_timeout applies to blocking reads; set_write_timeout to non-blocking writes.
+        stream
+            .set_read_timeout(Some(d))
+            .map_err(|e| format!("timeout: {e}"))?;
+    }
     let req = format!(
         "POST {path} HTTP/1.1\r\nHost: unix\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
@@ -1541,6 +1608,7 @@ mod tests {
             fs_grants: vec![],
             net_grants: vec![],
             max_ms: None,
+            memory_max_bytes: None,
         };
         let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
         assert!(cfg.contains("(name = \"uk_version\", service = \"kernel-loopback\")"));
@@ -2128,7 +2196,13 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
         let quit = Arc::new(AtomicBool::new(false));
         let sup_q = Arc::clone(&quit);
         let handle = std::thread::spawn(move || {
-            EcmaSidecar::supervise_loop(Arc::clone(&slot), make_child, sup_q, "test-mod");
+            EcmaSidecar::supervise_loop(
+                Arc::clone(&slot),
+                make_child,
+                sup_q,
+                "test-mod",
+                None,
+            );
         });
         // Give the supervisor ~1.2s to observe the crash and respawn at least twice.
         std::thread::sleep(Duration::from_millis(1200));
@@ -2151,6 +2225,86 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             })
             .count();
         assert!(down >= 1, "KERNEL_DOWN must be audited: {entries:?}");
+    }
+
+    // ── S14 (F13): per-call deadline ──────────────────────────────────────
+
+    #[test]
+    fn deadlined_call_kills_silent_child_and_audits() {
+        let dir = std::env::temp_dir().join(format!("unfer-s14-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A "main" unix socket whose listener accepts but never responds.
+        let main_sock = dir.join("main.sock");
+        let listener = UnixListener::bind(&main_sock).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let silent = std::thread::spawn(move || {
+            while !stop_flag.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok(_) => std::thread::sleep(Duration::from_millis(5_000)),
+                    Err(_) => break,
+                }
+            }
+        });
+        std::thread::sleep(Duration::from_millis(50));
+
+        let loopback_sock = dir.join("loopback.sock");
+        let loopback = KernelLoopback::start("test", vec![], vec![], vec![], vec![], &loopback_sock)
+            .expect("loopback");
+
+        // A docile child that outlives the call; the deadline must kill it.
+        let child = Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+
+        let sidecar = EcmaSidecar {
+            child: Arc::new(Mutex::new(Some(child))),
+            main_sock,
+            loopback,
+            staging: dir.clone(),
+            module_name: "deadline-mod".to_string(),
+            call_deadline: Duration::from_millis(250),
+            _supervisor: Arc::new(AtomicBool::new(false)),
+        };
+
+        let res = sidecar.call("run", "[]");
+        let err = res.expect_err("silent worker must time out");
+        eprintln!("ACTUAL_ERR={err:?}");
+        assert!(err.contains("timeout") || err.contains("unavailable"), "unexpected err: {err}");
+
+        // The child must be signalled (SIGKILL) so the supervisor can respawn a fresh one.
+        let mut guard = sidecar.child.lock().unwrap();
+        let exited = guard
+            .as_mut()
+            .and_then(|c| c.try_wait().ok())
+            .flatten()
+            .is_some();
+        if !exited {
+            // try_wait may race the OS; give the kill a moment to land.
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
+        }
+
+        let entries = read_ffi_audit();
+        let deadline = entries
+            .iter()
+            .filter(|e| {
+                e["symbol"] == "uk_kernel"
+                    && e["detail"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with("CALL_DEADLINE")
+            })
+            .count();
+        assert!(deadline >= 1, "CALL_DEADLINE must be audited: {entries:?}");
+
+        stop.store(true, Ordering::Relaxed);
+        silent.join().unwrap();
+        let _ = dir;
     }
 
     // ── S10: egress boundary (F9) ─────────────────────────────────────────
@@ -2199,6 +2353,7 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             fs_grants: vec![],
             net_grants: vec!["127.0.0.1:8787".into(), "api.example.com".into()],
             max_ms: None,
+            memory_max_bytes: None,
         };
         let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
         assert!(cfg.contains("net-egress-0"), "first egress service missing: {cfg}");
@@ -2220,6 +2375,7 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             fs_grants: vec![],
             net_grants: vec![],
             max_ms: None,
+            memory_max_bytes: None,
         };
         let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
         assert!(!cfg.contains("net-egress"), "empty net must produce no egress: {cfg}");
