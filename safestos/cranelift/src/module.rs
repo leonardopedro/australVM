@@ -16,6 +16,9 @@ pub struct ModuleManifest {
     /// F8 `[grants] observers`: other principals this module may read (actions,
     /// audit entries). A module always observes its own principal.
     pub observers: Vec<String>,
+    /// S18 (F17): `[grants] resources` — resource ids introduced to this module this session
+    /// (`uk_resource_use`); the loopback installs them on the caller grant set.
+    pub resources: Vec<String>,
     pub fs_grants: Vec<String>,
     pub net_grants: Vec<String>,
     /// `[limits] max_ms` — per-call deadline for the host↔sidecar RPC (default 5 s).
@@ -120,6 +123,16 @@ impl ModuleManifest {
                     .collect()
             })
             .unwrap_or_default();
+        let resources = v
+            .get("grants")
+            .and_then(|g| g.get("resources"))
+            .and_then(|r| r.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(Self {
             name,
             version,
@@ -129,6 +142,7 @@ impl ModuleManifest {
             grants,
             effects,
             observers,
+            resources,
             fs_grants,
             net_grants,
             max_ms,

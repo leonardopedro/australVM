@@ -211,6 +211,7 @@ impl EcmaSidecar {
             manifest.effects.clone(),
             manifest.observers.clone(),
             manifest.net_grants.clone(),
+            manifest.resources.clone(),
             &loopback_sock,
         )?;
 
@@ -540,6 +541,8 @@ impl KernelLoopback {
         effects: Vec<String>,
         observers: Vec<String>,
         net: Vec<String>,
+        // S18 (F17): the `[grants] resources` namespace introduced to the module this session.
+        resources: Vec<String>,
         sock_path: &Path,
     ) -> Result<Self, String> {
         let _ = std::fs::remove_file(sock_path);
@@ -556,6 +559,7 @@ impl KernelLoopback {
         let effects: Arc<HashSet<String>> = Arc::new(effects.into_iter().collect());
         let observers: Arc<HashSet<String>> = Arc::new(observers.into_iter().collect());
         let net: Arc<HashSet<String>> = Arc::new(net.into_iter().collect());
+        let resources: Arc<HashSet<String>> = Arc::new(resources.into_iter().collect());
         let handle = std::thread::spawn(move || {
             let _ = &listener;
             loop {
@@ -586,8 +590,17 @@ impl KernelLoopback {
                         let effects = Arc::clone(&effects);
                         let observers = Arc::clone(&observers);
                         let net = Arc::clone(&net);
+                        let resources = Arc::clone(&resources);
                         std::thread::spawn(move || {
-                            handle_loopback_conn(&name, &grants, &effects, &observers, &net, stream);
+                            handle_loopback_conn(
+                                &name,
+                                &grants,
+                                &effects,
+                                &observers,
+                                &net,
+                                &resources,
+                                stream,
+                            );
                         });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -625,6 +638,7 @@ fn handle_loopback_conn(
     effects: &HashSet<String>,
     observers: &HashSet<String>,
     net: &HashSet<String>,
+    resources: &HashSet<String>,
     mut stream: UnixStream,
 ) {
     let mut request = Vec::new();
@@ -687,7 +701,17 @@ fn handle_loopback_conn(
         .map(String::from);
 
     let response = match symbol {
-        Some(sym) => dispatch_loopback(module_name, grants, effects, observers, net, &sym, &body),
+        Some(sym) => dispatch_loopback_as(
+            None,
+            module_name,
+            grants,
+            effects,
+            observers,
+            resources,
+            net,
+            &sym,
+            &body,
+        ),
         None => json_response("error", &serde_json::json!({"code": 4000, "message": "bad path"})),
     };
     let _ = stream.write_all(response.as_bytes());
@@ -864,6 +888,9 @@ fn loopback_get(host: &str) -> Result<String, String> {
 ///   grant set is installed on the caller context so `uk_action_list`/`uk_audit_list` filter).
 /// * `[grants] net = [...]` — the egress allowlist (S10): `uk_fetch` may only target an
 ///   exact host[:port] present here; default-deny otherwise.
+/// * `[grants] resources = [...]` — the resource-introductions namespace (S18/F17): ids the
+///   module may exercise via `uk_resource_use`; installed on the caller grant set so the
+///   intro-surface gate can see them.
 fn dispatch_loopback(
     module_name: &str,
     grants: &HashSet<String>,
@@ -873,7 +900,20 @@ fn dispatch_loopback(
     symbol: &str,
     body: &str,
 ) -> String {
-    dispatch_loopback_as(None, module_name, grants, effects, observers, net, symbol, body)
+    // Keep the public test surface stable: a direct dispatch (no loopback resources) is
+    // simply a caller with no introductions.
+    let resources = HashSet::new();
+    dispatch_loopback_as(
+        None,
+        module_name,
+        grants,
+        effects,
+        observers,
+        &resources,
+        net,
+        symbol,
+        body,
+    )
 }
 
 /// Like [`dispatch_loopback`], but when `agent_handle` is `Some` the call is attributed to that
@@ -891,6 +931,7 @@ fn dispatch_loopback_as(
     grants: &HashSet<String>,
     effects: &HashSet<String>,
     observers: &HashSet<String>,
+    resources: &HashSet<String>,
     net: &HashSet<String>,
     symbol: &str,
     body: &str,
@@ -942,6 +983,7 @@ fn dispatch_loopback_as(
                     kernel: grants.iter().cloned().collect(),
                     effects: effects.iter().cloned().collect(),
                     observers: observers.iter().cloned().collect(),
+                    resources: resources.iter().cloned().collect(),
                 },
             )
         };
@@ -1386,6 +1428,34 @@ fn kernel_dispatch(
                 Err(e) => Err((4004, format!("uk_fetch {host}: {e}"))),
             }
         }
+        // ── S18/F17: resource introductions (grant-borne, UK-4401 gate in the FFI) ────────
+        "uk_resource_introduce" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_resource_introduce(p, l))
+        }
+        "uk_resource_forfeit" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_resource_forfeit(p, l))
+        }
+        "uk_resource_use" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_resource_use(p, l))
+        }
+        "uk_request_resource" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_request_resource(p, l))
+        }
+        "uk_resource_pending" => {
+            let out = buf_out(|b, c| unfer_ffi::uk_resource_pending(b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
         other => Err((
             4004,
             format!("kernel symbol '{other}' has no loopback marshaling"),
@@ -1605,6 +1675,7 @@ mod tests {
             ],
             effects: vec![],
             observers: vec![],
+            resources: vec![],
             fs_grants: vec![],
             net_grants: vec![],
             max_ms: None,
@@ -1871,6 +1942,7 @@ mod tests {
             &effects,
             &observers,
             &HashSet::new(),
+            &HashSet::new(),
             "uk_action_submit",
             body,
         );
@@ -1922,6 +1994,7 @@ mod tests {
             &effects,
             &observers,
             &HashSet::new(),
+            &HashSet::new(),
             "uk_version",
             "[]",
         );
@@ -1933,6 +2006,7 @@ mod tests {
             &grants,
             &effects,
             &observers,
+            &HashSet::new(),
             &HashSet::new(),
             "uk_evolve",
             r#"[{"t":0.1}]"#,
@@ -1955,11 +2029,113 @@ mod tests {
             &effects,
             &observers,
             &HashSet::new(),
+            &HashSet::new(),
             "uk_version",
             "[]",
         );
         assert!(resp.contains("\"error\""), "unknown agent must deny, got {resp}");
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
+    }
+
+    // ── S18 (F17): resource introductions gate the loopback ───────────────
+
+    #[test]
+    fn resource_introduction_gates_loopback_calls() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::HashSet;
+
+        let grants = HashSet::from([
+            "uk_resource_introduce".to_string(),
+            "uk_resource_use".to_string(),
+            "uk_resource_forfeit".to_string(),
+        ]);
+        let effects = HashSet::new();
+        let observers = HashSet::new();
+        let resource_id = "github.repo#loopback";
+        let json_id = serde_json::to_string(resource_id).unwrap();
+
+        // 1. A module introduced to the resource mints it at the chokepoint, then may use it.
+        let granted = HashSet::from([resource_id.to_string()]);
+        let mint = dispatch_loopback_as(
+            None,
+            "f17_res_granted",
+            &grants,
+            &effects,
+            &observers,
+            &granted,
+            &HashSet::new(),
+            "uk_resource_introduce",
+            &format!("[{json_id:?}]"),
+        );
+        assert!(
+            mint.contains("\"result\""),
+            "introduction must mint at the chokepoint, got {mint}"
+        );
+        let use1 = dispatch_loopback_as(
+            None,
+            "f17_res_granted",
+            &grants,
+            &effects,
+            &observers,
+            &granted,
+            &HashSet::new(),
+            "uk_resource_use",
+            &format!("[{json_id:?}]"),
+        );
+        assert!(
+            use1.contains("\"result\""),
+            "introduced caller may use the resource, got {use1}"
+        );
+
+        // 2. A module with NO introduction is refused UK-4401 (nothing is ambient).
+        let no_intro = HashSet::new();
+        let use2 = dispatch_loopback_as(
+            None,
+            "f17_res_denied",
+            &grants,
+            &effects,
+            &observers,
+            &no_intro,
+            &HashSet::new(),
+            "uk_resource_use",
+            &format!("[{json_id:?}]"),
+        );
+        assert!(
+            use2.contains("\"error\"") && use2.contains("4401"),
+            "unintroduced caller must get UK-4401, got {use2}"
+        );
+
+        // 3. Forfeit revokes; the re-use path turns to UK-4403 (never minted).
+        let revoke = dispatch_loopback_as(
+            None,
+            "f17_res_granted",
+            &grants,
+            &effects,
+            &observers,
+            &granted,
+            &HashSet::new(),
+            "uk_resource_forfeit",
+            &format!("[{json_id:?}]"),
+        );
+        assert!(
+            revoke.contains("\"result\""),
+            "forfeit must revoke, got {revoke}"
+        );
+        let use3 = dispatch_loopback_as(
+            None,
+            "f17_res_denied",
+            &grants,
+            &effects,
+            &observers,
+            &no_intro,
+            &HashSet::new(),
+            "uk_resource_use",
+            &format!("[{json_id:?}]"),
+        );
+        assert!(
+            use3.contains("\"error\"") && use3.contains("4401"),
+            "revoked resource is no longer usable (UK-4401), got {use3}"
+        );
     }
 
     // ── F8: observer re-check on shared reads ──────────────────────────────
@@ -2251,7 +2427,15 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
         std::thread::sleep(Duration::from_millis(50));
 
         let loopback_sock = dir.join("loopback.sock");
-        let loopback = KernelLoopback::start("test", vec![], vec![], vec![], vec![], &loopback_sock)
+        let loopback = KernelLoopback::start(
+            "test",
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            &loopback_sock,
+        )
             .expect("loopback");
 
         // A docile child that outlives the call; the deadline must kill it.
@@ -2350,6 +2534,7 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             grants: vec!["uk_version".into()],
             effects: vec![],
             observers: vec![],
+            resources: vec![],
             fs_grants: vec![],
             net_grants: vec!["127.0.0.1:8787".into(), "api.example.com".into()],
             max_ms: None,
@@ -2372,6 +2557,7 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             grants: vec!["uk_version".into()],
             effects: vec![],
             observers: vec![],
+            resources: vec![],
             fs_grants: vec![],
             net_grants: vec![],
             max_ms: None,
