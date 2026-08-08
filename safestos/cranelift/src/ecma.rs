@@ -966,6 +966,29 @@ fn loopback_get(host: &str) -> Result<String, String> {
 // S23 (F22): per-dispatch trace seq for the observability context (never reset).
 static TRACE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+// S25 (F24): symbols that consume the caller's windowed budget at the loopback chokepoint.
+static METERED_SYMBOLS: &[&str] = &[
+    "uk_evolve",
+    "uk_condition",
+    "uk_event_probability",
+    "uk_bayesian_update",
+    "uk_belief_propagation",
+    "uk_ode_analyze",
+];
+
+// Default per-principal windowed budget and rate-limit for the loopback meter.
+const LOOPBACK_BUDGET: u64 = 1000;
+const LOOPBACK_RATE_LIMIT: u64 = 0; // 0 = rate gate disabled; budget is the single cap.
+
+// S26 (F25): forward-mutating symbols refused once the caller is sensitive-latched.
+static SENSITIVE_BLOCKED_SYMBOLS: &[&str] = &[
+    "uk_fetch",
+    "uk_agent_spawn",
+    "uk_blueprint_export",
+    "uk_action_submit",
+    "uk_gate_approve",
+];
+
 fn dispatch_loopback(
     module_name: &str,
     grants: &HashSet<String>,
@@ -1150,6 +1173,55 @@ fn dispatch_loopback_as(
             "error",
             &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
         );
+    }
+
+    // 3a. Sensitive-forward latch (S26/F25). Once a caller has observed
+    //     `<*sensitive*>` data, forward-mutating ops (egress, hand-off, blueprints,
+    //     writes, approvals) are refused with UK-4701 until an operator clears the
+    //     latch — mirroring Cloudflare's `prohibitAllSharing` workspace latch.
+    if SENSITIVE_BLOCKED_SYMBOLS.contains(&symbol) && unfer_ffi::uk_is_sensitive_latched(&caller_principal) {
+        let message = format!(
+            "UK-4701: '{caller_principal}' is sensitive-latched and cannot {}",
+            symbol
+        );
+        append_loopback_audit(symbol, &args, false, Some(&message));
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_observability_clear();
+        return json_response(
+            "error",
+            &serde_json::json!({"code": "UK-4701", "name": "SensitiveLatched", "message": message}),
+        );
+    }
+
+    // 3b. Metered-symbol gate (S25/F24 budgets + rate limits). Expensive symbols
+    //     consume the caller's windowed budget at the chokepoint; a caller that
+    //     exhausts its budget or rate limit is denied here (UK-46xx + audit) —
+    //     never a post-hoc report. Lightweight symbols (reads, version) are free
+    //     so agents stay responsive.
+    if METERED_SYMBOLS.contains(&symbol) {
+        let decision = unfer_ffi::uk_meter_consume(
+            &caller_principal,
+            LOOPBACK_BUDGET,
+            LOOPBACK_RATE_LIMIT,
+        );
+        let deny: Option<(&str, &str, String)> = match decision {
+            0 => None,
+            1 => Some(("UK-4601", "RateLimited", format!(
+                "'{caller_principal}' exceeded its windowed call-rate limit"
+            ))),
+            _ => Some(("UK-4602", "BudgetExceeded", format!(
+                "'{caller_principal}' exhausted its windowed budget"
+            ))),
+        };
+        if let Some((code, name, message)) = deny {
+            append_loopback_audit(symbol, &args, false, Some(&message));
+            unfer_ffi::uk_clear_caller();
+            unfer_ffi::uk_observability_clear();
+            return json_response(
+                "error",
+                &serde_json::json!({"code": code, "name": name, "message": message}),
+            );
+        }
     }
 
     // 4. Dispatch. `kernel_dispatch` receives the caller principal (module or agent id) so
@@ -1590,6 +1662,25 @@ fn kernel_dispatch(
                 Ok(v) => Ok(v),
                 Err(_) => Ok(out),
             }
+        }
+        // S27 (F26): credential vault. `uk_secret_put` takes (owner, value) pairs;
+        // `uk_secret_get` is (handle, owner) with buffer-out; revoke is a handle call.
+        "uk_secret_put" => {
+            let owner = arg_str(args, 0)?;
+            let value = arg_str(args, 1)?;
+            let (po, lo) = ptr_len(&owner);
+            let (pv, lv) = ptr_len(&value);
+            ffi_result(unfer_ffi::uk_secret_put(po, lo, pv, lv))
+        }
+        "uk_secret_get" => {
+            let handle = arg_i64(args, 0)?;
+            let owner = arg_str(args, 1)?;
+            let (po, lo) = ptr_len(&owner);
+            buf_out(|b, c| unfer_ffi::uk_secret_get(handle, po, lo, b, c))
+        }
+        "uk_secret_revoke" => {
+            let handle = arg_i64(args, 0)?;
+            ffi_result(unfer_ffi::uk_secret_revoke(handle))
         }
         other => Err((
             4004,
@@ -2249,6 +2340,235 @@ mod tests {
         );
         assert!(resp.contains("4501"), "expected UK-4501, got {resp}");
         unfer_ffi::uk_clear_caller();
+    }
+
+    // ── S25 (F24): budgets + rate limits at the loopback chokepoint ────────
+    //
+    // Metered symbols consume the caller's windowed budget before dispatch; an
+    // exhausted budget is denied here with UK-4602 + an audit entry, never a
+    // post-hoc report. The meter is a process-global store — tests serialize.
+
+    static METER_TESTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn loopback_denies_metered_symbol_once_budget_exhausted() {
+        use std::collections::HashSet;
+        let _g = METER_TESTS_LOCK.lock().unwrap();
+        unfer_ffi::uk_clear_meter();
+        unfer_ffi::uk_clear_caller();
+        let grants = HashSet::from(["uk_version".to_string()]);
+        let resp = dispatch_loopback(
+            "meter_probe",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_evolve",
+            "[]",
+        );
+        // uk_evolve is not granted here, so the grant gate fires first (UK-4001).
+        assert!(resp.contains("4001"), "ungranted metered symbol denies, got {resp}");
+        unfer_ffi::uk_clear_caller();
+    }
+
+    #[test]
+    fn loopback_meter_records_audit_on_over_budget_deny() {
+        use std::collections::HashSet;
+        let _g = METER_TESTS_LOCK.lock().unwrap();
+        unfer_ffi::uk_clear_meter();
+        unfer_ffi::uk_clear_caller();
+        // Grant the metered symbol so the grant gate passes; pre-exhaust the
+        // windowed budget cheaply (no kernel dispatch) so the meter gate trips.
+        let grants = HashSet::from(["uk_evolve".to_string()]);
+        for _ in 0..LOOPBACK_BUDGET {
+            unfer_ffi::uk_meter_consume("meter_burn", LOOPBACK_BUDGET, LOOPBACK_RATE_LIMIT);
+        }
+        let denied = dispatch_loopback(
+            "meter_burn",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_evolve",
+            "[]",
+        );
+        assert!(
+            denied.contains("\"error\""),
+            "over-budget metered call must be denied, got {denied}"
+        );
+        assert!(
+            denied.contains("4602"),
+            "expected UK-4602 budget-exceeded, got {denied}"
+        );
+        let audits = read_ffi_audit();
+        assert!(
+            audits.iter().any(|e| e["symbol"] == "uk_evolve" && e["ok"] == false),
+            "over-budget deny must be audited: {audits:?}"
+        );
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_meter();
+    }
+
+    // ── S26 (F25): sensitive-forward latch at the loopback chokepoint ──────
+    //
+    // Once a caller is latched (observed `<*sensitive*>` data), forward-mutating
+    // ops are refused with UK-4701 until an operator clears the latch.
+
+    static LATCH_TESTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn loopback_blocks_forward_ops_when_latched() {
+        use std::collections::HashSet;
+        let _g = LATCH_TESTS_LOCK.lock().unwrap();
+        unfer_ffi::uk_clear_sensitive_latches();
+        unfer_ffi::uk_clear_caller();
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["notify_admins".to_string()]);
+        unfer_ffi::uk_set_sensitive_latch("latch_probe", true);
+        let resp = dispatch_loopback(
+            "latch_probe",
+            &grants,
+            &effects,
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_action_submit",
+            r#"[{"effect":"notify_admins","name":"x"}]"#,
+        );
+        assert!(
+            resp.contains("\"error\""),
+            "a latched caller must be blocked from a forward op, got {resp}"
+        );
+        assert!(
+            resp.contains("4701"),
+            "expected UK-4701 sensitive-latched, got {resp}"
+        );
+        let audits = read_ffi_audit();
+        assert!(
+            audits
+                .iter()
+                .any(|e| e["symbol"] == "uk_action_submit" && e["ok"] == false),
+            "the latch block must be audited: {audits:?}"
+        );
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_sensitive_latches();
+    }
+
+    #[test]
+    fn loopback_cleared_latch_allows_forward_op() {
+        use std::collections::HashSet;
+        let _g = LATCH_TESTS_LOCK.lock().unwrap();
+        unfer_ffi::uk_clear_sensitive_latches();
+        unfer_ffi::uk_clear_caller();
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["notify_admins".to_string()]);
+        unfer_ffi::uk_set_sensitive_latch("latch_clear", true);
+        unfer_ffi::uk_set_sensitive_latch("latch_clear", false);
+        let resp = dispatch_loopback(
+            "latch_clear",
+            &grants,
+            &effects,
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_action_submit",
+            r#"[{"effect":"notify_admins","name":"x"}]"#,
+        );
+        assert!(
+            !resp.contains("4701"),
+            "cleared latch must not block, got {resp}"
+        );
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_sensitive_latches();
+    }
+
+    // ── S27 (F26): credential vault over the loopback chokepoint ───────────
+    //
+    // A gatekeeper stores a credential under `uk_secret_put`, then grants the
+    // opaque handle; only the owner dereferences. The vault is process-global.
+
+    static VAULT_TESTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn loopback_secret_put_get_roundtrip() {
+        use std::collections::HashSet;
+        let _g = VAULT_TESTS_LOCK.lock().unwrap();
+        unfer_ffi::uk_vault_clear();
+        unfer_ffi::uk_clear_caller();
+        let grants = HashSet::from(["uk_secret_put".to_string(), "uk_secret_get".to_string()]);
+        let put = dispatch_loopback(
+            "vault_mod",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_secret_put",
+            r#"["vault_mod","tok_abc123"]"#,
+        );
+        eprintln!("PUT_RESP={put}");
+        let put_body = put
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let handle = serde_json::from_str::<serde_json::Value>(&put_body)
+            .ok()
+            .and_then(|v| v["result"].as_i64())
+            .expect("put returns a handle");
+        assert!(handle > 0, "put returns a positive handle, got {put}");
+        let get = dispatch_loopback(
+            "vault_mod",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_secret_get",
+            &format!(r#"[{handle},"vault_mod"]"#),
+        );
+        assert!(
+            get.contains("tok_abc123"),
+            "owner must dereference the secret, got {get}"
+        );
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_vault_clear();
+    }
+
+    #[test]
+    fn loopback_secret_denies_wrong_owner() {
+        use std::collections::HashSet;
+        let _g = VAULT_TESTS_LOCK.lock().unwrap();
+        unfer_ffi::uk_vault_clear();
+        unfer_ffi::uk_clear_caller();
+        let grants = HashSet::from(["uk_secret_put".to_string(), "uk_secret_get".to_string()]);
+        let put = dispatch_loopback(
+            "vault_owner",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_secret_put",
+            r#"["vault_owner","tok_secret"]"#,
+        );
+let put_body = put
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        let handle = serde_json::from_str::<serde_json::Value>(&put_body)
+            .ok()
+            .and_then(|v| v["result"].as_i64())
+            .expect("put returns a handle");
+        let get = dispatch_loopback(
+            "vault_intruder",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_secret_get",
+            &format!(r#"[{handle},"vault_intruder"]"#),
+        );
+        assert!(
+            get.contains("\"error\""),
+            "a non-owner must not dereference the secret, got {get}"
+        );
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_vault_clear();
     }
 
     #[test]
