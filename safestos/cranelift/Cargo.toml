@@ -25,7 +25,7 @@ arctic_authority = { path = "../../arctic_authority", optional = true }
 arctic = { path = "../../../dynamic-arctic", optional = true }
 serde_json = { version = "1", optional = true }
 hex = { version = "0.4", optional = true }
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 frunk = { version = "0.4", optional = true }
 cap-std = { version = "3", optional = true }
 unfer_consensus = { path = "../../../unfer/unfer_consensus", optional = true }
@@ -55,7 +55,7 @@ federation = ["dep:unfer_consensus", "dep:unfer_identity", "dep:unfer_data"]
 ecmascript = ["unfer-kernel", "dep:serde_json", "dep:unfer_protocol", "dep:hex"]
 # S3: OS sandbox layer — dedicated launcher wrapping the workerd sidecar in user/network/pid
 # namespaces + no_new_privs + seccomp-bpf + Landlock (browser-equivalent, no full VM).
-sandbox = ["ecmascript", "dep:libc"]
+sandbox = ["ecmascript"]
 
 # Test helpers: provides stub C runtime symbols (au_alloc, au_free, etc.)
 # so integration tests can link without the real safestos C runtime.

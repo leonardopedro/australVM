@@ -17,7 +17,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -277,6 +277,7 @@ impl EcmaSidecar {
                     staging,
                     module_name,
                 };
+                sidecar.loopback.set_expected_pid(sidecar.child.id());
                 sidecar.wait_ready()?;
                 return Ok(sidecar);
             }
@@ -293,6 +294,7 @@ impl EcmaSidecar {
             staging,
             module_name,
         };
+        sidecar.loopback.set_expected_pid(sidecar.child.id());
         sidecar.wait_ready()?;
         Ok(sidecar)
     }
@@ -365,6 +367,7 @@ struct KernelLoopback {
     path: PathBuf,
     stop: Arc<AtomicBool>,
     _handle: std::thread::JoinHandle<()>,
+    expected_pid: Arc<AtomicU32>,
 }
 
 impl KernelLoopback {
@@ -383,6 +386,8 @@ impl KernelLoopback {
             .map_err(|e| format!("loopback nonblocking: {e}"))?;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
+        let expected_pid = Arc::new(AtomicU32::new(0)); // 0 = peer-check disabled (pre-spawn)
+        let expected_pid_thread = Arc::clone(&expected_pid);
         let module_name = module_name.to_string();
         let grants: Arc<HashSet<String>> = Arc::new(grants.into_iter().collect());
         let effects: Arc<HashSet<String>> = Arc::new(effects.into_iter().collect());
@@ -396,6 +401,23 @@ impl KernelLoopback {
                 }
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let mut stream = stream;
+                        // S11 (F10): loopback peer lockdown. Reject any peer whose
+                        // SO_PEERCRED pid does not match the spawned workerd child; an
+                        // unrelated process that opened the socket path is refused before
+                        // it can impersonate the sidecar (lateral-movement vector).
+                        let want = expected_pid_thread.load(Ordering::Relaxed);
+                        let peer_pid = peer_cred_pid(&stream);
+                        if want != 0 && peer_pid.map(|p| p != want).unwrap_or(true) {
+                            let detail = format!(
+                                "loopback peer pid mismatch: expected {want}, got {peer_pid:?}"
+                            );
+                            append_security_audit(&detail);
+                            let _ = stream.write_all(
+                                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                            );
+                            continue;
+                        }
                         let name = module_name.clone();
                         let grants = Arc::clone(&grants);
                         let effects = Arc::clone(&effects);
@@ -416,7 +438,14 @@ impl KernelLoopback {
             path: sock_path.to_path_buf(),
             stop,
             _handle: handle,
+            expected_pid,
         })
+    }
+
+    /// Arm the SO_PEERCRED check once the workerd sidecar child is spawned: only that
+    /// pid may open the loopback. 0 disarms the check.
+    fn set_expected_pid(&self, pid: u32) {
+        self.expected_pid.store(pid, Ordering::Relaxed);
     }
 }
 
@@ -514,6 +543,47 @@ fn json_response(key: &str, value: &serde_json::Value) -> String {
         body.len(),
         body
     )
+}
+
+/// Append a security event (`uk_security`) to the kernel audit trail. The peer check
+/// runs outside any caller context (no workerd caller is on the thread), so the entry
+/// carries no caller tag.
+fn append_security_audit(detail: &str) {
+    let entry = serde_json::json!({
+        "symbol": "uk_security",
+        "args": [],
+        "ok": false,
+        "detail": detail,
+    });
+    let _ = unfer_ffi::uk_audit_append(&entry.to_string());
+}
+
+/// Read the peer's `SO_PEERCRED` pid (S11). Uses `libc`/`getsockopt` so the loopback
+/// works on the project toolchain (std's `UnixStream::peer_cred` is still unstable).
+/// Returns `None` when the credential is unreadable; callers fail closed only when a
+/// pid has been armed (never before the workerd child exists).
+fn peer_cred_pid(stream: &UnixStream) -> Option<u32> {
+    use std::os::unix::io::AsRawFd;
+    let mut ucred: libc::ucred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut ucred as *mut libc::ucred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if ret == 0 {
+        Some(ucred.pid as u32)
+    } else {
+        None
+    }
 }
 
 // ── S10: egress boundary (F9) ─────────────────────────────────────────
@@ -1875,8 +1945,53 @@ mod tests {
         // Subset spawn succeeds (agent inherits a subset incl. the module's observers).
         let subset =
             r#"[{"name":"clerk","grants":{"kernel":["uk_version"],"effects":[],"observers":["f8_peer"]}}]"#;
-        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", subset);
+let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", subset);
         assert!(resp.contains("\"result\""), "subset spawn must succeed, got {resp}");
+    }
+
+    // ── S11: loopback peer lockdown (F10) ─────────────────────────────────
+
+    #[test]
+    fn peer_cred_rejects_foreign_child_pid() {
+        // A self-connected socketpair's peer pid IS this test process.
+        let (a, _b) = UnixStream::pair().unwrap();
+        let peer = peer_cred_pid(&a).expect("SO_PEERCRED readable on a socketpair");
+        assert_eq!(peer, std::process::id(), "peer must be us");
+        // Matching pid -> accepted; a foreign pid -> rejected.
+        assert!(
+            peer_cred_pid(&a).map(|p| p == std::process::id()).unwrap_or(false),
+            "our own peer must pass the gate"
+        );
+        let want = std::process::id() + 5000;
+        assert!(
+            peer_cred_pid(&a).map(|p| p != want).unwrap_or(true),
+            "a foreign pid must fail the gate"
+        );
+    }
+
+    #[test]
+    fn peer_check_disarmed_before_spawn_accepts() {
+        // expected_pid == 0 (loopback armed pre-child): the acceptor must not reject.
+        let zero = AtomicU32::new(0);
+        let (_a, b) = UnixStream::pair().unwrap();
+        let want = zero.load(Ordering::Relaxed);
+        let peer_pid = peer_cred_pid(&b);
+        let reject = want != 0 && peer_pid.map(|p| p != want).unwrap_or(true);
+        assert!(!reject, "disarmed loopback must accept the first probe");
+    }
+
+    /// The acceptor's reject predicate: armed-and-matching accepts, armed-and-foreign
+    /// refuses, unarmed accepts on any cred.
+    #[test]
+    fn armed_loopback_reject_predicate() {
+        let (_a, b) = UnixStream::pair().unwrap();
+        let pid = peer_cred_pid(&b).expect("socketpair peer cred");
+        let want = pid;
+        assert!(!(want != 0 && peer_cred_pid(&b).map(|p| p != want).unwrap_or(true)));
+        let want = pid.wrapping_add(5000);
+        assert!(want != 0 && peer_cred_pid(&b).map(|p| p != want).unwrap_or(true));
+        let want = 0u32;
+        assert!(!(want != 0 && peer_cred_pid(&b).map(|p| p != want).unwrap_or(true)));
     }
 
     // ── S10: egress boundary (F9) ─────────────────────────────────────────
