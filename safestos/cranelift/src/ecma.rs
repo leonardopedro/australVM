@@ -18,7 +18,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::module::ModuleManifest;
@@ -159,11 +159,12 @@ fn find_in_fnm() -> Option<PathBuf> {
 
 /// A running workerd sidecar for one ECMAScript module (S1: one sidecar per module).
 pub struct EcmaSidecar {
-    child: Child,
+    child: Arc<Mutex<Option<Child>>>,
     main_sock: PathBuf,
     loopback: KernelLoopback,
     staging: PathBuf,
     module_name: String,
+    _supervisor: Arc<AtomicBool>,
 }
 
 impl EcmaSidecar {
@@ -217,17 +218,12 @@ impl EcmaSidecar {
         std::fs::write(staging.join("config.capnp"), config)
             .map_err(|e| format!("write config: {e}"))?;
 
-        let args: Vec<std::ffi::OsString> = vec![
+        let args: std::sync::Arc<Vec<std::ffi::OsString>> = std::sync::Arc::new(vec![
             "serve".into(),
             staging.join("config.capnp").into_os_string(),
             "-I".into(),
             paths.import_dir.clone().into_os_string(),
-        ];
-
-        let spawn_cmd = |base: &mut Command| -> Result<Child, String> {
-            base.args(args.iter()).stdout(Stdio::piped()).stderr(Stdio::piped());
-            base.spawn().map_err(|e| e.to_string())
-        };
+        ]);
 
         // S3: wrap the sidecar in the OS sandbox (userns + netns + no_new_privs + seccomp +
         // Landlock) when the feature is on and the kernel supports it. The unix sockets the
@@ -266,48 +262,152 @@ impl EcmaSidecar {
                     readable_dirs: readable,
                     memory_max_bytes: None,
                 };
-                let mut sandbox_cmd = crate::sandbox::sandboxed_command(&paths.bin, &profile);
-                let child = spawn_cmd(&mut sandbox_cmd)
-                    .map_err(|e| format!("spawn sandboxed workerd: {e} (bin={})", paths.bin.display()))?;
-
-                let mut sidecar = Self {
-                    child,
+                let bin = paths.bin.clone();
+                let make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync> =
+                    Arc::new(move || {
+                        let mut sandbox_cmd =
+                            crate::sandbox::sandboxed_command(&bin, &profile);
+                        sandbox_cmd.args(args.iter());
+                        sandbox_cmd
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::piped())
+                            .spawn()
+                            .map_err(|e| {
+                                format!("spawn sandboxed workerd: {e} (bin={})", bin.display())
+                            })
+                    });
+                return Self::spawn_with_supervisor(
+                    make_child,
                     main_sock,
                     loopback,
                     staging,
                     module_name,
-                };
-                sidecar.loopback.set_expected_pid(sidecar.child.id());
-                sidecar.wait_ready()?;
-                return Ok(sidecar);
+                );
             }
         }
 
-        let mut cmd = Command::new(&paths.bin);
-        let child = spawn_cmd(&mut cmd)
-            .map_err(|e| format!("spawn workerd: {e} (bin={})", paths.bin.display()))?;
+        let bin = paths.bin.clone();
+        let make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync> =
+            Arc::new(move || {
+                let mut cmd = Command::new(&bin);
+                cmd.args(args.iter())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| format!("spawn workerd: {e} (bin={})", bin.display()))
+            });
+        Self::spawn_with_supervisor(make_child, main_sock, loopback, staging, module_name)
+    }
 
-        let mut sidecar = Self {
-            child,
+    /// Spawn the initial child, hand it to a supervisor thread (S12) that respawns it on
+    /// crash with 1s→8s backoff, arm the loopback peer check, and wait for the socket.
+    fn spawn_with_supervisor(
+        make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync>,
+        main_sock: PathBuf,
+        loopback: KernelLoopback,
+        staging: PathBuf,
+        module_name: String,
+    ) -> Result<Self, String> {
+        let initial = make_child()?;
+        let slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(initial)));
+        let quit = Arc::new(AtomicBool::new(false));
+
+        let sup_slot = Arc::clone(&slot);
+        let sup_make = Arc::clone(&make_child);
+        let sup_quit = Arc::clone(&quit);
+        let sup_name = module_name.clone();
+        std::thread::spawn(move || {
+            Self::supervise_loop(sup_slot, sup_make, sup_quit, &sup_name);
+        });
+
+        let sidecar = Self {
+            child: slot,
             main_sock,
             loopback,
             staging,
             module_name,
+            _supervisor: quit,
         };
-        sidecar.loopback.set_expected_pid(sidecar.child.id());
+        sidecar.loopback.set_expected_pid(
+            sidecar
+                .child
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|c| c.id())
+                .unwrap_or(0),
+        );
         sidecar.wait_ready()?;
         Ok(sidecar)
     }
 
-    fn wait_ready(&mut self) -> Result<(), String> {
+    /// S12 (F11): sidecar supervision loop. Watches the shared child; when it exits, marks
+    /// the module degraded (`KERNEL_DOWN` audit) and respawns with 1s→8s doubling backoff,
+    /// reusing the same staging dir (stable socket addresses). Returns when `quit` is set.
+    fn supervise_loop(
+        slot: Arc<Mutex<Option<Child>>>,
+        make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync>,
+        quit: Arc<AtomicBool>,
+        module_name: &str,
+    ) {
+        let mut backoff = Duration::from_millis(100);
+        loop {
+            std::thread::sleep(backoff);
+            if quit.load(Ordering::Relaxed) {
+                return;
+            }
+            let exited = {
+                let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+                match guard.as_mut() {
+                    Some(c) => matches!(c.try_wait(), Ok(Some(_))),
+                    None => false,
+                }
+            };
+            if !exited {
+                backoff = Duration::from_millis(100);
+                continue;
+            }
+            // The child died: degrade, then heal.
+            append_host_audit("uk_kernel", false, &format!("KERNEL_DOWN module='{module_name}'"));
+            match make_child() {
+                Ok(newc) => {
+                    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(newc);
+                    append_host_audit(
+                        "uk_kernel",
+                        true,
+                        &format!("KERNEL_HEALED module='{module_name}'"),
+                    );
+                    backoff = Duration::from_secs(1);
+                }
+                Err(e) => {
+                    append_host_audit(
+                        "uk_kernel",
+                        false,
+                        &format!("RESPAWN_FAILED module='{module_name}': {e}"),
+                    );
+                    backoff = (backoff * 2).min(Duration::from_secs(8));
+                }
+            }
+        }
+    }
+
+    fn wait_ready(&self) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if let Some(status) = self.child.try_wait().map_err(|e| format!("wait: {e}"))? {
-                let stderr = read_child_stderr(&mut self.child);
-                return Err(format!(
-                    "workerd exited early with {status}{}",
-                    stderr.map(|s| format!("\nstderr:\n{s}")).unwrap_or_default()
-                ));
+            let mut guard = self.child.lock().unwrap_or_else(|e| e.into_inner());
+            let mut exit_info: Option<String> = None;
+            if let Some(child) = guard.as_mut() {
+                if let Some(status) = child.try_wait().map_err(|e| format!("wait: {e}"))? {
+                    if let Some(stderr) = read_child_stderr(child) {
+                        exit_info = Some(format!("{status}\nstderr:\n{stderr}"));
+                    } else {
+                        exit_info = Some(status.to_string());
+                    }
+                }
+            }
+            drop(guard);
+            if let Some(info) = exit_info {
+                return Err(format!("workerd exited early with {info}"));
             }
             if UnixStream::connect(&self.main_sock).is_ok() {
                 return Ok(());
@@ -337,10 +437,16 @@ impl EcmaSidecar {
         &self.module_name
     }
 
-    /// PID of the sandboxed `workerd` sidecar. Used by S3 escape-attempt tests to probe the
-    /// child's namespace/capability confinement (e.g. `uid_map`, `no_new_privs`).
+    /// PID of the (latest) `workerd` sidecar. 0 when no child is currently alive. Used by
+/// S3 escape-attempt tests to probe the child's namespace/capability confinement and by
+/// S11 to arm the loopback peer check.
     pub fn child_pid(&self) -> u32 {
-        self.child.id()
+        self.child
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|c| c.id())
+            .unwrap_or(0)
     }
 
     /// Path of the staging dir holding `config.capnp`, `harness.mjs`, `module.js` and the unix
@@ -352,8 +458,11 @@ impl EcmaSidecar {
 
 impl Drop for EcmaSidecar {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self._supervisor.store(true, Ordering::Relaxed);
+        if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         let _ = std::fs::remove_dir_all(&self.staging);
     }
 }
@@ -549,10 +658,16 @@ fn json_response(key: &str, value: &serde_json::Value) -> String {
 /// runs outside any caller context (no workerd caller is on the thread), so the entry
 /// carries no caller tag.
 fn append_security_audit(detail: &str) {
+    append_host_audit("uk_security", false, detail);
+}
+
+/// Append a host-originated event (no caller tag) to the kernel audit trail, e.g.
+/// `uk_security` peer-mismatch and `uk_kernel` KERNEL_DOWN/RESPAWN events. Host-internal.
+fn append_host_audit(symbol: &str, ok: bool, detail: &str) {
     let entry = serde_json::json!({
-        "symbol": "uk_security",
+        "symbol": symbol,
         "args": [],
-        "ok": false,
+        "ok": ok,
         "detail": detail,
     });
     let _ = unfer_ffi::uk_audit_append(&entry.to_string());
@@ -1992,6 +2107,50 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
         assert!(want != 0 && peer_cred_pid(&b).map(|p| p != want).unwrap_or(true));
         let want = 0u32;
         assert!(!(want != 0 && peer_cred_pid(&b).map(|p| p != want).unwrap_or(true)));
+    }
+
+    // ── S12: sidecar supervision & auto-restart (F11) ─────────────────────
+
+    #[test]
+    fn supervisor_respawns_crashed_child() {
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unfer_ffi::uk_audit_clear();
+        // `true` exits instantly; the supervisor must detect the crash and respawn.
+        let respawns = Arc::new(AtomicU32::new(0));
+        let respawns2 = Arc::clone(&respawns);
+        let make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync> = Arc::new(move || {
+            respawns2.fetch_add(1, Ordering::Relaxed);
+            Command::new("true").spawn().map_err(|e| e.to_string())
+        });
+        let slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(
+            Command::new("true").spawn().unwrap(),
+        )));
+        let quit = Arc::new(AtomicBool::new(false));
+        let sup_q = Arc::clone(&quit);
+        let handle = std::thread::spawn(move || {
+            EcmaSidecar::supervise_loop(Arc::clone(&slot), make_child, sup_q, "test-mod");
+        });
+        // Give the supervisor ~1.2s to observe the crash and respawn at least twice.
+        std::thread::sleep(Duration::from_millis(1200));
+        quit.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+
+        let n = respawns.load(Ordering::Relaxed);
+        assert!(n >= 2, "expected >=2 respawns after crash, got {n}");
+
+        // The kernel audit trail must carry a KERNEL_DOWN event for the degraded module.
+        let entries = read_ffi_audit();
+        let down = entries
+            .iter()
+            .filter(|e| {
+                e["symbol"] == "uk_kernel"
+                    && e["detail"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with("KERNEL_DOWN")
+            })
+            .count();
+        assert!(down >= 1, "KERNEL_DOWN must be audited: {entries:?}");
     }
 
     // ── S10: egress boundary (F9) ─────────────────────────────────────────
