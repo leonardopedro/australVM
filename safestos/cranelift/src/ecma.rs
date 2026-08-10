@@ -987,6 +987,12 @@ static SENSITIVE_BLOCKED_SYMBOLS: &[&str] = &[
     "uk_blueprint_export",
     "uk_action_submit",
     "uk_gate_approve",
+    // Plan R: certificate ledger mutations (mint/transfer/burn/authority) are
+    // forward-mutating and refuse to run once the caller is sensitive-latched.
+    "uk_cert_set_authority",
+    "uk_cert_mint",
+    "uk_cert_transfer",
+    "uk_cert_burn",
 ];
 
 fn dispatch_loopback(
@@ -1681,6 +1687,36 @@ fn kernel_dispatch(
         "uk_secret_revoke" => {
             let handle = arg_i64(args, 0)?;
             ffi_result(unfer_ffi::uk_secret_revoke(handle))
+        }
+        // ── Plan R: carbon-certificate / UTXO ledger ─────────────────────────
+        // `uk_cert_*` marshals onto the process-global `CertificateLedger`. The
+        // mutating ops take a single JSON op arg and return 0/-err; the read ops
+        // use the buffer-out protocol.
+        "uk_cert_set_authority" => {
+            let did = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&did);
+            ffi_result(unfer_ffi::uk_cert_set_authority(p, l))
+        }
+        "uk_cert_root" => {
+            buf_out_raw(|b, c| unfer_ffi::uk_cert_root(b, c))
+        }
+        "uk_cert_status" => {
+            buf_out(|b, c| unfer_ffi::uk_cert_status(b, c))
+        }
+        "uk_cert_mint" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_cert_mint(p, l))
+        }
+        "uk_cert_transfer" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_cert_transfer(p, l))
+        }
+        "uk_cert_burn" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_cert_burn(p, l))
         }
         other => Err((
             4004,
