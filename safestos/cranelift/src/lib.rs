@@ -193,6 +193,44 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_agent_list",     addr: unfer_ffi::uk_agent_list     as *const u8 },
     KernelSymbol { name: "uk_agent_kill",     addr: unfer_ffi::uk_agent_kill     as *const u8 },
     KernelSymbol { name: "uk_agent_grants",   addr: unfer_ffi::uk_agent_grants   as *const u8 },
+    // S5: .cell blueprint archives — remaining blueprint surface.
+    KernelSymbol { name: "uk_blueprint_cell",           addr: unfer_ffi::uk_blueprint_cell           as *const u8 },
+    KernelSymbol { name: "uk_blueprint_export_gadget",  addr: unfer_ffi::uk_blueprint_export_gadget  as *const u8 },
+    KernelSymbol { name: "uk_blueprint_get_by_id",      addr: unfer_ffi::uk_blueprint_get_by_id      as *const u8 },
+    KernelSymbol { name: "uk_blueprint_import",         addr: unfer_ffi::uk_blueprint_import         as *const u8 },
+    KernelSymbol { name: "uk_blueprint_list",           addr: unfer_ffi::uk_blueprint_list           as *const u8 },
+    // S7: observability + issue reporting.
+    KernelSymbol { name: "uk_observability", addr: unfer_ffi::uk_observability as *const u8 },
+    KernelSymbol { name: "uk_report_issue",  addr: unfer_ffi::uk_report_issue  as *const u8 },
+    // S22: owner-scoped owner log (operator console).
+    KernelSymbol { name: "uk_owner_clear", addr: unfer_ffi::uk_owner_clear as *const u8 },
+    KernelSymbol { name: "uk_owner_list",  addr: unfer_ffi::uk_owner_list  as *const u8 },
+    KernelSymbol { name: "uk_owner_log",   addr: unfer_ffi::uk_owner_log   as *const u8 },
+    // S21: vetted identity registry (console-only).
+    KernelSymbol { name: "uk_registry_vetted", addr: unfer_ffi::uk_registry_vetted as *const u8 },
+    // S25: read-only metering status + S27 credential vault.
+    KernelSymbol { name: "uk_meter_status", addr: unfer_ffi::uk_meter_status as *const u8 },
+    KernelSymbol { name: "uk_secret_put",    addr: unfer_ffi::uk_secret_put    as *const u8 },
+    KernelSymbol { name: "uk_secret_get",    addr: unfer_ffi::uk_secret_get    as *const u8 },
+    KernelSymbol { name: "uk_secret_revoke", addr: unfer_ffi::uk_secret_revoke as *const u8 },
+    // S18: resource introductions + caps + forfeit.
+    KernelSymbol { name: "uk_request_resource", addr: unfer_ffi::uk_request_resource as *const u8 },
+    KernelSymbol { name: "uk_resource_introduce", addr: unfer_ffi::uk_resource_introduce as *const u8 },
+    KernelSymbol { name: "uk_resource_pending",   addr: unfer_ffi::uk_resource_pending   as *const u8 },
+    KernelSymbol { name: "uk_resource_use",       addr: unfer_ffi::uk_resource_use       as *const u8 },
+    KernelSymbol { name: "uk_resource_forfeit",   addr: unfer_ffi::uk_resource_forfeit   as *const u8 },
+    // Plan R: certificate ledger ops (ReFi exchange).
+    KernelSymbol { name: "uk_cert_set_authority", addr: unfer_ffi::uk_cert_set_authority as *const u8 },
+    KernelSymbol { name: "uk_cert_mint",          addr: unfer_ffi::uk_cert_mint          as *const u8 },
+    KernelSymbol { name: "uk_cert_mint_request",  addr: unfer_ffi::uk_cert_mint_request  as *const u8 },
+    KernelSymbol { name: "uk_cert_transfer",      addr: unfer_ffi::uk_cert_transfer      as *const u8 },
+    KernelSymbol { name: "uk_cert_burn",          addr: unfer_ffi::uk_cert_burn          as *const u8 },
+    KernelSymbol { name: "uk_cert_status",        addr: unfer_ffi::uk_cert_status        as *const u8 },
+    KernelSymbol { name: "uk_cert_root",          addr: unfer_ffi::uk_cert_root          as *const u8 },
+    // Plan R: gate approval surface (secondary market settlement).
+    KernelSymbol { name: "uk_gate_list_pending", addr: unfer_ffi::uk_gate_list_pending as *const u8 },
+    KernelSymbol { name: "uk_gate_approve",      addr: unfer_ffi::uk_gate_approve      as *const u8 },
+    KernelSymbol { name: "uk_gate_reject",       addr: unfer_ffi::uk_gate_reject       as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]

@@ -72,8 +72,8 @@ jobs:
       - name: Checkout unfer as sibling (Cargo.toml path dep ../../../unfer/unfer_ffi)
         uses: actions/checkout@v4
         with:
-          repository: anomalyco/unfer
-          path: ../../unfer
+          repository: leonardopedro/unfer
+          path: ../unfer
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -159,7 +159,7 @@ jobs:
 
           echo ">> AUTHORIZATION: grant vs. revocation (UK-4001)"
           MODULE_NAME=$(grep -m1 "^name\s*=" "$MODULE_TOML" | sed "s/.*=\s*\"\(.*\)\"/\1/")
-          DENY_SYM="uk_probability"
+          DENY_SYM="uk_event_probability"
 
           # Positive: full manifest authorizes the symbol
           if "$MODHOST" authorize "$MODULE_TOML" "$MODULE_NAME" "$DENY_SYM"; then
