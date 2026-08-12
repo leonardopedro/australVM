@@ -669,7 +669,7 @@ dependencies = [
  "libm",
  "log",
  "regalloc2",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "smallvec",
  "target-lexicon",
@@ -1116,7 +1116,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "quanta",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "smallvec",
  "symbol_table",
  "symbolic_expressions",
@@ -1257,7 +1257,7 @@ dependencies = [
  "num-complex",
  "quantrs2-symengine-pure",
  "rayon",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde_json",
  "thiserror 2.0.19",
 ]
@@ -2483,6 +2483,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "nanoda_lib"
+version = "0.4.13"
+source = "git+https://github.com/ammkrn/nanoda_lib#418320295890faed83a96fd97907b12a3b6728c2"
+dependencies = [
+ "indexmap 2.14.0",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "rustc-hash 1.1.0",
+ "semver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ndarray"
 version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2519,7 +2534,7 @@ dependencies = [
  "num-complex",
  "quantrs2-symengine-pure",
  "rayon",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "thiserror 2.0.19",
 ]
@@ -2561,6 +2576,7 @@ checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
 dependencies = [
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -2685,7 +2701,7 @@ dependencies = [
  "nested_fock_algebra",
  "num-complex",
  "quantrs2-symengine-pure",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -2978,12 +2994,15 @@ version = "0.1.0"
 dependencies = [
  "candle-core",
  "fock_sirk",
+ "hex",
+ "nanoda_lib",
  "nested_fock_algebra",
  "num-complex",
  "ode_sirk",
  "qfm",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.19",
  "unfer_protocol",
 ]
@@ -3051,7 +3070,7 @@ dependencies = [
  "nalgebra",
  "nested_fock_algebra",
  "num-complex",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -3084,7 +3103,7 @@ dependencies = [
  "num-rational",
  "ordered-float",
  "oxicode",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "scirs2-autograd",
  "scirs2-core",
  "scirs2-linalg",
@@ -3308,7 +3327,7 @@ dependencies = [
  "bumpalo",
  "hashbrown 0.17.1",
  "log",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "smallvec",
 ]
 
@@ -3366,6 +3385,12 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustc-hash"
@@ -3531,7 +3556,7 @@ dependencies = [
  "num",
  "once_cell",
  "parking_lot",
- "rustc-hash",
+ "rustc-hash 2.1.3",
  "scirs2-core",
  "serde",
  "serde_json",
