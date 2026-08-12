@@ -1,11 +1,14 @@
 (executable
  (name austral)
+ (modules austral)
  (libraries austral_lib))
 
 (executable
  (name test_jit)
+ (modules test_jit)
  (libraries austral_lib austral_core austral_caml austral_cps_gen austral_rust_bridge))
 
 (executable
  (name test_hotswap)
+ (modules test_hotswap)
  (libraries austral_lib austral_core austral_caml austral_cps_gen austral_rust_bridge))

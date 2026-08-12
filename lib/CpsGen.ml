@@ -317,9 +317,19 @@ let serialize_function_def w func =
   write_u32 w (Int32.of_int len);
   write_bytes w body_data
 
-let serialize_functions (funcs: function_def list): string =
+(* Serialize a function list to the CPS binary format.
+   If [module_name] is [Some n], emits the v2 header
+   (magic 0x43505332, then the module name string) so the JIT can use the
+   module as the authorization principal. With [None], emits the legacy v1
+   header (magic 0x43505331) with no module header. *)
+let serialize_functions ?(module_name: string option) (funcs: function_def list): string =
   let w = create_writer () in
-  write_u32 w 0x43505331l;
+  (match module_name with
+   | Some n ->
+       write_u32 w 0x43505332l;
+       write_string w n
+   | None ->
+       write_u32 w 0x43505331l);
   write_u32 w (Int32.of_int (List.length funcs));
   List.iter (serialize_function_def w) funcs;
   Bytes.to_string (Buffer.to_bytes w.buf)

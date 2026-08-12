@@ -35,10 +35,13 @@ let test_compile_default _ =
                                        bin_path = "out";
                                        entrypoint = Entrypoint (make_mod_name "Foo", make_ident "main")
                                      };
-                           error_reporting_mode = ErrorReportPlain;
-                           use_cps_jit = false;
-                           jit_server = false
-                         }
+                            error_reporting_mode = ErrorReportPlain;
+                            use_cps_jit = false;
+                            jit_server = false;
+                            allow_all = false;
+                            auth_manifest = None;
+                            emit_cps_path = None
+                          }
   in
   assert_equal ~printer:(fun _ -> "cmd") cmd expected
 

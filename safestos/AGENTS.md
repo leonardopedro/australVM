@@ -4,7 +4,10 @@
 
 **SafestOS**: A virtual machine that runs an operating system inside a single Linux process, written in extended Austral. Designed for AI-friendliness, fast compilation, and safe live evolution.
 
-**Current Status**: CPS JIT pipeline compiles and runs — `fib(10)` returns `10` (needs OCaml recompile to emit `0x08` opcodes for correct `55`).
+**Current Status**: Cranelift bridge functional — see `COMPLETION_SUMMARY.md` /
+`CURRENT_STATUS.md`. Earlier CPS-JIT items (`CpsGen.ml` 0x08 patch,
+`cps_Fib_only.bin`, `test_fib_math`) are historical; those files are no longer
+in the tree.
 
 ## Architecture Summary
 
@@ -141,14 +144,12 @@ Some MAST nodes fall through to a default `IntLit(0)` stub:
 |------|---------|
 | `safestos/cranelift/src/lib.rs` | FFI bridge: `compile_to_function_named()` |
 | `safestos/cranelift/src/cps.rs` | CPS binary → Cranelift IR compiler |
-| `lib/CpsGen.ml` | OCaml MAST → CPS binary emitter |
-| `lib/CpsGen_backup.ml` | Original CpsGen before 0x08 patch |
-| `lib/Compiler_cps.ml` | CPS compilation entry point |
 | `examples/fib/Fibonacci.aum` | Fibonacci test source |
-| `examples/fib/cps_Fib_only.bin` | Stale CPS binary (needs regen) |
-| `examples/fib/cps_Example.Fibonacci.bin` | Full module CPS binary |
-| `safestos/test_fib_math` | Test binary (currently outputs fib(10)=10) |
-| `safestos/cranelift/src/cps.rs.backup3` | Previous working version (653 lines) |
+
+> Historical (no longer in tree): `lib/CpsGen.ml`, `lib/CpsGen_backup.ml`,
+> `lib/Compiler_cps.ml`, `examples/fib/cps_Fib_only.bin`,
+> `examples/fib/cps_Example.Fibonacci.bin`, `safestos/test_fib_math`,
+> `cranelift/src/cps.rs.backup3`.
 
 ## Backup Files (Do Not Delete)
 
@@ -156,19 +157,17 @@ Some MAST nodes fall through to a default `IntLit(0)` stub:
 - `cps.rs.backup3` — Full version with complete emit_expr; basis of current cps.rs
 - `CpsGen_backup.ml` — Original CpsGen before any patches
 
+> The `cps.rs.backup*` files above are noted for historical reference; verify
+> they still exist before relying on them.
+
 ## Test Protocol
 
 ```bash
 # 1. Build Rust bridge
 cd safestos/cranelift && cargo build --release
 
-# 2. (After OCaml recompile) Regenerate CPS binary
-cd examples/fib && make clean && make
-
-# 3. Run test
-cd safestos && ./test_fib_math
-# Expected after fix: fib(10) = 55
-# Current: fib(10) = 10 (stale binary)
+# 2. Run the module tests (fib is a historical CPS-era fixture)
+cargo test --features "test-stubs" -p austral_cranelift_bridge
 ```
 
 ## Revision History

@@ -80,11 +80,17 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; emit_cps_path } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path } ->
      Compiler.use_cps_jit := use_cps_jit;
      Compiler.jit_server_mode := jit_server;
      Compiler.emit_cps_path := emit_cps_path;
      if allow_all then CamlCompiler_rust_bridge.set_allow_all ();
+     (match auth_manifest with
+      | Some path ->
+         let toml = read_file_to_string path in
+         if not (CamlCompiler_rust_bridge.load_auth_manifest toml) then
+           err ("Failed to load --auth-manifest " ^ path ^ " (invalid TOML or no [grants] section).")
+      | None -> ());
      exec_compile modules target error_reporting_mode
 
 and print_usage _: unit =

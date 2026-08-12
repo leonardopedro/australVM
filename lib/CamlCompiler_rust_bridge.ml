@@ -21,9 +21,13 @@ external c_last_error : unit -> string option = "ocaml_cranelift_last_error"
 external c_lookup_function : string -> int64 = "ocaml_lookup_function"
 external c_list_function_names : unit -> string = "ocaml_list_function_names"
 external c_set_allow_all : unit -> unit = "ocaml_set_allow_all"
+external c_load_auth_manifest : string -> int64 = "ocaml_load_auth_manifest"
 external c_swap_binary : bytes -> int -> int64 = "ocaml_swap_binary"
 
 let set_allow_all () : unit = c_set_allow_all ()
+
+let load_auth_manifest (manifest: string) : bool =
+  c_load_auth_manifest manifest = 1L
 external c_cedar_load_policy : string -> int64 = "ocaml_cedar_load_policy"
 external c_cedar_check_runtime : string -> string -> string -> int64 = "ocaml_cedar_check_runtime"
 external c_set_cell_jit_ptr : int64 -> int64 -> unit = "ocaml_set_cell_jit_ptr"

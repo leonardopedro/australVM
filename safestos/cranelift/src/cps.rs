@@ -8,10 +8,27 @@ fn check_call_permission(caller: &str, module_name: &str, callee: &str) -> Resul
     if callee.starts_with("__") || callee.starts_with("au_") || caller == callee {
         return Ok(());
     }
-    // Prefer the module principal if available; fall back to function name
-    // for backwards compatibility with old CPS binaries that lack module headers.
-    let principal = if module_name.is_empty() { caller } else { module_name };
-    crate::auth::check(principal, "Call", callee)
+    // Only kernel-boundary calls (`uk_*`/`uz_*` FFI) are gated against the
+    // manifest grant list. Internal Austral calls — intra- or cross-module
+    // (e.g. a library wrapper like `kernelModelCreateStr` calling back into the
+    // same compiled program) — are part of the module's own code, not kernel
+    // calls, and must never be denied here.
+    if !callee.starts_with("uk_") && !callee.starts_with("uz_") {
+        return Ok(());
+    }
+    // Prefer the deployment principal (the manifest's module name, e.g.
+    // "demo_module") over the CPS header's Austral module name, falling back to
+    // the caller name for legacy binaries that lack module headers.
+    let principal = crate::auth::deployment_principal()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| {
+            if module_name.is_empty() {
+                caller.to_string()
+            } else {
+                module_name.to_string()
+            }
+        });
+    crate::auth::check(&principal, "Call", callee)
 }
 
 /// Declare `name` as an external import with `argc` i64 params returning i64,

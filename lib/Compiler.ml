@@ -125,14 +125,14 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
           (* Phase 7: CPS JIT Integration Path *)
           if !use_cps_jit then begin
             try
-              let funcs = Compiler_cps.compile_module_cps mono in
+              let (funcs, module_name) = Compiler_cps.compile_module_cps mono in
               (if Sys.getenv_opt "CPS_DEBUG" <> None then
                  Compiler_cps.debug_print_cps_functions funcs);
               if List.length funcs > 0 then begin
-                let binary = CpsGen.serialize_functions funcs in
+                let binary = CpsGen.serialize_functions ~module_name funcs in
                 (match !emit_cps_path with
                  | Some path ->
-                    Compiler_cps.write_cps_binary funcs path;
+                    Compiler_cps.write_cps_binary funcs module_name path;
                     Printf.eprintf "CPS JIT: Emitted CPS binary to %s\n%!" path
                  | None -> ());
                 Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
@@ -225,6 +225,7 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
     compile_mod_to_env (make_source pervasive_interface_source pervasive_body_source);
     compile_mod_to_env (make_source memory_interface_source memory_body_source);
     let all_funcs = ref [] in
+    let swap_module_name = ref "" in
     List.iter (fun source ->
       let (new_env, _name, combined, int_file_id, body_file_id) =
         parse_and_combine !env source in
@@ -239,11 +240,12 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
       env := new_env;
       let (new_env, mono) = monomorphize !env typed in
       env := new_env;
-      let funcs = Compiler_cps.compile_module_cps mono in
+      let (funcs, module_name) = Compiler_cps.compile_module_cps mono in
+      swap_module_name := module_name;
       all_funcs := !all_funcs @ funcs
     ) mods;
     if List.length !all_funcs > 0 then begin
-      let binary = CpsGen.serialize_functions !all_funcs in
+      let binary = CpsGen.serialize_functions ~module_name:!swap_module_name !all_funcs in
       Printf.eprintf "CPS JIT: Swap compiled %d functions (%d bytes)\n%!"
         (List.length !all_funcs) (String.length binary);
 

@@ -348,6 +348,7 @@ impl ModuleHost {
         let engine = ManifestAuthEngine::from_toml_str(&toml_str)
             .map_err(|e| format!("manifest auth error: {e}"))?;
         auth::set_auth_engine(Box::new(engine));
+        auth::set_deployment_principal(manifest.name.clone());
 
         // ECMAScript archetype: serve the module's JS via a workerd sidecar (S1) instead of
         // compiling a CPS binary into Cranelift IR.
@@ -558,6 +559,7 @@ impl ModuleHost {
         let engine = ManifestAuthEngine::from_toml_str(&toml_str)
             .map_err(|e| format!("manifest auth error: {e}"))?;
         auth::set_auth_engine(Box::new(engine));
+        auth::set_deployment_principal(new_manifest.name.clone());
 
         let handle = if new_manifest.archetype == "ecmascript" {
             #[cfg(feature = "ecmascript")]

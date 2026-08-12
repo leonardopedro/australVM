@@ -37,11 +37,17 @@ impl ManifestAuthEngine {
     pub fn from_toml_str(s: &str) -> Result<Self, String> {
         let manifest: ManifestToml =
             toml::from_str(s).map_err(|e| format!("TOML parse error: {}", e))?;
+        let module_name = manifest.module.name.clone();
         let mut engine = Self::new();
-        let callables: HashSet<String> = manifest.grants.kernel.into_iter().collect();
-        engine.grants.insert(manifest.module.name.clone(), callables);
+        let mut callables: HashSet<String> = manifest.grants.kernel.into_iter().collect();
+        // Fold `[grants] zenodo = [...]` (`uz_*` calls) into the module's grant
+        // set: they are ordinary Call actions on the kernel-interface boundary,
+        // exactly like `uk_*` symbols. Without this the zenodo module's positive
+        // test can never pass (uz_init/uz_manifest_json would be ungranted).
+        callables.extend(manifest.grants.zenodo.into_iter());
+        engine.grants.insert(module_name.clone(), callables);
         let effects: HashSet<String> = manifest.grants.effects.into_iter().collect();
-        engine.effects.insert(manifest.module.name, effects);
+        engine.effects.insert(module_name, effects);
         Ok(engine)
     }
 
@@ -122,11 +128,32 @@ struct GrantsToml {
     kernel: Vec<String>,
     #[serde(default)]
     effects: Vec<String>,
+    #[serde(default)]
+    zenodo: Vec<String>,
 }
 
 static AUTH_ENGINE: OnceLock<RwLock<Option<Box<dyn AuthorizationEngine>>>> = OnceLock::new();
 
 static MANIFEST_ENGINE: OnceLock<RwLock<ManifestAuthEngine>> = OnceLock::new();
+
+/// The deployment principal: the `[module] name` of the most recently loaded
+/// manifest. The JIT attributes every gated `uk_*`/`uz_*` kernel call to this
+/// principal (not to the per-Austral-module name in a CPS header), so grants
+/// keyed by the manifest name authorize calls made from any module in the
+/// compiled program, including kernel-interface libraries.
+static DEPLOYMENT_PRINCIPAL: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+
+fn deployment_lock() -> &'static RwLock<Option<String>> {
+    DEPLOYMENT_PRINCIPAL.get_or_init(|| RwLock::new(None))
+}
+
+pub fn set_deployment_principal(name: String) {
+    *deployment_lock().write().unwrap_or_else(|e| e.into_inner()) = Some(name);
+}
+
+pub fn deployment_principal() -> Option<String> {
+    deployment_lock().read().unwrap_or_else(|e| e.into_inner()).clone()
+}
 
 fn auth_lock() -> &'static RwLock<Option<Box<dyn AuthorizationEngine>>> {
     AUTH_ENGINE.get_or_init(|| RwLock::new(None))
@@ -192,8 +219,13 @@ pub fn check(principal: &str, action: &str, resource: &str) -> Result<(), String
     check(principal, action, resource)
 }
 
+/// Load a TOML auth manifest. Returns 1 on success, 0 on failure.
+///
+/// # Safety
+///
+/// `ptr` must point to `len` readable bytes for the duration of the call.
 #[no_mangle]
-pub extern "C" fn safestos_load_auth_manifest(ptr: *const u8, len: usize) -> i64 {
+pub unsafe extern "C" fn safestos_load_auth_manifest(ptr: *const u8, len: usize) -> i64 {
     if ptr.is_null() || len == 0 {
         return 0;
     }
@@ -212,7 +244,22 @@ pub extern "C" fn safestos_load_auth_manifest(ptr: *const u8, len: usize) -> i64
         let cloned = engine.clone();
         set_auth_engine(Box::new(cloned));
     }
+    set_deployment_principal(new_engine_principal(toml_str));
     1
+}
+
+/// Extract the manifest's `[module] name` for use as the deployment principal.
+/// On any parse failure, falls back to an empty principal so the JIT's
+/// per-module fallback still applies.
+fn new_engine_principal(toml_str: &str) -> String {
+    #[derive(serde::Deserialize)]
+    struct NameOnly {
+        module: ModuleToml,
+    }
+    match toml::from_str::<NameOnly>(toml_str) {
+        Ok(n) => n.module.name,
+        Err(_) => String::new(),
+    }
 }
 
 #[cfg(test)]

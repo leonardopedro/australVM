@@ -28,6 +28,7 @@ extern void* lookup_function(const unsigned char* name, int len);
 extern char* list_compiled_function_names(void);
 extern void cranelift_free_string(char* s);
 extern void set_allow_all(void);
+extern int64_t safestos_load_auth_manifest(const unsigned char* ptr, size_t len);
 extern void* cranelift_swap_binary(const unsigned char* data, int len);
 
 /* OCaml's scheduler_dispatch for linker symbol resolution */
@@ -169,6 +170,15 @@ CAMLprim value ocaml_set_allow_all(value unit) {
     CAMLparam1(unit);
     set_allow_all();
     CAMLreturn(Val_unit);
+}
+
+/* Load a module manifest's grant set into the authorization engine. Returns
+   1 on success, 0 on parse failure. */
+CAMLprim value ocaml_load_auth_manifest(value manifest_str) {
+    CAMLparam1(manifest_str);
+    const char* s = String_val(manifest_str);
+    int64_t ok = safestos_load_auth_manifest((const unsigned char*)s, strlen(s));
+    CAMLreturn(caml_copy_int64(ok));
 }
 
 /* Hot-swap: replace entire JIT module with new binary. Returns entry ptr (0 on failure). */

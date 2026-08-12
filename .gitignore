@@ -35,3 +35,7 @@ libaustral_cranelift_bridge.so
 # Docs/planning artifacts
 docs/history/
 examples/modules/demo_hosted/module.cps
+
+# Compiler-generated debug output
+calltree.html
+error.html
