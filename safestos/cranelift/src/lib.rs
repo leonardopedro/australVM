@@ -173,6 +173,8 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_poll",              addr: unfer_ffi::uk_poll              as *const u8 },
     // S29: Lean4 proof verification (nanoda_lib external type checker).
     KernelSymbol { name: "uk_proof_verify",      addr: unfer_ffi::uk_proof_verify      as *const u8 },
+    // S30: Cadabra2 symbolic coupling (external CAS subprocess).
+    KernelSymbol { name: "uk_symbolic_simplify", addr: unfer_ffi::uk_symbolic_simplify as *const u8 },
     KernelSymbol { name: "uk_bayesian_update",   addr: unfer_ffi::uk_bayesian_update   as *const u8 },
     KernelSymbol { name: "uk_belief_propagation",addr: unfer_ffi::uk_belief_propagation as *const u8 },
     KernelSymbol { name: "uk_buf_free",          addr: unfer_ffi::uk_buf_free           as *const u8 },
