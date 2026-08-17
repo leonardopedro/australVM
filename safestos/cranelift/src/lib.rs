@@ -233,6 +233,11 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_cert_burn",          addr: unfer_ffi::uk_cert_burn          as *const u8 },
     KernelSymbol { name: "uk_cert_status",        addr: unfer_ffi::uk_cert_status        as *const u8 },
     KernelSymbol { name: "uk_cert_root",          addr: unfer_ffi::uk_cert_root          as *const u8 },
+    // Plan R: unified auction (Prebid-model, carbon credits + publicity inventory).
+    KernelSymbol { name: "uk_auction_open",   addr: unfer_ffi::uk_auction_open   as *const u8 },
+    KernelSymbol { name: "uk_auction_bid",    addr: unfer_ffi::uk_auction_bid    as *const u8 },
+    KernelSymbol { name: "uk_auction_close",  addr: unfer_ffi::uk_auction_close  as *const u8 },
+    KernelSymbol { name: "uk_auction_report", addr: unfer_ffi::uk_auction_report as *const u8 },
     // Plan R: gate approval surface (secondary market settlement).
     KernelSymbol { name: "uk_gate_list_pending", addr: unfer_ffi::uk_gate_list_pending as *const u8 },
     KernelSymbol { name: "uk_gate_approve",      addr: unfer_ffi::uk_gate_approve      as *const u8 },

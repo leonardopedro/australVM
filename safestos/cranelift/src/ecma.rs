@@ -993,6 +993,12 @@ static SENSITIVE_BLOCKED_SYMBOLS: &[&str] = &[
     "uk_cert_mint",
     "uk_cert_transfer",
     "uk_cert_burn",
+    // Plan R: unified-auction mutations (open/bid/close) are forward-mutating
+    // (they change the auction state machine the same way cert ops change the
+    // certificate ledger).
+    "uk_auction_open",
+    "uk_auction_bid",
+    "uk_auction_close",
 ];
 
 fn dispatch_loopback(
@@ -1717,6 +1723,36 @@ fn kernel_dispatch(
             let json = arg_str(args, 0)?;
             let (p, l) = ptr_len(&json);
             ffi_result(unfer_ffi::uk_cert_burn(p, l))
+        }
+        "uk_auction_open" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_auction_open(p, l))
+        }
+        "uk_auction_bid" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_auction_bid(p, l))
+        }
+        // `uk_auction_close` both mutates the ledger and writes the winner JSON,
+        // so it cannot use the probe-then-copy `buf_out` protocol (the probe
+        // would apply the close twice). Use a single fixed-buffer call instead.
+        "uk_auction_close" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            let mut buf = vec![0u8; 4096];
+            let n = unfer_ffi::uk_auction_close(p, l, buf.as_mut_ptr(), buf.len() as i64);
+            if n < 0 {
+                return Err((( -n) as u32, read_last_error().unwrap_or_default()));
+            }
+            buf.truncate(n as usize);
+            let s = String::from_utf8(buf).map_err(|e| (1001, e.to_string()))?;
+            Ok(serde_json::Value::String(s))
+        }
+        "uk_auction_report" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            buf_out(|b, c| unfer_ffi::uk_auction_report(p, l, b, c))
         }
         other => Err((
             4004,
