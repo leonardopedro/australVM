@@ -167,6 +167,8 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_observe",           addr: unfer_ffi::uk_observe           as *const u8 },
     KernelSymbol { name: "uk_get_result",        addr: unfer_ffi::uk_get_result        as *const u8 },
     KernelSymbol { name: "uk_last_error",        addr: unfer_ffi::uk_last_error         as *const u8 },
+    // Logos CNL->UNF compilation (unique-normal-form via interaction-net reduction).
+    KernelSymbol { name: "uk_logos_compile",     addr: unfer_ffi::uk_logos_compile      as *const u8 },
     KernelSymbol { name: "uk_snapshot",          addr: unfer_ffi::uk_snapshot          as *const u8 },
     KernelSymbol { name: "uk_restore",           addr: unfer_ffi::uk_restore           as *const u8 },
     KernelSymbol { name: "uk_subscribe",         addr: unfer_ffi::uk_subscribe         as *const u8 },
