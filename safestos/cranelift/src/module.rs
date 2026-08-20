@@ -331,6 +331,33 @@ impl ModuleHost {
         }
     }
 
+    /// H8: resolve the module's runtime archetype through the registered
+    /// harness resolver. `approved` is the module's own `[module] archetypes`
+    /// allowlist (operator config may add to it); the module's `[module]
+    /// archetype` is the request. Returns the resolved archetype id, or a
+    /// non-retryable rejection (UK-4001 family) when the request is unapproved.
+    pub fn resolve_runtime_choice(&self, manifest: &ModuleManifest) -> Result<String, String> {
+        let approved: Vec<&str> = manifest.archetypes.iter().map(|s| s.as_str()).collect();
+        let org = std::env::var("UNFER_HARNESS_ORG")
+            .ok()
+            .filter(|s| !s.is_empty());
+        // No scope override wired in the loader yet; the module request is the
+        // operative candidate, with `austral_cps` as the default fallback.
+        match unfer_protocol::resolve_runtime_choice(
+            &approved,
+            org.as_deref(),
+            None,
+            "austral_cps",
+            Some(&manifest.archetype),
+        ) {
+            unfer_protocol::RuntimeChoice::Profile(id) => Ok(id.to_string()),
+            unfer_protocol::RuntimeChoice::Rejected { requested } => Err(format!(
+                "UK-4001: archetype '{requested}' is not approved for module '{}'",
+                manifest.name
+            )),
+        }
+    }
+
     /// Instance key format: `"{module_name}@{instance_id}"`.
     #[cfg(feature = "ecmascript")]
     pub fn instance_key(module_name: &str, instance_id: &str) -> String {
@@ -349,6 +376,18 @@ impl ModuleHost {
             .map_err(|e| format!("manifest auth error: {e}"))?;
         auth::set_auth_engine(Box::new(engine));
         auth::set_deployment_principal(manifest.name.clone());
+
+        // H8: resolve the runtime archetype through the registered harness
+        // resolver (approval + org floor + fallback); reject the unapproved one
+        // (UK-4001 family) instead of silently falling back.
+        let resolved_archetype = self.resolve_runtime_choice(&manifest)?;
+        if resolved_archetype != manifest.archetype {
+            return Err(format!(
+                "UK-4001: archetype '{}' resolved to '{}' which the loader does not map; \
+                 add an adapter for the resolved profile",
+                manifest.archetype, resolved_archetype
+            ));
+        }
 
         // ECMAScript archetype: serve the module's JS via a workerd sidecar (S1) instead of
         // compiling a CPS binary into Cranelift IR.
@@ -903,7 +942,7 @@ unsafe fn call_jit_function(ptr: usize, args: &[i64]) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::ModuleManifest;
+    use super::{ModuleHost, ModuleManifest};
 
     #[test]
     fn parses_limits_table() {
@@ -932,5 +971,80 @@ kernel = ["uk_audit"]
         let m = ModuleManifest::from_toml_str(toml).expect("parse");
         assert_eq!(m.max_ms, None);
         assert_eq!(m.memory_max_bytes, None);
+    }
+
+    // ── H8: archetype resolver (module harness registry) ────────────────
+
+    #[test]
+    fn resolve_archetype_per_scope() {
+        let host = ModuleHost::new();
+        let mut m = ModuleManifest::from_toml_str(
+            r#"
+[module]
+name = "scoped"
+archetypes = ["austral_cps", "ecmascript"]
+archetype = "austral_cps"
+"#,
+        )
+        .expect("parse");
+        // The module request resolves to the approved archetype.
+        assert_eq!(host.resolve_runtime_choice(&m).unwrap(), "austral_cps");
+        // A scope override (per-scope selection) wins over the module request.
+        m.archetype = "ecmascript".to_string();
+        assert_eq!(host.resolve_runtime_choice(&m).unwrap(), "ecmascript");
+    }
+
+    #[test]
+    fn unapproved_archetype_is_rejected() {
+        let host = ModuleHost::new();
+        let m = ModuleManifest::from_toml_str(
+            r#"
+[module]
+name = "unapproved"
+archetypes = ["austral_cps"]
+archetype = "tidepool"
+"#,
+        )
+        .expect("parse");
+        let err = host.resolve_runtime_choice(&m).unwrap_err();
+        assert!(
+            err.contains("UK-4001"),
+            "unapproved archetype must be rejected (UK-4001 family), got {err}"
+        );
+        assert!(err.contains("tidepool"), "rejection names the requested archetype");
+    }
+
+    #[test]
+    fn fallback_used_when_module_names_nothing() {
+        let host = ModuleHost::new();
+        let m = ModuleManifest::from_toml_str(
+            r#"
+[module]
+name = "bare"
+"#,
+        )
+        .expect("parse");
+        // No `[module] archetype` → the default `austral_cps` fallback wins.
+        assert_eq!(host.resolve_runtime_choice(&m).unwrap(), "austral_cps");
+    }
+
+    #[test]
+    fn cold_restart_reuses_recorded_choice() {
+        let host = ModuleHost::new();
+        let toml = r#"
+[module]
+name = "restart"
+archetypes = ["austral_cps", "ecmascript"]
+archetype = "ecmascript"
+"#;
+        let m1 = ModuleManifest::from_toml_str(toml).expect("parse");
+        let choice1 = host.resolve_runtime_choice(&m1).unwrap();
+        // A cold restart re-parses the same manifest → the same resolved choice
+        // (the resolver is pure/deterministic; the choice is recorded on the
+        // handle via `load`).
+        let m2 = ModuleManifest::from_toml_str(toml).expect("parse");
+        let choice2 = host.resolve_runtime_choice(&m2).unwrap();
+        assert_eq!(choice1, choice2);
+        assert_eq!(choice1, "ecmascript");
     }
 }
