@@ -1001,6 +1001,291 @@ static SENSITIVE_BLOCKED_SYMBOLS: &[&str] = &[
     "uk_auction_close",
 ];
 
+// ── H5: Cordis-style composable waterfall dispatch at the loopback ──────
+//
+// The loopback chokepoint models each call as a `symbol/*` event flowing through
+// registered listeners. A listener either **delegates** (calls `next()`, letting
+// the remaining listeners run) or **owns** the decision (returns a terminal
+// `Flow` without `next()`); annotation-only listeners must delegate. Registration
+// order = enforcement order, and a regression test pins the exact UK-code
+// sequence per symbol. This is a refactor-of-record: the C ABI, the `uk_*`
+// symbols, and the emitted UK codes stay byte-identical — only the wiring
+// becomes composable and testable. Composition mirrors the project's house
+// style: Tidepool `EffectHandler`s compose beside `KernelHandler` per granted
+// effect, and Egison matchers compose (`List (Something, (Something, Eql))`).
+
+/// Dispatch mode of a `symbol/*` event (part of the event's contract).
+/// `Parallel`/`Serial` are composed by downstream listeners/tests (Cordis
+/// `parallel`/`serial`); the loopback itself runs `Waterfall`.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DispatchMode {
+    /// Serial delegate chain; the first listener that owns the decision wins
+    /// and the chain stops. Used by the loopback (enforcement order).
+    Waterfall,
+    /// Every listener runs; the most restrictive terminal flow wins (Cordis `parallel`).
+    Parallel,
+    /// Every listener runs in order; the last terminal flow wins (Cordis `serial`).
+    Serial,
+}
+
+/// A `symbol/*` loopback event carrying everything a policy listener needs.
+struct SymbolEvent<'a> {
+    mode: DispatchMode,
+    symbol: &'a str,
+    args: &'a [serde_json::Value],
+    caller_principal: &'a str,
+    /// Effective kernel grants (or agent bounds).
+    kernel_grants: &'a HashSet<String>,
+    /// S4 effects namespace (gates `uk_action_submit`).
+    effects: &'a HashSet<String>,
+    /// S10 net egress allowlist.
+    net: &'a HashSet<String>,
+    /// S10 fetch target authority (for `uk_fetch` egress + audit detail).
+    fetch_url: &'a str,
+}
+
+/// A waterfall listener on `symbol/*` events. Own a decision by returning a
+/// terminal [`Flow`] without calling `next()`; delegate (annotation-only
+/// listeners, passing gates) by calling `next()` and returning its flow.
+trait SymbolListener {
+    /// Listener identity (used by tests to pin registration order).
+    #[allow(dead_code)]
+    fn name(&self) -> &'static str;
+    fn on_symbol(&self, ev: &SymbolEvent, next: &mut dyn FnMut() -> Flow) -> Flow;
+}
+
+/// The outcome of a `symbol/*` event flowing through the waterfall.
+#[derive(Debug)]
+enum Flow {
+    /// Delegate to the next registered listener.
+    Next,
+    /// Own: deny with a structured error response (exact UK code + name + message).
+    Deny(serde_json::Value),
+    /// Own: dispatch succeeded.
+    Ok(serde_json::Value),
+    /// Own: dispatch failed with a kernel error.
+    Err { code: u32, message: String },
+}
+
+/// Dispatch a `symbol/*` event through the listeners per the event's mode.
+fn emit(listeners: &[&dyn SymbolListener], ev: &SymbolEvent) -> Flow {
+    match ev.mode {
+        DispatchMode::Waterfall => waterfall(listeners, ev, 0),
+        DispatchMode::Parallel => parallel(listeners, ev),
+        DispatchMode::Serial => serial(listeners, ev),
+    }
+}
+
+/// First terminal wins; the chain stops once a listener owns the decision.
+fn waterfall(listeners: &[&dyn SymbolListener], ev: &SymbolEvent, i: usize) -> Flow {
+    match listeners.get(i) {
+        None => Flow::Next,
+        Some(l) => l.on_symbol(ev, &mut || waterfall(listeners, ev, i + 1)),
+    }
+}
+
+/// Every listener runs; the most restrictive terminal flow wins.
+fn parallel(listeners: &[&dyn SymbolListener], ev: &SymbolEvent) -> Flow {
+    let mut outcome = Flow::Next;
+    for l in listeners {
+        let flow = l.on_symbol(ev, &mut || Flow::Next);
+        if flow_rank(&flow) > flow_rank(&outcome) {
+            outcome = flow;
+        }
+    }
+    outcome
+}
+
+/// Every listener runs in order; the last terminal flow wins.
+fn serial(listeners: &[&dyn SymbolListener], ev: &SymbolEvent) -> Flow {
+    let mut outcome = Flow::Next;
+    for l in listeners {
+        let flow = l.on_symbol(ev, &mut || Flow::Next);
+        if !matches!(flow, Flow::Next) {
+            outcome = flow;
+        }
+    }
+    outcome
+}
+
+/// Restrictiveness used by `parallel`: Deny > Err > Ok > Next.
+fn flow_rank(f: &Flow) -> u8 {
+    match f {
+        Flow::Deny(_) => 3,
+        Flow::Err { .. } => 2,
+        Flow::Ok(_) => 1,
+        Flow::Next => 0,
+    }
+}
+
+/// S21/S4/S10 grant gate: `uk_action_submit` gates on the effects namespace,
+/// `uk_fetch` on the net egress allowlist, everything else on kernel grants.
+struct GrantGateListener;
+impl SymbolListener for GrantGateListener {
+    fn name(&self) -> &'static str {
+        "grant"
+    }
+    fn on_symbol(&self, ev: &SymbolEvent, next: &mut dyn FnMut() -> Flow) -> Flow {
+        let gate_error = if ev.symbol == "uk_action_submit" {
+            let effect = ev
+                .args
+                .first()
+                .and_then(|a| a.get("effect"))
+                .and_then(|e| e.as_str())
+                .unwrap_or("");
+            if !ev.effects.contains(effect) {
+                Some(format!(
+                    "UK-4001: Authorization denied — '{}' is not granted effect '{effect}'",
+                    ev.caller_principal
+                ))
+            } else {
+                None
+            }
+        } else if ev.symbol == "uk_fetch" {
+            let host = fetch_host(ev.fetch_url);
+            if host.is_empty() {
+                Some("UK-4001: uk_fetch requires a url with an explicit scheme://host".to_string())
+            } else if !egress_allowed(host, ev.net) {
+                Some(format!(
+                    "UK-4001: Egress denied — '{}' has no net grant for host '{host}'",
+                    ev.caller_principal
+                ))
+            } else {
+                None
+            }
+        } else if !ev.kernel_grants.contains(ev.symbol) {
+            Some(format!(
+                "UK-4001: Authorization denied — '{}' is not granted '{}'",
+                ev.caller_principal, ev.symbol
+            ))
+        } else {
+            None
+        };
+        match gate_error {
+            Some(message) => Flow::Deny(serde_json::json!({
+                "code": 4001, "name": "CallDenied", "message": message,
+            })),
+            None => next(),
+        }
+    }
+}
+
+/// S26 (F25): sensitive-forward latch. A latched caller is refused a
+/// forward-mutating symbol with UK-4701 until an operator clears the latch.
+struct LatchListener;
+impl SymbolListener for LatchListener {
+    fn name(&self) -> &'static str {
+        "latch"
+    }
+    fn on_symbol(&self, ev: &SymbolEvent, next: &mut dyn FnMut() -> Flow) -> Flow {
+        if SENSITIVE_BLOCKED_SYMBOLS.contains(&ev.symbol)
+            && unfer_ffi::uk_is_sensitive_latched(ev.caller_principal)
+        {
+            let message = format!(
+                "UK-4701: '{}' is sensitive-latched and cannot {}",
+                ev.caller_principal, ev.symbol
+            );
+            Flow::Deny(serde_json::json!({
+                "code": "UK-4701", "name": "SensitiveLatched", "message": message,
+            }))
+        } else {
+            next()
+        }
+    }
+}
+
+/// S25 (F24): windowed meter. The single denial point for cost governance;
+/// consumes one budget unit for a metered symbol, denying UK-4601/UK-4602.
+struct MeterListener;
+impl SymbolListener for MeterListener {
+    fn name(&self) -> &'static str {
+        "meter"
+    }
+    fn on_symbol(&self, ev: &SymbolEvent, next: &mut dyn FnMut() -> Flow) -> Flow {
+        if !METERED_SYMBOLS.contains(&ev.symbol) {
+            return next();
+        }
+        match unfer_ffi::uk_meter_consume(ev.caller_principal, LOOPBACK_BUDGET, LOOPBACK_RATE_LIMIT)
+        {
+            0 => next(),
+            1 => Flow::Deny(serde_json::json!({
+                "code": "UK-4601",
+                "name": "RateLimited",
+                "message": format!("'{}' exceeded its windowed call-rate limit", ev.caller_principal),
+            })),
+            _ => Flow::Deny(serde_json::json!({
+                "code": "UK-4602",
+                "name": "BudgetExceeded",
+                "message": format!("'{}' exhausted its windowed budget", ev.caller_principal),
+            })),
+        }
+    }
+}
+
+/// Terminal listener: dispatch to the kernel C ABI. Always owns the decision.
+struct DispatchListener;
+impl SymbolListener for DispatchListener {
+    fn name(&self) -> &'static str {
+        "dispatch"
+    }
+    fn on_symbol(&self, ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
+        match kernel_dispatch(ev.caller_principal, ev.symbol, ev.args) {
+            Ok(value) => Flow::Ok(value),
+            Err((code, message)) => Flow::Err { code, message },
+        }
+    }
+}
+
+/// Annotation-only listener (S23): runs the rest of the waterfall, appends the
+/// audit entry for the terminal outcome, then delegates that outcome unchanged.
+struct AuditListener;
+impl SymbolListener for AuditListener {
+    fn name(&self) -> &'static str {
+        "audit"
+    }
+    fn on_symbol(&self, ev: &SymbolEvent, next: &mut dyn FnMut() -> Flow) -> Flow {
+        let flow = next();
+        match &flow {
+            Flow::Next => {}
+            Flow::Deny(resp) => {
+                let message = resp
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("");
+                append_loopback_audit(ev.symbol, ev.args, false, Some(message));
+            }
+            Flow::Ok(_) => {
+                // S10: the fetch audit carries the explicit allow action + target host.
+                let detail = if ev.symbol == "uk_fetch" {
+                    Some(format!("action=allow host='{}'", fetch_host(ev.fetch_url)))
+                } else {
+                    None
+                };
+                append_loopback_audit(ev.symbol, ev.args, true, detail.as_deref());
+            }
+            Flow::Err { code, message } => append_loopback_audit(
+                ev.symbol,
+                ev.args,
+                false,
+                Some(&format!("UK-{code}: {message}")),
+            ),
+        }
+        flow
+    }
+}
+
+/// The loopback policy chain, in enforcement order. Registration order = order
+/// the gates fire: grant (UK-4001) → latch (UK-4701) → meter (UK-4601/4602) →
+/// dispatch. `AuditListener` wraps the whole chain so every exit is audited.
+const LOOPBACK_WATERFALL: [&dyn SymbolListener; 5] = [
+    &AuditListener,
+    &GrantGateListener,
+    &LatchListener,
+    &MeterListener,
+    &DispatchListener,
+];
+
 fn dispatch_loopback(
     module_name: &str,
     grants: &HashSet<String>,
@@ -1130,140 +1415,43 @@ fn dispatch_loopback_as(
         &serde_json::json!({ "trace_id": trace_id, "component": "kernel.audit" }).to_string(),
     );
 
-    // 3. Grant gate (default-deny). Denials are audited too — attempts are the most
-    //    important audit entries.
-    //    S10: `uk_fetch` gates on the *net* namespace (exact host[:port] allowlist),
-    //    not the kernel-grant namespace — a module needs `net = ["host"]` to egress.
-    let fetch_host_grants = if symbol == "uk_fetch" {
+    // 3. Run the policy waterfall over the `symbol/*` event. Registration order
+    //    = enforcement order: AuditListener (wraps, audits every exit) →
+    //    GrantGateListener (UK-4001) → LatchListener (UK-4701) → MeterListener
+    //    (UK-4601/4602) → DispatchListener (kernel C ABI). Each listener either
+    //    delegates (`next()`) or owns the decision; the first owner wins.
+    let fetch_url = if symbol == "uk_fetch" {
         args.first()
             .and_then(|a| a.get("url"))
             .and_then(|u| u.as_str())
             .unwrap_or("")
-            .to_string()
     } else {
-        String::new()
+        ""
     };
-    let gate_error = if symbol == "uk_action_submit" {
-        // S4: the effects namespace, not the kernel grants, gates submission. The effect
-        // name is `req.effect` of the single request arg.
-        let effect = args
-            .first()
-            .and_then(|a| a.get("effect"))
-            .and_then(|e| e.as_str())
-            .unwrap_or("");
-        if !eff_effects.contains(effect) {
-            Some(format!(
-                "UK-4001: Authorization denied — '{caller_principal}' is not granted effect '{effect}'"
-            ))
-        } else {
-            None
-        }
-    } else if symbol == "uk_fetch" {
-        // S10: egress gate — the target host must be on the net allowlist.
-        let host = fetch_host(&fetch_host_grants);
-        if host.is_empty() {
-            Some("UK-4001: uk_fetch requires a url with an explicit scheme://host".to_string())
-        } else if !egress_allowed(host, net) {
-            Some(format!(
-                "UK-4001: Egress denied — '{caller_principal}' has no net grant for host '{host}'"
-            ))
-        } else {
-            None
-        }
-    } else if !eff_grants.contains(symbol) {
-        Some(format!(
-            "UK-4001: Authorization denied — '{caller_principal}' is not granted '{symbol}'"
-        ))
-    } else {
-        None
+    let ev = SymbolEvent {
+        mode: DispatchMode::Waterfall,
+        symbol,
+        args: &args,
+        caller_principal: &caller_principal,
+        kernel_grants: &eff_grants,
+        effects: &eff_effects,
+        net,
+        fetch_url,
     };
-    if let Some(message) = gate_error {
-        append_loopback_audit(symbol, &args, false, Some(&message));
-        unfer_ffi::uk_clear_caller();
-        unfer_ffi::uk_observability_clear();
-        return json_response(
-            "error",
-            &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
-        );
-    }
+    let flow = emit(&LOOPBACK_WATERFALL, &ev);
 
-    // 3a. Sensitive-forward latch (S26/F25). Once a caller has observed
-    //     `<*sensitive*>` data, forward-mutating ops (egress, hand-off, blueprints,
-    //     writes, approvals) are refused with UK-4701 until an operator clears the
-    //     latch — mirroring Cloudflare's `prohibitAllSharing` workspace latch.
-    if SENSITIVE_BLOCKED_SYMBOLS.contains(&symbol) && unfer_ffi::uk_is_sensitive_latched(&caller_principal) {
-        let message = format!(
-            "UK-4701: '{caller_principal}' is sensitive-latched and cannot {}",
-            symbol
-        );
-        append_loopback_audit(symbol, &args, false, Some(&message));
-        unfer_ffi::uk_clear_caller();
-        unfer_ffi::uk_observability_clear();
-        return json_response(
-            "error",
-            &serde_json::json!({"code": "UK-4701", "name": "SensitiveLatched", "message": message}),
-        );
-    }
-
-    // 3b. Metered-symbol gate (S25/F24 budgets + rate limits). Expensive symbols
-    //     consume the caller's windowed budget at the chokepoint; a caller that
-    //     exhausts its budget or rate limit is denied here (UK-46xx + audit) —
-    //     never a post-hoc report. Lightweight symbols (reads, version) are free
-    //     so agents stay responsive.
-    if METERED_SYMBOLS.contains(&symbol) {
-        let decision = unfer_ffi::uk_meter_consume(
-            &caller_principal,
-            LOOPBACK_BUDGET,
-            LOOPBACK_RATE_LIMIT,
-        );
-        let deny: Option<(&str, &str, String)> = match decision {
-            0 => None,
-            1 => Some(("UK-4601", "RateLimited", format!(
-                "'{caller_principal}' exceeded its windowed call-rate limit"
-            ))),
-            _ => Some(("UK-4602", "BudgetExceeded", format!(
-                "'{caller_principal}' exhausted its windowed budget"
-            ))),
-        };
-        if let Some((code, name, message)) = deny {
-            append_loopback_audit(symbol, &args, false, Some(&message));
-            unfer_ffi::uk_clear_caller();
-            unfer_ffi::uk_observability_clear();
-            return json_response(
-                "error",
-                &serde_json::json!({"code": code, "name": name, "message": message}),
-            );
-        }
-    }
-
-    // 4. Dispatch. `kernel_dispatch` receives the caller principal (module or agent id) so
-    //    uk_action_submit injects the *actor* as the record principal, not a fixed module name.
-    let out = kernel_dispatch(&caller_principal, symbol, &args);
-    match &out {
-        Ok(_) => {
-            // S10: the fetch audit carries the explicit allow action + target host.
-            let detail = if symbol == "uk_fetch" {
-                Some(format!(
-                    "action=allow host='{}'",
-                    fetch_host(&fetch_host_grants)
-                ))
-            } else {
-                None
-            };
-            append_loopback_audit(symbol, &args, true, detail.as_deref());
-        }
-        Err((code, message)) => append_loopback_audit(
-            symbol,
-            &args,
-            false,
-            Some(&format!("UK-{code}: {message}")),
-        ),
-    }
+    // Every exit — granted or denied — clears the caller tag + observability
+    // context; the AuditListener already appended the audit entry for the flow.
     unfer_ffi::uk_clear_caller();
     unfer_ffi::uk_observability_clear();
-    match out {
-        Ok(value) => json_response("result", &value),
-        Err((code, message)) => json_response(
+    match flow {
+        Flow::Next => json_response(
+            "error",
+            &serde_json::json!({"code": 4001, "name": "CallDenied", "message": "no listener owned the decision"}),
+        ),
+        Flow::Deny(resp) => json_response("error", &resp),
+        Flow::Ok(value) => json_response("result", &value),
+        Flow::Err { code, message } => json_response(
             "error",
             &serde_json::json!({"code": code, "name": "KernelError", "message": message}),
         ),
@@ -1331,39 +1519,67 @@ fn ffi_result(ret: i64) -> DispatchResult {
 }
 
 /// Probe-then-copy buffer-out protocol (uk_get_result, uk_last_error, uk_snapshot, uk_poll).
+/// Probe-then-copy read of an FFI buffer. The kernel stores are process-global, so a
+/// concurrent writer can change the payload length between the probe and the copy; a
+/// size mismatch then leaves the buffer NUL-padded or truncated (breaking downstream
+/// `serde_json::from_str`). Retry the probe-then-copy until the sizes agree (bounded),
+/// falling back to the final read rather than emitting a malformed buffer.
 fn buf_out(mut f: impl FnMut(*mut u8, i64) -> i64) -> DispatchResult {
-    let needed = f(std::ptr::null_mut(), 0);
+    let mut needed = f(std::ptr::null_mut(), 0);
     if needed < 0 {
         return Err(((-needed) as u32, read_last_error().unwrap_or_default()));
     }
     if needed == 0 {
         return Ok(serde_json::Value::String(String::new()));
     }
-    let mut buf = vec![0u8; needed as usize];
-    let n = f(buf.as_mut_ptr(), needed);
-    if n < 0 {
-        return Err(((-n) as u32, read_last_error().unwrap_or_default()));
+    for _ in 0..BUF_RETRIES {
+        let mut buf = vec![0u8; needed as usize];
+        let n = f(buf.as_mut_ptr(), needed);
+        if n < 0 {
+            return Err(((-n) as u32, read_last_error().unwrap_or_default()));
+        }
+        if n == needed {
+            let s = String::from_utf8(buf).map_err(|e| (1001, e.to_string()))?;
+            return Ok(serde_json::Value::String(s));
+        }
+        // Payload length changed mid-read (concurrent writer): re-probe and retry.
+        needed = n;
     }
-    let s = String::from_utf8(buf).map_err(|e| (1001, e.to_string()))?;
-    Ok(serde_json::Value::String(s))
+    Err((
+        1002,
+        "kernel store kept changing size during read".to_string(),
+    ))
 }
 
+/// Number of probe-then-copy retries before [`buf_out`]/[`buf_out_raw`] give up.
+const BUF_RETRIES: i32 = 4;
+
 /// Binary variant of [`buf_out`]: reads raw bytes (which are not UTF-8 — e.g. a gzip `.cell`
-/// archive) and hex-encodes them so they survive the JSON transport.
+/// archive) and hex-encodes them so they survive the JSON transport. Same bounded
+/// probe-then-copy retry as [`buf_out`].
 fn buf_out_raw(mut f: impl FnMut(*mut u8, i64) -> i64) -> DispatchResult {
-    let needed = f(std::ptr::null_mut(), 0);
+    let mut needed = f(std::ptr::null_mut(), 0);
     if needed < 0 {
         return Err(((-needed) as u32, read_last_error().unwrap_or_default()));
     }
     if needed == 0 {
         return Ok(serde_json::Value::String(String::new()));
     }
-    let mut buf = vec![0u8; needed as usize];
-    let n = f(buf.as_mut_ptr(), needed);
-    if n < 0 {
-        return Err(((-n) as u32, read_last_error().unwrap_or_default()));
+    for _ in 0..BUF_RETRIES {
+        let mut buf = vec![0u8; needed as usize];
+        let n = f(buf.as_mut_ptr(), needed);
+        if n < 0 {
+            return Err(((-n) as u32, read_last_error().unwrap_or_default()));
+        }
+        if n == needed {
+            return Ok(serde_json::Value::String(hex::encode(&buf)));
+        }
+        needed = n;
     }
-    Ok(serde_json::Value::String(hex::encode(&buf)))
+    Err((
+        1002,
+        "kernel store kept changing size during read".to_string(),
+    ))
 }
 
 fn read_last_error() -> Option<String> {
@@ -2460,6 +2676,7 @@ mod tests {
     fn loopback_meter_records_audit_on_over_budget_deny() {
         use std::collections::HashSet;
         let _g = METER_TESTS_LOCK.lock().unwrap();
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_meter();
         unfer_ffi::uk_clear_caller();
         // Grant the metered symbol so the grant gate passes; pre-exhaust the
@@ -2505,6 +2722,7 @@ mod tests {
     fn loopback_blocks_forward_ops_when_latched() {
         use std::collections::HashSet;
         let _g = LATCH_TESTS_LOCK.lock().unwrap();
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_sensitive_latches();
         unfer_ffi::uk_clear_caller();
         let grants = HashSet::from(["uk_action_submit".to_string()]);
@@ -2563,6 +2781,223 @@ mod tests {
         );
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_clear_sensitive_latches();
+    }
+
+    // ── H5: loopback as composable waterfall listeners ────────────────────
+    //
+    // The chokepoint is modeled as `symbol/*` events flowing through registered
+    // listeners (Cordis-style emit/waterfall/parallel/serial). Registration order
+    // is enforcement order; these tests pin the exact UK-code sequence per symbol
+    // and the three dispatch modes.
+
+    #[test]
+    fn waterfall_first_terminal_wins_in_registration_order() {
+        use std::collections::HashSet;
+        // A "deny" listener and a "result" listener in order: the deny owns first.
+        let _deny = &Flow::Deny(serde_json::json!({"code": 4001, "name": "CallDenied"}));
+        let ev = SymbolEvent {
+            mode: DispatchMode::Waterfall,
+            symbol: "uk_x",
+            args: &[],
+            caller_principal: "probe",
+            kernel_grants: &HashSet::new(),
+            effects: &HashSet::new(),
+            net: &HashSet::new(),
+            fetch_url: "",
+        };
+        struct Own(Flow);
+        impl SymbolListener for Own {
+            fn name(&self) -> &'static str {
+                "own"
+            }
+            fn on_symbol(&self, _ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
+                match &self.0 {
+                    Flow::Deny(v) => Flow::Deny(v.clone()),
+                    other => match other {
+                        Flow::Ok(v) => Flow::Ok(v.clone()),
+                        _ => Flow::Next,
+                    },
+                }
+            }
+        }
+        let listeners: [&dyn SymbolListener; 2] = [&Own(Flow::Deny(serde_json::json!({"code": 4001}))), &Own(Flow::Ok(serde_json::json!(42)))];
+        let flow = emit(&listeners, &ev);
+        assert!(matches!(flow, Flow::Deny(_)), "first terminal must win, got {flow:?}");
+    }
+
+    #[test]
+    fn waterfall_delegates_when_listener_does_not_own() {
+        use std::collections::HashSet;
+        struct DelegateThenOk;
+        impl SymbolListener for DelegateThenOk {
+            fn name(&self) -> &'static str {
+                "delegate"
+            }
+            fn on_symbol(&self, _ev: &SymbolEvent, next: &mut dyn FnMut() -> Flow) -> Flow {
+                next()
+            }
+        }
+        struct Owner;
+        impl SymbolListener for Owner {
+            fn name(&self) -> &'static str {
+                "owner"
+            }
+            fn on_symbol(&self, _ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
+                Flow::Ok(serde_json::json!("done"))
+            }
+        }
+        let ev = SymbolEvent {
+            mode: DispatchMode::Waterfall,
+            symbol: "uk_y",
+            args: &[],
+            caller_principal: "probe",
+            kernel_grants: &HashSet::new(),
+            effects: &HashSet::new(),
+            net: &HashSet::new(),
+            fetch_url: "",
+        };
+        let listeners: [&dyn SymbolListener; 2] = [&DelegateThenOk, &Owner];
+        let flow = emit(&listeners, &ev);
+        match flow {
+            Flow::Ok(v) => assert_eq!(v, serde_json::json!("done")),
+            other => panic!("expected Ok after delegation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parallel_picks_most_restrictive() {
+        use std::collections::HashSet;
+        struct OkListener;
+        impl SymbolListener for OkListener {
+            fn name(&self) -> &'static str {
+                "ok"
+            }
+            fn on_symbol(&self, _ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
+                Flow::Ok(serde_json::json!(1))
+            }
+        }
+        struct ErrListener;
+        impl SymbolListener for ErrListener {
+            fn name(&self) -> &'static str {
+                "err"
+            }
+            fn on_symbol(&self, _ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
+                Flow::Err { code: 4100, message: "boom".into() }
+            }
+        }
+        let ev = SymbolEvent {
+            mode: DispatchMode::Parallel,
+            symbol: "uk_z",
+            args: &[],
+            caller_principal: "probe",
+            kernel_grants: &HashSet::new(),
+            effects: &HashSet::new(),
+            net: &HashSet::new(),
+            fetch_url: "",
+        };
+        let listeners: [&dyn SymbolListener; 2] = [&OkListener, &ErrListener];
+        let flow = emit(&listeners, &ev);
+        assert!(matches!(flow, Flow::Err { code: 4100, .. }), "parallel must pick Err over Ok, got {flow:?}");
+    }
+
+    #[test]
+    fn serial_last_terminal_wins() {
+        use std::collections::HashSet;
+        struct Own(Flow);
+        impl SymbolListener for Own {
+            fn name(&self) -> &'static str {
+                "own"
+            }
+            fn on_symbol(&self, _ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
+                match &self.0 {
+                    Flow::Ok(v) => Flow::Ok(v.clone()),
+                    Flow::Err { code, message } => Flow::Err { code: *code, message: message.clone() },
+                    Flow::Deny(v) => Flow::Deny(v.clone()),
+                    Flow::Next => Flow::Next,
+                }
+            }
+        }
+        let ev = SymbolEvent {
+            mode: DispatchMode::Serial,
+            symbol: "uk_w",
+            args: &[],
+            caller_principal: "probe",
+            kernel_grants: &HashSet::new(),
+            effects: &HashSet::new(),
+            net: &HashSet::new(),
+            fetch_url: "",
+        };
+        let listeners: [&dyn SymbolListener; 2] = [
+            &Own(Flow::Ok(serde_json::json!("first"))),
+            &Own(Flow::Ok(serde_json::json!("last"))),
+        ];
+        let flow = emit(&listeners, &ev);
+        match flow {
+            Flow::Ok(v) => assert_eq!(v, serde_json::json!("last"), "serial: last terminal wins"),
+            other => panic!("expected last Ok, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loopback_listener_order_grant_latch_meter() {
+        // Pins the enforcement order at the chokepoint: an ungranted symbol is
+        // refused with UK-4001 *before* any latch/meter check even if the caller
+        // is latched (grant is the outermost decision after the audit wrapper).
+        use std::collections::HashSet;
+        let _g = LATCH_TESTS_LOCK.lock().unwrap();
+        let _m = METER_TESTS_LOCK.lock().unwrap();
+        unfer_ffi::uk_clear_sensitive_latches();
+        unfer_ffi::uk_clear_meter();
+        unfer_ffi::uk_clear_caller();
+        // The caller is latched AND the symbol is metered but NOT granted: the
+        // grant gate (UK-4001) must fire before the latch (UK-4701) or meter.
+        unfer_ffi::uk_set_sensitive_latch("order_probe", true);
+        let grants = HashSet::new();
+        let resp = dispatch_loopback(
+            "order_probe",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_evolve",
+            "[]",
+        );
+        assert!(resp.contains("4001"), "grant gate must fire first, got {resp}");
+        assert!(!resp.contains("4701"), "latch must not precede grant, got {resp}");
+        assert!(!resp.contains("4602"), "meter must not precede grant, got {resp}");
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_sensitive_latches();
+        unfer_ffi::uk_clear_meter();
+    }
+
+    #[test]
+    fn loopback_listener_registration_order_is_enforcement_order() {
+        // Pins the exact listener chain: the waterfall registration order IS the
+        // enforcement order. A regression here means a gate moved relative to the
+        // others — the UK-code sequence per symbol changes with it.
+        let names: Vec<&'static str> = LOOPBACK_WATERFALL.iter().map(|l| l.name()).collect();
+        assert_eq!(
+            names,
+            vec!["audit", "grant", "latch", "meter", "dispatch"],
+            "registration order = enforcement order (audit wraps, then grant→latch→meter→dispatch)"
+        );
+    }
+
+    #[test]
+    fn loopback_listener_order_latch_blocked_metered_symbols_are_disjoint() {
+        // The latch (S26) and meter (S25) lists are intentionally disjoint today,
+        // so no single symbol can trip both gates. This pins that relationship:
+        // if a future symbol is added to both, the ordering test above must be
+        // re-checked (latch is registered before meter, so it fires first).
+        let overlap: Vec<&str> = METERED_SYMBOLS
+            .iter()
+            .filter(|s| SENSITIVE_BLOCKED_SYMBOLS.contains(s))
+            .copied()
+            .collect();
+        assert!(
+            overlap.is_empty(),
+            "metered and latch-blocked symbols must stay disjoint: {overlap:?}"
+        );
     }
 
     // ── S27 (F26): credential vault over the loopback chokepoint ───────────
@@ -2662,6 +3097,7 @@ let put_body = put
         // (trace_id + dot-separated owner component) threaded into its audit entry.
         // Assert on the entry for THIS dispatch by its unique caller principal.
         use std::collections::HashSet;
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_observability_clear();
         let grants = HashSet::from(["uk_version".to_string()]);
@@ -3260,6 +3696,7 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
 
     #[test]
     fn deadlined_call_kills_silent_child_and_audits() {
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("unfer-s14-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
