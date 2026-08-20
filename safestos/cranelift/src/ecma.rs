@@ -214,6 +214,9 @@ impl EcmaSidecar {
             manifest.resources.clone(),
             manifest.effect_kinds.clone(),
             manifest.gatekeeper_mode,
+            // H6: the module's `[limits] max_ms` overrides the symbol-declared
+            // deadline at the guard, sharing the Tidepool watchdog vocabulary.
+            manifest.max_ms,
             &loopback_sock,
         )?;
 
@@ -549,6 +552,9 @@ impl KernelLoopback {
         effect_kinds: Vec<(String, String)>,
         // S19 (F18): the `[gatekeeper] mode` for side-effect provisioning.
         gatekeeper_mode: GatekeeperMode,
+        // H6: the module's `[limits] max_ms` — overrides a symbol's declared
+        // `timeout_ms` default at the guard for this module's loopback.
+        max_ms: Option<u64>,
         sock_path: &Path,
     ) -> Result<Self, String> {
         let _ = std::fs::remove_file(sock_path);
@@ -567,6 +573,7 @@ impl KernelLoopback {
         let net: Arc<HashSet<String>> = Arc::new(net.into_iter().collect());
         let resources: Arc<HashSet<String>> = Arc::new(resources.into_iter().collect());
         let effect_kinds: Arc<Vec<(String, String)>> = Arc::new(effect_kinds);
+        let module_max_ms: Arc<Option<u64>> = Arc::new(max_ms);
         let mode = gatekeeper_mode;
         let handle = std::thread::spawn(move || {
             let _ = &listener;
@@ -600,6 +607,7 @@ impl KernelLoopback {
                         let net = Arc::clone(&net);
                         let resources = Arc::clone(&resources);
                         let effect_kinds = Arc::clone(&effect_kinds);
+                        let module_max_ms = Arc::clone(&module_max_ms);
                         std::thread::spawn(move || {
                             handle_loopback_conn(
                                 &name,
@@ -610,6 +618,7 @@ impl KernelLoopback {
                                 &resources,
                                 &effect_kinds,
                                 mode,
+                                *module_max_ms,
                                 stream,
                             );
                         });
@@ -690,6 +699,8 @@ fn handle_loopback_conn(
     resources: &HashSet<String>,
     effect_kinds: &[(String, String)],
     gatekeeper_mode: GatekeeperMode,
+    // H6: the module's `[limits] max_ms` override for the deadline guard.
+    module_max_ms: Option<u64>,
     mut stream: UnixStream,
 ) {
     let mut request = Vec::new();
@@ -770,7 +781,7 @@ fn handle_loopback_conn(
                 );
                 resp
             } else {
-                dispatch_loopback_as(
+                dispatch_loopback_as_with_max_ms(
                     None,
                     module_name,
                     grants,
@@ -779,6 +790,7 @@ fn handle_loopback_conn(
                     resources,
                     effect_kinds,
                     net,
+                    module_max_ms,
                     &sym,
                     &body,
                 )
@@ -1043,6 +1055,14 @@ struct SymbolEvent<'a> {
     net: &'a HashSet<String>,
     /// S10 fetch target authority (for `uk_fetch` egress + audit detail).
     fetch_url: &'a str,
+    /// H6: serialized caller identity (`{"from","principal","grants"}`) so the
+    /// deadline guard's worker thread can re-seed its own thread-local caller.
+    caller_json: &'a str,
+    /// H6: per-call observability JSON (trace_id/component) for the worker.
+    observability_json: &'a str,
+    /// H6: the module's `[limits] max_ms`, overriding the symbol default for
+    /// that module (shared vocabulary with the Tidepool watchdog).
+    module_max_ms: Option<u64>,
 }
 
 /// A waterfall listener on `symbol/*` events. Own a decision by returning a
@@ -1237,6 +1257,77 @@ impl SymbolListener for DispatchListener {
     }
 }
 
+/// H6: deadline guard composing with the meter. For a symbol that declares a
+/// `timeout_ms` in the H2 registry (or whose module `[limits] max_ms` overrides
+/// it), arms a cooperative per-call deadline on the dispatch. On expiry returns
+/// a structured `UK-4603 TOOL_TIMEOUT` result instead of the raw completion.
+/// Cooperative, not a hard kill: the dispatch runs on a worker thread and the
+/// guard stops waiting at the deadline — the backend keeps running to completion
+/// and its (late) result is discarded.
+struct GuardListener;
+impl SymbolListener for GuardListener {
+    fn name(&self) -> &'static str {
+        "guard"
+    }
+    fn on_symbol(&self, ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
+        let Some(deadline_ms) = effective_deadline_ms(ev) else {
+            // Undeclared op: untouched.
+            return _next();
+        };
+        // Arm the cooperative deadline around the dispatch. The worker thread
+        // re-seeds the thread-local caller + observability context (they are
+        // thread-locals in unfer_ffi) so the FFI dispatch audits under the same
+        // identity; then it runs the terminal dispatch and returns the flow.
+        let actor = ev.caller_principal.to_string();
+        let symbol = ev.symbol.to_string();
+        let args: Vec<serde_json::Value> = ev.args.to_vec();
+        let caller_json = ev.caller_json.to_string();
+        let observability_json = ev.observability_json.to_string();
+        run_with_deadline(deadline_ms, move || {
+            let _ = unfer_ffi::uk_set_caller(&caller_json);
+            let _ = unfer_ffi::uk_observability_set(&observability_json);
+            let flow = match kernel_dispatch(&actor, &symbol, &args) {
+                Ok(value) => Flow::Ok(value),
+                Err((code, message)) => Flow::Err { code, message },
+            };
+            unfer_ffi::uk_clear_caller();
+            unfer_ffi::uk_observability_clear();
+            flow
+        })
+    }
+}
+
+/// Run `work` on a worker thread and wait up to `deadline_ms` for its [`Flow`].
+/// On expiry, return the structured `UK-4603 TOOL_TIMEOUT` result while the
+/// worker keeps running to completion (cooperative — not a hard kill). The
+/// deadline is the *single* deadline point; the meter remains the single denial
+/// point.
+fn run_with_deadline(
+    deadline_ms: u64,
+    work: impl FnOnce() -> Flow + Send + 'static,
+) -> Flow {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    match rx.recv_timeout(Duration::from_millis(deadline_ms)) {
+        Ok(flow) => flow,
+        Err(_) => Flow::Deny(serde_json::json!({
+            "code": "UK-4603",
+            "name": "ToolTimeout",
+            "message": format!("dispatch exceeded its {deadline_ms}ms cooperative deadline"),
+        })),
+    }
+}
+
+/// H6: the effective per-call deadline for a symbol: the module's `[limits]
+/// max_ms` override wins, else the symbol's declared `timeout_ms` in the H2
+/// registry. `None` = no deadline (undeclared op untouched).
+fn effective_deadline_ms(ev: &SymbolEvent) -> Option<u64> {
+    let declared = unfer_protocol::symbols::SymbolRecord::timeout_ms(ev.symbol)?;
+    Some(ev.module_max_ms.unwrap_or(declared))
+}
+
 /// Annotation-only listener (S23): runs the rest of the waterfall, appends the
 /// audit entry for the terminal outcome, then delegates that outcome unchanged.
 struct AuditListener;
@@ -1277,12 +1368,14 @@ impl SymbolListener for AuditListener {
 
 /// The loopback policy chain, in enforcement order. Registration order = order
 /// the gates fire: grant (UK-4001) → latch (UK-4701) → meter (UK-4601/4602) →
-/// dispatch. `AuditListener` wraps the whole chain so every exit is audited.
-const LOOPBACK_WATERFALL: [&dyn SymbolListener; 5] = [
+/// guard (UK-4603 cooperative deadline) → dispatch. `AuditListener` wraps the
+/// whole chain so every exit is audited.
+const LOOPBACK_WATERFALL: [&dyn SymbolListener; 6] = [
     &AuditListener,
     &GrantGateListener,
     &LatchListener,
     &MeterListener,
+    &GuardListener,
     &DispatchListener,
 ];
 
@@ -1321,6 +1414,7 @@ fn dispatch_loopback(
 /// Every dispatch — granted or denied — sets the thread-local caller identity (with the caller's
 /// full grant set, so F8 read surfaces filter by observer) and appends one `AuditEntry`, so the
 /// human stays accountable for what agents/gadgets attempted.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn dispatch_loopback_as(
     agent_handle: Option<i64>,
@@ -1331,6 +1425,39 @@ fn dispatch_loopback_as(
     resources: &HashSet<String>,
     effect_kinds: &[(String, String)],
     net: &HashSet<String>,
+    symbol: &str,
+    body: &str,
+) -> String {
+    dispatch_loopback_as_with_max_ms(
+        agent_handle,
+        module_name,
+        grants,
+        effects,
+        observers,
+        resources,
+        effect_kinds,
+        net,
+        None,
+        symbol,
+        body,
+    )
+}
+
+/// [`dispatch_loopback_as`] with the module's `[limits] max_ms` (H6): overrides
+/// a symbol's declared `timeout_ms` default for this module. `None` keeps the
+/// registry default. Production loopback connections pass the module manifest's
+/// `max_ms`; direct/test dispatches pass `None`.
+#[allow(clippy::too_many_arguments)]
+fn dispatch_loopback_as_with_max_ms(
+    agent_handle: Option<i64>,
+    module_name: &str,
+    grants: &HashSet<String>,
+    effects: &HashSet<String>,
+    observers: &HashSet<String>,
+    resources: &HashSet<String>,
+    effect_kinds: &[(String, String)],
+    net: &HashSet<String>,
+    module_max_ms: Option<u64>,
     symbol: &str,
     body: &str,
 ) -> String {
@@ -1365,7 +1492,9 @@ fn dispatch_loopback_as(
                         "error",
                         &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
                     );
-                    set_loopback_caller("agent", &format!("agent-{handle}"), &unfer_protocol::GrantSet::default());
+                    let caller_json =
+                        loopback_caller_json("agent", &format!("agent-{handle}"), &unfer_protocol::GrantSet::default());
+                    let _ = unfer_ffi::uk_set_caller(&caller_json);
                     append_loopback_audit(symbol, &args, false, Some(&message));
                     unfer_ffi::uk_clear_caller();
                     unfer_ffi::uk_observability_clear();
@@ -1399,7 +1528,8 @@ fn dispatch_loopback_as(
             )
         };
 
-    set_loopback_caller(caller_from, &caller_principal, &caller_grants);
+    let caller_json = loopback_caller_json(caller_from, &caller_principal, &caller_grants);
+    let _ = unfer_ffi::uk_set_caller(&caller_json);
 
     // S23 (F22): thread a per-call observability context (AsyncLocal analog) into
     // the dispatcher thread. The kernel embeds these fields into every audit entry
@@ -1411,15 +1541,16 @@ fn dispatch_loopback_as(
         caller_principal,
         TRACE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     );
-    let _ = unfer_ffi::uk_observability_set(
-        &serde_json::json!({ "trace_id": trace_id, "component": "kernel.audit" }).to_string(),
-    );
+    let observability_json =
+        serde_json::json!({ "trace_id": trace_id, "component": "kernel.audit" }).to_string();
+    let _ = unfer_ffi::uk_observability_set(&observability_json);
 
     // 3. Run the policy waterfall over the `symbol/*` event. Registration order
     //    = enforcement order: AuditListener (wraps, audits every exit) →
     //    GrantGateListener (UK-4001) → LatchListener (UK-4701) → MeterListener
-    //    (UK-4601/4602) → DispatchListener (kernel C ABI). Each listener either
-    //    delegates (`next()`) or owns the decision; the first owner wins.
+    //    (UK-4601/4602) → GuardListener (H6 UK-4603 deadline) → DispatchListener
+    //    (kernel C ABI). Each listener either delegates (`next()`) or owns the
+    //    decision; the first owner wins.
     let fetch_url = if symbol == "uk_fetch" {
         args.first()
             .and_then(|a| a.get("url"))
@@ -1437,6 +1568,9 @@ fn dispatch_loopback_as(
         effects: &eff_effects,
         net,
         fetch_url,
+        caller_json: &caller_json,
+        observability_json: &observability_json,
+        module_max_ms,
     };
     let flow = emit(&LOOPBACK_WATERFALL, &ev);
 
@@ -1458,16 +1592,16 @@ fn dispatch_loopback_as(
     }
 }
 
-/// Tag the current thread as the acting caller (S6) with its full grant set (F8).
-/// Host-internal — a worker cannot call `uk_set_caller` (no loopback arm), so the
-/// identity + grant bound is host-owned.
-fn set_loopback_caller(from: &str, principal: &str, grants: &unfer_protocol::GrantSet) {
+/// Serialize the acting caller identity (S6) with its full grant set (F8) into
+/// the `uk_set_caller` JSON shape. Host-internal — a worker cannot call
+/// `uk_set_caller` (no loopback arm), so the identity + grant bound is host-owned.
+fn loopback_caller_json(from: &str, principal: &str, grants: &unfer_protocol::GrantSet) -> String {
     let caller = serde_json::json!({
         "from": from,
         "principal": principal,
         "grants": grants,
     });
-    let _ = unfer_ffi::uk_set_caller(&caller.to_string());
+    caller.to_string()
 }
 
 /// Serialize an audit entry for the current caller and append it to the kernel trail.
@@ -2711,6 +2845,32 @@ mod tests {
         unfer_ffi::uk_clear_meter();
     }
 
+    #[test]
+    fn loopback_meter_and_guard_compose_with_disjoint_vocabularies() {
+        // H6 composition contract: the meter is the single *denial* point
+        // (UK-4601/4602) and the guard the single *deadline* point (UK-4603).
+        // They are registered in that order (meter→guard) and their vocabularies
+        // are disjoint today — a metered symbol never declares a timeout, so a
+        // call can be denied by the meter or timed out by the guard, never both.
+        use unfer_protocol::symbols::SymbolRecord;
+        let metered_declared: Vec<&str> = METERED_SYMBOLS
+            .iter()
+            .filter(|s| SymbolRecord::timeout_ms(s).is_some())
+            .copied()
+            .collect();
+        assert!(
+            metered_declared.is_empty(),
+            "metered and timeout-declared vocabularies must stay disjoint: {metered_declared:?}"
+        );
+        // Registration order pins meter BEFORE guard, so a (future) symbol in
+        // both sets is denied by the meter first — the deadline never preempts
+        // the denial point.
+        let names: Vec<&'static str> = LOOPBACK_WATERFALL.iter().map(|l| l.name()).collect();
+        let meter_idx = names.iter().position(|n| *n == "meter").unwrap();
+        let guard_idx = names.iter().position(|n| *n == "guard").unwrap();
+        assert!(meter_idx < guard_idx, "meter must be registered before guard");
+    }
+
     // ── S26 (F25): sensitive-forward latch at the loopback chokepoint ──────
     //
     // Once a caller is latched (observed `<*sensitive*>` data), forward-mutating
@@ -2804,6 +2964,9 @@ mod tests {
             effects: &HashSet::new(),
             net: &HashSet::new(),
             fetch_url: "",
+            caller_json: r#"{"from":"gadget","principal":"probe"}"#,
+            observability_json: r#"{"trace_id":"t","component":"kernel.audit"}"#,
+            module_max_ms: None,
         };
         struct Own(Flow);
         impl SymbolListener for Own {
@@ -2855,6 +3018,9 @@ mod tests {
             effects: &HashSet::new(),
             net: &HashSet::new(),
             fetch_url: "",
+            caller_json: r#"{"from":"gadget","principal":"probe"}"#,
+            observability_json: r#"{"trace_id":"t","component":"kernel.audit"}"#,
+            module_max_ms: None,
         };
         let listeners: [&dyn SymbolListener; 2] = [&DelegateThenOk, &Owner];
         let flow = emit(&listeners, &ev);
@@ -2894,6 +3060,9 @@ mod tests {
             effects: &HashSet::new(),
             net: &HashSet::new(),
             fetch_url: "",
+            caller_json: r#"{"from":"gadget","principal":"probe"}"#,
+            observability_json: r#"{"trace_id":"t","component":"kernel.audit"}"#,
+            module_max_ms: None,
         };
         let listeners: [&dyn SymbolListener; 2] = [&OkListener, &ErrListener];
         let flow = emit(&listeners, &ev);
@@ -2926,6 +3095,9 @@ mod tests {
             effects: &HashSet::new(),
             net: &HashSet::new(),
             fetch_url: "",
+            caller_json: r#"{"from":"gadget","principal":"probe"}"#,
+            observability_json: r#"{"trace_id":"t","component":"kernel.audit"}"#,
+            module_max_ms: None,
         };
         let listeners: [&dyn SymbolListener; 2] = [
             &Own(Flow::Ok(serde_json::json!("first"))),
@@ -2978,8 +3150,8 @@ mod tests {
         let names: Vec<&'static str> = LOOPBACK_WATERFALL.iter().map(|l| l.name()).collect();
         assert_eq!(
             names,
-            vec!["audit", "grant", "latch", "meter", "dispatch"],
-            "registration order = enforcement order (audit wraps, then grant→latch→meter→dispatch)"
+            vec!["audit", "grant", "latch", "meter", "guard", "dispatch"],
+            "registration order = enforcement order (audit wraps, then grant→latch→meter→guard→dispatch)"
         );
     }
 
@@ -2998,6 +3170,104 @@ mod tests {
             overlap.is_empty(),
             "metered and latch-blocked symbols must stay disjoint: {overlap:?}"
         );
+    }
+
+    // ── H6: deadline guard composing with the meter (UK-4603) ────────────
+    //
+    // The meter is the single *denial* point (UK-4601/4602); the guard is the
+    // single *deadline* point (UK-4603). Guard is registered after meter, so a
+    // metered + declared symbol is denied by the meter before the guard arms.
+
+    #[test]
+    fn loopback_guard_undeclared_symbol_is_untouched() {
+        // `uk_version` declares no timeout in the H2 registry and no module
+        // `[limits] max_ms` is in play → the guard delegates untouched.
+        let grants = HashSet::from(["uk_version".to_string()]);
+        let resp = dispatch_loopback(
+            "guard_probe",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_version",
+            "[]",
+        );
+        assert!(resp.contains("\"result\""), "undeclared op must dispatch, got {resp}");
+    }
+
+    #[test]
+    fn loopback_guard_times_out_declared_slow_op_with_uk_4603() {
+        // The guard arms a cooperative deadline on declared symbols. A work item
+        // that outlives its deadline must produce the structured UK-4603 result,
+        // not the raw completion — while the backend keeps running (cooperative).
+        let flow = run_with_deadline(10, || {
+            std::thread::sleep(Duration::from_millis(200));
+            Flow::Ok(serde_json::json!({"late": true}))
+        });
+        match flow {
+            Flow::Deny(resp) => {
+                assert_eq!(resp["code"], "UK-4603", "structured timeout code, got {resp}");
+                assert_eq!(resp["name"], "ToolTimeout", "structured timeout name, got {resp}");
+            }
+            other => panic!("slow op must time out, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loopback_guard_fast_work_completes_within_deadline() {
+        // A work item that finishes before the deadline returns its raw completion.
+        let flow = run_with_deadline(500, || Flow::Ok(serde_json::json!("fast")));
+        match flow {
+            Flow::Ok(v) => assert_eq!(v, serde_json::json!("fast")),
+            other => panic!("fast work must complete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn loopback_guard_declared_symbol_dispatches_with_generous_override() {
+        // A declared symbol (uk_action_submit declares timeout_ms=5000) with a
+        // generous module `[limits] max_ms` override must dispatch to completion.
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["send_notification".to_string()]);
+        let resp = dispatch_loopback_as_with_max_ms(
+            None,
+            "guard_mod2",
+            &grants,
+            &effects,
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &HashSet::new(),
+            Some(5000), // module override is >= declared default → dispatch proceeds
+            "uk_action_submit",
+            r#"[{"effect":"send_notification","params":{}}]"#,
+        );
+        assert!(
+            resp.contains("\"result\""),
+            "generous module override must dispatch, got {resp}"
+        );
+    }
+
+    #[test]
+    fn loopback_guard_undeclared_registry_symbol_has_no_module_deadline() {
+        // `uk_version` has no declared timeout in the registry; even a module
+        // override must not arm the guard for an op the registry does not declare
+        // (undeclared op is untouched).
+        let grants = HashSet::from(["uk_version".to_string()]);
+        let resp = dispatch_loopback_as_with_max_ms(
+            None,
+            "guard_mod3",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &HashSet::new(),
+            Some(1), // module override present, but uk_version is undeclared
+            "uk_version",
+            "[]",
+        );
+        assert!(resp.contains("\"result\""), "undeclared op stays untouched, got {resp}");
     }
 
     // ── S27 (F26): credential vault over the loopback chokepoint ───────────
@@ -3726,6 +3996,7 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             vec![],
             vec![],
             GatekeeperMode::Enabled,
+            None,
             &loopback_sock,
         )
             .expect("loopback");
