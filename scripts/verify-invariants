@@ -40,6 +40,15 @@ check "S29: per-module CPS compile consumes the same census" \
 check "S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt" \
     test -f "$repo_root/safestos/cranelift/tests/symbol_sync.rs"
 
+# H2: the unfer census is generated from the one registry; run its check mode
+# (sibling repo) so this gate also fails on drift there.
+if [ -f "$repo_root/../unfer/scripts/gen_symbol_artifacts" ]; then
+    check "H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)" \
+        python3 "$repo_root/../unfer/scripts/gen_symbol_artifacts" check
+else
+    gap "H2: sibling unfer repo not present at ../unfer — skipping generator check"
+fi
+
 # --- H1.13 AuthorizationEngine: secure default, kernel denies without it ---
 check "S28: AuthorizationEngine trait present" \
     grep -q "trait AuthorizationEngine" "$repo_root/safestos/cranelift/src/auth.rs"
