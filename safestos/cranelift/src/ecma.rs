@@ -1585,6 +1585,19 @@ fn kernel_dispatch(
             let handle = arg_i64(args, 0)?;
             ffi_result(unfer_ffi::uk_gate_reject(handle))
         }
+        // ── H3: event-sourced session fork + compaction ─────────────────────
+        // `uk_session_fork` returns a new session handle (>0) or a negative
+        // UK code; `uk_session_compact` returns 0 or a negative UK code.
+        "uk_session_fork" => {
+            let handle = arg_i64(args, 0)?;
+            let seq = arg_i64(args, 1)?;
+            ffi_result(unfer_ffi::uk_session_fork(handle, seq))
+        }
+        "uk_session_compact" => {
+            let handle = arg_i64(args, 0)?;
+            let seq = arg_i64(args, 1)?;
+            ffi_result(unfer_ffi::uk_session_compact(handle, seq))
+        }
         // ── S21 (F20): console-vetted marker. The symbol marshals onto the FFI; only the
         //    operator hook (nil grants) clears it — a module/agent dispatch is refused
         //    here with UK-4501 by the FFI's caller-context check (defense in depth).

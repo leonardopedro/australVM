@@ -242,6 +242,9 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_gate_list_pending", addr: unfer_ffi::uk_gate_list_pending as *const u8 },
     KernelSymbol { name: "uk_gate_approve",      addr: unfer_ffi::uk_gate_approve      as *const u8 },
     KernelSymbol { name: "uk_gate_reject",       addr: unfer_ffi::uk_gate_reject       as *const u8 },
+    // H3: event-sourced session fork + compaction.
+    KernelSymbol { name: "uk_session_fork",    addr: unfer_ffi::uk_session_fork    as *const u8 },
+    KernelSymbol { name: "uk_session_compact", addr: unfer_ffi::uk_session_compact as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]
