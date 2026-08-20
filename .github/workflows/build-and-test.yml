@@ -62,6 +62,24 @@ jobs:
         run: test ! -f austral
 
   # ── Cranelift JIT + safestos integration stack ────────────────────
+  # H1 (PLAN_HARNESS): maintenance-invariant gate. Requires the sibling
+  # unfer checkout (the gate cross-checks the symbol census against unfer_ffi).
+  verify-invariants:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout australVM
+        uses: actions/checkout@v4
+
+      - name: Checkout unfer as sibling (path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: leonardopedro/unfer
+          path: ../unfer
+
+      - name: Run scripts/verify-invariants (H1)
+        run: bash scripts/verify-invariants
+
   jit-stack:
     runs-on: ubuntu-latest
 

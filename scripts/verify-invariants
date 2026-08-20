@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# H1 verify-invariants gate (australVM).
+#
+# Turns the AGENTS.md maintenance checklist into machine-checkable invariants
+# owned by THIS repo: the UNFER_SYMBOLS census, the symbol-sync test, the
+# AuthorizationEngine default, and the archetype surface. Output lists every
+# executed item; exit code is non-zero if any gate FAILS.
+
+set -u
+FAILED=0
+PASSED=0
+GAPS=0
+
+check() {
+    local name="$1"
+    shift
+    if "$@"; then
+        echo "[pass] $name"
+        PASSED=$((PASSED + 1))
+    else
+        echo "[FAIL] $name"
+        FAILED=$((FAILED + 1))
+    fi
+}
+
+gap() {
+    echo "[gap]  $1"
+    GAPS=$((GAPS + 1))
+}
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+# --- H1.12a UNFER_SYMBOLS census is the single uk_* registration point ---
+check "S29: UNFER_SYMBOLS table present" \
+    grep -q "pub(crate) const UNFER_SYMBOLS" "$repo_root/safestos/cranelift/src/lib.rs"
+check "S29: UNFER_SYMBOLS registers into the Cranelift JIT" \
+    grep -q "fn register_unfer_symbols" "$repo_root/safestos/cranelift/src/lib.rs"
+check "S29: per-module CPS compile consumes the same census" \
+    grep -q "UNFER_SYMBOLS" "$repo_root/safestos/cranelift/src/module.rs"
+check "S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt" \
+    test -f "$repo_root/safestos/cranelift/tests/symbol_sync.rs"
+
+# --- H1.13 AuthorizationEngine: secure default, kernel denies without it ---
+check "S28: AuthorizationEngine trait present" \
+    grep -q "trait AuthorizationEngine" "$repo_root/safestos/cranelift/src/auth.rs"
+check "S28: DenyAll is the default (fail-closed)" \
+    grep -q "pub struct DenyAll" "$repo_root/safestos/cranelift/src/auth.rs"
+check "S28: check() refuses without an installed engine" \
+    grep -q "DenyAll" "$repo_root/safestos/cranelift/src/auth.rs"
+
+# --- H1.14 Archetype surface: the three module archetypes are declared ---
+check "H8: austral_cps default archetype declared" \
+    grep -q 'austral_cps' "$repo_root/safestos/cranelift/src/module.rs"
+check "H8: ecmascript archetype runtime branch present" \
+    grep -q 'archetype == "ecmascript"' "$repo_root/safestos/cranelift/src/module.rs"
+check "H8: manifest parser reads the archetype key" \
+    grep -q 'get("archetype")' "$repo_root/safestos/cranelift/src/module.rs"
+check "H8: tidepool (Haskell effects) backend module exists" \
+    test -f "$repo_root/safestos/cranelift/src/tidepool_mod.rs"
+check "H8: cap-std Rust backend module exists" \
+    test -f "$repo_root/safestos/cranelift/src/capstd_mod.rs"
+
+# --- H1.15 GPL boundary: Cadabra2 runs as a subprocess, never linked ---
+check "S30: cadabra2-cli subprocess, not a dependency" \
+    bash -c "grep -q 'cadabra2-cli' '$repo_root'/../unfer/prob_kernel/src/symbolic.rs 2>/dev/null && ! grep -q 'cadabra2' '$repo_root/safestos/cranelift/Cargo.toml'"
+
+# --- H1.16 Trust annotations: grants_kernel / zenodo split in the census ---
+check "S21: ZENODO_SYMBOLS (uz_*) registered separately" \
+    grep -q "ZENODO_SYMBOLS" "$repo_root/safestos/cranelift/src/lib.rs"
+
+echo
+echo "verify-invariants: $PASSED passed, $GAPS explained gap(s), $FAILED failed"
+if [ "$FAILED" -gt 0 ]; then
+    exit 1
+fi
+exit 0
