@@ -1328,6 +1328,40 @@ fn effective_deadline_ms(ev: &SymbolEvent) -> Option<u64> {
     Some(ev.module_max_ms.unwrap_or(declared))
 }
 
+/// H9: strict-posture pause reusing the S21 approval lane. Under the `strict`
+/// deployment posture, every `EffectKind::Mutate` `uk_*` pauses for approval —
+/// except the two no-effect turn enders (`uk_session_close`, `uk_version`) and
+/// `uk_action_submit` itself (which *is* the lane). The consult reads the
+/// operator-set posture (S22 seam); a bounded caller cannot change it (UK-4501).
+struct PostureListener;
+impl SymbolListener for PostureListener {
+    fn name(&self) -> &'static str {
+        "posture"
+    }
+    fn on_symbol(&self, ev: &SymbolEvent, next: &mut dyn FnMut() -> Flow) -> Flow {
+        if unfer_ffi::uk_posture_current() != unfer_protocol::SecurityPosture::Strict {
+            return next();
+        }
+        if matches!(ev.symbol, "uk_session_close" | "uk_version" | "uk_action_submit") {
+            return next();
+        }
+        let is_mutate = unfer_protocol::symbols::SymbolRecord::by_name(ev.symbol)
+            .map(|r| r.effect_kind == unfer_protocol::EffectKind::Mutate)
+            .unwrap_or(true);
+        if !is_mutate {
+            return next();
+        }
+        Flow::Deny(serde_json::json!({
+            "code": "UK-4501",
+            "name": "ConsoleOnly",
+            "message": format!(
+                "strict posture pauses '{}' for approval (S21 lane); an operator must approve it",
+                ev.symbol
+            ),
+        }))
+    }
+}
+
 /// Annotation-only listener (S23): runs the rest of the waterfall, appends the
 /// audit entry for the terminal outcome, then delegates that outcome unchanged.
 struct AuditListener;
@@ -1368,13 +1402,14 @@ impl SymbolListener for AuditListener {
 
 /// The loopback policy chain, in enforcement order. Registration order = order
 /// the gates fire: grant (UK-4001) → latch (UK-4701) → meter (UK-4601/4602) →
-/// guard (UK-4603 cooperative deadline) → dispatch. `AuditListener` wraps the
-/// whole chain so every exit is audited.
-const LOOPBACK_WATERFALL: [&dyn SymbolListener; 6] = [
+/// posture (H9 strict-pause, UK-4501) → guard (UK-4603 cooperative deadline) →
+/// dispatch. `AuditListener` wraps the whole chain so every exit is audited.
+const LOOPBACK_WATERFALL: [&dyn SymbolListener; 7] = [
     &AuditListener,
     &GrantGateListener,
     &LatchListener,
     &MeterListener,
+    &PostureListener,
     &GuardListener,
     &DispatchListener,
 ];
@@ -1956,6 +1991,19 @@ fn kernel_dispatch(
             let vetted = arg_i64(args, 1)?;
             let (p, l) = ptr_len(&principal);
             ffi_result(unfer_ffi::uk_registry_vetted(p, l, vetted))
+        }
+        // ── H9: deployment security posture (S22 admin seam) ───────────────
+        "uk_posture_get" => {
+            let out = buf_out(|b, c| unfer_ffi::uk_posture_get(b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        "uk_posture_set" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_posture_set(p, l))
         }
         // ── S6: agent accountability + audit ─────────────────────────────────
         "uk_audit_list" => {
@@ -3150,8 +3198,8 @@ mod tests {
         let names: Vec<&'static str> = LOOPBACK_WATERFALL.iter().map(|l| l.name()).collect();
         assert_eq!(
             names,
-            vec!["audit", "grant", "latch", "meter", "guard", "dispatch"],
-            "registration order = enforcement order (audit wraps, then grant→latch→meter→guard→dispatch)"
+            vec!["audit", "grant", "latch", "meter", "posture", "guard", "dispatch"],
+            "registration order = enforcement order (audit wraps, then grant→latch→meter→posture→guard→dispatch)"
         );
     }
 
@@ -3268,6 +3316,93 @@ mod tests {
             "[]",
         );
         assert!(resp.contains("\"result\""), "undeclared op stays untouched, got {resp}");
+    }
+
+    // ── H9: security posture (strict-pause consult at the chokepoint) ────
+
+    static POSTURE_TESTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn strict_posture_pauses_mutators_and_admits_enders() {
+        // Under the strict posture the loopback pauses every direct-dispatch
+        // Mutate uk_* for approval (reusing the S21 lane) except the two
+        // no-effect turn enders and uk_action_submit (the lane itself).
+        let _g = POSTURE_TESTS_LOCK.lock().unwrap();
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_posture();
+        let body = r#"{"posture":"strict"}"#;
+        let (p, l) = (body.as_ptr(), body.len() as i64);
+        assert_eq!(unfer_ffi::uk_posture_set(p, l), 0, "operator sets strict");
+
+        // A direct-dispatch Mutate symbol (uk_evolve) pauses for approval.
+        let grants = HashSet::from(["uk_evolve".to_string(), "uk_version".to_string()]);
+        let resp = dispatch_loopback_as_with_max_ms(
+            None,
+            "posture_mod",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &HashSet::new(),
+            None,
+            "uk_evolve",
+            r#"[{"t":0.1}]"#,
+        );
+        assert!(
+            resp.contains("4501"),
+            "strict posture must pause a mutator for approval, got {resp}"
+        );
+        assert!(resp.contains("pauses"), "denial names the pause, got {resp}");
+
+        // The no-effect turn ender uk_version still dispatches.
+        let resp = dispatch_loopback(
+            "posture_mod",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_version",
+            "[]",
+        );
+        assert!(resp.contains("\"result\""), "ender must dispatch, got {resp}");
+
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_posture();
+    }
+
+    #[test]
+    fn auto_posture_does_not_pause_mutators() {
+        // Default/auto posture: no pause beyond the existing S21 lane.
+        let _g = POSTURE_TESTS_LOCK.lock().unwrap();
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_posture();
+
+        let grants = HashSet::from(["uk_action_submit".to_string()]);
+        let effects = HashSet::from(["send_notification".to_string()]);
+        let resp = dispatch_loopback_as_with_max_ms(
+            None,
+            "posture_auto",
+            &grants,
+            &effects,
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &HashSet::new(),
+            None,
+            "uk_action_submit",
+            r#"[{"effect":"send_notification","params":{}}]"#,
+        );
+        // Under auto, the effect lands in the S21 lane as a pending action
+        // (the normal lane), not a posture pause.
+        assert!(
+            resp.contains("\"result\"") || resp.contains("action"),
+            "auto posture must not posture-pause, got {resp}"
+        );
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_posture();
     }
 
     // ── S27 (F26): credential vault over the loopback chokepoint ───────────

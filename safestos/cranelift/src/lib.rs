@@ -173,6 +173,9 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_restore",           addr: unfer_ffi::uk_restore           as *const u8 },
     KernelSymbol { name: "uk_subscribe",         addr: unfer_ffi::uk_subscribe         as *const u8 },
     KernelSymbol { name: "uk_poll",              addr: unfer_ffi::uk_poll              as *const u8 },
+    // H9: deployment security posture (S22 admin seam).
+    KernelSymbol { name: "uk_posture_get",       addr: unfer_ffi::uk_posture_get       as *const u8 },
+    KernelSymbol { name: "uk_posture_set",       addr: unfer_ffi::uk_posture_set       as *const u8 },
     // S29: Lean4 proof verification (nanoda_lib external type checker).
     KernelSymbol { name: "uk_proof_verify",      addr: unfer_ffi::uk_proof_verify      as *const u8 },
     // S30: Cadabra2 symbolic coupling (external CAS subprocess).
