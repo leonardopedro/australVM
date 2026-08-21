@@ -248,6 +248,11 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     // H3: event-sourced session fork + compaction.
     KernelSymbol { name: "uk_session_fork",    addr: unfer_ffi::uk_session_fork    as *const u8 },
     KernelSymbol { name: "uk_session_compact", addr: unfer_ffi::uk_session_compact as *const u8 },
+    // H13: skills registry (discovery/sharing over the module path).
+    KernelSymbol { name: "uk_skill_get",         addr: unfer_ffi::uk_skill_get         as *const u8 },
+    KernelSymbol { name: "uk_skill_list",        addr: unfer_ffi::uk_skill_list        as *const u8 },
+    KernelSymbol { name: "uk_skill_pack_import", addr: unfer_ffi::uk_skill_pack_import as *const u8 },
+    KernelSymbol { name: "uk_skill_register",    addr: unfer_ffi::uk_skill_register    as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]

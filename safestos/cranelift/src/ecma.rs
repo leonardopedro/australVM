@@ -1983,6 +1983,35 @@ fn kernel_dispatch(
             let seq = arg_i64(args, 1)?;
             ffi_result(unfer_ffi::uk_session_compact(handle, seq))
         }
+        // ── H13: skills registry (discovery/sharing over the module path) ──
+        "uk_skill_list" => {
+            let principal = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&principal);
+            let out = buf_out(|b, c| unfer_ffi::uk_skill_list(p, l, b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        "uk_skill_get" => {
+            let id = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&id);
+            let out = buf_out(|b, c| unfer_ffi::uk_skill_get(p, l, b, c))?;
+            match serde_json::from_str(out.as_str().unwrap_or("")) {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(out),
+            }
+        }
+        "uk_skill_register" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_skill_register(p, l))
+        }
+        "uk_skill_pack_import" => {
+            let json = arg_str(args, 0)?;
+            let (p, l) = ptr_len(&json);
+            ffi_result(unfer_ffi::uk_skill_pack_import(p, l))
+        }
         // ── S21 (F20): console-vetted marker. The symbol marshals onto the FFI; only the
         //    operator hook (nil grants) clears it — a module/agent dispatch is refused
         //    here with UK-4501 by the FFI's caller-context check (defense in depth).
@@ -3403,6 +3432,48 @@ mod tests {
         );
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_clear_posture();
+    }
+
+    // ── H13: skills registry over the loopback ──────────────────────────
+
+    #[test]
+    fn loopback_skill_register_list_dispatch() {
+        let _g = POSTURE_TESTS_LOCK.lock().unwrap();
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_skills();
+
+        let grants = HashSet::from([
+            "uk_skill_register".to_string(),
+            "uk_skill_list".to_string(),
+        ]);
+        let resp = dispatch_loopback(
+            "skill_mod",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_skill_register",
+            r#"[{"id":"acme/audit","module":"audit","scope":"org","grants":["uk_snapshot"]}]"#,
+        );
+        assert!(resp.contains("\"result\""), "register must dispatch, got {resp}");
+
+        let resp = dispatch_loopback(
+            "skill_mod",
+            &grants,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "uk_skill_list",
+            r#"["alice"]"#,
+        );
+        assert!(
+            resp.contains("acme/audit"),
+            "list must surface the org skill, got {resp}"
+        );
+
+        unfer_ffi::uk_clear_caller();
+        unfer_ffi::uk_clear_skills();
     }
 
     // ── S27 (F26): credential vault over the loopback chokepoint ───────────
