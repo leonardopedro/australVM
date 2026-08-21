@@ -77,6 +77,13 @@ check "S30: cadabra2-cli subprocess, not a dependency" \
 check "S21: ZENODO_SYMBOLS (uz_*) registered separately" \
     grep -q "ZENODO_SYMBOLS" "$repo_root/safestos/cranelift/src/lib.rs"
 
+# --- H12: agent notes (four implemented categories, one per non-trivial PR) ---
+check "H12: notes implemented dir has the four categories" \
+    test -d "$repo_root/.agents/notes/implemented/architecture" \
+    && test -d "$repo_root/.agents/notes/implemented/feature" \
+    && test -d "$repo_root/.agents/notes/implemented/testing" \
+    && test -d "$repo_root/.agents/notes/implemented/process"
+
 echo
 echo "verify-invariants: $PASSED passed, $GAPS explained gap(s), $FAILED failed"
 if [ "$FAILED" -gt 0 ]; then
