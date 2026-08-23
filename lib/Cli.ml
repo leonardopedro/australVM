@@ -20,6 +20,13 @@ let rec main (args: string list): unit =
     dump_and_die ()
 
 and main' (args: string list): unit =
+  (* S36 unified application/VM: the application boots by loading its
+     plugins. `Vm_plugin.boot` registers the built-in compiler as the
+     application's compiler plugin (which installs the Why3-derived gate as
+     a plugin of that compiler); every compile request is then routed
+     through the registry (`Vm_plugin.run_compiler` in CliEngine) instead of
+     a hard-coded pipeline call. *)
+  Vm_plugin.boot ();
   let arglist: arglist = parse_args args in
   let cmd: cmd = parse arglist in
   exec cmd

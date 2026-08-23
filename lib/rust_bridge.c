@@ -27,6 +27,7 @@ extern void scheduler_dispatch(void (*func)(void*), void* state);
 extern void* lookup_function(const unsigned char* name, int len);
 extern char* list_compiled_function_names(void);
 extern void cranelift_free_string(char* s);
+extern char* austral_unf_translate(const char* src);
 extern void set_allow_all(void);
 extern int64_t safestos_load_auth_manifest(const unsigned char* ptr, size_t len);
 extern void* cranelift_swap_binary(const unsigned char* data, int len);
@@ -93,6 +94,23 @@ CAMLprim value ocaml_execute_function_2(value ptr, value arg1, value arg2) {
     CAMLparam3(ptr, arg1, arg2);
     int64_t res = execute_function_2((void*)Int64_val(ptr), Int64_val(arg1), Int64_val(arg2));
     CAMLreturn(caml_copy_int64(res));
+}
+
+/* Austral->deltanet UNF translation (the S36-cycle kernel call): returns
+   the AustralReport JSON as an OCaml string option, or None when the
+   kernel/bridge is unavailable. */
+CAMLprim value ocaml_austral_unf(value src) {
+    CAMLparam1(src);
+    CAMLlocal2(some, str);
+    char* json = austral_unf_translate(String_val(src));
+    if (json == NULL) {
+        CAMLreturn(Val_int(0)); /* None */
+    }
+    str = caml_copy_string(json);
+    cranelift_free_string(json);
+    some = caml_alloc(1, 0);
+    Store_field(some, 0, str);
+    CAMLreturn(some); /* Some json */
 }
 
 /* Retrieve last JIT error as an OCaml string option */

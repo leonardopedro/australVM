@@ -180,8 +180,10 @@ and try_adding_source_ctx (error: austral_error) (source_map: source_map): austr
 and exec_target (mods: module_source list) (target: target): unit =
   match target with
   | TypeCheck ->
-     (* Compile everything, emit no code. *)
-     let _ = compile_multiple empty_compiler mods in
+     (* Compile everything, emit no code. Routed through the VM plugin
+        registry (S36): the compiler is a plugin of the application/VM, so
+        this is `Vm_plugin.run_compiler`, not a hard-coded pipeline call. *)
+     let _ = Vm_plugin.run_compiler mods in
      (* JIT server mode: keep process alive for repeated calls *)
      if !jit_server_mode then begin
        Printf.eprintf "CPS JIT: Entering server mode (stdin commands)\n%!";
@@ -241,8 +243,9 @@ and exec_target (mods: module_source list) (target: target): unit =
      exec_compile_to_c mods output_path entrypoint
 
 and exec_compile_to_bin (mods: module_source list) (bin_path: string) (entrypoint: entrypoint): unit =
-  (* Compile everything to a C file. *)
-  let compiler = compile_multiple empty_compiler mods in
+  (* Compile everything to a C file. Routed through the VM plugin registry
+     (S36): the compiler is a plugin of the application/VM. *)
+  let compiler = Vm_plugin.run_compiler mods in
   (* Compile the wrapper functions *)
   let compiler = post_compile compiler in
   (* Compile the entrypoint. *)
@@ -258,8 +261,9 @@ and exec_compile_to_bin (mods: module_source list) (bin_path: string) (entrypoin
   ()
 
 and exec_compile_to_c (mods: module_source list) (output_path: string) (entrypoint: entrypoint option): unit =
-  (* Compile everything to a C file. *)
-  let compiler = compile_multiple empty_compiler mods in
+  (* Compile everything to a C file. Routed through the VM plugin registry
+     (S36): the compiler is a plugin of the application/VM. *)
+  let compiler = Vm_plugin.run_compiler mods in
   (* Compile the wrapper functions *)
   let compiler = post_compile compiler in
   (* Compile the entrypoint, if needed. *)

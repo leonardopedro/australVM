@@ -118,6 +118,16 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
           let combined: SmallCombined.combined_module = DesugaringPass.desugar combined in
           let (env, linked): (env * linked_module) = extract env combined int_file_id body_file_id in
           let typed: typed_module = augment_module env linked in
+          (* S36 WhyML plugin seam: every registered compiler pass runs on the
+             typed module after typing and before codegen. A VerdictReject
+             aborts compilation — the machine-verified authorization gate
+             (Why3-extracted) refuses modules whose uk_* imports are not
+             granted. *)
+          (match Compiler_plugin.run_on_typed typed with
+           | Compiler_plugin.VerdictReject msg ->
+              (* `austral_raise` never returns — it raises the Austral_error. *)
+              austral_raise TypeError [ErrorText.Text msg]
+           | Compiler_plugin.VerdictOk -> ());
           let _ = check_module_linearity typed in
           let env: env = extract_bodies env typed in
           let (env, mono): (env * mono_module) = monomorphize env typed in
@@ -212,6 +222,11 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
       let (new_env, linked) = extract !env combined int_file_id body_file_id in
       env := new_env;
       let typed = augment_module !env linked in
+      (* S36 WhyML plugin seam (same gate as compile_mod). *)
+      (match Compiler_plugin.run_on_typed typed with
+       | Compiler_plugin.VerdictReject msg ->
+          austral_raise TypeError [ErrorText.Text msg]
+       | Compiler_plugin.VerdictOk -> ());
       let _ = check_module_linearity typed in
       let new_env = extract_bodies !env typed in
       env := new_env;
@@ -302,6 +317,8 @@ let post_compile (compiler: compiler): compiler =
 let empty_compiler: compiler =
   with_frame "Compile built-in modules"
     (fun _ ->
+      (* S36: install the WhyML-derived compiler passes (idempotent). *)
+      Why3_plugin.install ();
       (* We have to compile the Austral.Pervasive module, followed by
          Austral.Memory, since the latter uses declarations from the former. *)
       let env: env = empty_env in

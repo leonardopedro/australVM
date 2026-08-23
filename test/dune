@@ -1,16 +1,40 @@
+; Shared test helpers: TestUtil is used by several (tests) stanzas, so it
+; lives in its own library and every stanza lists explicit modules (dune
+; refuses modules used across several stanzas otherwise).
+(library
+ (name test_util)
+ (modules TestUtil)
+ (wrapped false)
+ (libraries austral_core ounit2))
+
 (tests
  (names
   ExpressionParserTest
   UtilTest
   CRendererTest)
- (libraries austral_core ounit2))
+ (modules
+  ExpressionParserTest
+  UtilTest
+  CRendererTest)
+ (libraries austral_core ounit2 test_util))
 
 (tests
  (names
   CliUtilTest
-  CliParserTest)
- (libraries austral_lib ounit2))
+  CliParserTest
+  PluginTest
+  DeltanetPluginTest)
+ (modules
+  CliUtilTest
+  CliParserTest
+  PluginTest
+  DeltanetPluginTest)
+ ; austral_rust_bridge is needed so rust_bridge.c (which defines the au_*
+ ; runtime primitives the cranelift bridge .so imports) is linked into the
+ ; executable; without it the .so fails to load (undefined au_* symbol).
+ (libraries austral_lib austral_rust_bridge ounit2 unix str test_util))
 
 (tests
  (names JitTest)
+ (modules JitTest)
  (libraries austral_cps_gen austral_rust_bridge ounit2))

@@ -18,6 +18,7 @@ external c_execute_function : int64 -> int64 = "ocaml_execute_function"
 external c_execute_function_1 : int64 -> int64 -> int64 = "ocaml_execute_function_1"
 external c_execute_function_2 : int64 -> int64 -> int64 -> int64 = "ocaml_execute_function_2"
 external c_last_error : unit -> string option = "ocaml_cranelift_last_error"
+external c_austral_unf : string -> string option = "ocaml_austral_unf"
 external c_lookup_function : string -> int64 = "ocaml_lookup_function"
 external c_list_function_names : unit -> string = "ocaml_list_function_names"
 external c_set_allow_all : unit -> unit = "ocaml_set_allow_all"
@@ -148,3 +149,11 @@ let load (ptr: int64) : int64 =
 
 let store (ptr: int64) (value: int64) : unit =
   c_store ptr value
+
+(** Austral→deltanet UNF translation (S36-cycle kernel call): run an Austral
+    source fragment through the kernel's `uk_austral_unf` symbol and return
+    the `AustralReport` JSON (`{"value": "5", "unf_hash": ...}`), or None
+    when the kernel/bridge is unavailable. This is the "call the kernel
+    from the compiler" direction the Deltanet_plugin pass uses. *)
+let austral_unf_json (src: string) : string option =
+  c_austral_unf src

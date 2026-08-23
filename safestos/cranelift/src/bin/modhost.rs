@@ -19,57 +19,10 @@ use std::process::{Child, Command, ExitCode, Stdio};
 
 /// Host runtime primitives for JIT-compiled Austral modules.
 ///
-/// The OCaml FFI provides these in `lib/rust_bridge.c`; modhost is a
-/// standalone binary that links the Rust crate directly, so it must supply
-/// its own copies (unless the test harness already provides them via the
-/// `test-stubs` feature). They are registered into the Cranelift JIT's symbol
-/// table by `cranelift_init`.
-#[cfg(not(feature = "test-stubs"))]
-#[no_mangle]
-pub extern "C" fn au_print_int(i: i64) {
-    println!("{i}");
-}
-
-#[cfg(not(feature = "test-stubs"))]
-#[no_mangle]
-pub extern "C" fn au_exit(code: i64) {
-    eprintln!("Austral: Exit with code {code}");
-}
-
-#[cfg(not(feature = "test-stubs"))]
-#[no_mangle]
-pub extern "C" fn au_alloc(size: i64) -> *mut u8 {
-    if size <= 0 {
-        return std::ptr::null_mut();
-    }
-    // Same semantics as the OCaml stub's `malloc` (lib/rust_bridge.c).
-    unsafe { libc_malloc(size as usize) }
-}
-
-#[cfg(not(feature = "test-stubs"))]
-#[no_mangle]
-pub extern "C" fn au_free(ptr: *mut u8) {
-    if !ptr.is_null() {
-        unsafe { libc_free(ptr) }
-    }
-}
-
-#[cfg(not(feature = "test-stubs"))]
-unsafe extern "C" {
-    fn malloc(size: usize) -> *mut u8;
-    fn free(ptr: *mut u8);
-}
-
-#[cfg(not(feature = "test-stubs"))]
-unsafe fn libc_malloc(size: usize) -> *mut u8 {
-    malloc(size)
-}
-
-#[cfg(not(feature = "test-stubs"))]
-unsafe fn libc_free(ptr: *mut u8) {
-    free(ptr)
-}
-
+/// The Rust library (`austral_cranelift_bridge`) now provides `au_*`
+/// itself (self-contained `.so`, see `src/lib.rs`), so modhost inherits
+/// them from the rlib it links; the OCaml FFI provides identical copies
+/// in `lib/rust_bridge.c` (ELF interposition: the executable's copies win).
 fn cmd_authorize(args: &[String]) -> ExitCode {
     let (manifest_path, principal, symbol) = (&args[2], &args[3], &args[4]);
 

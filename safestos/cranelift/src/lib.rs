@@ -57,13 +57,43 @@ pub extern "C" fn cranelift_clear_error() {
 }
 
 extern "C" {
-    fn au_print_int(i: i64);
-    fn au_exit(code: i64);
-    fn au_alloc(size: i64) -> *mut u8;
-    fn au_free(ptr: *mut u8);
     fn cell_swap(old_id: u64, new_desc: *const c_void) -> bool;
     fn cell_can_replace(old: *const c_void, new: *const c_void) -> bool;
     fn cell_set_jit_fn_ptr(desc: *mut u8, ptr: *const std::ffi::c_void);
+}
+
+// The `au_*` runtime primitives the JIT registers for compiled Austral
+// code. They are defined HERE (not extern) so the bridge `.so` is
+// self-contained — no undefined symbols for host binaries to supply (which
+// otherwise breaks linking on binutils configs that enforce shared-library
+// symbol resolution). The OCaml side's `rust_bridge.c` provides identical
+// definitions for its own CAMLprims; ELF interposition makes the
+// executable's copies win at runtime, so the behavior is unchanged.
+#[no_mangle]
+pub extern "C" fn au_print_int(i: i64) {
+    use std::io::Write;
+    println!("{i}");
+    let _ = std::io::stdout().flush();
+}
+
+#[no_mangle]
+pub extern "C" fn au_exit(code: i64) {
+    eprintln!("Austral: Exit with code {code}");
+}
+
+#[no_mangle]
+pub extern "C" fn au_alloc(size: i64) -> *mut u8 {
+    if size <= 0 {
+        return std::ptr::null_mut();
+    }
+    unsafe { libc::malloc(size as usize) as *mut u8 }
+}
+
+#[no_mangle]
+pub extern "C" fn au_free(ptr: *mut u8) {
+    if !ptr.is_null() {
+        unsafe { libc::free(ptr as *mut libc::c_void) };
+    }
 }
 
 #[no_mangle]
@@ -169,6 +199,9 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_last_error",        addr: unfer_ffi::uk_last_error         as *const u8 },
     // Logos CNL->UNF compilation (unique-normal-form via interaction-net reduction).
     KernelSymbol { name: "uk_logos_compile",     addr: unfer_ffi::uk_logos_compile      as *const u8 },
+    // Austral->deltanet UNF translation (the austral/australVM-language side
+    // of the unique-normal-form pipeline, used by the Deltanet_plugin pass).
+    KernelSymbol { name: "uk_austral_unf",       addr: unfer_ffi::uk_austral_unf        as *const u8 },
     KernelSymbol { name: "uk_snapshot",          addr: unfer_ffi::uk_snapshot          as *const u8 },
     KernelSymbol { name: "uk_restore",           addr: unfer_ffi::uk_restore           as *const u8 },
     KernelSymbol { name: "uk_subscribe",         addr: unfer_ffi::uk_subscribe         as *const u8 },
@@ -180,6 +213,8 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_proof_verify",      addr: unfer_ffi::uk_proof_verify      as *const u8 },
     // S30: Cadabra2 symbolic coupling (external CAS subprocess).
     KernelSymbol { name: "uk_symbolic_simplify", addr: unfer_ffi::uk_symbolic_simplify as *const u8 },
+    // S36: WhyML codegen for the compiler-extension cycle (external Why3 toolchain).
+    KernelSymbol { name: "uk_whyml_emit",       addr: unfer_ffi::uk_whyml_emit       as *const u8 },
     KernelSymbol { name: "uk_bayesian_update",   addr: unfer_ffi::uk_bayesian_update   as *const u8 },
     KernelSymbol { name: "uk_belief_propagation",addr: unfer_ffi::uk_belief_propagation as *const u8 },
     KernelSymbol { name: "uk_buf_free",          addr: unfer_ffi::uk_buf_free           as *const u8 },
@@ -567,6 +602,72 @@ pub extern "C" fn cranelift_free_string(s: *mut std::ffi::c_char) {
     }
 }
 
+/// Austral→deltanet UNF translation bridge for the OCaml compiler plugin.
+///
+/// Runs the Austral source fragment through the kernel's `uk_austral_unf`
+/// symbol on a lazily-created model and returns the `AustralReport` JSON as
+/// a malloc'd NUL-terminated string (freed by [`cranelift_free_string`]), or
+/// NULL on failure (see `cranelift_last_error`). This is the "call the
+/// kernel from the compiler" direction of the S36 cycle: the OCaml
+/// `Deltanet_plugin` pass recomputes top-level constant expressions through
+/// the kernel's unique-normal-form (interaction-net) reducer and rejects the
+/// module when the values disagree.
+#[cfg(feature = "unfer-kernel")]
+#[no_mangle]
+pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut std::ffi::c_char {
+    use std::ffi::CStr;
+    use std::sync::OnceLock;
+
+    static MODEL: OnceLock<i64> = OnceLock::new();
+
+    if src.is_null() {
+        set_last_error("austral_unf_translate: null source");
+        return std::ptr::null_mut();
+    }
+    let src_str = match unsafe { CStr::from_ptr(src) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            set_last_error(&format!("austral_unf_translate: invalid UTF-8: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let model = *MODEL.get_or_init(|| {
+        // A minimal QFM-free model spec so the handle-based kernel API has a
+        // session to attach the report to (mirrors the FFI test spec).
+        let spec = br#"{"hamiltonian":{"kind":"builtin","name":"harmonic_chain","params":{"n_modes":2,"omega":1.0}},"prior":{"kind":"vacuum"},"solver":{"krylov_dim":4,"prune_eps":1e-12,"max_components":50000,"restarts":1,"device":{"kind":"cpu"}}}"#;
+        unfer_ffi::uk_model_create(spec.as_ptr() as *const u8, spec.len() as i64)
+    });
+    if model <= 0 {
+        set_last_error("austral_unf_translate: kernel model creation failed");
+        return std::ptr::null_mut();
+    }
+    let code = unfer_ffi::uk_austral_unf(model, src_str.as_ptr(), src_str.len() as i64);
+    if code != 0 {
+        set_last_error(&format!("austral_unf_translate: uk_austral_unf failed with {code}"));
+        return std::ptr::null_mut();
+    }
+    // Probe-then-copy result retrieval.
+    let needed = unfer_ffi::uk_get_result(model, std::ptr::null_mut(), 0);
+    if needed <= 0 {
+        set_last_error("austral_unf_translate: uk_get_result probe failed");
+        return std::ptr::null_mut();
+    }
+    let mut buf = vec![0u8; needed as usize + 1];
+    let written = unfer_ffi::uk_get_result(model, buf.as_mut_ptr(), buf.len() as i64);
+    if written != needed {
+        set_last_error("austral_unf_translate: uk_get_result copy mismatch");
+        return std::ptr::null_mut();
+    }
+    buf.truncate(needed as usize);
+    match CString::new(buf) {
+        Ok(cs) => cs.into_raw(),
+        Err(_) => {
+            set_last_error("austral_unf_translate: result contains NUL");
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// Install AllowAll authorizer (disables all authorization checks).
 #[no_mangle]
 pub extern "C" fn set_allow_all() {
@@ -694,35 +795,10 @@ pub fn au_cell_can_replace(old: *const std::ffi::c_void, new: *const std::ffi::c
     unsafe { cell_can_replace(old, new) }
 }
 
-// ── Test stubs for C runtime symbols ───────────────────────────────
-// Integration tests link against libaustral_cranelift_bridge.rlib,
-// which references au_print_int/au_exit/au_alloc/au_free from the C
-// runtime. These stubs satisfy the linker when `--features test-stubs`
-// is active. The real C runtime is linked in production (cdylib/staticlib)
-// via build.rs → cc::Build.
-//
-// Activate with: `cargo test --features test-stubs`
-// Panic-free stubs: Cranelift may call these during JIT init/resolution;
-// any panic crossing `extern "C"` causes SIGABRT ("non-unwinding panic").
-// Return safe defaults instead.
-#[cfg(feature = "test-stubs")]
-mod test_runtime_stubs {
-    #[no_mangle]
-    pub extern "C" fn au_print_int(_i: i64) {}
-
-    #[no_mangle]
-    pub extern "C" fn au_exit(_code: i64) { loop {} } // hang; exit is unreachable in tests
-
-    #[no_mangle]
-    pub extern "C" fn au_alloc(_size: i64) -> *mut u8 {
-        std::ptr::null_mut() // test modules don't need heap allocation
-    }
-
-    #[no_mangle]
-    pub extern "C" fn au_free(_ptr: *mut u8) {
-        // Test stubs never own real C allocations; leaked memory is acceptable.
-    }
-}
+// The `au_*` runtime primitives are now defined in this crate (see the
+// `#[no_mangle]` definitions above) so the bridge `.so` is self-contained.
+// The `test-stubs` feature is retained as a no-op for compatibility with
+// existing `--features test-stubs` invocations.
 
 #[cfg(all(test, feature = "unfer-kernel"))]
 mod tests {

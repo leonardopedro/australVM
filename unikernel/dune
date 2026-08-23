@@ -1,0 +1,23 @@
+; S36: the AustralVM unified application/VM.
+;
+; `config.ml` + `unikernel.ml` are the Mirage manifest/job (packaging the
+; compiler-as-plugin application as a unikernel). The Mirage toolchain is an
+; optional dev dependency (opam install mirage) and is NOT required for the
+; workspace build — this directory only builds `compiler_vm_test`, a plain
+; executable that exercises the same boot + registry routing without Mirage
+; (it is the unikernel's `boot_and_compile` under the unix backend).
+;
+; The `config.ml`/`unikernel.ml` files themselves are not compiled by dune
+; unless the user runs `mirage configure` (which generates its own dune
+; files). Keeping them unbuilt here avoids a hard Mirage dependency.
+(executable
+ (name compiler_vm_test)
+ (modules compiler_vm_test)
+ (libraries austral_lib))
+
+; Run as part of `dune runtest` (LD_LIBRARY_PATH must include the cranelift
+; bridge dir, as with the other test executables).
+(rule
+ (alias runtest)
+ (deps compiler_vm_test.exe)
+ (action (run %{exe:compiler_vm_test.exe})))
