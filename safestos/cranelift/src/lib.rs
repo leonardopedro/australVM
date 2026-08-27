@@ -96,6 +96,58 @@ pub extern "C" fn au_free(ptr: *mut u8) {
     }
 }
 
+// The `Austral.Pervasive::trapping*` arithmetic intrinsics. The CPS compiler
+// lowers `+`/`-`/`*`/`/` on Int64 to calls to these typeclass methods (the
+// OCaml native compiler implements them via `__builtin_*_overflow` + `abort`);
+// the JIT must provide the same symbols or any module using arithmetic fails
+// to finalize with "can't resolve symbol Austral.Pervasive::trappingAdd".
+// Semantics mirror BuiltInModules.ml: abort on overflow / divide by zero.
+fn trapping_abort(what: &str) -> ! {
+    eprintln!("Austral: {what}");
+    std::process::abort();
+}
+
+#[no_mangle]
+pub extern "C" fn au_trapping_add(lhs: i64, rhs: i64) -> i64 {
+    match lhs.checked_add(rhs) {
+        Some(v) => v,
+        None => trapping_abort("Overflow in trappingAdd (Int64)"),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn au_trapping_subtract(lhs: i64, rhs: i64) -> i64 {
+    match lhs.checked_sub(rhs) {
+        Some(v) => v,
+        None => trapping_abort("Overflow in trappingSubtract (Int64)"),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn au_trapping_multiply(lhs: i64, rhs: i64) -> i64 {
+    match lhs.checked_mul(rhs) {
+        Some(v) => v,
+        None => trapping_abort("Overflow in trappingMultiply (Int64)"),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn au_trapping_divide(lhs: i64, rhs: i64) -> i64 {
+    if rhs == 0 {
+        trapping_abort("Division by zero in trappingDivide (Int64)");
+    }
+    lhs / rhs
+}
+
+/// Register the `Austral.Pervasive::trapping*` arithmetic intrinsics on a
+/// JIT builder (both the initial and the hotswap builders must carry them).
+fn register_trapping_symbols(builder: &mut JITBuilder) {
+    builder.symbol("Austral.Pervasive::trappingAdd",      au_trapping_add      as *const u8);
+    builder.symbol("Austral.Pervasive::trappingSubtract", au_trapping_subtract as *const u8);
+    builder.symbol("Austral.Pervasive::trappingMultiply", au_trapping_multiply as *const u8);
+    builder.symbol("Austral.Pervasive::trappingDivide",   au_trapping_divide   as *const u8);
+}
+
 #[no_mangle]
 pub extern "C" fn __au_swap_module(old_id: u64, new_desc: *const c_void) -> i64 {
     unsafe {
@@ -132,6 +184,12 @@ pub extern "C" fn cranelift_init() -> i64 {
             builder.symbol("__union_new",   au_exit as *const u8);
             builder.symbol("__record_new",  au_exit as *const u8);
             builder.symbol("__slot_get",    au_exit as *const u8);
+
+            // Register the Austral.Pervasive::trapping* arithmetic intrinsics
+            // (see au_trapping_* above): CPS-lowered `+ - * /` on Int64 call
+            // these by name, and a module using arithmetic cannot finalize
+            // without them.
+            register_trapping_symbols(&mut builder);
 
             // Register unfer kernel symbols (uk_*) for JIT-compiled modules.
             // Access is gated by the manifest auth engine — uk_ is NOT in the
@@ -487,6 +545,7 @@ pub extern "C" fn cranelift_swap_binary(
         builder.symbol("__union_new",   au_exit as *const u8);
         builder.symbol("__record_new",  au_exit as *const u8);
         builder.symbol("__slot_get",    au_exit as *const u8);
+        register_trapping_symbols(&mut builder);
         #[cfg(feature = "unfer-kernel")]
         register_unfer_symbols(&mut builder);
         #[cfg(feature = "zenodo-store")]
