@@ -36,6 +36,7 @@ let boot () =
      compiler plugin, restored on every boot. *)
   Why3_plugin.install ();
   Deltanet_plugin.install ();
+  Npu_dma_plugin.install ();
   let names = list_compilers () in
   if not (List.mem "austral-builtin" names) then
     register_compiler

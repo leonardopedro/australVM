@@ -74,8 +74,10 @@
   ; S36: the WhyML cycle. authorize_gate.ml (the Why3 extraction, source in
   ; why3_plugin/authorize_gate.mlw) + why3_plugin.ml (the compiler pass) + the
   ; deltanet_plugin.ml (the Austral->deltanet UNF consistency gate) + the
+  ; npu_dma_gate.ml (the GPU.md Why3 extraction, source in
+  ; why3_plugin/npu_dma_gate.mlw) + npu_dma_plugin.ml (its compiler pass) + the
   ; Vm_plugin registry (the compiler itself as a plugin of the application/VM)
   ; live in this directory so dune picks them up with the explicit list below.
-  (modules Authorize_gate Compiler Cli CliEngine CliParser CliUtil Deltanet_plugin Vm_plugin Why3_plugin))
+  (modules Authorize_gate Compiler Cli CliEngine CliParser CliUtil Deltanet_plugin Npu_dma_gate Npu_dma_plugin Vm_plugin Why3_plugin))
 
 (documentation)

@@ -86,6 +86,72 @@ let test_why3_gate_enforces_the_grant_set _ =
    | VerdictReject msg -> assert_failure ("superset grant rejected: " ^ msg));
   reset ()
 
+(* ── the NPU DMA gate pass (GPU.md, WhyML-verified SRAM invariant) ──── *)
+
+let test_npu_dma_gate_is_the_sram_check _ =
+  (* dma_verdict offset bytes = 0  <->  offset + bytes <= MAX_NPU_SRAM *)
+  eq 0 (Npu_dma_gate.dma_verdict 0 0);
+  eq 0 (Npu_dma_gate.dma_verdict 0 262144);
+  eq 0 (Npu_dma_gate.dma_verdict 100000 162144);
+  eq 1 (Npu_dma_gate.dma_verdict 0 262145);
+  eq 1 (Npu_dma_gate.dma_verdict 262144 1);
+  eq 1 (Npu_dma_gate.dma_verdict 200000 100000);
+  (* dma_ok mirrors the same bound on the (size, offset) buffer record *)
+  eq true (Npu_dma_gate.dma_ok (262144, 0) 262144);
+  eq false (Npu_dma_gate.dma_ok (262144, 0) 262145)
+
+let test_npu_dma_gate_enforces_the_sram_bound _ =
+  reset ();
+  Npu_dma_plugin.install ();
+  let dma = Identifier.make_ident in
+  let check ~constants = Npu_dma_plugin.check ~module_name:"m" ~foreign_externals:[] ~constants in
+  (* no dma_* constants: no-op *)
+  (match check ~constants:[] with
+   | VerdictOk -> ()
+   | VerdictReject _ -> assert_failure "no DMA constants must pass");
+  (* an unrelated constant is not a DMA transfer *)
+  (match check ~constants:[(dma "ordinary", TIntConstant "1024")] with
+   | VerdictOk -> ()
+   | VerdictReject msg -> assert_failure ("unrelated constants must pass: " ^ msg));
+  (* in-bounds transfer: pass *)
+  (match check ~constants:[(dma "dma_embed_bytes", TIntConstant "65536")] with
+   | VerdictOk -> ()
+   | VerdictReject msg -> assert_failure ("in-bounds transfer rejected: " ^ msg));
+  (* explicit offset, still in bounds: pass *)
+  (match
+     check
+       ~constants:
+         [ (dma "dma_embed_offset", TIntConstant "100000");
+           (dma "dma_embed_bytes", TIntConstant "100000") ]
+   with
+   | VerdictOk -> ()
+   | VerdictReject msg -> assert_failure ("in-bounds offset transfer rejected: " ^ msg));
+  (* over-limit transfer: rejected, naming the constant and the limit *)
+  (match check ~constants:[(dma "dma_embed_bytes", TIntConstant "262145")] with
+   | VerdictReject msg ->
+       assert_bool
+         ("names the transfer and the limit: " ^ msg)
+         (try
+            let _ = Str.search_forward (Str.regexp_string "dma_embed") msg 0 in
+            let _ = Str.search_forward (Str.regexp_string "262144") msg 0 in
+            true
+          with Not_found -> false)
+   | VerdictOk -> assert_failure "an over-limit DMA transfer must be rejected");
+  (* over-limit via offset + bytes: rejected *)
+  (match
+     check
+       ~constants:
+         [ (dma "dma_embed_offset", TIntConstant "200000");
+           (dma "dma_embed_bytes", TIntConstant "100000") ]
+   with
+   | VerdictReject _ -> ()
+   | VerdictOk -> assert_failure "offset+bytes overflow must be rejected");
+  (* malformed negative size: rejected *)
+  (match check ~constants:[(dma "dma_embed_bytes", TIntConstant "-1")] with
+   | VerdictReject _ -> ()
+   | VerdictOk -> assert_failure "a negative DMA size must be rejected");
+  reset ()
+
 (* ── the compiler as a plugin of the application/VM (Vm_plugin) ──────── *)
 
 let test_compiler_plugin_registry _ =
@@ -128,9 +194,11 @@ let test_compiler_plugin_boot_registers_builtin _ =
                   "end module body.\n";
     } in
   let _ = Vm_plugin.run_compiler [ src ] in
-  (* the built-in compiler installed the Why3 gate as its pass plugin *)
+  (* the built-in compiler installed the Why3 gates as its pass plugins *)
   assert_bool "why3_gate pass installed by the compiler plugin"
     (List.mem "why3_gate" (Compiler_plugin.list_registered ()));
+  assert_bool "npu_dma_gate pass installed by the compiler plugin"
+    (List.mem "npu_dma_gate" (Compiler_plugin.list_registered ()));
   Vm_plugin.reset ();
   Compiler_plugin.reset ()
 
@@ -139,6 +207,8 @@ let suite =
       "gate_is_the_subset_check" >:: test_gate_is_the_subset_check;
       "registry_register_run_reset" >:: test_registry_register_run_reset;
       "why3_gate_enforces_the_grant_set" >:: test_why3_gate_enforces_the_grant_set;
+      "npu_dma_gate_is_the_sram_check" >:: test_npu_dma_gate_is_the_sram_check;
+      "npu_dma_gate_enforces_the_sram_bound" >:: test_npu_dma_gate_enforces_the_sram_bound;
       "compiler_plugin_registry" >:: test_compiler_plugin_registry;
       "compiler_plugin_boot_registers_builtin" >:: test_compiler_plugin_boot_registers_builtin;
     ]
