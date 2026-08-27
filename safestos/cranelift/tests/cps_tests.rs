@@ -18,10 +18,17 @@ fn write_str(buf: &mut Vec<u8>, s: &str) {
 /// raw `body_data`. The JIT entry-point lookup requires a function named
 /// "run" (or an explicit name via `compile_to_function_named`'s name arg).
 fn cps_v1(body_data: &[u8]) -> Vec<u8> {
+    cps_v1_named("run", body_data)
+}
+
+/// Like [`cps_v1`] but with a caller-chosen function name — the JIT module
+/// is process-global and persists across tests, so compiling two functions
+/// with the same name in one test process is a `DuplicateDefinition`.
+fn cps_v1_named(fname: &str, body_data: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
     write_u32(&mut buf, 0x43505331); // magic v1
     write_u32(&mut buf, 1);          // func_count
-    write_str(&mut buf, "run");
+    write_str(&mut buf, fname);
     write_u32(&mut buf, 0); // param_count
     buf.push(0);             // ret_type
     write_u32(&mut buf, body_data.len() as u32);
@@ -45,6 +52,22 @@ fn body_call_import(name: &str) -> Vec<u8> {
     body.push(0x04);     // App (function call)
     write_str(&mut body, name);
     write_u32(&mut body, 0); // arg_count
+    body
+}
+
+/// Body that tail-calls a 2-arg import with two i64 constants and returns
+/// its result — the shape the Austral compiler emits for `lhs op rhs` on
+/// Int64 (lowers to `Austral.Pervasive::trappingAdd` etc.).
+fn body_call_import_2args(name: &str, a: i64, b: i64) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(0x07);     // tail context
+    body.push(0x04);     // App (function call)
+    write_str(&mut body, name);
+    write_u32(&mut body, 2); // arg_count
+    body.push(0x01);     // iconst a
+    write_i64(&mut body, a);
+    body.push(0x01);     // iconst b
+    write_i64(&mut body, b);
     body
 }
 
@@ -118,6 +141,77 @@ fn calls_uk_version() {
 fn calls_uk_init() {
     let cps = cps_v1(&body_call_import("uk_init"));
     assert_eq!(execute(compile(&cps)), 0);
+}
+
+// ── Austral.Pervasive::trapping* arithmetic intrinsics ─────────────
+// The Austral compiler lowers `+ - * /` on Int64 to calls to these
+// typeclass methods; the JIT must resolve them (regression: before they
+// were registered, any module using arithmetic panicked at finalize with
+// "can't resolve symbol Austral.Pervasive::trappingAdd").
+
+#[test]
+fn trapping_add_resolves_and_executes() {
+    let cps = cps_v1(&body_call_import_2args(
+        "Austral.Pervasive::trappingAdd", 40, 2,
+    ));
+    assert_eq!(execute(compile(&cps)), 42);
+}
+
+#[test]
+fn trapping_subtract_resolves_and_executes() {
+    let cps = cps_v1(&body_call_import_2args(
+        "Austral.Pervasive::trappingSubtract", 44, 2,
+    ));
+    assert_eq!(execute(compile(&cps)), 42);
+}
+
+#[test]
+fn trapping_multiply_resolves_and_executes() {
+    let cps = cps_v1(&body_call_import_2args(
+        "Austral.Pervasive::trappingMultiply", 6, 7,
+    ));
+    assert_eq!(execute(compile(&cps)), 42);
+}
+
+#[test]
+fn trapping_divide_resolves_and_executes() {
+    let cps = cps_v1(&body_call_import_2args(
+        "Austral.Pervasive::trappingDivide", 84, 2,
+    ));
+    assert_eq!(execute(compile(&cps)), 42);
+}
+
+/// The packed return shape of `durable_status_module`'s `run()`:
+/// `(statusN * 65536) + snapN` with both operands small — the exact
+/// arithmetic the module does through the JIT. The JIT module is
+/// process-global, so each compile uses a distinct function name to avoid
+/// DuplicateDefinition.
+#[test]
+fn trapping_packed_return_matches_durable_status_module() {
+    let _lock = COMPILE_LOCK.lock().unwrap();
+    austral_cranelift_bridge::auth::set_allow_all();
+    let mul = cps_v1_named(
+        "pack_mul",
+        &body_call_import_2args(
+            "Austral.Pervasive::trappingMultiply", 400, 65536,
+        ),
+    );
+    // Direct FFI call — `compile` would re-lock the mutex (deadlock).
+    let hi = execute(austral_cranelift_bridge::compile_to_function_named(
+        mul.as_ptr(), mul.len(), ptr::null(), 0,
+    ));
+    // (statusN << 16) — high 16 bits of the packed return.
+    assert_eq!(hi, 400 * 65536);
+
+    let add = cps_v1_named(
+        "pack_add",
+        &body_call_import_2args("Austral.Pervasive::trappingAdd", hi, 3),
+    );
+    let ptr = austral_cranelift_bridge::compile_to_function_named(
+        add.as_ptr(), add.len(), ptr::null(), 0,
+    );
+    // ... + snapN — low 16 bits.
+    assert_eq!(execute(ptr), 400 * 65536 + 3);
 }
 
 /// Global auth is mutable global state; all compile paths must be serialized.
