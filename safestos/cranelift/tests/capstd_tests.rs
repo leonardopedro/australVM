@@ -59,13 +59,18 @@ fn hotswap_rejects_fs_grant_escalation() {
     std::fs::create_dir_all(&dir_v2).unwrap();
     std::fs::write(dir_v1.join("module.cps"), &cps).unwrap();
     std::fs::write(dir_v2.join("module.cps"), &cps).unwrap();
+    // H8: the archetype must be a registered harness profile the loader maps
+    // (rust_capstd is a manifest-parsing label, not a harness profile — the
+    // resolver would fall back to austral_cps and reject the mismatch). The
+    // test's subject is fs-grant escalation on swap, so both sides use the
+    // austral_cps JIT profile with an explicit allowlist.
     std::fs::write(
         dir_v1.join("module.toml"),
-        "[module]\nname = \"cap_mod\"\narchetype = \"rust_capstd\"\n\n[grants]\nfs = [\"data/\"]\n",
+        "[module]\nname = \"cap_mod\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\n\n[grants]\nfs = [\"data/\"]\n",
     ).unwrap();
     std::fs::write(
         dir_v2.join("module.toml"),
-        "[module]\nname = \"cap_mod\"\narchetype = \"rust_capstd\"\n\n[grants]\nfs = [\"data/\", \"/etc/\"]\n",
+        "[module]\nname = \"cap_mod\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\n\n[grants]\nfs = [\"data/\", \"/etc/\"]\n",
     ).unwrap();
 
     let mut host = ModuleHost::new();

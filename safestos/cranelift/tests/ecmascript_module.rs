@@ -207,9 +207,17 @@ fn ecmascript_loopback_denies_ungranted() {
     host.load(&dir).unwrap();
 
     // Directly POST to the module's kernel loopback for a symbol it was not granted.
+    // S11 peer lockdown: the loopback is armed to the workerd child's pid by
+    // default, which would refuse this host-side connection at the transport.
+    // This is the host-side loopback test, so re-arm the peer check to this
+    // process's own pid — the dispatch layer (UK-4001 for un-granted symbols)
+    // is what's under test, not the peer lockdown (covered by ecma.rs unit
+    // tests).
     let sock_path = {
         let handle = host.get("ecma_loopback_deny").unwrap();
-        handle.ecma().unwrap().loopback_sock().to_path_buf()
+        let ecma = handle.ecma().unwrap();
+        ecma.arm_loopback_peer(std::process::id());
+        ecma.loopback_sock().to_path_buf()
     };
     use std::io::{BufReader, Read, Write};
     use std::os::unix::net::UnixStream;

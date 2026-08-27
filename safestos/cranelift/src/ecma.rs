@@ -493,6 +493,14 @@ impl EcmaSidecar {
         &self.loopback.path
     }
 
+    /// Re-arm the loopback's SO_PEERCRED check to a specific pid (S11). The
+    /// default arms the spawned workerd child; a host-side consumer (or the
+    /// host-side loopback test) that connects directly may re-arm to its own
+    /// pid so the peer check accepts it. 0 disarms the check entirely.
+    pub fn arm_loopback_peer(&self, pid: u32) {
+        self.loopback.set_expected_pid(pid);
+    }
+
     pub fn module_name(&self) -> &str {
         &self.module_name
     }
