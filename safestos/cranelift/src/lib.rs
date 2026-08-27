@@ -288,6 +288,11 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol { name: "uk_skill_list",        addr: unfer_ffi::uk_skill_list        as *const u8 },
     KernelSymbol { name: "uk_skill_pack_import", addr: unfer_ffi::uk_skill_pack_import as *const u8 },
     KernelSymbol { name: "uk_skill_register",    addr: unfer_ffi::uk_skill_register    as *const u8 },
+    // H4: durable store live status, corrupt-snapshot recovery report, and
+    // the certificate audit trail (operator-facing consults + records).
+    KernelSymbol { name: "uk_durable_status",         addr: unfer_ffi::uk_durable_status         as *const u8 },
+    KernelSymbol { name: "uk_durable_snapshot_error", addr: unfer_ffi::uk_durable_snapshot_error as *const u8 },
+    KernelSymbol { name: "uk_certificate_issued",     addr: unfer_ffi::uk_certificate_issued     as *const u8 },
 ];
 
 #[cfg(feature = "unfer-kernel")]

@@ -5103,6 +5103,8 @@ dependencies = [
 name = "unfer_consensus"
 version = "0.1.0"
 dependencies = [
+ "arctic",
+ "curve25519-dalek",
  "ed25519-dalek",
  "hex",
  "prob_kernel",
