@@ -38,6 +38,14 @@ let jit_server_mode = ref false
 let emit_cps_path = ref (None: string option)
 let jit_functions : (string, int64) Hashtbl.t = Hashtbl.create 16
 
+(* The binary most recently swapped into the JIT (set only on a successful
+   swap). If a later swap produces byte-identical bytes, the JIT already
+   holds exactly those functions and the whole Rust-side rebuild is skipped.
+   Serialization is deterministic (ordered list, no map iteration), so byte
+   equality is a sound no-change test; if it ever were not, the fast path
+   simply would not fire — never incorrect, only slower. *)
+let last_swapped_binary : string option ref = ref None
+
 let append_import_to_interface (ci: concrete_module_interface) (import: concrete_import_list): concrete_module_interface =
   let (ConcreteModuleInterface (mn, docstring, imports, decls)) = ci in
   if equal_module_name mn pervasive_module_name then
@@ -261,24 +269,35 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
     ) mods;
     if List.length !all_funcs > 0 then begin
       let binary = CpsGen.serialize_functions ~module_name:!swap_module_name !all_funcs in
-      Printf.eprintf "CPS JIT: Swap compiled %d functions (%d bytes)\n%!"
-        (List.length !all_funcs) (String.length binary);
+      if Some binary = !last_swapped_binary then begin
+        (* Identical function set: the JIT already holds these exact bytes
+           and the function table has not changed — nothing to do. Reporting
+           it keeps the "swap" round trip honest without a wasted rebuild. *)
+        Printf.eprintf "CPS JIT: Swap no-change (%d functions, %d bytes — \
+                        already in the JIT)\n%!"
+          (List.length !all_funcs) (String.length binary);
+        true
+      end else begin
+        Printf.eprintf "CPS JIT: Swap compiled %d functions (%d bytes)\n%!"
+          (List.length !all_funcs) (String.length binary);
 
-      let (_fn_ptr, jit_err) = CamlCompiler_rust_bridge.swap_binary binary in
-      (match jit_err with
-       | Some msg -> Printf.eprintf "CPS JIT: Swap error: %s\n%!" msg; false
-       | None ->
-           (* Update jit_functions hashtable *)
-           Hashtbl.clear jit_functions;
-           let names = CamlCompiler_rust_bridge.list_function_names () in
-           List.iter (fun name ->
-             let ptr = CamlCompiler_rust_bridge.lookup_function name in
-             if ptr <> Int64.zero then
-               Hashtbl.replace jit_functions name ptr
-           ) names;
-           Printf.eprintf "CPS JIT: Swap complete — %d functions ready\n%!"
-             (Hashtbl.length jit_functions);
-           true)
+        let (_fn_ptr, jit_err) = CamlCompiler_rust_bridge.swap_binary binary in
+        (match jit_err with
+         | Some msg -> Printf.eprintf "CPS JIT: Swap error: %s\n%!" msg; false
+         | None ->
+             last_swapped_binary := Some binary;
+             (* Update jit_functions hashtable *)
+             Hashtbl.clear jit_functions;
+             let names = CamlCompiler_rust_bridge.list_function_names () in
+             List.iter (fun name ->
+               let ptr = CamlCompiler_rust_bridge.lookup_function name in
+               if ptr <> Int64.zero then
+                 Hashtbl.replace jit_functions name ptr
+             ) names;
+             Printf.eprintf "CPS JIT: Swap complete — %d functions ready\n%!"
+               (Hashtbl.length jit_functions);
+             true)
+      end
     end else begin
       Printf.eprintf "CPS JIT: No CPS functions to swap\n%!";
       false
