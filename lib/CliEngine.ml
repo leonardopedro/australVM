@@ -210,53 +210,73 @@ and exec_target (mods: module_source list) (target: target): unit =
            | None -> exit 0
            | Some "" -> ()
            | Some line ->
-               let parts = String.split_on_char ' ' line in
-               (match parts with                 | ["call"; name] ->
-                    (match Hashtbl.find_opt jit_functions name with
-                     | Some ptr ->
-                         let res = CamlCompiler_rust_bridge.execute_function ptr in
-                         (* JIT_PANIC sentinel → ERROR with the recorded
-                            reason; everything else prints as RESULT. *)
-                         Printf.printf "%s\n%!"
-                           (format_exec_result res (CamlCompiler_rust_bridge.last_jit_error ()));
-                         flush stdout
-                     | None ->
-                         Printf.printf "ERROR unknown function '%s'\n%!" name;
-                         flush stdout)
-                 | "swap" :: path_spec :: _ ->
-                     let mod_src = parse_mod_source path_spec in
-                     let (new_mods, _) = parse_source_files [mod_src] in
-                     (* Replace the entry for this module in the stored list *)
-                     let all_mods = !last_module_sources in
-                     (* Recompile all modules with the swapped one replaced *)
-                     let combined = List.map (fun m ->
-                       let m_name = match m with
-                         | TwoFileModuleSource { int_filename; _ } -> int_filename
-                         | BodyModuleSource { body_filename; _ } -> body_filename
-                       in
-                       let new_name = match List.hd new_mods with
-                         | TwoFileModuleSource { int_filename; _ } -> int_filename
-                         | BodyModuleSource { body_filename; _ } -> body_filename
-                       in
-                       if m_name = new_name then List.hd new_mods else m
-                     ) all_mods in
-                     if cps_jit_swap_modules combined then
-                       Printf.printf "SWAP_OK\n%!"
-                     else
-                       Printf.printf "SWAP_FAIL\n%!";
-                     flush stdout
-                 | ["exit"] -> exit 0
-                 | _ ->
-                     Printf.printf "ERROR unknown command\n%!";
-                     flush stdout)
+               (* One bad command must not kill the server: `handle_server_line`
+                  reports the failure on the protocol channel and returns, so
+                  the loop keeps serving — the driving script waits on stdout
+                  for a response, and a server that dies mid-protocol reads as
+                  a hang. *)
+               handle_server_line line
          done
        with exn ->
          Printf.eprintf "CPS JIT: Server error: %s\n%!" (Printexc.to_string exn)
      end
+
+
   | Executable { bin_path; entrypoint; } ->
      exec_compile_to_bin mods bin_path entrypoint
   | CStandalone { output_path; entrypoint; } ->
      exec_compile_to_c mods output_path entrypoint
+
+(* Handle one JIT-server command line. Never raises: a command whose
+   handling throws (e.g. a swap of a nonexistent module) is reported as
+   `ERROR <reason>` on the protocol channel — stdout, not just stderr — and
+   the server keeps serving. Parsing splits on single spaces, so multi-word
+   args (e.g. a file path) survive as one token. *)
+and handle_server_line (line: string): unit =
+  try
+    let parts = String.split_on_char ' ' line in
+    match parts with
+    | ["call"; name] ->
+        (match Hashtbl.find_opt jit_functions name with
+         | Some ptr ->
+             let res = CamlCompiler_rust_bridge.execute_function ptr in
+             (* JIT_PANIC sentinel → ERROR with the recorded reason;
+                everything else prints as RESULT. *)
+             Printf.printf "%s\n%!"
+               (format_exec_result res (CamlCompiler_rust_bridge.last_jit_error ()));
+             flush stdout
+         | None ->
+             Printf.printf "ERROR unknown function '%s'\n%!" name;
+             flush stdout)
+    | "swap" :: path_spec :: _ ->
+        let mod_src = parse_mod_source path_spec in
+        let (new_mods, _) = parse_source_files [mod_src] in
+        (* Replace the entry for this module in the stored list *)
+        let all_mods = !last_module_sources in
+        (* Recompile all modules with the swapped one replaced *)
+        let combined = List.map (fun m ->
+          let m_name = match m with
+            | TwoFileModuleSource { int_filename; _ } -> int_filename
+            | BodyModuleSource { body_filename; _ } -> body_filename
+          in
+          let new_name = match List.hd new_mods with
+            | TwoFileModuleSource { int_filename; _ } -> int_filename
+            | BodyModuleSource { body_filename; _ } -> body_filename
+          in
+          if m_name = new_name then List.hd new_mods else m
+        ) all_mods in
+        if cps_jit_swap_modules combined then
+          Printf.printf "SWAP_OK\n%!"
+        else
+          Printf.printf "SWAP_FAIL\n%!";
+        flush stdout
+    | ["exit"] -> exit 0
+    | _ ->
+        Printf.printf "ERROR unknown command\n%!";
+        flush stdout
+  with exn ->
+    Printf.printf "ERROR %s\n%!" (Printexc.to_string exn);
+    flush stdout
 
 and exec_compile_to_bin (mods: module_source list) (bin_path: string) (entrypoint: entrypoint): unit =
   (* Compile everything to a C file. Routed through the VM plugin registry
