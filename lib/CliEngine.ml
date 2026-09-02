@@ -177,6 +177,20 @@ and try_adding_source_ctx (error: austral_error) (source_map: source_map): austr
       | None ->
          error)
 
+(* Render an `execute_function` result for the REPL. The bridge returns the
+   JIT_PANIC sentinel (i64::MIN) when the JIT-compiled function panicked and
+   records the reason on the last-error channel; a panic must surface as
+   ERROR with that reason, never as a misleading RESULT. Pure so the test
+   suite can pin the sentinel contract. A true i64::MIN result (channel
+   empty) still prints as RESULT. *)
+and format_exec_result (res: int64) (last_error: string option): string =
+  if res = Int64.min_int then
+    match last_error with
+    | Some err -> "ERROR " ^ err
+    | None -> Printf.sprintf "RESULT %Ld" res
+  else
+    Printf.sprintf "RESULT %Ld" res
+
 and exec_target (mods: module_source list) (target: target): unit =
   match target with
   | TypeCheck ->
@@ -197,12 +211,14 @@ and exec_target (mods: module_source list) (target: target): unit =
            | Some "" -> ()
            | Some line ->
                let parts = String.split_on_char ' ' line in
-               (match parts with
-                | ["call"; name] ->
+               (match parts with                 | ["call"; name] ->
                     (match Hashtbl.find_opt jit_functions name with
                      | Some ptr ->
                          let res = CamlCompiler_rust_bridge.execute_function ptr in
-                         Printf.printf "RESULT %Ld\n%!" res;
+                         (* JIT_PANIC sentinel → ERROR with the recorded
+                            reason; everything else prints as RESULT. *)
+                         Printf.printf "%s\n%!"
+                           (format_exec_result res (CamlCompiler_rust_bridge.last_jit_error ()));
                          flush stdout
                      | None ->
                          Printf.printf "ERROR unknown function '%s'\n%!" name;

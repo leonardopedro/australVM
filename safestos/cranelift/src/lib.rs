@@ -738,25 +738,52 @@ pub extern "C" fn set_allow_all() {
     crate::auth::set_allow_all();
 }
 
+/// Sentinel returned by [`execute_function`] and friends when the
+/// JIT-compiled function panicked. `i64::MIN` is chosen because no real
+/// program result can plausibly collide with it, and the last-error channel
+/// (`cranelift_last_error`) disambiguates the rare true `i64::MIN` result.
+pub const JIT_PANIC: i64 = i64::MIN;
+
+/// Run a raw JIT function call behind a panic guard.
+///
+/// A Rust panic raised inside JIT-compiled code (typically from a runtime
+/// helper the compiled function calls) must never unwind across an
+/// `extern "C"` boundary — that is undefined behavior and usually aborts the
+/// whole process. `catch_unwind` converts it into a fail-visible contract:
+/// the result is [`JIT_PANIC`], the reason is recorded on the last-error
+/// channel, and the caller decides how to surface it.
+fn run_guarded(f: impl FnOnce() -> i64) -> i64 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error(
+                "execute_function: JIT-compiled function panicked; result is unknown \
+                 (JIT_PANIC i64::MIN) — check the runtime helper that call invoked",
+            );
+            JIT_PANIC
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn execute_function(ptr: *const c_void) -> i64 {
     if ptr.is_null() { return -1; }
     let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
-    f()
+    run_guarded(f)
 }
 
 #[no_mangle]
 pub extern "C" fn execute_function_1(ptr: *const c_void, arg1: i64) -> i64 {
     if ptr.is_null() { return -1; }
     let f: fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
-    f(arg1)
+    run_guarded(|| f(arg1))
 }
 
 #[no_mangle]
 pub extern "C" fn execute_function_2(ptr: *const c_void, arg1: i64, arg2: i64) -> i64 {
     if ptr.is_null() { return -1; }
     let f: fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
-    f(arg1, arg2)
+    run_guarded(|| f(arg1, arg2))
 }
 
 #[cfg(feature = "cedar")]
@@ -811,8 +838,12 @@ pub extern "C" fn au_cedar_check_runtime(
 // symbols (it declares `external ... = "ocaml_cedar_load_policy"`). Provide
 // no-op stubs so `--no-default-features` builds remain link-compatible; the
 // active authorizer in that configuration is the `auth.rs` engine (ManifestAuth
-// or AllowAll), not Cedar, so policy loads are intentionally ignored and runtime
-// checks defer to `auth::check` (which returns Allow under the AllowAll default).
+// or the fail-closed DenyAll), not Cedar, so policy loads are intentionally
+// ignored and runtime checks defer to `auth::check`. `auth::check` denies by
+// default (it installs DenyAll when no engine is set); AllowAll is reachable
+// only through the explicit `--allow-all` CLI flag / `set_allow_all()`.
+// Do not "fix" these stubs to return Allow: the no-cedar build must stay
+// fail-closed.
 #[cfg(not(feature = "cedar"))]
 #[no_mangle]
 pub extern "C" fn au_cedar_load_policy(_policy_str: *const std::ffi::c_char) -> i64 {
@@ -874,6 +905,86 @@ mod tests {
     #[test]
     fn uk_init_linkage() {
         assert_eq!(unfer_ffi::uk_init(std::ptr::null(), 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod panic_guard_tests {
+    use super::*;
+
+    /// The panic guard must convert a Rust panic inside "JIT" code into the
+    /// [`JIT_PANIC`] sentinel + a last-error explanation — never unwind
+    /// across the extern "C" boundary (UB / process abort). Regression for
+    /// the raw `transmute`-and-call path.
+    #[test]
+    fn execute_function_panic_returns_sentinel_not_ub() {
+        fn panicky() -> i64 {
+            panic!("JIT_PANIC_TEST_MARKER");
+        }
+        cranelift_clear_error();
+        let ptr = panicky as *const () as *const std::ffi::c_void;
+        let res = execute_function(ptr);
+        assert_eq!(res, JIT_PANIC, "panic must surface the sentinel, not unwind");
+        let msg = unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            msg.contains("panicked") && msg.contains("JIT_PANIC"),
+            "last_error must explain the panic, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn execute_function_1_panic_returns_sentinel() {
+        fn panicky(_x: i64) -> i64 {
+            panic!("JIT_PANIC_TEST_MARKER_1");
+        }
+        cranelift_clear_error();
+        let ptr = panicky as *const () as *const std::ffi::c_void;
+        assert_eq!(execute_function_1(ptr, 7), JIT_PANIC);
+        assert!(
+            unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
+                .to_string_lossy()
+                .contains("panicked")
+        );
+    }
+
+    #[test]
+    fn execute_function_2_panic_returns_sentinel() {
+        fn panicky(_a: i64, _b: i64) -> i64 {
+            panic!("JIT_PANIC_TEST_MARKER_2");
+        }
+        cranelift_clear_error();
+        let ptr = panicky as *const () as *const std::ffi::c_void;
+        assert_eq!(execute_function_2(ptr, 1, 2), JIT_PANIC);
+        assert!(
+            unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
+                .to_string_lossy()
+                .contains("panicked")
+        );
+    }
+
+    /// The guard must not interfere with healthy calls.
+    #[test]
+    fn execute_function_happy_path_still_returns_value() {
+        fn add(a: i64, b: i64) -> i64 {
+            a + b
+        }
+        cranelift_clear_error();
+        let ptr = add as *const () as *const std::ffi::c_void;
+        assert_eq!(execute_function_2(ptr, 40, 2), 42);
+        assert!(
+            unsafe { cranelift_last_error() }.is_null(),
+            "no error must be recorded on success"
+        );
+    }
+
+    /// Null pointers still report a bad-handle failure, not the panic sentinel.
+    #[test]
+    fn execute_function_null_ptr_returns_minus_one() {
+        assert_eq!(execute_function(std::ptr::null()), -1);
+        assert_eq!(execute_function_1(std::ptr::null(), 0), -1);
+        assert_eq!(execute_function_2(std::ptr::null(), 0, 0), -1);
     }
 }
 
