@@ -738,6 +738,11 @@ pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut st
 
     static MODEL: OnceLock<i64> = OnceLock::new();
 
+    // Fresh error channel per call (same discipline as the other extern
+    // entry points): a caller probing `cranelift_last_error` after this call
+    // must never see a stale failure from an earlier compile/translate.
+    cranelift_clear_error();
+
     if src.is_null() {
         set_last_error("austral_unf_translate: null source");
         return std::ptr::null_mut();
@@ -1152,6 +1157,44 @@ mod compile_guard_tests {
         let fname = "f0";
         let ptr = lookup_function(fname.as_ptr(), fname.len());
         assert!(!ptr.is_null(), "live module survives a failed swap");
+    }
+
+    /// REGRESSION (fails on pre-fix code): the error channel must describe
+    /// the MOST RECENT call. Before `austral_unf_translate` cleared the
+    /// channel at entry, a failed compile left a stale error that a
+    /// subsequent SUCCESSFUL translate never removed — the OCaml
+    /// Deltanet_plugin could misattribute the old failure to the new
+    /// translation. Now the stale text is gone after a healthy call.
+    #[cfg(feature = "unfer-kernel")]
+    #[test]
+    fn successful_unf_translate_clears_stale_compile_error() {
+        use std::ffi::CStr;
+
+        // 1. A failing compile populates the channel (panic-inducing IR).
+        cranelift_clear_error();
+        let bad = zero_arg_slot_get_ir();
+        let ptr = compile_to_function_named(bad.as_ptr(), bad.len(), std::ptr::null(), 0);
+        assert!(ptr.is_null());
+        assert!(
+            !unsafe { cranelift_last_error() }.is_null(),
+            "a failed compile must record its error"
+        );
+
+        // 2. A successful translate must refresh the channel.
+        let src = c"(x + 3)";
+        let out = austral_unf_translate(src.as_ptr());
+        assert!(
+            !out.is_null(),
+            "translate must succeed: {:?}",
+            unsafe { CStr::from_ptr(cranelift_last_error()) }.to_string_lossy()
+        );
+        unsafe { let _ = CString::from_raw(out); }
+
+        // 3. The channel is now fresh: no stale failure text remains.
+        assert!(
+            unsafe { cranelift_last_error() }.is_null(),
+            "a successful call must clear the stale error channel"
+        );
     }
 
     /// The trappingDivide decision: the abort contract covers BOTH division
