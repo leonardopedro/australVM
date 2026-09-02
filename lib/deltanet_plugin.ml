@@ -128,11 +128,32 @@ let value_to_number (v : value) : float =
 let kernel_number (s : string) : float =
   match float_of_string_opt s with Some f -> f | None -> nan
 
+(** Decision when the kernel returned no report. `None` from
+    `austral_unf_json` means EITHER the kernel/bridge is genuinely
+    unavailable (documented no-op: the compiler keeps working outside the
+    unfer checkout) OR the translate entry point ran and failed — and every
+    failure of `austral_unf_translate` is recorded on the bridge's
+    last-error channel. Passing silently in the second case would hide a
+    real kernel↔compiler consistency failure — the exact thing this gate
+    exists to catch — so a recorded error becomes a visible rejection. *)
+let verdict_on_missing_report ~module_name (id : Identifier.identifier)
+    (kernel_err : string option) : verdict =
+  match kernel_err with
+  | Some msg ->
+      VerdictReject
+        (Printf.sprintf
+           "module %s constant `%s`: deltanet UNF gate could not check via \
+            the kernel (bridge error: %s); not passing silently"
+           module_name (Identifier.ident_string id) msg)
+  | None -> VerdictOk (* kernel/bridge unavailable: no-op *)
+
 let check_constant ~module_name (id, init) : verdict =
   match (to_austral init, eval init) with
   | Some src, Some declared ->
       (match CamlCompiler_rust_bridge.austral_unf_json src with
-       | None -> VerdictOk (* kernel/bridge unavailable: no-op *)
+       | None ->
+           verdict_on_missing_report ~module_name id
+             (CamlCompiler_rust_bridge.last_jit_error ())
        | Some json -> (
            match report_value json with
            | None -> VerdictOk (* open term / non-numeric: nothing to check *)

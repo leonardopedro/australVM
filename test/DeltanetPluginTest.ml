@@ -80,6 +80,34 @@ let test_check_constant_agreement _ =
    | VerdictReject msg -> assert_failure ("agreement must not reject: " ^ msg));
   Compiler_plugin.reset ()
 
+(* When the kernel returns no report, the gate must distinguish "kernel
+   unavailable" (documented no-op) from "kernel reached but errored" (a
+   real failure recorded on the bridge error channel — a silent pass would
+   hide the exact consistency problem this gate exists to catch). *)
+
+let test_missing_report_without_error_is_noop _ =
+  let name = Identifier.make_ident "x" in
+  eq VerdictOk
+    (Deltanet_plugin.verdict_on_missing_report ~module_name:"m" name None)
+
+let test_missing_report_with_kernel_error_rejects _ =
+  let name = Identifier.make_ident "c" in
+  match
+    Deltanet_plugin.verdict_on_missing_report ~module_name:"m" name
+      (Some "uk_austral_unf failed with -5000")
+  with
+  | VerdictOk -> assert_failure "kernel error must not pass silently"
+  | VerdictReject msg ->
+      let contains sub =
+        try
+          ignore (Str.search_forward (Str.regexp_string sub) msg 0);
+          true
+        with Not_found -> false in
+      assert_bool "rejection names the module" (contains "module m");
+      assert_bool "rejection names the constant" (contains "constant `c`");
+      assert_bool "rejection carries the kernel error"
+        (contains "uk_austral_unf failed with -5000")
+
 let suite =
   "DeltanetPluginTest" >::: [
       "to_austral_literals" >:: test_to_austral_literals;
@@ -87,6 +115,8 @@ let suite =
       "eval_closed_expressions" >:: test_eval_closed_expressions;
       "pass_registers_and_respects_env" >:: test_pass_registers_and_respects_env;
       "check_constant_agreement" >:: test_check_constant_agreement;
+      "missing_report_without_error_is_noop" >:: test_missing_report_without_error_is_noop;
+      "missing_report_with_kernel_error_rejects" >:: test_missing_report_with_kernel_error_rejects;
     ]
 
 let () =
