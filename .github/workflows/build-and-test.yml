@@ -142,6 +142,12 @@ jobs:
       - name: Run OCaml JIT unit tests (JitTest)
         run: nix-shell --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune runtest'
 
+      - name: Run panic-guard suites explicitly (CliEngineTest / JitTest)
+        # dune runtest skips suites it considers up-to-date, so the sentinel
+        # rendering (CliEngineTest) and bridge-boundary (JitTest) suites are
+        # forced to actually execute — a regression fails the job loudly.
+        run: nix-shell --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/CliEngineTest.exe && LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/JitTest.exe'
+
       - name: Build modhost
         run: cargo build --release --features unfer-kernel --bin modhost
         working-directory: safestos/cranelift
