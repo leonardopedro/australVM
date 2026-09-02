@@ -413,14 +413,25 @@ pub fn registered_zenodo_symbols() -> Vec<&'static str> {
 /// the whole compile is wrapped: on panic the function records the reason on
 /// the last-error channel and returns null (the compile path's existing
 /// failure contract), never unwinding into the OCaml host.
-fn compile_guarded(f: impl FnOnce() -> *const c_void) -> *const c_void {
+///
+/// `label` names the entry point (e.g. "compile" vs "swap") so the report
+/// identifies the actual path; the panic payload is downcast and included so
+/// the diagnostic carries the real reason, not a guess.
+fn compile_guarded(label: &str, f: impl FnOnce() -> *const c_void) -> *const c_void {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(ptr) => ptr,
-        Err(_) => {
-            set_last_error(
-                "compile: JIT compiler panicked on the IR bytes (truncated or malformed \
-                 buffer?); result is null",
-            );
+        Err(payload) => {
+            let reason = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "non-string panic payload (no message)".to_string()
+            };
+            set_last_error(&format!(
+                "{}: JIT panicked: {}; result is null (JIT module state undefined)",
+                label, reason
+            ));
             std::ptr::null()
         }
     }
@@ -433,7 +444,7 @@ pub extern "C" fn compile_to_function_named(
     name_ptr: *const u8,
     name_len: usize,
 ) -> *const c_void {
-    compile_guarded(|| compile_to_function_named_impl(ir_ptr, ir_len, name_ptr, name_len))
+    compile_guarded("compile", || compile_to_function_named_impl(ir_ptr, ir_len, name_ptr, name_len))
 }
 
 fn compile_to_function_named_impl(
@@ -568,7 +579,7 @@ pub extern "C" fn cranelift_swap_binary(
     ir_ptr: *const u8,
     ir_len: usize,
 ) -> *const c_void {
-    compile_guarded(|| cranelift_swap_binary_impl(ir_ptr, ir_len))
+    compile_guarded("swap", || cranelift_swap_binary_impl(ir_ptr, ir_len))
 }
 
 fn cranelift_swap_binary_impl(
@@ -1045,6 +1056,78 @@ mod panic_guard_tests {
         assert_eq!(execute_function_1(std::ptr::null(), 0), -1);
         assert_eq!(execute_function_2(std::ptr::null(), 0, 0), -1);
     }
+
+    // --- compile_guarded (compile + hot-swap paths) ---
+
+    fn read_error() -> String {
+        unsafe {
+            let p = cranelift_last_error();
+            if p.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+            }
+        }
+    }
+
+    /// `compile_guarded` must never unwind into the OCaml host, and the
+    /// report on the last-error channel must carry the *real* panic payload
+    /// and the entry-point label — not a guessed message. Pre-fix the guard
+    /// dropped the payload and hardcoded a "compile:" guess that was also
+    /// wrong for the swap path (which shares the same guard).
+    #[test]
+    fn compile_guard_preserves_swap_panic_payload() {
+        cranelift_clear_error();
+        let res = compile_guarded("swap", || {
+            panic!("boom: corrupted IR at offset 42")
+        });
+        assert!(res.is_null(), "panic must yield a null result, never unwind");
+        let msg = read_error();
+        assert!(
+            msg.contains("swap"),
+            "report must identify the entry point, got: {msg}"
+        );
+        assert!(
+            msg.contains("boom: corrupted IR at offset 42"),
+            "panic payload must be preserved, got: {msg}"
+        );
+        assert!(msg.contains("result is null"), "got: {msg}");
+    }
+
+    #[test]
+    fn compile_guard_reports_non_string_payload() {
+        cranelift_clear_error();
+        let res = compile_guarded("compile", || std::panic::panic_any(42i32));
+        assert!(res.is_null());
+        let msg = read_error();
+        assert!(
+            msg.contains("non-string panic payload"),
+            "non-string payloads must be flagged, not dropped, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn compile_guard_passes_through_success() {
+        cranelift_clear_error();
+        let dummy: u8 = 7;
+        let ptr = &dummy as *const u8 as *const std::ffi::c_void;
+        let res = compile_guarded("swap", || ptr);
+        assert_eq!(res, ptr, "success must pass the pointer through unchanged");
+        assert!(read_error().is_empty(), "no spurious error on success");
+    }
+
+    /// The swap path's own real error message must win over any guard guess.
+    #[test]
+    fn swap_empty_ir_reports_real_message() {
+        cranelift_clear_error();
+        let res = cranelift_swap_binary(std::ptr::null(), 0);
+        assert!(res.is_null());
+        let msg = read_error();
+        assert!(
+            msg.contains("Empty IR passed to swap"),
+            "the real failure reason must win, got: {msg}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1329,3 +1412,5 @@ mod hotswap_tests {
         reclaim(&new);
     }
 }
+
+
