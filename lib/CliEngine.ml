@@ -81,6 +81,7 @@ let rec exec (cmd: cmd): unit =
   | CompileHelp ->
      print_compile_usage ()
   | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path } ->
+     validate_jit_server_target jit_server target;
      Compiler.use_cps_jit := use_cps_jit;
      Compiler.jit_server_mode := jit_server;
      Compiler.emit_cps_path := emit_cps_path;
@@ -109,27 +110,58 @@ and print_usage _: unit =
 and print_version _: unit =
   print_endline version_string
 
+and compile_help_lines (): string list =
+  (* Prompt text is part of the product: a flag that exists but the help does
+     not mention — or a value the help advertises that the parser rejects —
+     is a capability the user cannot discover. Keep these lines in lockstep
+     with CliParser's accepted flags and target values; CliEngineTest pins
+     the shipped surface. *)
+  [
+    "austral compile";
+    "";
+    "Usage:";
+    "    austral compile [options] <module...>";
+    "";
+    "Options:";
+    "    --help          Print this text.";
+    "    --target-type   One of `exe`, `tc`, `c`. Default is `exe`.";
+    "    --output        Path to the output file.";
+    "    --entrypoint    The name of the entrypoint function, in the";
+    "                    format `<module name>:<function name>`.";
+    "    --no-entrypoint  Don't compile an entrypoint. Incompatible with";
+    "                    the `exe` target.";
+    "    --use-cps-jit   Use CPS JIT compilation pipeline.";
+    "    --jit-server    JIT REPL server: stay resident and serve `call|swap|exit`";
+    "                    commands on stdin. Implies --use-cps-jit; requires";
+    "                    `--target-type=tc` (the server only runs on the tc target).";
+    "    --allow-all     Disable authorization (AllowAll engine). Without a manifest";
+    "                    or --allow-all the engine denies everything.";
+    "    --auth-manifest=<path>  Load a module.toml grant set into the JIT";
+    "                    authorization engine.";
+    "    --emit-cps      Save CPS binary IR to the given path.";
+    "";
+    "Positional arguments:";
+    "    module    Of the form 'file.aui,file.aum' for modules with";
+    "              both an interface and body file, or 'file.aum' for";
+    "              modules with only a body.";
+  ]
+
 and print_compile_usage _: unit =
-  print_endline "austral compile";
-  print_endline "";
-  print_endline "Usage:";
-  print_endline "    austral compile [options] <module...>";
-  print_endline "";
-  print_endline "Options:";
-  print_endline "    --help          Print this text.";
-  print_endline "    --target-type   One of `bin`, `tc`, `c`. Default is `bin`.";
-  print_endline "    --output        Path to the output file.";
-  print_endline "    --entrypoint    The name of the entrypoint function, in the";
-  print_endline "                    format `<module name>:<function name>`.";
-  print_endline "    --no-entrypoint  Don't compile an entrypoint. Incompatible with";
-  print_endline "                    `bin` target.";
-   print_endline "    --use-cps-jit   Use CPS JIT compilation pipeline.";
-   print_endline "    --emit-cps      Save CPS binary IR to the given path.";
-   print_endline "";
-  print_endline "Positional arguments:";
-  print_endline "    module    Of the form 'file.aui,file.aum' for modules with";
-  print_endline "              both an interface and body file, or 'file.aum' for";
-  print_endline "              modules with only a body."
+  List.iter print_endline (compile_help_lines ())
+
+and validate_jit_server_target (jit_server: bool) (target: target): unit =
+  (* `--jit-server` only takes effect on the `tc` target. On any other target
+     the requested REPL mode would be SILENTLY IGNORED — the compile produces
+     an artifact and the stdin `call|swap|exit` protocol never starts, which
+     reads to the driver as a hang. Refuse loudly and name the fix. *)
+  match target with
+  | TypeCheck -> ()
+  | _ when jit_server ->
+     err ("--jit-server requires `--target-type=tc`: the JIT REPL stays resident \
+           and serves `call|swap|exit` on stdin, which only the tc target does. \
+           Add --target-type=tc (or drop --jit-server to compile normally).")
+  | _ -> ()
+
 
 and exec_compile (modules: mod_source list) (target: target) (error_reporting_mode: error_reporting_mode): unit =
   (* Parse source files *)

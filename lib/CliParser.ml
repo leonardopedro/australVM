@@ -59,7 +59,14 @@ module Errors = struct
   let unknown_target target =
     austral_raise CliError [
       Text "Unknown target type ";
-      Code target
+      Code target;
+      Text ". Valid target types are ";
+      Code "exe";
+      Text ", ";
+      Code "tc";
+      Text ", and ";
+      Code "c";
+      Text "."
     ]
 
   let unknown_error_reporting_mode (mode: string) =

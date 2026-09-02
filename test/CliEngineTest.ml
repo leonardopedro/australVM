@@ -1,5 +1,6 @@
 open OUnit2
 open CliEngine
+open Error
 
 (* The REPL "call" command renders an execute_function result through
    format_exec_result. The Rust bridge returns the JIT_PANIC sentinel
@@ -53,6 +54,67 @@ let test_server_line_bad_swap_reports_not_raises _ =
   (* Reaching this point proves the server loop would still be alive. *)
   ()
 
+(* The `compile` help is prompt text: it must list every shipped flag and
+   only the target values CliParser actually accepts. Pre-fix the help
+   advertised `--target-type One of \`bin\`, \`tc\`, \`c\`` (the parser
+   rejects `bin` and accepts `exe`) and never mentioned `--jit-server`,
+   `--allow-all`, or `--auth-manifest` — shipped capabilities that were
+   undiscoverable from the tool's own text. *)
+let test_compile_help_lists_shipped_flags_and_real_targets _ =
+  let lines = CliEngine.compile_help_lines () in
+  let joined = String.concat "\n" lines in
+  let contains needle =
+    let re = Str.regexp_string needle in
+    Str.string_match re joined 0
+    || (try ignore (Str.search_forward re joined 0); true
+        with Not_found -> false)
+  in
+  (* The real target vocabulary, not the parser-rejected `bin`. *)
+  assert_bool "help must advertise `exe` as the default target"
+    (contains "One of `exe`, `tc`, `c`. Default is `exe`.");
+  assert_bool "help must not advertise the parser-rejected `bin` value"
+    (not (contains "`bin`"));
+  (* Every shipped flag is discoverable. *)
+  List.iter
+    (fun flag ->
+       assert_bool
+         (Printf.sprintf "help must mention --%s" flag)
+         (contains (Printf.sprintf "--%s" flag)))
+    ["jit-server"; "allow-all"; "auth-manifest"; "use-cps-jit";
+     "no-entrypoint"; "emit-cps"; "target-type"]
+
+(* `--jit-server` on any target but `tc` is silently ignored pre-fix: the
+   compile produces an artifact, the stdin `call|swap|exit` protocol never
+   starts, and the driving script is left waiting on a READY line that never
+   comes. The validator must refuse loudly and name the fix. *)
+let test_jit_server_requires_tc_target _ =
+  let exe_target =
+    CliParser.Executable {
+        bin_path = "x";
+        entrypoint =
+          CliParser.Entrypoint
+            (Identifier.make_mod_name "Test", Identifier.make_ident "main");
+      }
+  in
+  (* Fine on the tc target. *)
+  CliEngine.validate_jit_server_target true CliParser.TypeCheck;
+  (* Refused on the executable target: raises Austral_error naming the fix. *)
+  let message =
+    try
+      CliEngine.validate_jit_server_target true exe_target;
+      ""
+    with
+    | Austral_error (AustralError { text = Text s :: _; _ }) -> s
+    | Austral_error _ -> ""
+  in
+  assert_bool "exe target + --jit-server must refuse loudly" (message <> "");
+  assert_bool "error must name the fix"
+    (let re = Str.regexp_string "--target-type=tc" in
+     try ignore (Str.search_forward re message 0); true
+     with Not_found -> false);
+  (* No jit-server requested: any target is fine. *)
+  CliEngine.validate_jit_server_target false exe_target
+
 let suite =
   "CliEngine" >::: [
     "sentinel_with_reason_is_error" >:: test_sentinel_with_reason_is_error;
@@ -60,6 +122,9 @@ let suite =
     "stale_error_ignored_for_real_value" >:: test_stale_error_ignored_for_real_value;
     "true_min_int_is_result" >:: test_true_min_int_is_result;
     "server_line_bad_swap_reports_not_raises" >:: test_server_line_bad_swap_reports_not_raises;
+    "compile_help_lists_shipped_flags_and_real_targets"
+    >:: test_compile_help_lists_shipped_flags_and_real_targets;
+    "jit_server_requires_tc_target" >:: test_jit_server_requires_tc_target;
   ]
 
 let _ = run_test_tt_main suite

@@ -20,3 +20,15 @@ val handle_server_line : string -> unit
     (i64::MIN) with a recorded reason becomes `ERROR <reason>`; anything else
     becomes `RESULT <value>`. Pure; pinned by the test suite. *)
 val format_exec_result : int64 -> string option -> string
+
+(** The `compile` help text. Prompt text is part of the product: the lines
+    must list every shipped flag and only the target values CliParser
+    actually accepts (`exe`/`tc`/`c`). Pinned by the test suite so help and
+    parser cannot drift apart. *)
+val compile_help_lines : unit -> string list
+
+(** `--jit-server` only takes effect on the `tc` target. Refuses loudly
+    (raises `Austral_error`) when `jit_server` is set on any other target,
+    where the requested REPL mode would otherwise be silently ignored.
+    Returns normally for `TypeCheck`. *)
+val validate_jit_server_target : bool -> target -> unit
