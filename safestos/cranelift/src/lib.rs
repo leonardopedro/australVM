@@ -131,12 +131,27 @@ pub extern "C" fn au_trapping_multiply(lhs: i64, rhs: i64) -> i64 {
     }
 }
 
+/// The trappingDivide decision, as a pure function so the abort path is
+/// unit-testable: `Some(v)` when the division is defined, `None` for both
+/// division by zero and the `i64::MIN / -1` overflow case. The extern symbol
+/// aborts on `None`; keep the two in lockstep.
+fn trapping_divide_checked(lhs: i64, rhs: i64) -> Option<i64> {
+    lhs.checked_div(rhs)
+}
+
 #[no_mangle]
 pub extern "C" fn au_trapping_divide(lhs: i64, rhs: i64) -> i64 {
-    if rhs == 0 {
-        trapping_abort("Division by zero in trappingDivide (Int64)");
+    match trapping_divide_checked(lhs, rhs) {
+        // `checked_div` returns None for BOTH division by zero AND overflow
+        // (`i64::MIN / -1`). The raw `lhs / rhs` form silently wrapped to
+        // `i64::MIN` in release builds and — worse — panicked in debug
+        // builds, unwinding through the JIT-compiled caller's frame (which
+        // has no unwind tables) on its way out. Both must abort per the
+        // trapping contract (mirrors BuiltInModules.ml), so we funnel them
+        // through the same `trapping_abort` path.
+        Some(v) => v,
+        None => trapping_abort("Overflow or division by zero in trappingDivide (Int64)"),
     }
-    lhs / rhs
 }
 
 /// Register the `Austral.Pervasive::trapping*` arithmetic intrinsics on a
@@ -388,8 +403,40 @@ pub fn registered_zenodo_symbols() -> Vec<&'static str> {
     ZENODO_SYMBOLS.iter().map(|s| s.name).collect()
 }
 
+/// Compile a CPS IR buffer behind a panic guard.
+///
+/// The compiler consumes caller-supplied bytes. The reader bounds-checks
+/// cleanly (truncation is a normal `Err`), but the *codegen* is not fully
+/// defensive: e.g. a call to `__slot_get`/`__record_new` with zero arguments
+/// indexes `args[0]` unconditionally and panics. A panic must never unwind
+/// across the `extern "C"` boundary — same UB class as [`run_guarded`] — so
+/// the whole compile is wrapped: on panic the function records the reason on
+/// the last-error channel and returns null (the compile path's existing
+/// failure contract), never unwinding into the OCaml host.
+fn compile_guarded(f: impl FnOnce() -> *const c_void) -> *const c_void {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            set_last_error(
+                "compile: JIT compiler panicked on the IR bytes (truncated or malformed \
+                 buffer?); result is null",
+            );
+            std::ptr::null()
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn compile_to_function_named(
+    ir_ptr:   *const u8,
+    ir_len:   usize,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> *const c_void {
+    compile_guarded(|| compile_to_function_named_impl(ir_ptr, ir_len, name_ptr, name_len))
+}
+
+fn compile_to_function_named_impl(
     ir_ptr:   *const u8,
     ir_len:   usize,
     name_ptr: *const u8,
@@ -518,6 +565,13 @@ pub extern "C" fn compile_to_function(ir_ptr: *const u8, ir_len: usize) -> *cons
 /// and sets `CURRENT_MODULE` to the new module.
 #[no_mangle]
 pub extern "C" fn cranelift_swap_binary(
+    ir_ptr: *const u8,
+    ir_len: usize,
+) -> *const c_void {
+    compile_guarded(|| cranelift_swap_binary_impl(ir_ptr, ir_len))
+}
+
+fn cranelift_swap_binary_impl(
     ir_ptr: *const u8,
     ir_len: usize,
 ) -> *const c_void {
@@ -985,6 +1039,139 @@ mod panic_guard_tests {
         assert_eq!(execute_function(std::ptr::null()), -1);
         assert_eq!(execute_function_1(std::ptr::null(), 0), -1);
         assert_eq!(execute_function_2(std::ptr::null(), 0, 0), -1);
+    }
+}
+
+#[cfg(test)]
+mod compile_guard_tests {
+    use super::*;
+
+    /// A minimal but VALID v2 CPS IR module: magic, module name, one
+    /// function `f0` returning the constant 42. Building a healthy module
+    /// first lets the swap test prove a failed recompile preserves it.
+    fn healthy_module_ir() -> Vec<u8> {
+        let mut ir: Vec<u8> = Vec::new();
+        ir.extend_from_slice(&0x43505332u32.to_le_bytes()); // magic v2
+        let name = "m0";
+        ir.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        ir.extend_from_slice(name.as_bytes());
+        ir.extend_from_slice(&1u32.to_le_bytes()); // func count
+        let fname = "f0";
+        ir.extend_from_slice(&(fname.len() as u32).to_le_bytes());
+        ir.extend_from_slice(fname.as_bytes());
+        ir.extend_from_slice(&0u32.to_le_bytes()); // param count
+        ir.push(0); // ret type i64
+        // Body: statement 0x07 (return expr) + expression 0x01 (iconst) +
+        // the 8-byte constant 42. A minimal function that merely returns.
+        let mut body: Vec<u8> = vec![0x07u8, 0x01];
+        body.extend_from_slice(&42i64.to_le_bytes());
+        ir.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        ir.extend_from_slice(&body);
+        ir
+    }
+
+    /// IR that is structurally parseable but semantically malformed: a call
+    /// to `__slot_get` (or `__record_new`) with ZERO arguments. The codegen
+    /// reads `args[0]` / `args[1]` unconditionally for these primitives, so
+    /// the empty arg list is an index-out-of-bounds panic — not a clean
+    /// `Err`. This is the genuine panic the guard must convert into a
+    /// fail-closed null + explanation.
+    fn zero_arg_slot_get_ir() -> Vec<u8> {
+        let mut ir: Vec<u8> = Vec::new();
+        ir.extend_from_slice(&0x43505332u32.to_le_bytes()); // magic v2
+        let name = "m0";
+        ir.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        ir.extend_from_slice(name.as_bytes());
+        ir.extend_from_slice(&1u32.to_le_bytes()); // func count
+        let fname = "f0";
+        ir.extend_from_slice(&(fname.len() as u32).to_le_bytes());
+        ir.extend_from_slice(fname.as_bytes());
+        ir.extend_from_slice(&0u32.to_le_bytes()); // param count
+        ir.push(0); // ret type i64
+        // Body: App statement 0x07 0x04, callee "__slot_get", 0 args.
+        let mut body: Vec<u8> = vec![0x07u8, 0x04];
+        let callee = "__slot_get";
+        body.extend_from_slice(&(callee.len() as u32).to_le_bytes());
+        body.extend_from_slice(callee.as_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes()); // arg count 0 → args[0] panics
+        ir.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        ir.extend_from_slice(&body);
+        ir
+    }
+
+    /// REGRESSION (fails on pre-fix code): before the guard, compiling this
+    /// IR panicked and unwound across the extern "C" boundary (UB / process
+    /// abort in the OCaml host). Now it must surface as null + a last-error
+    /// explanation containing "panicked", never a crash.
+    #[test]
+    fn malformed_codegen_panic_fails_closed_not_unwind() {
+        cranelift_clear_error();
+        let ir = zero_arg_slot_get_ir();
+        let ptr = compile_to_function_named(ir.as_ptr(), ir.len(), std::ptr::null(), 0);
+        assert!(ptr.is_null(), "panic-inducing IR must fail closed, got {:p}", ptr);
+        let msg = unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            msg.contains("panicked"),
+            "last_error must explain the codegen panic, got: {msg}"
+        );
+    }
+
+    /// `compile_to_function` delegates to the guarded named variant, so it
+    /// inherits the same fail-closed contract.
+    #[test]
+    fn delegate_compile_is_guarded_too() {
+        cranelift_clear_error();
+        let ir = zero_arg_slot_get_ir();
+        let ptr = compile_to_function(ir.as_ptr(), ir.len());
+        assert!(ptr.is_null());
+        assert!(
+            !unsafe { cranelift_last_error() }.is_null(),
+            "delegate must record the codegen panic on the error channel"
+        );
+    }
+
+    /// The hot-swap path compiles with the same codegen; a panic-inducing
+    /// IR must fail closed there too, leaving the CURRENT module untouched.
+    #[test]
+    fn swap_panic_inducing_ir_fails_closed_and_preserves_current() {
+        let ir = healthy_module_ir();
+        let healthy = cranelift_swap_binary(ir.as_ptr(), ir.len());
+        assert!(!healthy.is_null(), "healthy module must compile");
+
+        cranelift_clear_error();
+        let bad = zero_arg_slot_get_ir();
+        let res = cranelift_swap_binary(bad.as_ptr(), bad.len());
+        assert!(res.is_null(), "swap of panic-inducing IR must fail closed");
+        assert!(
+            !unsafe { cranelift_last_error() }.is_null(),
+            "swap codegen panic must be recorded on the error channel"
+        );
+        // The live module must be untouched: the entry still resolves.
+        let fname = "f0";
+        let ptr = lookup_function(fname.as_ptr(), fname.len());
+        assert!(!ptr.is_null(), "live module survives a failed swap");
+    }
+
+    /// The trappingDivide decision: the abort contract covers BOTH division
+    /// by zero and `i64::MIN / -1` overflow. The extern symbol aborts on
+    /// None; this pins the decision itself (fail-closed on both).
+    #[test]
+    fn trapping_divide_fails_closed_on_zero_and_overflow() {
+        assert_eq!(trapping_divide_checked(10, 2), Some(5));
+        assert_eq!(
+            trapping_divide_checked(1, 0),
+            None,
+            "divide by zero must abort per the trapping contract"
+        );
+        assert_eq!(
+            trapping_divide_checked(i64::MIN, -1),
+            None,
+            "i64::MIN / -1 overflow must abort, not silently wrap"
+        );
+        assert_eq!(trapping_divide_checked(i64::MIN, 1), Some(i64::MIN));
+        assert_eq!(trapping_divide_checked(i64::MAX, -1), Some(i64::MAX.wrapping_neg()));
     }
 }
 
