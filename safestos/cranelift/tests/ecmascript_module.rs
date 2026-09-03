@@ -117,10 +117,16 @@ export async function run(kernel, args) {
     let args = format!(r#"{{"spec": {HARMONIC_SPEC}}}"#);
     let body = host.call_json("ecma_positive", "run", &args).unwrap();
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert!(v["result"].is_object(), "expected result object, got {body}");
+    assert!(
+        v["result"].is_object(),
+        "expected result object, got {body}"
+    );
     assert_eq!(v["result"]["version"], 1);
     let prob = v["result"]["probability"].as_f64().unwrap();
-    assert!(prob > 0.0 && prob <= 1.0, "probability out of range: {prob}");
+    assert!(
+        prob > 0.0 && prob <= 1.0,
+        "probability out of range: {prob}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -157,12 +163,7 @@ export async function run(kernel, args) {
 }
 "#;
 
-    make_ecma_module_dir(
-        &dir,
-        "ecma_f5",
-        &["uk_version", "uk_model_create"],
-        js,
-    );
+    make_ecma_module_dir(&dir, "ecma_f5", &["uk_version", "uk_model_create"], js);
 
     let mut host = ModuleHost::new();
     host.load(&dir).unwrap();
@@ -170,18 +171,35 @@ export async function run(kernel, args) {
     let body = host.call_json("ecma_f5", "run", "{}").unwrap();
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let result = &v["result"];
-    assert_eq!(result["versionPresent"], true, "granted symbol must be present, got {body}");
-    assert_eq!(result["createPresent"], true, "granted symbol must be present, got {body}");
-    assert_eq!(result["freeAbsent"], true, "un-granted symbol must be absent, got {body}");
-    assert_eq!(result["freeNotOwn"], true, "un-granted symbol must not be discoverable, got {body}");
+    assert_eq!(
+        result["versionPresent"], true,
+        "granted symbol must be present, got {body}"
+    );
+    assert_eq!(
+        result["createPresent"], true,
+        "granted symbol must be present, got {body}"
+    );
+    assert_eq!(
+        result["freeAbsent"], true,
+        "un-granted symbol must be absent, got {body}"
+    );
+    assert_eq!(
+        result["freeNotOwn"], true,
+        "un-granted symbol must not be discoverable, got {body}"
+    );
     let granted = result["granted"].as_array().expect("granted names array");
-    assert_eq!(granted.len(), 2, "capability must be exactly the granted set, got {body}");
-    let mut names: Vec<&str> = granted
-        .iter()
-        .filter_map(|g| g.as_str())
-        .collect();
+    assert_eq!(
+        granted.len(),
+        2,
+        "capability must be exactly the granted set, got {body}"
+    );
+    let mut names: Vec<&str> = granted.iter().filter_map(|g| g.as_str()).collect();
     names.sort();
-    assert_eq!(names, ["uk_model_create", "uk_version"], "capability = grants, got {body}");
+    assert_eq!(
+        names,
+        ["uk_model_create", "uk_version"],
+        "capability = grants, got {body}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -229,8 +247,14 @@ fn ecmascript_loopback_denies_ungranted() {
     }
     let mut response = String::new();
     res.read_to_string(&mut response).unwrap();
-    assert!(response.contains("\"error\""), "expected error, got {response}");
-    assert!(response.contains("4001"), "expected UK-4001, got {response}");
+    assert!(
+        response.contains("\"error\""),
+        "expected error, got {response}"
+    );
+    assert!(
+        response.contains("4001"),
+        "expected UK-4001, got {response}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -267,7 +291,9 @@ fn ecmascript_sidecar_os_sandbox_confines_child() {
     // 2. no_new_privs must be set (read back via /proc/<pid>/status).
     let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
     assert!(
-        status.lines().any(|l| l.starts_with("NoNewPrivs:") && l.contains('1')),
+        status
+            .lines()
+            .any(|l| l.starts_with("NoNewPrivs:") && l.contains('1')),
         "no_new_privs must be set in the sandboxed sidecar"
     );
 
@@ -374,16 +400,29 @@ export async function approve(kernel, args) {
     let body = host.call_json("ecma_client", "submit", "{}").unwrap();
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let result = &v["result"];
-    assert_eq!(result["state"], "pending", "client must see pending record, got {body}");
-    assert_eq!(result["simulated"], true, "provisional result must be simulated, got {body}");
+    assert_eq!(
+        result["state"], "pending",
+        "client must see pending record, got {body}"
+    );
+    assert_eq!(
+        result["simulated"], true,
+        "provisional result must be simulated, got {body}"
+    );
     let handle = result["handle"].as_i64().expect("action handle");
 
     // 2. Gatekeeper lists the pending action and approves it.
     let body = host
-        .call_json("ecma_gatekeeper", "approve", r#"{"effect":"send_notification"}"#)
+        .call_json(
+            "ecma_gatekeeper",
+            "approve",
+            r#"{"effect":"send_notification"}"#,
+        )
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["result"]["applied"], true, "gatekeeper must approve, got {body}");
+    assert_eq!(
+        v["result"]["applied"], true,
+        "gatekeeper must approve, got {body}"
+    );
 
     // 3. Client re-reads → merged applied result.
     let body = host
@@ -391,10 +430,12 @@ export async function approve(kernel, args) {
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let result = &v["result"];
-    assert_eq!(result["state"], "approved", "client must see approved record, got {body}");
     assert_eq!(
-        result["applied"],
-        true,
+        result["state"], "approved",
+        "client must see approved record, got {body}"
+    );
+    assert_eq!(
+        result["applied"], true,
         "merged result must be the applied one, got {body}"
     );
 
@@ -491,7 +532,10 @@ export async function list(kernel, args) {
     // 1. Client submits → pending record, own read works.
     let body = host.call_json("f8_client", "submit", "{}").unwrap();
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(v["result"]["state"], "pending", "client must see pending, got {body}");
+    assert_eq!(
+        v["result"]["state"], "pending",
+        "client must see pending, got {body}"
+    );
     let handle = v["result"]["handle"].as_i64().expect("action handle");
 
     // 2. Snoop (no observer grant) sees nothing of the client's records.
@@ -568,7 +612,10 @@ export async function run(kernel, args) {
     assert_eq!(result["denied"], true, "expected denial, got {body}");
     assert_eq!(result["code"], 4001, "expected UK-4001, got {body}");
     assert!(
-        result["message"].as_str().unwrap_or("").contains("send_notification"),
+        result["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("send_notification"),
         "denial must name the un-granted effect, got {body}"
     );
 
@@ -605,8 +652,18 @@ fn modulehost_instantiate_isolates_instances() {
     assert_ne!(k0, k1);
 
     // Distinct staging dirs → distinct main/loopback sockets.
-    let s0 = host.instance(&k0).unwrap().sidecar.staging_dir().to_path_buf();
-    let s1 = host.instance(&k1).unwrap().sidecar.staging_dir().to_path_buf();
+    let s0 = host
+        .instance(&k0)
+        .unwrap()
+        .sidecar
+        .staging_dir()
+        .to_path_buf();
+    let s1 = host
+        .instance(&k1)
+        .unwrap()
+        .sidecar
+        .staging_dir()
+        .to_path_buf();
     assert_ne!(s0, s1, "instances must not share a staging dir");
 
     // Distinct OS processes.
@@ -694,7 +751,9 @@ export async function read(kernel, args) {
     let cell = builder.build().unwrap();
 
     // 4. Instantiate a fresh instance from the blueprint: files materialized + session restored.
-    let (k1, restored) = host.instantiate_from_blueprint(&cell, &parent, "i1").unwrap();
+    let (k1, restored) = host
+        .instantiate_from_blueprint(&cell, &parent, "i1")
+        .unwrap();
     assert_ne!(k0, k1);
     let restored = restored.expect("blueprint must restore a session");
 
@@ -711,7 +770,10 @@ export async function read(kernel, args) {
 
     // The snapshot→restore→snapshot identity also holds at the JSON level.
     let resnap = host.snapshot_session(restored).unwrap();
-    assert_eq!(resnap, session_json, "session must round-trip byte-identically");
+    assert_eq!(
+        resnap, session_json,
+        "session must round-trip byte-identically"
+    );
 
     host.drop_instance(&k0).unwrap();
     host.drop_instance(&k1).unwrap();
@@ -728,7 +790,9 @@ fn modulehost_blueprint_rejects_path_traversal() {
     let _ = std::fs::remove_dir_all(&parent);
 
     let mut builder = unfer_protocol::CellBuilder::new("evil");
-    builder.add_file("module.toml", b"[module]\nname = \"evil\"\n").unwrap();
+    builder
+        .add_file("module.toml", b"[module]\nname = \"evil\"\n")
+        .unwrap();
     builder.add_file("../escape.txt", b"boom").unwrap();
     let cell = builder.build().unwrap();
 
@@ -753,7 +817,9 @@ fn modulehost_blueprint_requires_module_toml() {
     let _ = std::fs::remove_dir_all(&parent);
 
     let mut builder = unfer_protocol::CellBuilder::new("naked");
-    builder.add_file("src/main.js", b"export async function run(){return {};}").unwrap();
+    builder
+        .add_file("src/main.js", b"export async function run(){return {};}")
+        .unwrap();
     let cell = builder.build().unwrap();
 
     let mut host = ModuleHost::new();

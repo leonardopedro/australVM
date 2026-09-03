@@ -15,7 +15,12 @@ pub trait AuthorizationEngine: Send + Sync {
 pub struct AllowAll;
 
 impl AuthorizationEngine for AllowAll {
-    fn authorize(&self, _principal: &str, _action: &str, _resource: &str) -> Result<Decision, String> {
+    fn authorize(
+        &self,
+        _principal: &str,
+        _action: &str,
+        _resource: &str,
+    ) -> Result<Decision, String> {
         Ok(Decision::Allow)
     }
 }
@@ -53,7 +58,10 @@ impl ManifestAuthEngine {
 
     pub fn merge(&mut self, other: Self) {
         for (module, callables) in other.grants {
-            self.grants.entry(module.clone()).or_default().extend(callables);
+            self.grants
+                .entry(module.clone())
+                .or_default()
+                .extend(callables);
             self.effects.entry(module).or_default();
         }
         for (module, effects) in other.effects {
@@ -152,7 +160,10 @@ pub fn set_deployment_principal(name: String) {
 }
 
 pub fn deployment_principal() -> Option<String> {
-    deployment_lock().read().unwrap_or_else(|e| e.into_inner()).clone()
+    deployment_lock()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 fn auth_lock() -> &'static RwLock<Option<Box<dyn AuthorizationEngine>>> {
@@ -172,7 +183,12 @@ pub fn set_auth_engine(engine: Box<dyn AuthorizationEngine>) {
 pub struct DenyAll;
 
 impl AuthorizationEngine for DenyAll {
-    fn authorize(&self, principal: &str, _action: &str, resource: &str) -> Result<Decision, String> {
+    fn authorize(
+        &self,
+        principal: &str,
+        _action: &str,
+        resource: &str,
+    ) -> Result<Decision, String> {
         eprintln!(
             "safestos: no authorization engine installed for '{}' calling '{}' — DENYING by default. \
              Load a manifest with safestos_load_auth_manifest or pass --allow-all for AllowAll.",
@@ -279,23 +295,33 @@ kernel = ["uk_version", "uk_model_create", "uk_evolve"]
     fn manifest_grant_deny() {
         let engine = ManifestAuthEngine::from_toml_str(VALID_MANIFEST).unwrap();
         assert_eq!(
-            engine.authorize("demo_module", "Call", "uk_version").unwrap(),
+            engine
+                .authorize("demo_module", "Call", "uk_version")
+                .unwrap(),
             Decision::Allow
         );
         assert_eq!(
-            engine.authorize("demo_module", "Call", "uk_evolve").unwrap(),
+            engine
+                .authorize("demo_module", "Call", "uk_evolve")
+                .unwrap(),
             Decision::Allow
         );
         assert_eq!(
-            engine.authorize("demo_module", "Call", "uk_model_free").unwrap(),
+            engine
+                .authorize("demo_module", "Call", "uk_model_free")
+                .unwrap(),
             Decision::Deny
         );
         assert_eq!(
-            engine.authorize("evil_module", "Call", "uk_version").unwrap(),
+            engine
+                .authorize("evil_module", "Call", "uk_version")
+                .unwrap(),
             Decision::Deny
         );
         assert_eq!(
-            engine.authorize("demo_module", "Write", "uk_version").unwrap(),
+            engine
+                .authorize("demo_module", "Write", "uk_version")
+                .unwrap(),
             Decision::Deny
         );
     }
@@ -315,11 +341,15 @@ kernel = ["uk_version"]
         .unwrap();
         engine.merge(other);
         assert_eq!(
-            engine.authorize("demo_module", "Call", "uk_version").unwrap(),
+            engine
+                .authorize("demo_module", "Call", "uk_version")
+                .unwrap(),
             Decision::Allow
         );
         assert_eq!(
-            engine.authorize("other_module", "Call", "uk_version").unwrap(),
+            engine
+                .authorize("other_module", "Call", "uk_version")
+                .unwrap(),
             Decision::Allow
         );
     }
@@ -334,7 +364,9 @@ name = "no_grants_module"
         )
         .unwrap();
         assert_eq!(
-            engine.authorize("no_grants_module", "Call", "uk_version").unwrap(),
+            engine
+                .authorize("no_grants_module", "Call", "uk_version")
+                .unwrap(),
             Decision::Deny
         );
     }
@@ -388,24 +420,34 @@ effects = ["send_notification", "run_experiment"]
         )
         .unwrap();
         assert_eq!(
-            engine.authorize("client_module", "Effect", "send_notification").unwrap(),
+            engine
+                .authorize("client_module", "Effect", "send_notification")
+                .unwrap(),
             Decision::Allow
         );
         assert_eq!(
-            engine.authorize("client_module", "Effect", "run_experiment").unwrap(),
+            engine
+                .authorize("client_module", "Effect", "run_experiment")
+                .unwrap(),
             Decision::Allow
         );
         assert_eq!(
-            engine.authorize("client_module", "Effect", "unlisted_effect").unwrap(),
+            engine
+                .authorize("client_module", "Effect", "unlisted_effect")
+                .unwrap(),
             Decision::Deny
         );
         // Effects are not kernel grants and vice versa.
         assert_eq!(
-            engine.authorize("client_module", "Call", "send_notification").unwrap(),
+            engine
+                .authorize("client_module", "Call", "send_notification")
+                .unwrap(),
             Decision::Deny
         );
         assert_eq!(
-            engine.authorize("client_module", "Effect", "uk_version").unwrap(),
+            engine
+                .authorize("client_module", "Effect", "uk_version")
+                .unwrap(),
             Decision::Deny
         );
         // A module without the effect grant is denied even for a listed effect name.
@@ -417,7 +459,9 @@ name = "other_module"
         )
         .unwrap();
         assert_eq!(
-            denied.authorize("other_module", "Effect", "send_notification").unwrap(),
+            denied
+                .authorize("other_module", "Effect", "send_notification")
+                .unwrap(),
             Decision::Deny
         );
     }

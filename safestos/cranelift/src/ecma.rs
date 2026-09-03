@@ -139,17 +139,13 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
 /// `~/.local/share/fnm/node-versions/<v>/installation/lib/node_modules/workerd/bin/workerd`.
 fn find_in_fnm() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    let root = PathBuf::from(home)
-        .join(".local/share/fnm/node-versions");
+    let root = PathBuf::from(home).join(".local/share/fnm/node-versions");
     let entries = std::fs::read_dir(&root).ok()?;
-    let mut versions: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
+    let mut versions: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
     // Prefer the most recent installation when multiple exist.
     versions.sort();
     for version_dir in versions.into_iter().rev() {
-        let candidate = version_dir
-            .join("installation/lib/node_modules/workerd/bin/workerd");
+        let candidate = version_dir.join("installation/lib/node_modules/workerd/bin/workerd");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -276,8 +272,7 @@ impl EcmaSidecar {
                 let bin = paths.bin.clone();
                 let make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync> =
                     Arc::new(move || {
-                        let mut sandbox_cmd =
-                            crate::sandbox::sandboxed_command(&bin, &profile);
+                        let mut sandbox_cmd = crate::sandbox::sandboxed_command(&bin, &profile);
                         sandbox_cmd.args(args.iter());
                         sandbox_cmd
                             .stdout(Stdio::piped())
@@ -395,7 +390,11 @@ impl EcmaSidecar {
                 continue;
             }
             // The child died: degrade, then heal.
-            append_host_audit("uk_kernel", false, &format!("KERNEL_DOWN module='{module_name}'"));
+            append_host_audit(
+                "uk_kernel",
+                false,
+                &format!("KERNEL_DOWN module='{module_name}'"),
+            );
             match make_child() {
                 Ok(newc) => {
                     let new_pid = newc.id();
@@ -451,7 +450,9 @@ impl EcmaSidecar {
     /// Apply `[limits] memory_bytes` as a cgroup v2 memory cap for the child pid when a
     /// writable cgroup fs is available. Degrades silently (no cap) otherwise — no root.
     fn apply_memory_cgroup(child_pid: u32, memory_max_bytes: Option<u64>) {
-        let Some(bytes) = memory_max_bytes else { return };
+        let Some(bytes) = memory_max_bytes else {
+            return;
+        };
         if bytes == 0 {
             return;
         }
@@ -470,7 +471,12 @@ impl EcmaSidecar {
             r#"{{"entrypoint":{0:?},"args":{1}}}"#,
             entrypoint, args_json
         );
-        let result = http_post(&self.main_sock, "/unfer/call", &body, Some(self.call_deadline));
+        let result = http_post(
+            &self.main_sock,
+            "/unfer/call",
+            &body,
+            Some(self.call_deadline),
+        );
         // S14 (F13): a deadline hit means the module is unresponsive (busy loop) — record it and
         // kill the child so the supervisor can respawn a fresh, healthy sidecar.
         if let Err(e) = &result {
@@ -506,8 +512,8 @@ impl EcmaSidecar {
     }
 
     /// PID of the (latest) `workerd` sidecar. 0 when no child is currently alive. Used by
-/// S3 escape-attempt tests to probe the child's namespace/capability confinement and by
-/// S11 to arm the loopback peer check.
+    /// S3 escape-attempt tests to probe the child's namespace/capability confinement and by
+    /// S11 to arm the loopback peer check.
     pub fn child_pid(&self) -> u32 {
         self.child
             .lock()
@@ -672,12 +678,27 @@ fn gatekeeper_mode_allows_side_effect(mode: GatekeeperMode, symbol: &str) -> boo
 #[test]
 fn gatekeeper_modes_gate_action_submit() {
     // (F18) `disabled` is the only mode that refuses submissions up front.
-    assert!(!gatekeeper_mode_allows_side_effect(GatekeeperMode::Disabled, "uk_action_submit"));
-    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Optional, "uk_action_submit"));
-    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Enabled, "uk_action_submit"));
+    assert!(!gatekeeper_mode_allows_side_effect(
+        GatekeeperMode::Disabled,
+        "uk_action_submit"
+    ));
+    assert!(gatekeeper_mode_allows_side_effect(
+        GatekeeperMode::Optional,
+        "uk_action_submit"
+    ));
+    assert!(gatekeeper_mode_allows_side_effect(
+        GatekeeperMode::Enabled,
+        "uk_action_submit"
+    ));
     // Console-side symbols never submit side effects.
-    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Disabled, "uk_gate_approve"));
-    assert!(gatekeeper_mode_allows_side_effect(GatekeeperMode::Disabled, "uk_audit_list"));
+    assert!(gatekeeper_mode_allows_side_effect(
+        GatekeeperMode::Disabled,
+        "uk_gate_approve"
+    ));
+    assert!(gatekeeper_mode_allows_side_effect(
+        GatekeeperMode::Disabled,
+        "uk_audit_list"
+    ));
 }
 
 #[test]
@@ -693,9 +714,15 @@ mode = "disabled"
 "#;
     let m = ModuleManifest::from_toml_str(module_toml).expect("parse");
     assert_eq!(m.gatekeeper_mode, GatekeeperMode::Disabled);
-    let m2 = ModuleManifest::from_toml_str("[module]\nname=\"x\"\nversion=\"1\"\n[limits]\nmemory_bytes=1\n")
-        .expect("parse");
-    assert_eq!(m2.gatekeeper_mode, GatekeeperMode::Enabled, "absent `[gatekeeper]` defaults to enabled");
+    let m2 = ModuleManifest::from_toml_str(
+        "[module]\nname=\"x\"\nversion=\"1\"\n[limits]\nmemory_bytes=1\n",
+    )
+    .expect("parse");
+    assert_eq!(
+        m2.gatekeeper_mode,
+        GatekeeperMode::Enabled,
+        "absent `[gatekeeper]` defaults to enabled"
+    );
 }
 
 fn handle_loopback_conn(
@@ -804,7 +831,10 @@ fn handle_loopback_conn(
                 )
             }
         }
-        None => json_response("error", &serde_json::json!({"code": 4000, "message": "bad path"})),
+        None => json_response(
+            "error",
+            &serde_json::json!({"code": 4000, "message": "bad path"}),
+        ),
     };
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
@@ -897,12 +927,13 @@ pub fn egress_allowed(host: &str, allowlist: &HashSet<String>) -> bool {
 /// Extract `host[:port]` from a URL. Returns `""` for malformed / unrecognized schemes.
 pub fn fetch_host(url: &str) -> &str {
     // Accept `scheme://host[:port][/path]` — anything else is not a fetch target.
-    let rest = url
-        .split_once("://")
-        .map(|(_, r)| r)
-        .unwrap_or_default();
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or_default();
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.is_empty() { "" } else { authority }
+    if authority.is_empty() {
+        ""
+    } else {
+        authority
+    }
 }
 
 /// Split `host[:port]`; a trailing `:port` is parsed only when entirely numeric.
@@ -928,7 +959,9 @@ fn is_loopback_host(host: &str) -> bool {
 /// Minimal loopback HTTP GET (offline `uk_fetch` fixture). Reads up to 1 MiB body.
 fn loopback_get(host: &str) -> Result<String, String> {
     if !is_loopback_host(host) {
-        return Err(format!("fetch egress restricted to loopback fixture (host '{host}')"));
+        return Err(format!(
+            "fetch egress restricted to loopback fixture (host '{host}')"
+        ));
     }
     let (h, port) = split_host_port(host);
     let addr = match format!("{h}:{}", port.unwrap_or(80)).to_socket_addrs() {
@@ -938,9 +971,7 @@ fn loopback_get(host: &str) -> Result<String, String> {
         Err(e) => return Err(format!("resolve {host}: {e}")),
     };
     let mut stream = TcpStream::connect(addr).map_err(|e| format!("connect {host}: {e}"))?;
-    let req = format!(
-        "GET / HTTP/1.1\r\nHost: {h}\r\nConnection: close\r\n\r\n"
-    );
+    let req = format!("GET / HTTP/1.1\r\nHost: {h}\r\nConnection: close\r\n\r\n");
     stream
         .write_all(req.as_bytes())
         .map_err(|e| format!("send: {e}"))?;
@@ -1310,10 +1341,7 @@ impl SymbolListener for GuardListener {
 /// worker keeps running to completion (cooperative — not a hard kill). The
 /// deadline is the *single* deadline point; the meter remains the single denial
 /// point.
-fn run_with_deadline(
-    deadline_ms: u64,
-    work: impl FnOnce() -> Flow + Send + 'static,
-) -> Flow {
+fn run_with_deadline(deadline_ms: u64, work: impl FnOnce() -> Flow + Send + 'static) -> Flow {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(work());
@@ -1350,7 +1378,10 @@ impl SymbolListener for PostureListener {
         if unfer_ffi::uk_posture_current() != unfer_protocol::SecurityPosture::Strict {
             return next();
         }
-        if matches!(ev.symbol, "uk_session_close" | "uk_version" | "uk_action_submit") {
+        if matches!(
+            ev.symbol,
+            "uk_session_close" | "uk_version" | "uk_action_submit"
+        ) {
             return next();
         }
         let is_mutate = unfer_protocol::symbols::SymbolRecord::by_name(ev.symbol)
@@ -1382,10 +1413,7 @@ impl SymbolListener for AuditListener {
         match &flow {
             Flow::Next => {}
             Flow::Deny(resp) => {
-                let message = resp
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("");
+                let message = resp.get("message").and_then(|m| m.as_str()).unwrap_or("");
                 append_loopback_audit(ev.symbol, ev.args, false, Some(message));
             }
             Flow::Ok(_) => {
@@ -1518,58 +1546,64 @@ fn dispatch_loopback_as_with_max_ms(
     // 2. Resolve the effective grant sets + caller identity (module gadget vs sub-agent).
     //    The full GrantSet (kernel + effects + observers) is installed on the thread-local
     //    caller so the F8 read surfaces filter by the caller's observer rights.
-    let (eff_grants, eff_effects, caller_from, caller_principal, caller_grants) =
-        if let Some(handle) = agent_handle {
-            match ffi_agent_bounds(handle) {
-                Some((bounds, id)) => (
-                    bounds.kernel.iter().cloned().collect::<HashSet<_>>(),
-                    bounds.effects.iter().cloned().collect::<HashSet<_>>(),
+    let (eff_grants, eff_effects, caller_from, caller_principal, caller_grants) = if let Some(
+        handle,
+    ) =
+        agent_handle
+    {
+        match ffi_agent_bounds(handle) {
+            Some((bounds, id)) => (
+                bounds.kernel.iter().cloned().collect::<HashSet<_>>(),
+                bounds.effects.iter().cloned().collect::<HashSet<_>>(),
+                "agent",
+                id,
+                bounds,
+            ),
+            // Unknown/stopped agent: default-deny, but still audit the attempt.
+            None => {
+                let message = format!("agent handle {handle} is unknown or stopped");
+                let resp = json_response(
+                    "error",
+                    &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
+                );
+                let caller_json = loopback_caller_json(
                     "agent",
-                    id,
-                    bounds,
-                ),
-                // Unknown/stopped agent: default-deny, but still audit the attempt.
-                None => {
-                    let message = format!("agent handle {handle} is unknown or stopped");
-                    let resp = json_response(
-                        "error",
-                        &serde_json::json!({"code": 4001, "name": "CallDenied", "message": message}),
-                    );
-                    let caller_json =
-                        loopback_caller_json("agent", &format!("agent-{handle}"), &unfer_protocol::GrantSet::default());
-                    let _ = unfer_ffi::uk_set_caller(&caller_json);
-                    append_loopback_audit(symbol, &args, false, Some(&message));
-                    unfer_ffi::uk_clear_caller();
-                    unfer_ffi::uk_observability_clear();
-                    return resp;
-                }
+                    &format!("agent-{handle}"),
+                    &unfer_protocol::GrantSet::default(),
+                );
+                let _ = unfer_ffi::uk_set_caller(&caller_json);
+                append_loopback_audit(symbol, &args, false, Some(&message));
+                unfer_ffi::uk_clear_caller();
+                unfer_ffi::uk_observability_clear();
+                return resp;
             }
-        } else {
-            (
-                grants.clone(),
-                effects.clone(),
-                "gadget",
-                module_name.to_string(),
-                unfer_protocol::GrantSet {
-                    kernel: grants.iter().cloned().collect(),
-                    effects: effects.iter().cloned().collect(),
-                    observers: observers.iter().cloned().collect(),
-                    resources: resources.iter().cloned().collect(),
-                    // S21 (F20): the host trust annotations for granted effects (observe vs mutate).
-                    effect_kinds: effect_kinds
-                        .iter()
-                        .map(|(n, k)| unfer_protocol::EffectGrant {
-                            name: n.clone(),
-                            effect_kind: if k == "observe" {
-                                unfer_protocol::EffectKind::Observe
-                            } else {
-                                unfer_protocol::EffectKind::Mutate
-                            },
-                        })
-                        .collect(),
-                },
-            )
-        };
+        }
+    } else {
+        (
+            grants.clone(),
+            effects.clone(),
+            "gadget",
+            module_name.to_string(),
+            unfer_protocol::GrantSet {
+                kernel: grants.iter().cloned().collect(),
+                effects: effects.iter().cloned().collect(),
+                observers: observers.iter().cloned().collect(),
+                resources: resources.iter().cloned().collect(),
+                // S21 (F20): the host trust annotations for granted effects (observe vs mutate).
+                effect_kinds: effect_kinds
+                    .iter()
+                    .map(|(n, k)| unfer_protocol::EffectGrant {
+                        name: n.clone(),
+                        effect_kind: if k == "observe" {
+                            unfer_protocol::EffectKind::Observe
+                        } else {
+                            unfer_protocol::EffectKind::Mutate
+                        },
+                    })
+                    .collect(),
+            },
+        )
+    };
 
     let caller_json = loopback_caller_json(caller_from, &caller_principal, &caller_grants);
     let _ = unfer_ffi::uk_set_caller(&caller_json);
@@ -1677,7 +1711,9 @@ fn arg_i64(args: &[serde_json::Value], i: usize) -> Result<i64, (u32, String)> {
 }
 
 fn arg_str(args: &[serde_json::Value], i: usize) -> Result<String, (u32, String)> {
-    let v = args.get(i).ok_or_else(|| (1001, format!("arg {i}: missing")))?;
+    let v = args
+        .get(i)
+        .ok_or_else(|| (1001, format!("arg {i}: missing")))?;
     match v {
         serde_json::Value::String(s) => Ok(s.clone()),
         other => serde_json::to_string(other).map_err(|e| (1001, e.to_string())),
@@ -1775,11 +1811,7 @@ fn read_last_error() -> Option<String> {
 /// `actor` is the submitting caller's identity (the module name for a gadget, or the sub-agent
 /// id for an agent-attributed call): `uk_action_submit` injects it as the record's `principal`
 /// (an audit tag — a worker cannot claim another module's identity).
-fn kernel_dispatch(
-    actor: &str,
-    symbol: &str,
-    args: &[serde_json::Value],
-) -> DispatchResult {
+fn kernel_dispatch(actor: &str, symbol: &str, args: &[serde_json::Value]) -> DispatchResult {
     match symbol {
         "uk_version" => Ok(serde_json::json!(unfer_ffi::uk_version())),
         "uk_init" => {
@@ -1872,7 +1904,10 @@ fn kernel_dispatch(
             let hexed = arg_str(args, 0)?;
             let bytes = hex::decode(hexed.trim())
                 .map_err(|e| (1001, format!("blueprint hex decode: {e}")))?;
-            ffi_result(unfer_ffi::uk_blueprint_instantiate(bytes.as_ptr(), bytes.len() as i64))
+            ffi_result(unfer_ffi::uk_blueprint_instantiate(
+                bytes.as_ptr(),
+                bytes.len() as i64,
+            ))
         }
         "uk_subscribe" => {
             let model = arg_i64(args, 0)?;
@@ -2151,12 +2186,8 @@ fn kernel_dispatch(
             let (p, l) = ptr_len(&did);
             ffi_result(unfer_ffi::uk_cert_set_authority(p, l))
         }
-        "uk_cert_root" => {
-            buf_out_raw(|b, c| unfer_ffi::uk_cert_root(b, c))
-        }
-        "uk_cert_status" => {
-            buf_out(|b, c| unfer_ffi::uk_cert_status(b, c))
-        }
+        "uk_cert_root" => buf_out_raw(|b, c| unfer_ffi::uk_cert_root(b, c)),
+        "uk_cert_status" => buf_out(|b, c| unfer_ffi::uk_cert_status(b, c)),
         "uk_cert_mint" => {
             let json = arg_str(args, 0)?;
             let (p, l) = ptr_len(&json);
@@ -2191,7 +2222,7 @@ fn kernel_dispatch(
             let mut buf = vec![0u8; 4096];
             let n = unfer_ffi::uk_auction_close(p, l, buf.as_mut_ptr(), buf.len() as i64);
             if n < 0 {
-                return Err((( -n) as u32, read_last_error().unwrap_or_default()));
+                return Err(((-n) as u32, read_last_error().unwrap_or_default()));
             }
             buf.truncate(n as usize);
             let s = String::from_utf8(buf).map_err(|e| (1001, e.to_string()))?;
@@ -2228,7 +2259,8 @@ fn http_post(
     body: &str,
     read_timeout: Option<Duration>,
 ) -> Result<String, String> {
-    let mut stream = UnixStream::connect(sock).map_err(|e| format!("connect {}: {e}", sock.display()))?;
+    let mut stream =
+        UnixStream::connect(sock).map_err(|e| format!("connect {}: {e}", sock.display()))?;
     if let Some(d) = read_timeout {
         // set_read_timeout applies to blocking reads; set_write_timeout to non-blocking writes.
         stream
@@ -2248,9 +2280,12 @@ fn http_post(
         .read_to_end(&mut response)
         .map_err(|e| format!("recv: {e}"))?;
     let response = String::from_utf8_lossy(&response).to_string();
-    let (_, body) = response
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| format!("bad HTTP response: {}", &response[..response.len().min(200)]))?;
+    let (_, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
+        format!(
+            "bad HTTP response: {}",
+            &response[..response.len().min(200)]
+        )
+    })?;
     Ok(body.to_string())
 }
 
@@ -2260,7 +2295,9 @@ fn config_source(manifest: &ModuleManifest, loopback_sock: &Path, main_sock: &Pa
     let mut bindings = String::new();
     for sym in &manifest.grants {
         if is_kernel_symbol(sym) {
-            bindings.push_str(&format!("         (name = \"{sym}\", service = \"kernel-loopback\"),\n"));
+            bindings.push_str(&format!(
+                "         (name = \"{sym}\", service = \"kernel-loopback\"),\n"
+            ));
         }
     }
     // S10: mirror `[grants] net` into workerd external-service bindings. Each allowlisted
@@ -2397,7 +2434,10 @@ mod tests {
         // bindings (env keys), with NO throw-stub for the rest of the uk_*/uz_* table — an
         // un-granted name is simply absent and cannot be probed.
         let src = harness_source();
-        assert!(src.contains("Object.keys(env)"), "harness must enumerate env, not a static table");
+        assert!(
+            src.contains("Object.keys(env)"),
+            "harness must enumerate env, not a static table"
+        );
         assert!(src.contains("env[name].fetch"));
         assert!(src.contains("data.error"));
         assert!(
@@ -2429,10 +2469,17 @@ mod tests {
             memory_max_bytes: None,
             gatekeeper_mode: crate::module::GatekeeperMode::Enabled,
         };
-        let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
+        let cfg = config_source(
+            &manifest,
+            Path::new("/tmp/loop.sock"),
+            Path::new("/tmp/main.sock"),
+        );
         assert!(cfg.contains("(name = \"uk_version\", service = \"kernel-loopback\")"));
         assert!(cfg.contains("(name = \"uk_model_create\", service = \"kernel-loopback\")"));
-        assert!(!cfg.contains("uk_nonexistent"), "un-granted symbols must be absent");
+        assert!(
+            !cfg.contains("uk_nonexistent"),
+            "un-granted symbols must be absent"
+        );
         assert!(cfg.contains("unix:/tmp/loop.sock"));
         assert!(cfg.contains("unix:/tmp/main.sock"));
     }
@@ -2516,8 +2563,15 @@ mod tests {
         let effects = HashSet::from(["send_notification".to_string()]);
         let observers = HashSet::new();
         let body = r#"[{"effect":"send_notification","params":{"to":"alice"}}]"#;
-        let resp =
-            dispatch_loopback("client_module", &grants, &effects, &observers, &HashSet::new(), "uk_action_submit", body);
+        let resp = dispatch_loopback(
+            "client_module",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_action_submit",
+            body,
+        );
         // The gate lets the granted effect through: the loopback returns a `result`
         // (the action handle), not an error.
         assert!(
@@ -2525,7 +2579,10 @@ mod tests {
             "granted effect must dispatch, got {resp}"
         );
         // The module identity is injected as the record principal (audit tag).
-        let json = resp.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let json = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
         let handle = serde_json::from_str::<serde_json::Value>(&json)
             .ok()
             .and_then(|v| v["result"].as_i64());
@@ -2550,11 +2607,24 @@ mod tests {
         let observers = HashSet::new();
         // The module holds `send_notification`, NOT `delete_all`.
         let body = r#"[{"effect":"delete_all","params":{}}]"#;
-        let resp =
-            dispatch_loopback("client_module", &grants, &effects, &observers, &HashSet::new(), "uk_action_submit", body);
-        assert!(resp.contains("\"error\""), "unlisted effect must be denied, got {resp}");
+        let resp = dispatch_loopback(
+            "client_module",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_action_submit",
+            body,
+        );
+        assert!(
+            resp.contains("\"error\""),
+            "unlisted effect must be denied, got {resp}"
+        );
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
-        assert!(resp.contains("delete_all"), "denial must name the effect, got {resp}");
+        assert!(
+            resp.contains("delete_all"),
+            "denial must name the effect, got {resp}"
+        );
     }
 
     #[test]
@@ -2565,9 +2635,19 @@ mod tests {
         let effects = HashSet::new();
         let observers = HashSet::new();
         let body = r#"[{"effect":"send_notification","params":{}}]"#;
-        let resp =
-            dispatch_loopback("client_module", &grants, &effects, &observers, &HashSet::new(), "uk_action_submit", body);
-        assert!(resp.contains("\"error\""), "missing effects grant must deny, got {resp}");
+        let resp = dispatch_loopback(
+            "client_module",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_action_submit",
+            body,
+        );
+        assert!(
+            resp.contains("\"error\""),
+            "missing effects grant must deny, got {resp}"
+        );
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
 
@@ -2588,7 +2668,10 @@ mod tests {
             "uk_action_apply",
             r#"[1]"#,
         );
-        assert!(resp.contains("\"error\""), "ungranted kernel symbol must deny, got {resp}");
+        assert!(
+            resp.contains("\"error\""),
+            "ungranted kernel symbol must deny, got {resp}"
+        );
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
 
@@ -2604,7 +2687,9 @@ mod tests {
         use std::collections::HashSet;
         // Audit + action stores are process-global; the S6-style lock serializes us
         // against the other uk_audit_clear() tests (including the denied_no_grant one).
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_audit_clear();
         unfer_ffi::uk_clear_caller();
         let grants = HashSet::from([
@@ -2648,8 +2733,7 @@ mod tests {
             "[]",
         );
         assert!(
-            resp
-                .split_once("\r\n\r\n")
+            resp.split_once("\r\n\r\n")
                 .map(|(_, b)| b.to_string())
                 .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
                 .map(|v| {
@@ -2678,7 +2762,10 @@ mod tests {
             "uk_gate_approve",
             &format!("[{handle}]"),
         );
-        assert!(!approve.contains("\"error\""), "approval must resolve, got {approve}");
+        assert!(
+            !approve.contains("\"error\""),
+            "approval must resolve, got {approve}"
+        );
 
         let after = dispatch_loopback(
             "scan-module",
@@ -2727,7 +2814,10 @@ mod tests {
             "uk_gate_list_pending",
             "[]",
         );
-        assert!(resp.contains("\"error\""), "ungranted console symbol must deny, got {resp}");
+        assert!(
+            resp.contains("\"error\""),
+            "ungranted console symbol must deny, got {resp}"
+        );
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
 
@@ -2824,15 +2914,25 @@ mod tests {
             record["state"], "pending",
             "unannotated mutate stays pending: {record}"
         );
-        assert!(record["applied"].is_null(), "no applied result without approval");
+        assert!(
+            record["applied"].is_null(),
+            "no applied result without approval"
+        );
 
         // Only the human gate promotes it to applied.
-        assert_eq!(unfer_ffi::uk_gate_approve(handle), 0, "gate approval succeeds");
+        assert_eq!(
+            unfer_ffi::uk_gate_approve(handle),
+            0,
+            "gate approval succeeds"
+        );
         let needed = unfer_ffi::uk_action_get(handle, std::ptr::null_mut(), 0);
         let mut buf = vec![0u8; needed as usize];
         unfer_ffi::uk_action_get(handle, buf.as_mut_ptr(), needed);
         let record: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(record["state"], "approved", "approval promotes applied: {record}");
+        assert_eq!(
+            record["state"], "approved",
+            "approval promotes applied: {record}"
+        );
         assert_eq!(record["applied"]["forecast"]["rows"], 1);
         unfer_ffi::uk_clear_caller();
     }
@@ -2887,7 +2987,10 @@ mod tests {
             "[]",
         );
         // uk_evolve is not granted here, so the grant gate fires first (UK-4001).
-        assert!(resp.contains("4001"), "ungranted metered symbol denies, got {resp}");
+        assert!(
+            resp.contains("4001"),
+            "ungranted metered symbol denies, got {resp}"
+        );
         unfer_ffi::uk_clear_caller();
     }
 
@@ -2895,7 +2998,9 @@ mod tests {
     fn loopback_meter_records_audit_on_over_budget_deny() {
         use std::collections::HashSet;
         let _g = METER_TESTS_LOCK.lock().unwrap();
-        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_meter();
         unfer_ffi::uk_clear_caller();
         // Grant the metered symbol so the grant gate passes; pre-exhaust the
@@ -2923,7 +3028,9 @@ mod tests {
         );
         let audits = read_ffi_audit();
         assert!(
-            audits.iter().any(|e| e["symbol"] == "uk_evolve" && e["ok"] == false),
+            audits
+                .iter()
+                .any(|e| e["symbol"] == "uk_evolve" && e["ok"] == false),
             "over-budget deny must be audited: {audits:?}"
         );
         unfer_ffi::uk_clear_caller();
@@ -2953,7 +3060,10 @@ mod tests {
         let names: Vec<&'static str> = LOOPBACK_WATERFALL.iter().map(|l| l.name()).collect();
         let meter_idx = names.iter().position(|n| *n == "meter").unwrap();
         let guard_idx = names.iter().position(|n| *n == "guard").unwrap();
-        assert!(meter_idx < guard_idx, "meter must be registered before guard");
+        assert!(
+            meter_idx < guard_idx,
+            "meter must be registered before guard"
+        );
     }
 
     // ── S26 (F25): sensitive-forward latch at the loopback chokepoint ──────
@@ -2967,7 +3077,9 @@ mod tests {
     fn loopback_blocks_forward_ops_when_latched() {
         use std::collections::HashSet;
         let _g = LATCH_TESTS_LOCK.lock().unwrap();
-        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_sensitive_latches();
         unfer_ffi::uk_clear_caller();
         let grants = HashSet::from(["uk_action_submit".to_string()]);
@@ -3068,9 +3180,15 @@ mod tests {
                 }
             }
         }
-        let listeners: [&dyn SymbolListener; 2] = [&Own(Flow::Deny(serde_json::json!({"code": 4001}))), &Own(Flow::Ok(serde_json::json!(42)))];
+        let listeners: [&dyn SymbolListener; 2] = [
+            &Own(Flow::Deny(serde_json::json!({"code": 4001}))),
+            &Own(Flow::Ok(serde_json::json!(42))),
+        ];
         let flow = emit(&listeners, &ev);
-        assert!(matches!(flow, Flow::Deny(_)), "first terminal must win, got {flow:?}");
+        assert!(
+            matches!(flow, Flow::Deny(_)),
+            "first terminal must win, got {flow:?}"
+        );
     }
 
     #[test]
@@ -3133,7 +3251,10 @@ mod tests {
                 "err"
             }
             fn on_symbol(&self, _ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
-                Flow::Err { code: 4100, message: "boom".into() }
+                Flow::Err {
+                    code: 4100,
+                    message: "boom".into(),
+                }
             }
         }
         let ev = SymbolEvent {
@@ -3151,7 +3272,10 @@ mod tests {
         };
         let listeners: [&dyn SymbolListener; 2] = [&OkListener, &ErrListener];
         let flow = emit(&listeners, &ev);
-        assert!(matches!(flow, Flow::Err { code: 4100, .. }), "parallel must pick Err over Ok, got {flow:?}");
+        assert!(
+            matches!(flow, Flow::Err { code: 4100, .. }),
+            "parallel must pick Err over Ok, got {flow:?}"
+        );
     }
 
     #[test]
@@ -3165,7 +3289,10 @@ mod tests {
             fn on_symbol(&self, _ev: &SymbolEvent, _next: &mut dyn FnMut() -> Flow) -> Flow {
                 match &self.0 {
                     Flow::Ok(v) => Flow::Ok(v.clone()),
-                    Flow::Err { code, message } => Flow::Err { code: *code, message: message.clone() },
+                    Flow::Err { code, message } => Flow::Err {
+                        code: *code,
+                        message: message.clone(),
+                    },
                     Flow::Deny(v) => Flow::Deny(v.clone()),
                     Flow::Next => Flow::Next,
                 }
@@ -3219,9 +3346,18 @@ mod tests {
             "uk_evolve",
             "[]",
         );
-        assert!(resp.contains("4001"), "grant gate must fire first, got {resp}");
-        assert!(!resp.contains("4701"), "latch must not precede grant, got {resp}");
-        assert!(!resp.contains("4602"), "meter must not precede grant, got {resp}");
+        assert!(
+            resp.contains("4001"),
+            "grant gate must fire first, got {resp}"
+        );
+        assert!(
+            !resp.contains("4701"),
+            "latch must not precede grant, got {resp}"
+        );
+        assert!(
+            !resp.contains("4602"),
+            "meter must not precede grant, got {resp}"
+        );
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_clear_sensitive_latches();
         unfer_ffi::uk_clear_meter();
@@ -3277,7 +3413,10 @@ mod tests {
             "uk_version",
             "[]",
         );
-        assert!(resp.contains("\"result\""), "undeclared op must dispatch, got {resp}");
+        assert!(
+            resp.contains("\"result\""),
+            "undeclared op must dispatch, got {resp}"
+        );
     }
 
     #[test]
@@ -3291,8 +3430,14 @@ mod tests {
         });
         match flow {
             Flow::Deny(resp) => {
-                assert_eq!(resp["code"], "UK-4603", "structured timeout code, got {resp}");
-                assert_eq!(resp["name"], "ToolTimeout", "structured timeout name, got {resp}");
+                assert_eq!(
+                    resp["code"], "UK-4603",
+                    "structured timeout code, got {resp}"
+                );
+                assert_eq!(
+                    resp["name"], "ToolTimeout",
+                    "structured timeout name, got {resp}"
+                );
             }
             other => panic!("slow op must time out, got {other:?}"),
         }
@@ -3352,7 +3497,10 @@ mod tests {
             "uk_version",
             "[]",
         );
-        assert!(resp.contains("\"result\""), "undeclared op stays untouched, got {resp}");
+        assert!(
+            resp.contains("\"result\""),
+            "undeclared op stays untouched, got {resp}"
+        );
     }
 
     // ── H9: security posture (strict-pause consult at the chokepoint) ────
@@ -3365,7 +3513,9 @@ mod tests {
         // Mutate uk_* for approval (reusing the S21 lane) except the two
         // no-effect turn enders and uk_action_submit (the lane itself).
         let _g = POSTURE_TESTS_LOCK.lock().unwrap();
-        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_clear_posture();
         let body = r#"{"posture":"strict"}"#;
@@ -3391,7 +3541,10 @@ mod tests {
             resp.contains("4501"),
             "strict posture must pause a mutator for approval, got {resp}"
         );
-        assert!(resp.contains("pauses"), "denial names the pause, got {resp}");
+        assert!(
+            resp.contains("pauses"),
+            "denial names the pause, got {resp}"
+        );
 
         // The no-effect turn ender uk_version still dispatches.
         let resp = dispatch_loopback(
@@ -3403,7 +3556,10 @@ mod tests {
             "uk_version",
             "[]",
         );
-        assert!(resp.contains("\"result\""), "ender must dispatch, got {resp}");
+        assert!(
+            resp.contains("\"result\""),
+            "ender must dispatch, got {resp}"
+        );
 
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_clear_posture();
@@ -3413,7 +3569,9 @@ mod tests {
     fn auto_posture_does_not_pause_mutators() {
         // Default/auto posture: no pause beyond the existing S21 lane.
         let _g = POSTURE_TESTS_LOCK.lock().unwrap();
-        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_clear_posture();
 
@@ -3447,14 +3605,13 @@ mod tests {
     #[test]
     fn loopback_skill_register_list_dispatch() {
         let _g = POSTURE_TESTS_LOCK.lock().unwrap();
-        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_clear_skills();
 
-        let grants = HashSet::from([
-            "uk_skill_register".to_string(),
-            "uk_skill_list".to_string(),
-        ]);
+        let grants = HashSet::from(["uk_skill_register".to_string(), "uk_skill_list".to_string()]);
         let resp = dispatch_loopback(
             "skill_mod",
             &grants,
@@ -3464,7 +3621,10 @@ mod tests {
             "uk_skill_register",
             r#"[{"id":"acme/audit","module":"audit","scope":"org","grants":["uk_snapshot"]}]"#,
         );
-        assert!(resp.contains("\"result\""), "register must dispatch, got {resp}");
+        assert!(
+            resp.contains("\"result\""),
+            "register must dispatch, got {resp}"
+        );
 
         let resp = dispatch_loopback(
             "skill_mod",
@@ -3550,7 +3710,7 @@ mod tests {
             "uk_secret_put",
             r#"["vault_owner","tok_secret"]"#,
         );
-let put_body = put
+        let put_body = put
             .split_once("\r\n\r\n")
             .map(|(_, b)| b.to_string())
             .unwrap_or_default();
@@ -3581,7 +3741,9 @@ let put_body = put
         // (trace_id + dot-separated owner component) threaded into its audit entry.
         // Assert on the entry for THIS dispatch by its unique caller principal.
         use std::collections::HashSet;
-        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_observability_clear();
         let grants = HashSet::from(["uk_version".to_string()]);
@@ -3594,16 +3756,29 @@ let put_body = put
             "uk_version",
             "[]",
         );
-        assert!(resp.contains("\"result\""), "granted call must dispatch: {resp}");
+        assert!(
+            resp.contains("\"result\""),
+            "granted call must dispatch: {resp}"
+        );
         let entries = read_ffi_audit();
         let mine = entries
             .iter()
-            .find(|e| e["symbol"] == "uk_version" && e["caller"]["principal"] == "audit_trace_probe")
+            .find(|e| {
+                e["symbol"] == "uk_version" && e["caller"]["principal"] == "audit_trace_probe"
+            })
             .expect("the probe's dispatch must be audited");
-        let trace = mine["context"]["trace_id"].as_str().expect("trace_id threaded");
+        let trace = mine["context"]["trace_id"]
+            .as_str()
+            .expect("trace_id threaded");
         assert!(!trace.is_empty(), "trace id must be non-empty: {mine:?}");
-        assert!(trace.starts_with("audit_trace_probe-"), "trace names the caller: {trace}");
-        assert_eq!(mine["component"], "kernel.audit", "dot-separated owner component");
+        assert!(
+            trace.starts_with("audit_trace_probe-"),
+            "trace names the caller: {trace}"
+        );
+        assert_eq!(
+            mine["component"], "kernel.audit",
+            "dot-separated owner component"
+        );
         unfer_ffi::uk_clear_caller();
         unfer_ffi::uk_observability_clear();
     }
@@ -3645,7 +3820,8 @@ let put_body = put
     fn spawn_agent(name: &str, kernel_grants: &[&str], effect_grants: &[&str]) -> i64 {
         let kernel: Vec<String> = kernel_grants.iter().map(|s| s.to_string()).collect();
         let effects: Vec<String> = effect_grants.iter().map(|s| s.to_string()).collect();
-        let spec = serde_json::json!({ "name": name, "grants": { "kernel": kernel, "effects": effects } });
+        let spec =
+            serde_json::json!({ "name": name, "grants": { "kernel": kernel, "effects": effects } });
         let spec_json = spec.to_string();
         let (p, l) = ptr_len(&spec_json);
         let h = unfer_ffi::uk_agent_spawn(p, l);
@@ -3655,7 +3831,9 @@ let put_body = put
 
     #[test]
     fn loopback_audits_module_calls_with_caller_tag() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         unfer_ffi::uk_audit_clear();
 
@@ -3663,18 +3841,44 @@ let put_body = put
         let effects = HashSet::new();
         let observers = HashSet::new();
         // Granted call → audited ok.
-        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, &HashSet::new(), "uk_version", "[]");
-        assert!(resp.contains("\"result\""), "granted symbol must dispatch, got {resp}");
+        let resp = dispatch_loopback(
+            "audit_probe",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_version",
+            "[]",
+        );
+        assert!(
+            resp.contains("\"result\""),
+            "granted symbol must dispatch, got {resp}"
+        );
         // Denied call → audited too.
-        let resp = dispatch_loopback("audit_probe", &grants, &effects, &observers, &HashSet::new(), "uk_evolve", r#"[{"t":0.1}]"#);
-        assert!(resp.contains("\"error\""), "ungranted symbol must deny, got {resp}");
+        let resp = dispatch_loopback(
+            "audit_probe",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_evolve",
+            r#"[{"t":0.1}]"#,
+        );
+        assert!(
+            resp.contains("\"error\""),
+            "ungranted symbol must deny, got {resp}"
+        );
 
         let entries = read_ffi_audit();
         let mine: Vec<&serde_json::Value> = entries
             .iter()
             .filter(|e| e["caller"]["principal"] == "audit_probe")
             .collect();
-        assert_eq!(mine.len(), 2, "expected 2 audited calls from audit_probe: {entries:?}");
+        assert_eq!(
+            mine.len(),
+            2,
+            "expected 2 audited calls from audit_probe: {entries:?}"
+        );
         // Newest first: the denied evolve call, then the granted version call.
         assert_eq!(mine[0]["symbol"], "uk_evolve");
         assert_eq!(mine[0]["ok"], false);
@@ -3686,7 +3890,9 @@ let put_body = put
 
     #[test]
     fn loopback_audits_action_submit_with_agent_caller() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         unfer_ffi::uk_audit_clear();
 
@@ -3711,10 +3917,16 @@ let put_body = put
             "uk_action_submit",
             body,
         );
-        assert!(resp.contains("\"result\""), "granted effect must dispatch, got {resp}");
+        assert!(
+            resp.contains("\"result\""),
+            "granted effect must dispatch, got {resp}"
+        );
 
         // The action principal + caller tag must be the agent id.
-        let json = resp.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+        let json = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
         let handle_i64 = serde_json::from_str::<serde_json::Value>(&json)
             .ok()
             .and_then(|v| v["result"].as_i64())
@@ -3736,14 +3948,19 @@ let put_body = put
             .iter()
             .filter(|e| e["symbol"] == "uk_action_submit" && e["caller"]["principal"] == agent_id)
             .collect();
-        assert!(!mine.is_empty(), "action submit must be audited for the agent: {entries:?}");
+        assert!(
+            !mine.is_empty(),
+            "action submit must be audited for the agent: {entries:?}"
+        );
         assert_eq!(mine[0]["caller"]["from"], "agent");
         assert_eq!(mine[0]["caller"]["principal"], serde_json::json!(agent_id));
     }
 
     #[test]
     fn loopback_agent_grant_enforcement_bounded_set() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         // The agent is bounded to {uk_version} — uk_evolve must be denied host-side even
         // though the *module* grant set (passed in) contains everything.
@@ -3764,7 +3981,10 @@ let put_body = put
             "uk_version",
             "[]",
         );
-        assert!(ok.contains("\"result\""), "granted agent symbol must dispatch, got {ok}");
+        assert!(
+            ok.contains("\"result\""),
+            "granted agent symbol must dispatch, got {ok}"
+        );
 
         let denied = dispatch_loopback_as(
             Some(handle),
@@ -3778,13 +3998,18 @@ let put_body = put
             "uk_evolve",
             r#"[{"t":0.1}]"#,
         );
-        assert!(denied.contains("\"error\""), "unbounded agent symbol must deny, got {denied}");
+        assert!(
+            denied.contains("\"error\""),
+            "unbounded agent symbol must deny, got {denied}"
+        );
         assert!(denied.contains("4001"), "expected UK-4001, got {denied}");
     }
 
     #[test]
     fn loopback_agent_unknown_handle_denies() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         let grants = HashSet::from(["uk_version".to_string()]);
         let effects = HashSet::new();
@@ -3801,7 +4026,10 @@ let put_body = put
             "uk_version",
             "[]",
         );
-        assert!(resp.contains("\"error\""), "unknown agent must deny, got {resp}");
+        assert!(
+            resp.contains("\"error\""),
+            "unknown agent must deny, got {resp}"
+        );
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
     }
 
@@ -3809,7 +4037,9 @@ let put_body = put
 
     #[test]
     fn resource_introduction_gates_loopback_calls() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
 
         let grants = HashSet::from([
@@ -3927,7 +4157,15 @@ let put_body = put
         symbol: &str,
         body: &str,
     ) -> (bool, serde_json::Value) {
-        let resp = dispatch_loopback(from, grants, effects, observers, &HashSet::new(), symbol, body);
+        let resp = dispatch_loopback(
+            from,
+            grants,
+            effects,
+            observers,
+            &HashSet::new(),
+            symbol,
+            body,
+        );
         let json = resp
             .split_once("\r\n\r\n")
             .map(|(_, b)| b.to_string())
@@ -3938,7 +4176,9 @@ let put_body = put
 
     #[test]
     fn loopback_observers_filter_action_list() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
 
         // Actor A submits an action; the loopback injects its own principal.
@@ -3970,7 +4210,14 @@ let put_body = put
         let b_grants = HashSet::from(["uk_action_list".to_string(), "uk_action_get".to_string()]);
         let b_effects = HashSet::new();
         let b_obs = HashSet::new();
-        let (ok, v) = dispatch_parse("f8_actor_b", &b_grants, &b_effects, &b_obs, "uk_action_list", "[]");
+        let (ok, v) = dispatch_parse(
+            "f8_actor_b",
+            &b_grants,
+            &b_effects,
+            &b_obs,
+            "uk_action_list",
+            "[]",
+        );
         assert!(ok, "list must dispatch, got {v}");
         let records = v["result"].as_array().expect("list is an array");
         assert!(
@@ -3995,7 +4242,14 @@ let put_body = put
         let c_grants = HashSet::from(["uk_action_list".to_string()]);
         let c_effects = HashSet::new();
         let c_obs = HashSet::from(["f8_actor_a".to_string()]);
-        let (ok_c, v_c) = dispatch_parse("f8_actor_c", &c_grants, &c_effects, &c_obs, "uk_action_list", "[]");
+        let (ok_c, v_c) = dispatch_parse(
+            "f8_actor_c",
+            &c_grants,
+            &c_effects,
+            &c_obs,
+            "uk_action_list",
+            "[]",
+        );
         assert!(ok_c, "list must dispatch, got {v_c}");
         let records_c = v_c["result"].as_array().expect("list is an array");
         assert!(
@@ -4006,7 +4260,9 @@ let put_body = put
 
     #[test]
     fn loopback_observers_filter_audit_list() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         unfer_ffi::uk_audit_clear();
 
@@ -4015,40 +4271,78 @@ let put_body = put
 
         // Actor A makes a granted call so it has an audited entry.
         let a_grants = HashSet::from(["uk_version".to_string()]);
-        let r = dispatch_loopback("f8_audit_a", &a_grants, &g_effects, &g_obs, &HashSet::new(), "uk_version", "[]");
+        let r = dispatch_loopback(
+            "f8_audit_a",
+            &a_grants,
+            &g_effects,
+            &g_obs,
+            &HashSet::new(),
+            "uk_version",
+            "[]",
+        );
         assert!(r.contains("\"result\""), "A must dispatch, got {r}");
 
         // Reader B (no observers) reads the trail: only its OWN entries are visible.
         let b_grants = HashSet::from(["uk_audit_list".to_string(), "uk_version".to_string()]);
-        let r = dispatch_loopback("f8_audit_b", &b_grants, &g_effects, &g_obs, &HashSet::new(), "uk_version", "[]");
+        let r = dispatch_loopback(
+            "f8_audit_b",
+            &b_grants,
+            &g_effects,
+            &g_obs,
+            &HashSet::new(),
+            "uk_version",
+            "[]",
+        );
         assert!(r.contains("\"result\""), "B must dispatch, got {r}");
-        let (ok, v) = dispatch_parse("f8_audit_b", &b_grants, &g_effects, &g_obs, "uk_audit_list", "[]");
+        let (ok, v) = dispatch_parse(
+            "f8_audit_b",
+            &b_grants,
+            &g_effects,
+            &g_obs,
+            "uk_audit_list",
+            "[]",
+        );
         assert!(ok, "audit list must dispatch, got {v}");
         let entries = v["result"].as_array().expect("audit list is an array");
         assert!(
-            entries.iter().any(|e| e["caller"]["principal"] == "f8_audit_b"),
+            entries
+                .iter()
+                .any(|e| e["caller"]["principal"] == "f8_audit_b"),
             "B must see its own entries: {entries:?}"
         );
         assert!(
-            entries.iter().all(|e| e["caller"]["principal"] != "f8_audit_a"),
+            entries
+                .iter()
+                .all(|e| e["caller"]["principal"] != "f8_audit_a"),
             "B (no observers) must NOT see A's audit entries: {entries:?}"
         );
 
         // Reader C declares A as an observer: A's entries ARE visible.
         let c_grants = HashSet::from(["uk_audit_list".to_string()]);
         let c_obs = HashSet::from(["f8_audit_a".to_string()]);
-        let (ok_c, v_c) = dispatch_parse("f8_audit_c", &c_grants, &g_effects, &c_obs, "uk_audit_list", "[]");
+        let (ok_c, v_c) = dispatch_parse(
+            "f8_audit_c",
+            &c_grants,
+            &g_effects,
+            &c_obs,
+            "uk_audit_list",
+            "[]",
+        );
         assert!(ok_c, "audit list must dispatch, got {v_c}");
         let entries_c = v_c["result"].as_array().expect("audit list is an array");
         assert!(
-            entries_c.iter().any(|e| e["caller"]["principal"] == "f8_audit_a"),
+            entries_c
+                .iter()
+                .any(|e| e["caller"]["principal"] == "f8_audit_a"),
             "C (observer of A) must see A's audit entries: {entries_c:?}"
         );
     }
 
     #[test]
     fn loopback_agent_spawn_escalation_enforced_via_loopback() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
 
         // The loopback now installs the module's full bounded grant set on the caller
@@ -4060,25 +4354,55 @@ let put_body = put
         let observers = HashSet::from(["f8_peer".to_string()]);
 
         // Kernel escalation: agent requests uk_model_create (not held by the module).
-        let escalate = r#"[{"name":"upgrader","grants":{"kernel":["uk_model_create"],"effects":[]}}]"#;
-        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", escalate);
-        assert!(resp.contains("\"error\""), "escalation must be refused, got {resp}");
+        let escalate =
+            r#"[{"name":"upgrader","grants":{"kernel":["uk_model_create"],"effects":[]}}]"#;
+        let resp = dispatch_loopback(
+            "f8_escalator",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_agent_spawn",
+            escalate,
+        );
+        assert!(
+            resp.contains("\"error\""),
+            "escalation must be refused, got {resp}"
+        );
         assert!(resp.contains("4202"), "expected UK-4202, got {resp}");
 
         // Observer escalation: agent requests an observer right the module doesn't hold.
         let escalate_obs =
             r#"[{"name":"spy","grants":{"kernel":[],"effects":[],"observers":["secret"]}}]"#;
-        let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", escalate_obs);
+        let resp = dispatch_loopback(
+            "f8_escalator",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_agent_spawn",
+            escalate_obs,
+        );
         assert!(
             resp.contains("\"error\"") && resp.contains("4202"),
             "observer escalation must be refused, got {resp}"
         );
 
         // Subset spawn succeeds (agent inherits a subset incl. the module's observers).
-        let subset =
-            r#"[{"name":"clerk","grants":{"kernel":["uk_version"],"effects":[],"observers":["f8_peer"]}}]"#;
-let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &HashSet::new(), "uk_agent_spawn", subset);
-        assert!(resp.contains("\"result\""), "subset spawn must succeed, got {resp}");
+        let subset = r#"[{"name":"clerk","grants":{"kernel":["uk_version"],"effects":[],"observers":["f8_peer"]}}]"#;
+        let resp = dispatch_loopback(
+            "f8_escalator",
+            &grants,
+            &effects,
+            &observers,
+            &HashSet::new(),
+            "uk_agent_spawn",
+            subset,
+        );
+        assert!(
+            resp.contains("\"result\""),
+            "subset spawn must succeed, got {resp}"
+        );
     }
 
     // ── S11: loopback peer lockdown (F10) ─────────────────────────────────
@@ -4091,7 +4415,9 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
         assert_eq!(peer, std::process::id(), "peer must be us");
         // Matching pid -> accepted; a foreign pid -> rejected.
         assert!(
-            peer_cred_pid(&a).map(|p| p == std::process::id()).unwrap_or(false),
+            peer_cred_pid(&a)
+                .map(|p| p == std::process::id())
+                .unwrap_or(false),
             "our own peer must pass the gate"
         );
         let want = std::process::id() + 5000;
@@ -4130,28 +4456,24 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
 
     #[test]
     fn supervisor_respawns_crashed_child() {
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_audit_clear();
         // `true` exits instantly; the supervisor must detect the crash and respawn.
         let respawns = Arc::new(AtomicU32::new(0));
         let respawns2 = Arc::clone(&respawns);
-        let make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync> = Arc::new(move || {
-            respawns2.fetch_add(1, Ordering::Relaxed);
-            Command::new("true").spawn().map_err(|e| e.to_string())
-        });
-        let slot: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(
-            Command::new("true").spawn().unwrap(),
-        )));
+        let make_child: Arc<dyn Fn() -> Result<Child, String> + Send + Sync> =
+            Arc::new(move || {
+                respawns2.fetch_add(1, Ordering::Relaxed);
+                Command::new("true").spawn().map_err(|e| e.to_string())
+            });
+        let slot: Arc<Mutex<Option<Child>>> =
+            Arc::new(Mutex::new(Some(Command::new("true").spawn().unwrap())));
         let quit = Arc::new(AtomicBool::new(false));
         let sup_q = Arc::clone(&quit);
         let handle = std::thread::spawn(move || {
-            EcmaSidecar::supervise_loop(
-                Arc::clone(&slot),
-                make_child,
-                sup_q,
-                "test-mod",
-                None,
-            );
+            EcmaSidecar::supervise_loop(Arc::clone(&slot), make_child, sup_q, "test-mod", None);
         });
         // Give the supervisor ~1.2s to observe the crash and respawn at least twice.
         std::thread::sleep(Duration::from_millis(1200));
@@ -4180,7 +4502,9 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
 
     #[test]
     fn deadlined_call_kills_silent_child_and_audits() {
-        let _a = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _a = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("unfer-s14-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -4213,7 +4537,7 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             None,
             &loopback_sock,
         )
-            .expect("loopback");
+        .expect("loopback");
 
         // A docile child that outlives the call; the deadline must kill it.
         let child = Command::new("sleep")
@@ -4235,7 +4559,10 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
         let res = sidecar.call("run", "[]");
         let err = res.expect_err("silent worker must time out");
         eprintln!("ACTUAL_ERR={err:?}");
-        assert!(err.contains("timeout") || err.contains("unavailable"), "unexpected err: {err}");
+        assert!(
+            err.contains("timeout") || err.contains("unavailable"),
+            "unexpected err: {err}"
+        );
 
         // The child must be signalled (SIGKILL) so the supervisor can respawn a fresh one.
         let mut guard = sidecar.child.lock().unwrap();
@@ -4319,10 +4646,23 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             memory_max_bytes: None,
             gatekeeper_mode: crate::module::GatekeeperMode::Enabled,
         };
-        let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
-        assert!(cfg.contains("net-egress-0"), "first egress service missing: {cfg}");
-        assert!(cfg.contains("http://127.0.0.1:8787"), "loopback grant must be embedded: {cfg}");
-        assert!(cfg.contains("http://api.example.com"), "host grant must be embedded: {cfg}");
+        let cfg = config_source(
+            &manifest,
+            Path::new("/tmp/loop.sock"),
+            Path::new("/tmp/main.sock"),
+        );
+        assert!(
+            cfg.contains("net-egress-0"),
+            "first egress service missing: {cfg}"
+        );
+        assert!(
+            cfg.contains("http://127.0.0.1:8787"),
+            "loopback grant must be embedded: {cfg}"
+        );
+        assert!(
+            cfg.contains("http://api.example.com"),
+            "host grant must be embedded: {cfg}"
+        );
     }
 
     #[test]
@@ -4344,8 +4684,15 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             memory_max_bytes: None,
             gatekeeper_mode: crate::module::GatekeeperMode::Enabled,
         };
-        let cfg = config_source(&manifest, Path::new("/tmp/loop.sock"), Path::new("/tmp/main.sock"));
-        assert!(!cfg.contains("net-egress"), "empty net must produce no egress: {cfg}");
+        let cfg = config_source(
+            &manifest,
+            Path::new("/tmp/loop.sock"),
+            Path::new("/tmp/main.sock"),
+        );
+        assert!(
+            !cfg.contains("net-egress"),
+            "empty net must produce no egress: {cfg}"
+        );
     }
 
     #[test]
@@ -4363,9 +4710,15 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             "uk_fetch",
             r#"[{"url":"http://api.example.com/data"}]"#,
         );
-        assert!(resp.contains("\"error\""), "no net grant => deny, got {resp}");
+        assert!(
+            resp.contains("\"error\""),
+            "no net grant => deny, got {resp}"
+        );
         assert!(resp.contains("4001"), "expected UK-4001, got {resp}");
-        assert!(resp.contains("api.example.com"), "denial names the host, got {resp}");
+        assert!(
+            resp.contains("api.example.com"),
+            "denial names the host, got {resp}"
+        );
     }
 
     #[test]
@@ -4384,14 +4737,19 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             "uk_fetch",
             r#"[{"url":"http://127.0.0.1:9/x"}]"#,
         );
-        assert!(resp.contains("\"error\"") && resp.contains("4001"), "off-list must deny, got {resp}");
+        assert!(
+            resp.contains("\"error\"") && resp.contains("4001"),
+            "off-list must deny, got {resp}"
+        );
     }
 
     #[test]
     fn fetch_granted_loopback_fixture_succeeds() {
         // The audit trail is kernel-global and `uk_audit_clear()` in concurrent tests
         // would wipe this test's entry mid-flight — serialize + clear like the S6 tests.
-        let _lock = LOOPBACK_AUDIT_TESTS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = LOOPBACK_AUDIT_TESTS_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         unfer_ffi::uk_audit_clear();
         // Local fixture server (loopback only).
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -4400,7 +4758,9 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
-            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+            let _ = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+            );
         });
         let host = format!("127.0.0.1:{}", addr.port());
         let grant = host.clone();
@@ -4419,8 +4779,14 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             &serde_json::json!([{ "url": url }]).to_string(),
         );
         serve.join().unwrap();
-        assert!(resp.contains("\"result\""), "granted fixture fetch must succeed, got {resp}");
-        assert!(resp.contains("hello"), "fixture body must be returned, got {resp}");
+        assert!(
+            resp.contains("\"result\""),
+            "granted fixture fetch must succeed, got {resp}"
+        );
+        assert!(
+            resp.contains("hello"),
+            "fixture body must be returned, got {resp}"
+        );
         // The audit entry for the egress carries the explicit allow action + host.
         let entries = read_ffi_audit();
         let mine: Vec<&serde_json::Value> = entries
@@ -4428,10 +4794,19 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             .filter(|e| e["symbol"] == "uk_fetch" && e["caller"]["principal"] == "fetch_probe")
             .take(2)
             .collect();
-        assert!(!mine.is_empty(), "fetch egress must be audited: {entries:?}");
-        assert_eq!(mine[0]["ok"], true, "granted fetch must audit as allowed: {entries:?}");
         assert!(
-            mine[0]["detail"].as_str().unwrap_or("").contains("action=allow"),
+            !mine.is_empty(),
+            "fetch egress must be audited: {entries:?}"
+        );
+        assert_eq!(
+            mine[0]["ok"], true,
+            "granted fetch must audit as allowed: {entries:?}"
+        );
+        assert!(
+            mine[0]["detail"]
+                .as_str()
+                .unwrap_or("")
+                .contains("action=allow"),
             "audit must record action=allow, got {entries:?}"
         );
     }
@@ -4453,7 +4828,10 @@ let resp = dispatch_loopback("f8_escalator", &grants, &effects, &observers, &Has
             "uk_fetch",
             r#"[{"url":"http://api.example.com/x"}]"#,
         );
-        assert!(resp.contains("\"error\""), "non-loopback egress must refuse offline, got {resp}");
+        assert!(
+            resp.contains("\"error\""),
+            "non-loopback egress must refuse offline, got {resp}"
+        );
         assert!(
             resp.contains("loopback fixture"),
             "refusal must cite the loopback-fixture restriction, got {resp}"

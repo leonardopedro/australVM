@@ -1,4 +1,4 @@
-use cranelift_jit::{JITModule, JITBuilder};
+use cranelift_jit::{JITBuilder, JITModule};
 use std::cell::RefCell;
 use std::ffi::{c_void, CString};
 
@@ -10,20 +10,20 @@ fn cps_debug(msg: &str) {
     }
 }
 
-pub mod auth;
-#[cfg(feature = "cedar")]
-pub mod policy;
 #[cfg(feature = "arctic-auth")]
 pub mod arctic_auth;
-pub mod cps;
-pub mod module;
-pub mod tidepool_mod;
+pub mod auth;
 pub mod capstd_mod;
-pub mod federation;
+pub mod cps;
 #[cfg(feature = "ecmascript")]
 pub mod ecma;
+pub mod federation;
+pub mod module;
+#[cfg(feature = "cedar")]
+pub mod policy;
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
+pub mod tidepool_mod;
 
 #[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;
@@ -46,7 +46,10 @@ fn set_last_error(msg: &str) {
 #[no_mangle]
 pub extern "C" fn cranelift_last_error() -> *const std::ffi::c_char {
     LAST_ERROR.with(|e| {
-        e.borrow().as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null())
+        e.borrow()
+            .as_ref()
+            .map(|s| s.as_ptr())
+            .unwrap_or(std::ptr::null())
     })
 }
 
@@ -157,49 +160,66 @@ pub extern "C" fn au_trapping_divide(lhs: i64, rhs: i64) -> i64 {
 /// Register the `Austral.Pervasive::trapping*` arithmetic intrinsics on a
 /// JIT builder (both the initial and the hotswap builders must carry them).
 fn register_trapping_symbols(builder: &mut JITBuilder) {
-    builder.symbol("Austral.Pervasive::trappingAdd",      au_trapping_add      as *const u8);
-    builder.symbol("Austral.Pervasive::trappingSubtract", au_trapping_subtract as *const u8);
-    builder.symbol("Austral.Pervasive::trappingMultiply", au_trapping_multiply as *const u8);
-    builder.symbol("Austral.Pervasive::trappingDivide",   au_trapping_divide   as *const u8);
+    builder.symbol(
+        "Austral.Pervasive::trappingAdd",
+        au_trapping_add as *const u8,
+    );
+    builder.symbol(
+        "Austral.Pervasive::trappingSubtract",
+        au_trapping_subtract as *const u8,
+    );
+    builder.symbol(
+        "Austral.Pervasive::trappingMultiply",
+        au_trapping_multiply as *const u8,
+    );
+    builder.symbol(
+        "Austral.Pervasive::trappingDivide",
+        au_trapping_divide as *const u8,
+    );
 }
 
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn __au_swap_module(old_id: u64, new_desc: *const c_void) -> i64 {
     unsafe {
-        if cell_swap(old_id, new_desc) { 1 } else { 0 }
+        if cell_swap(old_id, new_desc) {
+            1
+        } else {
+            0
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn cranelift_init() -> i64 {
     JIT.with(|cell| {
-        if cell.borrow().is_some() { return 1; }
+        if cell.borrow().is_some() {
+            return 1;
+        }
 
         match (|| -> Result<JITModule, String> {
-            let target_builder = cranelift_native::builder()
-                .map_err(|e| format!("Native builder failed: {}", e))?;
+            let target_builder =
+                cranelift_native::builder().map_err(|e| format!("Native builder failed: {}", e))?;
             let flag_builder = cranelift_codegen::settings::builder();
             let isa = target_builder
                 .finish(cranelift_codegen::settings::Flags::new(flag_builder))
                 .map_err(|e| format!("ISA finish failed: {}", e))?;
-            let mut builder =
-                JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+            let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
             // Register runtime primitives
             builder.symbol("au_print_int", au_print_int as *const u8);
-            builder.symbol("au_exit",      au_exit      as *const u8);
-            builder.symbol("au_alloc",     au_alloc     as *const u8);
-            builder.symbol("au_free",      au_free      as *const u8);
+            builder.symbol("au_exit", au_exit as *const u8);
+            builder.symbol("au_alloc", au_alloc as *const u8);
+            builder.symbol("au_free", au_free as *const u8);
 
             // Register CPS-level intrinsics (handled inline in cps.rs, but
             // need entries in the symbol table so Cranelift JIT finalization
             // can find them via dlsym when a function body references them).
             // These are no-ops — the inline compiler never emits a real call
             // to them; they're only needed to satisfy the symbol resolver.
-            builder.symbol("__union_new",   au_exit as *const u8);
-            builder.symbol("__record_new",  au_exit as *const u8);
-            builder.symbol("__slot_get",    au_exit as *const u8);
+            builder.symbol("__union_new", au_exit as *const u8);
+            builder.symbol("__record_new", au_exit as *const u8);
+            builder.symbol("__slot_get", au_exit as *const u8);
 
             // Register the Austral.Pervasive::trapping* arithmetic intrinsics
             // (see au_trapping_* above): CPS-lowered `+ - * /` on Int64 call
@@ -259,114 +279,369 @@ pub(crate) struct KernelSymbol {
 /// requires adding it here and in the expected-symbols file.
 #[cfg(feature = "unfer-kernel")]
 pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
-    KernelSymbol { name: "uk_version",           addr: unfer_ffi::uk_version           as *const u8 },
-    KernelSymbol { name: "uk_init",              addr: unfer_ffi::uk_init              as *const u8 },
-    KernelSymbol { name: "uk_model_create",      addr: unfer_ffi::uk_model_create      as *const u8 },
-    KernelSymbol { name: "uk_model_free",        addr: unfer_ffi::uk_model_free        as *const u8 },
-    KernelSymbol { name: "uk_set_prior",         addr: unfer_ffi::uk_set_prior         as *const u8 },
-    KernelSymbol { name: "uk_set_hamiltonian",   addr: unfer_ffi::uk_set_hamiltonian   as *const u8 },
-    KernelSymbol { name: "uk_evolve",            addr: unfer_ffi::uk_evolve             as *const u8 },
-    KernelSymbol { name: "uk_condition",         addr: unfer_ffi::uk_condition          as *const u8 },
-    KernelSymbol { name: "uk_event_probability", addr: unfer_ffi::uk_event_probability as *const u8 },
-    KernelSymbol { name: "uk_observe",           addr: unfer_ffi::uk_observe           as *const u8 },
-    KernelSymbol { name: "uk_get_result",        addr: unfer_ffi::uk_get_result        as *const u8 },
-    KernelSymbol { name: "uk_last_error",        addr: unfer_ffi::uk_last_error         as *const u8 },
+    KernelSymbol {
+        name: "uk_version",
+        addr: unfer_ffi::uk_version as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_init",
+        addr: unfer_ffi::uk_init as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_model_create",
+        addr: unfer_ffi::uk_model_create as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_model_free",
+        addr: unfer_ffi::uk_model_free as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_set_prior",
+        addr: unfer_ffi::uk_set_prior as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_set_hamiltonian",
+        addr: unfer_ffi::uk_set_hamiltonian as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_evolve",
+        addr: unfer_ffi::uk_evolve as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_condition",
+        addr: unfer_ffi::uk_condition as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_event_probability",
+        addr: unfer_ffi::uk_event_probability as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_observe",
+        addr: unfer_ffi::uk_observe as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_get_result",
+        addr: unfer_ffi::uk_get_result as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_last_error",
+        addr: unfer_ffi::uk_last_error as *const u8,
+    },
     // Logos CNL->UNF compilation (unique-normal-form via interaction-net reduction).
-    KernelSymbol { name: "uk_logos_compile",     addr: unfer_ffi::uk_logos_compile      as *const u8 },
+    KernelSymbol {
+        name: "uk_logos_compile",
+        addr: unfer_ffi::uk_logos_compile as *const u8,
+    },
     // Austral->deltanet UNF translation (the austral/australVM-language side
     // of the unique-normal-form pipeline, used by the Deltanet_plugin pass).
-    KernelSymbol { name: "uk_austral_unf",       addr: unfer_ffi::uk_austral_unf        as *const u8 },
-    KernelSymbol { name: "uk_snapshot",          addr: unfer_ffi::uk_snapshot          as *const u8 },
-    KernelSymbol { name: "uk_restore",           addr: unfer_ffi::uk_restore           as *const u8 },
-    KernelSymbol { name: "uk_subscribe",         addr: unfer_ffi::uk_subscribe         as *const u8 },
-    KernelSymbol { name: "uk_poll",              addr: unfer_ffi::uk_poll              as *const u8 },
+    KernelSymbol {
+        name: "uk_austral_unf",
+        addr: unfer_ffi::uk_austral_unf as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_snapshot",
+        addr: unfer_ffi::uk_snapshot as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_restore",
+        addr: unfer_ffi::uk_restore as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_subscribe",
+        addr: unfer_ffi::uk_subscribe as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_poll",
+        addr: unfer_ffi::uk_poll as *const u8,
+    },
     // H9: deployment security posture (S22 admin seam).
-    KernelSymbol { name: "uk_posture_get",       addr: unfer_ffi::uk_posture_get       as *const u8 },
-    KernelSymbol { name: "uk_posture_set",       addr: unfer_ffi::uk_posture_set       as *const u8 },
+    KernelSymbol {
+        name: "uk_posture_get",
+        addr: unfer_ffi::uk_posture_get as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_posture_set",
+        addr: unfer_ffi::uk_posture_set as *const u8,
+    },
     // S29: Lean4 proof verification (nanoda_lib external type checker).
-    KernelSymbol { name: "uk_proof_verify",      addr: unfer_ffi::uk_proof_verify      as *const u8 },
+    KernelSymbol {
+        name: "uk_proof_verify",
+        addr: unfer_ffi::uk_proof_verify as *const u8,
+    },
     // S30: Cadabra2 symbolic coupling (external CAS subprocess).
-    KernelSymbol { name: "uk_symbolic_simplify", addr: unfer_ffi::uk_symbolic_simplify as *const u8 },
+    KernelSymbol {
+        name: "uk_symbolic_simplify",
+        addr: unfer_ffi::uk_symbolic_simplify as *const u8,
+    },
     // S36: WhyML codegen for the compiler-extension cycle (external Why3 toolchain).
-    KernelSymbol { name: "uk_whyml_emit",       addr: unfer_ffi::uk_whyml_emit       as *const u8 },
-    KernelSymbol { name: "uk_bayesian_update",   addr: unfer_ffi::uk_bayesian_update   as *const u8 },
-    KernelSymbol { name: "uk_belief_propagation",addr: unfer_ffi::uk_belief_propagation as *const u8 },
-    KernelSymbol { name: "uk_buf_free",          addr: unfer_ffi::uk_buf_free           as *const u8 },
-    KernelSymbol { name: "uk_ode_analyze",       addr: unfer_ffi::uk_ode_analyze        as *const u8 },
-    KernelSymbol { name: "uk_ode_measure_original", addr: unfer_ffi::uk_ode_measure_original as *const u8 },
+    KernelSymbol {
+        name: "uk_whyml_emit",
+        addr: unfer_ffi::uk_whyml_emit as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_bayesian_update",
+        addr: unfer_ffi::uk_bayesian_update as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_belief_propagation",
+        addr: unfer_ffi::uk_belief_propagation as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_buf_free",
+        addr: unfer_ffi::uk_buf_free as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_ode_analyze",
+        addr: unfer_ffi::uk_ode_analyze as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_ode_measure_original",
+        addr: unfer_ffi::uk_ode_measure_original as *const u8,
+    },
     // S4: deferred approval + local simulation (effects grant namespace).
-    KernelSymbol { name: "uk_action_submit", addr: unfer_ffi::uk_action_submit     as *const u8 },
-    KernelSymbol { name: "uk_action_apply",  addr: unfer_ffi::uk_action_apply      as *const u8 },
-    KernelSymbol { name: "uk_action_reject", addr: unfer_ffi::uk_action_reject     as *const u8 },
-    KernelSymbol { name: "uk_action_revert", addr: unfer_ffi::uk_action_revert     as *const u8 },
-    KernelSymbol { name: "uk_action_get",    addr: unfer_ffi::uk_action_get        as *const u8 },
-    KernelSymbol { name: "uk_action_list",   addr: unfer_ffi::uk_action_list       as *const u8 },
+    KernelSymbol {
+        name: "uk_action_submit",
+        addr: unfer_ffi::uk_action_submit as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_action_apply",
+        addr: unfer_ffi::uk_action_apply as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_action_reject",
+        addr: unfer_ffi::uk_action_reject as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_action_revert",
+        addr: unfer_ffi::uk_action_revert as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_action_get",
+        addr: unfer_ffi::uk_action_get as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_action_list",
+        addr: unfer_ffi::uk_action_list as *const u8,
+    },
     // S5: .cell blueprint archives (instance isolation + blueprints).
-    KernelSymbol { name: "uk_blueprint_export",      addr: unfer_ffi::uk_blueprint_export      as *const u8 },
-    KernelSymbol { name: "uk_blueprint_instantiate", addr: unfer_ffi::uk_blueprint_instantiate as *const u8 },
+    KernelSymbol {
+        name: "uk_blueprint_export",
+        addr: unfer_ffi::uk_blueprint_export as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_blueprint_instantiate",
+        addr: unfer_ffi::uk_blueprint_instantiate as *const u8,
+    },
     // S6: agent accountability + audit (GatekeeperCaller tags, audit trail, AgentSpawner).
-    KernelSymbol { name: "uk_audit_list",     addr: unfer_ffi::uk_audit_list     as *const u8 },
-    KernelSymbol { name: "uk_audit_clear",    addr: unfer_ffi::uk_audit_clear    as *const u8 },
-    KernelSymbol { name: "uk_agent_spawn",    addr: unfer_ffi::uk_agent_spawn    as *const u8 },
-    KernelSymbol { name: "uk_agent_list",     addr: unfer_ffi::uk_agent_list     as *const u8 },
-    KernelSymbol { name: "uk_agent_kill",     addr: unfer_ffi::uk_agent_kill     as *const u8 },
-    KernelSymbol { name: "uk_agent_grants",   addr: unfer_ffi::uk_agent_grants   as *const u8 },
+    KernelSymbol {
+        name: "uk_audit_list",
+        addr: unfer_ffi::uk_audit_list as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_audit_clear",
+        addr: unfer_ffi::uk_audit_clear as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_agent_spawn",
+        addr: unfer_ffi::uk_agent_spawn as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_agent_list",
+        addr: unfer_ffi::uk_agent_list as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_agent_kill",
+        addr: unfer_ffi::uk_agent_kill as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_agent_grants",
+        addr: unfer_ffi::uk_agent_grants as *const u8,
+    },
     // S5: .cell blueprint archives — remaining blueprint surface.
-    KernelSymbol { name: "uk_blueprint_cell",           addr: unfer_ffi::uk_blueprint_cell           as *const u8 },
-    KernelSymbol { name: "uk_blueprint_export_gadget",  addr: unfer_ffi::uk_blueprint_export_gadget  as *const u8 },
-    KernelSymbol { name: "uk_blueprint_get_by_id",      addr: unfer_ffi::uk_blueprint_get_by_id      as *const u8 },
-    KernelSymbol { name: "uk_blueprint_import",         addr: unfer_ffi::uk_blueprint_import         as *const u8 },
-    KernelSymbol { name: "uk_blueprint_list",           addr: unfer_ffi::uk_blueprint_list           as *const u8 },
+    KernelSymbol {
+        name: "uk_blueprint_cell",
+        addr: unfer_ffi::uk_blueprint_cell as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_blueprint_export_gadget",
+        addr: unfer_ffi::uk_blueprint_export_gadget as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_blueprint_get_by_id",
+        addr: unfer_ffi::uk_blueprint_get_by_id as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_blueprint_import",
+        addr: unfer_ffi::uk_blueprint_import as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_blueprint_list",
+        addr: unfer_ffi::uk_blueprint_list as *const u8,
+    },
     // S7: observability + issue reporting.
-    KernelSymbol { name: "uk_observability", addr: unfer_ffi::uk_observability as *const u8 },
-    KernelSymbol { name: "uk_report_issue",  addr: unfer_ffi::uk_report_issue  as *const u8 },
+    KernelSymbol {
+        name: "uk_observability",
+        addr: unfer_ffi::uk_observability as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_report_issue",
+        addr: unfer_ffi::uk_report_issue as *const u8,
+    },
     // S22: owner-scoped owner log (operator console).
-    KernelSymbol { name: "uk_owner_clear", addr: unfer_ffi::uk_owner_clear as *const u8 },
-    KernelSymbol { name: "uk_owner_list",  addr: unfer_ffi::uk_owner_list  as *const u8 },
-    KernelSymbol { name: "uk_owner_log",   addr: unfer_ffi::uk_owner_log   as *const u8 },
+    KernelSymbol {
+        name: "uk_owner_clear",
+        addr: unfer_ffi::uk_owner_clear as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_owner_list",
+        addr: unfer_ffi::uk_owner_list as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_owner_log",
+        addr: unfer_ffi::uk_owner_log as *const u8,
+    },
     // S21: vetted identity registry (console-only).
-    KernelSymbol { name: "uk_registry_vetted", addr: unfer_ffi::uk_registry_vetted as *const u8 },
+    KernelSymbol {
+        name: "uk_registry_vetted",
+        addr: unfer_ffi::uk_registry_vetted as *const u8,
+    },
     // S25: read-only metering status + S27 credential vault.
-    KernelSymbol { name: "uk_meter_status", addr: unfer_ffi::uk_meter_status as *const u8 },
-    KernelSymbol { name: "uk_secret_put",    addr: unfer_ffi::uk_secret_put    as *const u8 },
-    KernelSymbol { name: "uk_secret_get",    addr: unfer_ffi::uk_secret_get    as *const u8 },
-    KernelSymbol { name: "uk_secret_revoke", addr: unfer_ffi::uk_secret_revoke as *const u8 },
+    KernelSymbol {
+        name: "uk_meter_status",
+        addr: unfer_ffi::uk_meter_status as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_secret_put",
+        addr: unfer_ffi::uk_secret_put as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_secret_get",
+        addr: unfer_ffi::uk_secret_get as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_secret_revoke",
+        addr: unfer_ffi::uk_secret_revoke as *const u8,
+    },
     // S18: resource introductions + caps + forfeit.
-    KernelSymbol { name: "uk_request_resource", addr: unfer_ffi::uk_request_resource as *const u8 },
-    KernelSymbol { name: "uk_resource_introduce", addr: unfer_ffi::uk_resource_introduce as *const u8 },
-    KernelSymbol { name: "uk_resource_pending",   addr: unfer_ffi::uk_resource_pending   as *const u8 },
-    KernelSymbol { name: "uk_resource_use",       addr: unfer_ffi::uk_resource_use       as *const u8 },
-    KernelSymbol { name: "uk_resource_forfeit",   addr: unfer_ffi::uk_resource_forfeit   as *const u8 },
+    KernelSymbol {
+        name: "uk_request_resource",
+        addr: unfer_ffi::uk_request_resource as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_resource_introduce",
+        addr: unfer_ffi::uk_resource_introduce as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_resource_pending",
+        addr: unfer_ffi::uk_resource_pending as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_resource_use",
+        addr: unfer_ffi::uk_resource_use as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_resource_forfeit",
+        addr: unfer_ffi::uk_resource_forfeit as *const u8,
+    },
     // Plan R: certificate ledger ops (ReFi exchange).
-    KernelSymbol { name: "uk_cert_set_authority", addr: unfer_ffi::uk_cert_set_authority as *const u8 },
-    KernelSymbol { name: "uk_cert_mint",          addr: unfer_ffi::uk_cert_mint          as *const u8 },
-    KernelSymbol { name: "uk_cert_mint_request",  addr: unfer_ffi::uk_cert_mint_request  as *const u8 },
-    KernelSymbol { name: "uk_cert_transfer",      addr: unfer_ffi::uk_cert_transfer      as *const u8 },
-    KernelSymbol { name: "uk_cert_burn",          addr: unfer_ffi::uk_cert_burn          as *const u8 },
-    KernelSymbol { name: "uk_cert_status",        addr: unfer_ffi::uk_cert_status        as *const u8 },
-    KernelSymbol { name: "uk_cert_root",          addr: unfer_ffi::uk_cert_root          as *const u8 },
+    KernelSymbol {
+        name: "uk_cert_set_authority",
+        addr: unfer_ffi::uk_cert_set_authority as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_cert_mint",
+        addr: unfer_ffi::uk_cert_mint as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_cert_mint_request",
+        addr: unfer_ffi::uk_cert_mint_request as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_cert_transfer",
+        addr: unfer_ffi::uk_cert_transfer as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_cert_burn",
+        addr: unfer_ffi::uk_cert_burn as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_cert_status",
+        addr: unfer_ffi::uk_cert_status as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_cert_root",
+        addr: unfer_ffi::uk_cert_root as *const u8,
+    },
     // Plan R: unified auction (Prebid-model, carbon credits + publicity inventory).
-    KernelSymbol { name: "uk_auction_open",   addr: unfer_ffi::uk_auction_open   as *const u8 },
-    KernelSymbol { name: "uk_auction_bid",    addr: unfer_ffi::uk_auction_bid    as *const u8 },
-    KernelSymbol { name: "uk_auction_close",  addr: unfer_ffi::uk_auction_close  as *const u8 },
-    KernelSymbol { name: "uk_auction_report", addr: unfer_ffi::uk_auction_report as *const u8 },
+    KernelSymbol {
+        name: "uk_auction_open",
+        addr: unfer_ffi::uk_auction_open as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_auction_bid",
+        addr: unfer_ffi::uk_auction_bid as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_auction_close",
+        addr: unfer_ffi::uk_auction_close as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_auction_report",
+        addr: unfer_ffi::uk_auction_report as *const u8,
+    },
     // Plan R: gate approval surface (secondary market settlement).
-    KernelSymbol { name: "uk_gate_list_pending", addr: unfer_ffi::uk_gate_list_pending as *const u8 },
-    KernelSymbol { name: "uk_gate_approve",      addr: unfer_ffi::uk_gate_approve      as *const u8 },
-    KernelSymbol { name: "uk_gate_reject",       addr: unfer_ffi::uk_gate_reject       as *const u8 },
+    KernelSymbol {
+        name: "uk_gate_list_pending",
+        addr: unfer_ffi::uk_gate_list_pending as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_gate_approve",
+        addr: unfer_ffi::uk_gate_approve as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_gate_reject",
+        addr: unfer_ffi::uk_gate_reject as *const u8,
+    },
     // H3: event-sourced session fork + compaction.
-    KernelSymbol { name: "uk_session_fork",    addr: unfer_ffi::uk_session_fork    as *const u8 },
-    KernelSymbol { name: "uk_session_compact", addr: unfer_ffi::uk_session_compact as *const u8 },
+    KernelSymbol {
+        name: "uk_session_fork",
+        addr: unfer_ffi::uk_session_fork as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_session_compact",
+        addr: unfer_ffi::uk_session_compact as *const u8,
+    },
     // H13: skills registry (discovery/sharing over the module path).
-    KernelSymbol { name: "uk_skill_get",         addr: unfer_ffi::uk_skill_get         as *const u8 },
-    KernelSymbol { name: "uk_skill_list",        addr: unfer_ffi::uk_skill_list        as *const u8 },
-    KernelSymbol { name: "uk_skill_pack_import", addr: unfer_ffi::uk_skill_pack_import as *const u8 },
-    KernelSymbol { name: "uk_skill_register",    addr: unfer_ffi::uk_skill_register    as *const u8 },
+    KernelSymbol {
+        name: "uk_skill_get",
+        addr: unfer_ffi::uk_skill_get as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_skill_list",
+        addr: unfer_ffi::uk_skill_list as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_skill_pack_import",
+        addr: unfer_ffi::uk_skill_pack_import as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_skill_register",
+        addr: unfer_ffi::uk_skill_register as *const u8,
+    },
     // H4: durable store live status, corrupt-snapshot recovery report, and
     // the certificate audit trail (operator-facing consults + records).
-    KernelSymbol { name: "uk_durable_status",         addr: unfer_ffi::uk_durable_status         as *const u8 },
-    KernelSymbol { name: "uk_durable_snapshot_error", addr: unfer_ffi::uk_durable_snapshot_error as *const u8 },
-    KernelSymbol { name: "uk_certificate_issued",     addr: unfer_ffi::uk_certificate_issued     as *const u8 },
+    KernelSymbol {
+        name: "uk_durable_status",
+        addr: unfer_ffi::uk_durable_status as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_durable_snapshot_error",
+        addr: unfer_ffi::uk_durable_snapshot_error as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_certificate_issued",
+        addr: unfer_ffi::uk_certificate_issued as *const u8,
+    },
 ];
 
 #[cfg(feature = "unfer-kernel")]
@@ -384,11 +659,26 @@ pub fn registered_unfer_symbols() -> Vec<&'static str> {
 
 #[cfg(feature = "zenodo-store")]
 pub(crate) const ZENODO_SYMBOLS: &[KernelSymbol] = &[
-    KernelSymbol { name: "uz_init",          addr: unfer_ffi::zenodo::uz_init          as *const u8 },
-    KernelSymbol { name: "uz_push",          addr: unfer_ffi::zenodo::uz_push          as *const u8 },
-    KernelSymbol { name: "uz_pull",          addr: unfer_ffi::zenodo::uz_pull          as *const u8 },
-    KernelSymbol { name: "uz_manifest_json", addr: unfer_ffi::zenodo::uz_manifest_json as *const u8 },
-    KernelSymbol { name: "uz_last_error",    addr: unfer_ffi::zenodo::uz_last_error    as *const u8 },
+    KernelSymbol {
+        name: "uz_init",
+        addr: unfer_ffi::zenodo::uz_init as *const u8,
+    },
+    KernelSymbol {
+        name: "uz_push",
+        addr: unfer_ffi::zenodo::uz_push as *const u8,
+    },
+    KernelSymbol {
+        name: "uz_pull",
+        addr: unfer_ffi::zenodo::uz_pull as *const u8,
+    },
+    KernelSymbol {
+        name: "uz_manifest_json",
+        addr: unfer_ffi::zenodo::uz_manifest_json as *const u8,
+    },
+    KernelSymbol {
+        name: "uz_last_error",
+        addr: unfer_ffi::zenodo::uz_last_error as *const u8,
+    },
 ];
 
 #[cfg(feature = "zenodo-store")]
@@ -440,26 +730,27 @@ fn compile_guarded(label: &str, f: impl FnOnce() -> *const c_void) -> *const c_v
 
 #[no_mangle]
 pub extern "C" fn compile_to_function_named(
-    ir_ptr:   *const u8,
-    ir_len:   usize,
+    ir_ptr: *const u8,
+    ir_len: usize,
     name_ptr: *const u8,
     name_len: usize,
 ) -> *const c_void {
-    compile_guarded("compile", || compile_to_function_named_impl(ir_ptr, ir_len, name_ptr, name_len))
+    compile_guarded("compile", || {
+        compile_to_function_named_impl(ir_ptr, ir_len, name_ptr, name_len)
+    })
 }
 
 fn compile_to_function_named_impl(
-    ir_ptr:   *const u8,
-    ir_len:   usize,
+    ir_ptr: *const u8,
+    ir_len: usize,
     name_ptr: *const u8,
     name_len: usize,
 ) -> *const c_void {
     cranelift_clear_error();
 
-    if JIT.with(|c| c.borrow().is_none())
-        && cranelift_init() == 0 {
-            return std::ptr::null();
-        }
+    if JIT.with(|c| c.borrow().is_none()) && cranelift_init() == 0 {
+        return std::ptr::null();
+    }
 
     if ir_ptr.is_null() || ir_len == 0 {
         set_last_error("Empty IR passed to compiler");
@@ -511,7 +802,8 @@ fn compile_to_function_named_impl(
                             // Try "run" first (conventional), then "main"
                             // (entry-point from the Austral compiler), then
                             // fall back to the first function in the module.
-                            let found = name_map.get("run")
+                            let found = name_map
+                                .get("run")
                                 .or_else(|| name_map.get("main"))
                                 .or_else(|| name_map.values().next())
                                 .copied();
@@ -535,8 +827,11 @@ fn compile_to_function_named_impl(
                             let msg = format!(
                                 "Function '{}' not found. Available: [{}]",
                                 name_str,
-                                avail.iter().map(|s| s.as_str())
-                                     .collect::<Vec<_>>().join(", ")
+                                avail
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
                             );
                             set_last_error(&msg);
                             cps_debug(&msg);
@@ -561,11 +856,16 @@ pub extern "C" fn compile_to_function(ir_ptr: *const u8, ir_len: usize) -> *cons
     compile_to_function_named(ir_ptr, ir_len, std::ptr::null(), 0)
 }
 
-#[no_mangle] pub extern "C" fn cranelift_version()  -> u32  { 0x0083000 }
-#[no_mangle] pub extern "C" fn cranelift_is_ready() -> i64  {
+#[no_mangle]
+pub extern "C" fn cranelift_version() -> u32 {
+    0x0083000
+}
+#[no_mangle]
+pub extern "C" fn cranelift_is_ready() -> i64 {
     JIT.with(|c| if c.borrow().is_some() { 1 } else { 0 })
 }
-#[no_mangle] pub extern "C" fn cranelift_shutdown() {
+#[no_mangle]
+pub extern "C" fn cranelift_shutdown() {
     JIT.with(|c| *c.borrow_mut() = None);
     CURRENT_MODULE.with(|m| *m.borrow_mut() = None);
 }
@@ -575,17 +875,11 @@ pub extern "C" fn compile_to_function(ir_ptr: *const u8, ir_len: usize) -> *cons
 /// new `CpsModule` entry function pointer (or null if compilation fails),
 /// and sets `CURRENT_MODULE` to the new module.
 #[no_mangle]
-pub extern "C" fn cranelift_swap_binary(
-    ir_ptr: *const u8,
-    ir_len: usize,
-) -> *const c_void {
+pub extern "C" fn cranelift_swap_binary(ir_ptr: *const u8, ir_len: usize) -> *const c_void {
     compile_guarded("swap", || cranelift_swap_binary_impl(ir_ptr, ir_len))
 }
 
-fn cranelift_swap_binary_impl(
-    ir_ptr: *const u8,
-    ir_len: usize,
-) -> *const c_void {
+fn cranelift_swap_binary_impl(ir_ptr: *const u8, ir_len: usize) -> *const c_void {
     cranelift_clear_error();
     if ir_ptr.is_null() || ir_len == 0 {
         set_last_error("Empty IR passed to swap");
@@ -595,21 +889,20 @@ fn cranelift_swap_binary_impl(
 
     // Build a fresh JIT — same as cranelift_init() but forced.
     let mut new_jit = match (|| -> Result<JITModule, String> {
-        let target_builder = cranelift_native::builder()
-            .map_err(|e| format!("Native builder failed: {}", e))?;
+        let target_builder =
+            cranelift_native::builder().map_err(|e| format!("Native builder failed: {}", e))?;
         let flag_builder = cranelift_codegen::settings::builder();
         let isa = target_builder
             .finish(cranelift_codegen::settings::Flags::new(flag_builder))
             .map_err(|e| format!("ISA finish failed: {}", e))?;
-        let mut builder =
-            JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         builder.symbol("au_print_int", au_print_int as *const u8);
-        builder.symbol("au_exit",      au_exit      as *const u8);
-        builder.symbol("au_alloc",     au_alloc     as *const u8);
-        builder.symbol("au_free",      au_free      as *const u8);
-        builder.symbol("__union_new",   au_exit as *const u8);
-        builder.symbol("__record_new",  au_exit as *const u8);
-        builder.symbol("__slot_get",    au_exit as *const u8);
+        builder.symbol("au_exit", au_exit as *const u8);
+        builder.symbol("au_alloc", au_alloc as *const u8);
+        builder.symbol("au_free", au_free as *const u8);
+        builder.symbol("__union_new", au_exit as *const u8);
+        builder.symbol("__record_new", au_exit as *const u8);
+        builder.symbol("__slot_get", au_exit as *const u8);
         register_trapping_symbols(&mut builder);
         #[cfg(feature = "unfer-kernel")]
         register_unfer_symbols(&mut builder);
@@ -639,15 +932,13 @@ fn cranelift_swap_binary_impl(
                 Ok(_) => {
                     let name_map = module.name_map.clone();
                     // Determine which function to return as entry
-                    let entry_name = name_map.get("run")
+                    let entry_name = name_map
+                        .get("run")
                         .or_else(|| name_map.get("main"))
                         .or_else(|| name_map.values().next())
                         .copied();
                     let ptr = entry_name
-                        .map(|fid| {
-                            
-                            new_jit.get_finalized_function(fid) as *const c_void
-                        })
+                        .map(|fid| new_jit.get_finalized_function(fid) as *const c_void)
                         .unwrap_or(std::ptr::null());
                     (module, ptr)
                 }
@@ -666,8 +957,10 @@ fn cranelift_swap_binary_impl(
     JIT.with(|c| *c.borrow_mut() = Some(new_jit));
     CURRENT_MODULE.with(|m| *m.borrow_mut() = Some(module));
 
-    cps_debug(&format!("Swap complete: {} functions, entry at {:?}",
-        name_map_len, entry_ptr));
+    cps_debug(&format!(
+        "Swap complete: {} functions, entry at {:?}",
+        name_map_len, entry_ptr
+    ));
     entry_ptr
 }
 
@@ -677,10 +970,7 @@ fn cranelift_swap_binary_impl(
 /// call to `compile_to_function_named` (or `compile_to_function`).
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
-pub extern "C" fn lookup_function(
-    name_ptr: *const u8,
-    name_len: usize,
-) -> *const c_void {
+pub extern "C" fn lookup_function(name_ptr: *const u8, name_len: usize) -> *const c_void {
     if name_ptr.is_null() || name_len == 0 {
         return std::ptr::null();
     }
@@ -691,15 +981,17 @@ pub extern "C" fn lookup_function(
     };
 
     JIT.with(|jit_cell| {
-        CURRENT_MODULE.with(|mod_cell| {
-            let jit = jit_cell.borrow();
-            let jit = jit.as_ref()?;
-            let module = mod_cell.borrow();
-            let module = module.as_ref()?;
-            let fid = module.name_map.get(name)?;
-            let ptr = jit.get_finalized_function(*fid) as *const c_void;
-            Some(ptr)
-        }).unwrap_or(std::ptr::null())
+        CURRENT_MODULE
+            .with(|mod_cell| {
+                let jit = jit_cell.borrow();
+                let jit = jit.as_ref()?;
+                let module = mod_cell.borrow();
+                let module = module.as_ref()?;
+                let fid = module.name_map.get(name)?;
+                let ptr = jit.get_finalized_function(*fid) as *const c_void;
+                Some(ptr)
+            })
+            .unwrap_or(std::ptr::null())
     })
 }
 
@@ -714,8 +1006,10 @@ pub extern "C" fn list_compiled_function_names() -> *mut std::ffi::c_char {
             Some(m) => m.name_map.keys().collect(),
             None => vec![],
         };
-        let json = format!("[{}]",
-            names.iter()
+        let json = format!(
+            "[{}]",
+            names
+                .iter()
                 .map(|n| format!("\"{}\"", n))
                 .collect::<Vec<_>>()
                 .join(",")
@@ -729,7 +1023,9 @@ pub extern "C" fn list_compiled_function_names() -> *mut std::ffi::c_char {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn cranelift_free_string(s: *mut std::ffi::c_char) {
     if !s.is_null() {
-        unsafe { let _ = CString::from_raw(s); }
+        unsafe {
+            let _ = CString::from_raw(s);
+        }
     }
 }
 
@@ -780,7 +1076,9 @@ pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut st
     }
     let code = unfer_ffi::uk_austral_unf(model, src_str.as_ptr(), src_str.len() as i64);
     if code != 0 {
-        set_last_error(&format!("austral_unf_translate: uk_austral_unf failed with {code}"));
+        set_last_error(&format!(
+            "austral_unf_translate: uk_austral_unf failed with {code}"
+        ));
         return std::ptr::null_mut();
     }
     // Probe-then-copy result retrieval.
@@ -841,7 +1139,9 @@ fn run_guarded(f: impl FnOnce() -> i64) -> i64 {
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn execute_function(ptr: *const c_void) -> i64 {
-    if ptr.is_null() { return -1; }
+    if ptr.is_null() {
+        return -1;
+    }
     let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
     run_guarded(f)
 }
@@ -849,7 +1149,9 @@ pub extern "C" fn execute_function(ptr: *const c_void) -> i64 {
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn execute_function_1(ptr: *const c_void, arg1: i64) -> i64 {
-    if ptr.is_null() { return -1; }
+    if ptr.is_null() {
+        return -1;
+    }
     let f: fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
     run_guarded(|| f(arg1))
 }
@@ -857,7 +1159,9 @@ pub extern "C" fn execute_function_1(ptr: *const c_void, arg1: i64) -> i64 {
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn execute_function_2(ptr: *const c_void, arg1: i64, arg2: i64) -> i64 {
-    if ptr.is_null() { return -1; }
+    if ptr.is_null() {
+        return -1;
+    }
     let f: fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
     run_guarded(|| f(arg1, arg2))
 }
@@ -879,13 +1183,11 @@ pub extern "C" fn au_cedar_load_policy(policy_str: *const std::ffi::c_char) -> i
         }
     };
 
-    CEDAR_ENGINE.with(|engine| {
-        match engine.borrow_mut().load_policy(policy) {
-            Ok(_) => 1,
-            Err(e) => {
-                set_last_error(&e);
-                0
-            }
+    CEDAR_ENGINE.with(|engine| match engine.borrow_mut().load_policy(policy) {
+        Ok(_) => 1,
+        Err(e) => {
+            set_last_error(&e);
+            0
         }
     })
 }
@@ -906,9 +1208,12 @@ pub extern "C" fn au_cedar_check_runtime(
     let resource = unsafe { CStr::from_ptr(resource_ptr) }.to_string_lossy();
 
     CEDAR_ENGINE.with(|engine| {
-        match engine.borrow().is_authorized(&principal, &action, &resource) {
-            Ok(true) => 1,  // Allowed
-            _ => 0,         // Denied or error
+        match engine
+            .borrow()
+            .is_authorized(&principal, &action, &resource)
+        {
+            Ok(true) => 1, // Allowed
+            _ => 0,        // Denied or error
         }
     })
 }
@@ -951,7 +1256,9 @@ pub extern "C" fn au_cedar_check_runtime(
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ffi::c_void) {
-    if desc_ptr.is_null() { return; }
+    if desc_ptr.is_null() {
+        return;
+    }
     unsafe {
         cell_set_jit_fn_ptr(desc_ptr, jit_ptr);
     }
@@ -1006,7 +1313,10 @@ mod panic_guard_tests {
         cranelift_clear_error();
         let ptr = panicky as *const () as *const std::ffi::c_void;
         let res = execute_function(ptr);
-        assert_eq!(res, JIT_PANIC, "panic must surface the sentinel, not unwind");
+        assert_eq!(
+            res, JIT_PANIC,
+            "panic must surface the sentinel, not unwind"
+        );
         let msg = unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
             .to_string_lossy()
             .to_string();
@@ -1024,11 +1334,9 @@ mod panic_guard_tests {
         cranelift_clear_error();
         let ptr = panicky as *const () as *const std::ffi::c_void;
         assert_eq!(execute_function_1(ptr, 7), JIT_PANIC);
-        assert!(
-            unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
-                .to_string_lossy()
-                .contains("panicked")
-        );
+        assert!(unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
+            .to_string_lossy()
+            .contains("panicked"));
     }
 
     #[test]
@@ -1039,11 +1347,9 @@ mod panic_guard_tests {
         cranelift_clear_error();
         let ptr = panicky as *const () as *const std::ffi::c_void;
         assert_eq!(execute_function_2(ptr, 1, 2), JIT_PANIC);
-        assert!(
-            unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
-                .to_string_lossy()
-                .contains("panicked")
-        );
+        assert!(unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
+            .to_string_lossy()
+            .contains("panicked"));
     }
 
     /// The guard must not interfere with healthy calls.
@@ -1090,10 +1396,11 @@ mod panic_guard_tests {
     #[test]
     fn compile_guard_preserves_swap_panic_payload() {
         cranelift_clear_error();
-        let res = compile_guarded("swap", || {
-            panic!("boom: corrupted IR at offset 42")
-        });
-        assert!(res.is_null(), "panic must yield a null result, never unwind");
+        let res = compile_guarded("swap", || panic!("boom: corrupted IR at offset 42"));
+        assert!(
+            res.is_null(),
+            "panic must yield a null result, never unwind"
+        );
         let msg = read_error();
         assert!(
             msg.contains("swap"),
@@ -1161,8 +1468,8 @@ mod compile_guard_tests {
         ir.extend_from_slice(fname.as_bytes());
         ir.extend_from_slice(&0u32.to_le_bytes()); // param count
         ir.push(0); // ret type i64
-        // Body: statement 0x07 (return expr) + expression 0x01 (iconst) +
-        // the 8-byte constant 42. A minimal function that merely returns.
+                    // Body: statement 0x07 (return expr) + expression 0x01 (iconst) +
+                    // the 8-byte constant 42. A minimal function that merely returns.
         let mut body: Vec<u8> = vec![0x07u8, 0x01];
         body.extend_from_slice(&42i64.to_le_bytes());
         ir.extend_from_slice(&(body.len() as u32).to_le_bytes());
@@ -1188,7 +1495,7 @@ mod compile_guard_tests {
         ir.extend_from_slice(fname.as_bytes());
         ir.extend_from_slice(&0u32.to_le_bytes()); // param count
         ir.push(0); // ret type i64
-        // Body: App statement 0x07 0x04, callee "__slot_get", 0 args.
+                    // Body: App statement 0x07 0x04, callee "__slot_get", 0 args.
         let mut body: Vec<u8> = vec![0x07u8, 0x04];
         let callee = "__slot_get";
         body.extend_from_slice(&(callee.len() as u32).to_le_bytes());
@@ -1208,7 +1515,11 @@ mod compile_guard_tests {
         cranelift_clear_error();
         let ir = zero_arg_slot_get_ir();
         let ptr = compile_to_function_named(ir.as_ptr(), ir.len(), std::ptr::null(), 0);
-        assert!(ptr.is_null(), "panic-inducing IR must fail closed, got {:p}", ptr);
+        assert!(
+            ptr.is_null(),
+            "panic-inducing IR must fail closed, got {:p}",
+            ptr
+        );
         let msg = unsafe { std::ffi::CStr::from_ptr(cranelift_last_error()) }
             .to_string_lossy()
             .to_string();
@@ -1283,7 +1594,9 @@ mod compile_guard_tests {
             "translate must succeed: {:?}",
             unsafe { CStr::from_ptr(cranelift_last_error()) }.to_string_lossy()
         );
-        unsafe { let _ = CString::from_raw(out); }
+        unsafe {
+            let _ = CString::from_raw(out);
+        }
 
         // 3. The channel is now fresh: no stale failure text remains.
         assert!(
@@ -1309,7 +1622,10 @@ mod compile_guard_tests {
             "i64::MIN / -1 overflow must abort, not silently wrap"
         );
         assert_eq!(trapping_divide_checked(i64::MIN, 1), Some(i64::MIN));
-        assert_eq!(trapping_divide_checked(i64::MAX, -1), Some(i64::MAX.wrapping_neg()));
+        assert_eq!(
+            trapping_divide_checked(i64::MAX, -1),
+            Some(i64::MAX.wrapping_neg())
+        );
     }
 }
 
@@ -1368,7 +1684,9 @@ mod hotswap_tests {
     }
 
     fn reclaim(d: &TestCellDesc) {
-        unsafe { let _ = CString::from_raw(d.type_hash as *mut c_char); }
+        unsafe {
+            let _ = CString::from_raw(d.type_hash as *mut c_char);
+        }
     }
 
     #[test]
@@ -1424,5 +1742,3 @@ mod hotswap_tests {
         reclaim(&new);
     }
 }
-
-

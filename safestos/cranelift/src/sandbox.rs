@@ -122,12 +122,13 @@ fn userns_ok() -> bool {
 /// spawns it as usual; sandbox setup happens in the forked child just before `execve`.
 pub fn sandboxed_command(program: &Path, profile: &SandboxProfile) -> Command {
     let mut cmd = Command::new(program);
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
 
     // Pre-canonicalize Landlock path_beneath targets so the kernel sees the resolved path.
-    let resolve = |p: &PathBuf| -> PathBuf {
-        std::fs::canonicalize(p).unwrap_or_else(|_| p.clone())
-    };
+    let resolve =
+        |p: &PathBuf| -> PathBuf { std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()) };
     let writable: Vec<PathBuf> = profile.writable_dirs.iter().map(resolve).collect();
     let readable: Vec<PathBuf> = profile.readable_dirs.iter().map(resolve).collect();
 
@@ -229,7 +230,13 @@ fn apply_seccomp() -> std::io::Result<()> {
         filter: owned.as_ptr(),
     };
     let r = unsafe {
-        libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &prog as *const _, 0, 0)
+        libc::prctl(
+            libc::PR_SET_SECCOMP,
+            libc::SECCOMP_MODE_FILTER,
+            &prog as *const _,
+            0,
+            0,
+        )
     };
     if r != 0 {
         return Err(std::io::Error::last_os_error());
@@ -316,7 +323,11 @@ fn apply_landlock(writable: &[PathBuf], readable: &[PathBuf]) -> std::io::Result
     };
 
     for d in writable {
-        add_beneath(d, LANDLOCK_ACCESS_FS_ALL_READ | LANDLOCK_ACCESS_FS_ALL_WRITE, false)?;
+        add_beneath(
+            d,
+            LANDLOCK_ACCESS_FS_ALL_READ | LANDLOCK_ACCESS_FS_ALL_WRITE,
+            false,
+        )?;
     }
     for d in readable {
         add_beneath(d, LANDLOCK_ACCESS_FS_ALL_READ, true)?;
@@ -382,8 +393,16 @@ mod tests {
         }
         // Tail: ALLOW then ERRNO|EPERM.
         assert_eq!(f[n + 1].0, 0x06);
-        assert_eq!(f[n + 1].3, 0x7fff_0000, "penultimate instruction must be SECCOMP_RET_ALLOW");
+        assert_eq!(
+            f[n + 1].3,
+            0x7fff_0000,
+            "penultimate instruction must be SECCOMP_RET_ALLOW"
+        );
         assert_eq!(f[n + 2].0, 0x06);
-        assert_eq!(f[n + 2].3, 0x0005_0000 | 1, "last instruction must be ERRNO|EPERM");
+        assert_eq!(
+            f[n + 2].3,
+            0x0005_0000 | 1,
+            "last instruction must be ERRNO|EPERM"
+        );
     }
 }

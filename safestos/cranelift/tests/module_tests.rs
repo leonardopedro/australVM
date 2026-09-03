@@ -36,12 +36,7 @@ fn body_return_const(val: i64) -> Vec<u8> {
     body
 }
 
-fn make_module_dir(
-    dir: &Path,
-    name: &str,
-    grants: &[&str],
-    cps_data: &[u8],
-) {
+fn make_module_dir(dir: &Path, name: &str, grants: &[&str], cps_data: &[u8]) {
     std::fs::create_dir_all(dir).unwrap();
     let grants_toml: Vec<String> = grants.iter().map(|g| format!("    \"{g}\",")).collect();
     // H8: the loader's archetype resolver only maps registered harness

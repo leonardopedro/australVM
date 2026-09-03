@@ -76,3 +76,10 @@ jobs:
       # 21) — every FFI entry point carries an explicit
       # `#[allow(clippy::not_unsafe_ptr_arg_deref)]` for its C ABI pointers.
       - run: cargo clippy --manifest-path safestos/cranelift/Cargo.toml --all-targets -- -D warnings
+      # Formatting is enforced too (round-21 follow-up): the bridge crate was
+      # made fmt-clean with the pinned 1.97.1 rustfmt (rust-toolchain.toml
+      # governs every cargo invocation here, so the runner's default stable
+      # never drifts the gate — unlike an unpinned @nightly format job).
+      # Scoped via --manifest-path so the sibling path deps (unfer,
+      # dynamic-arctic) are never reformatted by this job.
+      - run: cargo fmt --manifest-path safestos/cranelift/Cargo.toml -- --check

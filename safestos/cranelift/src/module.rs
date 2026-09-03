@@ -7,8 +7,7 @@ use crate::cps::CpsModule;
 /// S19 (F18): gatekeeper provisioning modes, a replica of cloudflare's `disabled|optional|
 /// `enabled`. A side-effecting module archetype with `[gatekeeper] mode = "disabled"` has its
 /// submissions refused up front; anything else defers the mediation to the human console.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GatekeeperMode {
     #[default]
     Enabled,
@@ -57,11 +56,8 @@ pub struct ModuleManifest {
 
 impl ModuleManifest {
     pub fn from_toml_str(s: &str) -> Result<Self, String> {
-        let v: toml::Value =
-            toml::from_str(s).map_err(|e| format!("TOML parse error: {e}"))?;
-        let module = v
-            .get("module")
-            .ok_or("missing [module] section")?;
+        let v: toml::Value = toml::from_str(s).map_err(|e| format!("TOML parse error: {e}"))?;
+        let module = v.get("module").ok_or("missing [module] section")?;
         let name = module
             .get("name")
             .and_then(|n| n.as_str())
@@ -479,7 +475,7 @@ impl ModuleHost {
             #[cfg(not(feature = "ecmascript"))]
             {
                 return Err(
-                    "module is ECMAScript but the 'ecmascript' feature is disabled".to_string()
+                    "module is ECMAScript but the 'ecmascript' feature is disabled".to_string(),
                 );
             }
         }
@@ -489,12 +485,9 @@ impl ModuleHost {
                 .modules
                 .get(module_name)
                 .ok_or_else(|| format!("module '{module_name}' not loaded"))?;
-            handle
-                .runtime
-                .function_ptr(entrypoint)
-                .ok_or_else(|| {
-                    format!("entrypoint '{entrypoint}' not found in module '{module_name}'")
-                })?
+            handle.runtime.function_ptr(entrypoint).ok_or_else(|| {
+                format!("entrypoint '{entrypoint}' not found in module '{module_name}'")
+            })?
         };
         let result = unsafe { call_jit_function(ptr, args) };
         if let Some(handle) = self.modules.get_mut(module_name) {
@@ -528,11 +521,7 @@ impl ModuleHost {
         Ok(result)
     }
 
-    pub fn swap(
-        &mut self,
-        module_name: &str,
-        new_module_dir: &Path,
-    ) -> Result<(), String> {
+    pub fn swap(&mut self, module_name: &str, new_module_dir: &Path) -> Result<(), String> {
         let old_handle = self
             .modules
             .get(module_name)
@@ -798,10 +787,8 @@ impl ModuleHost {
 
         let session = match parsed.session() {
             Some(session_bytes) => {
-                let handle = unfer_ffi::uk_restore(
-                    session_bytes.as_ptr(),
-                    session_bytes.len() as i64,
-                );
+                let handle =
+                    unfer_ffi::uk_restore(session_bytes.as_ptr(), session_bytes.len() as i64);
                 if handle < 0 {
                     return Err(read_kernel_error(handle));
                 }
@@ -864,8 +851,7 @@ fn read_kernel_error(ret: i64) -> String {
 fn compile_cps_binary(data: &[u8]) -> Result<HashMap<String, usize>, String> {
     use cranelift_jit::{JITBuilder, JITModule};
 
-    let target_builder =
-        cranelift_native::builder().map_err(|e| format!("native builder: {e}"))?;
+    let target_builder = cranelift_native::builder().map_err(|e| format!("native builder: {e}"))?;
     let flag_builder = cranelift_codegen::settings::builder();
     let isa = target_builder
         .finish(cranelift_codegen::settings::Flags::new(flag_builder))
@@ -931,8 +917,7 @@ unsafe fn call_jit_function(ptr: usize, args: &[i64]) -> i64 {
             f(args[0], args[1])
         }
         _ => {
-            let f: unsafe extern "C" fn(i64, i64, i64, i64) -> i64 =
-                std::mem::transmute(ptr);
+            let f: unsafe extern "C" fn(i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
             let mut a = [0i64; 4];
             for (i, v) in args.iter().take(4).enumerate() {
                 a[i] = *v;
@@ -1013,7 +998,10 @@ archetype = "tidepool"
             err.contains("UK-4001"),
             "unapproved archetype must be rejected (UK-4001 family), got {err}"
         );
-        assert!(err.contains("tidepool"), "rejection names the requested archetype");
+        assert!(
+            err.contains("tidepool"),
+            "rejection names the requested archetype"
+        );
     }
 
     #[test]

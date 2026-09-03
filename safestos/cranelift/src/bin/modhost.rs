@@ -160,7 +160,8 @@ fn cmd_host(args: &[String]) -> ExitCode {
                 Err("--args-json requires the 'ecmascript' feature".to_string())
             }
         } else {
-            host.call(&module_name, &entrypoint, &call_args).map(|v| v.to_string())
+            host.call(&module_name, &entrypoint, &call_args)
+                .map(|v| v.to_string())
         };
         match result {
             Ok(result) => println!("{entrypoint}: {result}"),
@@ -174,11 +175,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn spawn_jit_server(
-    austral_path: &str,
-    module_args: &[String],
-    call_args: &[String],
-) -> ExitCode {
+fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[String]) -> ExitCode {
     let mut cmd = Command::new(austral_path);
     cmd.arg("compile");
     for m in module_args {
@@ -255,9 +252,7 @@ fn main() -> ExitCode {
     match args.get(1).map(|s| s.as_str()) {
         Some("authorize") => {
             if args.len() != 5 {
-                eprintln!(
-                    "usage: modhost authorize <manifest.toml> <module> <uk_symbol>"
-                );
+                eprintln!("usage: modhost authorize <manifest.toml> <module> <uk_symbol>");
                 return ExitCode::from(2);
             }
             cmd_authorize(&args)
@@ -307,15 +302,11 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!("usage:");
-            eprintln!(
-                "  modhost authorize <manifest.toml> <module> <uk_symbol>"
-            );
+            eprintln!("  modhost authorize <manifest.toml> <module> <uk_symbol>");
             eprintln!(
                 "  modhost host <module-dir> --call <entrypoint> [--args ...] [--repeat N] [--swap <dir>]"
             );
-            eprintln!(
-                "  modhost host-legacy <austral-path> <module-src>... -- <entrypoint>..."
-            );
+            eprintln!("  modhost host-legacy <austral-path> <module-src>... -- <entrypoint>...");
             ExitCode::from(2)
         }
     }

@@ -1,4 +1,4 @@
-use cedar_policy::{Authorizer, Context, Entities, PolicySet, Request, Response, EntityUid};
+use cedar_policy::{Authorizer, Context, Entities, EntityUid, PolicySet, Request, Response};
 use std::str::FromStr;
 
 use crate::auth::{AuthorizationEngine, Decision};
@@ -31,8 +31,8 @@ impl CedarVmEngine {
     }
 
     pub fn load_policy(&mut self, policy_src: &str) -> Result<(), String> {
-        let new_policies = PolicySet::from_str(policy_src)
-            .map_err(|e| format!("Policy parse error: {}", e))?;
+        let new_policies =
+            PolicySet::from_str(policy_src).map_err(|e| format!("Policy parse error: {}", e))?;
         self.policies = new_policies;
         Ok(())
     }
@@ -65,26 +65,27 @@ impl CedarVmEngine {
 }
 
 impl AuthorizationEngine for CedarVmEngine {
-    fn authorize(
-        &self,
-        principal: &str,
-        action: &str,
-        resource: &str,
-    ) -> Result<Decision, String> {
+    fn authorize(&self, principal: &str, action: &str, resource: &str) -> Result<Decision, String> {
         self.is_authorized(principal, action, resource)
-            .map(|allowed| if allowed { Decision::Allow } else { Decision::Deny })
+            .map(|allowed| {
+                if allowed {
+                    Decision::Allow
+                } else {
+                    Decision::Deny
+                }
+            })
     }
 }
 
 pub fn cedar_check(principal: &str, action: &str, resource: &str) -> Result<(), String> {
-    CEDAR_ENGINE.with(|engine| {
-        match engine.borrow().is_authorized(principal, action, resource) {
+    CEDAR_ENGINE.with(
+        |engine| match engine.borrow().is_authorized(principal, action, resource) {
             Ok(true) => Ok(()),
             Ok(false) => Err(format!(
                 "Cedar Policy Denied: {} cannot {} {}",
                 principal, action, resource
             )),
             Err(e) => Err(format!("Cedar Error: {}", e)),
-        }
-    })
+        },
+    )
 }
