@@ -188,4 +188,3 @@ jobs:
         # this gate cannot drift from the driver's logic again. It rebuilds
         # the bridge with its own feature set, so it is self-contained.
         run: nix develop -c bash ${{ github.workspace }}/../unfer/tools/module_builder run ${{ github.workspace }}/../unfer/demo_module --deny uk_event_probability
-          '
