@@ -180,56 +180,12 @@ jobs:
         working-directory: ${{ github.workspace }}/../unfer
 
       - name: Run demo_module positive + UK-4001 gate test
-        # Literal block (`|`): a multi-line single-quoted YAML scalar would
-        # fold the newlines (and the embedded `: ` at line 170 previously made
-        # the file fail to parse entirely — this workflow had never run).
-        run: |
-          nix develop -c bash -c '
-            HERE="${{ github.workspace }}"
-            UNFER_DIR="$HERE/../unfer"
-            CL_DIR="$HERE/safestos/cranelift"
-            LIBDIR="$CL_DIR/target/release"
-            AUSTRAL="$HERE/_build/default/bin/austral.exe"
-            MODHOST="$CL_DIR/target/release/modhost"
-            MODULE_DIR="$UNFER_DIR/demo_module"
-            MODULE_TOML="$MODULE_DIR/module.toml"
-
-            echo ">> POSITIVE: demo_module via CPS-JIT"
-            JIT_OUT=$(LD_LIBRARY_PATH="$LIBDIR" "$AUSTRAL" compile \
-              "$HERE/examples/kernel/UnferKernel.aui,$HERE/examples/kernel/UnferKernel.aum" \
-              "$MODULE_DIR/src/DemoModule.aui,$MODULE_DIR/src/DemoModule.aum" \
-              --use-cps-jit --target-type=tc 2>&1)
-
-            if echo "$JIT_OUT" | grep -qE "CPS JIT: Execution result: [1-9][0-9]*"; then
-              echo "PASS: demo_module JIT execution succeeded."
-            else
-              echo "FAIL: demo_module JIT execution." >&2
-              echo "$JIT_OUT" >&2
-              exit 1
-            fi
-
-            echo ">> AUTHORIZATION: grant vs. revocation (UK-4001)"
-            MODULE_NAME=$(grep -m1 "^name\s*=" "$MODULE_TOML" | sed "s/.*=\s*\"\(.*\)\"/\1/")
-            DENY_SYM="uk_event_probability"
-
-            # Positive: full manifest authorizes the symbol
-            if "$MODHOST" authorize "$MODULE_TOML" "$MODULE_NAME" "$DENY_SYM"; then
-              echo "PASS: granted manifest authorizes $DENY_SYM."
-            else
-              echo "FAIL: full manifest should authorize $DENY_SYM." >&2
-              exit 1
-            fi
-
-            # Negative: strip the deny symbol
-            STRIPPED=$(mktemp)
-            trap "rm -f $STRIPPED" EXIT
-            grep -v "$DENY_SYM" "$MODULE_TOML" > "$STRIPPED"
-            if "$MODHOST" authorize "$STRIPPED" "$MODULE_NAME" "$DENY_SYM" 2>/dev/null; then
-              echo "FAIL: stripped manifest must DENY $DENY_SYM." >&2
-              exit 1
-            else
-              echo "PASS: revoking $DENY_SYM denies with UK-4001."
-            fi
-
-            echo "demo_module: ALL TESTS PASSED"
+        # The B6-era inline invocation drifted from the fork's current JIT: it
+        # omitted --auth-manifest (the JIT denies kernel calls without it, so
+        # kernelModelCreateStr could never resolve) and grepped an obsolete
+        # output pattern. The canonical, maintained driver is
+        # unfer/tools/module_builder (also used by run_demo.sh) — invoke it so
+        # this gate cannot drift from the driver's logic again. It rebuilds
+        # the bridge with its own feature set, so it is self-contained.
+        run: nix develop -c bash '${{ github.workspace }}/../unfer/tools/module_builder run ${{ github.workspace }}/../unfer/demo_module --deny uk_event_probability'
           '
