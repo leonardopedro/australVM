@@ -45,24 +45,24 @@ jobs:
       # lib/BuiltInModules.ml (concat_builtins.py) on the way. A plain `make`
       # cannot work: the fork's dune files link the .so unconditionally.
       - name: make (build bridge + compiler)
-        run: nix develop --command 'make bridge'
+        run: nix develop -c bash -c 'make bridge'
 
       - name: make test
-        run: nix develop --command 'make test'
+        run: nix develop -c bash -c 'make test'
 
       # make test copies the .so to $HOME/.local/lib; the `austral` binary has
       # no rpath, so the runtime needs LD_LIBRARY_PATH for these steps.
       - name: end-to-end tests
-        run: nix develop --command 'export LD_LIBRARY_PATH=$HOME/.local/lib; python test-programs/runner.py'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$HOME/.local/lib; python test-programs/runner.py'
 
       - name: examples
-        run: nix develop --command 'export LD_LIBRARY_PATH=$HOME/.local/lib; bash run-examples.sh'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$HOME/.local/lib; bash run-examples.sh'
 
       - name: build the stdlib
-        run: nix develop --command 'export LD_LIBRARY_PATH=$HOME/.local/lib; make -C standard clean && make -C standard'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$HOME/.local/lib; make -C standard clean && make -C standard'
 
       - name: test the stdlib
-        run: nix develop --command './standard/test_bin'
+        run: nix develop -c bash -c './standard/test_bin'
 
       - name: upload compiler binary
         uses: actions/upload-artifact@v4
@@ -156,16 +156,16 @@ jobs:
           restore-prefixes-first-match: nix-jit-${{ runner.os }}-${{ runner.arch }}
 
       - name: Build OCaml compiler with JIT bridge
-        run: nix develop --command 'make bridge && cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $HOME/.local/lib/ 2>/dev/null; LD_LIBRARY_PATH=$HOME/.local/lib dune build bin/ lib/ test/'
+        run: nix develop -c bash -c 'make bridge && cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $HOME/.local/lib/ 2>/dev/null; LD_LIBRARY_PATH=$HOME/.local/lib dune build bin/ lib/ test/'
 
       - name: Run OCaml JIT unit tests (JitTest)
-        run: nix develop --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune runtest'
+        run: nix develop -c bash -c 'LD_LIBRARY_PATH=$HOME/.local/lib dune runtest'
 
       - name: Run panic-guard suites explicitly (CliEngineTest / JitTest)
         # dune runtest skips suites it considers up-to-date, so the sentinel
         # rendering (CliEngineTest) and bridge-boundary (JitTest) suites are
         # forced to actually execute — a regression fails the job loudly.
-        run: nix develop --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/CliEngineTest.exe && LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/JitTest.exe'
+        run: nix develop -c bash -c 'LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/CliEngineTest.exe && LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/JitTest.exe'
 
       - name: Build modhost
         run: cargo build --release --features unfer-kernel --bin modhost
@@ -180,7 +180,7 @@ jobs:
         # fold the newlines (and the embedded `: ` at line 170 previously made
         # the file fail to parse entirely — this workflow had never run).
         run: |
-          nix develop --command '
+          nix develop -c bash -c '
             HERE="${{ github.workspace }}"
             UNFER_DIR="$HERE/../unfer"
             CL_DIR="$HERE/safestos/cranelift"
