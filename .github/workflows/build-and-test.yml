@@ -6,7 +6,10 @@ on:
       - master
 
 jobs:
-  # ── Upstream OCaml-only CI (unchanged) ────────────────────────────
+  # ── Upstream OCaml CI, migrated from nix-shell (23.05) to the flake ─
+  # The fork links the cranelift JIT bridge (.so, DT_NEEDED, no rpath) into
+  # every binary, so this job needs the same sibling checkouts as jit-stack
+  # and LD_LIBRARY_PATH for every step that runs the `austral` binary.
   build-and-test-linux:
     strategy:
       fail-fast: true
@@ -18,6 +21,16 @@ jobs:
       - name: checkout
         uses: actions/checkout@v3
 
+      # actions/checkout refuses paths outside $GITHUB_WORKSPACE ("Repository
+      # path ... is not under ..." guard), so the sibling unfer + dynamic-arctic
+      # are cloned with plain git: the bridge Cargo.toml path-depends on
+      # ../../../unfer, which in turn path-depends on ../../dynamic-arctic via
+      # unfer_consensus.
+      - name: Checkout unfer as sibling (bridge path dep)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
+
       - name: install nix
         uses: nixbuild/nix-quick-install-action@v30
 
@@ -27,26 +40,29 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
 
-      - name: set up nix shell
-        run: nix-shell --command 'true'
-
-      - name: make
-        run: nix-shell --command 'make'
+      # `make bridge` (flake env): builds the Rust bridge .so via cargo, then
+      # the OCaml compiler against it, and regenerates the gitignored
+      # lib/BuiltInModules.ml (concat_builtins.py) on the way. A plain `make`
+      # cannot work: the fork's dune files link the .so unconditionally.
+      - name: make (build bridge + compiler)
+        run: nix develop --command 'make bridge'
 
       - name: make test
-        run: nix-shell --command 'make test'
+        run: nix develop --command 'make test'
 
+      # make test copies the .so to $HOME/.local/lib; the `austral` binary has
+      # no rpath, so the runtime needs LD_LIBRARY_PATH for these steps.
       - name: end-to-end tests
-        run: nix-shell --command 'python test-programs/runner.py'
+        run: nix develop --command 'export LD_LIBRARY_PATH=$HOME/.local/lib; python test-programs/runner.py'
 
       - name: examples
-        run: nix-shell --command 'bash run-examples.sh'
+        run: nix develop --command 'export LD_LIBRARY_PATH=$HOME/.local/lib; bash run-examples.sh'
 
       - name: build the stdlib
-        run: nix-shell --command 'make -C standard clean && make -C standard'
+        run: nix develop --command 'export LD_LIBRARY_PATH=$HOME/.local/lib; make -C standard clean && make -C standard'
 
       - name: test the stdlib
-        run: nix-shell --command './standard/test_bin'
+        run: nix develop --command './standard/test_bin'
 
       - name: upload compiler binary
         uses: actions/upload-artifact@v4
@@ -140,16 +156,16 @@ jobs:
           restore-prefixes-first-match: nix-jit-${{ runner.os }}-${{ runner.arch }}
 
       - name: Build OCaml compiler with JIT bridge
-        run: nix-shell --command 'make bridge && cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $HOME/.local/lib/ 2>/dev/null; LD_LIBRARY_PATH=$HOME/.local/lib dune build bin/ lib/ test/'
+        run: nix develop --command 'make bridge && cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $HOME/.local/lib/ 2>/dev/null; LD_LIBRARY_PATH=$HOME/.local/lib dune build bin/ lib/ test/'
 
       - name: Run OCaml JIT unit tests (JitTest)
-        run: nix-shell --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune runtest'
+        run: nix develop --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune runtest'
 
       - name: Run panic-guard suites explicitly (CliEngineTest / JitTest)
         # dune runtest skips suites it considers up-to-date, so the sentinel
         # rendering (CliEngineTest) and bridge-boundary (JitTest) suites are
         # forced to actually execute — a regression fails the job loudly.
-        run: nix-shell --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/CliEngineTest.exe && LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/JitTest.exe'
+        run: nix develop --command 'LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/CliEngineTest.exe && LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/JitTest.exe'
 
       - name: Build modhost
         run: cargo build --release --features unfer-kernel --bin modhost
@@ -164,7 +180,7 @@ jobs:
         # fold the newlines (and the embedded `: ` at line 170 previously made
         # the file fail to parse entirely — this workflow had never run).
         run: |
-          nix-shell --command '
+          nix develop --command '
             HERE="${{ github.workspace }}"
             UNFER_DIR="$HERE/../unfer"
             CL_DIR="$HERE/safestos/cranelift"
