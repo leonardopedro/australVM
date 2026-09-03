@@ -71,11 +71,11 @@ jobs:
       - name: Checkout australVM
         uses: actions/checkout@v4
 
+      # actions/checkout refuses paths outside $GITHUB_WORKSPACE ("Repository
+      # path ... is not under ..." guard), so the sibling unfer (a Cargo.toml
+      # path dep at ../../../unfer) is cloned with plain git.
       - name: Checkout unfer as sibling (path dep)
-        uses: actions/checkout@v4
-        with:
-          repository: leonardopedro/unfer
-          path: ../unfer
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
 
       - name: Run scripts/verify-invariants (H1)
         run: bash scripts/verify-invariants
@@ -87,11 +87,14 @@ jobs:
       - name: Checkout australVM
         uses: actions/checkout@v4
 
+      # actions/checkout refuses paths outside $GITHUB_WORKSPACE, so the
+      # sibling unfer is cloned with plain git (see verify-invariants above).
+      # unfer_ffi -> unfer_consensus -> arctic (../../dynamic-arctic from the
+      # unfer repo), so dynamic-arctic is cloned as unfer's sibling too.
       - name: Checkout unfer as sibling (Cargo.toml path dep ../../../unfer/unfer_ffi)
-        uses: actions/checkout@v4
-        with:
-          repository: leonardopedro/unfer
-          path: ../unfer
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -157,52 +160,56 @@ jobs:
         working-directory: ${{ github.workspace }}/../unfer
 
       - name: Run demo_module positive + UK-4001 gate test
-        run: nix-shell --command '
-          HERE="${{ github.workspace }}"
-          UNFER_DIR="$HERE/../unfer"
-          CL_DIR="$HERE/safestos/cranelift"
-          LIBDIR="$CL_DIR/target/release"
-          AUSTRAL="$HERE/_build/default/bin/austral.exe"
-          MODHOST="$CL_DIR/target/release/modhost"
-          MODULE_DIR="$UNFER_DIR/demo_module"
-          MODULE_TOML="$MODULE_DIR/module.toml"
+        # Literal block (`|`): a multi-line single-quoted YAML scalar would
+        # fold the newlines (and the embedded `: ` at line 170 previously made
+        # the file fail to parse entirely — this workflow had never run).
+        run: |
+          nix-shell --command '
+            HERE="${{ github.workspace }}"
+            UNFER_DIR="$HERE/../unfer"
+            CL_DIR="$HERE/safestos/cranelift"
+            LIBDIR="$CL_DIR/target/release"
+            AUSTRAL="$HERE/_build/default/bin/austral.exe"
+            MODHOST="$CL_DIR/target/release/modhost"
+            MODULE_DIR="$UNFER_DIR/demo_module"
+            MODULE_TOML="$MODULE_DIR/module.toml"
 
-          echo ">> POSITIVE: demo_module via CPS-JIT"
-          JIT_OUT=$(LD_LIBRARY_PATH="$LIBDIR" "$AUSTRAL" compile \
-            "$HERE/examples/kernel/UnferKernel.aui,$HERE/examples/kernel/UnferKernel.aum" \
-            "$MODULE_DIR/src/DemoModule.aui,$MODULE_DIR/src/DemoModule.aum" \
-            --use-cps-jit --target-type=tc 2>&1)
+            echo ">> POSITIVE: demo_module via CPS-JIT"
+            JIT_OUT=$(LD_LIBRARY_PATH="$LIBDIR" "$AUSTRAL" compile \
+              "$HERE/examples/kernel/UnferKernel.aui,$HERE/examples/kernel/UnferKernel.aum" \
+              "$MODULE_DIR/src/DemoModule.aui,$MODULE_DIR/src/DemoModule.aum" \
+              --use-cps-jit --target-type=tc 2>&1)
 
-          if echo "$JIT_OUT" | grep -qE "CPS JIT: Execution result: [1-9][0-9]*"; then
-            echo "PASS: demo_module JIT execution succeeded."
-          else
-            echo "FAIL: demo_module JIT execution." >&2
-            echo "$JIT_OUT" >&2
-            exit 1
-          fi
+            if echo "$JIT_OUT" | grep -qE "CPS JIT: Execution result: [1-9][0-9]*"; then
+              echo "PASS: demo_module JIT execution succeeded."
+            else
+              echo "FAIL: demo_module JIT execution." >&2
+              echo "$JIT_OUT" >&2
+              exit 1
+            fi
 
-          echo ">> AUTHORIZATION: grant vs. revocation (UK-4001)"
-          MODULE_NAME=$(grep -m1 "^name\s*=" "$MODULE_TOML" | sed "s/.*=\s*\"\(.*\)\"/\1/")
-          DENY_SYM="uk_event_probability"
+            echo ">> AUTHORIZATION: grant vs. revocation (UK-4001)"
+            MODULE_NAME=$(grep -m1 "^name\s*=" "$MODULE_TOML" | sed "s/.*=\s*\"\(.*\)\"/\1/")
+            DENY_SYM="uk_event_probability"
 
-          # Positive: full manifest authorizes the symbol
-          if "$MODHOST" authorize "$MODULE_TOML" "$MODULE_NAME" "$DENY_SYM"; then
-            echo "PASS: granted manifest authorizes $DENY_SYM."
-          else
-            echo "FAIL: full manifest should authorize $DENY_SYM." >&2
-            exit 1
-          fi
+            # Positive: full manifest authorizes the symbol
+            if "$MODHOST" authorize "$MODULE_TOML" "$MODULE_NAME" "$DENY_SYM"; then
+              echo "PASS: granted manifest authorizes $DENY_SYM."
+            else
+              echo "FAIL: full manifest should authorize $DENY_SYM." >&2
+              exit 1
+            fi
 
-          # Negative: strip the deny symbol
-          STRIPPED=$(mktemp)
-          trap "rm -f $STRIPPED" EXIT
-          grep -v "$DENY_SYM" "$MODULE_TOML" > "$STRIPPED"
-          if "$MODHOST" authorize "$STRIPPED" "$MODULE_NAME" "$DENY_SYM" 2>/dev/null; then
-            echo "FAIL: stripped manifest must DENY $DENY_SYM." >&2
-            exit 1
-          else
-            echo "PASS: revoking $DENY_SYM denies with UK-4001."
-          fi
+            # Negative: strip the deny symbol
+            STRIPPED=$(mktemp)
+            trap "rm -f $STRIPPED" EXIT
+            grep -v "$DENY_SYM" "$MODULE_TOML" > "$STRIPPED"
+            if "$MODHOST" authorize "$STRIPPED" "$MODULE_NAME" "$DENY_SYM" 2>/dev/null; then
+              echo "FAIL: stripped manifest must DENY $DENY_SYM." >&2
+              exit 1
+            else
+              echo "PASS: revoking $DENY_SYM denies with UK-4001."
+            fi
 
-          echo "demo_module: ALL TESTS PASSED"
-        '
+            echo "demo_module: ALL TESTS PASSED"
+          '

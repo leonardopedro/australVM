@@ -15,24 +15,22 @@ jobs:
   #
   # The bridge path-depends on unfer and dynamic-arctic as SIBLINGS of the
   # checkout root (safestos/cranelift/Cargo.toml resolves ../../../unfer and
-  # ../../../dynamic-arctic), so both are checked out one level up — the same
-  # sibling layout the workspace uses. `cargo build --release` produces the
-  # libaustral_cranelift_bridge.so that the OCaml tests dlopen.
+  # ../../../dynamic-arctic), so both live one level up — the same sibling
+  # layout the workspace uses. NOTE: actions/checkout refuses paths outside
+  # $GITHUB_WORKSPACE ("Repository path ... is not under ..." guard), so the
+  # siblings are cloned with plain git instead of a second checkout action.
+  # `cargo build --release` produces the libaustral_cranelift_bridge.so that
+  # the OCaml tests dlopen.
   # ---------------------------------------------------------------------------
   test:
     name: bridge test + OCaml suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: leonardopedro/unfer
-          path: ../unfer
-          ref: main
-      - uses: actions/checkout@v4
-        with:
-          repository: leonardopedro/dynamic-arctic
-          path: ../dynamic-arctic
+      - name: Checkout unfer as sibling (Cargo.toml path dep ../../../unfer)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -57,15 +55,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: leonardopedro/unfer
-          path: ../unfer
-          ref: main
-      - uses: actions/checkout@v4
-        with:
-          repository: leonardopedro/dynamic-arctic
-          path: ../dynamic-arctic
+      - name: Checkout unfer as sibling (Cargo.toml path dep ../../../unfer)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
