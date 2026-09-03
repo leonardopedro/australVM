@@ -162,6 +162,7 @@ impl<'a, 'b> BlockManager<'a, 'b> {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // threaded through the whole CPS emit chain
 fn emit_expr(
     jit: &mut JITModule,
     reader: &mut CpsReader,
@@ -215,10 +216,9 @@ fn emit_expr(
                 let alloc_fref = jit.declare_func_in_func(alloc_fid, mgr.builder.func);
                 let call = mgr.builder.ins().call(alloc_fref, &[size_val]);
                 let ptr = mgr.builder.inst_results(call)[0];
-                for i in 1..args.len() {
-                    let field_val = args[i];
+                for (i, field_val) in args.iter().enumerate().skip(1) {
                     let offset = (i - 1) * 8;
-                    mgr.builder.ins().store(MemFlags::new(), field_val, ptr, offset as i32);
+                    mgr.builder.ins().store(MemFlags::new(), *field_val, ptr, offset as i32);
                 }
                 return Ok(ptr);
             } else if func_name == "__union_new" {
@@ -239,10 +239,9 @@ fn emit_expr(
                     mgr.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
                     
                     // Store fields starting at offset 8
-                    for i in 2..args.len() {
-                        let field_val = args[i];
+                    for (i, field_val) in args.iter().enumerate().skip(2) {
                         let offset = (i - 1) * 8;
-                        mgr.builder.ins().store(MemFlags::new(), field_val, ptr, offset as i32);
+                        mgr.builder.ins().store(MemFlags::new(), *field_val, ptr, offset as i32);
                     }
                 return Ok(ptr);
             }
@@ -370,6 +369,7 @@ fn emit_expr(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // threaded through the whole CPS emit chain
 fn emit_stmt_list(
     jit: &mut JITModule,
     reader: &mut CpsReader,
@@ -416,10 +416,9 @@ fn emit_stmt_list(
                         let alloc_fref = jit.declare_func_in_func(alloc_fid, mgr.builder.func);
                         let call = mgr.builder.ins().call(alloc_fref, &[size_val]);
                         let ptr = mgr.builder.inst_results(call)[0];
-                        for i in 1..args.len() {
-                            let field_val = args[i];
+                        for (i, field_val) in args.iter().enumerate().skip(1) {
                             let offset = (i - 1) * 8;
-                            mgr.builder.ins().store(MemFlags::new(), field_val, ptr, offset as i32);
+                            mgr.builder.ins().store(MemFlags::new(), *field_val, ptr, offset as i32);
                         }
                         mgr.builder.ins().return_(&[ptr]);
                         mgr.terminated = true;

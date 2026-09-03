@@ -44,7 +44,7 @@ impl ManifestAuthEngine {
         // set: they are ordinary Call actions on the kernel-interface boundary,
         // exactly like `uk_*` symbols. Without this the zenodo module's positive
         // test can never pass (uz_init/uz_manifest_json would be ungranted).
-        callables.extend(manifest.grants.zenodo.into_iter());
+        callables.extend(manifest.grants.zenodo);
         engine.grants.insert(module_name.clone(), callables);
         let effects: HashSet<String> = manifest.grants.effects.into_iter().collect();
         engine.effects.insert(module_name, effects);
@@ -79,13 +79,13 @@ impl ManifestAuthEngine {
     pub fn is_granted(&self, module: &str, callable: &str) -> bool {
         self.grants
             .get(module)
-            .map_or(false, |set| set.contains(callable))
+            .is_some_and(|set| set.contains(callable))
     }
 
     pub fn is_effect_granted(&self, module: &str, effect: &str) -> bool {
         self.effects
             .get(module)
-            .map_or(false, |set| set.contains(effect))
+            .is_some_and(|set| set.contains(effect))
     }
 }
 

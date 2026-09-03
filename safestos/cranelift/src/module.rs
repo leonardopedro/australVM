@@ -8,16 +8,12 @@ use crate::cps::CpsModule;
 /// `enabled`. A side-effecting module archetype with `[gatekeeper] mode = "disabled"` has its
 /// submissions refused up front; anything else defers the mediation to the human console.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum GatekeeperMode {
+    #[default]
     Enabled,
     Optional,
     Disabled,
-}
-
-impl Default for GatekeeperMode {
-    fn default() -> Self {
-        Self::Enabled
-    }
 }
 
 impl GatekeeperMode {
@@ -319,6 +315,12 @@ pub struct ModuleInstance {
 impl ModuleInstance {
     pub fn session_handle(&self) -> Option<i64> {
         self.session
+    }
+}
+
+impl Default for ModuleHost {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

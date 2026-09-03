@@ -13,6 +13,12 @@ pub struct CedarVmEngine {
     entities: Entities,
 }
 
+impl Default for CedarVmEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CedarVmEngine {
     pub fn new() -> Self {
         let policies = PolicySet::new();

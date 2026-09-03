@@ -38,7 +38,7 @@ fn manifest_defaults_fs_net_grants_empty() {
 #[test]
 fn hotswap_rejects_fs_grant_escalation() {
     use austral_cranelift_bridge::module::ModuleHost;
-    use std::path::Path;
+    
 
     let dir_v1 = std::env::temp_dir().join("capstd_swap_v1");
     let dir_v2 = std::env::temp_dir().join("capstd_swap_v2");

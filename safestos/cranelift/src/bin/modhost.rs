@@ -225,8 +225,7 @@ fn spawn_jit_server(
         match reader.read_line(&mut result_line) {
             Ok(n) if n > 0 => {
                 let result = result_line.trim();
-                if result.starts_with("RESULT ") {
-                    let val = &result["RESULT ".len()..];
+                if let Some(val) = result.strip_prefix("RESULT ") {
                     println!("{target}: {val}");
                 } else if result.starts_with("ERROR ") {
                     eprintln!("modhost: {result}");

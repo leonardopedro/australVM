@@ -6,7 +6,7 @@
 //! When adding a new `uk_*` or `uz_*` symbol to unfer_ffi, you must also:
 //! 1. Add it to `EXPECTED_SYMBOLS.txt` (or `EXPECTED_SYMBOLS_ZENODO.txt`) in unfer.
 //! 2. Add it to the `UNFER_SYMBOLS` / `ZENODO_SYMBOLS` table in `lib.rs`.
-//! This test will catch any mismatch.
+//!    This test will catch any mismatch.
 
 use std::collections::BTreeSet;
 use std::path::Path;

@@ -31,9 +31,9 @@ use policy::CEDAR_ENGINE;
 use std::ffi::CStr;
 
 thread_local! {
-    static JIT: RefCell<Option<JITModule>> = RefCell::new(None);
-    static LAST_ERROR: RefCell<Option<CString>> = RefCell::new(None);
-    static CURRENT_MODULE: RefCell<Option<CpsModule>> = RefCell::new(None);
+    static JIT: RefCell<Option<JITModule>> = const { RefCell::new(None) };
+    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+    static CURRENT_MODULE: RefCell<Option<CpsModule>> = const { RefCell::new(None) };
 }
 
 fn set_last_error(msg: &str) {
@@ -164,6 +164,7 @@ fn register_trapping_symbols(builder: &mut JITBuilder) {
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn __au_swap_module(old_id: u64, new_desc: *const c_void) -> i64 {
     unsafe {
         if cell_swap(old_id, new_desc) { 1 } else { 0 }
@@ -455,11 +456,10 @@ fn compile_to_function_named_impl(
 ) -> *const c_void {
     cranelift_clear_error();
 
-    if JIT.with(|c| c.borrow().is_none()) {
-        if cranelift_init() == 0 {
+    if JIT.with(|c| c.borrow().is_none())
+        && cranelift_init() == 0 {
             return std::ptr::null();
         }
-    }
 
     if ir_ptr.is_null() || ir_len == 0 {
         set_last_error("Empty IR passed to compiler");
@@ -644,9 +644,9 @@ fn cranelift_swap_binary_impl(
                         .or_else(|| name_map.values().next())
                         .copied();
                     let ptr = entry_name
-                        .and_then(|fid| {
-                            let p = new_jit.get_finalized_function(fid) as *const c_void;
-                            Some(p)
+                        .map(|fid| {
+                            
+                            new_jit.get_finalized_function(fid) as *const c_void
                         })
                         .unwrap_or(std::ptr::null());
                     (module, ptr)
@@ -676,6 +676,7 @@ fn cranelift_swap_binary_impl(
 /// This does NOT recompile — the function must have been compiled by an earlier
 /// call to `compile_to_function_named` (or `compile_to_function`).
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn lookup_function(
     name_ptr: *const u8,
     name_len: usize,
@@ -725,6 +726,7 @@ pub extern "C" fn list_compiled_function_names() -> *mut std::ffi::c_char {
 
 /// Free a string previously returned by `list_compiled_function_names`.
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn cranelift_free_string(s: *mut std::ffi::c_char) {
     if !s.is_null() {
         unsafe { let _ = CString::from_raw(s); }
@@ -743,6 +745,7 @@ pub extern "C" fn cranelift_free_string(s: *mut std::ffi::c_char) {
 /// module when the values disagree.
 #[cfg(feature = "unfer-kernel")]
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut std::ffi::c_char {
     use std::ffi::CStr;
     use std::sync::OnceLock;
@@ -769,7 +772,7 @@ pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut st
         // A minimal QFM-free model spec so the handle-based kernel API has a
         // session to attach the report to (mirrors the FFI test spec).
         let spec = br#"{"hamiltonian":{"kind":"builtin","name":"harmonic_chain","params":{"n_modes":2,"omega":1.0}},"prior":{"kind":"vacuum"},"solver":{"krylov_dim":4,"prune_eps":1e-12,"max_components":50000,"restarts":1,"device":{"kind":"cpu"}}}"#;
-        unfer_ffi::uk_model_create(spec.as_ptr() as *const u8, spec.len() as i64)
+        unfer_ffi::uk_model_create(spec.as_ptr(), spec.len() as i64)
     });
     if model <= 0 {
         set_last_error("austral_unf_translate: kernel model creation failed");
@@ -836,6 +839,7 @@ fn run_guarded(f: impl FnOnce() -> i64) -> i64 {
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn execute_function(ptr: *const c_void) -> i64 {
     if ptr.is_null() { return -1; }
     let f: fn() -> i64 = unsafe { std::mem::transmute(ptr) };
@@ -843,6 +847,7 @@ pub extern "C" fn execute_function(ptr: *const c_void) -> i64 {
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn execute_function_1(ptr: *const c_void, arg1: i64) -> i64 {
     if ptr.is_null() { return -1; }
     let f: fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
@@ -850,6 +855,7 @@ pub extern "C" fn execute_function_1(ptr: *const c_void, arg1: i64) -> i64 {
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn execute_function_2(ptr: *const c_void, arg1: i64, arg2: i64) -> i64 {
     if ptr.is_null() { return -1; }
     let f: fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
@@ -858,6 +864,7 @@ pub extern "C" fn execute_function_2(ptr: *const c_void, arg1: i64, arg2: i64) -
 
 #[cfg(feature = "cedar")]
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn au_cedar_load_policy(policy_str: *const std::ffi::c_char) -> i64 {
     if policy_str.is_null() {
         set_last_error("Null pointer passed to au_cedar_load_policy");
@@ -885,6 +892,7 @@ pub extern "C" fn au_cedar_load_policy(policy_str: *const std::ffi::c_char) -> i
 
 #[cfg(feature = "cedar")]
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn au_cedar_check_runtime(
     principal_ptr: *const std::ffi::c_char,
     action_ptr: *const std::ffi::c_char,
@@ -922,6 +930,7 @@ pub extern "C" fn au_cedar_load_policy(_policy_str: *const std::ffi::c_char) -> 
 
 #[cfg(not(feature = "cedar"))]
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn au_cedar_check_runtime(
     principal_ptr: *const std::ffi::c_char,
     action_ptr: *const std::ffi::c_char,
@@ -940,6 +949,7 @@ pub extern "C" fn au_cedar_check_runtime(
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ffi::c_void) {
     if desc_ptr.is_null() { return; }
     unsafe {
@@ -948,6 +958,7 @@ pub extern "C" fn au_set_cell_jit_ptr(desc_ptr: *mut u8, jit_ptr: *const std::ff
 }
 
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn au_cell_swap(old_id: u64, new_desc: *mut std::ffi::c_void) -> bool {
     unsafe { cell_swap(old_id, new_desc) }
 }
@@ -956,6 +967,7 @@ pub extern "C" fn au_cell_swap(old_id: u64, new_desc: *mut std::ffi::c_void) -> 
 /// (cell_loader.c:63). Returns `true` when the new descriptor is a valid
 /// replacement for the old one: same `type_hash` AND new caps ⊆ old caps.
 /// Used by the hot-swap positive-path test (P5 #32).
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub fn au_cell_can_replace(old: *const std::ffi::c_void, new: *const std::ffi::c_void) -> bool {
     unsafe { cell_can_replace(old, new) }
 }
@@ -1044,7 +1056,7 @@ mod panic_guard_tests {
         let ptr = add as *const () as *const std::ffi::c_void;
         assert_eq!(execute_function_2(ptr, 40, 2), 42);
         assert!(
-            unsafe { cranelift_last_error() }.is_null(),
+            cranelift_last_error().is_null(),
             "no error must be recorded on success"
         );
     }
@@ -1215,7 +1227,7 @@ mod compile_guard_tests {
         let ptr = compile_to_function(ir.as_ptr(), ir.len());
         assert!(ptr.is_null());
         assert!(
-            !unsafe { cranelift_last_error() }.is_null(),
+            !cranelift_last_error().is_null(),
             "delegate must record the codegen panic on the error channel"
         );
     }
@@ -1233,7 +1245,7 @@ mod compile_guard_tests {
         let res = cranelift_swap_binary(bad.as_ptr(), bad.len());
         assert!(res.is_null(), "swap of panic-inducing IR must fail closed");
         assert!(
-            !unsafe { cranelift_last_error() }.is_null(),
+            !cranelift_last_error().is_null(),
             "swap codegen panic must be recorded on the error channel"
         );
         // The live module must be untouched: the entry still resolves.
@@ -1259,7 +1271,7 @@ mod compile_guard_tests {
         let ptr = compile_to_function_named(bad.as_ptr(), bad.len(), std::ptr::null(), 0);
         assert!(ptr.is_null());
         assert!(
-            !unsafe { cranelift_last_error() }.is_null(),
+            !cranelift_last_error().is_null(),
             "a failed compile must record its error"
         );
 
@@ -1275,7 +1287,7 @@ mod compile_guard_tests {
 
         // 3. The channel is now fresh: no stale failure text remains.
         assert!(
-            unsafe { cranelift_last_error() }.is_null(),
+            cranelift_last_error().is_null(),
             "a successful call must clear the stale error channel"
         );
     }

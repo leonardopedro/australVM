@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Core: the cranelift bridge must build, test and lint on CPU, and the OCaml
+  # compiler suite must pass against the built bridge.
+  #
+  # The bridge path-depends on unfer and dynamic-arctic as SIBLINGS of the
+  # checkout root (safestos/cranelift/Cargo.toml resolves ../../../unfer and
+  # ../../../dynamic-arctic), so both are checked out one level up — the same
+  # sibling layout the workspace uses. `cargo build --release` produces the
+  # libaustral_cranelift_bridge.so that the OCaml tests dlopen.
+  # ---------------------------------------------------------------------------
+  test:
+    name: bridge test + OCaml suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: leonardopedro/unfer
+          path: ../unfer
+          ref: main
+      - uses: actions/checkout@v4
+        with:
+          repository: leonardopedro/dynamic-arctic
+          path: ../dynamic-arctic
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: safestos/cranelift
+      # The .so is built in release (the Makefile's BRIDGE_DIR); debug `cargo
+      # test` keeps the fast unit suites fast.
+      - name: build bridge (release, for the OCaml .so)
+        run: cargo build --release --manifest-path safestos/cranelift/Cargo.toml
+      - name: cargo test (bridge workspace)
+        run: cargo test --manifest-path safestos/cranelift/Cargo.toml
+      # OCaml suite via the flake (ocaml, dune, yojson, ounit2, ...). The test
+      # binaries dlopen the bridge .so, so LD_LIBRARY_PATH points at the
+      # release dir — mirroring `make test`.
+      - uses: DeterminateSystems/nix-installer-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v9
+      - name: dune runtest (OCaml compiler suite)
+        run: |
+          nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune runtest'
+
+  lint:
+    name: clippy (deny warnings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: leonardopedro/unfer
+          path: ../unfer
+          ref: main
+      - uses: actions/checkout@v4
+        with:
+          repository: leonardopedro/dynamic-arctic
+          path: ../dynamic-arctic
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: safestos/cranelift
+      # Clippy is enforced with -D warnings: the bridge was swept clean (round
+      # 21) — every FFI entry point carries an explicit
+      # `#[allow(clippy::not_unsafe_ptr_arg_deref)]` for its C ABI pointers.
+      - run: cargo clippy --manifest-path safestos/cranelift/Cargo.toml --all-targets -- -D warnings

@@ -286,7 +286,7 @@ where
 fn self_call_allowed_under_deny_all() {
     let cps = cps_v1(&body_call_import("run"));
     let ptr = with_auth(
-        || austral_cranelift_bridge::auth::set_deny_all(),
+        austral_cranelift_bridge::auth::set_deny_all,
         &cps,
     );
     assert!(!ptr.is_null(), "self-call should be allowed under DenyAll");
@@ -296,7 +296,7 @@ fn self_call_allowed_under_deny_all() {
 fn au_call_allowed_under_deny_all() {
     let cps = cps_v1(&body_call_import("au_alloc"));
     let ptr = with_auth(
-        || austral_cranelift_bridge::auth::set_deny_all(),
+        austral_cranelift_bridge::auth::set_deny_all,
         &cps,
     );
     assert!(!ptr.is_null(), "au_* call should be allowed under DenyAll");
@@ -306,7 +306,7 @@ fn au_call_allowed_under_deny_all() {
 fn au_print_int_allowed_under_deny_all() {
     let cps = cps_v1(&body_call_import("au_print_int"));
     let ptr = with_auth(
-        || austral_cranelift_bridge::auth::set_deny_all(),
+        austral_cranelift_bridge::auth::set_deny_all,
         &cps,
     );
     assert!(!ptr.is_null(), "au_* call should be allowed under DenyAll");
@@ -316,7 +316,7 @@ fn au_print_int_allowed_under_deny_all() {
 fn uk_call_denied_under_deny_all() {
     let cps = cps_v1(&body_call_import("uk_version"));
     let ptr = with_auth(
-        || austral_cranelift_bridge::auth::set_deny_all(),
+        austral_cranelift_bridge::auth::set_deny_all,
         &cps,
     );
     assert!(ptr.is_null(), "uk_* call should be denied under DenyAll");

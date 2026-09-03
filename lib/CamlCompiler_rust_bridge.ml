@@ -51,11 +51,6 @@ let initialize () : bool =
 let is_ready () : bool =
   c_bridge_ready () = 1L
 
-let compile_demo () : int64 option =
-  let demo_bytes = Bytes.create 0 in
-  let ptr = c_compile_to_function demo_bytes 0 in
-  if ptr = Int64.zero then None else Some ptr
-
 let last_jit_error () : string option =
   c_last_error ()
 
@@ -91,14 +86,17 @@ let execute_function_2 (ptr: int64) (arg1: int64) (arg2: int64) : int64 =
   c_execute_function_2 ptr arg1 arg2
 
 let compile_mast (_module_name: module_name) (decls: mdecl list) : int64 option =
+  (* Never fall back to a "demo" pointer: a module with no compilable
+     functions or a failed compile must read as None (the failure is
+     recorded on the bridge's last-error channel via `last_jit_error`), so
+     the caller can never execute the wrong code silently. *)
   if not (is_ready ()) && not (initialize ()) then None
   else
     match CpsGen.compile_module _module_name decls with
-    | None -> compile_demo ()
+    | None -> None
     | Some cps_bytes ->
         let ptr = c_compile_to_function cps_bytes (Bytes.length cps_bytes) in
-        if ptr = Int64.zero then compile_demo ()
-        else Some ptr
+        if ptr = Int64.zero then None else Some ptr
 
 let compile_function (name: string) (params: (string * mono_ty) list) (body: mstmt) : int64 option =
   if not (is_ready ()) && not (initialize ()) then None
