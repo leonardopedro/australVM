@@ -44,11 +44,17 @@ jobs:
       # OCaml suite via the flake (ocaml, dune, yojson, ounit2, ...). The test
       # binaries dlopen the bridge .so, so LD_LIBRARY_PATH points at the
       # release dir — mirroring `make test`.
+      #
+      # lib/BuiltInModules.ml is GENERATED (concat_builtins.py) and
+      # gitignored, so a fresh checkout lacks it and dune 3.x refuses to
+      # build the interface-only BuiltInModules module. The Makefile's
+      # `make test` target generates it as an implicit prerequisite of the
+      # $(BIN) rule — CI must do the same before dune runs.
       - uses: DeterminateSystems/nix-installer-action@v14
       - uses: DeterminateSystems/magic-nix-cache-action@v9
       - name: dune runtest (OCaml compiler suite)
         run: |
-          nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune runtest'
+          nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; python3 concat_builtins.py && dune runtest'
 
   lint:
     name: clippy (deny warnings)
