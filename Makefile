@@ -20,7 +20,7 @@ $(BIN): $(SRC)
 # OCaml binary. Run after touching safestos/cranelift/src/*.rs or after
 # pulling a new unfer commit (the bridge statically links unfer_ffi).
 .PHONY: bridge
-bridge:
+bridge: lib/BuiltInModules.ml
 	cargo build --release --manifest-path safestos/cranelift/Cargo.toml
 	AUSTRAL_BRIDGE_DIR=$(CURDIR)/$(BRIDGE_DIR) dune build lib/ bin/
 	cp _build/default/bin/austral.exe $(BIN)
