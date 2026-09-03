@@ -28,7 +28,8 @@ bridge: lib/BuiltInModules.ml
 
 .PHONY: test
 test: $(BIN)
-	cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $(HOME)/.local/lib/ 2>/dev/null || true
+	mkdir -p $(HOME)/.local/lib
+	cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $(HOME)/.local/lib/
 	LD_LIBRARY_PATH=$(HOME)/.local/lib dune runtest
 
 .PHONY: install

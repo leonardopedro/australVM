@@ -50,16 +50,17 @@ jobs:
       - name: make test
         run: nix develop -c bash -c 'make test'
 
-      # make test copies the .so to $HOME/.local/lib; the `austral` binary has
-      # no rpath, so the runtime needs LD_LIBRARY_PATH for these steps.
+      # The `austral` binary has no rpath, so every step that runs it needs
+      # LD_LIBRARY_PATH pointing at the bridge .so's build dir (make bridge
+      # above produced it there) — the ci.yml pattern.
       - name: end-to-end tests
-        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$HOME/.local/lib; python test-programs/runner.py'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; python test-programs/runner.py'
 
       - name: examples
-        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$HOME/.local/lib; bash run-examples.sh'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; bash run-examples.sh'
 
       - name: build the stdlib
-        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$HOME/.local/lib; make -C standard clean && make -C standard'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; make -C standard clean && make -C standard'
 
       - name: test the stdlib
         run: nix develop -c bash -c './standard/test_bin'
@@ -155,17 +156,20 @@ jobs:
           primary-key: nix-jit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-jit-${{ runner.os }}-${{ runner.arch }}
 
+      # LD_LIBRARY_PATH points at the bridge .so's build dir (the ci.yml
+      # pattern): $HOME/.local/lib does not exist on a fresh runner and the
+      # silent cp fallback made these steps fail to load the bridge.
       - name: Build OCaml compiler with JIT bridge
-        run: nix develop -c bash -c 'make bridge && cp -f safestos/cranelift/target/release/libaustral_cranelift_bridge.so $HOME/.local/lib/ 2>/dev/null; LD_LIBRARY_PATH=$HOME/.local/lib dune build bin/ lib/ test/'
+        run: nix develop -c bash -c 'make bridge && export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune build bin/ lib/ test/'
 
       - name: Run OCaml JIT unit tests (JitTest)
-        run: nix develop -c bash -c 'LD_LIBRARY_PATH=$HOME/.local/lib dune runtest'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune runtest'
 
       - name: Run panic-guard suites explicitly (CliEngineTest / JitTest)
         # dune runtest skips suites it considers up-to-date, so the sentinel
         # rendering (CliEngineTest) and bridge-boundary (JitTest) suites are
         # forced to actually execute — a regression fails the job loudly.
-        run: nix develop -c bash -c 'LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/CliEngineTest.exe && LD_LIBRARY_PATH=$HOME/.local/lib dune exec --force test/JitTest.exe'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune exec --force test/CliEngineTest.exe && dune exec --force test/JitTest.exe'
 
       - name: Build modhost
         run: cargo build --release --features unfer-kernel --bin modhost
