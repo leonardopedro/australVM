@@ -32,6 +32,10 @@ test_const
 test_cps
 libaustral_cranelift_bridge.so
 
+# Root compiler binary (built by `make`/`make bridge`; CI uploads it as an
+# ephemeral artifact, never checked out and used directly)
+/austral
+
 # Docs/planning artifacts
 docs/history/
 examples/modules/demo_hosted/module.cps
