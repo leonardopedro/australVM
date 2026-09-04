@@ -33,3 +33,10 @@ The project has successfully integrated a multi-tier security model combining co
 - `safestos/cranelift/`: Rust bridge containing Cedar and Cranelift logic.
 - `safestos/runtime/`: C runtime providing the VM execution environment.
 - `test_programs/`: Austral examples for capabilities and hot-swapping.
+
+## 🦀 Rust toolchain
+
+The Rust bridge (`safestos/cranelift/`) pins **1.97.1** via its
+`rust-toolchain.toml`, and the nix flake provides the same rustc for
+`make bridge` — single stable toolchain shared with the unfer/
+dynamic-arctic/velysterm repos (no nightly anywhere). Bump deliberately.
