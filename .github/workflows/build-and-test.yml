@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26  # actions/checkout@v3
 
       # actions/checkout refuses paths outside $GITHUB_WORKSPACE ("Repository
       # path ... is not under ..." guard), so the sibling unfer + dynamic-arctic
@@ -32,10 +32,10 @@ jobs:
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
 
       - name: install nix
-        uses: nixbuild/nix-quick-install-action@v30
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
 
       - name: nix cache
-        uses: nix-community/cache-nix-action@v6
+        uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6  # nix-community/cache-nix-action@v6
         with:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
@@ -66,7 +66,7 @@ jobs:
         run: nix develop -c bash -c './standard/test_bin'
 
       - name: upload compiler binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # actions/upload-artifact@v4
         with:
           name: austral-linux-bin
           path: austral
@@ -86,7 +86,7 @@ jobs:
 
     steps:
       - name: Checkout australVM
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
 
       # actions/checkout refuses paths outside $GITHUB_WORKSPACE ("Repository
       # path ... is not under ..." guard), so the sibling unfer (a Cargo.toml
@@ -102,7 +102,7 @@ jobs:
 
     steps:
       - name: Checkout australVM
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
 
       # actions/checkout refuses paths outside $GITHUB_WORKSPACE, so the
       # sibling unfer is cloned with plain git (see verify-invariants above).
@@ -114,10 +114,10 @@ jobs:
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
 
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Cache cranelift / unfer_ffi build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # actions/cache@v4
         with:
           path: |
             ${{ github.workspace }}/safestos/cranelift/target
@@ -148,10 +148,10 @@ jobs:
         run: LD_LIBRARY_PATH=lib make -C safestos hotswap-test
 
       - name: Install Nix (for OCaml toolchain)
-        uses: nixbuild/nix-quick-install-action@v30
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
 
       - name: Cache Nix store
-        uses: nix-community/cache-nix-action@v6
+        uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6  # nix-community/cache-nix-action@v6
         with:
           primary-key: nix-jit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-jit-${{ runner.os }}-${{ runner.arch }}

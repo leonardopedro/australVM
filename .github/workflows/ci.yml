@@ -26,13 +26,13 @@ jobs:
     name: bridge test + OCaml suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
       - name: Checkout unfer as sibling (Cargo.toml path dep ../../../unfer)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
       - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c  # Swatinem/rust-cache@v2
         with:
           workspaces: safestos/cranelift
       # The .so is built in release (the Makefile's BRIDGE_DIR); debug `cargo
@@ -50,8 +50,8 @@ jobs:
       # build the interface-only BuiltInModules module. The Makefile's
       # `make test` target generates it as an implicit prerequisite of the
       # $(BIN) rule — CI must do the same before dune runs.
-      - uses: DeterminateSystems/nix-installer-action@v14
-      - uses: DeterminateSystems/magic-nix-cache-action@v9
+      - uses: DeterminateSystems/nix-installer-action@da36cb69b1c3247ad7a1f931ebfd954a1105ef14  # DeterminateSystems/nix-installer-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@6221693898146dc97e38ad0e013488a16477a4c4  # DeterminateSystems/magic-nix-cache-action@v9
       - name: dune runtest (OCaml compiler suite)
         run: |
           nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; python3 concat_builtins.py && dune runtest'
@@ -60,15 +60,15 @@ jobs:
     name: clippy (deny warnings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
       - name: Checkout unfer as sibling (Cargo.toml path dep ../../../unfer)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
       - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c  # Swatinem/rust-cache@v2
         with:
           workspaces: safestos/cranelift
       # Clippy is enforced with -D warnings: the bridge was swept clean (round
