@@ -1,0 +1,24 @@
+[module]
+name = "mathed_kernel"
+version = "0.1.0"
+archetype = "haskell_effect"
+entry = "main"
+
+# The \kernel segment's grants (velysterm N11) map onto the hosted
+# module's uk_* capabilities: the module may only call the kernel ops
+# its manifest grants name — deny-by-default, exactly like the
+# worker's MATHED_EXEC_GRANTS/MATHED_KERNEL_LANGS gates. Jupyter
+# kernels are trusted after container quarantine; here the capability
+# set *is* the safety boundary.
+[grants]
+kernel = [
+    "uk_version",
+    "uk_model_create",
+    "uk_evolve",
+    "uk_event_probability",
+    "uk_model_free",
+]
+effects = ["Kernel"]
+
+[limits]
+max_ms = 5000
