@@ -28,6 +28,11 @@ allowlists.
   refused, UK-4001, deny-by-default).
 
 Run: `./run_demo.sh` (GHC env from the unfer flake, read-only use).
+The module is dependency-free, so any GHC works: override the env
+when the pinned store path is absent, e.g.
+`GHC_ENV=$(nix build github:NixOS/nixpkgs/<rev>#ghc --print-out-paths)`
+or point it at an installed `ghc` wrapper (`bin/ghc` must be on
+`$GHC_ENV/bin`).
 velysterm's worker spawns this module as its `MATHED_KERNEL_BIN`
 backend; a real Jupyter kernel over the stdio transport attaches
 through the same `kernel_exec` op (`kernel_client::jupyter_stdio`).

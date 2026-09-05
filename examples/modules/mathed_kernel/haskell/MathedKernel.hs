@@ -25,6 +25,7 @@ module MathedKernel where
 
 import System.IO (getLine, isEOF)
 import System.Exit (exitSuccess)
+import Data.Char (isSpace)
 
 -- | JSON-escape a string for the output payload (no aeson dependency:
 -- the module compiles in the plain GHC env, mirroring fock_match).
@@ -36,14 +37,61 @@ esc = concatMap (\c -> case c of
     '\r' -> "\\r"
     c    -> [c])
 
--- | Read the one-line `{code: ...}` payload (empty input = the empty
--- code, which still answers — the contract is total).
+-- | Decode one JSON string whose opening quote is the first char of
+-- the input: returns (decoded, rest after the closing quote). The
+-- sample only needs the escapes its own `esc` emits plus the common
+-- ones; anything else passes through literally.
+decodeString :: String -> (String, String)
+decodeString ('"' : s) = go s
+  where
+    go [] = ([], [])
+    go ('\\' : 'n' : t)  = let (r, rest) = go t in ('\n' : r, rest)
+    go ('\\' : 'r' : t)  = let (r, rest) = go t in ('\r' : r, rest)
+    go ('\\' : 't' : t)  = let (r, rest) = go t in ('\t' : r, rest)
+    go ('\\' : '/' : t)  = let (r, rest) = go t in ('/' : r, rest)
+    go ('\\' : '\\' : t) = let (r, rest) = go t in ('\\' : r, rest)
+    go ('\\' : '"' : t)  = let (r, rest) = go t in ('"' : r, rest)
+    go ('"' : t)          = ([], t)
+    go (c : t)            = let (r, rest) = go t in (c : r, rest)
+decodeString s = ([], s)
+
+-- | The `code` field's value from the one-line
+-- `{"module": ..., "language": ..., "code": ...}` envelope (v1
+-- values are strings). Scanning skips the earlier string fields so a
+-- stray `"code"` inside a value can never be mistaken for the key.
+codeOf :: String -> String
+codeOf line = fields (dropWhile isSpace line)
+  where
+    fields ('{' : s) = nextKey (dropWhile isSpace s)
+    fields _ = ""
+    nextKey ('"' : t) =
+        let (key, rest1) = decodeString ('"' : t)
+            rest2 = dropWhile isSpace rest1
+        in case rest2 of
+             (':' : v) -> value key (dropWhile isSpace v)
+             _         -> ""
+    nextKey _ = ""
+    value key v
+        | key == "code" = case v of
+            ('"' : _) -> fst (decodeString v)
+            _         -> ""
+        | otherwise = case v of
+            -- Skip this field's string value, then continue after the comma.
+            ('"' : _) -> afterValue (snd (decodeString v))
+            _         -> ""
+    afterValue s = case dropWhile isSpace s of
+        (',' : t) -> nextKey (dropWhile isSpace t)
+        _         -> ""
+
+-- | Read the one-line `{module, language, code}` payload and pull out
+-- the code (empty/malformed input = the empty code, which still
+-- answers — the contract is total).
 readCode :: IO String
 readCode = do
     eof <- isEOF
     if eof
         then pure ""
-        else getLine
+        else codeOf <$> getLine
 
 -- | Answer the Jupyter-shaped outputs payload for a code run.
 outputsFor :: String -> String

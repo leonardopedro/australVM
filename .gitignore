@@ -5,6 +5,10 @@ result
 *.o
 *.so
 *.a
+*.hi
+
+# run_demo.sh compiles the hosted module in place (mathed_kernel)
+examples/modules/mathed_kernel/mathed_kernel
 
 # Editor/OS temp files
 *~
