@@ -38,6 +38,14 @@ let jit_server_mode = ref false
 let emit_cps_path = ref (None: string option)
 let jit_functions : (string, int64) Hashtbl.t = Hashtbl.create 16
 
+(* The binary most recently swapped into the JIT (set only on a successful
+   swap). If a later swap produces byte-identical bytes, the JIT already
+   holds exactly those functions and the whole Rust-side rebuild is skipped.
+   Serialization is deterministic (ordered list, no map iteration), so byte
+   equality is a sound no-change test; if it ever were not, the fast path
+   simply would not fire — never incorrect, only slower. *)
+let last_swapped_binary : string option ref = ref None
+
 let append_import_to_interface (ci: concrete_module_interface) (import: concrete_import_list): concrete_module_interface =
   let (ConcreteModuleInterface (mn, docstring, imports, decls)) = ci in
   if equal_module_name mn pervasive_module_name then
@@ -118,6 +126,16 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
           let combined: SmallCombined.combined_module = DesugaringPass.desugar combined in
           let (env, linked): (env * linked_module) = extract env combined int_file_id body_file_id in
           let typed: typed_module = augment_module env linked in
+          (* S36 WhyML plugin seam: every registered compiler pass runs on the
+             typed module after typing and before codegen. A VerdictReject
+             aborts compilation — the machine-verified authorization gate
+             (Why3-extracted) refuses modules whose uk_* imports are not
+             granted. *)
+          (match Compiler_plugin.run_on_typed typed with
+           | Compiler_plugin.VerdictReject msg ->
+              (* `austral_raise` never returns — it raises the Austral_error. *)
+              austral_raise TypeError [ErrorText.Text msg]
+           | Compiler_plugin.VerdictOk -> ());
           let _ = check_module_linearity typed in
           let env: env = extract_bodies env typed in
           let (env, mono): (env * mono_module) = monomorphize env typed in
@@ -125,14 +143,14 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
           (* Phase 7: CPS JIT Integration Path *)
           if !use_cps_jit then begin
             try
-              let funcs = Compiler_cps.compile_module_cps mono in
+              let (funcs, module_name) = Compiler_cps.compile_module_cps mono in
               (if Sys.getenv_opt "CPS_DEBUG" <> None then
                  Compiler_cps.debug_print_cps_functions funcs);
               if List.length funcs > 0 then begin
-                let binary = CpsGen.serialize_functions funcs in
+                let binary = CpsGen.serialize_functions ~module_name funcs in
                 (match !emit_cps_path with
                  | Some path ->
-                    Compiler_cps.write_cps_binary funcs path;
+                    Compiler_cps.write_cps_binary funcs module_name path;
                     Printf.eprintf "CPS JIT: Emitted CPS binary to %s\n%!" path
                  | None -> ());
                 Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
@@ -212,6 +230,11 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
       let (new_env, linked) = extract !env combined int_file_id body_file_id in
       env := new_env;
       let typed = augment_module !env linked in
+      (* S36 WhyML plugin seam (same gate as compile_mod). *)
+      (match Compiler_plugin.run_on_typed typed with
+       | Compiler_plugin.VerdictReject msg ->
+          austral_raise TypeError [ErrorText.Text msg]
+       | Compiler_plugin.VerdictOk -> ());
       let _ = check_module_linearity typed in
       let new_env = extract_bodies !env typed in
       env := new_env;
@@ -225,6 +248,7 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
     compile_mod_to_env (make_source pervasive_interface_source pervasive_body_source);
     compile_mod_to_env (make_source memory_interface_source memory_body_source);
     let all_funcs = ref [] in
+    let swap_module_name = ref "" in
     List.iter (fun source ->
       let (new_env, _name, combined, int_file_id, body_file_id) =
         parse_and_combine !env source in
@@ -239,29 +263,41 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
       env := new_env;
       let (new_env, mono) = monomorphize !env typed in
       env := new_env;
-      let funcs = Compiler_cps.compile_module_cps mono in
+      let (funcs, module_name) = Compiler_cps.compile_module_cps mono in
+      swap_module_name := module_name;
       all_funcs := !all_funcs @ funcs
     ) mods;
     if List.length !all_funcs > 0 then begin
-      let binary = CpsGen.serialize_functions !all_funcs in
-      Printf.eprintf "CPS JIT: Swap compiled %d functions (%d bytes)\n%!"
-        (List.length !all_funcs) (String.length binary);
+      let binary = CpsGen.serialize_functions ~module_name:!swap_module_name !all_funcs in
+      if Some binary = !last_swapped_binary then begin
+        (* Identical function set: the JIT already holds these exact bytes
+           and the function table has not changed — nothing to do. Reporting
+           it keeps the "swap" round trip honest without a wasted rebuild. *)
+        Printf.eprintf "CPS JIT: Swap no-change (%d functions, %d bytes — \
+                        already in the JIT)\n%!"
+          (List.length !all_funcs) (String.length binary);
+        true
+      end else begin
+        Printf.eprintf "CPS JIT: Swap compiled %d functions (%d bytes)\n%!"
+          (List.length !all_funcs) (String.length binary);
 
-      let (_fn_ptr, jit_err) = CamlCompiler_rust_bridge.swap_binary binary in
-      (match jit_err with
-       | Some msg -> Printf.eprintf "CPS JIT: Swap error: %s\n%!" msg; false
-       | None ->
-           (* Update jit_functions hashtable *)
-           Hashtbl.clear jit_functions;
-           let names = CamlCompiler_rust_bridge.list_function_names () in
-           List.iter (fun name ->
-             let ptr = CamlCompiler_rust_bridge.lookup_function name in
-             if ptr <> Int64.zero then
-               Hashtbl.replace jit_functions name ptr
-           ) names;
-           Printf.eprintf "CPS JIT: Swap complete — %d functions ready\n%!"
-             (Hashtbl.length jit_functions);
-           true)
+        let (_fn_ptr, jit_err) = CamlCompiler_rust_bridge.swap_binary binary in
+        (match jit_err with
+         | Some msg -> Printf.eprintf "CPS JIT: Swap error: %s\n%!" msg; false
+         | None ->
+             last_swapped_binary := Some binary;
+             (* Update jit_functions hashtable *)
+             Hashtbl.clear jit_functions;
+             let names = CamlCompiler_rust_bridge.list_function_names () in
+             List.iter (fun name ->
+               let ptr = CamlCompiler_rust_bridge.lookup_function name in
+               if ptr <> Int64.zero then
+                 Hashtbl.replace jit_functions name ptr
+             ) names;
+             Printf.eprintf "CPS JIT: Swap complete — %d functions ready\n%!"
+               (Hashtbl.length jit_functions);
+             true)
+      end
     end else begin
       Printf.eprintf "CPS JIT: No CPS functions to swap\n%!";
       false
@@ -300,6 +336,8 @@ let post_compile (compiler: compiler): compiler =
 let empty_compiler: compiler =
   with_frame "Compile built-in modules"
     (fun _ ->
+      (* S36: install the WhyML-derived compiler passes (idempotent). *)
+      Why3_plugin.install ();
       (* We have to compile the Austral.Pervasive module, followed by
          Austral.Memory, since the latter uses declarations from the former. *)
       let env: env = empty_env in

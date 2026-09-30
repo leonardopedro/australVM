@@ -1,0 +1,8 @@
+# Pinned Rust toolchain for the austral_cranelift_bridge JIT bridge.
+#
+# The repo's CI (build-and-test.yml) installs Rust via
+# actions-rust-lang/setup-rust-toolchain; rustup honors this file for every
+# cargo invocation in this crate, so the JIT bridge builds with exactly this
+# compiler regardless of what the runner's default stable is. Bump deliberately.
+[toolchain]
+channel = "1.97.1"

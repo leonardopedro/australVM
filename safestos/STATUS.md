@@ -1,9 +1,15 @@
 # SafestOS Implementation Status
 
 **Date**: 2026-07-19  
-**Status**: CPS JIT pipeline functional — `make bridge` builds the full stack (Rust bridge
+**Status**: Cranelift bridge functional — `make bridge` builds the full stack (Rust bridge
 → OCaml compiler binary) in one command. Unfer path dep kept; build.rs guard verifies
 sibling repo exists.
+
+> **Note**: earlier CPS-JIT-era items (the OCaml `CpsGen.ml` 0x08 patch,
+> `examples/fib/cps_Fib_only.bin`, and the `test_fib_math` binary) are
+> historical — those files are no longer part of the tree (the pipeline moved
+> to the `unfer_ffi` kernel integration). See `COMPLETION_SUMMARY.md` /
+> `CURRENT_STATUS.md` for the current state.
 
 ---
 
@@ -18,18 +24,14 @@ sibling repo exists.
 - Comparison opcodes (0x10, 0x13-0x19) working with borrow-checker fixes
 - Tail call support via `return_call` when 0x07 follows 0x04
 - Automatic import/stub detection for external function references
-- `test_fib_math` runs and produces results
 - Unfer path dep kept (not switched to git dep) for offline operation; `build.rs` guard
   verifies sibling `../unfer` repo's `Cargo.toml` exists at compile time and panics early
   with a clear message if missing (Stage B1)
 
 ### What Needs To Be Done
-1. **Recompile OCaml** after `CpsGen.ml` 0x08 patch (`dune build`)
-2. **Regenerate** `examples/fib/cps_Fib_only.bin` with patched compiler
-3. **Verify** `fib(10) = 55` in `test_fib_math`
-4. **Remove** debug `eprintln!`/`println!` statements from `cps.rs`
-5. **Verify** comparison opcode mapping between OCaml and Rust
-6. **Fix noreturn warnings** in `safestos/runtime/scheduler.c` (Stage B5)
+1. **Remove** debug `eprintln!`/`println!` statements from `cps.rs`
+2. **Verify** comparison opcode mapping between OCaml and Rust
+3. **Fix noreturn warnings** in `safestos/runtime/scheduler.c` (Stage B5)
 
 ---
 

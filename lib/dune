@@ -12,10 +12,9 @@
   (preprocess (pps ppx_deriving.eq ppx_deriving.show ppx_sexp_conv))
   (wrapped false)
   (flags :standard -w -39-50)
-  (modules
-    AbstractionPass BodyExtractionPass BuiltIn BuiltInModules CRenderer CRepr 
+  (modules    AbstractionPass BodyExtractionPass BuiltIn BuiltInModules CRenderer CRepr 
     CellAttribute Cst CstUtil CodeGen 
-    CombiningPass Common DeclIdSet DesugarBorrows DesugarPaths 
+    CombiningPass Common Compiler_plugin DeclIdSet DesugarBorrows DesugarPaths 
     DesugaringPass Entrypoint Env EnvExtras EnvTypes EnvUtils Error 
     ErrorText Escape ExportInstantiation ExtractionPass HtmlError Id 
     Identifier IdentifierMap IdentifierSet ImportResolution Imports LexEnv 
@@ -26,7 +25,7 @@
     TypeCheckExpr TypeClasses TypeErrors TypeMatch TypeParameter 
     TypeParameters TypeParser TypeReplace TypeSignature TypeStripping 
     TypeSystem TypeVarSet TypingPass Util Version Lexer Parser
-  ))
+  )) 
 
 ; OCaml library with C FFI for SafestOS
 (library
@@ -72,6 +71,13 @@
   (libraries austral_core austral_rust_bridge)
   (wrapped false)
   (flags :standard -w -39-50)
-  (modules Compiler Cli CliEngine CliParser CliUtil))
+  ; S36: the WhyML cycle. authorize_gate.ml (the Why3 extraction, source in
+  ; why3_plugin/authorize_gate.mlw) + why3_plugin.ml (the compiler pass) + the
+  ; deltanet_plugin.ml (the Austral->deltanet UNF consistency gate) + the
+  ; npu_dma_gate.ml (the GPU.md Why3 extraction, source in
+  ; why3_plugin/npu_dma_gate.mlw) + npu_dma_plugin.ml (its compiler pass) + the
+  ; Vm_plugin registry (the compiler itself as a plugin of the application/VM)
+  ; live in this directory so dune picks them up with the explicit list below.
+  (modules Authorize_gate Compiler Cli CliEngine CliParser CliUtil Deltanet_plugin Npu_dma_gate Npu_dma_plugin Vm_plugin Why3_plugin))
 
 (documentation)

@@ -2,7 +2,7 @@
 //!
 //! Subcommands:
 //!   authorize   <manifest.toml> <module> <uk_symbol>   — check authorization
-//!   host        <module-dir> --call <ep> [--args ...] [--repeat N] [--swap <dir>]
+//!   host        <module-dir> --call <ep> [--args ...] [--args-json <json>] [--repeat N] [--swap <dir>]
 //!   host-legacy <austral-path> <module-src>... -- <entrypoint>...
 //!
 //! The `host` subcommand loads a pre-compiled module directory (module.cps +
@@ -17,6 +17,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, ExitCode, Stdio};
 
+/// Host runtime primitives for JIT-compiled Austral modules.
+///
+/// The Rust library (`austral_cranelift_bridge`) now provides `au_*`
+/// itself (self-contained `.so`, see `src/lib.rs`), so modhost inherits
+/// them from the rlib it links; the OCaml FFI provides identical copies
+/// in `lib/rust_bridge.c` (ELF interposition: the executable's copies win).
 fn cmd_authorize(args: &[String]) -> ExitCode {
     let (manifest_path, principal, symbol) = (&args[2], &args[3], &args[4]);
 
@@ -53,6 +59,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
 
     let mut entrypoint = String::from("run");
     let mut call_args: Vec<i64> = Vec::new();
+    let mut args_json: Option<String> = None;
     let mut repeat: u64 = 1;
     let mut swap_dir: Option<String> = None;
 
@@ -63,6 +70,12 @@ fn cmd_host(args: &[String]) -> ExitCode {
                 i += 1;
                 if i < args.len() {
                     entrypoint = args[i].clone();
+                }
+            }
+            "--args-json" => {
+                i += 1;
+                if i < args.len() {
+                    args_json = Some(args[i].clone());
                 }
             }
             "--args" => {
@@ -103,7 +116,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
                 "modhost: loaded '{}' v{} ({} functions, entry='{}')",
                 handle.manifest.name,
                 handle.manifest.version,
-                handle.functions.len(),
+                handle.function_count(),
                 handle.manifest.entry,
             );
         }
@@ -136,7 +149,21 @@ fn cmd_host(args: &[String]) -> ExitCode {
         if repeat > 1 {
             println!("--- call {}/{} ---", call_idx + 1, repeat);
         }
-        match host.call(&module_name, &entrypoint, &call_args) {
+        let result: Result<String, String> = if let Some(json) = &args_json {
+            #[cfg(feature = "ecmascript")]
+            {
+                host.call_json(&module_name, &entrypoint, json)
+            }
+            #[cfg(not(feature = "ecmascript"))]
+            {
+                let _ = json;
+                Err("--args-json requires the 'ecmascript' feature".to_string())
+            }
+        } else {
+            host.call(&module_name, &entrypoint, &call_args)
+                .map(|v| v.to_string())
+        };
+        match result {
             Ok(result) => println!("{entrypoint}: {result}"),
             Err(e) => {
                 eprintln!("modhost: call failed: {e}");
@@ -148,11 +175,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn spawn_jit_server(
-    austral_path: &str,
-    module_args: &[String],
-    call_args: &[String],
-) -> ExitCode {
+fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[String]) -> ExitCode {
     let mut cmd = Command::new(austral_path);
     cmd.arg("compile");
     for m in module_args {
@@ -199,8 +222,7 @@ fn spawn_jit_server(
         match reader.read_line(&mut result_line) {
             Ok(n) if n > 0 => {
                 let result = result_line.trim();
-                if result.starts_with("RESULT ") {
-                    let val = &result["RESULT ".len()..];
+                if let Some(val) = result.strip_prefix("RESULT ") {
                     println!("{target}: {val}");
                 } else if result.starts_with("ERROR ") {
                     eprintln!("modhost: {result}");
@@ -230,9 +252,7 @@ fn main() -> ExitCode {
     match args.get(1).map(|s| s.as_str()) {
         Some("authorize") => {
             if args.len() != 5 {
-                eprintln!(
-                    "usage: modhost authorize <manifest.toml> <module> <uk_symbol>"
-                );
+                eprintln!("usage: modhost authorize <manifest.toml> <module> <uk_symbol>");
                 return ExitCode::from(2);
             }
             cmd_authorize(&args)
@@ -282,15 +302,11 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!("usage:");
-            eprintln!(
-                "  modhost authorize <manifest.toml> <module> <uk_symbol>"
-            );
+            eprintln!("  modhost authorize <manifest.toml> <module> <uk_symbol>");
             eprintln!(
                 "  modhost host <module-dir> --call <entrypoint> [--args ...] [--repeat N] [--swap <dir>]"
             );
-            eprintln!(
-                "  modhost host-legacy <austral-path> <module-src>... -- <entrypoint>..."
-            );
+            eprintln!("  modhost host-legacy <austral-path> <module-src>... -- <entrypoint>...");
             ExitCode::from(2)
         }
     }

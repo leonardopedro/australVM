@@ -46,19 +46,32 @@ mod tests {
     use arctic::types::DelegationCertificate;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn sign_certificate(cert: &DelegationCertificate) -> (arctic::arctic_core::PubKey, arctic::arctic_core::Signature) {
+    fn sign_certificate(
+        cert: &DelegationCertificate,
+    ) -> (arctic::arctic_core::PubKey, arctic::arctic_core::Signature) {
         let n = 7u32;
         let t = 4u32;
         let (group_pk, _player_pks, seckeys) = keygen(n, t);
         let coalition: Vec<u32> = (1..=n).collect();
         let cert_bytes = serde_json::to_vec(cert).unwrap();
 
-        let r1_outputs: Vec<_> = seckeys.iter().map(|k| sign1(k, &coalition, &cert_bytes)).collect();
+        let r1_outputs: Vec<_> = seckeys
+            .iter()
+            .map(|k| sign1(k, &coalition, &cert_bytes))
+            .collect();
         let sigshares: Vec<_> = seckeys
             .iter()
             .map(|k| sign2(&group_pk, k, &coalition, &cert_bytes, &r1_outputs).unwrap())
             .collect();
-        let sig = combine(&group_pk, t, &coalition, &cert_bytes, &r1_outputs, &sigshares).unwrap();
+        let sig = combine(
+            &group_pk,
+            t,
+            &coalition,
+            &cert_bytes,
+            &r1_outputs,
+            &sigshares,
+        )
+        .unwrap();
         (group_pk, sig)
     }
 
@@ -67,7 +80,11 @@ mod tests {
         let cert = DelegationCertificate {
             issuer_did: "did:web:authority.example".to_string(),
             delegatee_pk: "z6MkHotKey".to_string(),
-            expires_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600,
+            expires_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + 3600,
             capabilities: vec!["uk_observe".to_string()],
         };
         let (group_pk, sig) = sign_certificate(&cert);
@@ -76,15 +93,21 @@ mod tests {
         let engine = ArcticVmEngine::new(inner);
 
         assert_eq!(
-            engine.authorize("z6MkHotKey", "Call", "uk_observe").unwrap(),
+            engine
+                .authorize("z6MkHotKey", "Call", "uk_observe")
+                .unwrap(),
             Decision::Allow
         );
         assert_eq!(
-            engine.authorize("z6MkHotKey", "Call", "uk_set_hamiltonian").unwrap(),
+            engine
+                .authorize("z6MkHotKey", "Call", "uk_set_hamiltonian")
+                .unwrap(),
             Decision::Deny
         );
         assert_eq!(
-            engine.authorize("unknown_principal", "Call", "uk_observe").unwrap(),
+            engine
+                .authorize("unknown_principal", "Call", "uk_observe")
+                .unwrap(),
             Decision::Deny
         );
     }

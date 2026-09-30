@@ -13,9 +13,9 @@
 // Global scheduler queue
 PauseQueue scheduler_queue = {
     .buffer = {{0}},
-    .head = ATOMIC_VAR_INIT(0),
-    .tail = ATOMIC_VAR_INIT(0),
-    .size = ATOMIC_VAR_INIT(0)
+    .head = 0,
+    .tail = 0,
+    .size = 0
 };
 
 // Enqueue a cell for pausing

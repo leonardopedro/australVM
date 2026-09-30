@@ -9,9 +9,9 @@
 //! provides the *isolation* for genuinely untrusted code.
 
 #[cfg(feature = "capstd")]
-use cap_std::fs::Dir;
-#[cfg(feature = "capstd")]
 use cap_std::ambient_authority;
+#[cfg(feature = "capstd")]
+use cap_std::fs::Dir;
 #[cfg(feature = "capstd")]
 use std::path::Path;
 

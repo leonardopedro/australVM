@@ -9,11 +9,11 @@
 //! The module principal maps to a DID for consensus operations.
 
 #[cfg(feature = "federation")]
-use unfer_consensus::{ConsensusNode, LocalConsensus, Keypair};
-#[cfg(feature = "federation")]
-use unfer_identity::DidManager;
+use unfer_consensus::{ConsensusNode, Keypair, LocalConsensus};
 #[cfg(feature = "federation")]
 use unfer_data::compute_cid;
+#[cfg(feature = "federation")]
+use unfer_identity::DidManager;
 
 #[cfg(feature = "federation")]
 pub struct ModuleIdentity {

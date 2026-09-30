@@ -86,4 +86,10 @@ module body UnferKernel is
 
     pragma Foreign_Import(External_Name => "uk_last_error");
     function kernelLastError(buf: Address[Nat8], cap: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_durable_snapshot_error");
+    function kernelDurableSnapshotError(buf: Address[Nat8], cap: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_durable_status");
+    function kernelDurableStatus(buf: Address[Nat8], cap: Int64): Int64 is end;
 end module body.

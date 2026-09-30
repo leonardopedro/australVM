@@ -18,12 +18,17 @@ external c_execute_function : int64 -> int64 = "ocaml_execute_function"
 external c_execute_function_1 : int64 -> int64 -> int64 = "ocaml_execute_function_1"
 external c_execute_function_2 : int64 -> int64 -> int64 -> int64 = "ocaml_execute_function_2"
 external c_last_error : unit -> string option = "ocaml_cranelift_last_error"
+external c_austral_unf : string -> string option = "ocaml_austral_unf"
 external c_lookup_function : string -> int64 = "ocaml_lookup_function"
 external c_list_function_names : unit -> string = "ocaml_list_function_names"
 external c_set_allow_all : unit -> unit = "ocaml_set_allow_all"
+external c_load_auth_manifest : string -> int64 = "ocaml_load_auth_manifest"
 external c_swap_binary : bytes -> int -> int64 = "ocaml_swap_binary"
 
 let set_allow_all () : unit = c_set_allow_all ()
+
+let load_auth_manifest (manifest: string) : bool =
+  c_load_auth_manifest manifest = 1L
 external c_cedar_load_policy : string -> int64 = "ocaml_cedar_load_policy"
 external c_cedar_check_runtime : string -> string -> string -> int64 = "ocaml_cedar_check_runtime"
 external c_set_cell_jit_ptr : int64 -> int64 -> unit = "ocaml_set_cell_jit_ptr"
@@ -45,11 +50,6 @@ let initialize () : bool =
 
 let is_ready () : bool =
   c_bridge_ready () = 1L
-
-let compile_demo () : int64 option =
-  let demo_bytes = Bytes.create 0 in
-  let ptr = c_compile_to_function demo_bytes 0 in
-  if ptr = Int64.zero then None else Some ptr
 
 let last_jit_error () : string option =
   c_last_error ()
@@ -86,14 +86,17 @@ let execute_function_2 (ptr: int64) (arg1: int64) (arg2: int64) : int64 =
   c_execute_function_2 ptr arg1 arg2
 
 let compile_mast (_module_name: module_name) (decls: mdecl list) : int64 option =
+  (* Never fall back to a "demo" pointer: a module with no compilable
+     functions or a failed compile must read as None (the failure is
+     recorded on the bridge's last-error channel via `last_jit_error`), so
+     the caller can never execute the wrong code silently. *)
   if not (is_ready ()) && not (initialize ()) then None
   else
     match CpsGen.compile_module _module_name decls with
-    | None -> compile_demo ()
+    | None -> None
     | Some cps_bytes ->
         let ptr = c_compile_to_function cps_bytes (Bytes.length cps_bytes) in
-        if ptr = Int64.zero then compile_demo ()
-        else Some ptr
+        if ptr = Int64.zero then None else Some ptr
 
 let compile_function (name: string) (params: (string * mono_ty) list) (body: mstmt) : int64 option =
   if not (is_ready ()) && not (initialize ()) then None
@@ -144,3 +147,11 @@ let load (ptr: int64) : int64 =
 
 let store (ptr: int64) (value: int64) : unit =
   c_store ptr value
+
+(** Austral→deltanet UNF translation (S36-cycle kernel call): run an Austral
+    source fragment through the kernel's `uk_austral_unf` symbol and return
+    the `AustralReport` JSON (`{"value": "5", "unf_hash": ...}`), or None
+    when the kernel/bridge is unavailable. This is the "call the kernel
+    from the compiler" direction the Deltanet_plugin pass uses. *)
+let austral_unf_json (src: string) : string option =
+  c_austral_unf src

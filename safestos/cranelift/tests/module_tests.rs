@@ -36,16 +36,14 @@ fn body_return_const(val: i64) -> Vec<u8> {
     body
 }
 
-fn make_module_dir(
-    dir: &Path,
-    name: &str,
-    grants: &[&str],
-    cps_data: &[u8],
-) {
+fn make_module_dir(dir: &Path, name: &str, grants: &[&str], cps_data: &[u8]) {
     std::fs::create_dir_all(dir).unwrap();
     let grants_toml: Vec<String> = grants.iter().map(|g| format!("    \"{g}\",")).collect();
+    // H8: the loader's archetype resolver only maps registered harness
+    // profiles, so the helper uses the austral_cps JIT profile ("actor" was
+    // never a harness profile; it made every load fail the resolver).
     let toml = format!(
-        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"actor\"]\nentry = \"run\"\n\n[grants]\nkernel = [\n{}\n]\n",
+        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\nentry = \"run\"\n\n[grants]\nkernel = [\n{}\n]\n",
         grants_toml.join("\n")
     );
     std::fs::write(dir.join("module.toml"), toml).unwrap();
@@ -97,8 +95,8 @@ fn load_and_call_multiple_times() {
     let mut host = ModuleHost::new();
     let handle = host.load(&dir).unwrap();
     assert_eq!(handle.manifest.name, "test_load");
-    assert_eq!(handle.functions.len(), 1);
-    assert!(handle.functions.contains_key("run"));
+    assert_eq!(handle.function_count(), 1);
+    assert!(handle.runtime.function_ptr("run").is_some());
 
     for _ in 0..5 {
         let result = host.call("test_load", "run", &[]).unwrap();

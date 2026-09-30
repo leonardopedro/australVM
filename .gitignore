@@ -5,6 +5,10 @@ result
 *.o
 *.so
 *.a
+*.hi
+
+# run_demo.sh compiles the hosted module in place (mathed_kernel)
+examples/modules/mathed_kernel/mathed_kernel
 
 # Editor/OS temp files
 *~
@@ -32,6 +36,14 @@ test_const
 test_cps
 libaustral_cranelift_bridge.so
 
+# Root compiler binary (built by `make`/`make bridge`; CI uploads it as an
+# ephemeral artifact, never checked out and used directly)
+/austral
+
 # Docs/planning artifacts
 docs/history/
 examples/modules/demo_hosted/module.cps
+
+# Compiler-generated debug output
+calltree.html
+error.html

@@ -1,10 +1,15 @@
 {
   description = "Systems language with linear types and capability-based security.";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.05";
+  # nixos-unstable: the cranelift JIT bridge (cranelift 0.131) needs a rustc
+  # newer than nixos-23.05 ships, and the bridge .so / OCaml toolchain must
+  # share a glibc so OCaml test binaries can load the .so at runtime. The
+  # 23.05 pin (glibc 2.37) cannot load a .so built on a modern host.
+  # velysterm/unfer's flakes follow the same nixos-unstable convention.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   inputs.utils.url = "github:numtide/flake-utils";
 
-  outputs = { self, nixpkgs, utils }: 
+  outputs = { self, nixpkgs, utils }:
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -18,6 +23,11 @@
           ocamlPackages.dune_3
           ocamlPackages.findlib
           ocamlPackages.odoc
+
+          # Rust toolchain for the cranelift JIT bridge ("make bridge"
+          # rebuilds safestos/cranelift against this environment's glibc).
+          rustc
+          cargo
 
           # OCaml libraries
           ocamlPackages.yojson

@@ -6,11 +6,11 @@
 //! When adding a new `uk_*` or `uz_*` symbol to unfer_ffi, you must also:
 //! 1. Add it to `EXPECTED_SYMBOLS.txt` (or `EXPECTED_SYMBOLS_ZENODO.txt`) in unfer.
 //! 2. Add it to the `UNFER_SYMBOLS` / `ZENODO_SYMBOLS` table in `lib.rs`.
-//! This test will catch any mismatch.
+//!    This test will catch any mismatch.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
 /// Path to the sibling unfer repo, relative to CARGO_MANIFEST_DIR.
 fn unfer_dir() -> &'static Path {
@@ -24,9 +24,10 @@ fn unfer_dir() -> &'static Path {
 
 fn read_expected_symbols(rel_path: &str) -> BTreeSet<String> {
     let path = unfer_dir().join(rel_path);
-    let content = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    content.lines()
+    let content =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    content
+        .lines()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect()
@@ -101,7 +102,10 @@ fn uk_model_create_free_round_trip() {
     // null/0 is an invalid JSON spec → returns UK-1001 as a negative error
     // handle. Freeing a negative handle is a defined no-op.
     let handle = unfer_ffi::uk_model_create(std::ptr::null(), 0);
-    assert!(handle < 0, "uk_model_create(null,0) should return negative error code, got {handle}");
+    assert!(
+        handle < 0,
+        "uk_model_create(null,0) should return negative error code, got {handle}"
+    );
     unfer_ffi::uk_model_free(handle);
 }
 

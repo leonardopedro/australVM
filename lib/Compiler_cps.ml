@@ -148,7 +148,7 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MParamVar (id, _) -> Var (ident_string id)
   | Mt.MLocalVar (id, _) -> Var (ident_string id)
   | Mt.MTemporary (id, _) -> Var (ident_string id)
-  | Mt.MGenericFunVar (id, _) -> Var (show_mono_id id)
+  | Mt.MGenericFunVar (id, _) -> Var ("monomorph_" ^ show_mono_id id)
   | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ show_decl_id id)
   | Mt.MConcreteFuncall (decl_id, q, args, _) ->
       let name = qident_to_string q in
@@ -172,11 +172,11 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
            qualified debug name ("UnferKernel::wrapModel") would not resolve. *)
         App (ident_string (original_name q), List.map convert_expr args)
   | Mt.MGenericFuncall (id, args, _) ->
-      App (show_mono_id id, List.map convert_expr args)
+      App ("monomorph_" ^ show_mono_id id, List.map convert_expr args)
   | Mt.MConcreteMethodCall (_, q, args, _) ->
       App (qident_to_string q, List.map convert_expr args)
   | Mt.MGenericMethodCall (_, id, args, _) ->
-      App (show_mono_id id, List.map convert_expr args)
+      App ("method_" ^ show_mono_id id, List.map convert_expr args)
   | Mt.MFptrCall (id, args, _) ->
       App (ident_string id, List.map convert_expr args)
   | Mt.MCast (e, _) -> convert_expr e
@@ -226,6 +226,8 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       (match String.trim code, cargs with
        | "$1.data", [a] -> App ("__slot_get", [a; IntLit 0L])
        | "$1.size", [a] -> App ("__slot_get", [a; IntLit 8L])
+       | "NULL", [] -> IntLit 0L
+       | "$1", [a] -> a
        | _ -> App ("__embed", cargs))
   | Mt.MDeref e -> App ("__deref", [convert_expr e])
   | Mt.MTypecast (e, _) -> convert_expr e
@@ -418,9 +420,9 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
 (* MAIN ENTRY POINT: COMPILE MODULE *)
 (******************************************************************************)
 
-let compile_module_cps (mono_module: Mt.mono_module): CpsGen.function_def list =
+let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list * string) =
   match mono_module with
-  | Mt.MonoModule (_, decls) ->
+  | Mt.MonoModule (name, decls) ->
       (* First pass: collect record layouts and foreign function mappings *)
       List.iter (function
         | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
@@ -433,22 +435,22 @@ let compile_module_cps (mono_module: Mt.mono_module): CpsGen.function_def list =
         | _ -> ()
       ) decls;
       (* Second pass: convert functions *)
-      List.filter_map build_cps_function decls
+      (List.filter_map build_cps_function decls, mod_name_string name)
 
 (******************************************************************************)
 (* BINARY GENERATION AND WRITING *)
 (******************************************************************************)
 
-let write_cps_binary (funcs: CpsGen.function_def list) (output_path: string): unit =
-  let binary = CpsGen.serialize_functions funcs in
+let write_cps_binary (funcs: CpsGen.function_def list) (module_name: string) (output_path: string): unit =
+  let binary = CpsGen.serialize_functions ~module_name funcs in
   let oc = open_out_bin output_path in
   output_string oc binary;
   close_out oc
 
 let compile_and_save (mono_module: Mt.mono_module) (output_path: string): unit =
-  let funcs = compile_module_cps mono_module in
+  let (funcs, name) = compile_module_cps mono_module in
   if List.length funcs > 0 then
-    write_cps_binary funcs output_path
+    write_cps_binary funcs name output_path
 
 (******************************************************************************)
 (* TESTING HELPERS *)

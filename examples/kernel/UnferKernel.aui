@@ -78,4 +78,20 @@ module UnferKernel is
     function kernelObserve(model: Int64, obs: Address[Nat8], len: Int64): Int64;
     function kernelGetResult(model: Int64, buf: Address[Nat8], cap: Int64): Int64;
     function kernelLastError(buf: Address[Nat8], cap: Int64): Int64;
+
+    """
+    Consult the corrupt-snapshot recovery report of the H4 durable store:
+    the fail-visible message from a torn `snapshot.bin` that could not be
+    imported (the store started empty and preserved the evidence). Returns
+    the report length (0 = clean open / no store); the report itself is
+    copied into `buf` (min of length and `cap`). Never fails.
+    """
+    function kernelDurableSnapshotError(buf: Address[Nat8], cap: Int64): Int64;
+
+    """
+    Consult the durable-store live-status JSON: backend label, per-stream
+    record counts, persist counter, and `snapshot_load_error` (null when
+    clean). Buffer-out protocol as in `kernelDurableSnapshotError`.
+    """
+    function kernelDurableStatus(buf: Address[Nat8], cap: Int64): Int64;
 end module.

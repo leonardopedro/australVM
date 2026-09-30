@@ -1,0 +1,111 @@
+(** OCaml extraction driver for the unfer authorization gate (S36).
+
+    The stock `ocaml64` driver maps Why3's unbounded `int` to Zarith's
+    `Z.t`, which would pull the zarith library into the compiler plugin.
+    The gate only needs native machine integers (kernel symbol ids), so
+    this driver maps Why3 `int` to native OCaml `int` — exactly as the
+    stock driver's own `int32`/`int63` mappings do — keeping the
+    extracted module dependency-free.
+
+    Usage:
+      why3 extract -D unfer_ocaml.drv authorize_gate.mlw -o authorize_gate.ml
+
+    The extraction is semantics-preserving (Why3 extraction soundness);
+    the only difference from the stock driver is the integer
+    representation, which is irrelevant for the finite symbol-id sets the
+    gate decides (subset ⊆ over `list int`).
+*)
+
+printer "ocaml"
+
+module BuiltIn
+  syntax type int "int"
+  syntax literal int "%1"
+  syntax type string "string"
+end
+
+module HighOrd
+  syntax type (->) "%1 -> %2"
+  syntax val  ( @ )  "%1 %2" prec 4 4 3
+end
+
+module option.Option
+  syntax type      option  "%1 option"
+  syntax val  None    "None"
+  syntax val  Some    "Some %1" prec 4 3
+end
+
+module Bool
+  syntax type     bool  "bool"
+  syntax val True  "true"
+  syntax val False "false"
+end
+
+module bool.Ite
+  syntax val ite "if %1 then %2 else %3" prec 16 15 15 15
+end
+
+module bool.Bool
+  syntax val andb  "%1 && %2"      prec 12 11 12
+  syntax val orb   "%1 || %2"      prec 13 12 13
+  syntax val (=)   "%1 = %2"       prec 11 11 10
+  syntax val xorb  "%1 <> %2"      prec 11 11 10
+  syntax val notb  "not %1"        prec 4 3
+  syntax val implb "not %1 || %2"  prec 13 3 13
+end
+
+module list.List
+  syntax type     list "%1 list"
+  syntax val Nil  "[]"
+  syntax val Cons "%1 :: %2"        prec 9 8 9
+end
+
+module list.Length
+  syntax val length "List.length" prec 4 3
+end
+
+module list.Append
+  syntax val (++) "List.append"
+end
+
+module list.Reverse
+  syntax val reverse "List.rev"
+end
+
+module list.RevAppend
+  syntax val rev_append "List.rev_append"
+end
+
+module list.Combine
+  syntax val combine "List.combine"
+end
+
+module int.Int
+  syntax val zero "0"
+  syntax val one  "1"
+
+  syntax val (<)   "%1 < %2"      prec 11 10 10
+  syntax val (<=)  "%1 <= %2"     prec 11 10 10
+  syntax val (>)   "%1 > %2"      prec 11 10 10
+  syntax val (>=)  "%1 >= %2"     prec 11 10 10
+  syntax val (=)   "%1 = %2"      prec 11 10 10
+
+  syntax val  (+)   "%1 + %2"      prec 14 13 14
+  syntax val  (-)   "%1 - %2"      prec 14 13 14
+  syntax val  ( * ) "%1 * %2"      prec 15 14 15
+  syntax val  (-_)  "-%1"          prec 4 3
+end
+
+module int.Abs
+  syntax val abs "abs"
+end
+
+module int.MinMax
+  syntax val min "min"
+  syntax val max "max"
+end
+
+module int.ComputerDivision
+  syntax val div "Stdlib.(/)" prec 14 13 14
+  syntax val mod "Stdlib.(mod)" prec 14 13 14
+end

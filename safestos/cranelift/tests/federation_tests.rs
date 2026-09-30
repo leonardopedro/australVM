@@ -28,11 +28,8 @@ fn module_identity_stub() {
 #[test]
 fn module_identity_creates_did() {
     let mut node = austral_cranelift_bridge::federation::create_consensus_node();
-    let id = austral_cranelift_bridge::federation::ModuleIdentity::create(
-        &mut node,
-        "test_mod",
-    )
-    .unwrap();
+    let id = austral_cranelift_bridge::federation::ModuleIdentity::create(&mut node, "test_mod")
+        .unwrap();
     assert!(id.did.starts_with("did:unfer:"));
 }
 

@@ -9,8 +9,7 @@ fn main() {
     // missing or misaligned unfer tree.
     #[cfg(feature = "unfer-kernel")]
     {
-        let unfer_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../unfer");
+        let unfer_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../unfer");
         let unfer_toml = unfer_dir.join("Cargo.toml");
         if !unfer_toml.exists() {
             panic!(

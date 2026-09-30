@@ -38,41 +38,61 @@ fn manifest_defaults_fs_net_grants_empty() {
 #[test]
 fn hotswap_rejects_fs_grant_escalation() {
     use austral_cranelift_bridge::module::ModuleHost;
-    use std::path::Path;
 
     let dir_v1 = std::env::temp_dir().join("capstd_swap_v1");
     let dir_v2 = std::env::temp_dir().join("capstd_swap_v2");
     let _ = std::fs::remove_dir_all(&dir_v1);
     let _ = std::fs::remove_dir_all(&dir_v2);
 
-    fn write_u32(buf: &mut Vec<u8>, v: u32) { buf.extend_from_slice(&v.to_le_bytes()); }
-    fn write_i64(buf: &mut Vec<u8>, v: i64) { buf.extend_from_slice(&v.to_le_bytes()); }
-    fn write_str(buf: &mut Vec<u8>, s: &str) { write_u32(buf, s.len() as u32); buf.extend_from_slice(s.as_bytes()); }
+    fn write_u32(buf: &mut Vec<u8>, v: u32) {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    fn write_i64(buf: &mut Vec<u8>, v: i64) {
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    fn write_str(buf: &mut Vec<u8>, s: &str) {
+        write_u32(buf, s.len() as u32);
+        buf.extend_from_slice(s.as_bytes());
+    }
     let mut body = Vec::new();
-    body.push(0x07); body.push(0x01); write_i64(&mut body, 1);
+    body.push(0x07);
+    body.push(0x01);
+    write_i64(&mut body, 1);
     let mut cps = Vec::new();
-    write_u32(&mut cps, 0x43505331); write_u32(&mut cps, 1);
-    write_str(&mut cps, "run"); write_u32(&mut cps, 0); cps.push(0);
-    write_u32(&mut cps, body.len() as u32); cps.extend_from_slice(&body);
+    write_u32(&mut cps, 0x43505331);
+    write_u32(&mut cps, 1);
+    write_str(&mut cps, "run");
+    write_u32(&mut cps, 0);
+    cps.push(0);
+    write_u32(&mut cps, body.len() as u32);
+    cps.extend_from_slice(&body);
 
     std::fs::create_dir_all(&dir_v1).unwrap();
     std::fs::create_dir_all(&dir_v2).unwrap();
     std::fs::write(dir_v1.join("module.cps"), &cps).unwrap();
     std::fs::write(dir_v2.join("module.cps"), &cps).unwrap();
+    // H8: the archetype must be a registered harness profile the loader maps
+    // (rust_capstd is a manifest-parsing label, not a harness profile — the
+    // resolver would fall back to austral_cps and reject the mismatch). The
+    // test's subject is fs-grant escalation on swap, so both sides use the
+    // austral_cps JIT profile with an explicit allowlist.
     std::fs::write(
         dir_v1.join("module.toml"),
-        "[module]\nname = \"cap_mod\"\narchetype = \"rust_capstd\"\n\n[grants]\nfs = [\"data/\"]\n",
+        "[module]\nname = \"cap_mod\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\n\n[grants]\nfs = [\"data/\"]\n",
     ).unwrap();
     std::fs::write(
         dir_v2.join("module.toml"),
-        "[module]\nname = \"cap_mod\"\narchetype = \"rust_capstd\"\n\n[grants]\nfs = [\"data/\", \"/etc/\"]\n",
+        "[module]\nname = \"cap_mod\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\n\n[grants]\nfs = [\"data/\", \"/etc/\"]\n",
     ).unwrap();
 
     let mut host = ModuleHost::new();
     host.load(&dir_v1).unwrap();
 
     let err = host.swap("cap_mod", &dir_v2).unwrap_err();
-    assert!(err.contains("escalates"), "expected escalation rejection, got: {err}");
+    assert!(
+        err.contains("escalates"),
+        "expected escalation rejection, got: {err}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir_v1);
     let _ = std::fs::remove_dir_all(&dir_v2);
