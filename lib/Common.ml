@@ -32,6 +32,10 @@ type pragma =
   | ForeignImportPragma of string
   | ForeignExportPragma of string
   | UnsafeModulePragma
+  (** Liquid contract pragmas (docs/LIQUID.md §3): the first component is
+      the kind ("Requires", "Ensures", "Invariant", "Trusted", "Measure",
+      "Fold"), the second the contract string ("" for marker pragmas). *)
+  | LiquidPragma of string * string
 
 (** Whether a variable is immutable or mutable. *)
 type mutability =
