@@ -19,8 +19,7 @@
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
-        "utils": "utils",
-        "why3-nixpkgs": "why3-nixpkgs"
+        "utils": "utils"
       }
     },
     "systems": {
@@ -53,22 +52,6 @@
       "original": {
         "owner": "numtide",
         "repo": "flake-utils",
-        "type": "github"
-      }
-    },
-    "why3-nixpkgs": {
-      "locked": {
-        "lastModified": 1704290814,
-        "narHash": "sha256-LWvKHp7kGxk/GEtlrGYV68qIvPHkU9iToomNFGagixU=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "70bdadeb94ffc8806c0570eb5c2695ad29f0e421",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "70bdadeb94ffc8806c0570eb5c2695ad29f0e421",
         "type": "github"
       }
     }

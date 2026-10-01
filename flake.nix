@@ -8,39 +8,18 @@
   # velysterm/unfer's flakes follow the same nixos-unstable convention.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Why3 toolchain channel.
-  #
-  # Pinned to the SAME nixpkgs revision ../unfer uses (its `nixpkgs` input, the
-  # nixos-23.05 channel at rev 70bdade…). That is deliberate: `pkgs.why3` is
-  # then the *same store path* in both repositories, so there is one Why3 build
-  # on disk rather than two, and one version rather than two.
-  #
-  # This matters beyond disk. Before this, australVM resolved why3 1.8.2 from
-  # nixos-unstable and unfer resolved why3 1.6.0 from nixos-23.05 — two builds,
-  # two versions, and two different `.why3.conf` prover registrations, with a
-  # `.mlw` from australVM's emitter checked by one engine and unfer's WhyML
-  # checked by another. A prover that accepts a file in one version and rejects
-  # it in the other would have shown up as a mysterious refusal in one project
-  # only. (The emitted goldens were confirmed to parse under both versions.)
-  #
-  # Only the Why3 toolchain comes from this channel. australVM's own build inputs
-  # stay on nixos-unstable, because the cranelift-bridge/glibc constraint in the
-  # note above rules out 23.05 for the OCaml and Rust toolchains — moving the
-  # base channel would break the bridge to buy nothing.
-  inputs.why3-nixpkgs.url = "github:NixOS/nixpkgs/70bdadeb94ffc8806c0570eb5c2695ad29f0e421";
-
   inputs.utils.url = "github:numtide/flake-utils";
 
-  outputs = { self, nixpkgs, why3-nixpkgs, utils }:
+  outputs = { self, nixpkgs, utils }:
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        # `allowUnfree` only for this import, and only because alt-ergo is
-        # unfree in nixpkgs. ../unfer already sets it repo-wide for CUDA, so the
-        # two projects agree on which prover they use: `alt-ergo` proper, not a
-        # free variant that would be a *different* binary and a second thing to
-        # keep in sync.
-        pkgsWhy3 = import why3-nixpkgs {
+        # Why3 toolchain, imported from this same channel so `pkgs.why3` is the
+        # *same store path* ../unfer resolves (see the note on the input below).
+        # `allowUnfree` is scoped to this import and only because alt-ergo is
+        # unfree in nixpkgs — unfer already sets it repo-wide for CUDA, so the two
+        # projects use the same prover rather than one real and one free variant.
+        pkgsWhy3 = import nixpkgs {
           system = system;
           config.allowUnfree = true;
         };
@@ -69,9 +48,20 @@
           ocamlPackages.ppx_sexp_conv
           ocamlPackages.zarith
 
-          # Why3 verification engine (docs/LIQUID.md §2.3), taken from unfer's
-          # channel so both repositories share one build — see the
-          # `why3-nixpkgs` input above.
+          # Why3 verification engine (docs/LIQUID.md §2.3).
+          #
+          # SHARED TOOLCHAIN with ../unfer (S36 there, L5/L10 here). Both repos
+          # run `why3 prove` as a subprocess over `.mlw` files, so they must be
+          # the same *version*, not merely the same package: the two repos'
+          # stdlib assumptions differ between releases, and `lib/why3_plugin/
+          # unfer_ocaml.drv` is a concrete case — it maps `bool.Bool`'s `=`,
+          # which exists in 1.8.x and does not in 1.6.0, so extraction fails on
+          # the older engine while still exiting 0.
+          #
+          # This side is on nixos-unstable (why3 1.8.2); unfer takes that same
+          # channel for `why3`/`alt-ergo` only, since its base channel is
+          # 23.05 for CUDA. One build, one version, one `~/.why3.conf`.
+          # **Changing the version here means changing it there.**
           #
           # LiquidWhy3 shells out to `why3 prove`, and before this the engine was
           # simply absent, so `LiquidWhy3.prove` took its structured-skip path
