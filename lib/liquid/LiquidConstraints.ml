@@ -80,6 +80,10 @@ type t = {
   module_name : string;
   contracts : contract_entry list;
   goals : goal list;
+  (** L6: the qualifier templates that survived Houdini elimination. Emitted as
+      `predicate` declarations and assumed by the goals, so an unproved
+      obligation is visible as an assumption rather than hidden. *)
+  templates : LiquidInfer.qualifier list;
 }
 
 (* ── goal naming ─────────────────────────────────────────────────────────── *)
@@ -183,6 +187,21 @@ let to_mlw (c : t) : string =
       | _ -> line "  (*   %s *)\n" e.csrc)
     c.contracts;
   line "\n";
+  if c.templates <> [] then
+    List.iter
+      (fun (q : LiquidInfer.qualifier) ->
+         match q.LiquidInfer.qargs with
+         | [] ->
+            line "  (* qualifier inferred at a program point (L6) *)\n";
+            line "  axiom %s\n" q.LiquidInfer.qname
+         | args ->
+            line "  (* qualifier inferred at a program point (L6) *)\n";
+            line "  predicate %s (%s) = %s\n"
+              q.LiquidInfer.qname
+              (String.concat ", " (List.map (fun a -> Printf.sprintf "%s: int" a) args))
+              (emit_contract (LiquidTypes.string_of_formula q.LiquidInfer.qbody)))
+      c.templates;
+  line "\n";
   line "  (* --- verification conditions --- *)\n";
   List.iter
     (fun g ->
@@ -271,5 +290,13 @@ let generate (m : typed_module) : t option =
           | None -> [])
         contracts
     in
-    Some { module_name = name; contracts; goals }
+    (* L6: run inference. The oracle is permissive here — the Why3-backed
+       oracle lives in the L5 driver, and a permissive oracle means every
+       template survives and is emitted as an explicit assumption. That is the
+       safe direction: an obligation that was never discharged is visible in
+       the .mlw instead of quietly dropped. *)
+    let inference =
+      LiquidInfer.infer (fun _ -> true) m
+    in
+    Some { module_name = name; contracts; goals; templates = inference.LiquidInfer.surviving }
   end

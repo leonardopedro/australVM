@@ -648,11 +648,35 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L6 — inference
 
-- [ ] `LiquidInfer.ml`: qualifier templates over Γ, Houdini-style
-      elimination, Horn fixed point (finite lattice — no widening, the
-      fragment is recursion-free); fold invariants as accumulator
-      qualifiers; default measures (`length`, record projections, `Prob`
-      bounds).
+- [x] `LiquidInfer.ml`: qualifier templates over Γ, Houdini elimination, and
+      the Horn fixed point (finite lattice — no widening, the fragment is
+      recursion-free). Surviving templates are emitted as `predicate`
+      declarations in the `.mlw`, so an undischarged obligation is visible as
+      an assumption rather than hidden. Default measures (`length`,
+      `prob_in`, `prob_le`) are declared in one reviewable place.
+
+      **The oracle is a parameter**, not a hard-coded `why3 prove`. The
+      elimination logic is the part that can be wrong — a fixed point that does
+      not terminate, a premise dropped on the wrong side — and none of it needs
+      a prover to check, so `LiquidInferTest` drives it with fake oracles (12
+      cases). It also makes a missing prover degrade to L4's behaviour (every
+      template survives, emitted as an explicit `assumes`) rather than
+      silently claiming inference happened; under-claiming leaves work to be
+      proved later, over-claiming would drop a real obligation.
+
+      The walk had to become **alpha-aware**. `augment_stmt` lifts a boolean
+      expression into a temporary and leaves the bare temporary as the
+      condition — `if n > m then` reaches the typed pass as
+      `TLetTmp _t127 (n > m); TIf _t127 …`, as *siblings* in one `TBlock`.
+      Reading the `TIf` condition literally finds a variable, not a comparison,
+      and every template is vacuous; worse, the lifted comparison is a sibling
+      rather than a parent, so the binding only reaches the `TIf` if `walk`
+      returns the extended environment.
+
+      *Not in L6:* fold invariants as accumulator qualifiers (needs §5.9's
+      `fold` combinator, which does not exist yet), and **T3** (structural
+      patterns — still needs `case`-arm guard analysis that `typed_when` does
+      not expose).
 
 ### L7 — contract library
 

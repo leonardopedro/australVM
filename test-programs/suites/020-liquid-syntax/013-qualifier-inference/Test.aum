@@ -1,0 +1,22 @@
+module body Test is
+    """
+    L6: a conditional gives inference a program point, so the emitted .mlw
+    carries a qualifier template for the branch condition.
+    """
+    pragma Liquid_Requires(Contract => "n >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0");
+    function pick(n: Int64, m: Int64): Int64 is
+        var r: Int64 := n;
+        if n > m then
+            r := n;
+        else
+            r := m;
+        end if;
+        return r;
+    end;
+
+    function main(): ExitCode is
+        printLn(pick(3, 5));
+        return ExitSuccess();
+    end;
+end module body.
