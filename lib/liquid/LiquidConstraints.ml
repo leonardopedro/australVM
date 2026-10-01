@@ -24,11 +24,16 @@
      named from the declaration id and the contract kind instead. Threading
      spans to the typed AST is a prerequisite for exact blame, and belongs with
      L5's verdict→span mapping — which cannot work until they exist.
-   - **Callee contracts are assumptions.** Cycle A (§8.3), which emits a Why3
-     `function` per contracted function so obligations discharge in the
-     extended theory, is L10. Until it lands a caller's goal *assumes* the
-     callee's postcondition, and the emitted file says so in an `assumes`
-     block so it is honest about what it stands in for.
+   - **Callee contracts are assumptions.** Cycle A (§8.3) has landed: the
+     emitter now writes a `function` per contracted function plus an `axiom`
+     carrying its contract, so a caller *can* appeal to a callee by name. The
+     axiom remains an assumption rather than a proof — it states the contract so
+     callers may rely on it, and discharging it would need the function body,
+     which is still not translated. This note used to describe an `assumes`
+     block, which was not merely a placeholder but invalid Why3: `assumes` is a
+     program construct, illegal inside a `goal`, and Why3's exit 1 for the
+     syntax error was being read as "the prover refused". See `emit_theory`'s
+     comment and the `verify-invariants` gate that parses the goldens.
 
    Erasure (§1.2): nothing generated here reaches codegen.
 *)

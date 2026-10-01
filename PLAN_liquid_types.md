@@ -784,9 +784,49 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L10 — cycles A/B
 
-- [ ] `emit_theory`: total Austral → Why3 `function`/`predicate` theory fed
+- [x] `emit_theory`: total Austral → Why3 `function`/`predicate` theory fed
       into L4 goldens (only `fold` translates recursively, structurally —
-      conservative by T1/T2).
+      conservative by T1/T2). Landed as `0c85cd6f`.
+
+      The `.mlw` previously declared **no functions at all**, so every goal was
+      closed over bare parameters and a caller had nothing to appeal to. The
+      emitter now writes the module's total-fragment functions as a theory:
+
+      ```
+      function atLeast (n: int) : int
+      axiom atLeast_post: forall n: int. (n >= 0) -> atLeast n >= n
+      ```
+
+      **The shape was established by running the engine, not by guessing, and
+      two of three first attempts were wrong.** A bodyless
+      `function ... requires/ensures` is a *syntax error*; a `val` does not bind
+      its name for use in a goal's formula at all. What works is a bare
+      `function` declaration plus an `axiom` over the symbol — and it is not
+      vacuous: a caller that uses the axiom gets `Valid`, one that *overstates*
+      the contract does not.
+
+      The axiom is an **assumption, not a proof**: it states what the function is
+      declared to do so callers may rely on it. Same conservative shape L6 uses
+      for qualifiers — an undischarged obligation stays visible in the file.
+      Discharging it needs the function body.
+
+      **The remaining gap is now visible rather than hidden.** The RETURN goal is
+      `forall n, __result: int. n >= 0 -> __result >= n` and `__result` is
+      unconstrained because bodies are not translated, so it is sound but
+      underivable — Why3 answers `Timeout`, not `Valid`. Before Why3 was
+      installed this was masked by a syntax error, which `LiquidWhy3.prove` read
+      as a prover refusal. Translating the body is what remains.
+
+      **Shared with unfer rather than duplicated.** unfer already ran Why3
+      (S36); the two flakes sat on different nixpkgs revisions, so nix could not
+      dedupe and the repos ran why3 1.8.2 and 1.6.0 respectively — two builds,
+      two versions, and a `.mlw` validated by one engine and refused by the
+      other with no obvious cause. australVM keeps nixos-unstable for its own
+      toolchain (the cranelift/glibc constraint rules out 23.05) and takes
+      unfer's channel as a `why3-nixpkgs` input for `why3`/`alt-ergo` only. Both
+      now resolve to one store path. Goldens confirmed to parse under 1.6.0 and
+      1.8.2, and the exit-code mapping is sound under the shared version
+      (`Valid`→0→`Proved`; `Timeout`/`Unknown`→2→`Unknown`).
 - [ ] One extracted OCaml plugin (qualifier library or measure table) written
       in the total subset, liquid-checked, extracted via `liquid.drv`,
       loaded through `Compiler_plugin.register_typed`.
