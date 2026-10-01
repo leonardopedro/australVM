@@ -900,10 +900,25 @@ already quotiented by logos:**
       table-coverage curves; re-run the sparsity-allocation sweep (paper
       §3.1) to see where ρ* moves under semantic dedup. Acceptance:
       reproducible run log + ablation table appended to `docs/ENGRAM.md`.
-- [ ] **E5 (S)** [`[SYNC]`] — probabilistic engrams: `l1::split_l1` worlds →
-      weighted key sets, aggregated with `l1::aggregate_results`
-      (sum-preserving). Acceptance: `probably John loves Mary` → weighted key
-      set summing to 1.0; lookup returns the distribution.
+- [x] **E5 (S)** [`[SYNC]`] — probabilistic engrams over logos' existing L1
+      split. E5 adds **no** world splitting and **no** aggregation: `l1::split_l1`
+      already produces weighted worlds and `l1::aggregate_results` already
+      merges sum-preservingly, so the module derives a key per world and calls
+      the existing aggregator on the hex `unf_hash`. Nothing in `l1` changed.
+
+      **Acceptance met and measured**: `probably John loves Mary` →
+      `real_mass=0.800` (identity world, UNF path) + `fallback_mass=0.200`
+      (negate world, tagged fallback) = 1.000.
+
+      Enabling change: `logos/corpus/lexicon.tsv` gains `probably`. The lexicon
+      held **no word matching any TriggerTable entry**, so `split_l1` could never
+      see a trigger and the multi-world path was untestable. Additive CNL data;
+      the integration tests build an inline lexicon, so it cannot affect them.
+
+      A world that will not reduce routes its mass to a **tagged fallback**
+      rather than erroring the fragment: dropping it would silently renormalize
+      the hedge into a different sentence, which is the quiet wrong answer §4
+      exists to prevent. Conservation is asserted, not assumed.
 - [ ] **E6 (M)** [this repo + `[SYNC]`] — `uk_engram_lookup` /
       `uk_engram_store` over the unfer C ABI, following the S29 registration
       checklist (unfer: `unfer_protocol/src/symbols.rs`,
