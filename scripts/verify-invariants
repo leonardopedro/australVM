@@ -117,6 +117,58 @@ else
     gap "Liquid golden Why3 parse check (why3 not on PATH)"
 fi
 
+# --- Liquid: the total-subset library must still extract, unchanged ---
+#
+# Stronger than the parse check above. Extraction proves three things at once:
+# the source is inside the fragment the driver can extract, the driver still
+# matches the engine (a Why3 upgrade that renames a theory breaks extraction
+# before it breaks parsing), and the pinned OCaml has not drifted from the
+# source it was generated from.
+#
+# The golden is the extracted OCaml, and it is checked in deliberately rather
+# than generated at build time: Cycle B wants the extracted module compiled into
+# the checker, so dune needs a real file, and a checked-in file needs a gate to
+# stop it drifting. This gate is that gate.
+if command -v why3 >/dev/null 2>&1; then
+    mlw="$repo_root/lib/liquid/subset/liquid_measure.mlw"
+    golden="$repo_root/lib/liquid/LiquidMeasure.ml"
+    tmp="$(mktemp -d)"
+    if why3 extract -D "$repo_root/lib/why3_plugin/unfer_ocaml.drv" "$mlw" -o "$tmp/out.ml" >"$tmp/log" 2>&1; then
+        check "Liquid subset library extracts with the existing driver" true
+        if diff -u "$golden" "$tmp/out.ml" >"$tmp/diff" 2>&1; then
+            check "Liquid subset extraction matches its pinned golden" true
+        else
+            echo "  [detail] extraction drifted from the pinned golden:" >&2
+            head -20 "$tmp/diff" >&2
+            check "Liquid subset extraction matches its pinned golden" false
+        fi
+    else
+        echo "  [detail] extraction failed:" >&2
+        head -5 "$tmp/log" >&2
+        check "Liquid subset library extracts with the existing driver" false
+        check "Liquid subset extraction matches its pinned golden" false
+    fi
+    rm -rf "$tmp"
+else
+    gap "Liquid subset extraction check (why3 not on PATH)"
+fi
+
+# --- Liquid Cycle B: the production wiring for the extracted pass ---
+#
+# LiquidSubsetTest registers the pass itself, because Vm_plugin.boot does not run
+# inside a test binary. So the *production* wiring -- that boot registers the
+# tenant under a name distinct from `liquid` -- is checked here instead. Cheap,
+# and it catches the plausible mistake of adding the pass and forgetting to
+# register it, which nothing else would notice.
+check "L10 Cycle B: liquid_measure tenant registered in Vm_plugin.boot" \
+    grep -q 'register_typed ~name:"liquid_measure" LiquidSubset.check' "$repo_root/lib/Vm_plugin.ml"
+
+check "L10 Cycle B: liquid_measure is a distinct tenant from liquid" \
+    bash -c "! grep -q 'register_typed ~name:\"liquid\" LiquidSubset' '$repo_root/lib/Vm_plugin.ml'"
+
+check "L10 Cycle B: LiquidMeasure is the extracted module, listed in dune" \
+    grep -q 'LiquidMeasure' "$repo_root/lib/liquid/dune"
+
 # --- H12: agent notes (four implemented categories, one per non-trivial PR) ---
 check "H12: notes implemented dir has the four categories" \
     test -d "$repo_root/.agents/notes/implemented/architecture" \

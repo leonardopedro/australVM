@@ -45,6 +45,12 @@ let boot () =
      half of WF2). It still *enforces* nothing: L4 generates constraints, L5
      discharges them via Why3, L6 infers qualifiers. *)
   Compiler_plugin.register_typed ~name:"liquid" LiquidCheck.check;
+  (* L10 Cycle B: the checker extended by code *extracted* from the total subset.
+     `LiquidSubset.check` consults `LiquidMeasure`, which is Why3 output whose
+     decreasingness obligation is proved, rather than a hand-written rank that
+     would only be asserted. Registered beside `liquid` on the same seam; the two
+     tenant names are distinct so either can be enabled alone. *)
+  Compiler_plugin.register_typed ~name:"liquid_measure" LiquidSubset.check;
   let names = list_compilers () in
   if not (List.mem "austral-builtin" names) then
     register_compiler

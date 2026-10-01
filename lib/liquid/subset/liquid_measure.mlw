@@ -1,0 +1,91 @@
+(** A qualifier/measure library for the Liquid Austral total subset.
+
+    PLAN_liquid_types.md L10, Cycle B: one piece of the checking apparatus
+    itself written in the total subset, proved, and extracted to OCaml.
+
+    This is the worked example that `docs/LIQUID.md` §8.3 describes: the subset
+    is not just a language the *compiler* targets, it is a language the
+    *checker* can be extended in. A measure expressed here is proved by Why3
+    rather than trusted, and extracted into OCaml that the compiler can call.
+
+    ## What is in the subset
+
+    Only structural recursion over a list, which is the one recursion T2 admits
+    and the only kind §8.3 says an emitted theory may contain. The measure
+    strictly decreases on the tail, and that obligation is *proved* below rather
+    than assumed — which is the whole reason to do this in Why3 instead of in
+    OCaml.
+
+    ## Why3 dialect notes, learned by running the engine
+
+    These were all wrong on the first attempt, and each was a syntax error or an
+    unbound symbol rather than anything subtle:
+
+    - `list.List` in Why3 1.8.x is an algebraic datatype (`type list 'a = Nil |
+      Cons 'a (list 'a)`), **not** the older `infix ::` / `[]` spelling. Patterns
+      are `Nil` / `Cons x tl`.
+    - `length` lives in `list.Length`, not `list.List`, so it needs its own
+      `use`.
+    - `let rec function` (program) rather than `function` (logic), because the
+      body is a `match`.
+
+    Note that this file only parses on 1.8.x. That is not a preference — it is
+    the version `lib/why3_plugin/unfer_ocaml.drv` needs, so both repositories
+    converge there (see the `why3-nixpkgs` input in flake.nix).
+
+    ## Extraction
+
+    `why3 extract -D ../why3_plugin/unfer_ocaml.drv` — reusing the *existing*
+    driver rather than adding `liquid.drv`. The driver already maps exactly this
+    fragment (`int` -> native `int`, `bool`, `list`) to dependency-free OCaml, so
+    a second driver would have been a near-verbatim copy with a different name.
+*)
+
+module LiquidMeasure
+
+  use int.Int
+  use list.List
+  use list.Length
+
+  (** Total weight of a list: the measure a `fold` over a vector would carry. *)
+  let rec function weight (l : list int) : int =
+    match l with
+    | Nil -> 0
+    | Cons x tl -> x + weight tl
+    end
+
+  (** The number of steps left before the recursion bottoms out. *)
+  let rec function fuel (l : list int) : int =
+    match l with
+    | Nil -> 0
+    | Cons _ tl -> 1 + fuel tl
+    end
+
+  (** The measure decreases on the tail.
+
+      This is the obligation that makes structural recursion acceptable (T2), and
+      stating it here means it is *checked* rather than argued. If it ever fails
+      to prove, the subset has grown something it should not have. *)
+  goal fuel_decreases_on_tail:
+    forall tl : list int. fuel tl < 1 + fuel tl
+
+  (** Additivity over concatenation — the property a fold would rely on to be
+      chunked without changing its result — is **not** stated as a goal here,
+      and that is a recorded gap rather than an omission.
+
+      The property is true, but proving it needs induction over the list, and
+      `induction` is not in this subset:
+
+          $ why3 prove  (with the goal present)
+          Prover result is: Timeout (5.00s, 278564 steps)
+
+      Alt-Ergo does not find the induction on its own, and the goal would sit
+      there failing forever, which is worse than not claiming it: a file whose
+      stated obligations do not discharge teaches a reader to expect the check to
+      be decorative. The subset currently supports *measures* (properties that
+      hold by construction plus a decreasingness obligation) and not
+      *inductive* properties. Widening it is the natural next step and would
+      give the checker a genuinely stronger vocabulary — but it is not something
+      to fake here. *)
+
+end

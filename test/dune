@@ -57,6 +57,14 @@
  (libraries ounit2 unix austral_rust_bridge)
  (deps ../bin/austral.exe))
 
+; L10 Cycle B: the checker extended by extracted code. Links `austral_liquid`
+; because the code under test is the extracted `LiquidMeasure` plus the pass
+; that consults it.
+(tests
+ (names LiquidSubsetTest)
+ (modules LiquidSubsetTest)
+ (libraries austral_liquid austral_core ounit2 test_util))
+
 (tests
  (names JitTest)
  (modules JitTest)

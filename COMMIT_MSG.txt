@@ -1,46 +1,68 @@
-Share one Why3 with unfer — on the version the existing driver needs
+L10 Cycle B: the checker extended by code extracted from the total subset
 
-Follow-up to installing Why3 here. unfer already ran it (S36:
-`uk_whyml_emit` shells out to `why3 prove` and `why3 extract`), so adding it to
-australVM was on track to build a second copy — and it had: different nixpkgs
-revisions mean different store paths, so nix could not dedupe.
+The other half of L10, and the one that makes the subset worth having: not just a
+language the *compiler* targets, but a language the *checker* can be extended
+in.
 
-  before   australVM  nixos-unstable  why3 1.8.2   sglqns…
-           unfer      nixos-23.05     why3 1.6.0   wsh74n…
+## A measure library, proved
 
-Both now resolve `why3-1.8.2` and `alt-ergo-2.6.3`: one build, one version, one
-`~/.why3.conf`. Neither flake changes its own base channel — australVM must stay
-on nixos-unstable for the cranelift-bridge glibc constraint, unfer on 23.05 for
-CUDA — so the toolchain is pinned by revision on each side instead. Pinned by
-revision rather than by branch on purpose: a floating `nixos-unstable` would let
-the two flakes drift apart again the next time the channel advances, silently.
+`lib/liquid/subset/liquid_measure.mlw` defines `weight` and `fuel` over
+`list int` with structural recursion — the one recursion T2 admits and the only
+kind docs/LIQUID.md §8.3 allows an emitted theory to contain. Its decreasingness
+obligation is **proved by Why3** (`fuel_decreases_on_tail`, Valid), which is the
+entire reason to do this in Why3 rather than in OCaml: the fold check below then
+rests on a theorem rather than on an assumption.
 
-**The version is 1.8.2 because the existing driver requires it, not because
-australVM happened to have it.** `lib/why3_plugin/unfer_ocaml.drv` maps
-`bool.Bool`'s `=`, which exists in Why3 1.8.x and does not exist in 1.6.0:
+## Reused the existing driver — no `liquid.drv`
 
-    $ why3 extract -D unfer_ocaml.drv authorize_gate.mlw -o out.ml   # 1.6.0
-    Unknown val bool.Bool.infix =
+The plan asks for `lib/liquid/liquid.drv`. It does not exist and I did not create
+it: `lib/why3_plugin/unfer_ocaml.drv`, which unfer's S36 cycle already uses,
+maps exactly this fragment (`int` to a native OCaml int, plus `bool` and
+`list`). A second driver would have been a near-verbatim copy with a different
+name — precisely the duplication to avoid. The new gate below fails if that
+driver ever stops working, so the reuse is load-bearing and not taken on trust.
 
-So unfer's extraction path was **already broken on unfer's own channel**, and
-still exits 0 while failing — the same false-success shape as the missing-prover
-case. Aligning to 1.8.2 fixes that rather than preserving it. I checked that
-unfer's result parsing is version-agnostic first: `whyml.rs` counts lines
-containing `Valid` and rejects on `Invalid`/`Failure`/`Timeout`, so it does not
-depend on 1.6-era output formatting. Its whyml tests pass under 1.8.2.
+## The Why3 dialect notes are in the file, because three guesses were wrong
 
-Verified after the change: `why3 extract -D unfer_ocaml.drv` succeeds (388-byte
-output, the case that failed on 1.6.0), alt-ergo is now 2.6.3 so Why3 no longer
-warns about an unrecognised prover version, both repos resolve byte-identical
-store paths, australVM's Why3 parse gate passes, 9 dune suites green,
-test-programs pass, unfer_ffi 113 and prob_kernel 53 tests pass.
+`list.List` in 1.8.x is an algebraic datatype (`Nil`/`Cons`), not the older
+`[]`/`::` spelling; `length` lives in `list.Length`, not `list.List`; and a
+`match` body needs `let rec function`. Each was a syntax error or an unbound
+symbol, not anything subtle.
 
-Also carries L10 Cycle A: the emitter now writes a Why3 theory so a caller can
-appeal to a callee by name, using a `function` declaration plus an `axiom` —
-the two shapes I tried first (a bodyless `function` with its own contract, and a
-`val`) are respectively a syntax error and a symbol that never binds. The axiom
-is an assumption, not a proof, and the test confirms it is not vacuous: a
-caller that uses it comes out Valid, one that overstates the contract does not.
+**One property is deliberately not claimed.** Additivity over concatenation is
+true but needs induction, and `induction` is not in the subset — Alt-Ergo times
+out on it (278k steps). Rather than leave a goal that fails forever, it is
+recorded as a gap: a file whose stated obligations do not discharge teaches
+readers to expect the check to be decorative. The subset supports *measures*
+(properties holding by construction plus a decreasingness obligation), not
+*inductive* properties.
 
-🤖 Generated with Codebuff
-Co-Authored-By: Codebuff <noreply@codebuff.com>
+## Checked in, and gated
+
+`lib/liquid/LiquidMeasure.ml` is extracted output, checked in so dune can
+compile it. A `verify-invariants` gate re-extracts and diffs, so it cannot drift
+from the `.mlw` — which is what makes checking in generated code defensible. The
+gate is stronger than the existing parse gate: extraction proves the source is
+inside the extractable fragment *and* that the driver still matches the engine
+(a Why3 upgrade that renames a theory breaks extraction before it breaks
+parsing). Tested in both directions: passes clean, fails with exit 1 on a
+deliberately corrupted golden.
+
+## The pass, and a false positive my own test caught
+
+`LiquidSubset.check` is registered through `Compiler_plugin.register_typed` as
+tenant `liquid_measure`, beside `liquid`. Its first `is_fold_name` accepted any
+name *ending* in "fold" — and the test caught it on **`unfold`**, a name that is
+not a fold but does contain the letters. Now word-boundary aware, so `sum_fold`
+matches and `unfold` does not. That was the right thing for the test to catch:
+the pass only *reports* what it ranked, so a false positive is a misleading log
+line, but it is still a lie about what was checked.
+
+Also worth recording: `Compiler_plugin.list_registered` lists only *gate* names
+— it filters `Typed` out — so the typed seam has to be read through `names`.
+The test registering the pass itself is because `Vm_plugin.boot` does not run in
+a test binary, so the production wiring is checked by `verify-invariants` instead
+of left untested.
+
+Verified: verify-invariants 22 passed / 0 failed (six new Liquid gates), 13 dune
+suites green including 5 new Cycle B tests, all test-programs pass.

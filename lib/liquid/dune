@@ -7,6 +7,21 @@
 ; the library depends on `austral_liquid`, which depends on `austral_core`.
 ; `LiquidCheck` reaches `Compiler_plugin.verdict`, so it cannot live *inside*
 ; `austral_core` without a cycle.
+;
+; L10 Cycle B: `LiquidMeasure` is *extracted OCaml*, not hand-written. It comes
+; from lib/liquid/subset/liquid_measure.mlw via
+;
+;   why3 extract -D lib/why3_plugin/unfer_ocaml.drv \
+;     lib/liquid/subset/liquid_measure.mlw -o lib/liquid/LiquidMeasure.ml
+;
+; and is checked in so dune can compile it. A `verify-invariants` gate
+; re-extracts and diffs, so it cannot drift from the Why3 source it came from;
+; that gate is what makes checking in generated code defensible.
+;
+; Note the reuse: the extraction driver is lib/why3_plugin/unfer_ocaml.drv, the
+; one unfer's S36 cycle already uses. It maps exactly this fragment (`int` to a
+; native OCaml int, plus `bool` and `list`), so there is deliberately no
+; liquid-specific driver.
 (library
  (name austral_liquid)
  (public_name austral.austral_liquid)
@@ -14,4 +29,5 @@
  (libraries austral_core zarith str)
  (wrapped false)
  (flags :standard -w -39-50)
- (modules LiquidTypes LiquidParse LiquidConstraints LiquidInfer LiquidWhy3 TotalityCheck LiquidCheck))
+ (modules LiquidTypes LiquidParse LiquidConstraints LiquidInfer LiquidWhy3
+          TotalityCheck LiquidCheck LiquidMeasure LiquidSubset))
