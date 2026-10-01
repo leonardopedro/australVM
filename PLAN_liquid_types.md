@@ -803,13 +803,28 @@ already quotiented by logos:**
 | E7 | Prefetch/offload + cache tiers (paper §2.5) | L | unfer + this |
 | E8 | `deltanet_plugin` pass on the L1 seam (optional) | M | this repo |
 
-- [ ] **E1 (S)** — `docs/ENGRAM.md`: pin E0.1–E0.4; define the `EngramKey`
-      byte-layout (versioned, `unf_hash` first = stable addressing), the
-      granularity lattice, the fallback rule (fragment unparseable by
-      `harper_gate`/CCG → `window` key; keep the parse-rate metric), and the
-      ingest/lookup API. Golden corpus: ≥30 groups pinned as
-      `corpus/engram_keys.tsv` — paraphrase/algebraic variants expected to
-      collide (per E0.4's nuance), near-misses expected **not** to collide.
+- [x] **E1 (S)** — `docs/ENGRAM.md` + `corpus/engram_keys.tsv` (40 rows, 14
+      groups, 28 collide / 12 distinct).
+
+      Three decisions worth surfacing, all marked **[decision]** in the doc:
+      - **The hash is the one logos already has.** `deltanet::unf::unf_hash` is
+        *already SHA-256 over the canonical serialization* (`translate.rs`
+        documents it as such) and logos already depends on `sha2`. E2 therefore
+        introduces no new digest and no new dependency; §2.2 pins the byte
+        layout around that existing 32-byte digest.
+      - **Dedup is reported per granularity, never as one number.** Keys are
+        denotational, so `John adds two three` and `Bob adds three two`
+        collide by design (§3). A single headline dedup ratio would read that
+        as a win when it is really a statement about lexicon coverage.
+      - **The fallback is a tagged key, not a silent downgrade.** A fragment
+        that `harper_gate`/CCG rejects, or that hits the 10⁶-iteration
+        reduction cap, falls back to a `window` key with `flags` bit0 set and
+        stored like any other — and `parse_rate` is a first-class field of
+        `IngestStats`, not a debug line. §4 explains why: a silently degraded
+        corpus is the failure mode this feature creates.
+
+      The corpus records *expectations*, not digests, because E2 does not exist
+      yet; the digest columns are what E2 fills in and what pins it.
 - [ ] **E2 (M)** [`../unfer/logos`, `[SYNC]`] — `src/engram/{mod,key,
       segment}.rs`: `engram_key(fragment) -> EngramKey` =
       `harper_gate::lint` → `ccg::parse_sentence` →
