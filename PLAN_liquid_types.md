@@ -742,7 +742,7 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L9 — dependent index layer
 
-- [~] Index-carrying types over TRL terms (`Span[Nat8, n]`, `Vector[T, n]`)
+- [x] Index-carrying types over TRL terms (`Span[Nat8, n]`, `Vector[T, n]`)
       + erasure; `--emit-cps` byte-identity test with/without refinements.
       Landed as `0f35f185`.
 
@@ -770,17 +770,22 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       than assumed. `free_vars`/`undeclared_sorts` walk into the type, since an
       index term is subject to WF1/WF2 like any other term.
 
-      Two gaps recorded rather than papered over:
-      - **Pre-existing, exposed by this work:** §2.2's grammar lists
-        `trl-term "+" trl-term`, but the parser has no additive level at all —
-        `x + 1 == y` does not parse today. Not fixed here, because adding an
-        operator level would change every existing contract's parse (a change to
-        §2.2, not to L9). Pinned by a test so a future fix is noticed.
-      - Inside brackets a recognised sort is a type and anything else an index
-        term, so a *named* (non-sort) type argument — which `Vector[T, n]` needs
-        — is not yet expressible.
+      **Both gaps since closed**, so this stage is complete:
+      - **§2.2 arithmetic** (`c70ee9f4`). The grammar has always listed
+        `+`/`-`/`*` but the parser had no arithmetic level at all — `x + 1 == y`
+        did not *parse*. `parse_term` is now additive over `parse_multiplicative`
+        over `parse_unary_term`. Precedence (`*` binds tighter) and
+        left-associativity are pinned by test, because a wrong answer here is not
+        a parse error but a valid parse of the **wrong obligation** — it would
+        silently prove something other than what was written.
+      - **Scope-aware type arguments** (`f464ceb6`). `Vector[T, n]` and
+        `Vector[n]` are the same token stream up to the comma, so the grammar
+        cannot separate them; a *declared* type can. The parser takes
+        `?is_known_type` and `LiquidCheck.declared_type_names` threads the module's
+        record/union names through. An out-of-scope name falls back to the index
+        reading, so a typo in a type argument is not silently accepted as a type.
 
-      17 index-type tests + the erasure test; 9 dune suites green.
+      25 index-type tests + the erasure test; 13 dune suites green.
 
 ### L10 — cycles A/B
 
