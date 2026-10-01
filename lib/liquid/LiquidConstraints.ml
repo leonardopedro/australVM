@@ -142,11 +142,15 @@ let make_return_goal ~(decl : int) ~(name : string) ~(kind : LiquidTypes.contrac
     ~(ret_sort : string) : goal option =
   match kind with
   | LiquidTypes.KEnsures ->
+     (* Why3's quantifier syntax is `forall x: int, y: int. term` — one
+        comma-separated list, each binder *unparenthesised*. The previous
+        `forall (x: int) (y: int).` form is not Why3, and Why3 rejects the file
+        with a syntax error, which then exits 1 and is read downstream as "the
+        prover refused". So this too had never been syntax-checked. *)
      let binders =
-       String.concat " "
-         (List.map (fun p -> Printf.sprintf "(%s: %s)" p ret_sort) params)
-       ^ (if params = [] then "" else " ")
-       ^ Printf.sprintf "(%s: %s)" result_var ret_sort
+       String.concat ", "
+         (List.map (fun p -> Printf.sprintf "%s: %s" p ret_sort) params
+         @ [ Printf.sprintf "%s: %s" result_var ret_sort ])
      in
      Some
        {
@@ -205,16 +209,15 @@ let to_mlw (c : t) : string =
   line "  (* --- verification conditions --- *)\n";
   List.iter
     (fun g ->
-      line "\n  (* %s — %s *)\n" g.gname g.grule;
-      line "  goal %s:\n" g.gname;
-      (match g.gassumes with
-       | None -> ()
-       | Some h ->
-          (* Stands in for the callee contract until Cycle A (L10) emits real
-             Why3 `function` definitions. *)
-          line "    assumes a_%s: %s\n" g.gname (emit_contract h));
-      line "    %s%s\n" g.gbinder g.gbody;
-      line "  end\n")
+       line "\n  (* %s — %s *)\n" g.gname g.grule;
+       (* The whole goal is one line. Why3 does not allow a newline between
+          `goal g:` and its term — that is a syntax error, which then exits 1
+          and reads downstream as "the prover refused". Third and last instance
+          of the same underlying problem: an emitter that had never been parsed
+          by the engine it targets. *)
+       (match g.gassumes with
+       | None -> line "  goal %s: %s%s\n" g.gname g.gbinder g.gbody
+       | Some h -> line "  goal %s: %s(%s) -> %s\n" g.gname g.gbinder (emit_contract h) g.gbody))
     c.goals;
   line "\nend\n";
   Buffer.contents b

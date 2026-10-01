@@ -37,6 +37,27 @@
           ocamlPackages.sexplib
           ocamlPackages.ppx_sexp_conv
           ocamlPackages.zarith
+
+          # Why3 verification engine (docs/LIQUID.md §2.3).
+          #
+          # LiquidWhy3 shells out to `why3 prove`, and before this the engine was
+          # simply absent, so `LiquidWhy3.prove` took its structured-skip path
+          # and every emitted `.mlw` went unchecked. That is the safe direction
+          # — under-claiming leaves an obligation to prove later — but it also
+          # means a *wrong* `.mlw` was indistinguishable from an unproved one:
+          # nothing could tell "the prover said no" from "there was no prover".
+          # Having the engine in the dev shell is what lets L10's emitted theory
+          # be validated rather than pinned as a golden and hoped over.
+          pkgs.why3
+
+          # The prover `LiquidWhy3.prove` asks for. `why3` alone is not enough:
+          # `why3 prove -P alt-ergo` resolves the prover through Why3's own
+          # config (~/.why3.conf), which maps the *name* to a binary on PATH.
+          # Without the binary on PATH the invocation reports "No prover
+          # corresponds to alt-ergo" and — note — still exits 0, so a missing
+          # prover looks exactly like a successful one to any caller that only
+          # checks the exit status.
+          pkgs.alt-ergo-free
         ];
 
       in {

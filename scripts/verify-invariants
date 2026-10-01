@@ -77,6 +77,46 @@ check "S30: cadabra2-cli subprocess, not a dependency" \
 check "S21: ZENODO_SYMBOLS (uz_*) registered separately" \
     grep -q "ZENODO_SYMBOLS" "$repo_root/safestos/cranelift/src/lib.rs"
 
+# --- Liquid: the emitted .mlw goldens must parse under a real Why3 ---
+#
+# This gate exists because of a concrete failure, not as a precaution. The
+# goldens under lib/liquid/golden/ pinned three separate constructs that are not
+# valid Why3 at all:
+#
+#   * `assumes a_x: P` inside a `goal` -- a program construct, illegal there;
+#   * `forall (x: int) (y: int).` -- Why3 wants `forall x: int, y: int.`;
+#   * a newline between `goal g:` and its term.
+#
+# All three make Why3 exit 1, which LiquidWhy3.prove reads as "the prover
+# refused", so every contract with a precondition produced a *false rejection*.
+# None of it was visible, because with no engine installed every .mlw took the
+# structured-skip path and a malformed emitter is indistinguishable from an
+# unproved one. Pinning the text in a golden is not enough: a golden faithfully
+# records whatever the emitter produced, including nonsense.
+#
+# So the goldens are now required to *parse*. Note this checks syntax and
+# provability only -- it does not claim the emitted obligations are complete.
+if command -v why3 >/dev/null 2>&1; then
+    for mlw in "$repo_root"/lib/liquid/golden/*.mlw; do
+        [ -e "$mlw" ] || continue
+        name="$(basename "$mlw")"
+        # Exit 0 = all goals proved, 1 = unproved goals, 2 = unknown. Anything
+        # else -- and specifically a parse failure -- is the real signal here.
+        out="$(why3 prove -P alt-ergo "$mlw" 2>&1)"
+        # `check` owns the pass/fail bookkeeping; reporting the offending line
+        # here keeps the diagnostic useful without double-counting the failure.
+        if printf '%s' "$out" | grep -q "syntax error"; then
+            echo "  [detail] $name does not parse under Why3:" >&2
+            printf '%s\n' "$out" | grep "syntax error" | head -2 >&2
+            check "Liquid golden $name parses under Why3" false
+        else
+            check "Liquid golden $name parses under Why3" true
+        fi
+    done
+else
+    gap "Liquid golden Why3 parse check (why3 not on PATH)"
+fi
+
 # --- H12: agent notes (four implemented categories, one per non-trivial PR) ---
 check "H12: notes implemented dir has the four categories" \
     test -d "$repo_root/.agents/notes/implemented/architecture" \

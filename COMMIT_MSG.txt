@@ -1,0 +1,46 @@
+Install Why3 in the flake, and fix three bugs it immediately exposed
+
+Adds `pkgs.why3` and `pkgs.alt-ergo-free` to the flake's buildInputs, so the dev
+shell can actually run the prover `LiquidWhy3.prove` shells out to.
+
+Why3 1.8.2 and alt-ergo-free 2.4.3 both come from the nix cache. alt-ergo
+(proper) is unfree in nixpkgs, and I did not flip this project's unfree policy
+to get a prover; the free build registers under the same `alt-ergo` name. Why3
+warns the version is "unrecognised" (it expects 2.6.x) but proves correctly, and
+I checked it can refute as well as prove, so it is not rubber-stamping.
+
+**Why3 is installed because it immediately found three real bugs, which are all
+one bug.** The `.mlw` emitter had never been parsed by the engine it targets,
+because with no engine every `.mlw` took the structured-skip path -- and a
+malformed emitter is indistinguishable from an unproved one. Each of the three
+makes Why3 exit 1, which `LiquidWhy3.prove` reads as "the prover refused":
+
+  1. `assumes a_x: P` inside a `goal`. That is a Why3 *program* construct and is
+     illegal there, so every contract with a precondition produced a **false
+     rejection**. Now folded into the goal as an antecedent, `P -> body`, which
+     is also more direct: `gbinder` already binds the names the Requires
+     mentions.
+  2. `forall (x: int) (y: int).` Why3 wants `forall x: int, y: int.` -- one
+     comma-separated list, binders unparenthesised.
+  3. A newline between `goal g:` and its term. Not allowed.
+
+**The golden was a participant, not just a victim.** It faithfully pinned all
+three as though they were intended output. So `verify-invariants` gains a gate
+that *parses* the goldens under Why3 -- the check that would have caught them.
+Tested in both directions: it passes on the corrected golden and fails with
+exit 1 on a deliberately corrupted one.
+
+**What the engine now shows that it could not before.** With the file parsing,
+Why3 returns `Unknown` on the golden rather than a syntax error -- and that is
+the honest answer, not a bug. The emitted RETURN goal is
+`forall n: int, __result: int. n >= 0 -> __result >= n`, and `__result` is
+unconstrained because the emitter does not translate function bodies. The goal
+is sound but not yet derivable, so it cannot be discharged. Closing that means
+translating the body, which is L10's remaining work; the important part is that
+the gap is now *visible* instead of hidden behind a syntax error.
+
+Verified: verify-invariants 17 passed / 0 failed (with the new Why3 parse gate),
+9 dune suites green, all test-programs pass.
+
+🤖 Generated with Codebuff
+Co-Authored-By: Codebuff <noreply@codebuff.com>

@@ -15,12 +15,10 @@ module Test
   (* atLeast : Ensures *)
   (*   result >= n *)
 
+
   (* --- verification conditions --- *)
 
   (* g_d3eedf6b — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_d3eedf6b:
-    assumes a_g_d3eedf6b: n >= 0
-    forall (n: int) (__result: int). __result >= n
-  end
+  goal g_d3eedf6b: forall n: int, __result: int. (n >= 0) -> __result >= n
 
 end
