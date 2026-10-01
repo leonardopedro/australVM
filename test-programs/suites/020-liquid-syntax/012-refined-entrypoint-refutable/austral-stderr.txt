@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "T2 (§4.1): `refutable` uses `while`/`for`; the Total Austral Subset admits only `fold` over lists and structural `match` as iteration"
+    }
+  ],
+  "span": null,
+  "context": null
+}

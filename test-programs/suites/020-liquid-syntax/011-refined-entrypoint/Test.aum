@@ -1,0 +1,18 @@
+module body Test is
+    """
+    L7 showcase: a refined entrypoint whose contract is the kernel status
+    shape of PROTOCOL.md — a non-negative success, or a negated UK-* code.
+    Expressed as per-family ranges because TRL v1 has no symbolic constants,
+    so `result == -code` cannot be written literally.
+    """
+    pragma Liquid_Requires(Contract => "n >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0 || (result <= -1001 && result >= -1011) || (result <= -2001 && result >= -2005) || (result <= -4901 && result >= -4913)");
+    function checked(n: Int64): Int64 is
+        return n;
+    end;
+
+    function main(): ExitCode is
+        printLn(checked(7));
+        return ExitSuccess();
+    end;
+end module body.

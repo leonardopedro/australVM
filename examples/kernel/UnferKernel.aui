@@ -26,8 +26,14 @@ module UnferKernel is
     type Model: Linear;
 
     function kernelVersion(): Int64;
+    pragma Liquid_Requires(Contract => "len >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0 || (result <= -1001 && result >= -1011) || (result <= -2001 && result >= -2005) || (result <= -3001 && result >= -3002) || (result <= -4001 && result >= -4005) || (result <= -4100 && result >= -4102) || (result <= -4200 && result >= -4203) || (result <= -4401 && result >= -4403) || (result <= -4501 && result >= -4501) || (result <= -4601 && result >= -4603) || (result <= -4701 && result >= -4701) || (result <= -4801 && result >= -4804) || (result <= -4901 && result >= -4913) || (result <= -5000 && result >= -5000) || (result <= -6001 && result >= -6005) || (result <= -7001 && result >= -7107) || (result <= -7201 && result >= -7203) || (result <= -7301 && result >= -7308) || (result <= -7401 && result >= -7419) || (result <= -7501 && result >= -7512)");
     function kernelInit(cfg: Address[Nat8], len: Int64): Int64;
+    pragma Liquid_Requires(Contract => "len >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0 || (result <= -1001 && result >= -1011) || (result <= -2001 && result >= -2005) || (result <= -3001 && result >= -3002) || (result <= -4001 && result >= -4005) || (result <= -4100 && result >= -4102) || (result <= -4200 && result >= -4203) || (result <= -4401 && result >= -4403) || (result <= -4501 && result >= -4501) || (result <= -4601 && result >= -4603) || (result <= -4701 && result >= -4701) || (result <= -4801 && result >= -4804) || (result <= -4901 && result >= -4913) || (result <= -5000 && result >= -5000) || (result <= -6001 && result >= -6005) || (result <= -7001 && result >= -7107) || (result <= -7201 && result >= -7203) || (result <= -7301 && result >= -7308) || (result <= -7401 && result >= -7419) || (result <= -7501 && result >= -7512)");
     function kernelModelCreate(spec: Address[Nat8], len: Int64): Int64;
+    pragma Liquid_Requires(Contract => "model >= 0");
+    pragma Liquid_Ensures(Contract => "result == 0");
     function kernelModelFree(model: Int64): Int64;
 
     """
@@ -72,11 +78,22 @@ module UnferKernel is
     function freeModel(model: Model): Int64;
     function kernelSetPrior(model: Int64, json: Address[Nat8], len: Int64): Int64;
     function kernelSetHamiltonian(model: Int64, json: Address[Nat8], len: Int64): Int64;
+    pragma Liquid_Requires(Contract => "model >= 0");
+    pragma Liquid_Requires(Contract => "len >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0 || (result <= -1001 && result >= -1011) || (result <= -2001 && result >= -2005) || (result <= -3001 && result >= -3002) || (result <= -4001 && result >= -4005) || (result <= -4100 && result >= -4102) || (result <= -4200 && result >= -4203) || (result <= -4401 && result >= -4403) || (result <= -4501 && result >= -4501) || (result <= -4601 && result >= -4603) || (result <= -4701 && result >= -4701) || (result <= -4801 && result >= -4804) || (result <= -4901 && result >= -4913) || (result <= -5000 && result >= -5000) || (result <= -6001 && result >= -6005) || (result <= -7001 && result >= -7107) || (result <= -7201 && result >= -7203) || (result <= -7301 && result >= -7308) || (result <= -7401 && result >= -7419) || (result <= -7501 && result >= -7512)");
     function kernelEvolve(model: Int64, opts: Address[Nat8], len: Int64): Int64;
+    pragma Liquid_Requires(Contract => "model >= 0");
+    pragma Liquid_Requires(Contract => "len >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0 || (result <= -1001 && result >= -1011) || (result <= -2001 && result >= -2005) || (result <= -3001 && result >= -3002) || (result <= -4001 && result >= -4005) || (result <= -4100 && result >= -4102) || (result <= -4200 && result >= -4203) || (result <= -4401 && result >= -4403) || (result <= -4501 && result >= -4501) || (result <= -4601 && result >= -4603) || (result <= -4701 && result >= -4701) || (result <= -4801 && result >= -4804) || (result <= -4901 && result >= -4913) || (result <= -5000 && result >= -5000) || (result <= -6001 && result >= -6005) || (result <= -7001 && result >= -7107) || (result <= -7201 && result >= -7203) || (result <= -7301 && result >= -7308) || (result <= -7401 && result >= -7419) || (result <= -7501 && result >= -7512)");
     function kernelCondition(model: Int64, event: Address[Nat8], len: Int64): Int64;
     function kernelEventProbability(model: Int64, event: Address[Nat8], len: Int64): Int64;
     function kernelObserve(model: Int64, obs: Address[Nat8], len: Int64): Int64;
+    pragma Liquid_Requires(Contract => "model >= 0");
+    pragma Liquid_Requires(Contract => "cap >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0");
     function kernelGetResult(model: Int64, buf: Address[Nat8], cap: Int64): Int64;
+    pragma Liquid_Requires(Contract => "cap >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0");
     function kernelLastError(buf: Address[Nat8], cap: Int64): Int64;
 
     """

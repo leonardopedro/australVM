@@ -106,10 +106,13 @@ let check_module ~(bound : string list) (m : typed_module) : string option =
            (match check_decl ~bound:here (Identifier.ident_string name) pragmas with
             | Some e -> Some e
             | None -> go rest)
-        | TForeignFunction (_, _, name, _, _, _, _, pragmas) ->
-           (* A foreign declaration has no parameters of its own; its
-               contract may only mention `result` and module constants. *)
-           (match check_decl ~bound (Identifier.ident_string name) pragmas with
+        | TForeignFunction (_, _, name, params, _, _, _, pragmas) ->
+           (* A foreign declaration's own parameters are in scope for its
+              contracts, exactly as a defined function's are — L7 puts
+              buffer/length and handle contracts on `uk_*` bindings, and
+              `len` is one of those parameters. *)
+           let here = bound @ ("result" :: param_names params) in
+           (match check_decl ~bound:here (Identifier.ident_string name) pragmas with
             | Some e -> Some e
             | None -> go rest)
         | _ -> go rest)

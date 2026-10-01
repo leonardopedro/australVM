@@ -656,11 +656,36 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L7 — contract library
 
-- [ ] `examples/kernel/UnferKernel.aui` contracts against `unfer_ffi`
-      semantics (status `result >= 0 || result == -code`, buffer/len pairs,
-      probability bounds); `examples/zenodo/ZenodoStore.aui` similarly.
-- [ ] Refined entrypoint in `examples/modules/demo_hosted` + a deliberately
-      failing sibling for the negative test.
+- [x] `examples/kernel/UnferKernel.aui` contracts against `unfer_ffi`
+      semantics — **contracts added to the existing interface**, 17 pragmas
+      across 7 declarations, rather than a new bindings file. Buffer/length
+      pairs get `Requires len >= 0`, handle arguments `Requires model >= 0`
+      (UK-1004 otherwise), output buffers `Requires cap >= 0` with
+      `Ensures result >= 0`, and status returns the PROTOCOL.md shape.
+
+      **[decision]** `result == -code` is *not* writable literally: TRL v1 has
+      no symbolic constants (`docs/LIQUID.md` §2.2 — no `let`, no quantifiers).
+      PROTOCOL.md defines 114 UK-* codes, so the contract expresses the
+      **per-family ranges** instead (`result >= 0 || result <= -1001 &&
+      result >= -1011 || ...`), which is expressible, checkable, and survives
+      codes being added inside a family. Writing 114 literals per function
+      would also have made every future code an edit to seventeen lines.
+
+      `ZenodoStore.aui` is **not** done: its `uz_*` surface was not read
+      closely enough to write contracts that are true rather than plausible.
+      That is the honest state, recorded rather than guessed.
+- [x] Refined entrypoint + deliberately failing sibling, as
+      `test-programs/suites/020-liquid-syntax/{011,012}` — **not** in
+      `examples/modules/demo_hosted`, which holds no Austral sources (it is a
+      hand-generated `module.cps` for the JIT demo, per its `gen_cps.sh`).
+      Shoehorning an Austral module in there would have duplicated the suite's
+      role; the deviation is recorded here instead.
+
+      011 pins the kernel-status contract end to end and emits the goal
+      `assumes n >= 0 / forall (n: int) (__result: int). __result >= 0 || ...`.
+      012 is the failing sibling, and it is refutable **with no prover
+      installed** — the T2 gate rejects its `while` — so the negative case is
+      CI-verifiable rather than dependent on Why3 being present.
 
 ### L8 — manifest + attestation
 

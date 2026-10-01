@@ -1,0 +1,23 @@
+module body Test is
+    """
+    The deliberately failing sibling: a contract that no prover is needed to
+    refute. The totality gate rejects the `while`, because a refinement-level
+    function must terminate for its contract to denote anything.
+    """
+    pragma Liquid_Requires(Contract => "n >= 0");
+    pragma Liquid_Ensures(Contract => "result >= n");
+    function refutable(n: Int64): Int64 is
+        var total: Int64 := 0;
+        var i: Int64 := 0;
+        while i < n do
+            total := total + i;
+            i := i + 1;
+        end while;
+        return total;
+    end;
+
+    function main(): ExitCode is
+        printLn(refutable(4));
+        return ExitSuccess();
+    end;
+end module body.
