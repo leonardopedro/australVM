@@ -100,14 +100,64 @@ trl-term    ::= int-lit | real-lit | "true" | "false"
               | fun-name "(" [trl-term ("," trl-term)*] ")"   -- measures, total fns
 
 trl-formula ::= trl-term relop trl-term
+              | trl-term ":" trl-ty                   -- L9: type annotation
               | "!" trl-formula
               | trl-formula ("&&" | "||" | "==>") trl-formula
               | "(" trl-formula ")"
               | "true" | "false"
 
+trl-ty      ::= ty-sort | ty-name "[" [trl-arg ("," trl-arg)*] "]"
+trl-arg     ::= trl-ty | trl-term
+ty-sort     ::= "Nat" | "Nat8" | "Int" | "Int32" | "Int64"
+              | "Bool" | "Real" | "Float64" | "Prob"
+
 relop       ::= "==" | "!=" | "<" | "<=" | ">" | ">="
 var         ::= identifier | "result"
 ```
+
+### 2.2.1 Index-carrying types (L9)
+
+`trl-term ":" trl-ty` is a **type annotation**: the claim is that the program
+variable inhabits the type. It is a distinct production from `trl-term relop
+trl-term` on purpose — a relation is arithmetic over values, an annotation is a
+type-level fact about one — so the two can never be confused downstream.
+
+A `trl-ty` may take **indices**, and an index is a `trl-term`:
+`Span[Nat8, 8]`, `Span[Nat8, n]`. That is the point of the layer: an index
+fixed at type-check time cannot be related to a program variable, so nothing
+could be said about two spans of the same element type and different lengths.
+
+**A type is not a value.** `ty` is a separate type from `term` precisely so that
+`Span[Nat8, n]` cannot be added to an integer, and so that erasure is structural
+rather than a pass to remember: there is no function from `ty` to `term`, so an
+index has no path to codegen. `LiquidErasureTest` checks the consequence
+empirically by compiling a module with and without annotations and comparing
+the emitted CPS bytes.
+
+**Index well-formedness is conservative.** An index must be a non-negative
+literal or a variable declared `Nat`; everything else is refused, *including an
+unannotated variable*. Guessing there would let `Span[Nat8, x]` through on the
+chance that `x` happens to be an integer, and a non-integer extent is not an
+extent. Under-claiming leaves an obligation someone can discharge; over-claiming
+invents one.
+
+**Two limitations, recorded rather than papered over.**
+
+- An argument that is a recognised sort is a *type*; anything else is read as an
+  index *term*. `Vector[Foo]` is therefore a vector indexed by `Foo`, not a
+  vector of the named type `Foo` — the token stream alone does not distinguish
+  them. `Vector[T, n]` as the plan writes it needs a named (non-sort) type
+  argument, which is not yet expressible inside brackets.
+- An index is currently a literal or a variable, because the parser has no
+  additive level at all (see below), so `Span[Nat8, n + 1]` does not parse.
+
+**A pre-existing gap this work exposed.** §2.2's grammar lists
+`trl-term "+" trl-term` and its siblings, but the parser implements no additive
+level: `parse_term` handles literals, variables, calls, unary minus and `if`,
+and nothing folds `+`, `-` or `*`. So `x + 1 == y` does not parse today. That
+predates L9 and L9 does not fix it — adding an operator level would change every
+existing contract's parse, which is a change to §2.2 rather than to L9.
+`LiquidIndexTypesTest` pins the gap so a future fix is noticed.
 
 There are **no quantifiers** in v1 (`forall`/`exists` are MUST NOT).
 `fun-name` **MUST** resolve to a measure (§4.3) or a total-fragment function

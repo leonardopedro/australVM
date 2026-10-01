@@ -204,6 +204,19 @@ let parse_relop (st : state) : LiquidTypes.relop option =
 (** Right-associative `||`, mirroring the precedence of the connective
     families in §2.2. `&&` binds tighter than `||`, which binds tighter than
     `==>`. *)
+(** Recognised primitive sorts, spelled as they are in Austral. A type argument
+    that is one of these is a *type*; anything else in an argument position is
+    read as an index *term*. *)
+let sort_of_name (name : string) : LiquidTypes.sort option =
+  match name with
+  | "Nat" | "Nat8" -> Some LiquidTypes.SNat
+  | "Int" | "Int32" | "Int64" -> Some LiquidTypes.SInt
+  | "Bool" -> Some LiquidTypes.SBool
+  | "Real" | "Float64" -> Some LiquidTypes.SReal
+  | "Prob" -> Some LiquidTypes.SProb
+  | _ -> None
+
+
 let rec parse_implies (st : state) : LiquidTypes.formula =
   let lhs = parse_or st in
   skip_ws st;
@@ -262,6 +275,11 @@ and parse_relational (st : state) : LiquidTypes.formula =
      let rhs = parse_term st in
      LiquidTypes.FRel
        (op, lhs, rhs, { LiquidTypes.start = start; stop = st.pos })
+  | None when eat st ":" ->
+     (* L9: `e : T` — a type annotation over an index-carrying type. *)
+     let ty = parse_ty st in
+     LiquidTypes.FType
+       (lhs, ty, { LiquidTypes.start = start; stop = st.pos })
   | None ->
      (* No relop: §2.2 allows a bare "true"/"false" as a formula. *)
      (match lhs with
@@ -270,7 +288,86 @@ and parse_relational (st : state) : LiquidTypes.formula =
       | _ ->
          err_at st start st.pos
            "expected a relation: a formula is a comparison, a conjunction, \
-            a disjunction, an implication, a negation, or true/false")
+            a disjunction, an implication, a type annotation, a negation, or \
+            true/false")
+
+(* ── L9: types ───────────────────────────────────────────────────────────── *)
+
+and parse_ty (st : state) : LiquidTypes.ty =
+  skip_ws st;
+  let start = st.pos in
+  (match peek st with
+   | Some c when is_ident_start c ->
+       while (match peek st with Some c when is_ident_char c -> true | _ -> false) do
+         st.pos <- st.pos + 1
+       done;
+       let name = String.sub st.src start (st.pos - start) in
+       (match sort_of_name name with
+        | Some s -> LiquidTypes.TySort s
+        | None ->
+            skip_ws st;
+            if eat st "[" then begin
+              let args = ref [] in
+              skip_ws st;
+              if not (eat st "]") then begin
+                let rec loop () =
+                  let a = parse_ty_arg st in
+                  args := a :: !args;
+                  skip_ws st;
+                  if eat st "," then (skip_ws st; loop ())
+                  else if not (eat st "]") then
+                    err_at st start st.pos
+                      "expected \",\" or \"]\" in a type argument list"
+                in
+                loop ()
+              end;
+              LiquidTypes.TyApp
+                (name, List.rev !args, { LiquidTypes.start = start; stop = st.pos })
+            end
+            else LiquidTypes.TyApp (name, [], { LiquidTypes.start = start; stop = st.pos }))
+   | _ -> err_at st start st.pos "expected a type after `:`")
+
+(** One bracketed type argument: a primitive sort is a type, anything else is an
+    index term.
+
+    This is a deliberate, documented limitation rather than a parser quirk. The
+    two cases are genuinely ambiguous from the token stream alone —
+    `Vector[Foo]` could be a vector of the named type `Foo` or one indexed by a
+    variable — and picking either silently would let `Vector[Bar]` mean
+    different things in different contracts. Reading a non-sort as an index
+    keeps the rule predictable: sorts are types, everything else is a term.
+
+    The cost is that a *named* (non-sort) type argument is not yet expressible
+    inside brackets, which is what `Vector[T, n]` from the plan needs. Writing
+    it today requires the named type to be spelled as a sort; L9 leaves that
+    gap recorded rather than papering over it with a guess. *)
+and parse_ty_arg (st : state) : LiquidTypes.ty_arg =
+  skip_ws st;
+  let start = st.pos in
+  let identifier_at () =
+    match peek st with
+    | Some c when is_ident_start c ->
+      while (match peek st with Some c when is_ident_char c -> true | _ -> false) do
+        st.pos <- st.pos + 1
+      done;
+      Some (String.sub st.src start (st.pos - start))
+    | _ -> None
+  in
+  match identifier_at () with
+  | Some name -> (
+    match sort_of_name name with
+    | Some s -> LiquidTypes.TyArgTy (LiquidTypes.TySort s)
+    | None ->
+      (* Not a sort, so it is an index term. Rewind and let the term parser
+         have the whole thing, which is what makes `Span[Nat8, n + 1]` work:
+         the index is an arbitrary expression, not just a bare name. *)
+      st.pos <- start;
+      let t = parse_term st in
+      LiquidTypes.TyArgIndex t)
+  | None ->
+    (* Not an identifier at all: the argument can only be an index term. *)
+    let t = parse_term st in
+    LiquidTypes.TyArgIndex t
 
 (* ── entry points ───────────────────────────────────────────────────────── *)
 

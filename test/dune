@@ -41,6 +41,22 @@
  (modules LiquidInferTest)
  (libraries austral_liquid ounit2 zarith test_util))
 
+; L9: index-carrying types over TRL terms. Same libraries as LiquidInferTest —
+; the type layer, the parser, and Z for the index literals.
+(tests
+ (names LiquidIndexTypesTest)
+ (modules LiquidIndexTypesTest)
+ (libraries austral_liquid ounit2 zarith test_util))
+
+; L9 erasure: compiles two variants of the same module and compares the emitted
+; CPS bytes. Needs the compiler binary and the JIT bridge, so it links the
+; bridge library and stages `austral` alongside the test executable.
+(tests
+ (names LiquidErasureTest)
+ (modules LiquidErasureTest)
+ (libraries ounit2 unix austral_rust_bridge)
+ (deps ../bin/austral.exe))
+
 (tests
  (names JitTest)
  (modules JitTest)
