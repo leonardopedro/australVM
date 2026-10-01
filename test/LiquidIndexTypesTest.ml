@@ -80,6 +80,53 @@ let test_the_index_is_a_term_and_not_merely_a_name () =
      | _ -> assert_failure "the index should be the term `n`")
   | other -> assert_failure ("expected a type annotation, got " ^ string_of_formula other)
 
+(* §2.2 arithmetic. These levels were missing until L9 forced the question: an
+   index is meant to be a term, and a term could only be a literal or a
+   variable, so `Span[Nat8, n + 1]` could not be written. *)
+let test_addition_parses () =
+  match parse "a + b == c" with
+  | FRel (REq, TAdd (a, b, _), c, _) ->
+    eq "a" (match a with TVar (v, _, _) -> v | _ -> "?");
+    eq "b" (match b with TVar (v, _, _) -> v | _ -> "?");
+    eq "c" (match c with TVar (v, _, _) -> v | _ -> "?")
+  | f -> assert_failure ("expected a+b == c, got " ^ string_of_formula f)
+
+let test_multiplication_parses () =
+  match parse "a * b == c" with
+  | FRel (REq, TMul _, _, _) -> ()
+  | f -> assert_failure ("expected a*b == c, got " ^ string_of_formula f)
+
+let test_multiplication_binds_tighter_than_addition () =
+  (* `a + b * c` must be `a + (b * c)`, not `(a + b) * c`. Getting this wrong
+     would not be a parse error — it would silently prove the wrong obligation,
+     which is the dangerous kind. *)
+  match parse "a + b * c == d" with
+  | FRel (REq, TAdd (_, TMul _, _), _, _) -> ()
+  | FRel (REq, TMul _, _, _) ->
+     assert_failure "precedence is wrong: parsed as (a + b) * c"
+  | f -> assert_failure ("unexpected shape: " ^ string_of_formula f)
+
+let test_addition_is_left_associative () =
+  (* `a - b - c` is `(a - b) - c`. Same danger as precedence: a wrong tree is a
+     valid parse of the wrong thing. *)
+  match parse "a - b - c == d" with
+  | FRel (REq, TSub (TSub _, _, _), _, _) -> ()
+  | f -> assert_failure ("expected (a-b)-c == d, got " ^ string_of_formula f)
+
+let test_unary_minus_still_applies_to_a_whole_term () =
+  match parse "-a + b == c" with
+  | FRel (REq, TAdd (TNeg _, _, _), _, _) -> ()
+  | f -> assert_failure ("expected (-a) + b == c, got " ^ string_of_formula f)
+
+let test_an_arithmetic_index_is_now_writable () =
+  (* The gap this closes: `Span[Nat8, n + 1]`, which L9 needed. *)
+  match parse "x : Span[Nat8, n + 1]" with
+  | FType (_, ty, _) ->
+    (match ty_indices ty with
+     | [ TAdd _ ] -> ()
+     | _ -> assert_failure "the index should be `n + 1`")
+  | f -> assert_failure ("unexpected shape: " ^ string_of_formula f)
+
 (* A gap that predates L9 and that L9 makes visible rather than causes.
 
    §2.2's grammar lists `trl-term "+" trl-term` and friends, but the parser has
@@ -93,15 +140,15 @@ let test_the_index_is_a_term_and_not_merely_a_name () =
    `Span[Nat8, n + 1]` does not parse. That limit is recorded here so the next
    person to extend the grammar knows it was looked at, instead of discovering
    it from a failing contract. *)
-let test_contract_arithmetic_is_a_known_pre_l9_gap () =
-  (* If this ever fails, the §2.2 additive level has been implemented and this
-     note — and the index-expression test it replaces — can go. *)
+let test_contract_arithmetic_is_now_implemented () =
+  (* §2.2's grammar listed `+`, `-` and `*` from the start and the parser had no
+     level for them, so `x + 1 == y` did not parse. That is now closed, and this
+     test exists so the closure is deliberate rather than accidental: if the
+     additive level is ever removed again, it fails here rather than in a user's
+     contract. *)
   (match parse "x + 1 == y" with
-   | _ -> assert_failure "`x + 1 == y` now parses: the §2.2 gap is closed, update this test"
-   | exception Failure _ -> ());
-  (match parse "x : Span[Nat8, n + 1]" with
-   | _ -> assert_failure "an arithmetic index now parses: ditto"
-   | exception Failure _ -> ())
+   | FRel _ -> ()
+   | f -> assert_failure ("`x + 1 == y` should parse, got " ^ string_of_formula f))
 
 let test_an_index_is_not_a_term_in_arithmetic_position () =
   (* `Span[Nat8, 8] + 1` must not parse. A type is not a value, and the parser
@@ -204,7 +251,13 @@ let suite =
     "span_with_a_literal_index" >:: (fun _ -> test_span_with_a_literal_index ());
     "span_with_a_variable_index" >:: (fun _ -> test_span_with_a_variable_index ());
     "the_index_is_a_term_and_not_merely_a_name" >:: (fun _ -> test_the_index_is_a_term_and_not_merely_a_name ());
-    "contract_arithmetic_is_a_known_pre_l9_gap" >:: (fun _ -> test_contract_arithmetic_is_a_known_pre_l9_gap ());
+    "contract_arithmetic_is_now_implemented" >:: (fun _ -> test_contract_arithmetic_is_now_implemented ());
+    "addition_parses" >:: (fun _ -> test_addition_parses ());
+    "multiplication_parses" >:: (fun _ -> test_multiplication_parses ());
+    "multiplication_binds_tighter_than_addition" >:: (fun _ -> test_multiplication_binds_tighter_than_addition ());
+    "addition_is_left_associative" >:: (fun _ -> test_addition_is_left_associative ());
+    "unary_minus_still_applies_to_a_whole_term" >:: (fun _ -> test_unary_minus_still_applies_to_a_whole_term ());
+    "an_arithmetic_index_is_now_writable" >:: (fun _ -> test_an_arithmetic_index_is_now_writable ());
     "an_index_is_not_a_term_in_arithmetic_position" >:: (fun _ -> test_an_index_is_not_a_term_in_arithmetic_position ());
     "a_nat_literal_index_is_well_formed" >:: (fun _ -> test_a_nat_literal_index_is_well_formed ());
     "a_negative_literal_index_is_refused" >:: (fun _ -> test_a_negative_literal_index_is_refused ());

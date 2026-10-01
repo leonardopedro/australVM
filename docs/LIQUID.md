@@ -148,16 +148,27 @@ invents one.
   vector of the named type `Foo` — the token stream alone does not distinguish
   them. `Vector[T, n]` as the plan writes it needs a named (non-sort) type
   argument, which is not yet expressible inside brackets.
-- An index is currently a literal or a variable, because the parser has no
-  additive level at all (see below), so `Span[Nat8, n + 1]` does not parse.
+- ~~An index is currently a literal or a variable~~ — **fixed.** See below.
 
-**A pre-existing gap this work exposed.** §2.2's grammar lists
-`trl-term "+" trl-term` and its siblings, but the parser implements no additive
-level: `parse_term` handles literals, variables, calls, unary minus and `if`,
-and nothing folds `+`, `-` or `*`. So `x + 1 == y` does not parse today. That
-predates L9 and L9 does not fix it — adding an operator level would change every
-existing contract's parse, which is a change to §2.2 rather than to L9.
-`LiquidIndexTypesTest` pins the gap so a future fix is noticed.
+**The additive level L9 exposed, now implemented.** §2.2's grammar has always
+listed `trl-term "+" trl-term`, `trl-term "-" trl-term` and
+`trl-term "*" trl-term`, but the parser had **no** arithmetic level:
+`parse_term` handled literals, variables, calls, unary minus and `if`, and
+nothing folded `+`, `-` or `*`. So `x + 1 == y` did not parse at all — not a
+weakness, a failure. L9 surfaced it because an *index* is meant to be a term and a
+term could only be a literal or a variable, so `Span[Nat8, n + 1]` was
+unwritable.
+
+`parse_term` is now the additive level over `parse_multiplicative`, which is over
+`parse_unary_term` (primary, unary minus, `if`). Two properties are pinned by
+test because a wrong answer here is *not* a parse error — it is a valid parse of
+the wrong obligation, which is the dangerous kind:
+
+- `*` binds tighter than `+`, so `a + b * c` is `a + (b * c)`;
+- `+`/`-` are left-associative, so `a - b - c` is `(a - b) - c`.
+
+Unary minus stays a prefix at the tighter level, so `-a + b` and `a - b` are
+both unambiguous without a whitespace convention.
 
 There are **no quantifiers** in v1 (`forall`/`exists` are MUST NOT).
 `fun-name` **MUST** resolve to a measure (§4.3) or a total-fragment function

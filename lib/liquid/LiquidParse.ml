@@ -98,12 +98,54 @@ let check_int_range (z : Z.t) (start : int) (stop : int) (st : state) =
 
 (* ── terms ──────────────────────────────────────────────────────────────── *)
 
+(** `trl-term "+" trl-term`, `trl-term "-" trl-term`.
+
+    §2.2 lists these and the parser had no level for them, so `x + 1 == y` did
+    not parse at all: `parse_term` stopped after one primary, leaving `+ 1` to
+    be read as trailing input. L9 surfaced this because an *index* is meant to be
+    a term and a term could only be a literal or a variable.
+
+    Left-associative, matching the arithmetic these stand for, and `*` binds
+    tighter (below). Unary minus stays a prefix at the tighter level, so `-x` and
+    `a - b` are both unambiguous without needing whitespace conventions. *)
 let rec parse_term (st : state) : LiquidTypes.term =
+  let lhs = parse_multiplicative st in
+  let rec loop acc =
+    skip_ws st;
+    let start = st.pos in
+    if eat st "+" then begin
+      let rhs = parse_multiplicative st in
+      loop (LiquidTypes.TAdd (acc, rhs, { LiquidTypes.start = start; stop = st.pos }))
+    end
+    else if eat st "-" then begin
+      let rhs = parse_multiplicative st in
+      loop (LiquidTypes.TSub (acc, rhs, { LiquidTypes.start = start; stop = st.pos }))
+    end
+    else acc
+  in
+  loop lhs
+
+(** `trl-term "*" trl-term` — binds tighter than `+`/`-`. *)
+and parse_multiplicative (st : state) : LiquidTypes.term =
+  let lhs = parse_unary_term st in
+  let rec loop acc =
+    skip_ws st;
+    let start = st.pos in
+    if eat st "*" then begin
+      let rhs = parse_unary_term st in
+      loop (LiquidTypes.TMul (acc, rhs, { LiquidTypes.start = start; stop = st.pos }))
+    end
+    else acc
+  in
+  loop lhs
+
+(** A primary, plus unary minus and the conditional form of §2.2. *)
+and parse_unary_term (st : state) : LiquidTypes.term =
   skip_ws st;
   let start = st.pos in
   (* unary minus is a term on its own right in §2.2 *)
   if eat st "-" then begin
-    let t = parse_term st in
+    let t = parse_unary_term st in
     LiquidTypes.TNeg (t, { LiquidTypes.start = start; stop = st.pos })
   end
   else if eat st "if" then begin
