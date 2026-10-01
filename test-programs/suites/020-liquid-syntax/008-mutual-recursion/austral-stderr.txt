@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "T1 (§4.1): `isEven` is in a call cycle, so it is not total: isEven -> isOdd -> isEven -> isOdd"
+    }
+  ],
+  "span": null,
+  "context": null
+}

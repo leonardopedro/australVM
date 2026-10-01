@@ -577,14 +577,29 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L3 — totality gate
 
-- [ ] `TotalityCheck.ml`: refinement-level call graph (reuse the
+- [x] `TotalityCheck.ml`: refinement-level call graph (reuse the
       `TailCallAnalysis`/`TailCallUtil` traversal style), reject
       direct/mutual cycles *naming the cycle path* (mirror
       `../unfer/logos/src/austral_codegen/validate.rs::check_cycles`),
       `fold`/`match` only; enforce T1–T5 of `docs/LIQUID.md` §1.
-- [ ] Tests: mutual-recursion fixture errors with both function names;
+- [x] Tests: mutual-recursion fixture errors with both function names;
       fold-only recursion accepted; `while`/`for` → error under
       `required`, untracked otherwise.
+
+      *L3 scope, stated honestly:* T1, T2 and the callee half of T4 are
+      enforced. **T3** (structural patterns only) is deferred — it needs an
+      analysis of `case` arm guards that `typed_when` does not expose.
+      **T5** (refined variables are immutable) is deferred to **L4**: it needs
+      the refinement environment Γ, and at L3 no constraint exists yet, so
+      there is nothing to compare an assignment against.
+
+      The gate runs on the **typed** tree, not the monomorphic one:
+      `Compiler_plugin.typed_pass` sees a `Tast.typed_module` and that is the
+      only seam L1 provides. This is also the better level for T1 — at `Tast`
+      every call is a single `TFuncall` carrying a `decl_id`, so the graph
+      needs one namespace. Below `Monomorphize` a generic call carries only a
+      `mono_id` with no back-pointer to its source declaration, and the graph
+      would have to track both and could not name the generic nodes.
 
 ### L4 — constraint generation
 

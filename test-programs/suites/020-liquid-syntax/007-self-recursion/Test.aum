@@ -1,0 +1,18 @@
+module body Test is
+    """
+    T1: a refinement-level function may not call itself.
+    """
+    pragma Liquid_Requires(Contract => "true");
+    function countdown(n: Int64): Int64 is
+        if n <= 0 then
+            return 0;
+        else
+            return countdown(n - 1);
+        end if;
+    end;
+
+    function main(): ExitCode is
+        printLn(countdown(3));
+        return ExitSuccess();
+    end;
+end module body.

@@ -1,0 +1,21 @@
+module body Test is
+    """
+    T2: the only iteration in the Total Austral Subset is `fold` plus
+    structural `match`, so a contracted function may not use `while`.
+    """
+    pragma Liquid_Requires(Contract => "true");
+    function sumTo(n: Int64): Int64 is
+        var i: Int64 := 0;
+        var total: Int64 := 0;
+        while i < n do
+            total := total + i;
+            i := i + 1;
+        end while;
+        return total;
+    end;
+
+    function main(): ExitCode is
+        printLn(sumTo(4));
+        return ExitSuccess();
+    end;
+end module body.

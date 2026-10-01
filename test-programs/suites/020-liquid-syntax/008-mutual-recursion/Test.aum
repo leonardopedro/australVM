@@ -1,0 +1,28 @@
+module body Test is
+    """
+    T1: mutual recursion is not total either; the diagnostic names both
+    functions on the cycle.
+    """
+    pragma Liquid_Requires(Contract => "true");
+    function isEven(n: Int64): Bool is
+        if n = 0 then
+            return true;
+        else
+            return isOdd(n - 1);
+        end if;
+    end;
+
+    pragma Liquid_Requires(Contract => "true");
+    function isOdd(n: Int64): Bool is
+        if n = 0 then
+            return false;
+        else
+            return isEven(n - 1);
+        end if;
+    end;
+
+    function main(): ExitCode is
+        printLn(if isEven(4) then "even" else "odd");
+        return ExitSuccess();
+    end;
+end module body.

@@ -116,6 +116,56 @@ let check_module ~(bound : string list) (m : typed_module) : string option =
   in
   go decls
 
+(** L3: the totality gate, run on every function that carries a contract. A
+    function with no `Liquid_*` pragma is outside the fragment and is left
+    unchecked — the gate never rejects code that did not opt in.
+
+    The call graph is built once for the module, over both the `decl_id` and
+    `mono_id` namespaces (see `TotalityCheck` on why both are needed), and the
+    foreign `decl_id`s are collected for T4. *)
+let decl_key (id: Id.decl_id): int =
+  match id with
+  | Id.DeclId i -> i
+
+let totality (m : typed_module) : string option =
+  let (TypedModule (_, decls)) = m in
+  let names : (int, string) Hashtbl.t = Hashtbl.create 16 in
+  let foreign : (int, unit) Hashtbl.t = Hashtbl.create 16 in
+  let graph : (int, int list) Hashtbl.t = Hashtbl.create 16 in
+  List.iter
+    (fun d ->
+      match d with
+      | TFunction (id, _, name, _, _, _, body, _, _) ->
+         Hashtbl.replace names (decl_key id) (Identifier.ident_string name);
+         Hashtbl.replace graph (decl_key id)
+           (List.map decl_key (TotalityCheck.calls_in_stmt [] body))
+      | TForeignFunction (id, _, _, _, _, _, _, _) ->
+         Hashtbl.replace foreign (decl_key id) ()
+      | _ -> ())
+    decls;
+  (* Report the first contracted function that is not total. *)
+  let rec go = function
+    | [] -> None
+    | d :: rest ->
+       (match d with
+        | TFunction (id, _, name, _, _, _, body, _, pragmas) ->
+           let contracted =
+             List.exists
+               (fun p ->
+                 match p with
+                 | Common.LiquidPragma _ -> true
+                 | _ -> false)
+               pragmas
+           in
+           if not contracted then go rest
+           else
+             TotalityCheck.check_function
+               ~name:(Identifier.ident_string name)
+               ~entry:id ~body ~graph ~foreign ~names
+        | _ -> go rest)
+  in
+  go decls
+
 (** The `typed_pass` registered as the `liquid` tenant. Uses the
     self-referential scope: a contract may only mention its own parameters and
     `result`. WF3 — that every applied function symbol is total-fragment
@@ -141,4 +191,7 @@ let check (m : typed_module) : Compiler_plugin.verdict =
     decls;
   match check_module ~bound:!bound m with
   | Some msg -> Compiler_plugin.VerdictReject msg
-  | None -> Compiler_plugin.VerdictOk
+  | None ->
+     (match totality m with
+      | Some msg -> Compiler_plugin.VerdictReject msg
+      | None -> Compiler_plugin.VerdictOk)
