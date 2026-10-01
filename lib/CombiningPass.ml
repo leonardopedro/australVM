@@ -166,10 +166,21 @@ let merge_liquid_pragmas ~(name : Identifier.identifier)
         | _ -> true)
       ps
   in
-  (* Body-local contracts first (they are what the body actually writes), then
-     the interface's, in interface order, skipping kinds the body already
-     restated so no kind is duplicated. *)
+  (* The merged liquid set is: every liquid pragma the body declares (a
+     restatement of an interface contract is kept — it was checked equal
+     above), followed by the interface's kinds the body did not mention.
+     Dropping the restated ones would silently delete the contract, which is
+     exactly the bug this comment exists to prevent. *)
+  let liquid_of ps =
+    List.filter
+      (fun p ->
+        match p with
+        | Common.LiquidPragma _ -> true
+        | _ -> false)
+      ps
+  in
   (non_liquid def)
+  @ (liquid_of def)
   @ (List.filter_map
        (fun (kind, contract) ->
          let restated =

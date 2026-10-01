@@ -664,12 +664,32 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L8 — manifest + attestation
 
-- [ ] `[verify]` in `module.toml` (`liquid = "off"|"optional"|"required"`,
-      `qualifiers = [...]`); `liquid.ok` sidecar (source hash + `.mlw` hash
-      + prover name/version + verdict + trusted-contract count);
-      `modhost` load gate + hot-swap re-verify on changed sources.
-- [ ] Tests in `safestos/cranelift/tests/` (tampered/stale sidecar refused;
-      `off` modules unaffected).
+- [x] `[verify]` in `module.toml` (`liquid = "off"|"optional"|"required"`,
+      `qualifiers = [...]`) — **added to the existing `ManifestToml` struct**,
+      defaulting to `off`, so a manifest predating the section is unchanged and
+      the frozen vocabulary is untouched. `modhost` reads the posture with the
+      parser `authorize` already uses rather than a second TOML reader; merging
+      manifests takes the *stricter* posture, since silently downgrading
+      `required` would disable the check the author asked for.
+- [x] `liquid.ok` sidecar (sources hash + `.mlw` hash + prover name/version +
+      verdict + trusted-contract count), written by `LiquidWhy3` under
+      `AUSTRAL_LIQUID_SIDECAR`, and **never written for a `NoEngine` run** —
+      an attestation saying "proved" must not come from a run with no prover.
+- [x] `modhost` load gate + hot-swap re-verify: a swap is the easiest way to
+      get unverified bytes into a live process, so the gate runs again on the
+      incoming directory, not only at cold load.
+- [x] Tests: 9 unit tests in `liquid_attest.rs` and 3 integration tests in
+      `safestos/cranelift/tests/liquid_attest_tests.rs`, the latter driven by a
+      fixture whose `liquid.ok` was written by the **OCaml** compiler. That is
+      the load-bearing one: the digest is implemented twice, in two languages,
+      and the fixture fails the moment they drift.
+
+      **Documented limit:** FNV-1a is an integrity check, not a cryptographic
+      one. It catches a stale sidecar and casual edits; it would not resist an
+      adversary who edits both the sources and the sidecar. A test named
+      `editing_both_sides_is_the_documented_limit` pins that boundary instead
+      of pretending to cross it. SHA-256 (or re-attesting under the deployment
+      principal) is the follow-up.
 
 ### L9 — dependent index layer
 

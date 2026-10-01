@@ -1,0 +1,10 @@
+module Demo is
+    """
+    A module that claims its contracts were proved.
+    """
+    pragma Liquid_Requires(Contract => "n >= 0");
+    pragma Liquid_Ensures(Contract => "result >= n");
+    function atLeast(n: Int64): Int64;
+
+    function main(): ExitCode;
+end module.

@@ -12,6 +12,7 @@
 //! Exit codes: 0 = success, 1 = denied/error, 2 = usage error.
 
 use austral_cranelift_bridge::auth::{self, ManifestAuthEngine};
+use austral_cranelift_bridge::liquid_attest;
 use austral_cranelift_bridge::module::ModuleHost;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -52,6 +53,30 @@ fn cmd_authorize(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Read a module's `[verify]` posture and run the attestation gate.
+///
+/// Returns `Ok(note)` to proceed, `Err(reason)` to refuse. A missing or
+/// unparseable `module.toml` is not an attestation failure: the module simply
+/// declares nothing about liquid types, which is `off`.
+fn liquid_posture(module_dir: &Path) -> Result<String, String> {
+    let manifest_path = module_dir.join("module.toml");
+    let toml = match std::fs::read_to_string(&manifest_path) {
+        Ok(t) => t,
+        Err(_) => return liquid_attest::verify_module(module_dir, auth::LiquidMode::Off),
+    };
+    let engine = ManifestAuthEngine::from_toml_str(&toml)
+        .map_err(|e| format!("LiquidManifestInvalid: {}: {}", manifest_path.display(), e))?;
+    let mode = engine.liquid_mode();
+    let quals = engine.liquid_qualifiers();
+    liquid_attest::verify_module(module_dir, mode).map(|note| {
+        if quals.is_empty() {
+            note
+        } else {
+            format!("{} (qualifiers: {})", note, quals.join(", "))
+        }
+    })
 }
 
 fn cmd_host(args: &[String]) -> ExitCode {
@@ -126,11 +151,42 @@ fn cmd_host(args: &[String]) -> ExitCode {
         }
     }
 
+    // PLAN_liquid_types.md L8: the load-time attestation gate, in the same
+    // posture as UK-4001 — the compiler's liquid verdict is only load-bearing
+    // if the host refuses a module whose sidecar does not describe the bytes.
+    //
+    // The posture is read with `ManifestAuthEngine::from_toml_str`, the parser
+    // `authorize` already uses, rather than a second TOML reader: the `[verify]`
+    // section was added to that struct additively, so one parse answers both
+    // "what may this module call" and "what has this module proved".
+    match liquid_posture(module_dir) {
+        Err(e) => {
+            eprintln!("modhost: refusing to host: {e}");
+            return ExitCode::from(1);
+        }
+        Ok(note) => {
+            if !note.is_empty() {
+                println!("modhost: {note}");
+            }
+        }
+    }
+
     if let Some(ref sd) = swap_dir {
         let module_name = {
             let h = host.loaded_modules();
             h[0].to_string()
         };
+        // Re-verify the *incoming* module before it replaces the running one.
+        // A hot swap is the easiest way to get unverified bytes into a live
+        // process, so the attestation gate has to run again here and not only
+        // at cold load.
+        match liquid_posture(Path::new(sd)) {
+            Err(e) => {
+                eprintln!("modhost: refusing to hot-swap: {e}");
+                return ExitCode::from(1);
+            }
+            Ok(note) => println!("modhost: swap attestation: {note}"),
+        }
         match host.swap(&module_name, Path::new(sd)) {
             Ok(()) => println!("modhost: hot-swapped '{module_name}' from {sd}"),
             Err(e) => {

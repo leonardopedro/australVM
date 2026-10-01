@@ -29,6 +29,10 @@ impl AuthorizationEngine for AllowAll {
 pub struct ManifestAuthEngine {
     grants: HashMap<String, HashSet<String>>,
     effects: HashMap<String, HashSet<String>>,
+    /// PLAN_liquid_types.md L8: the `[verify]` posture, carried alongside the
+    /// grants rather than in a second parse of the same file.
+    liquid: LiquidMode,
+    qualifiers: Vec<String>,
 }
 
 impl ManifestAuthEngine {
@@ -36,6 +40,8 @@ impl ManifestAuthEngine {
         Self {
             grants: HashMap::new(),
             effects: HashMap::new(),
+            liquid: LiquidMode::Off,
+            qualifiers: Vec::new(),
         }
     }
 
@@ -53,7 +59,28 @@ impl ManifestAuthEngine {
         engine.grants.insert(module_name.clone(), callables);
         let effects: HashSet<String> = manifest.grants.effects.into_iter().collect();
         engine.effects.insert(module_name, effects);
+        // `[verify]` is additive and defaults to `off`; a malformed value is a
+        // hard error rather than a silent downgrade, because silently
+        // downgrading `required` to `off` would disable exactly the check the
+        // module author asked for.
+        engine.liquid = match manifest.verify.liquid.as_deref() {
+            None => LiquidMode::Off,
+            Some(s) => LiquidMode::parse(s)?,
+        };
+        engine.qualifiers = manifest.verify.qualifiers;
         Ok(engine)
+    }
+
+    /// The `[verify] liquid` posture of this manifest.
+    pub fn liquid_mode(&self) -> LiquidMode {
+        self.liquid
+    }
+
+    /// The `[verify] qualifiers` list: the refinement predicates the module's
+    /// prover was given. Recorded in the attestation so a host can tell which
+    /// theory a verdict was proved against.
+    pub fn liquid_qualifiers(&self) -> &[String] {
+        &self.qualifiers
     }
 
     pub fn merge(&mut self, other: Self) {
@@ -66,6 +93,21 @@ impl ManifestAuthEngine {
         }
         for (module, effects) in other.effects {
             self.effects.entry(module).or_default().extend(effects);
+        }
+        // Merging takes the *stricter* liquid posture. Merging is used when
+        // several manifests compose into one deployment, and the safe
+        // direction for a verification requirement is upward: a deployment
+        // that includes one `required` module must not become `optional`
+        // because another manifest said so.
+        self.liquid = match (self.liquid, other.liquid) {
+            (LiquidMode::Required, _) | (_, LiquidMode::Required) => LiquidMode::Required,
+            (LiquidMode::Optional, _) | (_, LiquidMode::Optional) => LiquidMode::Optional,
+            _ => LiquidMode::Off,
+        };
+        for q in other.qualifiers {
+            if !self.qualifiers.contains(&q) {
+                self.qualifiers.push(q);
+            }
         }
     }
 
@@ -123,6 +165,49 @@ struct ManifestToml {
     module: ModuleToml,
     #[serde(default)]
     grants: GrantsToml,
+    /// PLAN_liquid_types.md L8: additive `[verify]` section. Defaults to
+    /// `LiquidMode::Off`, so a manifest written before this section behaves
+    /// exactly as it did — the frozen vocabulary is untouched.
+    #[serde(default)]
+    verify: VerifyToml,
+}
+
+/// `[verify]` — how much liquid-type checking a module claims to have passed.
+///
+/// `Off` is the default and means "this module says nothing about liquid
+/// types". `Optional` means a `liquid.ok` sidecar is honoured if present.
+/// `Required` means the host refuses the module unless the sidecar is present
+/// *and* its recorded hashes match what is on disk.
+#[derive(serde::Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiquidMode {
+    #[default]
+    Off,
+    Optional,
+    Required,
+}
+
+impl LiquidMode {
+    fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "off" => Ok(LiquidMode::Off),
+            "optional" => Ok(LiquidMode::Optional),
+            "required" => Ok(LiquidMode::Required),
+            other => Err(format!(
+                "[verify] liquid must be \"off\", \"optional\" or \"required\", got {:?}",
+                other
+            )),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+struct VerifyToml {
+    /// Raw string so a bad value produces our own message rather than a serde
+    /// enum error that does not say which field was wrong.
+    #[serde(default)]
+    liquid: Option<String>,
+    #[serde(default)]
+    qualifiers: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
