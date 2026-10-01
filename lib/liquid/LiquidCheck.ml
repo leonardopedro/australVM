@@ -166,6 +166,23 @@ let totality (m : typed_module) : string option =
   in
   go decls
 
+(** L4: emit the module's `.mlw` when `AUSTRAL_LIQUID_DUMP` names a directory.
+    This is how the goldens under `lib/liquid/golden/` are produced
+    (`docs/LIQUID.md` §8.1) and how L5's driver will be exercised without
+    committing a Why3 engine to the test suite. Opt-in: unset, the pass writes
+    nothing. *)
+let dump (m : typed_module) =
+  match Sys.getenv_opt "AUSTRAL_LIQUID_DUMP" with
+  | None -> ()
+  | Some dir ->
+     (match LiquidConstraints.generate m with
+      | None -> ()
+      | Some c ->
+         let path = Filename.concat dir (c.LiquidConstraints.module_name ^ ".mlw") in
+         let oc = open_out path in
+         output_string oc (LiquidConstraints.to_mlw c);
+         close_out oc)
+
 (** The `typed_pass` registered as the `liquid` tenant. Uses the
     self-referential scope: a contract may only mention its own parameters and
     `result`. WF3 — that every applied function symbol is total-fragment
@@ -189,6 +206,7 @@ let check (m : typed_module) : Compiler_plugin.verdict =
            params
       | _ -> ())
     decls;
+  dump m;
   match check_module ~bound:!bound m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->

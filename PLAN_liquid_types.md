@@ -603,12 +603,25 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L4 — constraint generation
 
-- [ ] `LiquidConstraints.ml`: liquid judgments (`docs/LIQUID.md` §5) over
+- [x] `LiquidConstraints.ml`: liquid judgments (`docs/LIQUID.md` §5) over
       `Stages.Tast` → Horn constraints → one `.mlw` per module, goals named
       `g_<span-hash>`; measure unfolding equations as explicit hypotheses
       (`docs/LIQUID.md` §4.3).
-- [ ] `lib/liquid/golden/` pinned `.mlw` (the `authorize_gate` discipline).
-- [ ] Pre- vs post-monomorphization checking per §5 decision row 1.
+- [x] `lib/liquid/golden/` pinned `.mlw` (the `authorize_gate` discipline).
+      `AUSTRAL_LIQUID_DUMP=<dir>` makes the pass write `<Module>.mlw`.
+      Pinned: `golden/constraint-generation.mlw`.
+- [x] Pre- vs post-monomorphization checking per §5 decision row 1 —
+      **pre-monomorphization**, from `Stages.Tast`, matching the gate's
+      seam; at `Tast` a call is a single `TFuncall` with the callee's
+      `decl_id`, so callee contracts resolve without a generic
+      instantiation problem.
+      *L4 scope:* emits the §5.10 RETURN obligation (with the §5.6
+      Requires as an `assumes`). Two gaps are recorded rather than
+      hidden: `Stages.Tast` carries **no spans**, so goals are named
+      `g_<hash of decl_id, name, kind>` rather than §8.1's
+      `g_<span-hash>` — exact blame is therefore blocked until spans
+      reach the typed AST, which is L5's mapping step; and Cycle A
+      (§8.3) is L10, so callee contracts are assumptions.
 
 ### L5 — Why3 driver
 

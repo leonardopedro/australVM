@@ -1,0 +1,17 @@
+module body Test is
+    """
+    Emitting the `.mlw`: `atLeast` carries a precondition over its parameter
+    and a postcondition over the returned value, so the goal L4 generates binds
+    both and assumes the Requires.
+    """
+    pragma Liquid_Requires(Contract => "n >= 0");
+    pragma Liquid_Ensures(Contract => "result >= n");
+    function atLeast(n: Int64): Int64 is
+        return n;
+    end;
+
+    function main(): ExitCode is
+        printLn(atLeast(3));
+        return ExitSuccess();
+    end;
+end module body.
