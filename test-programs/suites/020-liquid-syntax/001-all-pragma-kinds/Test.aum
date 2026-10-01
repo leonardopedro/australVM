@@ -1,0 +1,16 @@
+module body Test is
+    """
+    All six Liquid pragma shapes in one declaration: the four
+    contract-carrying kinds and the two markers.
+    """
+    pragma Liquid_Requires(Contract => "true");
+    pragma Liquid_Ensures(Contract => "true");
+    pragma Liquid_Invariant(Contract => "true");
+    pragma Liquid_Trusted(Contract => "true");
+    pragma Liquid_Measure;
+    pragma Liquid_Fold;
+    function main(): ExitCode is
+        printLn("liquid");
+        return ExitSuccess();
+    end;
+end module body.

@@ -1,0 +1,10 @@
+module body Test is
+    """
+    Weakening the interface contract must be refused.
+    """
+    pragma Liquid_Ensures(Contract => "false");
+    function main(): ExitCode is
+        printLn("unreachable");
+        return ExitSuccess();
+    end;
+end module body.

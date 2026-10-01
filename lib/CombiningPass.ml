@@ -100,7 +100,88 @@ module Errors = struct
       Code (ident_string name);
       Text " and its implementation have different universes."
     ]
+
+  (** A body contract that contradicts the interface contract of the same
+      kind. `docs/LIQUID.md` §3 makes the interface the contract surface, so a
+      body may restate a contract but must not weaken it. *)
+  let liquid_contract_mismatch ~name ~(kind : string) ~(iface : string)
+      ~(body : string) =
+    austral_raise DeclarationError [
+      Text "The interface requires ";
+      Code (ident_string name);
+      Text " to satisfy ";
+      Code ("Liquid_" ^ kind);
+      Break;
+      Text " but the body declares a different one:";
+      Break;
+      Text "  interface: ";
+      Code iface;
+      Break;
+      Text "  body:      ";
+      Code body;
+      ]
 end
+
+(** PLAN_liquid_types.md L2, `docs/LIQUID.md` §3: the interface is the contract
+    surface. A body declaration may restate a contract, and may add
+    body-local ones (a fold invariant, say), but it must not *contradict* a
+    contract the interface already fixes — that would let a body quietly
+    weaken the interface's promise.
+
+    The check is string equality for any kind declared on both sides.
+    Equality is deliberately the strongest rule that is still decidable here:
+    L6 infers a semantic implication order for qualifiers, and until then the
+    compiler cannot prove that one contract implies another, so anything
+    weaker would be an unsound guess. Marker pragmas (`Liquid_Measure`,
+    `Liquid_Fold`) carry no contract and merge by presence. Foreign pragmas
+    come from the body, as before: an interface cannot declare them. *)
+let merge_liquid_pragmas ~(name : Identifier.identifier)
+    ~(decl : Common.pragma list) ~(def : Common.pragma list) : Common.pragma list =
+  let liquids_of ps =
+    List.filter_map
+      (fun p ->
+        match p with
+        | Common.LiquidPragma (kind, contract) -> Some (kind, contract)
+        | _ -> None)
+      ps
+  in
+  let iface = liquids_of decl in
+  let body = liquids_of def in
+  List.iter
+    (fun (kind, contract) ->
+      match
+        List.find_opt (fun (k, _) -> k = kind) body
+      with
+      | None -> ()
+      | Some (_, contract') ->
+         if contract' <> contract then
+           Errors.liquid_contract_mismatch ~name ~kind ~iface:contract
+             ~body:contract')
+    iface;
+  let non_liquid ps =
+    List.filter
+      (fun p ->
+        match p with
+        | Common.LiquidPragma _ -> false
+        | _ -> true)
+      ps
+  in
+  (* Body-local contracts first (they are what the body actually writes), then
+     the interface's, in interface order, skipping kinds the body already
+     restated so no kind is duplicated. *)
+  (non_liquid def)
+  @ (List.filter_map
+       (fun (kind, contract) ->
+         let restated =
+           List.exists
+             (fun p ->
+               match p with
+               | Common.LiquidPragma (k, _) -> k = kind
+               | _ -> false)
+             def
+         in
+         if restated then None else Some (Common.LiquidPragma (kind, contract)))
+       iface)
 
 let parse_slots (imports: import_map) (slots: concrete_slot list): qslot list =
   List.map
@@ -199,7 +280,7 @@ let match_decls (module_name: module_name) (ii: import_map) (bi: import_map) (de
                 Errors.type_mismatch name
          | _ ->
             Errors.declaration_kind_mismatch ~name ~expected:"type")
-  | ConcreteFunctionDecl (span, name, typarams, params, rt, docstring) ->
+  | ConcreteFunctionDecl (span, name, typarams, params, rt, docstring, decl_pragmas) ->
      adorn_error_with_span span
        (fun _ ->
          match def with
@@ -214,7 +295,7 @@ let match_decls (module_name: module_name) (ii: import_map) (bi: import_map) (de
                          qualify_typespec ii rt,
                          abs_stmt bi body,
                          docstring,
-                         pragmas)
+                         merge_liquid_pragmas ~name ~decl:decl_pragmas ~def:pragmas)
             else
               let msg =
                 if typarams <> typarams' then

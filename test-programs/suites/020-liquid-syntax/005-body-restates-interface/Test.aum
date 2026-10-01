@@ -1,0 +1,10 @@
+module body Test is
+    """
+    Restating the interface contract verbatim is allowed.
+    """
+    pragma Liquid_Ensures(Contract => "true");
+    function main(): ExitCode is
+        printLn("restated");
+        return ExitSuccess();
+    end;
+end module body.

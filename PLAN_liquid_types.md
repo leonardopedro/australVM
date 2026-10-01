@@ -566,14 +566,14 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L2 — surface syntax (`docs/LIQUID.md` §3)
 
-- [ ] `LiquidParse` (in `lib/liquid/`): TRL string DSL → refinement AST
+- [x] `LiquidParse` (in `lib/liquid/`): TRL string DSL → refinement AST
       (`LiquidTypes`), span-accurate errors *into* the pragma string
       (grammar: `docs/LIQUID.md` §2.2–2.3).
-- [ ] Interface/body contract merge rules (`Combined`/`SmallCombined`):
+- [x] Interface/body contract merge rules (`Combined`/`SmallCombined`):
       interface is the contract surface; a body contract must not weaken the
       interface one — fail on mismatch (decision recorded in `docs/LIQUID.md`
       §3 once implemented).
-- [ ] `test-programs/suites/020-liquid-syntax/` — parse + negative cases.
+- [x] `test-programs/suites/020-liquid-syntax/` — parse + negative cases.
 
 ### L3 — totality gate
 

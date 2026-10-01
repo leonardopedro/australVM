@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "on main: Liquid contract error at 0-6: \"forall\" is not available in Liquid Austral v1: the TRL has no quantifiers or binders (§2.2)\n  in: forall x. x >= 0"
+    }
+  ],
+  "span": null,
+  "context": null
+}

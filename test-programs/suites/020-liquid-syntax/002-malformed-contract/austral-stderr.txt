@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "on main: Liquid contract error at 14-14: expected a refinement term\n  in: result >= 0 &&"
+    }
+  ],
+  "span": null,
+  "context": null
+}

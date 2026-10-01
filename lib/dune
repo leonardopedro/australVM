@@ -68,7 +68,7 @@
 (library
   (name austral_lib)
   (public_name austral.austral_lib)
-  (libraries austral_core austral_rust_bridge)
+  (libraries austral_core austral_liquid austral_rust_bridge)
   (wrapped false)
   (flags :standard -w -39-50)
   ; S36: the WhyML cycle. authorize_gate.ml (the Why3 extraction, source in

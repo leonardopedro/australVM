@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "liquid contract error on main at 0-20: WF1 (§2.3): not a parameter, `result`, or a total-fragment constant: lowerBound"
+    }
+  ],
+  "span": null,
+  "context": null
+}

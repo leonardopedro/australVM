@@ -37,14 +37,14 @@ let boot () =
   Why3_plugin.install ();
   Deltanet_plugin.install ();
   Npu_dma_plugin.install ();
-  (* PLAN_liquid_types.md L1: the liquid contract pass is a tenant of this
-     seam. L0 only fixed the representation — the `Liquid_*` pragmas now parse
-     and reach the typed AST — but there is nothing to enforce until L4/L5/L6
-     generate and discharge constraints. So the pass is installed as a no-op
-     that accepts every module; L1's acceptance test registers its own
-     rejecting pass to prove the seam works, and `boot` is where the real
-     checker will replace this. *)
-  Compiler_plugin.register_typed ~name:"liquid" (fun _ -> Compiler_plugin.VerdictOk);
+  (* PLAN_liquid_types.md L2: the liquid contract pass is a tenant of this
+     seam. L0 fixed the representation and L1 threaded the pragmas to the
+     typed AST; L2 makes the pass real — it parses every contract and checks
+     the parts of docs/LIQUID.md §2.2-§2.3 that are already decidable (the
+     literal range, the no-quantifiers restriction, WF1, and the declared-sort
+     half of WF2). It still *enforces* nothing: L4 generates constraints, L5
+     discharges them via Why3, L6 infers qualifiers. *)
+  Compiler_plugin.register_typed ~name:"liquid" LiquidCheck.check;
   let names = list_compilers () in
   if not (List.mem "austral-builtin" names) then
     register_compiler

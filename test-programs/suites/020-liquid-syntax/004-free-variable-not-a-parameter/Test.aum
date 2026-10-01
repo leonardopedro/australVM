@@ -1,0 +1,7 @@
+module body Test is
+    pragma Liquid_Ensures(Contract => "result >= lowerBound");
+    function main(): ExitCode is
+        printLn("unreachable");
+        return ExitSuccess();
+    end;
+end module body.

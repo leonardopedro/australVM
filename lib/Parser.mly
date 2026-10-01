@@ -231,7 +231,7 @@ function_decl:
   | typarams=generic_segment
     FUNCTION name=identifier LPAREN params=parameter_list RPAREN
     COLON rt=typespec SEMI
-    { ConcreteFunctionDecl (from_loc $loc, name, typarams, params, rt, Docstring "") }
+    { ConcreteFunctionDecl (from_loc $loc, name, typarams, params, rt, Docstring "", []) }
   ;
 
 generic_segment:

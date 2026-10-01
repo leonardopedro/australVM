@@ -28,7 +28,7 @@ and concrete_decl =
   | ConcreteOpaqueTypeDecl of span * identifier * concrete_type_param list * universe * docstring
   | ConcreteRecordDecl of concrete_record
   | ConcreteUnionDecl of concrete_union
-  | ConcreteFunctionDecl of span * identifier * concrete_type_param list * concrete_param list * typespec * docstring
+  | ConcreteFunctionDecl of span * identifier * concrete_type_param list * concrete_param list * typespec * docstring * pragma list
   | ConcreteTypeClassDecl of concrete_typeclass
   | ConcreteInstanceDecl of span * identifier * concrete_type_param list * typespec * docstring
 

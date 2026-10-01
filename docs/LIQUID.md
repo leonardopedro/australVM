@@ -158,11 +158,33 @@ Rules:
 - Contracts **SHOULD** live in the interface (`.aui`) — that is the contract
   surface; body pragmas are for body-local annotations (fold invariants).
 - Multiple `Liquid_*` pragmas may combine with each other and with
-  `Foreign_Import`; `TypingPass`'s pragma match is extended accordingly (today
-  it accepts exactly `[ForeignImportPragma s]`, `[ForeignExportPragma _]`, or
-  `[]`, and `Errors.fun_invalid_pragmas ()` otherwise).
+  `Foreign_Import`; `TypingPass`'s pragma match is extended accordingly (it
+  partitions the list: `find_map` for the foreign pragmas, filter for the
+  liquid ones, and rejects anything else).
 - DSL strings are parsed by `LiquidParse` with span-accurate errors pointing
   into the pragma string.
+
+### 3.1 Interface/body merge (decided at L2)
+
+The interface is the contract surface. `CombiningPass.merge_liquid_pragmas`
+combines the two lists when a `.aui` declaration meets its `.aum` definition:
+
+- **A kind declared on both sides must agree exactly.** The contract strings
+  must be equal, or the compilation fails with `liquid_contract_mismatch`.
+  Equality — rather than "the body implies the interface" — is deliberate:
+  L6 infers a semantic implication order for qualifiers, and until then the
+  compiler cannot *prove* one contract implies another, so any weaker check
+  would be an unsound guess. When L6 lands this is the place to relax it.
+- **A kind on only one side is fine.** The interface's contracts survive even
+  when the body says nothing; a body may add body-local obligations (a fold
+  invariant, say) that the interface does not mention.
+- **Marker pragmas** (`Liquid_Measure`, `Liquid_Fold`) carry no contract and
+  merge by presence, never compared.
+- **Foreign pragmas** (`Foreign_Import`, `Foreign_Export`) come from the body,
+  as before: an interface declaration cannot name an external symbol.
+
+The merged list is the body's non-liquid pragmas, followed by the interface's
+liquid pragmas in interface order, skipping kinds the body already restated.
 
 Example (interface):
 

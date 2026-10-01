@@ -46,7 +46,7 @@ let concrete_decl_name = function
   | ConcreteOpaqueTypeDecl (_, n, _, _, _) -> Some n
   | ConcreteRecordDecl (ConcreteRecord (_, n, _, _, _, _)) -> Some n
   | ConcreteUnionDecl (ConcreteUnion (_, n, _, _, _, _)) -> Some n
-  | ConcreteFunctionDecl (_, n, _, _, _, _) -> Some n
+  | ConcreteFunctionDecl (_, n, _, _, _, _, _) -> Some n
   | ConcreteTypeClassDecl (ConcreteTypeClass (_, n, _, _, _)) -> Some n
   | ConcreteInstanceDecl _ -> None
 
@@ -217,8 +217,8 @@ let decl_replace_docstring_and_pragmas (decl: concrete_decl) (docstring: docstri
      ConcreteRecordDecl (ConcreteRecord (span, name, typarams, universe, slots, docstring))
   | ConcreteUnionDecl (ConcreteUnion (span, name, typarams, universe, cases, _)) ->
      ConcreteUnionDecl (ConcreteUnion (span, name, typarams, universe, cases, docstring))
-  | ConcreteFunctionDecl (span, name, typarams, params, rt, _) ->
-     ConcreteFunctionDecl (span, name, typarams, params, rt, docstring)
+  | ConcreteFunctionDecl (span, name, typarams, params, rt, _, _previous_pragmas) ->
+     ConcreteFunctionDecl (span, name, typarams, params, rt, docstring, pragmas)
   | ConcreteTypeClassDecl (ConcreteTypeClass (span, name, typarams, methods, _)) ->
      ConcreteTypeClassDecl (ConcreteTypeClass (span, name, typarams, methods, docstring))
   | ConcreteInstanceDecl (span, name, methods, ty, _) ->

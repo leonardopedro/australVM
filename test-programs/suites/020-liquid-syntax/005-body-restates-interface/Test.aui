@@ -1,0 +1,7 @@
+module Test is
+    """
+    The interface is the contract surface: it fixes a postcondition.
+    """
+    pragma Liquid_Ensures(Contract => "true");
+    function main(): ExitCode;
+end module.

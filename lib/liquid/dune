@@ -1,0 +1,17 @@
+; PLAN_liquid_types.md L2: the Liquid Austral refinement AST (`LiquidTypes`),
+; the TRL contract-string parser (`LiquidParse`), and the `liquid` compiler
+; pass (`LiquidCheck`).
+;
+; This is a separate library rather than more `austral_core` modules because the
+; pass sits on the `Compiler_plugin` seam, which `austral_lib` owns: `austral`
+; the library depends on `austral_liquid`, which depends on `austral_core`.
+; `LiquidCheck` reaches `Compiler_plugin.verdict`, so it cannot live *inside*
+; `austral_core` without a cycle.
+(library
+ (name austral_liquid)
+ (public_name austral.austral_liquid)
+ (synopsis "Liquid Austral: refinement types for the Total Austral Subset.")
+ (libraries austral_core zarith)
+ (wrapped false)
+ (flags :standard -w -39-50)
+ (modules LiquidTypes LiquidParse LiquidCheck))

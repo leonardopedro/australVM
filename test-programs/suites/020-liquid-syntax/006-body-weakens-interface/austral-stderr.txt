@@ -1,0 +1,33 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The interface requires " },
+    { "type": "code", "content": "main" },
+    { "type": "text", "content": " to satisfy " },
+    { "type": "code", "content": "Liquid_Ensures" },
+    { "type": "break" },
+    { "type": "text", "content": " but the body declares a different one:" },
+    { "type": "break" },
+    { "type": "text", "content": "  interface: " },
+    { "type": "code", "content": "true" },
+    { "type": "break" },
+    { "type": "text", "content": "  body:      " },
+    { "type": "code", "content": "false" }
+  ],
+  "span": {
+    "filename": "test-programs/suites/020-liquid-syntax/006-body-weakens-interface/Test.aui",
+    "startp": { "line": 5, "column": 46 },
+    "end": { "line": 6, "column": 30 }
+  },
+  "context": [
+    [
+      3,
+      "    The interface is the contract surface: it fixes a postcondition."
+    ],
+    [ 4, "    \"\"\"" ],
+    [ 5, "    pragma Liquid_Ensures(Contract => \"true\");" ],
+    [ 6, "    function main(): ExitCode;" ],
+    [ 7, "end module." ]
+  ]
+}
