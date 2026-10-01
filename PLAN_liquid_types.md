@@ -1033,11 +1033,27 @@ already quotiented by logos:**
       E4's ablation therefore compares two things that already exist, rather
       than a port followed by a comparison.
 
+      **Keying ablation now measured** (unfer `937d56c`): E4's comparison of (a)
+      surface N-gram against (b) UNF keys at iso-table-budget, with the coverage
+      curve — the half that does not need a GPU, and the half that decides the
+      claim. `logos/src/engram/ablation.rs` reimplements the pinned reference's
+      `_get_ngram_hashes` and measures both arms. On the 45-fragment golden
+      corpus: **740 slots / 2320 lookups vs 38 / 45** — 19.5× fewer slots, 51.6×
+      fewer lookups; at the budget UNF needs, surface keys cover **5%** of the
+      corpus. The gap is structural: surface keying indexes per token position,
+      so a paraphrase touches different slots by construction.
+
+      **The run prints its own caveats**, because the numbers are easy to
+      misread: 45 fragments *built* to contain paraphrases makes 19.5× an upper
+      bound rather than an estimate; arm (b)'s dedup is read from the corpus's
+      labels rather than produced by the reducer, so this measures what *perfect*
+      dedup buys, not how good ours is; and arm (a) is a reimplementation of the
+      hash arithmetic, not the reference's torch code.
+
       **Not done: the training ablation.** Val loss, the long-context RULER
-      subset, table-coverage curves and the ρ* sparsity sweep all need GPU
-      training runs; this machine has no accelerator. The acceptance's
-      "reproducible run log + ablation table" is consequently still outstanding
-      — no numbers have been invented to fill it.
+      subset, iso-FLOPs and the ρ* sparsity sweep all need GPU training runs;
+      this machine has no accelerator. Those remain outstanding — no numbers have
+      been invented to fill them.
 - [x] **E5 (S)** [`[SYNC]`] — probabilistic engrams over logos' existing L1
       split. E5 adds **no** world splitting and **no** aggregation: `l1::split_l1`
       already produces weighted worlds and `l1::aggregate_results` already
