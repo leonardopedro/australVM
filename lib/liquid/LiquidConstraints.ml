@@ -61,6 +61,28 @@ let emit_contract (src : string) : string =
 
 (* ── the generated file ──────────────────────────────────────────────────── *)
 
+(** One total-fragment function, as a Why3 `function` plus an axiom carrying its
+    contract.
+
+    The axiom is an **assumption**, not a proof — it states what the function is
+    declared to do so that callers may rely on it. That is the same conservative
+    shape L6 already uses for qualifiers: an undischarged obligation stays
+    visible in the emitted file instead of being silently dropped. Proving the
+    axiom would need the function body, which is not translated here.
+
+    The Why3 shapes were established by running the engine rather than assumed:
+    a bodyless `function ... requires/ensures` is a *syntax error*, and a `val`
+    does not bind its name for use in a goal's formula at all. What works is a
+    bare `function` declaration plus an `axiom` over the function symbol, and it
+    is not vacuous — a goal that overstates the contract does not come out
+    Valid. *)
+type theory_fn = {
+  tname : string;
+  tparams : string list;
+  tpre : string option;
+  tpost : string;
+}
+
 type contract_entry = {
   cname : string;
   ckind : LiquidTypes.contract_kind;
@@ -84,6 +106,12 @@ type t = {
       `predicate` declarations and assumed by the goals, so an unproved
       obligation is visible as an assumption rather than hidden. *)
   templates : LiquidInfer.qualifier list;
+  (** L10 Cycle A: the module's total-fragment functions, emitted as a Why3
+      theory so a caller's goal can *call* a callee instead of assuming its
+      contract. Before this the `.mlw` declared no functions at all, so every
+      goal was closed over bare parameters and a caller had nothing to appeal
+      to. *)
+  theory : theory_fn list;
 }
 
 (* ── goal naming ─────────────────────────────────────────────────────────── *)
@@ -164,6 +192,22 @@ let make_return_goal ~(decl : int) ~(name : string) ~(kind : LiquidTypes.contrac
 
 (* ── the emitter ─────────────────────────────────────────────────────────── *)
 
+(** Replace the goal's `result` variable with a call to the function.
+
+    The postcondition of a function contract talks about `result`; the axiom
+    that carries it has to talk about `atLeast n`, or it constrains nothing and
+    the caller learns nothing. This is a textual substitution of the one
+    identifier the emitter controls — `result_var` — rather than a rewrite of
+    the formula AST, and it is only sound because that identifier is reserved:
+    §2.2 spells it `result` and the emitter renames it, so a user variable
+    cannot collide with it. *)
+let substitute_result (params : string list) (fname : string) (text : string) : string =
+  let call = fname ^ (if params = [] then "" else " " ^ String.concat " " params) in
+  (* Word-boundary replace: `__result` must not be matched inside a longer
+     identifier. *)
+  let re = Str.regexp_string (Str.quote result_var) in
+  try Str.global_substitute re (fun _ -> call) text with Not_found -> text
+
 (** §8.1: one `.mlw` per module, goldens pinned under `lib/liquid/golden/`.
     Deterministic by construction — no timestamps, no absolute paths — so a
     golden diff means a real behaviour change. *)
@@ -206,6 +250,38 @@ let to_mlw (c : t) : string =
               (emit_contract (LiquidTypes.string_of_formula q.LiquidInfer.qbody)))
       c.templates;
   line "\n";
+  (* L10 Cycle A: the theory. Emitted before the goals so a goal can refer to a
+     callee by name. *)
+  if c.theory <> [] then begin
+    line "\n  (* --- theory: total-fragment functions (L10 Cycle A) --- *)\n";
+    List.iter
+      (fun (f : theory_fn) ->
+         let args = String.concat ", " f.tparams in
+         (* A bodyless `function` with its own contract is not valid Why3; the
+            contract has to be an axiom over the symbol. *)
+         line "  function %s (%s) : int\n" f.tname
+           (if args = "" then "" else
+              String.concat ", "
+                (List.map (fun p -> Printf.sprintf "%s: int" p) f.tparams));
+         (* The postcondition is stated about the call, not about a free
+            `result`, or the axiom would constrain nothing. *)
+         let post = substitute_result f.tparams f.tname (emit_contract f.tpost) in
+         let quantified =
+           String.concat ", "
+             (List.map (fun p -> Printf.sprintf "%s: int" p) f.tparams)
+         in
+         let binders =
+           if quantified = "" then ""
+           else Printf.sprintf "forall %s. " quantified
+         in
+         (match f.tpre with
+          | Some pre ->
+             line "  axiom %s_post: %s(%s) -> %s\n" f.tname binders
+               (emit_contract pre) post
+          | None -> line "  axiom %s_post: %s%s\n" f.tname binders post))
+      c.theory;
+    line "\n";
+  end;
   line "  (* --- verification conditions --- *)\n";
   List.iter
     (fun g ->
@@ -301,5 +377,39 @@ let generate (m : typed_module) : t option =
     let inference =
       LiquidInfer.infer (fun _ -> true) m
     in
-    Some { module_name = name; contracts; goals; templates = inference.LiquidInfer.surviving }
+    (* L10 Cycle A: pair each function's Requires with its Ensures. A function
+       with only one of the two still gets an axiom — the missing half is simply
+       absent, which is the honest reading: an Ensures with no Requires is
+       unconditional, and a Requires with no Ensures says nothing about the
+       result, so it contributes no axiom rather than a vacuous one. *)
+    let theory =
+      List.concat_map
+        (fun e ->
+           if e.ckind <> LiquidTypes.KEnsures then []
+           else
+             let pre =
+               List.find_opt
+                 (fun (c : contract_entry) ->
+                   c.cname = e.cname && c.ckind = LiquidTypes.KRequires)
+                 contracts
+               |> Option.map (fun c -> c.csrc)
+             in
+             [
+               {
+                 tname = e.cname;
+                 tparams = e.cparams;
+                 tpre = pre;
+                 tpost = e.csrc;
+               };
+             ])
+        contracts
+    in
+    Some
+      {
+        module_name = name;
+        contracts;
+        goals;
+        templates = inference.LiquidInfer.surviving;
+        theory;
+      }
   end

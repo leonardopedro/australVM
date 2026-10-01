@@ -1,46 +1,72 @@
-Install Why3 in the flake, and fix three bugs it immediately exposed
+L10 Cycle A: emit a real Why3 theory, and share one Why3 with unfer
 
-Adds `pkgs.why3` and `pkgs.alt-ergo-free` to the flake's buildInputs, so the dev
-shell can actually run the prover `LiquidWhy3.prove` shells out to.
+Two things, because the second is what made the first checkable.
 
-Why3 1.8.2 and alt-ergo-free 2.4.3 both come from the nix cache. alt-ergo
-(proper) is unfree in nixpkgs, and I did not flip this project's unfree policy
-to get a prover; the free build registers under the same `alt-ergo` name. Why3
-warns the version is "unrecognised" (it expects 2.6.x) but proves correctly, and
-I checked it can refute as well as prove, so it is not rubber-stamping.
+## Sharing the engine (no more duplicate Why3)
 
-**Why3 is installed because it immediately found three real bugs, which are all
-one bug.** The `.mlw` emitter had never been parsed by the engine it targets,
-because with no engine every `.mlw` took the structured-skip path -- and a
-malformed emitter is indistinguishable from an unproved one. Each of the three
-makes Why3 exit 1, which `LiquidWhy3.prove` reads as "the prover refused":
+unfer already used Why3 (S36: `uk_whyml_emit` shells out to `why3 prove` and
+`why3 extract`), so adding it to australVM was on track to create a second copy.
+It had: the flakes sit on different channels, and a different nixpkgs revision
+means a different store path, so nix could not dedupe.
 
-  1. `assumes a_x: P` inside a `goal`. That is a Why3 *program* construct and is
-     illegal there, so every contract with a precondition produced a **false
-     rejection**. Now folded into the goal as an antecedent, `P -> body`, which
-     is also more direct: `gbinder` already binds the names the Requires
-     mentions.
-  2. `forall (x: int) (y: int).` Why3 wants `forall x: int, y: int.` -- one
-     comma-separated list, binders unparenthesised.
-  3. A newline between `goal g:` and its term. Not allowed.
+  before   australVM  nixos-unstable  34ab990…  why3 1.8.2
+           unfer      nixos-23.05     70bdade…  why3 1.6.0
+  after    both                    70bdade…  why3 1.6.0   (one store path)
 
-**The golden was a participant, not just a victim.** It faithfully pinned all
-three as though they were intended output. So `verify-invariants` gains a gate
-that *parses* the goldens under Why3 -- the check that would have caught them.
-Tested in both directions: it passes on the corrected golden and fails with
-exit 1 on a deliberately corrupted one.
+This was worse than the disk cost: each project was validating `.mlw` files with
+a *different* engine, so a file one prover accepted could be refused by the other
+with no obvious cause — and `LiquidWhy3.prove` maps exit codes onto
+Proved/Refused, so it would have surfaced as a mysterious contract rejection in
+one project only.
 
-**What the engine now shows that it could not before.** With the file parsing,
-Why3 returns `Unknown` on the golden rather than a syntax error -- and that is
-the honest answer, not a bug. The emitted RETURN goal is
-`forall n: int, __result: int. n >= 0 -> __result >= n`, and `__result` is
-unconstrained because the emitter does not translate function bodies. The goal
-is sound but not yet derivable, so it cannot be discharged. Closing that means
-translating the body, which is L10's remaining work; the important part is that
-the gap is now *visible* instead of hidden behind a syntax error.
+australVM cannot move its base channel to 23.05 (its own flake documents why:
+the cranelift bridge needs a newer rustc, and a 23.05 binary cannot load an
+unstable-built `.so`). So it keeps nixos-unstable for its toolchain and takes
+unfer's channel as a separate `why3-nixpkgs` input used *only* for why3 and
+alt-ergo — the shared store path without touching the bridge. unfer's flake
+documents the coupling and what breaks it.
 
-Verified: verify-invariants 17 passed / 0 failed (with the new Why3 parse gate),
-9 dune suites green, all test-programs pass.
+This also corrects a mistake of mine: I had used `alt-ergo-free` because
+`alt-ergo` is unfree and I would not flip that policy unilaterally. But unfer
+already sets `allowUnfree = true` for CUDA, so the two would have used
+*different provers*. `allowUnfree` is now scoped to the Why3 import and both use
+the real alt-ergo.
+
+## Cycle A: `emit_theory`
+
+The `.mlw` previously declared **no functions at all**, so every goal was closed
+over bare parameters and a caller had nothing to appeal to. It now emits the
+module's total-fragment functions as a Why3 theory:
+
+    function atLeast (n: int) : int
+    axiom atLeast_post: forall n: int. (n >= 0) -> atLeast n >= n
+
+The shape was established by running the engine, not by guessing, and two of my
+first three attempts were wrong:
+
+  * a bodyless `function ... requires/ensures` is a **syntax error**;
+  * a `val` does not bind its name for use in a goal's formula **at all**;
+  * what works is a bare `function` declaration plus an `axiom` over the symbol.
+
+The axiom is an **assumption, not a proof** — it states what the function is
+declared to do so callers may rely on it. Same conservative shape L6 uses for
+qualifiers: an undischarged obligation stays visible in the file. Proving it
+needs the function body, which is not translated.
+
+Checked that the theory is not vacuous: a caller goal that uses the axiom comes
+out `Valid`, and one that *overstates* the contract does not.
+
+**What remains, now visible.** The RETURN goal is still
+`forall n, __result: int. n >= 0 -> __result >= n`, and `__result` is
+unconstrained because function bodies are not translated, so the goal is sound
+but underivable — Why3 returns `Timeout`, not `Valid`. Previously this was
+hidden behind a syntax error. Closing it means translating the body; that is the
+remaining L10 item.
+
+Verified: verify-invariants 17 passed / 0 failed (including the Why3 parse gate
+on the goldens), 9 dune suites green, all test-programs pass. Goldens confirmed
+to parse under both Why3 1.6.0 and 1.8.2, and the exit-code mapping is sound
+under the shared version.
 
 🤖 Generated with Codebuff
 Co-Authored-By: Codebuff <noreply@codebuff.com>

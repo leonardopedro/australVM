@@ -16,6 +16,11 @@ module Test
   (*   result >= n *)
 
 
+
+  (* --- theory: total-fragment functions (L10 Cycle A) --- *)
+  function atLeast (n: int) : int
+  axiom atLeast_post: forall n: int. (n >= 0) -> atLeast n >= n
+
   (* --- verification conditions --- *)
 
   (* g_d3eedf6b — §5.10 RETURN (assumes §5.6 APPLICATION) *)
