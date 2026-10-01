@@ -416,10 +416,28 @@ optional — Lean4 cross-check of the hard lemmas through unfer's
 
 - [x] `PLAN_liquid_types.md` + `docs/LIQUID.md` (L0 spec) written.
 - [x] `lib/Common.ml`: `pragma` extended with `LiquidPragma of string * string`
-      (kind, contract string). **Landed but consumed nowhere yet** — safe:
-      every pragma match has a catch-all arm. All OCaml modules compile with
-      it (verified; the final link needs `make bridge`, see below).
-- [ ] Everything else below.
+      (kind, contract string). Landed at L0, consumed from L1 on.
+- [x] Everything else in **L1** (§8 below) — landed and verified 2026-10-01.
+
+**L1 corrected the "not done" column above.** When L1 was picked up, the
+plugin-seam steps were *already committed* and predate this plan:
+`d87049ed` (2026-08-23, `Vm_plugin.boot`, Why3 gate + `deltanet_unf` passes)
+and `b6c41c84` (2026-08-27, NPU DMA gate). So L1.6/L1.7/L1.9/L1.10/L1.11
+were pre-existing, not new work. What L1 actually added: the `Liquid_*`
+pragma recognition, pragma threading to the typed AST, a **second pass kind**
+(`typed_pass`) beside the 3-arg `gate_pass`, the third plugin-gate site on
+the hot-swap path, and the liquid acceptance tests. See the L1 section for
+the two places the plan's text was wrong about the existing code.
+
+Build note: the toolchain is the repo's own `flake.nix` devShell
+(`nix develop`) — no opam needed. It resolves OCaml 5.4.1 + dune 3.23.1 and
+all six OCaml libraries; `make bridge` must run first because the checked-in
+`libaustral_cranelift_bridge.so` goes stale. Verification loop:
+`make bridge && dune build lib/ bin/ test/ && LD_LIBRARY_PATH=$HOME/.local/lib
+dune runtest && LD_LIBRARY_PATH=$HOME/.local/lib python3
+test-programs/runner.py` (the `LD_LIBRARY_PATH` is needed for both the
+runtest and the runner: the runner shells out to `./austral`, which dlopens
+the bridge).
 
 Build/preconditions: `make bridge` (or `run-tests.sh`, which does it) before
 `dune build lib/ bin/ test/` — the checked-in `libaustral_cranelift_bridge.so`
@@ -436,7 +454,7 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 > L2 keeps the TRL DSL *parser* and the interface/body merge rules.
 > Each checkbox below ≙ one step of the in-flight todo list when work paused.
 
-- [ ] **`lib/CstUtil.ml`** — extend `make_pragma` (~line 99): before the
+- [x] **`lib/CstUtil.ml`** — extend `make_pragma` (~line 99): before the
       trailing `Errors.unknown_pragma s`, add branches for `Liquid_Requires`,
       `Liquid_Ensures`, `Liquid_Invariant`, `Liquid_Trusted` — argument shape
       `ConcreteNamedArgs [(a, CStringConstant (_, c))]` with `a = Contract`,
@@ -444,16 +462,16 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       `ConcretePositionalArgs []` → `LiquidPragma (kind, "")`. Suggested
       helper `make_liquid_pragma` with `kind = String.sub s 7 (…)`, invalid
       shape → the local `module Errors` (line 13) `pragma_argument_error`.
-- [ ] **`lib/Stages.ml`** — `Tast`: append `* pragma list` to `TFunction`
+- [x] **`lib/Stages.ml`** — `Tast`: append `* pragma list` to `TFunction`
       (8→9 components) and `TForeignFunction` (7→8). Pragmas already flow
       through `Combined.CFunction` / `Linked.LFunction`; this completes the
       threading to the typed level (required by the acceptance test and by
       L4 contract lookup).
-- [ ] **Arity fixes** — the only match sites: `lib/BodyExtractionPass.ml:16`,
+- [x] **Arity fixes** — the only match sites: `lib/BodyExtractionPass.ml:16`,
       `lib/LinearityCheck.ml:766`, `lib/Monomorphize.ml:456`,
       `lib/Monomorphize.ml:469` (one extra `_` each; Monomorphize drops the
       pragmas = the §10 erasure point).
-- [ ] **`lib/TypingPass.ml`** (~lines 612–635) — replace the exact-list
+- [x] **`lib/TypingPass.ml`** (~lines 612–635) — replace the exact-list
       pragma match with partitioning: `List.find_map` for
       `ForeignImportPragma`/`ForeignExportPragma`; count-validate (≤1 each,
       never both, no `UnsafeModulePragma` at function level, no unknown
@@ -461,14 +479,21 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       `TForeignFunction (…, s, doc, pragmas)` / `TFunction (…, body', doc,
       pragmas)`. `Foreign_Import` + `Liquid_*` **must coexist** (L7 puts
       contracts on foreign decls).
-- [ ] **`lib/ExtractionPass.ml`** (~lines 386–393) — same partitioning for
+- [x] **`lib/ExtractionPass.ml`** (~lines 386–393) — same partitioning for
       `external_name`/`export_name`: today the exact match `[ForeignImportPragma
       s]` means any additional pragma silently disables foreign-import
       detection.
-- [ ] **`lib/Compiler_plugin.mli` + `.ml`** (new; in `austral_core`):
+- [x] **`lib/Compiler_plugin.mli` + `.ml`**: *pre-existing since `d87049ed`;
+        L1 extended it rather than creating it.* Note the plan's 2-argument
+        `gate_pass` was **not** adopted: the committed `register` is
+        3-argument (it also takes `constants`, which the deltanet UNF gate
+        needs) and is used by `Why3_plugin`, `Deltanet_plugin` and
+        `Npu_dma_plugin`. Narrowing it would have broken all three, so
+        `typed_pass` was added *alongside* it instead.
       - `type verdict = VerdictOk | VerdictReject of string`
       - `type gate_pass = module_name:string -> foreign_externals:string list
-        -> verdict` — exactly the WHYML_CYCLE §3 signature.
+        -> constants:(Identifier.identifier * Stages.Tast.texpr) list ->
+        verdict` — the committed WHYML_CYCLE §3 signature, kept.
       - `type typed_pass = Stages.Tast.typed_module -> verdict` — documented
         extension: the acceptance test and the liquid pass must inspect decl
         pragmas, which the gate signature cannot see. Register both kinds in
@@ -482,7 +507,8 @@ is a deliberate release artifact that goes stale whenever the bridge changes
         `reset` for tests.
       - Dependencies: `Stages` + `Identifier` only — keep in `austral_core`,
         never reference `Compiler` (cycle risk).
-- [ ] **`lib/Vm_plugin.mli` + `.ml`** (new; in `austral_lib`) — WHYML_CYCLE
+- [x] **`lib/Vm_plugin.mli` + `.ml`** — *pre-existing since `d87049ed`;
+        L1 only added the `liquid` tenant to `boot`.* WHYML_CYCLE
       §4 verbatim: `type compiler_service = { name : string; compile :
       Compiler.module_source list -> Compiler.compiler }`,
       `register_compiler` (replace-by-name), `run_compiler` (boot, then
@@ -491,7 +517,7 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       `fun mods -> Compiler.compile_multiple Compiler.empty_compiler mods`
       and install the no-op liquid pass
       `Compiler_plugin.register_typed ~name:"liquid" (fun _ -> VerdictOk)`).
-- [ ] **`lib/Compiler.ml`** — local `module Errors` with `plugin_rejected`
+- [x] **`lib/Compiler.ml`** — local `module Errors` with `plugin_rejected`
       (`austral_raise DeclarationError [Text "Module rejected by a compiler
       plugin: "; Text msg]`; `open Error` is already present, `Text` is
       `ErrorText.Text`). Helper `check_plugin_verdict : typed_module -> unit`
@@ -500,15 +526,15 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       typed` at **three** sites: `compile_mod` (~line 121) and both compile
       loops inside `cps_jit_swap_modules` (~lines 215, 237) — the hot-swap
       path must re-verify.
-- [ ] **`lib/Cli.ml`** — `main'` calls `Vm_plugin.boot ()` before `exec cmd`
+- [x] **`lib/Cli.ml`** — `main'` calls `Vm_plugin.boot ()` before `exec cmd`
       ("the application boots by loading its plugins").
-- [ ] **`lib/CliEngine.ml`** — route all three `compile_multiple
+- [x] **`lib/CliEngine.ml`** — route all three `compile_multiple
       empty_compiler mods` sites (`exec_target` TypeCheck branch,
       `exec_compile_to_bin`, `exec_compile_to_c`) through
       `Vm_plugin.run_compiler mods`.
-- [ ] **`lib/dune`** — module lists are explicit: add `Compiler_plugin` to
+- [x] **`lib/dune`** — module lists are explicit: add `Compiler_plugin` to
       `austral_core`'s `(modules …)`, `Vm_plugin` to `austral_lib`'s.
-- [ ] **`test/PluginTest.ml`** (new) + `test/dune` stanza
+- [x] **`test/PluginTest.ml`** (new) + `test/dune` stanza
       `(tests (names PluginTest) (libraries austral_lib ounit2))`:
       1. *(acceptance)* typed pass rejecting `TFunction` decls carrying
          `LiquidPragma ("Ensures", "false")`; compile a body-only module via
@@ -534,7 +560,7 @@ is a deliberate release artifact that goes stale whenever the bridge changes
          routes through the registry; `list_compilers` lists it.
       Always `Compiler_plugin.reset`/`unregister` in teardown — registries
       are global and ounit runs in one process.
-- [ ] **Acceptance**: `dune build lib/ bin/ test/` green (after
+- [x] **Acceptance**: `dune build lib/ bin/ test/` green (after
       `make bridge`); `LD_LIBRARY_PATH=. dune runtest` green;
       `python3 test-programs/runner.py` unaffected.
 
@@ -767,7 +793,7 @@ already quotiented by logos:**
       (`cloud_hypervisor_vm/`). Acceptance: offload overhead target < 3%
       (the paper's number) on a synthetic 100M-entry table; prefetch hit rate
       reported.
-- [ ] **E8 (M, optional)** [this repo] — `lib/deltanet_plugin.ml` registered
+- [x] **E8 (M, optional)** [this repo] — `lib/deltanet_plugin.ml` registered
       in `Vm_plugin.boot` beside the `liquid`/`why3_gate` passes (L1 seam,
       §8): serialize top-level constant expressions to the subset, call
       `uk_austral_unf` through the rust bridge, reject the module when the
@@ -776,6 +802,11 @@ already quotiented by logos:**
       constants then carry engram keys for free. Acceptance: mismatching
       constant → compile rejection; pass name `deltanet` distinct from the
       other tenants.
+      **Already landed** — `lib/deltanet_plugin.ml` + `test/DeltanetPluginTest.ml`
+      are tracked and committed since `d87049ed` (2026-08-23), i.e. *before*
+      this plan was written (2026-09-29). The `vm_test` suite reports
+      `boot ok (passes: why3_gate,deltanet_unf,npu_dma_gate)` and
+      `DeltanetPluginTest` passes. Only the plan's tick was missing.
 
 ### Open questions (record decisions in `docs/ENGRAM.md`)
 

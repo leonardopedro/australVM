@@ -235,7 +235,7 @@ let fun_pointer_named_args () =
 
 let fun_invalid_pragmas () =
   austral_raise DeclarationError [
-    Text "Only import and export pragmas are allowed inside functions."
+    Text "Only import, export, and Liquid contract pragmas are allowed inside functions."
   ]
 
 let if_inequal ~lhs ~rhs =

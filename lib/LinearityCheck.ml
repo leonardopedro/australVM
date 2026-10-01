@@ -763,7 +763,7 @@ let rec check_module_linearity (TypedModule (_, decls)): unit =
 
 and check_decl_linearity (decl: typed_decl): unit =
   match decl with
-  | TFunction (_, _, name, _, params, _, b, _) ->
+  | TFunction (_, _, name, _, params, _, b, _, _) ->
      with_frame ("Checking linearity of function " ^ (ident_string name))
        (fun _ ->
          linearity_check params b)

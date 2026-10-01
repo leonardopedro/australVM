@@ -30,6 +30,17 @@ open LinearityCheck
 open Reporter
 open Entrypoint
 open ExportInstantiation
+
+module Errors = struct
+  (** A registered compiler plugin rejected the module. PLAN_liquid_types.md
+      L1 makes this reachable from the hot-swap path as well as the cold
+      compile path, so the message names the plugin seam explicitly. *)
+  let plugin_rejected msg =
+    austral_raise DeclarationError [
+      ErrorText.Text "Module rejected by a compiler plugin: ";
+      ErrorText.Text msg
+    ]
+end
 open HtmlError
 
 (* Phase 7: CPS JIT Integration *)
@@ -258,6 +269,15 @@ let rec cps_jit_swap_modules (mods: module_source list): bool =
       let (new_env, linked) = extract !env combined int_file_id body_file_id in
       env := new_env;
       let typed = augment_module !env linked in
+      (* S36 plugin seam: the hot-swap path must re-verify every registered
+         pass, exactly as `compile_mod` and `compile_mod_to_env` do. A swapped
+         module reaches the JIT without passing through those two, so skipping
+         the gate here would let a module rejected on a cold compile be
+         accepted on a hot swap. *)
+      (match Compiler_plugin.run_on_typed typed with
+       | Compiler_plugin.VerdictReject msg ->
+          Errors.plugin_rejected msg
+       | Compiler_plugin.VerdictOk -> ());
       let _ = check_module_linearity typed in
       let new_env = extract_bodies !env typed in
       env := new_env;

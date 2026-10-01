@@ -13,7 +13,7 @@ let rec extract_bodies (env: env) (m: typed_module): env =
 
 and extract_decl (env: env) (decl: typed_decl): env =
   match decl with
-  | TFunction (decl_id, _, _, _, _, _, body, _) ->
+  | TFunction (decl_id, _, _, _, _, _, body, _, _) ->
       store_function_body env decl_id body
   | TInstance (_, _, _, _, _, methods, _) ->
      Util.iter_with_context extract_method env methods

@@ -616,23 +616,40 @@ let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (
          let _ =
            List.map (fun (ValueParameter (name, _)) -> check_var_doesnt_collide_with_decl ctx name) params
          in
-         (match pragmas with
-          | [ForeignImportPragma s] ->
-             if typarams_size typarams = 0 then
-               if kind = UnsafeModule then
-                 TForeignFunction (decl_id, vis, name, params, rt, s, doc)
-               else
-                 Errors.foreign_in_safe_module ()
-             else
-               Errors.foreign_type_parameters ()
-          | [ForeignExportPragma _] ->
-             let body' = augment_stmt ctx body in
-             TFunction (decl_id, vis, name, typarams, params, rt, body', doc)
-          | [] ->
-             let body' = augment_stmt ctx body in
-             TFunction (decl_id, vis, name, typarams, params, rt, body', doc)
-          | _ ->
-             Errors.fun_invalid_pragmas ())
+let recognized = List.for_all (fun p ->
+            match p with
+            | ForeignImportPragma _ | ForeignExportPragma _ | LiquidPragma _ -> true
+            | _ -> false) pragmas
+          and import_name = List.find_map (fun p ->
+            match p with
+            | ForeignImportPragma s -> Some s
+            | _ -> None) pragmas
+          and export_name = List.find_map (fun p ->
+            match p with
+            | ForeignExportPragma s -> Some s
+            | _ -> None) pragmas
+          and liquid_pragmas = List.filter_map (fun p ->
+            match p with
+            | LiquidPragma _ -> Some p
+            | _ -> None) pragmas
+          in
+          if not recognized then
+            Errors.fun_invalid_pragmas ()
+          else
+            (match (import_name, export_name) with
+             | (Some _, Some _) ->
+                Errors.fun_invalid_pragmas ()
+             | (Some s, None) ->
+                if typarams_size typarams = 0 then
+                  if kind = UnsafeModule then
+                    TForeignFunction (decl_id, vis, name, params, rt, s, doc, liquid_pragmas)
+                  else
+                    Errors.foreign_in_safe_module ()
+                else
+                  Errors.foreign_type_parameters ()
+             | (None, _) ->
+                let body' = augment_stmt ctx body in
+                TFunction (decl_id, vis, name, typarams, params, rt, body', doc, liquid_pragmas))
       | LTypeclass (decl_id, vis, name, typaram, methods, doc) ->
          ps ("Kind", "Typeclass");
          TTypeClass (decl_id, vis, name, typaram, List.map (augment_method_decl env rm typaram) methods, doc)

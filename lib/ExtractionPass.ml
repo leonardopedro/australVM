@@ -381,18 +381,16 @@ and extract_definition (env: env) (mod_id: mod_id) (mn: module_name) (local_type
        (fun _ ->
          let value_params = List.map (parse_param typarams) params
          and rt = parse' rm typarams rt
-         and external_name: string option =
-           (match pragmas with
-            | [ForeignImportPragma s] ->
-               Some s
-            | _ ->
-               None)
-         and export_name: string option =
-           (match pragmas with
-            | [ForeignExportPragma name] ->
-               Some name
-            | _ ->
-               None)
+and external_name: string option =
+            List.find_map (fun p ->
+              match p with
+              | ForeignImportPragma s -> Some s
+              | _ -> None) pragmas
+          and export_name: string option =
+            List.find_map (fun p ->
+              match p with
+              | ForeignExportPragma name -> Some name
+              | _ -> None) pragmas
          in
          let _ =
            (* Check: if we have both an export name and an external name, raise an error. *)

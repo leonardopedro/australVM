@@ -140,7 +140,48 @@ let make_pragma name args =
         | _ ->
            raise_err ()
       else
-        Errors.unknown_pragma s
+        (* Liquid contract pragmas (PLAN_liquid_types.md L1, docs/LIQUID.md §3).
+           The kind is the substring after "Liquid_". Contract-carrying pragmas
+           take exactly one named argument, Contract => "<string>"; the marker
+           pragmas (Liquid_Measure, Liquid_Fold) take none. *)
+        let liquid_kind = String.sub s 7 (String.length s - 7) in
+        let is_liquid = String.length s > 7 && String.sub s 0 7 = "Liquid_" in
+        if not is_liquid then
+          Errors.unknown_pragma s
+        else
+          let liquid_with_contract () =
+            let raise_err () =
+              Errors.pragma_argument_error
+                ~pragma_name:s
+                ~argument:(Some "Contract")
+            in
+            match args with
+            | ConcreteNamedArgs [(a, CStringConstant (_, c))] ->
+               if equal_identifier a (make_ident "Contract") then
+                 LiquidPragma (liquid_kind, c)
+               else
+                 raise_err ()
+            | _ ->
+               raise_err ()
+          and liquid_marker () =
+            let raise_err () =
+              Errors.pragma_argument_error
+                ~pragma_name:s
+                ~argument:None
+            in
+            match args with
+            | ConcretePositionalArgs [] ->
+               LiquidPragma (liquid_kind, "")
+            | _ ->
+               raise_err ()
+          in
+          (match liquid_kind with
+           | "Requires" | "Ensures" | "Invariant" | "Trusted" ->
+              liquid_with_contract ()
+           | "Measure" | "Fold" ->
+              liquid_marker ()
+           | _ ->
+              Errors.unknown_pragma s)
 
 let mod_int_name (inter: concrete_module_interface): module_name =
   let (ConcreteModuleInterface (name, _, _, _)) = inter in

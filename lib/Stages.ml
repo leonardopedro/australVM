@@ -557,8 +557,8 @@ module Tast = struct
     | TConstant of decl_id * vis * identifier * ty * texpr * docstring
     | TRecord of decl_id * type_vis * identifier * typarams * universe * typed_slot list * docstring
     | TUnion of decl_id * type_vis * identifier * typarams * universe * linked_case list * docstring
-    | TFunction of decl_id * vis * identifier * typarams * value_parameter list * ty * tstmt * docstring
-    | TForeignFunction of decl_id * vis * identifier * value_parameter list * ty * string * docstring
+    | TFunction of decl_id * vis * identifier * typarams * value_parameter list * ty * tstmt * docstring * pragma list
+    | TForeignFunction of decl_id * vis * identifier * value_parameter list * ty * string * docstring * pragma list
     | TTypeClass of decl_id * vis * identifier * type_parameter * typed_method_decl list * docstring
     | TInstance of decl_id * vis * qident * typarams * ty * typed_method_def list * docstring
 

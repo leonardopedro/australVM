@@ -453,7 +453,7 @@ let rec monomorphize_decl (env: env) (decl: typed_decl): (mdecl option * env) =
        (Some decl, env)
      else
        (None, env)
-  | TFunction (id, _, name, typarams, value_params, rt, body, _) ->
+  | TFunction (id, _, name, typarams, value_params, rt, body, _, _) ->
      (* Concrete functions are monomorphized immediately. Generic functions are
         monomorphized on demand. *)
      with_frame ("Monomorphizing function: " ^ (ident_string name))
@@ -466,7 +466,7 @@ let rec monomorphize_decl (env: env) (decl: typed_decl): (mdecl option * env) =
            (Some decl, env)
          else
            (None, env))
-  | TForeignFunction (id, _, name, params, rt, underlying, _) ->
+  | TForeignFunction (id, _, name, params, rt, underlying, _, _) ->
      (* Foreign functions are intrinsically monomorphic. *)
      let (env, params) = monomorphize_params env params in
      let (rt, env) = strip_and_mono env rt in
