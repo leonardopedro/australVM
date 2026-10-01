@@ -919,16 +919,62 @@ already quotiented by logos:**
       rather than erroring the fragment: dropping it would silently renormalize
       the hedge into a different sentence, which is the quiet wrong answer §4
       exists to prevent. Conservation is asserted, not assumed.
-- [ ] **E6 (M)** [this repo + `[SYNC]`] — `uk_engram_lookup` /
-      `uk_engram_store` over the unfer C ABI, following the S29 registration
+- [x] **E6 (M)** [this repo + `[SYNC]`] — `uk_engram_store` /
+      `uk_engram_lookup` over the unfer C ABI, following the S29 registration
       checklist (unfer: `unfer_protocol/src/symbols.rs`,
       `scripts/gen_symbol_artifacts`, `EXPECTED_SYMBOLS.txt`, generated
       header; then here: `UNFER_SYMBOLS` table + `symbol_sync` test +
       `GrantSet.kernel`) — additive-only per the frozen-contract rules.
-      Austral bindings `examples/kernel/EngramKernel.aui/.aum` mirroring
-      `UnferKernel.aui`'s buffer protocol (`Address[Nat8]` + `Int64` len);
-      demo module storing + re-looking-up a sentence engram through the JIT.
-      These contracts are among the first L7 liquid contracts.
+      Landed as unfer `bdf453e` + australVM `4aca46c8`.
+
+      **The key is an opaque 84-byte passthrough, deliberately.** Deriving one
+      is `logos`' job (E8's `deltanet` pass already emits keys for compiled
+      module constants), and `unfer_ffi` has no parser, lexicon or normal
+      form. Depending on `logos` to hold bytes would pull a CUDA-linked crate
+      into the kernel's dependency graph for nothing, so the kernel owes the
+      system exactly one thing — addressability. `E6_KEY_BYTES` is a bare
+      constant in `prob_kernel` rather than an import; the two sides assert the
+      width independently (`key_layout_is_the_versioned_84_byte_form`,
+      `uk_engram_round_trips_through_the_bridge`), so a layout change cannot
+      drift past either unnoticed.
+
+      Three semantics, each with a test:
+      - **Store replaces, never accumulates.** Adding on every call would let
+        re-ingesting a corpus inflate an engram's probability without bound, and
+        "I stored it twice" would quietly become "twice as likely". The
+        displaced weight is returned so a caller can notice the collision.
+      - **A miss is UK-4403, not a success carrying 0.0.** Absent and
+        zero-probability are different facts, and the project already encodes
+        that difference (NaN in the trailing slot = no annotation).
+      - **NaN/infinite weights are rejected**, since NaN here means
+        "no L1 annotation", not a probability.
+
+      A miss is pushed as an event of its own: "the table has never seen this
+      sentence" should be observable rather than silence.
+
+      **A gap the census gate did not catch**: `KNOWN_EVENT_TYPES` in
+      `unfer_ffi/src/handles.rs` is a second, independent enumeration of
+      `KernelEvent`, so a valid subscription query naming `engram_stored`
+      failed with "unknown event type" until that list was updated too. The
+      checklist verifies signatures and names, not auxiliary mirrors.
+
+      Austral bindings `examples/kernel/EngramKernel.aui/.aum` mirror
+      `UnferKernel.aui`'s buffer protocol (`Address[Nat8]` + `Int64` len). The
+      weight crosses as raw `f64` bits, not `Float64`, so `NaN` survives the
+      boundary. Liquid contracts pin `len == 84` and the result-code
+      disjunction.
+
+      **Deferred, deliberately: the JIT-resident demo module.** It was written
+      and then removed. `test-programs/suites` compiles Austral to C and links
+      it with a bare `gcc`, so the JIT-registered `uk_*` symbols do not
+      resolve there — the test could never pass, and a test that cannot pass is
+      worse than none. The JIT path that registers these symbols is the
+      CPS/SwapVM builder (`register_unfer_symbols` at `lib.rs:660`), and
+      driving an Austral module through it is a separate harness. The live
+      round-trip is `uk_engram_round_trips_through_the_bridge` instead. Note
+      also that `examples/kernel/*.aum` is not built by any dune rule today, so
+      these bindings are reference material in the same sense
+      `UnferKernel.aum` is.
 - [ ] **E7 (L)** — prefetch/offload: ingest-time key computation →
       host/SSD cache tiers (paper §2.5); optional VM tier
       (`cloud_hypervisor_vm/`). Acceptance: offload overhead target < 3%
