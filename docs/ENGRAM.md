@@ -105,10 +105,41 @@ Exactly the quotient logos already computes:
 
 ---
 
+## 2.5 Which digest carries which equivalence — *verified at E2*
+
+This distinction was **wrong or missing in the first version of this document**,
+and the golden corpus caught it. It is now load-bearing.
+
+`unf_hash` is canonical-form equality: two fragments collide on it only if they
+reduce to the *same net*. The reducer does not reorder, so `x + 2 + 3` and
+`x + 3 + 2` are **different nets** and do not collide on `unf_hash`.
+
+`ted_hash` is the algebraic canonical form — `deltanet::ted` sorts the
+polynomial over ℤ/2⁶⁴ — so commutativity, associativity and like-terms show up
+there.
+
+So a *paraphrase* is an **algebraic** equivalence, not a canonical-form one. The
+corpus's `field` column says which digest each row is about, and it is `ted` for
+every row at a UNF granularity. Conflating the two made the first corpus assert
+collisions that are simply false.
+
+Two further facts verified against the implementation, both recorded in the
+corpus:
+
+- **A differing subject still shares the `ted` digest.** `John adds two three`
+  and `Bob adds three two` both reduce to `5`, because the subject is not part
+  of the arithmetic canonical form. §3's claim below therefore *holds* — an
+  earlier `distinct` expectation in the corpus was what was wrong.
+- **`window` keys never collide across differing surface strings.** A window key
+  hashes the last `n` tokens' surface string, so it is order-sensitive by
+  construction. There is deliberately no `window` `collide` row in the corpus.
+
+---
+
 ## 3. Denotational nuance (read this before trusting a dedup number)
 
-Keys identify **normal forms**, so keys are *denotational*, not surface, and two
-different sentences can collide:
+Keys identify **normal forms** — and at the arithmetic level that means the
+*algebraic* normal form (§2.5), so two different sentences can collide:
 
 > `John adds two three` and `Bob adds three two` both reduce to `5` and collide
 > at `sentence` and `subderiv` granularity.
@@ -185,10 +216,15 @@ path.
 
 ## 6. Golden corpus
 
-`../corpus/engram_keys.tsv`, ≥30 groups, one row per (group, member, granularity).
+`../corpus/engram_keys.tsv` — 44 rows, 14 groups, 31 collide / 13 distinct.
+One row per (group, member, granularity, field).
 
-Columns: `group`, `member`, `granularity`, `expect` (`collide` | `distinct`),
-`note`.
+Columns: `group`, `member`, `granularity`, `field` (`unf` | `ted`), `expect`
+(`collide` | `distinct`), `note`, and the two digest columns.
+
+`field` is which digest `expect` is about — see §2.5. It is `ted` for every row
+at a UNF granularity and `unf` only for `window` rows, which are surface-derived
+and have no normal form.
 
 - `expect=collide` — members in a group that **must** produce the same
   `unf_hash` at that granularity. Paraphrases and algebraic variants land here.

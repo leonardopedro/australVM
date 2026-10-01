@@ -874,7 +874,7 @@ already quotiented by logos:**
 
       The corpus records *expectations*, not digests, because E2 does not exist
       yet; the digest columns are what E2 fills in and what pins it.
-- [ ] **E2 (M)** [`../unfer/logos`, `[SYNC]`] — `src/engram/{mod,key,
+- [x] **E2 (M)** [`../unfer/logos`, `[SYNC]`] — `src/engram/{mod,
       segment}.rs`: `engram_key(fragment) -> EngramKey` =
       `harper_gate::lint` → `ccg::parse_sentence` →
       `core_ir::compile_to_core_ir` → `core_ir::linearity::insert_linearity`
@@ -886,7 +886,7 @@ already quotiented by logos:**
       sentence. Property tests: determinism (intensional equivalence,
       double-run identical), collision-on-equivalence, discrimination,
       α-renaming invariance.
-- [ ] **E3 (M)** [`[SYNC]`] — `src/engram/table.rs`: `EngramTable` =
+- [x] **E3 (M)** [`[SYNC]`] — `src/engram/table.rs`: `EngramTable` =
       per-granularity `HashMap<EngramKey, Embedding>` (drop multi-head
       hashing; keep prime-sized bucketing only if the memory layout needs
       it); corpus ingest (segments → keys → store); stats: dedup ratio per

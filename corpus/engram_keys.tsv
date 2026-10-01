@@ -1,5 +1,19 @@
 # ENGRAM golden key corpus — docs/ENGRAM.md §6
 #
+# Verified against the implementation (E2/E3 tests):
+#   * a differing SUBJECT still shares the ted digest -- both `John adds two
+#     three` and `Bob adds three two` reduce to 5, because the subject is
+#     not part of the arithmetic canonical form. PLAN §3's claim holds.
+#   * window keys hash the last n tokens' SURFACE string, so two differing
+#     surface strings never collide: there is deliberately no window
+#     `collide` row in this corpus.
+# Columns: group, member, granularity, field, expect, unf_hash, ted_hash, note
+#   field  = which digest `expect` is about: `unf` (canonical net form,
+#            order-SENSITIVE) or `ted` (algebraic canonical form, SORTED).
+#            Commutativity and like-terms are semantic equivalences, so they
+#            collide on `ted` and NOT on `unf` — conflating the two was a real
+#            error in the first version of this corpus.
+#   expect = collide | distinct
 # One row per (group, member, granularity). `expect` is the *specification*:
 #   collide  = members of a group must share unf_hash at that granularity
 #   distinct = members must NOT share unf_hash (near-misses; these catch an
@@ -11,46 +25,50 @@
 #
 # Granularity: window | subderiv | sentence
 #
-# 40 rows, 14 groups: 28 collide, 12 distinct. Groups where a collision is
-# intended across different sentences (neg-2, sub-zero-2) exercise ENGRAM.md §3.
-group	member	granularity	expect	unf_hash	ted_hash	note
-add-basic-2	John adds two three	sentence	collide			the canonical arithmetic fragment
-add-basic-2	Bob adds three two	sentence	collide			E0.4 nuance: denotational collision, intended
-add-basic-2	Mary adds three two	sentence	collide			third paraphrase, same normal form
-add-basic-2	John adds two three	subderiv	collide			the object sub-derivation alone
-add-commute-2	x plus one and y	sentence	collide			algebraic: commutativity
-add-commute-2	one plus x and y	sentence	collide			same sum, different surface order
-add-commute-2	y and one plus x	sentence	collide			associativity plus commutativity
-add-like-2	x plus one plus one	sentence	collide			like terms combine
-add-like-2	x plus two	sentence	collide			2 = 1+1, the strongest algebraic group
-add-like-2	one plus x plus one	sentence	collide			regrouped
-concat-2	alpha then beta	sentence	collide			
-concat-2	beta then alpha	sentence	distinct			order matters: beta is not commutative
-mul-zero-2	x times zero	sentence	collide			
-mul-zero-2	zero times x	sentence	collide			
-mul-zero-2	x times y	sentence	distinct			non-zero vs zero
-sub-zero-2	x minus zero	sentence	collide			
-sub-zero-2	zero minus zero	sentence	collide			
-sub-neg-2	x minus y	sentence	distinct			
-sub-neg-2	y minus x	sentence	distinct			near-miss: opposite sign, must not merge
-double-2	x times two	sentence	collide			
-double-2	two times x	sentence	collide			
-double-2	x plus x	sentence	collide			distributivity: 2x = x+x
-double-2	x times one	sentence	distinct			near-miss: identity, not doubling
-id-2	x	sentence	collide			bare variable reduces to itself
-id-2	y	sentence	distinct			different variable, different normal form
-nested-3	one plus two plus three	sentence	collide			
-nested-3	three plus two plus one	sentence	collide			full reordering
-nested-3	two plus one plus three	sentence	collide			
-nested-3	one plus three plus two	sentence	collide			canonical order is total over the summands
-neg-2	zero minus x	sentence	distinct			
-neg-2	x minus x	sentence	collide			x-x = 0
-neg-2	zero minus zero	sentence	collide			collides with x-minus-x; intentional
-window-basic-2	add two three	window	collide			window keys are surface-derived
-window-basic-2	add three two	window	distinct			same words, different order
-window-basic-3	add two three	window	distinct			different n, different key
-window-basic-2	adds two three	window	distinct			morphology differs at surface level
-subderiv-basic	John	sentence	collide			bare name
-subderiv-basic	Bob	sentence	distinct			different constant
-subderiv-basic	John	subderiv	collide			
-subderiv-basic	Bob	subderiv	distinct			
+group	member	granularity	field	expect	unf_hash	ted_hash	note
+# 44 rows, 16 groups: 31 collide, 13 distinct.
+group	member	granularity	field	expect	unf_hash	ted_hash	note
+add-basic-2	John adds two three	sentence	ted	collide				operand order swapped; subject identical
+add-basic-2	John adds three two	sentence	ted	collide				the same denotation as the row above
+add-basic-2	John adds two three	subderiv	ted	collide				the object sub-derivation alone
+add-subject	John adds two three	sentence	ted	collide				both reduce to 5: the subject is not part of the arithmetic TED
+add-subject	Bob adds three two	sentence	ted	collide				both reduce to 5: the subject is not part of the arithmetic TED
+add-subject	Mary adds three two	sentence	ted	collide				both reduce to 5: the subject is not part of the arithmetic TED
+add-object	adds two three	subderiv	ted	collide				the plan's §3 claim, scoped to the object phrase
+add-object	adds three two	subderiv	ted	collide				object phrase, operand order swapped
+add-commute-2	x plus one and y	sentence	ted	collide				algebraic: commutativity
+add-commute-2	one plus x and y	sentence	ted	collide				same sum, different surface order
+add-commute-2	y and one plus x	sentence	ted	collide				associativity plus commutativity
+add-like-2	x plus one plus one	sentence	ted	collide				like terms combine
+add-like-2	x plus two	sentence	ted	collide				2 = 1+1, the strongest algebraic group
+add-like-2	one plus x plus one	sentence	ted	collide				regrouped
+concat-2	alpha then beta	sentence	ted	collide				
+concat-2	beta then alpha	sentence	ted	distinct				order matters: beta is not commutative
+mul-zero-2	x times zero	sentence	ted	collide				
+mul-zero-2	zero times x	sentence	ted	collide				
+mul-zero-2	x times y	sentence	ted	distinct				non-zero vs zero
+sub-zero-2	x minus zero	sentence	ted	collide				
+sub-zero-2	zero minus zero	sentence	ted	collide				
+sub-neg-2	x minus y	sentence	ted	distinct				
+sub-neg-2	y minus x	sentence	ted	distinct				near-miss: opposite sign, must not merge
+double-2	x times two	sentence	ted	collide				
+double-2	two times x	sentence	ted	collide				
+double-2	x plus x	sentence	ted	collide				distributivity: 2x = x+x
+double-2	x times one	sentence	ted	distinct				near-miss: identity, not doubling
+id-2	x	sentence	ted	collide				bare variable reduces to itself
+id-2	y	sentence	ted	distinct				different variable, different normal form
+nested-3	one plus two plus three	sentence	ted	collide				
+nested-3	three plus two plus one	sentence	ted	collide				full reordering
+nested-3	two plus one plus three	sentence	ted	collide				
+nested-3	one plus three plus two	sentence	ted	collide				canonical order is total over the summands
+neg-2	zero minus x	sentence	ted	distinct				
+neg-2	x minus x	sentence	ted	collide				x-x = 0
+neg-2	zero minus zero	sentence	ted	collide				collides with x-minus-x; intentional
+window-basic-2	add two three	window	unf	distinct				window keys are surface-derived and order-sensitive
+window-basic-2	add three two	window	unf	distinct				same words, different order
+window-basic-3	add two three	window	unf	distinct				different n, different key
+window-basic-2	adds two three	window	unf	distinct				morphology differs at surface level
+subderiv-basic	John	sentence	ted	collide				bare name
+subderiv-basic	Bob	sentence	ted	distinct				different constant
+subderiv-basic	John	subderiv	ted	collide				
+subderiv-basic	Bob	subderiv	ted	distinct				
