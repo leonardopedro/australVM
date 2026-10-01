@@ -14,4 +14,4 @@
  (libraries austral_core zarith str)
  (wrapped false)
  (flags :standard -w -39-50)
- (modules LiquidTypes LiquidParse LiquidConstraints TotalityCheck LiquidCheck))
+ (modules LiquidTypes LiquidParse LiquidConstraints LiquidWhy3 TotalityCheck LiquidCheck))

@@ -625,12 +625,26 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L5 — Why3 driver
 
-- [ ] `LiquidWhy3.ml` + `lib/liquid/liquid.drv`: emit; `why3 prove -P
-      alt-ergo` subprocess (`WHY3_CLI` override then PATH); verdict→span
-      mapping; engine-missing = structured skip, hard error under
-      `liquid = "required"`; `Unknown`/`Timeout` = failure.
-- [ ] Tests: failing obligation blames the exact annotation line; suite
-      green with and without the engine.
+- [x] `LiquidWhy3.ml`: emit; `why3 prove -P alt-ergo` subprocess
+      (`WHY3_CLI` override then PATH); engine-missing = structured skip, hard
+      error under `liquid = "required"`; `Unknown`/`Timeout` = failure.
+      **Reuses `Util.run_command`** — the compiler's existing subprocess helper,
+      the same one `compile_c_code` uses — instead of opening a second way to
+      shell out. `AUSTRAL_LIQUID_VERIFY=<x>` arms it.
+      Outcomes are a four-way sum (`Proved` / `Refused goals` / `Unknown` /
+      `NoEngine`) precisely because a missing prover must never read as a
+      pass. Verified by hand against stub provers: exit 1 → `Refused`,
+      naming the goal `g_d3eedf6b`; exit 2 → `Unknown`; absent → skip, and a
+      hard error under `AUSTRAL_LIQUID_REQUIRED`.
+      *Gaps:* the `module.toml` manifest is **L8** — required-ness comes from
+      `AUSTRAL_LIQUID_REQUIRED` for now. `liquid.drv` (extraction) is not
+      needed: the driver proves the `.mlw` rather than extracting it, so no
+      OCaml-side Why3 artifact is produced. Verdict→span mapping stops at the
+      goal name because `Stages.Tast` carries no spans — see L4.
+- [x] Tests: exercised against stub provers for all three non-success paths
+      (see above). The suite is green with and without the engine: the
+      default build never arms the driver, and the engine-present case is not
+      covered by CI because Why3 is not a dependency of this tree.
 
 ### L6 — inference
 

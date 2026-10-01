@@ -207,9 +207,21 @@ let check (m : typed_module) : Compiler_plugin.verdict =
       | _ -> ())
     decls;
   dump m;
+  (* L5: hand the module to the Why3 driver when asked. Off unless
+     AUSTRAL_LIQUID_VERIFY is set, so the default build needs no prover. *)
+  let prove_verdict =
+    match Sys.getenv_opt "AUSTRAL_LIQUID_VERIFY" with
+    | None -> None
+    | Some _ -> LiquidWhy3.verify m
+  in
   match check_module ~bound:!bound m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->
-     (match totality m with
-      | Some msg -> Compiler_plugin.VerdictReject msg
-      | None -> Compiler_plugin.VerdictOk)
+     match totality m with
+     | Some msg -> Compiler_plugin.VerdictReject msg
+     | None ->
+        (* A prover refusal outranks everything the syntactic pass found: the
+           contract was parsed, total, and then *disproved*. *)
+        (match prove_verdict with
+         | Some v -> v
+         | None -> Compiler_plugin.VerdictOk)
