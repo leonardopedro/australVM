@@ -742,8 +742,45 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
 ### L9 — dependent index layer
 
-- [ ] Index-carrying types over TRL terms (`Span[Nat8, n]`, `Vector[T, n]`)
+- [~] Index-carrying types over TRL terms (`Span[Nat8, n]`, `Vector[T, n]`)
       + erasure; `--emit-cps` byte-identity test with/without refinements.
+      Landed as `0f35f185`.
+
+      `trl-term ":" trl-ty` is a **type annotation**, a production distinct from
+      a relation so the two can never be confused downstream. An index is a
+      `trl-term`, which is the point: an index fixed at type-check time cannot
+      be related to a program variable, so nothing could be said about two spans
+      of the same element type and different lengths.
+
+      **`ty` is a separate type from `term`, deliberately.** A type is not a
+      value, so `Span[Nat8, n]` cannot be added to an integer and — more to the
+      point — there is no function from `ty` to `term`, so an index has no path
+      to codegen. Erasion is structural rather than a pass to remember.
+
+      **...and erasure is still measured, because a structural argument is not
+      a measurement.** `LiquidErasureTest` compiles two copies of one module,
+      one carrying index-carrying annotations and value refinements and one
+      carrying nothing, and asserts the emitted `--emit-cps` binaries are
+      **byte-identical** (284 bytes each). The comparison is on CPS rather than
+      generated C because CPS is the layer where a type-level annotation would
+      have to *become a runtime value* to survive.
+
+      **Index WF is conservative in the safe direction**: a non-negative literal
+      or a variable declared `Nat`; an *unannotated* variable is refused rather
+      than assumed. `free_vars`/`undeclared_sorts` walk into the type, since an
+      index term is subject to WF1/WF2 like any other term.
+
+      Two gaps recorded rather than papered over:
+      - **Pre-existing, exposed by this work:** §2.2's grammar lists
+        `trl-term "+" trl-term`, but the parser has no additive level at all —
+        `x + 1 == y` does not parse today. Not fixed here, because adding an
+        operator level would change every existing contract's parse (a change to
+        §2.2, not to L9). Pinned by a test so a future fix is noticed.
+      - Inside brackets a recognised sort is a type and anything else an index
+        term, so a *named* (non-sort) type argument — which `Vector[T, n]` needs
+        — is not yet expressible.
+
+      17 index-type tests + the erasure test; 9 dune suites green.
 
 ### L10 — cycles A/B
 
