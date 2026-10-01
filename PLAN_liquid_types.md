@@ -827,9 +827,44 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       now resolve to one store path. Goldens confirmed to parse under 1.6.0 and
       1.8.2, and the exit-code mapping is sound under the shared version
       (`Valid`→0→`Proved`; `Timeout`/`Unknown`→2→`Unknown`).
-- [ ] One extracted OCaml plugin (qualifier library or measure table) written
-      in the total subset, liquid-checked, extracted via `liquid.drv`,
-      loaded through `Compiler_plugin.register_typed`.
+- [x] One extracted OCaml plugin (qualifier library or measure table) written
+      in the total subset, liquid-checked, extracted, and loaded through
+      `Compiler_plugin.register_typed`. Landed as `92b1d6bd`.
+
+      **No `liquid.drv` was created**, and that is the reuse decision: the plan
+      named `lib/liquid/liquid.drv`, but `lib/why3_plugin/unfer_ocaml.drv` —
+      already used by unfer's S36 cycle — maps exactly this fragment (`int` to a
+      native OCaml int, plus `bool` and `list`). A second driver would have been a
+      near-verbatim copy with a different name. A new gate fails if the reused
+      driver ever stops working, so the reuse is load-bearing, not assumed.
+
+      `lib/liquid/subset/liquid_measure.mlw` defines `weight`/`fuel` over
+      `list int` with structural recursion — the one recursion T2 admits. Its
+      decreasingness obligation is **proved by Why3** (`Valid`), so
+      `LiquidSubset.check`, registered as tenant `liquid_measure` beside
+      `liquid`, rests on a theorem rather than an assumption.
+
+      **Extraction output is checked in** (`lib/liquid/LiquidMeasure.ml`) so dune
+      can compile it, with a gate that re-extracts and diffs so it cannot drift
+      from the `.mlw`. Extraction is a stronger check than parsing: it proves the
+      source is inside the extractable fragment *and* that the driver still
+      matches the engine.
+
+      **One property deliberately not claimed:** additivity over concatenation
+      needs induction, `induction` is not in the subset, and Alt-Ergo times out
+      (278k steps). It is recorded as a gap rather than left as a goal that fails
+      forever. The subset supports *measures*, not *inductive* properties.
+
+      A false positive in `is_fold_name` was caught by the new tests on
+      **`unfold`** — a name containing "fold" that is not a fold. Word-boundary
+      matching now accepts `sum_fold` and rejects `unfold`.
+
+      Also recorded: `Compiler_plugin.list_registered` lists only *gate* names, so
+      the typed seam reads through `names`. The test registers the pass itself
+      because `Vm_plugin.boot` does not run in a test binary, so the production
+      wiring is covered by `verify-invariants` instead of left untested.
+
+      6 new Liquid gates (22 total), 5 new tests, 13 dune suites green.
 
 ### Tenants of the same seam (do not collide)
 
