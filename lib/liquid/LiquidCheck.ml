@@ -34,15 +34,37 @@ let rejection (decl : string) (sp : LiquidTypes.span) (msg : string) : string =
     message. The parser reports through [failwith] with the span already
     formatted into the message, so the span is recovered here rather than
     re-derived. *)
-let parse_or_reject (decl : string) (kind : LiquidTypes.contract_kind) (src : string)
+(** Is this name a declared type in the module being checked?
+
+    The parser needs it to decide whether a bracketed argument in a type
+    annotation is a type or an index term — `Vector[T, n]` and `Vector[n]` are
+    the same token stream up to the comma, and nothing in the grammar alone can
+    tell them apart. Resolving against the module's own declarations is what
+    makes the syntax mean what it looks like, and it is scope-sensitive for the
+    same reason WF1 is. *)
+
+let declared_type_names (m : typed_module) : string list =
+  let (TypedModule (_, decls)) = m in
+  List.concat_map
+    (fun d ->
+      match d with
+      (* The two forms a user-declared type can take: a record or a union. Both
+         bind a type name, which is all the parser needs. *)
+      | TRecord (_, _, name, _, _, _, _) -> [ Identifier.ident_string name ]
+      | TUnion (_, _, name, _, _, _, _) -> [ Identifier.ident_string name ]
+      | _ -> [])
+    decls
+
+let parse_or_reject ~(is_known_type : string -> bool) (decl : string)
+    (kind : LiquidTypes.contract_kind) (src : string)
   : (LiquidTypes.contract, string) result =
-  try Ok (LiquidParse.parse_contract kind src) with
+  try Ok (LiquidParse.parse_contract ~is_known_type kind src) with
   | Failure msg -> Error (Printf.sprintf "on %s: %s" decl msg)
 
 (** Check one declaration's pragmas. Returns [None] when the declaration is
     clean, or the rejection message otherwise. *)
-let check_decl ~(bound : string list) (name : string) (pragmas : Common.pragma list)
-  : string option =
+let check_decl ~(bound : string list) ~(is_known_type : string -> bool) (name : string)
+    (pragmas : Common.pragma list) : string option =
   let fail sp msg = Some (rejection name sp msg) in
   let rec go = function
     | [] -> None
@@ -56,7 +78,7 @@ let check_decl ~(bound : string list) (name : string) (pragmas : Common.pragma l
                fail (LiquidTypes.span_of_string src)
                  (Printf.sprintf "unknown Liquid pragma kind %S" kind_name)
             | Some kind ->
-               (match parse_or_reject name kind src with
+               (match parse_or_reject ~is_known_type name kind src with
                 | Error e -> Some e
                 | Ok contract ->
                    (match contract.LiquidTypes.formula with
@@ -87,6 +109,7 @@ let check_decl ~(bound : string list) (name : string) (pragmas : Common.pragma l
     (parameters plus `result`) and defers constant lookup, which is WF3 and
     needs the module's constant table. *)
 let check_module ~(bound : string list) (m : typed_module) : string option =
+  let is_known_type (n : string) = List.mem n (declared_type_names m) in
   let (TypedModule (_, decls)) = m in
   let param_names (params : Type.value_parameter list) =
     List.filter_map
@@ -103,7 +126,10 @@ let check_module ~(bound : string list) (m : typed_module) : string option =
            (* WF1: this declaration's own parameters join the ambient scope,
                and `result` is always in scope (§2.2). *)
            let here = bound @ ("result" :: param_names params) in
-           (match check_decl ~bound:here (Identifier.ident_string name) pragmas with
+           (match
+                check_decl ~bound:here ~is_known_type (Identifier.ident_string name)
+                  pragmas
+              with
             | Some e -> Some e
             | None -> go rest)
         | TForeignFunction (_, _, name, params, _, _, _, pragmas) ->
@@ -112,7 +138,10 @@ let check_module ~(bound : string list) (m : typed_module) : string option =
               buffer/length and handle contracts on `uk_*` bindings, and
               `len` is one of those parameters. *)
            let here = bound @ ("result" :: param_names params) in
-           (match check_decl ~bound:here (Identifier.ident_string name) pragmas with
+           (match
+                check_decl ~bound:here ~is_known_type (Identifier.ident_string name)
+                  pragmas
+              with
             | Some e -> Some e
             | None -> go rest)
         | _ -> go rest)

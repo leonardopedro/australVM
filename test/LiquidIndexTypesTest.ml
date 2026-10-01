@@ -193,6 +193,32 @@ let test_a_nat_declared_variable_index_is_accepted () =
   let idx = TVar ("n", Some SNat, sp) in
   eq None (ty_wf (TyApp ("Span", [ TyArgTy (TySort SNat); TyArgIndex idx ], sp)))
 
+(* The plan writes `Vector[T, n]`, where `T` is a *declared* type and `n` an
+   index. Those are the same token stream as `Vector[n]` up to the comma, so the
+   grammar alone cannot separate them and the parser is given the module's
+   declared type names to resolve against. That is scope-sensitive for the same
+   reason WF1 is: a contract may only mention names its declaration has. *)
+let test_a_declared_type_argument_is_a_type () =
+  let known n = n = "Tree" in
+  match LiquidParse.parse_formula ~is_known_type:known "v : Vector[Tree, n]" with
+  | FType (_, ty, _) ->
+    eq "Vector[Tree, n]" (ty_to_string ty);
+    (match ty_indices ty with
+     | [ TVar (v, _, _) ] -> eq "n" v
+     | _ -> assert_failure "expected exactly one index, `n`")
+  | f -> assert_failure ("unexpected shape: " ^ string_of_formula f)
+
+let test_an_unknown_name_is_still_an_index () =
+  (* Without the name in scope, the same text means the other thing. So a typo in
+     a type argument is *not* silently accepted as a type — it falls back to the
+     index reading, which `ty_wf` then has something to say about. *)
+  let known _ = false in
+  match LiquidParse.parse_formula ~is_known_type:known "v : Vector[Tree, n]" with
+  | FType (_, ty, _) ->
+    eq "Vector[Tree, n]" (ty_to_string ty);
+    eq 2 (List.length (ty_indices ty))
+  | f -> assert_failure ("unexpected shape: " ^ string_of_formula f)
+
 let test_well_formedness_is_span_accurate () =
   match ty_wf (ty_of "x : Span[Nat8, 1.5]") with
   | Some (_, s) ->
@@ -264,6 +290,8 @@ let suite =
     "a_real_index_is_refused_and_says_why" >:: (fun _ -> test_a_real_index_is_refused_and_says_why ());
     "an_unannotated_variable_index_is_refused" >:: (fun _ -> test_an_unannotated_variable_index_is_refused ());
     "a_nat_declared_variable_index_is_accepted" >:: (fun _ -> test_a_nat_declared_variable_index_is_accepted ());
+    "a_declared_type_argument_is_a_type" >:: (fun _ -> test_a_declared_type_argument_is_a_type ());
+    "an_unknown_name_is_still_an_index" >:: (fun _ -> test_an_unknown_name_is_still_an_index ());
     "well_formedness_is_span_accurate" >:: (fun _ -> test_well_formedness_is_span_accurate ());
     "equal_indices_are_the_same_type" >:: (fun _ -> test_equal_indices_are_the_same_type ());
     "different_indices_are_different_types" >:: (fun _ -> test_different_indices_are_different_types ());

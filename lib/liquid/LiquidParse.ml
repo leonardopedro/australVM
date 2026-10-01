@@ -33,6 +33,14 @@
 type state = {
   src   : string;
   mutable pos : int;
+  (** Is this name a type that is *in scope*? See `parse_ty_arg`: a bracketed
+      argument that is neither a primitive sort nor a known type is read as an
+      index term, and the difference between `Vector[T, n]` and `Vector[n]` is
+      not decidable from the token stream alone. Resolving it against the
+      module's declared types is what makes the plan's syntax mean what it looks
+      like it means, and it is scope-sensitive for the same reason WF1 is: a
+      contract may only mention names its declaration has. *)
+  mutable is_known_type : string -> bool;
 }
 
 let err_at (st : state) (start : int) (stop : int) (msg : string) : 'a =
@@ -399,6 +407,13 @@ and parse_ty_arg (st : state) : LiquidTypes.ty_arg =
   | Some name -> (
     match sort_of_name name with
     | Some s -> LiquidTypes.TyArgTy (LiquidTypes.TySort s)
+    | None when st.is_known_type name ->
+      (* A declared type, in scope. `Vector[T, n]` from the plan needs exactly
+         this: without it, `T` reads as an index term and the contract silently
+         means something else. *)
+      LiquidTypes.TyArgTy
+        (LiquidTypes.TyApp
+           (name, [], { LiquidTypes.start = start; stop = st.pos }))
     | None ->
       (* Not a sort, so it is an index term. Rewind and let the term parser
          have the whole thing, which is what makes `Span[Nat8, n + 1]` work:
@@ -416,8 +431,9 @@ and parse_ty_arg (st : state) : LiquidTypes.ty_arg =
 (** Parse a whole contract string. The string must be consumed exactly: a
     trailing token is an error, not silently ignored, because a typo in a
     contract must not read as a weaker contract. *)
-let parse_formula (src : string) : LiquidTypes.formula =
-  let st = { src; pos = 0 } in
+let parse_formula ?(is_known_type = fun _ -> false) (src : string)
+  : LiquidTypes.formula =
+  let st = { src; pos = 0; is_known_type } in
   skip_ws st;
   if at_end st then
     err_at st 0 0 "empty contract: expected a refinement formula";
@@ -429,35 +445,36 @@ let parse_formula (src : string) : LiquidTypes.formula =
 
 (** Parse the contract of a pragma kind. Marker kinds ([KMeasure], [KFold])
     carry no formula and so reject any non-empty contract string. *)
-let parse_contract (kind : LiquidTypes.contract_kind) (src : string)
+let parse_contract ?(is_known_type = fun _ -> false)
+    (kind : LiquidTypes.contract_kind) (src : string)
   : LiquidTypes.contract =
   match kind with
   | LiquidTypes.KMeasure | LiquidTypes.KFold ->
      if String.trim src = "" then
        { kind; source = src; formula = None }
      else
-       err_at { src; pos = 0 } 0 (String.length src)
+       err_at { src; pos = 0; is_known_type } 0 (String.length src)
          (Printf.sprintf "%s is a marker pragma and takes no contract"
             (LiquidTypes.string_of_contract_kind kind))
   | _ ->
-     { kind; source = src; formula = Some (parse_formula src) }
+     { kind; source = src; formula = Some (parse_formula ~is_known_type src) }
 
 (** Parse the contract of a pragma kind, given the kind already resolved from
     its pragma name. Marker kinds ([KMeasure], [KFold]) carry no formula and
     so reject any non-empty contract string. Raises [Failure] with the span
     formatted into the message. *)
-let parse_contract_exn (kind_name : string) (src : string)
-  : LiquidTypes.contract =
+let parse_contract_exn ?(is_known_type = fun _ -> false) (kind_name : string)
+    (src : string) : LiquidTypes.contract =
   match LiquidTypes.contract_kind_of_string kind_name with
   | None ->
-     err_at { src; pos = 0 } 0 (String.length src)
+     err_at { src; pos = 0; is_known_type } 0 (String.length src)
        (Printf.sprintf "unknown Liquid pragma kind %S" kind_name)
-  | Some kind -> parse_contract kind src
+  | Some kind -> parse_contract ~is_known_type kind src
 
 (** Parse the contract string carried by a `LiquidPragma (kind_name, src)`.
     Returns [None] for a kind name that is not one of the six. *)
-let parse_pragma (kind_name : string) (src : string)
+let parse_pragma ?(is_known_type = fun _ -> false) (kind_name : string) (src : string)
   : LiquidTypes.contract option =
   match LiquidTypes.contract_kind_of_string kind_name with
   | None -> None
-  | Some kind -> Some (parse_contract kind src)
+  | Some kind -> Some (parse_contract ~is_known_type kind src)

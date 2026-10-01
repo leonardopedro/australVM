@@ -141,13 +141,20 @@ chance that `x` happens to be an integer, and a non-integer extent is not an
 extent. Under-claiming leaves an obligation someone can discharge; over-claiming
 invents one.
 
-**Two limitations, recorded rather than papered over.**
+**Two limitations, both now closed — recorded rather than papered over while they were open.**
 
-- An argument that is a recognised sort is a *type*; anything else is read as an
-  index *term*. `Vector[Foo]` is therefore a vector indexed by `Foo`, not a
-  vector of the named type `Foo` — the token stream alone does not distinguish
-  them. `Vector[T, n]` as the plan writes it needs a named (non-sort) type
-  argument, which is not yet expressible inside brackets.
+- ~~An argument that is a recognised sort is a type; anything else is an index
+  term.~~ **Resolved.** `Vector[T, n]` and `Vector[n]` are the same token stream
+  up to the comma, so the grammar alone cannot separate them — but a *declared*
+  type can be recognised from the module's own declarations. The parser is
+  therefore given the type names in scope
+  (`LiquidCheck.declared_type_names`) and reads a bracketed argument as a type
+  when it is a primitive sort **or** a declared type; otherwise an index term.
+
+  Scope-sensitivity is the same discipline as WF1, and it gives the fallback a
+  useful meaning: a name not in scope reads as an index, so a typo in a type
+  argument is not silently accepted as a type — `ty_wf` then has something to say
+  about it.
 - ~~An index is currently a literal or a variable~~ — **fixed.** See below.
 
 **The additive level L9 exposed, now implemented.** §2.2's grammar has always
