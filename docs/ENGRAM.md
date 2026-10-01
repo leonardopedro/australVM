@@ -252,3 +252,54 @@ wrong.
   `window` path is O(1) by construction, but `subderiv`/`sentence` reduce a net.
   Mitigation is the deterministic memo cache; E3 measures the hot `window` path
   separately.
+
+## 2.7 The reference key function is a surface n-gram hash (E4)
+
+E4 says to "port the key function into the `deepseek-ai/Engram` reference
+implementation". Reading the pinned reference first changes what that means, so
+this records what is actually there.
+
+`deepseek-ai/Engram` is pinned at **`fb7f84a21f91223715394a33a1dc24bbfb7f788e`**
+(`engram_demo_v1.py`, `_get_ngram_hashes`). Its key function is:
+
+```python
+for n in range(2, self.max_ngram_size + 1):          # max_ngram_size = 3 -> n in {2,3}
+    tokens = base_shifts[:n]                        # x, x<<1, ..., x<<(n-1)
+    mix = tokens[0] * multipliers[0]
+    for k in range(1, n):
+        mix = np.bitwise_xor(mix, tokens[k] * multipliers[k])
+    for j in range(self.n_head_per_ngram):           # n_head_per_ngram = 8
+        head_hash = mix % int(head_vocab_sizes[j])   # prime-searched, per head
+```
+
+So a key is **a surface n-gram hash over token IDs**: a shift-and-multiply
+polynomial, XOR-mixed across offsets, reduced modulo a per-head prime. Two
+consequences:
+
+- **There is no semantic key function in the reference to port.** Nothing in it
+  parses, normalizes, or reduces to a normal form. It is arm **(a)**, surface
+  N-gram keys.
+- **Arm (b), UNF keys, is this repo's `logos::engram`** — the
+  CCG parse → CoreIR → net → TED pipeline, hashed with SHA-256 into the 84-byte
+  `ENGM` layout.
+
+That makes E4's ablation a comparison between two things that both already
+exist, rather than a port followed by a comparison. It also confirms the framing
+in §2.5: paraphrases collide on `ted_hash` but not `unf_hash` precisely because
+arm (b) reduces meaning while arm (a) cannot.
+
+Note also what the two keys are *for*, since they are not interchangeable:
+the reference's hash is a **table address for an embedding lookup** — it must be
+cheap and collision-bounded against a prime-sized vocab, and its whole point is
+that it is a fast polynomial over token IDs. The `ENGM` key is a **statement
+identity** carrying granularity, depth, flags and an optional L1 weight. A
+surface n-gram hash cannot stand in for the second, and a semantic digest is
+needlessly expensive if all you need is the first.
+
+### E4 status
+
+The reference is cloned and pinned, and the key function is read and compared.
+**The training ablation itself is not done**: val loss, the long-context RULER
+subset, table-coverage curves, and the sparsity-allocation sweep for ρ* all need
+GPU training runs, and this machine has no accelerator. Those remain open; this
+section is the part of E4 that can be completed and checked without them.

@@ -893,13 +893,34 @@ already quotiented by logos:**
       granularity, TED-merge rate (algebraic collisions), lookup
       p50/p99. Acceptance: ingest the L0 `corpus/` plus a larger raw corpus;
       dedup > 0 on paraphrase sets; O(1) lookup benchmark recorded.
-- [ ] **E4 (L)** [external] — decoder module: port the key function into the
+- [~] **E4 (L)** [external] — decoder module: port the key function into the
       `deepseek-ai/Engram` reference implementation (pin rev); train small
       with (a) surface N-gram keys vs (b) UNF keys at iso-table-budget and
       iso-FLOPs. Metrics: val loss, long-context RULER subset,
       table-coverage curves; re-run the sparsity-allocation sweep (paper
       §3.1) to see where ρ* moves under semantic dedup. Acceptance:
       reproducible run log + ablation table appended to `docs/ENGRAM.md`.
+
+      **Done: the reference is cloned and pinned, and its key function is read
+      and compared** (`docs/ENGRAM.md` §2.7). Pinned at
+      `fb7f84a21f91223715394a33a1dc24bbfb7f788e`.
+
+      Reading it first **changes what "port the key function" means**. The
+      reference's key is a *surface n-gram hash over token IDs* — a
+      shift-multiply polynomial, XOR-mixed across offsets, modulo a per-head
+      prime, for n ∈ {2,3} × 8 heads. It does not parse, normalize, or reduce
+      to a normal form. So there is no semantic key function there to port: the
+      reference **is arm (a)** of this very ablation, and arm (b) is this
+      repo's `logos::engram` (CCG → CoreIR → net → TED, SHA-256, 84-byte `ENGM`).
+
+      E4's ablation therefore compares two things that already exist, rather
+      than a port followed by a comparison.
+
+      **Not done: the training ablation.** Val loss, the long-context RULER
+      subset, table-coverage curves and the ρ* sparsity sweep all need GPU
+      training runs; this machine has no accelerator. The acceptance's
+      "reproducible run log + ablation table" is consequently still outstanding
+      — no numbers have been invented to fill it.
 - [x] **E5 (S)** [`[SYNC]`] — probabilistic engrams over logos' existing L1
       split. E5 adds **no** world splitting and **no** aggregation: `l1::split_l1`
       already produces weighted worlds and `l1::aggregate_results` already
