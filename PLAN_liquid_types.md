@@ -975,11 +975,52 @@ already quotiented by logos:**
       also that `examples/kernel/*.aum` is not built by any dune rule today, so
       these bindings are reference material in the same sense
       `UnferKernel.aum` is.
-- [ ] **E7 (L)** — prefetch/offload: ingest-time key computation →
+- [~] **E7 (L)** — prefetch/offload: ingest-time key computation →
       host/SSD cache tiers (paper §2.5); optional VM tier
-      (`cloud_hypervisor_vm/`). Acceptance: offload overhead target < 3%
-      (the paper's number) on a synthetic 100M-entry table; prefetch hit rate
-      reported.
+      (`cloud_hypervisor_vm/`). Landed as unfer `630ba54`.
+
+      **Implemented**: `engram::tiered::TieredTable` (RAM-hot `BTreeMap` +
+      clock-ordered eviction) over `engram::spill::SpillTier` (append-only file
+      with a sparse offset index). Prefetch pulls a named batch back into RAM and
+      reports `TierStats::prefetch_hit_rate`.
+
+      Reuses rather than reinvents: the address is the same
+      `(granularity, unf_hash)` `EngramTable` already keys on, `Embedding` is
+      still `Vec<f32>`, and insert keeps `EngramTable`'s first-write-wins rule so
+      a tiered and an untiered ingest dedup identically.
+
+      The load-bearing invariant is that an address lives in **exactly one
+      tier** after any insert/offload/prefetch/get sequence; every test asserts
+      it, because a bug that lost or duplicated an engram would still pass a
+      throughput assertion. Granularity is part of the *on-disk* address, so
+      §2.3's "a lookup at granularity g must not find a sentence key" is tested
+      across a round trip through disk.
+
+      **Acceptance: prefetch hit rate reported — 1.0000 at both sizes. Offload
+      overhead target < 3% — NOT MET, measured 148% (200k) / 115% (1M).**
+
+      | entries | baseline | tiered | overhead | prefetch hit rate |
+      |---------|----------|--------|----------|-------------------|
+      | 200k    | 196 ms   | 485 ms | 148%     | 1.0000            |
+      | 1M      | 1.18 s   | 2.54 s | 115%     | 1.0000            |
+
+      The benchmark caught two performance defects, both mine, both now fixed:
+      eviction scanned the whole hot map per victim (O(n²) ingest — **20901%**
+      against a 3% target, now a lazy-deletion min-heap at O(log n)) and each
+      spill was an individual seek+write pair (now 1 MB batched appends).
+
+      The remaining 115% is the **synchronous write path**, not the algorithm:
+      62 MB at 1M entries against this filesystem's ~20 MB/s effective append.
+      Closing it needs a background writer thread or faster storage; neither is
+      done. The number is recorded rather than restated at a friendlier size.
+
+      **100M entries does not fit on this machine** (14 GB RAM; a 100M-entry
+      `HashMap` alone is ~12–15 GB), so the benchmark is parameterized — 200k
+      default, `ENGRAM_E7_ENTRIES` to raise. Running it at a size that OOMs
+      would measure the OOM killer, not offload overhead.
+
+      Still open: the optional VM tier (`cloud_hypervisor_vm/`), and the < 3%
+      target itself.
 - [x] **E8 (M, optional)** [this repo] — `lib/deltanet_plugin.ml` registered
       in `Vm_plugin.boot` beside the `liquid`/`why3_gate` passes (L1 seam,
       §8): serialize top-level constant expressions to the subset, call
