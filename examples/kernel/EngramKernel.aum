@@ -1,0 +1,23 @@
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+
+module body EngramKernel is
+    -- The canonical `ENGM` key width, mirrored from `logos::engram`'s layout.
+    -- Deliberately a bare literal rather than a generated import: the JIT side
+    -- holds opaque bytes and must not acquire a dependency on the crate that
+    -- derives them. The two sides assert the same width independently, and the
+    -- liquid contracts below pin `len == 84`, so a layout change cannot slip
+    -- through as a buffer that is accepted but misread.
+    function engramKeyBytes(): Int64 is
+        return 84;
+    end;
+
+    pragma Foreign_Import(External_Name => "uk_engram_store");
+    function engramStore(model: Int64, key: Address[Nat8], len: Int64, weightBits: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "uk_engram_lookup");
+    function engramLookup(model: Int64, key: Address[Nat8], len: Int64): Int64 is end;
+end;

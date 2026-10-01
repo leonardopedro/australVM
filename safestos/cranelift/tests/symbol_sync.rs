@@ -121,3 +121,89 @@ fn uk_last_error_initially_empty() {
         "uk_last_error() before any error: expected empty string, got len={n}"
     );
 }
+
+/// E6 linkage smoke test: the engram symbols are reachable from the bridge and
+/// round-trip through the real ABI, not just present in the census.
+///
+/// The key is 84 opaque bytes in `logos::engram`'s canonical `ENGM` layout.
+/// Both sides pin that width independently — deriving a key is `logos`' job,
+/// and neither crate depends on the other to hold bytes — so this test uses the
+/// same layout constants rather than importing them.
+#[test]
+#[cfg(feature = "unfer-kernel")]
+fn uk_engram_round_trips_through_the_bridge() {
+    const KEY_BYTES: usize = 84;
+
+    // A real session spec, not a stub: the engram table lives on `Session`, so
+    // there has to be a session for the symbols to act on.
+    let spec = br#"{
+      "hamiltonian": {
+        "kind": "builtin",
+        "name": "harmonic_chain",
+        "params": {"n_modes": 2, "omega": 1.0}
+      },
+      "prior": {
+        "kind": "superposition",
+        "terms": [
+          {"re": 0.5, "im": 0.0, "spec": {"kind": "vacuum"}},
+          {"re": 0.5, "im": 0.0, "spec": {"kind": "bosons", "modes": [[0, 1]]}}
+        ]
+      },
+      "solver": {
+        "krylov_dim": 4,
+        "prune_eps": 1e-12,
+        "max_components": 50000,
+        "restarts": 1,
+        "device": {"kind": "cpu"}
+      }
+    }"#;
+    let model = unfer_ffi::uk_model_create(spec.as_ptr(), spec.len() as i64);
+    assert!(model > 0, "uk_model_create failed");
+
+    let mut key = vec![0u8; KEY_BYTES];
+    key[0..4].copy_from_slice(b"ENGM");
+    key[4..6].copy_from_slice(&1u16.to_le_bytes());
+    key[32..40].copy_from_slice(&0xA5A5_A5A5_A5A5_A5A5u64.to_le_bytes());
+    key[76..84].copy_from_slice(&0.25f64.to_le_bytes());
+
+    // A miss is UK-4403, distinct from a stored zero.
+    assert_eq!(
+        -4403,
+        unfer_ffi::uk_engram_lookup(model, key.as_ptr(), KEY_BYTES as i64),
+        "an unstored engram is RESOURCE_NOT_FOUND, not a zero weight"
+    );
+
+    assert_eq!(
+        0,
+        unfer_ffi::uk_engram_store(model, key.as_ptr(), KEY_BYTES as i64, 0.25f64.to_bits() as i64)
+    );
+    assert_eq!(0, unfer_ffi::uk_engram_lookup(model, key.as_ptr(), KEY_BYTES as i64));
+
+    // Storing again replaces rather than accumulates, so a repeated ingest
+    // cannot inflate an engram's weight.
+    assert_eq!(
+        0,
+        unfer_ffi::uk_engram_store(model, key.as_ptr(), KEY_BYTES as i64, 0.25f64.to_bits() as i64)
+    );
+    let needed = unfer_ffi::uk_get_result(model, std::ptr::null_mut(), 0);
+    assert!(needed > 0);
+    let mut buf = vec![0u8; needed as usize];
+    unfer_ffi::uk_get_result(model, buf.as_mut_ptr(), buf.len() as i64);
+    let result = String::from_utf8_lossy(&buf);
+    assert!(
+        result.contains(r#""entries":1"#),
+        "re-storing must not create a second entry: {result}"
+    );
+    assert!(
+        result.contains(r#""replaced":0.25"#),
+        "the displaced weight is reported, not silently dropped: {result}"
+    );
+
+    // A wrong-length key is refused at the boundary.
+    assert!(
+        unfer_ffi::uk_engram_store(model, key.as_ptr(), 83, 0.25f64.to_bits() as i64) < 0,
+        "an 83-byte key must not be accepted"
+    );
+
+    unfer_ffi::uk_model_free(model);
+}

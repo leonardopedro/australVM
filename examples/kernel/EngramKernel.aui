@@ -1,0 +1,57 @@
+import Austral.Memory (
+    Address
+);
+
+module EngramKernel is
+    """
+    Typed Austral bindings for the engram ABI (`uk_engram_store` /
+    `uk_engram_lookup`).
+
+    An **engram key** is an opaque 84-byte value in the canonical `ENGM`
+    layout that `logos::engram` produces (magic, little-endian layout version,
+    granularity, window size, a 32-byte `unf_hash`, a 32-byte `ted_hash`, flags,
+    and a trailing optional `f64` weight). Nothing on this side interprets those
+    bytes: deriving a key is `logos`' job, and the JIT's contract is only that
+    the same 84 bytes always address the same engram. `logos` and the kernel
+    each pin the width independently, so this module states it as a contract
+    rather than importing it.
+
+    Byte buffers follow `UnferKernel`'s existing buffer protocol — an
+    `Address[Nat8]` plus an `Int64` length — rather than inventing a second
+    convention for the same job.
+
+    The weight crosses the boundary as **raw `f64` bits in an `Int64`**, not as
+    a `Float64`. That is deliberate: `NaN` is this project's encoding for "no
+    L1 annotation" and `0.0` is a real zero-probability world, so a
+    representation that could not carry `NaN` would erase a distinction the
+    rest of the system depends on. The kernel rejects a non-finite weight on the
+    other side.
+
+    Return values follow the kernel convention: `0` on success, `< 0` is
+    `-code`. A lookup **miss** is UK-4403 (`RESOURCE_NOT_FOUND`) rather than a
+    success carrying a zero weight, because "never seen" and "seen and
+    impossible" are different facts.
+    """
+    -- The canonical key width. `engramStore`/`engramLookup` require `len` to
+    -- equal this exactly; a short or long buffer is refused at the boundary.
+    function engramKeyBytes(): Int64;
+
+    function engramStore(model: Int64, key: Address[Nat8], len: Int64, weightBits: Int64): Int64;
+    pragma Liquid_Requires(Contract => "len == 84");
+    pragma Liquid_Ensures(Contract => "result == 0 || (result <= -1001 && result >= -1011) || (result <= -4401 && result >= -4403)");
+
+    function engramLookup(model: Int64, key: Address[Nat8], len: Int64): Int64;
+    pragma Liquid_Requires(Contract => "len == 84");
+    pragma Liquid_Ensures(Contract => "result == 0 || result == -4403 || (result <= -1001 && result >= -1011)");
+
+    """
+    Store an engram whose weight is already encoded as raw `f64` bits.
+    Convenience over `engramStore`; the weight is passed through unchanged so
+    no float conversion can round it on the way in.
+    """
+    function engramStoreBits(model: Int64, key: Address[Nat8], len: Int64, weightBits: Int64): Int64 is
+        pragma Liquid_Requires(Contract => "len == 84");
+        pragma Liquid_Ensures(Contract => "result == 0 || result == -1001 || result == -4401");
+        return engramStore(model, key, len, weightBits);
+    end;
+end;

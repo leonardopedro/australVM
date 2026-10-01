@@ -280,6 +280,17 @@ pub(crate) struct KernelSymbol {
 /// requires adding it here and in the expected-symbols file.
 #[cfg(feature = "unfer-kernel")]
 pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
+    // E6: the engram ABI. The 84-byte ENGM key is an opaque buffer over this
+    // boundary — deriving one is `logos`' job, so the JIT side only has to
+    // hand the bytes across.
+    KernelSymbol {
+        name: "uk_engram_store",
+        addr: unfer_ffi::uk_engram_store as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_engram_lookup",
+        addr: unfer_ffi::uk_engram_lookup as *const u8,
+    },
     KernelSymbol {
         name: "uk_version",
         addr: unfer_ffi::uk_version as *const u8,
