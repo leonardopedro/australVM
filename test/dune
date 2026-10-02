@@ -24,12 +24,14 @@
   CliParserTest
   PluginTest
   DeltanetPluginTest
+  FormalizePluginTest
   CliEngineTest)
  (modules
   CliUtilTest
   CliParserTest
   PluginTest
   DeltanetPluginTest
+  FormalizePluginTest
   CliEngineTest)
  ; austral_rust_bridge is needed so rust_bridge.c (which defines the au_*
  ; runtime primitives the cranelift bridge .so imports) is linked into the

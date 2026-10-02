@@ -1,0 +1,51 @@
+# The CNL formalization module (Part 2 P5 of the unfer rewrite plan, §16).
+#
+# A hosted module whose capability *is* the formalization contract: it may call
+# `uk_logos_compile` and nothing else, so it can compile a CNL sentence to its
+# unique normal form and do nothing else. Deny-by-default, exactly like the
+# worker's `MATHED_EXEC_GRANTS` / `MATHED_KERNEL_LANGS` gates — the capability set
+# is the safety boundary, not a formality on top of one.
+#
+# Why a module at all, when `Formalize_plugin` is a compiler pass? Two different
+# directions. The pass is *inward*: it checks a module that declares CNL
+# constants. This module is *outward*: it is the pipeline itself, packaged as
+# something the VM can host and deny capabilities to. A formalizer that could
+# reach `uk_austral_unf` as well could verify a lemma against the wrong
+# reduction; a formalizer that can reach only `uk_logos_compile` cannot.
+#
+# The plugin path calls the same operation through `logos unf --json` rather than
+# the in-process protocol op, because an OCaml compiler plugin cannot make an
+# NDJSON call into a kernel process. Both go through
+# `formalize::formalizer::verify_cnl`; see `logos/src/cli/mod.rs::cmd_unf`.
+
+[module]
+name = "logos_formalize"
+version = "0.1.0"
+archetype = "haskell_effect"
+entry = "main"
+
+[grants]
+# `uk_logos_compile` and nothing else, deliberately:
+#
+#   * not `uk_austral_unf` — that is the DeltaNets/Austral reduction, and a
+#     formalizer holding both could confirm a CNL lemma against an unrelated
+#     normal form. `Deltanet_plugin` already owns that comparison.
+#   * not `uk_version` — a capability probe, and capability probing is not this
+#     module's job.
+#   * not the probability ops (`uk_model_*`, `uk_event_probability`) — those
+#     belong to `unfer_consensus`, and a formalizer that could evaluate
+#     distributions would be able to assert numeric agreement it never checked.
+#
+# One grant, one capability: the narrowest manifest that does the job.
+kernel = [
+    "uk_logos_compile",
+]
+effects = ["Kernel"]
+
+[limits]
+# Each `cnl_` constant is a subprocess round trip to `logos`, which itself runs
+# the full gate → CCG → CoreIR → DeltaNet → reduce → readback → hash pipeline
+# twice (the confluence self-check). 500 ms is generous for one sentence; a module
+# declaring many will want the batch op of §16's "optional optimization", which is
+# not in this manifest because it does not exist yet.
+max_ms = 500

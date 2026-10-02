@@ -37,6 +37,13 @@ let boot () =
   Why3_plugin.install ();
   Deltanet_plugin.install ();
   Npu_dma_plugin.install ();
+  (* Part 2 P5 of the unfer rewrite plan: the CNL formalization gate. Same
+     shape as the deltanet gate — opt-in via `UNFER_LOGOS=1`, no-op when the
+     `logos` binary is absent — but it checks *identity* rather than a value:
+     a `cnl_` string constant must reduce to a unique normal form, and two of
+     them must not share one. See lib/formalize_plugin.ml for why identity is
+     the right thing to check when there is no second opinion to disagree with. *)
+  Formalize_plugin.install ();
   (* PLAN_liquid_types.md L2: the liquid contract pass is a tenant of this
      seam. L0 fixed the representation and L1 threaded the pragmas to the
      typed AST; L2 makes the pass real — it parses every contract and checks

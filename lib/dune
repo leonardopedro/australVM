@@ -78,6 +78,6 @@
   ; why3_plugin/npu_dma_gate.mlw) + npu_dma_plugin.ml (its compiler pass) + the
   ; Vm_plugin registry (the compiler itself as a plugin of the application/VM)
   ; live in this directory so dune picks them up with the explicit list below.
-  (modules Authorize_gate Compiler Cli CliEngine CliParser CliUtil Deltanet_plugin Npu_dma_gate Npu_dma_plugin Vm_plugin Why3_plugin))
+  (modules Authorize_gate Compiler Cli CliEngine CliParser CliUtil Deltanet_plugin Formalize_plugin Npu_dma_gate Npu_dma_plugin Vm_plugin Why3_plugin))
 
 (documentation)
