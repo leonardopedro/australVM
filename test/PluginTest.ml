@@ -100,7 +100,25 @@ let test_npu_dma_gate_is_the_sram_check _ =
   eq 1 (Npu_dma_gate.dma_verdict 200000 100000);
   (* dma_ok mirrors the same bound on the (size, offset) buffer record *)
   eq true (Npu_dma_gate.dma_ok (262144, 0) 262144);
-  eq false (Npu_dma_gate.dma_ok (262144, 0) 262145)
+  eq false (Npu_dma_gate.dma_ok (262144, 0) 262145);
+  (* The sum must not be computed.
+     `offset` and `bytes` reach the gate from `int_of_string` on an Int64
+     literal, so each can be as large as `max_int`. On a native 63-bit OCaml int
+     `max_int + 1` wraps to `min_int`, and `min_int <= 262144` is true — so
+     `offset + bytes <= max_npu_sram` returned 0 ("safe") for a transfer of
+     2^62 bytes and the gate accepted it. `unfer_ocaml.drv` maps Why3's unbounded
+     int onto the native int, so the `.mlw` precondition bounds the operands but
+     not their sum. *)
+  eq 1 (Npu_dma_gate.dma_verdict max_int 1);
+  eq 1 (Npu_dma_gate.dma_verdict max_int max_int);
+  eq 1 (Npu_dma_gate.dma_verdict (max_int - 1) 2);
+  eq 1 (Npu_dma_gate.dma_verdict 1 max_int);
+  eq 1 (Npu_dma_gate.dma_verdict 200000 max_int);
+  (* Still no false positive at the boundary. *)
+  eq 0 (Npu_dma_gate.dma_verdict 262143 1);
+  eq 1 (Npu_dma_gate.dma_verdict 262144 1);
+  eq false (Npu_dma_gate.dma_ok (262144, 0) max_int);
+  eq true (Npu_dma_gate.dma_ok (262144, 0) 262144)
 
 let test_npu_dma_gate_enforces_the_sram_bound _ =
   reset ();

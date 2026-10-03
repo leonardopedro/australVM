@@ -53,8 +53,19 @@ end
 let string_explode (s: string): char list =
   List.init (String.length s) (String.get s)
 
+(* `List.nth` is O(i), and `String.init` calls its function once per index, so
+   this was O(n^2) — and `Escape.escape_string` runs it over every string literal
+   in every module. Measured on a single constant: 40k chars 0.96s, 80k 3.0s,
+   160k 11.3s, 320k 44.1s, exactly 4x per doubling. A 2 MB literal (a base64
+   blob, say) extrapolates to ~30 minutes. The recursive `escape_list` over the
+   same input was a `Stack_overflow` risk besides.
+
+   Both the index and the list walk are gone: the buffer is filled in one pass
+   from a `Bytes` the recursion appends to. *)
 let string_implode (l: char list): string =
-  String.init (List.length l) (List.nth l)
+  let b = Buffer.create (List.length l) in
+  List.iter (Buffer.add_char b) l;
+  Buffer.contents b
 
 let read_stream_to_string stream: string =
   let rec read_stream stream =
@@ -200,7 +211,16 @@ let run_command (command: string): command_output =
     }
 
 let compile_c_code (source_path: string) (output_path: string): command_output =
-  let cmd = "cc " ^ source_path ^ " -fwrapv -lm -o " ^ output_path in
+  (* `run_command` hands the string to `sh -c`, so both paths are shell syntax
+     unless quoted. `output_path` comes straight from `--output=<path>`: a path
+     with a space produced a baffling `cc` error, and one containing `;` or
+     `$(...)` was command execution. `formalize_plugin.ml` already used
+     `Filename.quote` for the same reason. *)
+  let cmd =
+    String.concat " "
+      [ "cc"; Filename.quote source_path; "-fwrapv"; "-lm"; "-o";
+        Filename.quote output_path ]
+  in
   let o = run_command cmd in
   let (CommandOutput { command; code; stdout; stderr }) = o in
   if code <> 0 then

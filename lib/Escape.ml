@@ -12,32 +12,54 @@ open Std
 type escaped_string = EscapedString of string
 [@@deriving (show, sexp)]
 
-let rec escape_string s =
-  EscapedString (string_implode (escape_list (string_explode s)))
+(* Iterative, over the string, into one buffer.
 
-and escape_list lst =
-  match lst with
-  | ('\\' :: 'n' :: rest) -> '\n' :: (escape_list rest)
-  | ('\\' :: 'r' :: rest) -> '\r' :: (escape_list rest)
-  | ('\\' :: 't' :: rest) -> '\t' :: (escape_list rest)
-  | ('\\' :: '\'' :: rest) -> '\'' :: (escape_list rest)
-  | ('\\' :: '"' :: rest) -> '"' :: (escape_list rest)
-  | ('\\' :: '\\' :: rest) -> '\\' :: (escape_list rest)
-  | ('\\' :: ' ' :: rest) -> consume_whitespace (' ' :: rest)
-  | ('\\' :: '\n' :: rest) -> consume_whitespace (' ' :: rest)
-  | ('\\' :: '\r' :: rest) -> consume_whitespace (' ' :: rest)
-  | ('\\' :: '\t' :: rest) -> consume_whitespace (' ' :: rest)
-  | (head :: rest) -> head :: (escape_list rest)
-  | nil -> nil
+   This was `string_implode (escape_list (string_explode s))`: `string_explode`
+   built a cons cell per character and `escape_list` recursed once per cell, not
+   in tail position — so the depth was proportional to the literal's length, and
+   `escape_list` was never called with an empty accumulator to close over. A
+   multi-megabyte literal (a base64 blob, an `@embed` payload) was a
+   `Stack_overflow` waiting to happen, on top of the O(n^2) `string_implode`.
 
-and consume_whitespace lst =
-  match lst with
-  | (' '  :: rest) -> consume_whitespace rest
-  | ('\n' :: rest) -> consume_whitespace rest
-  | ('\r' :: rest) -> consume_whitespace rest
-  | ('\t' :: rest) -> consume_whitespace rest
-  | ('\\' :: rest) -> rest
-  | _ -> err "Bad whitespace escape sequence"
+   The rewrite is behaviour-preserving; `CRendererTest` pins the interesting
+   cases (quote, escaped quote, whitespace continuation). *)
+(* `escape_list` / `consume_whitespace`, the char-list version this replaced,
+   were removed: nothing else in the tree called them. *)
+let escape_string (s: string) : escaped_string =
+  let n = String.length s in
+  let b = Buffer.create n in
+  let i = ref 0 in
+  let c i = String.get s i in
+  (* `\` followed by whitespace: drop the whitespace run up to and including the
+     closing `\`, exactly as `consume_whitespace` did. *)
+  let skip_whitespace () =
+    let continue_ = ref true in
+    while !continue_ do
+      match if !i < n then c !i else '\000' with
+      | ' ' | '\n' | '\r' | '\t' -> incr i
+      | '\\' -> incr i; continue_ := false
+      | _ -> err "Bad whitespace escape sequence"
+    done
+  in
+  while !i < n do
+    (match c !i with
+     | '\\' when !i + 1 < n ->
+         (match c (!i + 1) with
+          | 'n'  -> Buffer.add_char b '\n'; i := !i + 2
+          | 'r'  -> Buffer.add_char b '\r'; i := !i + 2
+          | 't'  -> Buffer.add_char b '\t'; i := !i + 2
+          | '\'' -> Buffer.add_char b '\''; i := !i + 2
+          | '"'  -> Buffer.add_char b '"';  i := !i + 2
+          | '\\' -> Buffer.add_char b '\\'; i := !i + 2
+          | (' ' | '\n' | '\r' | '\t') -> i := !i + 1; skip_whitespace ()
+          | _ ->
+              (* A trailing lone backslash, or one before an unescapable
+                 character: keep it, as the list version did by falling through
+                 to the `(head :: rest)` case on the next cell. *)
+              Buffer.add_char b '\\'; incr i)
+     | ch -> Buffer.add_char b ch; incr i)
+  done;
+  EscapedString (Buffer.contents b)
 
 let escaped_to_string (EscapedString s) =
   s

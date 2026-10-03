@@ -123,9 +123,9 @@ let check_module ~(bound : string list) (m : typed_module) : string option =
     | d :: rest ->
        (match d with
         | TFunction (_, _, name, _, params, _, _, _, pragmas) ->
-           (* WF1: this declaration's own parameters join the ambient scope,
-               and `result` is always in scope (§2.2). *)
-           let here = bound @ ("result" :: param_names params) in
+           (* WF1: *this* declaration's parameters, and `result`, and nothing
+               else (§2.2). Not seeded with the module's other parameters. *)
+           let here = "result" :: param_names params in
            (match
                 check_decl ~bound:here ~is_known_type (Identifier.ident_string name)
                   pragmas
@@ -220,24 +220,15 @@ let dump (m : typed_module) =
     `result`. WF3 — that every applied function symbol is total-fragment
     admissible — is L3's totality gate, not this pass's job. *)
 let check (m : typed_module) : Compiler_plugin.verdict =
-  let (TypedModule (_, decls)) = m in
-  (* Scope for WF1 without constant lookup: every parameter name in the
-     module, plus `result`. Deliberately permissive — tightening it needs the
-     per-declaration scope, which `check_module` does properly. *)
-  let bound = ref [ "result" ] in
-  List.iter
-    (fun d ->
-      match d with
-      | TFunction (_, _, _, _, params, _, _, _, _) ->
-         List.iter
-           (fun (p : Type.value_parameter) ->
-             match p with
-             | Type.ValueParameter (n, _) ->
-                let s = Identifier.ident_string n in
-                if not (List.mem s !bound) then bound := s :: !bound)
-           params
-      | _ -> ())
-    decls;
+  let (TypedModule (_, _decls)) = m in
+  (* WF1's scope is per-declaration, exactly as `check_module` builds it below:
+     `result` plus *this* function's own parameters. It used to be seeded with
+     every parameter of every function in the module, which made the free-variable
+     test unable to reject any name that happened to be some other function's
+     parameter — so a contract could reach across declarations. Invented names
+     were still caught, which is why the existing single-function test passed.
+     The comment here claimed to be "deliberately permissive" while the docstring
+     above promised the opposite; the docstring was the intent. *)
   dump m;
   (* L5: hand the module to the Why3 driver when asked. Off unless
      AUSTRAL_LIQUID_VERIFY is set, so the default build needs no prover. *)
@@ -246,7 +237,7 @@ let check (m : typed_module) : Compiler_plugin.verdict =
     | None -> None
     | Some _ -> LiquidWhy3.verify m
   in
-  match check_module ~bound:!bound m with
+  match check_module ~bound:[ "result" ] m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->
      match totality m with

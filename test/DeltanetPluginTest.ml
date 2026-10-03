@@ -29,12 +29,61 @@ let test_to_austral_arithmetic _ =
   let open Common in
   let e = TComparison (Equal, TIntConstant "2", TIntConstant "3") in
   eq (Some "(2 = 3)") (Deltanet_plugin.to_austral e);
+  (* `<=` is emitted as its strict negation. The kernel's Austral subset has no
+     non-strict comparison: `logos/src/austral_codegen/parser.rs` rewrites `<=`
+     to `<` on the way in, so emitting `(2 <= 3)` produced `true` here and
+     `false` there — a silent disagreement in the one place this gate exists to
+     catch. Same for `>=`. *)
   let e2 = TComparison (LessThanOrEqual, TIntConstant "2", TIntConstant "3") in
-  eq (Some "(2 <= 3)") (Deltanet_plugin.to_austral e2);
+  eq (Some "(not (3 < 2))") (Deltanet_plugin.to_austral e2);
+  let e2b = TComparison (GreaterThanOrEqual, TIntConstant "2", TIntConstant "3") in
+  eq (Some "(not (2 > 3))") (Deltanet_plugin.to_austral e2b);
+  (* `<>` has no token in the kernel's grammar at all, so it is spelled as a
+     negated equality rather than as `<>` — which used to make
+     `uk_austral_unf` return UK-4804 and reject a valid module. *)
+  let e2c = TComparison (NotEqual, TIntConstant "2", TIntConstant "3") in
+  eq (Some "(not (2 = 3))") (Deltanet_plugin.to_austral e2c);
   let e3 = TConjunction (TBoolConstant true, TBoolConstant false) in
   eq (Some "(true and false)") (Deltanet_plugin.to_austral e3);
   let e4 = TNegation (TBoolConstant true) in
   eq (Some "(not true)") (Deltanet_plugin.to_austral e4)
+
+let contains needle haystack =
+  let n = String.length needle and h = String.length haystack in
+  let rec go i = i + n <= h && (String.sub haystack i n = needle || go (i + 1)) in
+  n = 0 || go 0
+
+(* The emitted program must not contain an operator the kernel cannot parse.
+   Every operator `to_austral` can emit is checked against the kernel's Austral
+   subset grammar, which is `== = <= >= < > and or + - * /` — of which `<=` and
+   `>=` are silently rewritten to strict forms, so only `=`, `<`, `>` are safe to
+   emit directly. *)
+let test_emitted_operators_are_in_the_kernels_subset _ =
+  let open Stages.Tast in
+  let open Common in
+  let ops =
+    [ (Equal, "="); (NotEqual, ""); (LessThan, "<"); (LessThanOrEqual, "");
+      (GreaterThan, ">"); (GreaterThanOrEqual, "") ]
+  in
+  List.iter
+    (fun (op, forbidden) ->
+      let emitted =
+        Deltanet_plugin.to_austral (TComparison (op, TIntConstant "2", TIntConstant "3"))
+      in
+      match emitted with
+      | None -> ()
+      | Some text ->
+          List.iter
+            (fun bad ->
+              let needle = " " ^ bad ^ " " in
+              if forbidden = bad && contains needle text then
+                failwith
+                  (Printf.sprintf
+                     "%s emits %S, which the kernel's parser does not accept" text
+                     needle))
+            [ "<>"; "<="; ">=" ])
+    ops
+
 
 (* ── the independent OCaml evaluator ─────────────────────────────────── *)
 
@@ -112,6 +161,8 @@ let suite =
   "DeltanetPluginTest" >::: [
       "to_austral_literals" >:: test_to_austral_literals;
       "to_austral_arithmetic" >:: test_to_austral_arithmetic;
+      "emitted_operators_are_in_the_kernels_subset" >::
+        test_emitted_operators_are_in_the_kernels_subset;
       "eval_closed_expressions" >:: test_eval_closed_expressions;
       "pass_registers_and_respects_env" >:: test_pass_registers_and_respects_env;
       "check_constant_agreement" >:: test_check_constant_agreement;

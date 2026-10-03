@@ -30,9 +30,24 @@
 
 let max_npu_sram : int = 262144
 
+(* `dma_ok` is the one place the sum is computed, because it is the one place it
+   can be wrong.
+
+   `offset` and `bytes` arrive from `int_of_string` on an Int64 literal, so each
+   can be as large as `max_int` (2^62-1). On a native OCaml int `max_int + 1`
+   wraps to `min_int`, and `min_int <= 262144` is true, so the naive
+   `offset + bytes <= max_npu_sram` returned "safe" for a 2^62-byte transfer and
+   the gate accepted it. `unfer_ocaml.drv` maps Why3's unbounded `int` onto the
+   native 63-bit int, so the `.mlw` precondition `0 <= offset /\ 0 <= bytes` is
+   checked but the addition is not.
+
+   Comparing the two terms instead of their sum cannot overflow. *)
+let fits_in_sram (offset: int) (bytes: int) : bool =
+  offset >= 0 && bytes >= 0 && offset <= max_npu_sram && bytes <= max_npu_sram - offset
+
 let dma_ok (buf: (int * int)) (bytes: int) : bool =
   let (_size, offset) = buf in
-  offset + bytes <= max_npu_sram
+  fits_in_sram offset bytes
 
 let dma_verdict (offset: int) (bytes: int) : int =
-  if offset + bytes <= max_npu_sram then 0 else 1
+  if fits_in_sram offset bytes then 0 else 1

@@ -49,17 +49,35 @@ let rec to_austral (e : texpr) : string option =
       match to_austral a with
       | Some s -> Some ("(not " ^ s ^ ")")
       | None -> None)
-  | TComparison (op, a, b) ->
+  | TComparison (op, a, b) -> (
+      (* The kernel's Austral subset has no `<>` and no non-strict comparison.
+         `logos/src/austral_codegen/parser.rs` rewrites `<=` to `<` and `>=` to
+         `>` on the way in, so `3 <= 3` compiled here as `true` and reduced on the
+         kernel side as `3 < 3` = `false` — a silent disagreement in exactly the
+         place this gate exists to catch. `<>` has no token at all, so
+         `uk_austral_unf` returned UK-4804 and a valid module was rejected with a
+         message blaming the kernel.
+
+         Only `=`, `<`, `>` survive unchanged, and `not (a = b)` is how the
+         kernel spells inequality. *)
       let op_s =
         match op with
-        | Equal -> "="
-        | NotEqual -> "<>"
-        | LessThan -> "<"
-        | LessThanOrEqual -> "<="
-        | GreaterThan -> ">"
-        | GreaterThanOrEqual -> ">="
+        | Equal -> Some "="
+        | LessThan -> Some "<"
+        | GreaterThan -> Some ">"
+        | NotEqual -> None
+        | LessThanOrEqual | GreaterThanOrEqual -> None
       in
-      binop op_s a b
+      match op_s with
+      | Some op_s -> binop op_s a b
+      | None -> (
+          match (op, to_austral a, to_austral b) with
+          | NotEqual, Some x, Some y -> Some ("(not (" ^ x ^ " = " ^ y ^ "))")
+          | LessThanOrEqual, Some x, Some y ->
+              Some ("(not (" ^ y ^ " < " ^ x ^ "))")
+          | GreaterThanOrEqual, Some x, Some y ->
+              Some ("(not (" ^ x ^ " > " ^ y ^ "))")
+          | _ -> None))
   | _ -> None
 
 and binop op a b =
@@ -128,6 +146,14 @@ let value_to_number (v : value) : float =
 let kernel_number (s : string) : float =
   match float_of_string_opt s with Some f -> f | None -> nan
 
+(* The kernel's report carries the reduced value as text. `true` / `false` are
+   booleans; anything else is a number or an open term. *)
+let kernel_bool (s : string) : bool option =
+  match String.lowercase_ascii (String.trim s) with
+  | "true" -> Some true
+  | "false" -> Some false
+  | _ -> None
+
 (** Decision when the kernel returned no report. `None` from
     `austral_unf_json` means EITHER the kernel/bridge is genuinely
     unavailable (documented no-op: the compiler keeps working outside the
@@ -158,6 +184,22 @@ let check_constant ~module_name (id, init) : verdict =
            match report_value json with
            | None -> VerdictOk (* open term / non-numeric: nothing to check *)
            | Some kernel_value ->
+               (* Booleans have to be compared as booleans. They used to go
+                  through `value_to_number`, where `VBool _ = nan`, and the
+                  `is_nan` guard turned that into `VerdictOk` — so every
+                  boolean-valued constant (all comparisons, `and`, `or`, `not`)
+                  was round-tripped to the kernel and its verdict thrown away.
+                  The deltanet test passed vacuously for exactly that reason. *)
+               match (declared, kernel_bool kernel_value) with
+               | VBool b, Some kb when b = kb -> VerdictOk
+               | VBool b, Some kb when b <> kb -> (
+                   VerdictReject
+                     (Printf.sprintf
+                        "module %s constant `%s` is a boolean, the compiler \
+                         evaluates it to %b but the kernel's `uk_austral_unf` \
+                         reduces the emitted program to %b"
+                        module_name (Identifier.ident_string id) b kb))
+               | _ ->
                let dv = value_to_number declared in
                let kv = kernel_number kernel_value in
                if Float.is_nan dv || Float.is_nan kv then VerdictOk
