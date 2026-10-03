@@ -16,6 +16,7 @@
    0x07: Return(value)
 *)
 
+open Error
 open Stages.Mtast
 open MonoType
 open Identifier
@@ -167,8 +168,22 @@ let rec serialize_cps_expr w expr =
       write_u8 w 0x01;
       write_i64 w (if b then 1L else 0L)
   | FloatLit f ->
+      (* The CPS binary has one 64-bit literal opcode and no float type, so a
+         float has to go through `Int64`. `Int64.of_float` *truncates* toward
+         zero (0.5 -> 0) and *raises* `Invalid_argument` outside the Int64
+         range. Both were invisible: `Compiler.ml`'s `with exn -> ... falling
+         back to C` turned the exception into a silent loss of JITting for the
+         whole module, and the truncation quietly changed the program's
+         constants. Rounding is explicit now, and an unrepresentable constant is
+         a compile error rather than a surprise. *)
       write_u8 w 0x01;
-      write_i64 w (Int64.of_float f)
+      if Float.is_nan f || Float.is_integer f = false && Float.abs f >= 9.2233720368547758e18
+      then
+        err
+          (Printf.sprintf
+             "float constant %h has no 64-bit integer representation; the CPS \
+              binary format cannot encode it" f)
+      else write_i64 w (Int64.of_float (Float.round f))
   | StringLit s ->
       (* 0x21 = string/byte constant. The JIT embeds the bytes in memory and
          yields a Span pointer (heap {data, size}); see cps.rs. *)

@@ -83,7 +83,12 @@ let goals_in (mlw_path : string) : string list =
     signal) means the run itself did not conclude. A run that could not
     conclude is reported as [Unknown], never folded into success. *)
 let prove (mlw_path : string) : outcome =
-  let cmd = Printf.sprintf "%s prove -P alt-ergo %s" (why3_cli ()) mlw_path in
+  (* `run_command` goes through `sh -c`, and `mlw_path`'s directory comes from
+     `AUSTRAL_LIQUID_DUMP` or `TMPDIR` — either can hold a space. *)
+  let cmd =
+    Printf.sprintf "%s prove -P alt-ergo %s"
+      (Filename.quote (why3_cli ())) (Filename.quote mlw_path)
+  in
   let (Util.CommandOutput { code; stdout; stderr; _ }) = Util.run_command cmd in
   let cli = why3_cli () in
   if code = 127 || (code <> 0 && cli <> "" && not (String.length stdout > 0)

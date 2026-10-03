@@ -323,10 +323,17 @@ and exec_compile_to_bin (mods: module_source list) (bin_path: string) (entrypoin
   in
   (* Write the output to a temporary file. *)
   let cfile: string = Filename.temp_file "austral_" ".c" in
-  write_string_to_file cfile (compiler_code compiler);
-  (* Invoke `cc`. *)
-  let _ = compile_c_code cfile bin_path in
-  ()
+  (* Removed on the way out, success or not: `Filename.temp_file` lands in
+     $TMPDIR and the generated C is megabytes, so every `--target-type=exe`
+     compile was leaving one behind. `Fun.protect` so a `cc` failure does not
+     skip the cleanup. *)
+  Fun.protect
+    ~finally:(fun () -> try Sys.remove cfile with Sys_error _ -> ())
+    (fun () ->
+      write_string_to_file cfile (compiler_code compiler);
+      (* Invoke `cc`. *)
+      let _ = compile_c_code cfile bin_path in
+      ())
 
 and exec_compile_to_c (mods: module_source list) (output_path: string) (entrypoint: entrypoint option): unit =
   (* Compile everything to a C file. Routed through the VM plugin registry
