@@ -47,8 +47,18 @@ jobs:
       - name: make (build bridge + compiler)
         run: nix develop -c bash -c 'make bridge'
 
+      # `FormalizePluginTest` is the only thing that exercises the `logos unf`
+      # compile-time gate added for the kernel work, and six of its sixteen cases
+      # read UNFER_LOGOS_BIN: with it unset they print a skip line and report OK.
+      # So CI was green against a gate that had never run — it would not have
+      # noticed the gate regressing to a no-op. The sibling unfer checkout is
+      # already there for the bridge's path dependency, so build the binary from
+      # it and point the tests at it.
+      - name: build logos (kernel gate binary)
+        run: cargo build --release --manifest-path ../unfer/Cargo.toml -p logos
+
       - name: make test
-        run: nix develop -c bash -c 'make test'
+        run: nix develop -c bash -c 'export UNFER_LOGOS_BIN=$PWD/../unfer/target/release/logos; make test'
 
       # The `austral` binary has no rpath, so every step that runs it needs
       # LD_LIBRARY_PATH pointing at the bridge .so's build dir (make bridge

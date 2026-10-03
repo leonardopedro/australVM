@@ -220,8 +220,30 @@ pub fn verify_module(module_dir: &Path, mode: LiquidMode) -> Gate {
     }
 
     // The `.mlw` the verdict was about, if it is still around to check.
-    let mlw = module_dir.join("module.mlw");
-    if let Some(actual) = hash_file(&mlw) {
+    //
+    // The writer emits `<ModuleName>.mlw` (LiquidWhy3.ml:
+    // `Filename.concat dir (module_name ^ ".mlw")`), so the hardcoded
+    // `module.mlw` this used to look for never existed: `hash_file` returned
+    // `None`, the whole block was skipped, and `mlw_hash` was never compared
+    // against anything. A replayed prover verdict over re-emitted obligations —
+    // the entire point of the field — was undetectable. Only `sources_hash`
+    // actually did anything.
+    //
+    // Every `.mlw` in the module directory is checked, so the name does not have
+    // to be predicted; if one hashes differently the verdict does not describe
+    // these obligations.
+    let mut checked_mlw = false;
+    let mut mlw_entries: Vec<_> = match std::fs::read_dir(&module_dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+        Err(_) => Vec::new(),
+    };
+    mlw_entries.sort();
+    for mlw in mlw_entries {
+        if mlw.extension().and_then(|e| e.to_str()) != Some("mlw") {
+            continue;
+        }
+        let Some(actual) = hash_file(&mlw) else { continue };
+        checked_mlw = true;
         if actual != att.mlw_hash {
             return Err(format!(
                 "LiquidAttestationStale: liquid.ok records mlw_hash {:#x} but {} \
@@ -232,6 +254,7 @@ pub fn verify_module(module_dir: &Path, mode: LiquidMode) -> Gate {
             ));
         }
     }
+    let _ = checked_mlw;
 
     match att.verdict.as_str() {
         "proved" => Ok(format!(
@@ -362,7 +385,41 @@ mod tests {
         let d = tmpdir("mlw");
         let h = write_sources(&d, "module body M is end module body.\n");
         sidecar(&d, h, 12345, "proved");
-        fs::write(d.join("module.mlw"), "module M end\n").unwrap();
+        // Under the *module's* name, which is what `LiquidWhy3.ml` writes
+        // (`module_name ^ ".mlw"`). The verifier used to look for a hardcoded
+        // `module.mlw`, so this test — and the production path it stands for —
+        // never exercised the comparison at all: `hash_file` returned `None` and
+        // the block was skipped. Writing the name the writer actually produces is
+        // what makes this test mean something.
+        fs::write(d.join("M.mlw"), "module M end\n").unwrap();
+        let e = verify_module(&d, LiquidMode::Required).unwrap_err();
+        assert!(e.contains("LiquidAttestationStale"), "{}", e);
+    }
+
+    #[test]
+    fn a_matching_mlw_under_any_name_is_accepted() {
+        let d = tmpdir("mlw-ok");
+        let h = write_sources(&d, "module body M is end module body.\n");
+        let body = "module M end\n";
+        sidecar(&d, h, fnv1a(body.as_bytes()), "proved");
+        fs::write(d.join("M.mlw"), body).unwrap();
+        verify_module(&d, LiquidMode::Required)
+            .expect("a matching .mlw must not be reported stale");
+    }
+
+    #[test]
+    fn re_emitted_obligations_are_caught() {
+        // The property the field exists for: a verdict proved over one set of
+        // obligations must not satisfy a later, different set.
+        let d = tmpdir("mlw-replay");
+        let h = write_sources(&d, "module body M is end module body.\n");
+        let proved = "module M\n  goal { true }\nend\n";
+        sidecar(&d, h, fnv1a(proved.as_bytes()), "proved");
+        fs::write(d.join("M.mlw"), proved).unwrap();
+        verify_module(&d, LiquidMode::Required).expect("the original obligations verify");
+
+        // Re-emit different obligations under the same module name.
+        fs::write(d.join("M.mlw"), "module M\n  goal { false }\nend\n").unwrap();
         let e = verify_module(&d, LiquidMode::Required).unwrap_err();
         assert!(e.contains("LiquidAttestationStale"), "{}", e);
     }
