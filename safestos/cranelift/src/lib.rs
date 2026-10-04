@@ -328,6 +328,10 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
         addr: unfer_ffi::uk_event_probability as *const u8,
     },
     KernelSymbol {
+        name: "uk_events_poll",
+        addr: unfer_ffi::uk_events_poll as *const u8,
+    },
+    KernelSymbol {
         name: "uk_observe",
         addr: unfer_ffi::uk_observe as *const u8,
     },
