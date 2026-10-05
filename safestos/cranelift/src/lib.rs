@@ -300,6 +300,14 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
         addr: unfer_ffi::uk_init as *const u8,
     },
     KernelSymbol {
+        name: "uk_memory_append",
+        addr: unfer_ffi::uk_memory_append as *const u8,
+    },
+    KernelSymbol {
+        name: "uk_memory_read",
+        addr: unfer_ffi::uk_memory_read as *const u8,
+    },
+    KernelSymbol {
         name: "uk_model_create",
         addr: unfer_ffi::uk_model_create as *const u8,
     },
