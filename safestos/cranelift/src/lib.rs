@@ -359,6 +359,10 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
         addr: unfer_ffi::uk_engram_lookup as *const u8,
     },
     KernelSymbol {
+        name: "uk_summarize",
+        addr: unfer_ffi::uk_summarize as *const u8,
+    },
+    KernelSymbol {
         name: "uk_version",
         addr: unfer_ffi::uk_version as *const u8,
     },
