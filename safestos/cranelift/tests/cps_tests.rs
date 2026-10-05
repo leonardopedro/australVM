@@ -202,19 +202,74 @@ fn trapping_divide_resolves_and_executes() {
     assert_eq!(execute(compile(&cps)), 42);
 }
 
+/// X4a: two modules exporting the same name in one thread.
+#[test]
+fn two_run_exports_in_one_thread_both_compile_and_keep_their_own_body() {
+    // This is the `JitTest` failure, reproduced deliberately.
+    //
+    // The engine is a per-thread singleton that lives as long as the thread, and
+    // it has one symbol namespace. Two compiles in the same thread that both
+    // export `run` used to collide, and the only workaround was to invent a
+    // different function name per compile -- which hid the defect instead of
+    // fixing it and made every test that needed two modules carry a rename.
+    let _lock = COMPILE_LOCK.lock().unwrap();
+    austral_cranelift_bridge::auth::set_allow_all();
+
+    let first = cps_v1(&body_return_const(11));
+    let a = austral_cranelift_bridge::compile_to_function_named(first.as_ptr(), first.len(), ptr::null(), 0);
+    assert!(!a.is_null(), "first run export must compile");
+    assert_eq!(execute(a), 11);
+
+    // Same name, different body. Before X4a this was a DuplicateDefinition.
+    let second = cps_v1(&body_return_const(22));
+    let b = austral_cranelift_bridge::compile_to_function_named(second.as_ptr(), second.len(), ptr::null(), 0);
+    assert!(!b.is_null(), "second run export must compile");
+    assert_eq!(execute(b), 22);
+
+    // The point of namespacing rather than resetting: the first definition is
+    // still reachable, and each module executes its own body rather than
+    // whichever one happened to be declared last.
+    assert_ne!(a, b);
+}
+
+/// X4a: a reset gives the name back.
+#[test]
+fn reset_jit_returns_a_claimed_export_name() {
+    let _lock = COMPILE_LOCK.lock().unwrap();
+    austral_cranelift_bridge::auth::set_allow_all();
+    let before = austral_cranelift_bridge::claimed_export_symbol_count();
+    let m = cps_v1(&body_return_const(7));
+    let p = austral_cranelift_bridge::compile_to_function_named(m.as_ptr(), m.len(), ptr::null(), 0);
+    assert!(!p.is_null());
+    assert!(
+        austral_cranelift_bridge::claimed_export_symbol_count() > before,
+        "the compile should have claimed a symbol"
+    );
+    austral_cranelift_bridge::reset_jit();
+    assert_eq!(
+        austral_cranelift_bridge::claimed_export_symbol_count(),
+        0,
+        "a reset must release every claimed name"
+    );
+}
+
 /// The packed return shape of `durable_status_module`'s `run()`:
 /// `(statusN * 65536) + snapN` with both operands small — the exact
-/// arithmetic the module does through the JIT. The JIT module is
-/// process-global, so each compile uses a distinct function name to avoid
-/// DuplicateDefinition.
+/// arithmetic the module does through the JIT.
+///
+/// Both halves are named `run`, which is what the real module uses. Before X4a
+/// this test had to call them `pack_mul` / `pack_add` and carry a comment
+/// explaining that the rename was mandatory; the collision it worked around is
+/// now namespaced, so the test exercises the shape it is actually about.
 #[test]
 fn trapping_packed_return_matches_durable_status_module() {
     let _lock = COMPILE_LOCK.lock().unwrap();
     austral_cranelift_bridge::auth::set_allow_all();
-    let mul = cps_v1_named(
-        "pack_mul",
-        &body_call_import_2args("Austral.Pervasive::trappingMultiply", 400, 65536),
-    );
+    let mul = cps_v1(&body_call_import_2args(
+        "Austral.Pervasive::trappingMultiply",
+        400,
+        65536,
+    ));
     // Direct FFI call — `compile` would re-lock the mutex (deadlock).
     let hi = execute(austral_cranelift_bridge::compile_to_function_named(
         mul.as_ptr(),
@@ -225,10 +280,7 @@ fn trapping_packed_return_matches_durable_status_module() {
     // (statusN << 16) — high 16 bits of the packed return.
     assert_eq!(hi, 400 * 65536);
 
-    let add = cps_v1_named(
-        "pack_add",
-        &body_call_import_2args("Austral.Pervasive::trappingAdd", hi, 3),
-    );
+    let add = cps_v1(&body_call_import_2args("Austral.Pervasive::trappingAdd", hi, 3));
     let ptr = austral_cranelift_bridge::compile_to_function_named(
         add.as_ptr(),
         add.len(),

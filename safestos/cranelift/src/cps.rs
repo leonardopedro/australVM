@@ -972,9 +972,18 @@ pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CpsModule
         }
         sig.returns.push(AbiParam::new(types::I64));
 
+        // X4a: declare under a unique symbol name if this thread's engine has
+        // already defined this one, but keep `name_map` keyed by the caller's
+        // name. Without this, two compiles in one thread that both export `run`
+        // fail on the engine's single symbol namespace -- which is what made
+        // `JitTest` red for reasons unrelated to the code under test.
+        //
+        // Imports are still resolved by the *original* name, so cross-module
+        // linking keeps working against the first definition.
+        let symbol = crate::claim_export_symbol(&name);
         let func_id = jit
-            .declare_function(&name, Linkage::Export, &sig)
-            .map_err(|e| format!("Declare {}: {:?}", name, e))?;
+            .declare_function(&symbol, Linkage::Export, &sig)
+            .map_err(|e| format!("Declare {}: {:?}", symbol, e))?;
 
         name_map.insert(name.clone(), func_id);
         func_headers.push((name, param_count, params, body_data, func_id, sig));

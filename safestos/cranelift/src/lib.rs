@@ -35,6 +35,73 @@ thread_local! {
     static JIT: RefCell<Option<JITModule>> = const { RefCell::new(None) };
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
     static CURRENT_MODULE: RefCell<Option<CpsModule>> = const { RefCell::new(None) };
+    /// X4a: export names this thread's engine has already defined.
+    ///
+    /// The engine is per-thread and persists for the life of the thread, so two
+    /// compiles in one thread that both export `run` collide in the engine's
+    /// single symbol namespace. That is what made `JitTest` fail for reasons that
+    /// had nothing to do with the code under test, and it is why the test helpers
+    /// had to invent distinct function names just to get a green run -- a rename
+    /// that hides the defect rather than fixing it.
+    ///
+    /// Cross-module linking resolves imports by name, so the *first* definition of
+    /// a name must keep winning or a library module's symbols stop being
+    /// reachable. Hence this is a set of names already taken, not a map to the
+    /// owning module: a colliding re-export gets a fresh symbol name and its own
+    /// `FuncId`, and imports still resolve to the original.
+    static DEFINED_EXPORTS: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// X4a: drop this thread's JIT engine, discarding every compiled module and the
+/// names they claimed.
+///
+/// This is the "reset the symbol table between tests" half of X4. It exists
+/// because the engine is a thread-local: dropping it is the only way to reclaim a
+/// symbol name, and a test that wants a pristine namespace should not have to
+/// know that internals to get one.
+///
+/// [`crate::cps::compile_cps_to_clif`] keeps working without calling this -- the
+/// namespacing there handles collisions on its own -- so this is for tests and
+/// for callers that want the memory back, not a correctness requirement.
+pub fn reset_jit() {
+    JIT.with(|c| *c.borrow_mut() = None);
+    CURRENT_MODULE.with(|m| *m.borrow_mut() = None);
+    DEFINED_EXPORTS.with(|s| s.borrow_mut().clear());
+}
+
+/// X4a: claim `name` for this thread's engine, returning the symbol name to
+/// actually declare under.
+///
+/// The common case returns `name` untouched. A repeat of an already-defined
+/// export gets a unique suffix, so the second module can define and call its own
+/// entry point instead of failing to compile. The caller keeps using the
+/// *original* name for lookup, so nothing above this needs to know.
+pub(crate) fn claim_export_symbol(name: &str) -> String {
+    DEFINED_EXPORTS.with(|set| {
+        let mut set = set.borrow_mut();
+        if set.insert(name.to_string()) {
+            return name.to_string();
+        }
+        // Deterministic suffix: no clock and no RNG, because a JIT symbol table
+        // that varied run to run would make "it compiled" untestable.
+        let mut n = 2usize;
+        loop {
+            let candidate = format!("{name}#{n}");
+            if set.insert(candidate.clone()) {
+                return candidate;
+            }
+            n += 1;
+        }
+    })
+}
+
+/// X4a: how many export names this thread's engine has claimed.
+///
+/// Exposed so a test can assert that [`reset_jit`] actually released them,
+/// rather than inferring it from a compile that happens to succeed.
+pub fn claimed_export_symbol_count() -> usize {
+    DEFINED_EXPORTS.with(|s| s.borrow().len())
 }
 
 fn set_last_error(msg: &str) {
