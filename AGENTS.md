@@ -35,6 +35,10 @@ in-process via native `uk_*` symbols registered in the JIT.
   `safestos/cranelift/target/release/libaustral_cranelift_bridge.{a,so}` — so
   **rebuild that release artifact** after touching the bridge, or the OCaml
   `austral` binary will use a stale lib (and may miss `uk_*` symbols).
+  Since A15 this is enforced, not just advised: `make all` and `make test`
+  run `check-bridge-fresh`, which refuses to link when any bridge source
+  (`src/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the `.so` and tells
+  you to run `make bridge`. Check it alone with `make check-bridge-fresh`.
 
 ## Gotchas
 
