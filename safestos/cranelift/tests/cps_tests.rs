@@ -216,13 +216,23 @@ fn two_run_exports_in_one_thread_both_compile_and_keep_their_own_body() {
     austral_cranelift_bridge::auth::set_allow_all();
 
     let first = cps_v1(&body_return_const(11));
-    let a = austral_cranelift_bridge::compile_to_function_named(first.as_ptr(), first.len(), ptr::null(), 0);
+    let a = austral_cranelift_bridge::compile_to_function_named(
+        first.as_ptr(),
+        first.len(),
+        ptr::null(),
+        0,
+    );
     assert!(!a.is_null(), "first run export must compile");
     assert_eq!(execute(a), 11);
 
     // Same name, different body. Before X4a this was a DuplicateDefinition.
     let second = cps_v1(&body_return_const(22));
-    let b = austral_cranelift_bridge::compile_to_function_named(second.as_ptr(), second.len(), ptr::null(), 0);
+    let b = austral_cranelift_bridge::compile_to_function_named(
+        second.as_ptr(),
+        second.len(),
+        ptr::null(),
+        0,
+    );
     assert!(!b.is_null(), "second run export must compile");
     assert_eq!(execute(b), 22);
 
@@ -239,7 +249,8 @@ fn reset_jit_returns_a_claimed_export_name() {
     austral_cranelift_bridge::auth::set_allow_all();
     let before = austral_cranelift_bridge::claimed_export_symbol_count();
     let m = cps_v1(&body_return_const(7));
-    let p = austral_cranelift_bridge::compile_to_function_named(m.as_ptr(), m.len(), ptr::null(), 0);
+    let p =
+        austral_cranelift_bridge::compile_to_function_named(m.as_ptr(), m.len(), ptr::null(), 0);
     assert!(!p.is_null());
     assert!(
         austral_cranelift_bridge::claimed_export_symbol_count() > before,
@@ -280,7 +291,11 @@ fn trapping_packed_return_matches_durable_status_module() {
     // (statusN << 16) — high 16 bits of the packed return.
     assert_eq!(hi, 400 * 65536);
 
-    let add = cps_v1(&body_call_import_2args("Austral.Pervasive::trappingAdd", hi, 3));
+    let add = cps_v1(&body_call_import_2args(
+        "Austral.Pervasive::trappingAdd",
+        hi,
+        3,
+    ));
     let ptr = austral_cranelift_bridge::compile_to_function_named(
         add.as_ptr(),
         add.len(),

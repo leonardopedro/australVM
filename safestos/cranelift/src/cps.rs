@@ -1047,3 +1047,79 @@ pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CpsModule
         module_name,
     })
 }
+
+#[cfg(test)]
+mod a10_live_grant_tests {
+    use super::check_call_permission;
+    use crate::auth;
+
+    /// A10: the LIVE JIT gate — the function the CPS emitter itself calls at
+    /// compile time, not `modhost authorize` (which the module e2e jobs
+    /// already prove) — must attribute a kernel call to the **module** the
+    /// manifest grants by, and deny anything that module does not grant.
+    ///
+    /// One test, run sequentially on purpose: the auth engine and the
+    /// deployment principal are process-global, so concurrent tests in this
+    /// binary would race each other's engines.
+    #[test]
+    fn live_jit_denies_uk_calls_the_module_manifest_does_not_grant() {
+        let engine = auth::ManifestAuthEngine::from_toml_str(
+            "[module]\nname = \"a10_widget\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
+        )
+        .expect("manifest parses");
+        auth::set_auth_engine(Box::new(engine));
+        auth::set_deployment_principal("a10_widget".to_string());
+
+        // Granted: the manifest names uk_version for this module.
+        assert!(
+            check_call_permission("run", "", "uk_version").is_ok(),
+            "a granted kernel call must pass"
+        );
+
+        // Denied: not granted to this module — UK-4001, and the principal in
+        // the message is the MODULE, not the calling function ("run"), which
+        // is exactly the A10 distinction the old extension point described.
+        for callee in ["uk_evolve", "uk_model_free"] {
+            let err = check_call_permission("run", "", callee).unwrap_err();
+            assert!(
+                err.contains("UK-4001"),
+                "expected UK-4001 for {callee}, got: {err}"
+            );
+            assert!(
+                err.contains("'a10_widget'") && !err.contains("'run'"),
+                "the principal must be the module, not the caller, got: {err}"
+            );
+        }
+
+        // Non-kernel calls are never gated: internal/cross-module Austral
+        // code is the module's own, not a kernel capability.
+        assert!(check_call_permission("run", "", "kernelModelCreateStr").is_ok());
+        assert!(check_call_permission("run", "", "__slot_get").is_ok());
+        assert!(check_call_permission("run", "au_alloc", "au_alloc").is_ok());
+
+        // No deployment principal (empty = unset) -> the CPS header's module
+        // name is the principal: same grants, keyed by header name.
+        auth::set_deployment_principal(String::new());
+        assert!(
+            check_call_permission("run", "a10_widget", "uk_version").is_ok(),
+            "header module name must carry the manifest's grants"
+        );
+        let err = check_call_permission("run", "a10_other", "uk_version").unwrap_err();
+        assert!(
+            err.contains("UK-4001"),
+            "a different header module must NOT inherit the grants, got: {err}"
+        );
+
+        // Neither principal present -> the caller name is the legacy fallback
+        // for binaries without module headers: grants keyed by that name work,
+        // any other name does not.
+        assert!(check_call_permission("a10_widget", "", "uk_version").is_ok());
+        let err = check_call_permission("some_legacy_fn", "", "uk_version").unwrap_err();
+        assert!(err.contains("UK-4001"), "got: {err}");
+
+        // Restore the documented default (no manifest -> DenyAll) so this
+        // test leaves the process-global state it found.
+        auth::set_auth_engine(Box::new(auth::DenyAll));
+        auth::set_deployment_principal(String::new());
+    }
+}

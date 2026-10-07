@@ -13,12 +13,12 @@ fn cps_debug(msg: &str) {
 #[cfg(feature = "arctic-auth")]
 pub mod arctic_auth;
 pub mod auth;
-pub mod liquid_attest;
 pub mod capstd_mod;
 pub mod cps;
 #[cfg(feature = "ecmascript")]
 pub mod ecma;
 pub mod federation;
+pub mod liquid_attest;
 pub mod module;
 #[cfg(feature = "cedar")]
 pub mod policy;

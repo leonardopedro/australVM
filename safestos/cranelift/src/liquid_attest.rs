@@ -197,7 +197,10 @@ pub fn verify_module(module_dir: &Path, mode: LiquidMode) -> Gate {
         Ok(a) => a,
         Err(e) => {
             return if mode == LiquidMode::Optional {
-                Ok(format!("unreadable liquid.ok ({}); optional, continuing", e))
+                Ok(format!(
+                    "unreadable liquid.ok ({}); optional, continuing",
+                    e
+                ))
             } else {
                 Err(format!("LiquidAttestationInvalid: {}", e))
             }
@@ -233,7 +236,7 @@ pub fn verify_module(module_dir: &Path, mode: LiquidMode) -> Gate {
     // to be predicted; if one hashes differently the verdict does not describe
     // these obligations.
     let mut checked_mlw = false;
-    let mut mlw_entries: Vec<_> = match std::fs::read_dir(&module_dir) {
+    let mut mlw_entries: Vec<_> = match std::fs::read_dir(module_dir) {
         Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
         Err(_) => Vec::new(),
     };
@@ -242,7 +245,9 @@ pub fn verify_module(module_dir: &Path, mode: LiquidMode) -> Gate {
         if mlw.extension().and_then(|e| e.to_str()) != Some("mlw") {
             continue;
         }
-        let Some(actual) = hash_file(&mlw) else { continue };
+        let Some(actual) = hash_file(&mlw) else {
+            continue;
+        };
         checked_mlw = true;
         if actual != att.mlw_hash {
             return Err(format!(
@@ -261,9 +266,9 @@ pub fn verify_module(module_dir: &Path, mode: LiquidMode) -> Gate {
             "liquid.ok accepted: {} {} proved {} contract(s), {} trusted",
             att.prover, att.prover_version, 0, att.trusted_contracts
         )),
-        "refused" => Err(
-            "LiquidAttestationRefused: the prover refused this module's contracts".into(),
-        ),
+        "refused" => {
+            Err("LiquidAttestationRefused: the prover refused this module's contracts".into())
+        }
         "unknown" => Err(
             "LiquidAttestationUnknown: the prover was inconclusive; an unknown verdict \
              never satisfies a required module"

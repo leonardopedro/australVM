@@ -160,7 +160,7 @@ fn uk_engram_round_trips_through_the_bridge() {
     let model = unfer_ffi::uk_model_create(spec.as_ptr(), spec.len() as i64);
     assert!(model > 0, "uk_model_create failed");
 
-    let mut key = vec![0u8; KEY_BYTES];
+    let mut key = [0u8; KEY_BYTES];
     key[0..4].copy_from_slice(b"ENGM");
     key[4..6].copy_from_slice(&1u16.to_le_bytes());
     key[32..40].copy_from_slice(&0xA5A5_A5A5_A5A5_A5A5u64.to_le_bytes());
@@ -175,15 +175,28 @@ fn uk_engram_round_trips_through_the_bridge() {
 
     assert_eq!(
         0,
-        unfer_ffi::uk_engram_store(model, key.as_ptr(), KEY_BYTES as i64, 0.25f64.to_bits() as i64)
+        unfer_ffi::uk_engram_store(
+            model,
+            key.as_ptr(),
+            KEY_BYTES as i64,
+            0.25f64.to_bits() as i64
+        )
     );
-    assert_eq!(0, unfer_ffi::uk_engram_lookup(model, key.as_ptr(), KEY_BYTES as i64));
+    assert_eq!(
+        0,
+        unfer_ffi::uk_engram_lookup(model, key.as_ptr(), KEY_BYTES as i64)
+    );
 
     // Storing again replaces rather than accumulates, so a repeated ingest
     // cannot inflate an engram's weight.
     assert_eq!(
         0,
-        unfer_ffi::uk_engram_store(model, key.as_ptr(), KEY_BYTES as i64, 0.25f64.to_bits() as i64)
+        unfer_ffi::uk_engram_store(
+            model,
+            key.as_ptr(),
+            KEY_BYTES as i64,
+            0.25f64.to_bits() as i64
+        )
     );
     let needed = unfer_ffi::uk_get_result(model, std::ptr::null_mut(), 0);
     assert!(needed > 0);

@@ -46,7 +46,9 @@ in-process via native `uk_*` symbols registered in the JIT.
   `External_Name`. `Compiler_cps.ml` keys foreign functions by **both** decl_id
   and source name so imported `uk_*` calls lower to the external symbol
   (e.g. `uk_version`) instead of a qualified Austral name the JIT can't resolve.
-- The JIT authorization principal is the **calling function** name; manifests
-  grant by **module** name. `modhost` checks the manifest decision directly;
-  threading the module name into `check_call_permission` is a documented
-  extension point (see `unfer/docs/MODULES.md` §6).
+- The JIT authorization principal is the **module** name (A10): manifest load
+  records `[module] name` as the deployment principal and
+  `check_call_permission` attributes each gated `uk_*`/`uz_*` call to it
+  (fallback: CPS header's module name, then the caller for legacy binaries).
+  `modhost` checks the manifest decision directly, and the live gate itself
+  is tested in `cps.rs::a10_live_grant_tests` (see `unfer/docs/MODULES.md` §6).
