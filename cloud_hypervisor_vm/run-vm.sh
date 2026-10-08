@@ -6,8 +6,35 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --- NixOS adaptations (2026-10-08); see full-stack-vm-launch.sh's block ----
+# Patched binaries live in the setup.sh-regenerated tree this script ships
+# in; kernel/initrd come from the booted NixOS system; all env-overridable.
+TREE="$SCRIPT_DIR"
+if [[ ! -x "$TREE/cloud-hypervisor/target/release/cloud-hypervisor" && -x "$SCRIPT_DIR/../../cloud-hypervisor-build/cloud-hypervisor/target/release/cloud-hypervisor" ]]; then
+  TREE="$SCRIPT_DIR/../../cloud-hypervisor-build"
+fi
+CH_BIN="${CLOUD_HYPERVISOR:-$TREE/cloud-hypervisor/target/release/cloud-hypervisor}"
+KERNEL_IMG="${KERNEL:-}"
+INITRD_IMG="${INITRD:-}"
+if [[ -z "$KERNEL_IMG" ]]; then
+  if [[ -e "/boot/vmlinuz-$(uname -r)" ]]; then
+    KERNEL_IMG="/boot/vmlinuz-$(uname -r)"
+    INITRD_IMG="/boot/initrd.img-$(uname -r)"
+  elif [[ -e /run/booted-system/kernel ]]; then
+    KERNEL_IMG="/run/booted-system/kernel"
+    INITRD_IMG="/run/booted-system/initrd"
+  else
+    echo "No kernel found; set KERNEL=/path/to/kernel" >&2
+    exit 1
+  fi
+fi
+[[ -x "$CH_BIN" ]] || { echo "cloud-hypervisor not at $CH_BIN — run australVM/cloud_hypervisor_vm/setup.sh (or set CLOUD_HYPERVISOR=)" >&2; exit 1; }
+[[ -S /tmp/vgpu.sock ]] || { echo "GPU backend socket /tmp/vgpu.sock missing — start it first (full-stack-vm-launch.sh does, or: crosvm device gpu --socket-path /tmp/vgpu.sock ...)" >&2; exit 1; }
+
 STRATEGY="${1:-perf}"
-if [[ "$1" == "--strategy" ]]; then
+if [[ "${1:-}" == "--strategy" ]]; then
   STRATEGY="$2"
 fi
 
@@ -35,13 +62,13 @@ if [[ "$STRATEGY" == "sec" ]]; then
   FS_ARGS="$FS_ARGS --fs tag=host_ssh,socket=/tmp/vm-ssh-virtiofs.sock"
 fi
 
-sudo cloud-hypervisor \
-  --kernel /boot/vmlinuz-$(uname -r) \
-  --initramfs /boot/initrd.img-$(uname -r) \
+sudo "$CH_BIN" \
+  --kernel "$KERNEL_IMG" \
+  --initramfs "$INITRD_IMG" \
   --cmdline "$CMDLINE" \
   --cpus boot=4 \
   --memory size=4G,shared=on,hugepages=on \
-  --disk path=./result/nixos.img \
+  --disk path="$SCRIPT_DIR/result/nixos.img" \
   $FS_ARGS \
   $NET_ARGS \
   --gpu socket=/tmp/vgpu.sock &

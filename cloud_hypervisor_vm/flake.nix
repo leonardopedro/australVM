@@ -21,5 +21,13 @@
         modules = [ vm-module ];
       };
     };
+
+    # NixOS convenience (2026-10-08): the one runtime tool neither the
+    # regenerated tree nor NixOS provides — full-stack-vm-launch.sh no longer
+    # hardcodes Debian's /usr/libexec/virtiofsd, so `nix develop` (or
+    # `nix shell nixpkgs#virtiofsd`) puts it on PATH for the launch.
+    devShells.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.mkShell {
+      packages = [ nixpkgs.legacyPackages.x86_64-linux.virtiofsd ];
+    };
   };
 }

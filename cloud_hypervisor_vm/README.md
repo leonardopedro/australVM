@@ -67,14 +67,29 @@ on NixOS with no packaging step:
   bindgen).
 - No `.deb` is built or needed: the two release binaries and the flake's
   `vm-perf`/`vm-sec` images are the deliverables.
+- The launch scripts resolve NixOS locations at run time instead of
+  hardcoding Debian ones: patched `cloud-hypervisor`/`crosvm` from the
+  regenerated tree (or `CLOUD_HYPERVISOR=`/`CROSVM=`; when run straight from
+  this recipe directory they fall back to `setup.sh`'s default output
+  `../../cloud-hypervisor-build`), kernel + initrd from
+  `/run/booted-system/{kernel,initrd}` (fallback: Debian's
+  `/boot/vmlinuz-$(uname -r)`; override `KERNEL=`/`INITRD=`), and virtiofsd
+  from PATH — **`nix develop` in this recipe provides it** (the flake's
+  devShell). `DISK=` points `--disk` at an image built elsewhere (e.g.
+  `unfer/unfer_nixvm`'s `nix build .#vm-perf-with-unfer`). Every missing
+  dependency is a named error *before* any `sudo` runs.
 
 ## Relationship to `../../unfer/unfer_nixvm/`
 
 `unfer_nixvm` (in the `unfer` repo, since its `packages.*` output is about the
-unfer kernel) composes with whichever `cloud-hypervisor-build`-equivalent
-directory's `configuration.nix` is on disk, via a `path` flake input — it doesn't
-care whether that directory came from running this repo's `setup.sh` or from an
-existing hand-built checkout. This split mirrors the earlier P11.20 placement
+unfer kernel) composes with **this directory directly** — since 2026-10-08 its
+`path` flake input is `australVM/cloud_hypervisor_vm` itself (the tracked
+recipe), so the composition evaluates from committed files only and does not
+need a regenerated `cloud-hypervisor-build/` tree at all; the tree is
+launch-only, carrying the two spectrum0-patched binaries. (It originally
+pointed at whichever `cloud-hypervisor-build`-equivalent directory was on
+ disk — the two `configuration.nix` copies are byte-identical, so the
+composition never cared which one it got.) This split mirrors the earlier P11.20 placement
 decision: `arctic_authority` lives here (in `australVM`) because its only consumer
 is `australVM/safestos/cranelift`; this VM-build recipe lives here for the
 analogous reason — it's runtime/module infrastructure, not kernel code — while the

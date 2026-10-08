@@ -10,6 +10,53 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STRATEGY="${STRATEGY:-perf}"
 
+# --- NixOS adaptations (2026-10-08) -----------------------------------------
+# The original targeted Debian; on NixOS none of `/usr/libexec/virtiofsd`,
+# `/boot/vmlinuz-$(uname -r)`, nor `cloud-hypervisor` on PATH exist. Every
+# lookup below is env-overridable (CLOUD_HYPERVISOR, CROSVM, VIRTIOFSD,
+# KERNEL, INITRD); the defaults are the NixOS-native locations.
+#
+# cloud-hypervisor MUST be the spectrum0-patched build from the tree this
+# script ships in (setup.sh's output) — upstream cloud-hypervisor has no
+# `--gpu` device, which is the entire point of the SpectrumOS patch.
+# Binary root: this script's own dir (when it lives in the regenerated tree),
+# else setup.sh's default output ../.. /cloud-hypervisor-build (when it is run
+# straight from this recipe directory).
+TREE="$SCRIPT_DIR"
+if [[ ! -x "$TREE/cloud-hypervisor/target/release/cloud-hypervisor" && -x "$SCRIPT_DIR/../../cloud-hypervisor-build/cloud-hypervisor/target/release/cloud-hypervisor" ]]; then
+  TREE="$SCRIPT_DIR/../../cloud-hypervisor-build"
+fi
+CH_BIN="${CLOUD_HYPERVISOR:-$TREE/cloud-hypervisor/target/release/cloud-hypervisor}"
+# crosvm: the vhost-user-gpu backend, same regenerated tree.
+CROSVM_BIN="${CROSVM:-$TREE/crosvm/target/release/crosvm}"
+# virtiofsd: Debian ships it at /usr/libexec; on NixOS it comes from PATH
+# (`nix shell nixpkgs#virtiofsd`, or `nix develop` in this recipe — the
+# flake's devShell provides it).
+VIRTIOFSD_BIN="${VIRTIOFSD:-/usr/libexec/virtiofsd}"
+if [[ ! -x "$VIRTIOFSD_BIN" ]]; then
+  VIRTIOFSD_BIN="$(command -v virtiofsd || true)"
+fi
+# Kernel/initrd: Debian /boot/vmlinuz-$(uname -r) first (original host), else
+# NixOS /run/booted-system/{kernel,initrd} — symlinks into the booted
+# system's store paths, which cloud-hypervisor reads through fine.
+KERNEL_IMG="${KERNEL:-}"
+INITRD_IMG="${INITRD:-}"
+if [[ -z "$KERNEL_IMG" ]]; then
+  if [[ -e "/boot/vmlinuz-$(uname -r)" ]]; then
+    KERNEL_IMG="/boot/vmlinuz-$(uname -r)"
+    INITRD_IMG="/boot/initrd.img-$(uname -r)"
+  elif [[ -e /run/booted-system/kernel ]]; then
+    KERNEL_IMG="/run/booted-system/kernel"
+    INITRD_IMG="/run/booted-system/initrd"
+  else
+    echo "No kernel found (tried /boot/vmlinuz-$(uname -r), /run/booted-system/kernel); set KERNEL=/path/to/kernel" >&2
+    exit 1
+  fi
+fi
+[[ -x "$CH_BIN" ]] || { echo "cloud-hypervisor not at $CH_BIN — run australVM/cloud_hypervisor_vm/setup.sh to build the spectrum0-patched binary (or set CLOUD_HYPERVISOR=)" >&2; exit 1; }
+[[ -x "$CROSVM_BIN" ]] || { echo "crosvm not at $CROSVM_BIN — run australVM/cloud_hypervisor_vm/setup.sh (or set CROSVM=)" >&2; exit 1; }
+[[ -n "$VIRTIOFSD_BIN" && -x "$VIRTIOFSD_BIN" ]] || { echo "virtiofsd not found — 'nix shell nixpkgs#virtiofsd' or 'nix develop' in this recipe (or set VIRTIOFSD=)" >&2; exit 1; }
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --strategy)
@@ -36,7 +83,7 @@ sudo rm -f /tmp/vm-ssh-virtiofs.sock /tmp/vm-ssh-virtiofs.sock.pid
 
 # 1. Start GPU backend
 echo "Starting GPU backend..."
-"$SCRIPT_DIR/crosvm/target/release/crosvm" device gpu \
+"$CROSVM_BIN" device gpu \
   --socket-path /tmp/vgpu.sock \
   --wayland-sock /run/user/$(id -u)/wayland-0 &
 GPU_PID=$!
@@ -52,7 +99,7 @@ GPU_PID=$!
 # depends on — when the guest's virtiofs mount is backed by the host's
 # actual /nix/store, not a project-local decoy.
 echo "Starting Nix Store exporter..."
-sudo /usr/libexec/virtiofsd \
+sudo "$VIRTIOFSD_BIN" \
   --socket-path /tmp/vm-nix-virtiofs.sock \
   --shared-dir /nix \
   --sandbox namespace 2>/dev/null &
@@ -64,7 +111,7 @@ if [[ "$STRATEGY" == "sec" ]]; then
   SSH_AUTH_SOCK="${SSH_AUTH_SOCK:-/run/user/1000/gnupg/S.gpg-agent.ssh}"
   SSH_SOCK_DIR="$(dirname "$SSH_AUTH_SOCK")"
   echo "Forwarding SSH agent socket from: $SSH_AUTH_SOCK"
-  sudo /usr/libexec/virtiofsd \
+  sudo "$VIRTIOFSD_BIN" \
     --socket-path /tmp/vm-ssh-virtiofs.sock \
     --shared-dir "$SSH_SOCK_DIR" \
     --sandbox namespace 2>/dev/null &
@@ -95,19 +142,22 @@ NET_ARGS="--net tap=${TAP_IF},ip=${GATEWAY},mask=255.255.255.0"
 CMDLINE="console=hvc0 root=/dev/vda rw systemd.unit=multi-user.target net.ifnames=0"
 
 FS_ARGS="--fs tag=host_nix,socket=/tmp/vm-nix-virtiofs.sock"
+# DISK override: point at an image built elsewhere (e.g. unfer_nixvm's
+# `nix build .#vm-perf-with-unfer`) instead of this directory's ./result.
+DISK_IMG="${DISK:-$SCRIPT_DIR/result/nixos.img}"
 if [[ "$STRATEGY" == "sec" ]]; then
   FS_ARGS="$FS_ARGS --fs tag=host_ssh,socket=/tmp/vm-ssh-virtiofs.sock"
 fi
 
 # 5. Launch cloud-hypervisor in background
 echo "Launching NixOS MicroVM via Cloud Hypervisor (strategy=$STRATEGY)..."
-sudo cloud-hypervisor \
-  --kernel /boot/vmlinuz-$(uname -r) \
-  --initramfs /boot/initrd.img-$(uname -r) \
+sudo "$CH_BIN" \
+  --kernel "$KERNEL_IMG" \
+  --initramfs "$INITRD_IMG" \
   --cmdline "$CMDLINE" \
   --cpus boot=4 \
   --memory size=4G,shared=on,hugepages=on \
-  --disk path="$SCRIPT_DIR/result/nixos.img" \
+  --disk path="$DISK_IMG" \
   $FS_ARGS \
   $NET_ARGS \
   --gpu socket=/tmp/vgpu.sock &
