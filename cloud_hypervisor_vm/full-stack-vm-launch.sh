@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # full-stack-vm-launch.sh
 # Usage:
 #   ./full-stack-vm-launch.sh                    (defaults to perf)

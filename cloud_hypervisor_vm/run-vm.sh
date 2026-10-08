@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # run-vm.sh
 # Usage:
 #   ./run-vm.sh               (defaults to perf — boots VM, then ssh -A into it)

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # setup.sh — regenerate a cloud-hypervisor-build-equivalent working directory from
 # upstream sources + the SpectrumOS GPU-sharing patches, so this small recipe (a few
 # hand-authored Nix/shell files, all committed to this repo) is enough to reproduce
@@ -17,6 +17,18 @@
 #
 # Usage:
 #   ./setup.sh [target-dir]     (defaults to ./cloud-hypervisor-build, sibling to this repo)
+#
+# NixOS notes (this recipe was re-adapted from a Debian-package build 2026-10-08;
+# no .deb is produced or needed here — the binaries and the Nix VM images are):
+#   * There is no /bin/bash: every script here uses #!/usr/bin/env bash.
+#   * crosvm's seccomp step needs python3 on PATH, minijail's Makefile
+#     hardcodes /bin/echo (patched below after the clone — idempotent), and
+#     wayland-scanner is its own nixpkgs package (not in `wayland`).
+#   * A package set + env that works for the whole script:
+#       nix-shell -p pkg-config systemd protobuf llvmPackages.libclang openssl \
+#         git curl file python3 wayland-scanner wayland wayland-protocols \
+#         libdrm mesa libxkbcommon libcap \
+#         --run 'export LIBCLANG_PATH="$(nix-build "<nixpkgs>" -A llvmPackages.libclang.lib --no-out-link)/lib"; ./setup.sh'
 
 set -euo pipefail
 
@@ -68,6 +80,14 @@ echo "=== Cloning crosvm @ $CROSVM_COMMIT (GPU device backend, vhost-user-gpu) =
 [ -d crosvm ] || git clone --recurse-submodules "$CROSVM_REPO" crosvm
 git -C crosvm checkout "$CROSVM_COMMIT"
 
+echo "=== NixOS adaptation: drop /bin/echo hardcodes in minijail's Makefile ==="
+# Debian build hosts had /bin/echo; NixOS does not, so the GEN rules fail with
+# "sh: /bin/echo: No such file or directory" (make Error 127). Plain `echo`
+# (shell builtin) is equivalent here. Idempotent, and survives `git -C crosvm
+# checkout` above since submodules aren't reset by it.
+sed -i 's|/bin/echo|echo|g' \
+   crosvm/third_party/minijail/Makefile crosvm/third_party/minijail/common.mk
+
 echo "=== Building cloud-hypervisor (release) ==="
 ( cd cloud-hypervisor && cargo build --release )
 
@@ -91,13 +111,8 @@ Next steps (NOT run by this script — real host-level actions, do these by hand
   nix build .#vm-perf   # or .#vm-sec — builds the NixOS guest image
   sudo ./full-stack-vm-launch.sh --strategy perf   # actually boots the VM
 
-If you also want a .deb (as cloud-hypervisor-spectrum_50.0-spectrum0_amd64.deb was
-built): package cloud-hypervisor/target/release/cloud-hypervisor under
-usr/bin/cloud-hypervisor and crosvm/target/release/crosvm under usr/bin/crosvm in a
-dpkg-deb staging tree with the control file:
-  Package: cloud-hypervisor-spectrum
-  Version: 50.0-spectrum0
-  Architecture: amd64
-  Depends: libclang1-17
-  Description: Cloud Hypervisor with virtio-gpu support from Spectrum OS
+No .deb is built on this machine: the original Debian host produced
+cloud-hypervisor-spectrum_50.0-spectrum0_amd64.deb (cloud-hypervisor + crosvm
+under /usr/bin), but on NixOS the two release binaries above and the flake's
+vm-perf/vm-sec images are the deliverables — install via Nix, not dpkg.
 EOF

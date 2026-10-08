@@ -31,7 +31,10 @@ instead):
   complete other open-source projects with their own licensing/versioning, not
   something to fold into this repo's history).
 - The built `cloud-hypervisor-spectrum_50.0-spectrum0_amd64.deb` (19MB binary) and
-  the `deb_build/` dpkg staging tree (101MB) — build artifacts, not source.
+  the `deb_build/` dpkg staging tree (101MB) — build artifacts, not source. Not
+  reproduced on NixOS: since the 2026-10-08 re-adaptation there is no `.deb`
+  step at all (the release binaries + the flake's VM images are the artifacts;
+  see `setup.sh`'s end-of-run message).
 - `result` (a Nix build-output symlink) and `listjson` (a generated file).
 
 ## Regenerating the full build tree
@@ -48,6 +51,22 @@ verified against (see `setup.sh`'s pinned-commit header), and applies the two
 patches with `git am`. It does **not** build the Nix VM image or launch anything
 — see the script's own end-of-run message for those next (deliberately manual)
 steps.
+
+### NixOS notes (re-adaptation 2026-10-08)
+
+The recipe originally targeted a Debian host (it produced a `.deb`); it now runs
+on NixOS with no packaging step:
+
+- Scripts use `#!/usr/bin/env bash` (NixOS has no `/bin/bash`).
+- `setup.sh` patches minijail's hardcoded `/bin/echo` (absent on NixOS) right
+  after the crosvm clone — idempotent.
+- Build deps for a single `nix-shell` invocation are listed at the top of
+  `setup.sh` (python3 for the seccomp compiler, `wayland-scanner` for crosvm's
+  protocol codegen, wayland/mesa/libdrm/libcap/libxkbcommon for its display
+  stack, `LIBCLANG_PATH` via `nix-build -A llvmPackages.libclang.lib` for
+  bindgen).
+- No `.deb` is built or needed: the two release binaries and the flake's
+  `vm-perf`/`vm-sec` images are the deliverables.
 
 ## Relationship to `../../unfer/unfer_nixvm/`
 
