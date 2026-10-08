@@ -5,4 +5,5 @@
 # cargo invocation in this crate, so the JIT bridge builds with exactly this
 # compiler regardless of what the runner's default stable is. Bump deliberately.
 [toolchain]
-channel = "1.97.1"
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

@@ -2,9 +2,10 @@
 # safestos/cranelift bridge).
 #
 # dynamic-arctic/rust-toolchain.toml and its README already document a single
-# 1.97.1 toolchain across dynamic-arctic/unfer/australVM/velysterm, but this
+# 1.99.0 toolchain across dynamic-arctic/unfer/australVM/velysterm, but this
 # repo had no pin file, so rustup picked whatever was active. Both Cargo
 # workspaces below are depth-1, so rustup resolves this file for either.
 # Bump deliberately, in lockstep with the sibling repos.
 [toolchain]
-channel = "1.97.1"
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
