@@ -59,7 +59,10 @@ pub struct ArcticAuthEngine {
 
 impl ArcticAuthEngine {
     pub fn new(group_pk: PubKey) -> Self {
-        Self { group_pk, certs: HashMap::new() }
+        Self {
+            group_pk,
+            certs: HashMap::new(),
+        }
     }
 
     /// Verify `sig` against this engine's group public key for the canonical JSON
@@ -100,7 +103,10 @@ impl ArcticAuthEngine {
         let Some(cert) = self.certs.get(principal) else {
             return AuthzResult::Deny;
         };
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         if now >= cert.expires_at {
             return AuthzResult::Deny;
         }
@@ -128,17 +134,32 @@ mod tests {
         let coalition: Vec<u32> = (1..=n).collect();
         let cert_bytes = serde_json::to_vec(cert).unwrap();
 
-        let r1_outputs: Vec<_> = seckeys.iter().map(|k| sign1(k, &coalition, &cert_bytes)).collect();
+        let r1_outputs: Vec<_> = seckeys
+            .iter()
+            .map(|k| sign1(k, &coalition, &cert_bytes))
+            .collect();
         let sigshares: Vec<_> = seckeys
             .iter()
             .map(|k| sign2(&group_pk, k, &coalition, &cert_bytes, &r1_outputs).unwrap())
             .collect();
-        let sig = combine(&group_pk, t, &coalition, &cert_bytes, &r1_outputs, &sigshares).unwrap();
+        let sig = combine(
+            &group_pk,
+            t,
+            &coalition,
+            &cert_bytes,
+            &r1_outputs,
+            &sigshares,
+        )
+        .unwrap();
         (group_pk, sig)
     }
 
     fn far_future() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600
     }
 
     #[test]
@@ -151,9 +172,14 @@ mod tests {
         };
         let (group_pk, sig) = sign_certificate(&cert);
         let mut engine = ArcticAuthEngine::new(group_pk);
-        engine.register_certificate(cert, &sig).expect("valid signature registers");
+        engine
+            .register_certificate(cert, &sig)
+            .expect("valid signature registers");
 
-        assert_eq!(engine.check("z6MkHotKey", "Call", "uk_observe"), AuthzResult::Allow);
+        assert_eq!(
+            engine.check("z6MkHotKey", "Call", "uk_observe"),
+            AuthzResult::Allow
+        );
     }
 
     #[test]
@@ -168,7 +194,10 @@ mod tests {
         let mut engine = ArcticAuthEngine::new(group_pk);
         engine.register_certificate(cert, &sig).unwrap();
 
-        assert_eq!(engine.check("z6MkHotKey", "Call", "uk_set_hamiltonian"), AuthzResult::Deny);
+        assert_eq!(
+            engine.check("z6MkHotKey", "Call", "uk_set_hamiltonian"),
+            AuthzResult::Deny
+        );
     }
 
     #[test]
@@ -183,7 +212,10 @@ mod tests {
         let mut engine = ArcticAuthEngine::new(group_pk);
         engine.register_certificate(cert, &sig).unwrap();
 
-        assert_eq!(engine.check("z6MkHotKey", "Call", "uk_bayesian_update"), AuthzResult::Allow);
+        assert_eq!(
+            engine.check("z6MkHotKey", "Call", "uk_bayesian_update"),
+            AuthzResult::Allow
+        );
     }
 
     #[test]
@@ -198,7 +230,10 @@ mod tests {
         let mut engine = ArcticAuthEngine::new(group_pk);
         engine.register_certificate(cert, &sig).unwrap();
 
-        assert_eq!(engine.check("z6MkHotKey", "Call", "uk_bayesian_update"), AuthzResult::Deny);
+        assert_eq!(
+            engine.check("z6MkHotKey", "Call", "uk_bayesian_update"),
+            AuthzResult::Deny
+        );
     }
 
     #[test]
@@ -233,7 +268,10 @@ mod tests {
         let mut engine = ArcticAuthEngine::new(group_pk);
         engine.register_certificate(cert, &sig).unwrap();
 
-        assert_eq!(engine.check("someone_else", "Call", "uk_observe"), AuthzResult::Deny);
+        assert_eq!(
+            engine.check("someone_else", "Call", "uk_observe"),
+            AuthzResult::Deny
+        );
     }
 
     #[test]
@@ -248,7 +286,10 @@ mod tests {
         let mut engine = ArcticAuthEngine::new(group_pk);
         engine.register_certificate(cert, &sig).unwrap();
 
-        assert_eq!(engine.check("z6MkHotKey", "Write", "uk_observe"), AuthzResult::Deny);
+        assert_eq!(
+            engine.check("z6MkHotKey", "Write", "uk_observe"),
+            AuthzResult::Deny
+        );
     }
 
     #[test]
@@ -262,10 +303,16 @@ mod tests {
         let (group_pk, sig) = sign_certificate(&cert);
         let mut engine = ArcticAuthEngine::new(group_pk);
         engine.register_certificate(cert, &sig).unwrap();
-        assert_eq!(engine.check("z6MkHotKey", "Call", "uk_observe"), AuthzResult::Allow);
+        assert_eq!(
+            engine.check("z6MkHotKey", "Call", "uk_observe"),
+            AuthzResult::Allow
+        );
 
         engine.revoke("z6MkHotKey");
-        assert_eq!(engine.check("z6MkHotKey", "Call", "uk_observe"), AuthzResult::Deny);
+        assert_eq!(
+            engine.check("z6MkHotKey", "Call", "uk_observe"),
+            AuthzResult::Deny
+        );
     }
 
     #[test]
