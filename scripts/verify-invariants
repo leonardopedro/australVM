@@ -28,6 +28,20 @@ gap() {
     GAPS=$((GAPS + 1))
 }
 
+# A gate whose tool is absent must say so, not report a failure: otherwise a
+# genuine census failure is indistinguishable from "no interpreter here", and
+# the gate is red on every machine that lacks python3 (it was). This mirrors
+# `unfer/scripts/verify-invariants`'s check_py.
+check_py() {
+    local name="$1"
+    shift
+    if ! command -v python3 >/dev/null 2>&1; then
+        gap "$name (tooling absent: python3 not on PATH)"
+        return 0
+    fi
+    check "$name" "$@"
+}
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- H1.12a UNFER_SYMBOLS census is the single uk_* registration point ---
@@ -43,7 +57,7 @@ check "S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt" \
 # H2: the unfer census is generated from the one registry; run its check mode
 # (sibling repo) so this gate also fails on drift there.
 if [ -f "$repo_root/../unfer/scripts/gen_symbol_artifacts" ]; then
-    check "H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)" \
+    check_py "H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)" \
         python3 "$repo_root/../unfer/scripts/gen_symbol_artifacts" check
 else
     gap "H2: sibling unfer repo not present at ../unfer — skipping generator check"
