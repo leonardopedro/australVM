@@ -7,8 +7,11 @@
 The `status:` line above is a claim with a command behind it, not decoration.
 `scripts/check-status` (workspace root) re-reads it and fails on drift.
 
+Everything below runs through the flake devshell — `nix develop -c` supplies
+dune/ocaml/`python3`, which a bare NixOS shell does not have:
+
 ```sh
-# from a nix dev shell
+nix develop -c bash -c '
 export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"   # Cranelift bridge .so
 export UNFER_LOGOS_BIN=/path/to/unfer/target/debug/logos    # deltanet UNF gate
 
@@ -16,6 +19,7 @@ dune build @install --profile release
 dune runtest --force          # 110 tests, 14 suites, all OK
 ./run-examples.sh
 python3 test-programs/runner.py   # "All tests passed"
+'
 ```
 
 Both environment variables are load-bearing and neither is discoverable from the
@@ -26,8 +30,16 @@ second, the deltanet gate has no reference reducer to compare against. An empty
 
 What "verified" does **not** mean: the unikernel/Mirage packaging under
 `unikernel/` needs the optional Mirage toolchain and is not covered by the
-counts above, and `AGENTS.md` §S36b records a known JIT-symbol collision on the
-Rust path that is separate from this.
+counts above.
+
+Every test compiles into the *same* process-global JIT module, so each function
+needs a distinct name — `test/JitTest.ml` threads a `fname` through
+`compile_named` (`run_0`, `run_add`, `run_fact`, `run_match`, …) for exactly that
+reason. Reusing a name with a different signature fails the whole compile
+(`DuplicateDefinition` / `IncompatibleSignature`). An earlier note here pointed at
+an `AGENTS.md` §S36b that no longer existed; the live statement of the rule is
+the comment at `test/JitTest.ml:11`. See also `../unfer/docs/CHECKLIST_EVIDENCE.md`
+(S36b) and `../unfer/docs/CHECKLIST_DETAIL_ARCHIVE.md`.
 
 # Austral Policy-Driven VM (SafestOS Extension)
 

@@ -230,7 +230,7 @@ Let $H$ be a finite set and $r\geq 1$ be an integer. Let $\mathsf{IG}$ be a rand
 
 ######
 
-![img-0.jpeg](img-0.jpeg)
+img-0.jpeg
 Fig. 1: The general forking algorithm  $\mathsf{Fork}^{\mathcal{C}}(X)$  and the modified general forking algorithm  $\mathsf{Fork}_m^{\mathcal{C}}(X)$ , defined with respect to an algorithm  $\mathcal{C}$  and instance  $X$ . The difference between the general forking algorithm and modified variant is shown in a box, for emphasis. In summary, the modified general forking algorithm aborts if any of the  $(h_1,\ldots ,h_r,h_j',\ldots ,h_r')$  collide.
 
 Let  $\mathsf{Fork}^{\mathcal{C}}(X)$  be the general forking algorithm defined in Figure 1 and let
@@ -373,7 +373,7 @@ Security. Similarly to verifiable random functions *[19, 24, 43, 44]*, we say th
 
 Intuitively, a VPSS is unique if it produces exactly one commitment to a (pseudorandom) value for each input $w$, regardless of the choice of coalition. More specifically, picking different coalitions should always result in the same commitment $D$, when the input $w$ remains the same. We show the VPSS uniqueness experiment in Figure 3.
 
-![img-1.jpeg](img-1.jpeg)
+img-1.jpeg
 Fig. 3: Uniqueness game for a VPSS.
 
 In the uniqueness experiment, the adversary is allowed to query honest participants for shares and commitments on inputs of its choosing. The adversary then outputs the evaluation input  $w$ , two coalitions  $C, C'$ , and two sets of commitments  $(D_i)_{i \in C \cap \text{corrupt}}$ ,  $(D_i')_{i \in C' \cap \text{corrupt}}$ .
@@ -390,7 +390,7 @@ $$
 
 A VPSS VPSS is unique if for all PPT adversaries  $\mathcal{A}$ ,  $\mathrm{Adv}_{\mathrm{VPSS},\mathcal{A}}^{\mathrm{unq}}$  is a negligible function of  $\lambda$ , for  $n,t,\mu \in \mathbb{N}$ ,  $t \leq \mu \leq n$ .
 
-![img-2.jpeg](img-2.jpeg)
+img-2.jpeg
 Fig. 4: Verifiability game for a VPSS.
 
 Verifiability. Intuitively, a VPSS is verifiable if given a set of commitments to shares from a coalition of participants, the verify algorithm will detect if some subset of players deviated from the protocol. We show the VPSS verifiability experiment in Figure 4.
@@ -405,7 +405,7 @@ $\mathsf{Adv}_{\mathsf{VPSS},\mathcal{A}}^{\mathsf{verf}}(\lambda ,n,t,\mu) = \l
 
 A VPSS VPSS is verifiable if for all PPT adversaries  $\mathcal{A}$ ,  $\mathsf{Adv}_{\mathsf{VPSS},\mathcal{A}}^{\mathsf{verf}}$  is a negligible function of  $\lambda$ , for  $n, t, \mu \in \mathbb{N}$ ,  $t \leq \mu \leq n$ .
 
-![img-3.jpeg](img-3.jpeg)
+img-3.jpeg
 Fig. 5: Pseudorandomness game for a VPSS.
 
 Pseudorandom. Intuitively, a VPSS is pseudorandom if the adversary has negligible advantage distinguishing between a real VPSS output from one that is randomly sampled. We show the VPSS pseudorandomness experiment in Figure 5.
@@ -666,10 +666,10 @@ We give the corresponding proof for Theorem 1 in the full version of this work *
 In this section, we analyze the performance of Arctic. In terms of the number of rounds of communication, Arctic matches the state of the art, with two, and
 
 Fig. 7: Experimental results for Arctic
-![img-4.jpeg](img-4.jpeg)
+img-4.jpeg
 (a) Single-core wall clock time for various parameter combinations for Arctic. The times shown are the sum of the computation times for  $\mathrm{Sign}_1$ ,  $\mathrm{Sign}_2$ , and Combine. The computation time for MuSig-DN is shown for comparison.
 
-![img-5.jpeg](img-5.jpeg)
+img-5.jpeg
 (b) Scaling experiment, showing the wall clock time for the largest configuration  $(n, |C|, t) = (25, 25, 11)$  shown in Figure 7a as we increase the number of CPU cores.
 
 it sends significantly less bandwidth per signature, at 65 bytes per participant. Therefore, we focus on the computational complexity.

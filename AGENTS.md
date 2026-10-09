@@ -40,6 +40,26 @@ in-process via native `uk_*` symbols registered in the JIT.
   (`src/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the `.so` and tells
   you to run `make bridge`. Check it alone with `make check-bridge-fresh`.
 
+## Scripts & gates
+
+Everything under `scripts/`; `python3` is not on `PATH` in a bare NixOS
+shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
+
+- `scripts/verify-invariants` — the repo's invariant gate (symbol census vs
+  `SYMBOL_REGISTRY`, cross-repo sync, …). Runs in CI
+  (`.github/workflows/build-and-test.yml`); a missing interpreter is reported
+  as an explained gap, never as a false failure.
+- `scripts/check-links` — relative markdown links resolve
+  (CI: `.github/workflows/linkcheck.yml`).
+- Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
+  `make bridge`, all guarded by `check-bridge-fresh`), `run-examples.sh`,
+  `test-programs/runner.py`, `demo_module/run_demo.sh`.
+
+```bash
+nix-shell -p python3 --run "bash scripts/verify-invariants"
+nix-shell -p python3 --run "python3 scripts/check-links"
+```
+
 ## Gotchas
 
 - Cross-module foreign calls resolve to the *interface* decl_id, not the body's
