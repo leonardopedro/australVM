@@ -23,7 +23,9 @@ toml = "0.8"
 unfer_ffi = { path = "../../../unfer/unfer_ffi", optional = true }
 arctic_authority = { path = "../../arctic_authority", optional = true }
 arctic = { path = "../../../dynamic-arctic", optional = true }
-serde_json = { version = "1", optional = true }
+# Not optional: `modhost --json` emits NDJSON events, and the crate is
+# already built against serde_json via unfer_protocol, so this costs nothing.
+serde_json = "1"
 hex = { version = "0.4", optional = true }
 libc = "0.2"
 frunk = { version = "0.4", optional = true }
@@ -46,13 +48,13 @@ default = ["cedar", "unfer-kernel"]
 cedar = ["dep:cedar-policy"]
 unfer-kernel = ["dep:unfer_ffi"]
 zenodo-store = ["dep:unfer_ffi", "unfer_ffi/zenodo"]
-arctic-auth = ["dep:arctic_authority", "dep:arctic", "dep:serde_json"]
+arctic-auth = ["dep:arctic_authority", "dep:arctic"]
 tidepool = ["dep:frunk"]
 capstd = ["dep:cap-std"]
 federation = ["dep:unfer_consensus", "dep:unfer_identity", "dep:unfer_data"]
 # ECMAScript module backend (S1): workerd sidecar supervisor + kernel capability loopback.
 # The workerd binary itself is a sidecar process located via $UNFER_WORKERD (see ecma.rs).
-ecmascript = ["unfer-kernel", "dep:serde_json", "dep:hex"]
+ecmascript = ["unfer-kernel", "dep:hex"]
 # S3: OS sandbox layer — dedicated launcher wrapping the workerd sidecar in user/network/pid
 # namespaces + no_new_privs + seccomp-bpf + Landlock (browser-equivalent, no full VM).
 sandbox = ["ecmascript"]

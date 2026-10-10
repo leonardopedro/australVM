@@ -1,8 +1,8 @@
 //! `modhost` — module host for the unfer kernel module system.
 //!
 //! Subcommands:
-//!   authorize   <manifest.toml> <module> <uk_symbol>   — check authorization
-//!   host        <module-dir> --call <ep> [--args ...] [--args-json <json>] [--repeat N] [--swap <dir>]
+//!   authorize   <manifest.toml> <module> <uk_symbol> [--json]  — check authorization
+//!   host        <module-dir> --call <ep> [--args ...] [--args-json <json>] [--repeat N] [--swap <dir>] [--json]
 //!   host-legacy <austral-path> <module-src>... -- <entrypoint>...
 //!
 //! The `host` subcommand loads a pre-compiled module directory (module.cps +
@@ -10,6 +10,18 @@
 //! without recompiling. Supports hot-swap via --swap.
 //!
 //! Exit codes: 0 = success, 1 = denied/error, 2 = usage error.
+//!
+//! CLI contracts (adapted from celld):
+//!   * `--help` anywhere (before host-legacy's `--`) prints usage on stdout and
+//!     exits 0; an unknown option or a malformed/missing option value is a
+//!     usage error on stderr + exit 2 — never a silent default. In
+//!     particular `--args` used to *drop* non-integer tokens, so the module
+//!     ran with fewer arguments than the caller asked for.
+//!   * `--json` (authorize, host) prints one structured JSON object per line
+//!     on stdout: a `decision`, `loaded`, `attestation`, `swapped`, `call`,
+//!     or `error` event. Human diagnostics stay on stderr in both modes, so
+//!     stdout is machine-clean under `--json` and byte-identical to the
+//!     historical transcript without it.
 
 use austral_cranelift_bridge::auth::{self, ManifestAuthEngine};
 use austral_cranelift_bridge::liquid_attest;
@@ -18,18 +30,60 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, ExitCode, Stdio};
 
+const USAGE_AUTHORIZE: &str =
+    "usage: modhost authorize <manifest.toml> <module> <uk_symbol> [--json]";
+const USAGE_HOST: &str = "usage: modhost host <module-dir> --call <ep> [--args ...] \
+                           [--args-json <json>] [--repeat N] [--swap <dir>] [--json]";
+const USAGE_LEGACY: &str =
+    "usage: modhost host-legacy <austral-path> <module-src>... -- <entrypoint>...";
+
+/// A usage error: message + the relevant usage line on stderr, exit 2.
+fn usage_error(msg: &str, usage: &str) -> ExitCode {
+    eprintln!("modhost: {msg}");
+    eprintln!("{usage}");
+    ExitCode::from(2)
+}
+
+/// One structured event on stdout, only under `--json`.
+fn emit(json: bool, event: serde_json::Value) {
+    if json {
+        println!("{event}");
+    }
+}
+
+/// The value for `flag` sitting at `args[*i]`. A missing value, or one that
+/// looks like another option, is a usage error instead of a silent fallback
+/// to the default (`--call` at end-of-args used to keep the default
+/// entrypoint; `--repeat` a malformed number used to keep 1).
+fn opt_value(args: &[String], i: &mut usize, flag: &str, usage: &str) -> Result<String, ExitCode> {
+    *i += 1;
+    match args.get(*i) {
+        None => Err(usage_error(&format!("{flag} requires a value"), usage)),
+        Some(v) if v.starts_with("--") => Err(usage_error(
+            &format!("{flag} requires a value, got {v:?}"),
+            usage,
+        )),
+        Some(v) => Ok(v.clone()),
+    }
+}
+
 /// Host runtime primitives for JIT-compiled Austral modules.
 ///
 /// The Rust library (`austral_cranelift_bridge`) now provides `au_*`
 /// itself (self-contained `.so`, see `src/lib.rs`), so modhost inherits
 /// them from the rlib it links; the OCaml FFI provides identical copies
 /// in `lib/rust_bridge.c` (ELF interposition: the executable's copies win).
-fn cmd_authorize(args: &[String]) -> ExitCode {
-    let (manifest_path, principal, symbol) = (&args[2], &args[3], &args[4]);
-
+fn cmd_authorize(manifest_path: &str, principal: &str, symbol: &str, json: bool) -> ExitCode {
     let toml = match std::fs::read_to_string(manifest_path) {
         Ok(s) => s,
         Err(e) => {
+            emit(
+                json,
+                serde_json::json!({
+                    "event": "error", "kind": "manifest_unreadable",
+                    "detail": format!("cannot read manifest {manifest_path}: {e}"),
+                }),
+            );
             eprintln!("modhost: cannot read manifest {manifest_path}: {e}");
             return ExitCode::from(2);
         }
@@ -37,6 +91,13 @@ fn cmd_authorize(args: &[String]) -> ExitCode {
     let engine = match ManifestAuthEngine::from_toml_str(&toml) {
         Ok(e) => e,
         Err(e) => {
+            emit(
+                json,
+                serde_json::json!({
+                    "event": "error", "kind": "manifest_invalid",
+                    "detail": format!("invalid manifest: {e}"),
+                }),
+            );
             eprintln!("modhost: invalid manifest: {e}");
             return ExitCode::from(2);
         }
@@ -45,10 +106,27 @@ fn cmd_authorize(args: &[String]) -> ExitCode {
 
     match auth::check(principal, "Call", symbol) {
         Ok(()) => {
-            println!("ALLOW: module '{principal}' may Call '{symbol}'");
+            emit(
+                json,
+                serde_json::json!({
+                    "event": "decision", "allowed": true,
+                    "principal": principal, "symbol": symbol,
+                }),
+            );
+            if !json {
+                println!("ALLOW: module '{principal}' may Call '{symbol}'");
+            }
             ExitCode::SUCCESS
         }
         Err(reason) => {
+            emit(
+                json,
+                serde_json::json!({
+                    "event": "decision", "allowed": false,
+                    "principal": principal, "symbol": symbol,
+                    "reason": &reason,
+                }),
+            );
             eprintln!("UK-4001 CallDenied: {reason}");
             ExitCode::from(1)
         }
@@ -87,48 +165,55 @@ fn cmd_host(args: &[String]) -> ExitCode {
     let mut args_json: Option<String> = None;
     let mut repeat: u64 = 1;
     let mut swap_dir: Option<String> = None;
+    let mut json = false;
 
     let mut i = 3;
     while i < args.len() {
         match args[i].as_str() {
-            "--call" => {
-                i += 1;
-                if i < args.len() {
-                    entrypoint = args[i].clone();
-                }
-            }
-            "--args-json" => {
-                i += 1;
-                if i < args.len() {
-                    args_json = Some(args[i].clone());
-                }
-            }
+            "--call" => match opt_value(args, &mut i, "--call", USAGE_HOST) {
+                Ok(v) => entrypoint = v,
+                Err(code) => return code,
+            },
+            "--args-json" => match opt_value(args, &mut i, "--args-json", USAGE_HOST) {
+                Ok(v) => args_json = Some(v),
+                Err(code) => return code,
+            },
             "--args" => {
                 i += 1;
                 while i < args.len() && !args[i].starts_with("--") {
-                    if let Ok(v) = args[i].parse::<i64>() {
-                        call_args.push(v);
+                    // Strict: a non-integer token used to be dropped
+                    // silently, shifting every later positional argument.
+                    match args[i].parse::<i64>() {
+                        Ok(v) => call_args.push(v),
+                        Err(_) => {
+                            return usage_error(
+                                &format!("--args expects integers, got {:?}", args[i]),
+                                USAGE_HOST,
+                            )
+                        }
                     }
                     i += 1;
                 }
                 continue;
             }
-            "--repeat" => {
-                i += 1;
-                if i < args.len() {
-                    repeat = args[i].parse().unwrap_or(1);
-                }
-            }
-            "--swap" => {
-                i += 1;
-                if i < args.len() {
-                    swap_dir = Some(args[i].clone());
-                }
-            }
-            other => {
-                eprintln!("modhost: unknown option '{other}'");
-                return ExitCode::from(2);
-            }
+            "--repeat" => match opt_value(args, &mut i, "--repeat", USAGE_HOST) {
+                Ok(v) => match v.parse::<u64>() {
+                    Ok(n) => repeat = n,
+                    Err(_) => {
+                        return usage_error(
+                            &format!("--repeat expects a whole number, got {v:?}"),
+                            USAGE_HOST,
+                        )
+                    }
+                },
+                Err(code) => return code,
+            },
+            "--swap" => match opt_value(args, &mut i, "--swap", USAGE_HOST) {
+                Ok(v) => swap_dir = Some(v),
+                Err(code) => return code,
+            },
+            "--json" => json = true,
+            other => return usage_error(&format!("unknown option '{other}'"), USAGE_HOST),
         }
         i += 1;
     }
@@ -137,15 +222,33 @@ fn cmd_host(args: &[String]) -> ExitCode {
 
     match host.load(module_dir) {
         Ok(handle) => {
-            println!(
-                "modhost: loaded '{}' v{} ({} functions, entry='{}')",
-                handle.manifest.name,
-                handle.manifest.version,
-                handle.function_count(),
-                handle.manifest.entry,
+            emit(
+                json,
+                serde_json::json!({
+                    "event": "loaded", "module": handle.manifest.name,
+                    "version": handle.manifest.version,
+                    "functions": handle.function_count(),
+                    "entry": handle.manifest.entry,
+                }),
             );
+            if !json {
+                println!(
+                    "modhost: loaded '{}' v{} ({} functions, entry='{}')",
+                    handle.manifest.name,
+                    handle.manifest.version,
+                    handle.function_count(),
+                    handle.manifest.entry,
+                );
+            }
         }
         Err(e) => {
+            emit(
+                json,
+                serde_json::json!({
+                    "event": "error", "kind": "load_failed",
+                    "detail": format!("load failed: {e}"),
+                }),
+            );
             eprintln!("modhost: load failed: {e}");
             return ExitCode::from(1);
         }
@@ -161,12 +264,27 @@ fn cmd_host(args: &[String]) -> ExitCode {
     // "what may this module call" and "what has this module proved".
     match liquid_posture(module_dir) {
         Err(e) => {
+            emit(
+                json,
+                serde_json::json!({
+                    "event": "error", "kind": "attestation_refused",
+                    "detail": &e, "phase": "load",
+                }),
+            );
             eprintln!("modhost: refusing to host: {e}");
             return ExitCode::from(1);
         }
         Ok(note) => {
             if !note.is_empty() {
-                println!("modhost: {note}");
+                emit(
+                    json,
+                    serde_json::json!({
+                        "event": "attestation", "note": &note, "phase": "load",
+                    }),
+                );
+                if !json {
+                    println!("modhost: {note}");
+                }
             }
         }
     }
@@ -182,14 +300,48 @@ fn cmd_host(args: &[String]) -> ExitCode {
         // at cold load.
         match liquid_posture(Path::new(sd)) {
             Err(e) => {
+                emit(
+                    json,
+                    serde_json::json!({
+                        "event": "error", "kind": "attestation_refused",
+                        "detail": &e, "phase": "swap",
+                    }),
+                );
                 eprintln!("modhost: refusing to hot-swap: {e}");
                 return ExitCode::from(1);
             }
-            Ok(note) => println!("modhost: swap attestation: {note}"),
+            Ok(note) => {
+                emit(
+                    json,
+                    serde_json::json!({
+                        "event": "attestation", "note": &note, "phase": "swap",
+                    }),
+                );
+                if !json {
+                    println!("modhost: swap attestation: {note}");
+                }
+            }
         }
         match host.swap(&module_name, Path::new(sd)) {
-            Ok(()) => println!("modhost: hot-swapped '{module_name}' from {sd}"),
+            Ok(()) => {
+                emit(
+                    json,
+                    serde_json::json!({
+                        "event": "swapped", "module": &module_name, "from": sd,
+                    }),
+                );
+                if !json {
+                    println!("modhost: hot-swapped '{module_name}' from {sd}");
+                }
+            }
             Err(e) => {
+                emit(
+                    json,
+                    serde_json::json!({
+                        "event": "error", "kind": "swap_failed",
+                        "detail": format!("swap failed: {e}"),
+                    }),
+                );
                 eprintln!("modhost: swap failed: {e}");
                 return ExitCode::from(1);
             }
@@ -202,7 +354,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
     };
 
     for call_idx in 0..repeat {
-        if repeat > 1 {
+        if repeat > 1 && !json {
             println!("--- call {}/{} ---", call_idx + 1, repeat);
         }
         let result: Result<String, String> = if let Some(json) = &args_json {
@@ -220,8 +372,29 @@ fn cmd_host(args: &[String]) -> ExitCode {
                 .map(|v| v.to_string())
         };
         match result {
-            Ok(result) => println!("{entrypoint}: {result}"),
+            Ok(result) => {
+                emit(
+                    json,
+                    serde_json::json!({
+                        "event": "call", "entrypoint": &entrypoint,
+                        "result": &result,
+                        "iteration": call_idx + 1, "repeat": repeat,
+                    }),
+                );
+                if !json {
+                    println!("{entrypoint}: {result}");
+                }
+            }
             Err(e) => {
+                emit(
+                    json,
+                    serde_json::json!({
+                        "event": "error", "kind": "call_failed",
+                        "detail": format!("call failed: {e}"),
+                        "entrypoint": &entrypoint,
+                        "iteration": call_idx + 1, "repeat": repeat,
+                    }),
+                );
                 eprintln!("modhost: call failed: {e}");
                 return ExitCode::from(1);
             }
@@ -305,28 +478,40 @@ fn spawn_jit_server(austral_path: &str, module_args: &[String], call_args: &[Str
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
 
+    // celld rule: `--help` anywhere — before host-legacy's `--` separator —
+    // prints usage on stdout and exits 0.
+    let pre_end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    if args[1..pre_end].iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE_AUTHORIZE}");
+        println!("{USAGE_HOST}");
+        println!("{USAGE_LEGACY}");
+        return ExitCode::SUCCESS;
+    }
+
     match args.get(1).map(|s| s.as_str()) {
         Some("authorize") => {
-            if args.len() != 5 {
-                eprintln!("usage: modhost authorize <manifest.toml> <module> <uk_symbol>");
+            let json = args[2..].iter().any(|t| t.as_str() == "--json");
+            let positional: Vec<&str> = args[2..]
+                .iter()
+                .filter(|t| t.as_str() != "--json")
+                .map(String::as_str)
+                .collect();
+            if positional.len() != 3 {
+                eprintln!("{USAGE_AUTHORIZE}");
                 return ExitCode::from(2);
             }
-            cmd_authorize(&args)
+            cmd_authorize(positional[0], positional[1], positional[2], json)
         }
         Some("host") => {
             if args.len() < 3 {
-                eprintln!(
-                    "usage: modhost host <module-dir> --call <entrypoint> [--args ...] [--repeat N] [--swap <dir>]"
-                );
+                eprintln!("{USAGE_HOST}");
                 return ExitCode::from(2);
             }
             cmd_host(&args)
         }
         Some("host-legacy") => {
             if args.len() < 4 {
-                eprintln!(
-                    "usage: modhost host-legacy <austral-path> <module-src>... -- <entrypoint>..."
-                );
+                eprintln!("{USAGE_LEGACY}");
                 return ExitCode::from(2);
             }
             let austral_path = &args[2];
@@ -357,12 +542,9 @@ fn main() -> ExitCode {
             spawn_jit_server(austral_path, &module_args, &call_args)
         }
         _ => {
-            eprintln!("usage:");
-            eprintln!("  modhost authorize <manifest.toml> <module> <uk_symbol>");
-            eprintln!(
-                "  modhost host <module-dir> --call <entrypoint> [--args ...] [--repeat N] [--swap <dir>]"
-            );
-            eprintln!("  modhost host-legacy <austral-path> <module-src>... -- <entrypoint>...");
+            eprintln!("{USAGE_AUTHORIZE}");
+            eprintln!("{USAGE_HOST}");
+            eprintln!("{USAGE_LEGACY}");
             ExitCode::from(2)
         }
     }
