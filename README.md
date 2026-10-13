@@ -1,6 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leonardopedro/australVM)
 
-<!-- status: verified | tests: 110 dune / 14 suites | last_verified: 2026-10-04 -->
+<!-- status: verified | tests: 110 dune / 14 suites | last_verified: 2026-10-13 -->
 
 ## Verification
 

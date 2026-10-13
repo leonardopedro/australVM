@@ -72,3 +72,15 @@ nix-shell -p python3 --run "python3 scripts/check-links"
   (fallback: CPS header's module name, then the caller for legacy binaries).
   `modhost` checks the manifest decision directly, and the live gate itself
   is tested in `cps.rs::a10_live_grant_tests` (see `unfer/docs/MODULES.md` §6).
+
+## Changelog
+
+`CHANGELOG.md` is **generated** from conventional commits (git-cliff,
+config in `cliff.toml`, pattern adapted from `emthin/cliff.toml`).
+The repo's pre-conventional/vendored history is excluded by design
+(`filter_unconventional`), so a large skip count in git-cliff's warning
+is expected. Refresh with:
+
+```bash
+nix run nixpkgs#git-cliff -- -o CHANGELOG.md
+```
