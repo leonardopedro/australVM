@@ -51,6 +51,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   as an explained gap, never as a false failure.
 - `scripts/check-links` — relative markdown links resolve
   (CI: `.github/workflows/linkcheck.yml`).
+- `scripts/check-todo-ledger` — code files (`*.rs`/`*.sh`/`*.py`/`*.toml`)
+  carry no `TODO`/`FIXME`/`HACK`/`XXX` marker unless the file is reviewed in
+  `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
+  marker is reported `[stale]` so it leaves with the work. Markdown
+  historical status prose is out of scan scope by policy.
 - Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
   `make bridge`, all guarded by `check-bridge-fresh`), `run-examples.sh`,
   `test-programs/runner.py`, `demo_module/run_demo.sh`.
