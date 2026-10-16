@@ -111,6 +111,13 @@ and cstmt =
       body: cstmt;
       mode: borrow_stmt_kind
     }
+  | CBorrowGroup of {
+      span: span;
+      originals: identifier list;
+      renames: identifier list;
+      body: cstmt;
+      mode: borrow_stmt_kind
+    }
   | CBlock of span * cstmt list
   | CDiscarding of span * cexpr
   | CReturn of span * cexpr

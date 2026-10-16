@@ -14,6 +14,16 @@ open Span
 open Common
 open Error
 
+(* PLAN_valen.md P1: fresh region names for the borrows a group borrow
+   desugars into. `$` is not lexable, so these never collide with a
+   user-written region name. *)
+let group_region_counter: int ref = ref 0
+
+let fresh_group_region _: int =
+  let n = !group_region_counter in
+  group_region_counter := n + 1;
+  n
+
 let rec abs_stmt im stmt =
   match stmt with
   | CSkip span ->
@@ -52,6 +62,20 @@ let rec abs_stmt im stmt =
        }
   | CBorrow { span; original; rename; region; body; mode; _ } ->
      ABorrow { span; original; rename; region; body=abs_stmt im body; mode }
+  | CBorrowGroup { span; originals; renames; body; mode; _ } ->
+     (* PLAN_valen.md P1: a group borrow is nested single borrows. Each level
+        needs its own region name (RegionMap rejects a duplicate), and the
+        `$` in the generated names is not lexable, so they cannot collide
+        with a user-written region. *)
+     let rec nest (origs: Identifier.identifier list) (rens: Identifier.identifier list): astmt =
+       match (origs, rens) with
+       | ([], []) -> abs_stmt im body
+       | (o :: os, r :: rs) ->
+          let region = Identifier.make_ident ("group_region$" ^ (string_of_int (fresh_group_region ()))) in
+          ABorrow { span; original=o; rename=r; region; body=nest os rs; mode }
+       | _ -> err "group borrow: one rename per original is required"
+     in
+     nest originals renames
   | CBlock (_, l) ->
      let_reshape im l
   | CDiscarding (span, e) ->

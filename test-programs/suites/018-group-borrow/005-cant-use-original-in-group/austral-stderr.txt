@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "foo" },
+    {
+      "type": "text",
+      "content": " cannot be consumed while it is borrowed (immutably)."
+    }
+  ],
+  "span": {
+    "filename": "test-programs/suites/018-group-borrow/005-cant-use-original-in-group/Test.aum",
+    "startp": { "line": 8, "column": 12 },
+    "end": { "line": 8, "column": 26 }
+  },
+  "context": [
+    [ 6, "        let bar: Foo := Foo();" ],
+    [ 7, "        borrow group (wa, wb) := &(foo, bar) do" ],
+    [ 8, "            let {} := foo;" ],
+    [ 9, "        end borrow;" ],
+    [ 10, "        let {} := foo;" ]
+  ]
+}

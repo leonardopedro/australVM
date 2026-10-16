@@ -1,0 +1,26 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    { "type": "text", "content": "Cannot borrow the variable " },
+    { "type": "code", "content": "foo" },
+    {
+      "type": "text",
+      "content": " mutably because the variable is immutable."
+    }
+  ],
+  "span": {
+    "filename": "test-programs/suites/018-group-borrow/004-cant-mutborrow-let-group/Test.aum",
+    "startp": { "line": 7, "column": 8 },
+    "end": { "line": 9, "column": 19 }
+  },
+  "context": [
+    [ 5, "        let foo: Foo := Foo();" ],
+    [ 6, "        let bar: Foo := Foo();" ],
+    [ 7, "        borrow group (wa, wb) := &!(foo, bar) do" ],
+    [ 8, "            skip;" ],
+    [ 9, "        end borrow;" ],
+    [ 10, "        let {} := foo;" ],
+    [ 11, "        let {} := bar;" ]
+  ]
+}

@@ -1,0 +1,35 @@
+module body Test is
+    record Foo: Linear is
+        bar: Nat8;
+    end;
+
+    record Baz: Linear is
+        qux: Nat8;
+    end;
+
+    record Zorp: Linear is
+        zot: Nat8;
+    end;
+
+    function main(): ExitCode is
+        let a: Foo := Foo(bar => 'a');
+        let b: Baz := Baz(qux => 'b');
+        let c: Zorp := Zorp(zot => 'c');
+        -- A group read borrow of three originals of *different* types: the
+        -- desugared single borrows are independent, so the group is
+        -- heterogeneous.
+        borrow group (ga, gb, gc) := &(a, b, c) do
+            printLn(ga->bar);
+            printLn(gb->qux);
+            printLn(gc->zot);
+        end borrow;
+        -- After the borrow ends the originals are usable again.
+        let { bar: Nat8 } := a;
+        printLn(bar);
+        let { qux: Nat8 } := b;
+        printLn(qux);
+        let { zot: Nat8 } := c;
+        printLn(zot);
+        return ExitSuccess();
+    end;
+end module body.

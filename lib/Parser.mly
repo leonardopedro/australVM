@@ -41,6 +41,7 @@ open Span
 /* Borrowing */
 %token BORROW_WRITE
 %token BORROW_READ
+%token GROUP
 %token SPAN_READ
 %token SPAN_WRITE
 %token REBORROW
@@ -320,6 +321,7 @@ statement:
   | WHILE expression DO block END WHILE SEMI { CWhile (from_loc $loc, $2, $4) }
   | FOR identifier FROM expression TO expression DO block END FOR SEMI { CFor (from_loc $loc, $2, $4, $6, $8) }
   | borrow_stmt { $1 }
+  | borrow_group_stmt { $1 }
   | RETURN expression SEMI { CReturn (from_loc $loc, $2) }
   | SKIP SEMI { CSkip (from_loc $loc) }
   ;
@@ -373,6 +375,28 @@ when_stmt:
 borrow_stmt:
   | BORROW name=identifier COLON borrow_stmt_read_or_write LBRACKET typespec COMMA reg=identifier RBRACKET ASSIGN mode=borrow_stmt_mode orig=identifier DO body=block END BORROW SEMI
     { CBorrow { span=from_loc $loc; original=orig; rename=name; region=reg; body=body; mode=mode } }
+  ;
+
+(* Group borrowing (PLAN_valen.md P1): several originals under one borrow
+   statement. Desugared in AbstractionPass into nested single borrows — each
+   original gets its own fresh region — so nothing downstream of abstraction
+   learns about groups: the typed AST, the linearity checker's per-borrow
+   enter/exit, and the erasure before CPS are all the existing single-borrow
+   machinery. Read and write only; reborrowing a whole group is rejected by
+   the parser (it would need per-pair types).
+
+   The single-borrow form's `&[Type, region]` annotation is discarded by
+   AbstractionPass — typing infers the reference type from the original — so
+   the group form omits it: `borrow group (a, b) := &(x, y) do ... *)
+borrow_group_stmt:
+  | BORROW GROUP LPAREN renames=separated_nonempty_list(COMMA, identifier) RPAREN
+    ASSIGN REF_TRANSFORM origs=separated_nonempty_list(COMMA, identifier) RPAREN
+    DO body=block END BORROW SEMI
+    { CBorrowGroup { span=from_loc $loc; originals=origs; renames=renames; body=body; mode=Read } }
+  | BORROW GROUP LPAREN renames=separated_nonempty_list(COMMA, identifier) RPAREN
+    ASSIGN BORROW_WRITE LPAREN origs=separated_nonempty_list(COMMA, identifier) RPAREN
+    DO body=block END BORROW SEMI
+    { CBorrowGroup { span=from_loc $loc; originals=origs; renames=renames; body=body; mode=Write } }
   ;
 
 borrow_stmt_read_or_write:

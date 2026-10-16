@@ -1,0 +1,40 @@
+module body Test is
+    record Foo: Linear is
+        bar: Nat8;
+    end;
+
+    record Baz: Linear is
+        qux: Nat8;
+    end;
+
+    record Zorp: Linear is
+        zot: Nat8;
+    end;
+
+    function main(): ExitCode is
+        let a: Foo := Foo(bar => 'a');
+        let b: Baz := Baz(qux => 'b');
+        let c: Zorp := Zorp(zot => 'c');
+        -- A single borrow nested inside a group borrow, and a group borrow
+        -- nested inside a single borrow: the desugaring is nested single
+        -- borrows, so both shapes must work.
+        borrow group (ga, gb) := &(a, b) do
+            borrow cref: &[Zorp, rho] := &c do
+                printLn(cref->zot);
+            end borrow;
+            printLn(ga->bar);
+            printLn(gb->qux);
+        end borrow;
+        borrow aref: &[Foo, rho2] := &a do
+            borrow group (gb2, gc2) := &(b, c) do
+                printLn(aref->bar);
+                printLn(gb2->qux);
+                printLn(gc2->zot);
+            end borrow;
+        end borrow;
+        let { bar: Nat8 } := a;
+        let { qux: Nat8 } := b;
+        let { zot: Nat8 } := c;
+        return ExitSuccess();
+    end;
+end module body.

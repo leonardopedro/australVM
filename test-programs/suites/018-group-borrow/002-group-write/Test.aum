@@ -1,0 +1,25 @@
+module body Test is
+    record Foo: Linear is
+        bar: Nat8;
+    end;
+
+    record Baz: Linear is
+        qux: Nat8;
+    end;
+
+    function main(): ExitCode is
+        var a: Foo := Foo(bar => 'a');
+        var b: Baz := Baz(qux => 'b');
+        -- A group write borrow of two originals. The body is empty: the point
+        -- is that two `var`s can be under one write borrow and come back
+        -- usable, exactly like single write borrows.
+        borrow group (wa, wb) := &!(a, b) do
+            nil;
+        end borrow;
+        let { bar: Nat8 } := a;
+        printLn(bar);
+        let { qux: Nat8 } := b;
+        printLn(qux);
+        return ExitSuccess();
+    end;
+end module body.
