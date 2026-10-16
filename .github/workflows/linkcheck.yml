@@ -10,5 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
+      # ATTRIBUTION.md:5 links ../ATTRIBUTION.md — the workspace-root ledger,
+      # which lives outside this repository (the root is not a git repo; its
+      # mirror in emthin/workspace-backup is gate-checked byte-identical).
+      # A lone checkout has no parent file, so the link resolved to nothing
+      # and this job was red on every run; materialize the mirror at the path
+      # the link names.
+      - name: workspace-root ATTRIBUTION (mirrored)
+        run: curl -fsSL https://raw.githubusercontent.com/leonardopedro/emthin/main/workspace-backup/ATTRIBUTION.md -o ../ATTRIBUTION.md
       - name: check-links
         run: python3 scripts/check-links
