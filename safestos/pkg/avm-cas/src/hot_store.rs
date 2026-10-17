@@ -381,4 +381,161 @@ mod tests {
             assert_eq!(&back, data);
         }
     }
+
+    /// Spec §5 — *acquiring an active hot cell* (resident fast path) must
+    /// complete in **< 1 µs**. Mean over 100,000 acquisitions of a resident
+    /// cell: map hit + LRU tick + Arc clone/drop, nothing else.
+    /// `cargo test -p avm-cas --release -- --ignored hot_acquire_under_1us --nocapture`
+    #[test]
+    #[ignore]
+    fn acceptance_hot_acquire_under_1us() {
+        let dir = tempfile::tempdir().unwrap();
+        let cold = Arc::new(ChunkStore::open(dir.path().join("store")).unwrap());
+        let hot = HotStore::new(cold.clone(), 64 * 1024 * 1024, dir.path().join("hot"), false)
+            .unwrap();
+        let data = filler(512 * 1024, 41);
+        let id = cold.put_buffer("cell", "1", &data, None).unwrap().identity_digest();
+        // Fault in once — after this the cell is *active* (resident), which
+        // is the case the spec's latency row measures.
+        let first = hot.acquire(&id).unwrap();
+        assert_eq!(first.len(), data.len());
+        drop(first);
+
+        const N: u32 = 100_000;
+        let t0 = std::time::Instant::now();
+        for _ in 0..N {
+            let map = hot.acquire(&id).unwrap();
+            std::hint::black_box(&map);
+        }
+        let mean_ns = t0.elapsed().as_nanos() as f64 / f64::from(N);
+        eprintln!("hot-acquire fast path: mean {mean_ns:.0} ns over {N} acquisitions");
+        assert!(
+            mean_ns < 1_000.0,
+            "hot acquire mean {mean_ns:.0} ns exceeds the spec's 1 µs target"
+        );
+        let s = hot.stats();
+        assert_eq!(s.evictions, 0, "a resident fast path must not evict");
+        assert_eq!(s.cells, 1, "cell must stay resident across the probe");
+    }
+
+    /// Spec §5 — *faulting in an evicted 50 MB cell* must complete in
+    /// **< 15 ms**. Median of five evicted fault-ins (prime first so the
+    /// cold store's page cache is warm — the row measures hydration, not
+    /// disk first-touch). Honors `$AVM_HOT_DIR`; put it on tmpfs (`/dev/shm`)
+    /// as the spec's swapfile analogue intends.
+    /// `AVM_HOT_DIR=/dev/shm cargo test -p avm-cas --release -- --ignored fault_in_50mb --nocapture`
+    #[test]
+    #[ignore]
+    fn acceptance_fault_in_50mb_under_15ms() {
+        let dir = tempfile::tempdir().unwrap();
+        let cold = Arc::new(ChunkStore::open(dir.path().join("store")).unwrap());
+        let hot_dir = std::env::var_os("AVM_HOT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dir.path().join("hot"));
+        let hot = HotStore::new(cold.clone(), 256 * 1024 * 1024, &hot_dir, false).unwrap();
+        let data = filler(50 * 1024 * 1024, 7);
+        let id = cold.put_buffer("cell", "1", &data, None).unwrap().identity_digest();
+
+        // Prime: first fault-in (untimed) warms the cold store's page cache.
+        assert_eq!(hot.acquire(&id).unwrap().len(), data.len());
+        hot.release(&id);
+
+        let mut samples: Vec<std::time::Duration> = Vec::new();
+        for _ in 0..5 {
+            let t0 = std::time::Instant::now();
+            let map = hot.acquire(&id).unwrap();
+            let dt = t0.elapsed();
+            std::hint::black_box(&map);
+            assert_eq!(map.len(), data.len());
+            assert_eq!(map[0], data[0], "hydrated cell must hold the source bytes");
+            hot.release(&id);
+            samples.push(dt);
+        }
+        samples.sort();
+        let median = samples[samples.len() / 2];
+        eprintln!("50 MiB evicted fault-in: median {median:?} (samples: {samples:?})");
+        assert!(
+            median < std::time::Duration::from_millis(15),
+            "median 50 MiB fault-in {median:?} exceeds the spec's 15 ms target"
+        );
+    }
+
+    /// Spec §5 — *evicting 10 GB of hot memory cells must generate 0 bytes
+    /// of disk writes*: churn > 10 GiB of cell bytes through a 64 MiB
+    /// budget (8 × 32 MiB cells, rehydrated in rounds), then prove the cold
+    /// packfiles are byte-for-byte untouched (size + mtime) and every cell
+    /// is still reconstructible. Usage must never exceed the budget.
+    /// `cargo test -p avm-cas --release -- --ignored evict_10gb --nocapture`
+    #[test]
+    #[ignore]
+    fn acceptance_evict_10gb_zero_writeback() {
+        let dir = tempfile::tempdir().unwrap();
+        let hot_dir = std::env::var_os("AVM_HOT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dir.path().join("hot"));
+        let cold = Arc::new(ChunkStore::open(dir.path().join("store")).unwrap());
+        let capacity: u64 = 64 * 1024 * 1024;
+
+        // 8 × 32 MiB distinct cells (unique header, zero body → deduped in
+        // cold):256 MiB of content that must keep re-hydrating.
+        let cell_size = 32 * 1024 * 1024;
+        let mut ids = Vec::new();
+        for i in 0..8u8 {
+            let mut data = vec![0u8; cell_size];
+            data[..512].copy_from_slice(&filler(512, 200 + i));
+            let m = cold.put_buffer("cell", "1", &data, None).unwrap();
+            ids.push(m.identity_digest());
+        }
+
+        // Snapshot cold packs: the whole storm must not touch them.
+        let before: Vec<(PathBuf, u64, std::time::SystemTime)> = cold
+            .pack_paths()
+            .iter()
+            .map(|p| {
+                let md = std::fs::metadata(p).unwrap();
+                (p.clone(), md.len(), md.modified().unwrap())
+            })
+            .collect();
+        assert!(!before.is_empty(), "cold store must have packfiles to protect");
+
+        let hot = HotStore::new(cold.clone(), capacity, &hot_dir, false).unwrap();
+        let target: u64 = 10 * 1024 * 1024 * 1024;
+        let mut rounds = 0u32;
+        while hot.stats().evicted_bytes < target {
+            for id in &ids {
+                let m = hot.acquire(id).unwrap();
+                std::hint::black_box(&m);
+                assert_eq!(m.len(), cell_size);
+                let s = hot.stats();
+                assert!(
+                    s.usage <= capacity,
+                    "usage {} exceeds budget {} mid-churn",
+                    s.usage,
+                    capacity
+                );
+            }
+            rounds += 1;
+            assert!(rounds < 5_000, "churn failed to reach the 10 GiB eviction target");
+        }
+        let s = hot.stats();
+        eprintln!(
+            "churn: {} evictions, {:.2} GiB evicted across {rounds} rounds",
+            s.evictions,
+            s.evicted_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
+        assert!(s.evicted_bytes >= target, "evicted {} < 10 GiB", s.evicted_bytes);
+
+        // Zero disk writes: cold packfiles byte-untouched (size + mtime).
+        for (p, len, mtime) in &before {
+            let md = std::fs::metadata(p).unwrap();
+            assert_eq!(md.len(), *len, "pack {:?} changed size", p);
+            assert_eq!(md.modified().unwrap(), *mtime, "pack {:?} mtime moved", p);
+        }
+        // And every cell still reconstructible after the storm.
+        for id in &ids {
+            let back = hot.read_cell(id).unwrap();
+            assert_eq!(back.len(), cell_size);
+            assert_eq!(back[0..512], filler(512, 200 + (id[0] - id[0]) as u8 + 0)[0..512].len().min(512)..);
+        }
+    }
 }
