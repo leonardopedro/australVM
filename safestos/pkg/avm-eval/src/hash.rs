@@ -17,6 +17,11 @@
 //!
 //! Everything is length-prefixed and sorted; nothing is ever hashed from a
 //! hash-map's iteration order (spec §6.4).
+//!
+//! Deliberately *not* hashed: `dependencies` enter through their resolved
+//! ids, and `totality` (the plan.json record) is a property of the
+//! compilation invocation, not of the derivation's inputs — recording
+//! `proven` must never flip a Merkle id.
 
 use crate::graph::Derivation;
 
@@ -75,6 +80,7 @@ mod tests {
             dependencies: vec!["ignored-by-hash".into()],
             sources: vec!["aa".into(), "bb".into()],
             env_vars: vec![("K".into(), "V".into())],
+            totality: None,
         };
         (d, deps)
     }
@@ -106,11 +112,17 @@ mod tests {
         let (d1, _) = drv("root", vec![]);
         let (mut d2, _) = drv("root", vec![]);
         d2.sources[0] = "cc".into();
-        assert_ne!(calculate_derivation_hash(&d1, &[]), calculate_derivation_hash(&d2, &[]));
+        assert_ne!(
+            calculate_derivation_hash(&d1, &[]),
+            calculate_derivation_hash(&d2, &[])
+        );
         // Separation between fields: moving a byte across a boundary moves the id.
         let (mut d3, _) = drv("root", vec![]);
         d3.version = "1.0.1".into();
-        assert_ne!(calculate_derivation_hash(&d1, &[]), calculate_derivation_hash(&d3, &[]));
+        assert_ne!(
+            calculate_derivation_hash(&d1, &[]),
+            calculate_derivation_hash(&d3, &[])
+        );
     }
 
     #[test]

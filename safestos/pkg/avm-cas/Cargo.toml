@@ -22,3 +22,7 @@ serde.workspace = true
 # which is hand-rolled canonical binary.
 serde_json.workspace = true
 tempfile.workspace = true
+# Sprint 5.1 — remote.rs: async chunk/manifest sync against an S3/REST
+# binary cache (loopback-mock tested; no egress on this machine).
+reqwest.workspace = true
+tokio.workspace = true

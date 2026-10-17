@@ -1,6 +1,5 @@
 use cranelift::prelude::*;
 use cranelift_codegen::ir::FuncRef;
-use cranelift_jit::JITModule;
 use cranelift_module::{FuncId, Linkage, Module};
 use std::collections::HashMap;
 
@@ -36,7 +35,7 @@ fn check_call_permission(caller: &str, module_name: &str, callee: &str) -> Resul
 /// Declare `name` as an external import with `argc` i64 params returning i64,
 /// returning its `FuncId`. Used for runtime/kernel builtins and for cross-module
 /// Austral calls (resolved by name to a definition in the persistent JITModule).
-fn declare_import(jit: &mut JITModule, name: &str, argc: usize) -> Result<FuncId, String> {
+fn declare_import<M: Module>(jit: &mut M, name: &str, argc: usize) -> Result<FuncId, String> {
     let mut sig = jit.make_signature();
     for _ in 0..argc {
         sig.params.push(AbiParam::new(types::I64));
@@ -182,8 +181,8 @@ impl<'a, 'b> BlockManager<'a, 'b> {
 }
 
 #[allow(clippy::too_many_arguments)] // threaded through the whole CPS emit chain
-fn emit_expr(
-    jit: &mut JITModule,
+fn emit_expr<M: Module>(
+    jit: &mut M,
     reader: &mut CpsReader,
     mgr: &mut BlockManager,
     vars: &mut HashMap<String, Variable>,
@@ -593,8 +592,8 @@ fn emit_expr(
 }
 
 #[allow(clippy::too_many_arguments)] // threaded through the whole CPS emit chain
-fn emit_stmt_list(
-    jit: &mut JITModule,
+fn emit_stmt_list<M: Module>(
+    jit: &mut M,
     reader: &mut CpsReader,
     mgr: &mut BlockManager,
     vars: &mut HashMap<String, Variable>,
@@ -939,7 +938,7 @@ fn emit_stmt_list(
     Ok(())
 }
 
-pub fn compile_cps_to_clif(jit: &mut JITModule, data: &[u8]) -> Result<CpsModule, String> {
+pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsModule, String> {
     let mut reader = CpsReader::new(data);
     let magic = reader.read_u32()?;
 

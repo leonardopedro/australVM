@@ -92,7 +92,11 @@ fn cut_point(data: &[u8], cfg: &ChunkerConfig) -> usize {
     //   early = base + 2 bits -> rare cuts (expected ~4x avg distance),
     //   late  = base - 2 bits -> frequent cuts (expected ~avg/4 distance).
     let base = cfg.log2_avg().max(3);
-    let mask_early = if base + 2 >= 64 { u64::MAX } else { (1u64 << (base + 2)) - 1 };
+    let mask_early = if base + 2 >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << (base + 2)) - 1
+    };
     let mask_late = (1u64 << base.saturating_sub(2).max(1)) - 1;
     // Midpoint: switch masks halfway between min and avg so most chunks
     // land near avg.
@@ -155,7 +159,15 @@ mod tests {
     #[test]
     fn roundtrip_and_bounds() {
         let cfg = ChunkerConfig::default();
-        for size in [0usize, 1, 4095, cfg.min - 1, cfg.min, cfg.avg + 1, 3 * cfg.max + 17] {
+        for size in [
+            0usize,
+            1,
+            4095,
+            cfg.min - 1,
+            cfg.min,
+            cfg.avg + 1,
+            3 * cfg.max + 17,
+        ] {
             let data = pseudo_random_bytes(size);
             let chunks = chunk_payload(&data, &cfg).unwrap();
             // Coverage: exact, gapless, in-order partition of the payload.
@@ -172,7 +184,10 @@ mod tests {
             }
             assert_eq!(cursor, data.len(), "partition must cover the input");
             if size > cfg.min {
-                assert!(chunks.iter().all(|c| c.len <= cfg.max.max(cfg.min)), "chunk exceeds max");
+                assert!(
+                    chunks.iter().all(|c| c.len <= cfg.max.max(cfg.min)),
+                    "chunk exceeds max"
+                );
             }
         }
     }
@@ -230,7 +245,10 @@ mod tests {
         let after = chunk_payload(&data, &cfg).unwrap();
 
         let after_set: std::collections::HashSet<_> = after.iter().map(|c| c.hash).collect();
-        let matched = before.iter().filter(|c| after_set.contains(&c.hash)).count();
+        let matched = before
+            .iter()
+            .filter(|c| after_set.contains(&c.hash))
+            .count();
         let ratio = matched as f64 / before.len() as f64;
         eprintln!(
             "mutation resync ({size} bytes, {mut_} chunks): {matched}/{} kept ({:.1}%)",

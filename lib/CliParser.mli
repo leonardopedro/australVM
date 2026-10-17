@@ -53,6 +53,12 @@ type cmd =
       allow_all: bool;
       auth_manifest: string option;
       emit_cps_path: string option;
+      (** Run the package totality pass (avm-pkg: rejects unbounded
+          constructs in package modules). *)
+      pkg_totality: bool;
+      (** Export the module's `Derivation` constants as plan JSON to this
+          path (avm-pkg), merging with an existing file. *)
+      emit_derivations: string option;
     }
   (** Whole program compilation using the C backend. *)
 

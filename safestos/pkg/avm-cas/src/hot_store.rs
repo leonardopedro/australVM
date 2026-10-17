@@ -24,6 +24,7 @@ use crate::{crypto, CasError};
 use dashmap::DashMap;
 use memmap2::{Mmap, MmapOptions};
 use std::io::Write;
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -101,7 +102,8 @@ impl HotStore {
     /// counter bump), slow path faults the cell in from the cold store.
     pub fn acquire(&self, manifest_hash: &Digest) -> Result<Arc<Mmap>, CasError> {
         if let Some(cell) = self.cells.get(manifest_hash) {
-            cell.last_used.store(self.tick.fetch_add(1, Ordering::Relaxed), Ordering::Relaxed);
+            cell.last_used
+                .store(self.tick.fetch_add(1, Ordering::Relaxed), Ordering::Relaxed);
             return Ok(cell.mmap.clone());
         }
         self.hydrate(manifest_hash)
@@ -120,7 +122,8 @@ impl HotStore {
         if let Some((_, cell)) = self.cells.remove(manifest_hash) {
             self.usage.fetch_sub(cell.size as u64, Ordering::Relaxed);
             self.evictions.fetch_add(1, Ordering::Relaxed);
-            self.evicted_bytes.fetch_add(cell.size as u64, Ordering::Relaxed);
+            self.evicted_bytes
+                .fetch_add(cell.size as u64, Ordering::Relaxed);
         }
     }
 
@@ -144,14 +147,68 @@ impl HotStore {
         self.make_room(total as u64);
 
         // Scratch file in the hot dir (tmpfs when $AVM_HOT_DIR says so),
-        // written chunk by chunk, mapped private, then unlinked.
-        let mut tf = tempfile::NamedTempFile::new_in(&self.hot_dir)
-            .map_err(CasError::Io)?;
-        for c in &manifest.chunks {
-            let raw = self.cold.get_chunk(c)?;
-            tf.as_file_mut().write_all(&raw)?;
+        // mapped private, then unlinked. Chunk layout comes from the index
+        // *before* any bytes move, so a big cell assembles in parallel:
+        // every chunk is still read, decompressed, and BLAKE3-verified
+        // exactly as before (integrity is untouched — only the serialization
+        // across cores and across write syscalls goes away). Each worker
+        // writes its chunks to final offsets with positional writes.
+        let mut tf = tempfile::NamedTempFile::new_in(&self.hot_dir).map_err(CasError::Io)?;
+        let lens = self.cold.chunk_raw_lens(&manifest.chunks)?;
+        let mut offsets: Vec<u64> = Vec::with_capacity(lens.len());
+        let mut off = 0u64;
+        for &l in &lens {
+            offsets.push(off);
+            off += l;
         }
-        tf.as_file_mut().flush()?;
+        if off as usize != total {
+            return Err(CasError::Corrupt(
+                "manifest total_size disagrees with its chunk lengths".into(),
+            ));
+        }
+        tf.as_file().set_len(off)?;
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .min(8);
+        if manifest.chunks.len() >= 64 && workers > 1 {
+            let chunks = &manifest.chunks[..];
+            let offsets = &offsets[..];
+            let file = tf.as_file();
+            let cold = &self.cold;
+            std::thread::scope(|s| -> Result<(), CasError> {
+                let mut handles = Vec::with_capacity(workers);
+                for w in 0..workers {
+                    handles.push(s.spawn(move || -> Result<(), CasError> {
+                        let mut i = w;
+                        while i < chunks.len() {
+                            let raw = cold.get_chunk(&chunks[i])?;
+                            file.write_at(&raw, offsets[i])?;
+                            i += workers;
+                        }
+                        Ok(())
+                    }));
+                }
+                for h in handles {
+                    match h.join() {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => return Err(e),
+                        Err(_) => {
+                            return Err(CasError::Io(std::io::Error::other(
+                                "hydration worker panicked",
+                            )))
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+        } else {
+            for c in &manifest.chunks {
+                let raw = self.cold.get_chunk(c)?;
+                tf.as_file_mut().write_all(&raw)?;
+            }
+            tf.as_file_mut().flush()?;
+        }
         // SAFETY: `map_copy_read_only` maps the file MAP_PRIVATE/PROT_READ
         // through the kernel; the file is a plain scratch file we own and
         // keep alive across the call. This is the one mmap site the spec
@@ -220,13 +277,7 @@ mod tests {
     fn setup(capacity: u64) -> (tempfile::TempDir, Arc<ChunkStore>, HotStore) {
         let dir = tempfile::tempdir().unwrap();
         let cold = Arc::new(ChunkStore::open(dir.path().join("store")).unwrap());
-        let hot = HotStore::new(
-            cold.clone(),
-            capacity,
-            dir.path().join("hot"),
-            false,
-        )
-        .unwrap();
+        let hot = HotStore::new(cold.clone(), capacity, dir.path().join("hot"), false).unwrap();
         (dir, cold, hot)
     }
 
@@ -242,7 +293,28 @@ mod tests {
         assert_eq!(hot.stats().usage, data.len() as u64);
         // Page alignment of the mapping (spec: page-aligned for zero-copy).
         let mmap = hot.acquire(&id).unwrap();
-        assert_eq!(mmap.as_ptr() as usize % 4096, 0, "mapping must be page-aligned");
+        assert_eq!(
+            mmap.as_ptr() as usize % 4096,
+            0,
+            "mapping must be page-aligned"
+        );
+    }
+
+    /// The parallel hydration branch (≥ 64 chunks, positional writes): the
+    /// assembled scratch file must hold the exact source bytes.
+    #[test]
+    fn hydrate_parallel_branch_byte_exact() {
+        let (_d, cold, hot) = setup(64 * 1024 * 1024);
+        // 8 MiB → ~128 chunks at the 64 KiB average, past the 64-chunk
+        // threshold where workers take over.
+        let data = filler(8 * 1024 * 1024, 77);
+        let id = cold
+            .put_buffer("cell", "1", &data, None)
+            .unwrap()
+            .identity_digest();
+        let out = hot.read_cell(&id).unwrap();
+        assert_eq!(out, data, "parallel assembly must be byte-exact");
+        assert_eq!(hot.stats().cells, 1);
     }
 
     #[test]
@@ -277,8 +349,13 @@ mod tests {
     fn signed_manifest_tamper_refuses_hydration() {
         let dir = tempfile::tempdir().unwrap();
         let cold = Arc::new(ChunkStore::open(dir.path().join("store")).unwrap());
-        let hot = HotStore::new(cold.clone(), 64 * 1024 * 1024, dir.path().join("hot"), false)
-            .unwrap();
+        let hot = HotStore::new(
+            cold.clone(),
+            64 * 1024 * 1024,
+            dir.path().join("hot"),
+            false,
+        )
+        .unwrap();
         let data = filler(256 * 1024, 30);
         let mut m = cold.put_buffer("cell", "1", &data, None).unwrap();
         crypto::sign_manifest(&mut m, &crypto::signing_key_from_seed(&[9u8; 32]));
@@ -353,7 +430,10 @@ mod tests {
                 expect ^= data[off];
                 off += 4096;
             }
-            assert_eq!(acc, expect, "page-touch pass must read the same bytes as the source");
+            assert_eq!(
+                acc, expect,
+                "page-touch pass must read the same bytes as the source"
+            );
             let s = hot.stats();
             assert!(
                 s.usage <= capacity,
@@ -391,10 +471,18 @@ mod tests {
     fn acceptance_hot_acquire_under_1us() {
         let dir = tempfile::tempdir().unwrap();
         let cold = Arc::new(ChunkStore::open(dir.path().join("store")).unwrap());
-        let hot = HotStore::new(cold.clone(), 64 * 1024 * 1024, dir.path().join("hot"), false)
-            .unwrap();
+        let hot = HotStore::new(
+            cold.clone(),
+            64 * 1024 * 1024,
+            dir.path().join("hot"),
+            false,
+        )
+        .unwrap();
         let data = filler(512 * 1024, 41);
-        let id = cold.put_buffer("cell", "1", &data, None).unwrap().identity_digest();
+        let id = cold
+            .put_buffer("cell", "1", &data, None)
+            .unwrap()
+            .identity_digest();
         // Fault in once — after this the cell is *active* (resident), which
         // is the case the spec's latency row measures.
         let first = hot.acquire(&id).unwrap();
@@ -434,7 +522,10 @@ mod tests {
             .unwrap_or_else(|| dir.path().join("hot"));
         let hot = HotStore::new(cold.clone(), 256 * 1024 * 1024, &hot_dir, false).unwrap();
         let data = filler(50 * 1024 * 1024, 7);
-        let id = cold.put_buffer("cell", "1", &data, None).unwrap().identity_digest();
+        let id = cold
+            .put_buffer("cell", "1", &data, None)
+            .unwrap()
+            .identity_digest();
 
         // Prime: first fault-in (untimed) warms the cold store's page cache.
         assert_eq!(hot.acquire(&id).unwrap().len(), data.len());
@@ -479,12 +570,13 @@ mod tests {
         // 8 × 32 MiB distinct cells (unique header, zero body → deduped in
         // cold):256 MiB of content that must keep re-hydrating.
         let cell_size = 32 * 1024 * 1024;
-        let mut ids = Vec::new();
+        let mut ids: Vec<([u8; 32], Vec<u8>)> = Vec::new();
         for i in 0..8u8 {
             let mut data = vec![0u8; cell_size];
-            data[..512].copy_from_slice(&filler(512, 200 + i));
+            let header = filler(512, 200 + i);
+            data[..512].copy_from_slice(&header);
             let m = cold.put_buffer("cell", "1", &data, None).unwrap();
-            ids.push(m.identity_digest());
+            ids.push((m.identity_digest(), header));
         }
 
         // Snapshot cold packs: the whole storm must not touch them.
@@ -496,13 +588,16 @@ mod tests {
                 (p.clone(), md.len(), md.modified().unwrap())
             })
             .collect();
-        assert!(!before.is_empty(), "cold store must have packfiles to protect");
+        assert!(
+            !before.is_empty(),
+            "cold store must have packfiles to protect"
+        );
 
         let hot = HotStore::new(cold.clone(), capacity, &hot_dir, false).unwrap();
         let target: u64 = 10 * 1024 * 1024 * 1024;
         let mut rounds = 0u32;
         while hot.stats().evicted_bytes < target {
-            for id in &ids {
+            for (id, _) in &ids {
                 let m = hot.acquire(id).unwrap();
                 std::hint::black_box(&m);
                 assert_eq!(m.len(), cell_size);
@@ -515,7 +610,10 @@ mod tests {
                 );
             }
             rounds += 1;
-            assert!(rounds < 5_000, "churn failed to reach the 10 GiB eviction target");
+            assert!(
+                rounds < 5_000,
+                "churn failed to reach the 10 GiB eviction target"
+            );
         }
         let s = hot.stats();
         eprintln!(
@@ -523,7 +621,11 @@ mod tests {
             s.evictions,
             s.evicted_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
         );
-        assert!(s.evicted_bytes >= target, "evicted {} < 10 GiB", s.evicted_bytes);
+        assert!(
+            s.evicted_bytes >= target,
+            "evicted {} < 10 GiB",
+            s.evicted_bytes
+        );
 
         // Zero disk writes: cold packfiles byte-untouched (size + mtime).
         for (p, len, mtime) in &before {
@@ -532,10 +634,11 @@ mod tests {
             assert_eq!(md.modified().unwrap(), *mtime, "pack {:?} mtime moved", p);
         }
         // And every cell still reconstructible after the storm.
-        for id in &ids {
+        for (id, header) in &ids {
             let back = hot.read_cell(id).unwrap();
             assert_eq!(back.len(), cell_size);
-            assert_eq!(back[0..512], filler(512, 200 + (id[0] - id[0]) as u8 + 0)[0..512].len().min(512)..);
+            assert_eq!(&back[..512], header.as_slice(), "unique header lost");
+            assert!(back[512..].iter().all(|&b| b == 0), "zero body corrupted");
         }
     }
 }

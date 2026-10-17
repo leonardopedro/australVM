@@ -43,7 +43,9 @@ COMMANDS (implemented over the real subsystems):
   eval <plan.json> [target]        memoized warm evaluation report (L1 + L2)
 
 PENDING (see PLAN_avm_pkg.md — these refuse rather than fake):
-  build <file.au>              needs the OCaml totality pass + executor
+  build <file.au>              needs the hermetic executor (Sprint 3);
+                               the OCaml totality pass + plan.json export shipped:
+                               austral compile --pkg-totality=true --emit-derivations=plan.json
   push / pull                  needs the Sprint 5 remote client
 ";
 
@@ -106,7 +108,7 @@ fn run(argv: &[String]) -> Result<Option<String>, i32> {
         "build" | "push" | "pull" => Err(format!(
             "`{cmd}` is not implemented yet: {} — see PLAN_avm_pkg.md for the sprint it belongs to (refusing instead of faking)",
             match cmd.as_str() {
-                "build" => "needs the OCaml totality pass (Sprint 2) and the hermetic executor (Sprint 3)",
+                "build" => "needs the hermetic executor (Sprint 3); the OCaml totality pass shipped — produce plan.json with `austral compile --pkg-totality=true --emit-derivations=plan.json`",
                 "push" | "pull" => "needs the Sprint 5 remote client",
                 _ => unreachable!(),
             }
@@ -213,7 +215,11 @@ fn cmd_put(ctx: &Ctx, args: &[String]) -> Result<String, String> {
         manifest.version,
         manifest.total_size,
         manifest.chunks.len(),
-        if manifest.signature.is_some() { ", signed" } else { "" }
+        if manifest.signature.is_some() {
+            ", signed"
+        } else {
+            ""
+        }
     ))
 }
 
@@ -227,7 +233,9 @@ fn is_flag_value(args: &[String], a: &str) -> bool {
 }
 
 fn cmd_stat(ctx: &Ctx, args: &[String]) -> Result<String, String> {
-    let id_hex = args.first().ok_or_else(|| "stat needs a manifest hash".to_string())?;
+    let id_hex = args
+        .first()
+        .ok_or_else(|| "stat needs a manifest hash".to_string())?;
     let id = unhex(id_hex).map_err(|e| e.to_string())?;
     let store = open_store(ctx)?;
     let m = store.get_manifest(&id).map_err(|e| e.to_string())?;
@@ -321,8 +329,7 @@ fn load_plan(path: &str) -> Result<Plan, String> {
         derivations: Vec<Derivation>,
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
-    let file: PlanFile =
-        serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
+    let file: PlanFile = serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
     let mut plan = Plan::new();
     for d in file.derivations {
         plan.insert(d).map_err(|e| e.to_string())?;
@@ -332,12 +339,17 @@ fn load_plan(path: &str) -> Result<Plan, String> {
 
 fn cmd_drv_hash(ctx: &Ctx, args: &[String]) -> Result<String, String> {
     let _ = ctx; // store-independent: pure derivation hashing
-    let path = args.first().ok_or_else(|| "drv-hash needs <plan.json>".to_string())?;
+    let path = args
+        .first()
+        .ok_or_else(|| "drv-hash needs <plan.json>".to_string())?;
     let target = args.get(1).map(|s| s.as_str());
     let plan = load_plan(path)?;
     let graph = plan.resolve(target).map_err(|e| e.to_string())?;
-    let ids: std::collections::BTreeMap<&str, String> =
-        graph.ids.iter().map(|(k, v)| (k.as_str(), hex(v))).collect();
+    let ids: std::collections::BTreeMap<&str, String> = graph
+        .ids
+        .iter()
+        .map(|(k, v)| (k.as_str(), hex(v)))
+        .collect();
     Ok(serde_json::json!({
         "target": target.and_then(|t| graph.ids.get(t)).map(|h| hex(h)),
         "resolved": ids,
@@ -347,7 +359,9 @@ fn cmd_drv_hash(ctx: &Ctx, args: &[String]) -> Result<String, String> {
 }
 
 fn cmd_eval(ctx: &Ctx, args: &[String]) -> Result<String, String> {
-    let path = args.first().ok_or_else(|| "eval needs <plan.json>".to_string())?;
+    let path = args
+        .first()
+        .ok_or_else(|| "eval needs <plan.json>".to_string())?;
     let target = args.get(1).map(|s| s.as_str());
     let plan = load_plan(path)?;
 
@@ -410,7 +424,9 @@ fn hydrate_get(
 }
 
 fn cmd_get(ctx: &Ctx, args: &[String]) -> Result<String, String> {
-    let id_hex = args.first().ok_or_else(|| "get needs a manifest hash".to_string())?;
+    let id_hex = args
+        .first()
+        .ok_or_else(|| "get needs a manifest hash".to_string())?;
     let limit = match flag(args, "--hot-limit") {
         Some(v) => parse_size(v)?,
         None => hot_limit_from_env()?,
@@ -457,7 +473,9 @@ mod tests {
     impl TempStore {
         fn new() -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
-            let ctx = Ctx { store_dir: dir.path().join("store") };
+            let ctx = Ctx {
+                store_dir: dir.path().join("store"),
+            };
             TempStore { _dir: dir, ctx }
         }
     }
@@ -495,7 +513,10 @@ mod tests {
         let stat = cmd_stat(&ts.ctx, std::slice::from_ref(&id_hex)).unwrap();
         assert!(stat.contains("\"name\":\"demo\""), "{stat}");
         assert!(stat.contains("\"version\":\"1.2.3\""), "{stat}");
-        assert!(stat.contains(&format!("\"drv_hash\":\"{}\"", hex(&[7u8; 32]))), "{stat}");
+        assert!(
+            stat.contains(&format!("\"drv_hash\":\"{}\"", hex(&[7u8; 32]))),
+            "{stat}"
+        );
 
         let out_file = ts._dir.path().join("out.bin");
         let get_out = cmd_get(
@@ -504,7 +525,11 @@ mod tests {
         )
         .unwrap();
         assert!(get_out.contains(&format!("\"bytes\":{}", payload.len())));
-        assert_eq!(std::fs::read(&out_file).unwrap(), payload, "bytes must roundtrip");
+        assert_eq!(
+            std::fs::read(&out_file).unwrap(),
+            payload,
+            "bytes must roundtrip"
+        );
     }
 
     #[test]
@@ -513,9 +538,11 @@ mod tests {
         let f = ts._dir.path().join("s.bin");
         write(&f, b"signed payload");
         let seed = hex(&[42u8; 32]);
-        let put_out =
-            cmd_put(&ts.ctx, &[f.display().to_string(), "--sign".into(), seed.clone()])
-                .unwrap();
+        let put_out = cmd_put(
+            &ts.ctx,
+            &[f.display().to_string(), "--sign".into(), seed.clone()],
+        )
+        .unwrap();
         assert!(put_out.contains("signed"), "{put_out}");
         let id_hex = put_out.split_whitespace().next().unwrap();
         let store = open_store(&ts.ctx).unwrap();
@@ -543,8 +570,7 @@ mod tests {
         store.drop_manifest(&unhex(&id_b).unwrap()).unwrap();
         let dry2 = cmd_gc(&ts.ctx, &["--dry-run".into()]).unwrap();
         assert!(dry2.contains("\"dead_chunks\":"), "{dry2}");
-        let dead: u64 = serde_json::from_str::<serde_json::Value>(&dry2)
-            .unwrap()["dead_chunks"]
+        let dead: u64 = serde_json::from_str::<serde_json::Value>(&dry2).unwrap()["dead_chunks"]
             .as_u64()
             .unwrap();
         assert!(dead > 0);
@@ -586,7 +612,9 @@ mod tests {
             unhex(v["resolved"]["mid"].as_str().unwrap()).unwrap()
         };
         let store = open_store(&ts.ctx).unwrap();
-        let mut m = store.put_buffer("mid", "1", b"built-mid", Some(mid_id)).unwrap();
+        let mut m = store
+            .put_buffer("mid", "1", b"built-mid", Some(mid_id))
+            .unwrap();
         avm_cas::crypto::sign_manifest(&mut m, &signing_key_from_seed(&[1u8; 32]));
         store.put_manifest(&m).unwrap();
 
@@ -603,6 +631,55 @@ mod tests {
             let r = run(&[cmd.to_string(), "whatever".to_string()]);
             assert!(r.is_err(), "{cmd} must not pretend to succeed");
         }
+    }
+
+    /// The OCaml exporter now writes a per-derivation `totality` record
+    /// ("proven" under `--pkg-totality=true`, otherwise "unproven").
+    /// `load_plan` must accept it (release contract point 2), a v0 plan
+    /// without the field must still parse, and the record must not move
+    /// any Merkle id — drv-hash stays byte-identical either way.
+    #[test]
+    fn plan_totality_record_is_kept_but_never_rehashes() {
+        let ts = TempStore::new();
+        let mk = |totality: &str| {
+            format!(
+                r#"{{"derivations":[
+                    {{"name":"base","version":"1","builder_symbol":"stdenv.build","dependencies":[],"sources":["aa"],"env_vars":[],"totality":"{totality}"}},
+                    {{"name":"app","version":"1","builder_symbol":"stdenv.build","dependencies":["base"],"sources":[],"env_vars":[],"totality":"{totality}"}}
+                ]}}"#
+            )
+        };
+        let p = |fname: &str, body: &str| {
+            let f = ts._dir.path().join(fname);
+            std::fs::write(&f, body).unwrap();
+            f.display().to_string()
+        };
+        let with_prov = p("prov.json", &mk("proven"));
+        let with_unprov = p("unprov.json", &mk("unproven"));
+        let v0 = p(
+            "v0.json",
+            r#"{"derivations":[
+                {"name":"base","version":"1","builder_symbol":"stdenv.build","dependencies":[],"sources":["aa"],"env_vars":[]},
+                {"name":"app","version":"1","builder_symbol":"stdenv.build","dependencies":["base"],"sources":[],"env_vars":[]}
+            ]}"#,
+        );
+
+        let h_prov = cmd_drv_hash(&ts.ctx, &[with_prov.clone()]).unwrap();
+        let h_unprov = cmd_drv_hash(&ts.ctx, &[with_unprov.clone()]).unwrap();
+        let h_v0 = cmd_drv_hash(&ts.ctx, &[v0.clone()]).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&h_prov).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&h_unprov).unwrap(),
+            "the totality record may not move a Merkle id"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&h_prov).unwrap()["order"],
+            serde_json::from_str::<serde_json::Value>(&h_v0).unwrap()["order"],
+            "a v0 plan must resolve identically"
+        );
+        // eval also tolerates the record (same load_plan path).
+        let e = cmd_eval(&ts.ctx, &[with_prov]).unwrap();
+        assert!(e.contains("\"store_hits\":[]"), "{e}");
     }
 
     #[test]

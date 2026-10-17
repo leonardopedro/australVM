@@ -209,6 +209,7 @@ dependencies = [
  "cedar-policy",
  "cranelift",
  "cranelift-codegen",
+ "cranelift-control",
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",

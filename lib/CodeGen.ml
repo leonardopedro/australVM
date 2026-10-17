@@ -683,11 +683,22 @@ let decl_order = function
 (* the following code is used to sort declarations in dependency order, so that
    the C compiler doesn't complain about types being incomplete *)
 
-let rec slot_depth decls (slot: c_slot) =
+(* Cycle guard: a self-referential type (a recursive union, e.g. a list,
+   whose `tail` slot names its own struct) would otherwise make the depth
+   walk below recurse forever — `name_depth` finds the struct, whose slots
+   name the struct again, ad infinitum. A name already on the current path
+   contributes depth 0: the CStructForwardDeclaration emitted alongside
+   every record/union definition already breaks the cycle for the C
+   compiler, and for *sorting* purposes a back edge adds no ordering
+   constraint. (Pre-existing bug, hit by recursive unions — fixed for
+   avm-pkg, where the package DSL's List type is recursive.) *)
+type depth_path = StringSet.StringSet.t
+
+let rec slot_depth decls (path: depth_path) (slot: c_slot) =
   match slot with
-  | CSlot (_, CNamedType name) -> name_depth name decls
-  | CSlot (_, CStructType (CStruct (_,slots))) -> slots_depth slots decls
-  | CSlot (_, CUnionType slots) -> slots_depth slots decls
+  | CSlot (_, CNamedType name) -> name_depth decls path name
+  | CSlot (_, CStructType (CStruct (_,slots))) -> slots_depth decls path slots
+  | CSlot (_, CUnionType slots) -> slots_depth decls path slots
   | _ -> 0
 
 and get_slots name decl =
@@ -699,15 +710,18 @@ and get_slots name decl =
        None
   | _ -> None
 
-and name_depth name decls =
-  let slots =
-    match (List.filter_map (get_slots name) decls) with
-    | hd :: _ -> hd
-    | _ -> [] in
-  slots_depth slots decls
+and name_depth decls (path: depth_path) name =
+  if StringSet.StringSet.mem name path then
+    0
+  else
+    let slots =
+      match (List.filter_map (get_slots name) decls) with
+      | hd :: _ -> hd
+      | _ -> [] in
+    slots_depth decls (StringSet.StringSet.add name path) slots
 
-and slots_depth slots decls =
-  let deps = List.map (slot_depth decls) slots in
+and slots_depth decls (path: depth_path) slots =
+  let deps = List.map (slot_depth decls path) slots in
   let dep_depth = List.fold_left max 0 deps in
   let depth = 1 + dep_depth in
   depth
@@ -715,7 +729,7 @@ and slots_depth slots decls =
 let detail_compare decls a b =
   match (a, b) with
   | (CNamedStructDefinition (_, _, s1), CNamedStructDefinition (_, _, s2)) ->
-     (slots_depth s1 decls) - (slots_depth s2 decls)
+     (slots_depth decls StringSet.StringSet.empty s1) - (slots_depth decls StringSet.StringSet.empty s2)
   | _ ->
      compare (decl_order a) (decl_order b)
 

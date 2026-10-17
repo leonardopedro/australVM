@@ -154,6 +154,27 @@ The totality checker rejects an Austral package definition if:
 2. It contains recursive function definitions not recognized as structurally descending or annotated for tail-call optimization.
 3. It performs unmediated side effects (all I/O must take an explicit capability reference).
 
+**Scheduling (release contract).** The checker is *heuristic*: rules 1–2
+syntactically reject anything they cannot prove bounded, and may therefore
+reject programs that happen to terminate. So the requirement is scoped to a
+single opt-in gate — `--pkg-totality=true` on `austral compile`
+(`Compiler.pkg_totality`, default `false`, checked in `lib/Compiler.ml`
+immediately after linearity and before derivation export). Nothing else in
+the pipeline runs it: ordinary typechecking is untouched, and the separate
+liquid totality gate (`LiquidCheck`) only ever examines functions carrying a
+`Liquid_*` pragma.
+
+**Plan record.** Running with `--pkg-totality=true` *selects* the
+compilations whose declarations are vetted non-recursive; everything not
+selected must still be visible, so the exporter stamps each derivation in
+plan.json with `"totality": "proven"` (flag on, pass accepted) or
+`"totality": "unproven"` (flag off — unknown, never assumed). The status is
+a pure function of invocation + module, merges deterministically (last
+deployment of a name wins), and a plan file predating the field decodes as
+`unproven`. Evaluators treat anything but an explicit `proven` as unproven.
+Persisting per-`.aum` caches is explicitly out of scope — plan.json is the
+only carrier.
+
 ---
 
 ### 3.2 Dual-Tier Storage Architecture (`avm-cas`)

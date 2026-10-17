@@ -40,7 +40,9 @@ let test_compile_default _ =
                             jit_server = false;
                             allow_all = false;
                             auth_manifest = None;
-                            emit_cps_path = None
+                            emit_cps_path = None;
+                            pkg_totality = false;
+                            emit_derivations = None
                           }
   in
   assert_equal ~printer:(fun _ -> "cmd") cmd expected

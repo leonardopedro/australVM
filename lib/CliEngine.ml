@@ -80,11 +80,13 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; pkg_totality; emit_derivations } ->
      validate_jit_server_target jit_server target;
      Compiler.use_cps_jit := use_cps_jit;
      Compiler.jit_server_mode := jit_server;
      Compiler.emit_cps_path := emit_cps_path;
+     Compiler.pkg_totality := pkg_totality;
+     Compiler.emit_derivations_path := emit_derivations;
      if allow_all then CamlCompiler_rust_bridge.set_allow_all ();
      (match auth_manifest with
       | Some path ->
@@ -139,6 +141,13 @@ and compile_help_lines (): string list =
     "    --auth-manifest=<path>  Load a module.toml grant set into the JIT";
     "                    authorization engine.";
     "    --emit-cps      Save CPS binary IR to the given path.";
+    "    --pkg-totality[=true|false]  Package modules only: run the totality";
+    "                    pass, which rejects while loops, recursion, foreign/embed";
+    "                    I/O, and other constructs whose termination cannot be";
+    "                    proven. Off by default; plans record each derivation as";
+    "                    proven only when this flag ran.";
+    "    --emit-derivations=<path>  Export this module's Derivation constants";
+    "                    as plan JSON (merging with an existing file).";
     "";
     "Positional arguments:";
     "    module    Of the form 'file.aui,file.aum' for modules with";

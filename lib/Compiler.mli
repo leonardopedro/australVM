@@ -36,6 +36,13 @@ val use_cps_jit : bool ref
 val jit_server_mode : bool ref
 val emit_cps_path : string option ref
 
+(** avm-pkg: run the package totality pass on every compiled module. *)
+val pkg_totality : bool ref
+
+(** avm-pkg: export each compiled module's `Derivation` constants to this
+    plan JSON path (merging with an existing file). *)
+val emit_derivations_path : string option ref
+
 (** Hash table of compiled JIT function pointers keyed by function name. *)
 val jit_functions : (string, int64) Hashtbl.t
 

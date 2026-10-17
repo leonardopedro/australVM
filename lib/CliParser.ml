@@ -69,6 +69,19 @@ module Errors = struct
       Text "."
     ]
 
+  let invalid_bool_flag_value (name: string) (value: string) =
+    austral_raise CliError [
+      Text "Invalid value for ";
+      Code ("--" ^ name);
+      Text ": ";
+      Code value;
+      Text ". Valid values are ";
+      Code "true";
+      Text " and ";
+      Code "false";
+      Text "."
+    ]
+
   let unknown_error_reporting_mode (mode: string) =
     austral_raise CliError [
       Text "Unknown error reporting mode: ";
@@ -114,6 +127,8 @@ type cmd =
       allow_all: bool;
       auth_manifest: string option;
       emit_cps_path: string option;
+      pkg_totality: bool;
+      emit_derivations: string option;
     }
 
 let check_leftovers (arglist: arglist): unit =
@@ -253,13 +268,42 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
     | Some (arglist, path) -> (Some path, arglist)
     | None -> (None, arglist)
   in
+  (* Parse --pkg-totality flag (avm-pkg: run the package totality pass,
+     which rejects unbounded constructs in package modules). Accepts both
+     the bare boolean form (`--pkg-totality`, preset => true) and the value
+     form from the release contract (`--pkg-totality=true`), with an
+     explicit value overriding the bare form. *)
+  let pkg_totality_of_value value =
+    match value with
+    | "true" -> true
+    | "false" -> false
+    | _ -> Errors.invalid_bool_flag_value "pkg-totality" value
+  in
+  let (pkg_totality, arglist) =
+    match pop_flag arglist "pkg-totality" with
+    | Some (arglist, BoolFlag _) ->
+       (true, arglist)
+    | Some (arglist, ValueFlag (_, value)) ->
+       (pkg_totality_of_value value, arglist)
+    | Some (_, PositionalArg _) ->
+       internal_err "pop_flag matched a positional argument by flag name"
+    | None ->
+       (false, arglist)
+  in
+  (* Parse --emit-derivations=<path> flag (avm-pkg: export the module's
+     Derivation constants as plan JSON) *)
+  let (emit_derivations, arglist) =
+    match pop_value_flag arglist "emit-derivations" with
+    | Some (arglist, path) -> (Some path, arglist)
+    | None -> (None, arglist)
+  in
   (* There must be at least one module. *)
   if ((List.length modules) < 1) then
     Errors.missing_module ()
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; pkg_totality = pkg_totality; emit_derivations = emit_derivations; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

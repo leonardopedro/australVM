@@ -175,7 +175,8 @@ extern rust fn crate_fn(buf: Address[Nat8], len: Int64) -> Int64
 mixed module set, builds the Rust crates via `cargo` (subprocess), registers
 their artifacts, and JITs the Austral half through the bridge. The umbrella
 *includes* australVM as a component; australVM does not learn about rustc.
-(Prototype shipped 2026-10-17 as `../umbrella` — see the P3 status in §5.)
+(Prototype shipped 2026-10-17 as `umbrella/` — since the same day a
+git submodule inside this tree, own repository — see the P3 status in §5.)
 
 **Not adopted, stated plainly**: Valen's route — a patched `rustc` on branch
 `per-instance-mir` — is not taken. A forked compiler is a maintenance sink
@@ -191,7 +192,7 @@ the plugin seam (shape A) keeps working without it.
 | P0 | this plan + attribution rows | `scripts/check-attribution`, `scripts/check-links` |
 | P1 | group-region checking pass (MTAST, erased), `test-programs/` positive + negative cases | `test-programs/runner.py`; JIT test suites unchanged (erasure boundary held) |
 | P2 | `extern rust` tier 1: declaration, MTAST ownership annotations, symbol table, one reference crate called end-to-end from a module | a `demo_module`-shaped end-to-end through `modhost`; `cps.rs::a10_live_grant_tests`-style denial test for an ungranted extern call |
-| P3 | umbrella prototype (shape B) outside this tree: `cargo` subprocess + australVM-as-library + one mixed build | the same end-to-end as P2, driven by the umbrella CLI instead of `run_demo.sh` |
+| P3 | umbrella prototype (shape B) as a separate crate: `cargo` subprocess + australVM-as-library + one mixed build | the same end-to-end as P2, driven by the umbrella CLI instead of `run_demo.sh` |
 
 Each phase is independently shippable; none of them touches the frozen ABI,
 and P1 does not touch the JIT at all. The honesty rule from Plan L applies
@@ -250,11 +251,16 @@ Deviations and limits, stated plainly:
   backend, exit 0); that behavior predates this plan and was not changed.
   The hard denial lives at the JIT gate and in `modhost authorize`.
 
-### P3 status (2026-10-17): shipped — umbrella prototype outside this tree
+### P3 status (2026-10-17): shipped — umbrella prototype (now an in-tree submodule)
 
-The prototype is `../umbrella` — a separate crate that depends on this
-repo only through the bridge path-dependency. Nothing in this tree refers
-to it: §4's boundary held, australVM does not learn about rustc.
+The prototype is `umbrella/` — a separate crate (own git repository,
+registered here as a submodule via `.gitmodules`) that depends on this
+repo only through the bridge path-dependency. It started life as a
+sibling checkout (`../umbrella`) and was moved inside the tree on
+2026-10-17; the move changed nothing about §4's boundary — the crate
+still contains no australVM code and australVM still does not learn
+about rustc; only the path-dependency and default front-end paths
+became in-tree relatives.
 
 - **cargo subprocess.** `umbrella` runs `cargo build --release
   --message-format=json` on an arbitrary crate (`modules/rscrate`) and
@@ -297,7 +303,8 @@ this cheap), and the expected value is asserted by the demo crate's own
 FNV contract rather than a cross-language golden file. The phase table's
 "driven by the umbrella CLI instead of `run_demo.sh`" is met in
 prototype form: same end-to-end as P2, ownership of cargo and rustc
-entirely outside this tree.
+entirely in the umbrella crate (separate repository even though now
+nested inside this tree as a submodule).
 
 ## §6 Considered and not used
 

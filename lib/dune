@@ -17,11 +17,12 @@
     CombiningPass Common Compiler_plugin DeclIdSet DesugarBorrows DesugarPaths 
     DesugaringPass Entrypoint Env EnvExtras EnvTypes EnvUtils Error 
     ErrorText Escape ExportInstantiation ExtractionPass HtmlError Id 
+    DerivAst 
     Identifier IdentifierMap IdentifierSet ImportResolution Imports LexEnv 
     LiftControlPass LinearityCheck ModIdSet ModuleNameSet MonoType 
     MonoTypeBindings Monomorphize MtastUtil Names ParserInterface Qualifier 
     Region RegionMap Reporter ReturnCheck SourceContext Span Stages 
-    StringSet TailCallAnalysis TailCallUtil TastUtil Type TypeBindings 
+    StringSet TailCallAnalysis TailCallUtil TastUtil Totality Type TypeBindings 
     TypeCheckExpr TypeClasses TypeErrors TypeMatch TypeParameter 
     TypeParameters TypeParser TypeReplace TypeSignature TypeStripping 
     TypeSystem TypeVarSet TypingPass Util Version Lexer Parser

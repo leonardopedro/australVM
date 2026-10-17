@@ -31,6 +31,12 @@ val arglist_size : arglist -> int
     present, None otherwise. *)
 val pop_bool_flag : arglist -> string -> arglist option
 
+(** Pop a flag with whatever form it was given in: --name (BoolFlag) or
+    --name=value (ValueFlag). Returns the arglist without the flag plus the
+    flag itself if present, None otherwise. Callers that accept both forms
+    (e.g. --pkg-totality and --pkg-totality=true) use this directly. *)
+val pop_flag : arglist -> string -> (arglist * arg) option
+
 (** Pop the value of a flag (e.g. --foo=bar returns bar), returning the arglist
     without the flag and the value if present, None otherwise. *)
 val pop_value_flag : arglist -> string -> (arglist * string) option

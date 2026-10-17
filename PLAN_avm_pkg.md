@@ -1,7 +1,9 @@
 # PLAN_avm_pkg — `avm-pkg`, the content-addressed package engine
 
-**Status (2026-10-17): Sprints 1–2 core + CLI shipped and measured; Sprints 3–5 and
-the OCaml totality pass not started — recorded, not covered.**
+**Status (2026-10-17): Sprints 1–2 core + CLI shipped and measured, task
+2.1 (OCaml totality pass + derivation export) shipped; Sprints 3–5 —
+hermetic runner, cell builder/linking, remote sync, bootstrap set — not
+started — recorded, not covered.**
 
 This document is the execution record for the owner's avm-pkg engineering
 spec (received 2026-10-17). It tracks what was built, what was measured,
@@ -9,13 +11,15 @@ what was deliberately designed differently and why, and exactly where the
 next agent picks up. Honesty rule from PLAN_valen §5 applies verbatim: a
 task that cannot run is recorded as *not covered*, never as passing.
 
-Provenance: everything here is implemented from the written spec. No
-external source tree was available in this workspace (the packfile-engine
-prior art the spec names, Vykar, has no checkout here), so `avm-cas` is an
-original implementation of the spec's documented design; no external code
-was read or copied. The single algorithm-level provenance row — the
-SplitMix64 mixer behind the gear table (§4.1) — is recorded in this repo's
-`ATTRIBUTION.md` as workspace policy #4 requires.
+Provenance: everything here is implemented from the written spec — now
+in-repo as `docs/pkg_manager_plan.md`. No external source tree was
+available in this workspace (the packfile-engine prior art the spec names,
+Vykar, has no checkout here), so `avm-cas` is an original implementation
+of the spec's documented design; no external code was read or copied.
+Per workspace policy #4 both provenance claims are rowed in this repo's
+`ATTRIBUTION.md`: the *design-level* Vykar adaptation (spec §3.2's "Vykar
+Adaptation") and the one algorithm-level row, the SplitMix64 mixer behind
+the gear table (§4.1).
 
 ## §1 What exists
 
@@ -35,9 +39,10 @@ safestos/pkg/                    cargo workspace (offline-only deps; own Cargo.l
                  gc, drv-hash, eval (build/push/pull refuse honestly)
 ```
 
-Plus: the spec's `stdlib/pkg/*.au` DSL, `lib/Pkg/Totality.ml`, `.avm` cell
-format, hermetic runner, remote sync, and the bootstrap package set are
-**not started** — see §5.
+Plus: the `.avm` cell format, hermetic runner, remote sync, and the
+bootstrap package set are **not started** — see §5. (The spec's package
+DSL exists as `stdlib/pkg/*.aui|.aum`, and the totality pass shipped as a
+flat `lib/Totality.ml` — see §2 and §4.8.)
 
 ## §2 Task status
 
@@ -47,7 +52,7 @@ format, hermetic runner, remote sync, and the bootstrap package set are
 | 1.2 Packfile engine & manifests & LZ4 | **done** | `engine.rs` + `compression.rs`; roundtrip, dedup, reopen, GC tests |
 | 1.3 Ed25519 signatures | **done** | `crypto.rs`; sign/verify/tamper/wrong-key/unsigned-fails-closed tests |
 | 1.4 Ephemeral hot store | **done** | `hot_store.rs`; LRU test + 2 GiB/1 GiB zero-writeback acceptance (release, ~4.1 s) |
-| 2.1 Totality pass (OCaml) | **not started** | design + confirmed hook facts in §5 |
+| 2.1 Totality pass (OCaml) | **done** | `lib/Totality.ml` (rules 1–5), gated on `--pkg-totality=true` at `Compiler.ml` between linearity and derivation export; `test/TotalityTest.ml` 10/10; flag matrix: no flag/`=false` pass, `=true` rejects while (rule 1) and recursion (rule 2), `=yes` fails loudly; `lib/DerivAst.ml` export + `test/DerivAstTest.ml` 11/11 incl. the `totality` plan record; end-to-end plan: 4 seed derivations `proven`, byte-identical on rerun, `drv-hash` byte-stable |
 | 2.2 Merkle DAG engine | **done** | `graph.rs` + `hash.rs`; declaration/dep/source/env order-independence, cycle detection |
 | 2.3 Memoization engine | **done (as specified semantics; see §4.3)** | `memo.rs`; warm/cold/id-keyed-presence tests + 5,000-node acceptance |
 | 3.1 Capability-checked sandbox | **not started** | §5 |
@@ -70,10 +75,12 @@ format, hermetic runner, remote sync, and the bootstrap package set are
 | Hot cell acquire (fast path) | < 1 µs | *not measured* | not covered |
 | 50 MB evicted-cell fault-in | < 15 ms | *not measured* (2 GiB acceptance hydrates 250 MiB cells well inside it, but no timed probe) | not covered |
 | Capability gating (`EPERM` w/o `NetworkCap`) | blocked at type + OS level | blocked: executor not started | not covered |
-| Language totality | 100 % of unbounded constructs rejected at compile time | blocked: `Totality.ml` not started | not covered |
+| Language totality | 100 % of unbounded constructs rejected at compile time | **pass for the shipped v1 rule set** (while / call cycles / foreign, embed, fptr): rejected at compile time under `--pkg-totality=true` — red probe `BadDrv.aum` (`rule 1`) leaves `rotten` absent from plan.json, control without the flag compiles and records `unproven` | pass |
 
-Suite: `cargo test --workspace` → **42 passed, 0 failed, 2 ignored** (the two
-ignored are the heavy acceptances above), exit 0. CLI exercised end-to-end
+Suite: `cargo test --workspace` → **60 passed, 0 failed, 5 ignored**, exit 0
+(the five ignored are the heavy/timing acceptances: hot-store ×4 and the
+5,000-node warm-eval; each is exercised separately in release mode per the
+commands below). CLI exercised end-to-end
 through the real binary (signed `put`, byte-exact `get` roundtrip, `gc`,
 refusals).
 
@@ -81,9 +88,9 @@ Reproduce every number:
 
 ```sh
 cd safestos/pkg
-CARGO_NET_OFFLINE=true cargo test --workspace                     # 42 pass / 2 ignored
+CARGO_NET_OFFLINE=true cargo test --workspace                     # 60 pass / 5 ignored
 AVM_HOT_DIR=/dev/shm CARGO_NET_OFFLINE=true \
-  cargo test --workspace --release -- --ignored --test-threads=1  # both heavy acceptances
+  cargo test --workspace --release -- --ignored --test-threads=1  # all heavy/timing acceptances (hot-store ×4 + warm-eval)
 cargo test -p avm-cas  --release minor_edit   -- --nocapture      # 98.8 % dedup
 cargo test -p avm-cas  --release acceptance_64mib -- --nocapture  # 99.9 % resync
 cargo test -p avm-eval --release -- --ignored warm_eval --nocapture  # 10.9 ms / 2.1 ms
@@ -146,21 +153,45 @@ pretends. `hot-stats` reports budget/hot-dir/scratch and says plainly that
 live residency is per-process until the Sprint 3 runtime integration,
 rather than inventing a number.
 
+**4.8 Totality scheduling + plan record (release contract).** The v1
+checker is heuristic (rules 1–5 are sound over-approximations: they reject
+what they cannot *prove* bounded), so the requirement is scoped — the
+relaxation lives at exactly one place, the `if !pkg_totality` call in
+`Compiler.ml` immediately after linearity and before derivation export.
+Nothing else runs it: ordinary typechecking is untouched (probe matrix:
+no flag / `=false` → rc 0; `=true` → rules 1–2 reject; bare spelling still
+works; `=yes` fails loudly), the liquid totality gate only examines
+pragma-carrying functions, and `lib/Linear/` was never touched (spec §6.2).
+Flag default is off in both the parser and `Compiler.pkg_totality =
+ref false`. Running with `--pkg-totality=true` *selects* the compilations
+into the vetted non-recursive set; everything not selected leaks into the
+plan deterministically: `DerivAst` stamps each derivation
+`"totality": "proven" | "unproven"` (pure function of invocation + module,
+byte-identical reruns, last declaration of a name wins the merge, v0 plans
+without the field decode as `unproven`, unknown values fail loudly).
+`avm-eval::Derivation` carries the same record (`Option<Totality>`,
+`is_proven()` false for absent) and deliberately keeps it **out of** the
+Merkle id calculus, so recording status never re-hashes a plan — pinned by
+`plan_totality_record_is_kept_but_never_rehashes`. Deviation from the
+spec: the pass lives at flat `lib/Totality.ml`, not `lib/Pkg/Totality.ml`
+(`lib/dune` uses an explicit module list; a subpackage would need its own
+stanza for no gain). Non-goal per the contract: no per-`.aum` caches —
+plan.json is the only carrier of this information.
+
 ## §5 Not covered — next steps in order
 
-1. **Totality pass (spec task 2.1).** Confirmed integration facts: `lib/dune`
-   uses an **explicit module list** (add the module there; spec's `lib/Pkg/`
-   needs its own `dune` stanza or a flat `lib/Totality.ml`), function bodies
-   with `while`/recursion live in the MAST stage (`Stages.ml`,
-   `Monomorphize.ml` reference `MWhile`), CLI-flag plumbing precedent is
-   `CliParser.ml` (`--target-type`, `--use-cps-jit` around lines 183–231),
-   pipeline entry is `Compiler.ml`. Proposed v1 rules (sound over-
-   approximations, each syntactic): package modules reject *all* `while`
-   statements, any call cycle through SCC analysis, and `Foreign_Import` /
-   `@embed` (no unmediated I/O until capabilities exist). Plus the JSON
-   derivation export `avm-cli`'s `plan.json` already consumes. Constraint
-   from spec §6.2: do not touch `lib/Linear/`. Not started: doing it half-
-   wired would be worse than absent.
+1. ~~**Totality pass (spec task 2.1)**~~ **DONE** (flat `lib/Totality.ml`,
+   not the spec's `lib/Pkg/` — recorded as a deviation in §4.8). Shipped:
+   rule 1–5 syntactic checks behind `--pkg-totality=true` (default off,
+   both spellings accepted), derivation export in `lib/DerivAst.ml` with a
+   per-entry `totality` plan record, tests in `test/TotalityTest.ml` +
+   `test/DerivAstTest.ml`, and the §3 acceptance row. Integral to it:
+   fixes behind the same gate — a cycle guard in `CodeGen.ml`'s
+   declaration sort (self-referential structs used to hang) and a `MonoTy`
+   universe escape in `TypeSystem.ml`'s `replace_variables` (crashed while
+   instantiating monomorphs whose type arguments were themselves
+   monomorphs). Constraint from spec §6.2 was honored: `lib/Linear/` is
+   untouched.
 2. **Freshness-carrying manifest for §4.2's traversal-skip** (one manifest
    field + guarded name lookup; makes the spec's literal warm-path shape
    sound).

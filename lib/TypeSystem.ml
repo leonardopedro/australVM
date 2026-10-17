@@ -129,6 +129,20 @@ let rec is_concrete = function
   | MonoTy _ ->
      true
 
+(** The universe used when recomputing a `Type`-declared application's
+    effective universe from its arguments (see [replace_variables] in
+    TypeBindings: substituting type variables can leave a [MonoTy] argument
+    — a type that has already been monomorphized, same escape hatch as
+    TypeBindings #399). Asking [type_universe] of a [MonoTy] would require
+    the environment, which is not threaded here, so a [MonoTy] argument is
+    counted as Type: the recomputation then preserves the declared
+    [TypeUniverse] instead of shrinking it, which can only over-approximate
+    the argument's universe, never under-approximate it. *)
+let rec arg_universe_for_effective (ty: ty): universe =
+  match ty with
+  | MonoTy _ -> TypeUniverse
+  | _ -> type_universe ty
+
 (** Given a list of types, return whether any of them are in the Linear
     universe. *)
 and any_arg_is_linear (args: ty list) =
@@ -136,7 +150,7 @@ and any_arg_is_linear (args: ty list) =
     | LinearUniverse -> true
     | _ -> false
   in
-  List.exists is_linear (List.map type_universe args)
+  List.exists is_linear (List.map arg_universe_for_effective args)
 
 (** Given a list of types, return whether any of them are in the Type
     universe. *)
@@ -145,4 +159,4 @@ and any_arg_is_type (args: ty list) =
     | TypeUniverse -> true
     | _ -> false
   in
-  List.exists is_type (List.map type_universe args)
+  List.exists is_type (List.map arg_universe_for_effective args)

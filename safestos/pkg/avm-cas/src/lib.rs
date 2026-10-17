@@ -22,9 +22,10 @@ pub mod compression;
 pub mod crypto;
 pub mod engine;
 pub mod hot_store;
+pub mod remote;
 
 pub use chunker::{chunk_payload, Chunk, ChunkerConfig};
-pub use engine::{ChunkStore, Digest, Manifest, GcReport};
+pub use engine::{ChunkStore, Digest, GcReport, Manifest};
 pub use hot_store::{HotStats, HotStore};
 
 use std::fmt;
@@ -42,6 +43,9 @@ pub enum CasError {
     Signature(String),
     Capacity(String),
     Codec(u8),
+    /// Remote binary-cache failure (Sprint 5.1): transport, protocol, or
+    /// server-side refusal — never a local storage state.
+    Remote(String),
 }
 
 impl fmt::Display for CasError {
@@ -53,6 +57,7 @@ impl fmt::Display for CasError {
             CasError::Signature(what) => write!(f, "signature check failed: {what}"),
             CasError::Capacity(what) => write!(f, "capacity error: {what}"),
             CasError::Codec(c) => write!(f, "unknown compression codec id {c}"),
+            CasError::Remote(what) => write!(f, "remote cache error: {what}"),
         }
     }
 }

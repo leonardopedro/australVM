@@ -47,6 +47,11 @@ open HtmlError
 let use_cps_jit = ref false
 let jit_server_mode = ref false
 let emit_cps_path = ref (None: string option)
+(* avm-pkg (PLAN_avm_pkg.md): package-module totality gate + derivation
+   JSON export. Both are opt-in per invocation — `--pkg-totality` and
+   `--emit-derivations <path>` — so ordinary compilation is untouched. *)
+let pkg_totality = ref false
+let emit_derivations_path = ref (None: string option)
 let jit_functions : (string, int64) Hashtbl.t = Hashtbl.create 16
 
 (* The binary most recently swapped into the JIT (set only on a successful
@@ -148,6 +153,16 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
               austral_raise TypeError [ErrorText.Text msg]
            | Compiler_plugin.VerdictOk -> ());
           let _ = check_module_linearity typed in
+          (* avm-pkg spec task 2.1: when compiling package modules, run
+             the totality pass (rejects unbounded constructs — see
+             lib/Totality.ml) and export the module's derivations to the
+             plan JSON `avm-pkg` consumes (see lib/DerivAst.ml). *)
+          if !pkg_totality then
+            Totality.check_module typed;
+          (match !emit_derivations_path with
+           | Some path ->               DerivAst.write_json path (DerivAst.module_derivations ~totality:!pkg_totality typed)
+           | None ->
+              ());
           let env: env = extract_bodies env typed in
           let (env, mono): (env * mono_module) = monomorphize env typed in
           

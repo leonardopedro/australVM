@@ -14,6 +14,7 @@ fn cps_debug(msg: &str) {
 pub mod arctic_auth;
 pub mod auth;
 pub mod capstd_mod;
+pub mod capture;
 pub mod cps;
 #[cfg(feature = "ecmascript")]
 pub mod ecma;

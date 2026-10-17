@@ -47,14 +47,19 @@ pub fn hex(bytes: &[u8]) -> String {
 
 pub fn unhex(s: &str) -> Result<Digest, CasError> {
     if s.len() != 64 {
-        return Err(CasError::Corrupt(format!("digest must be 64 hex chars, got {}", s.len())));
+        return Err(CasError::Corrupt(format!(
+            "digest must be 64 hex chars, got {}",
+            s.len()
+        )));
     }
     let bytes = s.as_bytes();
     let mut out = [0u8; 32];
     for i in 0..32 {
-        let hi = (bytes[2 * i] as char).to_digit(16)
+        let hi = (bytes[2 * i] as char)
+            .to_digit(16)
             .ok_or_else(|| CasError::Corrupt("bad hex".into()))? as u8;
-        let lo = (bytes[2 * i + 1] as char).to_digit(16)
+        let lo = (bytes[2 * i + 1] as char)
+            .to_digit(16)
             .ok_or_else(|| CasError::Corrupt("bad hex".into()))? as u8;
         out[i] = (hi << 4) | lo;
     }
@@ -138,6 +143,20 @@ impl Manifest {
         *blake3::hash(&self.encode_unsigned()).as_bytes()
     }
 
+    /// Canonical on-the-wire bytes for remote sync (Sprint 5.1): exactly
+    /// what `manifests/<id>.mfx` holds, so a pulled manifest re-verifies to
+    /// the same identity as a locally created one.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.encode_signed()
+    }
+
+    /// Inverse of [`Self::to_bytes`]. Identity is content-derived, so the
+    /// caller compares `identity_digest()` against the id it actually
+    /// asked for — this only guarantees structural validity.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CasError> {
+        Self::decode(bytes)
+    }
+
     fn decode(bytes: &[u8]) -> Result<Self, CasError> {
         let mut r = Reader { b: bytes, i: 0 };
         if r.take(4)? != MANIFEST_MAGIC {
@@ -145,7 +164,9 @@ impl Manifest {
         }
         let format = r.u16()?;
         if format != MANIFEST_FORMAT {
-            return Err(CasError::Corrupt(format!("manifest format {format} unsupported")));
+            return Err(CasError::Corrupt(format!(
+                "manifest format {format} unsupported"
+            )));
         }
         let name = r.string()?;
         let version = r.string()?;
@@ -176,7 +197,15 @@ impl Manifest {
         if r.i != bytes.len() {
             return Err(CasError::Corrupt("trailing bytes after manifest".into()));
         }
-        Ok(Manifest { name, version, total_size, chunks, drv_hash, pubkey, signature })
+        Ok(Manifest {
+            name,
+            version,
+            total_size,
+            chunks,
+            drv_hash,
+            pubkey,
+            signature,
+        })
     }
 
     /// JSON view for the CLI (`stat`). Hex-encoded digests.
@@ -308,7 +337,10 @@ impl ChunkStore {
         let mut next = 0u32;
         for e in fs::read_dir(root.join("packs"))? {
             let name = e?.file_name().to_string_lossy().into_owned();
-            if let Some(rest) = name.strip_prefix("p-").and_then(|r| r.strip_suffix(".pack")) {
+            if let Some(rest) = name
+                .strip_prefix("p-")
+                .and_then(|r| r.strip_suffix(".pack"))
+            {
                 if let Ok(id) = rest.parse::<u32>() {
                     next = next.max(id + 1);
                 }
@@ -327,7 +359,9 @@ impl ChunkStore {
         }
         let format = r.u16()?;
         if format != INDEX_FORMAT {
-            return Err(CasError::Corrupt(format!("index format {format} unsupported")));
+            return Err(CasError::Corrupt(format!(
+                "index format {format} unsupported"
+            )));
         }
         let n = r.u32()? as usize;
         let mut map = HashMap::with_capacity(n);
@@ -369,11 +403,27 @@ impl ChunkStore {
         self.state.lock().unwrap().contains_key(hash)
     }
 
+    /// Raw (pre-compression) lengths for an ordered chunk list, straight
+    /// from the index. Lets a caller lay out a cell's scratch file before
+    /// any bytes are read — the hot store's parallel hydration uses this to
+    /// know every chunk's final offset up front.
+    pub fn chunk_raw_lens(&self, chunks: &[Digest]) -> Result<Vec<u64>, CasError> {
+        let map = self.state.lock().unwrap();
+        let mut out = Vec::with_capacity(chunks.len());
+        for c in chunks {
+            let e = map.get(c).ok_or_else(|| CasError::NotFound(hex(c)))?;
+            out.push(u64::from(e.raw_len));
+        }
+        Ok(out)
+    }
+
     /// Read one chunk (decompressed) by digest.
     pub fn get_chunk(&self, hash: &Digest) -> Result<Vec<u8>, CasError> {
         let entry = {
             let map = self.state.lock().unwrap();
-            map.get(hash).copied().ok_or_else(|| CasError::NotFound(hex(hash)))?
+            map.get(hash)
+                .copied()
+                .ok_or_else(|| CasError::NotFound(hex(hash)))?
         };
         let mut f = File::open(self.pack_path(entry.pack_id))?;
         f.seek(SeekFrom::Start(entry.offset))?;
@@ -381,7 +431,9 @@ impl ChunkStore {
         f.read_exact(&mut framed)?;
         let comp_len = u32::from_le_bytes(framed);
         if comp_len != entry.comp_len {
-            return Err(CasError::Corrupt("pack framing disagrees with index".into()));
+            return Err(CasError::Corrupt(
+                "pack framing disagrees with index".into(),
+            ));
         }
         let mut codec = [0u8; 1];
         f.read_exact(&mut codec)?;
@@ -392,11 +444,15 @@ impl ChunkStore {
         f.read_exact(&mut comp)?;
         let raw = compression::decompress(entry.codec, &comp)?;
         if raw.len() != entry.raw_len as usize {
-            return Err(CasError::Corrupt("decompressed size disagrees with index".into()));
+            return Err(CasError::Corrupt(
+                "decompressed size disagrees with index".into(),
+            ));
         }
         let actual = *blake3::hash(&raw).as_bytes();
         if actual != *hash {
-            return Err(CasError::Corrupt("chunk plaintext does not match its digest".into()));
+            return Err(CasError::Corrupt(
+                "chunk plaintext does not match its digest".into(),
+            ));
         }
         Ok(raw)
     }
@@ -457,7 +513,13 @@ impl ChunkStore {
                 pack.write_all(&comp)?;
                 new_entries.push((
                     digest,
-                    ChunkEntry { pack_id, offset, comp_len: comp.len() as u32, raw_len: raw_len as u32, codec },
+                    ChunkEntry {
+                        pack_id,
+                        offset,
+                        comp_len: comp.len() as u32,
+                        raw_len: raw_len as u32,
+                        codec,
+                    },
                 ));
                 offset += 4 + 1 + comp.len() as u64;
             }
@@ -475,6 +537,73 @@ impl ChunkStore {
         manifest.drv_hash = drv_hash;
         self.put_manifest(&manifest)?;
         Ok(manifest)
+    }
+
+    /// Ingest already-addressed raw chunk bytes (remote pulls): hash each
+    /// buffer, dedup against the store *and* within the batch, and append
+    /// all genuinely new chunks to one fresh pack with a single index
+    /// write — the same batching rule as [`Self::put_buffer`], so pulling
+    /// thousands of chunks is not O(n²) index churn. Returns each input
+    /// buffer's digest, in order.
+    pub fn put_chunk_batch(&self, raws: Vec<Vec<u8>>) -> Result<Vec<Digest>, CasError> {
+        let mut digests: Vec<Digest> = Vec::with_capacity(raws.len());
+        let mut pending: Vec<usize> = Vec::new();
+        {
+            let map = self.state.lock().unwrap();
+            let mut seen: std::collections::HashSet<Digest> = std::collections::HashSet::new();
+            for (i, raw) in raws.iter().enumerate() {
+                let d = *blake3::hash(raw).as_bytes();
+                digests.push(d);
+                if !map.contains_key(&d) && seen.insert(d) {
+                    pending.push(i);
+                }
+            }
+        }
+        if !pending.is_empty() {
+            let pack_id = {
+                let mut guard = self.next_pack_id.lock().unwrap();
+                let id = *guard;
+                *guard += 1;
+                id
+            };
+            let mut pack = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(self.pack_path(pack_id))?;
+            let mut new_entries: Vec<(Digest, ChunkEntry)> = Vec::with_capacity(pending.len());
+            let mut offset = 0u64;
+            for &i in &pending {
+                let raw = &raws[i];
+                let (codec, comp) = compression::compress(raw);
+                pack.write_all(&(comp.len() as u32).to_le_bytes())?;
+                pack.write_all(&[codec])?;
+                pack.write_all(&comp)?;
+                new_entries.push((
+                    digests[i],
+                    ChunkEntry {
+                        pack_id,
+                        offset,
+                        comp_len: comp.len() as u32,
+                        raw_len: raw.len() as u32,
+                        codec,
+                    },
+                ));
+                offset += 4 + 1 + comp.len() as u64;
+            }
+            pack.sync_data()?;
+            let mut map = self.state.lock().unwrap();
+            for (digest, entry) in new_entries {
+                map.insert(digest, entry);
+            }
+            self.persist_index_locked(&map)?;
+        }
+        Ok(digests)
+    }
+
+    /// Single-chunk convenience wrapper over [`Self::put_chunk_batch`].
+    pub fn put_chunk_data(&self, raw: &[u8]) -> Result<Digest, CasError> {
+        let mut v = self.put_chunk_batch(vec![raw.to_vec()])?;
+        Ok(v.remove(0))
     }
 
     /// Persist a manifest under its identity digest; every referenced chunk
@@ -503,7 +632,9 @@ impl ChunkStore {
         f.read_to_end(&mut buf)?;
         let manifest = Manifest::decode(&buf)?;
         if manifest.identity_digest() != *id {
-            return Err(CasError::Corrupt("manifest file does not hash to its name".into()));
+            return Err(CasError::Corrupt(
+                "manifest file does not hash to its name".into(),
+            ));
         }
         Ok(manifest)
     }
@@ -534,7 +665,9 @@ impl ChunkStore {
             out.extend_from_slice(&self.get_chunk(c)?);
         }
         if out.len() as u64 != manifest.total_size {
-            return Err(CasError::Corrupt("assembled size disagrees with manifest".into()));
+            return Err(CasError::Corrupt(
+                "assembled size disagrees with manifest".into(),
+            ));
         }
         Ok(out)
     }
@@ -664,7 +797,12 @@ impl ChunkStore {
             .sum();
         let chunks = self.state.lock().unwrap().len();
         let manifests = fs::read_dir(self.root.join("manifests"))?.count();
-        Ok(StoreStats { chunks, packs: packs.len(), manifests, pack_bytes })
+        Ok(StoreStats {
+            chunks,
+            packs: packs.len(),
+            manifests,
+            pack_bytes,
+        })
     }
 }
 
@@ -727,7 +865,10 @@ mod tests {
         let chunks_after_first = store.stats().unwrap().chunks;
         let _m2 = store.put_buffer("b", "1", &data, None).unwrap();
         let stats = store.stats().unwrap();
-        assert_eq!(stats.chunks, chunks_after_first, "identical content must dedup to one copy");
+        assert_eq!(
+            stats.chunks, chunks_after_first,
+            "identical content must dedup to one copy"
+        );
         assert!(m1.chunks.len() as u64 * 65536 > 0);
     }
 
@@ -743,8 +884,14 @@ mod tests {
         let set1: std::collections::HashSet<_> = m1.chunks.iter().collect();
         let reused = m2.chunks.iter().filter(|c| set1.contains(c)).count();
         let ratio = reused as f64 / n1 as f64;
-        eprintln!("minor-edit dedup: {reused}/{n1} chunks reused ({:.1}%)", ratio * 100.0);
-        assert!(ratio > 0.85, "minor edit reused {reused}/{n1} chunks ({ratio:.2})");
+        eprintln!(
+            "minor-edit dedup: {reused}/{n1} chunks reused ({:.1}%)",
+            ratio * 100.0
+        );
+        assert!(
+            ratio > 0.85,
+            "minor edit reused {reused}/{n1} chunks ({ratio:.2})"
+        );
     }
 
     #[test]
@@ -779,7 +926,11 @@ mod tests {
         let unsigned_id = m.identity_digest();
         let key = crypto::signing_key_from_seed(&[7u8; 32]);
         crypto::sign_manifest(&mut m, &key);
-        assert_eq!(m.identity_digest(), unsigned_id, "signing must not move identity");
+        assert_eq!(
+            m.identity_digest(),
+            unsigned_id,
+            "signing must not move identity"
+        );
         let id = store.put_manifest(&m).unwrap();
         assert_eq!(id, unsigned_id);
         let back = store.get_manifest(&id).unwrap();

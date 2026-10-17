@@ -23,6 +23,36 @@ pub struct Derivation {
     /// Environment pairs.
     #[serde(default)]
     pub env_vars: Vec<(String, String)>,
+    /// Totality proof status from the OCaml `--pkg-totality=true` pass
+    /// (release contract point 2: all non-selected info leaks to a
+    /// deterministic plan.json).
+    ///
+    /// `None` on plans written before the contract: absence of the field
+    /// is *not* proof — consumers must treat `None` exactly as
+    /// [`Totality::Unproven`]. Not part of the derivation's Merkle
+    /// identity (`calculate_derivation_hash` is field-list based), so
+    /// recording the status never re-hashes a plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totality: Option<Totality>,
+}
+
+/// Whether the selection flag proved this derivation's module total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Totality {
+    /// Compiled under `--pkg-totality=true`: the flag-gated pass ran and
+    /// accepted every declaration it saw.
+    Proven,
+    /// Compiled without the flag: totality unknown, not assumed.
+    Unproven,
+}
+
+impl Derivation {
+    /// True only on an explicit `proven` record; a missing field (v0
+    /// plan) is never proof.
+    pub fn is_proven(&self) -> bool {
+        matches!(self.totality, Some(Totality::Proven))
+    }
 }
 
 #[derive(Debug)]
@@ -163,6 +193,7 @@ mod tests {
             dependencies: vec![],
             sources: vec![],
             env_vars: vec![],
+            totality: None,
         }
     }
 
@@ -229,5 +260,37 @@ mod tests {
         let mut p = Plan::new();
         p.insert(leaf("a")).unwrap();
         assert!(matches!(p.insert(leaf("a")), Err(EvalError::Duplicate(_))));
+    }
+
+    /// The totality record round-trips: explicit `proven` is proof,
+    /// an explicit `unproven` is recorded, and a v0 plan without the
+    /// field decodes as `None` (never proof).
+    #[test]
+    fn totality_record_round_trips() {
+        let proven = Derivation {
+            totality: Some(Totality::Proven),
+            ..leaf("a")
+        };
+        assert!(proven.is_proven());
+        let json = serde_json::to_string(&proven).unwrap();
+        assert!(
+            json.contains("\"totality\":\"proven\""),
+            "record must serialize: {json}"
+        );
+        let back: Derivation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.totality, Some(Totality::Proven));
+
+        let v0: Derivation =
+            serde_json::from_str("{\"name\":\"a\",\"version\":\"1\",\"builder_symbol\":\"b\"}")
+                .unwrap();
+        assert_eq!(v0.totality, None);
+        assert!(
+            !v0.is_proven(),
+            "an absent record must never read as proven"
+        );
+        assert!(serde_json::from_str::<Derivation>(
+            "{\"name\":\"a\",\"version\":\"1\",\"builder_symbol\":\"b\",\"totality\":\"maybe\"}"
+        )
+        .is_err(), "an unknown status must fail loudly");
     }
 }

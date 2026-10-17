@@ -11,7 +11,7 @@
 
 use crate::engine::Manifest;
 use crate::CasError;
-use ed25519_dalek::{Signer, Signature, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 /// Build a signing key from a raw 32-byte seed.
 pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {

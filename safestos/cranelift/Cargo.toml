@@ -16,6 +16,9 @@ cranelift-module = "0.131"
 cranelift-native = "0.131"
 cranelift-codegen = "0.131"
 cranelift-frontend = "0.131"
+# Capture backend (src/capture.rs): the Module trait's control-plane
+# parameter lives in this crate; already in the lock as a transitive dep.
+cranelift-control = "0.131"
 target-lexicon = "0.13"
 cedar-policy = { version = "4.11.2", optional = true }
 serde = { version = "1", features = ["derive"] }

@@ -54,17 +54,40 @@ pub struct EvalReport {
     /// Nodes whose built cell already exists in the store (L2): a future
     /// executor skips these builds.
     pub store_hits: Vec<String>,
+    /// Nodes the *remote* binary cache already holds pre-built (L3): an
+    /// executor hydrates these instead of building them (spec §3.3).
+    pub remote_hits: Vec<String>,
 }
 
-/// The memo table. `presence: None` disables L2 (pure in-process memo).
+/// The memo table. `presence: None` disables L2 (pure in-memory memo);
+/// `remote: None` disables L3 (no remote binary cache configured).
 pub struct MemoTable {
     l1: DashMap<String, DerivationId>,
     presence: Option<Arc<dyn Presence>>,
+    remote: Option<Arc<dyn Presence>>,
 }
 
 impl MemoTable {
     pub fn new(presence: Option<Arc<dyn Presence>>) -> Self {
-        MemoTable { l1: DashMap::new(), presence }
+        MemoTable {
+            l1: DashMap::new(),
+            presence,
+            remote: None,
+        }
+    }
+
+    /// L3 variant: also consult a remote binary-cache oracle (spec §3.3).
+    /// L2 is checked first — a local store hit never pays a network
+    /// consult, and each node is recorded in exactly one tier.
+    pub fn with_remote(
+        presence: Option<Arc<dyn Presence>>,
+        remote: Option<Arc<dyn Presence>>,
+    ) -> Self {
+        MemoTable {
+            l1: DashMap::new(),
+            presence,
+            remote,
+        }
     }
 
     /// Evaluate `target` with memoized short-circuits. `target: None`
@@ -77,6 +100,7 @@ impl MemoTable {
             visited: Vec::new(),
             session_hits: Vec::new(),
             store_hits: Vec::new(),
+            remote_hits: Vec::new(),
         };
         let roots: Vec<String> = match target {
             Some(t) => {
@@ -124,7 +148,9 @@ impl MemoTable {
             loop_names.push(name.to_string());
             return Err(EvalError::Cycle(loop_names));
         }
-        let drv = plan.get(name).ok_or_else(|| EvalError::Unknown(name.to_string()))?;
+        let drv = plan
+            .get(name)
+            .ok_or_else(|| EvalError::Unknown(name.to_string()))?;
         stack.push(name.to_string());
         let mut dep_ids = Vec::with_capacity(drv.dependencies.len());
         for dep in &drv.dependencies {
@@ -146,6 +172,14 @@ impl MemoTable {
         if let Some(presence) = &self.presence {
             if presence.contains_id(id) {
                 report.store_hits.push(name.to_string());
+                return;
+            }
+        }
+        // L3 (spec §3.3): only ids the local store *lacks* consult the
+        // remote oracle, and a hit lands in its own tier bucket.
+        if let Some(remote) = &self.remote {
+            if remote.contains_id(id) {
+                report.remote_hits.push(name.to_string());
             }
         }
     }
@@ -165,6 +199,7 @@ mod tests {
             dependencies: vec![],
             sources: vec![],
             env_vars: vec![],
+            totality: None,
         }
     }
 
@@ -205,7 +240,10 @@ mod tests {
         // `mid`/`base` are not consulted at all — that is the point.
         assert_eq!(warm.session_hits, vec!["app"]);
         assert!(warm.store_hits.is_empty());
-        assert_eq!(warm.target_id, cold.target_id, "memo may not change results");
+        assert_eq!(
+            warm.target_id, cold.target_id,
+            "memo may not change results"
+        );
     }
 
     /// Task 2.3: the store tier reports already-built nodes by their
@@ -219,7 +257,11 @@ mod tests {
         let presence = SetPresence(std::iter::once(full.resolved["mid"]).collect());
         let memo = MemoTable::new(Some(Arc::new(presence)));
         let warm = memo.evaluate(&plan, Some("app")).unwrap();
-        assert_eq!(warm.store_hits, vec!["mid"], "built node reported, id-keyed");
+        assert_eq!(
+            warm.store_hits,
+            vec!["mid"],
+            "built node reported, id-keyed"
+        );
         assert_eq!(
             warm.target_id, full.target_id,
             "warm and cold evaluation must agree bit-for-bit"
@@ -233,13 +275,40 @@ mod tests {
         assert_eq!(h.target_id, full.target_id);
     }
 
+    /// Spec §3.3: the L3 (remote binary-cache) oracle is consulted only
+    /// where the local store misses, its hits land in `remote_hits`, and
+    /// resolved ids stay bit-identical whichever tier answers.
+    #[test]
+    fn remote_tier_reports_hits_only_when_store_misses() {
+        let plan = plan3();
+        let full = MemoTable::new(None).evaluate(&plan, Some("app")).unwrap();
+
+        // Store holds `mid`, remote holds `base` — disjoint tiers.
+        let store = SetPresence(std::iter::once(full.resolved["mid"]).collect());
+        let remote = SetPresence(std::iter::once(full.resolved["base"]).collect());
+        let memo = MemoTable::with_remote(Some(Arc::new(store)), Some(Arc::new(remote)));
+        let warm = memo.evaluate(&plan, Some("app")).unwrap();
+        assert_eq!(warm.store_hits, vec!["mid"], "L2 wins where it applies");
+        assert_eq!(warm.remote_hits, vec!["base"], "L3 catches the store miss");
+        assert_eq!(warm.target_id, full.target_id, "tiers never change ids");
+
+        // No remote oracle configured: the tier is simply silent.
+        let only_store = SetPresence(std::iter::once(full.resolved["mid"]).collect());
+        let memo2 = MemoTable::new(Some(Arc::new(only_store)));
+        let w2 = memo2.evaluate(&plan, Some("app")).unwrap();
+        assert!(w2.remote_hits.is_empty());
+    }
+
     #[test]
     fn cycle_still_detected_on_cold_path() {
         let mut p = Plan::new();
         p.insert(node("a", &["b"])).unwrap();
         p.insert(node("b", &["a"])).unwrap();
         let memo = MemoTable::new(None);
-        assert!(matches!(memo.evaluate(&p, Some("a")), Err(EvalError::Cycle(_))));
+        assert!(matches!(
+            memo.evaluate(&p, Some("a")),
+            Err(EvalError::Cycle(_))
+        ));
     }
 
     #[test]
@@ -301,8 +370,16 @@ mod tests {
         let warm = warm_memo.evaluate(&plan, None).unwrap();
         let warm_dt = start.elapsed();
         assert_eq!(warm.target_id, cold.target_id);
-        assert_eq!(warm.visited.len(), 5000, "ids stay sound (computed), builds skipped");
-        assert_eq!(warm.store_hits.len(), 5000, "store already holds everything");
+        assert_eq!(
+            warm.visited.len(),
+            5000,
+            "ids stay sound (computed), builds skipped"
+        );
+        assert_eq!(
+            warm.store_hits.len(),
+            5000,
+            "store already holds everything"
+        );
 
         // Second call on the same memo = in-process L1 warm.
         let start2 = std::time::Instant::now();

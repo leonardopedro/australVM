@@ -71,3 +71,11 @@
  (names JitTest)
  (modules JitTest)
  (libraries austral_cps_gen austral_rust_bridge ounit2))
+
+; avm-pkg spec task 2.1: the package totality pass and the Derivation
+; JSON export (lib/Totality.ml, lib/DerivAst.ml). Hand-built typed ASTs —
+; no codegen, so austral_core alone is enough.
+(tests
+ (names TotalityTest DerivAstTest)
+ (modules TotalityTest DerivAstTest)
+ (libraries austral_core ounit2 test_util))
