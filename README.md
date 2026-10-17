@@ -1,6 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leonardopedro/australVM)
 
-<!-- status: verified | tests: 110 dune / 14 suites | last_verified: 2026-10-13 -->
+<!-- status: verified | tests: 113 dune / 14 suites | last_verified: 2026-10-17 -->
 
 ## Verification
 
@@ -16,7 +16,7 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"   # Cranelift bridge 
 export UNFER_LOGOS_BIN=/path/to/unfer/target/debug/logos    # deltanet UNF gate
 
 dune build @install --profile release
-dune runtest --force          # 110 tests, 14 suites, all OK
+dune runtest --force          # 113 tests, 14 suites, all OK
 ./run-examples.sh
 python3 test-programs/runner.py   # "All tests passed"
 '
