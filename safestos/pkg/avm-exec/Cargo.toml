@@ -1,0 +1,25 @@
+[package]
+name = "avm-exec"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# PLAN_avm_pkg.md Sprint 3 — the hermetic executor:
+#   runner.rs       capability-gated (Cedar) + namespace-isolated (unshare)
+#                   builder spawn, spec §3.1 / task 3.1
+#   cell_builder.rs AVCE -> `.avm` cell serialize/verify, spec §3.4 / task 3.2
+#   linker.rs       relocation against cells mapped by the hot store,
+#                   task 3.3
+# Zero `unsafe` (spec §6.3: in pkg/, unsafe exists only in avm-cas's
+# hot_store mmap call).
+
+[dependencies]
+avm-cas = { path = "../avm-cas" }
+blake3.workspace = true
+cedar-policy.workspace = true
+ed25519-dalek.workspace = true
+memmap2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,45 @@
+"""
+The avm-pkg package derivation DSL (docs/pkg_manager_plan.md §3.1).
+
+Deviation from the spec snippet, recorded in PLAN_avm_pkg.md §4: this
+compiler has no `List` builtin and no `FixedArray`, so the list type and
+the pair type are declared here, and store paths are carried as hex-digest
+strings (exactly the shape avm-eval's `Derivation` deserializes) rather
+than as `StoreHash`/`StorePath` records. Text is `Span[Nat8, Static]`,
+the type of string literals in Austral — the linear `String` type is a
+separate heap type that literals do not have.
+
+Package modules compiled with `--pkg-totality` may only contain bounded
+constructs (lib/Totality.ml): this module itself is pure data and one
+non-recursive constructor function.
+"""
+module Derivation is
+    record Pair[F: Type, S: Type]: Type is
+        first: F;
+        second: S;
+    end;
+
+    union List[T: Type]: Type is
+        case Nil;
+        case Cons is
+            head: T;
+            tail: List[T];
+    end;
+
+    record Derivation: Free is
+        name: Span[Nat8, Static];
+        version: Span[Nat8, Static];
+        sources: List[Span[Nat8, Static]];
+        dependencies: List[Span[Nat8, Static]];
+        env_vars: List[Pair[Span[Nat8, Static], Span[Nat8, Static]]];
+        builder_symbol: Span[Nat8, Static];
+    end;
+
+    function make_derivation(
+        name: Span[Nat8, Static],
+        version: Span[Nat8, Static],
+        sources: List[Span[Nat8, Static]],
+        deps: List[Span[Nat8, Static]],
+        builder: Span[Nat8, Static]
+    ): Derivation;
+end module.

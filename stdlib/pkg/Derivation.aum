@@ -1,0 +1,18 @@
+module body Derivation is
+    function make_derivation(
+        name: Span[Nat8, Static],
+        version: Span[Nat8, Static],
+        sources: List[Span[Nat8, Static]],
+        deps: List[Span[Nat8, Static]],
+        builder: Span[Nat8, Static]
+    ): Derivation is
+        return Derivation(
+            name => name,
+            version => version,
+            sources => sources,
+            dependencies => deps,
+            env_vars => Nil(): List[Pair[Span[Nat8, Static], Span[Nat8, Static]]],
+            builder_symbol => builder
+        );
+    end;
+end module body.

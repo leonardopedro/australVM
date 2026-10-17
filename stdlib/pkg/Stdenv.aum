@@ -1,0 +1,20 @@
+import Derivation (Derivation, List, Pair, Nil, Cons);
+
+module body Stdenv is
+    function stdenv(
+        name: Span[Nat8, Static],
+        version: Span[Nat8, Static],
+        sources: List[Span[Nat8, Static]],
+        deps: List[Span[Nat8, Static]],
+        env: List[Pair[Span[Nat8, Static], Span[Nat8, Static]]]
+    ): Derivation is
+        return Derivation(
+            name => name,
+            version => version,
+            sources => sources,
+            dependencies => deps,
+            env_vars => env,
+            builder_symbol => "stdenv.build"
+        );
+    end;
+end module body.

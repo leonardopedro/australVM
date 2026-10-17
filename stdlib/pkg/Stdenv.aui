@@ -1,0 +1,25 @@
+"""
+Stdenv: the standard builder derivation for avm-pkg packages
+(docs/pkg_manager_plan.md §4.2).
+
+Deviation, recorded in PLAN_avm_pkg.md §4: compiler flags arrive as
+env-var pairs (`Pair("CFLAGS", "-O2")`) instead of being folded into one
+string — joining a list needs recursion, which the package totality pass
+rejects by design. `builder_symbol` is `stdenv.build`, the symbol
+avm-pkg's evaluator keys the standard build on.
+"""
+import Derivation (
+    Derivation,
+    List,
+    Pair
+);
+
+module Stdenv is
+    function stdenv(
+        name: Span[Nat8, Static],
+        version: Span[Nat8, Static],
+        sources: List[Span[Nat8, Static]],
+        deps: List[Span[Nat8, Static]],
+        env: List[Pair[Span[Nat8, Static], Span[Nat8, Static]]]
+    ): Derivation;
+end module.

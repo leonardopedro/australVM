@@ -1,0 +1,79 @@
+"""
+The seed bootstrap package set (docs/pkg_manager_plan.md §4.2): four
+Derivation constants whose dependency chain is the classic cross-build
+path — bootstrap_seed (TinyCC + static Musl), musl (the C library built
+via tcc), busybox (POSIX utilities built against musl), hello (the GNU
+Hello validation package built against musl).
+
+Each constant is a literal record constructor: `avm-pkg build` compiles
+this module with `--pkg-totality` and exports the constants as plan.json
+through lib/DerivAst.ml — a function call in a constant initializer would
+not be a literal, so recipes never call `stdenv(...)`; they name
+`stdenv.build` directly, and dependency edges are the literal names of
+other derivations in the plan.
+
+Every `Nil()` carries a type cast: a bare `Nil()` inside a record field
+or a `Cons` tail is a generic constructor with no type evidence, and the
+type checker rejects it as ambiguous (the field's expected type does not
+flow into the argument).
+
+Honest limitation, recorded in PLAN_avm_pkg.md: `sources` are empty in
+these seed recipes. Source tarballs become hex store digests only when
+they are ingested with `avm-pkg put`, and this workspace has no tarball
+payloads to hash; a recipe that named an unhashed digest would claim an
+input the store cannot resolve. The recipes therefore pin the *dependency
+graph* and builder symbols — the part verifiable without payloads — and
+the demo end-to-end ingests a real source cell to exercise the sourced
+path.
+"""
+import Derivation (Derivation, List, Nil, Cons, Pair);
+
+module body Bootstrap is
+    constant bootstrap_seed: Derivation := Derivation(
+        name => "bootstrap_seed",
+        version => "0.1.0",
+        sources => Nil(): List[Span[Nat8, Static]],
+        dependencies => Nil(): List[Span[Nat8, Static]],
+        env_vars => Cons(
+            head => Pair(first => "CC", second => "tcc"),
+            tail => Nil(): List[Pair[Span[Nat8, Static], Span[Nat8, Static]]]),
+        builder_symbol => "stdenv.build"
+    );
+
+    constant musl: Derivation := Derivation(
+        name => "musl",
+        version => "1.2.5",
+        sources => Nil(): List[Span[Nat8, Static]],
+        dependencies => Cons(
+            head => "bootstrap_seed",
+            tail => Nil(): List[Span[Nat8, Static]]),
+        env_vars => Nil(): List[Pair[Span[Nat8, Static], Span[Nat8, Static]]],
+        builder_symbol => "stdenv.build"
+    );
+
+    constant busybox: Derivation := Derivation(
+        name => "busybox",
+        version => "1.36.1",
+        sources => Nil(): List[Span[Nat8, Static]],
+        dependencies => Cons(
+            head => "musl",
+            tail => Cons(
+                head => "bootstrap_seed",
+                tail => Nil(): List[Span[Nat8, Static]])),
+        env_vars => Nil(): List[Pair[Span[Nat8, Static], Span[Nat8, Static]]],
+        builder_symbol => "stdenv.build"
+    );
+
+    constant hello: Derivation := Derivation(
+        name => "hello",
+        version => "2.12",
+        sources => Nil(): List[Span[Nat8, Static]],
+        dependencies => Cons(
+            head => "musl",
+            tail => Nil(): List[Span[Nat8, Static]]),
+        env_vars => Cons(
+            head => Pair(first => "CFLAGS", second => "-O2"),
+            tail => Nil(): List[Pair[Span[Nat8, Static], Span[Nat8, Static]]]),
+        builder_symbol => "stdenv.build"
+    );
+end module body.
