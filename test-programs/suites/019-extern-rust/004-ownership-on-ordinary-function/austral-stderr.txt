@@ -1,0 +1,16 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The " },
+    { "type": "code", "content": "Rust_Ownership" },
+    {
+      "type": "text",
+      "content": " pragma can only annotate a foreign import declared with "
+    },
+    { "type": "code", "content": "Foreign_Import" },
+    { "type": "text", "content": "." }
+  ],
+  "span": null,
+  "context": null
+}

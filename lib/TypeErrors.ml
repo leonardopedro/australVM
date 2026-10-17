@@ -228,6 +228,70 @@ let foreign_type_parameters () =
     Text "Foreign functions can't have type parameters."
   ]
 
+let rust_ownership_required ~name =
+  austral_raise DeclarationError [
+    Text "The foreign import ";
+    Code name;
+    Text " uses the extern rust namespace (external names beginning ";
+    Code "rs_";
+    Text "), which requires a ";
+    Code "Rust_Ownership";
+    Text " pragma declaring each parameter's and the return value's ownership: ";
+    Code "borrowed";
+    Text " (the callee must not retain the value) or ";
+    Code "owned";
+    Text " (the value is consumed by the call)."
+  ]
+
+let rust_ownership_not_tier1 ~name =
+  austral_raise DeclarationError [
+    Text "The ";
+    Code "Rust_Ownership";
+    Text " pragma applies only to extern rust imports, i.e. foreign imports whose external name begins with ";
+    Code "rs_";
+    Text ". The external name ";
+    Code name;
+    Text " belongs to a different namespace, whose ownership conventions are fixed by that ABI."
+  ]
+
+let rust_ownership_not_foreign () =
+  austral_raise DeclarationError [
+    Text "The ";
+    Code "Rust_Ownership";
+    Text " pragma can only annotate a foreign import declared with ";
+    Code "Foreign_Import";
+    Text "."
+  ]
+
+let rust_ownership_arity ~expected ~got =
+  austral_raise DeclarationError [
+    Text "The ";
+    Code "Rust_Ownership";
+    Text " pragma's Params list must have one ownership annotation per parameter: the function has ";
+    Text (string_of_int expected);
+    Text (if expected = 1 then " parameter but " else " parameters but ");
+    Text (string_of_int got);
+    Text (if got = 1 then " annotation." else " annotations.")
+  ]
+
+let rust_ownership_annotation ~annotation =
+  austral_raise DeclarationError [
+    Text "Invalid ownership annotation ";
+    Code annotation;
+    Text ". Ownership annotations must be ";
+    Code "borrowed";
+    Text " or ";
+    Code "owned";
+    Text "."
+  ]
+
+let rust_ownership_shape ~ty =
+  austral_raise DeclarationError [
+    Text "The type ";
+    Type ty;
+    Text " is not part of the buffer protocol that may cross an extern rust boundary. Parameters and return values of `rs_*` imports must be scalar values (integers, floats, booleans) or addresses/pointers, because those are the shapes the Rust side's ABI speaks."
+  ]
+
 let fun_pointer_named_args () =
   austral_raise TypeError [
     Text "You can't call a function pointer with a named argument list, because function pointers don't preserve parameter names, so we wouldn't know how to assign arguments to parameters."
@@ -235,7 +299,7 @@ let fun_pointer_named_args () =
 
 let fun_invalid_pragmas () =
   austral_raise DeclarationError [
-    Text "Only import, export, and Liquid contract pragmas are allowed inside functions."
+    Text "Only import, export, Liquid contract, and Rust_Ownership pragmas are allowed inside functions."
   ]
 
 let if_inequal ~lhs ~rhs =

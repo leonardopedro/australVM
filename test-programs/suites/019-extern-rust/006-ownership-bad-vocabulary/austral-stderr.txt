@@ -1,0 +1,15 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "Invalid ownership annotation " },
+    { "type": "code", "content": "retain" },
+    { "type": "text", "content": ". Ownership annotations must be " },
+    { "type": "code", "content": "borrowed" },
+    { "type": "text", "content": " or " },
+    { "type": "code", "content": "owned" },
+    { "type": "text", "content": "." }
+  ],
+  "span": null,
+  "context": null
+}

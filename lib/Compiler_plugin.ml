@@ -79,8 +79,9 @@ let unregister name =
   registry := List.filter (fun (e : entry) -> entry_name e <> name) !registry
 
 (** The foreign externals a typed module imports: `TForeignFunction` decls
-    whose external symbol name is a kernel symbol (`uk_*` / `uz_*`). This is
-    exactly the set the JIT registers and the module manifest grants — the
+    whose external symbol name is a kernel symbol (`uk_*` / `uz_*`) or a
+    tier-1 extern rust symbol (`rs_*`, PLAN_valen §4). This is exactly the
+    set the JIT registers and the module manifest grants — the
     compiler-side mirror of the `GrantSet.kernel` namespace. *)
 let foreign_externals_of (TypedModule (_, decls)) : string list =
   List.filter_map
@@ -91,6 +92,7 @@ let foreign_externals_of (TypedModule (_, decls)) : string list =
           let is_kernel =
             (String.length s >= 3 && String.sub s 0 3 = "uk_")
             || (String.length s >= 3 && String.sub s 0 3 = "uz_")
+            || (String.length s >= 3 && String.sub s 0 3 = "rs_")
           in
           if is_kernel then Some s else None
       | _ ->

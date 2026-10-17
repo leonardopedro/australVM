@@ -1,0 +1,11 @@
+-- Rust_Ownership on a function that is not a foreign import at all.
+module body Test is
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function Identity(n: Int64): Int64 is
+        return n;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

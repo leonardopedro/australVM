@@ -175,6 +175,7 @@ extern rust fn crate_fn(buf: Address[Nat8], len: Int64) -> Int64
 mixed module set, builds the Rust crates via `cargo` (subprocess), registers
 their artifacts, and JITs the Austral half through the bridge. The umbrella
 *includes* australVM as a component; australVM does not learn about rustc.
+(Prototype shipped 2026-10-17 as `../umbrella` — see the P3 status in §5.)
 
 **Not adopted, stated plainly**: Valen's route — a patched `rustc` on branch
 `per-instance-mir` — is not taken. A forked compiler is a maintenance sink
@@ -196,6 +197,107 @@ Each phase is independently shippable; none of them touches the frozen ABI,
 and P1 does not touch the JIT at all. The honesty rule from Plan L applies
 here verbatim: a phase that cannot run is recorded as *not covered*, never
 as passing.
+
+### P2 status (2026-10-17): shipped, with the e2e relocated — recorded here
+
+Shipped:
+
+- **Declaration + checking + erasure.** `pragma Rust_Ownership` on
+  `extern rust fn` declarations: parsed in `CstUtil`, validated in
+  `TypingPass` (annotation required, owned/borrowed vocabulary only,
+  `Address[T]`/`Int64` parameter shapes), and erased before CPS — the MTAST
+  discipline of §3. `Compiler_plugin.foreign_externals_of` counts `rs_*`
+  names in the grant mirror.
+- **A new table, not a new mechanism.** `RS_FFI_SYMBOLS` in
+  `safestos/cranelift/src/lib.rs` registers the reference crate's symbols
+  under the `rs_` namespace (`feature tier1-rs`, on by default like
+  `unfer-kernel`). The reference crate is `safestos/rsffi/` — the buffer
+  pair (`rs_checksum`) and the scalar-only case (`rs_version`).
+- **The gate.** `check_call_permission` in `cps.rs` gates `rs_*` against
+  the manifest grant list, same principal resolution as `uk_*`.
+- **Negative typing tests.** `test-programs/suites/019-extern-rust/`: six
+  programs that must be rejected — `rs_*` foreign import with no
+  annotation, `Rust_Ownership` on a non-`rs_` import, `Rust_Ownership` on
+  an ordinary function, annotation/parameter arity mismatch, annotation
+  outside the `borrowed`/`owned` vocabulary, and a parameter type outside
+  the buffer protocol — each with recorded stderr, plus the whole existing
+  suite unchanged.
+- **Execution tests, both sides of the bridge.**
+  `safestos/cranelift/tests/tier1_extern_rust.rs` (in-process: granted
+  execution of `rs_checksum` over a live buffer checked against an
+  independent FNV-1a in the test, scalar `rs_version`, uk-grant ≠ rs-grant
+  denial with UK-4001 attributed to the module, DenyAll denial, symbol-table
+  sync, and `modhost authorize` answering the rs_ question from a manifest
+  file), the `a10_live_grant_tests` rs_ assertions in `cps.rs`, and
+  `test/JitTest.ml` (denial without manifest, denial under a uk-only grant,
+  granted execution through `CamlCompiler_rust_bridge` with a buffer
+  allocated from OCaml).
+
+Deviations and limits, stated plainly:
+
+- **The e2e does not go through `modhost host`.** `spawn_jit_server` passes
+  `--allow-all` by design (the host path bypasses manifests), so a
+  modhost-spawned run proves nothing about grants. The granted/denied pair
+  instead exercises the *same* `check_call_permission` gate and the same
+  manifest engine that modhost and the CLI both drive; `modhost authorize`
+  — the out-of-process answer — is covered directly for `rs_*` names.
+- **The C backend is not a tier-1 path.** An `extern rust` declaration
+  emits a C wrapper referencing the `rs_` symbol, which cannot link without
+  the crate — the same status quo as `uk_*`. Tier 1 is a JIT feature; the
+  positive path lives where the symbol exists.
+- **CLI-level denial is advisory, unchanged.** `--use-cps-jit` treats a JIT
+  compile error as advisory (it prints `UK-4001` and falls back to the C
+  backend, exit 0); that behavior predates this plan and was not changed.
+  The hard denial lives at the JIT gate and in `modhost authorize`.
+
+### P3 status (2026-10-17): shipped — umbrella prototype outside this tree
+
+The prototype is `../umbrella` — a separate crate that depends on this
+repo only through the bridge path-dependency. Nothing in this tree refers
+to it: §4's boundary held, australVM does not learn about rustc.
+
+- **cargo subprocess.** `umbrella` runs `cargo build --release
+  --message-format=json` on an arbitrary crate (`modules/rscrate`) and
+  takes the cdylib path from cargo's JSON stream — no assumption about
+  target layout.
+- **australVM as a library.** The bridge is linked as a plain path
+  dependency (default features, as this repo builds it); the umbrella
+  calls `safestos_load_auth_manifest` (or installs an explicit `DenyAll`)
+  and `compile_to_function_named` / `execute_function` in-process — the
+  same gate + compile pair P2 tested, driven by another host.
+- **australVM as a front-end.** The stock dune-built `./austral` binary
+  is invoked as a subprocess (`compile --use-cps-jit --allow-all
+  --target-type=tc --emit-cps=…`, the flag set `modhost`'s own
+  `spawn_jit_server` uses) to serialize `modules/Demo.aum`; the umbrella
+  supplies the child's `LD_LIBRARY_PATH`, so a bare caller needs no
+  special shell.
+- **Registration without a table.** The crate's `rs_demo_checksum` is in
+  neither `RS_FFI_SYMBOLS` nor the CPS binary: it resolves only because
+  the umbrella dlopens the cdylib `RTLD_GLOBAL` and the bridge's import
+  resolver falls back to `dlsym(RTLD_DEFAULT)` — the artifact
+  registration path §4 Tier 1 sketched as "a new *table*" turns out also
+  to need no bridge change at all.
+
+Verification (both paths run and recorded here):
+
+- **granted** (`--manifest module.toml`): cargo → dlopen → front-end →
+  gate → `RESULT -1781872834555808882` — FNV-1a of the `"au!"` buffer
+  the Austral module constructed itself and passed across the `extern
+  rust` boundary — exit 0, asserted with `--expect`;
+- **denied** (no manifest → explicit DenyAll): JIT compile fails with
+  `UK-4001 — 'anon' is not granted 'rs_demo_checksum'`, exit 1, no
+  `RESULT` line: nothing executed;
+- the demo crate's own `cargo test` holds the same `"au!"` vector as an
+  independently computed constant.
+
+Limits, stated plainly: one crate per invocation (no workspace-wide
+mixed build yet), single modules only (the multi-module link path is
+untested here), the crate is rebuilt every run (cargo incremental keeps
+this cheap), and the expected value is asserted by the demo crate's own
+FNV contract rather than a cross-language golden file. The phase table's
+"driven by the umbrella CLI instead of `run_demo.sh`" is met in
+prototype form: same end-to-end as P2, ownership of cargo and rustc
+entirely outside this tree.
 
 ## §6 Considered and not used
 

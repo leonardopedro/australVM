@@ -8,12 +8,14 @@ fn check_call_permission(caller: &str, module_name: &str, callee: &str) -> Resul
     if callee.starts_with("__") || callee.starts_with("au_") || caller == callee {
         return Ok(());
     }
-    // Only kernel-boundary calls (`uk_*`/`uz_*` FFI) are gated against the
-    // manifest grant list. Internal Austral calls — intra- or cross-module
-    // (e.g. a library wrapper like `kernelModelCreateStr` calling back into the
-    // same compiled program) — are part of the module's own code, not kernel
-    // calls, and must never be denied here.
-    if !callee.starts_with("uk_") && !callee.starts_with("uz_") {
+    // Only kernel-boundary calls (`uk_*`/`uz_*` FFI) and tier-1 extern rust
+    // calls (`rs_*`, PLAN_valen §4) are gated against the manifest grant
+    // list. Internal Austral calls — intra- or cross-module (e.g. a library
+    // wrapper like `kernelModelCreateStr` calling back into the same compiled
+    // program) — are part of the module's own code, not kernel calls, and
+    // must never be denied here. The namespaces are independent grants: a
+    // manifest granting `uk_version` does not grant `rs_checksum`.
+    if !callee.starts_with("uk_") && !callee.starts_with("uz_") && !callee.starts_with("rs_") {
         return Ok(());
     }
     // Prefer the deployment principal (the manifest's module name, e.g.
@@ -1096,6 +1098,35 @@ mod a10_live_grant_tests {
         assert!(check_call_permission("run", "", "kernelModelCreateStr").is_ok());
         assert!(check_call_permission("run", "", "__slot_get").is_ok());
         assert!(check_call_permission("run", "au_alloc", "au_alloc").is_ok());
+
+        // PLAN_valen §4 Tier 1: the rs_ namespace is gated too, and its
+        // grants are independent of the kernel namespace — a manifest that
+        // grants `uk_version` does NOT thereby grant `rs_checksum`.
+        let engine = auth::ManifestAuthEngine::from_toml_str(
+            "[module]\nname = \"a10_widget\"\n\n[grants]\nkernel = [\"uk_version\", \"rs_checksum\"]\n",
+        )
+        .expect("manifest parses");
+        auth::set_auth_engine(Box::new(engine));
+        auth::set_deployment_principal("a10_widget".to_string());
+        assert!(
+            check_call_permission("run", "", "rs_checksum").is_ok(),
+            "a grant naming rs_checksum must pass an rs_ call"
+        );
+        let engine = auth::ManifestAuthEngine::from_toml_str(
+            "[module]\nname = \"a10_widget\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
+        )
+        .expect("manifest parses");
+        auth::set_auth_engine(Box::new(engine));
+        auth::set_deployment_principal("a10_widget".to_string());
+        let err = check_call_permission("run", "", "rs_checksum").unwrap_err();
+        assert!(
+            err.contains("UK-4001"),
+            "a uk-only manifest must deny rs_ calls with UK-4001, got: {err}"
+        );
+        assert!(
+            err.contains("'a10_widget'") && !err.contains("'run'"),
+            "the rs_ denial's principal must be the module, got: {err}"
+        );
 
         // No deployment principal (empty = unset) -> the CPS header's module
         // name is the principal: same grants, keyed by header name.

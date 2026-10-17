@@ -308,6 +308,13 @@ pub extern "C" fn cranelift_init() -> i64 {
             #[cfg(feature = "zenodo-store")]
             register_zenodo_symbols(&mut builder);
 
+            // Register tier-1 extern rust symbols (rs_*, PLAN_valen §4) from
+            // the reference crate. Access is gated by the manifest auth
+            // engine — rs_ is NOT in the check_call_permission whitelist, so
+            // modules need explicit grants, and a uk_* grant does not carry.
+            #[cfg(feature = "tier1-rs")]
+            register_rs_symbols(&mut builder);
+
             Ok(JITModule::new(builder))
         })() {
             Ok(jit) => {
@@ -787,6 +794,40 @@ fn register_zenodo_symbols(builder: &mut JITBuilder) {
 #[cfg(feature = "zenodo-store")]
 pub fn registered_zenodo_symbols() -> Vec<&'static str> {
     ZENODO_SYMBOLS.iter().map(|s| s.name).collect()
+}
+
+// ── Tier-1 extern rust symbol table (PLAN_valen §4) ─────────────────────
+//
+// The reference `extern rust` crate's symbols, in the rs_ namespace. Same
+// data-driven shape as UNFER_SYMBOLS: the table IS the registry, tests
+// iterate it, and the manifest grant list gates every call by name.
+
+/// A tier-1 extern rust symbol entry: the name Cranelift JIT modules use
+/// (e.g. `rs_checksum`) and an opaque pointer to the corresponding
+/// `pub extern "C" fn` in the reference crate `rsffi`.
+#[cfg(feature = "tier1-rs")]
+pub(crate) const RS_FFI_SYMBOLS: &[KernelSymbol] = &[
+    KernelSymbol {
+        name: "rs_checksum",
+        addr: rsffi::rs_checksum as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_version",
+        addr: rsffi::rs_version as *const u8,
+    },
+];
+
+#[cfg(feature = "tier1-rs")]
+fn register_rs_symbols(builder: &mut JITBuilder) {
+    for sym in RS_FFI_SYMBOLS {
+        builder.symbol(sym.name, sym.addr);
+    }
+}
+
+/// Return the set of rs_* symbol names registered in the bridge.
+#[cfg(feature = "tier1-rs")]
+pub fn registered_rs_symbols() -> Vec<&'static str> {
+    RS_FFI_SYMBOLS.iter().map(|s| s.name).collect()
 }
 
 /// Compile a CPS IR buffer behind a panic guard.

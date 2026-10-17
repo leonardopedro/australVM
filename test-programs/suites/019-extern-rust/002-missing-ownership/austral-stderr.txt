@@ -1,0 +1,28 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The foreign import " },
+    { "type": "code", "content": "rs_checksum" },
+    {
+      "type": "text",
+      "content": " uses the extern rust namespace (external names beginning "
+    },
+    { "type": "code", "content": "rs_" },
+    { "type": "text", "content": "), which requires a " },
+    { "type": "code", "content": "Rust_Ownership" },
+    {
+      "type": "text",
+      "content": " pragma declaring each parameter's and the return value's ownership: "
+    },
+    { "type": "code", "content": "borrowed" },
+    {
+      "type": "text",
+      "content": " (the callee must not retain the value) or "
+    },
+    { "type": "code", "content": "owned" },
+    { "type": "text", "content": " (the value is consumed by the call)." }
+  ],
+  "span": null,
+  "context": null
+}

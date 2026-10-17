@@ -1,0 +1,17 @@
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+
+-- "retain" is not an ownership annotation.
+module body Test is
+    pragma Foreign_Import(External_Name => "rs_checksum");
+    pragma Rust_Ownership(Params => "borrowed, retain", Return => "owned");
+    function rs_checksum(buf: Address[Nat8], len: Int64): Int64 is
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

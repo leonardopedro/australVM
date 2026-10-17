@@ -1,0 +1,18 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The " },
+    { "type": "code", "content": "Rust_Ownership" },
+    {
+      "type": "text",
+      "content": " pragma's Params list must have one ownership annotation per parameter: the function has "
+    },
+    { "type": "text", "content": "2" },
+    { "type": "text", "content": " parameters but " },
+    { "type": "text", "content": "1" },
+    { "type": "text", "content": " annotation." }
+  ],
+  "span": null,
+  "context": null
+}

@@ -1,0 +1,21 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The " },
+    { "type": "code", "content": "Rust_Ownership" },
+    {
+      "type": "text",
+      "content": " pragma applies only to extern rust imports, i.e. foreign imports whose external name begins with "
+    },
+    { "type": "code", "content": "rs_" },
+    { "type": "text", "content": ". The external name " },
+    { "type": "code", "content": "putchar" },
+    {
+      "type": "text",
+      "content": " belongs to a different namespace, whose ownership conventions are fixed by that ABI."
+    }
+  ],
+  "span": null,
+  "context": null
+}

@@ -1,0 +1,14 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The type " },
+    { "type": "type", "content": "Cell" },
+    {
+      "type": "text",
+      "content": " is not part of the buffer protocol that may cross an extern rust boundary. Parameters and return values of `rs_*` imports must be scalar values (integers, floats, booleans) or addresses/pointers, because those are the shapes the Rust side's ABI speaks."
+    }
+  ],
+  "span": null,
+  "context": null
+}

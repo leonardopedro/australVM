@@ -104,6 +104,89 @@ let test_null_ptr_execute_returns_neg_one _ =
   assert_equal ~printer:Int64.to_string (-1L) (execute_function_1 0L 1L);
   assert_equal ~printer:Int64.to_string (-1L) (execute_function_2 0L 1L 2L)
 
+(* ── PLAN_valen §4 Tier 1: extern rust calls through the bridge ───── *)
+
+(* The auth engine is process-global and `load_auth_manifest` MERGES, so
+   these tests must run in a fixed order — denial first, grant last — and no
+   test may rely on an engine state it did not install itself. They sit at
+   the end of the suite for the same reason. *)
+
+let rs_manifest_toml callables =
+  let quoted = String.concat ", " (List.map (fun c -> "\"" ^ c ^ "\"") callables) in
+  "[module]\nname = \"rs_jit_widget\"\n\n[grants]\nkernel = [" ^ quoted ^ "]\n"
+
+let contains haystack needle =
+  let nh = String.length haystack and nn = String.length needle in
+  let rec go i =
+    if i + nn > nh then false
+    else if String.sub haystack i nn = needle then true
+    else go (i + 1)
+  in
+  go 0
+
+(* A CPS module with one function `fname(buf, len) = <callee>(buf, len)` and
+   an explicit v2 module header, so the JIT attributes the gated call to
+   module `rs_jit_widget` — the A10 module principal. *)
+let rs_cps_binary fname callee =
+  let f = {
+    name = fname;
+    params = ["buf"; "len"];
+    return_type = I64;
+    body = Return (App (callee, [Var "buf"; Var "len"]))
+  } in
+  CpsGen.serialize_functions ~module_name:"rs_jit_widget" [f]
+
+let compile_rs fname callee =
+  init ();
+  CamlCompiler_rust_bridge.compile_binary (rs_cps_binary fname callee)
+
+(* Denial, no manifest: the documented default is DenyAll, so an ungranted
+   extern rust call never reaches the reference crate — UK-4001 at the live
+   JIT gate (`cps.rs::a10_live_grant_tests` shape, from the OCaml side). *)
+let test_rs_denied_without_manifest _ =
+  (match compile_rs "run_rs_no_manifest" "rs_checksum" with
+   | (0L, Some err) ->
+       assert_bool ("expected UK-4001, got: " ^ err) (contains err "UK-4001")
+   | (0L, None) -> assert_failure "compile failed without an error message"
+   | (ptr, _) -> assert_failure
+       ("an ungranted rs_ call must not compile, got pointer " ^ Int64.to_string ptr))
+
+(* Denial, uk-only manifest: PLAN_valen §4 — "a manifest that grants
+   `uk_push` does not thereby grant a tier-1 call", from the OCaml side. *)
+let test_rs_denied_by_uk_only_grant _ =
+  init ();
+  assert_bool "uk-only manifest must load"
+    (CamlCompiler_rust_bridge.load_auth_manifest (rs_manifest_toml ["uk_version"]));
+  (match compile_rs "run_rs_uk_only" "rs_checksum" with
+   | (0L, Some err) ->
+       assert_bool ("expected UK-4001, got: " ^ err) (contains err "UK-4001")
+   | (0L, None) -> assert_failure "compile failed without an error message"
+   | (ptr, _) -> assert_failure
+       ("a uk-only manifest must deny rs_checksum, got pointer " ^ Int64.to_string ptr))
+
+(* Granted, end-to-end: the manifest names rs_checksum, the JIT resolves it
+   to the reference crate's rs_checksum, and it runs over a live buffer
+   allocated from OCaml. Expected = FNV-1a 64 of "au!", independently
+   pinned here (the Rust-side rsffi crate tests pin the same vector
+   against its canonical sources). *)
+let test_rs_granted_executes_checksum _ =
+  init ();
+  assert_bool "rs-granting manifest must load"
+    (CamlCompiler_rust_bridge.load_auth_manifest (rs_manifest_toml ["rs_checksum"]));
+  let ptr =
+    match compile_rs "run_rs_granted" "rs_checksum" with
+    | (0L, err) ->
+        assert_failure ("a granted rs_ call must compile: " ^
+          (match err with Some e -> e | None -> "unknown error"))
+    | (p, _) -> p
+  in
+  (* Buffer "au!" as one LE word: 0x61 0x75 0x21 followed by zeroes. *)
+  let buf = CamlCompiler_rust_bridge.au_alloc 8L in
+  assert_bool "au_alloc must return a live pointer" (buf <> 0L);
+  CamlCompiler_rust_bridge.store buf 0x217561L;
+  let got = CamlCompiler_rust_bridge.execute_function_2 ptr buf 3L in
+  assert_equal ~printer:Int64.to_string (-1781872834555808882L) got
+
 (* ── suite ──────────────────────────────────────────────────────── *)
 
 let suite =
@@ -115,6 +198,10 @@ let suite =
     "match_pick" >:: test_match;
     "tail_rec_sum_1000" >:: test_tail_rec_sum;
     "null_ptr_execute_returns_neg_one" >:: test_null_ptr_execute_returns_neg_one;
+    (* rs_ tests ordered denial-before-grant: the auth engine merges. *)
+    "rs_denied_without_manifest" >:: test_rs_denied_without_manifest;
+    "rs_denied_by_uk_only_grant" >:: test_rs_denied_by_uk_only_grant;
+    "rs_granted_executes_checksum" >:: test_rs_granted_executes_checksum;
   ]
 
 let _ = run_test_tt_main suite

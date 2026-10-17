@@ -216,6 +216,7 @@ dependencies = [
  "frunk",
  "hex",
  "libc",
+ "rsffi",
  "serde",
  "serde_json",
  "target-lexicon",
@@ -4005,6 +4006,10 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "rsffi"
+version = "0.1.0"
 
 [[package]]
 name = "rustc-hash"

@@ -592,6 +592,48 @@ and is_constant = function
   | TSpanIndex (_, idx, _) ->
      is_constant idx
 
+let is_rs_external_name (s: string): bool =
+  String.length s >= 3 && String.sub s 0 3 = "rs_"
+
+let is_ownership_annotation (s: string): bool =
+  (s = "borrowed") || (s = "owned")
+
+(* PLAN_valen §4, tier 1: the linear boundary of an `extern rust` call. The
+   buffer protocol the kernel already speaks is: scalars (integers, floats,
+   booleans) and addresses/pointers. Anything else — records, unions,
+   references — would smuggle Austral's linear structure across an FFI
+   boundary that only speaks machine words, so it is rejected here, on the
+   typed AST, before monomorphization erases the annotation. *)
+let rec is_buffer_protocol_type (ty: ty): bool =
+  match ty with
+  | Integer _ | SingleFloat | DoubleFloat | Boolean -> true
+  | Address inner | Pointer inner -> is_buffer_protocol_type inner
+  | _ -> false
+
+(* Validate a Rust_Ownership pragma against the signature of the foreign
+   import it annotates, and return the pragma unchanged (to ride along on the
+   typed declaration for introspection; Monomorphize drops it). All failure
+   modes are hard errors: a tier-1 declaration with a malformed or missing
+   contract must not silently default to "borrowed", because the default
+   would be exactly the unsafe reading. *)
+let check_rust_ownership ~(external_name: string) ~(params: value_parameter list) ~(rt: ty) (owners: string list) (ret: string): unit =
+  if not (is_rs_external_name external_name) then
+    Errors.rust_ownership_not_tier1 ~name:external_name;
+  if List.length owners <> List.length params then
+    Errors.rust_ownership_arity
+      ~expected:(List.length params)
+      ~got:(List.length owners);
+  List.iter (fun a ->
+      if not (is_ownership_annotation a) then
+        Errors.rust_ownership_annotation ~annotation:a) owners;
+  if not (is_ownership_annotation ret) then
+    Errors.rust_ownership_annotation ~annotation:ret;
+  List.iter (fun (ValueParameter (_, ty)) ->
+      if not (is_buffer_protocol_type ty) then
+        Errors.rust_ownership_shape ~ty) params;
+  if not (is_buffer_protocol_type rt) then
+    Errors.rust_ownership_shape ~ty:rt
+
 let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (decl: linked_definition): typed_decl =
   with_frame "Augment declaration"
     (fun _ ->
@@ -618,7 +660,7 @@ let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (
          in
 let recognized = List.for_all (fun p ->
             match p with
-            | ForeignImportPragma _ | ForeignExportPragma _ | LiquidPragma _ -> true
+            | ForeignImportPragma _ | ForeignExportPragma _ | LiquidPragma _ | RustOwnershipPragma _ -> true
             | _ -> false) pragmas
           and import_name = List.find_map (fun p ->
             match p with
@@ -632,6 +674,35 @@ let recognized = List.for_all (fun p ->
             match p with
             | LiquidPragma _ -> Some p
             | _ -> None) pragmas
+          and rust_ownership = List.find_map (fun p ->
+            match p with
+            | RustOwnershipPragma (owners, ret) -> Some (owners, ret)
+            | _ -> None) pragmas
+          in
+          let _ =
+            (* A Rust_Ownership pragma is only meaningful on a foreign
+               import, and only in the rs_ namespace. Anywhere else is an
+               error, not a no-op: an annotation the compiler ignores is an
+               annotation the author believes is enforced. *)
+            match rust_ownership with
+            | None -> ()
+            | Some (owners, ret) ->
+               (match import_name with
+                | None ->
+                   Errors.rust_ownership_not_foreign ()
+                | Some s ->
+                   check_rust_ownership ~external_name:s ~params ~rt owners ret)
+          in
+          let _ =
+            match import_name with
+            | Some s when is_rs_external_name s ->
+               (* The namespace can't be used unannotated: an rs_ import
+                  without a Rust_Ownership pragma has no linear contract at
+                  all, and PLAN_valen §4 makes the contract part of the
+                  declaration, not a comment. *)
+               if rust_ownership = None then
+                 Errors.rust_ownership_required ~name:s
+            | _ -> ()
           in
           if not recognized then
             Errors.fun_invalid_pragmas ()
@@ -642,7 +713,19 @@ let recognized = List.for_all (fun p ->
              | (Some s, None) ->
                 if typarams_size typarams = 0 then
                   if kind = UnsafeModule then
-                    TForeignFunction (decl_id, vis, name, params, rt, s, doc, liquid_pragmas)
+                    (* The ownership annotation rides on the typed decl for
+                       introspection; Monomorphize drops it (MForeignFunction
+                       carries no pragmas), which is the erasure boundary
+                       PLAN_valen §4 requires: checked on the MTAST, gone
+                       before CPS. *)
+                    let all_pragmas =
+                      liquid_pragmas
+                      @ (List.filter_map (fun p ->
+                            match p with
+                            | RustOwnershipPragma _ -> Some p
+                            | _ -> None) pragmas)
+                    in
+                    TForeignFunction (decl_id, vis, name, params, rt, s, doc, all_pragmas)
                   else
                     Errors.foreign_in_safe_module ()
                 else

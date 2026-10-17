@@ -18,6 +18,17 @@ module Errors = struct
     in
     austral_raise DeclarationError text
 
+  let rust_ownership_args () =
+    austral_raise DeclarationError [
+      Text "Invalid Rust_Ownership pragma.";
+      Break;
+      Text "This pragma takes exactly two named string arguments: ";
+      Code "Params";
+      Text " (a comma-separated list of ownership annotations, one per parameter, or the empty string when the function takes no parameters) and ";
+      Code "Return";
+      Text " (the return value's ownership annotation)."
+    ]
+
   let unknown_pragma name =
     austral_raise DeclarationError [
       Text "Unknown pragma ";
@@ -127,13 +138,37 @@ let make_pragma name args =
            raise_err ()
       | _ ->
          raise_err ()
+  else
+    if s = "Rust_Ownership" then
+      (* PLAN_valen §4, tier 1: ownership annotations for `rs_*` foreign
+         imports. Two named string arguments, in either order. The
+         vocabulary is validated against the function's signature in
+         TypingPass, where the parameters are in scope; here we only
+         establish the shape. *)
+      let split_owners (s: string): string list =
+        if String.trim s = "" then
+          []
+        else
+          List.map String.trim (String.split_on_char ',' s)
+      in
+      (match args with
+       | ConcreteNamedArgs [(a1, CStringConstant (_, p)); (a2, CStringConstant (_, r))]
+         when equal_identifier a1 (make_ident "Params")
+              && equal_identifier a2 (make_ident "Return") ->
+          RustOwnershipPragma (split_owners p, String.trim r)
+       | ConcreteNamedArgs [(a2, CStringConstant (_, r)); (a1, CStringConstant (_, p))]
+         when equal_identifier a1 (make_ident "Params")
+              && equal_identifier a2 (make_ident "Return") ->
+          RustOwnershipPragma (split_owners p, String.trim r)
+       | _ ->
+          Errors.rust_ownership_args ())
     else
       if s = "Unsafe_Module" then
-        let raise_err () =
-          Errors.pragma_argument_error
-            ~pragma_name:"Unsafe_Module"
-            ~argument:None
-        in
+      let raise_err () =
+        Errors.pragma_argument_error
+          ~pragma_name:"Unsafe_Module"
+          ~argument:None
+      in
         match args with
         | ConcretePositionalArgs [] ->
            UnsafeModulePragma

@@ -1,0 +1,13 @@
+[package]
+name = "rsffi"
+version = "0.1.0"
+edition = "2021"
+description = "PLAN_valen §4 Tier 1: the reference `extern rust` crate. Its symbols are registered in the cranelift bridge under the rs_ namespace and gated by the module manifest, exactly like uk_*."
+license = "Apache-2.0 WITH LLVM-exception"
+
+# Both crate types: rlib so the bridge crate can depend on it and register the
+# function addresses in the JIT symbol table (mirroring how unfer_ffi's uk_*
+# tables are registered), cdylib so the same source can be built as a
+# standalone artifact for out-of-process hosts later (PLAN_valen §4 Tier 2).
+[lib]
+crate-type = ["rlib", "cdylib"]

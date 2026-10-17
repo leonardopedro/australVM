@@ -36,6 +36,12 @@ type pragma =
       the kind ("Requires", "Ensures", "Invariant", "Trusted", "Measure",
       "Fold"), the second the contract string ("" for marker pragmas). *)
   | LiquidPragma of string * string
+  (** PLAN_valen §4, tier 1 (`extern rust`): ownership annotations for an
+      `rs_*` foreign import. The first component is one annotation per
+      parameter ("borrowed" or "owned"), the second the return value's
+      annotation. Checked on the typed AST and erased before CPS: the
+      monomorphized foreign declaration carries no pragmas. *)
+  | RustOwnershipPragma of string list * string
 
 (** Whether a variable is immutable or mutable. *)
 type mutability =

@@ -1,0 +1,14 @@
+-- Rust_Ownership on a C import: the annotation belongs to the rs_ namespace
+-- only; the C ABI's ownership conventions are not declared here.
+pragma Unsafe_Module;
+
+module body Test is
+    pragma Foreign_Import(External_Name => "putchar");
+    pragma Rust_Ownership(Params => "borrowed", Return => "owned");
+    function Put_Character(character: Nat8): Int32 is
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

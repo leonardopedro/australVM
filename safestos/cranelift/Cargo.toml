@@ -21,6 +21,11 @@ cedar-policy = { version = "4.11.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 unfer_ffi = { path = "../../../unfer/unfer_ffi", optional = true }
+# PLAN_valen §4 Tier 1: the reference `extern rust` crate. Its rs_* symbols
+# are registered under the rs_ namespace (RS_FFI_SYMBOLS), gated by the
+# module manifest like uk_*. On by default, same as unfer-kernel: the tier's
+# reference implementation must be executable everywhere the bridge is.
+rsffi = { path = "../rsffi", optional = true }
 arctic_authority = { path = "../../arctic_authority", optional = true }
 arctic = { path = "../../../dynamic-arctic", optional = true }
 # Not optional: `modhost --json` emits NDJSON events, and the crate is
@@ -44,9 +49,11 @@ unfer_protocol = { path = "../../../unfer/unfer_protocol" }
 # tidepool-repr = { git = "https://github.com/tidepool-heavy-industries/tidepool", rev = "ac0a95ddb07cbb996ba2b5bf1fd0772ca9315ef1", optional = true }
 
 [features]
-default = ["cedar", "unfer-kernel"]
+default = ["cedar", "unfer-kernel", "tier1-rs"]
 cedar = ["dep:cedar-policy"]
 unfer-kernel = ["dep:unfer_ffi"]
+# PLAN_valen §4 Tier 1: extern rust declarations (rs_* namespace).
+tier1-rs = ["dep:rsffi"]
 zenodo-store = ["dep:unfer_ffi", "unfer_ffi/zenodo"]
 arctic-auth = ["dep:arctic_authority", "dep:arctic"]
 tidepool = ["dep:frunk"]
@@ -75,3 +82,7 @@ strip = true
 [[test]]
 name = "ecmascript_module"
 required-features = ["ecmascript"]
+
+[[test]]
+name = "tier1_extern_rust"
+required-features = ["tier1-rs"]

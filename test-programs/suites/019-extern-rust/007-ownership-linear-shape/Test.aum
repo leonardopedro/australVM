@@ -1,0 +1,18 @@
+-- A linear record crossing the extern rust boundary: only the buffer
+-- protocol (scalars and addresses) may cross.
+pragma Unsafe_Module;
+
+module body Test is
+    record Cell: Linear is
+        value: Int64;
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_absorb");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_absorb(cell: Cell): Int64 is
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.
