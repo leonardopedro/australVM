@@ -12,6 +12,7 @@ cross-repo table — including what was deliberately **not** adopted — is
 | SafestOS (same author) | Apache-2.0 with LLVM-exception (README; the in-tree copy has **no LICENSE file** — verify) | the C runtime: lock-free scheduler, cell loader, memory management | `README.md` §Architecture item 3; tree in-tree at `safestos/` |
 | DeepSeek Engram paper (arXiv:2601.07372) | paper text arXiv-default (authors retain copyright); companion `../Engram` code is Apache-2.0 | the paper's **full text reproduced as a design note** — recorded, not normalised | `engram.md`, `docs/ENGRAM.md` |
 | Valen (`valen-lang/valen`, Apache-2.0) + the group-borrowing article (Ovadia 2025, crediting Nick Smith; blog text © its authors) | Apache-2.0 — LICENSE read firsthand 2026-10-16 | **design ideas only, no code copied**: group borrowing as an erasing ("ghost") type-pass over linear cells, and Rust-library interop kept out of the lightweight JIT — as a plugin over the existing seam or a separate umbrella compiler. Not adopted: the patched rustc. | `PLAN_valen.md` |
+| `SplitMix64` (Vigna's SplittableRandom mixer) | algorithm reimplemented from the published specification — no code copied; reference implementation public domain | the gear table of the in-house FastCDC chunker is expanded from the fixed seed `GEAR_SEED` via the SplitMix64 mixer and pinned by a test (the `fastcdc` crate was not used) | `safestos/pkg/avm-cas/src/chunker.rs`; claim recorded in `PLAN_avm_pkg.md` §4.1 |
 
 ## Notes
 

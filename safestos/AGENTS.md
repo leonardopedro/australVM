@@ -170,6 +170,27 @@ cd safestos/cranelift && cargo build --release
 cargo test --features "test-stubs" -p austral_cranelift_bridge
 ```
 
+## avm-pkg (package engine, `safestos/pkg/`)
+
+Content-addressed package subsystem: dual-tier CAS (FastCDC chunks,
+BLAKE3 ids, LZ4 packfiles, Ed25519 manifests, mmap hot store) + pure
+derivation-DAG evaluation + the `avm-pkg` CLI. **Status, measured
+acceptance numbers, and the not-covered list live in
+`../PLAN_avm_pkg.md` — read it before changing anything here.**
+
+```bash
+cd safestos/pkg
+CARGO_NET_OFFLINE=true cargo test --workspace          # fast suite (42 tests)
+# heavy acceptances (release, ignored by default):
+AVM_HOT_DIR=/dev/shm CARGO_NET_OFFLINE=true \
+  cargo test --workspace --release -- --ignored --test-threads=1
+```
+
+Like `cranelift/`, this is its own cargo workspace with its own
+`Cargo.lock`; deps are restricted to the machine's offline cargo cache.
+Run with `CARGO_NET_OFFLINE=true` so a stray network attempt fails loudly
+instead of hanging.
+
 ## Revision History
 
 - **2026-04-24**: Initial AGENTS.md created

@@ -1,0 +1,23 @@
+[package]
+name = "avm-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# PLAN_avm_pkg.md Sprint 4 (skeleton) — the `avm-pkg` command line. Only
+# subcommands whose backing subsystems exist are wired; the rest are named
+# in PLAN_avm_pkg.md as pending rather than stubbed to fake coverage.
+
+[[bin]]
+name = "avm-pkg"
+path = "src/main.rs"
+
+[dependencies]
+avm-cas = { path = "../avm-cas" }
+avm-eval = { path = "../avm-eval" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

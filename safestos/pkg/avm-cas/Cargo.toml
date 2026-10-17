@@ -1,0 +1,24 @@
+[package]
+name = "avm-cas"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# PLAN_avm_pkg.md Sprint 1 — dual-tier storage:
+#   cold:  append-only, FastCDC-chunked, BLAKE3-addressed, LZ4 packfiles,
+#          Ed25519-signed manifests (crypto.rs),
+#   hot:   ephemeral, mmap-backed, zero-writeback-evicting page cache
+#          (hot_store.rs) for active .avm cells.
+
+[dependencies]
+blake3.workspace = true
+dashmap.workspace = true
+ed25519-dalek.workspace = true
+lz4_flex.workspace = true
+memmap2.workspace = true
+serde.workspace = true
+# Manifest::to_json (CLI `stat` view); kept out of the identity encoding,
+# which is hand-rolled canonical binary.
+serde_json.workspace = true
+tempfile.workspace = true
