@@ -42,6 +42,11 @@ pub struct HotStats {
     pub capacity: u64,
     pub usage: u64,
     pub cells: usize,
+    /// Resident drops so far (spec §5 eviction accounting), both explicit
+    /// `release`s and budget-forced LRU evictions.
+    pub evictions: u64,
+    /// Cumulative bytes those drops removed from the resident set.
+    pub evicted_bytes: u64,
 }
 
 pub struct HotStore {
@@ -50,6 +55,8 @@ pub struct HotStore {
     capacity: u64,
     usage: AtomicU64,
     tick: AtomicU64,
+    evictions: AtomicU64,
+    evicted_bytes: AtomicU64,
     hot_dir: PathBuf,
     enforce_signatures: bool,
 }
@@ -69,6 +76,8 @@ impl HotStore {
             capacity,
             usage: AtomicU64::new(0),
             tick: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+            evicted_bytes: AtomicU64::new(0),
             hot_dir,
             enforce_signatures,
         })
@@ -83,6 +92,8 @@ impl HotStore {
             capacity: self.capacity,
             usage: self.usage.load(Ordering::Relaxed),
             cells: self.cells.len(),
+            evictions: self.evictions.load(Ordering::Relaxed),
+            evicted_bytes: self.evicted_bytes.load(Ordering::Relaxed),
         }
     }
 
@@ -102,10 +113,14 @@ impl HotStore {
         Ok(mmap.to_vec())
     }
 
-    /// Explicitly drop a cell from the resident set.
+    /// Explicitly drop a cell from the resident set. Counts toward the
+    /// spec §5 eviction accounting: a drop is a drop whether the caller
+    /// asked for it or the budget forced it.
     pub fn release(&self, manifest_hash: &Digest) {
         if let Some((_, cell)) = self.cells.remove(manifest_hash) {
             self.usage.fetch_sub(cell.size as u64, Ordering::Relaxed);
+            self.evictions.fetch_add(1, Ordering::Relaxed);
+            self.evicted_bytes.fetch_add(cell.size as u64, Ordering::Relaxed);
         }
     }
 
