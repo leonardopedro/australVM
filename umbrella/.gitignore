@@ -1,0 +1,5 @@
+# cargo build outputs (umbrella + the demo crate each get their own)
+/target/
+/modules/rscrate/target/
+# emitted CPS snapshots (rendered from modules/*.aum at run time)
+*.cps

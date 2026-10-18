@@ -1,0 +1,13 @@
+[package]
+name = "rscrate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# An ordinary cdylib. Nothing here knows about australVM: the umbrella
+# discovers this artifact with `cargo build --message-format=json` and
+# dlopens it so the JIT's rs_* calls resolve through the dlsym fallback
+# (PLAN_valen §5 P3 — registration without bridge-table changes).
+
+[lib]
+crate-type = ["cdylib", "staticlib"]

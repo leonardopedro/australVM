@@ -1,0 +1,38 @@
+-- umbrella/modules/Demo.aum — PLAN_valen §5 P3.
+--
+-- A self-contained module compiled by the STOCK `austral` front-end
+-- (australVM has no umbrella-specific code) and executed by the
+-- umbrella through the bridge. The extern call is on exactly the tier
+-- P2 verified end to end: the rs_ namespace, a Rust_Ownership
+-- buffer-protocol declaration, and a manifest grant for the call.
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+
+module body Demo is
+    -- Tier 1 declaration: borrowed pointer + borrowed length in, owned
+    -- scalar out. The permission to call it lives in module.toml, not
+    -- in this file.
+    pragma Foreign_Import(External_Name => "rs_demo_checksum");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_demo_checksum(buf: Address[Nat8], len: Int64): Int64 is
+    end;
+
+    -- Entry invoked by the umbrella (compile_to_function_named "compute"):
+    -- hand the extern a live Address[Nat8] over the literal bytes "au!".
+    -- Both @embed patterns are ones the CPS backend recognises ($1.data /
+    -- $1.size lower to JIT intrinsics over the span's {data,size} struct),
+    -- so this module needs no libc in the JIT process.
+    function compute(): Int64 is
+        let label: Span[Nat8, Static] := "au!";
+        let buf: Address[Nat8] := @embed(Address[Nat8], "$1.data", label);
+        let len: Int64 := @embed(Int64, "$1.size", label);
+        return rs_demo_checksum(buf, len);
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

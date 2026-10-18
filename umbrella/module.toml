@@ -1,0 +1,13 @@
+# umbrella/module.toml — what the Demo module is ALLOWED to call.
+#
+# rs_demo_checksum sits on the kernel-boundary gate exactly like uk_*
+# and uz_* symbols (cps.rs check_call_permission): an rs_* call with no
+# grant fails JIT compile with UK-4001. The same file drives both demo
+# paths — run with --manifest for the granted path, omit the flag to
+# take the explicit-DenyAll path.
+
+[module]
+name = "Demo"
+
+[grants]
+kernel = ["rs_demo_checksum"]

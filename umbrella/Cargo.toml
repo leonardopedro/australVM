@@ -1,0 +1,29 @@
+[package]
+name = "umbrella"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# PLAN_valen §5 P3 — a host project that consumes australVM as (a) a
+# library — the Cranelift bridge, referenced by path — and (b) a
+# front-end service — the stock `austral` binary invoked as a subprocess
+# to serialize CPS. australVM contains no umbrella-specific code; the
+# boundary the plan drew ("australVM does not learn about rustc") is
+# exactly what lets this crate exist.
+#
+# Since 2026-10-17 umbrella lives *inside* australVM as a git submodule
+# (australVM/.gitmodules), so the path dep below is the in-tree relative
+# path; the crate keeps its own repository and its own cargo target.
+#
+# Default bridge features on purpose: this prototype reuses the exact
+# dependency configuration australVM's own test harness builds, so the
+# only new ground being broken here is the wiring, not the feature set.
+# The bridge's baked rs_* table contains the reference crate's symbols,
+# never `rs_demo_checksum` — the demo's extern resolves solely through
+# the dlsym(RTLD_DEFAULT) fallback after this project dlopens its own
+# cdylib, which is the P3 claim under test.
+
+[dependencies]
+austral_cranelift_bridge = { path = "../safestos/cranelift" }
+libc = "0.2"
+serde_json = "1"
