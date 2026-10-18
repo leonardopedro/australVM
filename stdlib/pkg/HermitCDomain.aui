@@ -1,0 +1,29 @@
+"""
+The cloud-profile C driver-stack domain as a package derivation
+(docs/spectrum_plan.md §8.3, Sprint 8 task 8.5).
+
+Data-only recipe, the C-flavour sibling of HermitDomain: it pins the
+build facts read firsthand from the `../hermit-c/` checkout — the
+`x86_64-hermit-gcc` cross toolchain (the `hermit-os/hermit-gcc` image)
+linking `libhermit.a` from the kernel's xtask, and the kernel feature
+list that `meson.build` pins for C workloads (`acpi,dhcpv4,dns,mman,
+newlib,smp,tcp,udp,virtio-net,loader`, `pci` except riscv64).
+
+`sources` is empty and `builder_symbol` is `hermit.build` with an
+explicit `BUILDER_STATUS` row, for the same recorded reasons as
+HermitDomain: there is no image payload to hash here (the `kernel/` git
+submodule of hermit-os/kernel is not checked out in this workspace), and
+no unikernel-building builder exists here (machine offline). Capable-host
+steps live in docs/spectrum_plan.md §8 (task 8.4).
+
+Exported through `austral compile … --pkg-totality=true
+--emit-derivations=plan.json` and hashed by `avm-pkg drv-hash`, same
+release contract as the seed package set (PLAN_avm_pkg §4.8).
+"""
+import Derivation (
+    Derivation
+);
+
+module HermitCDomain is
+    constant hermit_c_domain: Derivation;
+end module.

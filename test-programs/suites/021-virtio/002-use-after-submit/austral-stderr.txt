@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "buffer" },
+    { "type": "text", "content": " has already been consumed." }
+  ],
+  "span": {
+    "filename": "test-programs/suites/021-virtio/002-use-after-submit/Test.aum",
+    "startp": { "line": 25, "column": 8 },
+    "end": { "line": 25, "column": 28 }
+  },
+  "context": [
+    [ 23, "        let inflight: BufferInFlight := submit(buffer, 7);" ],
+    [
+      24,
+      "        -- Use-after-submit: `buffer` was consumed by submit above."
+    ],
+    [ 25, "        free_buffer(buffer);" ],
+    [ 26, "        let reclaimed: DmaBuffer := complete(inflight);" ],
+    [ 27, "        free_buffer(reclaimed);" ]
+  ]
+}

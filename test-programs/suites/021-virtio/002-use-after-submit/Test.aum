@@ -1,0 +1,30 @@
+-- Expected compile failure: `submit` consumes the linear DmaBuffer, so
+-- touching it again is a linearity error at compile time — the buffer-
+-- invariance property of docs/spectrum_plan.md §6, never a runtime bug.
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address,
+    allocateBuffer
+);
+import Virtio (
+    DmaBuffer,
+    BufferInFlight,
+    make_buffer,
+    submit,
+    complete,
+    free_buffer
+);
+
+module body Test is
+    function main(): ExitCode is
+        let address: Address[Nat8] := allocateBuffer(64);
+        let buffer: DmaBuffer := make_buffer(address, 64, 0);
+        let inflight: BufferInFlight := submit(buffer, 7);
+        -- Use-after-submit: `buffer` was consumed by submit above.
+        free_buffer(buffer);
+        let reclaimed: DmaBuffer := complete(inflight);
+        free_buffer(reclaimed);
+        return ExitSuccess();
+    end;
+end module body.

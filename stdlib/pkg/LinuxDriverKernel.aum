@@ -1,0 +1,45 @@
+import Derivation (
+    Derivation,
+    List,
+    Pair,
+    Nil,
+    Cons
+);
+
+module body LinuxDriverKernel is
+    -- Literal record constructor only: a function call in a constant
+    -- initializer would not be a literal, so the export stays a pure data
+    -- term (Bootstrap.aum records the same constraint).
+    constant linux_driver_kernel: Derivation := Derivation(
+        name => "linux-driver-kernel",
+        version => "0.1.0",
+        sources => Nil(): List[Span[Nat8, Static]],
+        dependencies => Nil(): List[Span[Nat8, Static]],
+        env_vars => Cons(
+            head => Pair(
+                first => "KCONFIG_ON",
+                second => "VIRTIO=y VIRTIO_BLK=y VIRTIO_CONSOLE=y VIRTIO_PCI=y EROFS_FS=y"),
+            tail => Cons(
+                head => Pair(
+                    first => "KCONFIG_OFF",
+                    second => "VT=n DRM_FBDEV_EMULATION=n"),
+                tail => Cons(
+                    head => Pair(
+                        first => "KCONFIG_UNSET",
+                        second => "FONTS FONT_8x8 FONT_TER16x32 FRAMEBUFFER_CONSOLE FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER FRAMEBUFFER_CONSOLE_DETECT_PRIMARY FRAMEBUFFER_CONSOLE_ROTATION RC_CORE"),
+                    tail => Cons(
+                        head => Pair(
+                            first => "KERNEL_TARGET",
+                            second => "compressed/vmlinux.bin"),
+                        tail => Cons(
+                            head => Pair(
+                                first => "UPSTREAM",
+                                second => "linux_latest (../spectrum/vm/sys/net/default.nix)"),
+                            tail => Cons(
+                                head => Pair(
+                                    first => "BUILDER_STATUS",
+                                    second => "linux.build is not implemented in this workspace: no kernel sources, machine offline; capable-host steps in docs/spectrum_plan.md section 6"),
+                                tail => Nil(): List[Pair[Span[Nat8, Static], Span[Nat8, Static]]])))))),
+        builder_symbol => "linux.build"
+    );
+end module body.

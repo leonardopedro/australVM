@@ -1,0 +1,35 @@
+-- Driver-domain VirtIO ownership roundtrip: allocate, submit (buffer
+-- moves to the device), complete (ownership returns), read, free exactly
+-- once. Module under test: stdlib/sys/Virtio.aui.
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address,
+    allocateBuffer
+);
+import Virtio (
+    DmaBuffer,
+    BufferInFlight,
+    make_buffer,
+    buffer_length,
+    submit,
+    complete,
+    free_buffer
+);
+
+module body Test is
+    function main(): ExitCode is
+        let address: Address[Nat8] := allocateBuffer(64);
+        let buffer: DmaBuffer := make_buffer(address, 64, 0);
+        -- Ownership transfer: `buffer` is consumed by submit…
+        let inflight: BufferInFlight := submit(buffer, 7);
+        -- …and restored by complete.
+        let reclaimed: DmaBuffer := complete(inflight);
+        borrow bref: &[DmaBuffer, R] := &reclaimed do
+            printLn(buffer_length(bref));
+        end borrow;
+        -- Consumed exactly once: freed here.
+        free_buffer(reclaimed);
+        return ExitSuccess();
+    end;
+end module body.

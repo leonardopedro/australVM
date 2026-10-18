@@ -1,0 +1,73 @@
+-- Only safe wrappers live here bodies (allocate/deallocate come from the
+-- builtin memory module): Austral.Memory imports require the unsafe
+-- pragma, exactly as examples/kernel/UnferKernel.aum declares it.
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address,
+    Pointer,
+    nullCheck,
+    deallocate
+);
+
+module body Virtio is
+    function make_buffer(address: Address[Nat8], length: Int64, queue: Nat16): DmaBuffer is
+        return DmaBuffer(
+            address => address,
+            length => length,
+            queue => queue
+        );
+    end;
+
+    generic [R: Region]
+    function buffer_length(buffer: &[DmaBuffer, R]): Int64 is
+        return buffer->length;
+    end;
+
+    function submit(buffer: DmaBuffer, slot: Nat32): BufferInFlight is
+        -- Pure ownership move: the linear record is consumed here, so no
+        -- path in module code can touch `buffer` afterwards.
+        let {
+            address: Address[Nat8],
+            length: Int64,
+            queue: Nat16
+        } := buffer;
+        return BufferInFlight(
+            address => address,
+            length => length,
+            queue => queue,
+            slot => slot
+        );
+    end;
+
+    function complete(token: BufferInFlight): DmaBuffer is
+        let {
+            address: Address[Nat8],
+            length: Int64,
+            queue: Nat16,
+            slot: Nat32
+        } := token;
+        return DmaBuffer(
+            address => address,
+            length => length,
+            queue => queue
+        );
+    end;
+
+    function free_buffer(buffer: DmaBuffer): Unit is
+        -- Destructuring is the discharge of the linear obligation; the
+        -- allocation is released here rather than leaked.
+        let {
+            address: Address[Nat8],
+            length: Int64,
+            queue: Nat16
+        } := buffer;
+        case nullCheck(address) of
+            when Some(value: Pointer[Nat8]) do
+                deallocate(value);
+            when None do
+                abort("vfree: null DMA buffer address");
+        end case;
+        return nil;
+    end;
+end module body.

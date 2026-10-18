@@ -1,0 +1,128 @@
+{
+  "derivations": [
+    {
+      "name": "bootstrap_seed",
+      "version": "0.1.0",
+      "builder_symbol": "stdenv.build",
+      "dependencies": [],
+      "sources": [],
+      "env_vars": [ [ "CC", "tcc" ] ],
+      "totality": "proven"
+    },
+    {
+      "name": "busybox",
+      "version": "1.36.1",
+      "builder_symbol": "stdenv.build",
+      "dependencies": [ "musl", "bootstrap_seed" ],
+      "sources": [],
+      "env_vars": [],
+      "totality": "proven"
+    },
+    {
+      "name": "hello",
+      "version": "2.12",
+      "builder_symbol": "stdenv.build",
+      "dependencies": [ "musl" ],
+      "sources": [],
+      "env_vars": [ [ "CFLAGS", "-O2" ] ],
+      "totality": "proven"
+    },
+    {
+      "name": "hermit-c-domain",
+      "version": "0.1.0",
+      "builder_symbol": "hermit.build",
+      "dependencies": [],
+      "sources": [],
+      "env_vars": [
+        [
+          "KERNEL_FEATURES",
+          "acpi dhcpv4 dns mman newlib smp tcp udp virtio-net loader (pci except riscv64)"
+        ],
+        [ "TARGET", "x86_64-hermit (cross files also aarch64, riscv64)" ],
+        [
+          "TOOLCHAIN",
+          "x86_64-hermit-gcc (hermit-os/hermit-gcc) linking libhermit.a from the kernel xtask"
+        ],
+        [ "MEMORY_MIB", "64" ],
+        [ "VCPUS", "1" ],
+        [ "RUNNERS", "uhyve | qemu + hermit-loader (../hermit-c/README.md)" ],
+        [
+          "UPSTREAM",
+          "../hermit-c (kernel submodule hermit-os/kernel, not checked out)"
+        ],
+        [
+          "BUILDER_STATUS",
+          "hermit.build is not implemented in this workspace: kernel submodule not checked out, machine offline; capable-host steps in docs/spectrum_plan.md section 8"
+        ]
+      ],
+      "totality": "proven"
+    },
+    {
+      "name": "hermit-domain",
+      "version": "0.1.0",
+      "builder_symbol": "hermit.build",
+      "dependencies": [],
+      "sources": [],
+      "env_vars": [
+        [ "KERNEL_FEATURES", "virtio-net dhcpv4 fs" ],
+        [
+          "TARGET",
+          "x86_64-unknown-hermit (also aarch64, riscv64gc per ../hermit-rs/.github/workflows/ci.yml)"
+        ],
+        [
+          "TOOLCHAIN",
+          "nightly-2026-08-01 (-Zbuild-std=std,panic_abort; or rust-std-hermit on stable)"
+        ],
+        [ "MEMORY_MIB", "64" ],
+        [ "VCPUS", "1" ],
+        [
+          "RUNNERS",
+          "uhyve | qemu + hermit-loader (../hermit-rs/hermit/README.md)"
+        ],
+        [
+          "UPSTREAM",
+          "../hermit-rs (kernel submodule hermit-os/kernel, not checked out)"
+        ],
+        [
+          "BUILDER_STATUS",
+          "hermit.build is not implemented in this workspace: kernel submodule not checked out, machine offline; capable-host steps in docs/spectrum_plan.md section 8"
+        ]
+      ],
+      "totality": "proven"
+    },
+    {
+      "name": "linux-driver-kernel",
+      "version": "0.1.0",
+      "builder_symbol": "linux.build",
+      "dependencies": [],
+      "sources": [],
+      "env_vars": [
+        [
+          "KCONFIG_ON",
+          "VIRTIO=y VIRTIO_BLK=y VIRTIO_CONSOLE=y VIRTIO_PCI=y EROFS_FS=y"
+        ],
+        [ "KCONFIG_OFF", "VT=n DRM_FBDEV_EMULATION=n" ],
+        [
+          "KCONFIG_UNSET",
+          "FONTS FONT_8x8 FONT_TER16x32 FRAMEBUFFER_CONSOLE FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER FRAMEBUFFER_CONSOLE_DETECT_PRIMARY FRAMEBUFFER_CONSOLE_ROTATION RC_CORE"
+        ],
+        [ "KERNEL_TARGET", "compressed/vmlinux.bin" ],
+        [ "UPSTREAM", "linux_latest (../spectrum/vm/sys/net/default.nix)" ],
+        [
+          "BUILDER_STATUS",
+          "linux.build is not implemented in this workspace: no kernel sources, machine offline; capable-host steps in docs/spectrum_plan.md section 6"
+        ]
+      ],
+      "totality": "proven"
+    },
+    {
+      "name": "musl",
+      "version": "1.2.5",
+      "builder_symbol": "stdenv.build",
+      "dependencies": [ "bootstrap_seed" ],
+      "sources": [],
+      "env_vars": [],
+      "totality": "proven"
+    }
+  ]
+}

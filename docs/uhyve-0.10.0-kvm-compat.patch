@@ -1,0 +1,260 @@
+# uhyve 0.10.0 compatibility patch for newer KVM kernels
+# (australVM/docs/spectrum_plan.md §5, Task 8.4 / §6 boot-latency row).
+#
+# Apply against the crates.io source tree:
+#   cp -r ~/.cargo/registry/src/*/uhyve-0.10.0 uhyve-patched && chmod -R u+w uhyve-patched
+#   cd uhyve-patched && patch -p0 < docs/uhyve-0.10.0-kvm-compat.patch
+#   cargo build --release --offline
+#
+# Three changes, each independently reasoned:
+#  1. init(): install vCPU CPUID *before* the long-mode KVM_SET_SREGS.
+#     Newer kernels (reproduced on Linux 7.2.9) validate EFER bits
+#     against the current CPUID, so 0.10.0's original order gets
+#     EINVAL (BackendError(Error(22)) at vm.rs:505) on every boot.
+#  2. COM1 (0x3f8-0x3ff) emulation: hermit's serial console polls the
+#     UART line-status register; stock uhyve emulates no serial port,
+#     so loader images spin forever reading 0x3fd.
+#  3. MMIO scan tolerance: reads/writes to the virtio window without a
+#     configured virtio device (and other unhandled MMIO addresses)
+#     warn instead of panicking the whole VMM — the same "guest might
+#     just be scanning" discipline the PCI config path already has.
+# The UHYVE_SREGS_DIAG env-gated bisection block (change 1's evidence)
+# is included deliberately: it is how the EINVAL was isolated.
+--- /home/leo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/uhyve-0.10.0/src/linux/x86_64/kvm_cpu.rs	2006-07-24 03:21:28.000000000 +0200
++++ /home/leo/Projects/uhyve-0.10.0-patched/src/linux/x86_64/kvm_cpu.rs	2026-10-18 11:45:42.000261198 +0200
+@@ -232,12 +232,19 @@
+ 
+ impl KvmCpu {
+ 	fn init(&mut self) -> HypervisorResult<()> {
++		// Fix (recorded in australVM/docs/spectrum_plan.md §5): uhyve
++		// 0.10.0 as published runs these two steps the other way around.
++		// On newer kernels (reproduced: Linux 7.2.9) KVM_SET_SREGS
++		// validates EFER bits against the *current* vCPU CPUID — until
++		// CPUID has advertised long mode/NX, any nonzero EFER is
++		// rejected with EINVAL (BackendError(Error(22)) at vm.rs:505).
++		// Install CPUID first; the sregs payload itself is unchanged.
++		self.setup_cpuid()?;
+ 		self.setup_long_mode(
+ 			self.kernel_info.entry_point,
+ 			self.kernel_info.layout,
+ 			self.id,
+ 		)?;
+-		self.setup_cpuid()?;
+ 
+ 		// be sure that the multiprocessor is runable
+ 		let mp_state = kvm_mp_state {
+@@ -396,10 +403,95 @@
+ 		// DS, ES, SS: Data segments, using second GDT entry.
+ 		// Read-Write, accessed. L bit must not be set.
+ 		(seg.type_, seg.selector, seg.l) = (3, 1 << 4, 0);
+-		(sregs.ds, sregs.es, sregs.ss) = (seg, seg, seg);
+-		sregs.gdt.base = layout.gdt_address().as_u64();
+-		sregs.gdt.limit = ((std::mem::size_of::<u64>() * BOOT_GDT_MAX) - 1) as u16;
+-		self.vcpu.set_sregs(&sregs)?;
++		(sregs.ds, sregs.es, sregs.ss) = (seg, seg, seg);			sregs.gdt.base = layout.gdt_address().as_u64();
++			sregs.gdt.limit = ((std::mem::size_of::<u64>() * BOOT_GDT_MAX) - 1) as u16;
++
++			// uhyve 0.10.0 as published fails here with BackendError(EINVAL)
++			// on newer kernels (reproduced: Linux 7.2.9): the monolithic
++			// KVM_SET_SREGS payload is rejected and the ioctl carries no
++			// field-level reason. With UHYVE_SREGS_DIAG=1, bisect the
++			// payload cumulatively (control regs -> GDT -> CS -> data
++			// segments -> untouched system segments), print which group
++			// first trips EINVAL, and exit without booting.
++			if std::env::var_os("UHYVE_SREGS_DIAG").is_some() {
++				// CPUID-first theory: the kernel may reject EFER bits that
++				// the (still unset) CPUID does not advertise. Install CPUID
++				// before re-running the bisection.
++				self.setup_cpuid()?;
++				eprintln!("[sregs-diag] setup_cpuid() installed first");
++				let base = self.vcpu.get_sregs()?;
++				eprintln!("[sregs-diag] fresh get_sregs: {base:#?}");
++				let accepted = |s: &kvm_sregs| self.vcpu.set_sregs(s).is_ok();
++				let mut report = |name: &str, ok: bool| {
++					eprintln!(
++						"[sregs-diag] {name}: {}",
++						if ok { "Ok" } else { "EINVAL" }
++					)
++				};
++				report("0 baseline (verbatim get_sregs)", accepted(&base));
++				let mut cr_only = |f: &str, apply: &dyn Fn(&mut kvm_sregs)| {
++					let mut s = base.clone();
++					apply(&mut s);
++					report(f, accepted(&s));
++				};
++				cr_only("1a + cr0 only", &|s| s.cr0 = sregs.cr0);
++				cr_only("1b + cr3 only", &|s| s.cr3 = sregs.cr3);
++				cr_only("1c + cr4 only", &|s| s.cr4 = sregs.cr4);
++				cr_only("1d + efer only", &|s| s.efer = sregs.efer);
++				cr_only("1e + efer LME|NXE (no LMA)", &|s| s.efer = EFER_LME | EFER_NXE);
++				cr_only("1f + cr4 PAE|OSFXSAVE|OSXMMEXC", &|s| {
++					s.cr4 = sregs.cr4 | 1 << 9 | 1 << 10
++				});
++				cr_only("1d1 efer NXE only", &|s| s.efer = EFER_NXE);
++				cr_only("1d2 efer LME only", &|s| s.efer = EFER_LME);
++				cr_only("1d4 cr0(PG set)+efer LME|NXE, no LMA", &|s| {
++					s.cr0 = sregs.cr0;
++					s.efer = EFER_LME | EFER_NXE;
++				});
++				cr_only("1d5 cr0+cr3+cr4+efer LME|NXE, no LMA", &|s| {
++					s.cr0 = sregs.cr0;
++					s.cr3 = sregs.cr3;
++					s.cr4 = sregs.cr4;
++					s.efer = EFER_LME | EFER_NXE;
++				});
++				cr_only("1g cumulative cr0/cr3/cr4/efer", &|s| {
++					s.cr0 = sregs.cr0;
++					s.cr3 = sregs.cr3;
++					s.cr4 = sregs.cr4;
++					s.efer = sregs.efer;
++				});
++				let mut acc = base.clone();
++				acc.cr0 = sregs.cr0;
++				acc.cr3 = sregs.cr3;
++				acc.cr4 = sregs.cr4;
++				acc.efer = sregs.efer;
++				report("1 + cr0/cr3/cr4/efer", accepted(&acc));
++				acc.gdt = sregs.gdt;
++				report("2 + gdt", accepted(&acc));
++				acc.cs = sregs.cs;
++				report("3 + cs", accepted(&acc));
++				(acc.ds, acc.es, acc.ss) = (sregs.ds, sregs.es, sregs.ss);
++				report("4 + ds/es/ss (== full uhyve payload)", accepted(&acc));
++				// Probe: can EFER be written through KVM_SET_MSRS instead?
++				let efer_val = EFER_LME | EFER_LMA | EFER_NXE;
++				match Msrs::from_entries(&[kvm_msr_entry {
++					index: 0xC000_0080, // MSR_EFER (not exported by kvm-bindings)
++					data: efer_val,
++					..Default::default()
++				}]) {
++					Ok(msrs) => match self.vcpu.set_msrs(&msrs) {
++						Ok(n) => eprintln!("[sregs-diag] SET_MSRS(EFER): Ok, entries written = {n}"),
++						Err(e) => eprintln!("[sregs-diag] SET_MSRS(EFER): {e}"),
++					},
++					Err(e) => eprintln!("[sregs-diag] Msrs::from_entries failed: {e}"),
++				}
++				let back = self.vcpu.get_sregs()?;
++				eprintln!("[sregs-diag] efer after SET_MSRS probe: {:#x} (wanted {efer_val:#x})", back.efer);
++				eprintln!("[sregs-diag] exiting without booting");
++				std::process::exit(0);
++			}
++
++			self.vcpu.set_sregs(&sregs)?;
+ 
+ 		let regs = kvm_regs {
+ 			rflags: 2,
+@@ -491,6 +583,14 @@
+ 								}
+ 							}
+ 							PCI_CONFIG_ADDRESS_PORT => {}
++							// COM1 emulation (patch, australVM/docs/spectrum_plan.md
++							// §5): hermit's serial console *polls* the UART
++							// line-status register; stock uhyve 0.10.0 emulates no
++							// serial port at all, so loader images spin forever on
++							// reads of 0x3fd. LSR = THR empty (0x20) + TX idle
++							// (0x40); every other COM1 register reads as zero.
++							0x3fd => addr.fill(0x60),
++							0x3f8..=0x3ff => addr.fill(0x0),
+ 							port => {
+ 								warn!("Guest read from unknown I/O port {port:#x}");
+ 							}
+@@ -568,10 +668,18 @@
+ 											unsafe { *(addr.as_ptr() as *const u32) },
+ 										);
+ 									}
+-								}
+-								port => {
+-									warn!("Guest wrote to unknown I/O port {port:#x}");
+-								}
++								}									// COM1 output (patch, australVM/docs/
++								// spectrum_plan.md §5): bytes written to
++								// the UART THR go to uhyve's configured serial
++								// destination; divisor/FIFO/control writes are
++								// accepted and ignored.
++									0x3f8 => {
++										let _ = self.peripherals.serial.output(&addr);
++									}
++									0x3f9..=0x3ff => {}
++									port => {
++										warn!("Guest wrote to unknown I/O port {port:#x}");
++									}
+ 							}
+ 						};
+ 					}
+@@ -580,35 +688,53 @@
+ 							s.increment_val(VmExit::MMIORead)
+ 						}
+ 						match addr {
+-							0x9_F000..0xA_0000 | 0xF_0000..0x10_0000 => {} // Search for MP floating table
+-							IOBASE_U64..IOEND_U64 => virtio_device()
+-								.unwrap()
+-								.virtio
+-								.handle_read(PciConfigurationAddress(addr as u32), data),
+-							_ => {
+-								let l = data.len();
+-								self.print_registers();
+-								panic!(
+-									"undefined mmio read of {l} bytes to {addr:#x?} (ConfigAddress {:x?})",
+-									PciConfigurationAddress::from_guest_address(addr.into())
+-								);
+-							}
++							0x9_F000..0xA_0000 | 0xF_0000..0x10_0000 => {} // Search for MP floating table								// Patch (australVM/docs/spectrum_plan.md §5): an
++								// absent virtio device must not panic uhyve —
++								// the guest may simply be scanning (the PCI
++								// config path below tolerates the same case).
++								IOBASE_U64..IOEND_U64 => match virtio_device() {
++									Some(mut virtio_device) => virtio_device.virtio.handle_read(
++										PciConfigurationAddress(addr as u32),
++										data,
++									),
++									None => {
++										trace!("Guest reads from virtio window without a virtio device");
++										data.fill(0xff);
++									}
++								},
++								_ => {
++									// Patch (australVM/docs/spectrum_plan.md §5):
++									// stock 0.10.0 panics the whole VM here; a
++									// scanning guest gets "no device" semantics
++									// instead (0xff reads, ignored writes).
++									trace!(
++										"Guest read of {l} bytes from unhandled mmio {addr:#x}",
++										l = data.len()
++									);
++									data.fill(0xff);
++								}
+ 						}
+ 					}
+ 					VcpuExit::MmioWrite(addr, data) => {
+ 						if let Some(s) = self.stats.as_mut() {
+ 							s.increment_val(VmExit::MMIOWrite)
+ 						}
+-						match addr {
+-							IOBASE_U64..IOEND_U64 => virtio_device()
+-								.unwrap()
+-								.virtio
+-								.handle_write(PciConfigurationAddress(addr as u32), data),
+-							_ => {
+-								let l = data.len();
+-								self.print_registers();
+-								panic!("undefined mmio write of {l} bytes to {addr:#x?}");
+-							}
++						match addr {								// Patch (australVM/docs/spectrum_plan.md §5): as
++								// above — scanning writes to a device-less VM are
++								// ignored, never fatal.
++								IOBASE_U64..IOEND_U64 => match virtio_device() {
++									Some(mut virtio_device) => virtio_device.virtio.handle_write(
++										PciConfigurationAddress(addr as u32),
++										data,
++									),
++									None => trace!(
++										"Guest write to virtio window without a virtio device"
++									),
++								},
++								_ => trace!(
++									"Guest wrote {l} bytes to unhandled mmio {addr:#x}",
++									l = data.len()
++								),
+ 						}
+ 					}
+ 					VcpuExit::Debug(debug) => {

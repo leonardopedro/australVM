@@ -1,0 +1,20 @@
+[package]
+name = "avm-vmm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# docs/spectrum_plan.md Sprint 6, tasks 6.2/6.3 — cloud-hypervisor
+# orchestration for driver domains: the vm.config JSON payload (grounded in
+# ../cloud-hypervisor-build/cloud-hypervisor/docs/api.md), the REST-over-API
+# -socket client, and the CAS-backed launch lifecycle with honest
+# launch-or-refuse behavior when no VMM binary is present.
+
+[dependencies]
+avm-cas = { path = "../avm-cas" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

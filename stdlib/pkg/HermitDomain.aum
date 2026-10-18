@@ -1,0 +1,54 @@
+import Derivation (
+    Derivation,
+    List,
+    Pair,
+    Nil,
+    Cons
+);
+
+module body HermitDomain is
+    -- Literal record constructor only: a function call in a constant
+    -- initializer would not be a literal, so the export stays a pure data
+    -- term (Bootstrap.aum and LinuxDriverKernel.aum record the same
+    -- constraint).
+    constant hermit_domain: Derivation := Derivation(
+        name => "hermit-domain",
+        version => "0.1.0",
+        sources => Nil(): List[Span[Nat8, Static]],
+        dependencies => Nil(): List[Span[Nat8, Static]],
+        env_vars => Cons(
+            head => Pair(
+                first => "KERNEL_FEATURES",
+                second => "virtio-net dhcpv4 fs"),
+            tail => Cons(
+                head => Pair(
+                    first => "TARGET",
+                    second => "x86_64-unknown-hermit (also aarch64, riscv64gc per ../hermit-rs/.github/workflows/ci.yml)"),
+                tail => Cons(
+                    head => Pair(
+                        first => "TOOLCHAIN",
+                        second => "nightly-2026-08-01 (-Zbuild-std=std,panic_abort; or rust-std-hermit on stable)"),
+                    tail => Cons(
+                        head => Pair(
+                            first => "MEMORY_MIB",
+                            second => "64"),
+                        tail => Cons(
+                            head => Pair(
+                                first => "VCPUS",
+                                second => "1"),
+                            tail => Cons(
+                                head => Pair(
+                                    first => "RUNNERS",
+                                    second => "uhyve | qemu + hermit-loader (../hermit-rs/hermit/README.md)"),
+                                tail => Cons(
+                                    head => Pair(
+                                        first => "UPSTREAM",
+                                        second => "../hermit-rs (kernel submodule hermit-os/kernel, not checked out)"),
+                                    tail => Cons(
+                                        head => Pair(
+                                            first => "BUILDER_STATUS",
+                                            second => "hermit.build is not implemented in this workspace: kernel submodule not checked out, machine offline; capable-host steps in docs/spectrum_plan.md section 8"),
+                                        tail => Nil(): List[Pair[Span[Nat8, Static], Span[Nat8, Static]]])))))))),
+        builder_symbol => "hermit.build"
+    );
+end module body.

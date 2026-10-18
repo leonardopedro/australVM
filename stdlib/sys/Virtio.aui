@@ -1,0 +1,89 @@
+"""
+Linear VirtIO front-end interfaces for driver domains
+(docs/spectrum_plan.md §3.1, Task 6.3).
+
+`DmaBuffer` is the host-side ownership token for one DMA buffer handed to a
+driver domain over a vhost-user VirtIO queue. The record is `Linear`, so the
+compiler enforces the protocol the shared-memory channels need:
+
+  * `submit` *consumes* the `DmaBuffer` and returns a `BufferInFlight` —
+    after submit, touching the buffer is a type error, not a runtime bug;
+  * `complete` consumes the in-flight token and hands ownership back;
+  * `free_buffer` consumes the buffer one final time (the exact-twice
+    discipline the linearity checker already applies to `Free`-vs-`Linear`
+    records in suites 006/007/019).
+
+This is the *type* half of the queue capability: Cedar-network-cap policy
+belongs to the JIT manifest layer and is recorded, not faked (plan §4,
+Sprint 6 task 6.3).
+
+The buffer payload itself is `Address[Nat8]` + `Int64` length — the plain
+extern-boundary shape this compiler uses everywhere (`examples/kernel/
+UnferKernel.aui`), because Austral has no builtin `String` or slice type.
+Grounding: split-queue byte protocol lives in `safestos/pkg/avm-virtio`
+(ring.rs / vhost.rs, tests pinned to the SpectrumOS patch layouts); this
+module is the Austral-side ownership binding, not a second implementation
+of the wire format.
+"""
+import Austral.Memory (
+    Address
+);
+
+module Virtio is
+    """
+    A DMA buffer owned by the host frontend, destined for virtqueue `queue`
+    of the driver domain. Linear: consumed exactly once, either by
+    `submit` (ownership moves to the device) or dropped explicitly with
+    `free_buffer`.
+    """
+    record DmaBuffer: Linear is
+        address: Address[Nat8];
+        length: Int64;
+        queue: Nat16;
+    end;
+
+    """
+    The ownership token while the backend owns the buffer: `submit` has
+    consumed the `DmaBuffer`, and only `complete` turns it back. Holding
+    one without completing is dropped by the same exact-once rule.
+    """
+    record BufferInFlight: Linear is
+        address: Address[Nat8];
+        length: Int64;
+        queue: Nat16;
+        slot: Nat32;
+    end;
+
+    """
+    Wrap an rDMA-reachable byte range as a `DmaBuffer` for virtqueue
+    `queue`. The address is obtained from `Austral.Memory.allocateBuffer`
+    (or the extern allocator) by the caller before entering a typed path.
+    """
+    function make_buffer(address: Address[Nat8], length: Int64, queue: Nat16): DmaBuffer;
+
+    """
+    Read the buffer length without taking ownership.
+    """
+    generic [R: Region]
+    function buffer_length(buffer: &[DmaBuffer, R]): Int64;
+
+    """
+    Hand the buffer to the device: consumes the `DmaBuffer` and returns
+    the in-flight token for descriptor `slot`. Use after submit is a
+    compile-time linearity error (pinned by the expected-failure suite
+    case `021-virtio/002-use-after-submit`).
+    """
+    function submit(buffer: DmaBuffer, slot: Nat32): BufferInFlight;
+
+    """
+    Device completion: consumes the token and returns the buffer to the
+    host with ownership restored.
+    """
+    function complete(token: BufferInFlight): DmaBuffer;
+
+    """
+    Final consumption: discharges the linear obligation and releases the
+    underlying allocation.
+    """
+    function free_buffer(buffer: DmaBuffer): Unit;
+end module.

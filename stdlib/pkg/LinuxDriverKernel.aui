@@ -1,0 +1,32 @@
+"""
+The Linux driver-domain kernel as a package derivation
+(docs/spectrum_plan.md §3.4, Sprint 7 task 7.1).
+
+Data-only recipe: it pins the *kconfig intent* of SpectrumOS's reference
+driver VM (`../spectrum/vm/sys/net/default.nix`, read firsthand) — the
+virtio/erofs enabling set and the console/VT baggage removal — plus the
+stripped-vmlinux install target that same file names. Nothing else is
+claimed:
+
+  * `sources` is empty for the same recorded reason as the Bootstrap seed
+    set (PLAN_avm_pkg §4.8 supplier note): there is no kernel source
+    payload in this workspace to hash, and naming an unhashed digest would
+    claim an input the store cannot resolve;
+  * `builder_symbol` is `linux.build` with an explicit `BUILDER_STATUS`
+    env row: no kernel-compiling builder exists here (no kernel sources,
+    machine is offline). The evaluation path honest-refuses on an unknown
+    builder rather than pretending — this is exactly the Sprint-7 row the
+    plan records as *not covered* with its capable-host reproduction
+    commands (docs/spectrum_plan.md §6).
+
+Exported through `austral compile … --pkg-totality=true
+--emit-derivations=plan.json` and hashed by `avm-pkg drv-hash`, same
+release contract as the seed package set (PLAN_avm_pkg §4.8).
+"""
+import Derivation (
+    Derivation
+);
+
+module LinuxDriverKernel is
+    constant linux_driver_kernel: Derivation;
+end module.

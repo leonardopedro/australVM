@@ -1,0 +1,29 @@
+"""
+The cloud-profile Hermit driver domain as a package derivation
+(docs/spectrum_plan.md §8, Sprint 8 task 8.2).
+
+Data-only recipe, the sibling of LinuxDriverKernel: it pins the domain
+shape of `../hermit-rs/k8s/httpd.yml` (1 core, 64 MiB, virtio-only) and
+the build facts read firsthand from the `../hermit-rs/` checkout:
+
+  * `sources` is empty for the same recorded reason as LinuxDriverKernel
+    (PLAN_avm_pkg §4.8 supplier note): there is no unikernel image payload
+    in this workspace to hash, and the `kernel/` git submodule
+    (hermit-os/kernel) is not checked out;
+  * `builder_symbol` is `hermit.build` with an explicit `BUILDER_STATUS`
+    env row: no unikernel-building builder exists here (kernel submodule
+    absent, machine offline). The evaluation path honest-refuses on an
+    unknown builder rather than pretending — the capable-host steps live in
+    docs/spectrum_plan.md §8 (Sprint 8 task 8.4).
+
+Exported through `austral compile … --pkg-totality=true
+--emit-derivations=plan.json` and hashed by `avm-pkg drv-hash`, same
+release contract as the seed package set (PLAN_avm_pkg §4.8).
+"""
+import Derivation (
+    Derivation
+);
+
+module HermitDomain is
+    constant hermit_domain: Derivation;
+end module.
