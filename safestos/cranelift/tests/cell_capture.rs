@@ -109,7 +109,11 @@ fn capture_yields_bodies_and_named_relocs() {
 
     let defined = cap.defined();
     let names: Vec<&str> = defined.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(names, vec!["leaf", "caller"], "deterministic FuncId (declaration) order");
+    assert_eq!(
+        names,
+        vec!["leaf", "caller"],
+        "deterministic FuncId (declaration) order"
+    );
 
     let mut declared: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     declared.extend(cap.imports());
@@ -133,9 +137,17 @@ fn capture_yields_bodies_and_named_relocs() {
         .relocs
         .iter()
         .find(|r| r.symbol == "leaf")
-        .unwrap_or_else(|| panic!("caller must relocate against leaf, got {:#?}", caller.relocs));
-    assert!(rel.kind.contains("Call") || rel.kind.contains("PCRel") || rel.kind.contains("Abs"),
-        "call relocation kind should be a call/pc-rel/abs form, got {}", rel.kind);
+        .unwrap_or_else(|| {
+            panic!(
+                "caller must relocate against leaf, got {:#?}",
+                caller.relocs
+            )
+        });
+    assert!(
+        rel.kind.contains("Call") || rel.kind.contains("PCRel") || rel.kind.contains("Abs"),
+        "call relocation kind should be a call/pc-rel/abs form, got {}",
+        rel.kind
+    );
 }
 
 #[test]

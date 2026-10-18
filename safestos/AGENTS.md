@@ -96,6 +96,13 @@ Per function:
 
 ### Cranelift Bridge (Working)
 - `src/lib.rs`: Thread-local FFI with `compile_to_function_named()`
+- `src/lib.rs`: **static import seam** (Task 8.6, `../docs/spectrum_plan.md`
+  §8.4) — `register_static_symbol` + C-ABI
+  `austral_register_static_symbol` let a statically linked image (no
+  `dlopen`, e.g. Hermit guests) resolve `rs_*`/`uk_*` imports; every JIT
+  builder consults the registry at init. Registration is resolution, not
+  permission: the manifest gate is by name and applies unchanged.
+  Contract pinned by `tests/static_seam.rs` (3 tests).
 - `src/cps.rs`: Full CPS → Cranelift compiler with:
   - Three-pass compilation (parse headers, declare functions, define bodies)
   - All opcodes 0x01-0x07, 0x08, 0x10, 0x13-0x19 implemented
@@ -191,9 +198,43 @@ Like `cranelift/`, this is its own cargo workspace with its own
 Run with `CARGO_NET_OFFLINE=true` so a stray network attempt fails loudly
 instead of hanging.
 
+## Driver domains — cloud-hypervisor substrate (`../docs/spectrum_plan.md`)
+
+Sprints 6 & 7 of **`../docs/spectrum_plan.md`**: driver domains hosted in
+cloud-hypervisor micro-VMs, fronted over vhost-user VirtIO. **Read that
+plan before changing anything in this area** — status, measured numbers,
+and the hardware-gated *not covered* rows (real launch, boot latency,
+quarantine, line rate) live in its §5/§6. Sprint 8's cloud profile —
+Hermit unikernel driver domains (`../../hermit-rs/`, C stacks via
+`../../hermit-c/`) for virtio-only cloud deployments — tasks 8.1–8.5
+executed and measured 2026-10-18 (Hermit guests really boot: QEMU+loader
+201–290 ms to user code; **patched uhyve 245.7–262.6 ms, pruned+PIT
+160.3–173.1 ms** — `../../docs/uhyve-0.10.0-kvm-compat.patch`; task 7.3's
+real orchestration run works, create→Running 0.2–1.5 ms). The VirtIO-ready
+row is now measured in-guest via `boot_once`'s serial sink
+(**284.999–292.423 ms** guest-clock, §5). 8.6: cross-build + CPS bake +
+the dlopen→static seam done; in-guest boot open. Line rate stays a §6
+row — no 10 GbE NIC or VF exists on this machine (inventory in §6).
+
+```bash
+# New crates (member crates of the pkg/ workspace, same offline discipline):
+cd safestos/pkg
+CARGO_NET_OFFLINE=true cargo test -p avm-virtio    # split VirtQueue, vhost-user codec, shmem registry
+CARGO_NET_OFFLINE=true cargo test -p avm-vmm       # vm.config ↔ REST launcher, CAS lifecycle, KVM probe
+
+# Austral side:
+#   ../../stdlib/sys/Virtio.{aui,aum}     linear DmaBuffer/BufferInFlight (submit consumes)
+#   ../../stdlib/pkg/LinuxDriverKernel.*  data-only driver-kernel derivation (kconfig intent)
+# e2e gates: ../../test-programs/suites/021-virtio/  (roundtrip prints 64; use-after-submit
+# must fail to compile — austral-stderr.txt pins the exact linearity diagnostic)
+nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; \
+  python test-programs/runner.py'
+```
+
 ## Revision History
 
 - **2026-04-24**: Initial AGENTS.md created
 - **2026-04-25**: Updated with Cranelift pivot, bridge working (v0.131)
 - **2026-04-25**: Bridge test passes (JIT returns 42), CPS module added
 - **2026-04-26**: Major rewrite — CPS JIT fully integrated, 0x08 (If/Select) implemented in Rust, MIfExpression patched in OCaml. fib(10)=10 awaiting OCaml recompile.
+- **2026-10-18**: spectrum-plan follow-up pass — static import seam in the bridge (`tests/static_seam.rs`), in-guest VirtIO-ready measurement in `avm-vmm`'s `boot_once`, uhyve compat patch (`../docs/uhyve-0.10.0-kvm-compat.patch`); pkg workspace 108 tests.

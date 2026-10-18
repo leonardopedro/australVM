@@ -38,9 +38,7 @@ fn load_manifest(module: &str, callables: &[&str]) {
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let toml = format!(
-        "[module]\nname = \"{module}\"\n\n[grants]\nkernel = [{list}]\n"
-    );
+    let toml = format!("[module]\nname = \"{module}\"\n\n[grants]\nkernel = [{list}]\n");
     let engine = austral_cranelift_bridge::auth::ManifestAuthEngine::from_toml_str(&toml)
         .expect("manifest parses");
     austral_cranelift_bridge::auth::set_auth_engine(Box::new(engine));
@@ -260,10 +258,7 @@ fn no_manifest_denies_rs_call() {
         &body_tail_call_2params("rs_checksum", "buf", "len"),
     );
     let err = compile_result(&cps).expect_err("DenyAll must deny an rs_ call");
-    assert!(
-        err.contains("UK-4001"),
-        "expected UK-4001, got: {err}"
-    );
+    assert!(err.contains("UK-4001"), "expected UK-4001, got: {err}");
 
     restore_default_auth();
 }

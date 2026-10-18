@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["avm-cas", "avm-eval", "avm-exec", "avm-cli"]
+members = ["avm-cas", "avm-eval", "avm-exec", "avm-cli", "avm-virtio", "avm-vmm"]
 
 # PLAN_avm_pkg.md — the avm-pkg package engine core. Standalone workspace
 # (like safestos/cranelift): dependencies are pure crates from the shared

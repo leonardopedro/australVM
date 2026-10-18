@@ -894,6 +894,108 @@ mod tests {
         );
     }
 
+    /// docs/spectrum_plan.md §3.4 / §4 task 7.2: vendor firmware ingestion.
+    ///
+    /// Three *minor revisions* of a synthetic-but-structurally-realistic
+    /// `.mbn` bundle — fixed-size header (magic, header version, image id,
+    /// revision, segment table) over a multi-segment body — go through the
+    /// real CAS (`put_buffer` → FastCDC → BLAKE3 digests), and the chunk
+    /// reuse of the follow-on revisions is measured against the plan's
+    /// acceptance: **≥ 80 % chunk reuse**. `reuse` here is the same metric
+    /// `minor_edit_reuses_most_chunks` uses: how much of each *later* ingest
+    /// was already present in the store before that ingest. The overall
+    /// storage saving (distinct digests over all ingests) is printed too,
+    /// because it answers the different question — bytes actually not
+    /// stored — and with three near-identical revisions it necessarily sits
+    /// near 2/3, not near 100 %.
+    ///
+    /// Reproduce (per plan §5):
+    /// `cargo test -p avm-cas firmware_bundle_dedup -- --nocapture`
+    #[test]
+    fn firmware_bundle_dedup() {
+        let dir = tmpdir();
+        let store = ChunkStore::open(dir.path().join("store")).unwrap();
+
+        /// One `.mbn`-shaped bundle: 4 KiB header + a 2 MiB text segment +
+        /// a 1 MiB data segment + filler tail ⇒ 4 MiB total. Revisions
+        /// differ in exactly the places vendor firmware differs: the
+        /// revision field in the header and one symbol-table byte in the
+        /// code segment.
+        fn mbn_bundle(rev: u32) -> Vec<u8> {
+            let mut b = filler(4 * 1024 * 1024, 11);
+            // Header (synthetic, MBN-*shaped* — not a claimed byte-layout
+            // of any vendor's tooling):
+            b[0..4].copy_from_slice(b"MBN\0"); // magic
+            b[4..8].copy_from_slice(&3u32.to_le_bytes()); // header_vsn = 3
+            b[8..12].copy_from_slice(&0x19u32.to_le_bytes()); // image_id: ELF
+            b[12..16].copy_from_slice(&rev.to_le_bytes()); // build revision
+                                                           // Segment table: three u32 (offset, len) pairs.
+            let segs: [(u32, u32); 3] = [
+                (4096, 2 * 1024 * 1024),               // code
+                (4096 + 2 * 1024 * 1024, 1024 * 1024), // data
+                (4096 + 3 * 1024 * 1024, 1024 * 1024), // padding
+            ];
+            for (i, (off, len)) in segs.iter().enumerate() {
+                let at = 16 + i * 8;
+                b[at..at + 4].copy_from_slice(&off.to_le_bytes());
+                b[at + 4..at + 8].copy_from_slice(&len.to_le_bytes());
+            }
+            // Minor code delta: flip one byte of the code segment per rev.
+            b[4096 + 128] ^= 0x01;
+            b[4096 + 129] = rev as u8;
+            b
+        }
+
+        let mut seen: std::collections::HashSet<[u8; 32]> = Default::default();
+        let mut distinct = 0usize;
+        let mut total = 0usize;
+        let mut followon_reused = 0usize;
+        let mut followon_total = 0usize;
+
+        for rev in 1u32..=3 {
+            let data = mbn_bundle(rev);
+            let m = store
+                .put_buffer("vendor-firmware", &format!("1.0.{rev}"), &data, None)
+                .unwrap();
+            let n = m.chunks.len();
+            let reused = m.chunks.iter().filter(|c| seen.contains(*c)).count();
+            eprintln!(
+                "firmware rev {rev}: {reused}/{n} chunks already in store ({:.1} %)",
+                100.0 * reused as f64 / n as f64
+            );
+            for c in &m.chunks {
+                if seen.insert(*c) {
+                    distinct += 1;
+                }
+            }
+            total += n;
+            if rev > 1 {
+                followon_reused += reused;
+                followon_total += n;
+            }
+        }
+
+        let reuse = followon_reused as f64 / followon_total as f64;
+        let saving = 1.0 - distinct as f64 / total as f64;
+        eprintln!(
+            "firmware dedup: follow-on reuse {followon_reused}/{followon_total} = {:.1} %; \
+             storage saving = {distinct}/{total} distinct ⇒ {:.1} % saved",
+            reuse * 100.0,
+            saving * 100.0
+        );
+        assert!(
+            reuse >= 0.80,
+            "follow-on reuse {followon_reused}/{followon_total} ({reuse:.3}) below the 80 % acceptance"
+        );
+        assert!(
+            saving >= 0.60,
+            "storage saving {saving:.3} below the ~2/3 floor three near-identical revisions imply"
+        );
+        // The three revisions really are three distinct manifests.
+        assert_eq!(seen.len(), distinct);
+        assert!(distinct < total, "some chunks must have been reused");
+    }
+
     #[test]
     fn gc_prunes_dead_keeps_live() {
         let dir = tmpdir();

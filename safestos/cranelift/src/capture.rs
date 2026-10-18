@@ -176,11 +176,17 @@ fn reloc_kind_name(r: Reloc) -> String {
 /// (see `Module::declare_func_in_func`), data objects in namespace 1.
 fn symbol_string(name: &ModuleRelocTarget, decls: &ModuleDeclarations) -> String {
     match *name {
-        ModuleRelocTarget::User { namespace: 0, index } => {
+        ModuleRelocTarget::User {
+            namespace: 0,
+            index,
+        } => {
             let id = FuncId::from_u32(index);
             decls.get_function_decl(id).linkage_name(id).into_owned()
         }
-        ModuleRelocTarget::User { namespace: 1, index } => {
+        ModuleRelocTarget::User {
+            namespace: 1,
+            index,
+        } => {
             let id = DataId::from_u32(index);
             decls.get_data_decl(id).linkage_name(id).into_owned()
         }

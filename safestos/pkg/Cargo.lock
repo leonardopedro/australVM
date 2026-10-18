@@ -114,6 +114,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "avm-virtio"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "avm-vmm"
+version = "0.1.0"
+dependencies = [
+ "avm-cas",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

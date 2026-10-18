@@ -316,6 +316,16 @@ pub extern "C" fn cranelift_init() -> i64 {
             #[cfg(feature = "tier1-rs")]
             register_rs_symbols(&mut builder);
 
+            // Task 8.6 static import seam (docs/spectrum_plan.md §8.4,
+            // option 1): symbols a statically linked image registered
+            // before the first compile on this thread (the dlopen-free
+            // path for hosts like Hermit) join the JIT symbol table.
+            // Resolution is not permission: the manifest gate is by name
+            // (cps::check_call_permission) and still applies.
+            for (name, addr) in registered_static_symbols() {
+                builder.symbol(&name, addr as *const u8);
+            }
+
             Ok(JITModule::new(builder))
         })() {
             Ok(jit) => {
@@ -829,6 +839,84 @@ fn register_rs_symbols(builder: &mut JITBuilder) {
 #[cfg(feature = "tier1-rs")]
 pub fn registered_rs_symbols() -> Vec<&'static str> {
     RS_FFI_SYMBOLS.iter().map(|s| s.name).collect()
+}
+
+// ── Static import seam (Task 8.6, docs/spectrum_plan.md §8.4 option 1) ──
+//
+// The umbrella feeds `rs_*` symbols to the JIT by dlopening the crate
+// (RTLD_GLOBAL) and letting cranelift-jit's default lookup fall back to
+// `dlsym(RTLD_DEFAULT)`. Hosts without `dlopen` — a Hermit unikernel
+// guest, a statically linked image — cannot do that, so this registry is
+// the seam: a static image registers its symbols at startup (before the
+// first compile on the thread), and every JIT builder consults the
+// registry while resolving imports. Like `dlsym`, registration resolves
+// imports but never *grants* them: the manifest gate in
+// `cps::check_call_permission` is by name and applies unchanged.
+
+fn static_symbol_registry() -> &'static std::sync::Mutex<Vec<(String, usize)>> {
+    static REGISTRY: std::sync::OnceLock<std::sync::Mutex<Vec<(String, usize)>>> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Register a symbol for JIT import resolution without `dlopen`.
+///
+/// Must be called before the first compile **on the calling thread**
+/// (the JIT is thread-local and consumes its symbol table at
+/// initialization): registering later is refused rather than silently
+/// ineffective. Re-registering an existing name overwrites its address.
+pub fn register_static_symbol(name: &str, addr: *const u8) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("static symbol: empty name".to_string());
+    }
+    if addr.is_null() {
+        return Err(format!("static symbol {name}: null address"));
+    }
+    let initialized = JIT.with(|cell| cell.borrow().is_some());
+    if initialized {
+        return Err(format!(
+            "static symbol {name}: this thread's JIT is already initialized \
+             (register before the first compile)"
+        ));
+    }
+    let mut reg = static_symbol_registry()
+        .lock()
+        .map_err(|e| format!("static symbol registry poisoned: {e}"))?;
+    match reg.iter_mut().find(|(n, _)| n == name) {
+        Some(slot) => slot.1 = addr as usize,
+        None => reg.push((name.to_string(), addr as usize)),
+    }
+    Ok(())
+}
+
+/// C-ABI registrar for statically linked images (what a Hermit-side
+/// image calls in place of dlopen). Returns 1 on success, 0 on invalid
+/// arguments (null pointer, empty or non-UTF-8 name), -1 when refused
+/// (the calling thread's JIT is already initialized).
+#[no_mangle]
+pub extern "C" fn austral_register_static_symbol(
+    name: *const std::ffi::c_char,
+    addr: *const u8,
+) -> i64 {
+    if name.is_null() {
+        return 0;
+    }
+    let Ok(name) = (unsafe { std::ffi::CStr::from_ptr(name) }).to_str() else {
+        return 0;
+    };
+    match register_static_symbol(name, addr) {
+        Ok(()) => 1,
+        Err(_) => -1,
+    }
+}
+
+/// The current static-import registry (tests iterate it; a Hermit-side
+/// image can log it before compiling).
+pub fn registered_static_symbols() -> Vec<(String, usize)> {
+    static_symbol_registry()
+        .lock()
+        .expect("static symbol registry poisoned")
+        .clone()
 }
 
 /// Compile a CPS IR buffer behind a panic guard.
