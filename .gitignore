@@ -48,4 +48,8 @@ examples/modules/demo_hosted/module.cps
 calltree.html
 error.html
 
+# runner.py's per-run failure dump (README: "it is not checked in" — this
+# makes that true; a 377 KB artifact from one bad run sat untracked)
+FAILURES.txt
+
 engram.md

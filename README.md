@@ -1,6 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leonardopedro/australVM)
 
-<!-- status: verified | tests: 113 dune / 14 suites | last_verified: 2026-10-17 -->
+<!-- status: verified | tests: 134 dune / 16 suites + 108 safestos/pkg + 129 bridge cargo (excl. umbrella demo) | last_verified: 2026-10-18 -->
 
 ## Verification
 
@@ -16,9 +16,11 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"   # Cranelift bridge 
 export UNFER_LOGOS_BIN=/path/to/unfer/target/debug/logos    # deltanet UNF gate
 
 dune build @install --profile release
-dune runtest --force          # 113 tests, 14 suites, all OK
+dune runtest --force          # 134 tests, 16 suites, all OK
+cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 108 tests, all OK
+cargo test --manifest-path safestos/cranelift/Cargo.toml         # 129 tests, all OK
 ./run-examples.sh
-python3 test-programs/runner.py   # "All tests passed"
+python3 test-programs/runner.py   # "All tests passed" (311 programs)
 '
 ```
 
@@ -53,6 +55,15 @@ The project has successfully integrated a multi-tier security model combining co
 - [x] **Multi-Tier Capabilities**: Linear tokens for Network, Memory, and Hot-Swapping.
 - [x] **SafestOS Runtime Linkage**: Linked C-based scheduler and cell loader into the JIT bridge.
 - [x] **Hot-Swappable Cells**: Metadata generation for `CellDescriptor` is operational.
+
+### Since Phase 11
+Phase 11 is the last *phased* milestone; newer work ships per-plan, and the
+`status:` line at the top is the machine-checked claim (`scripts/check-status`):
+- **Valen-inspired group borrows** — parser + typechecker (`PLAN_valen.md` P1, 2026-10-16).
+- **`extern rust` interop, tier 1** — kernel-boundary gate with an `rs_*` namespace and `modhost authorize` (`PLAN_valen.md` §4 P2, 2026-10-17).
+- **`umbrella/` prototype** — mixed Austral/Rust module bundles; a plain subfolder since 2026-10-18 (`PLAN_valen.md` P3).
+- **avm-pkg content-addressed package engine** — `safestos/pkg/` crates (`avm-cas`, `avm-eval`, `avm-virtio`, `avm-vmm`, `avm-cli`), see `PLAN_avm_pkg.md`.
+- **SpectrumOS-derived driver-domain direction** — design plan only, in `docs/spectrum_plan.md`.
 
 ### 🏛 Architecture
 1. **Frontend (OCaml)**: Compiles Austral to monomorphized CPS IR.
