@@ -893,6 +893,13 @@ pub fn register_static_symbol(name: &str, addr: *const u8) -> Result<(), String>
 /// image calls in place of dlopen). Returns 1 on success, 0 on invalid
 /// arguments (null pointer, empty or non-UTF-8 name), -1 when refused
 /// (the calling thread's JIT is already initialized).
+//
+// The caller is a linked-in image, not OCaml, so the justification is
+// the one that actually holds here rather than the sibling functions'
+// wording: the pointer is C-ABI input, this function null-checks before
+// dereferencing, and it copies the bytes out (`CStr::to_str` ->
+// `to_string`) so no aliasing of the caller's buffer survives the call.
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: null-checked, then copied out; sound by contract
 #[no_mangle]
 pub extern "C" fn austral_register_static_symbol(
     name: *const std::ffi::c_char,

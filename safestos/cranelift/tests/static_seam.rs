@@ -224,9 +224,15 @@ fn c_abi_registrar_reaches_the_registry() {
     assert!(austral_cranelift_bridge::registered_static_symbols()
         .iter()
         .any(|(n, _)| n == "rs_seam_version"));
-    // Invalid arguments are refused with the documented codes.
+    // Invalid arguments are refused with the documented codes. The address
+    // is never consulted — `name` is null-checked first — so it is a
+    // `dangling` placeholder rather than a fabricated address, which is
+    // also what clippy (1.99, `-D warnings`) asks for.
     assert_eq!(
-        austral_cranelift_bridge::austral_register_static_symbol(ptr::null(), 1 as *const u8),
+        austral_cranelift_bridge::austral_register_static_symbol(
+            ptr::null(),
+            std::ptr::dangling::<u8>(),
+        ),
         0,
         "a null name is an invalid argument"
     );
