@@ -1,6 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leonardopedro/australVM)
 
-<!-- status: verified | tests: 134 dune / 16 suites + 108 safestos/pkg + 129 bridge cargo (excl. umbrella demo) | last_verified: 2026-10-18 -->
+<!-- status: verified | tests: 134 dune / 16 suites + 108 safestos/pkg + 129 bridge cargo (excl. umbrella demo) | last_verified: 2026-10-20 -->
 
 ## Verification
 
