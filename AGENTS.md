@@ -39,6 +39,20 @@ in-process via native `uk_*` symbols registered in the JIT.
   run `check-bridge-fresh`, which refuses to link when any bridge source
   (`src/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the `.so` and tells
   you to run `make bridge`. Check it alone with `make check-bridge-fresh`.
+- **Shell discipline (measured 2026-10-21).** Run every `dune` command
+  inside `nix develop`, never a bare `nix-shell`. The two environments
+  carry different glibcs (devshell 2.42, bare nix-shell 2.37 on this
+  host), and dune relinks its test executables and ppx driver binaries
+  to whichever environment is active — a `nix-shell … dune runtest`
+  poisons `_build` with 2.37-linked exes that then cannot satisfy the
+  bridge's `GLIBC_2.39`, and the failure surfaces as a loader error
+  far from the command that caused it. Symptom: `version GLIBC_2.39 not
+  found` (or a dead `ppx.exe` under `_build/default/.ppx/`). Remedy:
+  re-run the command under `nix develop` — dune re-executes the link in
+  the current environment and `_build` heals (stale ppx drivers are
+  regenerable cache: `rm -rf _build/default/.ppx/<hash>` is safe).
+  `../scripts/check-elf-interpreters` (workspace gate) catches the dead-
+  loader half of this class across all repos in one scan.
 
 ## Scripts & gates
 
