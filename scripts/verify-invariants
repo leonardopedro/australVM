@@ -65,17 +65,19 @@ fi
 
 # --- Phase D: the Lean4 -> DeltaNets -> MM0 certificate (docs/lean4mm0.md §5) ---
 #
-# gap_certificate.{mm0,mm1} is generated from the *pinned* nanoda-verified
-# lean4export of timepiece/GapCertificate.lean (sha256 in the file header),
-# over the target theory docs/cic.mm0. Two failure modes this gate exists to
-# catch: the emitter drifting from the pinned export (`check` regenerates and
-# compares against the committed artifacts), and the proofs rotting against
-# the theory (`verify` re-runs mm0-rs and the mm0-c root of trust — a warning
-# from mm0-rs is a proof hole and fails the gate).
+# gap_certificate.{mm0,mm1} and layout_certificate.{mm0,mm1} are generated
+# from the *pinned* nanoda-verified lean4export fixtures in unfer (sha256 in
+# each file header) — the Lean sources of record timepiece/GapCertificate.lean
+# and timepiece/Layout.lean — over the target theory docs/cic.mm0. Two
+# failure modes this gate exists to catch: the emitter drifting from the
+# pinned exports (`check` regenerates and compares against the committed
+# artifacts), and the proofs rotting against the theory (`verify` re-runs
+# mm0-rs and the mm0-c root of trust — a warning from mm0-rs is a proof
+# hole and fails the gate).
 check "Phase D: lean2mm0 emitter present" \
     test -f "$repo_root/scripts/lean2mm0"
 check "Phase D: generated certificate artifacts present" \
-    bash -c "test -f '$repo_root/mm0/gap_certificate.mm0' && test -f '$repo_root/mm0/gap_certificate.mm1'"
+    bash -c "test -f '$repo_root/mm0/gap_certificate.mm0' && test -f '$repo_root/mm0/gap_certificate.mm1' && test -f '$repo_root/mm0/layout_certificate.mm0' && test -f '$repo_root/mm0/layout_certificate.mm1'"
 check_py "Phase D: generated MM0/MM1 in sync with the pinned lean4export" \
     python3 "$repo_root/scripts/lean2mm0" check
 if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then

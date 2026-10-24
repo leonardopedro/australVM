@@ -82,3 +82,34 @@ jobs:
       # Scoped via --manifest-path so the sibling path deps (unfer,
       # dynamic-arctic) are never reformatted by this job.
       - run: cargo fmt --manifest-path safestos/cranelift/Cargo.toml -- --check
+
+  # ---------------------------------------------------------------------------
+  # Phase D: the Lean4 → DeltaNets → MM0 certificate gate (docs/lean4mm0.md §5).
+  # Regenerates BOTH certificates (gap_certificate, layout_certificate) from
+  # the pinned nanoda-verified lean4export fixtures in sibling unfer, fails
+  # on drift against the committed MM0/MM1, then drives the frozen root of
+  # trust: mm0-rs elaborates the .mm1 proofs into an .mmb and mm0-c — the
+  # <3k-line C verifier, outside every other checker's TCB — re-verifies it
+  # against the .mm0 spec. A warning from mm0-rs is a proof hole: it fails.
+  #
+  # The mm0 toolchain is built from digama0/mm0 at the same commit the
+  # provisioned host uses (the verifier is frozen: an update is an event,
+  # not a rebuild).
+  # ---------------------------------------------------------------------------
+  phase-d:
+    name: Phase D (lean2mm0 + mm0-c root of trust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
+      - name: Checkout unfer as sibling (pinned lean4export fixtures)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # dtolnay/rust-toolchain@stable
+      - name: Build the frozen mm0 toolchain (mm0-rs + mm0-c, digama0/mm0)
+        run: |
+          git clone https://github.com/digama0/mm0.git ../mm0
+          git -C ../mm0 checkout 0d414c0bfdaaeb7fea571895127abc1fa5a3d956
+          cargo install --path ../mm0/mm0-rs --root "$HOME/.local"
+          gcc ../mm0/mm0-c/main.c -O2 -o "$HOME/.local/bin/mm0-c"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: lean2mm0 verify (drift + mm0-rs + mm0-c, both certificates)
+        run: python3 scripts/lean2mm0 verify

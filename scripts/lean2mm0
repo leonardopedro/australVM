@@ -54,7 +54,7 @@ Trust story (why this is not circular):
     is *checked* by mm0-c, not asserted.
 
 Usage:
-    scripts/lean2mm0            # (re)generate mm0/gap_certificate.{mm0,mm1}
+    scripts/lean2mm0            # (re)generate mm0/{gap,layout}_certificate.{mm0,mm1}
     scripts/lean2mm0 check      # regenerate in memory; fail on drift
     scripts/lean2mm0 verify     # check + mm0-rs compile + mm0-c (root of trust)
 
@@ -78,25 +78,50 @@ from pathlib import Path
 AVM = Path(__file__).resolve().parent.parent          # australVM/
 WS = AVM.parent                                        # workspace root
 CIC = AVM / "docs" / "cic.mm0"                         # target theory
-NDJSON = WS / "unfer" / "prob_kernel" / "tests" / "fixtures" / "gap_certificate.ndjson"
-LEAN_SRC = WS / "timepiece" / "GapCertificate.lean"    # cited in the header
+FIXTURES = WS / "unfer" / "prob_kernel" / "tests" / "fixtures"
 OUT_DIR = AVM / "mm0"
-OUT_MM0 = OUT_DIR / "gap_certificate.mm0"
-OUT_MM1 = OUT_DIR / "gap_certificate.mm1"
 
-# The nine rfl certificates of the pinned export.  A drift here is a real
-# event (the fixture changed), not something to absorb silently.
-EXPECTED_THMS = [
-    "read_gap_verified",
-    "read_width_verified",
-    "gap_aggregate_verified",
-    "width_aggregate_verified",
-    "lower_verified",
-    "upper_verified",
-    "lower_pos_verified",
-    "upper_gt_lower_verified",
-    "strong_coupling_consistency_verified",
+# One entry per certificate file: the pinned nanoda-verified lean4export it
+# is generated from, the Lean source of record cited in its header, and its
+# exact certificate set. A drift in `thms` is a real event (the fixture
+# changed), not something to absorb silently — generation fails on it.
+SOURCES: list[dict] = [
+    {
+        "stem": "gap_certificate",
+        "ndjson": FIXTURES / "gap_certificate.ndjson",
+        "lean": WS / "timepiece" / "GapCertificate.lean",
+        "thms": [
+            "read_gap_verified",
+            "read_width_verified",
+            "gap_aggregate_verified",
+            "width_aggregate_verified",
+            "lower_verified",
+            "upper_verified",
+            "lower_pos_verified",
+            "upper_gt_lower_verified",
+            "strong_coupling_consistency_verified",
+        ],
+    },
+    {
+        "stem": "layout_certificate",
+        "ndjson": FIXTURES / "layout_bijective.ndjson",
+        "lean": WS / "timepiece" / "Layout.lean",
+        "thms": [
+            "bijective_verified",
+            "lookup_inverse_verified",
+            "insert_existing_verified",
+            "insert_new_verified",
+            "conflict_pair_verified",
+            "row_even_verified",
+            "image_too_small_verified",
+            "grid_image_small_verified",
+        ],
+    },
 ]
+
+
+def out_paths(stem: str) -> tuple[Path, Path]:
+    return OUT_DIR / f"{stem}.mm0", OUT_DIR / f"{stem}.mm1"
 
 # prim_tag bytes from unfer/logos/src/deltanet/unf.rs (load-bearing: renaming
 # a variant must not silently re-tag; this table mirrors that mapping).
@@ -115,12 +140,37 @@ class TranspileError(Exception):
 
 # ── NDJSON loading (three namespaces: in=name, il=level, ie=expr) ────────
 
+@dataclass(frozen=True)
+class CtorInfo:
+    """A constructor of an exported inductive (from an `inductive` block)."""
+    induct: int           # name-table id of the inductive type
+    cidx: int             # constructor index (minor-premise position)
+    num_params: int
+    num_fields: int
+    type_eid: int         # the ctor's full type (forallE chain)
+
+
+@dataclass(frozen=True)
+class RecInfo:
+    """A recursor of an exported inductive (`List.rec`, `Option.rec`, …)."""
+    num_params: int
+    num_motives: int
+    num_minors: int
+    num_indices: int
+    ctor_names: tuple     # canon ctor names, positionally = cidx
+
+
 class Export:
     def __init__(self, path: Path):
         self.names: dict[int, str] = {}
         self.levels: dict[int, dict] = {}
         self.exprs: dict[int, dict] = {}
         self.decls: dict[str, tuple[str, dict, int]] = {}
+        self.ctors: dict[str, CtorInfo] = {}
+        self.recs: dict[str, RecInfo] = {}
+        self.inductive_names: set[str] = set()
+        self._spine_cache: dict[int, tuple] = {}
+        self._pending_inductives: list[dict] = []
         self.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         for i, line in enumerate(path.read_text().splitlines()):
             if not line.strip():
@@ -143,6 +193,44 @@ class Export:
                 if k in d and isinstance(d[k], dict) and "name" in d[k]:
                     nm = self.names.get(d[k]["name"], f"?{d[k]['name']}")
                     self.decls[nm] = (k, d[k], i)
+            if "inductive" in d:
+                # name ids inside may not be in the table yet (the format
+                # emits names lazily); register after the full parse.
+                self._pending_inductives.append(d["inductive"])
+        for ind in self._pending_inductives:
+            self._register_inductive(ind)
+        self._pending_inductives = []
+
+    def _register_inductive(self, ind: dict) -> None:
+        """Register constructors and recursors of one exported inductive.
+
+        Constructor/recursor names resolve through the name table like every
+        other declaration; the evaluator dispatches on them generically, so a
+        source file's own inductives (OuterState here) work with no
+        per-source code.
+        """
+        types = ind.get("types", [])
+        if not types:
+            return
+        for t in types:
+            # type names in value position are type arguments: never evaluated
+            self.inductive_names.add(Export.canon(self.name(t["name"])))
+        for c in ind.get("ctors", []):
+            nm = Export.canon(self.name(c["name"]))
+            self.ctors[nm] = CtorInfo(
+                induct=types[0]["name"], cidx=c["cidx"],
+                num_params=c["numParams"], num_fields=c["numFields"],
+                type_eid=c["type"])
+        # canon ctor names indexed by cidx — minor premises are positional.
+        by_cidx = [None] * len(ind.get("ctors", []))
+        for c in ind.get("ctors", []):
+            by_cidx[c["cidx"]] = Export.canon(self.name(c["name"]))
+        for r in ind.get("recs", []):
+            nm = Export.canon(self.name(r["name"]))
+            self.recs[nm] = RecInfo(
+                num_params=r["numParams"], num_motives=r["numMotives"],
+                num_minors=r["numMinors"], num_indices=r["numIndices"],
+                ctor_names=tuple(by_cidx))
 
     def name(self, i: int) -> str:
         return self.names.get(i, f"?{i}")
@@ -152,7 +240,12 @@ class Export:
         return n.replace(".", "")
 
     def spine(self, eid: int) -> tuple[int, list[int]]:
-        """Decompose an application into (head_expr_id, [arg_expr_ids])."""
+        """Decompose an application into (head_expr_id, [arg_expr_ids]).
+        Cached: the export's exprs are immutable, and the evaluator walks
+        the same spines millions of times (list-heavy certificates)."""
+        hit = self._spine_cache.get(eid)
+        if hit is not None:
+            return hit[0], list(hit[1])
         args: list[int] = []
         cur = eid
         while True:
@@ -164,6 +257,7 @@ class Export:
                 cur = e["app"]["fn"]
             else:
                 args.reverse()   # outermost-first walk → application order
+                self._spine_cache[eid] = (cur, tuple(args))
                 return cur, args
 
     def pp(self, eid: int, depth: int = 0) -> str:
@@ -228,19 +322,71 @@ class VClos:
         return "<closure>"
 
 
-class VPair:
-    __slots__ = ("a", "b")
+class VCon:
+    """An applied constructor of an exported inductive (List.nil/cons,
+    OuterState.s*, Option.none/some, Prod.mk, …).
 
-    def __init__(self, a, b):
-        self.a, self.b = a, b
+    Interned on (canon-name, field values): structurally equal values are the
+    *same object*, so `veq` is identity, shared list suffixes are shared
+    objects, and cache keys below are exact without a deep hash. Parameters
+    (type arguments) are dropped — value equality never depends on them.
+    """
+
+    __slots__ = ("name", "fields", "interned")
+
+    def __init__(self, name: str, fields: tuple):
+        self.name = name
+        self.fields = fields
+        self.interned = False
 
     def __repr__(self):
-        return f"⟨{self.a}, {self.b}⟩"
+        if not self.fields:
+            return self.name
+        return f"{self.name}({', '.join(map(repr, self.fields))})"
 
 
-class VUnitT:
-    def __repr__(self):
-        return "unit"
+_VI_CACHE: dict[int, VI] = {}
+_VB_CACHE: dict[bool, VB] = {}
+_VCON_CACHE: dict[tuple, VCon] = {}
+
+
+def vi(n: int) -> VI:
+    v = _VI_CACHE.get(n)
+    if v is None:
+        v = _VI_CACHE[n] = VI(n)
+    return v
+
+
+def vb(b: bool) -> VB:
+    v = _VB_CACHE.get(b)
+    if v is None:
+        v = _VB_CACHE[b] = VB(b)
+    return v
+
+
+def _internable(v) -> bool:
+    """Cheap, deep-safe test: only scalars and interned constructors may be
+    cache keys — a fresh value may hold closures (brecOn's `below` packing),
+    and pinning those in a global cache would retain whole env chains."""
+    return (isinstance(v, (VI, VB))
+            or (isinstance(v, VCon) and v.interned))
+
+
+def vcon(name: str, fields: tuple) -> VCon:
+    """Intern a constructor application on (name, field identities): equal
+    values become the *same object*, shared list suffixes stay shared, and
+    cache keys are exact without a deep hash. Values holding fresh closures
+    (instance/proof-level packing) are never interned and never compared for
+    value equality (BEqbeq skips its instance argument), so they take the
+    structural path and stay collectable."""
+    if not all(_internable(f) for f in fields):
+        return VCon(name, fields)
+    key = (name,) + tuple(id(f) for f in fields)
+    v = _VCON_CACHE.get(key)
+    if v is None:
+        v = _VCON_CACHE[key] = VCon(name, fields)
+        v.interned = True
+    return v
 
 
 class VDumT:
@@ -248,30 +394,74 @@ class VDumT:
         return "·"
 
 
-VUNIT = VUnitT()
 VDUM = VDumT()
+
+
+class VThunk:
+    """A deferred recursive-call result (a recursor IH).
+
+    The Lean kernel reduces only what a term actually demands: a minor
+    premise that ignores its IH never forces the sub-walk. Computing IHs
+    eagerly would re-walk the whole tail per element (quadratic scans);
+    this keeps the kernel's demand-driven reduction exactly — a thunk is
+    forced only at a real observation point (application head, arithmetic,
+    equality, projection, final grounding), and a short-circuiting `or`/`and`
+    that never looks at its right operand never runs it.
+    """
+
+    __slots__ = ("fn", "_val")
+
+    def __init__(self, fn):
+        self.fn = fn            # None once forced
+        self._val = None
+
+    def force(self):
+        if self.fn is not None:
+            self._val = self.fn()
+            self.fn = None
+        return self._val
+
+    def __repr__(self):
+        return f"<thunk{'>' if self.fn is None else '…>'}"
+
+
+def force(v):
+    return v.force() if isinstance(v, VThunk) else v
 
 TYPE_CONSTS = {"Nat", "Bool", "Unit", "PUnit", "PProd", "Decidable", "Prop"}
 
 
 def as_int(v, ctx: str) -> int:
+    v = force(v)
     if isinstance(v, VI):
         return v.n
     raise TranspileError(f"{ctx}: expected a natural, got {v!r}")
 
 
 def as_bool(v, ctx: str) -> bool:
+    v = force(v)
     if isinstance(v, VB):
         return v.b
     raise TranspileError(f"{ctx}: expected a Bool, got {v!r}")
 
 
 def veq(a, b) -> bool:
+    # Interning makes equal scalars/constructors the same object, so identity
+    # is structural equality. The structural fallback for VCon only fires for
+    # distinct-but-shaped objects, which interning normally prevents (it
+    # matters for fields holding fresh closures: instances are never
+    # compared for value equality — BEqbeq skips its instance argument).
+    a, b = force(a), force(b)
+    if a is b:
+        return True
     if isinstance(a, VI) and isinstance(b, VI):
         return a.n == b.n
     if isinstance(a, VB) and isinstance(b, VB):
         return a.b == b.b
-    return a is b
+    if isinstance(a, VCon) and isinstance(b, VCon):
+        return (a.name == b.name and len(a.fields) == len(b.fields)
+                and all(veq(x, y) for x, y in zip(a.fields, b.fields)))
+    return False
 
 
 class Evaluator:
@@ -291,16 +481,30 @@ class Evaluator:
         for nm, (kind, rec, _) in ex.decls.items():
             if kind == "def":
                 self.defs[Export.canon(nm)] = rec["value"]
+        # exact-key memos: dict keys hold the env/values by reference, and
+        # every value class hashes by identity, so a hit is the same term in
+        # the same environment — no approximation anywhere.
+        self._memo: dict = {}            # (eid, env-tuple) -> value
+        self._umemo: dict = {}           # (def, arg-values) -> value
+        self._recfields: dict = {}       # (induct, cidx) -> rec-field idxs
 
     def val(self, eid: int, env, ctx: str = ""):
+        key = (eid, tuple(env))
+        hit = self._memo.get(key)
+        if hit is not None:
+            return hit
         try:
-            return self.eval(eid, env)
+            v = self.eval(eid, env)
         except TranspileError:
             raise
         except RecursionError as e:
             raise TranspileError(f"evaluator depth exceeded {ctx} @ expr {eid}") from e
+        v = force(v)
+        self._memo[key] = v
+        return v
 
     def apply(self, f, arg, ctx: str):
+        f = force(f)
         if isinstance(f, VClos):
             return self.eval(f.body, [arg] + f.env)
         raise TranspileError(f"{ctx}: applying non-function {f!r}")
@@ -327,10 +531,10 @@ class Evaluator:
             v = self.eval(e["letE"]["value"], env)
             return self.eval(e["letE"]["body"], [v] + env)
         if "proj" in e:
-            v = self.eval(e["proj"]["struct"], env)
+            v = force(self.eval(e["proj"]["struct"], env))
             idx = e["proj"]["idx"]
-            if isinstance(v, VPair):
-                return v.a if idx == 0 else v.b
+            if isinstance(v, VCon) and 0 <= idx < len(v.fields):
+                return v.fields[idx]
             raise TranspileError(f"proj {idx} of {v!r} @ {eid}")
         head, args = ex.spine(eid)
         he = ex.exprs.get(head)
@@ -346,7 +550,7 @@ class Evaluator:
         ev = lambda a: self.eval(a, env)
 
         # -- primitive table: value positions only -----------------------
-        if C in ("HAddhAdd", "HSubhSub", "HMulhMul", "HDivhDiv"):
+        if C in ("HAddhAdd", "HSubhSub", "HMulhMul", "HDivhDiv", "HModhMod"):
             a = as_int(ev(args[-2]), raw)
             b = as_int(ev(args[-1]), raw)
             if C == "HAddhAdd":
@@ -355,11 +559,13 @@ class Evaluator:
                 return VI(max(a - b, 0))          # Nat.sub, floor at 0
             if C == "HMulhMul":
                 return VI(a * b)
-            return VI(a // b if b else 0)         # Nat.div: x / 0 = 0
+            if C == "HDivhDiv":
+                return VI(a // b if b else 0)     # Nat.div: x / 0 = 0
+            return VI(a % b if b else a)          # Nat.mod: x % 0 = x
         if C == "BEqbeq":
             return VB(veq(ev(args[-2]), ev(args[-1])))
         if C == "OfNatofNat":
-            v = ev(args[1] if len(args) == 3 else args[-2])
+            v = force(ev(args[1] if len(args) == 3 else args[-2]))
             if not isinstance(v, VI):
                 raise TranspileError(f"OfNat of {v!r} @ {eid}")
             return v
@@ -371,12 +577,26 @@ class Evaluator:
             return VB(veq(ev(args[-2]), ev(args[-1])))
         if C == "Not":
             return VB(not self.bool_prop(args[-1], env))
+        if C == "Booland":
+            return VB(as_bool(ev(args[-2]), "Booland")
+                      and as_bool(ev(args[-1]), "Booland"))
+        if C == "Boolor":
+            return VB(as_bool(ev(args[-2]), "Boolor")
+                      or as_bool(ev(args[-1]), "Boolor"))
+        if C == "Boolnot":
+            return VB(not as_bool(ev(args[-1]), "Boolnot"))
         if C == "Decidabledecide":
             return VB(self.bool_prop(args[0], env))
         if C == "dite":
-            cond = self.bool_prop(args[-3], env)
-            branch = ev(args[-2] if cond else args[-1])
-            return self.apply(branch, VDUM, "dite")
+            # @dite: (α) (c) (h : Decidable c) (t) (e) — the condition is the
+            # *proposition* arg[1]; the instance h is never evaluated.
+            if len(args) < 5:
+                raise TranspileError(f"partial dite ({len(args)} args) @ {eid}")
+            cond = self.bool_prop(args[1], env)
+            out = self.apply(ev(args[3] if cond else args[4]), VDUM, "dite")
+            for a in args[5:]:
+                out = self.apply(out, ev(a), "dite result")
+            return out
         if C == "NatcasesOn":
             n = as_int(ev(args[-3]), "NatcasesOn")
             if n == 0:
@@ -392,7 +612,7 @@ class Evaluator:
         if C == "Boolrec":
             # @Bool.rec: (motive) (false-case) (true-case) (t) — nullary
             # constructors, so the minors are values, not functions.
-            t = ev(args[-1])
+            t = force(ev(args[-1]))
             if not isinstance(t, VB):
                 raise TranspileError(f"Boolrec scrutinee is {t!r} @ {eid}")
             return ev(args[-3] if not t.b else args[-2])
@@ -404,24 +624,122 @@ class Evaluator:
             return VB(True)
         if C == "Boolfalse":
             return VB(False)
-        if C == "PProdmk":
-            return VPair(ev(args[-2]), ev(args[-1]))
-        if C == "PUnitunit":
-            return VUNIT
-        if C in TYPE_CONSTS:
+        if C in TYPE_CONSTS or C in ex.inductive_names:
             return VDUM                                # type head: skip args
         if C in ("Falseelim", "absurd"):
             raise TranspileError(f"reached an impossible branch ({raw}) @ {eid}")
 
+        # -- constructors of the export's inductives (params, then fields;
+        # interned, so value equality is identity) -----------------------
+        if C in ex.ctors:
+            ci = ex.ctors[C]
+            arity = ci.num_params + ci.num_fields
+            if len(args) != arity:
+                raise TranspileError(
+                    f"constructor {raw} applied to {len(args)} args, expected "
+                    f"{arity} @ {eid}")
+            return vcon(C, tuple(ev(a) for a in args[ci.num_params:]))
+
+        # -- generic structural recursors (`@I.rec`: params motive minors…
+        # [indices] scrut — the layout the export's own recs declare) -----
+        if C in ex.recs:
+            ri = ex.recs[C]
+            need = (ri.num_params + ri.num_motives + ri.num_minors
+                    + ri.num_indices + 1)
+            if len(args) < need:
+                raise TranspileError(
+                    f"partial recursor {raw} ({len(args)}/{need}) @ {eid}")
+            lo = ri.num_params + ri.num_motives
+            minors = args[lo:lo + ri.num_minors]
+            scrut = ev(args[lo + ri.num_minors + ri.num_indices])
+            out = self.rec_on(C, minors, env, scrut, eid)
+            for a in args[need:]:
+                out = self.apply(out, ev(a), f"{raw} result")
+            return out
+
         # -- plain def unfolding ------------------------------------------
         if C in self.defs:
+            vals = tuple(ev(a) for a in args)   # evaluated once; memo key
+            hit = self._umemo.get((C, vals))
+            if hit is not None:
+                return hit
             f = self.eval(self.defs[C], [])
-            for a in args:
-                f = self.apply(f, ev(a), f"unfold {raw}")
+            for v in vals:
+                f = self.apply(f, v, f"unfold {raw}")
+            # memoize scalar results only: keys and values with closures
+            # (fresh per step in the brecOn machinery) must stay collectable
+            if all(_internable(v) for v in vals) and _internable(f):
+                self._umemo[(C, vals)] = f
             return f
 
         raise TranspileError(f"unknown constant {raw!r} (value position) @ {eid}: "
                              f"{self.ex.pp(eid)}")
+
+    def rec_on(self, C: str, minors: list[int], env, scrut, eid: int):
+        """One step of a generic structural recursor: dispatch on the
+        scrutinee's constructor, apply the minor premise to the fields, then
+        to the IH of each recursive field (Lean's minor-premise layout).
+
+        IHs are passed as lazy thunks — the kernel doesn't reduce an IH its
+        minor premise never demands, and that demand (not the walk) is what
+        makes scans like `memNat` linear when they short-circuit."""
+        ex = self.ex
+        scrut = force(scrut)
+        if not isinstance(scrut, VCon):
+            raise TranspileError(f"{C}: scrutinee is {scrut!r} @ {eid}: "
+                                 f"{ex.pp(eid)}")
+        ci = ex.ctors.get(scrut.name)
+        if ci is None:
+            raise TranspileError(f"{C}: {scrut.name} is not a constructor")
+        if ci.cidx >= len(minors):
+            raise TranspileError(f"{C}: no minor premise {ci.cidx} for "
+                                 f"{scrut.name}")
+        out = self.eval(minors[ci.cidx], env)
+        for f in scrut.fields:
+            out = self.apply(out, f, f"{C} {scrut.name} minor")
+        for k in self.rec_fields(ci):
+            fld = scrut.fields[k]
+            out = self.apply(
+                out,
+                VThunk(lambda fld=fld: self.rec_on(C, minors, env, fld, eid)),
+                f"{C} {scrut.name} ih")
+        return out
+
+    def rec_fields(self, ci) -> tuple:
+        """Field indices of `ci` whose declared type is the inductive itself
+        (the recursive fields — each gets an IH in the minor premise)."""
+        ex = self.ex
+        key = (ci.induct, ci.cidx)
+        got = self._recfields.get(key)
+        if got is not None:
+            return got
+        induct = Export.canon(ex.name(ci.induct))
+        doms: list[int] = []
+        cur = ci.type_eid
+        for _ in range(ci.num_params + ci.num_fields):
+            e = ex.exprs.get(cur)
+            while e is not None and "mdata" in e:
+                cur = e["mdata"]["expr"]
+                e = ex.exprs.get(cur)
+            if e is None or "forallE" not in e:
+                break
+            doms.append(e["forallE"]["type"])
+            cur = e["forallE"]["body"]
+        out: list[int] = []
+        for k in range(ci.num_fields):
+            j = ci.num_params + k
+            if j >= len(doms):
+                break
+            d = doms[j]
+            while "mdata" in (ex.exprs.get(d) or {}):
+                d = ex.exprs[d]["mdata"]["expr"]
+            head, _ = ex.spine(d)
+            he = ex.exprs.get(head)
+            if he is not None and "const" in he and \
+                    Export.canon(ex.name(he["const"]["name"])) == induct:
+                out.append(k)
+        self._recfields[key] = tuple(out)
+        return tuple(out)
 
     def bool_prop(self, eid: int, env) -> bool:
         """Evaluate a Prop to its truth value (decide/dite conditions only)."""
@@ -512,6 +830,7 @@ def term_of(node: Node, num) -> str:
 
 
 def lit_val(v) -> tuple[str, object]:
+    v = force(v)
     if isinstance(v, VI):
         return "i", v.n
     if isinstance(v, VB):
@@ -559,7 +878,13 @@ class Encoder:
         he = ex.exprs.get(head)
         if he is not None and "const" in he:
             n = Export.canon(ex.name(he["const"]["name"]))
-            node = self.const_node(n, args, env, eid)
+            try:
+                node = self.const_node(n, args, env, eid)
+            except TranspileError:
+                # Structure failed (list-valued operand, partial def, type
+                # shape): fall through to whole-expression evaluation —
+                # still cross-checked below, never silently wrong.
+                node = None
             if node is not None:
                 return node
         # not structurally encodable: evaluate to a literal (or fail loudly)
@@ -772,12 +1097,14 @@ def build_proof(node: Node, reg: Registry) -> str:
 
 # ── emission ─────────────────────────────────────────────────────────────
 
-def generate() -> tuple[str, str]:
-    if not NDJSON.exists():
-        raise TranspileError(f"fixture missing: {NDJSON}")
+def generate_source(src: dict) -> tuple[str, str]:
+    stem = src["stem"]
+    ndjson, lean_src, expected = src["ndjson"], src["lean"], src["thms"]
+    if not ndjson.exists():
+        raise TranspileError(f"fixture missing: {ndjson}")
     if not CIC.exists():
         raise TranspileError(f"theory missing: {CIC}")
-    ex = Export(NDJSON)
+    ex = Export(ndjson)
     ev = Evaluator(ex)
     enc = Encoder(ex, ev)
 
@@ -800,8 +1127,9 @@ def generate() -> tuple[str, str]:
             raise TranspileError(f"{nm}: RHS is not `true`: {ex.pp(rhs)}")
         thms.append((nm, lhs))
     found = [n for n, _ in thms]
-    if found != EXPECTED_THMS:
-        raise TranspileError(f"certificate set drifted:\n  expected {EXPECTED_THMS}\n"
+    if found != expected:
+        raise TranspileError(f"{stem}: certificate set drifted:\n"
+                             f"  expected {expected}\n"
                              f"  found    {found}")
 
     # encode every certificate; cross-check evaluator vs net reduction
@@ -837,13 +1165,13 @@ def generate() -> tuple[str, str]:
     cic_lines = CIC.read_text().rstrip("\n").split("\n")
 
     header = [
-        "-- gap_certificate.{mm0,mm1} — GENERATED by australVM/scripts/lean2mm0.",
+        f"-- {stem}.{{mm0,mm1}} — GENERATED by australVM/scripts/lean2mm0.",
         "-- DO NOT EDIT: run `scripts/lean2mm0` to regenerate;",
         "-- `scripts/lean2mm0 check` gates drift, `scripts/lean2mm0 verify`",
         "-- runs the mm0-rs elaborator and the mm0-c root of trust.",
         "--",
-        f"-- Source of record : {LEAN_SRC.relative_to(WS)}",
-        f"-- Kernel export    : {NDJSON.relative_to(WS)}",
+        f"-- Source of record : {lean_src.relative_to(WS)}",
+        f"-- Kernel export    : {ndjson.relative_to(WS)}",
         f"--   sha256 {ex.sha256}  (lean4export 3.1.0, re-verified by nanoda",
         "--   in unfer's prob_kernel suite)",
         f"-- Target theory    : {CIC.relative_to(WS)} (embedded verbatim below)",
@@ -967,6 +1295,11 @@ def generate() -> tuple[str, str]:
     return mm0, mm1
 
 
+def generate() -> list[tuple[str, str, str]]:
+    """Generate every configured source: [(stem, mm0, mm1), …]."""
+    return [(src["stem"], *generate_source(src)) for src in SOURCES]
+
+
 def header_prepend(header, cic_lines, lines) -> list[str]:
     """No-op kept for symmetry: header and cic are already inside `lines`."""
     del header, cic_lines
@@ -975,67 +1308,75 @@ def header_prepend(header, cic_lines, lines) -> list[str]:
 
 # ── modes ────────────────────────────────────────────────────────────────
 
-def write(mm0: str, mm1: str) -> None:
+def write(results: list[tuple[str, str, str]]) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    OUT_MM0.write_text(mm0)
-    OUT_MM1.write_text(mm1)
-    print(f"lean2mm0: wrote {OUT_MM0.relative_to(WS)} ({len(mm0.splitlines())} lines)")
-    print(f"lean2mm0: wrote {OUT_MM1.relative_to(WS)} ({len(mm1.splitlines())} lines)")
+    for stem, mm0, mm1 in results:
+        out0, out1 = out_paths(stem)
+        out0.write_text(mm0)
+        out1.write_text(mm1)
+        print(f"lean2mm0: wrote {out0.relative_to(WS)} ({len(mm0.splitlines())} lines)")
+        print(f"lean2mm0: wrote {out1.relative_to(WS)} ({len(mm1.splitlines())} lines)")
 
 
-def check_drift(mm0: str, mm1: str) -> None:
-    for path, fresh in ((OUT_MM0, mm0), (OUT_MM1, mm1)):
-        if not path.exists():
-            raise TranspileError(f"{path.relative_to(WS)} missing — run scripts/lean2mm0")
-        if path.read_text() != fresh:
-            raise TranspileError(f"{path.relative_to(WS)} is out of date — "
-                                 "run scripts/lean2mm0 and commit the result")
-    print("lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned export")
+def check_drift(results: list[tuple[str, str, str]]) -> None:
+    for stem, mm0, mm1 in results:
+        for path, fresh in zip(out_paths(stem), (mm0, mm1)):
+            if not path.exists():
+                raise TranspileError(f"{path.relative_to(WS)} missing — run scripts/lean2mm0")
+            if path.read_text() != fresh:
+                raise TranspileError(f"{path.relative_to(WS)} is out of date — "
+                                     "run scripts/lean2mm0 and commit the result")
+    print("lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports")
 
 
-def verify(mm0: str, mm1: str) -> None:
+def verify(results: list[tuple[str, str, str]]) -> None:
     for tool in ("mm0-rs", "mm0-c"):
         if not shutil.which(tool):
             print(f"lean2mm0 verify: {tool} not on PATH (toolchain not provisioned; "
                   "see docs/lean4mm0.md §5 for the build steps)", file=sys.stderr)
             raise SystemExit(2)
-    check_drift(mm0, mm1)
-    with tempfile.TemporaryDirectory(prefix="lean2mm0.") as td:
-        t = Path(td)
-        (t / "gap_certificate.mm0").write_text(mm0)
-        (t / "gap_certificate.mm1").write_text(mm1)
-        c = subprocess.run(["mm0-rs", "compile", str(t / "gap_certificate.mm1"),
-                            str(t / "gap_certificate.mmb")],
-                           capture_output=True, text=True)
-        out = c.stdout + c.stderr
-        if c.returncode != 0 or "warning" in out.lower():
-            sys.stderr.write(out)
-            raise TranspileError("mm0-rs compile failed (or emitted warnings — "
-                                 "a warning is a proof hole here)")
-        print(f"lean2mm0 verify: mm0-rs compile OK — "
-              f"{[l for l in out.splitlines() if l and not l.startswith(('elab ', 'elabbed'))][-1]}")
-        v = subprocess.run(["mm0-c", str(t / "gap_certificate.mmb")],
-                           input=mm0, capture_output=True, text=True)
-        if v.returncode != 0:
-            sys.stderr.write(v.stdout + v.stderr)
-            raise TranspileError(f"mm0-c rejected the proof binary (rc={v.returncode})")
-        print("lean2mm0 verify: mm0-c OK — the root of trust accepts the proofs")
+    check_drift(results)
+    for stem, mm0, mm1 in results:
+        with tempfile.TemporaryDirectory(prefix="lean2mm0.") as td:
+            t = Path(td)
+            (t / f"{stem}.mm0").write_text(mm0)
+            (t / f"{stem}.mm1").write_text(mm1)
+            c = subprocess.run(["mm0-rs", "compile", str(t / f"{stem}.mm1"),
+                                str(t / f"{stem}.mmb")],
+                               capture_output=True, text=True)
+            out = c.stdout + c.stderr
+            if c.returncode != 0 or "warning" in out.lower():
+                sys.stderr.write(out)
+                raise TranspileError(
+                    f"mm0-rs compile failed for {stem} (or emitted warnings — "
+                    "a warning is a proof hole here)")
+            print(f"lean2mm0 verify: mm0-rs compile OK ({stem}) — "
+                  f"{[l for l in out.splitlines() if l and not l.startswith(('elab ', 'elabbed'))][-1]}")
+            v = subprocess.run(["mm0-c", str(t / f"{stem}.mmb")],
+                               input=mm0, capture_output=True, text=True)
+            if v.returncode != 0:
+                sys.stderr.write(v.stdout + v.stderr)
+                raise TranspileError(f"mm0-c rejected {stem} (rc={v.returncode})")
+            print(f"lean2mm0 verify: mm0-c OK ({stem}) — the root of trust accepts the proofs")
 
 
 def main(argv: list[str]) -> int:
+    # The evaluator recurses once per constructor (Layout's grid image is a
+    # 1024-element list): deepen Python's limit before generating.
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), 200_000))
     mode = argv[1] if len(argv) > 1 else "generate"
     mode = mode.lstrip("-")
     if mode not in ("generate", "check", "verify"):
         print(__doc__, file=sys.stderr)
         return 1
     try:
-        mm0, mm1 = generate()
+        results = generate()
         if mode == "generate":
-            write(mm0, mm1)
+            write(results)
         elif mode == "check":
-            check_drift(mm0, mm1)
+            check_drift(results)
         else:
-            verify(mm0, mm1)
+            verify(results)
     except TranspileError as e:
         print(f"lean2mm0: ERROR: {e}", file=sys.stderr)
         return 1

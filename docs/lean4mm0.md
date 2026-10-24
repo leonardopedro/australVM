@@ -283,6 +283,21 @@ Phase D's remaining piece — the *theorem* side — is landed:
   check always (python3) and the full verify when mm0-rs/mm0-c are on
   PATH, else records an explained gap — mirroring the why3 gates' stance.
   23 passed / 2 explained gaps (why3 absent) / 0 failed.
+* **Second source — `layout_certificate` (follow-up iteration)**: the same
+  emitter now drives a second pinned nanoda-verified export,
+  `../timepiece/Layout.lean` → `mm0/layout_certificate.{mm0,mm1}` — eight
+  rfl certificates over shapes gap never exercised: a source-defined
+  inductive (`OuterState`), list constructors/recursors (`List.rec`/
+  `casesOn` machinery), `Nat.mod`, `HMod`, and Bool chains over `&&`/`||`/`!`.
+  The evaluator grew a generic ADT layer (constructor/recursor dispatch
+  registered from the export's own `inductive` blocks) and demand-driven
+  IHs — thunks forced only where the kernel would reduce them, which turns
+  the 32×32-grid `eraseDup` scan from quadratic to linear (2.3 s, not 20+
+  min). mm0-rs + mm0-c accept it (3 sorts, 34 term/def, 24 ax/thm).
+* **CI**: `.github/workflows/ci.yml` has a `phase-d` job that rebuilds the
+  frozen mm0 toolchain from digama0/mm0 at the host's pinned commit and
+  runs `scripts/lean2mm0 verify` — both certificates re-checked by mm0-c on
+  every push.
 
 ---
 
