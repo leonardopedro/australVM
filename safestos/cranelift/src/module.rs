@@ -857,6 +857,7 @@ fn compile_cps_binary(data: &[u8]) -> Result<HashMap<String, usize>, String> {
         .finish(cranelift_codegen::settings::Flags::new(flag_builder))
         .map_err(|e| format!("ISA finish: {e}"))?;
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    crate::use_arena_memory(&mut builder)?;
 
     extern "C" {
         fn au_print_int(i: i64);

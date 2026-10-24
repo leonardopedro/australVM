@@ -9,11 +9,15 @@
    initializer is serialized to the Austral subset the kernel's
    `uk_austral_unf` symbol accepts, reduced through the kernel's
    interaction-net unique-normal-form reducer (via the OCaml↔Rust bridge),
-   and compared against this pass's own independent OCaml evaluator for the
-   same expression. A disagreement means the compiler's view of a constant
-   and the kernel's canonical normal form diverge — a compiler-consistency
-   failure — and the module is rejected, mirroring how the Why3 gate rejects
-   modules importing ungranted symbols.
+   and checked against this pass's own independent OCaml evaluator for the
+   same expression — by the **conversion check** (`uk_austral_defeq`): the
+   initializer and the compiler's evaluated literal must reduce to the same
+   net, certificate (isomorphism witness) included. Equal nets ⇒ equal
+   values, so this subsumes the plain value comparison, which is kept as the
+   fallback when the kernel's defeq answer is unusable. A disagreement means
+   the compiler's view of a constant and the kernel's canonical normal form
+   diverge — a compiler-consistency failure — and the module is rejected,
+   mirroring how the Why3 gate rejects modules importing ungranted symbols.
 
    This is the "call the kernel from the compiler" direction of the S36
    cycle (see `unfer/docs/WHYML_CYCLE.md`): the kernel supplies the
@@ -130,6 +134,30 @@ and cmp op a b =
 
 (* ── compare the kernel's UNF value against the OCaml evaluation ────── *)
 
+(** The literal-source form of an *evaluated* constant: what the compiler
+    believes the initializer reduces to, written as source the kernel can
+    re-reduce. Round-trip checked against the kernel's Austral subset:
+    `(3 > 2)` ≡ `true`, `(1.5 + 2.25)` ≡ `3.75`, `(0 - 5)` ≡ `-5`, and
+    `(2.0 + 2.0)` ≡ `4.` all reduce to identical unique normal forms
+    (`logos iso`), so a conversion-check failure here is a genuine
+    compiler↔kernel inconsistency, not a formatting artifact. *)
+let literal_source (v : value) : string =
+  match v with
+  | VInt i -> Int64.to_string i
+  | VBool b -> string_of_bool b
+  | VFloat f -> string_of_float f
+
+(** The `equivalent` field of an `AustralDefeqReport` JSON. [None] when the
+    report is unparseable or lacks the field — the caller then falls back
+    to the plain value comparison rather than trusting a report it cannot
+    read. *)
+let report_equivalent (json : string) : bool option =
+  try
+    match Yojson.Safe.Util.member "equivalent" (Yojson.Safe.from_string json) with
+    | `Bool b -> Some b
+    | _ -> None
+  with _ -> None
+
 (** The kernel report's `value` field: `Some s` when the term was closed
     (no unknowns) and numeric, `None` otherwise. *)
 let report_value (json : string) : string option =
@@ -173,6 +201,40 @@ let verdict_on_missing_report ~module_name (id : Identifier.identifier)
            module_name (Identifier.ident_string id) msg)
   | None -> VerdictOk (* kernel/bridge unavailable: no-op *)
 
+(** The legacy value comparison: booleans against booleans, everything
+    else through [value_to_number]/[kernel_number]. Kept as the fallback
+    for when the kernel answers the UNF question but the conversion answer
+    is unusable (a malformed defeq report, or a bridge without the defeq
+    surface). *)
+let compare_values ~module_name (id : Identifier.identifier) (declared : value)
+    (kernel_value : string) (src : string) : verdict =
+  match (declared, kernel_bool kernel_value) with
+  | VBool b, Some kb when b = kb -> VerdictOk
+  | VBool b, Some kb when b <> kb -> (
+      VerdictReject
+        (Printf.sprintf
+           "module %s constant `%s` is a boolean, the compiler \
+             evaluates it to %b but the kernel's `uk_austral_unf` \
+             reduces the emitted program to %b"
+           module_name (Identifier.ident_string id) b kb))
+  | _ ->
+      let dv = value_to_number declared in
+      let kv = kernel_number kernel_value in
+      if Float.is_nan dv || Float.is_nan kv then VerdictOk
+      else if dv = kv then VerdictOk
+      else
+        VerdictReject
+          (Printf.sprintf
+             "module %s constant `%s` disagrees with the kernel's \
+              deltanet unique normal form: compiler evaluates to %s, \
+              kernel's `uk_austral_unf` reduces `%s` to %s"
+             module_name (Identifier.ident_string id)
+             (match declared with
+              | VInt i -> Int64.to_string i
+              | VFloat f -> string_of_float f
+              | VBool b -> string_of_bool b)
+             src kernel_value)
+
 let check_constant ~module_name (id, init) : verdict =
   match (to_austral init, eval init) with
   | Some src, Some declared ->
@@ -184,38 +246,49 @@ let check_constant ~module_name (id, init) : verdict =
            match report_value json with
            | None -> VerdictOk (* open term / non-numeric: nothing to check *)
            | Some kernel_value ->
-               (* Booleans have to be compared as booleans. They used to go
-                  through `value_to_number`, where `VBool _ = nan`, and the
-                  `is_nan` guard turned that into `VerdictOk` — so every
-                  boolean-valued constant (all comparisons, `and`, `or`, `not`)
-                  was round-tripped to the kernel and its verdict thrown away.
-                  The deltanet test passed vacuously for exactly that reason. *)
-               match (declared, kernel_bool kernel_value) with
-               | VBool b, Some kb when b = kb -> VerdictOk
-               | VBool b, Some kb when b <> kb -> (
-                   VerdictReject
-                     (Printf.sprintf
-                        "module %s constant `%s` is a boolean, the compiler \
-                         evaluates it to %b but the kernel's `uk_austral_unf` \
-                         reduces the emitted program to %b"
-                        module_name (Identifier.ident_string id) b kb))
-               | _ ->
-               let dv = value_to_number declared in
-               let kv = kernel_number kernel_value in
-               if Float.is_nan dv || Float.is_nan kv then VerdictOk
-               else if dv = kv then VerdictOk
-               else
-                 VerdictReject
-                   (Printf.sprintf
-                      "module %s constant `%s` disagrees with the kernel's \
-                       deltanet unique normal form: compiler evaluates to %s, \
-                       kernel's `uk_austral_unf` reduces `%s` to %s"
-                      module_name (Identifier.ident_string id)
-                      (match declared with
-                       | VInt i -> Int64.to_string i
-                       | VFloat f -> string_of_float f
-                       | VBool b -> string_of_bool b)
-                      src kernel_value)))
+               (* Conversion check first: the initializer and the compiler's
+                  own evaluated literal must reduce to the same net —
+                  witness included. Equal nets ⇒ equal values, so when the
+                  kernel answers this question it subsumes the value
+                  comparison, and it is *exact* where the float comparison
+                  was lossy (Int64 magnitudes above 2^53 round through
+                  float_of_string, and NaN never equals itself). *)
+               (match
+                  CamlCompiler_rust_bridge.austral_defeq_json src
+                    (literal_source declared)
+                with
+               | Some djson -> (
+                   match report_equivalent djson with
+                   | Some true -> VerdictOk
+                   | Some false ->
+                       VerdictReject
+                         (Printf.sprintf
+                            "module %s constant `%s`: the compiler evaluates \
+                             the initializer `%s` to %s, but the kernel's \
+                             conversion check (`uk_austral_defeq`) says it \
+                             does not reduce to the same unique normal form \
+                             as that literal — no isomorphism witness \
+                             (compiler↔kernel consistency failure)"
+                            module_name (Identifier.ident_string id) src
+                            (literal_source declared))
+                   | None ->
+                       compare_values ~module_name id declared kernel_value src)
+               | None -> (
+                   (* Same doctrine as [verdict_on_missing_report]: a
+                      recorded bridge error is a visible rejection, never a
+                      silent pass; no error means a bridge without the defeq
+                      surface, so the legacy value comparison still runs. *)
+                   match CamlCompiler_rust_bridge.last_jit_error () with
+                   | Some msg ->
+                       VerdictReject
+                         (Printf.sprintf
+                            "module %s constant `%s`: deltanet conversion \
+                             check could not run via the kernel (bridge \
+                             error: %s); not passing silently"
+                            module_name (Identifier.ident_string id) msg)
+                   | None ->
+                       compare_values ~module_name id declared kernel_value
+                         src))))
   | _ -> VerdictOk (* not in the translatable subset: no-op *)
 
 (** The pass as registered: checks every top-level constant. *)

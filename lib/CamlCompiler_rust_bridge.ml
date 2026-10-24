@@ -19,6 +19,7 @@ external c_execute_function_1 : int64 -> int64 -> int64 = "ocaml_execute_functio
 external c_execute_function_2 : int64 -> int64 -> int64 -> int64 = "ocaml_execute_function_2"
 external c_last_error : unit -> string option = "ocaml_cranelift_last_error"
 external c_austral_unf : string -> string option = "ocaml_austral_unf"
+external c_austral_defeq : string -> string -> string option = "ocaml_austral_defeq"
 external c_lookup_function : string -> int64 = "ocaml_lookup_function"
 external c_list_function_names : unit -> string = "ocaml_list_function_names"
 external c_set_allow_all : unit -> unit = "ocaml_set_allow_all"
@@ -155,3 +156,13 @@ let store (ptr: int64) (value: int64) : unit =
     from the compiler" direction the Deltanet_plugin pass uses. *)
 let austral_unf_json (src: string) : string option =
   c_austral_unf src
+
+(** Conversion check between two Austral source fragments (S36-cycle kernel
+    call): run both through the kernel's `uk_austral_defeq` symbol and return
+    the `AustralDefeqReport` JSON
+    (`{"equivalent": true, "unf_hash_a": ..., "witness": [[a,b],...]}`), or
+    None when the kernel/bridge is unavailable. The report carries the
+    isomorphism witness π when the two unique normal forms are isomorphic —
+    the certificate Deltanet_plugin's conversion gate acts on. *)
+let austral_defeq_json (src_a: string) (src_b: string) : string option =
+  c_austral_defeq src_a src_b

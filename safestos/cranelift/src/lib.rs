@@ -1,4 +1,4 @@
-use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use std::cell::RefCell;
 use std::ffi::{c_void, CString};
 
@@ -259,6 +259,35 @@ pub extern "C" fn __au_swap_module(old_id: u64, new_desc: *const c_void) -> i64 
     }
 }
 
+/// Virtual-address bytes reserved up front for the JIT's code, rodata and
+/// writable data (installed by [use_arena_memory]).
+///
+/// Why an arena at all: cranelift-jit's default `SystemMemoryProvider`
+/// allocates executable buffers from `malloc` — i.e. the process `[heap]` —
+/// and on hosts where SELinux is enforcing, `execheap` denies the RW→RX
+/// `mprotect` over heap pages (`EACCES`), so *every* JIT finalization fails
+/// with `unable to make memory readable+executable` (this is what made all
+/// of JitTest fail on such hosts, while a fresh `mmap` region transitions
+/// fine under ordinary `execmem` permission). `ArenaMemoryProvider` reserves
+/// one anonymous `PROT_NONE` mapping instead (region → `mmap`), commits it
+/// page by page, and hands out code/data slices from it.
+///
+/// The reservation is virtual-only until touched, spans code + rodata +
+/// writable data alike, and exhaustion surfaces as the ordinary backend
+/// error "pre-allocated jit memory region exhausted" — a normal `Err`, not
+/// undefined behavior.
+const JIT_ARENA_SIZE: usize = 1 << 32; // 4 GiB of address space, committed on demand
+
+/// Install the arena memory provider on [builder] (rationale: [JIT_ARENA_SIZE]).
+/// Every `JITModule::new` in this crate must be preceded by this call.
+pub(crate) fn use_arena_memory(builder: &mut JITBuilder) -> Result<(), String> {
+    builder.memory_provider(Box::new(
+        ArenaMemoryProvider::new_with_size(JIT_ARENA_SIZE)
+            .map_err(|e| format!("JIT arena reservation failed: {e}"))?,
+    ));
+    Ok(())
+}
+
 #[no_mangle]
 pub extern "C" fn cranelift_init() -> i64 {
     JIT.with(|cell| {
@@ -274,6 +303,7 @@ pub extern "C" fn cranelift_init() -> i64 {
                 .finish(cranelift_codegen::settings::Flags::new(flag_builder))
                 .map_err(|e| format!("ISA finish failed: {}", e))?;
             let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+            use_arena_memory(&mut builder)?;
 
             // Register runtime primitives
             builder.symbol("au_print_int", au_print_int as *const u8);
@@ -450,6 +480,13 @@ pub(crate) const UNFER_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol {
         name: "uk_austral_unf",
         addr: unfer_ffi::uk_austral_unf as *const u8,
+    },
+    // Conversion check (definitional equality) between two Austral sources:
+    // both sides reduced to their UNF and compared, with the isomorphism
+    // witness as certificate (lean4mm0 plan, Module 3).
+    KernelSymbol {
+        name: "uk_austral_defeq",
+        addr: unfer_ffi::uk_austral_defeq as *const u8,
     },
     KernelSymbol {
         name: "uk_snapshot",
@@ -1128,6 +1165,7 @@ fn cranelift_swap_binary_impl(ir_ptr: *const u8, ir_len: usize) -> *const c_void
             .finish(cranelift_codegen::settings::Flags::new(flag_builder))
             .map_err(|e| format!("ISA finish failed: {}", e))?;
         let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        use_arena_memory(&mut builder)?;
         builder.symbol("au_print_int", au_print_int as *const u8);
         builder.symbol("au_exit", au_exit as *const u8);
         builder.symbol("au_alloc", au_alloc as *const u8);
@@ -1261,6 +1299,20 @@ pub extern "C" fn cranelift_free_string(s: *mut std::ffi::c_char) {
     }
 }
 
+/// The process-global kernel model handle shared by the Austral→deltanet
+/// bridges (UNF translation and conversion check): one session, so both
+/// reports and events land on the same handle. Created lazily with a
+/// minimal QFM-free model spec (mirrors the FFI test spec).
+#[cfg(feature = "unfer-kernel")]
+fn deltanet_bridge_model() -> i64 {
+    use std::sync::OnceLock;
+    static MODEL: OnceLock<i64> = OnceLock::new();
+    *MODEL.get_or_init(|| {
+        let spec = br#"{"hamiltonian":{"kind":"builtin","name":"harmonic_chain","params":{"n_modes":2,"omega":1.0}},"prior":{"kind":"vacuum"},"solver":{"krylov_dim":4,"prune_eps":1e-12,"max_components":50000,"restarts":1,"device":{"kind":"cpu"}}}"#;
+        unfer_ffi::uk_model_create(spec.as_ptr(), spec.len() as i64)
+    })
+}
+
 /// Austral→deltanet UNF translation bridge for the OCaml compiler plugin.
 ///
 /// Runs the Austral source fragment through the kernel's `uk_austral_unf`
@@ -1276,9 +1328,6 @@ pub extern "C" fn cranelift_free_string(s: *mut std::ffi::c_char) {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointer is OCaml-supplied and sound by contract
 pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut std::ffi::c_char {
     use std::ffi::CStr;
-    use std::sync::OnceLock;
-
-    static MODEL: OnceLock<i64> = OnceLock::new();
 
     // Fresh error channel per call (same discipline as the other extern
     // entry points): a caller probing `cranelift_last_error` after this call
@@ -1296,12 +1345,7 @@ pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut st
             return std::ptr::null_mut();
         }
     };
-    let model = *MODEL.get_or_init(|| {
-        // A minimal QFM-free model spec so the handle-based kernel API has a
-        // session to attach the report to (mirrors the FFI test spec).
-        let spec = br#"{"hamiltonian":{"kind":"builtin","name":"harmonic_chain","params":{"n_modes":2,"omega":1.0}},"prior":{"kind":"vacuum"},"solver":{"krylov_dim":4,"prune_eps":1e-12,"max_components":50000,"restarts":1,"device":{"kind":"cpu"}}}"#;
-        unfer_ffi::uk_model_create(spec.as_ptr(), spec.len() as i64)
-    });
+    let model = deltanet_bridge_model();
     if model <= 0 {
         set_last_error("austral_unf_translate: kernel model creation failed");
         return std::ptr::null_mut();
@@ -1330,6 +1374,88 @@ pub extern "C" fn austral_unf_translate(src: *const std::ffi::c_char) -> *mut st
         Ok(cs) => cs.into_raw(),
         Err(_) => {
             set_last_error("austral_unf_translate: result contains NUL");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Conversion check (definitional equality) bridge for the OCaml compiler
+/// plugin.
+///
+/// Runs two Austral source fragments through the kernel's `uk_austral_defeq`
+/// symbol on the same lazily-created model as [`austral_unf_translate`] and
+/// returns the `AustralDefeqReport` JSON as a malloc'd NUL-terminated string
+/// (freed by [`cranelift_free_string`]), or NULL on failure (see
+/// `cranelift_last_error`). The report carries the verdict, both UNF/TED
+/// digests, and — when the normal forms are isomorphic — the isomorphism
+/// witness π. This is how `Deltanet_plugin` asks the *conversion* question
+/// (lean4mm0 plan): a module constant's initializer and the compiler's own
+/// evaluated literal must reduce to the same net, certificate included.
+#[cfg(feature = "unfer-kernel")]
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: the pointers are OCaml-supplied and sound by contract
+pub extern "C" fn austral_defeq_translate(
+    src_a: *const std::ffi::c_char,
+    src_b: *const std::ffi::c_char,
+) -> *mut std::ffi::c_char {
+    use std::ffi::CStr;
+
+    // Fresh error channel per call (same discipline as austral_unf_translate).
+    cranelift_clear_error();
+
+    if src_a.is_null() || src_b.is_null() {
+        set_last_error("austral_defeq_translate: null source");
+        return std::ptr::null_mut();
+    }
+    let str_a = match unsafe { CStr::from_ptr(src_a) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            set_last_error(&format!("austral_defeq_translate: side A invalid UTF-8: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let str_b = match unsafe { CStr::from_ptr(src_b) }.to_str() {
+        Ok(s) => s.to_string(),
+        Err(e) => {
+            set_last_error(&format!("austral_defeq_translate: side B invalid UTF-8: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let model = deltanet_bridge_model();
+    if model <= 0 {
+        set_last_error("austral_defeq_translate: kernel model creation failed");
+        return std::ptr::null_mut();
+    }
+    let code = unfer_ffi::uk_austral_defeq(
+        model,
+        str_a.as_ptr(),
+        str_a.len() as i64,
+        str_b.as_ptr(),
+        str_b.len() as i64,
+    );
+    if code != 0 {
+        set_last_error(&format!(
+            "austral_defeq_translate: uk_austral_defeq failed with {code}"
+        ));
+        return std::ptr::null_mut();
+    }
+    // Probe-then-copy result retrieval (same contract as the UNF bridge).
+    let needed = unfer_ffi::uk_get_result(model, std::ptr::null_mut(), 0);
+    if needed <= 0 {
+        set_last_error("austral_defeq_translate: uk_get_result probe failed");
+        return std::ptr::null_mut();
+    }
+    let mut buf = vec![0u8; needed as usize + 1];
+    let written = unfer_ffi::uk_get_result(model, buf.as_mut_ptr(), buf.len() as i64);
+    if written != needed {
+        set_last_error("austral_defeq_translate: uk_get_result copy mismatch");
+        return std::ptr::null_mut();
+    }
+    buf.truncate(needed as usize);
+    match CString::new(buf) {
+        Ok(cs) => cs.into_raw(),
+        Err(_) => {
+            set_last_error("austral_defeq_translate: result contains NUL");
             std::ptr::null_mut()
         }
     }

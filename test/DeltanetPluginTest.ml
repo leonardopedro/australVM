@@ -102,6 +102,39 @@ let test_eval_closed_expressions _ =
   let e4 = TNegation (TBoolConstant false) in
   eq (Some (Deltanet_plugin.VBool true)) (Deltanet_plugin.eval e4)
 
+(* ── the conversion gate's pure helpers ──────────────────────────────────
+
+   [literal_source] and [report_equivalent] are the two pure pieces of the
+   `uk_austral_defeq` gate; the round-trip against the real kernel is
+   covered by unfer's `unfer_ffi` defeq tests and the australVM bridge
+   integration. These pin the pure contracts here, where they run
+   everywhere. *)
+
+let test_literal_source_is_the_kernels_subset _ =
+  eq "42" (Deltanet_plugin.literal_source (Deltanet_plugin.VInt 42L));
+  eq "-5" (Deltanet_plugin.literal_source (Deltanet_plugin.VInt (-5L)));
+  eq "true" (Deltanet_plugin.literal_source (Deltanet_plugin.VBool true));
+  eq "false" (Deltanet_plugin.literal_source (Deltanet_plugin.VBool false));
+  eq "3.75" (Deltanet_plugin.literal_source (Deltanet_plugin.VFloat 3.75));
+  (* These literals must re-parse on the kernel side and reduce to the same
+     UNF as the expression they name — verified against the real kernel:
+     `(3 > 2)` ≡ `true`, `(0 - 5)` ≡ `-5`, `(1.5 + 2.25)` ≡ `3.75`,
+     `(2.0 + 2.0)` ≡ `4.` (all `logos iso` exit 0). *)
+  ()
+
+let test_report_equivalent_reads_the_verdict _ =
+  eq (Some true)
+    (Deltanet_plugin.report_equivalent
+       "{\"equivalent\":true,\"unf_hash_a\":\"x\",\"witness\":[[0,0]]}");
+  eq (Some false)
+    (Deltanet_plugin.report_equivalent
+       "{\"equivalent\":false,\"unf_hash_a\":\"x\",\"unf_hash_b\":\"y\",\"witness\":null}");
+  (* A report without a usable verdict is None — the caller falls back to
+     the legacy value comparison rather than trusting what it cannot read. *)
+  eq None (Deltanet_plugin.report_equivalent "not json at all");
+  eq None (Deltanet_plugin.report_equivalent "{\"equivalent\":\"yes\"}");
+  eq None (Deltanet_plugin.report_equivalent "{}")
+
 (* ── the pass: registry, enablement, per-constant verdicts ───────────── *)
 
 let test_pass_registers_and_respects_env _ =
@@ -157,6 +190,44 @@ let test_missing_report_with_kernel_error_rejects _ =
       assert_bool "rejection carries the kernel error"
         (contains "uk_austral_unf failed with -5000")
 
+(* ── the round-trip through the real bridge (.so) ────────────────────────
+
+   [check_constant]'s conversion check calls [austral_defeq_json]; these two
+   cases run that exact path against the built bridge: the initializer and
+   its evaluated literal must come back [equivalent:true], a deliberately
+   wrong pairing [equivalent:false] (otherwise the gate could never reject),
+   and [None] must carry a bridge error (the "not passing silently" doctrine)
+   — or mean the bridge/kernel is unavailable (no recorded error), in which
+   case the case is a documented no-op rather than a failure. *)
+
+let defeq_or_skip src_a src_b =
+  match CamlCompiler_rust_bridge.austral_defeq_json src_a src_b with
+  | Some json -> `Report json
+  | None -> (
+      match CamlCompiler_rust_bridge.last_jit_error () with
+      | Some err -> assert_failure ("defeq round-trip reached the kernel but failed: " ^ err)
+      | None -> `Unavailable) (* bridge/kernel unavailable: documented no-op *)
+
+let test_defeq_roundtrip_agreement _ =
+  match defeq_or_skip "(2 = 2)" "true" with
+  | `Unavailable -> ()
+  | `Report json -> (
+      match Deltanet_plugin.report_equivalent json with
+      | Some true -> ()
+      | _ ->
+          assert_failure
+            (Printf.sprintf "expected equivalent:true for (2 = 2) ≡ true, report: %s" json))
+
+let test_defeq_roundtrip_disagreement _ =
+  match defeq_or_skip "(2 = 2)" "false" with
+  | `Unavailable -> ()
+  | `Report json -> (
+      match Deltanet_plugin.report_equivalent json with
+      | Some false -> ()
+      | _ ->
+          assert_failure
+            (Printf.sprintf "expected equivalent:false for (2 = 2) ≢ false, report: %s" json))
+
 let suite =
   "DeltanetPluginTest" >::: [
       "to_austral_literals" >:: test_to_austral_literals;
@@ -164,10 +235,16 @@ let suite =
       "emitted_operators_are_in_the_kernels_subset" >::
         test_emitted_operators_are_in_the_kernels_subset;
       "eval_closed_expressions" >:: test_eval_closed_expressions;
+      "literal_source_is_the_kernels_subset" >::
+        test_literal_source_is_the_kernels_subset;
+      "report_equivalent_reads_the_verdict" >::
+        test_report_equivalent_reads_the_verdict;
       "pass_registers_and_respects_env" >:: test_pass_registers_and_respects_env;
       "check_constant_agreement" >:: test_check_constant_agreement;
-      "missing_report_without_error_is_noop" >:: test_missing_report_without_error_is_noop;
-      "missing_report_with_kernel_error_rejects" >:: test_missing_report_with_kernel_error_rejects;
+      "missing_report_without_error_is_noop" >:: test_missing_report_without_error_is_noop;      "missing_report_with_kernel_error_rejects" >::
+        test_missing_report_with_kernel_error_rejects;
+      "defeq_roundtrip_agreement" >:: test_defeq_roundtrip_agreement;
+      "defeq_roundtrip_disagreement" >:: test_defeq_roundtrip_disagreement;
     ]
 
 let () =
