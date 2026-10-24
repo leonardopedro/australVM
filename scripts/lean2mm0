@@ -1,0 +1,1046 @@
+#!/usr/bin/env python3
+"""lean2mm0 — the Phase-D Lean 4 → DeltaNets → MM0 emitter (docs/lean4mm0.md §5).
+
+Transpiles the *nanoda-verified* lean4export NDJSON of a timepiece Lean file
+(the S29 contract artifact pinned in unfer) into an MM0 specification
+(`.mm0`, the auditable spec of record) and a proof file (`.mm1`), both over
+the target theory `docs/cic.mm0`, then drives the frozen root of trust:
+`mm0-rs compile` elaborates the proofs into an `.mmb`, `mm0-c` re-verifies
+that binary against the `.mm0` source.
+
+Pipeline (per docs/lean4mm0.md §1):
+
+    timepiece/GapCertificate.lean
+      -- lean4export 3.1.0 (pinned, re-verified by nanoda in unfer) -->
+    gap_certificate.ndjson                 (INPUT — this script reads it)
+      -- this script -->
+    mm0/gap_certificate.mm0 + .mm1         (spec + proofs over cic.mm0)
+      -- mm0-rs compile --> .mmb  -- mm0-c --> verification verdict
+
+What the emitted proofs actually say, in the language of cic.mm0:
+
+  * Each Lean `def <x>_checked : Bool` (a *closed* Boolean computation over
+    scaled naturals) becomes an MM0 `def <x>_checked : Term` whose body is
+    the net encoding of the unfolded computation: `tint` literals, `tprim`
+    applications at the real `unf.rs::prim_tag` bytes, `ttrue`/`tfalse`,
+    and `tentity`-symbol applications where the agent signature has no
+    primitive (integer division — `austral_codegen` maps `/` to DivF64 and
+    the int64 fragment has no div prim; the emitted file documents the
+    symbol table).
+  * Each Lean `theorem <x>_verified : <x>_checked = true := rfl` becomes
+    `theorem <x>_verified: $ teq <x>_checked ttrue $` with a proof that
+    *reduces* the encoding to `ttrue` bottom-up: congruence lifts
+    (`teq_app`), the `prim_eval` schema for every int64 redex, and one
+    grounded evaluation axiom per distinct ground instance (cic.mm0's own
+    prescription: `teval` is uninterpreted, "the emitter grounds each
+    prim_tag byte"). Bool-valued and division redexes are grounded directly
+    (cic.mm0's `prim_eval` codomain is `tint`).
+  * `a <= b` is encoded `not (b < a)` — the documented kernel-subset
+    lowering (`australVM/lib/deltanet_plugin.ml`: "the kernel's Austral
+    subset has no non-strict comparison").
+
+Trust story (why this is not circular):
+
+  * The *statements* come from the export that nanoda type-checked and whose
+    `Eq.refl` proofs the Lean kernel closed by reduction — this script never
+    asserts what the theorems say; it re-derives the reduction in MM0.
+  * The evaluator independently re-computes each checked expression; the
+    script aborts unless it evaluates to `true` AND the net-encoding
+    reduction agrees (two independent paths, same value).
+  * Ground evaluation axioms are exactly that — axioms, visible in the
+    emitted spec, each a trivially checkable decimal fact
+    (`19875 - 555 = 19320`), the same auditing stance as set.mm's ground
+    numeral lemmas. Everything structural (the shape of each computation)
+    is *checked* by mm0-c, not asserted.
+
+Usage:
+    scripts/lean2mm0            # (re)generate mm0/gap_certificate.{mm0,mm1}
+    scripts/lean2mm0 check      # regenerate in memory; fail on drift
+    scripts/lean2mm0 verify     # check + mm0-rs compile + mm0-c (root of trust)
+
+Exit codes: 0 ok, 1 generation/self-check failure, 2 tooling absent (verify).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# ── paths ────────────────────────────────────────────────────────────────
+
+AVM = Path(__file__).resolve().parent.parent          # australVM/
+WS = AVM.parent                                        # workspace root
+CIC = AVM / "docs" / "cic.mm0"                         # target theory
+NDJSON = WS / "unfer" / "prob_kernel" / "tests" / "fixtures" / "gap_certificate.ndjson"
+LEAN_SRC = WS / "timepiece" / "GapCertificate.lean"    # cited in the header
+OUT_DIR = AVM / "mm0"
+OUT_MM0 = OUT_DIR / "gap_certificate.mm0"
+OUT_MM1 = OUT_DIR / "gap_certificate.mm1"
+
+# The nine rfl certificates of the pinned export.  A drift here is a real
+# event (the fixture changed), not something to absorb silently.
+EXPECTED_THMS = [
+    "read_gap_verified",
+    "read_width_verified",
+    "gap_aggregate_verified",
+    "width_aggregate_verified",
+    "lower_verified",
+    "upper_verified",
+    "lower_pos_verified",
+    "upper_gt_lower_verified",
+    "strong_coupling_consistency_verified",
+]
+
+# prim_tag bytes from unfer/logos/src/deltanet/unf.rs (load-bearing: renaming
+# a variant must not silently re-tag; this table mirrors that mapping).
+PRIM_TAG = {
+    "add": 0x00, "sub": 0x01, "mul": 0x02, "eq": 0x03,
+    "gt": 0x04, "lt": 0x05, "and": 0x0D, "or": 0x0E, "not": 0x0F,
+}
+# tentity symbol table of the emitted file (the agent signature has no
+# integer-division primitive; division is a symbol-level function).
+ENTITY_SYM = {"idiv": 0}
+
+
+class TranspileError(Exception):
+    """Any loud failure: unknown construct, value disagreement, drift."""
+
+
+# ── NDJSON loading (three namespaces: in=name, il=level, ie=expr) ────────
+
+class Export:
+    def __init__(self, path: Path):
+        self.names: dict[int, str] = {}
+        self.levels: dict[int, dict] = {}
+        self.exprs: dict[int, dict] = {}
+        self.decls: dict[str, tuple[str, dict, int]] = {}
+        self.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        for i, line in enumerate(path.read_text().splitlines()):
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            if "in" in d:
+                if "str" in d:
+                    s = d["str"]
+                    pre = s.get("pre", 0)
+                    self.names[d["in"]] = (self.names.get(pre, "") if pre else "") + s["str"]
+                else:
+                    n = d["num"]
+                    pre = n.get("pre", 0)
+                    self.names[d["in"]] = (self.names.get(pre, "") if pre else "") + str(n["i"])
+            if "il" in d:
+                self.levels[d["il"]] = d
+            if "ie" in d:
+                self.exprs[d["ie"]] = d
+            for k in ("axiom", "thm", "def", "inductive", "ctor", "opaque"):
+                if k in d and isinstance(d[k], dict) and "name" in d[k]:
+                    nm = self.names.get(d[k]["name"], f"?{d[k]['name']}")
+                    self.decls[nm] = (k, d[k], i)
+
+    def name(self, i: int) -> str:
+        return self.names.get(i, f"?{i}")
+
+    @staticmethod
+    def canon(n: str) -> str:
+        return n.replace(".", "")
+
+    def spine(self, eid: int) -> tuple[int, list[int]]:
+        """Decompose an application into (head_expr_id, [arg_expr_ids])."""
+        args: list[int] = []
+        cur = eid
+        while True:
+            e = self.exprs.get(cur)
+            if e is None:
+                raise TranspileError(f"dangling expr {cur}")
+            if "app" in e:
+                args.append(e["app"]["arg"])
+                cur = e["app"]["fn"]
+            else:
+                args.reverse()   # outermost-first walk → application order
+                return cur, args
+
+    def pp(self, eid: int, depth: int = 0) -> str:
+        if depth > 40:
+            return "…"
+        e = self.exprs.get(eid)
+        if e is None:
+            return f"?{eid}"
+        if "bvar" in e:
+            return f"#{e['bvar']}"
+        if "const" in e:
+            return self.name(e["const"]["name"])
+        if "app" in e:
+            head, args = self.spine(eid)
+            return "(" + " ".join([self.pp(head, depth + 1)]
+                                  + [self.pp(a, depth + 1) for a in args]) + ")"
+        if "natVal" in e:
+            return f"({e['natVal']})"
+        if "lam" in e:
+            return "(λ …)"
+        if "forallE" in e:
+            return "(∀ …)"
+        if "letE" in e:
+            return "(let …)"
+        if "sort" in e:
+            return "Sort"
+        if "mdata" in e:
+            return self.pp(e["mdata"]["expr"], depth + 1)
+        return str(e)
+
+
+# ── evaluator (values of the ground fragment) ────────────────────────────
+
+class VI:
+    __slots__ = ("n",)
+
+    def __init__(self, n: int):
+        self.n = n
+
+    def __repr__(self):
+        return f"{self.n}"
+
+
+class VB:
+    __slots__ = ("b",)
+
+    def __init__(self, b: bool):
+        self.b = b
+
+    def __repr__(self):
+        return f"{self.b}"
+
+
+class VClos:
+    __slots__ = ("body", "env")
+
+    def __init__(self, body: int, env):
+        self.body = body
+        self.env = env
+
+    def __repr__(self):
+        return "<closure>"
+
+
+class VPair:
+    __slots__ = ("a", "b")
+
+    def __init__(self, a, b):
+        self.a, self.b = a, b
+
+    def __repr__(self):
+        return f"⟨{self.a}, {self.b}⟩"
+
+
+class VUnitT:
+    def __repr__(self):
+        return "unit"
+
+
+class VDumT:
+    def __repr__(self):
+        return "·"
+
+
+VUNIT = VUnitT()
+VDUM = VDumT()
+
+TYPE_CONSTS = {"Nat", "Bool", "Unit", "PUnit", "PProd", "Decidable", "Prop"}
+
+
+def as_int(v, ctx: str) -> int:
+    if isinstance(v, VI):
+        return v.n
+    raise TranspileError(f"{ctx}: expected a natural, got {v!r}")
+
+
+def as_bool(v, ctx: str) -> bool:
+    if isinstance(v, VB):
+        return v.b
+    raise TranspileError(f"{ctx}: expected a Bool, got {v!r}")
+
+
+def veq(a, b) -> bool:
+    if isinstance(a, VI) and isinstance(b, VI):
+        return a.n == b.n
+    if isinstance(a, VB) and isinstance(b, VB):
+        return a.b == b.b
+    return a is b
+
+
+class Evaluator:
+    """Normalizing evaluator for the export's ground fragment.
+
+    Only value positions are evaluated: type/instance/proof arguments of the
+    primitive table are never touched, so proof closures (Falseelim paths in
+    unreachable branches, decidability evidence) cannot run.  Everything
+    else unfolds through the export's own `def` values — including the
+    Nat.rec/brecOn machinery behind `pow10` — so results are the same
+    ground values the Lean kernel reduced (the export's `Eq.refl` proofs).
+    """
+
+    def __init__(self, ex: Export):
+        self.ex = ex
+        self.defs: dict[str, int] = {}
+        for nm, (kind, rec, _) in ex.decls.items():
+            if kind == "def":
+                self.defs[Export.canon(nm)] = rec["value"]
+
+    def val(self, eid: int, env, ctx: str = ""):
+        try:
+            return self.eval(eid, env)
+        except TranspileError:
+            raise
+        except RecursionError as e:
+            raise TranspileError(f"evaluator depth exceeded {ctx} @ expr {eid}") from e
+
+    def apply(self, f, arg, ctx: str):
+        if isinstance(f, VClos):
+            return self.eval(f.body, [arg] + f.env)
+        raise TranspileError(f"{ctx}: applying non-function {f!r}")
+
+    def eval(self, eid: int, env):
+        ex = self.ex
+        e = ex.exprs.get(eid)
+        if e is None:
+            raise TranspileError(f"dangling expr {eid}")
+        if "bvar" in e:
+            i = e["bvar"]
+            if i >= len(env):
+                raise TranspileError(f"unbound bvar {i} (env {len(env)}) @ {eid}")
+            return env[i]
+        if "natVal" in e:
+            return VI(int(e["natVal"]))
+        if "sort" in e or "forallE" in e:
+            return VDUM
+        if "lam" in e:
+            return VClos(e["lam"]["body"], env)
+        if "mdata" in e:
+            return self.eval(e["mdata"]["expr"], env)
+        if "letE" in e:
+            v = self.eval(e["letE"]["value"], env)
+            return self.eval(e["letE"]["body"], [v] + env)
+        if "proj" in e:
+            v = self.eval(e["proj"]["struct"], env)
+            idx = e["proj"]["idx"]
+            if isinstance(v, VPair):
+                return v.a if idx == 0 else v.b
+            raise TranspileError(f"proj {idx} of {v!r} @ {eid}")
+        head, args = ex.spine(eid)
+        he = ex.exprs.get(head)
+        if he is not None and "const" in he:
+            return self.const_app(ex.name(he["const"]["name"]), args, env, eid)
+        v = self.eval(head, env)
+        for a in args:
+            v = self.apply(v, self.eval(a, env), f"app @ {eid}")
+        return v
+
+    def const_app(self, raw: str, args: list[int], env, eid: int):
+        ex, C = self.ex, Export.canon(raw)
+        ev = lambda a: self.eval(a, env)
+
+        # -- primitive table: value positions only -----------------------
+        if C in ("HAddhAdd", "HSubhSub", "HMulhMul", "HDivhDiv"):
+            a = as_int(ev(args[-2]), raw)
+            b = as_int(ev(args[-1]), raw)
+            if C == "HAddhAdd":
+                return VI(a + b)
+            if C == "HSubhSub":
+                return VI(max(a - b, 0))          # Nat.sub, floor at 0
+            if C == "HMulhMul":
+                return VI(a * b)
+            return VI(a // b if b else 0)         # Nat.div: x / 0 = 0
+        if C == "BEqbeq":
+            return VB(veq(ev(args[-2]), ev(args[-1])))
+        if C == "OfNatofNat":
+            v = ev(args[1] if len(args) == 3 else args[-2])
+            if not isinstance(v, VI):
+                raise TranspileError(f"OfNat of {v!r} @ {eid}")
+            return v
+        if C == "LTlt":
+            return VB(as_int(ev(args[-2]), "LTlt") < as_int(ev(args[-1]), "LTlt"))
+        if C == "LEle":
+            return VB(as_int(ev(args[-2]), "LEle") <= as_int(ev(args[-1]), "LEle"))
+        if C == "Eq":
+            return VB(veq(ev(args[-2]), ev(args[-1])))
+        if C == "Not":
+            return VB(not self.bool_prop(args[-1], env))
+        if C == "Decidabledecide":
+            return VB(self.bool_prop(args[0], env))
+        if C == "dite":
+            cond = self.bool_prop(args[-3], env)
+            branch = ev(args[-2] if cond else args[-1])
+            return self.apply(branch, VDUM, "dite")
+        if C == "NatcasesOn":
+            n = as_int(ev(args[-3]), "NatcasesOn")
+            if n == 0:
+                return ev(args[-2])
+            return self.apply(ev(args[-1]), VI(n - 1), "NatcasesOn")
+        if C == "Natrec":
+            n = as_int(ev(args[-1]), "Natrec")
+            z, s = args[-3], args[-2]
+            out = ev(z)
+            for k in range(n):
+                out = self.apply(self.apply(ev(s), VI(k), "Natrec s"), out, "Natrec s ih")
+            return out
+        if C == "Boolrec":
+            # @Bool.rec: (motive) (false-case) (true-case) (t) — nullary
+            # constructors, so the minors are values, not functions.
+            t = ev(args[-1])
+            if not isinstance(t, VB):
+                raise TranspileError(f"Boolrec scrutinee is {t!r} @ {eid}")
+            return ev(args[-3] if not t.b else args[-2])
+        if C == "Natzero":
+            return VI(0)
+        if C == "Natsucc":
+            return VI(as_int(ev(args[0]), "Natsucc") + 1)
+        if C == "Booltrue":
+            return VB(True)
+        if C == "Boolfalse":
+            return VB(False)
+        if C == "PProdmk":
+            return VPair(ev(args[-2]), ev(args[-1]))
+        if C == "PUnitunit":
+            return VUNIT
+        if C in TYPE_CONSTS:
+            return VDUM                                # type head: skip args
+        if C in ("Falseelim", "absurd"):
+            raise TranspileError(f"reached an impossible branch ({raw}) @ {eid}")
+
+        # -- plain def unfolding ------------------------------------------
+        if C in self.defs:
+            f = self.eval(self.defs[C], [])
+            for a in args:
+                f = self.apply(f, ev(a), f"unfold {raw}")
+            return f
+
+        raise TranspileError(f"unknown constant {raw!r} (value position) @ {eid}: "
+                             f"{self.ex.pp(eid)}")
+
+    def bool_prop(self, eid: int, env) -> bool:
+        """Evaluate a Prop to its truth value (decide/dite conditions only)."""
+        ex, C = self.ex, Export.canon
+        e = ex.exprs.get(eid)
+        if e is None:
+            raise TranspileError(f"dangling prop {eid}")
+        if "mdata" in e:
+            return self.bool_prop(e["mdata"]["expr"], env)
+        head, args = ex.spine(eid)
+        he = ex.exprs.get(head)
+        if he is None or "const" not in he:
+            raise TranspileError(f"non-const proposition head: {ex.pp(eid)}")
+        n = C(ex.name(he["const"]["name"]))
+        ev = lambda a: self.eval(a, env)
+        if n == "LTlt":
+            return as_int(ev(args[-2]), "LTlt") < as_int(ev(args[-1]), "LTlt")
+        if n == "LEle":
+            return as_int(ev(args[-2]), "LEle") <= as_int(ev(args[-1]), "LEle")
+        if n == "Eq":
+            return veq(ev(args[-2]), ev(args[-1]))
+        if n == "Not":
+            return not self.bool_prop(args[-1], env)
+        raise TranspileError(f"unsupported proposition {n!r}: {ex.pp(eid)}")
+
+
+# ── net encoding (the agent signature of docs/cic.mm0) ──────────────────
+
+@dataclass
+class Lit:
+    kind: str            # 'i' (tint) | 'b' (ttrue/tfalse)
+    val: object
+
+    def mm0(self, num) -> str:
+        # A bare numeral denotes `nat` (prefix n<n>: <n>); in Term position
+        # (a `tapp` argument) an int literal must be the agent `tint n`.
+        # Op/sym arguments of tprim/tentity stay bare -- those are nat.
+        if self.kind == "i":
+            return f"(tint {num(self.val)})"
+        return "ttrue" if self.val else "tfalse"
+
+
+@dataclass
+class Bin:
+    op: str              # add/sub/mul/eq/lt/and/or
+    a: "Node"            # children may be redexes: the proof lifts them to
+    b: "Node"            # their literals by congruence before grounding
+    val: object
+    via: str             # 'prim_eval' | 'direct'
+
+
+@dataclass
+class Un:
+    op: str              # 'not'
+    a: "Node"
+    val: object
+    via: str = "direct"
+
+
+@dataclass
+class Div:
+    a: "Node"
+    b: "Node"
+    val: object
+    via: str = "direct"
+
+
+Node = Lit | Bin | Un | Div
+
+INT_OPS = {"add", "sub", "mul", "eq", "lt"}     # int args, prim_eval route
+BOOL_OPS = {"and", "or"}                        # bool args, direct grounding
+
+
+def term_of(node: Node, num) -> str:
+    """The cic.mm0 encoding of a node (math-string body, no $)."""
+    if isinstance(node, Lit):
+        return node.mm0(num)
+    if isinstance(node, (Bin, Div)):
+        if isinstance(node, Div):
+            head = f"(tentity {num(ENTITY_SYM['idiv'])})"
+        else:
+            head = f"(tprim {num(PRIM_TAG[node.op])})"
+        inner = f"(tapp {head} {term_of(node.a, num)})"
+        return f"(tapp {inner} {term_of(node.b, num)})"
+    if isinstance(node, Un):
+        return f"(tapp (tprim {num(PRIM_TAG['not'])}) {term_of(node.a, num)})"
+    raise AssertionError(type(node))
+
+
+def lit_val(v) -> tuple[str, object]:
+    if isinstance(v, VI):
+        return "i", v.n
+    if isinstance(v, VB):
+        return "b", v.b
+    raise TranspileError(f"cannot ground value {v!r}")
+
+
+class Encoder:
+    """Structural encoding of a closed ground expression.
+
+    Primitive applications (per the lowering table below) become net nodes;
+    everything else — Lean-level recursion (`pow10`'s brecOn machinery),
+    constants, wrappers — is *evaluated* to a literal, because the agent
+    signature has no agent for Lean recursion: the emitter grounds it,
+    exactly as cic.mm0 prescribes for `teval`.
+    """
+
+    PRIMS = {"HAddhAdd": "add", "HSubhSub": "sub", "HMulhMul": "mul",
+             "HDivhDiv": "idiv", "BEqbeq": "eq", "Booland": "and",
+             "Boolor": "or"}
+
+    def __init__(self, ex: Export, ev: Evaluator):
+        self.ex = ex
+        self.ev = ev
+
+    @staticmethod
+    def val_env(env) -> list:
+        """The evaluator's view of an encode-env: entries carry values."""
+        return [e[2] for e in env]
+
+    def enc(self, eid: int, env) -> Node:
+        ex = self.ex
+        e = ex.exprs.get(eid)
+        if e is None:
+            raise TranspileError(f"dangling expr {eid}")
+        if "bvar" in e:
+            i = e["bvar"]
+            if i >= len(env):
+                raise TranspileError(f"enc: unbound bvar {i} @ {eid}")
+            eid2, env2, _v = env[i]
+            return self.enc(eid2, env2)
+        if "mdata" in e:
+            return self.enc(e["mdata"]["expr"], env)
+        head, args = ex.spine(eid)
+        he = ex.exprs.get(head)
+        if he is not None and "const" in he:
+            n = Export.canon(ex.name(he["const"]["name"]))
+            node = self.const_node(n, args, env, eid)
+            if node is not None:
+                return node
+        # not structurally encodable: evaluate to a literal (or fail loudly)
+        v = self.ev.val(eid, self.val_env(env), "encode fallback")
+        kind, val = lit_val(v)
+        return Lit(kind, val)
+
+    def const_node(self, C: str, args: list[int], env, eid: int) -> Node | None:
+        if C == "OfNatofNat":
+            v = self.ev.val(args[1] if len(args) == 3 else args[-2],
+                            self.val_env(env), "OfNat")
+            kind, val = lit_val(v)
+            return Lit(kind, val)
+        if C in ("Booltrue", "Boolfalse"):
+            return Lit("b", C == "Booltrue")
+        if C == "Natzero":
+            return Lit("i", 0)
+        if C == "Natsucc":
+            v = self.ev.val(eid, self.val_env(env), "succ")
+            _, val = lit_val(v)
+            return Lit("i", val)
+        if C == "HDivhDiv":
+            # no int64 division prim exists in the agent signature
+            # (austral_codegen: `/` is always F64); Nat.div is grounded as a
+            # symbol-level application — see ENTITY_SYM in the emitted file.
+            a = self.enc(args[-2], env)
+            b = self.enc(args[-1], env)
+            for side, child in (("lhs", a), ("rhs", b)):
+                if type(child.val) is not int:
+                    raise TranspileError(
+                        f"idiv {side} reduces to {child.val!r}: {self.ex.pp(eid)}")
+            return Div(a, b, a.val // b.val if b.val else 0)
+        if C in self.PRIMS:
+            op = self.PRIMS[C]
+            a = self.enc(args[-2], env)
+            b = self.enc(args[-1], env)
+            return self.bin(op, a, b, eid)
+        if C == "Decidabledecide":
+            return self.decide_node(args[0], env, eid)
+        if C in ("Boolnot",):
+            a = self.enc(args[-1], env)
+            if not isinstance(a, Lit) or a.kind != "b":
+                raise TranspileError(f"encoding not of {a!r} @ {eid}")
+            return Un("not", a, not a.b)
+        # def unfolding keeps the structure
+        if C in self.ev.defs:
+            return self.enc_closure(C, args, env, eid)
+        return None
+
+    def enc_closure(self, C: str, args: list[int], env, eid: int) -> Node:
+        """Unfold `C` and apply it to argument *expressions*, then encode."""
+        ex = self.ex
+        cur_body = self.ev.defs[C]
+        cur_env: list = list(env)
+        pending = list(args)
+        while pending:
+            b = ex.exprs.get(cur_body)
+            if b is None:
+                raise TranspileError(f"{C}: dangling def value")
+            if "mdata" in b:
+                cur_body = b["mdata"]["expr"]
+                continue
+            if "lam" in b:
+                a = pending.pop(0)
+                v = self.ev.val(a, self.val_env(env), f"{C} arg")
+                cur_env = [(a, env, v)] + cur_env
+                cur_body = b["lam"]["body"]
+                continue
+            if "forallE" in b:
+                cur_body = b["forallE"]["body"]
+                continue  # type-level binder: free, consumes no argument
+            # head is not a lambda: evaluate-and-apply semantics, literal out
+            v = self.ev.val(cur_body, self.val_env(cur_env), f"unfold {C}")
+            for a in pending:
+                v = self.ev.apply(v, self.ev.val(a, self.val_env(env), f"{C} arg"), C)
+            kind, val = lit_val(v)
+            return Lit(kind, val)
+        return self.enc(cur_body, cur_env)
+
+    def decide_node(self, prop_eid: int, env, eid: int) -> Node:
+        ex = self.ex
+        head, args = ex.spine(prop_eid)
+        he = ex.exprs.get(head)
+        if he is None or "const" not in he:
+            raise TranspileError(f"decide of non-const prop: {ex.pp(prop_eid)}")
+        n = Export.canon(ex.name(he["const"]["name"]))
+        if n == "LTlt":
+            return self.bin("lt", self.enc(args[-2], env), self.enc(args[-1], env), eid)
+        if n == "LEle":
+            # documented kernel-subset lowering (deltanet_plugin.ml):
+            # a <= b  ⇝  not (b < a)
+            inner = self.bin("lt", self.enc(args[-1], env), self.enc(args[-2], env), eid)
+            if type(inner.val) is not bool:
+                raise TranspileError(f"le lowering produced {inner.val!r}")
+            return Un("not", inner, not inner.val)
+        if n == "Eq":
+            return self.bin("eq", self.enc(args[-2], env), self.enc(args[-1], env), eid)
+        raise TranspileError(f"unsupported decide prop {n}: {ex.pp(prop_eid)}")
+
+    def bin(self, op: str, a: Node, b: Node, eid: int) -> Node:
+        # `val`s are raw python values (int/bool) after lit_val normalization;
+        # `type(...) is` keeps bools out of the int family (bool <: int).
+        want = bool if op in BOOL_OPS else int
+        for side, child in (("lhs", a), ("rhs", b)):
+            if type(child.val) is not want:
+                raise TranspileError(
+                    f"prim {op}: {side} reduces to {child.val!r}, expected "
+                    f"{want.__name__}: {self.ex.pp(eid)}")
+        if op in INT_OPS:
+            x, y = a.val, b.val
+            if op == "add":
+                v = x + y
+            elif op == "sub":
+                v = max(x - y, 0)
+            elif op == "mul":
+                v = x * y
+            elif op == "eq":
+                v = x == y
+            else:
+                v = x < y
+            return Bin(op, a, b, v, "prim_eval")
+        if op == "and":
+            return Bin(op, a, b, a.val and b.val, "direct")
+        if op == "or":
+            return Bin(op, a, b, a.val or b.val, "direct")
+        raise TranspileError(f"unknown prim {op}")
+
+
+# ── proof construction + ground-instance registry ───────────────────────
+
+@dataclass
+class Registry:
+    numerals: set = field(default_factory=set)
+    bridges: dict = field(default_factory=dict)     # (op,a,b) -> ("i"|"b", result)
+    directs: dict = field(default_factory=dict)     # name -> statement
+
+    def num(self, n) -> str:
+        n = int(n)
+        if n < 0:
+            raise TranspileError(f"negative numeral {n} (ground values must be "
+                                 "non-negative naturals)")
+        if n > 2**63 - 1:
+            raise TranspileError(f"numeral {n} exceeds Int64 range")
+        self.numerals.add(n)
+        return str(n)
+
+
+def bridge_name(op: str, a, b) -> str:
+    return f"teval_ground_{op}_{a}_{b}"
+
+
+def ensure_direct(reg: Registry, name: str, stmt: str) -> None:
+    if name in reg.directs and reg.directs[name] != stmt:
+        raise TranspileError(f"axiom {name} redefined with a different statement")
+    reg.directs[name] = stmt
+
+
+def build_proof(node: Node, reg: Registry) -> str:
+    """An mm1 verbatim term proving `teq <node> <lit(node.val)>`."""
+    if isinstance(node, Lit):
+        return "teq_refl"
+    if isinstance(node, Bin):
+        inner = f"(teq_app teq_refl {build_proof(node.a, reg)})"
+        outer = f"(teq_app {inner} {build_proof(node.b, reg)})"
+        if node.via == "prim_eval":
+            # route through cic.mm0's schema, then ground the teval instance:
+            #   teq redex (tint (teval op a b))   [prim_eval]
+            #   teq (tint (teval op a b)) lit     [bridge]
+            key = (node.op, node.a.val, node.b.val)
+            if key not in reg.bridges:
+                # node.val is a raw python value (post lit_val normalization)
+                rkind = "b" if type(node.val) is bool else "i"
+                rval = node.val
+                if node.op in ("eq", "lt") and rkind != "b":
+                    raise TranspileError(f"{node.op} must ground to a Bool")
+                if node.op in ("add", "sub", "mul") and rkind != "i":
+                    raise TranspileError(f"{node.op} must ground to a nat")
+                reg.bridges[key] = (rkind, rval)
+            step = f"(teq_trans prim_eval {bridge_name(node.op, node.a.val, node.b.val)})"
+        else:
+            x, y, v = node.a.val, node.b.val, node.val
+            name = f"ground_{node.op}_{int(x)}_{int(y)}"
+            stmt = (f"teq (tapp (tapp (tprim {reg.num(PRIM_TAG[node.op])}) "
+                    f"{'ttrue' if x else 'tfalse'}) {'ttrue' if y else 'tfalse'}) "
+                    f"{'ttrue' if v else 'tfalse'}")
+            ensure_direct(reg, name, stmt)
+            step = name
+        return f"(teq_trans {outer} {step})"
+    if isinstance(node, Un):
+        lift = f"(teq_app teq_refl {build_proof(node.a, reg)})"
+        x = node.a.val
+        if type(x) is not bool:
+            raise TranspileError(f"not of {x!r}")
+        name = f"ground_not_{int(x)}"
+        stmt = (f"teq (tapp (tprim {reg.num(PRIM_TAG['not'])}) "
+                f"{'ttrue' if x else 'tfalse'}) {'ttrue' if node.val else 'tfalse'}")
+        ensure_direct(reg, name, stmt)
+        return f"(teq_trans {lift} {name})"
+    if isinstance(node, Div):
+        inner = f"(teq_app teq_refl {build_proof(node.a, reg)})"
+        outer = f"(teq_app {inner} {build_proof(node.b, reg)})"
+        a, b, v = node.a.val, node.b.val, node.val
+        name = f"ground_idiv_{a}_{b}"
+        stmt = (f"teq (tapp (tapp (tentity {reg.num(ENTITY_SYM['idiv'])}) "
+                f"(tint {reg.num(a)})) (tint {reg.num(b)})) (tint {reg.num(v)})")
+        ensure_direct(reg, name, stmt)
+        return f"(teq_trans {outer} {name})"
+    raise AssertionError(type(node))
+
+
+# ── emission ─────────────────────────────────────────────────────────────
+
+def generate() -> tuple[str, str]:
+    if not NDJSON.exists():
+        raise TranspileError(f"fixture missing: {NDJSON}")
+    if not CIC.exists():
+        raise TranspileError(f"theory missing: {CIC}")
+    ex = Export(NDJSON)
+    ev = Evaluator(ex)
+    enc = Encoder(ex, ev)
+
+    # select the certificates: theorems whose statement is `lhs = true`
+    thms: list[tuple[str, int]] = []
+    for nm, (kind, rec, _line) in ex.decls.items():
+        if kind != "thm" or not nm.endswith("_verified"):
+            continue
+        head, args = ex.spine(rec["type"])
+        he = ex.exprs.get(head)
+        if he is None or "const" not in he or \
+                Export.canon(ex.name(he["const"]["name"])) != "Eq":
+            raise TranspileError(f"{nm}: statement is not an Eq: {ex.pp(rec['type'])}")
+        if len(args) != 3:
+            raise TranspileError(f"{nm}: Eq spine has {len(args)} args")
+        _, lhs, rhs = args
+        rhe = ex.exprs.get(rhs)
+        if rhe is None or "const" not in rhe or \
+                Export.canon(ex.name(rhe["const"]["name"])) != "Booltrue":
+            raise TranspileError(f"{nm}: RHS is not `true`: {ex.pp(rhs)}")
+        thms.append((nm, lhs))
+    found = [n for n, _ in thms]
+    if found != EXPECTED_THMS:
+        raise TranspileError(f"certificate set drifted:\n  expected {EXPECTED_THMS}\n"
+                             f"  found    {found}")
+
+    # encode every certificate; cross-check evaluator vs net reduction
+    reg = Registry()
+    encoded: list[tuple[str, str, Node, str]] = []   # (thm, defname, node, proof)
+    for thm, lhs in thms:
+        v = ev.val(lhs, [], f"{thm} lhs")
+        if not (isinstance(v, VB) and v.b):
+            raise TranspileError(f"{thm}: Lean-side evaluation is {v!r}, not `true` "
+                                 "(the evaluator disagrees with the kernel's rfl)")
+        head, args = ex.spine(lhs)
+        he = ex.exprs.get(head)
+        if he is not None and "const" in he and not args:
+            defname = ex.name(he["const"]["name"])
+        else:
+            defname = f"{thm}_body"
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", defname):
+            raise TranspileError(f"{thm}: def name {defname!r} is not a legal MM0 ident")
+        node = enc.enc(lhs, [])
+        nv = node.val
+        if not (isinstance(nv, bool) and nv):
+            raise TranspileError(f"{thm}: net reduction is {nv!r}, not `true` "
+                                 "(encoding disagrees with the evaluator)")
+        proof = build_proof(node, reg)
+        encoded.append((thm, defname, node, proof))
+
+    defnames = [d for _, d, _, _ in encoded]
+    if len(set(defnames)) != len(defnames):
+        raise TranspileError(f"duplicate def names: {defnames}")
+
+    # ---- content groups (numerals are collected as math strings are built,
+    # so the numeral block is rendered strictly LAST, before assembly) ----
+    cic_lines = CIC.read_text().rstrip("\n").split("\n")
+
+    header = [
+        "-- gap_certificate.{mm0,mm1} — GENERATED by australVM/scripts/lean2mm0.",
+        "-- DO NOT EDIT: run `scripts/lean2mm0` to regenerate;",
+        "-- `scripts/lean2mm0 check` gates drift, `scripts/lean2mm0 verify`",
+        "-- runs the mm0-rs elaborator and the mm0-c root of trust.",
+        "--",
+        f"-- Source of record : {LEAN_SRC.relative_to(WS)}",
+        f"-- Kernel export    : {NDJSON.relative_to(WS)}",
+        f"--   sha256 {ex.sha256}  (lean4export 3.1.0, re-verified by nanoda",
+        "--   in unfer's prob_kernel suite)",
+        f"-- Target theory    : {CIC.relative_to(WS)} (embedded verbatim below)",
+        "--",
+        "-- Each `<x>_checked : Term` is the agent-signature encoding of the Lean",
+        "-- def's unfolded body (tint / tprim at unf.rs prim_tag bytes / ttrue /",
+        "-- tfalse / tentity). Each `<x>_verified` reduces that encoding to ttrue",
+        "-- by congruence + prim_eval + grounded instances; mm0-c checks every",
+        "-- step against docs/cic.mm0.",
+        "",
+    ]
+
+    def_lines: list[str] = []
+    for thm, defname, node, _ in encoded:
+        def_lines.append(f"-- {thm}: Lean def `{defname}`, reduced to true by kernel rfl.")
+        def_lines.append(f"def {defname}: Term = $ {term_of(node, reg.num)} $;")
+        def_lines.append("")
+
+    bridge_lines: list[str] = [
+        "-- Ground evaluation of int64 redexes, via cic.mm0's prim_eval schema:",
+        "--   prim_eval gives  teq redex (tint (teval op a b)); the bridge below",
+        "--   grounds the uninterpreted `teval` at this instance (cic.mm0:",
+        '--   "the emitter grounds each prim_tag byte"). Each is a trivially',
+        "-- checkable decimal fact — the auditing stance of the spec file.",
+    ]
+    for (op, a, b), (kind, r) in sorted(reg.bridges.items(),
+                                         key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
+        tag = reg.num(PRIM_TAG[op])
+        if kind == "i":
+            rhs = f"(tint {reg.num(r)})"
+        else:
+            rhs = "ttrue" if r else "tfalse"
+        stmt = f"teq (tint (teval {tag} {reg.num(a)} {reg.num(b)})) {rhs}"
+        bridge_lines.append(f"axiom {bridge_name(op, a, b)}: $ {stmt} $;")
+    bridge_lines.append("")
+
+    direct_lines: list[str] = [
+        "-- Directly grounded redexes: bool-valued prims (cic.mm0's prim_eval",
+        "-- codomain is tint), the unary not, and integer division — the agent",
+        "-- signature has no div primitive (austral_codegen: `/` is always F64),",
+        "-- so Nat.div is a symbol-level application; its symbol table:",
+        f"--   tentity {ENTITY_SYM['idiv']} = idiv (integer division)",
+    ]
+    for name, stmt in sorted(reg.directs.items()):
+        direct_lines.append(f"axiom {name}: $ {stmt} $;")
+    direct_lines.append("")
+
+    thm_spec: list[str] = []
+    thm_mm1: list[str] = []
+    for thm, defname, _node, proof in encoded:
+        stmt = f"teq {defname} ttrue"
+        wrapped = proof if proof.startswith("(") else f"({proof})"
+        thm_spec.append(f"theorem {thm}: $ {stmt} $;")
+        thm_mm1.append(f"pub theorem {thm}: $ {stmt} $ = '{wrapped};")
+
+    numeral_lines = [
+        "-- Ground numerals: declared once, written as decimal tokens so the",
+        "-- emitted arithmetic reads exactly like the certificate:",
+        "--   teq (tint (teval 1 19875 555)) (tint 19320)   -- 19875 - 555",
+    ]
+    for n in sorted(reg.numerals):
+        numeral_lines.append(f"term n{n}: nat; prefix n{n}: ${n}$ prec max;")
+    numeral_lines.append("")
+
+    # ---- assemble: identical streams except `pub ` and the proof tail ----
+    pairs: list[tuple[str, str]] = []
+
+    def add(spec: str, mm1: str | None = None):
+        pairs.append((spec, spec if mm1 is None else mm1))
+
+    for line in cic_lines:
+        add(line)
+    add("")
+    for line in header:
+        add(line)
+    for line in numeral_lines:
+        add(line)
+    for line in def_lines:
+        add(line)
+    for line in bridge_lines:
+        add(line)
+    for line in direct_lines:
+        add(line)
+    for s, m in zip(thm_spec, thm_mm1):
+        add(s, m)
+    add("")
+
+    mm0_lines = [p for p, _ in pairs]
+    mm1_lines = [m for _, m in pairs]
+
+    # self-check 1: the two files differ ONLY in `pub ` and the proof tail
+    stripped = [re.sub(r"^pub ", "", m) for m in mm1_lines]
+    stripped = [re.sub(r" = '[\s\S]*;$", ";", s) for s in stripped]
+    if len(mm0_lines) != len(stripped):
+        raise TranspileError("spec/proof line counts differ")
+    for i, (a_, b_) in enumerate(zip(mm0_lines, stripped), 1):
+        if a_ != b_:
+            raise TranspileError(f"spec/proof divergence at line {i}:\n"
+                                 f"  mm0: {a_}\n  mm1: {b_}")
+
+    # self-check 2: every proof reference is declared somewhere in the file
+    declared = set()
+    for line in mm1_lines:
+        m = re.match(r"(?:pub )?(?:theorem|axiom|def|term) ([A-Za-z_][A-Za-z0-9_]*)", line)
+        if m:
+            declared.add(m.group(1))
+    ref_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    for line in mm1_lines:
+        if " = '" not in line:
+            continue
+        proof = line.split("= '", 1)[1]
+        for t in ref_re.findall(proof):
+            if t in ("teq_trans", "teq_app", "teq_refl", "prim_eval"):
+                continue
+            if t not in declared:
+                raise TranspileError(f"proof references undeclared {t!r}: "
+                                     f"{line[:120]}")
+
+    mm0 = "\n".join(header_prepend(header, cic_lines, mm0_lines)) + "\n"
+    mm1 = "\n".join(header_prepend(header, cic_lines, mm1_lines)) + "\n"
+    return mm0, mm1
+
+
+def header_prepend(header, cic_lines, lines) -> list[str]:
+    """No-op kept for symmetry: header and cic are already inside `lines`."""
+    del header, cic_lines
+    return lines
+
+
+# ── modes ────────────────────────────────────────────────────────────────
+
+def write(mm0: str, mm1: str) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_MM0.write_text(mm0)
+    OUT_MM1.write_text(mm1)
+    print(f"lean2mm0: wrote {OUT_MM0.relative_to(WS)} ({len(mm0.splitlines())} lines)")
+    print(f"lean2mm0: wrote {OUT_MM1.relative_to(WS)} ({len(mm1.splitlines())} lines)")
+
+
+def check_drift(mm0: str, mm1: str) -> None:
+    for path, fresh in ((OUT_MM0, mm0), (OUT_MM1, mm1)):
+        if not path.exists():
+            raise TranspileError(f"{path.relative_to(WS)} missing — run scripts/lean2mm0")
+        if path.read_text() != fresh:
+            raise TranspileError(f"{path.relative_to(WS)} is out of date — "
+                                 "run scripts/lean2mm0 and commit the result")
+    print("lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned export")
+
+
+def verify(mm0: str, mm1: str) -> None:
+    for tool in ("mm0-rs", "mm0-c"):
+        if not shutil.which(tool):
+            print(f"lean2mm0 verify: {tool} not on PATH (toolchain not provisioned; "
+                  "see docs/lean4mm0.md §5 for the build steps)", file=sys.stderr)
+            raise SystemExit(2)
+    check_drift(mm0, mm1)
+    with tempfile.TemporaryDirectory(prefix="lean2mm0.") as td:
+        t = Path(td)
+        (t / "gap_certificate.mm0").write_text(mm0)
+        (t / "gap_certificate.mm1").write_text(mm1)
+        c = subprocess.run(["mm0-rs", "compile", str(t / "gap_certificate.mm1"),
+                            str(t / "gap_certificate.mmb")],
+                           capture_output=True, text=True)
+        out = c.stdout + c.stderr
+        if c.returncode != 0 or "warning" in out.lower():
+            sys.stderr.write(out)
+            raise TranspileError("mm0-rs compile failed (or emitted warnings — "
+                                 "a warning is a proof hole here)")
+        print(f"lean2mm0 verify: mm0-rs compile OK — "
+              f"{[l for l in out.splitlines() if l and not l.startswith(('elab ', 'elabbed'))][-1]}")
+        v = subprocess.run(["mm0-c", str(t / "gap_certificate.mmb")],
+                           input=mm0, capture_output=True, text=True)
+        if v.returncode != 0:
+            sys.stderr.write(v.stdout + v.stderr)
+            raise TranspileError(f"mm0-c rejected the proof binary (rc={v.returncode})")
+        print("lean2mm0 verify: mm0-c OK — the root of trust accepts the proofs")
+
+
+def main(argv: list[str]) -> int:
+    mode = argv[1] if len(argv) > 1 else "generate"
+    mode = mode.lstrip("-")
+    if mode not in ("generate", "check", "verify"):
+        print(__doc__, file=sys.stderr)
+        return 1
+    try:
+        mm0, mm1 = generate()
+        if mode == "generate":
+            write(mm0, mm1)
+        elif mode == "check":
+            check_drift(mm0, mm1)
+        else:
+            verify(mm0, mm1)
+    except TranspileError as e:
+        print(f"lean2mm0: ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
