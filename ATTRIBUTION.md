@@ -1,8 +1,10 @@
 # Attribution
 
 Borrowed patterns and components that concern *this* repo. The authoritative,
-cross-repo table — including what was deliberately **not** adopted — is
-[`../ATTRIBUTION.md`](../ATTRIBUTION.md).
+cross-repo table — including what was deliberately **not** adopted — is the
+workspace-root `../ATTRIBUTION.md`, which lives outside this checkout (hence
+it is named as a path here, not linked: a relative link must resolve inside
+the repository).
 
 | source | licence | what was adapted | where it landed |
 |---|---|---|---|
