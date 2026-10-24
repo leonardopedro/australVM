@@ -10,6 +10,23 @@
 #include <stdio.h>
 #include <unistd.h>
 
+/* Spin-loop pause hint.
+ *
+ * `__builtin_ia32_pause` (the x86 PAUSE instruction) is the right hint on
+ * Intel/AMD, but it does not exist on aarch64 — where the equivalent
+ * spin-wait hint is YIELD. Without the guard below the bridge's C runtime
+ * fails to compile on aarch64 hosts with
+ *   error: implicit declaration of function '__builtin_ia32_pause'
+ * (-Wimplicit-function-declaration is an error), so this file was x86-only.
+ * On any other architecture there is no hint and the loop just spins. */
+static inline void scheduler_pause(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ volatile("yield" ::: "memory");
+#endif
+}
+
 // Global scheduler queue
 PauseQueue scheduler_queue = {
     .buffer = {{0}},
@@ -26,7 +43,7 @@ void scheduler_enqueue(CellStep fn, void* state) {
     // Check if queue is full (simple spin-lock fallback)
     while (next_tail == atomic_load(&scheduler_queue.head)) {
         // In production, use futex or wait strategy
-        __builtin_ia32_pause();
+        scheduler_pause();
     }
     
     scheduler_queue.buffer[tail].fn = fn;
@@ -76,7 +93,7 @@ void scheduler_dispatch(void) {
             // Queue is empty — normally shouldn't happen.
             // In production, wait on futex or event fd.
             // PAUSE hint avoids spinning the frontend pipeline.
-            __builtin_ia32_pause();
+            scheduler_pause();
         }
     }
 }
