@@ -294,6 +294,25 @@ Phase D's remaining piece — the *theorem* side — is landed:
   IHs — thunks forced only where the kernel would reduce them, which turns
   the 32×32-grid `eraseDup` scan from quadratic to linear (2.3 s, not 20+
   min). mm0-rs + mm0-c accept it (3 sorts, 34 term/def, 24 ax/thm).
+* **Trust split — pinned per def, not prose**: the emitter tags every
+  `<x>_checked` in the artifact itself and counts the classes in the file
+  header, so the trust story cannot rot away from the code. The split:
+  * `layout_certificate`: **3 structural / 5 grounded**. Structural:
+    `conflict_pair`, `image_too_small`, `grid_image_small` — scalar prim
+    spines (and/or/not, eq, lt) whose reduction mm0-c checks step by step
+    via congruence, `prim_eval` bridges and grounded instances. Grounded:
+    `bijective`, `lookup_inverse`, `insert_existing`, `insert_new`,
+    `row_even` — list computations (`nodup`/`all`/`map` over
+    `brecOn` machinery) with no agent in the signature, evaluated to
+    `ttrue`; their anchor is nanoda's kernel-verified rfl plus the
+    emitter's two independent paths (evaluator vs net reduction), and
+    mm0-c verifies only the resulting tautology.
+  * `gap_certificate`: **9 structural / 0 grounded** — the aggregates keep
+    their full net spine even where subterms (pow10) were evaluated.
+  * Structural ≠ fully checked by mm0-c alone: literal leaves inside a
+    structural spine (`rowImage.length → 16`) are emitter-evaluated too —
+    covered by the dual-path cross-check (evaluator value vs net reduction)
+    that generation runs before anything is emitted.
 * **CI**: `.github/workflows/ci.yml` has a `phase-d` job that rebuilds the
   frozen mm0 toolchain from digama0/mm0 at the host's pinned commit and
   runs `scripts/lean2mm0 verify` — both certificates re-checked by mm0-c on

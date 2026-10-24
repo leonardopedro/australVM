@@ -1160,6 +1160,10 @@ def generate_source(src: dict) -> tuple[str, str]:
     if len(set(defnames)) != len(defnames):
         raise TranspileError(f"duplicate def names: {defnames}")
 
+    # the trust split, reported in the header and tagged per def below
+    n_struct = sum(1 for _, _, node, _ in encoded if not isinstance(node, Lit))
+    n_ground = len(encoded) - n_struct
+
     # ---- content groups (numerals are collected as math strings are built,
     # so the numeral block is rendered strictly LAST, before assembly) ----
     cic_lines = CIC.read_text().rstrip("\n").split("\n")
@@ -1181,12 +1185,28 @@ def generate_source(src: dict) -> tuple[str, str]:
         "-- tfalse / tentity). Each `<x>_verified` reduces that encoding to ttrue",
         "-- by congruence + prim_eval + grounded instances; mm0-c checks every",
         "-- step against docs/cic.mm0.",
+        "--",
+        "-- Trust split (tagged on each def below — structural vs grounded):",
+        f"--   {n_struct} structural: the net spine is checked by mm0-c step by step",
+        "--     (congruence teq_app, prim_eval bridges, grounded instances); its",
+        "--     literal leaves — e.g. a List.length the kernel reduced — were",
+        "--     evaluated by the emitter and cross-checked against the net's",
+        "--     own reduction before emission.",
+        f"--   {n_ground} grounded: the body is ttrue because the def is pure",
+        "--     recursion, which the signature cannot encode (no recursion agent);",
+        "--     the emitter evaluated it. The anchor is nanoda's kernel-verified rfl",
+        "--     plus the emitter's two independent paths (evaluator vs net), not a",
+        "--     structural proof — mm0-c verifies only the resulting tautology.",
         "",
     ]
 
     def_lines: list[str] = []
     for thm, defname, node, _ in encoded:
         def_lines.append(f"-- {thm}: Lean def `{defname}`, reduced to true by kernel rfl.")
+        if isinstance(node, Lit):
+            def_lines.append("--   grounded: body evaluated to its literal (trust split above).")
+        else:
+            def_lines.append("--   structural: net spine checked by mm0-c (trust split above).")
         def_lines.append(f"def {defname}: Term = $ {term_of(node, reg.num)} $;")
         def_lines.append("")
 

@@ -137,6 +137,18 @@ axiom net_isomorphism_step (t u cert: Term):
 -- tfalse / tentity). Each `<x>_verified` reduces that encoding to ttrue
 -- by congruence + prim_eval + grounded instances; mm0-c checks every
 -- step against docs/cic.mm0.
+--
+-- Trust split (tagged on each def below — structural vs grounded):
+--   3 structural: the net spine is checked by mm0-c step by step
+--     (congruence teq_app, prim_eval bridges, grounded instances); its
+--     literal leaves — e.g. a List.length the kernel reduced — were
+--     evaluated by the emitter and cross-checked against the net's
+--     own reduction before emission.
+--   5 grounded: the body is ttrue because the def is pure
+--     recursion, which the signature cannot encode (no recursion agent);
+--     the emitter evaluated it. The anchor is nanoda's kernel-verified rfl
+--     plus the emitter's two independent paths (evaluator vs net), not a
+--     structural proof — mm0-c verifies only the resulting tautology.
 
 -- Ground numerals: declared once, written as decimal tokens so the
 -- emitted arithmetic reads exactly like the certificate:
@@ -149,27 +161,35 @@ term n16: nat; prefix n16: $16$ prec max;
 term n32: nat; prefix n32: $32$ prec max;
 
 -- bijective_verified: Lean def `bijective_checked`, reduced to true by kernel rfl.
+--   grounded: body evaluated to its literal (trust split above).
 def bijective_checked: Term = $ ttrue $;
 
 -- lookup_inverse_verified: Lean def `lookup_inverse_checked`, reduced to true by kernel rfl.
+--   grounded: body evaluated to its literal (trust split above).
 def lookup_inverse_checked: Term = $ ttrue $;
 
 -- insert_existing_verified: Lean def `insert_existing_checked`, reduced to true by kernel rfl.
+--   grounded: body evaluated to its literal (trust split above).
 def insert_existing_checked: Term = $ ttrue $;
 
 -- insert_new_verified: Lean def `insert_new_checked`, reduced to true by kernel rfl.
+--   grounded: body evaluated to its literal (trust split above).
 def insert_new_checked: Term = $ ttrue $;
 
 -- conflict_pair_verified: Lean def `conflict_pair_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def conflict_pair_checked: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 13) (tapp (tapp (tprim 13) (tapp (tapp (tprim 5) (tint 0)) (tint 32))) (tapp (tapp (tprim 5) (tint 16)) (tint 32)))) ttrue)) (tapp (tapp (tprim 3) (tint 0)) (tint 0))) $;
 
 -- row_even_verified: Lean def `row_even_checked`, reduced to true by kernel rfl.
+--   grounded: body evaluated to its literal (trust split above).
 def row_even_checked: Term = $ ttrue $;
 
 -- image_too_small_verified: Lean def `image_too_small_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def image_too_small_checked: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 3) (tint 16)) (tint 16))) (tapp (tapp (tprim 5) (tint 16)) (tint 32))) $;
 
 -- grid_image_small_verified: Lean def `grid_image_small_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def grid_image_small_checked: Term = $ (tapp (tapp (tprim 3) (tint 16)) (tint 16)) $;
 
 -- Ground evaluation of int64 redexes, via cic.mm0's prim_eval schema:

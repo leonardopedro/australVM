@@ -137,6 +137,18 @@ axiom net_isomorphism_step (t u cert: Term):
 -- tfalse / tentity). Each `<x>_verified` reduces that encoding to ttrue
 -- by congruence + prim_eval + grounded instances; mm0-c checks every
 -- step against docs/cic.mm0.
+--
+-- Trust split (tagged on each def below — structural vs grounded):
+--   9 structural: the net spine is checked by mm0-c step by step
+--     (congruence teq_app, prim_eval bridges, grounded instances); its
+--     literal leaves — e.g. a List.length the kernel reduced — were
+--     evaluated by the emitter and cross-checked against the net's
+--     own reduction before emission.
+--   0 grounded: the body is ttrue because the def is pure
+--     recursion, which the signature cannot encode (no recursion agent);
+--     the emitter evaluated it. The anchor is nanoda's kernel-verified rfl
+--     plus the emitter's two independent paths (evaluator vs net), not a
+--     structural proof — mm0-c verifies only the resulting tautology.
 
 -- Ground numerals: declared once, written as decimal tokens so the
 -- emitted arithmetic reads exactly like the certificate:
@@ -160,30 +172,39 @@ term n20430: nat; prefix n20430: $20430$ prec max;
 term n40000: nat; prefix n40000: $40000$ prec max;
 
 -- read_gap_verified: Lean def `read_gap_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def read_gap_checked: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 3) (tint 19875)) (tint 19875))) (tapp (tapp (tprim 3) (tint 4)) (tint 4))) $;
 
 -- read_width_verified: Lean def `read_width_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def read_width_checked: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 3) (tint 300)) (tint 300))) (tapp (tapp (tprim 3) (tint 4)) (tint 4))) $;
 
 -- gap_aggregate_verified: Lean def `gap_aggregate_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def gap_aggregate_checked: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tint 19875)) $;
 
 -- width_aggregate_verified: Lean def `width_aggregate_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def width_aggregate_checked: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 0) (tint 300)) (tint 255))) (tint 555)) $;
 
 -- lower_verified: Lean def `lower_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def lower_checked: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tint 19320)) $;
 
 -- upper_verified: Lean def `upper_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def upper_checked: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 0) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tint 20430)) $;
 
 -- lower_pos_verified: Lean def `lower_pos_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def lower_pos_checked: Term = $ (tapp (tapp (tprim 5) (tint 0)) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) $;
 
 -- upper_gt_lower_verified: Lean def `upper_gt_lower_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def upper_gt_lower_checked: Term = $ (tapp (tapp (tprim 5) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tapp (tapp (tprim 0) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) $;
 
 -- strong_coupling_consistency_verified: Lean def `strong_coupling_consistency_checked`, reduced to true by kernel rfl.
+--   structural: net spine checked by mm0-c (trust split above).
 def strong_coupling_consistency_checked: Term = $ (tapp (tapp (tprim 13) (tapp (tprim 15) (tapp (tapp (tprim 5) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tapp (tapp (tprim 2) (tint 2)) (tint 2))) (tint 10000))) (tint 2))) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))))) (tapp (tprim 15) (tapp (tapp (tprim 5) (tapp (tapp (tprim 0) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tapp (tapp (tprim 2) (tint 2)) (tint 2))) (tint 10000))) (tint 2))))) $;
 
 -- Ground evaluation of int64 redexes, via cic.mm0's prim_eval schema:
