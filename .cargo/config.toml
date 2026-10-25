@@ -1,0 +1,44 @@
+# Target-specific rustflags for the australVM tree (both cargo workspaces:
+# safestos/cranelift and safestos/pkg).
+#
+# Why this exists: `austral_cranelift_bridge` path-depends on the sibling
+# unfer checkout (`unfer_ffi` → prob_kernel/qfm/fock_sirk → `candle-core`
+# 0.8.4), and candle-core depends on `gemm` unconditionally — there is no
+# feature to switch it off. `gemm-common` hand-writes its half-precision
+# kernels as inline `asm!` (`fadd {v}.8h`, `fmla {v}.8h` in
+# `gemm-common/src/simd.rs`). Those mnemonics take `fullfp16`, and the crate
+# only enables `fp16` on its own functions, so on aarch64 the assembler
+# rejects them:
+#
+#     error: instruction requires: fullfp16
+#       --> gemm-common-0.18.2/src/simd.rs:1994
+#
+# Cargo reads config from the *current directory* upward, not from a path
+# dependency's directory, so unfer's identical `.cargo/config.toml` never
+# applies to the commands this README documents (`cargo test --manifest-path
+# safestos/...` run from the repo root) — the flags have to live here too.
+# This is the same file as `../unfer/.cargo/config.toml`; keep the two in
+# step.
+#
+# Enabling both features here is what makes the crate compile. It is *not* a
+# runtime hazard, for two reasons:
+#
+#   1. gemm never executes the fp16 kernels unconditionally: every entry point
+#      goes through `try_new()`, which returns `None` unless
+#      `feature_detected!("neon") && feature_detected!("fp16")` — a runtime
+#      CPUID check, compiled into the caller. On an aarch64 CPU without fp16,
+#      the kernels are present in the binary and simply never run; gemm falls
+#      back to its generic scalar path.
+#   2. The section is gated on `target_arch = "aarch64"`, so Intel and AMD
+#      builds are untouched: no flag, no codegen change, same binary as before
+#      this file existed.
+#
+# On a host whose CPU lacks fp16, nothing changes at runtime either — see
+# (1). This host reports `asimdhp`, so it has the feature in the first place.
+#
+# To override or drop these flags for one build, `RUSTFLAGS` in the environment
+# takes precedence over this file (it is not merged, it replaces it), so
+# `RUSTFLAGS="" cargo test --manifest-path safestos/pkg/Cargo.toml` builds
+# without them.
+[target.'cfg(target_arch = "aarch64")']
+rustflags = ["-C", "target-feature=+fp16,+fullfp16"]
