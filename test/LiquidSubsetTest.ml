@@ -56,6 +56,23 @@ let suite =
             substring test would claim a fold that is not there. *)
          [ "sum"; "unfold"; "add"; "length"; ""; "refold_now" ])
 
+    ; "the_marker_pragma_designates_a_fold_regardless_of_name" >:: (fun _ ->
+       (* §4.4's designation is the pragma, not the spelling. A marker is what
+          lets a module call its combinator `reduce` and still be ranked — and
+          what stops the pass claiming a fold named `folder` that is not one.
+          Constructed here rather than compiled from source so the assertion is
+          about this pass's predicate alone. *)
+       assert_bool "`Liquid_Fold` must be a fold"
+         (LiquidSubset.is_fold_marked [ Common.LiquidPragma ("Fold", "") ]);
+       assert_bool "a marker on its own line is still a marker"
+         (LiquidSubset.is_fold_marked
+            [ Common.LiquidPragma ("Requires", "n >= 0");
+              Common.LiquidPragma ("Fold", "") ]);
+       assert_bool "a contract is not a marker"
+         (not (LiquidSubset.is_fold_marked [ Common.LiquidPragma ("Requires", "n >= 0") ]));
+       assert_bool "no pragmas, no fold"
+         (not (LiquidSubset.is_fold_marked [])))
+
     ; "the_tenant_is_registered_through_the_typed_pass_seam" >:: (fun _ ->
        (* This is the "loaded through Compiler_plugin.register_typed" half of the
           stage, asserted rather than assumed: the pass has to be reachable

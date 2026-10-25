@@ -278,6 +278,96 @@ let rec string_of_formula = function
      "(" ^ (string_of_formula a) ^ " ==> " ^ (string_of_formula b) ^ ")"
   | FType (e, t, _) -> "(" ^ (string_of_term e) ^ " : " ^ (ty_to_string t) ^ ")"
 
+(** The same rendering, spelled for Why3.
+
+    Two differences from the TRL spelling above, both forced by the engine
+    rather than chosen:
+
+    - **Application is curried and space-separated.** Why3 reads `f a b` as a
+      two-argument application and `f (a, b)` as a one-argument application to
+      a *tuple* — the latter has type `(int, int)` where `int` is expected, so
+      a two-argument measure call rendered the TRL way is a type error in the
+      generated `.mlw`, and a type error exits 1, which downstream reads as
+      "the prover refused" (the same trap as `==` and as the unparsable goal
+      line: an emitter that had never been parsed by its engine).
+    - Nothing else moves. Connectives are still rendered TRL-side and
+      translated by `why3_ops`, so there is exactly one place that knows about
+      Why3's operator spellings.
+
+    Why not change [string_of_term] itself: it also renders terms into
+    diagnostics and into golden-key comparisons, where the TRL spelling is the
+    contract with the reader. Keeping both means a translation has to be
+    *asked for*, which is what every `.mlw` emission site below does. *)
+let rec why3_of_term (t : term) : string =
+  let paren t = "(" ^ why3_of_term t ^ ")" in
+  match t with
+  | TInt (z, _) -> Z.to_string z
+  | TReal (f, _) -> Printf.sprintf "%g" f
+  | TBool (b, _) -> if b then "true" else "false"
+  | TVar (v, _, _) -> v
+  | TAdd (a, b, _) -> "(" ^ why3_of_term a ^ " + " ^ why3_of_term b ^ ")"
+  | TSub (a, b, _) -> "(" ^ why3_of_term a ^ " - " ^ why3_of_term b ^ ")"
+  | TMul (a, b, _) -> "(" ^ why3_of_term a ^ " * " ^ why3_of_term b ^ ")"
+  | TNeg (a, _) -> "-" ^ paren a
+  | TIf (c, a, b, _) ->
+     "(if " ^ why3_of_term c ^ " then " ^ why3_of_term a ^ " else "
+     ^ why3_of_term b ^ ")"
+  | TCall (f, args, _) -> (
+     match args with
+     | [] -> f
+     | _ -> "(" ^ String.concat " " (f :: List.map paren args) ^ ")")
+
+let rec why3_of_formula (f : formula) : string =
+  match f with
+  | FTrue _ -> "true"
+  | FFalse _ -> "false"
+  | FRel (op, a, b, _) ->
+     "(" ^ why3_of_term a ^ " " ^ string_of_relop op ^ " " ^ why3_of_term b ^ ")"
+  | FNot (g, _) -> "!(" ^ why3_of_formula g ^ ")"
+  | FAnd (a, b, _) -> "(" ^ why3_of_formula a ^ " && " ^ why3_of_formula b ^ ")"
+  | FOr (a, b, _) -> "(" ^ why3_of_formula a ^ " || " ^ why3_of_formula b ^ ")"
+  | FImplies (a, b, _) ->
+     "(" ^ why3_of_formula a ^ " ==> " ^ why3_of_formula b ^ ")"
+  | FType (e, t, _) -> "(" ^ why3_of_term e ^ " : " ^ ty_to_string t ^ ")"
+
+(** Every function symbol a formula mentions, with its arity, in first-use
+    order and deduplicated.
+
+    The generated `.mlw` has to *declare* each one, or Why3 reports an unbound
+    symbol and the exit status is again read as a refusal. This is what turns
+    a projection (`__slot_X(r)`) from an unstatable term into a stateable one:
+    the term carries its symbol, and the symbol is collected here. *)
+let symbols_of_formula (f : formula) : (string * int) list =
+  let seen = ref [] in
+  let add name arity =
+    if not (List.exists (fun (n, _) -> n = name) !seen) then
+      seen := (name, arity) :: !seen
+  in
+  let rec go_term (t : term) =
+    match t with
+    | TInt _ | TReal _ | TBool _ | TVar _ -> ()
+    | TAdd (a, b, _) | TSub (a, b, _) | TMul (a, b, _) ->
+       go_term a; go_term b
+    | TNeg (a, _) -> go_term a
+    | TIf (c, a, b, _) ->
+       go_term c; go_term a; go_term b
+    | TCall (name, args, _) ->
+       add name (List.length args);
+       List.iter go_term args
+  in
+  let rec go (g : formula) =
+    match g with
+    | FTrue _ | FFalse _ -> ()
+    | FRel (_, a, b, _) ->
+       go_term a; go_term b
+    | FNot (h, _) -> go h
+    | FAnd (a, b, _) | FOr (a, b, _) | FImplies (a, b, _) ->
+       go a; go b
+    | FType (e, _, _) -> go_term e
+  in
+  go f;
+  List.rev !seen
+
 (** L9: an index-carrying type over TRL terms.
 
     A type may take **indices**, which are [term]s rather than types:
@@ -369,6 +459,62 @@ let rec free_vars (f : formula) : string list =
              acc args
      in
      ty_vars (free_vars_term [] e) t
+
+(* ── substitution (§5.6) ────────────────────────────────────────────────── *)
+
+(** Replace free variables by terms.
+
+    This exists for one judgment: APPLICATION (§5.6), where the callee's
+    `Requires` must be restated over the *actual* arguments before it can be
+    proved at the call site. `Γ ⊢ P[a̅/x̅] ok` is that substitution.
+
+    TRL v1 has no binders — `forall`/`exists`/`lambda` are lexed only so the
+    parser can *reject* them (§2.2; the restriction is normative) — so this is
+    plain name replacement: there is no capture to avoid and no alpha-renaming
+    to do. A capture-avoiding substitution would be a different function for a
+    different language, and adding one here now would suggest the layer has
+    quantifiers it does not. *)
+let rec subst_term (s : (string * term) list) (t : term) : term =
+  match t with
+  | TInt _ | TReal _ | TBool _ -> t
+  | TVar (v, _, _) -> (
+     match List.assoc_opt v s with
+     | Some t' -> t'
+     | None -> t)
+  | TAdd (a, b, sp) -> TAdd (subst_term s a, subst_term s b, sp)
+  | TSub (a, b, sp) -> TSub (subst_term s a, subst_term s b, sp)
+  | TMul (a, b, sp) -> TMul (subst_term s a, subst_term s b, sp)
+  | TNeg (a, sp) -> TNeg (subst_term s a, sp)
+  | TIf (c, a, b, sp) ->
+     TIf (subst_term s c, subst_term s a, subst_term s b, sp)
+  | TCall (f, args, sp) -> TCall (f, List.map (subst_term s) args, sp)
+
+let rec subst_formula (s : (string * term) list) (f : formula) : formula =
+  match f with
+  | FTrue _ | FFalse _ -> f
+  | FRel (op, a, b, sp) -> FRel (op, subst_term s a, subst_term s b, sp)
+  | FNot (g, sp) -> FNot (subst_formula s g, sp)
+  | FAnd (a, b, sp) -> FAnd (subst_formula s a, subst_formula s b, sp)
+  | FOr (a, b, sp) -> FOr (subst_formula s a, subst_formula s b, sp)
+  | FImplies (a, b, sp) ->
+     FImplies (subst_formula s a, subst_formula s b, sp)
+  | FType (e, ty, sp) ->
+     (* The index terms are terms: `x : Span[Nat8, n]` with `n := len` must
+        become `Span[Nat8, len]`, or a call-site obligation would talk about a
+        formal that is not in scope. *)
+     let rec ty_subst = function
+       | TySort _ as t -> t
+       | TyApp (n, args, asp) ->
+          TyApp
+            ( n,
+              List.map
+                (function
+                  | TyArgTy t -> TyArgTy (ty_subst t)
+                  | TyArgIndex i -> TyArgIndex (subst_term s i))
+                args,
+              asp )
+     in
+     FType (subst_term s e, ty_subst ty, sp)
 
 (* ── WF1 / WF2 checks that need no environment ──────────────────────────── *)
 

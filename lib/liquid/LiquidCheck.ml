@@ -152,12 +152,60 @@ let check_module ~(bound : string list) (m : typed_module) : string option =
     function with no `Liquid_*` pragma is outside the fragment and is left
     unchecked — the gate never rejects code that did not opt in.
 
+    T5 (§4.1) needs one input from here that the body alone does not carry:
+    *which* parameters this declaration's contracts name. `refined_params`
+    computes it from the same parsed pragmas, so the gate and the VC generator
+    cannot disagree about what "refined" means.
+
     The call graph is built once for the module, over both the `decl_id` and
     `mono_id` namespaces (see `TotalityCheck` on why both are needed), and the
     foreign `decl_id`s are collected for T4. *)
 let decl_key (id: Id.decl_id): int =
   match id with
   | Id.DeclId i -> i
+
+(** T5 (§4.1): the parameters a declaration's *own* contracts refine.
+
+    "Refined" is deliberately read as "named by a contract", not as "has a
+    non-`true` refinement in Γ": Γ is L4's, and at the gate there is no Γ yet.
+    Naming a parameter in a contract is exactly the condition under which the
+    emitted `Requires ⇒ Ensures` goal would be about that binding, so it is the
+    right conservative test — it can only over-reject, and a contract that
+    mentions a parameter it then overwrites is a contract the author did not
+    mean.
+
+    A contract that does not parse contributes nothing here: `check_module` has
+    already rejected it, and `totality` runs after that pass. *)
+let refined_params (params : Type.value_parameter list)
+    (pragmas : Common.pragma list) : string list =
+  let names =
+    List.filter_map
+      (fun (p : Type.value_parameter) ->
+        match p with
+        | Type.ValueParameter (n, _) -> Some (Identifier.ident_string n))
+      params
+  in
+  let free =
+    List.concat_map
+      (fun p ->
+        match p with
+        | Common.LiquidPragma (kind_name, src) ->
+           (match LiquidTypes.contract_kind_of_string kind_name with
+            | None -> []
+            | Some kind ->
+               (try
+                  let c =
+                    LiquidParse.parse_contract
+                      ~is_known_type:(fun _ -> false) kind src
+                  in
+                  match c.LiquidTypes.formula with
+                  | Some f -> LiquidTypes.free_vars f
+                  | None -> []
+                with Failure _ -> []))
+        | _ -> [])
+      pragmas
+  in
+  List.filter (fun n -> List.mem n free) names
 
 let totality (m : typed_module) : string option =
   let (TypedModule (_, decls)) = m in
@@ -180,7 +228,7 @@ let totality (m : typed_module) : string option =
     | [] -> None
     | d :: rest ->
        (match d with
-        | TFunction (id, _, name, _, _, _, body, _, pragmas) ->
+        | TFunction (id, _, name, _, params, _, body, _, pragmas) ->
            let contracted =
              List.exists
                (fun p ->
@@ -194,6 +242,7 @@ let totality (m : typed_module) : string option =
              TotalityCheck.check_function
                ~name:(Identifier.ident_string name)
                ~entry:id ~body ~graph ~foreign ~names
+               ~refined:(refined_params params pragmas)
         | _ -> go rest)
   in
   go decls

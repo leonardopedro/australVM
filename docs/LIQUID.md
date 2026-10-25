@@ -334,6 +334,35 @@ function fold(f: (E, A) -> A, init: A, xs: List[E]): A is … end;
 The step function takes **element first, accumulator second**. Typing rule in
 §5.9.
 
+**Status (2026-10-25).** The signature above is written with an arrow, and
+the arrow is still not surface syntax: `Cst.typespec` is a named type, a read
+borrow, a write borrow, a span or a span write, and `Parser.mly`'s `typespec`
+rule adds no arrow. A function *value* is nevertheless writable, because
+`Fn[...]` **is** a named type — `TypeParser` turns `Fn[E, A, A]` into
+`FnPtr` — and a named function used in argument position denotes one (it
+becomes a `TFunVar`). So §4.4's shape is expressible, and what the
+implementation designates is:
+
+- `pragma Liquid_Fold;` on a declaration: the marker is live. It is parsed
+  (`CstUtil` requires no arguments), merges by presence across interface and
+  body (`CombiningPass`), and is honoured by the measure pass
+  (`LiquidSubset.is_fold_marked`) — a marked declaration is ranked as a fold
+  whatever it is called, which is what makes the pragma more than a comment.
+- A fold whose step is passed as a **named** function of element then
+  accumulator:
+
+  ```austral
+  pragma Liquid_Fold;
+  function fold2(f: Fn[E, A, A], init: A, xs: List[E]): A is … end;
+  ```
+
+  called as `fold2(step, init, xs)`. `List[E]` as a *built-in* is still not
+  surface syntax (list-shaped types are user types); §5.9's premises do not
+  depend on the shape of the element type.
+
+With that shape, §5.9 states all three of its halves — see §5.9's
+implementation status.
+
 ---
 
 ## 5. The liquid judgment (normative)
@@ -443,9 +472,43 @@ inferred, §9):
 ```
 
 Side facts: the step's postcondition **MUST** imply `I` (VC:
-`I(a) ⇒ I(f(e, a))`); the result additionally carries measure facts, e.g.
+`I(a) ⇒ I(f(e,a))`); the result additionally carries measure facts, e.g.
 `length(result) == length(xs)` when `A` is a list. Optional length-decrease
 refinements (`len` on nested folds) are v2.
+
+**Implementation status (2026-10-25).** All three halves of the rule are
+emitted as goals:
+
+- the *result* half: a `Liquid_Invariant` produces
+  `Γ ∧ Requires ∧ (result = e) ⇒ I(result)`, tagged `§5.9 FOLD (result half)`
+  in the `.mlw` — `e` being the expression the body returns, so the goal is
+  §5.10's subtyping judgment (`I` over the actual value) rather than a demand
+  that *every* value satisfy `I`. When `e` cannot be rendered (a branching
+  body, an actual that `term_of` skips), the goal falls back to the un-linked
+  `Γ ∧ Requires ⇒ I(result)` shape: emitted, and honestly unprovable, rather
+  than dropped;
+- the *init* half, at each call of the §4.4 combinator: `Γ ∧ Requires ⇒ I(init)`,
+  tagged `§5.9 FOLD (init half)` — the actual seed substituted for `result`;
+- the *step* half, at the same call site: `Γ ∧ Requires ⇒ I(a) ⇒ I(f(e, a))`,
+  tagged `§5.9 FOLD (step half)` — `e` and `a` bound by the goal itself as
+  `__elem`/`__acc` (nothing in the source introduces them), and `f` the named
+  step actual, applied flat (`step (__elem) (__acc)`).
+
+Gates, all in the under-claiming direction (a skipped premise is a missing
+obligation, never a wrong one): the combinator must be the `pragma Liquid_Fold`
+declaration of arity 3, called with three actuals; the step actual must
+resolve to a *named* function (`TFunVar`, or a local bound to one — the
+call-site environment carries `let s := step` — through a transparent
+`TCast`) that carries an `Ensures` and two parameters — that `Ensures` is the
+theory `f` the goal applies, so without one there is no `f` to appeal to — and
+every substituted formula must be free only of the caller's parameters plus
+the goal's own binders, or it is not emitted. A step that arrives as a
+*parameter* of the caller (a function value with no binding to resolve) or
+through a record field still contributes no premise.
+
+All of it discharges: `why3 prove -P z3` over the pinned golden
+`lib/liquid/golden/vc-fold-premises.mlw` reports **Valid** for every goal —
+result, init and step, at both the direct and the local-bound call site.
 
 **Invariant rule of thumb**: `I` is exactly the qualifier vocabulary
 instantiated over the accumulator type — the reason `fold` needs no
@@ -500,6 +563,43 @@ becomes unmanageable. Reals: `Prob` bounds are hypotheses at ABI boundaries;
 `*` on `Real` is restricted to measures (non-linear real arithmetic is
 prover-dependent; keep products rare).
 
+**Implementation status (2026-10-25).** `+`, `-` and `*` emit the range VC,
+for operations in a refinement-level body:
+
+```
+g_… — §6 RANGE (the result stays inside its machine type's range)
+forall n: int. ((n >= 1 /\ (min <= n /\ max >= n))) -> (min <= n - 1 /\ max >= n - 1)
+```
+
+Three pieces make that statement *provable* rather than merely emitted:
+
+- **The sort environment.** `LiquidInfer.env_of_function` reads each
+  variable's type off the typed AST, `int_bounds_of_ty` turns `Integer
+  (signedness, width)` into exact bounds, and `LiquidInfer.sort_of_ty` gives
+  the TRL sort for the rest. A width the host ABI decides (`WidthByteSize`,
+  `WidthIndex`) yields `None` — no bound, no obligation.
+- **The type facts.** `LiquidInfer.range_facts` adds `min ≤ x ∧ x ≤ max` to the
+  antecedent for every integer parameter. Without them `n - 1` is unprovable
+  for every `n`; with them the obligation says what §6 means: *the operation*,
+  not the operand, must stay in range. A goal may assume what the type checker
+  already promised, so this can only make an obligation easier to prove.
+- **The rendering.** The operation is a `Austral.Pervasive` intrinsic
+  (`trappingAdd`/`trappingSubtract`/`trappingMultiply`), resolved to a TRL
+  term by `LiquidInfer.arithmetic_term` through the same borrow/temporary
+  environment §5.6 uses.
+
+Deliberately not emitted yet, each with its reason:
+
+- **Casts** (the rule above). Every argument carries a `TCast`, so the naive
+  reading emits one VC per call argument; the useful case is a *narrowing*
+  cast, which needs the operand type compared against the target first.
+- **Literals.** A literal outside range is rejected by the type checker's own
+  well-formedness; restating it as a VC would emit a goal that can only fail
+  on a program that never compiled.
+- **`/`.** TRL has no division term, and machine division truncates —
+  rendering it as a mathematical division would be a different claim rather
+  than a translation.
+
 ---
 
 ## 7. Trusted contracts (`Liquid_Trusted`) (normative)
@@ -547,6 +647,14 @@ end
 ```
 
 ### 8.2 Discharge
+
+Every goal body is translated from TRL surface spelling to Why3 surface
+spelling first (`==`→`=`, `!=`→`<>`, `&&`→`/\`, `||`→`\/`, `!`→`not`,
+`==>`→`->`) — `LiquidConstraints.why3_ops`. Without it a contract using any of
+those parses in Why3 (as an infix symbol) and then fails the type checker with
+`unbound function or predicate symbol`, which exits 1 and is indistinguishable
+from a prover refusal at the driver's end. The `--type-only` gate in
+`scripts/verify-invariants` covers this class without needing a prover.
 
 `why3 prove -P alt-ergo Liquid_<M>.mlw` runs as a **subprocess**
 (`WHY3_CLI` override, then PATH — the Cadabra2 engine-missing pattern).
@@ -606,9 +714,47 @@ is pinned the same way when Cycle B is exercised.
 
 ## 11. Soundness sketch and TCB (non-normative)
 
-Soundness claim: if the liquid pass accepts a module, then at every call the
-actual arguments satisfy the callee's `requires`, and every return value
-satisfies the declared `ensures`, *relative to* the trusted contracts.
+Soundness claim: if the liquid pass accepts a module **and its obligations are
+discharged** (`liquid = "required"` with the prover armed), then at every call
+inside the fragment the actual arguments satisfy the callee's `requires`, and
+every return value satisfies the declared `ensures` and `invariant`, *relative
+to* the trusted contracts and to the assumptions listed below.
+
+What the emitted VC set does **not** cover, stated so the claim cannot be read
+as broader than it is:
+
+- **Range obligations (§6)** — emitted for `+`, `-` and `*` in
+  refinement-level bodies (§6's implementation status says what that covers
+  and what it does not). **Casts** do not emit their target range, and
+  `WidthByteSize`/`WidthIndex` operations are skipped: no bound, no
+  obligation. TRL's integers are mathematical throughout.
+- **Fold step conditions (§5.9)** — emitted only when the step actual resolves
+  to a named function with a two-parameter `Ensures` (§5.9's implementation
+  status); a step that arrives as a *parameter* of the caller, or through a
+  record field, still contributes no premise — only the result half is a goal
+  for it.
+- **Call sites outside the fragment** — only bodies that are themselves
+  refinement-level are walked; an uncontracted function calling a contracted
+  one is unchecked, by definition of the fragment.
+- **Call sites whose actuals the term bridge cannot render** (`LiquidInfer.term_of`
+  covers literals, variables, temporaries bound by `TLetTmp`, read-borrow
+  renames (so `r.X` resolves to its parameter), casts, `+`/`-`/`*` over
+  `Austral.Pervasive` intrinsics, record/union **projections** (`__slot_X(r)`)
+  and array/span indexing (`__index`) — each of the last two declared as an
+  uninterpreted symbol in the `.mlw`, or Why3 exits 1 on an unbound symbol and
+  that exit reads as a refusal) — skipped rather than approximated, and visible
+  as a missing goal rather than a false pass. Still in the skipped set:
+  **division** (no TRL term), **comparisons in term position** (`f(a < b)`
+  would need a `predicate` symbol, so it is refused rather than rendered in a
+  spelling Why3 rejects), and **unions/records passed as whole values through
+  a local** (only parameters and resolved temporaries are in scope).
+- **Projection contracts** — `__slot_X(r)` can appear in a *goal*, but TRL has
+  no projection syntax, so a `Requires` cannot yet say `r.X >= 0`. The
+  obligation is therefore emitted and may fail until the parser grows the
+  syntax; that is the direction a real obligation should take, not a reason to
+  drop it.
+- **Measure unfolding (§4.3)** — measures are emitted as functions plus
+  contract axioms, not as per-constructor equations.
 
 TCB: Why3 + alt-ergo + the Why3 extractor; `LiquidConstraints`/`LiquidWhy3`/
 `TotalityCheck` (the VC generator is trusted — mitigated by golden pinning
@@ -641,9 +787,10 @@ vs. `validate.rs` (logos):
 |-------------|-----------|
 | `check_cycles` (no call cycles) | T1, stage L3 `TotalityCheck` |
 | `Fold` only iteration; no `while`/self-ref `Let` | T2, §4.4 |
-| `Pattern::Tag` structural patterns | T3, §5.7 |
+| `Pattern::Tag` structural patterns | **T3, by construction at `Tast`** — `typed_when` carries a constructor tag and binders and has no guard field, so a guarded or non-constructor `case` arm cannot exist by the time the gate runs (`TypingPass` rejects non-exhaustive matches first) |
 | exactly-once use / `clone` / `drop` | already enforced by `check_module_linearity`; liquid never weakens it |
-| errors at the violating node | span-accurate diagnostics via `LiquidParse`/blame mapping |
+| refined bindings are immutable (T5) | **`TypingPass` first** — assigning to a parameter and mutably borrowing one are both rejected (`TypeErrors.cannot_assign_to_parameter`, `TypeErrors.cannot_borrow_param_mutably`); **`TotalityCheck` second** — it re-states T5 over contract-named parameters, so a loosening upstream fails as a T5 diagnostic rather than as an unsound goal |
+| errors at the violating node | span-accurate diagnostics via `LiquidParse`/blame mapping (goal→span mapping still blocked on spans in `Tast`; goals are named from the declaration id) |
 
 vs. stages (`PLAN_liquid_types.md`):
 

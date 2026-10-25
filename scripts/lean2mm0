@@ -56,7 +56,8 @@ Trust story (why this is not circular):
 Usage:
     scripts/lean2mm0            # (re)generate mm0/{gap,layout}_certificate.{mm0,mm1}
     scripts/lean2mm0 check      # regenerate in memory; fail on drift
-    scripts/lean2mm0 verify     # check + mm0-rs compile + mm0-c (root of trust)
+    scripts/lean2mm0 selftest   # mutate each trust anchor; both must refuse
+    scripts/lean2mm0 verify     # check + selftest + mm0-rs compile + mm0-c
 
 Exit codes: 0 ok, 1 generation/self-check failure, 2 tooling absent (verify).
 """
@@ -120,8 +121,56 @@ SOURCES: list[dict] = [
 ]
 
 
+# ── the trust split, pinned ──────────────────────────────────────────────
+#
+# Per certificate: how many definitions are structurally checked by mm0-c
+# (`teq_app` congruence over a net spine mm0-c re-checks) and how many the
+# emitter evaluated (a grounded body's proof is the tautology `teq ttrue
+# ttrue`). The counts are *budgets*, not statistics: generation fails when the
+# grounded set widens or the certificate set changes without this table being
+# edited in the same commit. A silent widening is the one failure mode that a
+# proof-checking pipeline cannot see — the .mmb would still verify.
+#
+# Widening is allowed; claiming it is not is the bug. Edit this table.
+BUDGETS: dict[str, dict[str, int]] = {
+    "gap_certificate":    {"structural": 9, "grounded": 0, "certificates": 9},
+    "layout_certificate": {"structural": 3, "grounded": 5, "certificates": 8},
+}
+
+
 def out_paths(stem: str) -> tuple[Path, Path]:
     return OUT_DIR / f"{stem}.mm0", OUT_DIR / f"{stem}.mm1"
+
+
+def trust_split_line(stem: str, structural: int, grounded: int,
+                     certificates: int) -> str:
+    """The machine-readable trust split, read by scripts/verify-invariants."""
+    return (f"-- trust-split: structural={structural} grounded={grounded} "
+            f"certificates={certificates}")
+
+
+# The agent signature of docs/cic.mm0, in declaration order. Which of these a
+# generated file actually uses is *reported in the artifact* (§9.4): a reader
+# must be able to tell a checked rule from a reserved one, and prose goes stale
+# the moment the encoder changes.
+SIGNATURE_TERMS = [
+    "tvar", "tapp", "tabs", "tint", "tf64", "ttrue", "tfalse", "tcon",
+    "tnil", "tcons", "tfold", "tdup", "tera", "tprim", "tentity",
+    "tsubst", "teval",
+]
+
+
+def coverage_line(body: str) -> str:
+    """Which signature terms the generated declarations mention.
+
+    `body` must be the generated part only — the `.mm0` embeds `cic.mm0`
+    verbatim for audit, so scanning the whole file would report every
+    declaration as used.
+    """
+    used = [t for t in SIGNATURE_TERMS if re.search(rf"\b{t}\b", body)]
+    unused = [t for t in SIGNATURE_TERMS if t not in used]
+    return (f"-- theory coverage: used={','.join(used) or '-'} "
+            f"unused={','.join(unused) or '-'}")
 
 # prim_tag bytes from unfer/logos/src/deltanet/unf.rs (load-bearing: renaming
 # a variant must not silently re-tag; this table mirrors that mapping).
@@ -809,6 +858,25 @@ class Div:
 
 Node = Lit | Bin | Un | Div
 
+
+def _flip_node(node: Node) -> Node:
+    """A copy of `node` whose *value* is wrong but whose shape is unchanged.
+
+    Only the self-test calls this. It must be the narrowest possible lie: the
+    encoder's own reduction is untouched (`teq_refl` still holds for the
+    literals), so the only thing that can notice is the evaluator-vs-net
+    cross-check in `generate_source`.
+    """
+    if isinstance(node, Lit):
+        if node.kind == "b":
+            return Lit("b", not node.val)
+        return Lit("b", False)
+    if isinstance(node, Bin):
+        return Bin(node.op, node.a, node.b, not node.val, node.via)
+    if isinstance(node, Un):
+        return Un(node.op, node.a, not node.val, node.via)
+    return Div(node.a, node.b, node.val + 1, node.via)
+
 INT_OPS = {"add", "sub", "mul", "eq", "lt"}     # int args, prim_eval route
 BOOL_OPS = {"and", "or"}                        # bool args, direct grounding
 
@@ -1097,7 +1165,14 @@ def build_proof(node: Node, reg: Registry) -> str:
 
 # ── emission ─────────────────────────────────────────────────────────────
 
-def generate_source(src: dict) -> tuple[str, str]:
+def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
+    """Emit one certificate stream, or raise TranspileError.
+
+    `tamper` exists for the self-test (§9.3 of docs/lean4mm0.md): "kernel"
+    flips the Lean-side evaluation result, "net" flips the encoded node's
+    value. Both must be caught by the two anchors below — that is the claim
+    the trust story rests on, and this parameter is how it is exercised.
+    """
     stem = src["stem"]
     ndjson, lean_src, expected = src["ndjson"], src["lean"], src["thms"]
     if not ndjson.exists():
@@ -1137,6 +1212,8 @@ def generate_source(src: dict) -> tuple[str, str]:
     encoded: list[tuple[str, str, Node, str]] = []   # (thm, defname, node, proof)
     for thm, lhs in thms:
         v = ev.val(lhs, [], f"{thm} lhs")
+        if tamper == "kernel":
+            v = vb(not v.b) if isinstance(v, VB) else v
         if not (isinstance(v, VB) and v.b):
             raise TranspileError(f"{thm}: Lean-side evaluation is {v!r}, not `true` "
                                  "(the evaluator disagrees with the kernel's rfl)")
@@ -1149,6 +1226,8 @@ def generate_source(src: dict) -> tuple[str, str]:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", defname):
             raise TranspileError(f"{thm}: def name {defname!r} is not a legal MM0 ident")
         node = enc.enc(lhs, [])
+        if tamper == "net":
+            node = _flip_node(node)
         nv = node.val
         if not (isinstance(nv, bool) and nv):
             raise TranspileError(f"{thm}: net reduction is {nv!r}, not `true` "
@@ -1163,6 +1242,19 @@ def generate_source(src: dict) -> tuple[str, str]:
     # the trust split, reported in the header and tagged per def below
     n_struct = sum(1 for _, _, node, _ in encoded if not isinstance(node, Lit))
     n_ground = len(encoded) - n_struct
+    budget = BUDGETS.get(stem)
+    if budget is None:
+        raise TranspileError(
+            f"{stem}: no trust-split budget in BUDGETS — add one (the split is "
+            "a pinned contract, not a statistic)")
+    actual = {"structural": n_struct, "grounded": n_ground,
+              "certificates": len(encoded)}
+    if actual != budget:
+        raise TranspileError(
+            f"{stem}: trust split widened/drifted: {actual} != pinned {budget}. "
+            "Movement toward `grounded` means mm0-c checks less of this "
+            "certificate; if that is intended, edit BUDGETS in the same commit "
+            "and say why in the artifact header.")
 
     # ---- content groups (numerals are collected as math strings are built,
     # so the numeral block is rendered strictly LAST, before assembly) ----
@@ -1185,6 +1277,8 @@ def generate_source(src: dict) -> tuple[str, str]:
         "-- tfalse / tentity). Each `<x>_verified` reduces that encoding to ttrue",
         "-- by congruence + prim_eval + grounded instances; mm0-c checks every",
         "-- step against docs/cic.mm0.",
+        "--",
+        trust_split_line(stem, n_struct, n_ground, len(encoded)),
         "--",
         "-- Trust split (tagged on each def below — structural vs grounded):",
         f"--   {n_struct} structural: the net spine is checked by mm0-c step by step",
@@ -1265,8 +1359,14 @@ def generate_source(src: dict) -> tuple[str, str]:
     for line in cic_lines:
         add(line)
     add("")
-    for line in header:
+    # Coverage is computed here rather than with the rest of the header because
+    # it scans the rendered declarations, which only exist by now.
+    coverage = coverage_line(
+        "\n".join(def_lines + bridge_lines + direct_lines + thm_spec))
+    for line in header[:-1]:
         add(line)
+    add(coverage)
+    add("")
     for line in numeral_lines:
         add(line)
     for line in def_lines:
@@ -1349,6 +1449,45 @@ def check_drift(results: list[tuple[str, str, str]]) -> None:
     print("lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports")
 
 
+def selftest() -> None:
+    """Exercise both trust anchors by mutation (docs/lean4mm0.md §9.3).
+
+    The certificate that a `grounded` definition is honest rests on two paths
+    agreeing: the Lean-side evaluator, and the net encoding's own reduction.
+    A cross-check that never fires is indistinguishable from one that cannot,
+    so each path is tampered with in turn and the emitter must refuse. The
+    unmutated run is asserted clean in the same pass, and against the
+    committed artifacts, so the mutation is applied to input the emitter has
+    already been shown to accept.
+    """
+    clean = generate()
+    check_drift(clean)
+    print("lean2mm0 selftest: unmutated generation is clean and matches the "
+          "committed artifacts")
+    expect = {
+        "kernel": "Lean-side evaluation is",
+        "net": "net reduction is",
+    }
+    for tamper, needle in expect.items():
+        for src in SOURCES:
+            try:
+                generate_source(src, tamper=tamper)
+            except TranspileError as e:
+                if needle not in str(e):
+                    raise TranspileError(
+                        f"selftest[{tamper}]/{src['stem']}: refused for the "
+                        f"wrong reason: {e}") from e
+                print(f"lean2mm0 selftest: {tamper!r} tamper refused "
+                      f"({src['stem']}) — {str(e).splitlines()[0][:96]}")
+            else:
+                raise TranspileError(
+                    f"selftest[{tamper}]/{src['stem']}: the emitter accepted a "
+                    "tampered certificate — the anchor it rests on is not "
+                    "firing")
+    print("lean2mm0 selftest: OK — both anchors (kernel rfl, evaluator vs net) "
+          "refuse tampered input")
+
+
 def verify(results: list[tuple[str, str, str]]) -> None:
     for tool in ("mm0-rs", "mm0-c"):
         if not shutil.which(tool):
@@ -1356,6 +1495,7 @@ def verify(results: list[tuple[str, str, str]]) -> None:
                   "see docs/lean4mm0.md §5 for the build steps)", file=sys.stderr)
             raise SystemExit(2)
     check_drift(results)
+    selftest()
     for stem, mm0, mm1 in results:
         with tempfile.TemporaryDirectory(prefix="lean2mm0.") as td:
             t = Path(td)
@@ -1386,10 +1526,13 @@ def main(argv: list[str]) -> int:
     sys.setrecursionlimit(max(sys.getrecursionlimit(), 200_000))
     mode = argv[1] if len(argv) > 1 else "generate"
     mode = mode.lstrip("-")
-    if mode not in ("generate", "check", "verify"):
+    if mode not in ("generate", "check", "verify", "selftest"):
         print(__doc__, file=sys.stderr)
         return 1
     try:
+        if mode == "selftest":
+            selftest()
+            return 0
         results = generate()
         if mode == "generate":
             write(results)

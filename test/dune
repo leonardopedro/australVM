@@ -67,6 +67,26 @@
  (modules LiquidSubsetTest)
  (libraries austral_liquid austral_core ounit2 test_util))
 
+; §5.6/§5.9/T5: the VC set itself. Drives the real compiler (so the pass runs
+; where it actually runs) with `--target-type=tc`, dumps the `.mlw`, and
+; compares it against a pinned golden — the same posture as the L9 erasure
+; test, for the same reason: the claim is about emitted text, so the test
+; reads emitted text. `austral_core` is needed for the hand-built `Tast` the
+; T5 cases use (no source program can reach that branch; see the header).
+(tests
+ (names LiquidVCTest)
+ (modules LiquidVCTest)
+ (libraries austral_liquid austral_core ounit2 unix test_util)
+ ; The golden is a declared dependency, not an incidental read: without it
+ ; dune does not stage the file into the build tree, and the test would report
+ ; the golden as missing while it sits in the source tree. `austral.exe` is
+ ; the compiler the test drives.
+ (deps ../bin/austral.exe
+       ../lib/liquid/golden/vc-callsite-and-invariant.mlw
+       ../lib/liquid/golden/vc-operators.mlw
+       ../lib/liquid/golden/vc-arithmetic.mlw
+       ../lib/liquid/golden/vc-projection.mlw))
+
 (tests
  (names JitTest)
  (modules JitTest)

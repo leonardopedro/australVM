@@ -586,12 +586,18 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       fold-only recursion accepted; `while`/`for` → error under
       `required`, untracked otherwise.
 
-      *L3 scope, stated honestly:* T1, T2 and the callee half of T4 are
-      enforced. **T3** (structural patterns only) is deferred — it needs an
-      analysis of `case` arm guards that `typed_when` does not expose.
-      **T5** (refined variables are immutable) is deferred to **L4**: it needs
-      the refinement environment Γ, and at L3 no constraint exists yet, so
-      there is nothing to compare an assignment against.
+      *L3 scope, corrected 2026-10-25:* T1, T2, the callee half of T4 and T5
+      are enforced. **T3** (structural patterns only) is not checked because it
+      holds **by construction** at this seam — the earlier "deferred, needs
+      `case` arm guard analysis that `typed_when` does not expose" was
+      circular: `typed_when` has no guard field because the language has no
+      guarded `case` arms, and a non-constructor pattern never reaches `Tast`.
+      **T5** was called "L4's, since it needs Γ"; the useful form is the one
+      implemented at L3 — reject an assignment or write borrow on any
+      parameter the declaration's own contracts name. `TypingPass` is the first
+      line (parameters are neither assignable nor mutably borrowable); the gate
+      states the rule again at the fragment boundary so a loosening upstream
+      fails as T5 rather than as an unsound `Requires ⇒ Ensures`.
 
       The gate runs on the **typed** tree, not the monomorphic one:
       `Compiler_plugin.typed_pass` sees a `Tast.typed_module` and that is the
@@ -615,13 +621,36 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       seam; at `Tast` a call is a single `TFuncall` with the callee's
       `decl_id`, so callee contracts resolve without a generic
       instantiation problem.
-      *L4 scope:* emits the §5.10 RETURN obligation (with the §5.6
-      Requires as an `assumes`). Two gaps are recorded rather than
-      hidden: `Stages.Tast` carries **no spans**, so goals are named
-      `g_<hash of decl_id, name, kind>` rather than §8.1's
-      `g_<span-hash>` — exact blame is therefore blocked until spans
-      reach the typed AST, which is L5's mapping step; and Cycle A
-      (§8.3) is L10, so callee contracts are assumptions.
+      *L4 scope (2026-10-25):* emits three obligation families — §5.10 RETURN
+      (with the Requires as an `assumes`, and — added with the fold premises —
+      the body equation `result = e` when the returned expression renders, so
+      the goal states §5.10's subtyping judgment and is provable rather than
+      `forall __result`-strong), **§5.6 APPLICATION caller side**
+      (one goal per call to a contracted callee, its `Requires` substituted
+      with the actuals via `LiquidTypes.subst_formula`; skipped, not
+      approximated, when an actual cannot be rendered), and **§5.9 FOLD result
+      half** (`Liquid_Invariant` is `I(result)`, no longer dropped). Goal
+      bodies are translated from TRL to Why3 spelling (`why3_ops`) — untranslated
+      `==`/`&&`/`||` type-check as unbound symbols, which the driver would read
+      as a refusal. Pinned golden: `golden/vc-callsite-and-invariant.mlw`,
+      compared byte-for-byte by `LiquidVCTest`.
+
+      One gap is recorded rather than hidden: `Stages.Tast` carries **no
+      spans**, so goals are named `g_<hash of decl_id, name, kind>` rather than
+      §8.1's `g_<span-hash>` — exact blame is blocked until spans reach the
+      typed AST.
+
+      *Added 2026-10-25 (fold premises):* the §4.4 combinator is now
+      distinguishable — `find_fold_combinator` reads the `Liquid_Fold` marker,
+      not the name — so §5.9's two undischarged halves are emitted at its call
+      sites as well: **init** (`Γ ∧ Requires ⇒ I(init)`, the actual seed
+      substituted for `result`) and **step** (`Γ ∧ Requires ⇒ I(a) ⇒ I(f(e,a))`,
+      with `__elem`/`__acc` bound by the goal). Pinned golden:
+      `golden/vc-fold-premises.mlw`, byte-compared by `LiquidVCTest` and under
+      the `why3 prove --type-only` gate; end-to-end run:
+      `020-liquid-syntax/015-fold-premises`. Emitting it surfaced that a
+      **two-parameter** theory function was printed `function f (a: int, b: int)`,
+      which Why3 rejects — parameters are emitted as curried groups now.
 
 ### L5 — Why3 driver
 
@@ -673,8 +702,10 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       rather than a parent, so the binding only reaches the `TIf` if `walk`
       returns the extended environment.
 
-      *Not in L6:* fold invariants as accumulator qualifiers (needs §5.9's
-      `fold` combinator, which does not exist yet), and **T3** (structural
+      *Not in L6:* fold invariants as accumulator qualifiers (the §5.9 `fold`
+      combinator is marked and distinguished by then, but its invariant is
+      consumed as a pragma contract — constraints, not the qualifier lattice —
+      so inference never sees it), and **T3** (structural
       patterns — still needs `case`-arm guard analysis that `typed_when` does
       not expose).
 

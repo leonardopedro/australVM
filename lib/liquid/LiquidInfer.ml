@@ -35,12 +35,14 @@
 
    ## What is *not* here
 
-   - **T3** (structural patterns only) still needs `case`-arm guard analysis
-     that `typed_when` does not expose. Templates at a `case` are created, but
-     no clause proves them yet.
-   - **T5** (refined variables are immutable) now becomes *checkable*, because
-     Γ exists: `LiquidCheck` asks this module which variables are refined. The
-     enforcement lands in the same commit as the tests.
+   - **T3** (structural patterns only) needs no work here: `typed_when` carries
+     a constructor tag and binders and no guard field, so the rule holds by
+     construction by the time any pass sees the tree. Templates at a `case`
+     are still created, and no clause proves them yet — that is a template-
+     generation gap, not a T3 violation.
+   - **T5** (refined variables are immutable) is enforced in `TotalityCheck`,
+     not here: it is a property of the body, and the set it quantifies over
+     (contract-named parameters) is known from the declaration, not from Γ.
 *)
 open Stages.Tast
 
@@ -98,8 +100,27 @@ let relop_of (op : Common.comparison_operator) : LiquidTypes.relop =
 
 let span0 = { LiquidTypes.start = 0; stop = 0 }
 
-(** Variables a translated term mentions, so a template gets the right arity. *)
-let rec term_of (e : texpr) : (LiquidTypes.term * string list) option =
+(** A temporary bound by `TLetTmp`, with the expression it stands for.
+
+    The desugarer hoists a compound argument into a temporary before the call
+    (`atLeast(n - 1)` becomes `let _t = n - 1; atLeast(_t)`), so a call-site
+    obligation whose actual is arithmetic would otherwise be *unstatable*: the
+    actual is a temporary, and a temporary is not one of the caller's
+    parameters. Resolving it here — rather than at each use site — keeps
+    `term_of` the single place that knows what a `texpr` denotes. *)
+type temp_env = (string * texpr) list
+
+let rec lookup_temp (env : temp_env) (name : string) : texpr option =
+  match env with
+  | [] -> None
+  | (n, e) :: rest -> if n = name then Some e else lookup_temp rest name
+
+(** Variables a translated term mentions, so a template gets the right arity.
+
+    [temps] is the `TLetTmp` environment in scope at the point the expression
+    appears; `term_of e` with no environment is what most callers want. *)
+let rec term_of ?(temps : temp_env = []) (e : texpr)
+  : (LiquidTypes.term * string list) option =
   match e with
   | TIntConstant s -> (
      (* The compiler only emits well-formed literals, but a stray one must not
@@ -112,9 +133,31 @@ let rec term_of (e : texpr) : (LiquidTypes.term * string list) option =
         else None
      | None -> None)
   | TBoolConstant b -> Some (LiquidTypes.TBool (b, span0), [])
-  | TParamVar (n, _) | TLocalVar (n, _) | TTemporary (n, _) ->
+  | TTemporary (n, _) -> (
+     (* A hoisted argument: resolve it to the expression it names, when the
+        caller walked past the binding. Otherwise it is just a variable — and
+        one that no contract may mention, since it is not a parameter, so the
+        §5.6 scope check will skip the obligation. *)
+     match lookup_temp temps (Identifier.ident_string n) with
+     | Some binding -> term_of ~temps binding
+     | None ->
+        let name = Identifier.ident_string n in
+        Some (LiquidTypes.TVar (name, None, span0), [ name ]))
+  | TParamVar (n, _) ->
      let name = Identifier.ident_string n in
      Some (LiquidTypes.TVar (name, None, span0), [ name ])
+  | TLocalVar (n, _) -> (
+     (* A local resolves to its binding when the traversal walked past it — the
+        same treatment `TTemporary` gets, and for the same reason: desugaring
+        turns `r.X` into a borrow-and-load whose local (`r_tmp_ref1`) is not a
+        parameter, so a goal naming it would be unbound. Resolution is scoped to
+        exactly the bindings the traversal put in [temps] (`TLetTmp`, plus a
+        read borrow's rename), so an unrelated local stays a local and falls
+        through to the scope check in the caller. *)
+     let name = Identifier.ident_string n in
+     (match lookup_temp temps name with
+      | Some binding -> term_of ~temps binding
+      | None -> Some (LiquidTypes.TVar (name, None, span0), [ name ])))
   | TConstVar (q, _) ->
      (* A module constant: name it by its last component, which is how a TRL
         contract refers to it (docs/LIQUID.md §5.2, WF1). *)
@@ -126,18 +169,262 @@ let rec term_of (e : texpr) : (LiquidTypes.term * string list) option =
      in
      Some (LiquidTypes.TVar (name, None, span0), [ name ])
   | TNegation e' -> (
-     match term_of e' with
+     match term_of ~temps e' with
      | Some (t, vs) -> Some (LiquidTypes.TNeg (t, span0), vs)
      | None -> None)
+  | TCast (e', _) ->
+     (* Desugaring wraps call arguments and returns in `TCast` at the callee's
+        parameter type, so *every* actual arrives cast — without this the
+        §5.6 call-site obligation could never be stated for a parameter whose
+        type was written down. Transparent for the same reason `docs/LIQUID.md`
+        §5.10 gives: TRL models machine integers as mathematical integers, so a
+        cast between integer sorts that the type checker accepted adds no fact
+        and loses none. A cast that changes the *sort* (Int → Real) is
+        likewise an injection, not a rounding, but it is left to §6's range
+        obligations rather than modelled here. *)
+     term_of ~temps e'
   | TComparison (_, a, b) -> (
-     match (term_of a, term_of b) with
-     | Some (ta, va), Some (tb, vb) ->
-        Some
-          ( LiquidTypes.TCall
-              ( "@cmp", [ ta; tb ], span0 ),
-            va @ vb )
+     (* Deliberately **unstatable**, and dropped rather than approximated.
+
+        A comparison in term position (`f(a < b)`) denotes a `Bool`, and the
+        `.mlw` declares only int-sorted functions: rendering it as a function
+        symbol needs a `predicate`, which means a second sort through the
+        emitter, the theory section and the goal binder. Before this note the
+        case rendered `@cmp(a, b)` — `@` is not a Why3 identifier, so the file
+        did not parse, and a parse failure exits 1, which the driver reads as
+        "the prover refused": a fabricated rejection, the one direction this
+        layer never takes. Skipping leaves the obligation for a later pass. *)
+     ignore (a, b);
+     None)
+  | TFuncall (_, name, args, _, _) | TMethodCall (_, name, _, args, _, _) ->
+     arithmetic_term ~temps name args
+  | TSlotAccessor (rec', slot, _) -> (
+     (* A projection: `r.count`. TRL has no projection *syntax* — the parser
+        cannot yet read `r.count` in a contract — so this can only make the
+        term available to a goal that needs it, not to a contract that names
+        it. Rendered as an uninterpreted function of the record, which is
+        exactly the information the prover has: it may not assume anything
+        about `@slot_count(r)` unless a contract says so, and a contract
+        cannot yet say so. That is the under-claiming direction, and it is
+        why the contract-side half of this is listed as a language change in
+        docs/cas.md §4. *)
+     match term_of ~temps rec' with
+     | Some (tr, vs) ->
+        let field = Identifier.ident_string slot in
+        Some (LiquidTypes.TCall ("__slot_" ^ field, [ tr ], span0), vs)
+     | None -> None)
+  | TDeref e' ->
+     (* Desugaring lowers `r.X` to a load: `TDeref (TSlotAccessor …)`. The load
+        reads the value *at this program point*, which is exactly what the
+        source expression denotes, so the deref adds no fact and loses none —
+        the same argument `TCast` makes below. Without this the projection
+        case above is unreachable from real source, which is how the record
+        argument silently failed to get an obligation. *)
+     term_of ~temps e'
+  | TArrayIndex (a, i, _) | TSpanIndex (a, i, _) -> (
+     match (term_of ~temps a, term_of ~temps i) with
+     | Some (ta, va), Some (ti, vi) ->
+        Some (LiquidTypes.TCall ("__index", [ ta; ti ], span0), va @ vi)
      | _ -> None)
   | _ -> None
+
+(** §6.3 arithmetic desugars to a `pervasive` intrinsic (`TypeCheckExpr
+    .augment_arithmetic`: `trappingAdd`, `trappingSubtract`,
+    `trappingMultiply`, `trappingDivide`), with both operands wrapped in a cast.
+    Rendering the first three lets a call site whose actual is `n - 1` state its
+    §5.6 obligation instead of being skipped — the gap `term_of`'s `_ -> None`
+    used to leave.
+
+    Both shapes are matched because desugaring picks between them: a bare
+    `f(x)` becomes `TFuncall`, while `n - 1` arrives as a `TMethodCall` on
+    `Austral.Pervasive` (the arithmetic operators are written as methods).
+    Leaving one out is exactly the kind of half-fix that reads as working.
+
+    Two deliberate omissions:
+
+    - **`trappingDivide`** is not a division term: TRL has none, and machine
+      division truncates, so rendering it as mathematical division would be a
+      *different* claim rather than a translation. `TSub`/`TAdd`/`TMul` are
+      exact in the fragment because TRL's integers are mathematical and no
+      range obligation is emitted (§11).
+    - **The module must be `Austral.Pervasive`**, not merely the name: a user
+      function called `trappingAdd` is theirs, and reading it as `+` would
+      fabricate a fact about arbitrary code. *)
+and arithmetic_term ?(temps : temp_env = []) (name : Identifier.qident)
+    (args : texpr list) : (LiquidTypes.term * string list) option =
+  let is_pervasive =
+    Identifier.equal_module_name
+      (Identifier.source_module_name name)
+      BuiltIn.pervasive_module_name
+  in
+  if not is_pervasive then None
+  else
+    match (Identifier.ident_string (Identifier.original_name name), args) with
+    | op, [ a; b ] -> (
+       match (op, term_of ~temps a, term_of ~temps b) with
+       | "trappingAdd", Some (ta, va), Some (tb, vb) ->
+          Some (LiquidTypes.TAdd (ta, tb, span0), va @ vb)
+       | "trappingSubtract", Some (ta, va), Some (tb, vb) ->
+          Some (LiquidTypes.TSub (ta, tb, span0), va @ vb)
+       | "trappingMultiply", Some (ta, va), Some (tb, vb) ->
+          Some (LiquidTypes.TMul (ta, tb, span0), va @ vb)
+       | _ -> None)
+    | _ -> None
+
+(* ── the sort environment (the §6 prerequisite) ─────────────────────────── *)
+
+(** What a machine type means in TRL: the sort a variable is bound to, and —
+    for the machine integers — the exact range its values live in.
+
+    This is the environment §6 asks for: a range obligation `min(T) ≤ e ≤ max(T)`
+    needs `T` from somewhere, and until now nothing in the pipeline carried a
+    variable's type into the emitter. It also supplies the *facts* side of the
+    same judgment: a goal about an `Int64` parameter may assume `min ≤ n ≤ max`,
+    which is what makes a range VC about `n + 1` provable at all. *)
+
+(** The TRL sort of a typed expression, when it has one.
+
+    [None] is the honest answer for the types TRL has no word for — references,
+    spans, function pointers, regions — and a caller of this function must
+    treat [None] as "cannot be stated" rather than as "sort is int". *)
+let sort_of_ty (t : Type.ty) : LiquidTypes.sort option =
+  match t with
+  | Type.Integer _ -> Some LiquidTypes.SInt
+  | Type.Boolean -> Some LiquidTypes.SBool
+  | Type.SingleFloat | Type.DoubleFloat -> Some LiquidTypes.SReal
+  | Type.NamedType (q, _, _) ->
+     Some (LiquidTypes.SAdt (Identifier.ident_string (Identifier.local_name q)))
+  | _ -> None
+
+(** The exact value range of a machine integer type.
+
+    [WidthByteSize] and [WidthIndex] are deliberately [None]: their width is a
+    property of the host ABI rather than of the type, and guessing 64 would
+    make the range facts wrong on a 32-bit target. No bound, no obligation —
+    the under-claiming direction. *)
+let int_bounds_of_ty (t : Type.ty) : (Z.t * Z.t) option =
+  let width w =
+    match (w : Type.integer_width) with
+    | Type.Width8 -> 8
+    | Type.Width16 -> 16
+    | Type.Width32 -> 32
+    | Type.Width64 -> 64
+    | Type.WidthByteSize | Type.WidthIndex -> raise Exit
+  in
+  match t with
+  | Type.Integer (Type.Unsigned, w) -> (
+     try
+       let bits = width w in
+       let max = Z.pred (Z.shift_left Z.one bits) in
+       Some (Z.zero, max)
+     with Exit -> None)
+  | Type.Integer (Type.Signed, w) -> (
+     try
+       let bits = width w in
+       let top = Z.shift_left Z.one (bits - 1) in
+       Some (Z.neg top, Z.pred top)
+     with Exit -> None)
+  | _ -> None
+
+(** Every variable a body mentions, with its type, keyed by name.
+
+    Read off the variable *nodes* rather than off the bindings: every `texpr`
+    variable carries its own `ty`, so there is no need to thread a scope through
+    the traversal — and a node cannot disagree with its own type. A name bound
+    twice (which the compiler's fresh temporaries allow) keeps its first
+    occurrence, which is the binding every use after hoisting refers to. *)
+let env_of_function (params : Type.value_parameter list) (body : tstmt) :
+    (string * Type.ty) list =
+  let add name ty acc =
+    if List.exists (fun (n, _) -> n = name) acc then acc else (name, ty) :: acc
+  in
+  let collected = ref [] in
+  List.iter
+    (fun (Type.ValueParameter (n, ty)) ->
+      collected := add (Identifier.ident_string n) ty !collected)
+    params;
+  let with_expr (e : texpr) =
+    let rec go (e : texpr) =
+      match e with
+      | TParamVar (n, ty) | TLocalVar (n, ty) | TTemporary (n, ty) ->
+         collected := add (Identifier.ident_string n) ty !collected
+      | TCast (e', _) | TNegation e' | TDeref e' | TSlotAccessor (e', _, _)
+      | TPointerSlotAccessor (e', _, _) -> go e'
+      | TFuncall (_, _, args, _, _) | TMethodCall (_, _, _, args, _, _)
+      | TFptrCall (_, args, _) -> List.iter go args
+      | TVarMethodCall { args; _ } -> List.iter go args
+      | TEmbed (_, _, args) -> List.iter go args
+      | TComparison (_, a, b) | TConjunction (a, b) | TDisjunction (a, b)
+      | TArrayIndex (a, b, _) | TSpanIndex (a, b, _) ->
+         go a; go b
+      | TIfExpression (c, a, b) ->
+         go c; go a; go b
+      | TRecordConstructor (_, fs) | TUnionConstructor (_, _, fs) ->
+         List.iter (fun (_, e') -> go e') fs
+      | _ -> ()
+    in
+    go e
+  in
+  let rec go_stmt (s : tstmt) =
+    let with_var (n : Identifier.identifier) (ty : Type.ty) =
+      collected := add (Identifier.ident_string n) ty !collected
+    in
+    match s with
+    | TSkip _ -> ()
+    | TLet (_, _, n, ty, s') ->
+       with_var n ty;
+       go_stmt s'
+    | TLetTmp (n, ty, e) ->
+       with_expr e;
+       with_var n ty
+    | TAssignTmp (_, e) | TAssignVar (_, _, e) | TInitialAssign (_, e)
+    | TReturn (_, e) | TDiscarding (_, e) -> with_expr e
+    | TDestructure (_, _, _, e, s') ->
+       with_expr e;
+       go_stmt s'
+    | TAssign (_, a, b) ->
+       with_expr a; with_expr b
+    | TIf (_, c, t, f) ->
+       with_expr c; go_stmt t; go_stmt f
+    | TCase (_, e, whens, _) ->
+       with_expr e;
+       List.iter (fun (TypedWhen (_, _, body)) -> go_stmt body) whens
+    | TWhile (_, c, body) | TFor (_, _, _, c, body) ->
+       with_expr c; go_stmt body
+    | TBorrow { body; _ } -> go_stmt body
+    | TBlock (_, a, b) ->
+       go_stmt a; go_stmt b
+  in
+  go_stmt body;
+  !collected
+
+(** The range facts a goal may assume about the names in [scope]: `min ≤ x ∧
+    x ≤ max` for each integer-typed one.
+
+    These are *type* facts, not refinements: they are what the declared type
+    already promises, so assuming them in an obligation cannot accept a program
+    the type checker would reject. Non-integer and unknown-width types
+    contribute nothing. *)
+let range_facts (env : (string * Type.ty) list) (scope : string list) :
+    LiquidTypes.formula list =
+  let span = span0 in
+  List.filter_map
+    (fun (name, ty) ->
+      if not (List.mem name scope) then None
+      else
+        match int_bounds_of_ty ty with
+        | None -> None
+        | Some (lo, hi) ->
+           let v = LiquidTypes.TVar (name, Some LiquidTypes.SInt, span) in
+           Some
+             (LiquidTypes.FAnd
+                ( LiquidTypes.FRel
+                    (LiquidTypes.RLe, LiquidTypes.TInt (lo, span), v, span),
+                  LiquidTypes.FRel
+                    (LiquidTypes.RGe, LiquidTypes.TInt (hi, span), v, span),
+                  span ))
+    )
+    env
 
 let rec formula_of (e : texpr) : (LiquidTypes.formula * string list) option =
   match e with

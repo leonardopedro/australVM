@@ -1,0 +1,33 @@
+module body Test is
+    """
+    §5.6 APPLICATION and §5.9 FOLD, end to end.
+
+    `atLeast` states a precondition over its parameter and a postcondition over
+    its result. `caller` calls it with its own parameter, so the emitted VC set
+    gains a §5.6 goal (`m >= 0` must imply `atLeast`'s `n >= 0` with `n := m`)
+    on top of the two RETURN goals; `caller` also carries a
+    `Liquid_Invariant`, which used to be parsed and silently dropped and is now
+    a §5.9 goal about the returned value.
+
+    None of that changes what the program computes — that is the point of the
+    test: obligations are ghost facts, and the run must be byte-identical to the
+    same program without them.
+    """
+    pragma Liquid_Requires(Contract => "n >= 0");
+    pragma Liquid_Ensures(Contract => "result >= n");
+    function atLeast(n: Int64): Int64 is
+        return n;
+    end;
+
+    pragma Liquid_Requires(Contract => "m >= 0");
+    pragma Liquid_Invariant(Contract => "result >= 0");
+    pragma Liquid_Ensures(Contract => "result >= 0");
+    function caller(m: Int64): Int64 is
+        return atLeast(m);
+    end;
+
+    function main(): ExitCode is
+        printLn(caller(3));
+        return ExitSuccess();
+    end;
+end module body.

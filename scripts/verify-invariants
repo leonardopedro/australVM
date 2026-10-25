@@ -80,6 +80,51 @@ check "Phase D: generated certificate artifacts present" \
     bash -c "test -f '$repo_root/mm0/gap_certificate.mm0' && test -f '$repo_root/mm0/gap_certificate.mm1' && test -f '$repo_root/mm0/layout_certificate.mm0' && test -f '$repo_root/mm0/layout_certificate.mm1'"
 check_py "Phase D: generated MM0/MM1 in sync with the pinned lean4export" \
     python3 "$repo_root/scripts/lean2mm0" check
+# The trust split is a pinned contract, not a statistic: generation fails when
+# the grounded set widens (`check` above would catch it), and this asserts the
+# *artifact* states its split, so a reader of the certificate cannot mistake an
+# emitter-evaluated definition for one mm0-c checked. Widening is allowed — by
+# editing BUDGETS in scripts/lean2mm0 in the same commit.
+check "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" \
+    grep -q -- '-- trust-split: structural=9 grounded=0 certificates=9' \
+    "$repo_root/mm0/gap_certificate.mm0"
+check "Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)" \
+    grep -q -- '-- trust-split: structural=3 grounded=5 certificates=8' \
+    "$repo_root/mm0/layout_certificate.mm0"
+# `scripts/lean2mm0` also writes a `-- theory coverage:` line into each artifact
+# (docs/lean4mm0.md §9.4) so a reader can tell a checked rule from a reserved
+# one. The line is generated, so `check` above already pins it against the
+# pinned exports; what that cannot notice is the generator *inventing* a name --
+# a source construct encoded as `tfoo` for a rule the interface never declared
+# would give a coverage line that reads complete and a certificate mm0-rs later
+# rejects. So every `used=` name must be a declared term of the theory.
+#
+# A declaration is `term name: ...` or `term name (args: ...): ...`, hence the
+# bracketed continuation class rather than a bare colon.
+for artifact in "$repo_root"/mm0/*.mm0; do
+    [ -e "$artifact" ] || continue
+    name="$(basename "$artifact")"
+    used="$(sed -n 's/^-- theory coverage: used=\([^ ]*\) unused=.*/\1/p' "$artifact")"
+    if [ -z "$used" ]; then
+        check "Phase D: $name states its theory coverage" false
+        continue
+    fi
+    missing=""
+    for rule in $(printf '%s' "$used" | tr ',' ' '); do
+        grep -qE "^term $rule[ (:;]" "$artifact" || missing="$missing $rule"
+    done
+    if [ -n "$missing" ]; then
+        echo "  [detail] $name claims used rules the theory does not declare:$missing" >&2
+        check "Phase D: $name only claims rules its theory declares" false
+    else
+        check "Phase D: $name only claims rules its theory declares" true
+    fi
+done
+# Both anchors of the trust story must refuse tampered input. This needs no mm0
+# toolchain: the mutation is caught before any .mmb exists, which is exactly the
+# point — it tests the emitter's cross-checks, not the verifier.
+check_py "Phase D: emitter self-test (both trust anchors refuse tampered input)" \
+    python3 "$repo_root/scripts/lean2mm0" selftest
 if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
     check_py "Phase D: mm0-rs elaborates and mm0-c re-verifies the certificate" \
         python3 "$repo_root/scripts/lean2mm0" verify
@@ -134,7 +179,28 @@ check "S21: ZENODO_SYMBOLS (uz_*) registered separately" \
 #
 # So the goldens are now required to *parse*. Note this checks syntax and
 # provability only -- it does not claim the emitted obligations are complete.
+#
+# `--type-only` is the gate that matters and the one that always runs: it needs
+# no prover, and it catches what a syntax check cannot. A TRL contract using
+# `==`, `&&`, `||`, `!=` or `!` used to reach the `.mlw` untranslated, which
+# Why3 parses (`==` lexes as an infix symbol) and then rejects as "unbound
+# function or predicate symbol '(==)'". With no prover configured, `why3 prove
+# -P alt-ergo` reports "No prover ... corresponds" and exits before reaching
+# that error, so the older check was blind to exactly this class. See
+# `LiquidConstraints.why3_ops`.
 if command -v why3 >/dev/null 2>&1; then
+    for mlw in "$repo_root"/lib/liquid/golden/*.mlw; do
+        [ -e "$mlw" ] || continue
+        name="$(basename "$mlw")"
+        out="$(why3 prove --type-only "$mlw" 2>&1)"
+        if [ $? -eq 0 ]; then
+            check "Liquid golden $name type-checks under Why3" true
+        else
+            echo "  [detail] $name does not type-check under Why3:" >&2
+            printf '%s\n' "$out" | head -3 >&2
+            check "Liquid golden $name type-checks under Why3" false
+        fi
+    done
     for mlw in "$repo_root"/lib/liquid/golden/*.mlw; do
         [ -e "$mlw" ] || continue
         name="$(basename "$mlw")"

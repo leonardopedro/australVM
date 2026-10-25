@@ -24,6 +24,6 @@ module Test
   (* --- verification conditions --- *)
 
   (* g_d3eedf6b — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_d3eedf6b: forall n: int, __result: int. (n >= 0) -> __result >= n
+  goal g_d3eedf6b: forall n: int, __result: int. ((n >= 0 /\ (__result = (n)))) -> __result >= n
 
 end

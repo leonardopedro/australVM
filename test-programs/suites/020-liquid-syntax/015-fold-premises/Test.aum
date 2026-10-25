@@ -1,0 +1,56 @@
+module body Test is
+    """
+    §5.9 FOLD, all three halves, end to end.
+
+    `step` is the named step function: element first, accumulator second, a
+    precondition over its parameter and a postcondition over its result that
+    carries the accumulator invariant forward.
+    `fold2` is §4.4's combinator — marked `pragma Liquid_Fold`, carrying the
+    `Liquid_Invariant` that is §5.9's `I`, and taking the step as a function
+    value (`Fn[...]`); its `Requires` is the seed condition its own invariant
+    needs (`init >= 0`).
+    `caller` calls `fold2(step, 0, n)` — the shape the rule is about: step,
+    seed, list — and `callerViaLocal` binds the same step through a local
+    first, which must not change which obligations are emitted.
+
+    At each call site the VC set gains the two premises that used to be
+    documented and not emitted — `I(init)` (init half) and
+    `I(a) => I(f(e, a))` (step half, with `__elem`/`__acc` bound by the goal)
+    — on top of the result half already carried by `fold2`'s own invariant,
+    whose goal now ties `result` to the returned expression (`result = init`),
+    so the three halves are *provable*, not just present.
+
+    None of that changes what the program computes — that is the point of the
+    test: obligations are ghost facts, and the run must be byte-identical to
+    the same program without them.
+    """
+    pragma Liquid_Requires(Contract => "true");
+    pragma Liquid_Ensures(Contract => "result >= acc");
+    function step(e: Int64, acc: Int64): Int64 is
+        return acc;
+    end;
+
+    pragma Liquid_Fold;
+    pragma Liquid_Invariant(Contract => "result >= 0");
+    pragma Liquid_Requires(Contract => "init >= 0");
+    function fold2(f: Fn[Int64, Int64, Int64], init: Int64, xs: Int64): Int64 is
+        return init;
+    end;
+
+    pragma Liquid_Requires(Contract => "n >= 0");
+    function caller(n: Int64): Int64 is
+        return fold2(step, 0, n);
+    end;
+
+    pragma Liquid_Requires(Contract => "n >= 0");
+    function callerViaLocal(n: Int64): Int64 is
+        let s: Fn[Int64, Int64, Int64] := step;
+        return fold2(s, 0, n);
+    end;
+
+    function main(): ExitCode is
+        printLn(caller(3));
+        printLn(callerViaLocal(3));
+        return ExitSuccess();
+    end;
+end module body.

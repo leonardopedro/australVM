@@ -92,6 +92,28 @@
           inherit buildInputs;
         };
 
+        # The Why3 engine on its own, installable without the devShell:
+        #
+        #     nix build .#why3        # or: nix profile install .#why3
+        #
+        # This exists because the devShell is all-or-nothing: it carries
+        # alt-ergo alongside why3, alt-ergo is unfree, and on some hosts its
+        # build fails — which then takes the *engine* down with it, even though
+        # `why3 prove --type-only` (the gate in scripts/verify-invariants that
+        # needs no prover) needs only why3. Splitting the output means the
+        # engine is installable by itself, and the prover by itself, rather
+        # than both or neither.
+        #
+        # Same store path as the devShell's entry (`pkgsWhy3.why3`, why3
+        # 1.8.2): the version is pinned by this flake, not by the host.
+        packages.why3 = pkgsWhy3.why3;
+
+        # The prover `LiquidWhy3.prove` names with `-P alt-ergo`. Separate for
+        # the reason above (unfree; its build is the one that fails); install
+        # it when the host can build it, and the `Liquid golden Why3 parse
+        # check` gap in scripts/verify-invariants closes with it.
+        packages.alt-ergo = pkgsWhy3.alt-ergo;
+
         devShells.default = pkgs.mkShell {
           inherit buildInputs;
         };

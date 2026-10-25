@@ -12,13 +12,23 @@
    is *proved*. So the fold check below rests on a theorem rather than on an
    assumption — which is the point of doing it in Why3 instead of in OCaml.
 
-   What this pass actually enforces is deliberately modest, and it is worth being
-   exact about the limit. It checks that every recursive fold the module performs
-   is over a list the extracted measure can rank, and it *rejects* a module whose
-   fold descends under a measure that does not strictly decrease. It is not a
-   general termination checker: it recognises the structural shape, which is the
-   only recursion T1/T2 admit anyway, so a module needing genuine well-founded
-   reasoning still falls to Why3.
+   What this pass actually does is deliberately modest, and it is worth being
+   exact about the limit: it *ranks* the folds it recognises with the extracted
+   measure and reports them, and it **does not reject** anything on that basis
+   (`LiquidSubsetTest` states the same thing). The rejection the header used to
+   claim — a fold descending under a measure that does not strictly decrease —
+   cannot arise from a source in this language: `TotalityCheck.check_cycles`
+   rejects call cycles, so a function cannot recurse into itself, and the only
+   iteration left is `for`, whose bounds the measure does not see. What remains
+   valuable is the rank itself: it is a proved quantity (`fuel`/`weight` come
+   from `why3 extract`) that a later pass can read, and the self-check below
+   turns a stale extraction into a visible failure.
+
+   Folds are recognised two ways: the `Liquid_Fold` marker pragma (§4.4 of
+   docs/LIQUID.md — the precise way, and the one the spec designates), and the
+   name heuristic that predates it. The marker is checked first in effect (a
+   marked declaration is a fold whatever it is called), which is what makes
+   `pragma Liquid_Fold` more than a comment.
 *)
 open Compiler_plugin
 open Stages.Tast
@@ -70,6 +80,23 @@ let is_fold_name (n : string) : bool =
         else scan (i + 1)
       in
       scan 1)
+
+(** Is this declaration marked `pragma Liquid_Fold`? That marker is §4.4's
+    designation, so a marked declaration is a fold regardless of its name —
+    which is the whole reason to have a marker rather than a naming convention.
+    Kinds are matched through `LiquidTypes.contract_kind_of_string`, the same
+    table the VC generator uses, so the two passes cannot disagree about what
+    `Liquid_Fold` is called. *)
+let is_fold_marked (pragmas : Common.pragma list) : bool =
+  List.exists
+    (fun p ->
+      match p with
+      | Common.LiquidPragma (kind, _) ->
+         (match LiquidTypes.contract_kind_of_string kind with
+          | Some LiquidTypes.KFold -> true
+          | _ -> false)
+      | _ -> false)
+    pragmas
 
 let rec mentions_fold (e : texpr) : bool =
   match e with
@@ -136,8 +163,9 @@ let check (m : typed_module) : Compiler_plugin.verdict =
       List.filter_map
         (fun d ->
           match d with
-          | TFunction (_, _, name, _, _, _, _, _, _)
-            when is_fold_name (Identifier.ident_string name) ->
+          | TFunction (_, _, name, _, _, _, _, _, pragmas)
+            when is_fold_marked pragmas
+                 || is_fold_name (Identifier.ident_string name) ->
              Some (Identifier.ident_string name)
           | TFunction (_, _, _, _, _, _, body, _, _) when stmts_fold body ->
              Some "<anonymous fold>"

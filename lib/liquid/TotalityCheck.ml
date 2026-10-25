@@ -31,14 +31,23 @@
      `TForeignFunction`. That is how every `uk_*` kernel symbol and every
      `@embed` wrapper reaches a body, so rejecting foreign callees is the
      whole of T4 that the typed AST can see.
+   - **T5 (refined variables are immutable)** — no assignment and no mutable
+     borrow may target a parameter that occurs in the declaration's own
+     contracts. Why this is a *soundness* rule and not a style rule: the
+     emitted obligation is `Requires ⇒ Ensures`, so a body that overwrites a
+     contracted parameter invalidates the antecedent after the fact and the
+     goal proves a statement about a value the function no longer has.
+     `result` is not a parameter and is the one variable a refined body exists
+     to produce, so it is exempt by construction.
 
-   Not enforced here, on purpose:
-
-   - **T3 (structural patterns only)** — needs an analysis of `case` arm
-     guards, which `typed_when` does not yet expose. Deferred.
-   - **T5 (refined variables are immutable)** — needs the refinement
-     environment Γ from L4: L3 runs before any constraint exists, so there is
-     nothing to compare an assignment against. L4 owns it.
+   **T3 (structural patterns only) holds by construction at this seam,** and
+   the earlier "deferred, needs `case` arm guard analysis" note was circular:
+   `Stages.Tast.typed_when` is `TypedWhen of identifier * typed_binding list *
+   tstmt` — a constructor tag, its binders and a body. There is no guard field
+   to analyse because the language has no guarded `case` arms, and
+   `TypingPass` rejects a non-exhaustive or non-constructor pattern before a
+   `Tast` exists. Nothing here can violate T3, so nothing here checks it; the
+   normative claim is recorded in `docs/LIQUID.md` §13 instead.
 
    A function with no `Liquid_*` pragma is outside the fragment and is left
    alone: the gate never rejects code that did not opt in.
@@ -100,6 +109,84 @@ let rec loops_in_stmt (s : tstmt) : bool =
   | TBlock (_, a, b) -> loops_in_stmt a || loops_in_stmt b
   | _ -> false
 
+(* ── T5: refined variables are immutable ────────────────────────────────── *)
+
+let ident_name (n : Identifier.identifier) : string =
+  Identifier.ident_string n
+
+let qident_name (q : Identifier.qident) : string =
+  Identifier.qident_to_sident q |> Identifier.sident_name |> ident_name
+
+(** The variable an assignment target names, if it names one. An assignment
+    path (`p.slot := …`) is a projection of a variable; its root is what T5
+    cares about, exactly as `LinearityCheck` treats consumption. *)
+let rec target_root (e : texpr) : string option =
+  match e with
+  | TParamVar (n, _) | TLocalVar (n, _) | TTemporary (n, _) -> Some (ident_name n)
+  | TSlotAccessor (e', _, _) | TPointerSlotAccessor (e', _, _)
+  | TCast (e', _) | TDeref e' -> target_root e'
+  | _ -> None
+
+(** Every contracted parameter this statement mutates, in visit order. Both
+    mutation forms count: an assignment (§5.1) and a *write* borrow (§5.8) —
+    v1 does not model invalidation-and-restoration of facts across a mutable
+    borrow, so a write borrow of a refined value is the same unsoundness with
+    extra steps. *)
+let mutated_in_stmt (refined : string list) (body : tstmt) : string list =
+  let hit acc name =
+    if List.mem name refined && not (List.mem name acc) then acc @ [ name ]
+    else acc
+  in
+  let rec expr acc (e : texpr) : string list =
+    match e with
+    | TComparison (_, a, b) | TConjunction (a, b) | TDisjunction (a, b) ->
+       expr (expr acc a) b
+    | TIfExpression (c, a, b) -> expr (expr (expr acc c) a) b
+    | TFuncall (_, _, args, _, _) | TMethodCall (_, _, _, args, _, _)
+    | TFptrCall (_, args, _) -> List.fold_left expr acc args
+    | TVarMethodCall { args; _ } -> List.fold_left expr acc args
+    | TEmbed (_, _, args) -> List.fold_left expr acc args
+    | TCast (e', _) | TNegation e' | TDeref e' | TSlotAccessor (e', _, _)
+    | TPointerSlotAccessor (e', _, _) -> expr acc e'
+    | TRecordConstructor (_, fs) | TUnionConstructor (_, _, fs) ->
+       List.fold_left (fun acc (_, e') -> expr acc e') acc fs
+    | TArrayIndex (a, b, _) | TSpanIndex (a, b, _) -> expr (expr acc a) b
+    | _ -> acc
+  in
+  let rec stmt acc (s : tstmt) : string list =
+    match s with
+    | TSkip _ -> acc
+    | TLet (_, _, _, _, s') -> stmt acc s'
+    | TLetTmp (_, _, e) | TAssignTmp (_, e) | TInitialAssign (_, e)
+    | TDiscarding (_, e) | TReturn (_, e) ->
+       (match s with
+        | TInitialAssign (q, _) -> expr (hit acc (qident_name q)) e
+        | _ -> expr acc e)
+    | TAssignVar (_, q, e) -> expr (hit acc (qident_name q)) e
+    | TAssign (_, a, b) ->
+       let acc =
+         match target_root a with Some n -> hit acc n | None -> expr acc a
+       in
+       expr acc b
+    | TDestructure (_, _, _, e, s') -> stmt (expr acc e) s'
+    | TIf (_, c, t, f) -> stmt (stmt (expr acc c) t) f
+    | TCase (_, e, whens, _) ->
+       List.fold_left
+         (fun acc (TypedWhen (_, _, body)) -> stmt acc body)
+         (expr acc e) whens
+    | TWhile (_, c, body) -> stmt (expr acc c) body
+    | TFor (_, _, _, c, body) -> stmt (expr acc c) body
+    | TBorrow { original; body; mode; _ } ->
+       let acc =
+         match mode with
+         | Common.Write -> hit acc (ident_name original)
+         | Common.Read | Common.Reborrow -> acc
+       in
+       stmt acc body
+    | TBlock (_, a, b) -> stmt (stmt acc a) b
+  in
+  stmt [] body
+
 (* ── T1: cycle detection ─────────────────────────────────────────────────── *)
 
 let key (id: Id.decl_id) : int =
@@ -136,7 +223,20 @@ let rec find_cycle (graph : (int, int list) Hashtbl.t)
 let check_function ~(name : string) ~(entry : Id.decl_id) ~(body : tstmt)
     ~(graph : (int, int list) Hashtbl.t)
     ~(foreign : (int, unit) Hashtbl.t)
-    ~(names : (int, string) Hashtbl.t) : string option =
+    ~(names : (int, string) Hashtbl.t)
+    ~(refined : string list) : string option =
+  (* T5 first: it is a local property of this body, like T2, and the caller
+     already knows which parameters the contracts mention. Reporting it before
+     the call-graph walk keeps one defect to one sentence. *)
+  match mutated_in_stmt refined body with
+  | name' :: _ ->
+     Some
+       (Printf.sprintf
+          "T5 (§4.1): `%s` assigns to `%s`, a parameter its contract refines; \
+           a refined variable is immutable, or the emitted Requires ⇒ Ensures \
+           goal would talk about a binding the body changed"
+          name name')
+  | [] ->
   (* T2 before T1: a loop is a local, unambiguous defect, and reporting it
      before walking the graph keeps the diagnostic to one sentence. *)
   if loops_in_stmt body then

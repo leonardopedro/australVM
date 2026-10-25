@@ -138,6 +138,8 @@ axiom net_isomorphism_step (t u cert: Term):
 -- by congruence + prim_eval + grounded instances; mm0-c checks every
 -- step against docs/cic.mm0.
 --
+-- trust-split: structural=3 grounded=5 certificates=8
+--
 -- Trust split (tagged on each def below — structural vs grounded):
 --   3 structural: the net spine is checked by mm0-c step by step
 --     (congruence teq_app, prim_eval bridges, grounded instances); its
@@ -149,6 +151,7 @@ axiom net_isomorphism_step (t u cert: Term):
 --     the emitter evaluated it. The anchor is nanoda's kernel-verified rfl
 --     plus the emitter's two independent paths (evaluator vs net), not a
 --     structural proof — mm0-c verifies only the resulting tautology.
+-- theory coverage: used=tapp,tint,ttrue,tprim,tentity,teval unused=tvar,tabs,tf64,tfalse,tcon,tnil,tcons,tfold,tdup,tera,tsubst
 
 -- Ground numerals: declared once, written as decimal tokens so the
 -- emitted arithmetic reads exactly like the certificate:

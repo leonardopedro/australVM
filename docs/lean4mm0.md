@@ -1,17 +1,33 @@
 # Lean 4 → DeltaNets → MM0 — Adapted Plan
 
-> **Adapted 2026-10-23** from the generic multi-team roadmap to what this
-> repository actually contains. The original plan proposed *building* four
-> modules (a Nanoda↔AustralVM flat-AST C ABI, an Austral-language DeltaNets
-> engine, a `cic.mm0`, and an mm0-rs synthesizer). Three of the four already
-> exist here in better-integrated form — so this plan **reweights toward
-> improving the existing implementation**, per the standing rule:
+> **Adapted 2026-10-23; re-grounded 2026-10-25** against the tree. The
+> original generic plan proposed *building* four modules (a Nanoda↔AustralVM
+> flat-AST C ABI, an Austral-language DeltaNets engine, a `cic.mm0`, and an
+> mm0-rs synthesizer). Three of the four already existed here in
+> better-integrated form, and Phases C and D have since landed — so this plan
+> **reweights toward improving the existing implementation**, per the standing
+> rule:
 >
 > **Improving an existing feature outranks adding a new one. There is
 > exactly one DeltaNets implementation in this project
 > (`unfer/logos/src/deltanet`), driven from AustralVM through
 > `lib/deltanet_plugin.ml` and `prob_kernel` — it is improved here, never
 > duplicated.**
+>
+> **State at 2026-10-25:** Phases A–D landed and green. Measured here:
+> `cargo test -p logos --lib` clean (303 passed, 1 ignored, including the five
+> reducer tests §9.1 adds), `scripts/lean2mm0 check` byte-identical, `selftest`
+> refusing both tampered anchors, and `mm0-rs` + `mm0-c` accepting both
+> certificates — the `phase-d` CI job runs the same three. §9 is what changed
+> in this iteration: the reducer correctness pass, the trust-split budget, the
+> coverage label, and the emitter self-test — all *inside* the existing
+> pipeline, no new module.
+>
+> Numbers deliberately absent: `prob_kernel`'s test count is not quoted here
+> because this host cannot rebuild that crate (its `gemm-f16` dependency
+> assembles `+fullfp16` instructions and the host is `aarch64` without the
+> feature), so any figure would be second-hand. The kernel path this document
+> is about — `logos::deltanet` — is built and tested here.
 
 ---
 
@@ -87,12 +103,12 @@
 | §1 Nanoda flat-AST C ABI (`bridge.h`) | `prob_kernel::verify::verify_export` (nanoda_lib linked in-process, S29) | **Exists** — FFI superseded; no new ABI surface needed |
 | §2 Austral-language `DeltaNet.Core/Parallel/Canonicalize` | `unfer/logos/src/deltanet` (Rust: `compiler`, `reducer`, `readback`, `symbolic`, `ted`, `unf`) | **Exists** — improved, not duplicated |
 | §2.1 linear node pool / slot recycling | `Net::free_list` + `freed` forwarding stubs in `deltanet::types` | Exists (single-threaded) |
-| §2.2 multicore work-stealing CAS loop | — | Deferred → `PLAN_parallel_australvm.md` (§5) |
+| §2.2 multicore work-stealing CAS loop | — | Deferred → `PLAN_parallel_australvm.md` (§5); correctness pass landed, §9 |
 | §2.3 WL canonicalization + isomorphism witness π | `unf::canonical_serialize` (root-directed DFS, backrefs for cycles) + **`unf::isomorphism_witness`** | **Exists + improved (this iteration)** |
 | §1/§4 conversion-check C ABI `reduce_and_check_isomorphism` | **`prob_kernel::logos::austral_defeq` + `uk_austral_defeq` + `logos iso`** | **Exists + S29-registered (this iteration)** |
 | §3 `cic.mm0` (generic CIC) | `docs/cic.mm0` (agent-signature theory + `net_isomorphism_step`) | **Spec adapted (this iteration)** |
-| §4 mm0-rs `.mmb` synthesizer | — | Deferred → Phase D (§5) |
-| §4 mm0-c root of trust | — | Deferred with Phase D |
+| §4 mm0-rs `.mmb` synthesizer | `scripts/lean2mm0` → `mm0/*.mm1` → `mm0-rs compile` | **Exists** — Phase D, §7 |
+| §4 mm0-c root of trust | `mm0-c <stem>.mmb < <stem>.mm0` | **Exists** — Phase D, §7, gated in CI |
 | AustralVM compiler-side gate | `lib/deltanet_plugin.ml` (`deltanet_unf` pass, via `CamlCompiler_rust_bridge.austral_unf_json` + `austral_defeq_json`) + `lib/formalize_plugin.ml` (`logos unf` subprocess) | Exists — conversion-gated (this iteration) |
 
 The Austral→DeltaNets compiler cycle (S36/S37 in `unfer/docs/LOGOS.md`):
@@ -313,6 +329,18 @@ Phase D's remaining piece — the *theorem* side — is landed:
     structural spine (`rowImage.length → 16`) are emitter-evaluated too —
     covered by the dual-path cross-check (evaluator value vs net reduction)
     that generation runs before anything is emitted.
+  * **Why the grounded class cannot simply be encoded structurally.** The
+    signature has `tnil`/`tcons`/`tfold`/`tabs`/`tapp`/`tsubst`, and `tfold`
+    does reduce (`fold_nil`, `fold_cons`). What it cannot do is *compute*: MM0
+    has no beta rule for `tapp (tabs b) a` — the theory gives
+    `teq (tapp (tabs b) a) (tsubst b a)` with `tsubst` **opaque**, so a fold
+    whose step function is a Lean lambda reaches `tsubst b a` and stops. A
+    `row_even`-shaped def is `List.all` over a 32-element row: its normal form
+    is a tower of `tsubst` applications, not `ttrue`. Encoding it structurally
+    would produce a goal no axiom can close, so the emitter evaluates it and
+    says so. Making those five structural would require a substitution
+    calculus in the theory (a `tsubst` congruence with per-constructor rules) —
+    a different, much larger theory, not an emitter fix.
 * **CI**: `.github/workflows/ci.yml` has a `phase-d` job that rebuilds the
   frozen mm0 toolchain from digama0/mm0 at the host's pinned commit and
   runs `scripts/lean2mm0 verify` — both certificates re-checked by mm0-c on
@@ -320,12 +348,141 @@ Phase D's remaining piece — the *theorem* side — is landed:
 
 ---
 
-## 8. Resource note (revised)
+---
+
+## 9. Executed this iteration (2026-10-25)
+
+All inside the existing pipeline: no new module, no second reducer, no new
+hash. Every item below is a property the document previously *stated* and now
+*checks*.
+
+### 9.1 Reducer correctness — the Phase-E prerequisite
+
+The single-threaded reducer had four defects that surfaced as invalid reads
+(`no port at node 3 slot 2`) or silently wrong readbacks, all in
+`unfer/logos`:
+
+* `deltanet/types.rs` — `alloc_node` recycled freed ids. A freed node is a
+  *forwarding stub* that live ports legitimately point into, so recycling
+  rewired walks to an unrelated node. Ids are no longer recycled (the free list
+  is gone); `wire`/`get_aux`/`resolve_port` are bounds-guarded, as is the
+  freed-node branch of `readback`/`symbolic`.
+* `deltanet/reducer.rs` — `commute_dup_through` created one fresh Dup per aux
+  port but wired each original port twice and left one of the Dup's outputs
+  dangling. Both outputs now terminate on the copies' principals.
+* `core_ir/linearity.rs` — the duplication insertion (ΔI/ΔA) wrapped the body
+  in extra `Lam`s and left uses pointing at the same wire; multi-use binders
+  now keep their name and get a `rename_uses` pass, and `insert_clone_chain`'s
+  terminal Dup erases its surplus output instead of leaving an unconnected
+  port.
+
+Tests added in `linearity.rs`: `dup_in_lam_reduces_to_a_pair`,
+`…_under_application`, `dup_and_let_alias_share_a_normal_form` (UNF-hash
+equality), `drop_in_lam_inserts_an_eraser_and_reduces`,
+`triple_use_fans_out_through_a_dup_chain`. This is what Phase E (parallel
+reduction) must keep bit-identical, so it had to be right first.
+
+### 9.2 Trust split is a budget, not a paragraph
+
+`scripts/lean2mm0` now pins, per certificate, how many definitions are
+structurally checked by `mm0-c` and how many are emitter-evaluated, and
+**fails generation** when the grounded set widens or the certificate set
+changes:
+
+```
+gap_certificate      structural=9 grounded=0 certificates=9
+layout_certificate   structural=3 grounded=5 certificates=8
+```
+
+The reasoning: a regression inside the encoder (an unfold that stops firing, a
+prim table entry that stops matching) would quietly move a definition from
+*checked* to *evaluated* — the proof would still verify, because a grounded
+definition's proof is the tautology `teq ttrue ttrue`. The artifact's header
+already counted the split in prose; a prose count cannot fail. The count is now
+in `BUDGETS` in the emitter, is emitted as a machine-readable
+`-- trust-split: structural=N grounded=M certificates=K` line, and is gated by
+`scripts/verify-invariants`.
+
+Widening the budget is still allowed — deliberately, by editing the table in
+the same commit that widens it, so the diff shows a human decided. That is the
+same posture as the pinned lean4export fixtures.
+
+### 9.3 Both trust anchors are tested by mutation
+
+The document's load-bearing claim is the *dual-path cross-check*: the emitter
+re-derives each checked def twice (Lean-side evaluation, and the net encoding's
+reduction) and refuses to emit when they disagree. Until now nothing tested
+that the refusal happens — a cross-check that never fires is
+indistinguishable from one that cannot.
+
+`scripts/lean2mm0 selftest` mutates one value on each path and requires the
+emitter to raise:
+
+| Mutation | Anchor it must trip |
+|---|---|
+| evaluator returns a flipped boolean | `Lean-side evaluation is … not \`true\`` — the kernel-rfl anchor |
+| encoder's node value is flipped after encoding | `net reduction is … not \`true\`` — the evaluator-vs-net anchor |
+
+Both run against the real pinned exports, so the mutation is applied to a
+computation the emitter has already been shown to accept. Unmutated generation
+is asserted clean in the same run. Gated by `scripts/verify-invariants` and by
+the `phase-d` CI job (no mm0 toolchain needed: the mutation is caught before
+any `.mmb` is produced).
+
+### 9.4 Theory substrate is labelled, not implied
+
+`docs/cic.mm0` declares more of the agent signature than the two certificates
+exercise. Rather than describe that in prose (which goes stale the moment the
+encoder changes), each artifact now carries the answer it was generated from:
+
+```
+-- theory coverage: used=tapp,tint,ttrue,tfalse,tprim,tentity,teval
+--   unused=tvar,tabs,tf64,tcon,tnil,tcons,tfold,tdup,tera,tsubst
+```
+
+(`gap_certificate`; `layout_certificate` differs only in that it never emits
+`tfalse`.) The line is scanned from the *generated* declarations only — the
+`.mm0` embeds `cic.mm0` verbatim for audit, so scanning the whole file would
+mark everything used — and it is part of the drift gate, so a change in what
+the encoder emits shows up as a diff.
+
+What the unused set means, precisely:
+
+- `tcon`/`tnil`/`tcons`/`tfold` are the constructor spine and the structural
+  fold. The encoder *can* emit them (`const_node` on a surviving constructor
+  application), but every list-shaped computation in these two sources is
+  grounded, for the reason §7 gives: without a `tsubst` calculus a fold over a
+  lambda normalizes to a tower of opaque `tsubst` applications, never to
+  `ttrue`. So the spine support is exercised by construction, not by these
+  certificates.
+- `tabs`/`tvar` are the binder and the De Bruijn index: the two sources have
+  no open terms (every certificate is a closed `Bool` computation), and
+  `pow10`'s `brecOn` machinery is evaluated rather than encoded.
+- `tf64` is the F64 literal. Neither source computes on floats.
+- `tdup`/`tera` are the duplication and erasure agents. Ground `Bool`
+  computations never need them; they appear in the *net* side of the pipeline
+  (`deltanet::reducer`), which is not what this theory certifies.
+- `tsubst` is the opaque substitution term of `tsubst_beta`. It is declared
+  because the beta rule needs it; it is unused because nothing here reasons
+  about a beta redex it cannot evaluate.
+
+A later reader can therefore tell a checked rule from a reserved one without
+trusting a paragraph: the paragraph is generated from the same pass. The drift
+gate keeps it honest in one direction (artifact vs regeneration);
+`scripts/verify-invariants` keeps it honest in the other, by requiring every
+`used=` name to be a `term` the theory declares — a name invented by the
+encoder would otherwise produce a coverage line that reads complete and a
+certificate `mm0-rs` rejects at the next gate.
+
+---
+
+## 10. Resource note (revised)
 
 The generic plan estimated ~2,500 LOC for a new DeltaNets engine, ~1,200 for
 Nanoda instrumentation and ~1,800 for an mm0 synthesizer against a 2–3
-engineer team over 10 months. Because the engine, the nanoda seam and the
-compiler gate already exist here, this iteration's delta is ~600 LOC of
-engine/API/CLI plus the adapted `cic.mm0`, and the remaining genuinely-new
-work (Phase C/D) is the registration checklist and the mm0 emitter — sized
-in weeks, not quarters, and independently verifiable at each step.
+engineer team over 10 months. Measured in this tree: the engine is ~2.5k lines
+of Rust that already existed, `scripts/lean2mm0` is ~1.5k lines of stdlib-only
+Python, `docs/cic.mm0` is 122 lines, and this iteration's delta is the
+reducer-fix set (§9.1) plus ~120 lines of emitter/gate code (§9.2–9.3). The
+remaining genuinely-new work is the substitution calculus §7 names — sized in
+weeks, and independently verifiable at each step.
