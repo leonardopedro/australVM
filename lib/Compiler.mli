@@ -43,6 +43,11 @@ val pkg_totality : bool ref
     plan JSON path (merging with an existing file). *)
 val emit_derivations_path : string option ref
 
+(** memsafe: export the linearity ledger — the checker's linear-resource and
+    borrow decisions — to this JSON path, merging with an existing file
+    (docs/memsafe.md §3). *)
+val emit_linearity_ledger_path : string option ref
+
 (** Hash table of compiled JIT function pointers keyed by function name. *)
 val jit_functions : (string, int64) Hashtbl.t
 

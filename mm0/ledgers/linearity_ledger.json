@@ -1,0 +1,170 @@
+{
+  "modules": [
+    {
+      "name": "LinearityLedger",
+      "functions": [
+        { "name": "make_handle", "kind": "function", "timelines": [] },
+        {
+          "name": "discard_handle",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "discard",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "consume_pair",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "a",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "b",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "borrow_read",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [
+                "acquire", "borrow_read", "borrow_read", "unborrow",
+                "unborrow", "consume"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "borrow_write",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "mut_h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "borrow_write", "unborrow", "consume" ]
+            },
+            {
+              "var": "w",
+              "ty": "&![Handle, Region<6>]",
+              "path": "entry",
+              "events": [ "acquire", "borrow_read", "unborrow", "drop" ]
+            }
+          ]
+        },
+        {
+          "name": "read_ref",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "w",
+              "ty": "&![Handle, R]",
+              "path": "entry",
+              "events": [ "acquire", "borrow_read", "unborrow", "drop" ]
+            }
+          ]
+        },
+        {
+          "name": "reborrow_write",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "mut_h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "borrow_write", "unborrow", "consume" ]
+            },
+            {
+              "var": "w",
+              "ty": "&![Handle, Region<9>]",
+              "path": "entry",
+              "events": [ "acquire", "reborrow", "unborrow", "drop" ]
+            },
+            {
+              "var": "w_tmp_ref5",
+              "ty": "&![Handle, Region<10>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "consume_in_both_arms",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "b0.a0",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "b0.a1",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "consume_and_replace",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume", "reacquire", "consume" ]
+            },
+            {
+              "var": "_t130",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        { "name": "main", "kind": "function", "timelines": [] }
+      ]
+    }
+  ]
+}

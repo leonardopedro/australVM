@@ -42,7 +42,8 @@ let test_compile_default _ =
                             auth_manifest = None;
                             emit_cps_path = None;
                             pkg_totality = false;
-                            emit_derivations = None
+                            emit_derivations = None;
+                            emit_linearity_ledger = None
                           }
   in
   assert_equal ~printer:(fun _ -> "cmd") cmd expected

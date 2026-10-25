@@ -52,6 +52,10 @@ let emit_cps_path = ref (None: string option)
    `--emit-derivations <path>` — so ordinary compilation is untouched. *)
 let pkg_totality = ref false
 let emit_derivations_path = ref (None: string option)
+(* memsafe (docs/memsafe.md §3): `--emit-linearity-ledger <path>` turns on the
+   linearity ledger and writes it as JSON. Off by default; when off the
+   checker's hooks are no-ops and no ledger state is allocated. *)
+let emit_linearity_ledger_path = ref (None: string option)
 let jit_functions : (string, int64) Hashtbl.t = Hashtbl.create 16
 
 (* The binary most recently swapped into the JIT (set only on a successful
@@ -152,7 +156,17 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
               (* `austral_raise` never returns — it raises the Austral_error. *)
               austral_raise TypeError [ErrorText.Text msg]
            | Compiler_plugin.VerdictOk -> ());
+          (* memsafe: a ledger is per module, so the checker starts from an
+             empty one and the export replaces this module's entry. *)
+          (match !emit_linearity_ledger_path with
+           | Some _ -> LinearityLedger.clear (); LinearityLedger.set_enabled true
+           | None -> ());
           let _ = check_module_linearity typed in
+          (match !emit_linearity_ledger_path with
+           | Some path ->
+              LinearityLedger.write_json ~path ~name:(mod_name_string name);
+              LinearityLedger.set_enabled false
+           | None -> ());
           (* avm-pkg spec task 2.1: when compiling package modules, run
              the totality pass (rejects unbounded constructs — see
              lib/Totality.ml) and export the module's derivations to the

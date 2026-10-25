@@ -1,0 +1,122 @@
+-- memsafe linearity-ledger fixture (docs/memsafe.md §3.2).
+--
+-- The *only* purpose of this module is to make the linearity checker take
+-- every transition that docs/memsafe.mm0 declares, so the certificate the
+-- pipeline emits is not a proof about a vacuous trace:
+--
+--   e_acq    parameters, `let` bindings, destructured linear fields
+--   e_cons   the one legal consumption of each of them
+--   e_drop   a write reference discharged by its borrow scope ending
+--   e_reacq  a `var` reassigned after consumption (inside a loop, so the
+--            checker's pending bookkeeping is exercised too)
+--   e_bor /  a read borrow, and a read borrow nested in a read borrow
+--   e_unbor
+--   branch   an `if` that consumes the same parameter in both arms: two
+--            execution paths, one timeline each (docs/memsafe.md §3.1)
+--
+-- Nothing here is clever on purpose: every function is minimal, so a change
+-- in the ledger shape is a change in the checker, not in the fixture.
+module body LinearityLedger is
+    record Handle : Linear is
+        id: Int32;
+    end;
+
+    function make_handle(id: Int32): Handle is
+        return Handle(id => id);
+    end;
+
+    -- e_acq (parameter) + e_cons (destructure).
+    function discard_handle(h: Handle): Unit is
+        let { id: Int32 } := h;
+        return nil;
+    end;
+
+    -- e_acq (local) + e_cons by a call.
+    function discard(): Unit is
+        let h: Handle := make_handle(1);
+        discard_handle(h);
+        return nil;
+    end;
+
+    -- e_acq (two parameters) + e_cons for each, in one body.
+    function consume_pair(a: Handle, b: Handle): Unit is
+        discard_handle(a);
+        discard_handle(b);
+        return nil;
+    end;
+
+    -- e_acq (parameter) + e_bor + nested e_bor + e_unbor twice + e_cons.
+    -- A read borrow of an already read-borrowed value is legal and nests.
+    function borrow_read(h: Handle): Unit is
+        borrow r1: &[Handle, rho] := &h do
+            borrow r2: &[Handle, R] := &h do
+                let x: Int32 := r2->id;
+                let y: Int32 := r1->id;
+            end borrow;
+        end borrow;
+        discard_handle(h);
+        return nil;
+    end;
+
+    -- e_acq (parameter) + e_bw (write borrow) + e_unbor + e_acq (the write
+    -- reference itself) + e_drop (it is discharged by the borrow ending) +
+    -- e_cons (the borrowed value).
+    function borrow_write(h: Handle): Unit is
+        var mut_h: Handle := h;
+        borrow w: &![Handle, rho] := &!mut_h do
+            let x: Int32 := w->id;
+        end borrow;
+        discard_handle(mut_h);
+        return nil;
+    end;
+
+    -- e_acq (parameter) + e_bor (reading through a write reference borrows
+    -- it) + e_unbor + e_drop (the parameter is discharged at return).
+    generic [R: Region]
+    function read_ref(w: &![Handle, R]): Unit is
+        let x: Int32 := w->id;
+        return nil;
+    end;
+
+    -- e_reb: `&~w` reborrows a write reference instead of borrowing it.
+    function reborrow_write(h: Handle): Unit is
+        var mut_h: Handle := h;
+        borrow w: &![Handle, rho] := &!mut_h do
+            read_ref(&~w);
+        end borrow;
+        discard_handle(mut_h);
+        return nil;
+    end;
+
+    -- Two execution paths through one `if`, each consuming the parameter.
+    function consume_in_both_arms(h: Handle, cond: Bool): Unit is
+        if cond then
+            discard_handle(h);
+        else
+            discard_handle(h);
+        end if;
+        return nil;
+    end;
+
+    -- e_cons + e_reacq inside a loop, then a final e_cons.
+    function consume_and_replace(): Unit is
+        var h: Handle := make_handle(2);
+        for i from 0 to 3 do
+            discard_handle(h);
+            h := make_handle(7);
+        end for;
+        discard_handle(h);
+        return nil;
+    end;
+
+    function main(): ExitCode is
+        discard();
+        consume_pair(make_handle(3), make_handle(4));
+        borrow_read(make_handle(5));
+        borrow_write(make_handle(6));
+        reborrow_write(make_handle(8));
+        consume_in_both_arms(make_handle(7), true);
+        consume_and_replace();
+        return ExitSuccess();
+    end;
+end module body.

@@ -62,8 +62,9 @@ type appearances
 val count : identifier -> texpr -> appearances
 
 (** Run the linearity checking algorithm given a function or method's value
-    parameter list and body. *)
-val linearity_check: value_parameter list -> tstmt -> unit
+    parameter list and body. [name] and [kind] only label the function in the
+    linearity ledger (docs/memsafe.md §3); they do not affect checking. *)
+val linearity_check: ?name:string -> ?kind:string -> value_parameter list -> tstmt -> unit
 
 (** Given a list of value parameters, add the linearly-typed ones to the table. *)
 val init_tbl : state_tbl -> value_parameter list -> state_tbl

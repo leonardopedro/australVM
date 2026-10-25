@@ -1,0 +1,217 @@
+-- memsafe linearity certificate — linearity_certificate (generated).
+--
+-- Source ledger: mm0/ledgers/linearity_ledger.json (sha256 2f600442d1bdb7c9baea69b5246913f23e5a81be393d75417bf36a1efbd6b6aa)
+-- Ledger source: mm0/fixtures/linearity_ledger.aum compiled with --emit-linearity-ledger,
+--   whose rows are written at lib/LinearityCheck.ml's decision points (docs/memsafe.md §3).
+-- Target theory: docs/memsafe.mm0 (sha256 86e1b8d162fcf0549dc63edf6d45c713f7e98f24b1d2b350ed3a2928e905ec11)
+--
+-- Each theorem claims one timeline is a run of the automaton from
+-- st_idle back to st_idle. MM0 re-checks every transition; nothing
+-- here is asserted about the program directly, only about the trace
+-- the checker produced (docs/memsafe.md §5).
+--
+-- trust-split: structural=17 grounded=0 certificates=17
+-- theory coverage: used=st_idle,st_owned,st_read,st_write,e_acq,e_cons,e_reacq,e_bor,e_bw,e_reb,e_unbor,e_drop,trans,tl_nil,tl_cons,run unused=-
+-- transitions exercised: t_acq,t_bor,t_bor_nested,t_bw,t_cons,t_drop,t_reacq,t_reb,t_unbor_idle,t_unbor_read,t_unbor_write
+-- memsafe.mm0 — the MM0 target theory for the linearity certificate
+-- (docs/memsafe.md §4). Adapted to what this project actually produces: a
+-- *ledger* of the linearity checker's decisions (lib/LinearityLedger.ml,
+-- exported with `--emit-linearity-ledger`), not a model of the C lowering.
+--
+-- Why this shape. The generic memsafe plan (the one this document replaced)
+-- proposed axiomatizing "linear states as multisets" and proving conservation
+-- with `state_add` / `state_remove` axioms. Multiset equality needs
+-- induction, and MM0 has no induction: a proof about an abstract multiset
+-- could only be closed by postulating the fact it was meant to check. The
+-- ledger makes the claim *decidable*, so it can be *checked*:
+--
+--   * one timeline per (variable, complete execution path);
+--   * a timeline is a finite word over the transition alphabet below;
+--   * the property "this variable's linear discipline was respected on this
+--     path" is exactly "the word is a run of the automaton from st_idle back
+--     to st_idle" — derived step by step by `run_cons`, so mm0-c re-checks
+--     every transition instead of trusting a postulate.
+--
+-- The automaton is the specification. It is small enough to audit by eye,
+-- and its missing edges are the illegal programs:
+--
+--   * no edge consumes from st_idle        (double consumption / use after
+--                                            consumption)
+--   * no edge consumes from st_read/st_write (consuming a borrowed value)
+--   * no edge acquires from st_owned/st_*  (acquiring over a live value)
+--   * no edge borrows a write-borrowed value, and none write-borrows a
+--     read-borrowed one (exclusivity); a nested *read* borrow is the single
+--     exception, and it is an explicit self-loop
+--
+-- One edge below is a deliberate record of a checker limitation, not a law:
+-- `t_unbor_idle`. LinearityCheck's borrow handling is not depth-counting —
+-- when a read borrow's body ends it resets the original to Unconsumed even if
+-- an outer read borrow is still live (lib/LinearityCheck.ml, TBorrow's second
+-- branch). So a nested read borrow emits two `unborrow` events for one
+-- `st_read`, and without this edge the genuine trace of
+-- mm0/fixtures/linearity_ledger.aum's `borrow_read` would not be a run. The
+-- edge is idempotent: it enables no new `consume`, so conservation is
+-- unaffected, while borrow-exclusivity is exactly as strong as the checker.
+-- docs/memsafe.md §5 records this as a finding, so the artifact does not
+-- silently claim more than the trace supports.
+--
+-- Difference from docs/cic.mm0: nothing here is delegated. The Lean-side
+-- certificates need `net_isomorphism_step` because equality of normal forms
+-- is the kernel's answer; here every step is a rule application, so the
+-- artifact's trust split is 100% structural (no grounded tautologies).
+--
+-- Validated with `mm0-rs compile` + `mm0-c` as part of
+-- scripts/ledger2mm0 verify; gated by scripts/verify-invariants.
+
+provable sort Prop;
+
+sort St;                        -- the resource state of one variable
+sort Ev;                        -- one ledger event
+sort L;                         -- a timeline: a word of events
+
+-- Secondary-lexer delimiters: parentheses are standalone tokens in math
+-- strings (same declaration as docs/cic.mm0).
+delimiter $ ( ) $;
+
+-- ── States ───────────────────────────────────────────────────────────────
+-- st_idle is doing double duty as "nothing owned yet" and "consumed": the
+-- two are interchangeable for conservation — what matters is that no path
+-- can *use* a value that is not owned, and that every path ends idle.
+
+term st_idle: St;
+term st_owned: St;
+term st_read: St;               -- read-borrowed
+term st_write: St;              -- write-borrowed
+
+-- ── Events (lib/LinearityLedger.event_rule) ──────────────────────────────
+
+term e_acq: Ev;                 -- a linear value enters scope
+term e_cons: Ev;                -- its one legal consumption
+term e_reacq: Ev;               -- an assignment restores a consumed variable
+term e_bor: Ev;                 -- a read borrow starts
+term e_bw: Ev;                  -- a write borrow starts
+term e_reb: Ev;                 -- a `reborrow` starts
+term e_unbor: Ev;               -- a borrow scope ends
+term e_drop: Ev;                -- a linear reference type is discharged
+
+-- ── The automaton ────────────────────────────────────────────────────────
+-- One axiom per edge, stated flat (no parameters), so an applied edge is a
+-- literal fact mm0-c can match.
+
+term trans (s: St) (e: Ev) (s2: St): Prop;
+
+axiom t_acq:  $ trans st_idle e_acq st_owned $;
+axiom t_reacq: $ trans st_idle e_reacq st_owned $;
+axiom t_cons: $ trans st_owned e_cons st_idle $;
+axiom t_drop: $ trans st_owned e_drop st_idle $;
+axiom t_bor:  $ trans st_owned e_bor st_read $;
+axiom t_bw:   $ trans st_owned e_bw st_write $;
+axiom t_reb:  $ trans st_owned e_reb st_write $;
+axiom t_bor_nested: $ trans st_read e_bor st_read $;
+axiom t_unbor_read: $ trans st_read e_unbor st_owned $;
+axiom t_unbor_write: $ trans st_write e_unbor st_owned $;
+-- See the header: the checker resets borrow state without counting depth, so
+-- the second `unborrow` of a nested read borrow arrives in st_owned.
+axiom t_unbor_idle: $ trans st_owned e_unbor st_owned $;
+
+-- ── Timelines and runs ───────────────────────────────────────────────────
+
+term tl_nil: L;
+term tl_cons (e: Ev) (l: L): L;
+
+term run (l: L) (s: St) (s2: St): Prop;
+
+axiom run_nil (s: St): $ run tl_nil s s $;
+
+-- The only rule a certificate's proof uses, once per event. Hypothesis
+-- binders (`>`), not `->` inside the formula: MM0 has no internal modus
+-- ponens, so only hypothesis form can actually be applied (the same lesson
+-- docs/cic.mm0 records).
+axiom run_cons (e: Ev) (l: L) (s: St) (s2: St) (s3: St):
+  $ trans s e s2 $ > $ run l s2 s3 $ > $ run (tl_cons e l) s s3 $;
+
+-- LinearityLedger.discard_handle (function): linear variable `h` : Handle, path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_discard_handle__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_discard_handle__h__entry: $ run c_discard_handle__h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.discard (function): linear variable `h` : Handle, path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_discard__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_discard__h__entry: $ run c_discard__h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.consume_pair (function): linear variable `a` : Handle, path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_consume_pair__a__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_consume_pair__a__entry: $ run c_consume_pair__a__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.consume_pair (function): linear variable `b` : Handle, path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_consume_pair__b__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_consume_pair__b__entry: $ run c_consume_pair__b__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.borrow_read (function): linear variable `h` : Handle, path entry, 6 event(s)
+--   timeline: acquire, borrow_read, borrow_read, unborrow, unborrow, consume
+def c_borrow_read__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_bor (tl_cons e_unbor (tl_cons e_unbor (tl_cons e_cons tl_nil)))))) $;
+pub theorem c_borrow_read__h__entry: $ run c_borrow_read__h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_bor (run_cons t_bor_nested (run_cons t_unbor_read (run_cons t_unbor_idle (run_cons t_cons run_nil))))));
+
+-- LinearityLedger.borrow_write (function): linear variable `h` : Handle, path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_borrow_write__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_borrow_write__h__entry: $ run c_borrow_write__h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.borrow_write (function): linear variable `mut_h` : Handle, path entry, 4 event(s)
+--   timeline: acquire, borrow_write, unborrow, consume
+def c_borrow_write__mut_h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_bw (tl_cons e_unbor (tl_cons e_cons tl_nil)))) $;
+pub theorem c_borrow_write__mut_h__entry: $ run c_borrow_write__mut_h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_bw (run_cons t_unbor_write (run_cons t_cons run_nil))));
+
+-- LinearityLedger.borrow_write (function): linear variable `w` : &![Handle, Region<6>], path entry, 4 event(s)
+--   timeline: acquire, borrow_read, unborrow, drop
+def c_borrow_write__w__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+pub theorem c_borrow_write__w__entry: $ run c_borrow_write__w__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_bor (run_cons t_unbor_read (run_cons t_drop run_nil))));
+
+-- LinearityLedger.read_ref (function): linear variable `w` : &![Handle, R], path entry, 4 event(s)
+--   timeline: acquire, borrow_read, unborrow, drop
+def c_read_ref__w__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+pub theorem c_read_ref__w__entry: $ run c_read_ref__w__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_bor (run_cons t_unbor_read (run_cons t_drop run_nil))));
+
+-- LinearityLedger.reborrow_write (function): linear variable `h` : Handle, path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_reborrow_write__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_reborrow_write__h__entry: $ run c_reborrow_write__h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.reborrow_write (function): linear variable `mut_h` : Handle, path entry, 4 event(s)
+--   timeline: acquire, borrow_write, unborrow, consume
+def c_reborrow_write__mut_h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_bw (tl_cons e_unbor (tl_cons e_cons tl_nil)))) $;
+pub theorem c_reborrow_write__mut_h__entry: $ run c_reborrow_write__mut_h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_bw (run_cons t_unbor_write (run_cons t_cons run_nil))));
+
+-- LinearityLedger.reborrow_write (function): linear variable `w` : &![Handle, Region<9>], path entry, 4 event(s)
+--   timeline: acquire, reborrow, unborrow, drop
+def c_reborrow_write__w__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_reb (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+pub theorem c_reborrow_write__w__entry: $ run c_reborrow_write__w__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_reb (run_cons t_unbor_write (run_cons t_drop run_nil))));
+
+-- LinearityLedger.reborrow_write (function): linear variable `w_tmp_ref5` : &![Handle, Region<10>], path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_reborrow_write__w_tmp_ref5__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_reborrow_write__w_tmp_ref5__entry: $ run c_reborrow_write__w_tmp_ref5__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.consume_in_both_arms (function): linear variable `h` : Handle, path b0.a0, 2 event(s)
+--   timeline: acquire, consume
+def c_consume_in_both_arms__h__b0_a0_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_consume_in_both_arms__h__b0_a0: $ run c_consume_in_both_arms__h__b0_a0_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.consume_in_both_arms (function): linear variable `h` : Handle, path b0.a1, 2 event(s)
+--   timeline: acquire, consume
+def c_consume_in_both_arms__h__b0_a1_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_consume_in_both_arms__h__b0_a1: $ run c_consume_in_both_arms__h__b0_a1_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+
+-- LinearityLedger.consume_and_replace (function): linear variable `h` : Handle, path entry, 4 event(s)
+--   timeline: acquire, consume, reacquire, consume
+def c_consume_and_replace__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons (tl_cons e_reacq (tl_cons e_cons tl_nil)))) $;
+pub theorem c_consume_and_replace__h__entry: $ run c_consume_and_replace__h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons (run_cons t_reacq (run_cons t_cons run_nil))));
+
+-- LinearityLedger.consume_and_replace (function): linear variable `_t130` : Handle, path entry, 2 event(s)
+--   timeline: acquire, consume
+def c_consume_and_replace___t130__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_consume_and_replace___t130__entry: $ run c_consume_and_replace___t130__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+

@@ -132,6 +132,103 @@ else
     gap "Phase D: mm0 toolchain absent (mm0-rs/mm0-c not on PATH; see docs/lean4mm0.md §5)"
 fi
 
+# --- memsafe: the linearity ledger + its MM0 certificate (docs/memsafe.md) ---
+#
+# The chain this gate owns: mm0/fixtures/linearity_ledger.aum is compiled
+# with `--emit-linearity-ledger` into the pinned ledger
+# mm0/ledgers/linearity_ledger.json, and scripts/ledger2mm0 turns that ledger
+# into mm0/linearity_certificate.{mm0,mm1} over docs/memsafe.mm0. Three
+# distinct failure modes, three checks:
+#
+#   * the ledger drifting from the fixture or from the checker (regenerating
+#     needs the compiler binary, so it is a gap when dune has not run);
+#   * the certificate drifting from the ledger or the theory (`check`, needs
+#     only python3);
+#   * a certificate that would verify *anything* — the mutation anchors:
+#     `selftest` (no toolchain) makes the emitter's audit refuse a trace whose
+#     resource is never released, and `verify` additionally requires mm0-rs to
+#     reject a proof paired with a mutated timeline. A certificate that
+#     survives its own mutation is a tautology, not a check.
+check "memsafe: theory, emitter, fixture and pinned ledger present" \
+    bash -c "test -f '$repo_root/docs/memsafe.mm0' && test -f '$repo_root/scripts/ledger2mm0' && test -f '$repo_root/mm0/fixtures/linearity_ledger.aum' && test -f '$repo_root/mm0/ledgers/linearity_ledger.json' && test -f '$repo_root/mm0/linearity_certificate.mm0' && test -f '$repo_root/mm0/linearity_certificate.mm1'"
+check "memsafe: certificate + ledger emitter present and executable" \
+    test -x "$repo_root/scripts/ledger2mm0"
+check_py "memsafe: certificates in sync with the pinned ledger and theory" \
+    python3 "$repo_root/scripts/ledger2mm0" check
+# The trust split of a memsafe certificate is 100% derived: every theorem is a
+# run_cons chain, so `grounded` must be 0 and `structural` must equal the
+# certificate count. If that line ever reads otherwise, the emitter stopped
+# deriving and started asserting.
+check "memsafe: certificate pins its trust split (17 derived / 0 grounded)" \
+    grep -q -- '-- trust-split: structural=17 grounded=0 certificates=17' \
+    "$repo_root/mm0/linearity_certificate.mm0"
+# A rule no timeline exercises is a rule this certificate set does not test.
+# The theory declares the automaton; the artifact lists the edges it fired;
+# every declared edge must appear, so adding a transition without a fixture
+# that reaches it fails here rather than passing silently.
+exercised="$(sed -n 's/^-- transitions exercised: //p' "$repo_root/mm0/linearity_certificate.mm0")"
+missing_edges=""
+for edge in $(sed -n 's/^axiom \(t_[a-z_]*\).*/\1/p' "$repo_root/docs/memsafe.mm0"); do
+    case ",$exercised," in
+        *",$edge,"*) ;;
+        *) missing_edges="$missing_edges $edge" ;;
+    esac
+done
+if [ -n "$missing_edges" ]; then
+    echo "  [detail] the fixture never reaches:$missing_edges" >&2
+    check "memsafe: fixture exercises every automaton edge" false
+else
+    check "memsafe: fixture exercises every automaton edge" true
+fi
+check_py "memsafe: emitter self-test (audit refuses an unreleased resource)" \
+    python3 "$repo_root/scripts/ledger2mm0" selftest
+
+# Regenerate the ledger from the fixture. This is the only check that can
+# notice the *checker* changing what it records: `check` compares artifacts to
+# the pinned ledger, so a checker that quietly stops recording a consumption
+# would still produce a consistent (and weaker) certificate. Needs the
+# compiler binary and its bridge .so, hence the gap when dune has not run.
+ledger_drift() {
+    local tmp
+    tmp="$(mktemp -d)"
+    if ! ( cd "$tmp" && LD_LIBRARY_PATH="$repo_root/safestos/cranelift/target/release:$repo_root" \
+             "$repo_root/_build/default/bin/austral.exe" compile \
+             "$repo_root/mm0/fixtures/linearity_ledger.aum" \
+             --target-type=c --no-entrypoint \
+             --output="$tmp/out.c" \
+             --emit-linearity-ledger="$tmp/ledger.json" ) >"$tmp/log" 2>&1; then
+        echo "  [detail] compiling the fixture failed:" >&2
+        head -8 "$tmp/log" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    if [ ! -f "$tmp/ledger.json" ]; then
+        echo "  [detail] the compiler produced no ledger" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    if ! diff -u "$repo_root/mm0/ledgers/linearity_ledger.json" "$tmp/ledger.json" >"$tmp/diff"; then
+        echo "  [detail] the pinned ledger drifted from the fixture:" >&2
+        head -24 "$tmp/diff" >&2
+        rm -rf "$tmp"
+        return 1
+    fi
+    rm -rf "$tmp"
+    return 0
+}
+if [ -x "$repo_root/_build/default/bin/austral.exe" ]; then
+    check "memsafe: pinned ledger in sync with the fixture and the checker" ledger_drift
+else
+    gap "memsafe: pinned ledger in sync with the fixture (austral.exe not built; run dune build)"
+fi
+
+if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+    check_py "memsafe: mm0-rs + mm0-c verify the certificate, and reject a mutated one" \
+        python3 "$repo_root/scripts/ledger2mm0" verify
+else
+    gap "memsafe: mm0 toolchain absent (mm0-rs/mm0-c not on PATH; see docs/memsafe.md §6)"
+fi
+
 # --- H1.13 AuthorizationEngine: secure default, kernel denies without it ---
 check "S28: AuthorizationEngine trait present" \
     grep -q "trait AuthorizationEngine" "$repo_root/safestos/cranelift/src/auth.rs"

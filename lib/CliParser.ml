@@ -129,6 +129,9 @@ type cmd =
       emit_cps_path: string option;
       pkg_totality: bool;
       emit_derivations: string option;
+      (** Export the linearity ledger — the checker's linear-resource and
+          borrow decisions — as JSON to this path (docs/memsafe.md §3). *)
+      emit_linearity_ledger: string option;
     }
 
 let check_leftovers (arglist: arglist): unit =
@@ -297,13 +300,20 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
     | Some (arglist, path) -> (Some path, arglist)
     | None -> (None, arglist)
   in
+  (* Parse --emit-linearity-ledger=<path> (docs/memsafe.md §3: export the
+     linearity checker's decisions as the ledger ledger2mm0 certifies) *)
+  let (emit_linearity_ledger, arglist) =
+    match pop_value_flag arglist "emit-linearity-ledger" with
+    | Some (arglist, path) -> (Some path, arglist)
+    | None -> (None, arglist)
+  in
   (* There must be at least one module. *)
   if ((List.length modules) < 1) then
     Errors.missing_module ()
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; pkg_totality = pkg_totality; emit_derivations = emit_derivations; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; pkg_totality = pkg_totality; emit_derivations = emit_derivations; emit_linearity_ledger = emit_linearity_ledger; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

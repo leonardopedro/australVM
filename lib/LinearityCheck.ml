@@ -27,6 +27,17 @@ let universe_linear_ish = function
   | TypeUniverse -> true
   | _ -> false
 
+(* docs/memsafe.md §3: the ledger records exactly the variables whose
+   conservation is the claim — the linear-ish ones. Every hook below is cheap
+   when the export flag is off (`LinearityLedger.record` returns immediately). *)
+let ledger_linear (ty: ty): bool = universe_linear_ish (type_universe ty)
+
+let ledger_note (name: identifier) (ty: ty) (depth: loop_depth)
+    (event: LinearityLedger.event): unit =
+  if ledger_linear ty then
+    LinearityLedger.record ~var:(ident_string name) ~ty:(type_string ty)
+      ~depth event
+
 type state_tbl = StateTable of (identifier * ty * loop_depth * var_state) list * identifier list
 
 let show_state_tbl (tbl: state_tbl): string =
@@ -62,6 +73,7 @@ let add_entry (tbl: state_tbl) (name: identifier) (ty: ty) (depth: loop_depth): 
   let (StateTable (rows, pending)) = tbl in
   match get_entry tbl name with
   | None ->
+     ledger_note name ty depth LinearityLedger.Acquire;
      StateTable ((name, ty, depth, Unconsumed) :: rows, pending)
   | Some _ ->
      (* The justification for this being an internal error is that the compiler
@@ -103,12 +115,19 @@ let remove_entry (tbl: state_tbl) (name: identifier): state_tbl =
                    ^ (ident_string name)
                    ^ "`, but no such variable exists in the state table. Table contents: \n\n"
                    ^ (show_state_tbl tbl))
-  | Some (ty, _, state) ->
+  | Some (ty, depth, state) ->
      let is_write_ref: bool = match ty with WriteRef _ -> true | SpanMut _ -> true | _ -> false in
-     if (state = Consumed) || is_write_ref then
+     if (state = Consumed) || is_write_ref then begin
+       (* A write reference is a linear capability whose borrow scope *is* its
+          lifetime: leaving the scope discharges it. That is a legal
+          transition (docs/memsafe.mm0 `e_drop`), not a leak, and the ledger
+          says so explicitly. *)
+       (if is_write_ref && state <> Consumed then
+          ledger_note name ty depth LinearityLedger.Drop);
        let (StateTable (rows, pending)) = tbl in
        let others = List.filter (fun (n, _, _, _) -> not (equal_identifier name n)) rows in
        StateTable (others, pending)
+     end
      else
        if universe_linear_ish (type_universe ty) then
          austral_raise LinearityError [
@@ -402,6 +421,7 @@ let rec check_var_in_expr (tbl: state_tbl) (depth: loop_depth) (name: identifier
      tbl
 
 and consume_once (tbl: state_tbl) (depth: loop_depth) (name: identifier) (ty: ty): state_tbl =
+  ledger_note name ty depth LinearityLedger.Consume;
   let tbl: state_tbl =
     if universe_linear_ish (type_universe ty) then
       update_tbl tbl name Consumed
@@ -504,6 +524,7 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
               else
                 tbl
            | Consumed ->
+              ledger_note name ty depth LinearityLedger.Reacquire;
               let tbl: state_tbl = update_tbl tbl name Unconsumed in
               if is_pending tbl name then
                 remove_pending tbl name
@@ -560,6 +581,7 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
               else
                 tbl
            | Consumed ->
+              ledger_note name ty depth LinearityLedger.Reacquire;
               let tbl: state_tbl = update_tbl tbl name Unconsumed in
               if is_pending tbl name then
                 remove_pending tbl name
@@ -573,8 +595,14 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
      adorn_error_with_span span
        (fun _ ->
          let tbl: state_tbl = check_expr tbl depth cond in
-         let true_tbl: state_tbl = check_stmt tbl depth tb in
-         let false_tbl: state_tbl = check_stmt tbl depth fb in
+         (* The two arms are two execution paths, not two sequential states:
+            the ledger records them as arms of one branch so that each path's
+            timeline is accepted on its own (docs/memsafe.md §3.1). *)
+         let branch: int = LinearityLedger.next_branch () in
+         let true_tbl: state_tbl =
+           LinearityLedger.with_arm branch 0 (fun _ -> check_stmt tbl depth tb) in
+         let false_tbl: state_tbl =
+           LinearityLedger.with_arm branch 1 (fun _ -> check_stmt tbl depth fb) in
          let _ = tables_are_consistent "an if" true_tbl false_tbl in
          true_tbl)
   | TCase (span, expr, whens, _) ->
@@ -621,6 +649,12 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
        (fun _ ->
          (* Ensure the original variable is unconsumed to be borrowed. *)
          if is_unconsumed tbl original then
+           let (original_ty, _, _) = get_entry_or_fail tbl original in
+           ledger_note original original_ty depth
+             (match mode with
+              | Read -> LinearityLedger.BorrowRead
+              | Write -> LinearityLedger.BorrowWrite
+              | Reborrow -> LinearityLedger.Reborrow);
            let tbl: state_tbl =
              match mode with
              | Read ->
@@ -638,6 +672,7 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
            (* Traverse the body. *)
            let tbl: state_tbl = check_stmt tbl depth body in
            (* After the body, unborrow the variable. *)
+           ledger_note original original_ty depth LinearityLedger.Unborrow;
            let tbl: state_tbl = update_tbl tbl original Unconsumed in
            (* Remove the rename from the table. *)
            let tbl: state_tbl = remove_entry tbl rename in
@@ -646,11 +681,14 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
            (* If we're read-borrowing, and the variable is already read-borrowed, that's also allowed. *)
            let state: var_state = get_state tbl original in
            if (mode = Read) && (state = BorrowedRead) then
+             let (original_ty, _, _) = get_entry_or_fail tbl original in
+             ledger_note original original_ty depth LinearityLedger.BorrowRead;
              (* Add the rename. *)
              let tbl: state_tbl = add_entry tbl rename ref_type depth in
              (* Traverse the body. *)
              let tbl: state_tbl = check_stmt tbl depth body in
              (* After the body, unborrow the variable. *)
+             ledger_note original original_ty depth LinearityLedger.Unborrow;
              let tbl: state_tbl = update_tbl tbl original Unconsumed in
              (* Remove the rename from the table. *)
              let tbl: state_tbl = remove_entry tbl rename in
@@ -714,7 +752,10 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
          tbl)
 
 and check_whens (tbl: state_tbl) (depth: loop_depth) (whens: typed_when list): state_tbl list =
-  List.map (check_when tbl depth) whens
+  let branch: int = LinearityLedger.next_branch () in
+  List.mapi
+    (fun arm whn -> LinearityLedger.with_arm branch arm (fun _ -> check_when tbl depth whn))
+    whens
 
 and check_when (tbl: state_tbl) (depth: loop_depth) (whn: typed_when): state_tbl =
   let TypedWhen (_, bindings, body) = whn in
@@ -742,7 +783,12 @@ let init_tbl (tbl: state_tbl) (params: value_parameter list): state_tbl =
   in
   Util.iter_with_context f tbl params
 
-let linearity_check (params: value_parameter list) (body: tstmt): unit =
+let linearity_check ?(name: string = "<anonymous>")
+    ?(kind: string = "function")
+    (params: value_parameter list) (body: tstmt): unit =
+  (* docs/memsafe.md §3: one ledger function per checked body, so the export
+     can attribute every row to the function whose discipline it witnesses. *)
+  LinearityLedger.begin_function ~name ~kind;
   (* Initialize the loop depth to zero. *)
   let depth: int = 0 in
   (* Initialize the state table to the empty table. *)
@@ -750,8 +796,20 @@ let linearity_check (params: value_parameter list) (body: tstmt): unit =
   (* Populate the table with the linear parameters. *)
   let tbl: state_tbl = init_tbl tbl params in
   (* Traverse the code in execution order. *)
-  let _ = check_stmt tbl depth body in
-  ()
+  let tbl: state_tbl = check_stmt tbl depth body in
+  (* A write reference (or write span) still owned when the body ends is
+     discharged by the function's exit — the same rule {!remove_entry} applies
+     to a scoped one, and the same reason {!TReturn} does not object to it.
+     Without this the ledger would show such a parameter as never released
+     (docs/memsafe.md §3). *)
+  List.iter
+    (fun (name, ty, entry_depth, state) ->
+      let is_write_ref =
+        match ty with WriteRef _ -> true | SpanMut _ -> true | _ -> false in
+      if is_write_ref && state <> Consumed then
+        ledger_note name ty entry_depth LinearityLedger.Drop)
+    (tbl_to_list tbl);
+  LinearityLedger.end_function ()
 
 (* Linearity checking of whole modules *)
 
@@ -766,7 +824,7 @@ and check_decl_linearity (decl: typed_decl): unit =
   | TFunction (_, _, name, _, params, _, b, _, _) ->
      with_frame ("Checking linearity of function " ^ (ident_string name))
        (fun _ ->
-         linearity_check params b)
+         linearity_check ~name:(ident_string name) ~kind:"function" params b)
   | TInstance (_, _, _, _, _, methods, _) ->
      let _ = List.map check_method_linearity methods in
      ()
@@ -775,4 +833,4 @@ and check_decl_linearity (decl: typed_decl): unit =
 
 and check_method_linearity (TypedMethodDef (_, name, params, _, b)) =
   with_frame ("Checking linearity of method " ^ (ident_string name))
-    (fun _ -> linearity_check params b)
+    (fun _ -> linearity_check ~name:(ident_string name) ~kind:"method" params b)

@@ -39,6 +39,11 @@
  (libraries austral_lib austral_rust_bridge ounit2 unix str test_util))
 
 (tests
+ (names LinearityLedgerTest)
+ (modules LinearityLedgerTest)
+ (libraries austral_core ounit2 yojson))
+
+(tests
  (names LiquidInferTest)
  (modules LiquidInferTest)
  (libraries austral_liquid ounit2 zarith test_util))

@@ -59,6 +59,9 @@ type cmd =
       (** Export the module's `Derivation` constants as plan JSON to this
           path (avm-pkg), merging with an existing file. *)
       emit_derivations: string option;
+      (** Export the linearity ledger — the checker's linear-resource and
+          borrow decisions — as JSON to this path (docs/memsafe.md §3). *)
+      emit_linearity_ledger: string option;
     }
   (** Whole program compilation using the C backend. *)
 

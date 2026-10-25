@@ -1,0 +1,529 @@
+#!/usr/bin/env python3
+"""ledger2mm0 — certify the linearity ledger against docs/memsafe.mm0.
+
+Input: one pinned ledger JSON per module, written by the compiler with
+`--emit-linearity-ledger` (lib/LinearityLedger.ml). Each ledger holds, per
+checked function, one timeline per (linear variable, complete execution path):
+the ordered events the linearity checker committed to.
+
+Output: `mm0/<stem>.{mm0,mm1}` — a section per ledger timeline, whose theorem
+claims "this timeline is a run of the automaton in docs/memsafe.mm0 from
+st_idle back to st_idle". The `.mm1` carries the proof (`run_cons` once per
+event), so `mm0-c` re-checks every transition instead of trusting the
+checker.
+
+Modes (same shape as scripts/lean2mm0):
+
+    generate   write the artifacts
+    check      drift gate: regenerate and compare, no toolchain needed
+    verify     check + mm0-rs + mm0-c; also proves the certificate is
+               load-bearing by requiring a tampered proof to be rejected
+    selftest   exercise the emitter's own audit by mutation
+
+Exit codes: 0 ok, 1 failure, 2 verify without the mm0 toolchain (a distinct
+code, never a silent pass — see docs/memsafe.md §6).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+AVM = Path(__file__).resolve().parent.parent          # australVM/
+THEORY = AVM / "docs" / "memsafe.mm0"                 # target theory
+LEDGER_DIR = AVM / "mm0" / "ledgers"                  # pinned ledgers
+OUT_DIR = AVM / "mm0"
+
+# One entry per certificate file: the pinned ledger it is generated from, and
+# the exact certificate set. A change in either is a real event — generation
+# fails instead of absorbing it (the same stance as scripts/lean2mm0's
+# BUDGETS).
+SOURCES: list[dict] = [
+    {
+        "stem": "linearity_certificate",
+        "ledger": LEDGER_DIR / "linearity_ledger.json",
+        "fixture": AVM / "mm0" / "fixtures" / "linearity_ledger.aum",
+    },
+]
+
+# Per artifact: how many certificates (timelines) it must contain, and the
+# trust split. memsafe certificates have no grounded class by construction:
+# every theorem is a step-by-step derivation, so `structural` must equal
+# `certificates`. A drift here means the emitter stopped deriving and started
+# postulating, which is exactly what this table exists to catch.
+BUDGETS: dict[str, dict[str, int]] = {
+    "linearity_certificate": {"certificates": 17, "structural": 17, "grounded": 0},
+}
+
+
+class CertificateError(Exception):
+    """Any loud failure: a bad timeline, a drifted artifact, a broken anchor."""
+
+
+# ── the automaton, mirroring docs/memsafe.mm0 ────────────────────────────
+#
+# Event token → the theory's constructor. The spelling is a contract: the
+# ledger writes these tokens (lib/LinearityLedger.event_token) and the theory
+# declares these constructors (event_rule).
+EVENT_RULE = {
+    "acquire": "e_acq",
+    "consume": "e_cons",
+    "reacquire": "e_reacq",
+    "borrow_read": "e_bor",
+    "borrow_write": "e_bw",
+    "reborrow": "e_reb",
+    "unborrow": "e_unbor",
+    "drop": "e_drop",
+}
+
+# (state, token) → (next state, axiom name). This is docs/memsafe.mm0's `trans`
+# relation; the *missing* rows are the illegal programs (double consumption,
+# consuming a borrowed value, acquiring over a live one, write-borrowing a
+# borrowed value).
+EDGES = {
+    ("st_idle", "acquire"): ("st_owned", "t_acq"),
+    ("st_idle", "reacquire"): ("st_owned", "t_reacq"),
+    ("st_owned", "consume"): ("st_idle", "t_cons"),
+    ("st_owned", "drop"): ("st_idle", "t_drop"),
+    ("st_owned", "borrow_read"): ("st_read", "t_bor"),
+    ("st_owned", "borrow_write"): ("st_write", "t_bw"),
+    ("st_owned", "reborrow"): ("st_write", "t_reb"),
+    ("st_read", "borrow_read"): ("st_read", "t_bor_nested"),
+    ("st_read", "unborrow"): ("st_owned", "t_unbor_read"),
+    ("st_write", "unborrow"): ("st_owned", "t_unbor_write"),
+    # Documented checker limitation, not a law: LinearityCheck resets borrow
+    # state without counting depth, so a nested read borrow's outer scope end
+    # is seen in st_owned (docs/memsafe.mm0 header, docs/memsafe.md §5).
+    ("st_owned", "unborrow"): ("st_owned", "t_unbor_idle"),
+}
+
+START = "st_idle"
+ACCEPT = "st_idle"
+
+
+def audit(events: list[str]) -> list[tuple[str, str]]:
+    """Replay one timeline; return [(rule, state_after), …].
+
+    This is the emitter's independent path: the OCaml checker decided the
+    program was legal, this decides the *ledger* is a legal run. They are
+    different artifacts produced by different code, which is the point — a
+    missing or duplicated event in the ledger has no proof, and a bug that
+    only affects the ledger shows up here instead of in a verified artifact.
+    """
+    state = START
+    steps: list[tuple[str, str]] = []
+    for i, ev in enumerate(events):
+        if ev not in EVENT_RULE:
+            raise CertificateError(
+                f"unknown event {ev!r} at position {i} "
+                f"(lib/LinearityLedger.event_token never emits it)")
+        edge = EDGES.get((state, ev))
+        if edge is None:
+            allowed = ", ".join(sorted(e for (s, e) in EDGES if s == state)) or "nothing"
+            raise CertificateError(
+                f"timeline is not a run: event {i} is {ev!r} in state {state}, "
+                f"which {THEORY.name} does not allow (from {state} only: {allowed})")
+        state, rule = edge
+        steps.append((rule, state))
+    if state != ACCEPT:
+        raise CertificateError(
+            f"timeline ends in {state}, not {ACCEPT}: the value is still "
+            f"{'owned' if state == 'st_owned' else 'borrowed'} at function exit")
+    return steps
+
+
+# ── MM0 emission ─────────────────────────────────────────────────────────
+
+def sanitize(name: str) -> str:
+    out = "".join(c if (c.isalnum()) else "_" for c in name)
+    return out
+
+
+def cert_name(fn: str, var: str, path: str, taken: set[str]) -> str:
+    base = "c_" + sanitize(f"{fn}__{var}__{path}")
+    name, n = base, 2
+    while name in taken:
+        name, n = f"{base}_{n}", n + 1
+    taken.add(name)
+    return name
+
+
+def timeline_term(events: list[str]) -> str:
+    body = "tl_nil"
+    for ev in reversed(events):
+        body = f"(tl_cons {EVENT_RULE[ev]} {body})"
+    return body
+
+
+def proof_term(steps: list[tuple[str, str]]) -> str:
+    """`run_cons` once per event, innermost `run_nil`.
+
+    No arguments are written: every binder is determined by the goal
+    (`e`, `l`, `s`, `s3`) or by the preceding hypothesis (`s2`), the same
+    inference the Lean-side proofs in `scripts/lean2mm0` rely on.
+    """
+    if not steps:
+        return "run_nil"
+    rule = steps[0][0]
+    return f"(run_cons {rule} {proof_term(steps[1:])})"
+
+
+def theory_terms(theory: str) -> list[str]:
+    """The `term` names the theory declares, in declaration order."""
+    names = []
+    for line in theory.splitlines():
+        line = line.strip()
+        if line.startswith("term "):
+            rest = line[len("term "):]
+            name = rest.split("(")[0].split(":")[0].strip()
+            if name and name.isidentifier():
+                names.append(name)
+    return names
+
+
+def theory_axioms(theory: str) -> dict[str, str]:
+    """The theory's axioms: name → the statement text that declares it."""
+    out: dict[str, str] = {}
+    lines = theory.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("axiom "):
+            continue
+        rest = stripped[len("axiom "):]
+        name = rest.split("(")[0].split(":")[0].strip()
+        if not name or not name.isidentifier():
+            continue
+        # A statement can wrap onto continuation lines (cic.mm0's style); the
+        # coverage question is only "which sort/term names does it mention".
+        text = stripped
+        j = i + 1
+        while not text.rstrip().endswith(";") and j < len(lines):
+            text += " " + lines[j].strip()
+            j += 1
+        out[name] = text
+    return out
+
+
+def coverage_line(body: str, terms: list[str]) -> str:
+    import re
+    used = [t for t in terms if re.search(rf"\b{re.escape(t)}\b", body)]
+    unused = [t for t in terms if t not in used]
+    return (f"-- theory coverage: used={','.join(used) or '-'} "
+            f"unused={','.join(unused) or '-'}")
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_ledger(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        raise CertificateError(
+            f"{path.relative_to(AVM)} missing — regenerate it with "
+            f"`scripts/ledger2mm0 generate` after compiling the fixture") from None
+    except json.JSONDecodeError as e:
+        raise CertificateError(f"{path.relative_to(AVM)}: not JSON: {e}") from e
+
+
+def certificates(ledger: dict, tamper: str | None = None) -> list[dict]:
+    """Resolve a ledger into one record per timeline, audited and provable."""
+    taken: set[str] = set()
+    out: list[dict] = []
+    for module in ledger.get("modules", []):
+        for fn in module.get("functions", []):
+            for tl in fn.get("timelines", []):
+                events = list(tl["events"])
+                if tamper == "trace":
+                    # Drop the last event: the resource stays owned. The
+                    # automaton must refuse, and it must refuse for this
+                    # reason rather than by accident.
+                    events = events[:-1]
+                name = cert_name(fn["name"], tl["var"], tl.get("path", "entry"), taken)
+                steps = audit(events)
+                out.append({
+                    "name": name,
+                    "module": module.get("name", "?"),
+                    "fn": fn["name"],
+                    "kind": fn.get("kind", "function"),
+                    "var": tl["var"],
+                    "ty": tl["ty"],
+                    "path": tl.get("path", "entry"),
+                    "events": events,
+                    "steps": steps,
+                })
+    return out
+
+
+def trust_split_line(stem: str, structural: int, grounded: int,
+                     certificates: int) -> str:
+    return (f"-- trust-split: structural={structural} grounded={grounded} "
+            f"certificates={certificates}")
+
+
+def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
+    theory = THEORY.read_text()
+    ledger = load_ledger(src["ledger"])
+    certs = certificates(ledger, tamper=tamper)
+
+    expected = BUDGETS[src["stem"]]
+    if len(certs) != expected["certificates"]:
+        raise CertificateError(
+            f"{src['stem']}: {len(certs)} certificates, budget says "
+            f"{expected['certificates']} — the ledger or the fixture changed; "
+            f"if that is intended, edit BUDGETS in scripts/ledger2mm0 in the "
+            f"same commit")
+    structural = len(certs)
+    grounded = 0
+    if structural != expected["structural"] or grounded != expected["grounded"]:
+        raise CertificateError(
+            f"{src['stem']}: trust split {structural}/{grounded} widened from "
+            f"{expected['structural']}/{expected['grounded']} — memsafe "
+            f"certificates are derived, never grounded")
+
+    mm0_body: list[str] = []
+    mm1_body: list[str] = []
+    for c in certs:
+        label = (f"{c['module']}.{c['fn']} ({c['kind']}): linear variable "
+                 f"`{c['var']}` : {c['ty']}, path {c['path']}, "
+                 f"{len(c['events'])} event(s)")
+        events = ", ".join(c["events"]) or "<empty>"
+        mm0_body.append(f"-- {label}\n--   timeline: {events}")
+        mm1_body.append(f"-- {label}\n--   timeline: {events}")
+        term = timeline_term(c["events"])
+        goal = f"$ run {c['name']}_timeline st_idle st_idle $"
+        mm0_body.append(f"def {c['name']}_timeline: L = $ {term} $;\n"
+                        f"theorem {c['name']}: {goal};\n")
+        proof = proof_term(c["steps"])
+        mm1_body.append(f"def {c['name']}_timeline: L = $ {term} $;\n"
+                        f"pub theorem {c['name']}: {goal} = '{proof};\n")
+
+    mm0_gen = "\n".join(mm0_body)
+    mm1_gen = "\n".join(mm1_body)
+    # Coverage is computed over the generated text *plus* the axioms those
+    # certificates fire, because the states a timeline passes through appear
+    # in the rule statement (`trans st_idle e_acq st_owned`), not in the
+    # timeline. Scanning only the generated defs would report `st_owned` as
+    # unused while every certificate passes through it.
+    declared = theory_axioms(theory)
+    fired = sorted({rule for c in certs for (rule, _) in c["steps"]})
+    body_for_coverage = mm0_gen + "\n" + mm1_gen + "\n" + "\n".join(
+        declared.get(rule, "") for rule in fired)
+
+    # Every rule a proof mentions must be an axiom of the theory: an invented
+    # name would elaborate as nothing and read as complete in the artifact.
+    import re
+    for line in mm1_body:
+        if " = '" not in line:
+            continue
+        proof = line.split(" = '", 1)[1]
+        for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", proof):
+            if tok not in declared:
+                raise CertificateError(
+                    f"{src['stem']}: proof references undeclared rule {tok!r}: "
+                    f"{line.strip()[:120]}")
+
+    header = [
+        f"-- memsafe linearity certificate — {src['stem']} (generated).",
+        "--",
+        "-- Source ledger: "
+        f"mm0/ledgers/{src['ledger'].name} (sha256 {sha256(src['ledger'])})",
+        "-- Ledger source: "
+        f"{src['fixture'].relative_to(AVM)} compiled with "
+        "--emit-linearity-ledger,",
+        "--   whose rows are written at lib/LinearityCheck.ml's decision "
+        "points (docs/memsafe.md §3).",
+        "-- Target theory: docs/memsafe.mm0 "
+        f"(sha256 {sha256(THEORY)})",
+        "--",
+        "-- Each theorem claims one timeline is a run of the automaton from",
+        "-- st_idle back to st_idle. MM0 re-checks every transition; nothing",
+        "-- here is asserted about the program directly, only about the trace",
+        "-- the checker produced (docs/memsafe.md §5).",
+        "--",
+        trust_split_line(src["stem"], structural, grounded, len(certs)),
+        coverage_line(body_for_coverage, theory_terms(theory)),
+        # Which automaton edges the certificates actually exercise. This is
+        # the audit question the theory's own header invites: a rule no
+        # timeline uses is untested by these certificates, and a rule they use
+        # is checked here by mm0-c.
+        "-- transitions exercised: " + ",".join(fired),
+        "",
+    ]
+    mm0 = "\n".join(header) + theory + "\n" + mm0_gen + "\n"
+    mm1 = "\n".join(header) + theory + "\n" + mm1_gen + "\n"
+    return mm0, mm1
+
+
+def generate(tamper: str | None = None) -> list[tuple[str, str, str]]:
+    return [(src["stem"], *generate_source(src, tamper=tamper)) for src in SOURCES]
+
+
+def out_paths(stem: str) -> tuple[Path, Path]:
+    return OUT_DIR / f"{stem}.mm0", OUT_DIR / f"{stem}.mm1"
+
+
+def write(results: list[tuple[str, str, str]]) -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    for stem, mm0, mm1 in results:
+        out0, out1 = out_paths(stem)
+        out0.write_text(mm0)
+        out1.write_text(mm1)
+        print(f"ledger2mm0: wrote {out0.relative_to(AVM)} "
+              f"({len(mm0.splitlines())} lines)")
+        print(f"ledger2mm0: wrote {out1.relative_to(AVM)} "
+              f"({len(mm1.splitlines())} lines)")
+
+
+def check_drift(results: list[tuple[str, str, str]]) -> None:
+    for stem, mm0, mm1 in results:
+        for path, fresh in zip(out_paths(stem), (mm0, mm1)):
+            if not path.exists():
+                raise CertificateError(
+                    f"{path.relative_to(AVM)} missing — run scripts/ledger2mm0")
+            if path.read_text() != fresh:
+                raise CertificateError(
+                    f"{path.relative_to(AVM)} is out of date — run "
+                    f"scripts/ledger2mm0 and commit the result")
+    print("ledger2mm0 check: OK — certificates are in sync with the pinned "
+          "ledger and theory")
+
+
+def selftest() -> None:
+    """The emitter's audit must refuse a tampered trace.
+
+    A check that never fires is indistinguishable from one that cannot: the
+    clean run is asserted first (against the committed artifacts), then the
+    last event of every timeline is dropped, and the automaton must refuse —
+    for its own reason, not by accident.
+    """
+    clean = generate()
+    check_drift(clean)
+    print("ledger2mm0 selftest: unmutated generation is clean and matches the "
+          "committed certificates")
+    for src in SOURCES:
+        try:
+            generate_source(src, tamper="trace")
+        except CertificateError as e:
+            if "not a run" not in str(e) and "ends in" not in str(e):
+                raise CertificateError(
+                    f"selftest/{src['stem']}: refused for the wrong reason: {e}") from e
+            print(f"ledger2mm0 selftest: tampered trace refused ({src['stem']}) — "
+                  f"{str(e).splitlines()[0][:96]}")
+        else:
+            raise CertificateError(
+                f"selftest/{src['stem']}: the emitter accepted a timeline that "
+                f"is not a run — the audit is not firing")
+    print("ledger2mm0 selftest: OK — the automaton refuses a trace whose "
+          "resource is never released")
+
+
+def _compile(mm1_text: str, mm0_text: str, stem: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="ledger2mm0.") as td:
+        t = Path(td)
+        (t / f"{stem}.mm0").write_text(mm0_text)
+        (t / f"{stem}.mm1").write_text(mm1_text)
+        c = subprocess.run(["mm0-rs", "compile", str(t / f"{stem}.mm1"),
+                            str(t / f"{stem}.mmb")],
+                           capture_output=True, text=True)
+        out = c.stdout + c.stderr
+        if c.returncode != 0 or "warning" in out.lower():
+            sys.stderr.write(out)
+            raise CertificateError(
+                f"mm0-rs compile failed for {stem} (or emitted warnings — "
+                f"a warning is a proof hole here)")
+        print(f"ledger2mm0 verify: mm0-rs compile OK ({stem}) — "
+              f"{[l for l in out.splitlines() if l and l.startswith(('4 sorts', '3 sorts'))][-1]}")
+        v = subprocess.run(["mm0-c", str(t / f"{stem}.mmb")],
+                           input=mm0_text, capture_output=True, text=True)
+        if v.returncode != 0:
+            sys.stderr.write(v.stdout + v.stderr)
+            raise CertificateError(f"mm0-c rejected {stem} (rc={v.returncode})")
+        print(f"ledger2mm0 verify: mm0-c OK ({stem}) — the root of trust "
+              f"accepts every transition")
+
+
+def _negative(stem: str, mm0_text: str, mm1_text: str) -> None:
+    """A *stale* proof must not verify a changed trace.
+
+    This is the anchor the whole design rests on: the certificate is
+    load-bearing only if editing the trace without editing the proof makes the
+    verifier fail. The mutation is applied to a certificate mm0-rs has just
+    been shown to accept, so the failure cannot be blamed on the input.
+    """
+    marker = "def c_"
+    idx = mm1_text.find(marker)
+    if idx < 0:
+        raise CertificateError(f"negative check: no certificate to mutate in {stem}")
+    line_end = mm1_text.find("\n", idx)
+    line = mm1_text[idx:line_end]
+    if "tl_cons" not in line:
+        raise CertificateError(
+            f"negative check: {stem}'s first certificate has no timeline to mutate")
+    # One more consume spliced into the *timeline*, the proof left untouched:
+    # the two now disagree, which the elaborator must notice.
+    mutated = line.replace("tl_nil", "(tl_cons e_cons tl_nil)", 1)
+    if mutated == line:
+        raise CertificateError(f"negative check: could not mutate {stem}")
+    mm1_bad = mm1_text[:idx] + mutated + mm1_text[line_end:]
+    with tempfile.TemporaryDirectory(prefix="ledger2mm0.neg.") as td:
+        t = Path(td)
+        (t / f"{stem}.mm1").write_text(mm1_bad)
+        c = subprocess.run(["mm0-rs", "compile", str(t / f"{stem}.mm1"),
+                            str(t / f"{stem}.mmb")],
+                           capture_output=True, text=True)
+        out = c.stdout + c.stderr
+    if c.returncode == 0:
+        sys.stderr.write(out)
+        raise CertificateError(
+            f"negative check: mm0-rs accepted a proof for a mutated timeline "
+            f"in {stem} — the certificate is a tautology, not a check")
+    first = next((l.strip() for l in out.splitlines()
+                  if "failed to unify" in l or "error:" in l), "rejected")
+    print(f"ledger2mm0 verify: mutated timeline rejected ({stem}) — {first[:96]}")
+
+
+def verify(results: list[tuple[str, str, str]]) -> None:
+    for tool in ("mm0-rs", "mm0-c"):
+        if not shutil.which(tool):
+            print(f"ledger2mm0 verify: {tool} not on PATH (toolchain not "
+                  f"provisioned; see docs/memsafe.md §6 for the build steps)",
+                  file=sys.stderr)
+            raise SystemExit(2)
+    check_drift(results)
+    selftest()
+    for stem, mm0, mm1 in results:
+        _compile(mm1, mm0, stem)
+        _negative(stem, mm0, mm1)
+
+
+def main(argv: list[str]) -> int:
+    mode = (argv[1] if len(argv) > 1 else "generate").lstrip("-")
+    if mode not in ("generate", "check", "verify", "selftest"):
+        print(__doc__, file=sys.stderr)
+        return 1
+    try:
+        if mode == "selftest":
+            selftest()
+            return 0
+        results = generate()
+        if mode == "generate":
+            write(results)
+        elif mode == "check":
+            check_drift(results)
+        else:
+            verify(results)
+    except CertificateError as e:
+        print(f"ledger2mm0: ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

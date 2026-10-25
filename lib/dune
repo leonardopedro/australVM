@@ -19,7 +19,7 @@
     ErrorText Escape ExportInstantiation ExtractionPass HtmlError Id 
     DerivAst 
     Identifier IdentifierMap IdentifierSet ImportResolution Imports LexEnv 
-    LiftControlPass LinearityCheck ModIdSet ModuleNameSet MonoType 
+    LiftControlPass LinearityCheck LinearityLedger ModIdSet ModuleNameSet MonoType 
     MonoTypeBindings Monomorphize MtastUtil Names ParserInterface Qualifier 
     Region RegionMap Reporter ReturnCheck SourceContext Span Stages 
     StringSet TailCallAnalysis TailCallUtil TastUtil Totality Type TypeBindings 

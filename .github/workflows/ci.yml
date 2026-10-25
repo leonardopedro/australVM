@@ -55,6 +55,22 @@ jobs:
       - name: dune runtest (OCaml compiler suite)
         run: |
           nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; python3 concat_builtins.py && dune runtest'
+      # memsafe (docs/memsafe.md §6): the linearity ledger is the *compiler's*
+      # output, so this job — the only one that builds austral.exe — is where
+      # the pinned ledger can be re-derived and compared. `ledger2mm0 check`
+      # then pins the certificate to that ledger and to docs/memsafe.mm0, and
+      # `selftest` requires the emitter's audit to refuse a trace whose
+      # resource is never released (no mm0 toolchain needed for either; the
+      # root-of-trust half runs in phase-d).
+      - name: memsafe ledger gate (fixture → pinned ledger → certificate)
+        run: |
+          nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; \
+            ./_build/default/bin/austral.exe compile mm0/fixtures/linearity_ledger.aum \
+              --target-type=c --no-entrypoint --output=/tmp/ll.c \
+              --emit-linearity-ledger=/tmp/ll.json && \
+            diff -u mm0/ledgers/linearity_ledger.json /tmp/ll.json && \
+            python3 scripts/ledger2mm0 check && \
+            python3 scripts/ledger2mm0 selftest'
 
   lint:
     name: clippy (deny warnings)
@@ -113,3 +129,10 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: lean2mm0 verify (drift + mm0-rs + mm0-c, both certificates)
         run: python3 scripts/lean2mm0 verify
+      # Same root of trust, different subject: the memsafe linearity
+      # certificate is derived (no grounded class), so this runs the full
+      # verify — drift, mm0-rs elaboration, mm0-c re-verification, and the
+      # negative anchor that requires a stale proof to be *rejected* for a
+      # mutated timeline (docs/memsafe.md §6).
+      - name: ledger2mm0 verify (drift + mm0-rs + mm0-c + mutation anchor)
+        run: python3 scripts/ledger2mm0 verify
