@@ -11,7 +11,7 @@ module LiquidVCProj
 
   (* --- contracts (docs/LIQUID.md §5.6) --- *)
   (* atLeast : Requires *)
-  (*   n >= 0 *)
+  (*   n == n *)
   (* caller : Requires *)
   (*   true *)
 
@@ -23,6 +23,6 @@ module LiquidVCProj
   (* --- verification conditions --- *)
 
   (* g_82de6a31 — §5.6 APPLICATION (the caller proves the callee's Requires) *)
-  goal g_82de6a31: forall r: int. (true) -> (((__slot_X (r)) >= 0))
+  goal g_82de6a31: forall r: int. (true) -> (((__slot_X (r)) = (__slot_X (r))))
 
 end

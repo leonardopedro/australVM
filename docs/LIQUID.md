@@ -503,12 +503,18 @@ call-site environment carries `let s := step` — through a transparent
 theory `f` the goal applies, so without one there is no `f` to appeal to — and
 every substituted formula must be free only of the caller's parameters plus
 the goal's own binders, or it is not emitted. A step that arrives as a
-*parameter* of the caller (a function value with no binding to resolve) or
-through a record field still contributes no premise.
+*parameter* of the caller is **deferred, not dropped**: the premise follows
+the parameter along the call graph — through wrappers, to a fixpoint — and is
+emitted at each call site whose actual is concrete (a named function, or a
+local bound to one), stated in *that* caller's Γ (`pending_steps`). A step
+through a record field, or one supplied only by uncontracted code, still
+contributes no premise.
 
 All of it discharges: `why3 prove -P z3` over the pinned golden
 `lib/liquid/golden/vc-fold-premises.mlw` reports **Valid** for every goal —
-result, init and step, at both the direct and the local-bound call site.
+result, init and step, at both the direct and the local-bound call site —
+and `scripts/verify-invariants` gates exactly that (all-Valid under z3), so
+an over-strong premise fails the suite even though it parses.
 
 **Invariant rule of thumb**: `I` is exactly the qualifier vocabulary
 instantiated over the accumulator type — the reason `fold` needs no
@@ -728,11 +734,12 @@ as broader than it is:
   and what it does not). **Casts** do not emit their target range, and
   `WidthByteSize`/`WidthIndex` operations are skipped: no bound, no
   obligation. TRL's integers are mathematical throughout.
-- **Fold step conditions (§5.9)** — emitted only when the step actual resolves
-  to a named function with a two-parameter `Ensures` (§5.9's implementation
-  status); a step that arrives as a *parameter* of the caller, or through a
-  record field, still contributes no premise — only the result half is a goal
-  for it.
+- **Fold step conditions (§5.9)** — discharged where the step is *concrete*:
+  a named function (through a cast, through a local) at the fold's own call
+  site, or — when the step is a caller parameter — at the call sites that
+  supply the function, propagated along the call graph. A step through a
+  record field, or one supplied only by uncontracted code, still contributes
+  no premise — only the result half is a goal for it.
 - **Call sites outside the fragment** — only bodies that are themselves
   refinement-level are walked; an uncontracted function calling a contracted
   one is unchecked, by definition of the fragment.

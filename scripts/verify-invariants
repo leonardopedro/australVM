@@ -221,6 +221,38 @@ else
     gap "Liquid golden Why3 parse check (why3 not on PATH)"
 fi
 
+# --- Liquid: the fold golden must *prove*, not just parse ---
+#
+# vc-fold-premises.mlw is the one golden with no honest refutation in it:
+# every §5.9 goal (result/init/step, at the direct and the local-bound call
+# site) and §5.10's return for `step` is satisfiable by the fixture, so
+# "all Valid under a real prover" is a claim the file can actually keep. A
+# regression that overstates a premise -- or drops the body equation that
+# makes the return-family goals statable -- turns Valid into Invalid here,
+# where the parse gate would still pass: an unprovable goal parses fine.
+#
+# z3 rather than alt-ergo: alt-ergo still fails to build on this host (the
+# `as`/ocamlopt failure recorded in docs/cas.md §2.2), while z3 is a cache
+# fetch. `why3 config detect` records its absolute path, so the prover needs
+# no PATH entry -- only to be registered in ~/.why3.conf, and an
+# unregistered prover is a gap, not a failure.
+fold_golden="$repo_root/lib/liquid/golden/vc-fold-premises.mlw"
+if command -v why3 >/dev/null 2>&1 && [ -f "$fold_golden" ]; then
+    out="$(why3 prove -P z3 "$fold_golden" 2>&1)"
+    rc=$?
+    if printf '%s' "$out" | grep -qE "No prover|cannot find|No such file|not found"; then
+        gap "Liquid golden vc-fold-premises.mlw full z3 validity (z3 not configured for why3)"
+    elif [ "$rc" -eq 0 ]; then
+        check "Liquid golden vc-fold-premises.mlw proves in full under z3" true
+    else
+        echo "  [detail] vc-fold-premises.mlw did not prove under z3:" >&2
+        printf '%s\n' "$out" | grep -E "Goal|Invalid|Unknown|Error" | head -6 >&2
+        check "Liquid golden vc-fold-premises.mlw proves in full under z3" false
+    fi
+else
+    gap "Liquid golden vc-fold-premises.mlw full z3 validity (why3 not on PATH)"
+fi
+
 # --- Liquid: the total-subset library must still extract, unchanged ---
 #
 # Stronger than the parse check above. Extraction proves three things at once:

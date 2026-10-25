@@ -24,6 +24,6 @@ module LiquidVCOps
   (* --- verification conditions --- *)
 
   (* g_16b56c0f — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_16b56c0f: forall n: int, __result: int. ((n >= 0 /\ not (n > 100) /\ (__result = (n)))) -> __result = 0 \/ (__result >= 5 /\ __result <> 7)
+  goal g_16b56c0f: forall n: int, __result: int. ((n >= 0 /\ not (n > 100) /\ (__result = (0)))) -> __result = 0 \/ (__result >= 5 /\ __result <> 7)
 
 end

@@ -196,7 +196,30 @@ let rec term_of ?(temps : temp_env = []) (e : texpr)
         layer never takes. Skipping leaves the obligation for a later pass. *)
      ignore (a, b);
      None)
-  | TFuncall (_, name, args, _, _) | TMethodCall (_, name, _, args, _, _) ->
+  | TFuncall (_, name, args, _, _) -> (
+     match arithmetic_term ~temps name args with
+     | Some _ as r -> r
+     | None ->
+        (* A named function of the module, applied.
+
+           Before this the case fell through to `None` — arithmetic only —
+           so a body that *returns a call* (`return atLeast(m)`) could not
+           carry its `result = atLeast(m)` equation, and its return goal kept
+           the un-linkable `forall __result` shape: a postcondition no body
+           could ever discharge. The symbol is either in the theory (the
+           callee carries a contract) or declared from the goal's own
+           symbols, so the file still parses either way. *)
+        (match List.map (term_of ~temps) args with
+         | ts when List.for_all Option.is_some ts ->
+            let ts = List.map Option.get ts in
+            Some
+              (LiquidTypes.TCall
+                 ( Identifier.ident_string (Identifier.original_name name),
+                   List.map fst ts,
+                   span0 ),
+               List.concat_map snd ts)
+         | _ -> None))
+  | TMethodCall (_, name, _, args, _, _) ->
      arithmetic_term ~temps name args
   | TSlotAccessor (rec', slot, _) -> (
      (* A projection: `r.count`. TRL has no projection *syntax* — the parser

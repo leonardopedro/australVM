@@ -35,10 +35,10 @@ module LiquidVCProbe
   goal g_d3eedf6b: forall n: int, __result: int. ((n >= 0 /\ (__result = (n)))) -> __result >= n
 
   (* g_ee569f24 — §5.9 FOLD (result half; the step obligation needs §4.4) *)
-  goal g_ee569f24: forall m: int, __result: int. (m >= 0) -> __result >= 0
+  goal g_ee569f24: forall m: int, __result: int. ((m >= 0 /\ (__result = ((atLeast (m)))))) -> __result >= 0
 
   (* g_2c4c50fd — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_2c4c50fd: forall m: int, __result: int. (m >= 0) -> __result >= 0
+  goal g_2c4c50fd: forall m: int, __result: int. ((m >= 0 /\ (__result = ((atLeast (m)))))) -> __result >= 0
 
   (* g_3b2b1490 — §5.6 APPLICATION (the caller proves the callee's Requires) *)
   goal g_3b2b1490: forall m: int. (m >= 0) -> ((m >= 0))

@@ -103,14 +103,17 @@ end module body.
 (* Every operator the two languages spell differently, in one contract: `==`,
    `!=`, `&&`, `||`, `!`. All five are in the pinned golden this test compares
    against, so the claim "the emitter translates them" is a byte comparison
-   rather than an absence of the wrong spelling. *)
+   rather than an absence of the wrong spelling. The body returns `0` — the
+   least the contract could be satisfied by — so the golden proves under a
+   prover as well as parses: an `Ensures` no body of this fixture could meet
+   would pin an unprovability, not a translation. *)
 let operators_source =
   {|
 module body LiquidVCOps is
     pragma Liquid_Requires(Contract => "n >= 0 && !(n > 100)");
     pragma Liquid_Ensures(Contract => "result == 0 || (result >= 5 && result != 7)");
     function f(n: Int64): Int64 is
-        return n;
+        return 0;
     end;
 
     function main(): ExitCode is
@@ -152,7 +155,15 @@ end module body.
    not a parameter — so until the borrow rename resolves back to `r` and the
    slot becomes an uninterpreted `__slot_X(r)`, this obligation could not be
    stated at all. The declaration of `__slot_X` is part of the claim: an
-   undeclared symbol makes Why3 exit 1, which reads as "the prover refused". *)
+   undeclared symbol makes Why3 exit 1, which reads as "the prover refused".
+
+   The callee's contract is the reflexive `n == n`, deliberately: what is
+   under test is that the *projection is the actual* — substituted into the
+   callee's `Requires` and declared — and a non-trivial claim about the slot
+   (`n >= 0`) could not be discharged from the caller's context at all, since
+   TRL v1 has no projection syntax for the caller to state `r.X >= 0` with
+   (docs/cas.md §4). The program would be genuinely unsound under that
+   contract; it is satisfiable under this one, and the golden proves. *)
 let projection_source =
   {|
 module body LiquidVCProj is
@@ -160,7 +171,7 @@ module body LiquidVCProj is
         X: Int32;
     end;
 
-    pragma Liquid_Requires(Contract => "n >= 0");
+    pragma Liquid_Requires(Contract => "n == n");
     function atLeast(n: Int32): Int32 is
         return n;
     end;
@@ -225,6 +236,45 @@ module body LiquidFoldPremises is
 end module body.
 |}
 
+(* A wrapper whose fold step is *its own* parameter: `callerParam` cannot
+   name a function for its premise — there is nothing to name until someone
+   calls it — so the obligation follows the parameter: `outer` supplies
+   `step`, and the step half is emitted *there*, in outer's context. Without
+   that propagation the premise would be dropped exactly when the fold is
+   written abstractly, which is when it matters most. *)
+let fold_param_source =
+  {|
+module body LiquidFoldParamStep is
+    pragma Liquid_Requires(Contract => "true");
+    pragma Liquid_Ensures(Contract => "result >= acc");
+    function step(e: Int64, acc: Int64): Int64 is
+        return acc;
+    end;
+
+    pragma Liquid_Fold;
+    pragma Liquid_Invariant(Contract => "result >= 0");
+    pragma Liquid_Requires(Contract => "init >= 0");
+    function fold2(f: Fn[Int64, Int64, Int64], init: Int64, xs: Int64): Int64 is
+        return init;
+    end;
+
+    pragma Liquid_Requires(Contract => "n >= 0");
+    function callerParam(f: Fn[Int64, Int64, Int64], n: Int64): Int64 is
+        return fold2(f, 0, n);
+    end;
+
+    pragma Liquid_Requires(Contract => "n >= 0");
+    function outer(n: Int64): Int64 is
+        return callerParam(step, n);
+    end;
+
+    function main(): ExitCode is
+        printLn(outer(3));
+        return ExitSuccess();
+    end;
+end module body.
+|}
+
 let dump_mlw ~work ~name source =
   let dir = Filename.concat work name in
   (try Unix.mkdir dir 0o755 with _ -> ());
@@ -277,6 +327,17 @@ let contains ~(needle : string) (hay : string) : bool =
     else at (i + 1)
   in
   n = 0 || at 0
+
+(** How many disjoint occurrences of [needle] appear — non-overlapping, so a
+    count of premises is a count of premises, not of substrings. *)
+let count_occurrences ~(needle : string) (hay : string) : int =
+  let n = String.length needle and h = String.length hay in
+  let rec at i acc =
+    if i + n > h then acc
+    else if String.sub hay i n = needle then at (i + n) (acc + 1)
+    else at (i + 1) acc
+  in
+  if n = 0 then 0 else at 0 0
 
 (** Only the lines that are *logic*, not commentary.
 
@@ -377,17 +438,37 @@ let test_fold_premises_are_stated (_ : OUnit2.test_ctxt) =
     (contains ~needle:"((__acc >= 0)) -> (((step (__elem) (__acc)) >= 0))" mlw);
   (* The same premise for the caller that binds the step through a local:
      exactly two step halves, one per fold call, not one per combinator. *)
-  let rec count_sub i acc =
-    let needle = "§5.9 FOLD (step half)" in
-    let n = String.length needle and h = String.length mlw in
-    if i + n > h then acc
-    else if String.sub mlw i n = needle then count_sub (i + n) (acc + 1)
-    else count_sub (i + 1) acc
-  in
+  let steps = count_occurrences ~needle:"§5.9 FOLD (step half)" mlw in
   assert_bool
-    (Printf.sprintf "expected one step premise per fold call (found %d)"
-       (count_sub 0 0))
-    (count_sub 0 0 = 2)
+    (Printf.sprintf "expected one step premise per fold call (found %d)" steps)
+    (steps = 2)
+
+(* The deferred premise: `callerParam`'s step is its parameter, so its own
+   fold call states only the init half — the step half appears once, at the
+   call site that supplies the function, and in *that* caller's context
+   (outer's `n`, not callerParam's `f`). *)
+let test_fold_param_step_is_discharged_where_the_actual_is (_ : OUnit2.test_ctxt) =
+  let work = workdir () in
+  (try Unix.mkdir work 0o755 with _ -> ());
+  let mlw = dump_mlw ~work ~name:"foldparamstep" fold_param_source in
+  assert_bool
+    ("the wrapper's own init half is missing:\n" ^ mlw)
+    (contains ~needle:"§5.9 FOLD (init half)" mlw);
+  assert_bool
+    ("the deferred step half was not emitted at the site that supplies the \
+     function:\n" ^ mlw)
+    (contains ~needle:"§5.9 FOLD (step half)" mlw
+     && contains ~needle:"((step (__elem) (__acc)) >= 0)" mlw);
+  assert_bool
+    ("the step half is not in the supplying caller's context (or was emitted \
+     twice):\n" ^ mlw)
+    (contains ~needle:"forall n: int, __elem: int, __acc: int. " mlw);
+  let steps = count_occurrences ~needle:"§5.9 FOLD (step half)" mlw in
+  assert_bool
+    (Printf.sprintf
+       "expected exactly one step premise (at outer's site), found %d:\n%s"
+       steps mlw)
+    (steps = 1)
 
 (* ── 3. TRL connectives are spelled the way Why3 parses them ────────────── *)
 
@@ -464,7 +545,7 @@ let test_projection_actuals_are_stated (_ : OUnit2.test_ctxt) =
   let work = workdir () in
   (try Unix.mkdir work 0o755 with _ -> ());
   let mlw = dump_mlw ~work ~name:"projection" projection_source in
-  (* The goal itself: the callee's `n >= 0` over the actual `r.X`, with the
+  (* The goal itself: the callee's contract over the actual `r.X`, with the
      borrow rename resolved back to the parameter `r`. *)
   assert_bool
     ("the projection obligation is missing (the actual was skipped):\n" ^ mlw)
@@ -571,6 +652,8 @@ let suite =
     "callsite_obligation_is_stated" >:: test_callsite_obligation_is_stated;
     "invariant_obligation_is_stated" >:: test_invariant_obligation_is_stated;
     "fold_premises_are_stated" >:: test_fold_premises_are_stated;
+    "fold_param_step_discharged_at_call_site"
+    >:: test_fold_param_step_is_discharged_where_the_actual_is;
     "operators_are_translated" >:: test_operators_are_translated;
     "arithmetic_actuals_are_stated" >:: test_arithmetic_actuals_are_stated;
     "projection_actuals_are_stated" >:: test_projection_actuals_are_stated;

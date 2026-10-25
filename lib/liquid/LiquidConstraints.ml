@@ -239,10 +239,49 @@ let rec return_expr (s : tstmt) : texpr option =
   | TLet (_, _, _, _, body) -> return_expr body
   | _ -> None
 
+(** The bindings in scope where the body's `return` sits: the `TLetTmp`
+    temporaries, the source `let` initialisations and the read-borrow renames
+    along the statement spine, collected without the scope restore
+    `calls_in_stmt` performs — the return *is inside* those scopes, and this
+    walk runs straight to it. Later bindings prepend, so a rebound name
+    resolves to the nearest one, which is how `lookup_temp` reads the list. *)
+let rec spine_env (env : LiquidInfer.temp_env) (s : tstmt) :
+    LiquidInfer.temp_env =
+  match s with
+  | TBlock (_, a, b) -> spine_env (spine_env env a) b
+  | TLetTmp (id, _, e) -> (Identifier.ident_string id, e) :: env
+  | TInitialAssign (n, e) ->
+     (Identifier.ident_string (Identifier.original_name n), e) :: env
+  | TLet (_, _, _, _, body) ->
+     let head =
+       let rec head_of t =
+         match t with
+         | TInitialAssign (n, e) ->
+            Some
+              (Identifier.ident_string (Identifier.original_name n), e)
+         | TBlock (_, a, _) -> head_of a
+         | _ -> None
+       in
+       head_of body
+     in
+     spine_env (match head with Some b -> b :: env | None -> env) body
+  | TBorrow { rename; original; mode; orig_type; body; _ } ->
+     let env' =
+       match mode with
+       | Common.Read ->
+          (Identifier.ident_string rename,
+           TParamVar (original, orig_type))
+          :: env
+       | Common.Write | Common.Reborrow -> env
+     in
+     spine_env env' body
+  | _ -> env
+
 (* A direct builder, kept separate so the signature stays readable. *)
 let make_return_goal ~(decl : int) ~(name : string) ~(kind : LiquidTypes.contract_kind)
     ~(ensures : string) ~(req : string option) ~(params : string list)
-    ~(ret_sort : string) ~(body : tstmt option) : goal option =
+    ~(ret_sort : string) ~(body : tstmt option)
+    ~(temps : LiquidInfer.temp_env) : goal option =
   match kind with
   | LiquidTypes.KEnsures | LiquidTypes.KInvariant ->
      (* Why3's quantifier syntax is `forall x: int, y: int. term` — one
@@ -293,7 +332,7 @@ let make_return_goal ~(decl : int) ~(name : string) ~(kind : LiquidTypes.contrac
          match return_expr s with
          | None -> None
          | Some e -> (
-            match LiquidInfer.term_of e with
+            match LiquidInfer.term_of ~temps e with
             | None -> None
             | Some (t, vs) ->
                if List.for_all (fun v -> List.mem v params) vs then
@@ -787,6 +826,183 @@ let find_fold_combinator (decls : typed_decl list) :
       | _ -> None)
     decls
 
+(** The step actual of a fold-shaped call, as far as it can be known at this
+    site: a declaration (emit the premise here), the *caller's own parameter*
+    (the premise must wait for a call site where that parameter has a value),
+    or nothing. A `let s := step` binding resolves through the call site's
+    environment; a transparent `TCast` is unwrapped; everything else is
+    nothing, and nothing emits no goal. *)
+let rec step_actual ~(env : LiquidInfer.temp_env) (e : texpr) :
+    [ `Decl of int | `Param of string | `None ] =
+  match e with
+  | TFunVar (id, _, _) -> `Decl (decl_key id)
+  | TCast (e', _) -> step_actual ~env e'
+  | TLocalVar (n, _) | TTemporary (n, _) -> (
+     match LiquidInfer.lookup_temp env (Identifier.ident_string n) with
+     | Some binding -> step_actual ~env binding
+     | None -> `None)
+  | TParamVar (n, _) -> `Param (Identifier.ident_string n)
+  | _ -> `None
+
+(** The pending half of §5.9: the step actual is the caller's own parameter,
+    so the premise is deferred rather than dropped. The gates are exactly
+    `fold_goals`'s (the marker's combinator of arity three, three actuals, a
+    declared invariant, the call is to that combinator) — keep them together:
+    a pending recorded where `fold_goals` would emit nothing would let a
+    premise exist that the rule never asked for here. *)
+let fold_step_param ~(fold_com : (int * string list * string option) option)
+    (call : call_site) : string option =
+  match fold_com with
+  | Some (fold_id, fold_params, Some _) when List.length fold_params = 3 ->
+     if List.length call.cs_args <> 3 then None
+     else (
+       match call.cs_decl with
+       | Some cid when decl_key cid = fold_id -> (
+          match step_actual ~env:call.cs_env (List.nth call.cs_args 0) with
+          | `Param p -> Some p
+          | `Decl _ | `None -> None)
+       | _ -> None)
+  | _ -> None
+
+(** The position of parameter [p] of declaration [cid], by name. *)
+let callee_param_index (decls : typed_decl list) (cid : Id.decl_id)
+    (p : string) : int option =
+  List.find_map
+    (fun d ->
+      match d with
+      | TFunction (id, _, _, _, params, _, _, _, _)
+        when decl_key id = decl_key cid ->
+         let rec at i = function
+           | [] -> None
+           | x :: xs -> if x = p then Some i else at (i + 1) xs
+         in
+         at 0 (param_names params)
+      | _ -> None)
+    decls
+
+(** Which contracted functions owe a step premise through one of their *own*
+    parameters, seeded from their fold calls and propagated along the call
+    graph to a fixpoint: if [A] calls pending [B] with [A]'s own parameter,
+    the premise has to wait for [A]'s callers instead. Each function maps to
+    the list of its parameters so pending; a wrapper with two folds keeps
+    both. *)
+let pending_steps ~(fold_com : (int * string list * string option) option)
+    (decls : typed_decl list) : (int, string list) Hashtbl.t =
+  let pending : (int, string list) Hashtbl.t = Hashtbl.create 8 in
+  let add (fid : int) (p : string) : bool =
+    match Hashtbl.find_opt pending fid with
+    | Some ps when List.mem p ps -> false
+    | Some ps -> Hashtbl.replace pending fid (p :: ps); true
+    | None -> Hashtbl.replace pending fid [ p ]; true
+  in
+  List.iter
+    (fun d ->
+      match d with
+      | TFunction (id, _, _, _, _, _, body, _, pragmas)
+        when List.exists is_contract pragmas ->
+         let calls, _ = calls_in_stmt [] [] body in
+         List.iter
+           (fun cs ->
+             match fold_step_param ~fold_com cs with
+             | Some p -> ignore (add (decl_key id) p)
+           | None -> ())
+           calls
+      | _ -> ())
+    decls;
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    List.iter
+      (fun d ->
+        match d with
+        | TFunction (id, _, _, _, _, _, body, _, pragmas)
+          when List.exists is_contract pragmas ->
+           let self = decl_key id in
+           if not (Hashtbl.mem pending self) then begin
+             let calls, _ = calls_in_stmt [] [] body in
+             List.iter
+               (fun cs ->
+                 match cs.cs_decl with
+                 | Some cid -> (
+                    match Hashtbl.find_opt pending (decl_key cid) with
+                    | None -> ()
+                    | Some ps ->
+                       List.iter
+                         (fun p ->
+                           match callee_param_index decls cid p with
+                           | Some idx -> (
+                              match List.nth_opt cs.cs_args idx with
+                              | Some actual -> (
+                                 match step_actual ~env:cs.cs_env actual with
+                                 | `Param q ->
+                                    if add self q then changed := true
+                                 | `Decl _ | `None -> ())
+                              | None -> ())
+                           | None -> ())
+                         ps)
+                 | None -> ())
+               calls
+           end
+        | _ -> ())
+      decls
+  done;
+  pending
+
+(** `forall p: int, … . ` — or `""` when there is nothing to bind. *)
+let forall_binder (params : string list) (extra : string list) : string =
+  let ps =
+    List.map (fun p -> Printf.sprintf "%s: int" p) params
+    @ List.map (fun p -> Printf.sprintf "%s: int" p) extra
+  in
+  match String.concat ", " ps with
+  | "" -> ""
+  | s -> "forall " ^ s ^ ". "
+
+(** The §5.9 step premise as one goal, in one caller's context: `Γ ∧ Requires
+    ⇒ I(a) ⇒ I(f(e, a))`, with `__elem`/`__acc` bound by the goal and [step]
+    applied by name.
+
+    Shared by the combinator's own call site (`fold_goals`) and by a call
+    site that supplies a *pending* step actual — the premise the fold's own
+    site deferred because its step was the caller's parameter. Two gates:
+    [step] must be in the emitted theory with two parameters (its `Ensures`
+    is the `f` the goal applies; the arity keeps the application total), and
+    both substituted formulas must be free only of the caller's parameters
+    plus the goal's own binders. *)
+let step_premise_goal ~(caller_params : string list)
+    ~(caller_req : string option) ~(facts : LiquidTypes.formula list)
+    ~(decl : int) ~(name : string) ~(step : string)
+    ~(invf : LiquidTypes.formula) ~(theory : theory_fn list) : goal option =
+  match List.find_opt (fun (f : theory_fn) -> f.tname = step) theory with
+  | Some f when List.length f.tparams = 2 ->
+     let acc = LiquidTypes.TVar ("__acc", None, span0) in
+     let elem = LiquidTypes.TVar ("__elem", None, span0) in
+     let step_app = LiquidTypes.TCall (step, [ elem; acc ], span0) in
+     let ante_f = LiquidTypes.subst_formula [ ("result", acc) ] invf in
+     let cons_f =
+       LiquidTypes.subst_formula [ ("result", step_app) ] invf
+     in
+     let allowed = caller_params @ [ "__elem"; "__acc" ] in
+     let in_scope f =
+       List.for_all (fun v -> List.mem v allowed) (LiquidTypes.free_vars f)
+     in
+     if in_scope ante_f && in_scope cons_f then
+       Some
+         {
+           gname = goal_name decl name "foldstep";
+           grule = "§5.9 FOLD (step half)";
+           gbinder = forall_binder caller_params [ "__elem"; "__acc" ];
+           gassumes = combine_assumes caller_req facts;
+           gbody =
+             "(" ^ why3_ops (LiquidTypes.why3_of_formula ante_f) ^ ") -> ("
+             ^ why3_ops (LiquidTypes.why3_of_formula cons_f) ^ ")";
+           gsyms =
+             LiquidTypes.symbols_of_formula ante_f
+             @ LiquidTypes.symbols_of_formula cons_f;
+         }
+     else None
+  | _ -> None
+
 (** §5.9's two premises, as obligations, for one call to the combinator.
 
     The rule (docs/LIQUID.md §5.9) has three premises about `init`, `f` and
@@ -819,26 +1035,14 @@ let fold_goals ~(caller : string) ~(caller_params : string list)
     ~(caller_req : string option) ~(facts : LiquidTypes.formula list)
     ~(decl : int) ~(index : int) ~(fold_id : int) ~(fold_params : string list)
     ~(names_by_id : (int, string) Hashtbl.t) ~(theory : theory_fn list)
-    ~(invariant : string option) ~(call : call_site) : goal list =
-  (* §4.4's shape: step, seed, list; no declared invariant, no premises. *)
+    ~(invf : LiquidTypes.formula option) ~(call : call_site) : goal list =
+  (* §4.4's shape: step, seed, list; no declared invariant, no premises.
+     The gates are the ones `fold_step_param` mirrors — keep them together. *)
   if List.length fold_params <> 3 then []
   else if List.length call.cs_args <> 3 then []
   else
-    match (invariant, call.cs_decl) with
-    | Some inv_src, Some cid when decl_key cid = fold_id ->
-       let inv =
-         try
-           match
-             LiquidParse.parse_contract ~is_known_type:(fun _ -> false)
-               LiquidTypes.KInvariant inv_src
-           with
-           | { LiquidTypes.formula = Some f; _ } -> Some f
-           | _ -> None
-         with Failure _ -> None
-       in
-       (match inv with
-        | None -> []
-        | Some invf ->
+    match (invf, call.cs_decl) with
+    | Some invf, Some cid when decl_key cid = fold_id ->
            let in_scope (allowed : string list) (f : LiquidTypes.formula) : bool =
              List.for_all
                (fun v -> List.mem v allowed)
@@ -849,19 +1053,11 @@ let fold_goals ~(caller : string) ~(caller_params : string list)
                (LiquidTypes.why3_of_formula
                   (LiquidTypes.subst_formula sub invf))
            in
-           let binders_of (extra : string list) =
-             let ps =
-               List.map (fun p -> Printf.sprintf "%s: int" p) caller_params
-               @ List.map (fun p -> Printf.sprintf "%s: int" p) extra
-             in
-             let s = String.concat ", " ps in
-             if s = "" then "" else "forall " ^ s ^ ". "
-           in
            let base =
              {
                gname = goal_name decl (Printf.sprintf "%s_fold_%d" caller index) "fold";
                grule = "§5.9 FOLD (init half)";
-               gbinder = binders_of [];
+               gbinder = forall_binder caller_params [];
                gassumes = combine_assumes caller_req facts;
                gbody = "";
                gsyms = [];
@@ -882,77 +1078,27 @@ let fold_goals ~(caller : string) ~(caller_params : string list)
                 else []
            in
            let step_goals =
-             (* The step actual, as a declaration. It usually arrives as a
-                `TFunVar` — a named function in argument position — but
-                desugaring wraps call arguments in a `TCast`, and a caller may
-                bind the function to a local first (`let s := step; fold2(s, …)`),
-                in which case the argument is a variable whose value lives in
-                the call site's environment. Resolving through both is what
-                makes the premise a property of *this* step function rather
-                than a gap: an unresolvable actual emits nothing, as before. *)
-             let rec step_decl_of (e : texpr) : int option =
-               match e with
-               | TFunVar (id, _, _) -> Some (decl_key id)
-               | TCast (e', _) -> step_decl_of e'
-               | TLocalVar (n, _) | TParamVar (n, _) | TTemporary (n, _) -> (
-                  match
-                    LiquidInfer.lookup_temp call.cs_env
-                      (Identifier.ident_string n)
-                  with
-                  | Some binding -> step_decl_of binding
-                  | None -> None)
-               | _ -> None
-             in
-             let step_name =
-               match step_decl_of (List.nth call.cs_args 0) with
-               | Some id -> Hashtbl.find_opt names_by_id id
-               | None -> None
-             in
-             match step_name with
-             | None -> []
-             | Some step -> (
-                match
-                  List.find_opt (fun (f : theory_fn) -> f.tname = step) theory
-                with
-                | Some f when List.length f.tparams = 2 ->
-                   let acc =
-                     LiquidTypes.TVar ("__acc", None, span0)
-                   in
-                   let elem =
-                     LiquidTypes.TVar ("__elem", None, span0)
-                   in
-                   let step_app =
-                     LiquidTypes.TCall
-                       (step, [ elem; acc ], span0)
-                   in
-                   let ante_f =
-                     LiquidTypes.subst_formula [ ("result", acc) ] invf
-                   in
-                   let cons_f =
-                     LiquidTypes.subst_formula [ ("result", step_app) ] invf
-                   in
-                   if in_scope (caller_params @ [ "__elem"; "__acc" ]) ante_f
-                     && in_scope (caller_params @ [ "__elem"; "__acc" ]) cons_f then
-                     [ { base with
-                         gname =
-                           goal_name decl
-                             (Printf.sprintf "%s_fold_step_%d" caller index)
-                             "foldstep";
-                         grule = "§5.9 FOLD (step half)";
-                         gbinder = binders_of [ "__elem"; "__acc" ];
-                         gbody =
-                           "(" ^ why3_ops (LiquidTypes.why3_of_formula ante_f)
-                           ^ ") -> ("
-                           ^ why3_ops (LiquidTypes.why3_of_formula cons_f)
-                           ^ ")";
-                         gsyms =
-                           LiquidTypes.symbols_of_formula ante_f
-                           @ LiquidTypes.symbols_of_formula cons_f;
-                       } ]
-                   else []
-                | _ -> [])
+             (* The premise belongs to *this* step function: a named function
+                (through a cast, through a `let`), emitted here; the caller's
+                own parameter, deferred — `pending_steps` carries it to the
+                call sites where the parameter has a value; anything else
+                emits nothing. *)
+             match step_actual ~env:call.cs_env (List.nth call.cs_args 0) with
+             | `Decl id -> (
+                match Hashtbl.find_opt names_by_id id with
+                | Some step -> (
+                   match
+                     step_premise_goal ~caller_params ~caller_req
+                       ~facts ~decl
+                       ~name:(Printf.sprintf "%s_fold_step_%d" caller index)
+                       ~step ~invf ~theory
+                   with
+                   | Some g -> [ g ]
+                   | None -> [])
+                | None -> [])
+             | `Param _ | `None -> []
            in
-           init_goals @ step_goals)
+           init_goals @ step_goals
     | _ -> []
 
 (* ── driver: typed module -> constraints ──────────────────────────────────── *)
@@ -1024,6 +1170,26 @@ let generate (m : typed_module) : t option =
     (* §4.4: the module's fold combinator — its declaration id, parameter
        names, and the invariant pragma it carries, if any. *)
     let fold_com = find_fold_combinator decls in
+    (* Its invariant, parsed once: every fold premise in the module is a
+       substitution into this formula, and a contract that fails to parse
+       yields no premises at all rather than malformed ones. *)
+    let fold_inv : LiquidTypes.formula option =
+      match fold_com with
+      | Some (_, _, Some src) -> (
+         try
+           match
+             LiquidParse.parse_contract ~is_known_type:(fun _ -> false)
+               LiquidTypes.KInvariant src
+           with
+           | { LiquidTypes.formula = Some f; _ } -> Some f
+           | _ -> None
+         with Failure _ -> None)
+      | _ -> None
+    in
+    (* §5.9's deferred steps: which functions owe a step premise through one
+       of their own parameters, fixed over the call graph (see
+       `pending_steps`). *)
+    let pending = pending_steps ~fold_com decls in
     (* Every function's name by declaration id: the step actual of a fold call
        arrives as a function value, and the goal needs the name the theory
        declares for it. *)
@@ -1129,18 +1295,55 @@ let generate (m : typed_module) : t option =
                           ~facts ~decl:(decl_key id) ~index:i ~call:cs
                       with                       | Some g -> [ g ]
                        | None -> []
-                    in
-                    (* §5.9: the fold's init and step premises, for a call to
+                    in                    (* §5.9: the fold's init and step premises, for a call to
                        the module's own combinator. *)
                     let fold =
                       match fold_com with
                       | None -> []
-                      | Some (fold_id, fold_params, invariant) ->
-                       fold_goals ~caller ~caller_params ~caller_req ~facts
-                         ~decl:(decl_key id) ~index:i ~fold_id ~fold_params
-                         ~names_by_id ~theory ~invariant ~call:cs
+                      | Some (fold_id, fold_params, _) ->
+                         fold_goals ~caller ~caller_params ~caller_req ~facts
+                           ~decl:(decl_key id) ~index:i ~fold_id ~fold_params
+                           ~names_by_id ~theory ~invf:fold_inv ~call:cs
                     in
-                    from_callee @ range @ fold)
+                    (* §5.9 through a pending parameter: the callee's fold
+                       step was *its* own parameter, so its premise was
+                       deferred — and this actual is where that parameter
+                       finally has a function to name. The premise is stated
+                       in this caller's context, with this caller's Γ. *)
+                    let via_pending =
+                      match (fold_inv, cs.cs_decl) with
+                      | Some invf, Some cid -> (
+                         match Hashtbl.find_opt pending (decl_key cid) with
+                         | None -> []
+                         | Some ps ->
+                            List.filter_map
+                              (fun p ->
+                                match callee_param_index decls cid p with
+                                | Some idx -> (
+                                   match List.nth_opt cs.cs_args idx with
+                                   | Some actual -> (
+                                      match
+                                        step_actual ~env:cs.cs_env actual
+                                      with
+                                      | `Decl sid -> (
+                                         match Hashtbl.find_opt names_by_id sid with
+                                         | Some step ->
+                                            step_premise_goal
+                                              ~caller_params
+                                              ~caller_req ~facts
+                                              ~decl:(decl_key id)
+                                              ~name:(
+                                                Printf.sprintf "%s_steparg_%d_%s"
+                                                  caller i p)
+                                              ~step ~invf ~theory
+                                         | None -> None)
+                                      | `Param _ | `None -> None)
+                                   | None -> None)
+                                | None -> None)
+                              ps)
+                      | _ -> []
+                    in
+                    from_callee @ range @ fold @ via_pending)
              |> List.concat
           | _ -> [])
         decls
@@ -1168,13 +1371,16 @@ let generate (m : typed_module) : t option =
             | Some (TFunction (_, _, _, _, _, _, b, _, _)) -> Some b
             | _ -> None
           in
+          let temps =
+            match body with Some b -> spine_env [] b | None -> []
+          in
           let req =
             List.assoc_opt e.cname requires
           in
           match
             make_return_goal ~decl:decl_id ~name:e.cname ~kind:e.ckind
               ~ensures:e.csrc ~req ~params:e.cparams ~ret_sort:"int"
-              ~body
+              ~body ~temps
           with
           | Some g -> [ g ]
           | None -> [])
