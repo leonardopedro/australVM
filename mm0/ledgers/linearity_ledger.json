@@ -56,7 +56,7 @@
               "path": "entry",
               "events": [
                 "acquire", "borrow_read", "borrow_read", "unborrow",
-                "unborrow", "consume"
+                "consume"
               ]
             }
           ]

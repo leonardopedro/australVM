@@ -49,6 +49,11 @@ SOURCES: list[dict] = [
         "ledger": LEDGER_DIR / "linearity_ledger.json",
         "fixture": AVM / "mm0" / "fixtures" / "linearity_ledger.aum",
     },
+    {
+        "stem": "linearity_certificate_spans",
+        "ledger": LEDGER_DIR / "linearity_ledger_spans.json",
+        "fixture": AVM / "mm0" / "fixtures" / "linearity_ledger_spans.aum",
+    },
 ]
 
 # Per artifact: how many certificates (timelines) it must contain, and the
@@ -58,6 +63,9 @@ SOURCES: list[dict] = [
 # postulating, which is exactly what this table exists to catch.
 BUDGETS: dict[str, dict[str, int]] = {
     "linearity_certificate": {"certificates": 17, "structural": 17, "grounded": 0},
+    # Second fixture: reborrow chains, group borrows, mutable/free spans —
+    # the shapes docs/memsafe.md §3.2 says the first fixture cannot reach.
+    "linearity_certificate_spans": {"certificates": 19, "structural": 19, "grounded": 0},
 }
 
 
@@ -96,10 +104,10 @@ EDGES = {
     ("st_read", "borrow_read"): ("st_read", "t_bor_nested"),
     ("st_read", "unborrow"): ("st_owned", "t_unbor_read"),
     ("st_write", "unborrow"): ("st_owned", "t_unbor_write"),
-    # Documented checker limitation, not a law: LinearityCheck resets borrow
-    # state without counting depth, so a nested read borrow's outer scope end
-    # is seen in st_owned (docs/memsafe.mm0 header, docs/memsafe.md §5).
-    ("st_owned", "unborrow"): ("st_owned", "t_unbor_idle"),
+    # Deliberately absent: ("st_owned", "unborrow"). Borrows are counted
+    # (LinearityLedger.push_borrow/pop_borrow, driven by TBorrow), so only the
+    # outermost scope emits `unborrow`; a release with no outstanding borrow
+    # has no rule (docs/memsafe.mm0 header, docs/memsafe.md §5.1).
 }
 
 START = "st_idle"

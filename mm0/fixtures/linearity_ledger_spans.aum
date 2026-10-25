@@ -1,0 +1,148 @@
+-- memsafe linearity-ledger fixture, second source (docs/memsafe.md §3.2).
+--
+-- mm0/fixtures/linearity_ledger.aum reaches every *event* of docs/memsafe.mm0;
+-- this module reaches the *shapes* that one cannot, because its borrow
+-- handling is deliberately narrow:
+--
+--   reborrow chain   `&~ref` three frames deep (drive_chain → chain →
+--                    middle → read_ref), so the reborrow's nesting is
+--                    counted across function boundaries, not just inside one
+--                    borrow block;
+--   group borrow     `borrow group (ga, gb) := &(a, b)` desugars to nested
+--                    single borrows of *different* originals
+--                    (lib/AbstractionPass.ml), so several push/pop pairs are
+--                    live at once and must not be confused;
+--   spans            `Span![T, R]` is LinearUniverse — a linear value with no
+--                    explicit destructor: it is consumed by use, or
+--                    discharged by its scope ending (the `e_drop` shape for
+--                    `let` bindings rather than for borrow renames);
+--   free spans       `Span[T, R]` is FreeUniverse: it must produce *no*
+--                    timeline, which is the filter's negative case.
+--
+-- Nothing here is clever: every function is minimal, so a change in the
+-- ledger shape is a change in the checker or its hooks, not in the fixture.
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Pointer,
+    Address,
+    allocateBuffer,
+    nullCheck,
+    deallocate,
+    span,
+    spanWrite
+);
+
+module body LinearityLedgerSpans is
+    record Handle : Linear is
+        id: Int32;
+    end;
+
+    function allocateOrDie(): Pointer[Int32] is
+        let addr: Address[Int32] := allocateBuffer(10);
+        case nullCheck(addr) of
+            when Some(value: Pointer[Int32]) do
+                return value;
+            when None do
+                abort("Allocation failed.");
+        end case;
+    end;
+
+    -- ── reborrow chain ───────────────────────────────────────────────────
+    -- Each frame holds a write reference, reborrows it for the call, and is
+    -- discharged at exit: acq, reb, unbor, drop per frame.
+    generic [R: Region]
+    function read_ref(w: &![Handle, R]): Unit is
+        let x: Int32 := w->id;
+        return nil;
+    end;
+
+    generic [R: Region]
+    function middle(ref: &![Handle, R]): Unit is
+        read_ref(&~ref);
+        return nil;
+    end;
+
+    generic [R: Region]
+    function chain(ref: &![Handle, R]): Unit is
+        middle(&~ref);
+        return nil;
+    end;
+
+    function drive_chain(h: Handle): Unit is
+        var mut_h: Handle := h;
+        borrow w: &![Handle, rho] := &!mut_h do
+            chain(&~w);
+        end borrow;
+        let { id: Int32 } := mut_h;
+        return nil;
+    end;
+
+    function discard_handle(h: Handle): Unit is
+        let { id: Int32 } := h;
+        return nil;
+    end;
+
+    -- ── group borrow ─────────────────────────────────────────────────────
+    -- Two originals, nested single borrows: `a` and `b` each go
+    -- owned → read → owned while the other is still borrowed, and the
+    -- renames are separate linear values discharged at the inner scope.
+    function group_borrow(a: Handle, b: Handle): Unit is
+        borrow group (ga, gb) := &(a, b) do
+            let x: Int32 := ga->id;
+            let y: Int32 := gb->id;
+        end borrow;
+        discard_handle(a);
+        discard_handle(b);
+        return nil;
+    end;
+
+    -- ── spans ────────────────────────────────────────────────────────────
+    -- A mutable span is a linear value with no destructor: consuming it is
+    -- legal (below), and so is letting its scope discharge it (drop_span).
+    generic [R: Region]
+    function take_span(sp: Span![Int32, R]): Unit is
+        let n: Index := spanWriteLength(sp);
+        return nil;
+    end;
+
+    function consume_span(): Unit is
+        var ptr: Pointer[Int32] := allocateOrDie();
+        borrow ref: &[Pointer[Int32], R] := &ptr do
+            -- An immutable span is FreeUniverse: used here twice, and it must
+            -- not appear in the ledger at all.
+            let ro: Span[Int32, R] := span(ref, 0, 9);
+            let a: Int32 := ro[0];
+            let b: Int32 := ro[1];
+        end borrow;
+        borrow ref2: &![Pointer[Int32], R] := &!ptr do
+            let sp: Span![Int32, R] := spanWrite(ref2, 0, 9);
+            take_span(sp);
+        end borrow;
+        deallocate(ptr);
+        return nil;
+    end;
+
+    function drop_span(): Unit is
+        var ptr: Pointer[Int32] := allocateOrDie();
+        borrow ref2: &![Pointer[Int32], R] := &!ptr do
+            let sp: Span![Int32, R] := spanWrite(ref2, 0, 9);
+        end borrow;
+        deallocate(ptr);
+        return nil;
+    end;
+
+    -- Indexing a mutable span inside a loop: the shape the checker sees as a
+    -- consumption inside a loop, i.e. the pending bookkeeping.
+    function index_span(): Unit is
+        var ptr: Pointer[Int32] := allocateOrDie();
+        borrow ref2: &![Pointer[Int32], R] := &!ptr do
+            let sp: Span![Int32, R] := spanWrite(ref2, 0, 9);
+            for i from 0 to 9 do
+                let val: Int32 := sp[i];
+            end for;
+        end borrow;
+        deallocate(ptr);
+        return nil;
+    end;
+end module body.

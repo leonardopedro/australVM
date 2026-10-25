@@ -83,6 +83,12 @@ val with_arm : int -> int -> (unit -> 'a) -> 'a
     no function is open. *)
 val record : var:string -> ty:string -> depth:int -> event -> unit
 
+(* Borrow nesting is *checker* state, not ledger state: {!LinearityCheck}
+   counts it (`borrow_push`/`borrow_pop` in LinearityCheck.mli) because it
+   also decides what a nested borrow scope restores, and tells this module
+   when to record `Unborrow`. Keeping one counter where both decisions are
+   made is the point — see docs/memsafe.md §5.1. *)
+
 (** Resolve a function's rows into timelines, one per (variable, maximal
     path). A row belongs to a timeline when its path is a prefix of the
     timeline's path — that is, when the event is on that execution path.

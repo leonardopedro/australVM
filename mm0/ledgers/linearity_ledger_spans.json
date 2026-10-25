@@ -1,0 +1,184 @@
+{
+  "modules": [
+    {
+      "name": "LinearityLedgerSpans",
+      "functions": [
+        { "name": "allocateOrDie", "kind": "function", "timelines": [] },
+        {
+          "name": "read_ref",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "w",
+              "ty": "&![Handle, R]",
+              "path": "entry",
+              "events": [ "acquire", "borrow_read", "unborrow", "drop" ]
+            }
+          ]
+        },
+        {
+          "name": "middle",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "ref",
+              "ty": "&![Handle, R]",
+              "path": "entry",
+              "events": [ "acquire", "reborrow", "unborrow", "drop" ]
+            },
+            {
+              "var": "ref_tmp_ref2",
+              "ty": "&![Handle, Region<3>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "chain",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "ref",
+              "ty": "&![Handle, R]",
+              "path": "entry",
+              "events": [ "acquire", "reborrow", "unborrow", "drop" ]
+            },
+            {
+              "var": "ref_tmp_ref3",
+              "ty": "&![Handle, Region<4>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "drive_chain",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "mut_h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "borrow_write", "unborrow", "consume" ]
+            },
+            {
+              "var": "w",
+              "ty": "&![Handle, Region<5>]",
+              "path": "entry",
+              "events": [ "acquire", "reborrow", "unborrow", "drop" ]
+            },
+            {
+              "var": "w_tmp_ref4",
+              "ty": "&![Handle, Region<6>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "discard_handle",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "h",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "group_borrow",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "a",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "borrow_read", "unborrow", "consume" ]
+            },
+            {
+              "var": "b",
+              "ty": "Handle",
+              "path": "entry",
+              "events": [ "acquire", "borrow_read", "unborrow", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "take_span",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "sp",
+              "ty": "Span![Int32, R]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "consume_span",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "ref2",
+              "ty": "&![Pointer[Int32], Region<14>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "sp",
+              "ty": "Span![Int32, Region<14>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            }
+          ]
+        },
+        {
+          "name": "drop_span",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "ref2",
+              "ty": "&![Pointer[Int32], Region<15>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "sp",
+              "ty": "Span![Int32, Region<15>]",
+              "path": "entry",
+              "events": [ "acquire", "drop" ]
+            }
+          ]
+        },
+        {
+          "name": "index_span",
+          "kind": "function",
+          "timelines": [
+            {
+              "var": "ref2",
+              "ty": "&![Pointer[Int32], Region<16>]",
+              "path": "entry",
+              "events": [ "acquire", "consume" ]
+            },
+            {
+              "var": "sp",
+              "ty": "Span![Int32, Region<16>]",
+              "path": "entry",
+              "events": [ "acquire", "borrow_read", "unborrow", "drop" ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

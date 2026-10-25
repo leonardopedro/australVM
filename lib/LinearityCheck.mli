@@ -61,6 +61,23 @@ type appearances
 (** Count the appearances of a given variable in the expression. *)
 val count : identifier -> texpr -> appearances
 
+(** Borrow nesting depth (docs/memsafe.md §5.1). The state column alone cannot
+    say whether a borrow scope's end is the moment the value becomes owned
+    again: a nested read borrow ends while the outer one is still live. The
+    count is therefore checker state — it decides both what a scope restores
+    and when the ledger records [Unborrow] — and it is reset for every checked
+    function. Two Hashtbl operations per borrow. *)
+
+(** A borrow of [var] starts. *)
+val borrow_push : identifier -> unit
+
+(** A borrow of [var] ends. Returns [true] when it was the outermost scope.
+    An unbalanced pop returns [true] rather than hiding a transition. *)
+val borrow_pop : identifier -> bool
+
+(** Forget every borrow count; called once per checked function. *)
+val reset_borrow_depth : unit -> unit
+
 (** Run the linearity checking algorithm given a function or method's value
     parameter list and body. [name] and [kind] only label the function in the
     linearity ledger (docs/memsafe.md §3); they do not affect checking. *)

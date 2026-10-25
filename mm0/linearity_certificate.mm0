@@ -1,9 +1,9 @@
 -- memsafe linearity certificate — linearity_certificate (generated).
 --
--- Source ledger: mm0/ledgers/linearity_ledger.json (sha256 2f600442d1bdb7c9baea69b5246913f23e5a81be393d75417bf36a1efbd6b6aa)
+-- Source ledger: mm0/ledgers/linearity_ledger.json (sha256 9e8917f297ddb267c891cdd44cb216372216962825f938a3f762252fc12c3642)
 -- Ledger source: mm0/fixtures/linearity_ledger.aum compiled with --emit-linearity-ledger,
 --   whose rows are written at lib/LinearityCheck.ml's decision points (docs/memsafe.md §3).
--- Target theory: docs/memsafe.mm0 (sha256 86e1b8d162fcf0549dc63edf6d45c713f7e98f24b1d2b350ed3a2928e905ec11)
+-- Target theory: docs/memsafe.mm0 (sha256 73e75fa97cfaf72493053dd4c664ca00c6b11538644e4500f3d2cde396b39edd)
 --
 -- Each theorem claims one timeline is a run of the automaton from
 -- st_idle back to st_idle. MM0 re-checks every transition; nothing
@@ -12,7 +12,7 @@
 --
 -- trust-split: structural=17 grounded=0 certificates=17
 -- theory coverage: used=st_idle,st_owned,st_read,st_write,e_acq,e_cons,e_reacq,e_bor,e_bw,e_reb,e_unbor,e_drop,trans,tl_nil,tl_cons,run unused=-
--- transitions exercised: t_acq,t_bor,t_bor_nested,t_bw,t_cons,t_drop,t_reacq,t_reb,t_unbor_idle,t_unbor_read,t_unbor_write
+-- transitions exercised: t_acq,t_bor,t_bor_nested,t_bw,t_cons,t_drop,t_reacq,t_reb,t_unbor_read,t_unbor_write
 -- memsafe.mm0 — the MM0 target theory for the linearity certificate
 -- (docs/memsafe.md §4). Adapted to what this project actually produces: a
 -- *ledger* of the linearity checker's decisions (lib/LinearityLedger.ml,
@@ -43,17 +43,15 @@
 --     read-borrowed one (exclusivity); a nested *read* borrow is the single
 --     exception, and it is an explicit self-loop
 --
--- One edge below is a deliberate record of a checker limitation, not a law:
--- `t_unbor_idle`. LinearityCheck's borrow handling is not depth-counting —
--- when a read borrow's body ends it resets the original to Unconsumed even if
--- an outer read borrow is still live (lib/LinearityCheck.ml, TBorrow's second
--- branch). So a nested read borrow emits two `unborrow` events for one
--- `st_read`, and without this edge the genuine trace of
--- mm0/fixtures/linearity_ledger.aum's `borrow_read` would not be a run. The
--- edge is idempotent: it enables no new `consume`, so conservation is
--- unaffected, while borrow-exclusivity is exactly as strong as the checker.
--- docs/memsafe.md §5 records this as a finding, so the artifact does not
--- silently claim more than the trace supports.
+-- One edge was removed and one discipline added this iteration, both for the
+-- same reason: borrows nest, and nesting has to be counted somewhere or the
+-- trace cannot say when a value is owned again. LinearityCheck's *state* is
+-- not depth-counted — it resets a variable to Unconsumed when an inner read
+-- borrow ends — so the ledger counts it (LinearityLedger.push_borrow/
+-- pop_borrow, driven from TBorrow) and emits `e_unbor` only for the
+-- outermost scope. That is why `st_read` has a self-loop for a nested borrow
+-- but no `st_owned --e_unbor--> st_owned` edge: a second `unborrow` with no
+-- borrow still has no rule. docs/memsafe.md §5.1 records the history.
 --
 -- Difference from docs/cic.mm0: nothing here is delegated. The Lean-side
 -- certificates need `net_isomorphism_step` because equality of normal forms
@@ -110,9 +108,6 @@ axiom t_reb:  $ trans st_owned e_reb st_write $;
 axiom t_bor_nested: $ trans st_read e_bor st_read $;
 axiom t_unbor_read: $ trans st_read e_unbor st_owned $;
 axiom t_unbor_write: $ trans st_write e_unbor st_owned $;
--- See the header: the checker resets borrow state without counting depth, so
--- the second `unborrow` of a nested read borrow arrives in st_owned.
-axiom t_unbor_idle: $ trans st_owned e_unbor st_owned $;
 
 -- ── Timelines and runs ───────────────────────────────────────────────────
 
@@ -150,9 +145,9 @@ theorem c_consume_pair__a__entry: $ run c_consume_pair__a__entry_timeline st_idl
 def c_consume_pair__b__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
 theorem c_consume_pair__b__entry: $ run c_consume_pair__b__entry_timeline st_idle st_idle $;
 
--- LinearityLedger.borrow_read (function): linear variable `h` : Handle, path entry, 6 event(s)
---   timeline: acquire, borrow_read, borrow_read, unborrow, unborrow, consume
-def c_borrow_read__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_bor (tl_cons e_unbor (tl_cons e_unbor (tl_cons e_cons tl_nil)))))) $;
+-- LinearityLedger.borrow_read (function): linear variable `h` : Handle, path entry, 5 event(s)
+--   timeline: acquire, borrow_read, borrow_read, unborrow, consume
+def c_borrow_read__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_bor (tl_cons e_unbor (tl_cons e_cons tl_nil))))) $;
 theorem c_borrow_read__h__entry: $ run c_borrow_read__h__entry_timeline st_idle st_idle $;
 
 -- LinearityLedger.borrow_write (function): linear variable `h` : Handle, path entry, 2 event(s)

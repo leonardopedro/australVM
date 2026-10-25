@@ -135,6 +135,34 @@ let test_json_shape _ =
   assert_equal ["acquire"; "consume"]
     (arm |> member "events" |> to_list |> List.map to_string)
 
+let test_borrow_depth_counts_nesting _ =
+  (* Borrow depth is *checker* state (LinearityCheck): it decides both what a
+     nested scope restores and when `Unborrow` reaches the ledger. Two nested
+     borrows of one variable: only the outermost end owns the value again. *)
+  let v = Identifier.make_ident in
+  LinearityCheck.reset_borrow_depth ();
+  LinearityCheck.borrow_push (v "h");
+  LinearityCheck.borrow_push (v "h");
+  assert_equal false (LinearityCheck.borrow_pop (v "h"))
+    ~msg:"a nested borrow's end must not release the value";
+  assert_equal true (LinearityCheck.borrow_pop (v "h"))
+    ~msg:"the outermost borrow's end releases the value";
+  assert_equal true (LinearityCheck.borrow_pop (v "h"))
+    ~msg:"an unbalanced pop still reports outermost, so an anomaly is judged not hidden";
+  (* Independent variables are independent counters. *)
+  LinearityCheck.borrow_push (v "a");
+  LinearityCheck.borrow_push (v "a");
+  LinearityCheck.borrow_push (v "b");
+  assert_equal false (LinearityCheck.borrow_pop (v "a"));
+  assert_equal true (LinearityCheck.borrow_pop (v "b"))
+    ~msg:"a single-level borrow on another variable ends immediately";
+  assert_equal true (LinearityCheck.borrow_pop (v "a"));
+  (* Reset leaves nothing behind: the next function starts at zero. *)
+  LinearityCheck.borrow_push (v "c");
+  LinearityCheck.reset_borrow_depth ();
+  assert_equal true (LinearityCheck.borrow_pop (v "c"))
+    ~msg:"reset drops counts, so functions cannot inherit each other's nesting"
+
 let test_event_tokens_are_the_wire_format _ =
   (* scripts/ledger2mm0 reads these tokens; lib/LinearityLedger.event_token
      writes them. Renaming one without the other must fail here rather than
@@ -180,6 +208,7 @@ let suite =
       "nested branch keeps outer prefix" >:: test_nested_branch_keeps_outer_prefix;
       "json shape" >:: test_json_shape;
       "event tokens are the wire format" >:: test_event_tokens_are_the_wire_format;
+      "borrow depth counts nesting" >:: test_borrow_depth_counts_nesting;
       "event rules are the theory constructors" >:: test_event_rules_are_the_theory_constructors;
     ]
 

@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "foo" },
+    {
+      "type": "text",
+      "content": " cannot be consumed while it is borrowed (immutably)."
+    }
+  ],
+  "span": {
+    "filename": "test-programs/suites/007-borrowing/018-nested-borrow-consume/Test.aum",
+    "startp": { "line": 29, "column": 12 },
+    "end": { "line": 29, "column": 25 }
+  },
+  "context": [
+    [ 27, "                let b: Nat8 := inner->bar;" ],
+    [ 28, "            end borrow;" ],
+    [ 29, "            consume(foo);" ],
+    [ 30, "        end borrow;" ],
+    [ 31, "        consume(foo);" ]
+  ]
+}

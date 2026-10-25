@@ -90,46 +90,59 @@ informally (`mm0-c`) decides whether the proof stands.
 
 All of it lands inside existing seams. Nothing was rewritten.
 
-* **`lib/LinearityLedger.ml` / `.mli` (new, ~250 lines).** An event
+* **`lib/LinearityLedger.ml` / `.mli` (new, 311 + 130 lines).** An event
   vocabulary (`Acquire`, `Consume`, `Reacquire`, `BorrowRead`, `BorrowWrite`,
-  `Reborrow`, `Unborrow`, `Drop`), branch paths, resolution of rows into
-  per-path timelines, and the JSON export. Recording is *off* by default:
-  `LinearLedger.record` returns immediately unless the flag turned it on, so
-  ordinary compilation cannot be affected by a defect here.
+  `Reborrow`, `Unborrow`, `Drop`), branch paths, borrow-nesting counters
+  (§5.1), resolution of rows into per-path timelines, and the JSON export.
+  Recording is *off* by default: `LinearityLedger.record` returns immediately
+  unless the flag turned it on, so ordinary compilation cannot be affected by
+  a defect here.
 * **`lib/LinearityCheck.ml` instrumented at its own decision points** —
   `add_entry` (acquire), `consume_once` (the one legal consumption),
   `remove_entry` (drop of a write reference), the two assignment paths
   (reacquire), `TBorrow`'s three branches (borrow start, nested read borrow,
   borrow end), `TIf`/`TCase` arms (branch paths, §3.1), and the end of a body
-  (a write reference still owned is discharged by exit). `linearity_check`
-  gained `?name`/`?kind`, which label the function in the ledger and change
-  nothing about checking.
+  (a write reference still owned is discharged by exit). Borrow scopes are
+  counted here too: `TBorrow` pushes and pops a per-variable depth and only
+  the outermost pop emits `Unborrow` (§5.1) — the one place where the
+  checker's *state* (which is not depth-aware) is corrected before it becomes
+  a certificate claim. `linearity_check` gained `?name`/`?kind`, which label
+  the function in the ledger and change nothing about checking.
 * **`--emit-linearity-ledger=<path>`** — `CliParser`, `CliEngine`,
   `Compiler.emit_linearity_ledger_path`, merging per module like
   `--emit-derivations` does for plan JSON.
-* **`docs/memsafe.mm0` (new, 116 lines).** The automaton (`st_idle`,
-  `st_owned`, `st_read`, `st_write` × 11 edges) and the run relation
+* **`docs/memsafe.mm0` (new, 111 lines).** The automaton (`st_idle`,
+  `st_owned`, `st_read`, `st_write` × 10 edges) and the run relation
   `run : L → St → St → Prop`, in hypothesis-binder form so the rules are
   applicable (the lesson `docs/cic.mm0` records).
 * **`scripts/ledger2mm0` (new).** `generate` / `check` / `verify` /
   `selftest`, `BUDGETS` pinned per artifact, coverage and transition lines
   emitted into the artifact, and two mutation anchors (§6).
-* **`mm0/fixtures/linearity_ledger.aum`**, **`mm0/ledgers/linearity_ledger.json`**
-  (pinned, byte-stable across runs — verified by recompiling and diffing), and
-  **`mm0/linearity_certificate.{mm0,mm1}`** (217 lines each, 17 certificates).
-* **`test/LinearityLedgerTest.ml`** — 9 cases over the path resolution (scope
-  inheritance, arm separation, maximality, nesting) and the two wire contracts
+* **Two fixtures, two pinned ledgers, two certificates.**
+  `mm0/fixtures/linearity_ledger.aum` → `mm0/ledgers/linearity_ledger.json` →
+  `mm0/linearity_certificate.{mm0,mm1}` (212 lines, **17** certificates), and
+  `mm0/fixtures/linearity_ledger_spans.aum` →
+  `mm0/ledgers/linearity_ledger_spans.json` →
+  `mm0/linearity_certificate_spans.{mm0,mm1}` (222 lines, **19** certificates).
+  Ledgers are pinned and byte-stable across runs — verified by recompiling and
+  diffing (the gate does this on every run).
+* **`test/LinearityLedgerTest.ml`** — 10 cases over the path resolution
+  (scope inheritance, arm separation, maximality, nesting), the borrow-depth
+  counters that decide `Unborrow` (§5.1), and the two wire contracts
   (`event_token` for the emitter, `event_rule` for the theory).
-* **Gates.** Eight `memsafe:` items in `scripts/verify-invariants`; a CI step
-  in the OCaml `test` job (which is the only job that builds `austral.exe`,
-  hence the only place the ledger can be re-derived) and `ledger2mm0 verify`
-  in the `phase-d` job (the only job with the mm0 toolchain).
+* **Gates.** Ten `memsafe:` items in `scripts/verify-invariants` (presence,
+  drift, trust split *per certificate*, edge coverage *across* certificates,
+  self-test, both ledger re-derivations, toolchain verify); a CI step in the
+  OCaml `test` job (the only job that builds `austral.exe`, hence the only
+  place the ledgers can be re-derived) and `ledger2mm0 verify` in the `phase-d`
+  job (the only job with the mm0 toolchain).
 
 Measured here: `python3 scripts/ledger2mm0 verify` → `mm0-rs compile OK
-(linearity_certificate) — 4 sorts, 33 term/def, 30 ax/thm`, `mm0-c OK`, and
-`mutated timeline rejected`. `scripts/verify-invariants` → **52 passed, 0
-explained gaps, 0 failed**. `dune runtest --force` → 160 cases across 18
-suites, all OK.
+(linearity_certificate) — 4 sorts, 33 term/def, 29 ax/thm` and
+`(linearity_certificate_spans) — 4 sorts, 35 term/def, 31 ax/thm`, both `mm0-c
+OK`, both with `mutated timeline rejected`. `scripts/verify-invariants` →
+**55 passed, 0 explained gaps, 0 failed**. `dune runtest --force` → 161 cases
+across 18 suites, all OK.
 
 ---
 

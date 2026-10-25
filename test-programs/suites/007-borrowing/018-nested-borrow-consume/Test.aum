@@ -1,0 +1,34 @@
+-- Regression: a nested read borrow's end must not make the borrowed value
+-- consumable (see austral-stderr.txt and docs/memsafe.md §5.1).
+--
+-- `inner` is nested inside `outer`, both borrowing `foo`. When `inner`'s
+-- scope ended, the checker used to reset `foo` to Unconsumed while `outer`
+-- was still live, so the first `consume(foo)` looked legal — and when
+-- `outer` ended it reset `foo` again, erasing that consumption, so the second
+-- `consume(foo)` looked legal too. The result was a value consumed twice:
+-- a double free that typechecks.
+--
+-- LinearityCheck now counts borrow depth and restores BorrowedRead when a
+-- nested scope ends, so the first consume is refused.
+module body Test is
+    record Foo: Linear is
+        bar: Nat8;
+    end;
+
+    function consume(foo: Foo): Unit is
+        let { bar: Nat8 } := foo;
+        return nil;
+    end;
+
+    function main(): ExitCode is
+        let foo: Foo := Foo(bar => 'a');
+        borrow outer: &[Foo, rho] := &foo do
+            borrow inner: &[Foo, R] := &foo do
+                let b: Nat8 := inner->bar;
+            end borrow;
+            consume(foo);
+        end borrow;
+        consume(foo);
+        return ExitSuccess();
+    end;
+end module body.

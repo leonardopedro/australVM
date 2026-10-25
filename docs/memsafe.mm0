@@ -28,17 +28,15 @@
 --     read-borrowed one (exclusivity); a nested *read* borrow is the single
 --     exception, and it is an explicit self-loop
 --
--- One edge below is a deliberate record of a checker limitation, not a law:
--- `t_unbor_idle`. LinearityCheck's borrow handling is not depth-counting —
--- when a read borrow's body ends it resets the original to Unconsumed even if
--- an outer read borrow is still live (lib/LinearityCheck.ml, TBorrow's second
--- branch). So a nested read borrow emits two `unborrow` events for one
--- `st_read`, and without this edge the genuine trace of
--- mm0/fixtures/linearity_ledger.aum's `borrow_read` would not be a run. The
--- edge is idempotent: it enables no new `consume`, so conservation is
--- unaffected, while borrow-exclusivity is exactly as strong as the checker.
--- docs/memsafe.md §5 records this as a finding, so the artifact does not
--- silently claim more than the trace supports.
+-- One edge was removed and one discipline added this iteration, both for the
+-- same reason: borrows nest, and nesting has to be counted somewhere or the
+-- trace cannot say when a value is owned again. LinearityCheck's *state* is
+-- not depth-counted — it resets a variable to Unconsumed when an inner read
+-- borrow ends — so the ledger counts it (LinearityLedger.push_borrow/
+-- pop_borrow, driven from TBorrow) and emits `e_unbor` only for the
+-- outermost scope. That is why `st_read` has a self-loop for a nested borrow
+-- but no `st_owned --e_unbor--> st_owned` edge: a second `unborrow` with no
+-- borrow still has no rule. docs/memsafe.md §5.1 records the history.
 --
 -- Difference from docs/cic.mm0: nothing here is delegated. The Lean-side
 -- certificates need `net_isomorphism_step` because equality of normal forms
@@ -95,9 +93,6 @@ axiom t_reb:  $ trans st_owned e_reb st_write $;
 axiom t_bor_nested: $ trans st_read e_bor st_read $;
 axiom t_unbor_read: $ trans st_read e_unbor st_owned $;
 axiom t_unbor_write: $ trans st_write e_unbor st_owned $;
--- See the header: the checker resets borrow state without counting depth, so
--- the second `unborrow` of a nested read borrow arrives in st_owned.
-axiom t_unbor_idle: $ trans st_owned e_unbor st_owned $;
 
 -- ── Timelines and runs ───────────────────────────────────────────────────
 

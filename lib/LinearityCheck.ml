@@ -32,6 +32,39 @@ let universe_linear_ish = function
    when the export flag is off (`LinearityLedger.record` returns immediately). *)
 let ledger_linear (ty: ty): bool = universe_linear_ish (type_universe ty)
 
+(* Borrow nesting depth, keyed by variable, for the function being checked.
+   The *state* column is not enough on its own: `TBorrow`'s nested-read branch
+   must know whether its scope is the outermost one before it decides what the
+   variable becomes when the scope ends. Counting it is what makes that
+   decision possible, and what lets the ledger emit `Unborrow` exactly once
+   per borrow tree (docs/memsafe.md §5.1). Reset per function; two Hashtbl
+   operations per borrow, recording or not. *)
+let borrow_depth: (string, int) Hashtbl.t = Hashtbl.create 8
+
+(** A borrow of [var] starts. *)
+let borrow_push (var: identifier): unit =
+  let key = ident_string var in
+  let d = Option.value (Hashtbl.find_opt borrow_depth key) ~default:0 in
+  Hashtbl.replace borrow_depth key (d + 1)
+
+(** A borrow of [var] ends. Returns [true] when it was the outermost scope —
+    the only moment at which the value is owned again. An unbalanced pop
+    returns [true] (record the transition; let the auditor judge it) rather
+    than dropping a transition silently. *)
+let borrow_pop (var: identifier): bool =
+  let key = ident_string var in
+  match Hashtbl.find_opt borrow_depth key with
+  | Some d when d > 1 ->
+     Hashtbl.replace borrow_depth key (d - 1);
+     false
+  | Some _ ->
+     Hashtbl.remove borrow_depth key;
+     true
+  | None ->
+     true
+
+let reset_borrow_depth (): unit = Hashtbl.reset borrow_depth
+
 let ledger_note (name: identifier) (ty: ty) (depth: loop_depth)
     (event: LinearityLedger.event): unit =
   if ledger_linear ty then
@@ -650,6 +683,7 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
          (* Ensure the original variable is unconsumed to be borrowed. *)
          if is_unconsumed tbl original then
            let (original_ty, _, _) = get_entry_or_fail tbl original in
+           borrow_push original;
            ledger_note original original_ty depth
              (match mode with
               | Read -> LinearityLedger.BorrowRead
@@ -671,8 +705,12 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
            let tbl: state_tbl = add_entry tbl rename ref_type depth in
            (* Traverse the body. *)
            let tbl: state_tbl = check_stmt tbl depth body in
-           (* After the body, unborrow the variable. *)
-           ledger_note original original_ty depth LinearityLedger.Unborrow;
+           (* After the body, unborrow the variable: only when this was the
+              outermost scope of *its* nesting — a nested read borrow ends
+              inside another live one, and the value is not owned yet
+              (docs/memsafe.md §5.1). *)
+           if borrow_pop original then
+             ledger_note original original_ty depth LinearityLedger.Unborrow;
            let tbl: state_tbl = update_tbl tbl original Unconsumed in
            (* Remove the rename from the table. *)
            let tbl: state_tbl = remove_entry tbl rename in
@@ -682,14 +720,25 @@ let rec check_stmt (tbl: state_tbl) (depth: loop_depth) (stmt: tstmt): state_tbl
            let state: var_state = get_state tbl original in
            if (mode = Read) && (state = BorrowedRead) then
              let (original_ty, _, _) = get_entry_or_fail tbl original in
+             borrow_push original;
              ledger_note original original_ty depth LinearityLedger.BorrowRead;
              (* Add the rename. *)
              let tbl: state_tbl = add_entry tbl rename ref_type depth in
              (* Traverse the body. *)
              let tbl: state_tbl = check_stmt tbl depth body in
-             (* After the body, unborrow the variable. *)
-             ledger_note original original_ty depth LinearityLedger.Unborrow;
-             let tbl: state_tbl = update_tbl tbl original Unconsumed in
+             (* After the body: the outermost scope's end, not the nested
+                one's — see the same site in the branch above. *)
+             if borrow_pop original then
+               ledger_note original original_ty depth LinearityLedger.Unborrow;
+             (* Restore, do not unconditionally un-borrow: this scope is
+                nested (that is why this branch ran), so the variable is
+                *still borrowed by the outer scope* and must go back to
+                BorrowedRead. Returning it to Unconsumed here erased any
+                consumption made since the inner scope ended and let a value
+                be consumed twice — a real double-free hole, closed because
+                the ledger pipeline refused to certify its trace
+                (docs/memsafe.md §5.1). *)
+             let tbl: state_tbl = update_tbl tbl original BorrowedRead in
              (* Remove the rename from the table. *)
              let tbl: state_tbl = remove_entry tbl rename in
              tbl
@@ -789,6 +838,7 @@ let linearity_check ?(name: string = "<anonymous>")
   (* docs/memsafe.md §3: one ledger function per checked body, so the export
      can attribute every row to the function whose discipline it witnesses. *)
   LinearityLedger.begin_function ~name ~kind;
+  reset_borrow_depth ();
   (* Initialize the loop depth to zero. *)
   let depth: int = 0 in
   (* Initialize the state table to the empty table. *)
