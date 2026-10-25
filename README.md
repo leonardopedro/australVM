@@ -1,6 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leonardopedro/australVM)
 
-<!-- status: verified | tests: 134 dune / 16 suites + 108 safestos/pkg + 129 bridge cargo (excl. umbrella demo) | last_verified: 2026-10-20 -->
+<!-- status: verified | tests: 161 dune / 18 suites + 108 safestos/pkg + 129 bridge cargo (excl. umbrella demo) | last_verified: 2026-10-25 -->
 
 ## Verification
 
@@ -16,7 +16,7 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"   # Cranelift bridge 
 export UNFER_LOGOS_BIN=/path/to/unfer/target/debug/logos    # deltanet UNF gate
 
 dune build @install --profile release
-dune runtest --force          # 134 tests, 16 suites, all OK
+dune runtest --force          # 161 tests, 18 suites, all OK
 cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 108 tests, all OK
 cargo test --manifest-path safestos/cranelift/Cargo.toml         # 129 tests, all OK
 ./run-examples.sh
