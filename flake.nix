@@ -81,6 +81,17 @@
           # prover looks exactly like a successful one to any caller that only
           # checks the exit status.
           pkgsWhy3.alt-ergo
+
+          # The prover behind the one gate that must *prove*, not merely
+          # parse: `why3 prove -P z3 lib/liquid/golden/vc-fold-premises.mlw`
+          # (scripts/verify-invariants, the fold golden). z3 is free and a
+          # cache fetch — unlike alt-ergo it cannot take the engine down with
+          # it — and it comes from the same channel as why3 above, so driver
+          # and prover versions move together. Registration is host state:
+          # `why3 config detect` records the absolute path in ~/.why3.conf,
+          # after which PATH is irrelevant (an unregistered prover is a gap,
+          # not a failure, in that gate).
+          pkgsWhy3.z3
         ];
 
         # GHC environment for building mm0-hs' from-mm path (shared with the
