@@ -1,0 +1,339 @@
+-- refi/modules/RefiPolicy.aum
+--
+-- The ReFi exchange policy kernel. Every mutating HTTP command is routed
+-- through `apply` before the Rust host touches the certificate ledger, so the
+-- authorization, amount, capability and post-op audit rules live here, in
+-- Austral, compiled by the stock `austral` front-end and executed by the
+-- australVM Cranelift bridge in-process.
+--
+-- The host (`refi_service`) provides the `rs_*` primitives: the exchange
+-- mechanism (GNU Taler-style reserves/e-coins over the unfer certificate
+-- ledger), while this module decides *whether* a command may run and in what
+-- order. The manifest (`refi/module.toml`) grants exactly the primitives used
+-- below; an ungranted call is refused at JIT compile time with UK-4001.
+--
+-- Command codes, shared with `src/policy.rs`:
+--   1  open_reserve      6  confirm_peg_out    (admin)
+--   2  peg_in            7  cancel_peg_out     (owner or admin)
+--   3  withdraw          8  issue_denomination (admin)
+--   4  deposit           9  mint_certificate   (admin)
+--   5  peg_out          10  transfer_certificate
+--
+-- Return codes (0 = accepted):
+--   0 ok   1 unauthorized   2 bad amount   3 insufficient funds
+--   4 unknown reserve       5 unsupported denomination
+--   6 already deposited     7 audit failure      8 limit exceeded
+--   9 unknown command
+
+pragma Unsafe_Module;
+
+module body RefiPolicy is
+    -- ── policy queries ────────────────────────────────────────────────
+    -- Role gate: 0 = any authenticated account, 1 = admin, 2 = merchant.
+    pragma Foreign_Import(External_Name => "rs_role");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_role(required: Int64): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_max_wire");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_max_wire(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_amount_ok");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_amount_ok(amount: Int64): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_owns_reserve");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_owns_reserve(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_owns_merchant");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_owns_merchant(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_daily_cap_ok");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_daily_cap_ok(amount: Int64): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_coin_count");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_coin_count(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_coin_ok");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_coin_ok(index: Int64): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_denom_ok");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_denom_ok(amount: Int64): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_audit_ok");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_audit_ok(): Int64 is
+    end;
+
+    -- ── mechanism (the host performs these) ──────────────────────────
+    pragma Foreign_Import(External_Name => "rs_open_reserve");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_open_reserve(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_peg_in");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_peg_in(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_withdraw");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_withdraw(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_deposit");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_deposit(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_peg_out");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_peg_out(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_confirm_peg_out");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_confirm_peg_out(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_cancel_peg_out");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_cancel_peg_out(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_issue_denom");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_issue_denom(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_mint");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_mint(): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_transfer");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_transfer(): Int64 is
+    end;
+
+    -- ── reusable policy gates ─────────────────────────────────────────
+    -- A positive, bounded amount. `rs_amount_ok` already enforces the
+    -- positivity bound; this adds the per-request ceiling read from the
+    -- host's configuration, keeping the two checks distinguishable in
+    -- the return code.
+    function amount_gate(amount: Int64): Int64 is
+        if amount <= 0 then
+            return 2;
+        end if;
+        if rs_amount_ok(amount) /= 0 then
+            return 2;
+        end if;
+        if amount > rs_max_wire() then
+            return 8;
+        end if;
+        return 0;
+    end;
+
+    function audit_gate(): Int64 is
+        if rs_audit_ok() /= 0 then
+            return 7;
+        end if;
+        return 0;
+    end;
+
+    -- ── entry point (called by the host, 2 i64 arguments) ────────────
+    function apply(cmd: Int64, amount: Int64): Int64 is
+        -- Open a reserve: the caller's own fiat account, no amount.
+        if cmd = 1 then
+            if rs_role(0) /= 0 then
+                return 1;
+            end if;
+            return rs_open_reserve();
+        end if;
+
+        -- Peg-in: simulated bank wire into the caller's reserve.
+        if cmd = 2 then
+            if rs_role(0) /= 0 then
+                return 1;
+            end if;
+            if rs_owns_reserve() /= 0 then
+                return 4;
+            end if;
+            let gate: Int64 := amount_gate(amount);
+            if gate /= 0 then
+                return gate;
+            end if;
+            if rs_daily_cap_ok(amount) /= 0 then
+                return 8;
+            end if;
+            let r: Int64 := rs_peg_in();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        -- Withdraw: reserve credit becomes one e-coin of a live denomination.
+        if cmd = 3 then
+            if rs_role(0) /= 0 then
+                return 1;
+            end if;
+            if rs_owns_reserve() /= 0 then
+                return 4;
+            end if;
+            let gate: Int64 := amount_gate(amount);
+            if gate /= 0 then
+                return gate;
+            end if;
+            if rs_denom_ok(amount) /= 0 then
+                return 5;
+            end if;
+            let r: Int64 := rs_withdraw();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        -- Deposit: spend the caller's e-coins to a merchant's fiat balance.
+        if cmd = 4 then
+            if rs_role(0) /= 0 then
+                return 1;
+            end if;
+            let count: Int64 := rs_coin_count();
+            if count <= 0 then
+                return 2;
+            end if;
+            if count > 16 then
+                return 8;
+            end if;
+            var i: Int64 := 0;
+            while i < count do
+                -- The primitive distinguishes a malformed/foreign coin (2) from
+                -- one this exchange already deposited (6), so the caller gets
+                -- the precise UK code instead of a generic shape error.
+                let c: Int64 := rs_coin_ok(i);
+                if c /= 0 then
+                    return c;
+                end if;
+                i := i + 1;
+            end while;
+            let r: Int64 := rs_deposit();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        -- Peg-out: redeem merchant fiat to a bank account.
+        if cmd = 5 then
+            if rs_role(0) /= 0 then
+                return 1;
+            end if;
+            if rs_owns_merchant() /= 0 then
+                return 1;
+            end if;
+            let gate: Int64 := amount_gate(amount);
+            if gate /= 0 then
+                return gate;
+            end if;
+            let r: Int64 := rs_peg_out();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        -- Confirm a booked wire (admin: the bank reported settlement).
+        if cmd = 6 then
+            if rs_role(1) /= 0 then
+                return 1;
+            end if;
+            let r: Int64 := rs_confirm_peg_out();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        -- Cancel an unsettled wire: refund the merchant, reverse the fiat
+        -- commitment. The adapter refuses a settled wire.
+        if cmd = 7 then
+            if rs_role(0) /= 0 then
+                return 1;
+            end if;
+            let r: Int64 := rs_cancel_peg_out();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        -- Issue a denomination (admin). `amount` is the face value; the
+        -- expiry is a host-configured horizon, not caller input.
+        if cmd = 8 then
+            if rs_role(1) /= 0 then
+                return 1;
+            end if;
+            let gate: Int64 := amount_gate(amount);
+            if gate /= 0 then
+                return gate;
+            end if;
+            return rs_issue_denom();
+        end if;
+
+        -- Mint carbon certificates (admin, mint authority). The provenance
+        -- reference is validated host-side against the UNFCCC VC shape.
+        if cmd = 9 then
+            if rs_role(1) /= 0 then
+                return 1;
+            end if;
+            let gate: Int64 := amount_gate(amount);
+            if gate /= 0 then
+                return gate;
+            end if;
+            let r: Int64 := rs_mint();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        -- Transfer certificates between accounts (owner only).
+        if cmd = 10 then
+            if rs_role(0) /= 0 then
+                return 1;
+            end if;
+            let gate: Int64 := amount_gate(amount);
+            if gate /= 0 then
+                return gate;
+            end if;
+            let r: Int64 := rs_transfer();
+            if r /= 0 then
+                return r;
+            end if;
+            return audit_gate();
+        end if;
+
+        return 9;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.
