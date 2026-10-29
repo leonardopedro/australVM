@@ -543,6 +543,18 @@ of re-axiomatizing it:
   alongside the new axiom (50,031 after ours). Full `verify` (check +
   selftest + four artifacts) runs in ~16 s.
 
+* **Negative anchor — a corrupted `set.mmu` proof must be refused.**
+  Acceptance alone is satisfied by a chain that never reads the imported
+  proofs at all, so `verify` then streams a copy of the real 548 MB corpus
+  with one line flipped — `idi`'s proof (set.mm's *first* theorem, so the
+  refusal costs ~1 s, not a re-read) becomes `ax_1`, which proves something
+  else — and requires `mm0-rs compile` to fail **on that line**
+  (`set.mmu:8:7: error: unknown subproof`, rc≠0). Three ways to fail, all
+  loud: the compile accepting it (the proofs are not being checked), the
+  error not naming the corruption (refused for the wrong reason), or the
+  sed not matching (the corpus moved — the anchor re-pins itself instead
+  of corrupting nothing).
+
 * **Provisioning (untracked toolchain state).** `mm0/metamath/{set.mm,
   set.mm0, set.mmu}` is not committed — `set.mmu` is 548 MB. Provision with:
 
@@ -557,6 +569,18 @@ of re-axiomatizing it:
   these commands* and still verify the certificate stems — a gap, never a
   silent pass, the same idiom as the missing-toolchain gaps in
   `scripts/verify-invariants`.
+
+* **CI provisions it (phase-d), so the gap cannot hide there.** The job
+  fetches `metamath/set.mm` from a pinned rev and sha256-checks it against
+  the host's byte-identical copy, restores the generated `set.mm0`/`set.mmu`
+  from `actions/cache` (keyed on that rev + the from-mm compat patch +
+  `flake.lock`), and on a miss runs the cold path: `nix build
+  .#mm0-from-mm` (the flake's pinned GHC closure) → `from-mm` → the `pub `
+  strip. Two guards keep the wiring honest: a step asserts the theory files
+  exist *before* verify, and the verify step greps its own log for
+  `label contract grounded` and `negative anchor OK` — both print only on
+  the provisioned branch, so an un-provisioned run fails CI instead of
+  passing with an explained gap.
 
 * **Gates.** `scripts/verify-invariants` Phase D now honours the
   `-- theory source:` line an imported-theory artifact carries: every

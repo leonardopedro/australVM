@@ -108,6 +108,10 @@ jobs:
   # <3k-line C verifier, outside every other checker's TCB — re-verifies it
   # against the .mm0 spec. A warning from mm0-rs is a proof hole: it fails.
   #
+  # It also provisions metamath/{set.mm0,set.mmu} (see the block below) so the
+  # set.mm statement layer — the 7/8 quasi-Riemann axiom — verifies over the
+  # imported corpus instead of reporting an explained gap (§11).
+  #
   # The mm0 toolchain is built from digama0/mm0 at the same commit the
   # provisioned host uses (the verifier is frozen: an update is an event,
   # not a rebuild).
@@ -115,6 +119,13 @@ jobs:
   phase-d:
     name: Phase D (lean2mm0 + mm0-c root of trust)
     runs-on: ubuntu-latest
+    env:
+      # Pinned metamath/set.mm source for the imported theory — byte-identical
+      # (sha256 below) to the set.mm the provisioned host generated its
+      # set.mm0/set.mmu from (docs/lean4mm0.md §11). Bump the rev and the hash
+      # together; both feed the theory cache key.
+      SET_MM_REV: b975dbbd636372803f3102045aa333771f25a477
+      SET_MM_SHA256: 39c9f7304a1928d56b12e0e04ef76b40805f0c899b516f695d840f6f5f67f788
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
       - name: Checkout unfer as sibling (pinned lean4export fixtures)
@@ -127,8 +138,54 @@ jobs:
           cargo install --path ../mm0/mm0-rs --root "$HOME/.local"
           gcc ../mm0/mm0-c/main.c -O2 -o "$HOME/.local/bin/mm0-c"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: lean2mm0 verify (drift + mm0-rs + mm0-c, both certificates)
-        run: python3 scripts/lean2mm0 verify
+      # ---------------------------------------------------------------------
+      # Provision the imported theory (docs/lean4mm0.md §11): the statement
+      # layer imports set.mm instead of re-axiomatizing it, so its verify path
+      # needs metamath/{set.mm0,set.mmu} — 568 MB of untracked toolchain state
+      # that cannot be committed and would otherwise print `[gap]` and skip
+      # the statement stem. set.mm is fetched from a pinned rev (sha256-checked
+      # against the host's copy), and the generated pair comes back from the
+      # actions/cache unless its inputs — source rev, the from-mm compat
+      # patch, the flake (which pins nixpkgs/GHC) — changed, in which case
+      # nix builds mm0-from-mm and regenerates it (cold path, a few minutes).
+      # ---------------------------------------------------------------------
+      - name: Fetch the pinned set.mm source
+        run: |
+          mkdir -p mm0/metamath
+          curl -fsSL -o mm0/metamath/set.mm "https://raw.githubusercontent.com/metamath/set.mm/$SET_MM_REV/set.mm"
+          echo "$SET_MM_SHA256  mm0/metamath/set.mm" | sha256sum -c -
+      - name: Restore the provisioned theory (set.mm0 + set.mmu)
+        id: theory
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # actions/cache@v4
+        with:
+          path: mm0/metamath
+          key: metamath-${{ env.SET_MM_REV }}-${{ hashFiles('mm0/from-mm-compat.patch', 'flake.lock') }}
+      - uses: DeterminateSystems/nix-installer-action@da36cb69b1c3247ad7a1f931ebfd954a1105ef14  # DeterminateSystems/nix-installer-action@v14
+        if: steps.theory.outputs.cache-hit != 'true'
+      - uses: DeterminateSystems/magic-nix-cache-action@6221693898146dc97e38ad0e013488a16477a4c4  # DeterminateSystems/magic-nix-cache-action@v9
+        if: steps.theory.outputs.cache-hit != 'true'
+      - name: Provision set.mm0 + set.mmu (mm0-from-mm, only on a cache miss)
+        if: steps.theory.outputs.cache-hit != 'true'
+        run: |
+          nix build .#mm0-from-mm -o /tmp/mm0-from-mm
+          /tmp/mm0-from-mm/bin/mm0-from-mm from-mm mm0/metamath/set.mm \
+            -o mm0/metamath/set.mm0 mm0/metamath/set.mmu
+          # mm0-rs's reader takes no `pub ` prefix (docs/lean4mm0.md §11)
+          sed -i 's/^(pub //' mm0/metamath/set.mmu
+      - name: The theory is present (a [gap] here would mean a silent skip)
+        run: |
+          test -s mm0/metamath/set.mm0
+          test -s mm0/metamath/set.mmu
+          grep -q '^(sort ' mm0/metamath/set.mmu
+      - name: lean2mm0 verify (drift + mm0-rs + mm0-c, certificates + set.mm statement)
+        run: |
+          set -o pipefail
+          python3 scripts/lean2mm0 verify 2>&1 | tee "$RUNNER_TEMP/lean2mm0-verify.log"
+          # The statement path must have actually run — labelled grounding and
+          # the corrupted-proof refusal both print only when it did, never on
+          # the `[gap]` branch.
+          grep -q 'label contract grounded' "$RUNNER_TEMP/lean2mm0-verify.log"
+          grep -q 'negative anchor OK' "$RUNNER_TEMP/lean2mm0-verify.log"
       # Same root of trust, different subject: the memsafe linearity
       # certificate is derived (no grounded class), so this runs the full
       # verify — drift, mm0-rs elaboration, mm0-c re-verification, and the
