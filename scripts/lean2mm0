@@ -59,7 +59,10 @@ Usage:
                                # statement of record over imported set.mm)
     scripts/lean2mm0 check      # regenerate in memory; fail on drift
     scripts/lean2mm0 selftest   # mutate each trust anchor; both must refuse
-    scripts/lean2mm0 verify     # check + selftest + mm0-rs compile + mm0-c
+    scripts/lean2mm0 verify     # check + selftest + mm0-rs compile + mm0-c,
+                               # positive over the imported corpus and then
+                               # negative: one corrupted set.mmu proof that
+                               # the compile must refuse (docs/lean4mm0.md §11)
 
 Exit codes: 0 ok, 1 generation/self-check failure, 2 tooling absent (verify).
 """
@@ -1921,6 +1924,68 @@ def verify_statement(stem: str, mm0: str, mm1: str) -> None:
               "the axiom and every imported set.mm proof")
 
 
+# The negative anchor: which proof to corrupt in set.mmu, and what the
+# elaborator must say about it. `idi` is set.mm's *first* theorem, so the
+# corruption lands at the start of the corpus and the refusal costs ~1 s
+# rather than a pass over 548 MB; its proof line is unique in the file, so
+# if the corpus ever moves the anchor fails loudly instead of quietly
+# corrupting nothing.
+MMU_CORRUPT = "s/^  idi_1)$/  ax_1)/"
+MMU_CORRUPT_LINE = 8                     # where `idi`'s proof term sits
+MMU_CORRUPT_NEEDLES = ("set.mmu:8", "unknown subproof")
+
+
+def negative_mmu(stem: str, mm0: str, mm1: str) -> None:
+    """Corrupt one set.mmu proof and require `mm0-rs compile` to refuse it.
+
+    The positive run above proves only that the chain *accepts* this input;
+    a chain that skipped the imported proofs entirely would accept it just
+    as happily (the selftest's logic, docs/lean4mm0.md §9.3, turned on the
+    checker instead of the emitter). So `idi`'s proof — flipped to `ax_1`,
+    which proves something else entirely — is corrupted into a streamed
+    copy of the real corpus, and the compile must fail *on that line*.
+    Refusing for any other reason (the copy itself breaking, say) is also
+    a failure: a negative test that cannot tell "detected" from "broken"
+    is no evidence at all.
+    """
+    with tempfile.TemporaryDirectory(prefix="lean2mm0.neg.") as td:
+        t = Path(td)
+        m = t / "metamath"
+        m.mkdir()
+        (m / "set.mm0").symlink_to(SET_MM0)
+        # Streamed copy: only the one line differs from the corpus the
+        # positive run just verified (~1 s for 548 MB), so this exercises
+        # the real file rather than a reduced stand-in.
+        with (m / "set.mmu").open("wb") as f:
+            subprocess.run(["sed", MMU_CORRUPT, str(SET_MMU)], stdout=f)
+        with (m / "set.mmu").open(encoding="utf-8", errors="replace") as f:
+            head = [ln for _, ln in zip(range(MMU_CORRUPT_LINE), f)]
+        if len(head) < MMU_CORRUPT_LINE or head[MMU_CORRUPT_LINE - 1] != "  ax_1)\n":
+            raise TranspileError(
+                "negative anchor: the set.mmu corruption did not apply — line "
+                f"{MMU_CORRUPT_LINE} is not the flipped proof (expected "
+                "`  ax_1)`); re-pin MMU_CORRUPT against the provisioned corpus")
+        (t / f"{stem}.mm0").write_text(mm0)
+        (t / f"{stem}.mm1").write_text(mm1)
+        c = subprocess.run(["mm0-rs", "compile", str(t / f"{stem}.mm1"),
+                            str(t / f"{stem}.mmb")],
+                           capture_output=True, text=True)
+        out = c.stdout + c.stderr
+        if c.returncode == 0:
+            sys.stderr.write(out)
+            raise TranspileError(
+                f"mm0-rs compile ACCEPTED {stem} over a corrupted set.mmu "
+                "proof — the imported proofs are not being checked")
+        for needle in MMU_CORRUPT_NEEDLES:
+            if needle not in out:
+                sys.stderr.write(out)
+                raise TranspileError(
+                    "negative anchor refused for the wrong reason: mm0-rs's "
+                    f"error does not contain {needle!r} (the corruption site)")
+        print("lean2mm0 verify: negative anchor OK — mm0-rs refuses the "
+              "corrupted set.mmu proof (idi's proof → ax_1, set.mmu:8)")
+
+
 def verify(results: list[tuple[str, str, str]]) -> None:
     for tool in ("mm0-rs", "mm0-c"):
         if not shutil.which(tool):
@@ -1950,6 +2015,11 @@ def verify(results: list[tuple[str, str, str]]) -> None:
             ground_setmm_labels()
             for stem, mm0, mm1 in stmt:
                 verify_statement(stem, mm0, mm1)
+            # Acceptance alone would also be satisfied by a chain that
+            # never reads the imported proofs — corrupt one and require
+            # the elaborator to name it.
+            neg_stem, neg_mm0, neg_mm1 = stmt[0]
+            negative_mmu(neg_stem, neg_mm0, neg_mm1)
     for stem, mm0, mm1 in results:
         if stem in stems:
             continue
