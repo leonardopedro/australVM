@@ -54,7 +54,9 @@ Trust story (why this is not circular):
     is *checked* by mm0-c, not asserted.
 
 Usage:
-    scripts/lean2mm0            # (re)generate mm0/{gap,layout}_certificate.{mm0,mm1}
+    scripts/lean2mm0            # (re)generate every configured artifact (SOURCES +
+                               # STATEMENTS — certificates over cic.mm0, and the
+                               # statement of record over imported set.mm)
     scripts/lean2mm0 check      # regenerate in memory; fail on drift
     scripts/lean2mm0 selftest   # mutate each trust anchor; both must refuse
     scripts/lean2mm0 verify     # check + selftest + mm0-rs compile + mm0-c
@@ -118,7 +120,65 @@ SOURCES: list[dict] = [
             "grid_image_small_verified",
         ],
     },
+    {
+        "stem": "quasi_rh_certificate",
+        "ndjson": FIXTURES / "quasi_rh_certificate.ndjson",
+        "lean": WS / "timepiece" / "QuasiRiemannCertificate.lean",
+        "thms": [
+            "read_bound_verified",
+            "bound_computes_verified",
+            "bound_is_seven_eighths_verified",
+            "theta_lt_one_verified",
+            "epsilon_gap_verified",
+            "epsilon_is_one_eighth_verified",
+            "interior_point_verified",
+            "boundary_point_excluded_verified",
+            "pole_at_one_verified",
+        ],
+    },
 ]
+
+# One entry per *statement* artifact — the statement-of-record layer over
+# set.mm (docs/lean4mm0.md §11). Unlike SOURCES (certificates over cic.mm0,
+# theory embedded verbatim), the emitted decl is the quasi-Riemann statement
+# itself: one axiom whose math lives in set.mm's own notation, over a theory
+# that comes in through `import` — spec side metamath/set.mm0, proof side
+# metamath/set.mmu (mm0-rs reads imported proofs from an imported .mm1/.mmu,
+# never from a spec — that is why the two files import different things).
+# Nothing here is proven by this pipeline: the truth of the statement is the
+# proof of record cited in the artifact header; what mm0-c checks is the
+# axiom's well-formedness and every imported set.mm proof.
+STATEMENTS: list[dict] = [
+    {
+        "stem": "quasi_rh_7_8",
+        "ndjson": FIXTURES / "quasi_rh_certificate.ndjson",
+        "lean": WS / "timepiece" / "QuasiRiemannCertificate.lean",
+        "decl": "riemannZeta_ne_zero_of_seven_eighths_lt_re",
+    },
+]
+
+# The imported theory: untracked toolchain state like set.mm itself
+# (provisioned by mm0-from-mm, docs/lean4mm0.md §11 — set.mmu is 548 MB and
+# cannot be committed), and the import strings the two streams carry.
+METAMATH = OUT_DIR / "metamath"
+SET_MM0 = METAMATH / "set.mm0"
+SET_MMU = METAMATH / "set.mmu"
+SPEC_IMPORT = "metamath/set.mm0"
+PROOF_IMPORT = "metamath/set.mmu"
+
+# The set.mm labels a statement artifact may name, with the sort set.mm
+# declares them at — a pinned contract with the imported theory. `verify`
+# grounds every entry against metamath/set.mm0 (existence + sort) when the
+# theory is provisioned; if the contract is wrong the compile fails anyway,
+# but this says *which* label drifted. (0's label is cc0, not c0 — c0 is the
+# empty set.) The binder `s` and the `>` hypothesis separator are grammar,
+# not labels.
+SETMM_LABELS: dict[str, str] = {
+    "wbr": "wff", "wne": "wff", "wcel": "wff",
+    "co": "class", "cfv": "class", "cc": "class", "cre": "class",
+    "czeta": "class", "c7": "class", "c8": "class", "cdiv": "class",
+    "clt": "class", "cc0": "class",
+}
 
 
 # ── the trust split, pinned ──────────────────────────────────────────────
@@ -135,6 +195,13 @@ SOURCES: list[dict] = [
 BUDGETS: dict[str, dict[str, int]] = {
     "gap_certificate":    {"structural": 9, "grounded": 0, "certificates": 9},
     "layout_certificate": {"structural": 3, "grounded": 5, "certificates": 8},
+    "quasi_rh_certificate": {"structural": 9, "grounded": 0, "certificates": 9},
+    # A statement artifact has no Bool-rfl certificates: `statements` counts
+    # the *asserted* axioms (truth = the proof of record in the header), and
+    # structural/grounded stay 0 because there is no computed body to split.
+    # Same pinned-contract rule: widening needs this line edited in the same
+    # commit.
+    "quasi_rh_7_8": {"structural": 0, "grounded": 0, "statements": 1},
 }
 
 
@@ -1415,9 +1482,286 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
     return mm0, mm1
 
 
+# ── statement-of-record emission (the set.mm import layer) ──────────────
+#
+# generate_source above proves closed Bool reductions over cic.mm0; this
+# block carries the *statement* of the quasi-Riemann result into the imported
+# set.mm theory as an axiom. Three anchors, in increasing order of what they
+# can see:
+#
+#   1. shape — the export's value must be exactly
+#        ∀ s : Complex, (boundScaled < complexReScaled s) →
+#                       (riemannZeta s ≠ complexZero)
+#      with every atom resolved by name (Complex, LT.lt, Ne, …), so a fixture
+#      whose statement changed is refused instead of reinterpreted;
+#   2. bound — boundScaled/denom are *evaluated* from the pinned export
+#      (8750/10000) and cross-multiplied against 7/8 (8·8750 = 7·10000):
+#      the emitted `( 7 / 8 )` is the Lean def's own value, not a comment;
+#   3. theory — the label contract (SETMM_LABELS) is grounded against
+#      metamath/set.mm0 by `verify` (existence + sort), then mm0-c checks
+#      the axiom over the joined spec, re-verifying every imported proof.
+#
+# `tamper` exists for selftest: "shape" mis-expects the hypothesis head,
+# "bound" mis-expects the seven-eighths numerator. Both must be refused.
+
+def _strip_mdata(ex: Export, eid: int) -> int:
+    while True:
+        e = ex.exprs.get(eid)
+        if e is None:
+            raise TranspileError(f"dangling expr {eid}")
+        if "mdata" not in e:
+            return eid
+        eid = e["mdata"]["expr"]
+
+
+def _expect_const(ex: Export, eid: int, want: str, what: str) -> None:
+    e = ex.exprs.get(eid) or {}
+    if "const" not in e:
+        raise TranspileError(
+            f"structure mismatch: {what} is not a constant: {ex.pp(eid)}")
+    got = Export.canon(ex.name(e["const"]["name"]))
+    if got != want:
+        raise TranspileError(
+            f"structure mismatch: {what} is {got}, expected {want}")
+
+
+def _expect_bvar(ex: Export, eid: int, idx: int, what: str) -> None:
+    e = ex.exprs.get(eid) or {}
+    if e.get("bvar") != idx:
+        raise TranspileError(
+            f"structure mismatch: {what} is not bound variable #{idx}")
+
+
+def check_statement_shape(ex: Export, decl: str, hyp_head: str = "LTlt") -> None:
+    """Anchor 1 — the export must be exactly the statement of record."""
+    kind, rec, _line = ex.decls.get(decl, (None, None, None))
+    if kind is None:
+        raise TranspileError(f"statement decl missing from export: {decl}")
+    if kind != "def":
+        raise TranspileError(
+            f"structure mismatch: {decl} is a {kind}, expected a def")
+    t = _strip_mdata(ex, rec["type"])
+    te = ex.exprs[t]
+    if te.get("sort") != 0:
+        raise TranspileError(
+            f"structure mismatch: {decl} is not a Prop (Sort 0): {ex.pp(t)}")
+    v = _strip_mdata(ex, rec["value"])
+    ve = ex.exprs[v]
+    if "forallE" not in ve:
+        raise TranspileError(f"structure mismatch: body is not a ∀: {ex.pp(v)}")
+    outer = ve["forallE"]
+    _expect_const(ex, _strip_mdata(ex, outer["type"]), "Complex",
+                  "the quantifier domain")
+    inner_e = _strip_mdata(ex, outer["body"])
+    inner_n = ex.exprs.get(inner_e) or {}
+    if "forallE" not in inner_n:
+        raise TranspileError(
+            f"structure mismatch: the hypothesis binder is missing: "
+            f"{ex.pp(inner_e)}")
+    inner = inner_n["forallE"]
+    # hypothesis: hyp_head … boundScaled (complexReScaled #0)
+    head, args = ex.spine(_strip_mdata(ex, inner["type"]))
+    he = ex.exprs.get(head) or {}
+    if "const" not in he:
+        raise TranspileError(
+            f"structure mismatch: hypothesis head is not a constant: "
+            f"{ex.pp(head)}")
+    got = Export.canon(ex.name(he["const"]["name"]))
+    if got != hyp_head:
+        raise TranspileError(
+            f"structure mismatch: hypothesis head is {got}, expected {hyp_head}")
+    if len(args) < 2:
+        raise TranspileError(
+            f"structure mismatch: {hyp_head} has {len(args)} args, expected ≥ 2")
+    lhs, rhs = args[-2], args[-1]
+    _expect_const(ex, _strip_mdata(ex, lhs), "boundScaled", "the bound (lhs)")
+    rh, rargs = ex.spine(_strip_mdata(ex, rhs))
+    _expect_const(ex, rh, "complexReScaled", "the scaled real part (rhs)")
+    if len(rargs) != 1:
+        raise TranspileError(
+            f"structure mismatch: complexReScaled has {len(rargs)} args, "
+            "expected 1")
+    _expect_bvar(ex, rargs[0], 0, "the real-part argument")
+    # conclusion: Ne … (riemannZeta #1) complexZero
+    ch, cargs = ex.spine(_strip_mdata(ex, inner["body"]))
+    _expect_const(ex, ch, "Ne", "the conclusion (≠)")
+    if len(cargs) < 2:
+        raise TranspileError(
+            f"structure mismatch: Ne has {len(cargs)} args, expected ≥ 2")
+    lh, largs = ex.spine(_strip_mdata(ex, cargs[-2]))
+    _expect_const(ex, lh, "riemannZeta", "the zeta application (lhs)")
+    if len(largs) != 1:
+        raise TranspileError(
+            f"structure mismatch: riemannZeta has {len(largs)} args, expected 1")
+    _expect_bvar(ex, largs[0], 1, "the zeta argument")
+    _expect_const(ex, _strip_mdata(ex, cargs[-1]), "complexZero",
+                  "the zero constant (rhs)")
+
+
+def ground_bound(ex: Export, ev: Evaluator,
+                 tamper: str | None = None) -> tuple[int, int]:
+    """Anchor 2 — the emitted ( 7 / 8 ) is the Lean bound's evaluated value.
+
+    Returns the numerator/denominator to emit. All four bound defs are
+    evaluated from the export (never read from source text), then tied to
+    seven-eighths by cross-multiplication on the common denominator — the
+    same identity `bound_is_seven_eighths_verified` closes kernel-side.
+    """
+    def ev_nat(decl_name: str) -> int:
+        if decl_name not in ex.decls:
+            raise TranspileError(f"statement fixture lacks {decl_name}")
+        return as_int(ev.val(ex.decls[decl_name][1]["value"], [], decl_name),
+                      decl_name)
+    bs, dn = ev_nat("boundScaled"), ev_nat("denom")
+    mant, exp = ev_nat("boundMantissa"), ev_nat("boundExp")
+    if bs != mant:
+        raise TranspileError(
+            f"seven-eighths decimal read disagrees with the computation: "
+            f"boundMantissa={mant}, boundScaled={bs}")
+    if dn != 10 ** exp:
+        raise TranspileError(
+            f"seven-eighths denominator disagrees with the decimal read: "
+            f"denom={dn}, 10^{exp}={10 ** exp}")
+    num = 6 if tamper == "bound" else 7
+    den = 8
+    if den * bs != num * dn:
+        raise TranspileError(
+            f"seven-eighths identity failed: {den}×{bs} != {num}×{dn} "
+            "(the emitted fraction is not the Lean bound)")
+    return num, den
+
+
+def statement_coverage_line(math: str) -> str:
+    """Which pinned set.mm labels the emitted math names (§9.4 discipline:
+    generated from the same pass that renders the axiom, not prose)."""
+    used = [l for l in SETMM_LABELS if re.search(rf"\b{re.escape(l)}\b", math)]
+    unused = [l for l in SETMM_LABELS if l not in used]
+    return (f"-- theory coverage: used={','.join(used) or '-'} "
+            f"unused={','.join(unused) or '-'}")
+
+
+def generate_statement(src: dict, tamper: str | None = None) -> tuple[str, str]:
+    """Emit one statement artifact over the imported set.mm theory, or raise.
+
+    The two streams are line-identical except for the import line (the spec
+    reads set.mm0, the proof file reads set.mmu) — self-checked below.
+    """
+    stem, ndjson, lean_src = src["stem"], src["ndjson"], src["lean"]
+    decl_name = src["decl"]
+    if not ndjson.exists():
+        raise TranspileError(f"fixture missing: {ndjson}")
+    ex = Export(ndjson)
+    ev = Evaluator(ex)
+
+    # anchors 1 and 2 (block comment above)
+    num, den = ground_bound(ex, ev, tamper)
+    check_statement_shape(ex, decl_name,
+                          hyp_head="LEle" if tamper == "shape" else "LTlt")
+
+    budget = BUDGETS.get(stem)
+    actual = {"structural": 0, "grounded": 0, "statements": 1}
+    if budget is None:
+        raise TranspileError(
+            f"{stem}: no trust-split budget in BUDGETS — add one (the split is "
+            "a pinned contract, not a statistic)")
+    if actual != budget:
+        raise TranspileError(
+            f"{stem}: trust split widened/drifted: {actual} != pinned {budget}. "
+            "Edit BUDGETS in the same commit and say why in the artifact "
+            "header.")
+
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", decl_name):
+        raise TranspileError(
+            f"{stem}: axiom name {decl_name!r} is not a legal MM0 ident")
+
+    # the axiom, in set.mm's own notation. Argument order follows MM0's
+    # parameter (= set.mm $f) order, not the surface text: wbr(A,B,R) is
+    # `A R B`, cfv(point, F) is `( F ` point )`, co(a,b,F) is `( a F b )`.
+    math = (f"$ wcel s cc $ > $ wbr (co c{num} cdiv c{den}) "
+            f"(cfv s cre) clt $ > $ wne (cfv s czeta) cc0 $")
+    for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", math):
+        if tok != "s" and tok not in SETMM_LABELS:
+            raise TranspileError(
+                f"{stem}: axiom names {tok!r}, which is not a pinned set.mm "
+                "label (SETMM_LABELS)")
+    coverage = statement_coverage_line(math)
+
+    header = [
+        f"-- {stem}.{{mm0,mm1}} — GENERATED by australVM/scripts/lean2mm0.",
+        "-- DO NOT EDIT: run `scripts/lean2mm0` to regenerate;",
+        "-- `scripts/lean2mm0 check` gates drift, `scripts/lean2mm0 verify`",
+        "-- runs the mm0-rs elaborator and the mm0-c root of trust.",
+        "--",
+        f"-- Source of record : {lean_src.relative_to(WS)}",
+        f"--   ({decl_name} — the quasi-Riemann statement of record,",
+        "--   restated over opaque stand-ins; asserted here, not proved here)",
+        "-- Proof of record  : math/lean/ComparatorChallenges/",
+        "--   QuasiRiemannHypothesis.lean (the challenge stub) and",
+        "--   math/lean/OAI/NumberTheory/DirichletL/Nonvanishing.lean (the",
+        "--   Mathlib DirichletL development — the analytic proof, beyond this",
+        "--   pipeline's ground-Bool scope, docs/lean4mm0.md §9.2)",
+        f"-- Kernel export    : {ndjson.relative_to(WS)}",
+        f"--   sha256 {ex.sha256}  (lean4export 3.1.0, re-verified by nanoda",
+        "--   in unfer's prob_kernel suite)",
+        f"-- Target theory    : {SPEC_IMPORT} (imported, NOT embedded) +",
+        f"--   {PROOF_IMPORT} — set.mm's own proofs, re-verified",
+        "--   by mm0-c against the joined spec on every verify.",
+        "--   Provisioning: docs/lean4mm0.md §11 (untracked toolchain state).",
+        "--",
+        "-- Lean → set.mm mapping, each side anchored:",
+        "--   ∀ s : Complex       ↦  axiom binder (s: class) + s e. CC",
+        f"--   boundScaled < _     ↦  ( {num} / {den} ) < ( Re ` s )",
+        f"--     boundScaled = {num}·10⁴/{den} is evaluated from the pinned export",
+        f"--     and cross-multiplied against {num}/{den} (8·8750 = 7·10000) — the",
+        "--     numeral above is the Lean def's value, not a comment. The",
+        "--     stand-in's scaled-natural hypothesis is read as the real",
+        "--     inequality it states (QuasiRiemannCertificate.lean's mapping",
+        "--     note).",
+        "--   complexReScaled s   ↦  ( Re ` s )   [set.mm `Re` is ℜ — df-re]",
+        "--   riemannZeta s       ↦  ( ζ ` s )    [set.mm df-zeta]",
+        "--   complexZero         ↦  0",
+        "--   ≠                   ↦  =/=",
+        "-- The label contract (existence + sort) is grounded against",
+        f"-- {SPEC_IMPORT} by `verify` when the theory is provisioned.",
+        "--",
+        "-- trust-split: structural=0 grounded=0 statements=1",
+        "--",
+        "-- Trust split: nothing in this file is a Bool-rfl certificate;",
+        "-- `statements=1` is one asserted axiom whose truth is the proof of",
+        "-- record above. What mm0-c checks is everything else: the statement's",
+        "-- well-formedness against set.mm's grammar, and — via the import —",
+        "-- every imported set.mm theorem against the joined spec.",
+        coverage,
+        "-- theory source: mm0/metamath/set.mm0",
+        "",
+    ]
+
+    pairs: list[tuple[str, str]] = []
+
+    def add(m0: str, m1: str | None = None):
+        pairs.append((m0, m0 if m1 is None else m1))
+
+    for line in header:
+        add(line)
+    import_idx = len(pairs)
+    add(f'import "{SPEC_IMPORT}";', f'import "{PROOF_IMPORT}";')
+    add("delimiter $ ( $ $ ) $;")
+    add(f"axiom {decl_name} (s: class):")
+    add(f"  {math};")
+
+    mm0_lines = [a for a, _ in pairs]
+    mm1_lines = [b for _, b in pairs]
+    diff = [i for i, (a, b) in enumerate(zip(mm0_lines, mm1_lines)) if a != b]
+    if len(mm0_lines) != len(mm1_lines) or diff != [import_idx]:
+        raise TranspileError(
+            f"{stem}: spec/proof divergence outside the import line: {diff}")
+    return "\n".join(mm0_lines) + "\n", "\n".join(mm1_lines) + "\n"
+
+
 def generate() -> list[tuple[str, str, str]]:
     """Generate every configured source: [(stem, mm0, mm1), …]."""
-    return [(src["stem"], *generate_source(src)) for src in SOURCES]
+    return ([(src["stem"], *generate_source(src)) for src in SOURCES]
+            + [(src["stem"], *generate_statement(src)) for src in STATEMENTS])
 
 
 def header_prepend(header, cic_lines, lines) -> list[str]:
@@ -1484,8 +1828,97 @@ def selftest() -> None:
                     f"selftest[{tamper}]/{src['stem']}: the emitter accepted a "
                     "tampered certificate — the anchor it rests on is not "
                     "firing")
-    print("lean2mm0 selftest: OK — both anchors (kernel rfl, evaluator vs net) "
-          "refuse tampered input")
+    expect_stmt = {
+        "bound": "seven-eighths",
+        "shape": "structure",
+    }
+    for tamper, needle in expect_stmt.items():
+        for src in STATEMENTS:
+            try:
+                generate_statement(src, tamper=tamper)
+            except TranspileError as e:
+                if needle not in str(e):
+                    raise TranspileError(
+                        f"selftest[{tamper}]/{src['stem']}: refused for the "
+                        f"wrong reason: {e}") from e
+                print(f"lean2mm0 selftest: {tamper!r} tamper refused "
+                      f"({src['stem']}) — {str(e).splitlines()[0][:96]}")
+            else:
+                raise TranspileError(
+                    f"selftest[{tamper}]/{src['stem']}: the emitter accepted a "
+                    "tampered statement — the anchor it rests on is not firing")
+    print("lean2mm0 selftest: OK — all four anchors refuse tampered input "
+          "(kernel rfl, evaluator vs net, statement shape, seven-eighths bound)")
+
+
+def statement_stems() -> set[str]:
+    return {s["stem"] for s in STATEMENTS}
+
+
+def ground_setmm_labels() -> None:
+    """Anchor 3 — the pinned label contract against metamath/set.mm0."""
+    declared: dict[str, str] = {}
+    with SET_MM0.open(encoding="utf-8", errors="replace") as f:
+        for line in f:
+            # `term NAME: sort;` or `term NAME (params): sort;` — the
+            # param list is greedy to its single closing paren, which keeps
+            # the sort after `): ` out of the group.
+            m = re.match(r"^\s*term (\w+)(?: \(.*\))?: (\w+);$",
+                         line.rstrip("\n"))
+            if m:
+                declared[m.group(1)] = m.group(2)
+    for label, sort in SETMM_LABELS.items():
+        if label not in declared:
+            raise TranspileError(
+                f"set.mm0 does not declare {label!r} — the statement's label "
+                "contract has drifted from the imported theory")
+        if declared[label] != sort:
+            raise TranspileError(
+                f"set.mm0 declares {label!r} as {declared[label]}, the "
+                f"contract expects {sort}")
+    print(f"lean2mm0 verify: label contract grounded — all "
+          f"{len(SETMM_LABELS)} set.mm0 labels exist with the expected sorts")
+
+
+def verify_statement(stem: str, mm0: str, mm1: str) -> None:
+    """compile → join → mm0-c for a statement artifact that imports set.mm.
+
+    Same three gates as the certificate path, but the streams are files
+    under a tempdir whose `metamath/` symlink lets `import` resolve, and
+    mm0-c is fed the *joined* spec (set.mm0 inlined) so the root of trust
+    re-verifies every imported set.mm proof alongside the new axiom.
+    """
+    with tempfile.TemporaryDirectory(prefix="lean2mm0.stmt.") as td:
+        t = Path(td)
+        (t / f"{stem}.mm0").write_text(mm0)
+        (t / f"{stem}.mm1").write_text(mm1)
+        (t / "metamath").symlink_to(METAMATH, target_is_directory=True)
+        c = subprocess.run(["mm0-rs", "compile", str(t / f"{stem}.mm1"),
+                            str(t / f"{stem}.mmb")],
+                           capture_output=True, text=True)
+        out = c.stdout + c.stderr
+        if c.returncode != 0 or "warning" in out.lower():
+            sys.stderr.write(out)
+            raise TranspileError(
+                f"mm0-rs compile failed for {stem} (or emitted warnings — "
+                "a warning is a proof hole here)")
+        tail = [l for l in out.splitlines()
+                if l and not l.startswith(("elab ", "elabbed"))]
+        print(f"lean2mm0 verify: mm0-rs compile OK ({stem}) — "
+              f"{tail[-1] if tail else 'ok'}")
+        j = subprocess.run(["mm0-rs", "join", str(t / f"{stem}.mm0")],
+                           capture_output=True, text=True)
+        if j.returncode != 0 or not j.stdout:
+            sys.stderr.write(j.stdout + j.stderr)
+            raise TranspileError(
+                f"mm0-rs join failed for {stem} (import resolution)")
+        v = subprocess.run(["mm0-c", str(t / f"{stem}.mmb")],
+                           input=j.stdout, capture_output=True, text=True)
+        if v.returncode != 0:
+            sys.stderr.write(v.stdout + v.stderr)
+            raise TranspileError(f"mm0-c rejected {stem} (rc={v.returncode})")
+        print(f"lean2mm0 verify: mm0-c OK ({stem}) — the root of trust accepts "
+              "the axiom and every imported set.mm proof")
 
 
 def verify(results: list[tuple[str, str, str]]) -> None:
@@ -1496,7 +1929,30 @@ def verify(results: list[tuple[str, str, str]]) -> None:
             raise SystemExit(2)
     check_drift(results)
     selftest()
+    stems = statement_stems()
+    stmt = [r for r in results if r[0] in stems]
+    if stmt:
+        missing = [p for p in (SET_MM0, SET_MMU) if not p.exists()]
+        if missing:
+            # The imported theory is untracked toolchain state (set.mmu is
+            # 548 MB — it cannot be committed). Its absence must not fail a
+            # gate that cannot see it, and must never look like a pass
+            # either: it prints the gap *and* the provision commands, the
+            # same idiom scripts/verify-invariants uses for a missing
+            # toolchain.
+            rel = ", ".join(str(p.relative_to(WS)) for p in missing)
+            print(f"lean2mm0 verify: [gap] statement stems NOT verified — {rel} "
+                  "absent (untracked toolchain state, not committed)")
+            print("  provision: mm0-from-mm from-mm mm0/metamath/set.mm "
+                  "-o mm0/metamath/set.mm0 mm0/metamath/set.mmu")
+            print("  then:      sed -i 's/^(pub //' mm0/metamath/set.mmu")
+        else:
+            ground_setmm_labels()
+            for stem, mm0, mm1 in stmt:
+                verify_statement(stem, mm0, mm1)
     for stem, mm0, mm1 in results:
+        if stem in stems:
+            continue
         with tempfile.TemporaryDirectory(prefix="lean2mm0.") as td:
             t = Path(td)
             (t / f"{stem}.mm0").write_text(mm0)

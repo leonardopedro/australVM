@@ -1,0 +1,153 @@
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/Compiler/Elaborator.hs a/src/MM0/Compiler/Elaborator.hs
+--- a/src/MM0/Compiler/Elaborator.hs	2026-10-28 07:32:47.986965031 +0100
++++ a/src/MM0/Compiler/Elaborator.hs	2026-10-28 12:01:59.876228269 +0100
+@@ -4,6 +4,7 @@
+ module MM0.Compiler.Elaborator (elaborate, elabLoad,
+   ErrorLevel(..), ElabError(..), ElabConfig(..), toElabError) where
+ 
++import Control.Monad
+ import Control.Applicative ((<|>))
+ import Control.Monad.State
+ import Control.Monad.RWS.Strict
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/Compiler/Env.hs a/src/MM0/Compiler/Env.hs
+--- a/src/MM0/Compiler/Env.hs	2026-10-28 07:32:47.986965031 +0100
++++ a/src/MM0/Compiler/Env.hs	2026-10-28 12:01:59.864641677 +0100
+@@ -6,6 +6,7 @@
+   binderName, binderType, binderSort, binderBound,
+   Proof(..), Conv(..), Prec(..), TVar) where
+ 
++import Control.Monad
+ import Control.Concurrent.STM
+ import Control.Concurrent hiding (newMVar)
+ import Control.Concurrent.Async.Pool
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/Compiler/Export.hs a/src/MM0/Compiler/Export.hs
+--- a/src/MM0/Compiler/Export.hs	2026-10-28 07:32:47.986965031 +0100
++++ a/src/MM0/Compiler/Export.hs	2026-10-28 12:05:32.940343504 +0100
+@@ -4,6 +4,8 @@
+ {-# HLINT ignore "Redundant <$>" #-}
+ module MM0.Compiler.Export (export, exportK, exportKP) where
+ 
++import Data.Monoid (Endo(..))
++import Control.Monad
+ import GHC.Generics (Generic)
+ import Control.Applicative
+ import Control.Monad.State
+@@ -77,7 +79,7 @@
+   | PLetF VarName a a
+ 
+   | ProofF [(Maybe VarName, a)] Bool [(VarName, Sort)] a
+-  deriving (Generic, Functor, Foldable, Traversable, Show)
++  deriving (Generic, Functor, Foldable, Traversable, Show, Eq)
+ instance Hashable a => Hashable (ProofF a) where
+ 
+ instance MuRef SExpr where
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/Compiler/Parser.hs a/src/MM0/Compiler/Parser.hs
+--- a/src/MM0/Compiler/Parser.hs	2026-10-28 07:32:47.986965031 +0100
++++ a/src/MM0/Compiler/Parser.hs	2026-10-28 11:43:29.196168713 +0100
+@@ -20,7 +20,7 @@
+ import qualified Data.Set as S
+ import qualified Data.Vector as V
+ import qualified Data.Text as T
+-import qualified Text.Builder as TB
++import qualified TextBuilder as TB
+ import qualified Text.Megaparsec.Char.Lexer as L
+ import MM0.Compiler.AST
+ import MM0.Util
+@@ -329,7 +329,7 @@
+ importStmt = mSpan (kw "import" >> commit (Import <$> lexeme (span strLit)))
+ 
+ strLit :: Parser T.Text
+-strLit = single '"' *> (TB.run <$> p) where
++strLit = single '"' *> (TB.toText <$> p) where
+   p = do
+     toks <- TB.text <$>
+       takeWhileP (Just "end of string") (\c -> c /= '\\' && c /= '"')
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/Compiler/PrettyPrinter.hs a/src/MM0/Compiler/PrettyPrinter.hs
+--- a/src/MM0/Compiler/PrettyPrinter.hs	2026-10-28 07:32:47.986965031 +0100
++++ a/src/MM0/Compiler/PrettyPrinter.hs	2026-10-28 12:01:59.871986601 +0100
+@@ -4,6 +4,7 @@
+   renderNoBreak, ppExpr', (<+>), unifyErr, getStat, ppMVar, ppExprCyc,
+   ppStmt, ppBinder, ppPBinder, ppGroupedBinders, ppDecl, ppDeclType) where
+ 
++import Control.Monad
+ import Control.Applicative
+ import Control.Concurrent.STM
+ import Control.Monad.State
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/FromMM/Closure.hs a/src/MM0/FromMM/Closure.hs
+--- a/src/MM0/FromMM/Closure.hs	2026-10-28 07:32:47.986965031 +0100
++++ a/src/MM0/FromMM/Closure.hs	2026-10-28 11:43:29.198595967 +0100
+@@ -1,5 +1,6 @@
+ module MM0.FromMM.Closure (closure) where
+ 
++import Control.Monad
+ import Control.Monad.State
+ import Data.Bifunctor
+ import qualified Data.Set as S
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/FromMM/FindBundled.hs a/src/MM0/FromMM/FindBundled.hs
+--- a/src/MM0/FromMM/FindBundled.hs	2026-10-28 07:32:47.987295748 +0100
++++ a/src/MM0/FromMM/FindBundled.hs	2026-10-28 11:43:29.201604855 +0100
+@@ -1,5 +1,6 @@
+ module MM0.FromMM.FindBundled (findBundled, bundle, reportBundled, Bundles) where
+ 
++import Control.Monad
+ import Control.Monad.RWS.Strict
+ import qualified Data.Map.Strict as M
+ import qualified Data.IntMap as I
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/FromMM/Parser.hs a/src/MM0/FromMM/Parser.hs
+--- a/src/MM0/FromMM/Parser.hs	2026-10-28 07:32:47.987295748 +0100
++++ a/src/MM0/FromMM/Parser.hs	2026-10-28 12:48:23.443718011 +0100
+@@ -5,6 +5,8 @@
+ import Data.Maybe
+ import Data.Default
+ import Data.Bifunctor
++import Control.Monad
++import Control.Monad.Trans.Class (lift)
+ import Control.Monad.Trans.State
+ import Control.Monad.Except
+ import qualified Text.ParserCombinators.ReadP as P
+@@ -340,13 +342,23 @@
+     parseJString ('\\' : s') _ _ = JError ("bad escape sequence '\\" ++ s' ++ "'")
+     parseJString ('\'' : s') f ss' = JString (T.pack (f [])) (parseJ (T.pack s' : ss'))
+     parseJString (c : s') f ss' = parseJString s' (f . (c :)) ss'
++  -- Double-quoted strings: newer set.mm metadata (varcolorcode "wff" as
++  -- "0000FF" etc.) quotes arguments with `"` instead of `'`. The unknown
++  -- keyword is skipped by processJ's catch-all, but the tokenizer must at
++  -- least consume the strings so the comment stays well-formed.
++  '"' : s -> parseJDQ s id ss where
++    parseJDQ [] _ [] = JError "unclosed $j string"
++    parseJDQ [] f (s' : ss') = parseJDQ (T.unpack s') (f . (' ' :)) ss'
++    parseJDQ ('\\' : c : s') f ss' = parseJDQ s' (f . (c :)) ss'
++    parseJDQ ('"' : s') f ss' = JString (T.pack (f [])) (parseJ (T.pack s' : ss'))
++    parseJDQ (c : s') f ss' = parseJDQ s' (f . (c :)) ss'
+   s -> case P.readP_to_S L.lex s of -- TODO: better parser
+     [(L.EOF, _)] -> parseJ ss
+     [(L.Punc ";", s')] -> JSemi (parseJ (T.pack s' : ss))
+     [(L.Ident x, s')] -> JKeyword (T.pack x) (parseJ (T.pack s' : ss))
+     [(L.Punc x, s')] -> JKeyword (T.pack x) (parseJ (T.pack s' : ss))
+     [(L.Symbol x, s')] -> JKeyword (T.pack x) (parseJ (T.pack s' : ss))
+-    _ -> JError ("parse failed \"" ++ s ++ "\"" ++ T.unpack (head ss))
++    _ -> JError ("parse failed \"" ++ s ++ "\"" ++ maybe "" T.unpack (listToMaybe ss))
+ 
+ getManyJ :: String -> JComment -> ([T.Text] -> FromMMM ()) -> FromMMM ()
+ getManyJ name j f = go j id where
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/FromMM.hs a/src/MM0/FromMM.hs
+--- a/src/MM0/FromMM.hs	2026-10-28 07:32:47.986965031 +0100
++++ a/src/MM0/FromMM.hs	2026-10-28 12:06:31.574589910 +0100
+@@ -1,5 +1,6 @@
+ module MM0.FromMM (fromMM, showBundled) where
+ 
++import Data.Monoid (Endo(..))
+ import System.IO
+ import System.Exit
+ import Control.Monad
+diff -ruN '--exclude=out' '--exclude=.ghc-out' '--exclude=mm0-from-mm' '--exclude=Main.hs' '--exclude=*.o' '--exclude=*.hi' a/src/MM0/Util.hs a/src/MM0/Util.hs
+--- a/src/MM0/Util.hs	2026-10-28 07:32:47.987848118 +0100
++++ a/src/MM0/Util.hs	2026-10-28 10:47:26.669428878 +0100
+@@ -1,6 +1,7 @@
+ module MM0.Util (module MM0.Util, module Debug.Trace, module GHC.Stack, (<&>)) where
+ 
+ import Control.Applicative
++import Control.Monad
+ import Control.Monad.Except
+ import Control.Monad.Writer
+ import Data.Word (Word8)

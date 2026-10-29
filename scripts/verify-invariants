@@ -109,9 +109,24 @@ for artifact in "$repo_root"/mm0/*.mm0; do
         check "Phase D: $name states its theory coverage" false
         continue
     fi
+    # An artifact whose declarations are *imported* (the set.mm statement
+    # layer) names its theory in a `-- theory source:` line instead of
+    # embedding it, so the `used=` names must be grounded there — and that
+    # theory is untracked toolchain state (metamath/set.mm0 + a 548 MB
+    # set.mmu cannot be committed), hence a gap rather than a failure when
+    # it is not provisioned: same idiom as the missing-toolchain gaps.
+    theory="$artifact"
+    theory_src="$(sed -n 's/^-- theory source: //p' "$artifact")"
+    if [ -n "$theory_src" ]; then
+        theory="$repo_root/$theory_src"
+        if [ ! -f "$theory" ]; then
+            gap "Phase D: $name grounded against $theory_src (imported theory not provisioned)"
+            continue
+        fi
+    fi
     missing=""
     for rule in $(printf '%s' "$used" | tr ',' ' '); do
-        grep -qE "^term $rule[ (:;]" "$artifact" || missing="$missing $rule"
+        grep -qE "^term $rule[ (:;]" "$theory" || missing="$missing $rule"
     done
     if [ -n "$missing" ]; then
         echo "  [detail] $name claims used rules the theory does not declare:$missing" >&2

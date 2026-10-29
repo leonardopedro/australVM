@@ -486,3 +486,84 @@ Python, `docs/cic.mm0` is 122 lines, and this iteration's delta is the
 reducer-fix set (§9.1) plus ~120 lines of emitter/gate code (§9.2–9.3). The
 remaining genuinely-new work is the substitution calculus §7 names — sized in
 weeks, and independently verifiable at each step.
+
+---
+
+## 11. Wave 3 — the statement of record over set.mm (2026-10-29)
+
+§7's certificates prove closed Boolean reductions over an *embedded*
+`cic.mm0`. This layer carries the **statement itself** — the quasi-Riemann
+hypothesis at 7/8 — into the real Metamath corpus, importing set.mm instead
+of re-axiomatizing it:
+
+* **Artifact.** `mm0/quasi_rh_7_8.{mm0,mm1}` (51 lines) is generated from
+  the same pinned export as `quasi_rh_certificate` (the `STATEMENTS` table
+  in `scripts/lean2mm0`). The whole statement is one axiom:
+
+  ```
+  import "metamath/set.mm0";   (the .mm1 imports "metamath/set.mmu")
+  delimiter $ ( $ $ ) $;
+  axiom riemannZeta_ne_zero_of_seven_eighths_lt_re (s: class):
+    $ wcel s cc $ > $ wbr (co c7 cdiv c8) (cfv s cre) clt $ > $ wne (cfv s czeta) cc0 $;
+  ```
+
+  which reads `s ∈ CC → ( 7 / 8 ) < ( Re ` s ) → ( ζ ` s ) ≠ 0` — exactly
+  the source-of-record statement in `timepiece/QuasiRiemannCertificate.lean`.
+  The two files are line-identical except the import line (self-checked):
+  mm0-rs reads imported *proofs* from an imported `.mm1`/`.mmu`, never from
+  a spec, hence `.mm0` imports `set.mm0` and `.mm1` imports `set.mmu`.
+
+* **Argument order — the trap in this layer.** MM0 parameters are in
+  set.mm's `$f` declaration order, not the surface-text order of the
+  Metamath math string: `wbr(A,B,R)` is `A R B`, `co(a,b,F)` is `( a F b )`,
+  `cfv(point,F)` is `( F ` point )`. Grounded by reading `term` lines and
+  real theorems (`reval`, `df_zeta`) in `set.mm0`; the artifact header
+  records the resulting mapping table.
+
+* **Three anchors, all mutation-tested by `selftest`:**
+  1. *shape* — the export's value must parse as
+     `∀ s : Complex, boundScaled < complexReScaled s → riemannZeta s ≠ complexZero`
+     with every atom resolved by name (Complex / LT.lt / Ne / …), so a
+     fixture whose statement changed is refused, not reinterpreted;
+  2. *bound* — `boundScaled`/`denom`/`boundMantissa`/`boundExp` are
+     *evaluated* from the pinned export (8750/10000/8750/4) and tied to
+     seven-eighths by cross-multiplication (`8·8750 = 7·10000`) before
+     `( 7 / 8 )` is emitted — the numeral is the Lean def's value, not a
+     comment. A flipped numerator must be refused;
+  3. *label contract* — the 13 set.mm labels the axiom may name, with the
+     sorts set.mm declares them at, are pinned in `SETMM_LABELS` and
+     grounded against `metamath/set.mm0` by `verify` (existence + sort).
+
+* **Verify chain.** Same three gates as the certificate path, but the
+  streams are written under a tempdir whose `metamath/` symlink lets
+  `import` resolve: `mm0-rs compile` elaborates the `.mm1` (pulling in
+  `set.mmu`, whose proofs it checks), `mm0-rs join` inlines `set.mm0` into
+  one spec stream, and `mm0-c` checks the `.mmb` against the joined spec —
+  so the root of trust re-verifies all 50,030 imported set.mm statements
+  alongside the new axiom (50,031 after ours). Full `verify` (check +
+  selftest + four artifacts) runs in ~16 s.
+
+* **Provisioning (untracked toolchain state).** `mm0/metamath/{set.mm,
+  set.mm0, set.mmu}` is not committed — `set.mmu` is 548 MB. Provision with:
+
+  ```
+  mm0-from-mm from-mm mm0/metamath/set.mm -o mm0/metamath/set.mm0 mm0/metamath/set.mmu
+  sed -i 's/^(pub //' mm0/metamath/set.mmu    # mm0-rs's reader takes no `pub ` prefix
+  ```
+
+  (`from-mm`'s spec output is deterministic — regeneration is
+  byte-identical — and `set.mm0` is ~21 MB, should committing it ever be
+  wanted.) When the theory is absent, both gates print a `[gap]` *with
+  these commands* and still verify the certificate stems — a gap, never a
+  silent pass, the same idiom as the missing-toolchain gaps in
+  `scripts/verify-invariants`.
+
+* **Gates.** `scripts/verify-invariants` Phase D now honours the
+  `-- theory source:` line an imported-theory artifact carries: every
+  `used=` label must be a `term` declared in that file (gap when it is not
+  provisioned). The artifact's `-- trust-split: structural=0 grounded=0
+  statements=1` is pinned by `BUDGETS` like every other artifact: the
+  statement's *truth* is asserted (proof of record: the Mathlib
+  DirichletL development cited in the header), and what mm0-c checks is
+  everything else — well-formedness against set.mm's grammar, and via the
+  import, the whole imported corpus.
