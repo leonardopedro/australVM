@@ -806,17 +806,18 @@ impl Service {
         Ok(HttpResponse::html(200, html))
     }
 
-    /// (doi, id, title) for every archived proof — what the registry needs to
-    /// name the proof behind an `attested` certificate. A copy, so rendering
+    /// (doi, id, title, record url) for every archived proof — what the
+    /// registry needs to name the proof behind an `attested` certificate and
+    /// to link that row straight to the Zenodo record. A copy, so rendering
     /// never holds the ledger lock.
-    fn proof_index(&self) -> Vec<(String, String, String)> {
+    fn proof_index(&self) -> Vec<(String, String, String, Option<String>)> {
         let Ok(ledger) = self.ledger.lock() else {
             return Vec::new();
         };
         ledger
             .list()
             .iter()
-            .filter_map(|p| Some((p.doi.clone()?, p.id.clone(), p.title.clone())))
+            .filter_map(|p| Some((p.doi.clone()?, p.id.clone(), p.title.clone(), p.url.clone())))
             .collect()
     }
 

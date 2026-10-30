@@ -888,6 +888,12 @@ fn a_proof_is_published_through_mm0web_and_its_doi_is_recorded() {
     assert!(html.contains("linearity ledger"));
     assert!(html.contains("10.5281/zenodo.42"));
     assert!(html.contains("https://doi.org/10.5281/zenodo.42"));
+    // The row goes straight to the deposit as well as to the resolver.
+    assert!(
+        html.contains("https://zenodo.test/records/42"),
+        "the proof list links the record: {html}"
+    );
+    assert!(html.contains("zenodo ↗"));
 }
 
 #[test]
@@ -1050,6 +1056,13 @@ fn an_archived_proof_backs_a_certificate() {
     assert_eq!(status, 200);
     assert!(registry_html.contains("Backed by"), "registry: {registry_html}");
     assert!(registry_html.contains(&format!("/proofs/{id}")));
+    // …and from that row straight to the archive itself, one click past the
+    // proof page: the deposit's record URL on the certificate's own line.
+    assert!(
+        registry_html.contains("https://zenodo.test/records/42"),
+        "registry: {registry_html}"
+    );
+    assert!(registry_html.contains("zenodo record"));
     assert!(registry_html.contains("kernel invariants"));
     assert!(registry_html.contains(&cert["cert_id"].as_str().unwrap_or("").to_string()));
 

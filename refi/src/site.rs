@@ -165,7 +165,7 @@ pub fn home(chrome: &Chrome, status: &Value, registry: &Value) -> String {
 pub fn registry(
     chrome: &Chrome,
     registry: &Value,
-    proofs: &[(String, String, String)],
+    proofs: &[(String, String, String, Option<String>)],
 ) -> String {
     let certificates: Vec<Value> = registry["certificates"]
         .as_array()
@@ -182,12 +182,22 @@ pub fn registry(
             return "<span class=\"muted\">—</span>".to_string();
         }
         let doi = c["source"].as_str().unwrap_or("");
-        match proofs.iter().find(|(d, _, _)| d == doi) {
-            Some((_, id, title)) => format!(
-                "<a href=\"/proofs/{}\">{}</a>",
-                escape_html(id),
-                escape_html(title)
-            ),
+        match proofs.iter().find(|(d, _, _, _)| d == doi) {
+            Some((_, id, title, record)) => {
+                // The row goes straight to the archive: the deposit's own
+                // record URL, or the DOI resolver if the record never
+                // recorded one.
+                let href = record
+                    .clone()
+                    .unwrap_or_else(|| format!("https://doi.org/{doi}"));
+                format!(
+                    "<a href=\"/proofs/{}\">{}</a> · \
+                     <a href=\"{}\" rel=\"noopener\" target=\"_blank\">zenodo record ↗</a>",
+                    escape_html(id),
+                    escape_html(title),
+                    escape_html(&href)
+                )
+            }
             None => "<span class=\"muted\">—</span>".to_string(),
         }
     };
@@ -563,6 +573,16 @@ fn proof_rows(proofs: &[Proof], admin: bool) -> String {
                     None => "—".to_string(),
                 },
             };
+            // Archived rows also link straight to the record itself: the DOI
+            // resolver is one hop, the deposit page is none.
+            let record = match p.url.as_deref() {
+                Some(url) => format!(
+                    " · <a href=\"{}\" rel=\"noopener\" target=\"_blank\">zenodo ↗</a>",
+                    escape_html(url)
+                ),
+                None => String::new(),
+            };
+            let doi = doi + &record;
             format!(
                 "<tr><td>{title}</td><td><span class=\"pill {class}\">{state}</span></td>\
                  <td>{doi}</td><td class=\"mono small\">{sha}</td><td class=\"num\">{at}</td></tr>",
@@ -694,7 +714,8 @@ fn proof_view(
         let doi = p.doi.as_deref().unwrap_or("");
         let record = match (p.url.as_deref(), p.zenodo_record) {
             (Some(url), Some(n)) => format!(
-                "<div><span>Record</span><a href=\"{}\" rel=\"noopener\">zenodo record {}</a></div>",
+                "<div><span>Record</span><a href=\"{}\" rel=\"noopener\" \
+                 target=\"_blank\">zenodo record {} ↗</a></div>",
                 escape_html(url),
                 n
             ),
