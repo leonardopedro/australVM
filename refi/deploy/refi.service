@@ -1,0 +1,50 @@
+[Unit]
+Description=ReFi exchange web service (Taler-style settlement over the unfer certificate ledger)
+Documentation=file:%h/Projects/australVM/refi/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/australVM/refi
+EnvironmentFile=%h/.config/refi/refi.env
+# Bind to loopback and let a TLS-terminating front (tunnel or reverse proxy)
+# dial it; the service itself speaks plain HTTP/1.1. See deploy/README.md.
+ExecStart=%h/Projects/australVM/refi/target/release/refi_service \
+    --listen ${REFI_LISTEN} \
+    --state-dir ${REFI_STATE_DIR} \
+    --base-url ${REFI_BASE_URL} \
+    --manifest ${REFI_MANIFEST} \
+    --module ${REFI_MODULE} \
+    --cps ${REFI_CPS} \
+    --austral-bin ${REFI_AUSTRAL_BIN} \
+    --max-wire ${REFI_MAX_WIRE} \
+    --daily-cap ${REFI_DAILY_CAP} \
+    --denom-horizon ${REFI_DENOM_HORIZON} \
+    --mm0web ${REFI_MM0WEB} \
+    ${REFI_OPEN_REGISTRATION}
+
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+
+# Hardening: the process only needs its state directory writable.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/refi
+ReadOnlyPaths=%h/Projects/australVM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+# NOTE: MemoryDenyWriteExecute is deliberately NOT set. The Austral policy
+# kernel is JIT-compiled by Cranelift, which maps its code pages RWX; denying
+# that makes every request-run fail at startup. If the JIT ever grows a
+# W^X mapping (a dual-mapping or memfd+sealing design), enable this again.
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=default.target

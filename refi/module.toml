@@ -1,0 +1,37 @@
+# refi/module.toml — the grants the ReFi policy kernel is allowed to call.
+#
+# `rs_*` sits on the kernel-boundary gate exactly like `uk_*`/`uz_*`: an rs_
+# call with no grant fails JIT compilation with UK-4001, so this file — not the
+# Austral source — is the capability list. Keep it in step with
+# `modules/RefiPolicy.aum`; `PolicyEngine::start` refuses to compile if the
+# compiled CPS names a primitive that is not granted here.
+
+[module]
+name = "RefiService"
+version = "0.1.0"
+
+[grants]
+kernel = [
+  # policy queries
+  "rs_role",
+  "rs_max_wire",
+  "rs_amount_ok",
+  "rs_owns_reserve",
+  "rs_owns_merchant",
+  "rs_daily_cap_ok",
+  "rs_coin_count",
+  "rs_coin_ok",
+  "rs_denom_ok",
+  "rs_audit_ok",
+  # mechanism
+  "rs_open_reserve",
+  "rs_peg_in",
+  "rs_withdraw",
+  "rs_deposit",
+  "rs_peg_out",
+  "rs_confirm_peg_out",
+  "rs_cancel_peg_out",
+  "rs_issue_denom",
+  "rs_mint",
+  "rs_transfer",
+]

@@ -1,0 +1,44 @@
+[workspace]
+members = []
+resolver = "2"
+
+[package]
+name = "refi_service"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "ReFi exchange web service: GNU Taler-style settlement over the unfer carbon-certificate ledger, with an Austral policy kernel and a small HTTP/1.1 front."
+publish = false
+
+[lib]
+name = "refi_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "refi_service"
+path = "src/main.rs"
+
+[dependencies]
+unfer_taler = { path = "../../unfer/unfer_taler" }
+# The svcmux-bundle-v1 measurement, shared with mm0web so both webservers'
+# /attestation answers are produced by one canonical implementation.
+unfer_measure = { path = "../../unfer/unfer_measure" }
+unfer_consensus = { path = "../../unfer/unfer_consensus" }
+unfer_protocol = { path = "../../unfer/unfer_protocol" }
+# The Cranelift bridge, without the unfer-kernel/tier1-rs feature surface: this
+# host supplies its own rs_* primitives through the static-symbol registry.
+austral_cranelift_bridge = { path = "../safestos/cranelift", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
