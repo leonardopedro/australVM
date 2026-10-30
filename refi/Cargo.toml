@@ -20,6 +20,9 @@ path = "src/main.rs"
 
 [dependencies]
 unfer_taler = { path = "../../unfer/unfer_taler" }
+# The svcmux-bundle-v1 measurement, shared with mm0web so both webservers'
+# /attestation answers are produced by one canonical implementation.
+unfer_measure = { path = "../../unfer/unfer_measure" }
 unfer_consensus = { path = "../../unfer/unfer_consensus" }
 unfer_protocol = { path = "../../unfer/unfer_protocol" }
 # The Cranelift bridge, without the unfer-kernel/tier1-rs feature surface: this

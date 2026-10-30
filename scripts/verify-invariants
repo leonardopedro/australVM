@@ -279,6 +279,55 @@ else
     gap "memsafe: mm0 toolchain absent (mm0-rs/mm0-c not on PATH; see docs/memsafe.md §6)"
 fi
 
+# --- service isolation: the three-service certificate (docs/service_isolation.mm0) ---
+#
+# Same root of trust as memsafe, different subject: svcmux's cross-checked
+# measurements (verifieduniquealiases/scripts/e2e-three-svcs.sh writes
+# mm0/service_pins.json) become one `isolated` theorem per ordered pair,
+# derived by iso_intro over the pinned facts. The invariants this gate owns:
+#
+#   * the artifacts are in sync with the pins and the theory (`check`);
+#   * the trust split is structural-only — a `grounded=` line other than 0
+#     means the emitter stopped deriving separations and started asserting
+#     them, which is the exact failure the certificate exists to catch;
+#   * the emitter's own audit refuses a pair measured equal on any axis
+#     (`selftest`, no toolchain);
+#   * mm0-rs + mm0-c accept the proofs and refuse a proof mutated to cite
+#     the wrong axis's pinned constant (`verify`, needs the toolchain).
+iso_files="$repo_root/mm0/service_pins.json $repo_root/docs/service_isolation.mm0 $repo_root/mm0/service_isolation_certificate.mm0 $repo_root/mm0/service_isolation_certificate.mm1"
+iso_present=1
+for f in $iso_files; do
+    [ -f "$f" ] || iso_present=0
+done
+if [ "$iso_present" = 1 ]; then
+    check "service-isolation: pins, theory and both certificate halves present" true
+else
+    echo "  [detail] missing one of: $iso_files" >&2
+    check "service-isolation: pins, theory and both certificate halves present" false
+fi
+check "service-isolation: emitter present and executable" \
+    test -x "$repo_root/scripts/service_iso2mm0"
+check_py "service-isolation: certificate in sync with the pinned measurements and theory" \
+    python3 "$repo_root/scripts/service_iso2mm0" check
+iso_line="$(sed -n 's/^-- trust-split: //p' "$repo_root/mm0/service_isolation_certificate.mm0")"
+iso_struct="$(sed -n 's/^structural=\([0-9]*\).*/\1/p' <<<"$iso_line")"
+iso_ground="$(sed -n 's/.*grounded=\([0-9]*\).*/\1/p' <<<"$iso_line")"
+iso_certs="$(sed -n 's/.*certificates=\([0-9]*\).*/\1/p' <<<"$iso_line")"
+if [ -n "$iso_struct" ] && [ "$iso_ground" = 0 ] && [ "$iso_struct" = "$iso_certs" ]; then
+    check "service-isolation: trust split is structural-only ($iso_struct derived / 0 grounded)" true
+else
+    echo "  [detail] trust-split line: $iso_line (want grounded=0, structural=certificates)" >&2
+    check "service-isolation: trust split is structural-only ($iso_struct derived / 0 grounded)" false
+fi
+check_py "service-isolation: emitter self-test (an equal pair is refused, never axiomatized)" \
+    python3 "$repo_root/scripts/service_iso2mm0" selftest
+if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+    check_py "service-isolation: mm0-rs + mm0-c verify the theorems, and reject a mutated proof" \
+        python3 "$repo_root/scripts/service_iso2mm0" verify
+else
+    gap "service-isolation: mm0 toolchain absent (mm0-rs/mm0-c not on PATH; see docs/service_isolation.mm0)"
+fi
+
 # --- H1.13 AuthorizationEngine: secure default, kernel denies without it ---
 check "S28: AuthorizationEngine trait present" \
     grep -q "trait AuthorizationEngine" "$repo_root/safestos/cranelift/src/auth.rs"

@@ -11,3 +11,8 @@ license = "Apache-2.0 WITH LLVM-exception"
 # standalone artifact for out-of-process hosts later (PLAN_valen §4 Tier 2).
 [lib]
 crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Only for rs_bundle_tag: the same sha2 every other crate in the workspace
+# pins, so the measurement tag is a plain SHA-256 and not a home-made digest.
+sha2 = "0.10"

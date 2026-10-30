@@ -7,6 +7,7 @@
 //! kernel.
 
 pub mod accounts;
+pub mod attestation;
 pub mod server;
 pub mod content;
 pub mod engine;

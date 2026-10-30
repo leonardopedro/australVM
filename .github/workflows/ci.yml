@@ -70,7 +70,9 @@ jobs:
               --emit-linearity-ledger=/tmp/ll.json && \
             diff -u mm0/ledgers/linearity_ledger.json /tmp/ll.json && \
             python3 scripts/ledger2mm0 check && \
-            python3 scripts/ledger2mm0 selftest'
+            python3 scripts/ledger2mm0 selftest && \
+            python3 scripts/service_iso2mm0 check && \
+            python3 scripts/service_iso2mm0 selftest'
 
   lint:
     name: clippy (deny warnings)
@@ -136,3 +138,8 @@ jobs:
       # mutated timeline (docs/memsafe.md §6).
       - name: ledger2mm0 verify (drift + mm0-rs + mm0-c + mutation anchor)
         run: python3 scripts/ledger2mm0 verify
+      # The service-isolation certificate rests on the same root of trust:
+      # svcmux's pinned measurements become `isolated` theorems, and the
+      # negative anchor must refuse a proof citing the wrong axis's constant.
+      - name: service_iso2mm0 verify (drift + mm0-rs + mm0-c + mutation anchor)
+        run: python3 scripts/service_iso2mm0 verify

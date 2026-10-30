@@ -24,6 +24,10 @@ use crate::util::{
 #[derive(Debug, Clone)]
 pub struct Config {
     pub state_dir: PathBuf,
+    /// The address the listener was asked to bind. Reported by
+    /// `GET /attestation` as part of the service's bundle: the supervisor's
+    /// manifest records the same string, so a port change rotates the digest.
+    pub listen: String,
     pub base_url: String,
     /// Allow anyone to self-register a customer account.
     pub open_registration: bool,
@@ -260,6 +264,7 @@ impl Service {
             ("GET", ["pages", slug]) => self.site_page(slug),
             ("GET", ["proofs"]) => self.site_proofs(),
             ("GET", ["proofs", id]) => self.site_proof(id),
+            ("GET", ["attestation"]) => self.site_attestation(req),
             ("GET", ["admin"]) => self.admin_home(req),
             ("GET", ["admin", "login"]) => Ok(site::login(&self.chrome(req), None).into()),
             ("POST", ["admin", "login"]) => self.admin_login(req),
@@ -837,6 +842,16 @@ impl Service {
         Ok(HttpResponse::html(200, html))
     }
 
+    /// This service's own measurement, nonce-bound: the outside-in view
+    /// (`svcmux`'s manifest) checked against the inside-out one.
+    fn site_attestation(&self, req: &HttpRequest) -> Result<HttpResponse, ApiError> {
+        crate::attestation::attestation(
+            &self.config.state_dir,
+            &self.config.listen,
+            req.query_get("nonce"),
+        )
+    }
+
     fn site_api(&self) -> Result<HttpResponse, ApiError> {
         let html = self.with_chrome(|chrome| site::api_docs(chrome, &self.config.base_url))?;
         Ok(HttpResponse::html(200, html))
@@ -1218,8 +1233,12 @@ impl Service {
 
     fn site_proofs(&self) -> Result<HttpResponse, ApiError> {
         let (proofs, counts, configured, backend) = self.ledger_view()?;
+        // The landing list shows each proof beside the certificate minted
+        // from it, so it needs the live registry as well as the ledger.
+        let registry = self.engine.read(Read::Registry { limit: 500, kind: None })?;
+        let certs: Vec<Value> = registry["certificates"].as_array().cloned().unwrap_or_default();
         let html = self.with_chrome(|chrome| {
-            site::proofs(chrome, &proofs, counts, configured, backend.as_deref())
+            site::proofs(chrome, &proofs, counts, configured, backend.as_deref(), &certs)
         })?;
         Ok(HttpResponse::html(200, html))
     }

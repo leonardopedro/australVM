@@ -2524,6 +2524,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unfer_consensus",
+ "unfer_measure",
  "unfer_protocol",
  "unfer_taler",
 ]
@@ -3322,6 +3323,16 @@ dependencies = [
  "sha2",
  "thiserror 2.0.21",
  "unfer_protocol",
+]
+
+[[package]]
+name = "unfer_measure"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

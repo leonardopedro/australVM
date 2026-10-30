@@ -257,6 +257,7 @@ fn main() {
     let service = Service::new(
         Config {
             state_dir: cli.state_dir.clone(),
+            listen: cli.listen.clone(),
             base_url: cli.base_url.clone(),
             open_registration: cli.open_registration,
             secure_cookies: secure,

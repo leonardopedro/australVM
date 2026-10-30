@@ -107,6 +107,7 @@ fn fixture_with(admin: &str, mm0web: Option<&str>) -> Option<Fixture> {
     let service = Service::new(
         Config {
             state_dir: dir.path().to_path_buf(),
+            listen: "127.0.0.1:0".to_string(),
             base_url: "https://refi.test".to_string(),
             open_registration: true,
             secure_cookies: true,
@@ -665,6 +666,7 @@ fn state_survives_a_restart() {
     let reopened = Service::new(
         Config {
             state_dir: state_dir.clone(),
+            listen: "127.0.0.1:0".to_string(),
             base_url: "https://refi.test".to_string(),
             open_registration: true,
             secure_cookies: true,
@@ -894,6 +896,12 @@ fn a_proof_is_published_through_mm0web_and_its_doi_is_recorded() {
         "the proof list links the record: {html}"
     );
     assert!(html.contains("zenodo ↗"));
+    // Nothing is minted against this proof yet, so there is no certificate
+    // column to show — an empty grid would be noise.
+    assert!(
+        !html.contains("<th>Certificate</th>"),
+        "no pairing column before the first mint: {html}"
+    );
 }
 
 #[test]
@@ -1065,6 +1073,27 @@ fn an_archived_proof_backs_a_certificate() {
     assert!(registry_html.contains("zenodo record"));
     assert!(registry_html.contains("kernel invariants"));
     assert!(registry_html.contains(&cert["cert_id"].as_str().unwrap_or("").to_string()));
+
+    // …and the landing list shows the pair side by side: one row carries the
+    // proof and the certificate minted from it, no second lookup.
+    let (status, proofs_html) = request(&fx.service, "GET", "/proofs", None, None);
+    assert_eq!(status, 200);
+    assert!(proofs_html.contains("<th>Certificate</th>"), "proofs: {proofs_html}");
+    let cert_id = cert["cert_id"].as_str().unwrap_or("");
+    let start = proofs_html.find("kernel invariants").expect("the proof is listed");
+    let end = proofs_html[start..]
+        .find("</tr>")
+        .map(|i| start + i)
+        .unwrap_or(proofs_html.len());
+    let row = &proofs_html[start..end];
+    assert!(
+        row.contains(&format!(
+            "<td><div><span class=\"mono small\">{cert_id}</span>"
+        )),
+        "the certificate gets its own cell on its proof's line: {row}"
+    );
+    assert!(row.contains("10 units"), "row: {row}");
+    assert!(row.contains("unspent"), "row: {row}");
 
     let (status, proof_html) = request(&fx.service, "GET", &format!("/proofs/{id}"), None, None);
     assert_eq!(status, 200, "the public proof page needs no account");
@@ -1330,4 +1359,47 @@ fn unknown_paths_are_a_real_404() {
     );
     assert_eq!(status, 404);
     assert!(body.contains("UK-1002"), "API 404s carry the protocol code: {body}");
+}
+
+#[test]
+fn attestation_measures_this_process_and_binds_the_nonce() {
+    let Some(fx) = fixture(ADMIN) else {
+        return;
+    };
+    let (status, body) = request(
+        &fx.service,
+        "GET",
+        "/attestation?nonce=challenge-1",
+        None,
+        None,
+    );
+    assert_eq!(status, 200, "attestation: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("JSON answer");
+    assert_eq!(v["spec"], "svcmux-bundle-v1");
+    assert_eq!(v["id"], "refi");
+    assert_eq!(v["listen"], "127.0.0.1:0");
+    assert_eq!(
+        v["state_root"],
+        fx._dir.path().display().to_string(),
+        "the bundle names the state root this process was given"
+    );
+    for k in ["binary_sha256", "config_sha256", "bundle"] {
+        let s = v[k].as_str().unwrap_or("");
+        assert_eq!(s.len(), 64, "{k} must be a hex sha256, got {s:?}");
+    }
+
+    // Recompute the binding the way a verifier does — raw sha2 over the
+    // served digest, not through the crate that produced it.
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(v["bundle"].as_str().unwrap().as_bytes());
+    h.update([0]);
+    h.update(b"challenge-1");
+    let expect = hex::encode(h.finalize());
+    assert_eq!(v["binding"], expect, "the nonce binds the digest");
+
+    // An unanswered challenge gets a 400: an unbound statement proves
+    // nothing and replaying one would be trivial.
+    let (status, _) = request(&fx.service, "GET", "/attestation", None, None);
+    assert_eq!(status, 400, "no nonce, no attestation");
 }

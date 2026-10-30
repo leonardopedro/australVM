@@ -549,7 +549,13 @@ footer{max-width:1080px;margin:0 auto;padding:1.4rem;border-top:1px solid var(--
 
 // ── proofs ──────────────────────────────────────────────────────────
 
-fn proof_rows(proofs: &[Proof], admin: bool) -> String {
+fn proof_rows(proofs: &[Proof], admin: bool, certs: &[Value]) -> String {
+    // The pairing this list exists for: a proof and the certificate minted
+    // from it on one line. The column only appears once there is a pair to
+    // show — before the first mint it would be an empty grid.
+    let paired = certs
+        .iter()
+        .any(|c| proofs.iter().any(|p| p.doi.as_deref() == c["source"].as_str()));
     let rows = proofs
         .iter()
         .map(|p| {
@@ -583,15 +589,46 @@ fn proof_rows(proofs: &[Proof], admin: bool) -> String {
                 None => String::new(),
             };
             let doi = doi + &record;
+            let certificate = if paired {
+                let mine = certs
+                    .iter()
+                    .filter(|c| p.doi.as_deref() == c["source"].as_str())
+                    .map(|c| {
+                        let status = c["status"].as_str().unwrap_or("");
+                        format!(
+                            "<div><span class=\"mono small\">{}</span> · {} units · \
+                             <span class=\"pill {}\">{}</span></div>",
+                            escape_html(c["cert_id"].as_str().unwrap_or("")),
+                            c["amount"].as_u64().unwrap_or(0),
+                            if status == "unspent" { "ok" } else { "muted" },
+                            escape_html(status),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                if mine.is_empty() {
+                    "<span class=\"muted\">—</span>".to_string()
+                } else {
+                    mine
+                }
+            } else {
+                String::new()
+            };
+            let cell = if paired {
+                format!("<td>{certificate}</td>")
+            } else {
+                String::new()
+            };
             format!(
                 "<tr><td>{title}</td><td><span class=\"pill {class}\">{state}</span></td>\
-                 <td>{doi}</td><td class=\"mono small\">{sha}</td><td class=\"num\">{at}</td></tr>",
+                 <td>{doi}</td><td class=\"mono small\">{sha}</td><td class=\"num\">{at}</td>{cell}</tr>",
                 title = title,
                 class = if p.state.as_str() == "published" { "ok" } else { "muted" },
                 state = escape_html(p.state.as_str()),
                 doi = doi,
                 sha = escape_html(&short(&p.sha256)),
                 at = p.updated_at,
+                cell = cell,
             )
         })
         .collect::<Vec<_>>()
@@ -602,9 +639,10 @@ fn proof_rows(proofs: &[Proof], admin: bool) -> String {
          <code>mm0-c</code> and archived on Zenodo with a DOI.</p>"
             .to_string()
     } else {
+        let header = if paired { "<th>Certificate</th>" } else { "" };
         format!(
             "<table><thead><tr><th>Proof</th><th>State</th><th>DOI</th><th>Digest</th>\
-             <th class=\"num\">Updated</th></tr></thead><tbody>{rows}</tbody></table>"
+             <th class=\"num\">Updated</th>{header}</tr></thead><tbody>{rows}</tbody></table>"
         )
     }
 }
@@ -631,6 +669,7 @@ pub fn proofs(
     counts: (usize, usize, usize),
     configured: bool,
     backend: Option<&str>,
+    certs: &[Value],
 ) -> String {
     let (published, pending, failed) = counts;
     let body = format!(
@@ -642,7 +681,7 @@ pub fn proofs(
         a = stat("Archived", &published.to_string(), "with a Zenodo DOI"),
         b = stat("Pending", &pending.to_string(), "queued or verified, not archived"),
         c = stat("Refused", &failed.to_string(), "proof hole or backend error"),
-        rows = proof_rows(proofs, false),
+        rows = proof_rows(proofs, false, certs),
     );
     layout("Proofs", chrome, &body, false)
 }
@@ -683,7 +722,9 @@ pub fn admin_proofs(
         a = stat("Archived", &published.to_string(), "with a Zenodo DOI"),
         b = stat("Pending", &pending.to_string(), "queued or verified"),
         c = stat("Refused", &failed.to_string(), "proof hole or backend error"),
-        rows = proof_rows(proofs, true),
+        // The console keeps its list as it was: each proof's certificates
+        // are on its own detail page, behind the mint form.
+        rows = proof_rows(proofs, true, &[]),
     );
     layout("Proofs · admin", chrome, &body, true)
 }

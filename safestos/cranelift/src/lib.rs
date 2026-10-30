@@ -863,6 +863,14 @@ pub(crate) const RS_FFI_SYMBOLS: &[KernelSymbol] = &[
         name: "rs_version",
         addr: rsffi::rs_version as *const u8,
     },
+    KernelSymbol {
+        // The measurement primitive: first 8 bytes of sha256 over a
+        // canonical svcmux-bundle-v1 preimage (see rsffi's docs). The
+        // isolation model calls it so an Austral module's tags are produced
+        // by the same digest the guest's supervisor publishes.
+        name: "rs_bundle_tag",
+        addr: rsffi::rs_bundle_tag as *const u8,
+    },
 ];
 
 #[cfg(feature = "tier1-rs")]
