@@ -799,8 +799,15 @@ impl Service {
 
     fn site_home(&self) -> Result<HttpResponse, ApiError> {
         let status = self.engine.read(Read::Status)?;
-        let registry = self.engine.read(Read::Registry { limit: 8, kind: None })?;
-        let html = self.with_chrome(|chrome| site::home(chrome, &status, &registry))?;
+        // One registry read feeds both panels: the newest-certificates
+        // table keeps its first 8 rows, and the newest-proofs panel needs
+        // every certificate minted against a recent proof's DOI, wherever
+        // it sits in the registry (site_proofs reads the same limit).
+        let registry = self.engine.read(Read::Registry { limit: 500, kind: None })?;
+        let certs: Vec<Value> = registry["certificates"].as_array().cloned().unwrap_or_default();
+        let (proofs, _, _, _) = self.ledger_view()?;
+        let html =
+            self.with_chrome(|chrome| site::home(chrome, &status, &registry, &proofs, &certs))?;
         Ok(HttpResponse::html(200, html))
     }
 

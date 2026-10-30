@@ -1080,6 +1080,12 @@ fn an_archived_proof_backs_a_certificate() {
     assert_eq!(status, 200);
     assert!(proofs_html.contains("<th>Certificate</th>"), "proofs: {proofs_html}");
     let cert_id = cert["cert_id"].as_str().unwrap_or("");
+    // …and the registry line the id points at exists: /proofs links to
+    // /registry#cert-<id>, so the row must carry that anchor.
+    assert!(
+        registry_html.contains(&format!("id=\"cert-{cert_id}\"")),
+        "the registry row is anchorable: {registry_html}"
+    );
     let start = proofs_html.find("kernel invariants").expect("the proof is listed");
     let end = proofs_html[start..]
         .find("</tr>")
@@ -1088,12 +1094,33 @@ fn an_archived_proof_backs_a_certificate() {
     let row = &proofs_html[start..end];
     assert!(
         row.contains(&format!(
-            "<td><div><span class=\"mono small\">{cert_id}</span>"
+            "<td><div><a class=\"mono small\" href=\"/registry#cert-{cert_id}\">{cert_id}</a>"
         )),
-        "the certificate gets its own cell on its proof's line: {row}"
+        "the certificate id links to its registry row on its proof's line: {row}"
     );
     assert!(row.contains("10 units"), "row: {row}");
     assert!(row.contains("unspent"), "row: {row}");
+
+    // …and the home page's newest-proofs panel shows the same pair: proof
+    // and certificate on one line, with the id linked to its registry row.
+    let (status, home) = request(&fx.service, "GET", "/", None, None);
+    assert_eq!(status, 200);
+    assert!(home.contains("Newest proofs"), "home: {home}");
+    let start = home
+        .find("kernel invariants")
+        .expect("the newest proof is listed on the home page");
+    let end = home[start..]
+        .find("</tr>")
+        .map(|i| start + i)
+        .unwrap_or(home.len());
+    let row = &home[start..end];
+    assert!(
+        row.contains(&format!(
+            "<a class=\"mono small\" href=\"/registry#cert-{cert_id}\">{cert_id}</a>"
+        )),
+        "the home pair links the certificate id to its registry row: {row}"
+    );
+    assert!(row.contains("10 units"), "home row: {row}");
 
     let (status, proof_html) = request(&fx.service, "GET", &format!("/proofs/{id}"), None, None);
     assert_eq!(status, 200, "the public proof page needs no account");
