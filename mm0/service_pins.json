@@ -1,0 +1,24 @@
+{
+  "spec": "svcmux-bundle-v1",
+  "set_digest": "6ff2cffbf4eed5bee36f9b61c2973612c16339fdf161447f5fd4fe51392eefb9",
+  "services": [
+    {
+      "id": "mm0web",
+      "bundle": "b66e7b1845c9c88a9c975059ed39e26cf0cd347d5aaef4e77ac032af38c46ddd",
+      "binary_sha256": "2942cd05623f630f053d316614e9acc765a4d410a280b22c16a10b1e9f8f9b78",
+      "config_sha256": "3fb26c997508e9fbd51233e79fed19479d1c8842ab6a709c0d2ec7b04e021088",
+      "state_root": "/home/leo/Projects/verifieduniquealiases/output-e2e/state/mm0web",
+      "listen": "127.0.0.1:19081",
+      "path": "/home/leo/Projects/verifieduniquealiases/../unfer/target/release/mm0web"
+    },
+    {
+      "id": "refi",
+      "bundle": "963d59bc1be180b0d94c7fc5e0e67234c2f0628c77c324ea32af6a69f0ddde29",
+      "binary_sha256": "1d019269ab59037b3682c559c78c4b1fa136f678fffb36a5c8c0bc2016cf97c2",
+      "config_sha256": "8228fdbbe99bee64aa745234ef5910b8db0d8039df7c33261e863fd1903eced4",
+      "state_root": "/home/leo/Projects/verifieduniquealiases/output-e2e/state/refi",
+      "listen": "127.0.0.1:19080",
+      "path": "/home/leo/Projects/verifieduniquealiases/../australVM/refi/target/release/refi_service"
+    }
+  ]
+}

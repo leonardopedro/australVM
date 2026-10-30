@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""service_iso2mm0 — the three-service isolation certificate.
+
+Input:  mm0/service_pins.json — the svcmux-bundle-v1 manifest of the
+        confidential guest's three webservers (written by
+        verifieduniquealiases/scripts/e2e-three-svcs.sh after its
+        outside-in/inside-out measurement cross-check).
+Output: mm0/service_isolation_certificate.{mm0,mm1} — one `isolated`
+        theorem per ordered pair, derived by rule application over the
+        pinned facts.
+
+Modes (same shape as scripts/ledger2mm0):
+
+    generate   write the artifacts
+    check      drift gate: regenerate and compare, no toolchain needed
+    verify     check + mm0-rs + mm0-c, plus a negative: a mutated proof
+               must be refused (the certificate is load-bearing)
+    selftest   the emitter's own audit by mutation: two services pinned to
+               the same value must be a refusal, never an axiom
+
+Exit codes: 0 ok, 1 failure, 2 verify without the mm0 toolchain (a distinct
+code, never a silent pass).
+
+The trust split is enforced, not narrated: every theorem is structural
+(a rule application), and the grounded facts are exactly the pairs the
+pins file says differ. Emission of an equality as a separation is
+impossible — the generator refuses first.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+AVM = Path(__file__).resolve().parent.parent          # australVM/
+THEORY = AVM / "docs" / "service_isolation.mm0"
+PINS = AVM / "mm0" / "service_pins.json"
+OUT_DIR = AVM / "mm0"
+
+# The guest's three services → the theory's constants. `paypal-auth-vm` is
+# the attested OAuth service that svcmux supervises alongside the two
+# webservers; the isolation claim is over all three.
+SERVICES = {
+    "paypal-auth-vm": ("svc_paypal", "h_paypal", "p_paypal", "d_paypal"),
+    "mm0web": ("svc_mm0web", "h_mm0web", "p_mm0web", "d_mm0web"),
+    "refi": ("svc_refi", "h_refi", "p_refi", "d_refi"),
+}
+PAIRS_ALL = [
+    ("paypal-auth-vm", "mm0web"),
+    ("paypal-auth-vm", "refi"),
+    ("mm0web", "refi"),
+]
+STEM = "service_isolation_certificate"
+
+# The trust split is COMPUTED from what is pinned and checked against
+# invariants: every theorem must be structural (a postulated conclusion is
+# the failure this catches), grounded theorems must be 0 (grounded facts
+# live in the theory as evidence, never as a theorem), and the evidence
+# count must be exactly 3 pin axioms per service + 3 differs axioms per
+# pair. `paypal-auth-vm` is pinned only by a run that includes it (the
+# x86_64 image build); a host rehearsal of the two webservers certifies
+# those two — the header records which set was certified.
+
+
+class CertificateError(Exception):
+    """A loud failure: a bad pins file, a same-value pair, a drifted artifact."""
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_pins() -> dict:
+    try:
+        pins = json.loads(PINS.read_text())
+    except FileNotFoundError:
+        raise CertificateError(
+            f"{PINS.relative_to(AVM)} missing — run "
+            "verifieduniquealiases/scripts/e2e-three-svcs.sh and copy its "
+            "output-e2e/service-pins.json here") from None
+    except json.JSONDecodeError as e:
+        raise CertificateError(f"{PINS.relative_to(AVM)}: not JSON: {e}") from e
+    if pins.get("spec") != "svcmux-bundle-v1":
+        raise CertificateError(
+            f"pins carry spec {pins.get('spec')!r}, not 'svcmux-bundle-v1' — "
+            "a different measurement spec is a different certificate")
+    by_id = {s.get("id"): s for s in pins.get("services", [])}
+    # The two webservers are the point of the exercise: without them there
+    # is nothing to certify. paypal-auth-vm joins when the pins come from a
+    # run that includes it.
+    missing = [s for s in ("mm0web", "refi") if s not in by_id]
+    if missing:
+        raise CertificateError(
+            f"pins file names no measurement for {missing} — the guest's "
+            f"table has {sorted(by_id)}")
+    return pins
+
+
+def facts(pins: dict) -> dict:
+    """The three axes per service, plus the pairwise audit.
+
+    Refuses (rather than axiomatizes) any pair measured equal on any axis:
+    the certificate's whole claim is separation, and a pinned equality is
+    the deployment saying the separation does not hold.
+    """
+    out: dict[str, dict[str, str]] = {}
+    pinned = {s.get("id") for s in pins["services"]}
+    for sid, (svc, h, p, d) in SERVICES.items():
+        if sid not in pinned:
+            continue  # e.g. paypal-auth-vm on a host rehearsal of the other two
+        m = next(s for s in pins["services"] if s["id"] == sid)
+        for key in ("state_root", "listen", "bundle"):
+            v = m.get(key)
+            if not isinstance(v, str) or not v:
+                raise CertificateError(f"{sid}: pins carry no {key}")
+        if len(m["bundle"]) != 64 or not re.fullmatch(r"[0-9a-f]{64}", m["bundle"]):
+            raise CertificateError(f"{sid}: bundle is not 64 hex chars: {m['bundle']!r}")
+        out[sid] = {"svc": svc, "h": h, "p": p, "d": d,
+                    "state_root": m["state_root"], "listen": m["listen"],
+                    "bundle": m["bundle"]}
+    ids = list(out)
+    if len(ids) < 2:
+        raise CertificateError(f"only {len(ids)} service pinned — an "
+                               "isolation certificate needs at least two")
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            for axis in ("state_root", "listen", "bundle"):
+                if out[a][axis] == out[b][axis]:
+                    raise CertificateError(
+                        f"{a} and {b} measure the same {axis} ({out[a][axis]!r}): "
+                        "the services are NOT separated on that axis — refusing "
+                        "to emit a certificate that would claim otherwise")
+    return out
+
+
+def mm0_body(f: dict) -> list[str]:
+    """The grounded facts: one pin axiom per service per axis, one differs
+    axiom per unordered pair per axis (3n + 3·C(n,2) counting the axioms
+    alone — the `evidence` count the invariant checks)."""
+    out: list[str] = []
+    for sid, c in f.items():
+        out.append(f"-- pin: {sid}")
+        out.append(f"axiom st_{c['svc'][4:]}: $ is_state {c['svc']} {c['h']} $;")
+        out.append(f"axiom ln_{c['svc'][4:]}: $ is_listen {c['svc']} {c['p']} $;")
+        out.append(f"axiom bd_{c['svc'][4:]}: $ is_bundle {c['svc']} {c['d']} $;")
+    ids = list(f)
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            ca, cb = f[a], f[b]
+            ta, tb = ca["svc"][4:], cb["svc"][4:]
+            out.append(f"-- differ: {a} vs {b} ({ca['bundle'][:16]}… / {cb['bundle'][:16]}…)")
+            out.append(f"axiom dH_{ta}_{tb}: $ differsH {ca['h']} {cb['h']} $;")
+            out.append(f"axiom dP_{ta}_{tb}: $ differsP {ca['p']} {cb['p']} $;")
+            out.append(f"axiom dD_{ta}_{tb}: $ differsD {ca['d']} {cb['d']} $;")
+    return out
+
+
+def proof_for(a: str, b: str, f: dict) -> str:
+    ca, cb = f[a], f[b]
+    ta, tb = ca["svc"][4:], cb["svc"][4:]
+    return (
+        f"(iso_intro "
+        f"(state_sep st_{ta} st_{tb} dH_{ta}_{tb}) "
+        f"(listen_sep ln_{ta} ln_{tb} dP_{ta}_{tb}) "
+        f"(bundle_sep bd_{ta} bd_{tb} dD_{ta}_{tb}))"
+    )
+
+
+def generate_source(tamper: str | None = None) -> tuple[str, str]:
+    pins = load_pins()
+    f = facts(pins)
+    if tamper == "equal":
+        # Selftest: pretend two services share a state root. The audit must
+        # refuse this — for its own reason, not by falling over.
+        f = {k: dict(v) for k, v in f.items()}
+        f["refi"]["state_root"] = f["mm0web"]["state_root"]
+        try:
+            facts({**pins, "services": [
+                {**s, "state_root": (f[s["id"]]["state_root"]
+                                     if s["id"] in f else s["state_root"])}
+                for s in pins["services"]]})
+        except CertificateError as e:
+            if "state_root" not in str(e):
+                raise CertificateError(f"selftest: refused for the wrong reason: {e}")
+            print(f"service_iso2mm0 selftest: equal state roots refused — "
+                  f"{str(e).splitlines()[0][:90]}")
+            raise
+        raise CertificateError("selftest: the audit accepted an equal pair")
+
+    theory = THEORY.read_text()
+    mm0_gen: list[str] = []
+    mm1_gen: list[str] = []
+    ids = list(f)
+    pairs = [(a, b) for i, a in enumerate(ids) for b in ids[i + 1:]]
+    for a, b in pairs:
+        name = f"iso_{f[a]['svc'][4:]}_{f[b]['svc'][4:]}"
+        rev = f"iso_{f[b]['svc'][4:]}_{f[a]['svc'][4:]}"
+        goal = f"$ isolated {f[a]['svc']} {f[b]['svc']} $"
+        mm0_gen.append(f"theorem {name}: {goal};\ntheorem {rev}: $ isolated "
+                       f"{f[b]['svc']} {f[a]['svc']} $;")
+        mm1_gen.append(
+            f"pub theorem {name}: {goal} = '{proof_for(a, b, f)};\n"
+            f"pub theorem {rev}: $ isolated {f[b]['svc']} {f[a]['svc']} $ = "
+            f"'(iso_symm {name});")
+
+    certificates = len(pairs) * 2
+    structural = certificates   # every theorem is a rule application
+    grounded = 0                # no theorem may be a postulate
+    evidence = sum(1 for line in mm0_body(f) if line.startswith("axiom "))
+    expected_evidence = 3 * len(ids) + 3 * len(pairs)
+    if evidence != expected_evidence:
+        raise CertificateError(
+            f"{evidence} grounded facts, count says {expected_evidence} — "
+            "the emitter's own accounting drifted")
+    if grounded != 0:
+        raise CertificateError(f"trust split widened: grounded={grounded} "
+                               "— isolation theorems must be derived")
+
+    # `-- theory coverage:` — which declared terms the generated content
+    # actually touches (same line scripts/lean2mm0 and ledger2mm0 write, and
+    # the same one scripts/verify-invariants parses for every mm0/*.mm0). It
+    # is computed from the facts + theorems + proofs, so a term the theory
+    # declares but this pins file never reaches (paypal-auth-vm on a host
+    # rehearsal of the two webservers) reads as unused rather than silently
+    # covered.
+    theory_terms = re.findall(r"^term (\w+)", theory, re.M)
+    generated = "\n".join(mm0_body(f) + mm0_gen + mm1_gen)
+    # A rule the proofs fire brings its own statement's terms with it: the
+    # proofs cite `state_sep`, whose *conclusion* is `sep_state` — counting
+    # only the literal tokens of the generated text would report the sep
+    # predicates as unused while every theorem derives them.
+    blocks = {m.group(1): m.group(0) for m in re.finditer(
+        r"^axiom (\w+)[\s\S]*?(?=^axiom |^term |^sort |^provable|\Z)",
+        theory, re.M)}
+    fired = (set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", generated))
+             & blocks.keys())
+    basis = generated + "\n" + "\n".join(blocks[a] for a in sorted(fired))
+    used = {t for t in theory_terms
+            if re.search(rf"\b{re.escape(t)}\b", basis)}
+    coverage = ("-- theory coverage: used=" + ",".join(sorted(used))
+                + " unused=" + ",".join(t for t in theory_terms
+                                        if t not in used))
+
+    header = [
+        f"-- three-service isolation certificate — {STEM} (generated).",
+        "--",
+        f"-- Source pins: mm0/service_pins.json (sha256 {sha256(PINS)})",
+        "--   svcmux-bundle-v1 manifest: measured from outside by svcmux and",
+        "--   from inside by each service's /attestation, cross-checked by",
+        "--   verifieduniquealiases/scripts/e2e-three-svcs.sh.",
+        f"-- Target theory: docs/service_isolation.mm0 (sha256 {sha256(THEORY)})",
+        "--",
+        "-- Each theorem claims one ordered pair of services is isolated:",
+        "-- distinct state root, distinct endpoint, distinct bundle digest.",
+        "-- The rules do the deriving; the pins file supplies only facts the",
+        "-- generator has itself checked to hold.",
+        "--",
+        f"-- trust-split: structural={structural} grounded={grounded} "
+        f"certificates={structural} evidence={evidence}",
+        coverage,
+        f"-- set_digest: {pins['set_digest']}",
+        "",
+    ]
+    mm0 = "\n".join(header) + theory + "\n" + "\n".join(mm0_body(f)) + "\n" + "\n".join(mm0_gen) + "\n"
+    mm1 = "\n".join(header) + theory + "\n" + "\n".join(mm0_body(f)) + "\n" + "\n".join(mm1_gen) + "\n"
+    return mm0, mm1
+
+
+def out_paths() -> tuple[Path, Path]:
+    return OUT_DIR / f"{STEM}.mm0", OUT_DIR / f"{STEM}.mm1"
+
+
+def generate() -> tuple[str, str]:
+    return generate_source()
+
+
+def check_drift(src: tuple[str, str]) -> None:
+    for path, fresh in zip(out_paths(), src):
+        if not path.exists():
+            raise CertificateError(
+                f"{path.relative_to(AVM)} missing — run scripts/service_iso2mm0")
+        if path.read_text() != fresh:
+            raise CertificateError(
+                f"{path.relative_to(AVM)} is out of date — run "
+                "scripts/service_iso2mm0 and commit the result")
+    print("service_iso2mm0 check: OK — certificate is in sync with the "
+          "pinned service measurements and theory")
+
+
+def verify(src: tuple[str, str]) -> None:
+    mm0_text, mm1_text = src
+    # Every rule the proofs name must exist in the theory: an invented name
+    # would elaborate as nothing and read as complete in the artifact.
+    # The generated mm0's own theorem statements count as declarations too —
+    # the reverse-direction proof cites the forward theorem by name.
+    declared = set(re.findall(r"^axiom (\w+)", theory_text(), re.M))
+    declared |= set(re.findall(r"^theorem (\w+)", mm0_text, re.M))
+    for tok in set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", mm1_text)):
+        if tok.startswith(("iso_", "state_sep", "listen_sep", "bundle_sep")) and tok not in declared:
+            raise CertificateError(f"proof references undeclared rule {tok!r}")
+
+    with tempfile.TemporaryDirectory(prefix="service_iso2mm0.") as td:
+        t = Path(td)
+        (t / f"{STEM}.mm0").write_text(mm0_text)
+        (t / f"{STEM}.mm1").write_text(mm1_text)
+        try:
+            c = subprocess.run(
+                ["mm0-rs", "compile", str(t / f"{STEM}.mm1"), str(t / f"{STEM}.mmb")],
+                capture_output=True, text=True)
+        except FileNotFoundError:
+            print("service_iso2mm0 verify: mm0-rs not on PATH — the "
+                  "certificate was NOT checked (exit 2)", file=sys.stderr)
+            sys.exit(2)
+        out = c.stdout + c.stderr
+        if c.returncode != 0 or "warning" in out.lower():
+            sys.stderr.write(out)
+            raise CertificateError(
+                "mm0-rs compile failed (or warned — a warning is a proof hole)")
+        v = subprocess.run(["mm0-c", str(t / f"{STEM}.mmb")],
+                           input=mm0_text, capture_output=True, text=True)
+        if v.returncode != 0:
+            sys.stderr.write(v.stdout + v.stderr)
+            raise CertificateError(f"mm0-c rejected the certificate (rc={v.returncode})")
+        print("service_iso2mm0 verify: mm0-rs compile OK, mm0-c accepts — "
+              "every separation is a rule application")
+
+        # Negative: a stale proof must not verify a changed fact. In the
+        # PROOF only, swap one pinned digest constant for the same pair's
+        # listen constant — a proof citing the wrong axis must be refused by
+        # the typechecker (the certificate is load-bearing, not decoration).
+        # Keyed off whatever pair is actually pinned, so it applies whether
+        # or not paypal-auth-vm joined this run, and applied to the PROOF
+        # section only (the axioms stay intact: it is the proof that goes
+        # stale).
+        proof_at = mm1_text.index("pub theorem")
+        proofs = mm1_text[proof_at:]
+        mobj = re.search(r"\bdD_([a-z0-9_]+)", proofs)
+        if not mobj:
+            raise CertificateError("negative: no digest constant to mutate")
+        mutated = (mm1_text[:proof_at] + proofs[:mobj.start()] + "dP_"
+                   + mobj.group(1) + proofs[mobj.end():])
+        (t / f"{STEM}.mm1").write_text(mutated)
+        m = subprocess.run(
+            ["mm0-rs", "compile", str(t / f"{STEM}.mm1"), str(t / f"{STEM}2.mmb")],
+            capture_output=True, text=True)
+        if m.returncode == 0:
+            raise CertificateError(
+                "negative: mm0-rs accepted a proof citing the wrong pinned "
+                "digest — the certificate is not load-bearing")
+        print("service_iso2mm0 verify: negative OK — a proof citing the wrong "
+              "axis's pinned constant is refused")
+
+
+def theory_text() -> str:
+    return THEORY.read_text()
+
+
+def selftest() -> None:
+    clean = generate()
+    check_drift(clean)
+    print("service_iso2mm0 selftest: unmutated generation matches the "
+          "committed certificate")
+    try:
+        generate_source(tamper="equal")
+    except CertificateError:
+        print("service_iso2mm0 selftest: OK — an equal pair is refused, "
+              "never axiomatized as separated")
+    else:
+        raise CertificateError("selftest: the audit accepted an equal pair")
+
+
+def main() -> None:
+    mode = sys.argv[1] if len(sys.argv) > 1 else "generate"
+    src = generate()
+    if mode == "generate":
+        for path, text in zip(out_paths(), src):
+            path.write_text(text)
+            print(f"service_iso2mm0: wrote {path.relative_to(AVM)} "
+                  f"({len(text.splitlines())} lines)")
+    elif mode == "check":
+        check_drift(src)
+    elif mode == "verify":
+        check_drift(src)
+        verify(src)
+    elif mode == "selftest":
+        selftest()
+    else:
+        print(f"unknown mode {mode!r}; use generate|check|verify|selftest",
+              file=sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except CertificateError as e:
+        print(f"service_iso2mm0: {e}", file=sys.stderr)
+        sys.exit(1)

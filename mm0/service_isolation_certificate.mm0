@@ -1,0 +1,130 @@
+-- three-service isolation certificate — service_isolation_certificate (generated).
+--
+-- Source pins: mm0/service_pins.json (sha256 8821ec92cb37762cbf3f156ca96e27d9b8f562f0af79c6bc6104547c49ca8306)
+--   svcmux-bundle-v1 manifest: measured from outside by svcmux and
+--   from inside by each service's /attestation, cross-checked by
+--   verifieduniquealiases/scripts/e2e-three-svcs.sh.
+-- Target theory: docs/service_isolation.mm0 (sha256 a64cda00f09704178c2d671aa792d622bdbae8b16963e3655aa788a8e0753809)
+--
+-- Each theorem claims one ordered pair of services is isolated:
+-- distinct state root, distinct endpoint, distinct bundle digest.
+-- The rules do the deriving; the pins file supplies only facts the
+-- generator has itself checked to hold.
+--
+-- trust-split: structural=2 grounded=0 certificates=2 evidence=9
+-- theory coverage: used=d_mm0web,d_refi,differsD,differsH,differsP,h_mm0web,h_refi,is_bundle,is_listen,is_state,isolated,p_mm0web,p_refi,sep_bundle,sep_listen,sep_state,svc_mm0web,svc_refi unused=svc_paypal,h_paypal,p_paypal,d_paypal
+-- set_digest: 6ff2cffbf4eed5bee36f9b61c2973612c16339fdf161447f5fd4fe51392eefb9
+-- service_isolation.mm0 — the MM0 target theory for the three-service
+-- isolation certificate (the confidential-guest work: svcmux + mm0web +
+-- refi + paypal-auth-vm in one TDX domain).
+--
+-- "Isolated" here means precisely: every pair of services differs on all
+-- three things a webservice can be confused through — the state root it
+-- may write, the endpoint it answers on, and its measured bundle digest
+-- (svcmux-bundle-v1, the same digest svcmux's manifest and each
+-- service's GET /attestation publish). Pairwise separation on those three
+-- axes is `isolated`.
+--
+-- The trust split, stated the way docs/memsafe.mm0 states it:
+--
+--   * GROUNDED (evidence, imported): `is_state` / `is_listen` /
+--     `is_bundle` pin each service to one concrete H / P / D value, and
+--     `differsH/P/D` asserts two of those values are different. These are
+--     the facts of the deployment. scripts/service_iso2mm0 emits one only
+--     after checking the two hex strings / paths / endpoints actually
+--     differ in mm0/service_pins.json — a pair that measures equal is a
+--     refusal, not an axiom.
+--   * STRUCTURAL (derived): every `isolated` theorem is a rule
+--     application — sep rules then iso_intro (and iso_symm for the other
+--     direction). MM0 has no equality (many-sorted FOL without equality),
+--     which is why separation is carried by `differs*` facts on values
+--     rather than by `~(a = b)`: nothing here is a disguised equality
+--     axiom, and no proof postulates the conclusion it was built to check.
+--
+-- MM0 has no induction, so nothing claims isolation over future services;
+-- the certificate is about exactly these three, which is what the
+-- measured manifest can actually support.
+--
+-- Validated with `mm0-rs compile` + `mm0-c` as part of
+-- scripts/service_iso2mm0 verify; the trust split is enforced there.
+
+provable sort Prop;
+
+sort Svc;                       -- one webservice of the guest
+sort H;                         -- a state root: the directory a service writes
+sort P;                         -- a listen endpoint
+sort D;                         -- a bundle digest (svcmux-bundle-v1)
+
+-- Secondary-lexer delimiters: parentheses are standalone tokens in math
+-- strings (same declaration as docs/memsafe.mm0).
+delimiter $ ( ) $;
+
+-- ── The deployment ────────────────────────────────────────────────────────
+
+term svc_paypal: Svc;           -- the attested PayPal OAuth service (TLS :443)
+term svc_mm0web: Svc;           -- the MM0 proof webservice
+term svc_refi: Svc;             -- the carbon-certificate exchange
+
+-- ── Grounded: one pinned value per service, per axis ──────────────────────
+-- Written by scripts/service_iso2mm0 from mm0/service_pins.json; each
+-- constant below is the literal that file records for that service.
+
+term h_paypal: H;
+term h_mm0web: H;
+term h_refi: H;
+term p_paypal: P;
+term p_mm0web: P;
+term p_refi: P;
+term d_paypal: D;
+term d_mm0web: D;
+term d_refi: D;
+
+term is_state (s: Svc) (h: H): Prop;
+term is_listen (s: Svc) (p: P): Prop;
+term is_bundle (s: Svc) (d: D): Prop;
+
+-- Pairwise difference of the pinned values: the import from the pins
+-- file. Nine facts (3 axes × 3 pairs), each checked against the hex /
+-- path / endpoint strings before it is written.
+term differsH (a b: H): Prop;
+term differsP (a b: P): Prop;
+term differsD (a b: D): Prop;
+
+-- ── Isolation, derived ────────────────────────────────────────────────────
+
+term sep_state (a b: Svc): Prop;
+term sep_listen (a b: Svc): Prop;
+term sep_bundle (a b: Svc): Prop;
+term isolated (a b: Svc): Prop;
+
+-- Deduction form, not `->` inside the formula: MM0 has no internal modus
+-- ponens, so only hypothesis form can actually be applied (the lesson
+-- docs/memsafe.mm0 records).
+axiom state_sep (a b: Svc) (h1 h2: H):
+  $ is_state a h1 $ > $ is_state b h2 $ > $ differsH h1 h2 $ > $ sep_state a b $;
+
+axiom listen_sep (a b: Svc) (x1 x2: P):
+  $ is_listen a x1 $ > $ is_listen b x2 $ > $ differsP x1 x2 $ > $ sep_listen a b $;
+
+axiom bundle_sep (a b: Svc) (d1 d2: D):
+  $ is_bundle a d1 $ > $ is_bundle b d2 $ > $ differsD d1 d2 $ > $ sep_bundle a b $;
+
+axiom iso_intro (a b: Svc):
+  $ sep_state a b $ > $ sep_listen a b $ > $ sep_bundle a b $ > $ isolated a b $;
+
+axiom iso_symm (a b: Svc): $ isolated a b $ > $ isolated b a $;
+
+-- pin: mm0web
+axiom st_mm0web: $ is_state svc_mm0web h_mm0web $;
+axiom ln_mm0web: $ is_listen svc_mm0web p_mm0web $;
+axiom bd_mm0web: $ is_bundle svc_mm0web d_mm0web $;
+-- pin: refi
+axiom st_refi: $ is_state svc_refi h_refi $;
+axiom ln_refi: $ is_listen svc_refi p_refi $;
+axiom bd_refi: $ is_bundle svc_refi d_refi $;
+-- differ: mm0web vs refi (b66e7b1845c9c88a… / 963d59bc1be180b0…)
+axiom dH_mm0web_refi: $ differsH h_mm0web h_refi $;
+axiom dP_mm0web_refi: $ differsP p_mm0web p_refi $;
+axiom dD_mm0web_refi: $ differsD d_mm0web d_refi $;
+theorem iso_mm0web_refi: $ isolated svc_mm0web svc_refi $;
+theorem iso_refi_mm0web: $ isolated svc_refi svc_mm0web $;
