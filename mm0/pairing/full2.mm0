@@ -87,3 +87,6 @@ axiom add0 (a: Term): $ a + 0 = a $;
 axiom addS (a b: Term): $ a + suc b = suc (a + b) $;
 axiom mul0 (a: Term): $ a * 0 = 0 $;
 axiom mulS (a b: Term): $ a * suc b = a * b + a $;
+theorem logos_cnl_addcom (v_a v_b: Term): $ teq (tadd v_a v_b) (tadd v_b v_a) $;
+theorem logos_cnl_add01 (v_a: Term): $ teq (tadd tz v_a) v_a $;
+theorem logos_cnl_addS1 (v_a v_b: Term): $ teq (tadd (ts v_a) v_b) (ts (tadd v_a v_b)) $;

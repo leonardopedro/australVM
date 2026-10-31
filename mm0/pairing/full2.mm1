@@ -1602,3 +1602,8 @@ theorem cnl_addcom_b (v_a v_b: Term): $ teq (tadd v_a v_b) (tadd v_b v_a) $ =
   (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
   (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
   (eqtr4 add0 add01) (eqtr4g addS addS1 suceq));
+
+-- ==== CNL certificate claims (public interface; proofs stay local) ====
+pub theorem logos_cnl_addcom (v_a v_b: Term): $ teq (tadd v_a v_b) (tadd v_b v_a) $ = '(addcom);
+pub theorem logos_cnl_add01 (v_a: Term): $ teq (tadd tz v_a) v_a $ = '(add01);
+pub theorem logos_cnl_addS1 (v_a v_b: Term): $ teq (tadd (ts v_a) v_b) (ts (tadd v_a v_b)) $ = '(addS1);

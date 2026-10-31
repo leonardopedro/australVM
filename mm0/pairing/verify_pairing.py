@@ -2,21 +2,28 @@
 """verify_pairing.py - regenerate, verify, and stress-test the mm0/mm1 pairing.
 
 Steps:
-  1. Regenerate full2.mm0 / full3.mm0 from their .mm1 sources (gen_mm0.py)
-     and assert the output matches the checked-in files (determinism).
-  2. POSITIVE: mm0-c must accept each checked-in (.mmb, .mm0) pair.
-  3. REBUILD: mm0-rs compile each .mm1 to a fresh .mmb in a temp dir, and
+  1. Regenerate full2.mm0 from full2.mm1 (gen_mm0.py) and assert the output
+     byte-matches the checked-in file (determinism).
+  2. POSITIVE: mm0-c must accept the checked-in (full2.mmb, full2.mm0) pair.
+  3. REBUILD: mm0-rs compile full2.mm1 to a fresh .mmb in a temp dir, and
      mm0-c must accept it against the checked-in .mm0 (source <-> binary
-     <-> mm0 agree without relying on the checked-in binaries).
-  4. NEGATIVE: five deliberately-broken .mm0 variants must all be REJECTED.
-  5. Optional ground truth: the upstream peano pair, if an mm0 checkout with
+     <-> mm0 agree without trusting the checked-in binary).
+  4. NEGATIVE: ten deliberately-broken .mm0 variants must all be REJECTED -
+     removed axioms, reordered statements, removed public statements,
+     an inserted local statement, dropped defs/notations/delimiter, and a
+     weakened sort modifier.
+  5. TOLERATED: one variant that mm0-c correctly accepts (adjacent notation
+     lines swapped), pinning the property that notation lines are consumed
+     but never stream-paired.
+  6. Optional ground truth: the upstream peano pair, if an mm0 checkout with
      examples/ is available (override path with MM0_EXAMPLES).
 
 Pairing rule under test:
   public statements (sort/term/def/axiom/`pub theorem`) must appear in the
   .mm0 in exact .mmb statement-stream order; local statements (plain
   `theorem`, `local def`) must NOT appear at all; `delimiter`/`notation`/
-  `prefix`/`infixl` lines are consumed by the verifier but not paired.
+  `prefix`/`infixl` lines are consumed by the verifier but not paired -
+  though their content still matters, because later statements must parse.
 
 Exit status: 0 iff every expectation holds.
 """
@@ -30,6 +37,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MM0C = shutil.which("mm0-c")
 MM0RS = shutil.which("mm0-rs")
 PEANO_DIR = os.environ.get("MM0_EXAMPLES", "/tmp/mm0/examples")
+MMB = os.path.join(HERE, "full2.mmb")
+MM0 = os.path.join(HERE, "full2.mm0")
 
 results = []
 
@@ -56,92 +65,114 @@ def must_reject(name, mmb, mm0):
     check(name, rc != 0, f"(mm0-c exit {rc}, expected nonzero)")
 
 
-def gen(src, dst):
-    r = subprocess.run([sys.executable, os.path.join(HERE, "gen_mm0.py"),
-                        os.path.join(HERE, src), dst],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        print(r.stdout + r.stderr)
-        sys.exit(2)
-    return r.stdout.strip()
-
-
 def main():
     if not MM0C or not MM0RS:
         sys.exit("verify_pairing: need `mm0-c` and `mm0-rs` on PATH "
                  "(build github.com/digama0/mm0)")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        print("== 1. regenerate companions (determinism vs checked-in) ==")
-        for stem in ("full2", "full3"):
-            before = open(os.path.join(HERE, f"{stem}.mm0"), "rb").read()
-            out = os.path.join(tmp, f"{stem}.regen.mm0")
-            print("  " + gen(f"{stem}.mm1", out))
-            after = open(out, "rb").read()
-            check(f"gen_mm0.py reproduces checked-in {stem}.mm0",
-                  before == after)
+    lines = open(MM0).read().splitlines(True)
 
-        print("== 2. positive: checked-in pairs verify ==")
-        must_accept("full2.mmb <-> full2.mm0",
-                    os.path.join(HERE, "full2.mmb"),
-                    os.path.join(HERE, "full2.mm0"))
-        must_accept("full3.mmb <-> full3.mm0",
-                    os.path.join(HERE, "full3.mmb"),
-                    os.path.join(HERE, "full3.mm0"))
+    def idx(prefix):
+        return next(k for k, l in enumerate(lines) if l.startswith(prefix))
+
+    def variant(name, newlines):
+        p = os.path.join(TMP, name)
+        open(p, "w").writelines(newlines)
+        return p
+
+    with tempfile.TemporaryDirectory() as TMP:
+        print("== 1. regenerate companion (determinism vs checked-in) ==")
+        before = open(MM0, "rb").read()
+        out = os.path.join(TMP, "full2.regen.mm0")
+        r = subprocess.run([sys.executable, os.path.join(HERE, "gen_mm0.py"),
+                            os.path.join(HERE, "full2.mm1"), out],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print(r.stdout + r.stderr)
+            sys.exit(2)
+        print("  " + r.stdout.strip())
+        check("gen_mm0.py reproduces checked-in full2.mm0",
+              before == open(out, "rb").read())
+
+        print("== 2. positive: checked-in pair verifies ==")
+        must_accept("full2.mmb <-> full2.mm0", MMB, MM0)
 
         print("== 3. rebuild from source, re-verify against checked-in .mm0 ==")
-        for stem in ("full2", "full3"):
-            fresh = os.path.join(tmp, f"{stem}.fresh.mmb")
-            r = subprocess.run([MM0RS, "compile",
-                                os.path.join(HERE, f"{stem}.mm1"), fresh],
-                               capture_output=True, text=True)
-            tail = (r.stdout + r.stderr).strip().splitlines()
-            check(f"mm0-rs compile {stem}.mm1", r.returncode == 0,
-                  tail[-1] if tail else "")
-            if r.returncode == 0:
-                must_accept(f"{stem}.fresh.mmb <-> {stem}.mm0", fresh,
-                            os.path.join(HERE, f"{stem}.mm0"))
+        fresh = os.path.join(TMP, "full2.fresh.mmb")
+        r = subprocess.run([MM0RS, "compile",
+                            os.path.join(HERE, "full2.mm1"), fresh],
+                           capture_output=True, text=True)
+        tail = (r.stdout + r.stderr).strip().splitlines()
+        check("mm0-rs compile full2.mm1", r.returncode == 0,
+              tail[-1] if tail else "")
+        if r.returncode == 0:
+            must_accept("full2.fresh.mmb <-> full2.mm0", fresh, MM0)
 
         print("== 4. negative controls: every broken variant rejected ==")
-        f2 = open(os.path.join(HERE, "full2.mm0")).read().splitlines(True)
-        f3 = open(os.path.join(HERE, "full3.mm0")).read().splitlines(True)
-        mmb2 = os.path.join(HERE, "full2.mmb")
-        mmb3 = os.path.join(HERE, "full3.mmb")
+        must_reject("neg01: all 22 axioms removed", MMB,
+                    variant("neg01.mm0",
+                            [l for l in lines if not l.startswith("axiom ")]))
 
-        def write(name, lines):
-            p = os.path.join(tmp, name)
-            open(p, "w").writelines(lines)
-            return p
-
-        must_reject("neg1: all 22 axioms removed",
-                    mmb2, write("neg1.mm0",
-                                [l for l in f2 if not l.startswith("axiom ")]))
-
-        i = next(k for k, l in enumerate(f2) if l.startswith("axiom ax_1 "))
-        j = next(k for k, l in enumerate(f2) if l.startswith("axiom ax_2 "))
-        sw = list(f2)
+        i, j = idx("axiom ax_1 "), idx("axiom ax_2 ")
+        sw = list(lines)
         sw[i], sw[j] = sw[j], sw[i]
-        must_reject("neg2: ax_1/ax_2 order swapped",
-                    mmb2, write("neg2.mm0", sw))
+        must_reject("neg02: ax_1/ax_2 order swapped", MMB,
+                    variant("neg02.mm0", sw))
 
-        must_reject("neg3: public theorems ifppos/ifpneg removed",
-                    mmb2, write("neg3.mm0",
-                                [l for l in f2
-                                 if not l.startswith(("theorem ifppos",
-                                                      "theorem ifpneg"))]))
+        must_reject("neg03: public theorems ifppos/ifpneg removed", MMB,
+                    variant("neg03.mm0",
+                            [l for k, l in enumerate(lines)
+                             if k not in (idx("theorem ifppos"),
+                                          idx("theorem ifpneg"))]))
 
-        k = next(k for k, l in enumerate(f2) if l.startswith("axiom ax_1 "))
-        ins = list(f2)
-        ins.insert(k, "theorem syl (h1: $ b $) (h2: $ a -> b $): $ a $;\n")
-        must_reject("neg4: extra local theorem statement inserted",
-                    mmb2, write("neg4.mm0", ins))
+        ins = list(lines)
+        ins.insert(idx("axiom ax_1 "),
+                   "theorem syl (h1: $ b $) (h2: $ a -> b $): $ a $;\n")
+        must_reject("neg04: extra local theorem statement inserted", MMB,
+                    variant("neg04.mm0", ins))
 
-        must_reject("neg5: full3 CNL claims removed",
-                    mmb3, write("neg5.mm0",
-                                [l for l in f3
-                                 if not l.startswith("theorem logos_cnl_")]))
+        k = idx("theorem logos_cnl_addcom")
+        claims = [k, k + 1, k + 2]
+        must_reject("neg05: CNL claims removed", MMB,
+                    variant("neg05.mm0",
+                            [l for m, l in enumerate(lines)
+                             if m not in claims]))
 
-        print("== 5. upstream ground truth (optional) ==")
+        k = idx("infixl eq:")
+        must_reject("neg06: infixl eq notation moved to end "
+                    "(breaks later statements)", MMB,
+                    variant("neg06.mm0",
+                            lines[:k] + lines[k + 1:] + [lines[k]]))
+
+        must_reject("neg07: public def `eq` dropped", MMB,
+                    variant("neg07.mm0",
+                            [l for l in lines if not l.startswith("def eq ")]))
+
+        must_reject("neg08: delimiter line dropped", MMB,
+                    variant("neg08.mm0",
+                            [l for l in lines
+                             if not l.startswith("delimiter ")]))
+
+        must_reject("neg09: sort modifier weakened (provable sort -> sort)",
+                    MMB,
+                    variant("neg09.mm0",
+                            [l.replace("provable sort Prop;", "sort Prop;")
+                             for l in lines]))
+
+        must_reject("neg10: notation sb dropped (peano5 needs [0 / x])", MMB,
+                    variant("neg10.mm0",
+                            [l for l in lines
+                             if not l.startswith("notation sb ")]))
+
+        print("== 5. tolerated variant (documents what is NOT paired) ==")
+        a, b = idx("infixl eq:"), idx("infixl tadd:")
+        tv = list(lines)
+        tv[a], tv[b] = tv[b], tv[a]
+        must_accept("tol01: adjacent notation lines swapped "
+                    "(notations are never stream-paired)",
+                    MMB, variant("tol01.mm0", tv))
+
+        print("== 6. upstream ground truth (optional) ==")
         peano_mm0 = os.path.join(PEANO_DIR, "peano.mm0")
         peano_mmb = os.path.join(HERE, "peano_ref.mmb")
         if os.path.exists(peano_mm0) and os.path.exists(peano_mmb):
