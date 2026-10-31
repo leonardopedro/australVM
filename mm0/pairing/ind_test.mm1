@@ -1,0 +1,12 @@
+-- variants of an induction proof for our CNL goal shape
+theorem cnl_addcom_a (v_a: Term) {v_b: Term}: $ teq (tadd v_a v_b) (tadd v_b v_a) $ =
+'(! ind x y _ $ teq (tadd v_a x) (tadd x v_a) $ _ _ _ _
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqtr4 add0 add01) (eqtr4g addS addS1 suceq));
+
+theorem cnl_addcom_b (v_a v_b: Term): $ teq (tadd v_a v_b) (tadd v_b v_a) $ =
+'(! ind x y _ $ teq (tadd v_a x) (tadd x v_a) $ _ _ _ _
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqtr4 add0 add01) (eqtr4g addS addS1 suceq));
