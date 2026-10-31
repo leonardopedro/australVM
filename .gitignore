@@ -53,3 +53,8 @@ error.html
 FAILURES.txt
 
 engram.md
+
+# The macro-expanded Metamath dump: 523 MB, GitHub rejects any commit
+# carrying it (GH001, 100 MB limit) — it is a build artifact of set.mm and
+# stays on disk, out of history.
+mm0/metamath/set.mmu
