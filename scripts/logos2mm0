@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# The logos CNL → DeltaNet → MM0 gate.
+#
+# What it owns: the *end-to-end* claim of the math fragment — that a sentence in
+# the controlled natural language becomes an MM0 theorem whose proof mm0-rs
+# elaborates and mm0-c re-checks, and that a question's answer (yes / no / no
+# verdict) is the shape of that certificate. The chain:
+#
+#   unfer/logos/mm0/{claims,upstream}.txt
+#        --(logos mm0 claims --verify)-->  <theorem>.mm0 + <theorem>.mm1
+#        --(mm0-rs compile)-->             <theorem>.mmb
+#        --(mm0-c)-->                      the root of trust's verdict
+#
+# Five invariants, each of which has failed at least once during construction:
+#
+#   1. the theory compiles *and* re-checks on its own (`logos_math.mm0`), so a
+#      certificate failure is never confused with a theory failure;
+#   2. the corpus reaches exactly the verdict each line expects — including the
+#      two honest negatives (`false:` lines, and one `unproved:` line for a true
+#      fact the fragment cannot prove);
+#   3. the same holds for `upstream.txt`, whose sentences are rewrites of *existing*
+#      MM0 theorems from MM0's own Peano development: the recursion laws' theorems
+#      (`add02`, `addS2`, `add12`, `mulS2`, …) and their consequences must be
+#      proved, while the induction-only ones (`addcom`, `muladd`, …) must stay
+#      unproved — the fragment's boundary, recorded rather than hidden;
+#   4. asking a question answers it: exit 0 for yes, 2 for no, and the artifacts
+#      are the same certificate shapes a claim gets;
+#   5. the anchor — a *tampered* certificate must be rejected. A verifier that
+#      accepts everything would pass (1)–(4) and is worthless, so this is the
+#      check that makes the others mean something.
+#
+# Tooling discipline, as in `unfer/scripts/smoke_gate`: no cargo or no mm0
+# toolchain is a documented [gap] (exit 0) rather than a permanent red on
+# machines that cannot run it; cargo present but the emitter misbehaving is a
+# hard [FAIL].
+#
+# Usage: scripts/logos2mm0 [--keep]      (--keep leaves the scratch dir printed)
+# Env:   LOGOS_BIN   use this binary instead of building
+#        MM0_RS, MM0_C  tool overrides (passed through to the emitter)
+# Exit:  0 green (or gapped), 1 a check failed.
+
+set -u
+
+FAILED=0
+PASSED=0
+GAPS=0
+KEEP=0
+[ "${1:-}" = "--keep" ] && KEEP=1
+
+ok() {
+    echo "[pass] $1"
+    PASSED=$((PASSED + 1))
+}
+
+bad() {
+    echo "[FAIL] $1"
+    FAILED=$((FAILED + 1))
+}
+
+gap() {
+    echo "[gap]  $1"
+    GAPS=$((GAPS + 1))
+}
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+unfer="$repo_root/../unfer"
+corpus="$unfer/logos/mm0/claims.txt"
+upstream="$unfer/logos/mm0/upstream.txt"
+theory="$unfer/logos/mm0/logos_math.mm0"
+
+echo "logos CNL → DeltaNet → MM0 gate"
+
+if [ ! -f "$corpus" ] || [ ! -f "$theory" ]; then
+    gap "sibling unfer repo has no mm0 fragment (looked for $corpus) — skipping"
+    exit 0
+fi
+
+for tool in mm0-rs mm0-c; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        gap "mm0 toolchain absent ($tool not on PATH; see docs/lean4mm0.md §5) — skipping"
+        exit 0
+    fi
+done
+
+# ── build (or take) the emitter ──────────────────────────────────────────────
+if [ -n "${LOGOS_BIN:-}" ]; then
+    logos="$LOGOS_BIN"
+    [ -x "$logos" ] || { bad "LOGOS_BIN=$logos is not executable"; exit 1; }
+else
+    if ! command -v cargo >/dev/null 2>&1; then
+        gap "cargo absent (Rust toolchain not installed) — skipping"
+        exit 0
+    fi
+    if ! (cd "$unfer" && cargo build -q -p logos 2>&1); then
+        bad "cargo build -p logos (the emitter does not build)"
+        exit 1
+    fi
+    logos="${CARGO_TARGET_DIR:-$unfer/target}/debug/logos"
+    [ -x "$logos" ] || { bad "logos binary missing at $logos"; exit 1; }
+fi
+ok "emitter built ($logos)"
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/logos2mm0.XXXXXX")"
+if [ "$KEEP" = 1 ]; then
+    echo "      scratch: $tmp"
+else
+    trap 'rm -rf "$tmp"' EXIT
+fi
+
+# ── 1. the theory re-checks on its own ──────────────────────────────────────
+"$logos" mm0 theory --out "$tmp/logos_math.mm0" >/dev/null || bad "dumping the theory"
+# mm0-rs compiles the theory as a (proof-free) statement file; every `theorem`
+# in it would be a `sorry`, and there are none — the fragment's theorems live in
+# the certificates, not in the theory.
+if mm0-rs compile "$tmp/logos_math.mm0" "$tmp/logos_math.mmb" >"$tmp/theory.log" 2>&1 \
+    && mm0-c "$tmp/logos_math.mmb" < "$tmp/logos_math.mm0" >>"$tmp/theory.log" 2>&1; then
+    ok "theory compiles and re-checks ($(grep -o '[0-9]* sorts, [0-9]* term/def, [0-9]* ax/thm' "$tmp/theory.log" | tail -1))"
+else
+    bad "theory contradicts mm0"
+    sed -n '1,20p' "$tmp/theory.log" | sed 's/^/      /'
+fi
+
+# ── 2. the corpus, with its expectations ────────────────────────────────────
+if "$logos" mm0 claims "$corpus" --out "$tmp/corpus" --verify >"$tmp/claims.log" 2>&1; then
+    ok "claim corpus certifies ($(grep -c '^\[*[a-z]' "$tmp/claims.log" || true) lines, every expectation held)"
+else
+    bad "claim corpus (an expectation was not met, or a certificate was rejected)"
+    tail -25 "$tmp/claims.log" | sed 's/^/      /'
+fi
+
+# The corpus must have produced real certificates and at least one unproved
+# *goal* file: a run that certified nothing, or one that stopped recording what
+# it could not prove, would pass the check above vacuously.
+cert_count="$(find "$tmp/corpus" -name '*.mm0' 2>/dev/null | wc -l | tr -d ' ')"
+goal_count="$(find "$tmp/corpus" -name '*.goal' 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$cert_count" -gt 0 ] && [ "$goal_count" -gt 0 ]; then
+    ok "corpus wrote $cert_count certificate(s) and $goal_count goal(s)"
+else
+    bad "corpus artifacts look wrong ($cert_count certificates, $goal_count goals)"
+fi
+
+# ── 2b. sentences rewritten from existing MM0 theorems ───────────────────────
+# `upstream.txt` cites the `peano.mm1` theorem each line comes from. Its `proved:`
+# lines are the ones a *rewriting* proof closes (`add02`, `addS2`, `add12`,
+# `add22`, `mul02`, `mulS2` and their congruence consequences); its `unproved:`
+# lines are true theorems upstream proves by induction, which this theory cannot.
+# Both counts are checked, because a corpus that quietly flipped either way would
+# still "pass" a run that only looked at the exit code.
+if [ -f "$upstream" ]; then
+    if "$logos" mm0 claims "$upstream" --out "$tmp/upstream" --verify >"$tmp/upstream.log" 2>&1; then
+        proved_open="$(grep -c '^proved' "$tmp/upstream.log" || true)"
+        upstream_goals="$(find "$tmp/upstream" -name '*.goal' 2>/dev/null | wc -l | tr -d ' ')"
+        ok "upstream corpus certifies ($proved_open open claim(s) rewritten, $upstream_goals goal(s) for the induction-only theorems)"
+        if [ "$proved_open" -lt 10 ] || [ "$upstream_goals" -lt 10 ]; then
+            bad "upstream corpus shape ($proved_open proved, $upstream_goals goals: expected >=10 of each)"
+        fi
+    else
+        bad "upstream corpus (an MM0 theorem's rewrite reached the wrong verdict)"
+        tail -25 "$tmp/upstream.log" | sed 's/^/      /'
+    fi
+else
+    gap "no upstream corpus at $upstream — skipping"
+fi
+
+# ── 3. asking a question answers it ─────────────────────────────────────────
+"$logos" mm0 ask "is two plus three five?" --out "$tmp/q" --verify >/dev/null 2>&1
+yes_rc=$?
+"$logos" mm0 ask "is two plus three six?" --out "$tmp/q" --verify >/dev/null 2>&1
+no_rc=$?
+if [ "$yes_rc" -eq 0 ] && [ "$no_rc" -eq 2 ]; then
+    ok "questions answered: yes=0, no=2 (the contract callers branch on)"
+else
+    bad "question exit codes (wanted 0 then 2, got $yes_rc then $no_rc)"
+fi
+
+# ── 4. the anchor: a tampered certificate is rejected ───────────────────────
+# Change the *statement* of a true certificate (5 → 4) in both files. The proof
+# is now a proof of something else, and mm0 must refuse it.
+"$logos" mm0 ask "two plus three equals five" --out "$tmp/neg" >/dev/null 2>&1
+neg_mm0="$(find "$tmp/neg" -name '*.mm0' | head -1)"
+if [ -z "$neg_mm0" ]; then
+    bad "could not produce a certificate to tamper with"
+else
+    sed -i 's/(ts (ts (ts (ts (ts tz)))))/(ts (ts (ts (ts tz))))/' \
+        "$neg_mm0" "${neg_mm0%.mm0}.mm1"
+    if mm0-rs compile "${neg_mm0%.mm0}.mm1" "$tmp/neg/tampered.mmb" >"$tmp/neg.log" 2>&1; then
+        bad "tampered certificate ACCEPTED — mm0 is not load-bearing here"
+        sed -n '1,10p' "$tmp/neg.log" | sed 's/^/      /'
+    else
+        ok "tampered certificate rejected (5 → 4 no longer proves the statement)"
+    fi
+fi
+
+echo
+echo "logos2mm0: $PASSED passed, $FAILED failed, $GAPS gapped"
+[ "$FAILED" -eq 0 ]

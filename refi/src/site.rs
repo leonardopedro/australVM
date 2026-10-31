@@ -85,9 +85,16 @@ fn short(s: &str) -> String {
     }
 }
 
-/// The landing page: live ledger numbers, the newest certificates and the
+/// The landing page: live ledger numbers, the newest certificates, the
+/// newest proofs beside the certificates minted from them, and the
 /// published content pages.
-pub fn home(chrome: &Chrome, status: &Value, registry: &Value) -> String {
+pub fn home(
+    chrome: &Chrome,
+    status: &Value,
+    registry: &Value,
+    proofs: &[Proof],
+    certs: &[Value],
+) -> String {
     let ledger = &status["ledger"];
     let supply = ledger["total_supply"].as_u64().unwrap_or(0);
     let unspent = ledger["unspent"].as_u64().unwrap_or(0);
@@ -126,6 +133,14 @@ pub fn home(chrome: &Chrome, status: &Value, registry: &Value) -> String {
         )
     };
 
+    // The same pair /proofs shows — proof and certificate on one line —
+    // for the four newest submissions: a taste of the ledger, not the
+    // ledger itself (/proofs has that). proof_rows is the function /proofs
+    // renders with, so the two pages cannot drift apart: the certificate id
+    // links to its registry row on both.
+    let newest = proofs.len().min(4);
+    let pair = proof_rows(&proofs[..newest], false, certs);
+
     let body = format!(
         "<section class=\"hero\"><div class=\"kicker\">Carbon certificates · Taler settlement</div>\
          <h1>Verified tonnes, settled as spendable value.</h1>\
@@ -143,7 +158,9 @@ pub fn home(chrome: &Chrome, status: &Value, registry: &Value) -> String {
          <div><span>Merchant balances</span><code>{merchants}</code></div>\
          <div><span>Outstanding e-coins</span><code>{outstanding}</code></div></div></section>\
          <section class=\"panel\"><div class=\"panel-head\"><h2>Newest certificates</h2>\
-         <a href=\"/registry\" class=\"small\">full registry →</a></div>{table}</section>",
+         <a href=\"/registry\" class=\"small\">full registry →</a></div>{table}</section>\
+         <section class=\"panel\"><div class=\"panel-head\"><h2>Newest proofs</h2>\
+         <a href=\"/proofs\" class=\"small\">all proofs →</a></div>{pair}</section>",
         stat("Certificates in circulation", &supply.to_string(), &format!("{unspent} unspent")),
         stat("Ledger sequence", &seq.to_string(), "signed ops"),
         stat("Reserve liabilities", &reserves.to_string(), "sandbox units"),
@@ -157,6 +174,7 @@ pub fn home(chrome: &Chrome, status: &Value, registry: &Value) -> String {
         merchants = merchants,
         outstanding = status["funded_outstanding"].as_u64().unwrap_or(0),
         table = table,
+        pair = pair,
     );
     layout("Home", chrome, &body, false)
 }
@@ -212,10 +230,14 @@ pub fn registry(
             } else {
                 String::new()
             };
+            // The row carries its certificate id as an anchor: /proofs links
+            // each minted id here, so a reader lands on the registry line
+            // instead of scanning for the hex. cert_id is hex (engine.rs
+            // `hex::encode`), so the id is a valid fragment either way.
+            let cert = escape_html(c["cert_id"].as_str().unwrap_or(""));
             format!(
-                "<tr><td class=\"mono small\">{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"mono small\">{}</td>\
+                "<tr id=\"cert-{cert}\"><td class=\"mono small\">{cert}</td><td>{}</td><td class=\"num\">{}</td><td class=\"mono small\">{}</td>\
                  <td class=\"mono small\">{}</td><td class=\"num\">{}</td><td><span class=\"pill {}\">{}</span></td>{extra}</tr>",
-                escape_html(c["cert_id"].as_str().unwrap_or("")),
                 escape_html(c["kind"].as_str().unwrap_or("certificate")),
                 c["amount"].as_u64().unwrap_or(0),
                 escape_html(c["owner"].as_str().unwrap_or("")),
@@ -518,6 +540,7 @@ h2{font-size:1.2rem;margin:0;letter-spacing:-.01em}
 table{width:100%;border-collapse:collapse;font-size:.9rem}
 th{text-align:left;color:var(--muted);font-weight:500;font-size:.76rem;text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--line);padding:.5rem .4rem}
 td{padding:.55rem .4rem;border-bottom:1px solid #16212c;vertical-align:top}
+tr:target td{background:#123047}
 .num{text-align:right;font-variant-numeric:tabular-nums}
 .pill{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.72rem;border:1px solid var(--line);color:var(--muted)}
 .pill.ok{border-color:#16513d;color:#7ff0c4;background:#0d2a21}
@@ -595,13 +618,16 @@ fn proof_rows(proofs: &[Proof], admin: bool, certs: &[Value]) -> String {
                     .filter(|c| p.doi.as_deref() == c["source"].as_str())
                     .map(|c| {
                         let status = c["status"].as_str().unwrap_or("");
+                        // The id itself is the link: /proofs shows the
+                        // pair, the registry row is where the certificate
+                        // lives (owner, seq, spent status).
                         format!(
-                            "<div><span class=\"mono small\">{}</span> · {} units · \
+                            "<div><a class=\"mono small\" href=\"/registry#cert-{cert}\">{cert}</a> · {} units · \
                              <span class=\"pill {}\">{}</span></div>",
-                            escape_html(c["cert_id"].as_str().unwrap_or("")),
                             c["amount"].as_u64().unwrap_or(0),
                             if status == "unspent" { "ok" } else { "muted" },
                             escape_html(status),
+                            cert = escape_html(c["cert_id"].as_str().unwrap_or("")),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -777,13 +803,13 @@ fn proof_view(
         .iter()
         .map(|c| {
             format!(
-                "<tr><td class=\"mono small\">{}</td><td class=\"num\">{}</td>\
+                "<tr><td class=\"mono small\"><a href=\"/registry#cert-{cert}\">{cert}</a></td><td class=\"num\">{}</td>\
                  <td class=\"mono small\">{}</td><td><span class=\"pill {}\">{}</span></td></tr>",
-                escape_html(c["cert_id"].as_str().unwrap_or("")),
                 c["amount"].as_u64().unwrap_or(0),
                 escape_html(&short(c["owner"].as_str().unwrap_or(""))),
                 if c["status"] == "unspent" { "ok" } else { "muted" },
                 escape_html(c["status"].as_str().unwrap_or("")),
+                cert = escape_html(c["cert_id"].as_str().unwrap_or("")),
             )
         })
         .collect::<Vec<_>>()
@@ -941,9 +967,11 @@ mod tests {
             "treasury_did": "did:unfer:aa",
         });
         let registry = serde_json::json!({"certificates": []});
-        let html = home(&chrome(), &status, &registry);
+        let html = home(&chrome(), &status, &registry, &[], &[]);
         assert!(html.contains("Sandbox settlement"));
         assert!(html.contains(">42<"));
         assert!(html.contains("No certificates minted yet"));
+        assert!(html.contains("Newest proofs"));
+        assert!(html.contains("No proofs yet"));
     }
 }
