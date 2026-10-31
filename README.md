@@ -4,8 +4,13 @@
 
 ## Verification
 
-The `status:` line above is a claim with a command behind it, not decoration.
-`scripts/check-status` (workspace root) re-reads it and fails on drift.
+The `status:` line above is a claim with a command behind it, not decoration:
+the commands in the fenced block below are the ones that printed those counts,
+with the date they were measured. No script re-reads the line itself — the gates
+this repo actually runs are `scripts/verify-invariants` (symbol census, symbol
+sync, the `AuthorizationEngine` default and the archetype surface) and
+`scripts/check-todo-ledger`; the counts move only when a suite grows, and are
+bumped by hand together with the run that measured them.
 
 Everything below runs through the flake devshell — `nix develop -c` supplies
 dune/ocaml/`python3`, which a bare NixOS shell does not have:
