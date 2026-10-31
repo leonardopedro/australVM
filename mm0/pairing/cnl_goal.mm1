@@ -1,0 +1,4 @@
+-- the exact goal shape our CNL emits, proved via the ported addcom
+theorem logos_cnl_addcom (v_a v_b: Term): $ teq (tadd v_a v_b) (tadd v_b v_a) $ = '(addcom);
+theorem logos_cnl_add01 (v_a: Term): $ teq (tadd tz v_a) v_a $ = '(add01);
+theorem logos_cnl_addS1 (v_a v_b: Term): $ teq (tadd (ts v_a) v_b) (ts (tadd v_a v_b)) $ = '(addS1);

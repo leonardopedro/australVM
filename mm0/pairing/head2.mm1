@@ -1,0 +1,48 @@
+-- logos_math head (minimal): core + notations + propositional/quantifier axioms.
+-- The prelude supplies: tru/fal, an/iff/or, d1..d10, sb, peano5, peano1/2,
+-- addeq/muleq/add0/addS/mul0/mulS, and all derived theorems.
+provable sort Prop;
+sort Term;
+delimiter $ ( [ ~ $ $ ] ) $;
+
+-- ── core (logos_math.mm0) ───────────────────────────────────────────
+term tz: Term;
+term ts (a: Term): Term;
+term tapp (f a: Term): Term;
+term tprim_add: Term;
+term tprim_mul: Term;
+term teq (a b: Term): Prop;
+term tfals: Prop;
+term tadd (a b: Term): Term;
+term tmul (a b: Term): Term;
+
+-- ── notations over our constants ────────────────────────────────────
+-- `eq` is *defined* as `teq`: peano's derived machinery pattern-matches on a
+-- constant named `eq`, and definitional unfolding makes the two interchangeable.
+def eq (a b: Term): Prop = $ teq a b $;
+infixl eq: $=$ prec 50;
+infixl tadd: $+$ prec 64;
+infixl tmul: $*$ prec 70;
+prefix tz: $0$ prec max;
+prefix ts: $suc$ prec max;
+
+-- ── object logic ────────────────────────────────────────────────────
+term im (p q: Prop): Prop; infixr im: $->$ prec 25;
+term not (p: Prop): Prop; prefix not: $~$ prec 41;
+axiom ax_1 (a b: Prop): $ a -> b -> a $;
+axiom ax_2 (a b c: Prop): $ (a -> b -> c) -> (a -> b) -> a -> c $;
+axiom ax_3 (a b: Prop): $ (~a -> ~b) -> b -> a $;
+axiom ax_mp (a b: Prop): $ a -> b $ > $ a $ > $ b $;
+
+term al {x: Term} (p: Prop x): Prop; prefix al: $A.$ prec 41;
+def ex {x: Term} (p: Prop x): Prop = $ ~(A. x ~p) $;
+prefix ex: $E.$ prec 41;
+
+axiom ax_gen {x: Term} (p: Prop x): $ p $ > $ A. x p $;
+axiom ax_4 {x: Term} (p q: Prop x): $ A. x (p -> q) -> A. x p -> A. x q $;
+axiom ax_5 {x: Term} (p: Prop): $ p -> A. x p $;
+axiom ax_6 (a: Term) {x: Term}: $ E. x x = a $;
+axiom ax_7 (a b c: Term): $ a = b -> a = c -> b = c $;
+axiom ax_10 {x: Term} (p: Prop x): $ ~(A. x p) -> A. x ~(A. x p) $;
+axiom ax_11 {x y: Term} (p: Prop x y): $ A. x A. y p -> A. y A. x p $;
+axiom ax_12 {x: Term} (a: Term) (p: Prop x): $ x = a -> p -> A. x (x = a -> p) $;

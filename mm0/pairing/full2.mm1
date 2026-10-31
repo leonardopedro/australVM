@@ -1,0 +1,1609 @@
+-- logos_math head (minimal): core + notations + propositional/quantifier axioms.
+-- The prelude supplies: tru/fal, an/iff/or, d1..d10, sb, peano5, peano1/2,
+-- addeq/muleq/add0/addS/mul0/mulS, and all derived theorems.
+provable sort Prop;
+sort Term;
+delimiter $ ( [ ~ $ $ ] ) $;
+
+-- ── core (logos_math.mm0) ───────────────────────────────────────────
+term tz: Term;
+term ts (a: Term): Term;
+term tapp (f a: Term): Term;
+term tprim_add: Term;
+term tprim_mul: Term;
+term teq (a b: Term): Prop;
+term tfals: Prop;
+term tadd (a b: Term): Term;
+term tmul (a b: Term): Term;
+
+-- ── notations over our constants ────────────────────────────────────
+-- `eq` is *defined* as `teq`: peano's derived machinery pattern-matches on a
+-- constant named `eq`, and definitional unfolding makes the two interchangeable.
+def eq (a b: Term): Prop = $ teq a b $;
+infixl eq: $=$ prec 50;
+infixl tadd: $+$ prec 64;
+infixl tmul: $*$ prec 70;
+prefix tz: $0$ prec max;
+prefix ts: $suc$ prec max;
+
+-- ── object logic ────────────────────────────────────────────────────
+term im (p q: Prop): Prop; infixr im: $->$ prec 25;
+term not (p: Prop): Prop; prefix not: $~$ prec 41;
+axiom ax_1 (a b: Prop): $ a -> b -> a $;
+axiom ax_2 (a b c: Prop): $ (a -> b -> c) -> (a -> b) -> a -> c $;
+axiom ax_3 (a b: Prop): $ (~a -> ~b) -> b -> a $;
+axiom ax_mp (a b: Prop): $ a -> b $ > $ a $ > $ b $;
+
+term al {x: Term} (p: Prop x): Prop; prefix al: $A.$ prec 41;
+def ex {x: Term} (p: Prop x): Prop = $ ~(A. x ~p) $;
+prefix ex: $E.$ prec 41;
+
+axiom ax_gen {x: Term} (p: Prop x): $ p $ > $ A. x p $;
+axiom ax_4 {x: Term} (p q: Prop x): $ A. x (p -> q) -> A. x p -> A. x q $;
+axiom ax_5 {x: Term} (p: Prop): $ p -> A. x p $;
+axiom ax_6 (a: Term) {x: Term}: $ E. x x = a $;
+axiom ax_7 (a b c: Term): $ a = b -> a = c -> b = c $;
+axiom ax_10 {x: Term} (p: Prop x): $ ~(A. x p) -> A. x ~(A. x p) $;
+axiom ax_11 {x y: Term} (p: Prop x y): $ A. x A. y p -> A. y A. x p $;
+axiom ax_12 {x: Term} (a: Term) (p: Prop x): $ x = a -> p -> A. x (x = a -> p) $;
+do {
+  (def (id x) x)
+  (def (ignore . _))
+  (def dbg @ match-fn* [(x) (print x) x]
+    [(x y) (display @ string-append (->string x) ": " (->string y)) y])
+  (def (foldl l z s) (if (null? l) z (foldl (tl l) (s z (hd l)) s)))
+  (def (foldr l z s) (if (null? l) z (s (hd l) (foldr (tl l) z s))))
+  (def (range a b) (if {a = b} () (cons a (range {a + 1} b))))
+  (def (for a b f) (if {a = b} #undef (begin (f a) (for {a + 1} b f))))
+  (def last (match-fn [(a) a] [(_ . l) (last l)]))
+  (def split-last @ match-fn
+    [(and (_) l) l]
+    [(a . l) @ match (split-last l) @ (r . l2) '(,r ,a . ,l2)]
+    [() ()])
+  (def (append . ls) @ foldr ls () @ fn (l l2) @ foldr l l2 cons)
+  (def (rev l) @ foldl l () (fn (l a) (cons a l)))
+  (def (len l) @ foldl l 0 (fn (n _) {n + 1}))
+  (def (filter l p) @ foldl l () @ fn (l2 x) @ if (p x) (cons x l2) l2)
+  (def (repeat a n) (if {n = 0} () (cons a (repeat a {n - 1}))))
+  (def (iterate n f a) (if {n = 0} a (f (iterate {n - 1} f a))))
+  (def (find l) @ match l
+    [((k v) . l) (def f (find l)) @ fn (a) @ if {k == a} v (f a)]
+    [() @ fn (a)])
+  (def (verb e) (copy-span e (list ':verb e)))
+  (def (exact e) (refine (verb e)))
+  (def (result) (hd (get-goals)))
+  (def (target) (goal-type (result)))
+  (def (inspect-result f) (def g (result)) (refine (f)) (display @ pp g))
+  (def (later) @ match (get-goals)
+    [(g . gs) (apply set-goals @ append gs @ list g)])
+  (def mvar-sort @ match-fn @ (mvar s _) s)
+  (def (report a) (def g (result)) (refine a) (print g))
+  (def (atom-map . xs) (get! @ apply atom-map! xs))
+  (def (lookup-fn xs) (def m (apply atom-map xs)) (fn k (apply lookup m k)))
+  (def (atom-app . xs) (string->atom (apply string-append (map ->string xs))))
+  (def transpose @ match-fn*
+    [(xs) (apply map list xs)]
+    [(n xs) (if (null? xs) (repeat () n) (apply map list xs))])
+  (def (join xs) (apply append xs))
+  (def (rmap . args) (apply map (split-last args)))
+  (def (scan . args) (apply rmap args) #undef)
+  (def (undef? x) (not (def? x)))
+  (def (error-at sp msg) (report-at 'error sp msg))
+  (def (info-at sp msg) (report-at 'info sp msg))
+  (def goal! @ match-fn*
+    [(ty) (ref! (goal ty))]
+    [(pos ty) (ref! (copy-span pos (goal ty)))])
+  (def (swap) @ match (get-goals) [(x . y) (apply set-goals @ append y @ list x)])
+  (def suffices @ match-fn*
+    [(h) (have h _) (swap)]
+    [xs (apply have xs) (swap)])
+  (def (get-proof x) @ match (get-decl x)
+    [('theorem _ _ _ _ _ pf) (hd @ tl @ pf)]
+    [_ (error "not a theorem")])
+  (def (pp-proof x) (display @ pp @ get-proof x))
+
+  --| This utility will take a verbatim proof and "unelaborate" it into a refine script
+  --| using ! on every step. This is useful to get `refine` to re-typecheck a term when
+  --| testing tactics which produce verbatim proofs.
+  (def unelab @ letrec (
+    [(args bs xs)
+      @ if (null? bs) (map rec xs)
+      @ cons (hd xs) @ args (tl bs) (tl xs)]
+    [rec @ match-fn
+      [(':conv tgt _ p) '{,(rec p) : ,tgt}]
+      [(f . xs)
+        (cons '! f @ args (nth 2 @ get-decl f) xs)]
+      [e e]])
+    rec)
+
+  --| This is a special variable used by `mm0-rs doc` to shorten axiom list printouts.
+  --| It is an atom map from a name for the axiom list to a list of axioms.
+  (def axiom-sets (atom-map!))
+  --| Declare a new axiom set, which is used by the docgen tool to shorten axiom lists.
+  (def (add-axiom-set! x doc xs) (insert! axiom-sets x (cons doc xs)))
+
+  --| `(named pf)` wraps a proof script `pf`, runs it, then gathers all
+  --| unassigned metavariables and assigns them to dummies.
+  --| `(named x1 ... xn pf)` is the same but names the first `n` variables `x1,...,xn`.
+  --| This is commonly used for proofs where we don't care to name the
+  --| dummy variables.
+  (def named
+    (def (assign-mvar m x) @ match x ['_] [_ (set! m (dummy! x (mvar-sort m)))])
+    @ match-fn*
+      [((? atom? d) es) (refine es) (scan (get-mvars) (list d) assign-mvar)]
+      [(ds es) (refine es) (scan (get-mvars) ds assign-mvar)]
+      [(es) (refine es)
+        (def n (ref! 1))
+        (scan (get-mvars) @ fn (v)
+          (assign-mvar v (atom-app "a" n)) (set! n {n + 1}))
+        (if {n = 1} (display "unnecessary (named)"))])
+
+  --| `(name-all x1 ... xn)` instantiates all metavariables in the current
+  --| proof state. It is the same as `named` but it can be used in the middle of a
+  --| proof instead of as a wrapper around a complete proof.
+  (def (name-all . ds)
+    (def (assign-mvar m x) @ match x ['_] [_ (set! m (dummy! x (mvar-sort m)))])
+    (scan (get-mvars) ds assign-mvar))
+
+  (def ((tac-thm stmt f))
+    @ match (get-goals) @ (g)
+    (def res (f))
+    (if (def? res) (refine res))
+    (match (get-goals) [()] [_ (stat) (error "not all goals are solved")])
+    '(() ,g))
+  (def (add-tac-thm! x bis hyps ret vis f)
+    (add-thm! x bis hyps ret vis (tac-thm ret f)))
+
+  (def eq-for @ lookup-fn '([Prop iff] [Term eq] [set eqs]))
+  (def eq-sort @ lookup-fn '([iff Prop] [eq Term] [eqs set]))
+  (def nf-for @ lookup-fn '([Prop nf] [Term nfn] [set nfs]))
+  (def eqid-for @ lookup-fn '([Prop biid] [Term eqid] [set eqsid]))
+  (def eqidd-for @ lookup-fn '([Prop biidd] [Term eqidd] [set eqsidd]))
+  (def eqd-map (atom-map!)) (set-merge-strategy eqd-map merge-map)
+  (def (eqd-for . e) (apply lookup eqd-map e))
+  (def (register-eqd df) (fn tgt (insert! eqd-map df tgt)))
+  (def (get-tgt-args args df . s) @ match args
+    [() (apply atom-app df s)]
+    [((? atom? t)) (apply atom-app t s)]
+    [('quote (? atom? t)) t])
+
+  (def (maybe-atom-map hs)
+    @ if (apply and @ map (fn (x) (atom? (hd x))) hs)
+      (let ([m (get! @ apply atom-map! hs)])
+        @ fn (x) (lookup m x))
+      (find hs))
+  (def (eqtac-ctx ltr hyps)
+    @ foldr hyps () @ fn (h ls)
+      @ match (match (infer-type h) [('im _ R) R] [R R])
+        [('eq L R) '([,(if ltr L R) ,h] . ,ls)]
+        [_ ls])
+  (def (eqtac-core ltr ctx t)
+    @ match t @ (eq L R)
+    @ letrec (
+      [(f A) @ match (ctx A)
+        [#undef @ match A
+          [((? atom? t) . es)
+            @ if (null? es) #undef @ begin
+            @ match (eqd-for t) [#undef] @ (eqd . eqNds)
+            @ match (get-decl eqd) @ (_ _ bis hs ('im _ (eq (t . args) _)) ...)
+            (def subterms @ apply atom-map! @ map list args es)
+            (def nonrefl (ref! #f))
+            (def idx (ref! 0))
+            (def subproofs @ rmap hs @ match-fn @ (h ('im _ (eq arg _)))
+              (def r @ if (atom? arg)
+                (or_refl nonrefl idx @ lookup subterms arg)
+                (eqidd-for (infer-sort A)))
+              (set! idx {idx + 1}) r)
+            @ if {nonrefl == #f} #undef @ begin
+            @ match (match nonrefl [#undef] [n (nth n eqNds)])
+              [#undef (cons eqd subproofs)]
+              [eqNd (list eqNd (nth nonrefl subproofs))]]
+          [e #undef]]
+        [res res]]
+      [(or_refl nonrefl idx A) @ match (f A)
+        [#undef (eqidd-for (infer-sort A))]
+        [e (set! nonrefl @ match nonrefl [#f (get! idx)] [_]) e]])
+    (or_refl (ref!) 0 (if ltr L R)))
+  (def ((eqtac-with ltr . hyps) refine t)
+    @ refine t @ match t
+    [('im G (and rhs (eq L R)))
+      @ letrec ([add-locals @ match-fn*
+        [(('an G D) f)
+          (add-locals G @ fn (a p) (f a '(anwl ,G ,D ,a ,p)))
+          (add-locals D @ fn (a p) (f a '(anwr ,G ,D ,a ,p)))]
+        [((and a (h . _)) f) @ if (def? (eq-sort h)) (f a '(id ,a))]
+        [_]])
+      (def ctx (ref! (eqtac-ctx #t hyps)))
+      (add-locals G @ match-fn* @ ((eq L R) p)
+        (def v (if ltr L R))
+        (def v @ match v [(mvar s _) (def d (dummy! s)) (set! v d) d] [_ v])
+        (set! ctx '([,v ,(verb p)] . ,(get! ctx))))
+      (eqtac-core ltr (maybe-atom-map ctx) rhs)]
+    [(eq L R) '(trud ,(eqtac-core ltr (maybe-atom-map @ eqtac-ctx #t hyps) t))])
+
+  --| A refine script that will prove formulas of the form `x = a -> (p <-> ?q)`
+  --| by substituting all instances of `x` with `a` in `p`. This works whether `?q`
+  --| is a metavariable or the substitution.
+  (def eqtac (eqtac-with #t))
+
+  --| Like `eqtac` but works in reverse:
+  --| it will prove formulas of the form `x = a -> (?p <-> q)`
+  --| by substituting all instances of `a` with `x` in `q`. If `x` is a metavariable, it
+  --| also assigns it to a new dummy variable.
+  (def ((eqtac-gen a) refine t) @ refine t
+    @ match t @ ('im (eq x _) _)
+      (def y (match x [(mvar s _) (dummy! s)] [_ x]))
+      '{,(eqtac-with #f) : (im (eq ,y ,a) _)})
+
+  --| This metaprogram proves a statement of the form
+  --| $ G -> a1 = a2 $ > $ G -> b1 = b2 $ > $ G -> foo a1 b1 = foo a2 b2 $
+  --| for any definition foo.
+  (def (add-eqd-thm df . args)
+    (def tgt (get-tgt-args args df "eqd"))
+    @ match (get-decl df)
+      [#undef (error (string-append "declaration '" (->string df) "' not found"))]
+      [(_ _ () ...)]
+      [(_ _ bis (ret _) . rest)
+        (def G @ if (apply or (map (match-fn [('G ...) #t] [_ #f]) bis)) '_G '_G)
+        (if (def? (get-decl tgt))
+          @ error (string-append "declaration '" (->string tgt) "' already created"))
+        (def ctx (atom-map!))
+        @ match (map join @ transpose 4 @ rmap bis @ match-fn
+          [(and (x s) e) (insert! ctx x (list s)) '((,e) () (,x) (,x))]
+          [(v s vs) @ let ([v1 (atom-app '_ v 1)] [v2 (atom-app '_ v 2)] [hv (atom-app '_ v 'h)])
+            (insert! ctx v (list v1 v2 s hv))
+            '(() ((,v ,s ,v1 ,v2 ,hv))
+              (,v1) (,v2))]) @ (xs vs es1 es2)
+        (def xs1 (map hd xs))
+        (def bis '((,G Prop ()) . ,(append xs @ join @ rmap vs
+          @ match-fn [(v s v1 v2 hv) '((,v1 ,s ,xs1) (,v2 ,s ,xs1))])))
+        (def hs @ rmap vs @ match-fn [(v s v1 v2 hv) '(,hv (im ,G (,(eq-for s) ,v1 ,v2)))])
+        (def rete '(im ,G (,(eq-for ret) (,df . ,es1) (,df . ,es2))))
+        (match rest
+          [() (add-thm! tgt bis hs rete)]
+          [(_ ds v) @ add-thm! tgt bis hs rete () @ fn () @ list ds
+            (def ds (rmap ds @ match-fn @ (x s) (insert! ctx x (list s)) x))
+            @ letrec (
+              [preproof (match-fn
+                [(? atom? v) (lookup ctx v)]
+                [((? atom? t) . es)
+                  @ match (get-decl t) @ (_ _ bis (ret _) ...)
+                  @ if (null? es) (list ret) @ begin
+                  (def nonrefl (ref! #f))
+                  (def idx (ref! 0))
+                  (def res @ transpose 5 @ rmap bis es @ fn (bi e)
+                    @ match bi
+                      [(_ _) '((,e) () () ,e ,e)]
+                      [(_ _ _)
+                        (def res @ match (preproof e)
+                          [(s) '(() (,e ,e) ((,(eqidd-for s) ,G ,e)) ,e ,e)]
+                          [(e1 e2 s p) (set! nonrefl @ match nonrefl [#f (get! idx)] [_])
+                            '(() (,e1 ,e2) (,p) ,e1 ,e2)])
+                        (set! idx {idx + 1})
+                        res])
+                  @ match res @ (xs ts ps es1 es2)
+                  @ if {nonrefl == #f} (list ret)
+                  @ match (eqd-for t)
+                    [#undef (error @ string-append "equality theorem not found for " (->string t))]
+                    [(eqd . eqNds)
+                      (def pf @ match (match nonrefl [#undef] [n (nth n eqNds)])
+                        [#undef @ cons eqd G @ append (join xs) (join ts) (join ps)]
+                        [eqNd
+                          (set! idx 0)
+                          (def ts2 @ join @ rmap ts @ match-fn
+                            [() ()]
+                            [(and e (x _))
+                              (def r @ if {idx == nonrefl} e (list x))
+                              (set! idx {idx + 1}) r])
+                          @ cons eqNd G @ append (join xs) ts2 (list @ nth nonrefl @ join ps)])
+                      '((,t . ,es1) (,t . ,es2) ,ret ,pf)]])]
+              [(mk-proof e) (match (preproof e)
+                [(s) '(,e ,e (,(eqidd-for s) ,G ,e))]
+                [(e1 e2 s p) (list e1 e2 p)])])
+            @ match (mk-proof v) @ (t1 t2 p)
+            '(:conv ,rete (im ,G (,(eq-for ret)
+              (:unfold ,df ,es1 ,ds ,t1)
+              (:unfold ,df ,es2 ,ds ,t2))) ,p)])
+        (insert! eqd-map df '(,tgt))])
+
+  (def (ded-to-thm t)
+    @ match (get-decl t) @ (_ _ ((G 'Prop ()) . bis) hs ('im _ ret) ...)
+    @ if (apply and @ rmap bis @ match-fn [(_ _ ()) #t] [_ #f]) @ begin
+    (def rete @ foldr hs ret @ match-fn* [((_ ('im _ h)) r) '(im ,h ,r)])
+    @ list bis rete @ fn () @ list ()
+    @ letrec (
+      [(exps l r) @ match r
+        [('im e1 e2) (list 'exp l e1 e2 (exps (list 'an l e1) e2))]
+        [_ (cons t l @ append (map hd bis) @
+          map (match-fn [(_ h) h]) @ rev @ conjuncts l)]]
+      [conjuncts @ match-fn
+        [('an e1 e2)
+          @ match (conjuncts e1)
+            [(_) '((,e2 (anr ,e1 ,e2)) (,e1 (anl ,e1 ,e2)))]
+            [hs (cons '(,e2 (anr ,e1 ,e2)) @
+              rmap hs @ match-fn [(e h) '(,e (anwl ,e1 ,e2 ,e ,h))])]]
+        [e '((,e (id ,e)))]])
+    @ match rete [('im l r) (exps l r)])
+
+  --| Using the `*eqd` proof in `add-eqd-thm`,
+  --| this metaprogram proves the corresponding `*eq` theorem of the form
+  --| `a1 = a2 -> b1 = b2 -> foo a1 b1 = foo a2 b2`
+  --| for any definition `foo`.
+  (def (add-eq-thm t . args)
+    (def tgt (get-tgt-args args t "eq"))
+    @ if (undef? (get-decl tgt)) @ begin
+    @ match (eqd-for t) [#undef] @ (eqd . _)
+    @ match (ded-to-thm eqd) [#undef] @ (bis ret val)
+    (add-thm! tgt bis () ret () val))
+
+  (def (make-eqNd-thms df)
+    @ match (get-decl df) @ (_ _ bis (ret _) . rest)
+    (def G '_G) (def h0 '_h)
+    @ letrec (
+      [mk-bis @ match-fn
+        [() '(() () () () ())]
+        [((and (x _) e) . bis)
+          @ match (mk-bis bis) @ (pes vs es pp data)
+          '((,x . ,pes) ,vs ,es ,pp
+            ,(rmap data @ match-fn [(b t1 t2 h es ps)
+              '(,b (,x . ,t1) (,x . ,t2) ,h ,es ,ps)]))]
+        [((v s _) . bis)
+          @ match (mk-bis bis) @ (pes vs es pp data)
+          @ let ([v1 (atom-app '_ v 1)] [v2 (atom-app '_ v 2)])
+          '((,v . ,pes)
+            ((,v ,s) . ,vs)
+            (,v ,v . ,es)
+            ((,(eqidd-for s) ,G ,v) . ,pp)
+            ((((,v1 ,s) (,v2 ,s) . ,vs)
+              (,v1 . ,pes)
+              (,v2 . ,pes)
+              (im ,G (,(eq-for s) ,v1 ,v2))
+              (,v1 ,v2 . ,es)
+              (,h0 . ,pp)) .
+             ,(rmap data @ match-fn @ (b t1 t2 h es ps)
+              '(((,v ,s) . ,b) (,v . ,t1) (,v . ,t2) ,h (,v ,v . ,es) ((,(eqidd-for s) ,G ,v) . ,ps)))))]])
+    (def xs @ join @ rmap bis @ match-fn [(and (_ _) e) (list e)] [_ ()])
+    @ rmap (match (mk-bis bis) [(_ _ _ _ data) data]) @ match-fn @ (vs t1 t2 h es ps)
+      (def xs1 (map hd xs))
+      (def vs+ (rmap vs @ match-fn @ (v s) '(,v ,s ,xs1)))
+      @ list
+        '((,G Prop ()) . ,(append xs vs+))
+        '((,h0 ,h))
+        '(im ,G (,(eq-for ret) (,df . ,t1) (,df . ,t2)))
+        (match (eqd-for df)
+          [#undef (error @ string-append "equality theorem not found for " (->string df))]
+          [(eqd . _) '(,eqd ,G . ,(append xs1 es ps))]))
+
+  --| This program adds `*eqNd` and `*eqN` theorems corresponding to the definition
+  --| `foo`, of the form
+  --| * `fooeq1: $ a1 = a2 -> foo a1 b = foo a2 b $`
+  --| * `fooeq1: $ a1 = a2 -> foo a1 b = foo a2 b $`
+  --| * `fooeq2: $ b1 = b2 -> foo a b1 = foo a b2 $`
+  --| * `fooeq1d: $ G -> a1 = a2 $ > $ G -> foo a1 b = foo a2 b $`
+  --| * `fooeq2: $ G -> b1 = b2 $ > $ G -> foo a b1 = foo a b2 $`
+  --|
+  --| for any definition `foo`.
+  (def (add-eqN-thms t . args)
+    (def idx (ref! 0))
+    (def base (get-tgt-args args t "eq"))
+    @ match (make-eqNd-thms t)
+      [(and (__ 2) thms)
+        (def tgts @ rmap thms @ match-fn @ (bis hs ret val)
+          (set! idx {idx + 1})
+          (def tgt (atom-app base idx "d"))
+          (if (undef? (get-decl tgt)) @ begin
+            (add-thm! tgt bis hs ret () '(() ,val))
+            (def tgt2 (atom-app base idx))
+            @ if (undef? (get-decl tgt2)) @ begin
+            @ match (ded-to-thm tgt) [#undef] @ (bis2 ret2 val2)
+            (add-thm! tgt2 bis2 () ret2 () val2))
+          tgt)
+        @ match (eqd-for t) [#undef] @ (eqd . _)
+        @ insert! eqd-map t @ cons eqd tgts]
+      [_ ()])
+
+  (def derive-eq @ match-fn*
+    [(t1 t2 t3) @ fn (s)
+      (add-eqd-thm s '',t1)
+      (add-eq-thm s '',t2)
+      (add-eqN-thms s '',t3)]
+    [args @ fn (s)
+      (apply add-eqd-thm s args)
+      (apply add-eq-thm s args)
+      (apply add-eqN-thms s args)])
+
+  (def eval-map (atom-map!
+    '[im ,(fn (a b) {(not (eval a)) or (eval b)})]
+    '[not ,(fn (a) (not (eval a)))]))
+  (set-merge-strategy eval-map merge-map)
+  (def (eval e) @ match e @ ((? atom? t) . es)
+    (apply
+      (lookup eval-map t @ fn () @ error
+        @ string-append "unknown function encountered during evaluation: " (->string t))
+      es))
+
+  --| This is used as an annotation.
+  --| * `def foo ..` will add `f` as an evaluator for `foo`,
+  --|   which is used by the `eval` function (which can evaluate many
+  --|   closed terms of sort `Term` or `Prop` to values).
+  --| * `` will attempt to evaluate the body of the definition
+  --|   and use that as the result.
+  (def ((add-eval . f) a)
+    (if (def? @ lookup eval-map a) (error "already defined evaluation rule"))
+    @ insert! eval-map a @ match f
+    [(f) (if (fn? f) f (fn () f))]
+    [() (def x @ eval @ nth 6 @ get-decl a) (fn () x)])
+
+  --| `@eval-check` is an annotation that can be placed on theorems or axioms which
+  --| are closed terms, and will check that the theorem/axiom evaluates to `#t`.
+  --| This is not formally rigorous as the evaluator is not verified, but it can be
+  --| viewed as a cross-check of the axiom or the evaluator, depending on your
+  --| point of view.
+  (def (eval-check a) @ match (eval @ nth 4 @ get-decl a) [#t])
+};
+
+-- configuration
+do {
+  (set-timeout 500)
+  (def (refine-extra-args refine tgt e . ps)
+    @ refine tgt (foldl ps (verb e) @ fn (acc p2) @ copy-span e '(ax_mp ,acc ,p2)))
+  (def default-annotate (derive-eq))
+  (def (annotate e s) @ match e ['_ (default-annotate s)] [_ (e s)])
+
+  -- Enable this to mark unnecessary parentheses below.
+  -- It is disabled because there are many "false positives"
+  -- for operator pairs which are not obvious like (a -> b) <-> c
+  --
+  -- (warn-unnecessary-parens #t)
+};
+
+theorem a1i (h: $ b $): $ a -> b $ = '(ax_1 h);
+theorem a2i (h: $ a -> b -> c $): $ (a -> b) -> (a -> c) $ = '(ax_2 h);
+theorem mpd (h1: $ a -> b $) (h2: $ a -> b -> c $): $ a -> c $ = '(ax_2 h2 h1);
+theorem mpi (h1: $ b $) (h2: $ a -> b -> c $): $ a -> c $ = '(mpd (a1i h1) h2);
+theorem id: $ a -> a $ = '(mpd (! ax_1 _ a) ax_1);
+theorem idd: $ a -> b -> b $ = '(a1i id);
+theorem syl (h1: $ b -> c $) (h2: $ a -> b $): $ a -> c $ = '(mpd h2 (a1i h1));
+theorem rsyl (h1: $ a -> b $) (h2: $ b -> c $): $ a -> c $ = '(syl h2 h1);
+theorem a1d (h: $ a -> b $): $ a -> c -> b $ = '(syl ax_1 h);
+theorem a2d (h: $ a -> b -> c -> d $): $ a -> (b -> c) -> (b -> d) $ = '(syl ax_2 h);
+theorem a3d (h: $ a -> ~b -> ~c $): $ a -> c -> b $ = '(syl ax_3 h);
+theorem sylc (h: $ b -> c -> d $) (h1: $ a -> b $) (h2: $ a -> c $): $ a -> d $ = '(mpd h2 @ syl h h1);
+theorem syld (h1: $ a -> b -> c $) (h2: $ a -> c -> d $): $ a -> b -> d $ = '(mpd h1 @ a2d @ a1d h2);
+theorem syl5 (h1: $ b -> c $) (h2: $ a -> c -> d $): $ a -> b -> d $ = '(syld (a1i h1) h2);
+theorem syl6 (h1: $ c -> d $) (h2: $ a -> b -> c $): $ a -> b -> d $ = '(syld h2 (a1i h1));
+theorem imim2: $ (b -> c) -> (a -> b) -> (a -> c) $ = '(a2d ax_1);
+theorem imim2i (h: $ b -> c $): $ (a -> b) -> (a -> c) $ = '(imim2 h);
+theorem imim2d (h: $ a -> c -> d $): $ a -> (b -> c) -> (b -> d) $ = '(syl imim2 h);
+theorem absurd: $ ~a -> a -> b $ = '(a3d ax_1);
+theorem com12 (h: $ a -> b -> c $): $ b -> a -> c $ = '(syl (a2i h) ax_1);
+theorem mpcom: $ a -> (a -> b) -> b $ = '(com12 id);
+theorem com23 (h: $ a -> b -> c -> d $): $ a -> c -> b -> d $ = '(syl (com12 @ imim2d mpcom) h);
+theorem eimd (h1: $ a -> b $) (h2: $ a -> c -> d $): $ a -> (b -> c) -> d $ = '(syld (rsyl h1 mpcom) h2);
+theorem absurdr: $ a -> ~a -> b $ = '(com12 absurd);
+theorem imim1: $ (a -> b) -> (b -> c) -> (a -> c) $ = '(com12 imim2);
+theorem imim1i (h: $ a -> b $): $ (b -> c) -> (a -> c) $ = '(imim1 h);
+theorem imim1d (h: $ a -> b -> c $): $ a -> (c -> d) -> (b -> d) $ = '(syl imim1 h);
+theorem imimd (h1: $ a -> b -> c $) (h2: $ a -> d -> e $):
+  $ a -> (c -> d) -> (b -> e) $ = '(syld (imim1d h1) (imim2d h2));
+theorem imim: $ (a -> b) -> (c -> d) -> (b -> c) -> (a -> d) $ = '(syl5 imim2 (imim2d imim1));
+theorem imidm: $ (a -> a -> b) -> a -> b $ = '(a2i mpcom);
+theorem eim: $ a -> (b -> c) -> (a -> b) -> c $ = '(imim1d mpcom);
+theorem contra: $ (~a -> a) -> a $ = '(imidm (a3d (a2i absurd)));
+theorem dne: $ ~~a -> a $ = '(syl contra absurd);
+theorem inot: $ (a -> ~a) -> ~a $ = '(syl contra (imim1 dne));
+theorem con2: $ (a -> ~b) -> (b -> ~a) $ = '(a3d (syl5 dne id));
+theorem notnot1: $ a -> ~~a $ = '(con2 id);
+theorem con3: $ (a -> b) -> (~b -> ~a) $ = '(syl con2 (imim2i notnot1));
+theorem con1: $ (~a -> b) -> (~b -> a) $ = '(a3d (imim2i notnot1));
+theorem cases (h1: $ a -> b $) (h2: $ ~a -> b $): $ b $ = '(contra @ syl h1 @ con1 h2);
+theorem casesd (h1: $ a -> b -> c $) (h2: $ a -> ~b -> c $): $ a -> c $ =
+'(cases (com12 h1) (com12 h2));
+theorem con1d (h: $ a -> ~b -> c $): $ a -> ~c -> b $ = '(syl con1 h);
+theorem con2d (h: $ a -> b -> ~c $): $ a -> c -> ~b $ = '(syl con2 h);
+theorem con3d (h: $ a -> b -> c $): $ a -> ~c -> ~b $ = '(syl con3 h);
+theorem con4d (h: $ a -> ~b -> ~c $): $ a -> c -> b $ = '(syl ax_3 h);
+theorem mt (h1: $ b -> a $) (h2: $ ~a $): $ ~b $ = '(con3 h1 h2);
+theorem mt2 (h1: $ b -> ~a $) (h2: $ a $): $ ~b $ = '(con2 h1 h2);
+theorem mtd (h1: $ a -> ~b $) (h2: $ a -> c -> b $): $ a -> ~c $ = '(mpd h1 (con3d h2));
+theorem mti (h1: $ ~b $) (h2: $ a -> c -> b $): $ a -> ~c $ = '(mtd (a1i h1) h2);
+theorem mt2d (h1: $ a -> c $) (h2: $ a -> b -> ~c $): $ a -> ~b $ = '(sylc con2 h2 h1);
+
+--| Conjunction: `a` and `b` are both true.
+def an (a b: Prop): Prop = $ ~(a -> ~b) $;
+infixl an: $/\$ prec 34;
+
+theorem anl: $ a /\ b -> a $ = '(con1 absurd);
+theorem anr: $ a /\ b -> b $ = '(con1 ax_1);
+theorem anli (h: $ a /\ b $): $ a $ = '(anl h);
+theorem anri (h: $ a /\ b $): $ b $ = '(anr h);
+theorem ian: $ a -> b -> a /\ b $ = '(con2d mpcom);
+theorem iand (h1: $ a -> b $) (h2: $ a -> c $): $ a -> b /\ c $ = '(sylc ian h1 h2);
+theorem anld (h: $ a -> b /\ c $): $ a -> b $ = '(syl anl h);
+theorem anrd (h: $ a -> b /\ c $): $ a -> c $ = '(syl anr h);
+theorem iani (h1: $ a $) (h2: $ b $): $ a /\ b $ = '(ian h1 h2);
+theorem anwl (h: $ a -> c $): $ a /\ b -> c $ = '(syl h anl);
+theorem anwr (h: $ b -> c $): $ a /\ b -> c $ = '(syl h anr);
+theorem anll: $ a /\ b /\ c -> a $ = '(anwl anl);
+theorem anlr: $ a /\ b /\ c -> b $ = '(anwl anr);
+theorem anrl: $ a /\ (b /\ c) -> b $ = '(anwr anl);
+theorem anrr: $ a /\ (b /\ c) -> c $ = '(anwr anr);
+theorem anwll (h: $ a -> d $): $ a /\ b /\ c -> d $ = '(anwl (anwl h));
+theorem anw3l (h: $ a -> e $): $ a /\ b /\ c /\ d -> e $ = '(anwll (anwl h));
+theorem anw4l (h: $ a -> f $): $ a /\ b /\ c /\ d /\ e -> f $ = '(anw3l (anwl h));
+theorem anw5l (h: $ a -> g $): $ a /\ b /\ c /\ d /\ e /\ f -> g $ = '(anw4l (anwl h));
+theorem anw6l (x: $ a -> h $): $ a /\ b /\ c /\ d /\ e /\ f /\ g -> h $ = '(anw5l (anwl x));
+theorem anw7l (x: $ a -> i $): $ a /\ b /\ c /\ d /\ e /\ f /\ g /\ h -> i $ = '(anw6l (anwl x));
+theorem anllr: $ a /\ b /\ c /\ d -> b $ = '(anwll anr);
+theorem an3l: $ a /\ b /\ c /\ d -> a $ = '(anwll anl);
+theorem an3lr: $ a /\ b /\ c /\ d /\ e -> b $ = '(anwl anllr);
+theorem an4l: $ a /\ b /\ c /\ d /\ e -> a $ = '(anwl an3l); -- TODO: automate these
+theorem an4lr: $ a /\ b /\ c /\ d /\ e /\ f -> b $ = '(anwl an3lr);
+theorem an5l: $ a /\ b /\ c /\ d /\ e /\ f -> a $ = '(anwl an4l);
+theorem an5lr: $ a /\ b /\ c /\ d /\ e /\ f /\ g -> b $ = '(anwl an4lr);
+theorem an6l: $ a /\ b /\ c /\ d /\ e /\ f /\ g -> a $ = '(anwl an5l);
+theorem an6lr: $ a /\ b /\ c /\ d /\ e /\ f /\ g /\ h -> b $ = '(anwl an5lr);
+theorem imp (h: $ a -> b -> c $): $ a /\ b -> c $ = '(sylc h anl anr);
+theorem exp (h: $ a /\ b -> c $): $ a -> b -> c $ = '(syl6 h ian);
+theorem impcom (h: $ a -> b -> c $): $ b /\ a -> c $ = '(imp (com12 h));
+theorem expcom (h: $ a /\ b -> c $): $ b -> a -> c $ = '(com12 (exp h));
+theorem syla (h1: $ (b -> c) -> d $) (h2: $ a /\ b -> c $): $ a -> d $ = '(syl h1 @ exp h2);
+theorem sylan (h: $ b /\ c -> d $) (h1: $ a -> b $) (h2: $ a -> c $):
+  $ a -> d $ = '(syl h @ iand h1 h2);
+theorem animd (h1: $ a -> b -> c $) (h2: $ a -> d -> e $): $ a -> b /\ d -> c /\ e $ =
+'(exp (iand (imp (syl5 anl h1)) (imp (syl5 anr h2))));
+theorem anim1d (h: $ a -> b -> c $): $ a -> b /\ d -> c /\ d $ = '(animd h idd);
+theorem anim2d (h: $ a -> c -> d $): $ a -> b /\ c -> b /\ d $ = '(animd idd h);
+theorem anim1: $ (a -> b) -> a /\ c -> b /\ c $ = '(anim1d id);
+theorem anim2: $ (b -> c) -> a /\ b -> a /\ c $ = '(anim2d id);
+theorem anim: $ (a -> b) -> (c -> d) -> a /\ c -> b /\ d $ =
+'(exp @ syld (anim1d anl) (anim2d anr));
+theorem anim2a: $ (a -> b -> c) -> (a /\ b -> a /\ c) $ =
+'(exp @ iand anrl @ mpd anrr @ mpd anrl anl);
+theorem ancom: $ a /\ b -> b /\ a $ = '(iand anr anl);
+theorem anrasss (h: $ a /\ b /\ c -> d $): $ a /\ c /\ b -> d $ =
+'(sylan h (iand anll anr) anlr);
+theorem anim1a: $ (a -> b -> c) -> (b /\ a -> c /\ a) $ =
+'(syl6 ancom @ syl5 ancom anim2a);
+theorem casesda (h1: $ a /\ b -> c $) (h2: $ a /\ ~b -> c $): $ a -> c $ =
+'(casesd (exp h1) (exp h2));
+theorem inotda (h: $ a /\ b -> ~b $): $ a -> ~b $ = '(syla inot h);
+theorem mpand (h1: $ a -> b $) (h2: $ a /\ b -> c $): $ a -> c $ = '(mpd h1 (exp h2));
+theorem mtand (h1: $ a -> ~b $) (h2: $ a /\ c -> b $): $ a -> ~c $ = '(mtd h1 (exp h2));
+theorem mtani (h1: $ ~b $) (h2: $ a /\ c -> b $): $ a -> ~c $ = '(mtand (a1i h1) h2);
+
+--| If and only if: `a` implies `b`, and `b` implies `a`.
+def iff (a b: Prop): Prop = $ (a -> b) /\ (b -> a) $;
+infixl iff: $<->$ prec 20;
+
+theorem bi1: $ (a <-> b) -> a -> b $ = 'anl;
+theorem bi1i (h: $ a <-> b $): $ a -> b $ = '(bi1 h);
+theorem bi1d (h: $ a -> (b <-> c) $): $ a -> b -> c $ = '(syl bi1 h);
+theorem bi1a (h: $ a -> (b <-> c) $): $ a /\ b -> c $ = '(imp @ bi1d h);
+theorem bi2: $ (a <-> b) -> b -> a $ = 'anr;
+theorem bi2i (h: $ a <-> b $): $ b -> a $ = '(bi2 h);
+theorem bi2d (h: $ a -> (b <-> c) $): $ a -> c -> b $ = '(syl bi2 h);
+theorem bi2a (h: $ a -> (b <-> c) $): $ a /\ c -> b $ = '(imp @ bi2d h);
+theorem ibii (h1: $ a -> b $) (h2: $ b -> a $): $ a <-> b $ = '(iani h1 h2);
+theorem ibid (h1: $ a -> b -> c $) (h2: $ a -> c -> b $): $ a -> (b <-> c) $ = '(iand h1 h2);
+theorem ibida (h1: $ a /\ b -> c $) (h2: $ a /\ c -> b $): $ a -> (b <-> c) $ = '(ibid (exp h1) (exp h2));
+theorem biid: $ a <-> a $ = '(ibii id id);
+theorem biidd: $ a -> (b <-> b) $ = '(a1i biid);
+theorem mpbi (h1: $ a <-> b $) (h2: $ a $): $ b $ = '(bi1i h1 h2);
+theorem mpbir (h1: $ b <-> a $) (h2: $ a $): $ b $ = '(bi2i h1 h2);
+theorem mpbid (h1: $ a -> (b <-> c) $) (h2: $ a -> b $): $ a -> c $ = '(mpd h2 (bi1d h1));
+theorem mpbird (h1: $ a -> (c <-> b) $) (h2: $ a -> b $): $ a -> c $ = '(mpd h2 (bi2d h1));
+theorem mpbii (h1: $ b $) (h2: $ a -> (b <-> c) $): $ a -> c $ = '(mpbid h2 (a1i h1));
+theorem mpbiri (h1: $ b $) (h2: $ a -> (c <-> b) $): $ a -> c $ = '(mpbird h2 (a1i h1));
+theorem mtbi (h1: $ a <-> b $) (h2: $ ~a $): $ ~b $ = '(mt (bi2 h1) h2);
+theorem mtbir (h1: $ b <-> a $) (h2: $ ~a $): $ ~b $ = '(mt (bi1 h1) h2);
+theorem mtbid (h1: $ a -> (b <-> c) $) (h2: $ a -> ~b $): $ a -> ~c $ = '(mtd h2 (bi2d h1));
+theorem mtbird (h1: $ a -> (c <-> b) $) (h2: $ a -> ~b $): $ a -> ~c $ = '(mtd h2 (bi1d h1));
+theorem con1b: $ (~a <-> b) -> (~b <-> a) $ = '(ibid (con1d bi1) (con2d bi2));
+theorem con2b: $ (a <-> ~b) -> (b <-> ~a) $ = '(ibid (con2d bi1) (con1d bi2));
+theorem con3b: $ (a <-> b) -> (~a <-> ~b) $ = '(ibid (con3d bi2) (con3d bi1));
+theorem con4b: $ (~a <-> ~b) -> (a <-> b) $ = '(ibid (con4d bi2) (con4d bi1));
+theorem con1bb: $ (~a <-> b) <-> (~b <-> a) $ = '(ibii con1b con1b);
+theorem con2bb: $ (a <-> ~b) <-> (b <-> ~a) $ = '(ibii con2b con2b);
+theorem con3bb: $ (a <-> b) <-> (~a <-> ~b) $ = '(ibii con3b con4b);
+theorem con1bi: $ (~a -> b) <-> (~b -> a) $ = '(ibii con1 con1);
+theorem con2bi: $ (a -> ~b) <-> (b -> ~a) $ = '(ibii con2 con2);
+theorem con3bi: $ (a -> b) <-> (~b -> ~a) $ = '(ibii con3 ax_3);
+theorem notnot: $ a <-> ~~a $ = '(ibii notnot1 dne);
+theorem bithd (h1: $ a -> b $) (h2: $ a -> c $): $ a -> (b <-> c) $ = '(ibid (a1d h2) (a1d h1));
+theorem binthd (h1: $ a -> ~b $) (h2: $ a -> ~c $): $ a -> (b <-> c) $ = '(syl con4b @ bithd h1 h2);
+theorem bith: $ a -> b -> (a <-> b) $ = '(exp @ bithd anl anr);
+theorem binth: $ ~a -> ~b -> (a <-> b) $ = '(exp @ binthd anl anr);
+theorem bicom: $ (a <-> b) -> (b <-> a) $ = '(ibid bi2 bi1);
+theorem bicomb: $ (a <-> b) <-> (b <-> a) $ = '(ibii bicom bicom);
+theorem bicomd (h: $ a -> (b <-> c) $): $ a -> (c <-> b) $ = '(syl bicom h);
+theorem bitrd (h1: $ a -> (b <-> c) $) (h2: $ a -> (c <-> d) $): $ a -> (b <-> d) $ =
+'(ibid (syld (bi1d h1) (bi1d h2)) (syld (bi2d h2) (bi2d h1)));
+theorem bitr2d (h1: $ a -> (b <-> c) $) (h2: $ a -> (c <-> d) $): $ a -> (d <-> b) $ = '(bicomd (bitrd h1 h2));
+theorem bitr3d (h1: $ a -> (c <-> b) $) (h2: $ a -> (c <-> d) $): $ a -> (b <-> d) $ = '(bitrd (bicomd h1) h2);
+theorem bitr4d (h1: $ a -> (b <-> c) $) (h2: $ a -> (d <-> c) $): $ a -> (b <-> d) $ = '(bitrd h1 (bicomd h2));
+theorem bitr: $ (a <-> b) -> (b <-> c) -> (a <-> c) $ = '(exp (bitrd anl anr));
+theorem bitr2: $ (a <-> b) -> (b <-> c) -> (c <-> a) $ = '(exp (bitr2d anl anr));
+theorem bitr3: $ (b <-> a) -> (b <-> c) -> (a <-> c) $ = '(exp (bitr3d anl anr));
+theorem bitr4: $ (a <-> b) -> (c <-> b) -> (a <-> c) $ = '(exp (bitr4d anl anr));
+theorem sylib (h1: $ b <-> c $) (h2: $ a -> b $): $ a -> c $ = '(syl (bi1i h1) h2);
+theorem sylibr (h1: $ c <-> b $) (h2: $ a -> b $): $ a -> c $ = '(syl (bi2i h1) h2);
+theorem sylbi (h1: $ a <-> b $) (h2: $ b -> c $): $ a -> c $ = '(syl h2 (bi1i h1));
+theorem sylbir (h1: $ b <-> a $) (h2: $ b -> c $): $ a -> c $ = '(syl h2 (bi2i h1));
+theorem syl5bb (h1: $ b <-> c $) (h2: $ a -> (c <-> d) $): $ a -> (b <-> d) $ = '(bitrd (a1i h1) h2);
+theorem syl5bbr (h1: $ c <-> b $) (h2: $ a -> (c <-> d) $): $ a -> (b <-> d) $ = '(syl5bb (bicom h1) h2);
+theorem syl6bb (h1: $ c <-> d $) (h2: $ a -> (b <-> c) $): $ a -> (b <-> d) $ = '(bitrd h2 (a1i h1));
+theorem syl6bbr (h1: $ d <-> c $) (h2: $ a -> (b <-> c) $): $ a -> (b <-> d) $ = '(syl6bb (bicom h1) h2);
+theorem syl5bi (h1: $ b <-> c $) (h2: $ a -> c -> d $): $ a -> b -> d $ = '(syl5 (bi1 h1) h2);
+theorem syl5bir (h1: $ c <-> b $) (h2: $ a -> c -> d $): $ a -> b -> d $ = '(syl5bi (bicom h1) h2);
+theorem syl6ib (h1: $ c <-> d $) (h2: $ a -> b -> c $): $ a -> b -> d $ = '(syl6 (bi1 h1) h2);
+theorem syl6ibr (h1: $ d <-> c $) (h2: $ a -> b -> c $): $ a -> b -> d $ = '(syl6 (bi2 h1) h2);
+theorem syl5ibrcom (h1: $ c -> (b <-> d) $) (h2: $ a -> d $): $ a -> c -> b $ = '(com12 @ syl5 h2 (bi2d h1));
+theorem syl5ibcom (h1: $ c -> (b <-> d) $) (h2: $ a -> b $): $ a -> c -> d $ = '(syl5ibrcom (bicomd h1) h2);
+theorem sylbid (h1: $ a -> (b <-> c) $) (h2: $ a -> c -> d $): $ a -> b -> d $ = '(syld (bi1d h1) h2);
+theorem sylibd (h1: $ a -> b -> c $) (h2: $ a -> (c <-> d) $): $ a -> b -> d $ = '(syld h1 (bi1d h2));
+theorem sylbird (h1: $ a -> (c <-> b) $) (h2: $ a -> c -> d $): $ a -> b -> d $ = '(syld (bi2d h1) h2);
+theorem sylibrd (h1: $ a -> b -> c $) (h2: $ a -> (d <-> c) $): $ a -> b -> d $ = '(syld h1 (bi2d h2));
+theorem bitr3g (h1: $ b <-> d $) (h2: $ c <-> e $) (h: $ a -> (b <-> c) $):
+  $ a -> (d <-> e) $ = '(syl5bb (bicom h1) @ syl6bb h2 h);
+theorem bitr4g (h1: $ d <-> b $) (h2: $ e <-> c $) (h: $ a -> (b <-> c) $):
+  $ a -> (d <-> e) $ = '(syl5bb h1 @ syl6bb (bicom h2) h);
+theorem bitr3gi (h1: $ a <-> c $) (h2: $ b <-> d $) (h: $ a <-> b $): $ c <-> d $ = '(bitr3 h1 @ bitr h h2);
+theorem bitr4gi (h1: $ c <-> a $) (h2: $ d <-> b $) (h: $ a <-> b $): $ c <-> d $ = '(bitr h1 @ bitr4 h h2);
+theorem impbi (h: $ a -> (b <-> c) $): $ a /\ b -> c $ = '(imp @ bi1d h);
+theorem impbir (h: $ a -> (c <-> b) $): $ a /\ b -> c $ = '(imp @ bi2d h);
+theorem ancomb: $ a /\ b <-> b /\ a $ = '(ibii ancom ancom);
+theorem anass: $ a /\ b /\ c <-> a /\ (b /\ c) $ =
+'(ibii (iand anll (anim1 anr)) (iand (anim2 anl) anrr));
+theorem bian2a: $ (a -> b) -> (a /\ b <-> a) $ = '(ibid (a1i anl) (a2i ian));
+theorem bian1a: $ (b -> a) -> (a /\ b <-> b) $ = '(syl5bb ancomb bian2a);
+theorem bian1: $ a -> (a /\ b <-> b) $ = '(syl bian1a ax_1);
+theorem bian2: $ b -> (a /\ b <-> a) $ = '(syl bian2a ax_1);
+theorem bibi1: $ a -> ((a <-> b) <-> b) $ = '(ibid (com12 bi1) bith);
+theorem bibi2: $ b -> ((a <-> b) <-> a) $ = '(syl5bb bicomb bibi1);
+theorem noteq: $ (a <-> b) -> (~a <-> ~b) $ = 'con3b;
+theorem noteqi (h: $ a <-> b $): $ ~a <-> ~b $ = '(noteq h);
+@(register-eqd 'not) theorem noteqd (h: $ a -> (b <-> c) $): $ a -> (~b <-> ~c) $ = '(syl noteq h);
+theorem imeqd (h1: $ a -> (b <-> c) $) (h2: $ a -> (d <-> e) $): $ a -> (b -> d <-> c -> e) $ =
+'(ibid (imimd (bi2d h1) (bi1d h2)) (imimd (bi1d h1) (bi2d h2)));
+theorem bibin1: $ ~a -> ((a <-> b) <-> ~b) $ = '(ibid (com12 @ bi1d noteq) binth);
+theorem bibin2: $ ~b -> ((a <-> b) <-> ~a) $ = '(syl5bb bicomb bibin1);
+theorem imeq1d (h: $ a -> (b <-> c) $): $ a -> (b -> d <-> c -> d) $ = '(imeqd h biidd);
+theorem imeq2d (h: $ a -> (c <-> d) $): $ a -> (b -> c <-> b -> d) $ = '(imeqd biidd h);
+do (apply (register-eqd 'im) '(imeqd imeq1d imeq2d));
+theorem imeq1i (h: $ a <-> b $): $ a -> c <-> b -> c $ = '(imeq1d id h);
+theorem imeq2i (h: $ b <-> c $): $ a -> b <-> a -> c $ = '(imeq2d id h);
+theorem imeqi (h1: $ a <-> b $) (h2: $ c <-> d $): $ a -> c <-> b -> d $ = '(bitr (imeq1i h1) (imeq2i h2));
+theorem aneqd (h1: $ a -> (b <-> c) $) (h2: $ a -> (d <-> e) $): $ a -> (b /\ d <-> c /\ e) $ =
+'(ibid (animd (bi1d h1) (bi1d h2)) (animd (bi2d h1) (bi2d h2)));
+theorem imeq2a: $ (a -> (b <-> c)) -> (a -> b <-> a -> c) $ = '(ibid (a2d @ imim2i bi1) (a2d @ imim2i bi2));
+theorem imeq1a: $ (~c -> (a <-> b)) -> (a -> c <-> b -> c) $ = '(bitr4g con3bi con3bi @ syl imeq2a @ imim2i noteq);
+theorem imeq2da (h: $ G /\ a -> (b <-> c) $): $ G -> (a -> b <-> a -> c) $ = '(syl imeq2a @ exp h);
+theorem aneq1d (h: $ a -> (b <-> c) $): $ a -> (b /\ d <-> c /\ d) $ = '(aneqd h biidd);
+theorem aneq2d (h: $ a -> (c <-> d) $): $ a -> (b /\ c <-> b /\ d) $ = '(aneqd biidd h);
+do (apply (register-eqd 'an) '(aneqd aneq1d aneq2d));
+theorem aneq: $ (a <-> b) -> (c <-> d) -> (a /\ c <-> b /\ d) $ = '(exp @ aneqd anl anr);
+theorem aneq1i (h: $ a <-> b $): $ a /\ c <-> b /\ c $ = '(aneq1d id h);
+theorem aneq2i (h: $ b <-> c $): $ a /\ b <-> a /\ c $ = '(aneq2d id h);
+theorem aneq2a: $ (a -> (b <-> c)) -> (a /\ b <-> a /\ c) $ =
+'(ibid (syl anim2a @ imim2i bi1) (syl anim2a @ imim2i bi2));
+theorem aneq1a: $ (c -> (a <-> b)) -> (a /\ c <-> b /\ c) $ = '(syl5bb ancomb @ syl6bb ancomb aneq2a);
+theorem aneq1da (h: $ G /\ c -> (a <-> b) $): $ G -> (a /\ c <-> b /\ c) $ = '(syl aneq1a @ exp h);
+theorem aneq2da (h: $ G /\ a -> (b <-> c) $): $ G -> (a /\ b <-> a /\ c) $ = '(syl aneq2a @ exp h);
+theorem anlass: $ a /\ (b /\ c) <-> b /\ (a /\ c) $ =
+'(bitr3 anass @ bitr (aneq1i ancomb) anass);
+theorem anrass: $ a /\ b /\ c <-> a /\ c /\ b $ =
+'(bitr anass @ bitr4 (aneq2i ancomb) anass);
+theorem an4: $ (a /\ b) /\ (c /\ d) <-> (a /\ c) /\ (b /\ d) $ =
+'(bitr4 anass @ bitr4 anass @ aneq2i anlass);
+theorem anroti (h: $ a -> b /\ d $): $ a /\ c -> b /\ c /\ d $ = '(sylib anrass @ anim1 h);
+theorem anrotri (h: $ b /\ d -> a $): $ b /\ c /\ d -> a /\ c $ = '(sylbi anrass @ anim1 h);
+theorem bian11i (h: $ a <-> b /\ c $): $ a /\ d <-> b /\ (c /\ d) $ = '(bitr (aneq1i h) anass);
+theorem bian21i (h: $ a <-> b /\ c $): $ a /\ d <-> (b /\ d) /\ c $ = '(bitr (aneq1i h) anrass);
+theorem bian12i (h: $ a <-> b /\ c $): $ d /\ a <-> b /\ (d /\ c) $ = '(bitr (aneq2i h) anlass);
+theorem bian22i (h: $ a <-> b /\ c $): $ d /\ a <-> (d /\ b) /\ c $ = '(bitr4 (aneq2i h) anass);
+theorem bian11d (h: $ G -> (a <-> b /\ c) $): $ G -> (a /\ d <-> b /\ (c /\ d)) $ = '(syl6bb anass (aneq1d h));
+theorem bian21d (h: $ G -> (a <-> b /\ c) $): $ G -> (a /\ d <-> (b /\ d) /\ c) $ = '(syl6bb anrass (aneq1d h));
+theorem bian12d (h: $ G -> (a <-> b /\ c) $): $ G -> (d /\ a <-> b /\ (d /\ c)) $ = '(syl6bb anlass (aneq2d h));
+theorem bian22d (h: $ G -> (a <-> b /\ c) $): $ G -> (d /\ a <-> (d /\ b) /\ c) $ = '(syl6bbr anass (aneq2d h));
+theorem bian11da (h: $ G /\ d -> (a <-> b /\ c) $): $ G -> (a /\ d <-> b /\ (c /\ d)) $ = '(syl6bb anass (aneq1da h));
+theorem bian21da (h: $ G /\ d -> (a <-> b /\ c) $): $ G -> (a /\ d <-> (b /\ d) /\ c) $ = '(syl6bb anrass (aneq1da h));
+theorem bian12da (h: $ G /\ d -> (a <-> b /\ c) $): $ G -> (d /\ a <-> b /\ (d /\ c)) $ = '(syl6bb anlass (aneq2da h));
+theorem bian22da (h: $ G /\ d -> (a <-> b /\ c) $): $ G -> (d /\ a <-> (d /\ b) /\ c) $ = '(syl6bbr anass (aneq2da h));
+theorem anidm: $ a /\ a <-> a $ = '(ibii anl (iand id id));
+theorem anandi: $ a /\ (b /\ c) <-> (a /\ b) /\ (a /\ c) $ = '(bitr3 (aneq1i anidm) an4);
+theorem anandir: $ (a /\ b) /\ c <-> (a /\ c) /\ (b /\ c) $ = '(bitr3 (aneq2i anidm) an4);
+theorem imandi: $ (a -> b /\ c) <-> (a -> b) /\ (a -> c) $ =
+'(ibii (iand (imim2i anl) (imim2i anr)) (com12 @ animd mpcom mpcom));
+theorem imancom: $ a /\ (b -> c) -> b -> a /\ c $ = '(com12 @ anim2d mpcom);
+theorem rbida (h1: $ a /\ c -> b $) (h2: $ a /\ d -> b $)
+  (h: $ a /\ b -> (c <-> d) $): $ a -> (c <-> d) $ =
+'(bitr3d (syla bian2a h1) @ bitrd (syla aneq1a h) (syla bian2a h2));
+theorem rbid (h1: $ b -> a $) (h2: $ c -> a $) (h: $ a -> (b <-> c) $): $ b <-> c $ =
+'(bitr3 (bian2a h1) @ bitr (aneq1a h) (bian2a h2));
+theorem bieqd (h1: $ a -> (b <-> c) $) (h2: $ a -> (d <-> e) $): $ a -> ((b <-> d) <-> (c <-> e)) $ =
+'(aneqd (imeqd h1 h2) (imeqd h2 h1));
+theorem bieq1d (h: $ a -> (b <-> c) $): $ a -> ((b <-> d) <-> (c <-> d)) $ = '(bieqd h biidd);
+theorem bieq2d (h: $ a -> (c <-> d) $): $ a -> ((b <-> c) <-> (b <-> d)) $ = '(bieqd biidd h);
+do (apply (register-eqd 'iff) '(bieqd bieq1d bieq2d));
+theorem bieq: $ (a <-> b) -> (c <-> d) -> ((a <-> c) <-> (b <-> d)) $ = '(exp (bieqd anl anr));
+theorem bieq1: $ (a <-> b) -> ((a <-> c) <-> (b <-> c)) $ = '(bieq1d id);
+theorem bieq2: $ (b <-> c) -> ((a <-> b) <-> (a <-> c)) $ = '(bieq2d id);
+theorem impexp: $ (a /\ b -> c) <-> (a -> b -> c) $ =
+'(ibii (exp @ exp @ mpd (anim1 anr) anll) (exp @ mpd anrr @ mpd anrl anl));
+theorem impd (h: $ a -> b -> c -> d $): $ a -> b /\ c -> d $ = '(sylibr impexp h);
+theorem expd (h: $ a -> b /\ c -> d $): $ a -> b -> c -> d $ = '(sylib impexp h);
+theorem com12b: $ (a -> b -> c) <-> (b -> a -> c) $ = '(ibii (com23 id) (com23 id));
+
+--| Disjunction: either `a` is true or `b` is true.
+@_ def or (a b: Prop): Prop = $ ~a -> b $;
+infixl or: $\/$ prec 30;
+
+theorem orl: $ a -> a \/ b $ = 'absurdr;
+theorem orr: $ b -> a \/ b $ = 'ax_1;
+theorem eori (h1: $ a -> c $) (h2: $ b -> c $): $ a \/ b -> c $ =
+'(casesd (a1i h1) (imim2i h2));
+theorem eord (h1: $ a -> b -> d $) (h2: $ a -> c -> d $):
+  $ a -> b \/ c -> d $ = '(com12 (eori (com12 h1) (com12 h2)));
+theorem eorda (h1: $ a /\ b -> d $) (h2: $ a /\ c -> d $):
+  $ a -> b \/ c -> d $ = '(eord (exp h1) (exp h2));
+theorem orld (h: $ a -> b $): $ a -> b \/ c $ = '(syl orl h);
+theorem orrd (h: $ a -> c $): $ a -> b \/ c $ = '(syl orr h);
+theorem eor: $ (a -> c) -> (b -> c) -> a \/ b -> c $ = '(exp (eord anl anr));
+theorem orimd (h1: $ a -> b -> c $) (h2: $ a -> d -> e $): $ a -> b \/ d -> c \/ e $ =
+'(eord (syl6 orl h1) (syl6 orr h2));
+theorem orim1d (h: $ a -> b -> c $): $ a -> b \/ d -> c \/ d $ = '(orimd h idd);
+theorem orim2d (h: $ a -> c -> d $): $ a -> b \/ c -> b \/ d $ = '(orimd idd h);
+theorem orim1: $ (a -> b) -> a \/ c -> b \/ c $ = '(orim1d id);
+theorem orim2: $ (b -> c) -> a \/ b -> a \/ c $ = '(orim2d id);
+theorem oreq1i (h: $ a <-> b $): $ a \/ c <-> b \/ c $ = '(oreq1d id h);
+theorem oreq2i (h: $ b <-> c $): $ a \/ b <-> a \/ c $ = '(oreq2d id h);
+theorem orim: $ (a -> b) -> (c -> d) -> a \/ c -> b \/ d $ = '(exp @ syld (anwl orim1) (anwr orim2));
+theorem oreqi (h1: $ a <-> b $) (h2: $ c <-> d $): $ a \/ c <-> b \/ d $ = '(bitr (oreq1i h1) (oreq2i h2));
+theorem orcom: $ a \/ b -> b \/ a $ = 'con1;
+theorem orcomb: $ a \/ b <-> b \/ a $ = '(ibii orcom orcom);
+theorem or12: $ a \/ (b \/ c) <-> b \/ (a \/ c) $ = '(bitr3 impexp @ bitr (imeq1i ancomb) impexp);
+theorem orass: $ a \/ b \/ c <-> a \/ (b \/ c) $ = '(bitr orcomb @ bitr or12 (oreq2 orcomb));
+theorem or4: $ (a \/ b) \/ (c \/ d) <-> (a \/ c) \/ (b \/ d) $ = '(bitr4 orass @ bitr4 orass @ oreq2 or12);
+theorem oridm: $ a \/ a <-> a $ = '(ibii (eor id id) orl);
+theorem notan2: $ ~(a /\ b) <-> a -> ~b $ = '(bicom notnot);
+theorem notan: $ ~(a /\ b) <-> (~a \/ ~b) $ = '(bitr notan2 (imeq1i notnot));
+theorem notor: $ ~(a \/ b) <-> (~a /\ ~b) $ = '(con1b (bitr4 notan (oreqi notnot notnot)));
+theorem iman: $ a -> b <-> ~(a /\ ~b) $ = '(bitr4 (imeq2i notnot) notan2);
+theorem imor: $ ((a \/ b) -> c) <-> ((a -> c) /\ (b -> c)) $ =
+'(ibii (iand (imim1i orl) (imim1i orr)) (imp eor));
+theorem andi: $ a /\ (b \/ c) <-> a /\ b \/ a /\ c $ =
+'(ibii (imp @ orimd ian ian) @ eor (anim2 orl) (anim2 orr));
+theorem andir: $ (a \/ b) /\ c <-> a /\ c \/ b /\ c $ =
+'(bitr ancomb @ bitr andi @ oreqi ancomb ancomb);
+theorem ordi: $ a \/ (b /\ c) <-> (a \/ b) /\ (a \/ c) $ =
+'(ibii (iand (orim2 anl) (orim2 anr)) @ com12 @ animd mpcom mpcom);
+theorem ordir: $ (a /\ b) \/ c <-> (a \/ c) /\ (b \/ c) $ =
+'(bitr orcomb @ bitr ordi @ aneq orcomb orcomb);
+theorem oreq2a: $ (~a -> (b <-> c)) -> (a \/ b <-> a \/ c) $ = 'imeq2a;
+theorem oreq1a: $ (~c -> (a <-> b)) -> (a \/ c <-> b \/ c) $ = '(syl5bb orcomb @ syl6bb orcomb oreq2a);
+theorem biim1a: $ (~a -> b) -> (a -> b <-> b) $ = '(ibid (exp @ casesd anr anl) (a1i ax_1));
+theorem biim2a: $ (b -> ~a) -> (a -> b <-> ~a) $ = '(ibid (exp @ syl inot @ imp imim2) (a1i absurd));
+theorem bior1a: $ (a -> b) -> (a \/ b <-> b) $ = '(sylbi (imeq1i notnot) biim1a);
+theorem bior2a: $ (b -> a) -> (a \/ b <-> a) $ = '(syl5bb orcomb bior1a);
+theorem biim1: $ a -> (a -> b <-> b) $ = '(syl biim1a absurdr);
+theorem biim2: $ ~b -> (a -> b <-> ~a) $ = '(syl biim2a absurd);
+theorem bior1: $ ~a -> (a \/ b <-> b) $ = '(syl bior1a absurd);
+theorem bior2: $ ~b -> (a \/ b <-> a) $ = '(syl bior2a absurd);
+theorem em: $ p \/ ~p $ = 'id;
+theorem emr: $ ~p \/ p $ = '(orcom em);
+theorem oriman: $ (a <-> b) <-> (a \/ b -> a /\ b) $ =
+'(ibii (eorda (iand anr (imp bi1)) (iand (imp bi2) anr)) @
+  ibida (anrd @ imp @ imim1i orl) (anld @ imp @ imim1i orr));
+theorem nbioran: $ ~(a <-> b) <-> (a \/ b) /\ ~(a /\ b) $ =
+'(mpbi con1bb @ bitr2 oriman iman);
+
+--| Selection: `ifp p a b` is equivalent to `a` if `p` is true,
+--| and equivalent to `b` if `p` is false.
+@(add-eval @ fn (a b c) (if (eval a) (eval b) (eval c)))
+@_ abstract def ifp (p a b: Prop): Prop = $ p /\ a \/ ~p /\ b $;
+
+pub theorem ifppos (p a b: Prop): $ p -> (ifp p a b <-> a) $ =
+'(bitrd (syl bior2 @ con2 anl) bian1);
+pub theorem ifpneg (p a b: Prop): $ ~p -> (ifp p a b <-> b) $ =
+'(bitrd (syl bior1 @ con3 anl) bian1);
+
+theorem ifpid: $ ifp p a a <-> a $ = '(cases ifppos ifpneg);
+theorem ifpnot: $ ifp (~p) a b <-> ifp p b a $ =
+'(bitr4 orcomb @ oreq1 @ aneq1i notnot);
+
+theorem ifpan1: $ ifp p a b /\ c <-> ifp p (a /\ c) (b /\ c) $ =
+'(bitr andir @ oreq anass anass);
+theorem ifpan2: $ c /\ ifp p a b <-> ifp p (c /\ a) (c /\ b) $ =
+'(bitr andi @ oreq anlass anlass);
+theorem ifpor: $ ifp p (a \/ b) (c \/ d) <-> ifp p a c \/ ifp p b d $ =
+(let ([(f x) '(bitr4d ,x @ oreqd ,x ,x)]) '(cases ,(f 'ifppos) ,(f 'ifpneg)));
+
+theorem ifpeq2a: $ (p -> (a1 <-> a2)) -> (ifp p a1 b <-> ifp p a2 b) $ = '(oreq1d aneq2a);
+theorem ifpeq3a: $ (~p -> (b1 <-> b2)) -> (ifp p a b1 <-> ifp p a b2) $ = '(oreq2d aneq2a);
+
+theorem ifptreq (h: $ G -> (p <-> ifp a p0 p1) $)
+  (h0: $ G /\ a -> (p0 <-> q0) $) (h1: $ G /\ ~a -> (p1 <-> q1) $):
+  $ G -> (p <-> ifp a q0 q1) $ =
+'(bitrd h @ bitrd (syl ifpeq2a @ exp h0) (syl ifpeq3a @ exp h1));
+
+theorem ifppos2: $ b -> (ifp a b c <-> a \/ c) $ = '(syl6bb (oreq2a bian1) (oreq1d bian2));
+theorem ifppos3: $ c -> (ifp a b c <-> ~a \/ b) $ = '(syl5bbr ifpnot ifppos2);
+theorem ifpneg3: $ ~c -> (ifp a b c <-> a /\ b) $ = '(syl bior2 @ con3 anr);
+theorem ifpneg2: $ ~b -> (ifp a b c <-> ~a /\ c) $ = '(syl5bbr ifpnot ifpneg3);
+
+--| The constant `true`.
+term tru: Prop; prefix tru: $T.$ prec max;
+--| `true` is true.
+axiom itru: $ T. $;
+--| The constant `false`.
+def fal: Prop = $ ~T. $; prefix fal: $F.$ prec max;
+
+do (add-axiom-set! 'axs_prop_calc "Propositional calculus" '(ax_1 ax_2 ax_3 ax_mp itru));
+
+theorem trud (h: $ T. -> a $): $ a $ = '(h itru);
+theorem eqtru: $ (a <-> T.) <-> a $ =
+'(ibii (mpbiri itru id) @ bithd id (a1i itru));
+theorem notfal: $ ~F. $ = '(notnot1 itru);
+theorem efal: $ F. -> a $ = '(absurd notfal);
+theorem imfal: $ (a -> F.) <-> ~a $ = '(ibii (mpi notfal con3) absurd);
+theorem eqfal: $ (a <-> F.) <-> ~a $ = '(bitr (bian2 efal) imfal);
+theorem neqfal: $ (~a <-> F.) <-> a $ = '(bitr4 eqfal notnot);
+
+--| The sort of natural numbers, or nonnegative integers.
+--| In Peano Arithmetic this is the domain of discourse,
+--| the basic sort over which quantifiers range.
+
+--| The for-all quantifier. `A. x p` means
+--| "for all natural numbers `x`, `p` holds",
+--| where `(p: Prop x)` in the declaration indicates that `p` may contain
+--| free occurrences of variable `x` that are bound by this quantifier.
+
+--| The exists quantifier. `E. x p` means
+--| "there is a natural number `x`, such that `p` holds",
+--| where `(p: Prop x)` in the declaration indicates that `p` may contain
+--| free occurrences of variable `x` that are bound by this quantifier.
+
+--| Equality of natural numbers: `a = b`
+--| means that `a` and `b` have the same value.
+
+--| The axiom of generalization. If `|- p` is derivable
+--| (the lack of a precondition means this is a proof in the empty context),
+--| then `p` is universally true, so `|- A. x p` is also true.
+
+--| Axiom 4 for predicate logic: forall distributes over implication.
+theorem alim {x: Term} (p q: Prop x): $ A. x (p -> q) -> A. x p -> A. x q $ = 'ax_4;
+
+--| Axiom 5 for predicate logic: If `p` does not contain an occurrence of `x`
+--| (note that `(p: Prop)` in contrast to `(p: Prop x)` means that `p` cannot
+--| depend on variable `x`), then `p` implies `A. x p`
+--| because the quantifier is trivial.
+theorem ial {x: Term} (p: Prop): $ p -> A. x p $ = 'ax_5;
+
+--| Axiom 6 for predicate logic: for any term `a` (which cannot depend on `x`),
+--| there exists an `x` which is equal to `a`.
+
+--| Axiom 7 for predicate logic: equality satisfies the euclidean property
+--| (which implies symmetry and transitivity, and reflexivity given axiom 6).
+theorem eqtr3: $ b = a -> b = c -> a = c $ = 'ax_7;
+
+-- axiom 9 has been proven redundant; axiom 8 is displaced below
+
+--| Axiom 10 for predicate logic: `x` is bound in `~(A. x p)`, so we can
+--| safely introduce a `A. x` quantifier. (This axiom is used to internalize
+--| the notion of "bound in" when axiom 5 does not apply.)
+
+--| Axiom 11 for predicate logic: forall quantifiers commute.
+theorem alcom {x y: Term} (p: Prop x y): $ A. x A. y p -> A. y A. x p $ = 'ax_11;
+
+--| Axiom 12 for predicate logic: If `x` is some fixed `a` and `p(x)` holds,
+--| then for all `x` which are equal to `a`, `p(x)` holds. This expresses the
+--| substitution property of `=`, but the name shadowing on `x` allows us to
+--| express this without changing `p`,
+--| because we haven't defined proper substitution yet.
+
+do (add-axiom-set! 'axs_pred_calc "Predicate calculus"
+  '(ax_gen ax_4 ax_5 ax_6 ax_7 ax_10 ax_11 ax_12));
+
+theorem alimi (a b: Prop x) (h: $ a -> b $): $ A. x a -> A. x b $ = '(ax_4 (ax_gen h));
+theorem iald (a: Prop) (b: Prop x) (h: $ a -> b $): $ a -> A. x b $ = '(syl (alimi h) ax_5);
+theorem eex (a: Prop x) (b: Prop) (h: $ a -> b $): $ E. x a -> b $ = '(con1 @ iald @ con3 h);
+
+theorem eqid: $ a = a $ = '(!! eex x (imidm ax_7) ax_6);
+theorem eqcom: $ a = b -> b = a $ = '(mpi eqid ax_7);
+theorem eqtr: $ a = b -> b = c -> a = c $ = '(syl ax_7 eqcom);
+theorem eqtr2: $ a = b -> b = c -> c = a $ = '(syl6 eqcom eqtr);
+theorem eqtr4: $ a = b -> c = b -> a = c $ = '(syl5 eqcom eqtr);
+theorem eqcomb: $ a = b <-> b = a $ = '(ibii eqcom eqcom);
+theorem eqeq1: $ a = b -> (a = c <-> b = c) $ = '(ibid eqtr3 eqtr);
+theorem eqeq2: $ b = c -> (a = b <-> a = c) $ = '(ibid (com12 eqtr) (com12 eqtr4));
+theorem eqeq1d (h: $ G -> a = b $): $ G -> (a = c <-> b = c) $ = '(syl eqeq1 h);
+theorem eqeq2d (h: $ G -> b = c $): $ G -> (a = b <-> a = c) $ = '(syl eqeq2 h);
+theorem eqeqd (h1: $ G -> a = b $) (h2: $ G -> c = d $):
+  $ G -> (a = c <-> b = d) $ = '(bitrd (eqeq1d h1) (eqeq2d h2));
+do (apply (register-eqd 'eq) '(eqeqd eqeq1d eqeq2d));
+theorem eqeq: $ a = b -> c = d -> (a = c <-> b = d) $ = '(exp (eqeqd anl anr));
+theorem eqtr2d (h1: $ G -> a = b $) (h2: $ G -> b = c $): $ G -> c = a $ = '(sylc eqtr2 h1 h2);
+theorem eqtr3d (h1: $ G -> b = a $) (h2: $ G -> b = c $): $ G -> a = c $ = '(sylc eqtr3 h1 h2);
+theorem eqidd: $ G -> a = a $ = '(a1i eqid);
+theorem eqcomi (h: $ a = b $): $ b = a $ = '(eqcom h);
+theorem eqcomd (h: $ G -> a = b $): $ G -> b = a $ = '(syl eqcom h);
+theorem eqtrd (h1: $ G -> a = b $) (h2: $ G -> b = c $): $ G -> a = c $ = '(sylc eqtr h1 h2);
+theorem eqtr4i (h1: $ a = b $) (h2: $ c = b $): $ a = c $ = '(eqtr4 h1 h2);
+theorem eqtr4d (h1: $ G -> a = b $) (h2: $ G -> c = b $): $ G -> a = c $ = '(sylc eqtr4 h1 h2);
+theorem syl5eq (h1: $ a = b $) (h2: $ G -> b = c $): $ G -> a = c $ = '(eqtrd (a1i h1) h2);
+theorem syl5eqr (h1: $ b = a $) (h2: $ G -> b = c $): $ G -> a = c $ = '(eqtr3d (a1i h1) h2);
+theorem syl6eq (h1: $ b = c $) (h2: $ G -> a = b $): $ G -> a = c $ = '(eqtrd h2 (a1i h1));
+theorem syl6eqr (h1: $ c = b $) (h2: $ G -> a = b $): $ G -> a = c $ = '(eqtr4d h2 (a1i h1));
+theorem eqtr3g (h1: $ a = c $) (h2: $ b = d $) (h: $ G -> a = b $):
+  $ G -> c = d $ = '(syl5eqr h1 @ syl6eq h2 h);
+theorem eqtr4g (h1: $ c = a $) (h2: $ d = b $) (h: $ G -> a = b $):
+  $ G -> c = d $ = '(syl5eq h1 @ syl6eqr h2 h);
+
+theorem aleq (a b: Prop x): $ A. x (a <-> b) -> (A. x a <-> A. x b) $ =
+'(ibid (syl ax_4 @ alimi bi1) (syl ax_4 @ alimi bi2));
+theorem aleqi (a b: Prop x) (h: $ a <-> b $): $ A. x a <-> A. x b $ = '(aleq @ ax_gen h);
+theorem alimd (G) (a b: Prop x) (h: $ G -> a -> b $):
+  $ G -> A. x a -> A. x b $ = '(syl ax_4 @ syl (alimi h) ax_5);
+theorem raleqi (p a b: Prop x) (h: $ a <-> b $): $ A. x (p -> a) <-> A. x (p -> b) $ = '(aleqi @ imeq2i h);
+theorem al2imi (a b c: Prop x) (h: $ a -> b -> c $): $ A. x a -> A. x b -> A. x c $ =
+'(syl alim @ alimi h);
+@(register-eqd 'al) theorem aleqd (G) {x} (a b: Prop x) (h: $ G -> (a <-> b) $):
+  $ G -> (A. x a <-> A. x b) $ = '(syl aleq @ iald h);
+theorem ialda (G: Prop) (a b: Prop x) (h: $ G /\ a -> b $): $ G -> A. x (a -> b) $ = '(iald @ exp h);
+theorem alcomb (a: Prop x y): $ A. x A. y a <-> A. y A. x a $ = '(ibii alcom alcom);
+theorem alan (a b: Prop x): $ A. x (a /\ b) <-> A. x a /\ A. x b $ =
+'(ibii (iand (alimi anl) (alimi anr)) (imp @ al2imi ian));
+theorem ralan (a b c: Prop x): $ A. x (a -> b /\ c) <-> A. x (a -> b) /\ A. x (a -> c) $ =
+'(bitr (aleqi imandi) alan);
+theorem exim (a b: Prop x): $ A. x (a -> b) -> E. x a -> E. x b $ = '(syl con3 @ al2imi con3);
+theorem eximi (a b: Prop x) (h: $ a -> b $): $ E. x a -> E. x b $ = '(exim @ ax_gen h);
+theorem exeq (a b: Prop x): $ A. x (a <-> b) -> (E. x a <-> E. x b) $ =
+'(noteqd @ syl aleq @ alimi noteq);
+@(register-eqd 'ex) theorem exeqd (G) {x} (a b: Prop x) (h: $ G -> (a <-> b) $):
+  $ G -> (E. x a <-> E. x b) $ = '(syl exeq @ iald h);
+theorem exeqi (a b: Prop x) (h: $ a <-> b $): $ E. x a <-> E. x b $ = '(exeq @ ax_gen h);
+theorem rexeqi (p a b: Prop x) (h: $ a <-> b $): $ E. x (p /\ a) <-> E. x (p /\ b) $ = '(exeqi @ aneq2i h);
+theorem rexeqa (p a b: Prop x) (h: $ p -> (a <-> b) $): $ E. x (p /\ a) <-> E. x (p /\ b) $ = '(exeqi @ aneq2a h);
+theorem rexeqd (p a b: Prop x) (h: $ G -> (a <-> b) $): $ G -> (E. x (p /\ a) <-> E. x (p /\ b)) $ = '(exeqd @ aneq2d h);
+theorem rexeqda (p a b: Prop x) (h: $ G /\ p -> (a <-> b) $): $ G -> (E. x (p /\ a) <-> E. x (p /\ b)) $ = '(exeqd @ aneq2da h);
+theorem iex (a: Prop x): $ a -> E. x a $ =
+'(!! eex y (rsyl eqcom @ syl6 (mpi ax_6 exim) ax_12) ax_6);
+theorem alanex (a b: Prop x): $ A. x a /\ E. x b -> E. x (a /\ b) $ = '(imp @ syl exim @ alimi ian);
+theorem exanal (a b: Prop x): $ E. x a /\ A. x b -> E. x (a /\ b) $ = '(impcom @ syl exim @ alimi @ com12 ian);
+theorem alnex (a: Prop x): $ A. x ~a <-> ~(E. x a) $ = 'notnot;
+theorem ngen (a: Prop x) (h: $ ~a $): $ ~E. x a $ = '(notnot1 (ax_gen h));
+theorem alex (a: Prop x): $ A. x a <-> ~(E. x ~a) $ = '(bitr (aleqi notnot) alnex);
+theorem exnal (a: Prop x): $ E. x ~a <-> ~(A. x a) $ = '(con2b alex);
+theorem eal (a: Prop x): $ A. x a -> a $ = '(ax_3 @ sylib exnal iex);
+theorem albi: $ A. x a <-> a $ = '(ibii eal ial);
+theorem exbi: $ E. x a <-> a $ = '(con1b @ bicom albi);
+theorem alan1 (b: Prop x): $ A. x (a /\ b) <-> a /\ A. x b $ = '(bitr alan @ aneq1i albi);
+theorem alan2 (a: Prop x): $ A. x (a /\ b) <-> A. x a /\ b $ = '(bitr alan @ aneq2i albi);
+theorem exor (a b: Prop x): $ E. x (a \/ b) <-> E. x a \/ E. x b $ =
+'(bitr (noteqi (bitr (aleqi notor) alan)) notan);
+theorem eximd (G) (a b: Prop x) (h: $ G -> a -> b $): $ G -> E. x a -> E. x b $ = '(syl exim @ iald h);
+theorem excomb (a: Prop x y): $ E. x E. y a <-> E. y E. x a $ =
+'(noteq @ bitr3 (aleqi alnex) @ bitr alcomb (aleqi alnex));
+theorem excom (a: Prop x y): $ E. x E. y a -> E. y E. x a $ = '(bi1 excomb);
+theorem nexi (a: Prop x) (h: $ ~a $): $ ~E. x a $ = '(mpbi alnex @ ax_gen h);
+theorem nexd (a: Prop x) (h: $ G -> ~a $): $ G -> ~E. x a $ = '(sylib alnex @ iald h);
+theorem exim1 (a: Prop) (b: Prop x): $ E. x (a -> b) -> (a -> E. x b) $ = '(com12 @ eximd mpcom);
+
+@_ local def nf {x: Term} (a: Prop x): Prop = $ A. x (a -> A. x a) $;
+prefix nf: $F/$ prec 10;
+
+theorem nfv: $ F/ x a $ = '(ax_gen ax_5);
+theorem nfi (a: Prop x) (h: $ F/ x a $): $ a -> A. x a $ = '(eal h);
+theorem nfri (a: Prop x) (h: $ a -> A. x a $): $ F/ x a $ = '(ax_gen h);
+theorem nfeqi (a b: Prop x) (h: $ a <-> b $): $ (F/ x a) <-> (F/ x b) $ = '(trud @ nfeqd @ a1i h);
+theorem nfx (a b: Prop x) (h1: $ a <-> b $) (h2: $ F/ x b $): $ F/ x a $ = '(bi2i (nfeqi h1) h2);
+theorem nfal (a: Prop x y) (h: $ F/ x a $): $ F/ x A. y a $ =
+'(nfri @ syl ax_11 @ alimi @ nfi h);
+theorem nfnot (a: Prop x) (h: $ F/ x a $): $ F/ x ~a $ =
+'(nfri @ con1 @ syl eal @ syl (con1 @ !! ax_10 x) @ eximi @ nfi h);
+theorem nfim (a b: Prop x) (h1: $ F/ x a $) (h2: $ F/ x b $): $ F/ x a -> b $ =
+'(nfri @ cases
+   (syl6 (syl (alimi ax_1) (nfi h2)) mpcom)
+   (a1d @ syl (alimi absurd) @ nfi @ nfnot h1));
+theorem nfan (a b: Prop x) (h1: $ F/ x a $) (h2: $ F/ x b $): $ F/ x a /\ b $ = '(nfnot @ nfim h1 @ nfnot h2);
+theorem nfor (a b: Prop x) (h1: $ F/ x a $) (h2: $ F/ x b $): $ F/ x a \/ b $ = '(nfim (nfnot h1) h2);
+theorem nfbi (a b: Prop x) (h1: $ F/ x a $) (h2: $ F/ x b $): $ F/ x a <-> b $ = '(nfan (nfim h1 h2) (nfim h2 h1));
+theorem nfex1 (a: Prop x): $ F/ x E. x a $ = '(ax_gen ax_10);
+theorem nfex (a: Prop x y) (h: $ F/ x a $): $ F/ x E. y a $ = '(nfnot @ nfal @ nfnot h);
+theorem nfal1 (a: Prop x): $ F/ x A. x a $ = '(nfx alex @ nfnot nfex1);
+
+theorem ialdh (a b: Prop x) (h1: $ F/ x a $) (h2: $ a -> b $): $ a -> A. x b $ =
+'(syl (alimi h2) (nfi h1));
+theorem eexh (a b: Prop x) (h1: $ F/ x b $) (h2: $ a -> b $): $ E. x a -> b $ =
+'(con1 @ ialdh (nfnot h1) @ con3 h2);
+theorem eexdh (a b c: Prop x) (h1: $ F/ x a $) (h2: $ F/ x c $)
+  (h3: $ a -> b -> c $): $ a -> E. x b -> c $ =
+'(con1d @ exp @ ialdh (nfan h1 (nfnot h2)) (imp @ con3d h3));
+theorem alimdh (a b c: Prop x) (h1: $ F/ x a $) (h2: $ a -> b -> c $):
+  $ a -> A. x b -> A. x c $ = '(syl alim @ ialdh h1 h2);
+theorem aleqdh (G a b: Prop x) (h1: $ F/ x G $) (h: $ G -> (a <-> b) $):
+  $ G -> (A. x a <-> A. x b) $ = '(syl aleq @ ialdh h1 h);
+theorem eexd (a: Prop) (b: Prop x) (c: Prop)
+  (h: $ a -> b -> c $): $ a -> E. x b -> c $ = '(eexdh nfv nfv h);
+theorem eexda (a: Prop) (b: Prop x) (c: Prop)
+  (h: $ a /\ b -> c $): $ a -> E. x b -> c $ = '(eexd (exp h));
+theorem eexb (a: Prop x) (b: Prop): $ (E. x a -> b) <-> A. x (a -> b) $ =
+'(ibii (ialdh (nfim nfex1 nfv) (imim1i iex)) (eexdh nfal1 nfv eal));
+theorem erexb (a b: Prop x) (c: Prop): $ (E. x (a /\ b) -> c) <-> A. x (a -> b -> c) $ =
+'(bitr eexb @ aleqi impexp);
+theorem iexeh (a: Term) (b c: Prop x) (h: $ F/ x c $)
+  (e: $ x = a -> (b <-> c) $): $ c -> E. x b $ =
+'(mpi ax_6 @ syl exim @ ialdh h @ com12 @ bi2d e);
+theorem ealeh (a: Term) (b c: Prop x) (h: $ F/ x c $)
+  (e: $ x = a -> (b <-> c) $): $ A. x b -> c $ =
+'(ax_3 @ sylib exnal @ iexeh (nfnot h) @ noteqd e);
+theorem alim1 (a) (b: Prop x): $ A. x (a -> b) <-> a -> A. x b $ =
+'(ibii (com12 @ alimd mpcom) (ialdh (nfim nfv nfal1) @ imim2i eal));
+theorem ralim1 (a) (p b: Prop x): $ A. x (p -> a -> b) <-> a -> A. x (p -> b) $ =
+'(bitr (aleqi com12b) alim1);
+theorem ralalcomb (p: Prop x) (a: Prop x y): $ A. x (p -> A. y a) <-> A. y A. x (p -> a) $ =
+'(bitr3 (aleqi alim1) alcomb);
+theorem ralcomb (p: Prop x) (q: Prop y) (a: Prop x y):
+  $ A. x (p -> A. y (q -> a)) <-> A. y (q -> A. x (p -> a)) $ =
+'(bitr ralalcomb @ aleqi ralim1);
+theorem exal (a: Prop x y): $ E. x A. y a -> A. y E. x a $ = '(eexh (nfal nfex1) @ alimi iex);
+theorem exral (a: Prop y) (b: Prop x y):
+  $ E. x A. y (a -> b) -> A. y (a -> E. x b) $ = '(rsyl exal @ alimi exim1);
+theorem rexal (a: Prop x) (b: Prop x y):
+  $ E. x (a /\ A. y b) -> A. y E. x (a /\ b) $ = '(sylbir (exeqi alan1) @ exal);
+theorem rexim1 (a c: Prop x): $ E. x (a /\ (b -> c)) -> b -> E. x (a /\ c) $ =
+'(com12 @ eximd @ anim2d mpcom);
+theorem rexral (a: Prop x) (b: Prop y) (c: Prop x y):
+  $ E. x (a /\ A. y (b -> c)) -> A. y (b -> E. x (a /\ c)) $ =
+'(syl exral @ eximi @ sylbir alan1 @ alimi imancom);
+theorem eqerd {x} (h: $ G -> a = x -> p $): $ G -> p $ = '(mpi ax_6 @ eexd @ syl5 eqcom h);
+theorem eale (a: Term) (b: Prop x) (c: Prop)
+  (e: $ x = a -> (b <-> c) $): $ A. x b -> c $ = '(ealeh nfv e);
+theorem iexdeh (a: Term) (G b: Prop x) (h: $ F/ x G $)
+  (e: $ G /\ x = a -> b $): $ G -> E. x b $ = '(mpi ax_6 (syl exim @ ialdh h (exp e)));
+theorem iexde (G) (a: Term) (b: Prop x)
+  (e: $ G /\ x = a -> b $): $ G -> E. x b $ = '(iexdeh nfv e);
+theorem iexdde (G b) (a: Term) (c: Prop x)
+  (e: $ G /\ x = a -> b -> c $): $ G -> b -> E. x c $ =
+'(exp @ iexde @ imp @ imp @ com23 @ exp e);
+theorem iexie (a: Term) (b: Prop x) (e: $ x = a -> b $): $ E. x b $ = '(trud @ iexde @ anwr e);
+theorem iexe (a: Term) (b: Prop x) (c: Prop)
+  (e: $ x = a -> (b <-> c) $): $ c -> E. x b $ = '(iexde @ mpbird (anwr e) anl);
+theorem ealdeh (a: Term) (G b c: Prop x) (h1: $ F/ x G $) (h2: $ F/ x c $)
+  (e: $ G /\ x = a -> b -> c $): $ G -> A. x b -> c $ =
+'(con4d @ exp @ sylib exnal @ iexdeh (nfan h1 @ nfnot h2) @ anrasss @ imp @ con3d e);
+theorem ealieh (a: Term) (b: Prop x) (h: $ F/ x c $)
+  (e: $ x = a -> b -> c $): $ A. x b -> c $ =
+'(trud @ ealdeh nfv h @ anwr e);
+theorem ealde (G) (a: Term) (b: Prop x)
+  (e: $ G /\ x = a -> b -> c $): $ G -> A. x b -> c $ = '(ealdeh nfv nfv e);
+theorem ealie (a: Term) (b: Prop x) (e: $ x = a -> b -> c $): $ A. x b -> c $ = '(ealieh nfv e);
+theorem exan1 (a) (b: Prop x): $ E. x (a /\ b) <-> a /\ E. x b $ =
+'(ibii (iand (eex anl) (eximi anr)) (imp @ eximd ian));
+theorem exan2 (a: Prop x) (b): $ E. x (a /\ b) <-> E. x a /\ b $ =
+'(bitr (exeqi ancomb) @ bitr exan1 ancomb);
+theorem bian1exi (a c: Prop x) (h: $ a <-> b /\ c $): $ E. x a <-> b /\ E. x c $ = '(bitr (exeqi h) exan1);
+theorem bian2exi (a b: Prop x) (h: $ a <-> b /\ c $): $ E. x a <-> E. x b /\ c $ = '(bitr (exeqi h) exan2);
+theorem bian1exd (a c: Prop x) (h: $ G -> (a <-> b /\ c) $): $ G -> (E. x a <-> b /\ E. x c) $ = '(syl6bb exan1 (exeqd h));
+theorem bian2exd (a b: Prop x) (h: $ G -> (a <-> b /\ c) $): $ G -> (E. x a <-> E. x b /\ c) $ = '(syl6bb exan2 (exeqd h));
+theorem biexexi (a b: Prop x y) (h: $ a <-> E. y b $): $ E. x a <-> E. y E. x b $ = '(bitr4 (exeqi h) excomb);
+theorem biexan1a (a b: Prop x) (h: $ c -> (a <-> E. x b) $): $ a /\ c <-> E. x (b /\ c) $ = '(bitr4 (aneq1a h) exan2);
+theorem biexan2a (b c: Prop x) (h: $ a -> (b <-> E. x c) $): $ a /\ b <-> E. x (a /\ c) $ = '(bitr4 (aneq2a h) exan1);
+theorem biexan1i (a b: Prop x) (h: $ a <-> E. x b $): $ a /\ c <-> E. x (b /\ c) $ = '(biexan1a @ a1i h);
+theorem biexan2i (b c: Prop x) (h: $ b <-> E. x c $): $ a /\ b <-> E. x (a /\ c) $ = '(biexan2a @ a1i h);
+theorem rexexcomb (p: Prop x) (a: Prop x y):
+  $ E. x (p /\ E. y a) <-> E. y E. x (p /\ a) $ = '(bitr3 (exeqi exan1) excomb);
+theorem birexexi (a b: Prop x y) (q: Prop y) (h: $ a <-> E. y (q /\ b) $):
+  $ E. x a <-> E. y (q /\ E. x b) $ = '(bitr4 (exeqi h) rexexcomb);
+theorem biexrexa (p: Prop x) (a b: Prop x y) (h: $ p -> (a <-> E. y b) $):
+  $ E. x (p /\ a) <-> E. y E. x (p /\ b) $ = '(bitr (rexeqa h) rexexcomb);
+theorem biexrexi (p: Prop x) (a b: Prop x y) (h: $ a <-> E. y b $):
+  $ E. x (p /\ a) <-> E. y E. x (p /\ b) $ = '(biexrexa @ a1i h);
+theorem rexcomb (p: Prop x) (q: Prop y) (a: Prop x y):
+  $ E. x (p /\ E. y (q /\ a)) <-> E. y (q /\ E. x (p /\ a)) $ =
+'(bitr rexexcomb @ exeqi @ bitr (exeqi anlass) exan1);
+theorem birexan1a (p a b: Prop x) (h: $ c -> (a <-> E. x (p /\ b)) $):
+  $ a /\ c <-> E. x (p /\ (b /\ c)) $ = '(bitr (biexan1a h) @ exeqi anass);
+theorem birexan2a (p b c: Prop x) (h: $ a -> (b <-> E. x (p /\ c)) $):
+  $ a /\ b <-> E. x (p /\ (a /\ c)) $ = '(bitr (biexan2a h) @ exeqi anlass);
+theorem birexrexa (q: Prop y) (p: Prop x) (a b: Prop x y) (h: $ p -> (a <-> E. y (q /\ b)) $):
+  $ E. x (p /\ a) <-> E. y (q /\ E. x (p /\ b)) $ = '(birexexi @ birexan2a h);
+theorem birexan1i (p a b: Prop x) (h: $ a <-> E. x (p /\ b) $):
+  $ a /\ c <-> E. x (p /\ (b /\ c)) $ = '(birexan1a @ a1i h);
+theorem birexan2i (p b c: Prop x) (h: $ b <-> E. x (p /\ c) $):
+  $ a /\ b <-> E. x (p /\ (a /\ c)) $ = '(birexan2a @ a1i h);
+theorem birexrexi (q: Prop y) (p: Prop x) (a b: Prop x y) (h: $ a <-> E. y (q /\ b) $):
+  $ E. x (p /\ a) <-> E. y (q /\ E. x (p /\ b)) $ = '(birexrexa @ a1i h);
+theorem rexan1 (a) (p b: Prop x): $ E. x (p /\ (a /\ b)) <-> a /\ E. x (p /\ b) $ =
+'(bitr (exeqi anlass) exan1);
+theorem rexan2 (p a: Prop x) (b): $ E. x (p /\ (a /\ b)) <-> E. x (p /\ a) /\ b $ =
+'(bitr3 (exeqi anass) exan2);
+theorem bian1rexa (p a c: Prop x) (h: $ p -> (a <-> b /\ c) $):
+  $ E. x (p /\ a) <-> b /\ E. x (p /\ c) $ = '(bitr (rexeqa h) rexan1);
+theorem bian2rexa (p a b: Prop x) (h: $ p -> (a <-> b /\ c) $):
+  $ E. x (p /\ a) <-> E. x (p /\ b) /\ c $ = '(bitr (rexeqa h) rexan2);
+theorem bian1rexi (p a c: Prop x) (h: $ a <-> b /\ c $):
+  $ E. x (p /\ a) <-> b /\ E. x (p /\ c) $ = '(bian1rexa @ a1i h);
+theorem bian2rexi (p a b: Prop x) (h: $ a <-> b /\ c $):
+  $ E. x (p /\ a) <-> E. x (p /\ b) /\ c $ = '(bian2rexa @ a1i h);
+theorem alexan (a b: Prop x): $ A. x a -> E. x b -> E. x (a /\ b) $ =
+'(syl exim @ alimi ian);
+theorem exifp (a b: Prop x): $ E. x ifp p a b <-> ifp p (E. x a) (E. x b) $ =
+'(bitr exor @ oreq exan1 exan1);
+
+theorem cbvalh (p q: Prop x y) (h1: $ F/ y p $) (h2: $ F/ x q $)
+  (e: $ x = y -> (p <-> q) $): $ A. x p <-> A. y q $ =
+'(ibii (ialdh (nfal h1) (ealeh h2 e))
+  (ialdh (nfal h2) (ealeh h1 @ bicomd @ syl e eqcom)));
+theorem cbval (p: Prop x) (q: Prop y)
+  (e: $ x = y -> (p <-> q) $): $ A. x p <-> A. y q $ = '(cbvalh nfv nfv e);
+
+theorem cbvexh (p q: Prop x y) (h1: $ F/ y p $) (h2: $ F/ x q $)
+  (e: $ x = y -> (p <-> q) $): $ E. x p <-> E. y q $ =
+'(noteq (cbvalh (nfnot h1) (nfnot h2) (noteqd e)));
+theorem cbvex (p: Prop x) (q: Prop y)
+  (e: $ x = y -> (p <-> q) $): $ E. x p <-> E. y q $ = '(cbvexh nfv nfv e);
+
+--| Not sure what to call this, let's say "positive implication".
+--| It quantifies both `p` and `q` and asserts that `p` implies `q`, but not vacuously.
+local def pim {x: Term} (p q: Prop x): Prop = $ E. x p /\ A. x (p -> q) $;
+-- uses a low prec to require parens, since the binding is not obvious
+notation pim {x} (p q) = ($P.$:10) x p ($->$:25) q;
+
+theorem pimex (p q: Prop x): $ (P. x p -> q) -> E. x p $ = 'anl;
+theorem pimal (p q: Prop x): $ (P. x p -> q) -> A. x (p -> q) $ = 'anr;
+theorem pimex2 (p q: Prop x): $ (P. x p -> q) -> E. x q $ = '(impcom exim);
+theorem pimex12 (p q: Prop x): $ (P. x p -> q) -> E. x (p /\ q) $ =
+'(impcom @ syl exim @ alimi @ a2i ian);
+theorem pimeq: $ (P. x p -> q) -> A. x (p -> q) $ = 'anr;
+theorem pimeq1 (p1 p2 q: Prop x):
+  $ A. x (p1 <-> p2) -> ((P. x p1 -> q) <-> (P. x p2 -> q)) $ =
+'(aneqd exeq @ syl aleq @ alimi @ imeq1d id);
+theorem pimim2 (p q1 q2: Prop x):
+  $ A. x (q1 -> q2) -> (P. x p -> q1) -> (P. x p -> q2) $ =
+'(anim2d @ al2imi imim2);
+theorem pimim2i (p q1 q2: Prop x) (h: $ q1 -> q2 $):
+  $ (P. x p -> q1) -> (P. x p -> q2) $ = '(pimim2 @ ax_gen h);
+theorem pimim2d (p q1 q2: Prop x) (h: $ G -> q1 -> q2 $):
+  $ G -> (P. x p -> q1) -> (P. x p -> q2) $ = '(syl pimim2 @ iald h);
+theorem pimeq2a (p q1 q2: Prop x):
+  $ A. x (p -> (q1 <-> q2)) -> ((P. x p -> q1) <-> (P. x p -> q2)) $ =
+'(aneq2d @ syl aleq @ alimi imeq2a);
+theorem pimeq2 (p q1 q2: Prop x):
+  $ A. x (q1 <-> q2) -> ((P. x p -> q1) <-> (P. x p -> q2)) $ =
+'(syl pimeq2a @ alimi ax_1);
+theorem pimeq1d (G: Prop) {x: Term} (p1 p2 q: Prop x)
+  (h1: $ G -> (p1 <-> p2) $): $ G -> ((P. x p1 -> q) <-> (P. x p2 -> q)) $ =
+'(syl pimeq1 @ iald h1);
+theorem pimeq2d (G: Prop) {x: Term} (p q1 q2: Prop x)
+  (h1: $ G -> (q1 <-> q2) $): $ G -> ((P. x p -> q1) <-> (P. x p -> q2)) $ =
+'(syl pimeq2 @ iald h1);
+theorem pimeq1i {x: Term} (p1 p2 q: Prop x)
+  (h1: $ p1 <-> p2 $): $ (P. x p1 -> q) <-> (P. x p2 -> q) $ = '(trud @ pimeq1d @ a1i h1);
+theorem pimeq2i {x: Term} (p q1 q2: Prop x)
+  (h1: $ q1 <-> q2 $): $ (P. x p -> q1) <-> (P. x p -> q2) $ = '(trud @ pimeq2d @ a1i h1);
+theorem pimeqd (G: Prop) {x: Term} (p1 p2 q1 q2: Prop x)
+  (h1: $ G -> (p1 <-> p2) $) (h2: $ G -> (q1 <-> q2) $):
+  $ G -> ((P. x p1 -> q1) <-> (P. x p2 -> q2)) $ =
+'(bitrd (pimeq1d h1) (pimeq2d h2));
+do (apply (register-eqd 'pim) '(pimeqd pimeq1d pimeq2d));
+
+theorem cbvpimh (p1 p2 q1 q2: Prop x y)
+  (h1: $ F/ y p1 $) (h2: $ F/ y q1 $) (h3: $ F/ x p2 $) (h4: $ F/ x q2 $)
+  (e1: $ x = y -> (p1 <-> p2) $) (e2: $ x = y -> (q1 <-> q2) $):
+  $ (P. x p1 -> q1) <-> (P. y p2 -> q2) $ =
+'(aneq (cbvexh h1 h3 e1) (cbvalh (nfim h1 h2) (nfim h3 h4) (imeqd e1 e2)));
+theorem cbvpim (p1 q1: Prop x) (p2 q2: Prop y)
+  (e1: $ x = y -> (p1 <-> p2) $) (e2: $ x = y -> (q1 <-> q2) $):
+  $ (P. x p1 -> q1) <-> (P. y p2 -> q2) $ =
+'(cbvpimh nfv nfv nfv nfv e1 e2);
+
+theorem piman (a b c: Prop x): $ (P. x a -> b) /\ (P. x a -> c) -> (P. x a -> b /\ c) $ =
+'(iand anll @ sylibr ralan @ anim anr anr);
+theorem impim (a c: Prop x): $ (P. x a -> b -> c) -> b -> (P. x a -> c) $ =
+'(com12 @ anim2d @ alimd @ imim2d mpcom);
+theorem expim (p: Prop x) (q: Prop x y): $ E. y (P. x p -> q) -> (P. x p -> E. y q) $ =
+'(iand (rsyl (eximi anl) @ rsyl excom @ eximi @ eex id) @ syl exral @ eximi anr);
+theorem rexpim (a: Prop y) (p: Prop x) (q: Prop x y):
+  $ E. y (a /\ (P. x p -> q)) -> (P. x p -> E. y (a /\ q)) $ =
+'(syl expim @ eximi @ bi2a @ pimeq2d bian1);
+theorem rexpim1 (a: Prop x) (b: Prop y) (c: Prop x y):
+  $ E. x (a /\ (P. y b -> c)) -> (P. y b -> E. x (a /\ c)) $ =
+'(iand (eex anrl) @ rsyl (eximi @ anim2 anr) rexral);
+theorem pim2im (p1 q1: Prop x) (p2 q2: Prop y):
+  $ A. x (p1 -> (P. y p2 -> q1 -> q2)) -> (P. x p1 -> q1) -> (P. y p2 -> q2) $ =
+'(impd @ com23 @ syl6ibr eexb @ al2imi @ a2d @ imim2i impim);
+theorem pimtr (p: Prop x) (q a: Prop x y) (b: Prop y):
+  $ (P. x p -> a) -> A. x (a -> (P. y q -> b)) -> (P. y E. x (p /\ q) -> b) $ =
+'(exp @ iand
+  (syl excom @ impcom @ syl5 pimex12 @ syl exim @ alimi @
+    impd @ com12 @ imim2d @ syl5 anl @ eximd ian)
+  (rsyl (anim anr @ alimi @ imim2i anr) @
+    sylibr (aleqi @ bitr eexb @ aleqi impexp) @ sylib ralalcomb @
+    imp @ al2imi @ com12 imim2));
+
+--| Not equal: `a != b` means `a` and `b` are distinct natural numbers.
+@(add-eval @ fn (a b) (not {(eval a) = (eval b)}))
+@_ def ne (a b: Term): Prop = $ ~ a = b $; infixl ne: $!=$ prec 50;
+
+theorem necom: $ a != b -> b != a $ = '(con3 eqcom);
+
+--| Proper substitution. `[a / x] p` is `p`, with free occurrences of `x` in
+--| `p` replaced by `a`. If we write `p(x)`, this may also be denoted as `p(a)`.
+--| (Note that this is only provably equivalent to `p(a)`;
+--| `[0 / x] (x < x + y)` is equivalent but not syntactically identical to
+--| `0 < 0 + y`, and it requires a rewriting/substitution proof to show.)
+def sb (a: Term) {x .y: Term} (p: Prop x): Prop =
+  $ A. y (y = a -> A. x (x = y -> p)) $;
+notation sb (a x p) = ($[$:41) a ($/$:0) x ($]$:0) p;
+
+theorem sbq (a: Term) (b: Prop x): $ x = a -> (b <-> [a / x] b) $ =
+'(! ibid _ _ (al y _) (exp @ ialda @ sylc ax_12 (eqtr4d anll anr) anlr)
+  (mpi ax_6 @ eexdh nfv (nfim nfal1 nfv) @ exp @ syl5 eal @
+    syld (com12 @ imim1i anr) @ syl (com12 eal) @ imp eqtr4));
+theorem sbqcom (a: Term) (b: Prop x): $ a = x -> ([a / x] b <-> b) $ = '(bicomd @ rsyl eqcom sbq);
+theorem nfsb1 (a: Term) (b: Prop x): $ F/ x [a / x] b $ =
+'(!! nfal _ y (nfim nfv nfal1));
+theorem nfsb (a: Term y) (b: Prop x y) (h: $ F/ x b $): $ F/ x [a / y] b $ =
+'(!! nfal _ z (nfim nfv (nfal (nfim nfv h))));
+theorem sbeq1 (a b: Term x) (c: Prop x): $ a = b -> ([a / x] c <-> [b / x] c) $ =
+'(!! aleqd y @ imeq1d eqeq2);
+theorem sbeq1d (G: Prop x) (a b: Term x) (c: Prop x) (h: $ G -> a = b $):
+  $ G -> ([a / x] c <-> [b / x] c) $ = '(syl sbeq1 h);
+do ((derive-eq) 'sb);
+theorem sbeq2i (a: Term x) (b c: Prop x) (h: $ b <-> c $):
+  $ [a / x] b <-> [a / x] c $ = '(trud @ sbeq2d @ a1i h);
+
+theorem sbeht (a: Term) (b c: Prop x) (h: $ F/ x c $):
+  $ A. x (x = a -> (b <-> c)) -> ([a / x] b <-> c) $ =
+'(eexh (nfim nfal1 (nfbi nfsb1 h))
+  (exp (bitr3d (anwl sbq) (impcom eal))) ax_6);
+theorem sbeh (a: Term) (b c: Prop x) (h: $ F/ x c $)
+  (e: $ x = a -> (b <-> c) $): $ [a / x] b <-> c $ = '(sbeht h (ax_gen e));
+theorem sbet (a: Term) (b: Prop x) (c: Prop):
+  $ A. x (x = a -> (b <-> c)) -> ([a / x] b <-> c) $ = '(sbeht nfv);
+theorem sbe (a: Term) (b: Prop x) (c: Prop)
+  (e: $ x = a -> (b <-> c) $): $ [a / x] b <-> c $ = '(sbeh nfv e);
+theorem sbed (a: Term) (b: Prop x) (c: Prop)
+  (e: $ G /\ x = a -> (b <-> c) $): $ G -> ([a / x] b <-> c) $ =
+'(syl sbet @ ialda e);
+theorem dfsb2 (a: Term) (b: Prop x): $ [a / x] b <-> A. x (x = a -> b) $ =
+'(! ibii (al y _) _
+  (mpi ax_6 @ eexdh nfal1 nfv @ syl (a2i @ alimd @ imim1d @ com12 eqtr4) eal)
+  (iald @ com12 @ alimd @ imim1d @ com12 eqtr));
+theorem dfsb3 (a: Term) (b: Prop x): $ [a / x] b <-> E. x (x = a /\ b) $ =
+'(sbeh nfex1 @ syl con2b @ syl5bb (bitr4 (aleqi notan2) dfsb2) @ bicomd sbq);
+theorem sbco (a: Term x) (b: Prop x):
+  $ [a / y] [y / x] b <-> [a / x] b $ = '(bitr dfsb2 (aleqi (imeq2i dfsb2)));
+theorem sbid (a: Prop x): $ [x / x] a <-> a $ =
+'(! ibii (al y _) _
+  (mpi ax_6 @ eexdh nfal1 nfv @ rsyl eal @ a2i @ rsyl eqcom @ com12 eal)
+  (iald @ com12 @ bi1d @ syl6bb dfsb2 @ syl sbq eqcom));
+theorem sbcom (p: Prop x y): $ [a / x] [b / y] p <-> [b / y] [a / x] p $ =
+'(bitr dfsb2 @ bitr4 (raleqi dfsb2) @ bitr dfsb2 @ bitr4 (raleqi dfsb2) ralcomb);
+theorem sbth (a: Term x) (p: Prop x) (h: $ p $): $ [a / x] p $ =
+'(!! ax_gen y @ a1i @ ax_gen @ a1i h);
+theorem sbthd (p: Prop x) (h: $ G /\ x = a -> p $): $ G -> [a / x] p $ =
+'(mpbiri itru @ sbed @ syl (mpi itru bith) h);
+theorem sbeth (p: Prop x) (h: $ p $) (e: $ x = a -> (p <-> q) $): $ q $ =
+'(mpbi (sbe e) @ sbth h);
+theorem sbethh (p q: Prop x) (h: $ F/ x q $)
+  (hp: $ p $) (e: $ x = a -> (p <-> q) $): $ q $ =
+'(mpbi (sbeh h e) @ sbth hp);
+theorem cbvsbh (a: Term) (p q: Prop x y) (h1: $ F/ y p $) (h2: $ F/ x q $)
+  (e: $ x = y -> (p <-> q) $): $ [a / x] p <-> [a / y] q $ =
+'(!! aleqi z (imeq2i (cbvalh (nfim nfv h1) (nfim nfv h2) (imeqd eqeq1 e))));
+theorem cbvsb (a: Term) (p: Prop x) (q: Prop y)
+  (e: $ x = y -> (p <-> q) $): $ [a / x] p <-> [a / y] q $ = '(cbvsbh nfv nfv e);
+
+theorem aleqe (a: Term) (p: Prop x) (q: Prop)
+  (e: $ x = a -> (p <-> q) $): $ A. x (x = a -> p) <-> q $ = '(bitr3 dfsb2 @ sbe e);
+theorem aleqed (a: Term) (p: Prop x) (q: Prop)
+  (e: $ G /\ x = a -> (p <-> q) $): $ G -> (A. x (x = a -> p) <-> q) $ = '(syl5bbr dfsb2 @ sbed e);
+theorem exeqe (a: Term) (p: Prop x) (q: Prop)
+  (e: $ x = a -> (p <-> q) $): $ E. x (x = a /\ p) <-> q $ = '(bitr3 dfsb3 @ sbe e);
+theorem exeqed (a: Term) (p: Prop x) (q: Prop)
+  (e: $ G /\ x = a -> (p <-> q) $): $ G -> (E. x (x = a /\ p) <-> q) $ = '(syl5bbr dfsb3 @ sbed e);
+theorem pimeqed (a: Term) (p: Prop x) (q: Prop)
+  (e: $ G /\ x = a -> (p <-> q) $): $ G -> ((P. x x = a -> p) <-> q) $ = '(syl5bb (bian1 ax_6) @ aleqed e);
+theorem pimeqe (a: Term) (p: Prop x) (q: Prop)
+  (e: $ x = a -> (p <-> q) $): $ (P. x x = a -> p) <-> q $ = '(trud @ pimeqed @ anwr e);
+theorem cbvals (p: Prop x): $ A. x p <-> A. y ([y / x] p) $ = '(cbvalh nfv nfsb1 sbq);
+theorem cbvexs (p: Prop x): $ E. x p <-> E. y ([y / x] p) $ = '(cbvexh nfv nfsb1 sbq);
+theorem cbvald (G) (p: Prop x) (q: Prop y)
+  (h: $ G /\ x = y -> (p <-> q) $): $ G -> (A. x p <-> A. y q) $ =
+'(bitrd (a1i cbvals) (aleqd @ syl sbet @ ialda h));
+theorem cbvexd (G) (p: Prop x) (q: Prop y)
+  (h: $ G /\ x = y -> (p <-> q) $): $ G -> (E. x p <-> E. y q) $ =
+'(bitrd (a1i cbvexs) (exeqd @ syl sbet @ ialda h));
+
+theorem pimexeqed (a: Term) (p: Prop x y) (q: Prop x) (p2 q2: Prop y)
+  (e1: $ G /\ x = a -> (p <-> p2) $)
+  (e2: $ G /\ x = a -> (q <-> q2) $):
+  $ G -> ((P. x E. y (x = a /\ p) -> q) <-> (P. y p2 -> q2)) $ =
+'(aneqd (syl5bb excomb @ exeqd @ exeqed e1) @ syl5bb (aleqi eexb) @
+  syl5bb alcomb @ aleqd @ syl5bb (aleqi impexp) @ aleqed @ imeqd e1 e2);
+
+-- FOL mode: a natural deduction language that compiles to MM0 peano axioms
+do {
+  (def folmode-context (ref!))
+
+  --| `(folmode)` initializes the FOL goal state from the MM0 goal state.
+  --| For example, if the initial state is
+  --|
+  --|    h1: G -> a
+  --|    h2: G -> b
+  --|    |- G /\ c -> a /\ b
+  --|
+  --| then the generated FOL state will be
+  --|
+  --|    h1: a
+  --|    h2: b
+  --|    _h0: c
+  --|    |- a /\ b
+  --|
+  --| The context is populated with all the MM0 hypotheses, as well as all
+  --| antecedents of the goal implication, except for a leftmost variable called
+  --| `G` or `_G`. The antecedents can be named using arguments to `(folmode)`; for
+  --| example `(folmode 'hc _)` produces
+  --|
+  --|    h1: a
+  --|    h2: b
+  --|    hc: c
+  --|    |- a /\ b
+  --|
+  --| instead.
+  --|
+  --| The last argument to folmode is a refine script that is passed to `(folrefine)`.
+  (def (folmode . vs)
+    @ match (match (split-last vs) [() '(#undef)] [r r]) @ (r . vs)
+    (set! folmode-context
+      (def vs (ref! vs))
+      @ rmap (get-goals) @ fn (g)
+      (def t (goal-type g))
+      @ match (match t [('im G R) (list G R)] [_ (list #undef t)]) @ (G rhs)
+      (def hs1 (rmap (local-ctx) @ fn (h)
+        (def t (infer-type h))
+        @ if (undef? G) '(,h (,t ,h))
+        @ match t
+          [('im L R) (=> break)
+            @ letrec ([upgrade @ match-fn
+              [(? (fn (G) {L == G})) h]
+              [('an G1 D) '(anwl ,G1 ,D ,R ,(upgrade G1))]
+              [_ (break)]])
+            '(,h (,R ,(upgrade G)))]
+          [_ '(,h (,t (a1i ,G ,t ,h)))]))
+      (def hs
+        @ if (undef? G) hs1
+        @ letrec ([add-locals @ match-fn*
+          [(('an G D) left)
+            (def hsG (add-locals G left))
+            (def hsD (add-locals D #f))
+            @ fn (f hs)
+            @ hsG (fn (v a p) (f v a '(anwl ,G ,D ,a ,p)))
+            @ hsD (fn (v a p) (f v a '(anwr ,G ,D ,a ,p))) hs]
+          [((or 'G '_G) #t) @ fn (f hs) (append hs1 hs)]
+          [(a _)
+            (def v @ match vs
+              [(v . vs2) (set! vs vs2) v]
+              [_
+                (def n @ if (number? vs) vs 0)
+                (set! vs {n + 1})
+                (atom-app "_h" n)])
+            @ fn (f hs) '(,(f v a '(id ,a)) . ,hs)]])
+        ((add-locals G #t) (fn (v a p) '(,v (,a ,p))) ()))
+      (list G (apply atom-map! hs) (rev @ map hd hs) rhs g))
+    (set-close-fn folmode-end)
+    (folrefine r))
+
+  --| `(folmode-pp-goal g)` converts the FOL goal `g` to a string.
+  (def folmode-pp-goal @ match-fn @ (G hm hs t g)
+    (def ss @ foldr hs "" @ fn (v acc)
+      @ match (lookup hm v)
+      [(e _) (string-append acc (->string v) ": " (pp e) "\n")]
+      [#undef acc])
+    (string-append ss "|- " (pp t) "\n"))
+
+  --| `(folstat-str)` returns the FOL goals as a string, or `#undef` if there are no goals.
+  (def (folstat-str)
+    @ match (apply append @ map (fn (g) (list "\n" (folmode-pp-goal g))) folmode-context)
+    [()]
+    [(_ . gs) @ apply string-append gs])
+
+  --| `(folstat)` is the analogue of `(stat)` for the FOL goal state.
+  (def (folstat)
+    (def s (folstat-str))
+    (if (def? s) (display s)))
+
+  --| Resets the MM0 goals using the FOL goals.
+  (def (folmode-reset-goals)
+    (apply set-goals @ map (fn (g) (nth 4 g)) folmode-context))
+
+  --| Closer for the FOL mode - prints all the FOL goals that have not been closed
+  --| (and suppresses MM0 goal printing).
+  (def (folmode-end)
+    (scan folmode-context @ fn (g)
+      (error-at (nth 4 g) @ folmode-pp-goal g))
+    @ if (not (null? folmode-context)) @ begin
+    (error @ string-append "not all goals are solved\n" (folstat-str)))
+
+  --| `(folrefine)` runs a refine script in FOL mode. This is similar to `(refine)` but
+  --| includes operations for manipulating the context using lambda-calculus
+  --| inspired proof terms.
+  --|
+  --| * If `h` is in the context, then `h` applies it to solve the goal.
+  --| * A `_` in the term generates a new subgoal.
+  --| * `(ian p1 p2 ... pn)` proves `|- a1 /\ a2 /\ ... /\ an` if `pi` proves `|- ai`.
+  --| * `(iim x1 ... xn p)` proves `|- a1 -> a2 -> ... -> an -> b` if
+  --|   `p` is a proof of `x1: a1, x2: a2, ..., xn: an |- b`.
+  --| * `(:base p)` provides `p` as an MM0 refine script.
+  --| * `(p p1 ... pn)` proves `b` if `p: a1 -> a2 -> ... -> an -> b` and `pi: ai`.
+  (def (folrefine . rs)
+    (def newgs (ref! ()))
+    (def (push . a) @ set! newgs @ cons a @ get! newgs)
+    (def (im2 G e) @ if (def? G) '(im ,G ,e) e)
+    @ letrec ([((folref G hm hs p) refine tgt)
+      (def (im e) (im2 G e))
+      (def rhs (match tgt [('im _ e) e] [_ tgt]))
+      (def (app sp p ps)
+        @ match (lookup hm p)
+          [(t pr)
+            (def mp (if (def? G) 'mpd 'ax_mp))
+            @ copy-span sp @ foldl ps
+              (copy-span p '{(:verb ,pr) : (:verb ,(im t))})
+              (fn (acc p2) (list mp acc (folref G hm hs p2)))]
+          [#undef (error-at p "unimplemented") (copy-span p '?)])
+      (def out @ match p
+        [('ian p1 . ps)
+          (def ian (if (def? G) 'iand 'ian))
+          @ foldl ps (folref G hm hs p1) @ fn (acc p2)
+          @ copy-span p (list ian acc (folref G hm hs p2))]
+        [('iim . ps)
+          @ letrec ([(iim G hm hs ps rhs) @ match ps
+            [(p) (folref G hm hs p)]
+            [(x . ps2)
+              @ match (match rhs
+                [('im D rhs2) (list D rhs2)]
+                [_ (list (copy-span x (mvar! 'Prop #f)) (mvar! 'Prop #f))])
+                @ (D rhs2)
+              (def G2 @ if (def? G) '(an ,G ,D) D)
+              (def hm2 @ apply atom-map! @ rmap (rev hs) @ if (def? G)
+                (fn (h) @ match (lookup hm h) [(R pr) '(,h (,R (anwl ,G ,D ,R ,pr)))])
+                (fn (h) @ match (lookup hm h) [(R pr) '(,h (,R (a1i ,D ,R ,pr)))]))
+              (def hs2 @ match x ['_ hs] @ _
+                (insert! hm2 x @ list D @ if (def? G) '(anr ,G ,D) '(id ,D))
+                (cons x hs))
+              '{(exp ,(iim G2 hm2 hs2 ps2 rhs2)) : ,(im2 G '(im ,D ,rhs2))}]
+            [_ (error-at p "expected > 1 argument") (copy-span p '?)]])
+          (iim G hm hs ps rhs)]
+        [(or '_ ('_))
+          (def g (goal! p tgt))
+          (push G hm hs rhs g)
+          '(:verb ,g)]
+        [(? atom?) (app p p ())]
+        [(':base p) p]
+        [((? atom? p1) . ps) (app p p1 ps)])
+      (refine tgt out)])
+    (def oldgs (ref! @ get! folmode-context))
+    (apply refine @ rmap rs @ match-fn
+      [#undef]
+      [e @ match oldgs
+        [((G hm hs _ _) . gs) (set! oldgs gs) (folref G hm hs e)]
+        [_ (error "no more goals")]])
+    (set! folmode-context @ append (rev newgs) oldgs)
+    (folmode-reset-goals))
+};
+
+--| The sort of sets of natural numbers. Because we are working in
+--| Peano Arithmetic, we cannot quantify over variables of this type, and these
+--| should be thought of only as sugar for formulas with one free variable.
+--| This is a conservative extension of PA.
+
+-- ==== numerals + peano axioms + ind ====
+--| The successor operation: `suc n` is a natural number when `n` is.
+
+def d1:  Term = $suc 0$; prefix d1:  $1$  prec max;
+def d2:  Term = $suc 1$; prefix d2:  $2$  prec max;
+def d3:  Term = $suc 2$; prefix d3:  $3$  prec max;
+def d4:  Term = $suc 3$; prefix d4:  $4$  prec max;
+def d5:  Term = $suc 4$; prefix d5:  $5$  prec max;
+def d6:  Term = $suc 5$; prefix d6:  $6$  prec max;
+def d7:  Term = $suc 6$; prefix d7:  $7$  prec max;
+def d8:  Term = $suc 7$; prefix d8:  $8$  prec max;
+def d9:  Term = $suc 8$; prefix d9:  $9$  prec max;
+def d10: Term = $suc 9$; prefix d10: $10$ prec max;
+
+--| Zero is not a successor. Axiom 1 of Peano Arithmetic.
+axiom peano1 (a: Term): $ suc a != 0 $;
+--| The successor function is injective. Axiom 2 of Peano Arithmetic.
+axiom peano2 (a b: Term): $ suc a = suc b <-> a = b $;
+--| The induction axiom of Peano Arithmetic. If `p(0)` is true,
+--| and `p(x)` implies `p(suc x)` for all `x`, then `p(x)` is true for all `x`.
+axiom peano5 {x: Term} (p: Prop x):
+  $ [0 / x] p -> A. x (p -> [suc x / x] p) -> A. x p $;
+
+theorem d1ne0: $ 1 != 0 $ = 'peano1;
+theorem d2ne0: $ 2 != 0 $ = 'peano1;
+theorem suceq: $ a = b -> suc a = suc b $ = '(bi2 peano2);
+@(register-eqd 'ts) theorem suceqd
+  (h: $ G -> a = b $): $ G -> suc a = suc b $ = '(syl suceq h);
+
+theorem ind {x y} (a: Term y) (px: Prop x) (p0 pa py ps: Prop y)
+  (ha: $ x = a -> (px <-> pa) $)
+  (h0: $ x = 0 -> (px <-> p0) $)
+  (hy: $ x = y -> (px <-> py) $)
+  (hs: $ x = suc y -> (px <-> ps) $)
+  (h1: $ p0 $) (h2: $ py -> ps $): $ pa $ =
+'(eale ha @ peano5
+  (mpbir (sbe h0) h1)
+  (mpbir (cbvalh nfv (nfim nfv nfsb1) @ imeqd hy @ sbeq1d suceq)
+    (ax_gen @ rsyl h2 @ bi2i @ sbe hs)));
+
+
+-- ==== arithmetic axioms ====
+axiom addeq (a b c d: Term): $ a = b -> c = d -> a + c = b + d $;
+--| Multiplication respects equalty.
+axiom muleq (a b c d: Term): $ a = b -> c = d -> a * c = b * d $;
+--| The base case in the definition of addition.
+axiom add0 (a: Term): $ a + 0 = a $;
+--| The successor case in the definition of addition.
+axiom addS (a b: Term): $ a + suc b = suc (a + b) $;
+--| The base case in the definition of multiplication.
+axiom mul0 (a: Term): $ a * 0 = 0 $;
+--| The successor case in the definition of multiplication.
+axiom mulS (a b: Term): $ a * suc b = a * b + a $;
+
+do (add-axiom-set! 'axs_peano "Peano arithmetic"
+  '(peano1 peano2 peano5 addeq muleq add0 addS mul0 mulS));
+
+@(register-eqd 'tadd) theorem addeqd (h1: $ G -> a = b $) (h2: $ G -> c = d $):
+  $ G -> a + c = b + d $ = '(sylc addeq h1 h2);
+@(register-eqd 'tmul) theorem muleqd (h1: $ G -> a = b $) (h2: $ G -> c = d $):
+  $ G -> a * c = b * d $ = '(sylc muleq h1 h2);
+do { (add-eqN-thms 'tadd) (add-eqN-thms 'tmul) };
+
+-- ==== addition theorems ====
+theorem add02: $ a + 0 = a $ = 'add0;
+theorem add01: $ 0 + a = a $ =
+'(! ind x y _ $ 0 + x = x $ _ _ _ _
+  (eqeqd taddeq2 id) (eqeqd taddeq2 id)
+  (eqeqd taddeq2 id) (eqeqd taddeq2 id)
+  add0 (syl5eq addS suceq));
+
+theorem addS2: $ a + suc b = suc (a + b) $ = 'addS;
+theorem addS1: $ suc a + b = suc (a + b) $ =
+'(! ind x y _ $ suc a + x = suc (a + x) $ _ _ _ _
+  (eqeqd taddeq2 (suceqd taddeq2)) (eqeqd taddeq2 (suceqd taddeq2))
+  (eqeqd taddeq2 (suceqd taddeq2)) (eqeqd taddeq2 (suceqd taddeq2))
+  (eqtr4 add0 (suceq add0))
+  (syl5eq addS (suceqd (syl6eqr addS id))));
+theorem addSass: $ suc a + b = a + suc b $ = '(eqtr4 addS1 addS2);
+
+theorem add12: $ a + 1 = suc a $ = '(eqtr addS (suceq add0));
+theorem add11: $ 1 + a = suc a $ = '(eqtr addS1 (suceq add01));
+theorem add22: $ a + 2 = suc (suc a) $ = '(eqtr addS (suceq add12));
+
+theorem addcom: $ a + b = b + a $ =
+'(! ind x y _ $ a + x = x + a $ _ _ _ _
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqtr4 add0 add01) (eqtr4g addS addS1 suceq));
+
+-- variants of an induction proof for our CNL goal shape
+theorem cnl_addcom_a (v_a: Term) {v_b: Term}: $ teq (tadd v_a v_b) (tadd v_b v_a) $ =
+'(! ind x y _ $ teq (tadd v_a x) (tadd x v_a) $ _ _ _ _
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqtr4 add0 add01) (eqtr4g addS addS1 suceq));
+
+theorem cnl_addcom_b (v_a v_b: Term): $ teq (tadd v_a v_b) (tadd v_b v_a) $ =
+'(! ind x y _ $ teq (tadd v_a x) (tadd x v_a) $ _ _ _ _
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqeqd taddeq2 taddeq1) (eqeqd taddeq2 taddeq1)
+  (eqtr4 add0 add01) (eqtr4g addS addS1 suceq));
+
+-- ==== CNL certificate claims (public interface; proofs stay local) ====
+pub theorem logos_cnl_addcom (v_a v_b: Term): $ teq (tadd v_a v_b) (tadd v_b v_a) $ = '(addcom);
+pub theorem logos_cnl_add01 (v_a: Term): $ teq (tadd tz v_a) v_a $ = '(add01);
+pub theorem logos_cnl_addS1 (v_a v_b: Term): $ teq (tadd (ts v_a) v_b) (ts (tadd v_a v_b)) $ = '(addS1);
