@@ -132,6 +132,21 @@ else
     gap "Phase D: mm0 toolchain absent (mm0-rs/mm0-c not on PATH; see docs/lean4mm0.md §5)"
 fi
 
+# --- logos: the CNL → DeltaNet → MM0 math fragment (unfer/docs/LOGOS_MM0.md) ---
+#
+# A sentence of the math fragment is compiled by unfer/logos's own pipeline
+# (CNL → CoreIR → DeltaNet net), encoded as an MM0 theorem whose bridge axioms
+# name the net's agents, and answered by mm0's verdict: proved `teq L R` is yes,
+# `teq L R ⟹ tfals` is no, no certificate is "do not know". The gate owns the
+# end-to-end chain *and* its anchor — a tampered certificate must be rejected,
+# or "verified" means nothing.
+if [ -f "$repo_root/scripts/logos2mm0" ] && [ -f "$repo_root/../unfer/logos/mm0/claims.txt" ]; then
+    check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" \
+        bash "$repo_root/scripts/logos2mm0"
+else
+    gap "logos mm0: sibling unfer repo absent at ../unfer — skipping the fragment gate"
+fi
+
 # --- memsafe: the linearity ledger + its MM0 certificates (docs/memsafe.md) ---
 #
 # The chain this gate owns, once per source: a fixture .aum is compiled with
