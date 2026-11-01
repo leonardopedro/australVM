@@ -120,6 +120,24 @@ else
     sed -n '1,20p' "$tmp/theory.log" | sed 's/^/      /'
 fi
 
+# ── 1b. the Kopperman overlay re-checks on its own ───────────────────────────
+# The Hilbert-space theory (`mm0/kopperman.mm0`) concatenated onto the agent
+# layer — the exact text a Kopperman certificate is checked against.
+kop_theory="$unfer/logos/mm0/kopperman.mm0"
+if [ -f "$kop_theory" ]; then
+    if ! "$logos" mm0 theory --kopperman --out "$tmp/kopperman.mm0" >/dev/null; then
+        bad "dumping the Kopperman theory"
+    elif mm0-rs compile "$tmp/kopperman.mm0" "$tmp/kopperman.mmb" >"$tmp/kop-theory.log" 2>&1 \
+        && mm0-c "$tmp/kopperman.mmb" < "$tmp/kopperman.mm0" >>"$tmp/kop-theory.log" 2>&1; then
+        ok "Kopperman theory compiles and re-checks ($(grep -o '[0-9]* sorts, [0-9]* term/def, [0-9]* ax/thm' "$tmp/kop-theory.log" | tail -1))"
+    else
+        bad "Kopperman theory contradicts mm0"
+        sed -n '1,20p' "$tmp/kop-theory.log" | sed 's/^/      /'
+    fi
+else
+    gap "no Kopperman overlay at $kop_theory — skipping"
+fi
+
 # ── 2. the corpus, with its expectations ────────────────────────────────────
 if "$logos" mm0 claims "$corpus" --out "$tmp/corpus" --verify >"$tmp/claims.log" 2>&1; then
     ok "claim corpus certifies ($(grep -c '^\[*[a-z]' "$tmp/claims.log" || true) lines, every expectation held)"
@@ -160,6 +178,32 @@ if [ -f "$upstream" ]; then
     fi
 else
     gap "no upstream corpus at $upstream — skipping"
+fi
+
+# ── 2c. the Kopperman corpus (the Hilbert-space fragment) ────────────────────
+# `kop_claims.txt` carries three verdicts on purpose — ground claims decided
+# by evaluation, open claims closed by rewriting and/or the bounded obvious
+# layer (every candidate replayed by mm0-rs), and unproved goals the theory
+# honestly cannot reach. The artifact counts are checked for the same reason
+# as the arithmetic corpus: a run that certified nothing, or stopped recording
+# what it could not prove, would pass the exit code vacuously.
+kop_corpus="$unfer/logos/mm0/kop_claims.txt"
+if [ -f "$kop_corpus" ]; then
+    if "$logos" mm0 claims "$kop_corpus" --out "$tmp/kop-corpus" --verify >"$tmp/kop-claims.log" 2>&1; then
+        ok "Kopperman corpus certifies ($(grep -c '^\[*[a-z]' "$tmp/kop-claims.log" || true) lines, every expectation held)"
+    else
+        bad "Kopperman corpus (an expectation was not met, or a certificate was rejected)"
+        tail -25 "$tmp/kop-claims.log" | sed 's/^/      /'
+    fi
+    kop_certs="$(find "$tmp/kop-corpus" -name '*.mm0' 2>/dev/null | wc -l | tr -d ' ')"
+    kop_goals="$(find "$tmp/kop-corpus" -name '*.goal' 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$kop_certs" -gt 0 ] && [ "$kop_goals" -gt 0 ]; then
+        ok "Kopperman corpus wrote $kop_certs certificate(s) and $kop_goals goal(s)"
+    else
+        bad "Kopperman corpus artifacts look wrong ($kop_certs certificates, $kop_goals goals)"
+    fi
+else
+    gap "no Kopperman corpus at $kop_corpus — skipping"
 fi
 
 # ── 3. asking a question answers it ─────────────────────────────────────────

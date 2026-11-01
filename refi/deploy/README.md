@@ -146,7 +146,7 @@ right host; cookies become `Secure` automatically when it starts with
   carries `version: 1`; a future format change must migrate on read.
 - **Rotate the admin token:** stop the service, replace `admin.token` (any
   32+ char secret), start it again. Account tokens are unaffected; the
-  bootstrap admin account's hash is re-derived from the new token on startup.
+  bootstrap admin account's hash is recomputed from the new token on startup.
 - **Revoke an account:** remove its entry from `accounts.json` while stopped
   (there is no delete endpoint yet); its DID remains on-ledger and its coins
   remain spendable only by a key nobody holds, which is the safe direction.
