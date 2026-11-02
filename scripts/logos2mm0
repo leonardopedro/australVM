@@ -138,6 +138,28 @@ else
     gap "no Kopperman overlay at $kop_theory — skipping"
 fi
 
+# ── 1c. the Kopperman/Mehler overlay re-checks on its own ────────────────────
+# The optional tail-determination extension (`mm0/mehler.mm0`) concatenated
+# onto the base overlay — the exact text a `--mehler` certificate is checked
+# against. The corpus below carries `theory: mehler` claims citing its axioms,
+# so this block and that run are two halves of the same fact: if the
+# directives stopped selecting the mehler theory, those claims would be
+# certified against the base one and their expectations would fail.
+mehler_theory="$unfer/logos/mm0/mehler.mm0"
+if [ -f "$mehler_theory" ]; then
+    if ! "$logos" mm0 theory --mehler --out "$tmp/mehler.mm0" >/dev/null; then
+        bad "dumping the Kopperman/Mehler theory"
+    elif mm0-rs compile "$tmp/mehler.mm0" "$tmp/mehler.mmb" >"$tmp/mehler-theory.log" 2>&1 \
+        && mm0-c "$tmp/mehler.mmb" < "$tmp/mehler.mm0" >>"$tmp/mehler-theory.log" 2>&1; then
+        ok "Kopperman/Mehler theory compiles and re-checks ($(grep -o '[0-9]* sorts, [0-9]* term/def, [0-9]* ax/thm' "$tmp/mehler-theory.log" | tail -1))"
+    else
+        bad "Kopperman/Mehler theory contradicts mm0"
+        sed -n '1,20p' "$tmp/mehler-theory.log" | sed 's/^/      /'
+    fi
+else
+    gap "no tail-determination overlay at $mehler_theory — skipping"
+fi
+
 # ── 2. the corpus, with its expectations ────────────────────────────────────
 if "$logos" mm0 claims "$corpus" --out "$tmp/corpus" --verify >"$tmp/claims.log" 2>&1; then
     ok "claim corpus certifies ($(grep -c '^\[*[a-z]' "$tmp/claims.log" || true) lines, every expectation held)"
