@@ -119,13 +119,19 @@ for mod in "${MODULES[@]}"; do
     LEAN_PATH_EXTRA=
     if [[ ${SKIP_BUILD:-0} != 1 ]]; then
         olean=$PROJ/.lake/build/lib/lean/${mod//.//}.olean
-        if [[ -f $olean && ! $PROJ/$mod.lean -nt $olean ]]; then
+        # The module name is dotted; the source path is not. For
+        # `BookProof/ChapterCarlemanSimplex/Part4.lean` the module is
+        # `BookProof.ChapterCarlemanSimplex.Part4`, so `$mod.lean` names a file
+        # that does not exist — which made a stale olean look current and made
+        # elaboration fail with "no such file or directory".
+        src=${mod//.//}.lean
+        if [[ -f $olean && ! $PROJ/$src -nt $olean ]]; then
             : # current — the `lake build` this replaces was a 3 s no-op walk
         else
             scratch=$OUT/olean/${mod//.//}.olean
             mkdir -p "$(dirname "$scratch")"
             if ! (cd "$PROJ" && timeout "$BUILD_TIMEOUT" lake env lean \
-                    -o "$scratch" "$mod.lean" >/tmp/lean-corpus-build.log 2>&1); then
+                    -o "$scratch" "$src" >/tmp/lean-corpus-build.log 2>&1); then
                 if grep -qiE 'failed to read file|unknown module|unknown package' \
                         /tmp/lean-corpus-build.log; then
                     err "$mod: cannot elaborate — an import has no olean, so the project is not built"
