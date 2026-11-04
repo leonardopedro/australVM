@@ -632,12 +632,16 @@ certificates are the proofs.
 
 ### Two traps this pipeline exists to encode
 
-* **`lean4export Mod` exports the whole import closure.** In a Mathlib project
-  that is ~50 000 declarations and a ~300 MB NDJSON, which `lean2mm0-stmts`
-  refuses (`MAX_DECLS`) rather than emitting a degenerate file. So the export is
-  narrowed with the module's *own* declarations, listed by
-  `scripts/lean-module-decls.lean` via `Environment.getModuleIdxFor?` — no
-  name-convention guessing, namespaces irrelevant. The narrowed export is ~800 KB.
+* **`lean4export Mod -- roots` exports the roots *plus their dependency
+  closure*.** The `--` argument list narrows the ROOTS, not the payload: for a
+  Mathlib-importing module the closure is ~50 000 declarations / ~300-390 MB
+  (measured on `BookProof.ChapterA4`: 24 own declarations → 54 053 exported,
+  369 MiB; a *single* Mathlib lemma alone → 6 760 declarations / 29 MiB). That
+  is not exporter waste — nanoda re-checks that closure, so it has to be there.
+  `lean2mm0-stmts` therefore emits statements for the roots only (`--only`), and
+  `MAX_DECLS` bounds *those*; a module that declares nothing of its own still
+  cannot produce a degenerate file. Modules with no Mathlib imports export
+  exactly their own declarations (~800 KB), so nothing changes for them.
 * **mm0-rs has no numeral literals.** `(tentity 0)` is a parse error
   (`expected '$'` at the `(`): `0` is not a token of any declared notation. Each
   value used is therefore declared once, ahead of the statements —
@@ -653,7 +657,10 @@ certificates are the proofs.
 ### Status on this host (timepiece, Lean 4.28.0 + Mathlib)
 
 `GapCertificate` (36 declarations → 792 lines) and `Layout` (89 → 1 528 lines)
-convert and pass mm0-c. Modules whose `.lean` file is a script rather than a
+convert and pass mm0-c, as do `QuasiRiemannCertificate`, `extract_sketch_info`,
+and — through the nanoda leg with the budget lifted — Mathlib-importing chapters:
+`BookProof.ChapterA4` (24 → 484 lines, closure re-checked in 399 s) and
+`BookProof.ChapterAbelianDiagonal` (11 → 339 lines, inside the default budget). Modules whose `.lean` file is a script rather than a
 lake target (`minitest`, `axiom_gate`) and umbrella modules that only re-export
 sub-libraries (`PnpProof`, `BayesianTransformer`, `Book`) are reported as
 skipped, which is the honest status: there is nothing of their own to encode.
@@ -690,6 +697,23 @@ exports 35 MB). The CLI therefore defaults to 256 MiB and takes an explicit
 `[max-bytes]` argument. Hitting the cap is a verification *gap* to report, never
 "unproved".
 
+**The driver's own budget (`NANODA_MAX_BYTES`, default 256 MiB).** It exists
+because a Mathlib-importing module's export is far past that, and the cost is
+real: on this host (14 GB RAM) `BookProof.ChapterA4`'s 369 MiB export took
+**399 s and 836 MiB peak RSS** to re-check, and an earlier attempt against
+several such exports **triggered the OOM killer**. So over-budget exports are
+reported as `GAP` — statements are still emitted and mm0-c still checks the
+encoding, but the summary says `NOT kernel-backed` and the module is *not*
+counted as converted+verified. Measured, not guessed: since a single module
+peaks under 1 GB, `NANODA_MAX_BYTES=0` (unbounded) is safe for a serial run on a
+machine with ≥3 GB free; leave the default in place when batching, where several
+kinds of heavy process overlap.
+
+Run cost is the reason `BookProof/` is a sampling target, not a batch target:
+350 chapters × ~6 min of nanoda ≈ 35 h serial. Per-chapter status prints, and a
+run is resumable module-by-module (the export cache is keyed by module), so
+`for m in BookProof.Chapter*; do …; done` is the intended shape.
+
 ### Files that are not lake targets
 
 Not every `*.lean` file is a `[[lean_lib]]` root: `QuasiRiemannCertificate` is a
@@ -714,4 +738,22 @@ artifacts — `Layout` regenerates byte-identically), while every member of an
 ambiguous base gets the first 8 hex digits of `SHA-256(original name)`. The
 result is injective AND independent of declaration order, so regeneration of the
 same export is byte-identical. Found on `timepiece/extract_sketch_info.lean`
-(31 declarations, 15 359 emitted lines).
+(31 declarations, 15 359 emitted lines at the time — now 31 → 368, because the
+closure is no longer restated; see the `--only` note above).
+
+### A fourth trap: `pre` is a name id, not a prefix length
+
+`Name.str` / `Name.num` records carry `{"pre": <id>, "str": <component>}`, and
+`pre` is the id of the **parent Name** (`Export.lean` writes `("pre", ← dumpName n)`).
+Reading it as a character count still produces plausible strings, because the
+parent's own text is already interned under that id — but the components end up
+**flattened**: `BookProof.conjugateₗᵢ` becomes `BookProofconjugateₗᵢ`, and the
+symbol tables in every artifact carried that damage unnoticed (it is a comment
+line, and mm0-c does not care what a symbol is *called*). What broke it was
+`--only`: a root list written as real Lean names matched *nothing* against the
+export, and the driver reported "none of the 24 requested declarations appear"
+while the names were plainly in the file. Components are now re-joined with `.`,
+so symbols read like Lean names again and root filtering works. Regenerating the
+four pre-existing artifacts changed their symbol tables and axiom identifiers
+(`decl_OfNatofNat` → `decl_OfNat_ofNat`) but not their statement structure; all
+four were re-emitted and re-checked by mm0-rs and mm0-c afterwards.

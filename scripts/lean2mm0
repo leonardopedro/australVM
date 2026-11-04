@@ -296,14 +296,21 @@ class Export:
                 continue
             d = json.loads(line)
             if "in" in d:
+                # `pre` is the *id of the parent Name*, not a character count:
+                # lean4export builds `.str n s` as {"pre": <dumpName n>, "str": s}
+                # (Export.lean). Components therefore have to be re-joined with
+                # the separator, or every name comes back flattened —
+                # `BookProof.conjugateₗᵢ` → `BookProofconjugateₗᵢ` — which makes
+                # symbols unreadable AND makes name lookups (e.g. a `--only`
+                # root list) silently match nothing.
                 if "str" in d:
                     s = d["str"]
-                    pre = s.get("pre", 0)
-                    self.names[d["in"]] = (self.names.get(pre, "") if pre else "") + s["str"]
+                    parent = self.names.get(s.get("pre")) or ""
+                    self.names[d["in"]] = f"{parent}.{s['str']}" if parent else s["str"]
                 else:
                     n = d["num"]
-                    pre = n.get("pre", 0)
-                    self.names[d["in"]] = (self.names.get(pre, "") if pre else "") + str(n["i"])
+                    parent = self.names.get(n.get("pre")) or ""
+                    self.names[d["in"]] = f"{parent}.{n['i']}" if parent else str(n["i"])
             if "il" in d:
                 self.levels[d["il"]] = d
             if "ie" in d:

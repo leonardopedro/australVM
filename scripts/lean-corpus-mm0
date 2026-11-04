@@ -87,7 +87,7 @@ else
 fi
 ((${#MODULES[@]})) || die "no Lean modules found in $PROJ"
 
-declare -a OK=() BAD=() SKIP=()
+declare -a OK=() BAD=() SKIP=() GAPPED=()
 for mod in "${MODULES[@]}"; do
     echo
     info "== $mod"
@@ -151,8 +151,30 @@ for mod in "${MODULES[@]}"; do
 
     # nanoda re-checks the export in an independent kernel BEFORE anything is
     # encoded: an export the Lean kernel would reject must never reach MM0.
+    #
+    # BUDGET, not a verdict. The `--` list narrows the ROOTS, not the payload:
+    # lean4export writes each named declaration's transitive dependency closure
+    # (measured on BookProof.ChapterA4: 24 own decls → 54,053 decls / 369 MB;
+    # a single Mathlib lemma alone → 6,760 decls / 29 MB). nanoda must re-check
+    # that whole closure, so a Mathlib-importing module costs minutes and
+    # multi-GB RSS apiece — which is what caused the OOM on a 14 GB host.
+    # Above the budget this is reported as a GAP: statements are still emitted,
+    # but they are NOT kernel-backed and the summary says so. Raise
+    # NANODA_MAX_BYTES deliberately, one module at a time, on a host that can
+    # pay for it. NANODA_MAX_BYTES=0 disables the budget entirely.
+    nanoda_budget=${NANODA_MAX_BYTES:-268435456}
+    # nanoda takes the byte limit as an argument and treats 0 as "use the
+    # default", so a disabled budget must still pass a number it can accept.
+    nanoda_limit=$nanoda_budget
+    (( nanoda_limit > 0 )) || nanoda_limit=8589934592
+    gapped=0
     if [[ -n $NANODA && -x $NANODA ]]; then
-        if ! "$NANODA" "$ndjson" >/tmp/lean-corpus-nanoda.log 2>&1; then
+        size=$(stat -c%s "$ndjson")
+        if (( nanoda_budget > 0 && size > nanoda_budget )); then
+            gapped=1
+            warn "$mod: export is $((size / 1048576)) MiB > nanoda budget $((nanoda_budget / 1048576)) MiB — GAP, statements are not kernel-backed (raise NANODA_MAX_BYTES; measured cost: a 369 MiB chapter export = 399 s, 836 MiB peak RSS)"
+            GAPPED+=("$mod")
+        elif ! "$NANODA" "$ndjson" "$nanoda_limit" >/tmp/lean-corpus-nanoda.log 2>&1; then
             err "$mod: nanoda REJECTED the export"
             tail -2 /tmp/lean-corpus-nanoda.log | sed 's/^/    /'
             BAD+=("$mod (nanoda)")
@@ -160,7 +182,14 @@ for mod in "${MODULES[@]}"; do
         fi
     fi
 
-    if ! "$PY" "$AVM/scripts/lean2mm0-stmts" emit "$ndjson" "$mod" --out "$OUT/statements" 2>/tmp/lean-corpus-emit.log; then
+    # Only the module's OWN declarations become statements: the export also
+    # carries their dependency closure (nanoda's re-check material), and
+    # restating Mathlib as MM0 axioms would be noise, not evidence.
+    roots=$(mktemp)
+    printf '%s\n' "$decls" >"$roots"
+    if ! "$PY" "$AVM/scripts/lean2mm0-stmts" emit "$ndjson" "$mod" \
+            --out "$OUT/statements" --only "$roots" 2>/tmp/lean-corpus-emit.log; then
+        rm -f "$roots"
         err "$mod: lean2mm0-stmts failed"
         tail -3 /tmp/lean-corpus-emit.log | sed 's/^/    /'
         BAD+=("$mod (emit)")
@@ -183,15 +212,27 @@ for mod in "${MODULES[@]}"; do
         continue
     fi
 
-    printf '    %s decls → %s lines, mm0-c OK\n' "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")"
-    OK+=("$mod")
+    rm -f "$roots"
+    # mm0-c accepted the encoding either way; say which verdict the STATEMENTS
+    # have. Only a nanoda-accepted export makes them kernel-backed, so a gapped
+    # module is never counted as converted+verified.
+    if (( gapped )); then
+        printf '    %s decls → %s lines, mm0-c OK (statements NOT kernel-backed)\n' \
+            "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")"
+    else
+        printf '    %s decls → %s lines, mm0-c OK\n' \
+            "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")"
+        OK+=("$mod")
+    fi
 done
 
 echo
 echo "=================================================================="
-printf 'converted+verified %d · failed %d · skipped %d\n' "${#OK[@]}" "${#BAD[@]}" "${#SKIP[@]}"
-[[ ${#OK[@]}  -gt 0 ]] && printf '  OK      : %s\n' "${OK[*]}"
-[[ ${#SKIP[@]} -gt 0 ]] && printf '  skipped : %s\n' "${SKIP[*]}"
-[[ ${#BAD[@]}  -gt 0 ]] && printf '  FAILED  : %s\n' "${BAD[*]}"
+printf 'converted+verified %d · gapped %d · failed %d · skipped %d\n' \
+    "${#OK[@]}" "${#GAPPED[@]}" "${#BAD[@]}" "${#SKIP[@]}"
+[[ ${#OK[@]}     -gt 0 ]] && printf '  OK      : %s\n' "${OK[*]}"
+[[ ${#GAPPED[@]} -gt 0 ]] && printf '  GAP     : %s (statements emitted, NOT kernel-backed)\n' "${GAPPED[*]}"
+[[ ${#SKIP[@]}    -gt 0 ]] && printf '  skipped : %s\n' "${SKIP[*]}"
+[[ ${#BAD[@]}     -gt 0 ]] && printf '  FAILED  : %s\n' "${BAD[*]}"
 echo "=================================================================="
 ((${#BAD[@]} == 0))

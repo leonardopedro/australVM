@@ -40,10 +40,15 @@ Each declaration becomes
 and the file ends with the symbol table, so `tentity` indices stay auditable.
 
 Usage:
-    scripts/lean2mm0-stmts emit  <export.ndjson> <stem> [--out DIR]
-    scripts/lean2mm0-stmts check <export.ndjson> <stem> [--out DIR]
-    scripts/lean2mm0-stmts verify <export.ndjson> <stem> [--out DIR]
+    scripts/lean2mm0-stmts emit  <export.ndjson> <stem> [--out DIR] [--only FILE]
+    scripts/lean2mm0-stmts check <export.ndjson> <stem> [--out DIR] [--only FILE]
+    scripts/lean2mm0-stmts verify <export.ndjson> <stem> [--out DIR] [--only FILE]
         # emit + mm0-rs compile + mm0-c replay (exit 2 if the tools are absent)
+        # --only FILE: names, one per line, of the export's ROOTS. lean4export
+        # also writes their dependency closure (a Mathlib-importing chapter:
+        # 24 roots → 54 053 decls); the closure is what nanoda re-checks, but
+        # restating it as MM0 axioms would just be Mathlib-as-axioms, so only
+        # the roots are emitted and MAX_DECLS bounds those.
 
 Exit codes: 0 ok, 1 generation/verification failure, 2 tooling absent.
 """
@@ -63,11 +68,12 @@ AVM = Path(__file__).resolve().parent.parent
 WS = AVM.parent
 CIC = AVM / "docs" / "cic.mm0"
 
-# A declaration list this big is already an unusual file; the cap keeps a
-# runaway export (Mathlib pulled in whole) from emitting a multi-hundred-MB
-# artifact by accident. 8000, not 4000: a real module whose declarations carry
-# large quoted syntax (`timepiece/extract_sketch_info.lean`, 4386 declarations)
-# is a legitimate corpus member, while a whole-Mathlib export is ~50 000.
+# Bounds the number of STATEMENTS, so a runaway selection cannot emit a
+# multi-hundred-MB artifact by accident. 8000, not 4000: a real module whose
+# declarations carry large quoted syntax (`timepiece/extract_sketch_info.lean`,
+# 4386 declarations) is a legitimate corpus member. Note this counts the roots
+# passed in `--only`, not the export's dependency closure (~54 000 for a
+# Mathlib-importing chapter, which is expected and not a runaway).
 MAX_DECLS = 8000
 
 
@@ -235,24 +241,36 @@ class Encoder:
         raise EncodeError(f"unhandled expr kind {kind}")
 
 
-def generate(ndjson: Path, stem: str) -> tuple[str, str]:
+def generate(ndjson: Path, stem: str, only: set[str] | None = None) -> tuple[str, str]:
     if not CIC.exists():
         raise EncodeError(f"theory missing: {CIC}")
     ex = Export(ndjson)
     if not ex.decls:
         raise EncodeError(f"{ndjson} declares nothing")
-    if len(ex.decls) > MAX_DECLS:
-        raise EncodeError(f"{ndjson} declares {len(ex.decls)} decls "
+    # An export contains the ROOTS' transitive dependency closure, not just the
+    # roots: lean4export has to write it, because that is what a kernel re-check
+    # consumes. Only the roots become statements — encoding the closure (54,053
+    # Mathlib decls for one BookProof chapter) would restate Mathlib as axioms
+    # and add nothing. So when the caller names its roots, the cap applies to
+    # THOSE, and the closure merely gets loaded and discarded.
+    selected = list(ex.decls.items()) if only is None else [
+        (nm, v) for nm, v in ex.decls.items() if nm in only]
+    if only is not None and not selected:
+        raise EncodeError(f"none of the {len(only)} requested declarations "
+                          f"appear in {ndjson.name} (its {len(ex.decls)} "
+                          "decls are the dependency closure)")
+    if len(selected) > MAX_DECLS:
+        raise EncodeError(f"{ndjson} would emit {len(selected)} decls "
                           f"(cap {MAX_DECLS}) — narrow the export with "
-                          "-- explicit declaration arguments")
+                          "-- explicit declaration arguments or --only")
     enc = Encoder()
     lines: list[str] = []
     used_names: set[str] = set()
     base_counts: dict[str, int] = {}
-    for nm in ex.decls:
+    for nm, _v in selected:
         b = sanitize(nm)
         base_counts[b] = base_counts.get(b, 0) + 1
-    for nm, (_kind, rec, _line) in ex.decls.items():
+    for nm, (_kind, rec, _line) in selected:
         try:
             ty = enc.enc(ex, rec["type"])
         except EncodeError as e:
@@ -287,9 +305,16 @@ def generate(ndjson: Path, stem: str) -> tuple[str, str]:
         "-- theorem this corpus wants *proved* in MM0 needs a certificate",
         "-- (scripts/lean2mm0), not a statement.",
         "--",
-        f"-- trust-split: structural=0 grounded=0 statements={len(ex.decls)}",
-        "--",
+        f"-- trust-split: structural=0 grounded=0 statements={len(selected)}",
     ]
+    # Say so explicitly only when the export carried more than the statements:
+    # a Mathlib-importing module's export is dominated by Mathlib's closure, and
+    # a reader should not have to guess why 54 053 decls became 24 axioms.
+    if len(ex.decls) > len(selected):
+        header.append(f"-- export decls: {len(ex.decls)} = {len(selected)} roots + "
+                      f"{len(ex.decls) - len(selected)} dependency-closure decls "
+                      f"(re-checked by nanoda, not restated as axioms)")
+    header.append("--")
     # Numerals: MM0 (mm0-rs) has no numeral literals — `(tentity 0)` is a
     # parse error ("expected '$'" at the `(`), because `0` is not a token of
     # any declared notation. Declare each value once as a prefix term whose
@@ -311,9 +336,26 @@ def generate(ndjson: Path, stem: str) -> tuple[str, str]:
     return text, text
 
 
-def runs(ndjson: Path, stem: str, out: Path) -> tuple[Path, Path]:
-    mm0, mm1 = generate(ndjson, stem)
+def roots_path(out: Path, stem: str) -> Path:
+    """Where a `--only` artifact records the roots it stated.
+
+    Needed because an export carries its roots' dependency closure: without the
+    roots, regenerating a Mathlib-importing module is impossible to do
+    faithfully (the export alone says "54 053 declarations", 99.9% of them
+    Mathlib's), so `check` reads them back from here instead of guessing.
+    """
+    return out / f"{stem}.roots"
+
+
+def runs(ndjson: Path, stem: str, out: Path,
+         only: set[str] | None = None) -> tuple[Path, Path]:
+    mm0, mm1 = generate(ndjson, stem, only)
     out.mkdir(parents=True, exist_ok=True)
+    rp = roots_path(out, stem)
+    if only is None:
+        rp.unlink(missing_ok=True)
+    else:
+        rp.write_text("\n".join(sorted(only)) + "\n")
     p0, p1 = out / f"{stem}.mm0", out / f"{stem}.mm1"
     p0.write_text(mm0)
     p1.write_text(mm1)
@@ -331,8 +373,25 @@ def main(argv: list[str]) -> int:
         out = Path(argv[argv.index("--out") + 1])
     ndjson = Path(ndjson_arg)
 
+    # --only <file>: one declaration name per line, the export's ROOTS. The
+    # dependency closure stays in the export (nanoda needs it) but contributes
+    # no statements.
+    only: set[str] | None = None
+    if "--only" in argv:
+        p = Path(argv[argv.index("--only") + 1])
+        if not p.exists():
+            print(f"lean2mm0-stmts: --only file not found: {p}", file=sys.stderr)
+            return 1
+        only = {ln.strip() for ln in p.read_text().splitlines() if ln.strip()}
+    else:
+        # Regenerating must use the roots the artifact was emitted from, or a
+        # Mathlib-importing module "regenerates" as 54 053 closure decls.
+        rp = roots_path(out, stem)
+        if rp.exists():
+            only = {ln.strip() for ln in rp.read_text().splitlines() if ln.strip()}
+
     if mode == "check":
-        mm0, _ = generate(ndjson, stem)
+        mm0, _ = generate(ndjson, stem, only)
         target = out / f"{stem}.mm0"
         if not target.exists() or target.read_text() != mm0:
             print(f"lean2mm0-stmts check: {target} is out of date")
@@ -341,7 +400,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
-        p0, _p1 = runs(ndjson, stem, out)
+        p0, _p1 = runs(ndjson, stem, out, only)
     except EncodeError as e:
         print(f"lean2mm0-stmts: {e}", file=sys.stderr)
         return 1

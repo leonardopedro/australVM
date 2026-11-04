@@ -14,7 +14,8 @@
 -- theorem this corpus wants *proved* in MM0 needs a certificate
 -- (scripts/lean2mm0), not a statement.
 --
--- trust-split: structural=0 grounded=0 statements=354
+-- trust-split: structural=0 grounded=0 statements=73
+-- export decls: 354 = 73 roots + 281 dependency-closure decls (re-checked by nanoda, not restated as axioms)
 --
 -- cic.mm0 — the MM0 target theory for the Lean4→DeltaNets→MM0 pipeline,
 -- adapted to this project's *existing* term language (unfer/logos deltanet)
@@ -189,1340 +190,272 @@ term n42: nat; prefix n42: $42$ prec max;
 term n43: nat; prefix n43: $43$ prec max;
 term n44: nat; prefix n44: $44$ prec max;
 term n45: nat; prefix n45: $45$ prec max;
-term n46: nat; prefix n46: $46$ prec max;
-term n47: nat; prefix n47: $47$ prec max;
-term n48: nat; prefix n48: $48$ prec max;
-term n49: nat; prefix n49: $49$ prec max;
-term n50: nat; prefix n50: $50$ prec max;
-term n51: nat; prefix n51: $51$ prec max;
-term n52: nat; prefix n52: $52$ prec max;
-term n53: nat; prefix n53: $53$ prec max;
-term n54: nat; prefix n54: $54$ prec max;
-term n55: nat; prefix n55: $55$ prec max;
-term n56: nat; prefix n56: $56$ prec max;
-term n57: nat; prefix n57: $57$ prec max;
-term n58: nat; prefix n58: $58$ prec max;
-term n59: nat; prefix n59: $59$ prec max;
-term n60: nat; prefix n60: $60$ prec max;
-term n61: nat; prefix n61: $61$ prec max;
-term n62: nat; prefix n62: $62$ prec max;
-term n63: nat; prefix n63: $63$ prec max;
-term n64: nat; prefix n64: $64$ prec max;
-term n65: nat; prefix n65: $65$ prec max;
-term n66: nat; prefix n66: $66$ prec max;
-term n67: nat; prefix n67: $67$ prec max;
-term n68: nat; prefix n68: $68$ prec max;
-term n69: nat; prefix n69: $69$ prec max;
-term n70: nat; prefix n70: $70$ prec max;
-term n71: nat; prefix n71: $71$ prec max;
-term n72: nat; prefix n72: $72$ prec max;
-term n73: nat; prefix n73: $73$ prec max;
-term n74: nat; prefix n74: $74$ prec max;
-term n75: nat; prefix n75: $75$ prec max;
-term n76: nat; prefix n76: $76$ prec max;
-term n77: nat; prefix n77: $77$ prec max;
-term n78: nat; prefix n78: $78$ prec max;
-term n79: nat; prefix n79: $79$ prec max;
-term n80: nat; prefix n80: $80$ prec max;
-term n81: nat; prefix n81: $81$ prec max;
-term n82: nat; prefix n82: $82$ prec max;
-term n83: nat; prefix n83: $83$ prec max;
-term n84: nat; prefix n84: $84$ prec max;
-term n85: nat; prefix n85: $85$ prec max;
-term n86: nat; prefix n86: $86$ prec max;
-term n87: nat; prefix n87: $87$ prec max;
-term n88: nat; prefix n88: $88$ prec max;
-term n89: nat; prefix n89: $89$ prec max;
-term n90: nat; prefix n90: $90$ prec max;
-term n91: nat; prefix n91: $91$ prec max;
-term n92: nat; prefix n92: $92$ prec max;
-term n93: nat; prefix n93: $93$ prec max;
-term n94: nat; prefix n94: $94$ prec max;
-term n95: nat; prefix n95: $95$ prec max;
-term n96: nat; prefix n96: $96$ prec max;
-term n97: nat; prefix n97: $97$ prec max;
-term n98: nat; prefix n98: $98$ prec max;
-term n99: nat; prefix n99: $99$ prec max;
-term n100: nat; prefix n100: $100$ prec max;
-term n101: nat; prefix n101: $101$ prec max;
-term n102: nat; prefix n102: $102$ prec max;
-term n103: nat; prefix n103: $103$ prec max;
-term n104: nat; prefix n104: $104$ prec max;
-term n105: nat; prefix n105: $105$ prec max;
-term n106: nat; prefix n106: $106$ prec max;
-term n107: nat; prefix n107: $107$ prec max;
-term n108: nat; prefix n108: $108$ prec max;
-term n109: nat; prefix n109: $109$ prec max;
-term n110: nat; prefix n110: $110$ prec max;
-term n111: nat; prefix n111: $111$ prec max;
-term n112: nat; prefix n112: $112$ prec max;
-term n113: nat; prefix n113: $113$ prec max;
-term n114: nat; prefix n114: $114$ prec max;
-term n115: nat; prefix n115: $115$ prec max;
-term n116: nat; prefix n116: $116$ prec max;
-term n117: nat; prefix n117: $117$ prec max;
-term n118: nat; prefix n118: $118$ prec max;
-term n119: nat; prefix n119: $119$ prec max;
-term n120: nat; prefix n120: $120$ prec max;
-term n121: nat; prefix n121: $121$ prec max;
-term n122: nat; prefix n122: $122$ prec max;
-term n123: nat; prefix n123: $123$ prec max;
-term n124: nat; prefix n124: $124$ prec max;
-term n125: nat; prefix n125: $125$ prec max;
-term n126: nat; prefix n126: $126$ prec max;
-term n127: nat; prefix n127: $127$ prec max;
-term n128: nat; prefix n128: $128$ prec max;
-term n129: nat; prefix n129: $129$ prec max;
-term n130: nat; prefix n130: $130$ prec max;
-term n131: nat; prefix n131: $131$ prec max;
-term n132: nat; prefix n132: $132$ prec max;
-term n133: nat; prefix n133: $133$ prec max;
-term n134: nat; prefix n134: $134$ prec max;
-term n135: nat; prefix n135: $135$ prec max;
-term n136: nat; prefix n136: $136$ prec max;
-term n137: nat; prefix n137: $137$ prec max;
-term n138: nat; prefix n138: $138$ prec max;
-term n139: nat; prefix n139: $139$ prec max;
-term n140: nat; prefix n140: $140$ prec max;
-term n141: nat; prefix n141: $141$ prec max;
-term n142: nat; prefix n142: $142$ prec max;
-term n143: nat; prefix n143: $143$ prec max;
-term n144: nat; prefix n144: $144$ prec max;
-term n145: nat; prefix n145: $145$ prec max;
-term n146: nat; prefix n146: $146$ prec max;
-term n147: nat; prefix n147: $147$ prec max;
-term n148: nat; prefix n148: $148$ prec max;
-term n149: nat; prefix n149: $149$ prec max;
-term n150: nat; prefix n150: $150$ prec max;
-term n151: nat; prefix n151: $151$ prec max;
-term n152: nat; prefix n152: $152$ prec max;
-term n153: nat; prefix n153: $153$ prec max;
-term n154: nat; prefix n154: $154$ prec max;
-term n155: nat; prefix n155: $155$ prec max;
-term n156: nat; prefix n156: $156$ prec max;
-term n55296: nat; prefix n55296: $55296$ prec max;
-term n57343: nat; prefix n57343: $57343$ prec max;
-term n1114112: nat; prefix n1114112: $1114112$ prec max;
 
--- OfNatofNat
-axiom decl_OfNatofNat: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 2) (tvar 1)) (tvar 0))) (tvar 2)))) ttrue $;
+-- OuterState._sizeOf_1
+axiom decl_OuterState__sizeOf_1: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tentity 1)) ttrue $;
 
--- instOfNatNat
-axiom decl_instOfNatNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 2) (tentity 1)) (tvar 0))) ttrue $;
+-- OuterState._sizeOf_inst
+axiom decl_OuterState__sizeOf_inst: $ teq (tapp (tentity 3) (tentity 0)) ttrue $;
 
--- OuterState_sizeOf_1
-axiom decl_OuterState_sizeOf_1: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tentity 1)) ttrue $;
+-- OuterState.casesOn
+axiom decl_OuterState_casesOn: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tvar 1) (tentity 5))) (tapp (tapp (tentity 2) (tapp (tvar 2) (tentity 6))) (tapp (tapp (tentity 2) (tapp (tvar 3) (tentity 7))) (tapp (tapp (tentity 2) (tapp (tvar 4) (tentity 8))) (tapp (tapp (tentity 2) (tapp (tvar 5) (tentity 9))) (tapp (tvar 6) (tvar 5))))))))) ttrue $;
 
--- OuterState_sizeOf_inst
-axiom decl_OuterState_sizeOf_inst: $ teq (tapp (tentity 5) (tentity 4)) ttrue $;
+-- OuterState.ctorIdx
+axiom decl_OuterState_ctorIdx: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tentity 1)) ttrue $;
 
--- OuterStatecasesOn
-axiom decl_OuterStatecasesOn: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tvar 1) (tentity 7))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 8))) (tapp (tapp (tentity 3) (tapp (tvar 3) (tentity 9))) (tapp (tapp (tentity 3) (tapp (tvar 4) (tentity 10))) (tapp (tapp (tentity 3) (tapp (tvar 5) (tentity 11))) (tapp (tvar 6) (tvar 5))))))))) ttrue $;
+-- OuterState.ctorElimType
+axiom decl_OuterState_ctorElimType: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 1)) (tentity 10))) ttrue $;
 
--- OuterStatectorIdx
-axiom decl_OuterStatectorIdx: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tentity 1)) ttrue $;
+-- OuterState.ctorElim
+axiom decl_OuterState_ctorElim: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tvar 1)) (tapp (tentity 12) (tvar 0)))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 13) (tvar 3)) (tvar 2))) (tapp (tvar 4) (tvar 2))))))) ttrue $;
 
--- Unit
-axiom decl_Unit: $ teq (tentity 12) ttrue $;
+-- OuterState.noConfusionType
+axiom decl_OuterState_noConfusionType: $ teq (tapp (tapp (tentity 2) (tentity 14)) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tentity 0)) (tentity 14)))) ttrue $;
 
--- BoolcasesOn
-axiom decl_BoolcasesOn: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 13)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tvar 1) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 15))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
+-- OuterState.noConfusion
+axiom decl_OuterState_noConfusion: $ teq (tapp (tapp (tentity 2) (tentity 15)) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 0)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tentity 16) (tvar 3)) (tvar 2)) (tvar 1)))))) ttrue $;
 
--- Unitunit
-axiom decl_Unitunit: $ teq (tentity 16) ttrue $;
+-- OuterState.ofNat
+axiom decl_OuterState_ofNat: $ teq (tapp (tapp (tentity 2) (tentity 1)) (tentity 0)) ttrue $;
 
--- condmatch_1
-axiom decl_condmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 13)) (tentity 17))) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tentity 15)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 3) (tentity 14)))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
+-- OuterState.ofNat_ctorIdx
+axiom decl_OuterState_ofNat_ctorIdx: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tapp (tentity 11) (tentity 0)) (tapp (tentity 17) (tapp (tentity 12) (tvar 0)))) (tvar 0))) ttrue $;
 
--- cond
-axiom decl_cond: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 3))))) ttrue $;
+-- OuterState.recOn
+axiom decl_OuterState_recOn: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tvar 1) (tentity 5))) (tapp (tapp (tentity 2) (tapp (tvar 2) (tentity 6))) (tapp (tapp (tentity 2) (tapp (tvar 3) (tentity 7))) (tapp (tapp (tentity 2) (tapp (tvar 4) (tentity 8))) (tapp (tapp (tentity 2) (tapp (tvar 5) (tentity 9))) (tapp (tvar 6) (tvar 5))))))))) ttrue $;
 
--- Natbelow
-axiom decl_Natbelow: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 1)) (tentity 18))) ttrue $;
+-- OuterState.s0.elim
+axiom decl_OuterState_s0_elim: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tentity 12) (tvar 0))) (tint 0))) (tapp (tapp (tentity 2) (tapp (tvar 2) (tentity 5))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
 
--- NatbrecOngo
-axiom decl_NatbrecOngo: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 19) (tvar 2)) (tvar 0))) (tapp (tvar 3) (tvar 1))))) (tapp (tapp (tentity 20) (tapp (tvar 2) (tvar 1))) (tapp (tapp (tentity 19) (tvar 2)) (tvar 1)))))) ttrue $;
+-- OuterState.s0.sizeOf_spec
+axiom decl_OuterState_s0_sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tapp (tapp (tentity 18) (tentity 0)) (tentity 19)) (tentity 5))) (tapp (tapp (tapp (tentity 20) (tentity 1)) (tint 1)) (tapp (tentity 21) (tint 1)))) ttrue $;
 
--- NatbrecOn
-axiom decl_NatbrecOn: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 19) (tvar 2)) (tvar 0))) (tapp (tvar 3) (tvar 1))))) (tapp (tvar 2) (tvar 1))))) ttrue $;
+-- OuterState.s1.elim
+axiom decl_OuterState_s1_elim: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tentity 12) (tvar 0))) (tint 1))) (tapp (tapp (tentity 2) (tapp (tvar 2) (tentity 6))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
 
--- NatcasesOn
-axiom decl_NatcasesOn: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tvar 1) (tentity 21))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
+-- OuterState.s1.sizeOf_spec
+axiom decl_OuterState_s1_sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tapp (tapp (tentity 18) (tentity 0)) (tentity 19)) (tentity 6))) (tapp (tapp (tapp (tentity 20) (tentity 1)) (tint 1)) (tapp (tentity 21) (tint 1)))) ttrue $;
 
--- Natblematch_1
-axiom decl_Natblematch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 3) (tentity 21)) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 4) (tapp (tentity 22) (tvar 0))) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 6) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))))) (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)))))))) ttrue $;
+-- OuterState.s2.elim
+axiom decl_OuterState_s2_elim: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tentity 12) (tvar 0))) (tint 2))) (tapp (tapp (tentity 2) (tapp (tvar 2) (tentity 7))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
 
--- Natble
-axiom decl_Natble: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 13))) ttrue $;
+-- OuterState.s2.sizeOf_spec
+axiom decl_OuterState_s2_sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tapp (tapp (tentity 18) (tentity 0)) (tentity 19)) (tentity 7))) (tapp (tapp (tapp (tentity 20) (tentity 1)) (tint 1)) (tapp (tentity 21) (tint 1)))) ttrue $;
 
--- OuterStatectorElimType
-axiom decl_OuterStatectorElimType: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 1)) (tentity 18))) ttrue $;
+-- OuterState.s3.elim
+axiom decl_OuterState_s3_elim: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tentity 12) (tvar 0))) (tint 3))) (tapp (tapp (tentity 2) (tapp (tvar 2) (tentity 8))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
 
--- PULiftdown
-axiom decl_PULiftdown: $ teq (tapp (tapp (tentity 3) (tentity 23)) (tapp (tapp (tentity 3) (tapp (tentity 24) (tvar 0))) (tvar 1))) ttrue $;
+-- OuterState.s3.sizeOf_spec
+axiom decl_OuterState_s3_sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tapp (tapp (tentity 18) (tentity 0)) (tentity 19)) (tentity 8))) (tapp (tapp (tapp (tentity 20) (tentity 1)) (tint 1)) (tapp (tentity 21) (tint 1)))) ttrue $;
 
--- Eqndrec
-axiom decl_Eqndrec: $ teq (tapp (tapp (tentity 3) (tentity 25)) (tapp (tapp (tentity 3) (tvar 0)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tentity 26))) (tapp (tapp (tentity 3) (tapp (tvar 0) (tvar 1))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 4)) (tvar 3)) (tvar 0))) (tapp (tvar 3) (tvar 1)))))))) ttrue $;
+-- OuterState.s4.elim
+axiom decl_OuterState_s4_elim: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 4))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tentity 12) (tvar 0))) (tint 4))) (tapp (tapp (tentity 2) (tapp (tvar 2) (tentity 9))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
 
--- OuterStatectorElim
-axiom decl_OuterStatectorElim: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 1)) (tapp (tentity 28) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 29) (tvar 3)) (tvar 2))) (tapp (tvar 4) (tvar 2))))))) ttrue $;
+-- OuterState.s4.sizeOf_spec
+axiom decl_OuterState_s4_sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tapp (tapp (tentity 18) (tentity 0)) (tentity 19)) (tentity 9))) (tapp (tapp (tapp (tentity 20) (tentity 1)) (tint 1)) (tapp (tentity 21) (tint 1)))) ttrue $;
 
--- Not
-axiom decl_Not: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tentity 30)) ttrue $;
-
--- DecidableEq
-axiom decl_DecidableEq: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tentity 18)) ttrue $;
-
--- DecidablecasesOn
-axiom decl_DecidablecasesOn: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tentity 6))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 2))) (tapp (tvar 2) (tapp (tapp (tentity 33) (tvar 3)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 3) (tapp (tapp (tentity 34) (tvar 4)) (tvar 0))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- noConfusionTypeEnum
-axiom decl_noConfusionTypeEnum: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 35)) (tapp (tapp (tentity 3) (tapp (tentity 36) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 2)) (tvar 2))) (tapp (tapp (tentity 3) (tentity 37)) (tapp (tapp (tentity 3) (tvar 4)) (tapp (tapp (tentity 3) (tvar 5)) (tentity 37)))))))) ttrue $;
-
--- NatdecEqmatch_1
-axiom decl_NatdecEqmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 13)) (tentity 17))) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 0)) (tentity 15))) (tapp (tvar 2) (tentity 15)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 1)) (tentity 14))) (tapp (tvar 3) (tentity 14)))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Natbeqmatch_1
-axiom decl_Natbeqmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tvar 3) (tentity 21)) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 4) (tentity 21)) (tapp (tentity 22) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 5) (tapp (tentity 22) (tvar 0))) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 7) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))))) (tapp (tapp (tvar 6) (tvar 5)) (tvar 4))))))))) ttrue $;
-
--- Natbeq
-axiom decl_Natbeq: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 13))) ttrue $;
-
--- _privateInitPrelude0Nateq_of_beq_eq_truematch_1_1
-axiom decl__privateInitPrelude0Nateq_of_beq_eq_truematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tvar 1)) (tvar 0))) (tentity 15))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tvar 1)) (tvar 0))) (tentity 15))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tentity 21)) (tentity 21))) (tentity 15))) (tapp (tapp (tapp (tvar 4) (tentity 21)) (tentity 21)) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tentity 21)) (tapp (tentity 22) (tvar 0)))) (tentity 15))) (tapp (tapp (tapp (tvar 6) (tentity 21)) (tapp (tentity 22) (tvar 1))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tapp (tentity 22) (tvar 0))) (tentity 21))) (tentity 15))) (tapp (tapp (tapp (tvar 7) (tapp (tentity 22) (tvar 1))) (tentity 21)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))) (tentity 15))) (tapp (tapp (tapp (tvar 9) (tapp (tentity 22) (tvar 2))) (tapp (tentity 22) (tvar 1))) (tvar 0)))))) (tapp (tapp (tapp (tvar 7) (tvar 6)) (tvar 5)) (tvar 4)))))))))) ttrue $;
-
--- rfl
-axiom decl_rfl: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tvar 0)) (tapp (tapp (tapp (tentity 27) (tvar 1)) (tvar 0)) (tvar 0)))) ttrue $;
-
--- BoolnoConfusionType
-axiom decl_BoolnoConfusionType: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tentity 13)) (tentity 6)))) ttrue $;
-
--- BoolnoConfusion
-axiom decl_BoolnoConfusion: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tentity 39) (tvar 3)) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- Nateq_of_beq_eq_true
-axiom decl_Nateq_of_beq_eq_true: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tvar 1)) (tvar 0))) (tentity 15))) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 2)) (tvar 1))))) ttrue $;
-
--- _privateInitPrelude0Natne_of_beq_eq_falsematch_1_1
-axiom decl__privateInitPrelude0Natne_of_beq_eq_falsematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tvar 1)) (tvar 0))) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 2)) (tvar 1))) (tentity 30)))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tvar 1)) (tvar 0))) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tentity 21)) (tentity 21))) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tentity 21)) (tentity 21))) (tapp (tapp (tapp (tapp (tvar 6) (tentity 21)) (tentity 21)) (tvar 1)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tentity 21)) (tapp (tentity 22) (tvar 0)))) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tentity 21)) (tapp (tentity 22) (tvar 1)))) (tapp (tapp (tapp (tapp (tvar 8) (tentity 21)) (tapp (tentity 22) (tvar 2))) (tvar 1)) (tvar 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tapp (tentity 22) (tvar 0))) (tentity 21))) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 22) (tvar 1))) (tentity 21))) (tapp (tapp (tapp (tapp (tvar 9) (tapp (tentity 22) (tvar 2))) (tentity 21)) (tvar 1)) (tvar 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 22) (tvar 2))) (tapp (tentity 22) (tvar 1)))) (tapp (tapp (tapp (tapp (tvar 11) (tapp (tentity 22) (tvar 3))) (tapp (tentity 22) (tvar 2))) (tvar 1)) (tvar 0))))))) (tapp (tapp (tapp (tapp (tvar 8) (tvar 7)) (tvar 6)) (tvar 5)) (tvar 4))))))))))) ttrue $;
-
--- NatnoConfusionType
-axiom decl_NatnoConfusionType: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 6)))) ttrue $;
-
--- NatnoConfusion
-axiom decl_NatnoConfusion: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tentity 40) (tvar 3)) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- absurd
-axiom decl_absurd: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 35)) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 2))) (tvar 2))))) ttrue $;
-
--- Natne_of_beq_eq_false
-axiom decl_Natne_of_beq_eq_false: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 38) (tvar 1)) (tvar 0))) (tentity 14))) (tapp (tentity 32) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- NatdecEq
-axiom decl_NatdecEq: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 31) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 1)) (tvar 0))))) ttrue $;
-
--- instDecidableEqNat
-axiom decl_instDecidableEqNat: $ teq (tapp (tentity 36) (tentity 1)) ttrue $;
-
--- OuterStatenoConfusionType
-axiom decl_OuterStatenoConfusionType: $ teq (tapp (tapp (tentity 3) (tentity 41)) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tentity 4)) (tentity 41)))) ttrue $;
-
--- Falseelim
-axiom decl_Falseelim: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 42)) (tvar 1))) ttrue $;
-
--- congrArg
-axiom decl_congrArg: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 35)) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 4)) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tentity 27) (tvar 4)) (tapp (tvar 1) (tvar 3))) (tapp (tvar 1) (tvar 2))))))))) ttrue $;
-
--- noConfusionEnum_proof_1
-axiom decl_noConfusionEnum_proof_1: $ teq (tapp (tapp (tentity 3) (tentity 17)) (tapp (tapp (tentity 3) (tentity 43)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tvar 1))) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 4)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 32) (tapp (tapp (tapp (tentity 27) (tvar 4)) (tapp (tvar 3) (tvar 2))) (tapp (tvar 3) (tvar 1))))) (tentity 42)))))))) ttrue $;
-
--- noConfusionEnum
-axiom decl_noConfusionEnum: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 35)) (tapp (tapp (tentity 3) (tapp (tentity 36) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 2)) (tvar 2))) (tapp (tapp (tentity 3) (tentity 37)) (tapp (tapp (tentity 3) (tvar 4)) (tapp (tapp (tentity 3) (tvar 5)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 6)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tapp (tapp (tapp (tentity 44) (tvar 7)) (tvar 6)) (tvar 5)) (tvar 4)) (tvar 3)) (tvar 2)) (tvar 1)))))))))) ttrue $;
-
--- OuterStatenoConfusion
-axiom decl_OuterStatenoConfusion: $ teq (tapp (tapp (tentity 3) (tentity 45)) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 4)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tentity 46) (tvar 3)) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- OuterStateofNat
-axiom decl_OuterStateofNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tentity 4)) ttrue $;
-
--- OuterStateofNat_ctorIdx
-axiom decl_OuterStateofNat_ctorIdx: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tapp (tentity 27) (tentity 4)) (tapp (tentity 47) (tapp (tentity 28) (tvar 0)))) (tvar 0))) ttrue $;
-
--- OuterStaterecOn
-axiom decl_OuterStaterecOn: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tvar 1) (tentity 7))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 8))) (tapp (tapp (tentity 3) (tapp (tvar 3) (tentity 9))) (tapp (tapp (tentity 3) (tapp (tvar 4) (tentity 10))) (tapp (tapp (tentity 3) (tapp (tvar 5) (tentity 11))) (tapp (tvar 6) (tvar 5))))))))) ttrue $;
-
--- Eqsymm
-axiom decl_Eqsymm: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tvar 0)) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tentity 27) (tvar 3)) (tvar 1)) (tvar 2)))))) ttrue $;
-
--- OuterStates0elim
-axiom decl_OuterStates0elim: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 28) (tvar 0))) (tint 0))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 7))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- SizeOfsizeOf
-axiom decl_SizeOfsizeOf: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tapp (tentity 5) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tentity 1)))) ttrue $;
-
--- OuterStates0sizeOf_spec
-axiom decl_OuterStates0sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tapp (tapp (tentity 48) (tentity 4)) (tentity 49)) (tentity 7))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1)) (tapp (tentity 51) (tint 1)))) ttrue $;
-
--- OuterStates1elim
-axiom decl_OuterStates1elim: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 28) (tvar 0))) (tint 1))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 8))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- OuterStates1sizeOf_spec
-axiom decl_OuterStates1sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tapp (tapp (tentity 48) (tentity 4)) (tentity 49)) (tentity 8))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1)) (tapp (tentity 51) (tint 1)))) ttrue $;
-
--- OuterStates2elim
-axiom decl_OuterStates2elim: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 28) (tvar 0))) (tint 2))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 9))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- OuterStates2sizeOf_spec
-axiom decl_OuterStates2sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tapp (tapp (tentity 48) (tentity 4)) (tentity 49)) (tentity 9))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1)) (tapp (tentity 51) (tint 1)))) ttrue $;
-
--- OuterStates3elim
-axiom decl_OuterStates3elim: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 28) (tvar 0))) (tint 3))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 10))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- OuterStates3sizeOf_spec
-axiom decl_OuterStates3sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tapp (tapp (tentity 48) (tentity 4)) (tentity 49)) (tentity 10))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1)) (tapp (tentity 51) (tint 1)))) ttrue $;
-
--- OuterStates4elim
-axiom decl_OuterStates4elim: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 28) (tvar 0))) (tint 4))) (tapp (tapp (tentity 3) (tapp (tvar 2) (tentity 11))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- OuterStates4sizeOf_spec
-axiom decl_OuterStates4sizeOf_spec: $ teq (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tapp (tapp (tentity 48) (tentity 4)) (tentity 49)) (tentity 11))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1)) (tapp (tentity 51) (tint 1)))) ttrue $;
-
--- OuterStatetoCtorIdx
-axiom decl_OuterStatetoCtorIdx: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tentity 1)) ttrue $;
-
--- outParam
-axiom decl_outParam: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tentity 6)) ttrue $;
-
--- HModhMod
-axiom decl_HModhMod: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tentity 53) (tentity 54))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 55) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))))))) ttrue $;
-
--- Modmod
-axiom decl_Modmod: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 56) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 3))))) ttrue $;
-
--- instHMod
-axiom decl_instHMod: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 56) (tvar 0))) (tapp (tapp (tapp (tentity 55) (tvar 1)) (tvar 1)) (tvar 1)))) ttrue $;
-
--- namedPattern
-axiom decl_namedPattern: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tvar 0)) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 2)) (tvar 1)) (tvar 0))) (tvar 3))))) ttrue $;
-
--- Natmodmatch_1
-axiom decl_Natmodmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 3) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 1)) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 7) (tapp (tapp (tapp (tapp (tentity 58) (tentity 1)) (tvar 3)) (tapp (tentity 22) (tvar 2))) (tvar 1))) (tvar 0))))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- ite
-axiom decl_ite: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 4)))))) ttrue $;
-
--- LEle
-axiom decl_LEle: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 59) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tentity 30))))) ttrue $;
-
--- instLENat
-axiom decl_instLENat: $ teq (tapp (tentity 59) (tentity 1)) ttrue $;
-
--- dite
-axiom decl_dite: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tvar 3))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 2))) (tvar 4))) (tvar 4)))))) ttrue $;
-
--- BooldecEqmatch_1
-axiom decl_BooldecEqmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tentity 13)) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tvar 3) (tentity 14)) (tentity 14)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tvar 4) (tentity 14)) (tentity 15)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tvar 5) (tentity 15)) (tentity 14)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tvar 6) (tentity 15)) (tentity 15)))) (tapp (tapp (tvar 6) (tvar 5)) (tvar 4))))))))) ttrue $;
-
--- BooldecEq
-axiom decl_BooldecEq: $ teq (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tentity 31) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 1)) (tvar 0))))) ttrue $;
-
--- instDecidableEqBool
-axiom decl_instDecidableEqBool: $ teq (tapp (tentity 36) (tentity 13)) ttrue $;
-
--- EqcasesOn
-axiom decl_EqcasesOn: $ teq (tapp (tapp (tentity 3) (tentity 17)) (tapp (tapp (tentity 3) (tvar 0)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 2)) (tvar 1)) (tvar 0))) (tentity 6)))) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 3)) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tvar 2) (tvar 3)) (tapp (tapp (tentity 60) (tvar 4)) (tvar 3)))) (tapp (tapp (tvar 3) (tvar 2)) (tvar 1)))))))) ttrue $;
-
--- _privateInitPrelude0noConfusion_of_Natauxmatch_1_1
-axiom decl__privateInitPrelude0noConfusion_of_Natauxmatch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 30))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- _privateInitPrelude0noConfusion_of_Nataux
-axiom decl__privateInitPrelude0noConfusion_of_Nataux: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 61) (tabs (tentity 30))) (tentity 42)) (tentity 62)) (tapp (tapp (tentity 38) (tvar 0)) (tvar 0)))) ttrue $;
-
--- noConfusion_of_Nat
-axiom decl_noConfusion_of_Nat: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 0)) (tentity 1))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tvar 3)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 61) (tabs (tentity 30))) (tentity 42)) (tentity 62)) (tapp (tapp (tentity 38) (tapp (tvar 3) (tvar 2))) (tapp (tvar 3) (tvar 1))))))))) ttrue $;
-
--- BoolctorIdx
-axiom decl_BoolctorIdx: $ teq (tapp (tapp (tentity 3) (tentity 13)) (tentity 1)) ttrue $;
-
--- _privateInitPrelude0Natle_of_ble_eq_truematch_1_1
-axiom decl__privateInitPrelude0Natle_of_ble_eq_truematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 1)) (tvar 0))) (tentity 15))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 1)) (tvar 0))) (tentity 15))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tentity 15))) (tapp (tapp (tapp (tvar 5) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))) (tentity 15))) (tapp (tapp (tapp (tvar 7) (tapp (tentity 22) (tvar 2))) (tapp (tentity 22) (tvar 1))) (tvar 0)))))) (tapp (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- _privateInitPrelude0Natzero_lematch_1_1
-axiom decl__privateInitPrelude0Natzero_lematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 30))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Natzero_le
-axiom decl_Natzero_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) ttrue $;
-
--- NatlebrecOn
-axiom decl_NatlebrecOn: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 1)) (tvar 0))) (tentity 30)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 4)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 5)) (tvar 4)) (tvar 1)) (tvar 0))) (tapp (tapp (tvar 5) (tvar 2)) (tvar 1)))))) (tapp (tapp (tvar 3) (tvar 2)) (tvar 1))))))) ttrue $;
-
--- NatlebelowcasesOn
-axiom decl_NatlebelowcasesOn: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 1)) (tvar 0))) (tentity 30)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 3)) (tvar 2)) (tvar 1)) (tvar 0))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 3)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 4)) (tvar 3)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tvar 3) (tvar 5)) (tapp (tentity 68) (tvar 5))) (tapp (tapp (tentity 69) (tvar 5)) (tvar 4)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 7)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 8)) (tvar 7)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tvar 8) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tvar 8) (tapp (tentity 22) (tvar 3))) (tapp (tapp (tapp (tentity 70) (tvar 10)) (tvar 3)) (tvar 2))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 71) (tvar 10)) (tvar 9)) (tvar 3)) (tvar 2)) (tvar 1)) (tvar 0)))))))) (tapp (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)) (tvar 2)))))))))) ttrue $;
-
--- cast
-axiom decl_cast: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 6)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 2)) (tvar 2))))) ttrue $;
-
--- eq_of_heq
-axiom decl_eq_of_heq: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tvar 0)) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 72) (tvar 2)) (tvar 1)) (tvar 2)) (tvar 0))) (tapp (tapp (tapp (tentity 27) (tvar 3)) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- _privateInitPrelude0Natsucc_le_succmatch_1_4
-axiom decl__privateInitPrelude0Natsucc_le_succmatch_1_4: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tentity 30)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 3)) (tabs (tabs (tapp (tapp (tvar 4) (tvar 1)) (tvar 0))))) (tvar 1)) (tvar 0))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 4)) (tabs (tabs (tapp (tapp (tvar 5) (tvar 1)) (tvar 0))))) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tapp (tvar 4) (tvar 6)) (tapp (tentity 68) (tvar 6))) (tapp (tapp (tentity 69) (tvar 6)) (tabs (tabs (tapp (tapp (tvar 7) (tvar 1)) (tvar 0)))))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 7)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 8)) (tabs (tabs (tapp (tapp (tvar 9) (tvar 1)) (tvar 0))))) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tvar 8) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tvar 8) (tapp (tentity 22) (tvar 3))) (tapp (tapp (tapp (tentity 70) (tvar 10)) (tvar 3)) (tvar 2))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 71) (tvar 10)) (tabs (tabs (tapp (tapp (tvar 11) (tvar 1)) (tvar 0))))) (tvar 3)) (tvar 2)) (tvar 1)) (tvar 0)))))))) (tapp (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)) (tvar 2)))))))))) ttrue $;
-
--- HAddhAdd
-axiom decl_HAddhAdd: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tentity 53) (tentity 54))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 73) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))))))) ttrue $;
-
--- Addadd
-axiom decl_Addadd: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 74) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 3))))) ttrue $;
-
--- instHAdd
-axiom decl_instHAdd: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 74) (tvar 0))) (tapp (tapp (tapp (tentity 73) (tvar 1)) (tvar 1)) (tvar 1)))) ttrue $;
-
--- Nataddmatch_1
-axiom decl_Nataddmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 3) (tvar 0)) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 5) (tvar 1)) (tapp (tentity 22) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- Natadd
-axiom decl_Natadd: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
-
--- instAddNat
-axiom decl_instAddNat: $ teq (tapp (tentity 74) (tentity 1)) ttrue $;
-
--- Natsucc_le_succ
-axiom decl_Natsucc_le_succ: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 22) (tvar 2))) (tapp (tentity 22) (tvar 1)))))) ttrue $;
-
--- Natle_of_ble_eq_true
-axiom decl_Natle_of_ble_eq_true: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 1)) (tvar 0))) (tentity 15))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))))) ttrue $;
-
--- _privateInitPrelude0Natble_eq_true_of_lematch_1_4
-axiom decl__privateInitPrelude0Natble_eq_true_of_lematch_1_4: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tentity 30)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 3)) (tabs (tabs (tapp (tapp (tvar 4) (tvar 1)) (tvar 0))))) (tvar 1)) (tvar 0))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 4)) (tabs (tabs (tapp (tapp (tvar 5) (tvar 1)) (tvar 0))))) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tapp (tvar 4) (tvar 6)) (tapp (tentity 68) (tvar 6))) (tapp (tapp (tentity 69) (tvar 6)) (tabs (tabs (tapp (tapp (tvar 7) (tvar 1)) (tvar 0)))))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 7)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 8)) (tabs (tabs (tapp (tapp (tvar 9) (tvar 1)) (tvar 0))))) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tvar 8) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tvar 8) (tapp (tentity 22) (tvar 3))) (tapp (tapp (tapp (tentity 70) (tvar 10)) (tvar 3)) (tvar 2))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 71) (tvar 10)) (tabs (tabs (tapp (tapp (tvar 11) (tvar 1)) (tvar 0))))) (tvar 3)) (tvar 2)) (tvar 1)) (tvar 0)))))))) (tapp (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)) (tvar 2)))))))))) ttrue $;
-
--- _privateInitPrelude0Natble_self_eq_truematch_1_1
-axiom decl__privateInitPrelude0Natble_self_eq_truematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 30))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Natble_self_eq_true
-axiom decl_Natble_self_eq_true: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 0)) (tvar 0))) (tentity 15))) ttrue $;
-
--- _privateInitPrelude0Natble_succ_eq_truematch_1_1
-axiom decl__privateInitPrelude0Natble_succ_eq_truematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 1)) (tvar 0))) (tentity 15))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 1)) (tvar 0))) (tentity 15))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tentity 15))) (tapp (tapp (tapp (tvar 5) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))) (tentity 15))) (tapp (tapp (tapp (tvar 7) (tapp (tentity 22) (tvar 2))) (tapp (tentity 22) (tvar 1))) (tvar 0)))))) (tapp (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- Natble_succ_eq_true
-axiom decl_Natble_succ_eq_true: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 1)) (tvar 0))) (tentity 15))) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 2)) (tapp (tentity 22) (tvar 1)))) (tentity 15))))) ttrue $;
-
--- Natble_eq_true_of_le
-axiom decl_Natble_eq_true_of_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 2)) (tvar 1))) (tentity 15))))) ttrue $;
-
--- Natnot_le_of_not_ble_eq_true
-axiom decl_Natnot_le_of_not_ble_eq_true: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 63) (tvar 1)) (tvar 0))) (tentity 15)))) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- NatdecLe
-axiom decl_NatdecLe: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))))) ttrue $;
-
--- LTlt
-axiom decl_LTlt: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 75) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tentity 30))))) ttrue $;
-
--- Natlt
-axiom decl_Natlt: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 30))) ttrue $;
-
--- instLTNat
-axiom decl_instLTNat: $ teq (tapp (tentity 75) (tentity 1)) ttrue $;
-
--- NatdecLt
-axiom decl_NatdecLt: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tvar 0))))) ttrue $;
-
--- NatlecasesOn
-axiom decl_NatlecasesOn: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 1)) (tvar 0))) (tentity 30)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tvar 2) (tvar 3)) (tapp (tentity 68) (tvar 3)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 5)) (tvar 0))) (tapp (tapp (tvar 5) (tapp (tentity 22) (tvar 1))) (tapp (tapp (tapp (tentity 70) (tvar 6)) (tvar 1)) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- NatctorIdx
-axiom decl_NatctorIdx: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tentity 1)) ttrue $;
-
--- Natdivgomatch_1
-axiom decl_Natdivgomatch_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tvar 0))) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tvar 4) (tapp (tentity 22) (tvar 1))) (tvar 0))))) (tapp (tapp (tvar 3) (tvar 2)) (tvar 1))))))) ttrue $;
-
--- HSubhSub
-axiom decl_HSubhSub: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tentity 53) (tentity 54))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 78) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))))))) ttrue $;
-
--- Subsub
-axiom decl_Subsub: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 79) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 3))))) ttrue $;
-
--- instHSub
-axiom decl_instHSub: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 79) (tvar 0))) (tapp (tapp (tapp (tentity 78) (tvar 1)) (tvar 1)) (tvar 1)))) ttrue $;
-
--- Natmulmatch_1
-axiom decl_Natmulmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 3) (tvar 0)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 5) (tvar 1)) (tapp (tentity 22) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- Natpowmatch_1
-axiom decl_Natpowmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 17))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Natpred
-axiom decl_Natpred: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tentity 1)) ttrue $;
-
--- Natsub
-axiom decl_Natsub: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
-
--- instSubNat
-axiom decl_instSubNat: $ teq (tapp (tentity 79) (tentity 1)) ttrue $;
-
--- _privateInitPrelude0Natle_transmatch_1_6
-axiom decl__privateInitPrelude0Natle_transmatch_1_6: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))) (tentity 30))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 4)) (tabs (tabs (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 7)) (tvar 6))) (tapp (tapp (tapp (tvar 6) (tvar 2)) (tvar 0)) (tvar 1)))))) (tvar 2)) (tvar 0))) (tentity 30)))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 3))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 5)) (tabs (tabs (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 8)) (tvar 7))) (tapp (tapp (tapp (tvar 7) (tvar 2)) (tvar 0)) (tvar 1)))))) (tvar 2)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 7)) (tvar 6))) (tapp (tapp (tapp (tapp (tvar 5) (tvar 7)) (tvar 0)) (tapp (tentity 68) (tvar 7))) (tapp (tapp (tentity 69) (tvar 7)) (tabs (tabs (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 10)) (tvar 9))) (tapp (tapp (tapp (tvar 9) (tvar 2)) (tvar 0)) (tvar 1))))))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 8)) (tvar 7))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tvar 9)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 67) (tvar 10)) (tabs (tabs (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 13)) (tvar 12))) (tapp (tapp (tapp (tvar 12) (tvar 2)) (tvar 0)) (tvar 1)))))) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 12)) (tvar 11))) (tapp (tapp (tapp (tvar 11) (tvar 3)) (tvar 0)) (tvar 2)))) (tapp (tapp (tapp (tapp (tvar 10) (tapp (tentity 22) (tvar 3))) (tvar 4)) (tapp (tapp (tapp (tentity 70) (tvar 12)) (tvar 3)) (tvar 2))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 71) (tvar 12)) (tabs (tabs (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 15)) (tvar 14))) (tapp (tapp (tapp (tvar 14) (tvar 2)) (tvar 0)) (tvar 1)))))) (tvar 3)) (tvar 2)) (tvar 1)) (tvar 0))))))))) (tapp (tapp (tapp (tapp (tvar 6) (tvar 5)) (tvar 4)) (tvar 3)) (tvar 2)))))))))))) ttrue $;
-
--- Natle_trans
-axiom decl_Natle_trans: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 2))))))) ttrue $;
-
--- Natlt_of_lt_of_le
-axiom decl_Natlt_of_lt_of_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tvar 2))))))) ttrue $;
-
--- AndcasesOn
-axiom decl_AndcasesOn: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tvar 1)) (tvar 0))) (tentity 6))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 3) (tapp (tapp (tapp (tapp (tentity 81) (tvar 5)) (tvar 4)) (tvar 1)) (tvar 0)))))) (tapp (tvar 2) (tvar 1))))))) ttrue $;
-
--- _privateInitPrelude0Natdiv_rec_lemmamatch_1_1
-axiom decl__privateInitPrelude0Natdiv_rec_lemmamatch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 0)) (tvar 1)))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 2)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tvar 4))) (tapp (tvar 3) (tapp (tapp (tapp (tapp (tentity 81) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 4))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 5))) (tvar 1)) (tvar 0)))))) (tapp (tvar 2) (tvar 1))))))) ttrue $;
-
--- _privateInitPrelude0Natsub_ltmatch_1_1
-axiom decl__privateInitPrelude0Natsub_ltmatch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tentity 30)))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tapp (tapp (tvar 7) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 2)) (tvar 1)) (tvar 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0))))) (tapp (tapp (tapp (tapp (tvar 8) (tapp (tentity 22) (tvar 2))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1)) (tvar 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 1)))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 1)))) (tapp (tapp (tapp (tapp (tvar 10) (tapp (tentity 22) (tvar 3))) (tapp (tentity 22) (tvar 2))) (tvar 1)) (tvar 0))))))) (tapp (tapp (tapp (tapp (tvar 7) (tvar 6)) (tvar 5)) (tvar 4)) (tvar 3)))))))))) ttrue $;
-
--- _privateInitPrelude0Natnot_succ_le_selfmatch_1_1
-axiom decl__privateInitPrelude0Natnot_succ_le_selfmatch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 30))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Natnot_succ_le_zero
-axiom decl_Natnot_succ_le_zero: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 22) (tvar 0))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0))))) (tentity 42))) ttrue $;
-
--- _privateInitPrelude0Natpred_le_predmatch_1_1
-axiom decl__privateInitPrelude0Natpred_le_predmatch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tvar 4) (tvar 0)) (tvar 0)) (tapp (tentity 68) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tapp (tvar 6) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 1))) (tapp (tapp (tapp (tentity 70) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1)) (tvar 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 66) (tapp (tentity 22) (tvar 1))) (tvar 0))) (tapp (tapp (tapp (tvar 8) (tapp (tentity 22) (tvar 2))) (tapp (tentity 22) (tvar 1))) (tapp (tapp (tapp (tentity 70) (tapp (tentity 22) (tvar 2))) (tvar 1)) (tvar 0))))))) (tapp (tapp (tapp (tvar 6) (tvar 5)) (tvar 4)) (tvar 3))))))))) ttrue $;
-
--- Natle_succ
-axiom decl_Natle_succ: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 0)) (tapp (tentity 22) (tvar 0)))) ttrue $;
-
--- Natpred_le_pred
-axiom decl_Natpred_le_pred: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 82) (tvar 2))) (tapp (tentity 82) (tvar 1)))))) ttrue $;
-
--- Natle_of_succ_le_succ
-axiom decl_Natle_of_succ_le_succ: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))))) ttrue $;
-
--- Natnot_succ_le_self
-axiom decl_Natnot_succ_le_self: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 22) (tvar 0))) (tvar 0)))) ttrue $;
-
--- Natlt_irrefl
-axiom decl_Natlt_irrefl: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tvar 0)))) ttrue $;
-
--- Natlt_succ_of_le
-axiom decl_Natlt_succ_of_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tapp (tentity 22) (tvar 1)))))) ttrue $;
-
--- Natle_refl
-axiom decl_Natle_refl: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 0)) (tvar 0))) ttrue $;
-
--- _privateInitPrelude0Natpred_lematch_1_1
-axiom decl__privateInitPrelude0Natpred_lematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 30))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Natpred_le
-axiom decl_Natpred_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 82) (tvar 0))) (tvar 0))) ttrue $;
-
--- Natsub_le
-axiom decl_Natsub_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 83) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 84) (tentity 1)) (tentity 85))) (tvar 1)) (tvar 0))) (tvar 1)))) ttrue $;
-
--- Natsucc_sub_succ_eq_sub
-axiom decl_Natsucc_sub_succ_eq_sub: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 83) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 84) (tentity 1)) (tentity 85))) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 83) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 84) (tentity 1)) (tentity 85))) (tvar 1)) (tvar 0))))) ttrue $;
-
--- Natsub_lt
-axiom decl_Natsub_lt: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 83) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 84) (tentity 1)) (tentity 85))) (tvar 3)) (tvar 2))) (tvar 3)))))) ttrue $;
-
--- Natdiv_rec_lemma
-axiom decl_Natdiv_rec_lemma: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 0)) (tvar 1)))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 83) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 84) (tentity 1)) (tentity 85))) (tvar 2)) (tvar 1))) (tvar 2))))) ttrue $;
-
--- Natle_of_lt_succ
-axiom decl_Natle_of_lt_succ: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1))))) ttrue $;
-
--- Natdiv_rec_fuel_lemma
-axiom decl_Natdiv_rec_fuel_lemma: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 3))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 86) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 87) (tentity 1)) (tentity 88))) (tvar 2)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1)) (tapp (tentity 51) (tint 1)))))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 83) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 84) (tentity 1)) (tentity 85))) (tvar 5)) (tvar 4))) (tvar 3)))))))) ttrue $;
-
--- NatmodCorego
-axiom decl_NatmodCorego: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tvar 1))) (tentity 1)))))) ttrue $;
-
--- Natlt_add_one
-axiom decl_Natlt_add_one: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 86) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 87) (tentity 1)) (tentity 88))) (tvar 0)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1)) (tapp (tentity 51) (tint 1)))))) ttrue $;
-
--- Natlt_succ_self
-axiom decl_Natlt_succ_self: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tapp (tentity 22) (tvar 0)))) ttrue $;
-
--- NatmodCore
-axiom decl_NatmodCore: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
-
--- Natmod
-axiom decl_Natmod: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
-
--- NatinstMod
-axiom decl_NatinstMod: $ teq (tapp (tentity 56) (tentity 1)) ttrue $;
-
--- HMulhMul
-axiom decl_HMulhMul: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tentity 53) (tentity 54))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 89) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))))))) ttrue $;
-
--- Mulmul
-axiom decl_Mulmul: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 90) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 3))))) ttrue $;
-
--- instHMul
-axiom decl_instHMul: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 90) (tvar 0))) (tapp (tapp (tapp (tentity 89) (tvar 1)) (tvar 1)) (tvar 1)))) ttrue $;
-
--- Natmul
-axiom decl_Natmul: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
-
--- instMulNat
-axiom decl_instMulNat: $ teq (tapp (tentity 90) (tentity 1)) ttrue $;
+-- OuterState.toCtorIdx
+axiom decl_OuterState_toCtorIdx: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tentity 1)) ttrue $;
 
 -- bank
-axiom decl_bank: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
+axiom decl_bank: $ teq (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tentity 2) (tentity 1)) (tentity 1))) ttrue $;
 
--- Listbelow
-axiom decl_Listbelow: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tentity 92)))) ttrue $;
-
--- ListbrecOngo
-axiom decl_ListbrecOngo: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 93) (tvar 3)) (tvar 2)) (tvar 0))) (tapp (tvar 3) (tvar 1))))) (tapp (tapp (tentity 20) (tapp (tvar 2) (tvar 1))) (tapp (tapp (tapp (tentity 93) (tvar 3)) (tvar 2)) (tvar 1))))))) ttrue $;
-
--- ListbrecOn
-axiom decl_ListbrecOn: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 93) (tvar 3)) (tvar 2)) (tvar 0))) (tapp (tvar 3) (tvar 1))))) (tapp (tvar 2) (tvar 1)))))) ttrue $;
-
--- ListcasesOn
-axiom decl_ListcasesOn: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tvar 1) (tapp (tentity 94) (tvar 2)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 4))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 95) (tvar 5)) (tvar 1)) (tvar 0)))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- memNatmatch_1
-axiom decl_memNatmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tapp (tentity 94) (tentity 1))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 95) (tentity 1)) (tvar 1)) (tvar 0)))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Boolandmatch_1
-axiom decl_Boolandmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 13)) (tentity 17))) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tentity 14)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 3) (tentity 15)))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- Booland
-axiom decl_Booland: $ teq (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tentity 13)) (tentity 13))) ttrue $;
-
--- Boolnot
-axiom decl_Boolnot: $ teq (tapp (tapp (tentity 3) (tentity 13)) (tentity 13)) ttrue $;
-
--- Boolor
-axiom decl_Boolor: $ teq (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tentity 13)) (tentity 13))) ttrue $;
-
--- BEqbeq
-axiom decl_BEqbeq: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 96) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tentity 13))))) ttrue $;
-
--- Decidabledecide
-axiom decl_Decidabledecide: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tentity 13))) ttrue $;
-
--- instBEqOfDecidableEq
-axiom decl_instBEqOfDecidableEq: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 36) (tvar 0))) (tapp (tentity 96) (tvar 1)))) ttrue $;
+-- memNat.match_1
+axiom decl_memNat_match_1: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tentity 23))) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 24)) (tapp (tvar 2) (tapp (tentity 25) (tentity 1))))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 26) (tentity 1)) (tvar 1)) (tvar 0)))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
 
 -- memNat
-axiom decl_memNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tentity 13))) ttrue $;
+axiom decl_memNat: $ teq (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tentity 27))) ttrue $;
 
 -- nodupNat
-axiom decl_nodupNat: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tentity 13)) ttrue $;
+axiom decl_nodupNat: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tentity 27)) ttrue $;
 
--- instDecidableEqListmatch_1
-axiom decl_instDecidableEqListmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tentity 43))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tapp (tentity 94) (tvar 3))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 4))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 95) (tvar 5)) (tvar 1)) (tvar 0)))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
+-- mem.match_1
+axiom decl_mem_match_1: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tentity 23))) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 24)) (tapp (tvar 2) (tapp (tentity 25) (tentity 0))))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 26) (tentity 0)) (tvar 1)) (tvar 0)))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
 
--- Listmap
-axiom decl_Listmap: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tentity 97)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 2))) (tapp (tentity 91) (tvar 2)))))) ttrue $;
-
--- memmatch_1
-axiom decl_memmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tapp (tentity 94) (tentity 4))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 95) (tentity 4)) (tvar 1)) (tvar 0)))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- instBEqOuterStatebeq
-axiom decl_instBEqOuterStatebeq: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tentity 4)) (tentity 13))) ttrue $;
+-- instBEqOuterState.beq
+axiom decl_instBEqOuterState_beq: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tentity 0)) (tentity 27))) ttrue $;
 
 -- instBEqOuterState
-axiom decl_instBEqOuterState: $ teq (tapp (tentity 96) (tentity 4)) ttrue $;
+axiom decl_instBEqOuterState: $ teq (tapp (tentity 28) (tentity 0)) ttrue $;
 
 -- indexOf
-axiom decl_indexOf: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tentity 1))) ttrue $;
+axiom decl_indexOf: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tentity 1))) ttrue $;
 
 -- dict
-axiom decl_dict: $ teq (tapp (tentity 91) (tentity 4)) ttrue $;
+axiom decl_dict: $ teq (tapp (tentity 22) (tentity 0)) ttrue $;
 
 -- bijective_checked
-axiom decl_bijective_checked: $ teq (tentity 13) ttrue $;
+axiom decl_bijective_checked: $ teq (tentity 27) ttrue $;
 
 -- bijective_verified
-axiom decl_bijective_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 98)) (tentity 15)) ttrue $;
-
--- HAppendhAppend
-axiom decl_HAppendhAppend: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tentity 53) (tentity 54))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 99) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))))))) ttrue $;
-
--- Appendappend
-axiom decl_Appendappend: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 100) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 3))))) ttrue $;
-
--- instHAppendOfAppend
-axiom decl_instHAppendOfAppend: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 100) (tvar 0))) (tapp (tapp (tapp (tentity 99) (tvar 1)) (tvar 1)) (tvar 1)))) ttrue $;
-
--- Listappendmatch_1
-axiom decl_Listappendmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tentity 43)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 3))) (tapp (tapp (tvar 3) (tapp (tentity 94) (tvar 4))) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 5))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 6))) (tapp (tapp (tvar 6) (tapp (tapp (tapp (tentity 95) (tvar 7)) (tvar 2)) (tvar 1))) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- Listappend
-axiom decl_Listappend: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tentity 91) (tvar 2))))) ttrue $;
-
--- ListinstAppend
-axiom decl_ListinstAppend: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tentity 100) (tapp (tentity 91) (tvar 0)))) ttrue $;
+axiom decl_bijective_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 29)) (tentity 30)) ttrue $;
 
 -- concatMap
-axiom decl_concatMap: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 91) (tentity 1)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tentity 91) (tentity 1)))) ttrue $;
+axiom decl_concatMap: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tentity 22) (tentity 1)))) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tapp (tentity 22) (tentity 1)))) ttrue $;
 
--- concatMap_sunfold
-axiom decl_concatMap_sunfold: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 91) (tentity 1)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tentity 91) (tentity 1)))) ttrue $;
-
--- bne
-axiom decl_bne: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 96) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tentity 13))))) ttrue $;
+-- concatMap._sunfold
+axiom decl_concatMap__sunfold: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tentity 22) (tentity 1)))) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tapp (tentity 22) (tentity 1)))) ttrue $;
 
 -- conflict_pair_checked
-axiom decl_conflict_pair_checked: $ teq (tentity 13) ttrue $;
+axiom decl_conflict_pair_checked: $ teq (tentity 27) ttrue $;
 
 -- conflict_pair_verified
-axiom decl_conflict_pair_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 101)) (tentity 15)) ttrue $;
+axiom decl_conflict_pair_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 31)) (tentity 30)) ttrue $;
 
 -- eraseDup
-axiom decl_eraseDup: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tentity 91) (tentity 1))) ttrue $;
+axiom decl_eraseDup: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tapp (tentity 22) (tentity 1))) ttrue $;
 
--- eraseDup_sunfold
-axiom decl_eraseDup_sunfold: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tentity 91) (tentity 1))) ttrue $;
+-- eraseDup._sunfold
+axiom decl_eraseDup__sunfold: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tapp (tentity 22) (tentity 1))) ttrue $;
 
--- getAtmatch_1
-axiom decl_getAtmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 3) (tentity 1)) (tentity 17)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 3) (tapp (tentity 94) (tentity 4))) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tvar 6) (tapp (tapp (tapp (tentity 95) (tentity 4)) (tvar 2)) (tvar 1))) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
+-- getAt.match_1
+axiom decl_getAt_match_1: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 2) (tentity 1)) (tentity 23)))) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tvar 3) (tapp (tentity 25) (tentity 0))) (tvar 0)))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tvar 6) (tapp (tapp (tapp (tentity 26) (tentity 0)) (tvar 2)) (tvar 1))) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
 
 -- getAt
-axiom decl_getAt: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 102) (tentity 4)))) ttrue $;
+axiom decl_getAt: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tentity 32) (tentity 0)))) ttrue $;
 
--- getAt_sunfold
-axiom decl_getAt_sunfold: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 102) (tentity 4)))) ttrue $;
+-- getAt._sunfold
+axiom decl_getAt__sunfold: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tentity 32) (tentity 0)))) ttrue $;
 
--- ProdcasesOn
-axiom decl_ProdcasesOn: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 103) (tvar 1)) (tvar 0))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 103) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 3) (tapp (tapp (tapp (tapp (tentity 104) (tvar 5)) (tvar 4)) (tvar 1)) (tvar 0)))))) (tapp (tvar 2) (tvar 1))))))) ttrue $;
-
--- get_or_insertmatch_1
-axiom decl_get_or_insertmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 103) (tentity 1)) (tapp (tentity 91) (tentity 4)))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 103) (tentity 1)) (tapp (tentity 91) (tentity 4)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tvar 3) (tapp (tapp (tapp (tapp (tentity 104) (tentity 1)) (tapp (tentity 91) (tentity 4))) (tvar 1)) (tvar 0)))))) (tapp (tvar 2) (tvar 1))))) ttrue $;
+-- get_or_insert.match_1
+axiom decl_get_or_insert_match_1: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tapp (tapp (tentity 33) (tentity 1)) (tapp (tentity 22) (tentity 0)))) (tentity 23))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 33) (tentity 1)) (tapp (tentity 22) (tentity 0)))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tvar 3) (tapp (tapp (tapp (tapp (tentity 34) (tentity 1)) (tapp (tentity 22) (tentity 0))) (tvar 1)) (tvar 0)))))) (tapp (tvar 2) (tvar 1))))) ttrue $;
 
 -- get_or_insert
-axiom decl_get_or_insert: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 103) (tentity 1)) (tapp (tentity 91) (tentity 4))))) ttrue $;
+axiom decl_get_or_insert: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 33) (tentity 1)) (tapp (tentity 22) (tentity 0))))) ttrue $;
 
--- get_or_insert_sunfold
-axiom decl_get_or_insert_sunfold: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tapp (tapp (tentity 103) (tentity 1)) (tapp (tentity 91) (tentity 4))))) ttrue $;
-
--- Listrangeloopmatch_1
-axiom decl_Listrangeloopmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tapp (tvar 3) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tapp (tvar 5) (tapp (tentity 22) (tvar 1))) (tvar 0))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- Listrangeloop
-axiom decl_Listrangeloop: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tapp (tentity 91) (tentity 1)))) ttrue $;
-
--- Listrange
-axiom decl_Listrange: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 91) (tentity 1))) ttrue $;
+-- get_or_insert._sunfold
+axiom decl_get_or_insert__sunfold: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tapp (tapp (tentity 33) (tentity 1)) (tapp (tentity 22) (tentity 0))))) ttrue $;
 
 -- gridImage
-axiom decl_gridImage: $ teq (tapp (tentity 91) (tentity 1)) ttrue $;
-
--- Listlength
-axiom decl_Listlength: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tentity 1))) ttrue $;
+axiom decl_gridImage: $ teq (tapp (tentity 22) (tentity 1)) ttrue $;
 
 -- grid_image_small_checked
-axiom decl_grid_image_small_checked: $ teq (tentity 13) ttrue $;
+axiom decl_grid_image_small_checked: $ teq (tentity 27) ttrue $;
 
 -- grid_image_small_verified
-axiom decl_grid_image_small_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 105)) (tentity 15)) ttrue $;
+axiom decl_grid_image_small_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 35)) (tentity 30)) ttrue $;
 
 -- rowBanks
-axiom decl_rowBanks: $ teq (tapp (tentity 91) (tentity 1)) ttrue $;
+axiom decl_rowBanks: $ teq (tapp (tentity 22) (tentity 1)) ttrue $;
 
 -- rowImage
-axiom decl_rowImage: $ teq (tapp (tentity 91) (tentity 1)) ttrue $;
+axiom decl_rowImage: $ teq (tapp (tentity 22) (tentity 1)) ttrue $;
 
 -- image_too_small_checked
-axiom decl_image_too_small_checked: $ teq (tentity 13) ttrue $;
+axiom decl_image_too_small_checked: $ teq (tentity 27) ttrue $;
 
 -- image_too_small_verified
-axiom decl_image_too_small_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 106)) (tentity 15)) ttrue $;
+axiom decl_image_too_small_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 36)) (tentity 30)) ttrue $;
 
--- indexOf_sunfold
-axiom decl_indexOf_sunfold: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tentity 1))) ttrue $;
-
--- Listanymatch_1
-axiom decl_Listanymatch_1: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tentity 13))) (tentity 43)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 2)) (tentity 13))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tentity 13))) (tapp (tapp (tvar 3) (tapp (tentity 94) (tvar 4))) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 5))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 6)) (tentity 13))) (tapp (tapp (tvar 6) (tapp (tapp (tapp (tentity 95) (tvar 7)) (tvar 2)) (tvar 1))) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- Listall
-axiom decl_Listall: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tentity 13))) (tentity 13)))) ttrue $;
-
--- Listbeqmatch_1
-axiom decl_Listbeqmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tentity 43)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tvar 3) (tapp (tentity 94) (tvar 4))) (tapp (tentity 94) (tvar 4))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 5))) (tapp (tapp (tentity 3) (tvar 6)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 7))) (tapp (tapp (tvar 7) (tapp (tapp (tapp (tentity 95) (tvar 8)) (tvar 3)) (tvar 2))) (tapp (tapp (tapp (tentity 95) (tvar 8)) (tvar 1)) (tvar 0)))))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 5))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 6))) (tapp (tapp (tvar 6) (tvar 1)) (tvar 0))))) (tapp (tapp (tvar 5) (tvar 4)) (tvar 3))))))))) ttrue $;
-
--- Listbeq
-axiom decl_Listbeq: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 96) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 2))) (tentity 13))))) ttrue $;
-
--- ListinstBEq
-axiom decl_ListinstBEq: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 96) (tvar 0))) (tapp (tentity 96) (tapp (tentity 91) (tvar 1))))) ttrue $;
+-- indexOf._sunfold
+axiom decl_indexOf__sunfold: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tentity 1))) ttrue $;
 
 -- insert_existing_checked
-axiom decl_insert_existing_checked: $ teq (tentity 13) ttrue $;
+axiom decl_insert_existing_checked: $ teq (tentity 27) ttrue $;
 
 -- insert_existing_verified
-axiom decl_insert_existing_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 107)) (tentity 15)) ttrue $;
+axiom decl_insert_existing_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 37)) (tentity 30)) ttrue $;
 
 -- insert_new_checked
-axiom decl_insert_new_checked: $ teq (tentity 13) ttrue $;
+axiom decl_insert_new_checked: $ teq (tentity 27) ttrue $;
 
 -- insert_new_verified
-axiom decl_insert_new_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 108)) (tentity 15)) ttrue $;
+axiom decl_insert_new_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 38)) (tentity 30)) ttrue $;
 
--- Eqmp
-axiom decl_Eqmp: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 6)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 2)) (tvar 2))))) ttrue $;
+-- instDecidableEqOuterState._proof_1
+axiom decl_instDecidableEqOuterState__proof_1: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tentity 12) (tvar 1))) (tapp (tentity 12) (tvar 0)))) (tapp (tapp (tapp (tentity 11) (tentity 0)) (tvar 2)) (tvar 1))))) ttrue $;
 
--- instDecidableEqOuterState_proof_1
-axiom decl_instDecidableEqOuterState_proof_1: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 28) (tvar 1))) (tapp (tentity 28) (tvar 0)))) (tapp (tapp (tapp (tentity 27) (tentity 4)) (tvar 2)) (tvar 1))))) ttrue $;
-
--- instDecidableEqOuterState_proof_2
-axiom decl_instDecidableEqOuterState_proof_2: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tapp (tentity 28) (tvar 1))) (tapp (tentity 28) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 4)) (tvar 2)) (tvar 1))) (tentity 42))))) ttrue $;
+-- instDecidableEqOuterState._proof_2
+axiom decl_instDecidableEqOuterState__proof_2: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 39) (tapp (tapp (tapp (tentity 11) (tentity 1)) (tapp (tentity 12) (tvar 1))) (tapp (tentity 12) (tvar 0))))) (tapp (tapp (tentity 2) (tapp (tapp (tapp (tentity 11) (tentity 0)) (tvar 2)) (tvar 1))) (tentity 40))))) ttrue $;
 
 -- instDecidableEqOuterState
-axiom decl_instDecidableEqOuterState: $ teq (tapp (tentity 36) (tentity 4)) ttrue $;
+axiom decl_instDecidableEqOuterState: $ teq (tapp (tentity 41) (tentity 0)) ttrue $;
 
--- HPowhPow
-axiom decl_HPowhPow: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tentity 53) (tentity 54))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 109) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))))))) ttrue $;
+-- instReprOuterState.repr.match_1
+axiom decl_instReprOuterState_repr_match_1: $ teq (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 0)) (tentity 23))) (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 24)) (tapp (tvar 2) (tentity 5)))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 24)) (tapp (tvar 3) (tentity 6)))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 24)) (tapp (tvar 4) (tentity 7)))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 24)) (tapp (tvar 5) (tentity 8)))) (tapp (tapp (tentity 2) (tapp (tapp (tentity 2) (tentity 24)) (tapp (tvar 6) (tentity 9)))) (tapp (tvar 6) (tvar 5))))))))) ttrue $;
 
--- Powpow
-axiom decl_Powpow: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 110) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 4)))))) ttrue $;
-
--- instHPow
-axiom decl_instHPow: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tentity 97)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 110) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tentity 109) (tvar 2)) (tvar 1)) (tvar 2))))) ttrue $;
-
--- NatPowpow
-axiom decl_NatPowpow: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 111) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tentity 1)) (tvar 3))))) ttrue $;
-
--- instPowNat
-axiom decl_instPowNat: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 111) (tvar 0))) (tapp (tapp (tentity 110) (tvar 1)) (tentity 1)))) ttrue $;
-
--- Natpow
-axiom decl_Natpow: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
-
--- instNatPowNat
-axiom decl_instNatPowNat: $ teq (tapp (tentity 111) (tentity 1)) ttrue $;
-
--- NatisValidChar
-axiom decl_NatisValidChar: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tentity 30)) ttrue $;
-
--- Finval
-axiom decl_Finval: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 112) (tvar 0))) (tentity 1))) ttrue $;
-
--- BitVectoFin
-axiom decl_BitVectoFin: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 113) (tvar 0))) (tapp (tentity 112) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 114) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tapp (tentity 115) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 116) (tentity 1)) (tentity 117)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 2)) (tapp (tentity 51) (tint 2)))) (tvar 1))))) ttrue $;
-
--- BitVectoNat
-axiom decl_BitVectoNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 113) (tvar 0))) (tentity 1))) ttrue $;
-
--- UInt32toBitVec
-axiom decl_UInt32toBitVec: $ teq (tapp (tapp (tentity 3) (tentity 118)) (tapp (tentity 113) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 32)) (tapp (tentity 51) (tint 32))))) ttrue $;
-
--- UInt32toNat
-axiom decl_UInt32toNat: $ teq (tapp (tapp (tentity 3) (tentity 118)) (tentity 1)) ttrue $;
-
--- UInt32isValidChar
-axiom decl_UInt32isValidChar: $ teq (tapp (tapp (tentity 3) (tentity 118)) (tentity 30)) ttrue $;
-
--- ListtoByteArraymatch_1
-axiom decl_ListtoByteArraymatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 119))) (tapp (tapp (tentity 3) (tentity 120)) (tentity 17)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 119))) (tapp (tapp (tentity 3) (tentity 120)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 120)) (tapp (tapp (tvar 3) (tapp (tentity 94) (tentity 119))) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 119)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 119))) (tapp (tapp (tentity 3) (tentity 120)) (tapp (tapp (tvar 6) (tapp (tapp (tapp (tentity 95) (tentity 119)) (tvar 2)) (tvar 1))) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- ByteArraycasesOn
-axiom decl_ByteArraycasesOn: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 120)) (tentity 6))) (tapp (tapp (tentity 3) (tentity 120)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 121) (tentity 119))) (tapp (tvar 2) (tapp (tentity 122) (tvar 0))))) (tapp (tvar 2) (tvar 1))))) ttrue $;
-
--- ByteArraypushmatch_1
-axiom decl_ByteArraypushmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 120)) (tapp (tapp (tentity 3) (tentity 119)) (tentity 17)))) (tapp (tapp (tentity 3) (tentity 120)) (tapp (tapp (tentity 3) (tentity 119)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 121) (tentity 119))) (tapp (tapp (tentity 3) (tentity 119)) (tapp (tapp (tvar 4) (tapp (tentity 122) (tvar 1))) (tvar 0))))) (tapp (tapp (tvar 3) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- Listconcatmatch_1
-axiom decl_Listconcatmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tentity 43)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 1))) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tvar 3) (tapp (tentity 94) (tvar 4))) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 5))) (tapp (tapp (tentity 3) (tvar 6)) (tapp (tapp (tvar 6) (tapp (tapp (tapp (tentity 95) (tvar 7)) (tvar 2)) (tvar 1))) (tvar 0)))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- Listconcat
-axiom decl_Listconcat: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tentity 91) (tvar 2))))) ttrue $;
-
--- ArraytoList
-axiom decl_ArraytoList: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 121) (tvar 0))) (tapp (tentity 91) (tvar 1)))) ttrue $;
-
--- Arraypush
-axiom decl_Arraypush: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 121) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tentity 121) (tvar 2))))) ttrue $;
-
--- ByteArraypush
-axiom decl_ByteArraypush: $ teq (tapp (tapp (tentity 3) (tentity 120)) (tapp (tapp (tentity 3) (tentity 119)) (tentity 120))) ttrue $;
-
--- ListtoByteArrayloop
-axiom decl_ListtoByteArrayloop: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 119))) (tapp (tapp (tentity 3) (tentity 120)) (tentity 120))) ttrue $;
-
--- ArrayemptyWithCapacity
-axiom decl_ArrayemptyWithCapacity: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 121) (tvar 1)))) ttrue $;
-
--- Arrayempty
-axiom decl_Arrayempty: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tentity 121) (tvar 0))) ttrue $;
-
--- ByteArrayemptyWithCapacity
-axiom decl_ByteArrayemptyWithCapacity: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tentity 120)) ttrue $;
-
--- ByteArrayempty
-axiom decl_ByteArrayempty: $ teq (tentity 120) ttrue $;
-
--- ListtoByteArray
-axiom decl_ListtoByteArray: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 119))) (tentity 120)) ttrue $;
-
--- Listflattenmatch_1
-axiom decl_Listflattenmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tapp (tentity 91) (tvar 0)))) (tentity 43))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tapp (tentity 91) (tvar 1)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tapp (tentity 94) (tapp (tentity 91) (tvar 3)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 3))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tapp (tentity 91) (tvar 4)))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 95) (tapp (tentity 91) (tvar 5))) (tvar 1)) (tvar 0)))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- Listflatten
-axiom decl_Listflatten: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tapp (tentity 91) (tvar 0)))) (tapp (tentity 91) (tvar 1)))) ttrue $;
-
--- ListflatMap
-axiom decl_ListflatMap: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tentity 91) (tvar 1)))) (tapp (tapp (tentity 3) (tapp (tentity 91) (tvar 2))) (tapp (tentity 91) (tvar 2)))))) ttrue $;
-
--- Charval
-axiom decl_Charval: $ teq (tapp (tapp (tentity 3) (tentity 123)) (tentity 118)) ttrue $;
-
--- _privateInitPrelude0Natmod_ltmatch_1_3
-axiom decl__privateInitPrelude0Natmod_ltmatch_1_3: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tapp (tvar 5) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 1))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tapp (tvar 7) (tapp (tentity 22) (tvar 2))) (tvar 1)) (tvar 0)))))) (tapp (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- Natzero_lt_succ
-axiom decl_Natzero_lt_succ: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 0)))) ttrue $;
-
--- _privateInitPrelude0Natmod_ltmatch_1_1
-axiom decl__privateInitPrelude0Natmod_ltmatch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 0)) (tapp (tentity 22) (tvar 1))))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tapp (tentity 22) (tvar 2))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tapp (tentity 22) (tvar 3)))) (tapp (tvar 2) (tapp (tapp (tentity 34) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tapp (tentity 22) (tvar 4)))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tapp (tentity 22) (tvar 4))))) (tapp (tvar 3) (tapp (tapp (tentity 33) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 4)) (tapp (tentity 22) (tvar 5)))) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- _privateInitPrelude0NatmodCore_ltmatch_1_1
-axiom decl__privateInitPrelude0NatmodCore_ltmatch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0)))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 2))) (tapp (tvar 2) (tapp (tapp (tentity 34) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 3))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 3)))) (tapp (tvar 3) (tapp (tapp (tentity 33) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 4))) (tvar 0))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- Natnot_lt_zero
-axiom decl_Natnot_lt_zero: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))))) ttrue $;
-
--- _privateInitPrelude0NatmodCoreGo_ltmatch_1_1
-axiom decl__privateInitPrelude0NatmodCoreGo_ltmatch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0)))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 3)) (tvar 2))) (tapp (tvar 2) (tapp (tapp (tentity 34) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 3))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 3)))) (tapp (tvar 3) (tapp (tapp (tentity 33) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 5)) (tvar 4))) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- OrcasesOn
-axiom decl_OrcasesOn: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 1)) (tvar 0))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 2) (tapp (tapp (tapp (tentity 125) (tvar 4)) (tvar 3)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 3) (tapp (tapp (tapp (tentity 126) (tvar 5)) (tvar 4)) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- _privateInitPrelude0Orelimmatch_1_1
-axiom decl__privateInitPrelude0Orelimmatch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 1)) (tvar 0))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 2) (tapp (tapp (tapp (tentity 125) (tvar 4)) (tvar 3)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 3) (tapp (tapp (tapp (tentity 126) (tvar 5)) (tvar 4)) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- Orelim
-axiom decl_Orelim: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))) (tvar 3))))))) ttrue $;
-
--- id
-axiom decl_id: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tvar 0)) (tvar 1))) ttrue $;
-
--- Orresolve_right
-axiom decl_Orresolve_right: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 1))) (tvar 3))))) ttrue $;
-
--- GEge
-axiom decl_GEge: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 59) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tentity 30))))) ttrue $;
-
--- _privateInitPrelude0Natlt_or_gematch_1_5
-axiom decl__privateInitPrelude0Natlt_or_gematch_1_5: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tentity 30))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tentity 21)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tvar 3) (tapp (tentity 22) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))) ttrue $;
-
--- _privateInitPrelude0Natlt_or_gematch_1_3
-axiom decl__privateInitPrelude0Natlt_or_gematch_1_3: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 127) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0)))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 127) (tentity 1)) (tentity 65)) (tvar 2)) (tvar 1)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 3)) (tvar 2))) (tapp (tvar 2) (tapp (tapp (tapp (tentity 125) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tvar 3))) (tapp (tapp (tapp (tapp (tentity 127) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 3))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 127) (tentity 1)) (tentity 65)) (tvar 4)) (tvar 3))) (tapp (tvar 3) (tapp (tapp (tapp (tentity 126) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 5)) (tvar 4))) (tapp (tapp (tapp (tapp (tentity 127) (tentity 1)) (tentity 65)) (tvar 5)) (tvar 4))) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- Natle_succ_of_le
-axiom decl_Natle_succ_of_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 2)) (tapp (tentity 22) (tvar 1)))))) ttrue $;
-
--- _privateInitPrelude0Natlt_or_gematch_1_1
-axiom decl__privateInitPrelude0Natlt_or_gematch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 0)) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tvar 1)))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 1)) (tvar 2))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tvar 2)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 2)) (tvar 3))) (tapp (tvar 2) (tapp (tapp (tapp (tentity 125) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 3)) (tvar 4))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 3)) (tvar 4))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 3)) (tvar 4))) (tapp (tvar 3) (tapp (tapp (tapp (tentity 126) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 4)) (tvar 5))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tvar 5))) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- Nateq_or_lt_of_lematch_3
-axiom decl_Nateq_or_lt_of_lematch_3: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tentity 21)) (tentity 21))) (tapp (tapp (tapp (tvar 4) (tentity 21)) (tentity 21)) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tentity 21)) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tapp (tvar 6) (tentity 21)) (tapp (tentity 22) (tvar 1))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 22) (tvar 0))) (tentity 21))) (tapp (tapp (tapp (tvar 7) (tapp (tentity 22) (tvar 1))) (tentity 21)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tapp (tentity 22) (tvar 1))) (tapp (tentity 22) (tvar 0)))) (tapp (tapp (tapp (tvar 9) (tapp (tentity 22) (tvar 2))) (tapp (tentity 22) (tvar 1))) (tvar 0)))))) (tapp (tapp (tapp (tvar 7) (tvar 6)) (tvar 5)) (tvar 4)))))))))) ttrue $;
-
--- Nateq_or_lt_of_lematch_1
-axiom decl_Nateq_or_lt_of_lematch_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tvar 0)))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tvar 1)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 3)) (tvar 2))) (tapp (tvar 2) (tapp (tapp (tapp (tentity 125) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 4)) (tvar 3))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tvar 3))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tvar 3))) (tapp (tvar 3) (tapp (tapp (tapp (tentity 126) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 5)) (tvar 4))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 5)) (tvar 4))) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- Nateq_or_lt_of_le
-axiom decl_Nateq_or_lt_of_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tentity 27) (tentity 1)) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- Natlt_or_ge
-axiom decl_Natlt_or_ge: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 124) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 127) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0))))) ttrue $;
-
--- Natlt_of_not_le
-axiom decl_Natlt_of_not_le: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tapp (tapp (tapp (tapp (tentity 64) (tentity 1)) (tentity 65)) (tvar 1)) (tvar 0)))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tvar 2))))) ttrue $;
-
--- NatmodCoreGo_lt
-axiom decl_NatmodCoreGo_lt: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tvar 3))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tapp (tapp (tentity 128) (tvar 3)) (tvar 2)) (tvar 4)) (tvar 1)) (tvar 0))) (tvar 3))))))) ttrue $;
-
--- NatmodCore_lt
-axiom decl_NatmodCore_lt: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tentity 129) (tvar 2)) (tvar 1))) (tvar 1))))) ttrue $;
-
--- Natmod_lt
-axiom decl_Natmod_lt: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 130) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 131) (tentity 1)) (tentity 132))) (tvar 2)) (tvar 1))) (tvar 1))))) ttrue $;
-
--- FinInternalofNat
-axiom decl_FinInternalofNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 112) (tvar 2))))) ttrue $;
-
--- _privateInitPrelude0Natpow_posmatch_1_1
-axiom decl__privateInitPrelude0Natpow_posmatch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tentity 30)))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 3))) (tapp (tapp (tvar 3) (tentity 21)) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 5))) (tapp (tapp (tvar 5) (tapp (tentity 22) (tvar 1))) (tvar 0))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- _privateInitPrelude0Natmul_posmatch_1_1
-axiom decl__privateInitPrelude0Natmul_posmatch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tentity 30)))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tentity 21))) (tapp (tapp (tapp (tapp (tvar 7) (tvar 2)) (tentity 21)) (tvar 1)) (tvar 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 1)))) (tapp (tapp (tapp (tapp (tvar 9) (tvar 3)) (tapp (tentity 22) (tvar 2))) (tvar 1)) (tvar 0))))))) (tapp (tapp (tapp (tapp (tvar 6) (tvar 5)) (tvar 4)) (tvar 3)) (tvar 2))))))))) ttrue $;
-
--- _privateInitPrelude0Natadd_pos_rightmatch_1_1
-axiom decl__privateInitPrelude0Natadd_pos_rightmatch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tentity 30))))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tentity 21))) (tapp (tapp (tapp (tvar 5) (tentity 21)) (tvar 1)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tentity 22) (tvar 1)))) (tapp (tapp (tapp (tvar 7) (tapp (tentity 22) (tvar 2))) (tvar 1)) (tvar 0)))))) (tapp (tapp (tapp (tvar 5) (tvar 4)) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- Natadd_pos_right
-axiom decl_Natadd_pos_right: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 86) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 87) (tentity 1)) (tentity 88))) (tvar 1)) (tvar 2)))))) ttrue $;
-
--- Natmul_pos
-axiom decl_Natmul_pos: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 133) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 134) (tentity 1)) (tentity 135))) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- Natpow_pos
-axiom decl_Natpow_pos: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 114) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tapp (tentity 115) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 116) (tentity 1)) (tentity 117)))) (tvar 2)) (tvar 1)))))) ttrue $;
-
--- BitVecofNat_proof_1
-axiom decl_BitVecofNat_proof_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 114) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tapp (tentity 115) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 116) (tentity 1)) (tentity 117)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 2)) (tapp (tentity 51) (tint 2)))) (tvar 0)))) ttrue $;
-
--- BitVecofNat
-axiom decl_BitVecofNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tentity 113) (tvar 1)))) ttrue $;
-
--- UInt8ofNat
-axiom decl_UInt8ofNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tentity 119)) ttrue $;
-
--- HDivhDiv
-axiom decl_HDivhDiv: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tentity 52)) (tapp (tapp (tentity 3) (tapp (tentity 53) (tentity 54))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 136) (tvar 2)) (tvar 1)) (tvar 0))) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tvar 3)) (tvar 3))))))) ttrue $;
-
--- Divdiv
-axiom decl_Divdiv: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 137) (tvar 0))) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tapp (tentity 3) (tvar 2)) (tvar 3))))) ttrue $;
-
--- instHDiv
-axiom decl_instHDiv: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 137) (tvar 0))) (tapp (tapp (tapp (tentity 136) (tvar 1)) (tvar 1)) (tvar 1)))) ttrue $;
-
--- Natdivgo
-axiom decl_Natdivgo: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tvar 0))) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tvar 1))) (tentity 1)))))) ttrue $;
-
--- Natdiv
-axiom decl_Natdiv: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 1))) ttrue $;
-
--- NatinstDiv
-axiom decl_NatinstDiv: $ teq (tapp (tentity 137) (tentity 1)) ttrue $;
-
--- Stringutf8EncodeChar
-axiom decl_Stringutf8EncodeChar: $ teq (tapp (tapp (tentity 3) (tentity 123)) (tapp (tentity 91) (tentity 119))) ttrue $;
-
--- Listutf8Encode
-axiom decl_Listutf8Encode: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 123))) (tentity 120)) ttrue $;
-
--- optParam
-axiom decl_optParam: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tvar 0)) (tentity 6))) ttrue $;
-
--- instReprOuterStatereprmatch_1
-axiom decl_instReprOuterStatereprmatch_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 4)) (tentity 17))) (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 2) (tentity 7)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 3) (tentity 8)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 4) (tentity 9)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 5) (tentity 10)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tvar 6) (tentity 11)))) (tapp (tvar 6) (tvar 5))))))))) ttrue $;
-
--- NatCastnatCast
-axiom decl_NatCastnatCast: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 138) (tvar 0))) (tapp (tapp (tentity 3) (tentity 1)) (tvar 2)))) ttrue $;
-
--- Natcast
-axiom decl_Natcast: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tentity 138) (tvar 0))) (tapp (tapp (tentity 3) (tentity 1)) (tvar 2)))) ttrue $;
-
--- instNatCastInt
-axiom decl_instNatCastInt: $ teq (tapp (tentity 138) (tentity 139)) ttrue $;
-
--- Inhabiteddefault
-axiom decl_Inhabiteddefault: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tapp (tentity 140) (tvar 0))) (tvar 1))) ttrue $;
-
--- PiinstInhabited
-axiom decl_PiinstInhabited: $ teq (tapp (tapp (tentity 3) (tentity 6)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 0)) (tentity 35))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 1)) (tapp (tentity 140) (tapp (tvar 1) (tvar 0))))) (tapp (tentity 140) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tvar 2) (tvar 0))))))) ttrue $;
-
--- instInhabitedNat
-axiom decl_instInhabitedNat: $ teq (tapp (tentity 140) (tentity 1)) ttrue $;
-
--- StringInternallength
-axiom decl_StringInternallength: $ teq (tapp (tapp (tentity 3) (tentity 141)) (tentity 1)) ttrue $;
-
--- StdFormatinstAppend
-axiom decl_StdFormatinstAppend: $ teq (tapp (tentity 100) (tentity 142)) ttrue $;
-
--- StdFormatbracket
-axiom decl_StdFormatbracket: $ teq (tapp (tapp (tentity 3) (tentity 141)) (tapp (tapp (tentity 3) (tentity 142)) (tapp (tapp (tentity 3) (tentity 141)) (tentity 142)))) ttrue $;
-
--- instDecidableAndmatch_1
-axiom decl_instDecidableAndmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tvar 2) (tapp (tapp (tentity 34) (tvar 3)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 3))) (tapp (tvar 3) (tapp (tapp (tentity 33) (tvar 4)) (tvar 0))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- instDecidableOrmatch_1
-axiom decl_instDecidableOrmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 1)) (tvar 0))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 2) (tapp (tapp (tapp (tentity 125) (tvar 4)) (tvar 3)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 3) (tapp (tapp (tapp (tentity 126) (tvar 5)) (tvar 4)) (tvar 0))))) (tapp (tvar 3) (tvar 2)))))))) ttrue $;
-
--- instDecidableOr_proof_1
-axiom decl_instDecidableOr_proof_1: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 124) (tvar 3)) (tvar 2))) (tentity 42)))))) ttrue $;
-
--- instDecidableOr
-axiom decl_instDecidableOr: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tentity 31) (tapp (tapp (tentity 124) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- Andright
-axiom decl_Andright: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tvar 1)) (tvar 0))) (tvar 1)))) ttrue $;
-
--- instDecidableAnd_proof_1
-axiom decl_instDecidableAnd_proof_1: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tvar 2)) (tvar 1))) (tentity 42))))) ttrue $;
-
--- Andleft
-axiom decl_Andleft: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tvar 1)) (tvar 0))) (tvar 2)))) ttrue $;
-
--- instDecidableAnd_proof_2
-axiom decl_instDecidableAnd_proof_2: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 80) (tvar 2)) (tvar 1))) (tentity 42))))) ttrue $;
-
--- instDecidableAnd
-axiom decl_instDecidableAnd: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tentity 31) (tapp (tapp (tentity 80) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- BitVecofNatLT
-axiom decl_BitVecofNatLT: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 0)) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 114) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tapp (tentity 115) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 116) (tentity 1)) (tentity 117)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 2)) (tapp (tentity 51) (tint 2)))) (tvar 1)))) (tapp (tentity 113) (tvar 2))))) ttrue $;
-
--- UInt32size
-axiom decl_UInt32size: $ teq (tentity 1) ttrue $;
-
--- _privateInitPrelude0isValidChar_UInt32match_1_1
-axiom decl__privateInitPrelude0isValidChar_UInt32match_1_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 143) (tvar 0))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tentity 143) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 55296)) (tapp (tentity 51) (tint 55296))))) (tapp (tvar 2) (tapp (tapp (tapp (tentity 125) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 3)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 55296)) (tapp (tentity 51) (tint 55296))))) (tapp (tapp (tentity 80) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 57343)) (tapp (tentity 51) (tint 57343)))) (tvar 3))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 3)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1114112)) (tapp (tentity 51) (tint 1114112)))))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 57343)) (tapp (tentity 51) (tint 57343)))) (tvar 3))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1114112)) (tapp (tentity 51) (tint 1114112))))) (tapp (tvar 4) (tapp (tapp (tapp (tentity 126) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 5)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 55296)) (tapp (tentity 51) (tint 55296))))) (tapp (tapp (tentity 80) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 57343)) (tapp (tentity 51) (tint 57343)))) (tvar 5))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 5)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1114112)) (tapp (tentity 51) (tint 1114112)))))) (tapp (tapp (tapp (tapp (tentity 81) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 57343)) (tapp (tentity 51) (tint 57343)))) (tvar 5))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 5)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1114112)) (tapp (tentity 51) (tint 1114112))))) (tvar 1)) (tvar 0))))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- Natlt_trans
-axiom decl_Natlt_trans: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 2)) (tvar 1))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 4)) (tvar 2))))))) ttrue $;
-
--- _privateInitPrelude0of_decide_eq_truematch_1_1
-axiom decl__privateInitPrelude0of_decide_eq_truematch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tentity 30))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 2)) (tapp (tvar 2) (tapp (tapp (tentity 34) (tvar 3)) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 3))) (tapp (tvar 3) (tapp (tapp (tentity 33) (tvar 4)) (tvar 0))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- _privateInitPrelude0ne_true_of_eq_falsematch_1_1
-axiom decl__privateInitPrelude0ne_true_of_eq_falsematch_1_1: $ teq (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 0)) (tentity 14))) (tentity 30)))) (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 0)) (tentity 14))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 15)) (tentity 14))) (tapp (tapp (tvar 3) (tentity 15)) (tvar 0)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 14)) (tentity 14))) (tapp (tapp (tvar 4) (tentity 14)) (tvar 0)))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2))))))) ttrue $;
-
--- ne_true_of_eq_false
-axiom decl_ne_true_of_eq_false: $ teq (tapp (tapp (tentity 3) (tentity 13)) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 0)) (tentity 14))) (tapp (tentity 32) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tvar 1)) (tentity 15))))) ttrue $;
-
--- _privateInitPrelude0decide_eq_falsematch_1_1
-axiom decl__privateInitPrelude0decide_eq_falsematch_1_1: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 1))) (tentity 30)))) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 4))) (tapp (tapp (tvar 4) (tapp (tapp (tentity 34) (tvar 5)) (tvar 1))) (tvar 0))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 4))) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 5))) (tapp (tapp (tvar 5) (tapp (tapp (tentity 33) (tvar 6)) (tvar 1))) (tvar 0))))) (tapp (tapp (tvar 4) (tvar 3)) (tvar 2)))))))) ttrue $;
-
--- decide_eq_false
-axiom decl_decide_eq_false: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 32) (tvar 1))) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 144) (tvar 2)) (tvar 1))) (tentity 14))))) ttrue $;
-
--- of_decide_eq_true
-axiom decl_of_decide_eq_true: $ teq (tapp (tapp (tentity 3) (tentity 30)) (tapp (tapp (tentity 3) (tapp (tentity 31) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tapp (tapp (tentity 27) (tentity 13)) (tapp (tapp (tentity 144) (tvar 1)) (tvar 0))) (tentity 15))) (tvar 2)))) ttrue $;
-
--- _privateInitPrelude0isValidChar_UInt32
-axiom decl__privateInitPrelude0isValidChar_UInt32: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 143) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tentity 145)))) ttrue $;
-
--- CharofNatAux_private_1
-axiom decl_CharofNatAux_private_1: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 143) (tvar 0))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tvar 1)) (tentity 145)))) ttrue $;
-
--- CharofNatAux
-axiom decl_CharofNatAux: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 143) (tvar 0))) (tentity 123))) ttrue $;
-
--- CharofNat_proof_1
-axiom decl_CharofNat_proof_1: $ teq (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tapp (tapp (tapp (tapp (tapp (tapp (tentity 114) (tentity 1)) (tentity 1)) (tentity 1)) (tapp (tapp (tapp (tentity 115) (tentity 1)) (tentity 1)) (tapp (tapp (tentity 116) (tentity 1)) (tentity 117)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 2)) (tapp (tentity 51) (tint 2)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 32)) (tapp (tentity 51) (tint 32))))) ttrue $;
-
--- CharofNat_proof_2
-axiom decl_CharofNat_proof_2: $ teq (tapp (tapp (tentity 124) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tentity 146) (tapp (tentity 147) (tapp (tapp (tapp (tentity 148) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 32)) (tapp (tentity 51) (tint 32)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tentity 149))))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 55296)) (tapp (tentity 51) (tint 55296))))) (tapp (tapp (tentity 80) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 57343)) (tapp (tentity 51) (tint 57343)))) (tapp (tentity 146) (tapp (tentity 147) (tapp (tapp (tapp (tentity 148) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 32)) (tapp (tentity 51) (tint 32)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tentity 149)))))) (tapp (tapp (tapp (tapp (tentity 76) (tentity 1)) (tentity 77)) (tapp (tentity 146) (tapp (tentity 147) (tapp (tapp (tapp (tentity 148) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 32)) (tapp (tentity 51) (tint 32)))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 0)) (tapp (tentity 51) (tint 0)))) (tentity 149))))) (tapp (tapp (tapp (tentity 50) (tentity 1)) (tint 1114112)) (tapp (tentity 51) (tint 1114112)))))) ttrue $;
-
--- CharofNat
-axiom decl_CharofNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tentity 123)) ttrue $;
-
--- StringofList_proof_1
-axiom decl_StringofList_proof_1: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 123))) (tapp (tentity 150) (tapp (tentity 151) (tvar 0)))) ttrue $;
-
--- StringofList
-axiom decl_StringofList: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 123))) (tentity 141)) ttrue $;
-
--- StdFormatparen
-axiom decl_StdFormatparen: $ teq (tapp (tapp (tentity 3) (tentity 142)) (tentity 142)) ttrue $;
-
--- RepraddAppParen
-axiom decl_RepraddAppParen: $ teq (tapp (tapp (tentity 3) (tentity 142)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 142))) ttrue $;
-
--- instOfNat
-axiom decl_instOfNat: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 2) (tentity 139)) (tvar 0))) ttrue $;
-
--- instReprOuterStaterepr
-axiom decl_instReprOuterStaterepr: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tentity 1)) (tentity 142))) ttrue $;
+-- instReprOuterState.repr
+axiom decl_instReprOuterState_repr: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tentity 1)) (tentity 42))) ttrue $;
 
 -- instReprOuterState
-axiom decl_instReprOuterState: $ teq (tapp (tentity 152) (tentity 4)) ttrue $;
-
--- OptioncasesOn
-axiom decl_OptioncasesOn: $ teq (tapp (tapp (tentity 3) (tentity 0)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 0))) (tentity 17))) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tvar 1) (tapp (tentity 153) (tvar 2)))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 3)) (tapp (tvar 3) (tapp (tapp (tentity 154) (tvar 4)) (tvar 0))))) (tapp (tvar 3) (tvar 2))))))) ttrue $;
-
--- OptioninstBEqbeqmatch_1
-axiom decl_OptioninstBEqbeqmatch_1: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 1))) (tentity 43)))) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 2))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tentity 16)) (tapp (tapp (tvar 3) (tapp (tentity 153) (tvar 4))) (tapp (tentity 153) (tvar 4))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tvar 4)) (tapp (tapp (tentity 3) (tvar 5)) (tapp (tapp (tvar 5) (tapp (tapp (tentity 154) (tvar 6)) (tvar 1))) (tapp (tapp (tentity 154) (tvar 6)) (tvar 0)))))) (tapp (tapp (tentity 3) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 5))) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 6))) (tapp (tapp (tvar 6) (tvar 1)) (tvar 0))))) (tapp (tapp (tvar 5) (tvar 4)) (tvar 3))))))))) ttrue $;
-
--- OptioninstBEqbeq
-axiom decl_OptioninstBEqbeq: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 96) (tvar 0))) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 1))) (tapp (tapp (tentity 3) (tapp (tentity 102) (tvar 2))) (tentity 13))))) ttrue $;
-
--- OptioninstBEq
-axiom decl_OptioninstBEq: $ teq (tapp (tapp (tentity 3) (tentity 57)) (tapp (tapp (tentity 3) (tapp (tentity 96) (tvar 0))) (tapp (tentity 96) (tapp (tentity 102) (tvar 1))))) ttrue $;
+axiom decl_instReprOuterState: $ teq (tapp (tentity 43) (tentity 0)) ttrue $;
 
 -- lookup_inverse_checked
-axiom decl_lookup_inverse_checked: $ teq (tentity 13) ttrue $;
+axiom decl_lookup_inverse_checked: $ teq (tentity 27) ttrue $;
 
 -- lookup_inverse_verified
-axiom decl_lookup_inverse_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 155)) (tentity 15)) ttrue $;
+axiom decl_lookup_inverse_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 44)) (tentity 30)) ttrue $;
 
 -- mem
-axiom decl_mem: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tentity 13))) ttrue $;
+axiom decl_mem: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tentity 27))) ttrue $;
 
--- mem_sunfold
-axiom decl_mem_sunfold: $ teq (tapp (tapp (tentity 3) (tentity 4)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tentity 13))) ttrue $;
+-- mem._sunfold
+axiom decl_mem__sunfold: $ teq (tapp (tapp (tentity 2) (tentity 0)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tentity 27))) ttrue $;
 
--- memNat_sunfold
-axiom decl_memNat_sunfold: $ teq (tapp (tapp (tentity 3) (tentity 1)) (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tentity 13))) ttrue $;
+-- memNat._sunfold
+axiom decl_memNat__sunfold: $ teq (tapp (tapp (tentity 2) (tentity 1)) (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tentity 27))) ttrue $;
 
 -- nodup
-axiom decl_nodup: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tentity 13)) ttrue $;
+axiom decl_nodup: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tentity 27)) ttrue $;
 
--- nodup_sunfold
-axiom decl_nodup_sunfold: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 4))) (tentity 13)) ttrue $;
+-- nodup._sunfold
+axiom decl_nodup__sunfold: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 0))) (tentity 27)) ttrue $;
 
--- nodupNat_sunfold
-axiom decl_nodupNat_sunfold: $ teq (tapp (tapp (tentity 3) (tapp (tentity 91) (tentity 1))) (tentity 13)) ttrue $;
+-- nodupNat._sunfold
+axiom decl_nodupNat__sunfold: $ teq (tapp (tapp (tentity 2) (tapp (tentity 22) (tentity 1))) (tentity 27)) ttrue $;
 
 -- row_even_checked
-axiom decl_row_even_checked: $ teq (tentity 13) ttrue $;
+axiom decl_row_even_checked: $ teq (tentity 27) ttrue $;
 
 -- row_even_verified
-axiom decl_row_even_verified: $ teq (tapp (tapp (tapp (tentity 27) (tentity 13)) (tentity 156)) (tentity 15)) ttrue $;
+axiom decl_row_even_verified: $ teq (tapp (tapp (tapp (tentity 11) (tentity 27)) (tentity 45)) (tentity 30)) ttrue $;
 
 -- Numerals used by tint (auditable, in order):
---   0, 1, 2, 3, 4, 32, 55296, 57343, 1114112
+--   0, 1, 2, 3, 4
 -- Symbol table (tentity indices, in first-use order):
---   0: Sort 3
+--   0: OuterState
 --   1: Nat
---   2: OfNat
---   3: Pi
---   4: OuterState
---   5: SizeOf
---   6: Sort 2
---   7: OuterStates0
---   8: OuterStates1
---   9: OuterStates2
---   10: OuterStates3
---   11: OuterStates4
---   12: Sort 1
---   13: Bool
---   14: Boolfalse
---   15: Booltrue
---   16: Unit
---   17: Sort 4
---   18: Sort 5
---   19: Natbelow
---   20: PProd
---   21: Natzero
---   22: Natsucc
---   23: Sort 10
---   24: PULift
---   25: Sort 14
---   26: Sort 13
---   27: Eq
---   28: OuterStatectorIdx
---   29: OuterStatectorElimType
---   30: Sort 0
---   31: Decidable
---   32: Not
---   33: DecidableisFalse
---   34: DecidableisTrue
---   35: Sort 6
---   36: DecidableEq
---   37: Sort 15
---   38: Natbeq
---   39: BoolnoConfusionType
---   40: NatnoConfusionType
---   41: Sort 17
---   42: False
---   43: Sort 18
---   44: noConfusionTypeEnum
---   45: Sort 19
---   46: OuterStatenoConfusionType
---   47: OuterStateofNat
---   48: SizeOfsizeOf
---   49: OuterState_sizeOf_inst
---   50: OfNatofNat
---   51: instOfNatNat
---   52: Sort 20
---   53: outParam
---   54: Sort 16
---   55: HMod
---   56: Mod
---   57: Sort 24
---   58: namedPattern
---   59: LE
---   60: Eqrefl
---   61: Boolrec
---   62: True
---   63: Natble
---   64: LEle
---   65: instLENat
---   66: Natle
---   67: Natlebelow
---   68: Natlerefl
---   69: Natlebelowrefl
---   70: Natlestep
---   71: Natlebelowstep
---   72: HEq
---   73: HAdd
---   74: Add
---   75: LT
---   76: LTlt
---   77: instLTNat
---   78: HSub
---   79: Sub
---   80: And
---   81: Andintro
---   82: Natpred
---   83: HSubhSub
---   84: instHSub
---   85: instSubNat
---   86: HAddhAdd
---   87: instHAdd
---   88: instAddNat
---   89: HMul
---   90: Mul
---   91: List
---   92: Sort 25
---   93: Listbelow
---   94: Listnil
---   95: Listcons
---   96: BEq
---   97: Sort 29
---   98: bijective_checked
---   99: HAppend
---   100: Append
---   101: conflict_pair_checked
---   102: Option
---   103: Prod
---   104: Prodmk
---   105: grid_image_small_checked
---   106: image_too_small_checked
---   107: insert_existing_checked
---   108: insert_new_checked
---   109: HPow
---   110: Pow
---   111: NatPow
---   112: Fin
---   113: BitVec
---   114: HPowhPow
---   115: instHPow
---   116: instPowNat
---   117: instNatPowNat
---   118: UInt32
---   119: UInt8
---   120: ByteArray
---   121: Array
---   122: ByteArraymk
---   123: Char
---   124: Or
---   125: Orinl
---   126: Orinr
---   127: GEge
---   128: NatmodCorego
---   129: NatmodCore
---   130: HModhMod
---   131: instHMod
---   132: NatinstMod
---   133: HMulhMul
---   134: instHMul
---   135: instMulNat
---   136: HDiv
---   137: Div
---   138: NatCast
---   139: Int
---   140: Inhabited
---   141: String
---   142: StdFormat
---   143: NatisValidChar
---   144: Decidabledecide
---   145: UInt32size
---   146: UInt32toNat
---   147: UInt32ofBitVec
---   148: BitVecofNatLT
---   149: CharofNat_proof_1
---   150: ByteArrayIsValidUTF8
---   151: Listutf8Encode
---   152: Repr
---   153: Optionnone
---   154: Optionsome
---   155: lookup_inverse_checked
---   156: row_even_checked
+--   2: Pi
+--   3: SizeOf
+--   4: Sort 2
+--   5: OuterState.s0
+--   6: OuterState.s1
+--   7: OuterState.s2
+--   8: OuterState.s3
+--   9: OuterState.s4
+--   10: Sort 5
+--   11: Eq
+--   12: OuterState.ctorIdx
+--   13: OuterState.ctorElimType
+--   14: Sort 17
+--   15: Sort 19
+--   16: OuterState.noConfusionType
+--   17: OuterState.ofNat
+--   18: SizeOf.sizeOf
+--   19: OuterState._sizeOf_inst
+--   20: OfNat.ofNat
+--   21: instOfNatNat
+--   22: List
+--   23: Sort 4
+--   24: Unit
+--   25: List.nil
+--   26: List.cons
+--   27: Bool
+--   28: BEq
+--   29: bijective_checked
+--   30: Bool.true
+--   31: conflict_pair_checked
+--   32: Option
+--   33: Prod
+--   34: Prod.mk
+--   35: grid_image_small_checked
+--   36: image_too_small_checked
+--   37: insert_existing_checked
+--   38: insert_new_checked
+--   39: Not
+--   40: False
+--   41: DecidableEq
+--   42: Std.Format
+--   43: Repr
+--   44: lookup_inverse_checked
+--   45: row_even_checked
