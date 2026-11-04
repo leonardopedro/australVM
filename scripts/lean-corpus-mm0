@@ -53,6 +53,28 @@ command -v mm0-rs >/dev/null || die "mm0-rs not on PATH"
 command -v mm0-c >/dev/null || die "mm0-c not on PATH (the root of trust)"
 PY=$(command -v python3) || die "python3 not on PATH (nix shell nixpkgs#python3)"
 
+# The nanoda leg (unfer/prob_kernel). Its verdict is what makes the statements
+# mean anything: mm0-c checks that the ENCODING is well-formed, nanoda checks
+# that the export really is a Lean kernel derivation. Build it once with
+#   (cd ../unfer && cargo build -q -p prob_kernel --example verify_export)
+NANODA=${NANODA_VERIFY:-}
+if [[ -z $NANODA ]]; then
+    for cand in "$WS/unfer/target/debug/examples/verify_export" \
+                "$WS/unfer/target/release/examples/verify_export"; do
+        [[ -x $cand ]] && NANODA=$cand && break
+    done
+fi
+if [[ -z $NANODA || ! -x $NANODA ]]; then
+    if [[ ${SKIP_NANODA:-0} == 1 ]]; then
+        warn "no verify_export binary and SKIP_NANODA=1 — exports are NOT re-checked by nanoda"
+    else
+        die "nanoda checker not found (build ../unfer with: cargo build -p prob_kernel --example verify_export)
+  or set NANODA_VERIFY=/path/to/verify_export, or SKIP_NANODA=1 to convert without the kernel re-check"
+    fi
+else
+    info "nanoda : $NANODA"
+fi
+
 mkdir -p "$OUT/exports" "$OUT/statements"
 export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-}
 
@@ -71,21 +93,42 @@ for mod in "${MODULES[@]}"; do
     info "== $mod"
     if [[ ${SKIP_BUILD:-0} != 1 ]]; then
         if ! (cd "$PROJ" && timeout "$BUILD_TIMEOUT" lake build "$mod" >/tmp/lean-corpus-build.log 2>&1); then
-            # A `.lean` file that is not a lake target (`axiom_gate`, a script)
-            # has nothing to build — that is not a conversion failure.
+            # Not every `.lean` file is a lake TARGET: `QuasiRiemannCertificate`
+            # is a module of the `RiemannProof` lib, `axiom_gate` is a script.
+            # Compile the file directly into a scratch olean dir and put THAT on
+            # the search path — the export only needs the olean, not a lake rule.
             if grep -q 'unknown target' /tmp/lean-corpus-build.log; then
-                warn "$mod: not a lake target (script or sample) — skipped"
-                SKIP+=("$mod")
+                mkdir -p "$OUT/olean"
+                if ! (cd "$PROJ" && timeout "$BUILD_TIMEOUT" lake env lean \
+                        -o "$OUT/olean/$mod.olean" "$mod.lean" >/tmp/lean-corpus-build.log 2>&1); then
+                    if grep -qi 'error' /tmp/lean-corpus-build.log; then
+                        err "$mod: not a lake target and does not elaborate — skipped"
+                        tail -3 /tmp/lean-corpus-build.log | sed 's/^/    /'
+                        BAD+=("$mod (elaborate)")
+                    else
+                        warn "$mod: not a lake target (script or sample) — skipped"
+                        SKIP+=("$mod")
+                    fi
+                    continue
+                fi
+                LEAN_PATH_EXTRA=$OUT/olean
+                info "$mod: leaf module — elaborated to $OUT/olean/$mod.olean"
+            else
+                err "$mod: lake build failed (last lines below) — skipped"
+                tail -3 /tmp/lean-corpus-build.log | sed 's/^/    /'
+                BAD+=("$mod (build)")
                 continue
             fi
-            err "$mod: lake build failed (last lines below) — skipped"
-            tail -3 /tmp/lean-corpus-build.log | sed 's/^/    /'
-            BAD+=("$mod (build)")
-            continue
+        else
+            LEAN_PATH_EXTRA=
         fi
     fi
 
-    decls=$(cd "$PROJ" && timeout 300 lake env lean --run "$DECLS_LEAN" "$mod" 2>/tmp/lean-corpus-decls.log)
+    # `lake env` supplies LEAN_PATH itself; only a leaf module needs the scratch
+    # olean dir prepended, and an unset LEAN_PATH must not trip `set -u`.
+    lp="${LEAN_PATH_EXTRA:+$LEAN_PATH_EXTRA:}${LEAN_PATH:-}"
+    decls=$(cd "$PROJ" && LEAN_PATH="$lp" \
+        timeout 300 lake env lean --run "$DECLS_LEAN" "$mod" 2>/tmp/lean-corpus-decls.log)
     if [[ -z $decls ]]; then
         warn "$mod: exports no declarations of its own — skipped"
         tail -2 /tmp/lean-corpus-decls.log | sed 's/^/    /'
@@ -97,11 +140,24 @@ for mod in "${MODULES[@]}"; do
     # Narrowed export: without the `--` list, a Mathlib project exports the whole
     # environment (~50k decls / 300 MB) and lean2mm0-stmts refuses it.
     ndjson=$OUT/exports/$mod.ndjson
-    if ! (cd "$PROJ" && timeout 900 lake env "$EXPORTER" "$mod" -- $decls >"$ndjson" 2>/tmp/lean-corpus-export.log); then
+    if ! (cd "$PROJ" && LEAN_PATH="$lp" \
+            timeout 900 lake env "$EXPORTER" "$mod" -- $decls \
+            >"$ndjson" 2>/tmp/lean-corpus-export.log); then
         err "$mod: lean4export failed"
         tail -3 /tmp/lean-corpus-export.log | sed 's/^/    /'
         BAD+=("$mod (export)")
         continue
+    fi
+
+    # nanoda re-checks the export in an independent kernel BEFORE anything is
+    # encoded: an export the Lean kernel would reject must never reach MM0.
+    if [[ -n $NANODA && -x $NANODA ]]; then
+        if ! "$NANODA" "$ndjson" >/tmp/lean-corpus-nanoda.log 2>&1; then
+            err "$mod: nanoda REJECTED the export"
+            tail -2 /tmp/lean-corpus-nanoda.log | sed 's/^/    /'
+            BAD+=("$mod (nanoda)")
+            continue
+        fi
     fi
 
     if ! "$PY" "$AVM/scripts/lean2mm0-stmts" emit "$ndjson" "$mod" --out "$OUT/statements" 2>/tmp/lean-corpus-emit.log; then

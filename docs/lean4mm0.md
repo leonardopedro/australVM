@@ -660,3 +660,43 @@ skipped, which is the honest status: there is nothing of their own to encode.
 The nested sub-libraries (`Book.*`, `BayesianTransformer.*`, ~14 600 files)
 convert with the same command by module name but are not part of the default
 corpus — one module per invocation, as their builds are the expensive part.
+
+### The nanoda leg (added 2026-11-04)
+
+mm0-c checks that the *encoding* is well-formed against the theory; it says
+nothing about whether the export was a real derivation. That is nanoda's job, and
+the corpus driver now runs it **between the export and the emission**:
+
+```
+lean4export ──▶ NDJSON ──▶ nanoda (unfer/prob_kernel) ──▶ lean2mm0-stmts ──▶ mm0-rs ──▶ mm0-c
+```
+
+```sh
+# one-time build of the checker (same code path as the pinned-fixture tests)
+(cd ../unfer && cargo build -p prob_kernel --example verify_export)
+```
+
+`prob_kernel/examples/verify_export.rs` exposes `verify_export()` as a command —
+before it, the independent kernel was only reachable from `#[test]`s hard-wired
+to the vendored fixtures, so a fresh export could not be re-checked without
+overwriting a fixture. Exit 0 = nanoda accepted every declaration; 1 = rejected
+(failing declaration printed); 2 = usage/IO error. The driver treats a rejection
+as a failure of that module (`<mod> (nanoda)`) and writes no statements.
+
+**Size cap, not a kernel verdict.** `LeanVerifySpec::max_export_bytes` defaults to
+16 MiB because the *service* accepts payloads over the wire; a local audit of a
+module that quotes large syntax trees easily exceeds that (`extract_sketch_info`
+exports 35 MB). The CLI therefore defaults to 256 MiB and takes an explicit
+`[max-bytes]` argument. Hitting the cap is a verification *gap* to report, never
+"unproved".
+
+### Files that are not lake targets
+
+Not every `*.lean` file is a `[[lean_lib]]` root: `QuasiRiemannCertificate` is a
+module of the `RiemannProof` library, `axiom_gate` is a script. `lake build <mod>`
+answers `unknown target` for those, so the driver falls back to elaborating the
+file directly into `mm0/olean/<mod>.olean` and prepending that directory to
+`LEAN_PATH` for the export. Three outcomes result, and they are reported
+separately: *converted*, *skipped* (does not elaborate as a standalone file, or
+exports no declarations of its own), *failed* (build error, nanoda rejection,
+mm0-rs error, mm0-c refusal).

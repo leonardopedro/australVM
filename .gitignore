@@ -65,3 +65,4 @@ mm0/metamath/set.mmu
 mm0/exports/
 mm0/statements/*.mmb
 scripts/__pycache__/
+mm0/olean/
