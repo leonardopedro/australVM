@@ -23,7 +23,15 @@
 #   LEAN_PROJECT        Lean project to export (default ../timepiece)
 #   LEAN_EXPORTER       lean4export binary (default: /tmp/l4e428 build)
 #   CORPUS_OUT          output root (default australVM/mm0)
-#   BUILD_TIMEOUT       per-module `lake build` budget, seconds (default 900)
+#   BUILD_TIMEOUT       per-module elaboration budget, seconds (default 900)
+#
+# Memory: this script deliberately never runs `lake build <module>`. Lake
+# resolves that against the whole `BookProof` library (8,144 planned artifacts
+# for a five-declaration chapter) and compiles whatever is stale with one job
+# per core, so a stale cluster becomes a dozen concurrent Mathlib environments —
+# an OOM kill waiting to happen. It elaborates exactly one file instead, and
+# scripts/lean-corpus-sweep runs the modules serially, each in its own capped
+# cgroup.
 #   SKIP_BUILD=1        do not run `lake build` (olean must already exist)
 #   NANODA_MAX_BYTES    export-size budget for the kernel re-check, bytes
 #                       (default 268435456, 0 = no budget)
@@ -97,36 +105,45 @@ declare -a OK=() BAD=() SKIP=() GAPPED=()
 for mod in "${MODULES[@]}"; do
     echo
     info "== $mod"
+    # --- olean: check this module's own, elaborate only if it is stale --------
+    # Not `lake build "$mod"`: Lake resolves a module target against the whole
+    # library and plans every artifact of it (measured here: 8,144 jobs for
+    # `BookProof.ChapterErrorNorms`, which has five declarations), then compiles
+    # the stale ones with Lake's job pool — one process per core, each of them a
+    # whole Mathlib environment. That fan-out is what filled the machine and got
+    # the sweep OOM-killed; capping a module in a cgroup (see
+    # scripts/lean-corpus-sweep) bounds one chapter, but nothing makes twelve
+    # concurrent chapters cheap.
+    # The olean is what the export actually needs, so: use it if it is current,
+    # otherwise elaborate that ONE file into the scratch dir.
+    LEAN_PATH_EXTRA=
     if [[ ${SKIP_BUILD:-0} != 1 ]]; then
-        if ! (cd "$PROJ" && timeout "$BUILD_TIMEOUT" lake build "$mod" >/tmp/lean-corpus-build.log 2>&1); then
-            # Not every `.lean` file is a lake TARGET: `QuasiRiemannCertificate`
-            # is a module of the `RiemannProof` lib, `axiom_gate` is a script.
-            # Compile the file directly into a scratch olean dir and put THAT on
-            # the search path — the export only needs the olean, not a lake rule.
-            if grep -q 'unknown target' /tmp/lean-corpus-build.log; then
-                mkdir -p "$OUT/olean"
-                if ! (cd "$PROJ" && timeout "$BUILD_TIMEOUT" lake env lean \
-                        -o "$OUT/olean/$mod.olean" "$mod.lean" >/tmp/lean-corpus-build.log 2>&1); then
-                    if grep -qi 'error' /tmp/lean-corpus-build.log; then
-                        err "$mod: not a lake target and does not elaborate — skipped"
-                        tail -3 /tmp/lean-corpus-build.log | sed 's/^/    /'
-                        BAD+=("$mod (elaborate)")
-                    else
-                        warn "$mod: not a lake target (script or sample) — skipped"
-                        SKIP+=("$mod")
-                    fi
-                    continue
+        olean=$PROJ/.lake/build/lib/lean/${mod//.//}.olean
+        if [[ -f $olean && ! $PROJ/$mod.lean -nt $olean ]]; then
+            : # current — the `lake build` this replaces was a 3 s no-op walk
+        else
+            scratch=$OUT/olean/${mod//.//}.olean
+            mkdir -p "$(dirname "$scratch")"
+            if ! (cd "$PROJ" && timeout "$BUILD_TIMEOUT" lake env lean \
+                    -o "$scratch" "$mod.lean" >/tmp/lean-corpus-build.log 2>&1); then
+                if grep -qiE 'failed to read file|unknown module|unknown package' \
+                        /tmp/lean-corpus-build.log; then
+                    err "$mod: cannot elaborate — an import has no olean, so the project is not built"
+                    tail -2 /tmp/lean-corpus-build.log | sed 's/^/    /'
+                    BAD+=("$mod (imports unbuilt)")
+                elif grep -qi 'error' /tmp/lean-corpus-build.log; then
+                    err "$mod: does not elaborate — skipped"
+                    tail -3 /tmp/lean-corpus-build.log | sed 's/^/    /'
+                    BAD+=("$mod (elaborate)")
+                else
+                    warn "$mod: does not elaborate and reports no error (script or sample) — skipped"
+                    tail -2 /tmp/lean-corpus-build.log | sed 's/^/    /'
+                    SKIP+=("$mod")
                 fi
-                LEAN_PATH_EXTRA=$OUT/olean
-                info "$mod: leaf module — elaborated to $OUT/olean/$mod.olean"
-            else
-                err "$mod: lake build failed (last lines below) — skipped"
-                tail -3 /tmp/lean-corpus-build.log | sed 's/^/    /'
-                BAD+=("$mod (build)")
                 continue
             fi
-        else
-            LEAN_PATH_EXTRA=
+            LEAN_PATH_EXTRA=$OUT/olean
+            info "$mod: olean was stale — elaborated into $scratch"
         fi
     fi
 

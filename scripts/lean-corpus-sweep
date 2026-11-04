@@ -18,6 +18,12 @@
 #   SWEEP_STATE       state file (default mm0/sweep-state.tsv)
 #   SWEEP_LOGS        per-module logs (default mm0/sweep-logs)
 #   SWEEP_TIMEOUT     per-module wall-clock budget, seconds (default 3600)
+#   SWEEP_MEM_FLOOR_MIB  stop a module when MemAvailable drops below this
+#                     (default 1024 MiB) instead of letting the kernel's OOM
+#                     killer pick a victim — usually this sweep
+#   SWEEP_MEM_NEED_MIB   wait until this much is available before starting a
+#                     module (default 4000)
+#   SWEEP_MEM_WAIT    seconds to wait for that before giving up (default 1200)
 #   SWEEP_RETRY=1     re-attempt modules recorded as failed/gapped
 #   NANODA_MAX_BYTES  passed through; the sweep default is 0 (no budget), which
 #                     is only cheap because $NANODA_TRUSTED skips the shared
@@ -32,6 +38,13 @@
 #   timeout   hit $SWEEP_TIMEOUT; nothing recorded about the module's contents
 #   failed    the driver reported a failure (build, export, nanoda, mm0-rs, mm0-c)
 #   empty     the module exports no declarations of its own (nothing to convert)
+#
+# Memory: one module at a time, each in its own capped cgroup, with the peak
+# charged to that cgroup recorded in the state file. A summed-RSS figure for the
+# same run is several times too large: `lake env`, `lean` and the exporter all
+# mmap the same Mathlib oleans, and RSS counts those pages in every process that
+# maps them (BookProof.Bell.ChapterBell: 8,203 MiB summed, 2.1 GiB charged).
+# Budget on the cgroup number — see "Bounding one module" below.
 set -uo pipefail
 
 AVM=$(cd "$(dirname "$0")/.." && pwd)
@@ -56,6 +69,30 @@ STATE=${SWEEP_STATE:-$AVM/mm0/sweep-state.tsv}
 LOGDIR=${SWEEP_LOGS:-$AVM/mm0/sweep-logs}
 TIMEOUT=${SWEEP_TIMEOUT:-3600}
 RETRY=${SWEEP_RETRY:-0}
+# One chapter's worst step measured ~8.4 GiB. Below a gigabyte of available
+# memory the next allocation is likely to be answered by the OOM killer, which
+# does not distinguish this sweep from the editor next to it.
+MEMFLOOR_MIB=${SWEEP_MEM_FLOOR_MIB:-1024}
+MEMFLOOR_KB=$(( MEMFLOOR_MIB * 1024 ))
+MEMNEED_MIB=${SWEEP_MEM_NEED_MIB:-4000}
+MEMWAIT=${SWEEP_MEM_WAIT:-1200}
+
+# Two ways to cap a module were tried on this host and neither caps anything:
+#
+#   ulimit -v        Lean mmaps its oleans, so the limit surfaces as a corrupt
+#                    import ("failed to read file '…/Mathlib/…/AlgebraicClosure.olean'")
+#                    rather than as a memory error.
+#   cgroup MemoryMax `systemd-run --user --scope -p MemoryMax=800M` accepts the
+#                    property and reports it back (memory.max = 838860800) and
+#                    still lets a 1.5 GiB allocation through: the memory
+#                    controller is not delegated far enough down the user tree
+#                    to be enforced. (Verified twice; the global OOM killer fired
+#                    instead, which is exactly the failure being fixed.)
+#
+# So the guard is the watchdog below plus the driver's no-fan-out rule, not a
+# kernel-enforced ceiling: MemAvailable is sampled every second, and if the
+# machine runs dry the module's own process group is killed. That bounds the
+# damage to one module and keeps the sweep's state file honest.
 
 # Reference the positional parameter even when SWEEP_ROOT is set, so
 # `SWEEP_ROOT=… scripts/lean-corpus-sweep BookProof/Sub` is not silently ignored.
@@ -96,9 +133,12 @@ echo "   project     : $PROJ"
 echo "   state       : $STATE ($(wc -l <"$STATE") recorded)"
 echo "   logs        : $LOGDIR"
 echo "   nanoda      : budget ${NANODA_MAX_BYTES} B, trusted base ${NANODA_TRUSTED:-none}"
+echo "   memory      : one module at a time, waits for ${MEMNEED_MIB} MiB available,"
+echo "                 kills its process group below ${MEMFLOOR_MIB} MiB"
 echo
 
 declare -a DID=() RESUMED=()
+MEMFAILS=0
 sweep_start=$(date +%s)
 for mod in "${MODULES[@]}"; do
     n=$(( ${#DID[@]} + ${#RESUMED[@]} + 1 ))
@@ -109,9 +149,60 @@ for mod in "${MODULES[@]}"; do
     log=$LOGDIR/$mod.log
     echo "[$n/${#MODULES[@]}] $mod"
     t0=$(date +%s)
-    timeout "$TIMEOUT" "$AVM/scripts/lean-corpus-mm0" "$mod" >"$log" 2>&1
+    # Watch the module instead of just waiting for it. A chapter peaks at 6-8 GiB,
+    # so one started while the desktop is busy is a plausible OOM victim — and when
+    # the kernel picks it, the sweep dies with it (that is how this loop lost a
+    # module without a state row). Sampling MemAvailable and killing the module's
+    # OWN process group turns that into a recorded failure with the peak attached.
+    # Wait for headroom first: one module's real footprint is ~2 GiB of anon
+    # memory on top of several GiB of Mathlib page cache, so starting one into a
+    # few hundred MiB free only burns the module.
+    waited=0
+    while :; do
+        avail=$(( $(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo) / 1024 ))
+        (( avail >= MEMNEED_MIB )) && break
+        (( waited >= MEMWAIT )) && { echo "    starting anyway: only ${avail} MiB available after ${waited}s"; break; }
+        (( waited % 60 == 0 )) && echo "    waiting for memory: ${avail} MiB available, want ${MEMNEED_MIB}"
+        sleep 15
+        waited=$(( waited + 15 ))
+    done
+    set -m                       # job control → the module gets its own process group
+    timeout "$TIMEOUT" "$AVM/scripts/lean-corpus-mm0" "$mod" >"$log" 2>&1 </dev/null &
+    dpid=$!
+    set +m
+    peak_kb=0
+    mem_out=0
+    # Peak from RssAnon + RssShmem, not from `ps -o rss`. RSS counts the Mathlib
+    # oleans once per process that maps them — `lake env`, `lean` and
+    # `lean4export` all map the same pages — so the tree sum reads about four
+    # times the memory actually committed (measured: 8,203 MiB summed against
+    # the 2.1 GiB the kernel charges the same run). Anon+shmem counts a shared
+    # page once, which is the number a memory budget has to be set from.
+    while kill -0 "$dpid" 2>/dev/null; do
+        cur_kb=0
+        for p in $(ps -eo pid,ppid --no-headers | awk -v r="$dpid" '
+                { pp[$1] = $2 }
+                END { for (k in pp) { x = k
+                        while (x in pp) { if (pp[x] == r) { print k; break } x = pp[x] } } }'); do
+            cur_kb=$(( cur_kb + $(awk '/^RssAnon:/ { a = $2 }
+                                      /^RssShmem:/ { s = $2 }
+                                      END { print a + s }' "/proc/$p/status" 2>/dev/null || echo 0) ))
+        done
+        avail_kb=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo)
+        (( cur_kb > peak_kb )) && peak_kb=$cur_kb
+        if (( avail_kb < MEMFLOOR_KB )); then
+            mem_out=1
+            kill -TERM -- "-$dpid" 2>/dev/null
+            sleep 2
+            kill -KILL -- "-$dpid" 2>/dev/null
+            break
+        fi
+        sleep 1
+    done
+    wait "$dpid" 2>/dev/null
     rc=$?
     dt=$(( $(date +%s) - t0 ))
+    peak=$(( peak_kb / 1024 ))
 
     # The driver's exit code is the module's overall verdict; the log line says
     # how many declarations went in and how many MM0 lines came out, and whether
@@ -122,6 +213,9 @@ for mod in "${MODULES[@]}"; do
     [[ -z $detail ]] && detail=$(grep -m1 -E '\[(FAIL|FATAL|WARN)\]' "$log" | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-140)
     if (( rc == 124 )); then
         status=timeout
+    elif (( rc == 137 )); then
+        status=failed
+        detail="killed by SIGKILL — memory watchdog or the kernel's OOM killer"
     elif (( rc != 0 )); then
         status=failed
     elif grep -q 'statements NOT kernel-backed' "$log"; then
@@ -131,12 +225,28 @@ for mod in "${MODULES[@]}"; do
     else
         status=ok
     fi
-    printf '%s\t%s\t%s\t%s\n' "$status" "$mod" "$dt" "${detail:-—}" >>"$STATE"
+    # A module stopped for memory is not evidence about the module: say which
+    # limit stopped it, and keep the peak so the next attempt can budget for it.
+    if (( mem_out )); then
+        status=failed
+        detail="host memory fell below ${MEMFLOOR_MIB} MiB — stopped mid-module"
+        (( ++MEMFAILS >= 3 )) && stop_after_memfail=1
+    else
+        MEMFAILS=0
+    fi
+    detail="${detail:-—} · peak ${peak} MiB"
+    printf '%s\t%s\t%s\t%s\n' "$status" "$mod" "$dt" "$detail" >>"$STATE"
     DID+=("$mod")
-    printf '    %-7s %4ds  %s\n' "$status" "$dt" "${detail:-—}"
+    printf '    %-7s %4ds  peak %5d MiB  %s\n' "$status" "$dt" "$peak" "${detail:-—}"
     # Keep the long job honest about where it is: append-only, one line per
     # module, so `tail -f` works and nothing is lost on a hard kill.
     echo "$(date -Is)	$status	$mod	${dt}s	${detail:-—}" >>"$LOGDIR/sweep.log"
+    if (( ${stop_after_memfail:-0} )); then
+        echo >&2
+        echo "[STOP] three modules in a row were stopped for memory (<${MEMFLOOR_MIB} MiB available)." >&2
+        echo "       Free up memory and re-run: finished modules are recorded, this one included." >&2
+        break
+    fi
 done
 
 elapsed=$(( $(date +%s) - sweep_start ))

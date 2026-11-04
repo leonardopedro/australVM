@@ -751,6 +751,44 @@ manifest was written would be skipped. The pipeline regenerates it from a full
 verdict on an export of this environment rather than accepting one from anywhere
 else.
 
+### Memory: one chapter is 6–8 GiB, and `lake build` multiplies it
+
+The OOM events that killed sweeps had a specific cause, not a general "Lean is
+hungry". Per step of one Mathlib-importing chapter
+(`BookProof.ChapterEsaFarisLavineIndex`, measured with a process-tree sampler on
+a 14 GiB host):
+
+| step | peak RSS | wall |
+|---|---|---|
+| elaborate the module (`lake env lean -o`) | 6 335 MiB | 29 s |
+| declaration walk (`lake env lean --run lean-module-decls.lean`) | 8 375 MiB | 5 s |
+| export (`lake env lean4export`) | ~7 053 MiB | 17 s |
+| nanoda, 370 MiB export, trusted base | 736 MiB | 35 s |
+
+Every step is fine on its own — the sweep runs them one module at a time. What
+was not fine is that the driver used to start with `lake build <module>`, which
+Lake resolves against the whole `BookProof` **library**: it plans all 8 144
+artifacts (a five-declaration chapter included) and compiles stale ones with one
+job per core. One stale file is a 6.3 GiB `lean`; a stale cluster is twelve of
+them at once, and the kernel OOM killer then picks whatever it likes — often the
+sweep itself, which is how a run can die mid-module without writing a state row.
+
+The driver no longer calls `lake build` at all: it checks whether the module's
+own olean (`.lake/build/lib/lean/<Mod>.olean`) is newer than its source and,
+when it is not, elaborates that single file with `lean -o` into `mm0/olean/`.
+When an import has no olean it says so (`imports unbuilt`) instead of building
+the project behind your back. To build the project itself, run `lake build` once
+by hand — on an idle machine, because that fan-out wants far more memory than
+this box has.
+
+`scripts/lean-corpus-sweep` adds the guard: while a module runs it samples
+`MemAvailable` once a second and, below `SWEEP_MEM_FLOOR_MIB` (default 1024 MiB),
+kills that module's own process group and records it as `failed` with the reason —
+instead of the kernel choosing a victim. It also records each module's peak RSS
+in the state file, since the peak, not the average, decides whether the next
+module fits: `ok  36s  peak  8375 MiB  17 decls → 435 lines, mm0-c OK`. After
+three memory stops in a row it stops, telling you to free memory and re-run.
+
 ### Sweeping the corpus
 
 `scripts/lean-corpus-sweep` converts a whole directory, one module per driver
@@ -763,7 +801,8 @@ SWEEP_RETRY=1 scripts/lean-corpus-sweep    # re-attempt whatever is not `ok`
 ```
 
 State is one tab-separated line per module in `mm0/sweep-state.tsv`
-(`status · module · seconds · detail`), with a per-module transcript in
+(`status · module · seconds · detail`, the detail carrying the module's peak
+RSS), with a per-module transcript in
 `mm0/sweep-logs/<module>.log` and an append-only `mm0/sweep-logs/sweep.log` that
 a `tail -f` can follow. A module that already has a line is never attempted again,
 so an interrupted sweep resumes where it stopped and loses at most the module that
@@ -823,3 +862,54 @@ so symbols read like Lean names again and root filtering works. Regenerating the
 four pre-existing artifacts changed their symbol tables and axiom identifiers
 (`decl_OfNatofNat` → `decl_OfNat_ofNat`) but not their statement structure; all
 four were re-emitted and re-checked by mm0-rs and mm0-c afterwards.
+
+### Why the corpus sweep was getting OOM-killed
+
+The first full sweep died at module 146 of 883, with no state row for it. The
+journal had the reason:
+
+    app-ghostty-surface-transient-….scope: The kernel OOM killer killed some
+    processes in this unit.
+    … Consumed 6min 3.640s CPU time …, 11.2G memory peak, 12.7G memory swap peak.
+
+Three separate things had to be untangled.
+
+**1. `lake build <module>` is not a per-module operation.** Lake resolves a
+module target against the whole library — `BookProof.ChapterErrorNorms`, five
+declarations, plans 8,144 jobs — and compiles whatever is stale with one job per
+core. Every one of those is a full Mathlib environment, so a stale cluster turns
+into a dozen concurrent environments. `scripts/lean-corpus-mm0` now checks
+whether the module's own olean is current and, if it is not, elaborates that one
+file with `lean -o` into `mm0/exports/olean`. It never asks Lake for a target set.
+
+**2. The first per-module numbers were inflated fourfold.** Summing `ps -o rss`
+over the process tree counts the Mathlib oleans once per process that maps them:
+`lake env`, `lean` and `lean4export` all map the same pages. The same run reads
+8,203 MiB summed and 2.1 GiB as charged by the kernel
+(`BookProof.Bell.ChapterBell`; `ChapterTsirelson` 2.4 GiB). The state file and the
+progress line now report `RssAnon + RssShmem`, which counts a shared page once.
+
+**3. Neither memory ceiling that looks obvious works on this host.**
+
+| Attempt | What happens |
+|---|---|
+| `ulimit -v` | Lean mmaps its oleans, so the cap surfaces as a corrupt import: `failed to read file '…/Mathlib/…/AlgebraicClosure.olean'` |
+| `systemd-run --user --scope -p MemoryMax=800M` | The property is accepted and reads back (`memory.max` = 838860800), and a 1.5 GiB allocation still succeeds — the global OOM killer fires instead. The memory controller is not delegated far enough down the user tree to be enforced |
+| `lean -M/--memory` | Works, and fails with `lean::memory_exception` — but `lean4export` has its own CLI and ignores it |
+
+So the sweep bounds the *blast radius* rather than the peak: it runs one module
+at a time, waits for headroom before starting one, samples `MemAvailable` every
+second while it runs, and kills that module's own process group (job control
+gives it one) when the machine runs dry. The module is recorded as `failed` with
+the reason, and three such stops in a row end the sweep instead of burning
+through the rest of the corpus.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SWEEP_MEM_NEED_MIB` | 4000 | wait for this much available before starting a module |
+| `SWEEP_MEM_WAIT` | 1200 s | how long to wait for it before starting anyway |
+| `SWEEP_MEM_FLOOR_MIB` | 1024 | kill the module's process group below this |
+
+Running the sweep beside a `lake build`, or two sweeps at once, still runs out of
+memory: the guard protects the machine from one module's growth, not from two
+mechanisms each asking for a few gigabytes.
