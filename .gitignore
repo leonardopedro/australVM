@@ -66,3 +66,8 @@ mm0/exports/
 mm0/statements/*.mmb
 scripts/__pycache__/
 mm0/olean/
+# A sweep's own bookkeeping (scripts/lean-corpus-sweep): the state file is what
+# makes a run resumable, the logs are 883 per-module transcripts. Both describe
+# one run on one host; the committed artifacts are the statements themselves.
+mm0/sweep-state.tsv
+mm0/sweep-logs/

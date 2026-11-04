@@ -25,6 +25,12 @@
 #   CORPUS_OUT          output root (default australVM/mm0)
 #   BUILD_TIMEOUT       per-module `lake build` budget, seconds (default 900)
 #   SKIP_BUILD=1        do not run `lake build` (olean must already exist)
+#   NANODA_MAX_BYTES    export-size budget for the kernel re-check, bytes
+#                       (default 268435456, 0 = no budget)
+#   NANODA_TRUSTED      manifest of names a full run already verified; those
+#                       declarations are skipped, not re-checked. Create it with
+#                       scripts/lean-corpus-trust. Setting it also lifts the
+#                       default budget (the closure check is what it priced).
 #
 # Exit codes: 0 all modules converted and mm0-c verified, 1 any failure,
 #             2 unusable environment (missing tool / project).
@@ -163,23 +169,40 @@ for mod in "${MODULES[@]}"; do
     # NANODA_MAX_BYTES deliberately, one module at a time, on a host that can
     # pay for it. NANODA_MAX_BYTES=0 disables the budget entirely.
     nanoda_budget=${NANODA_MAX_BYTES:-268435456}
+    nanoda_args=("$ndjson")
+    # The shared Mathlib closure is byte-identical from module to module, so a
+    # trusted-name manifest (scripts/lean-corpus-trust) lets nanoda skip the
+    # re-check while keeping those declarations in the environment. The budget
+    # is a proxy for work that is then no longer done, so unless the caller set
+    # NANODA_MAX_BYTES explicitly it stops applying — a 369 MiB chapter whose
+    # closure is trusted costs its own 24 declarations, not the 54,053 again.
+    if [[ -n ${NANODA_TRUSTED:-} ]]; then
+        nanoda_args+=(--trusted "$NANODA_TRUSTED")
+        [[ -z ${NANODA_MAX_BYTES:-} ]] && nanoda_budget=0
+    fi
     # nanoda takes the byte limit as an argument and treats 0 as "use the
     # default", so a disabled budget must still pass a number it can accept.
     nanoda_limit=$nanoda_budget
     (( nanoda_limit > 0 )) || nanoda_limit=8589934592
+    nanoda_args+=("$nanoda_limit")
     gapped=0
     if [[ -n $NANODA && -x $NANODA ]]; then
         size=$(stat -c%s "$ndjson")
         if (( nanoda_budget > 0 && size > nanoda_budget )); then
             gapped=1
-            warn "$mod: export is $((size / 1048576)) MiB > nanoda budget $((nanoda_budget / 1048576)) MiB — GAP, statements are not kernel-backed (raise NANODA_MAX_BYTES; measured cost: a 369 MiB chapter export = 399 s, 836 MiB peak RSS)"
+            warn "$mod: export is $((size / 1048576)) MiB > nanoda budget $((nanoda_budget / 1048576)) MiB — GAP, statements are not kernel-backed (raise NANODA_MAX_BYTES; measured cost: a 369 MiB chapter export = 399 s, 836 MiB peak RSS; or check the closure once with scripts/lean-corpus-trust and set NANODA_TRUSTED)"
             GAPPED+=("$mod")
-        elif ! "$NANODA" "$ndjson" "$nanoda_limit" >/tmp/lean-corpus-nanoda.log 2>&1; then
+        elif ! "$NANODA" "${nanoda_args[@]}" >/tmp/lean-corpus-nanoda.log 2>&1; then
             err "$mod: nanoda REJECTED the export"
             tail -2 /tmp/lean-corpus-nanoda.log | sed 's/^/    /'
             BAD+=("$mod (nanoda)")
             continue
         fi
+        # Say what the kernel actually checked: with a trusted base it examines
+        # only the module's own declarations, and a log that reports a bare
+        # "verified" would overstate that.
+        info "nanoda  : $(grep -m1 '^nanoda: verified' /tmp/lean-corpus-nanoda.log \
+            | sed -e 's/^nanoda: verified [^ ]* //' -e 's/^nanoda: /nanoda: /')"
     fi
 
     # Only the module's OWN declarations become statements: the export also

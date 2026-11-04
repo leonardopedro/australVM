@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# lean-corpus-trust — type-check the shared Lean closure ONCE and record it.
+#
+#   scripts/lean-corpus-trust BookProof.ChapterA4
+#   scripts/lean-corpus-trust --update BookProof.ChapterA4b   # add a chapter
+#
+# Every module that imports Mathlib exports the same transitive closure: on
+# BookProof.ChapterA4, 24 own declarations pull in 54,053 more (369 MiB, ~400 s
+# of nanoda, ~840 MiB RSS). That closure is byte-identical work each time, so
+# this script runs the full check once and writes the names it verified to a
+# manifest (mm0/exports/trusted.names). `scripts/lean-corpus-mm0` then passes
+# that manifest as `NANODA_TRUSTED`, and nanoda re-checks only the module's own
+# declarations — the trusted ones stay in the environment, so the rest still
+# check against them.
+#
+# The manifest is only as trustworthy as this run. It is written from a *full*
+# nanoda verdict on an export of THIS project's environment, and the provenance
+# sidecar records which export (by SHA-256) that was. Rebuild it if the Lean
+# toolchain, Mathlib, or the project's imports change — a stale manifest would
+# skip declarations whose statements have since been edited.
+#
+# Exits 0 when the manifest is written, 1 when nanoda rejects, 2 on setup error.
+set -uo pipefail
+
+AVM=$(cd "$(dirname "$0")/.." && pwd)
+WS=$(cd "$AVM/.." && pwd)
+exports=$AVM/mm0/exports
+manifest=${NANODA_TRUSTED:-$exports/trusted.names}
+provenance=$manifest.meta
+log=$exports/trusted.log
+NANODA=${NANODA_VERIFY:-}
+if [[ -z $NANODA ]]; then
+    for cand in "$WS/unfer/target/debug/examples/verify_export" \
+                "$WS/unfer/target/release/examples/verify_export"; do
+        [[ -x $cand ]] && NANODA=$cand && break
+    done
+fi
+[[ -x ${NANODA:-} ]] || { echo "[FATAL] nanoda checker not found (build unfer: cargo build -p prob_kernel --example verify_export)" >&2; exit 2; }
+
+update=0
+if [[ ${1:-} == --update ]]; then update=1; shift; fi
+mod=${1:-}
+[[ -n $mod ]] || { echo "usage: scripts/lean-corpus-trust [--update] <module>" >&2; exit 2; }
+export_file=$exports/$mod.ndjson
+if [[ ! -f $export_file ]]; then
+    cat >&2 <<EOF
+[FATAL] no export at $export_file
+  produce one with the converter (statements are written too, without a verdict):
+    SKIP_NANODA=1 scripts/lean-corpus-mm0 $mod
+EOF
+    exit 2
+fi
+
+mkdir -p "$exports"
+size=$(stat -c%s "$export_file")
+sha=$(sha256sum "$export_file" | cut -d' ' -f1)
+echo "[INFO] trusting $mod: $export_file ($((size / 1048576)) MiB, sha256 ${sha:0:16}…)"
+if [[ -f $manifest && $update == 0 ]]; then
+    echo "[INFO] $manifest already exists — pass --update to extend it (the run is cumulative)"
+fi
+args=("$export_file" 8589934592 --emit-trusted "$manifest")
+# Cumulative by design: a --update run keeps what the previous manifest covered.
+[[ -f $manifest ]] && args+=(--trusted "$manifest")
+
+start=$(date +%s)
+"$NANODA" "${args[@]}" 2>&1 | tee "$log"
+rc=${PIPESTATUS[0]}
+elapsed=$(( $(date +%s) - start ))
+if (( rc != 0 )); then
+    echo "[FAIL] nanoda did not accept $mod (exit $rc) — the manifest was NOT updated" >&2
+    exit 1
+fi
+names=$(wc -l <"$manifest")
+{
+    printf 'generated: %s\n' "$(date -Is)"
+    printf 'export: %s\n' "$mod"
+    printf 'export_sha256: %s\n' "$sha"
+    printf 'export_bytes: %s\n' "$size"
+    printf 'trusted_names: %s\n' "$names"
+    printf 'elapsed_s: %s\n' "$elapsed"
+    printf 'checker: %s\n' "$NANODA"
+} >"$provenance"
+echo "[OK] $names names trusted after ${elapsed}s → $manifest"
+echo "     now convert with: NANODA_TRUSTED=$manifest scripts/lean-corpus-mm0 …"

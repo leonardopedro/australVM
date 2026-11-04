@@ -659,7 +659,7 @@ certificates are the proofs.
 `GapCertificate` (36 declarations → 792 lines) and `Layout` (89 → 1 528 lines)
 convert and pass mm0-c, as do `QuasiRiemannCertificate`, `extract_sketch_info`,
 and — through the nanoda leg with the budget lifted — Mathlib-importing chapters:
-`BookProof.ChapterA4` (24 → 484 lines, closure re-checked in 399 s) and
+`BookProof.ChapterA4` (24 → 484 lines, closure re-checked in ~400 s) and
 `BookProof.ChapterAbelianDiagonal` (11 → 339 lines, inside the default budget). Modules whose `.lean` file is a script rather than a
 lake target (`minitest`, `axiom_gate`) and umbrella modules that only re-export
 sub-libraries (`PnpProof`, `BayesianTransformer`, `Book`) are reported as
@@ -700,7 +700,8 @@ exports 35 MB). The CLI therefore defaults to 256 MiB and takes an explicit
 **The driver's own budget (`NANODA_MAX_BYTES`, default 256 MiB).** It exists
 because a Mathlib-importing module's export is far past that, and the cost is
 real: on this host (14 GB RAM) `BookProof.ChapterA4`'s 369 MiB export took
-**399 s and 836 MiB peak RSS** to re-check, and an earlier attempt against
+**399–443 s and ~840 MiB peak RSS** to re-check (the larger figure is the run
+that also writes the trusted-name manifest), and an earlier attempt against
 several such exports **triggered the OOM killer**. So over-budget exports are
 reported as `GAP` — statements are still emitted and mm0-c still checks the
 encoding, but the summary says `NOT kernel-backed` and the module is *not*
@@ -709,10 +710,75 @@ peaks under 1 GB, `NANODA_MAX_BYTES=0` (unbounded) is safe for a serial run on a
 machine with ≥3 GB free; leave the default in place when batching, where several
 kinds of heavy process overlap.
 
-Run cost is the reason `BookProof/` is a sampling target, not a batch target:
-350 chapters × ~6 min of nanoda ≈ 35 h serial. Per-chapter status prints, and a
-run is resumable module-by-module (the export cache is keyed by module), so
-`for m in BookProof.Chapter*; do …; done` is the intended shape.
+### Checking the shared closure once (added 2026-11-04)
+
+The closure cannot be dropped from a module's export: nanoda type-checks each
+declaration against the others, so the dependencies must be present in the file.
+Nor can two exports be concatenated into a shared base — the NDJSON ids are
+file-local (`{"in":1,…}`, `"pre":0`), so a second file's ids, level ids and
+expression references would all have to be renumbered consistently. What *can* be
+dropped is the **re-check**: `verify_export --trusted NAMES` parses the whole
+export, leaves every declaration in the environment (their types are needed), and
+type-checks only the names the manifest does not already cover.
+
+```sh
+scripts/lean-corpus-trust BookProof.ChapterA4             # once: full check → manifest
+NANODA_TRUSTED=mm0/exports/trusted.names \
+  scripts/lean-corpus-mm0 BookProof.ChapterA5             # delta only
+scripts/lean-corpus-trust --update BookProof.ChapterA5    # widen the base
+```
+
+Measured on this host (14 GB RAM), same binary, same inputs:
+
+| run | export | decls checked | wall | peak RSS |
+|---|---|---|---|---|
+| full check (writes the manifest) | `ChapterA4`, 369.7 MiB | 53 954 | 443 s | 837 MiB |
+| trusted, same file | `ChapterA4`, 369.7 MiB | 0 | 35 s | 736 MiB |
+| full check | `ChapterA4b`, 318.5 MiB | 51 028 | 331 s | 717 MiB |
+| trusted | `ChapterA4b`, 318.5 MiB | 5 470 | 103 s | 659 MiB |
+
+The closure re-check was 92 % of the wall time on a chapter the manifest already
+covered; 35 s — parse and load — is the floor trust cannot remove. `ChapterA4b`
+still pays 103 s because 5 470 of its declarations were not in a manifest built
+from `ChapterA4` alone, so `--update` after a few chapters converges it toward the
+floor.
+
+Trust is **by name**, so the manifest is only as good as the run behind it:
+`mm0/exports/trusted.names.meta` records which export it came from (SHA-256, size,
+checker, elapsed). Rebuild it when the Lean toolchain, Mathlib, or the project's
+imports change — otherwise a declaration whose statement was edited since the
+manifest was written would be skipped. The pipeline regenerates it from a full
+verdict on an export of this environment rather than accepting one from anywhere
+else.
+
+### Sweeping the corpus
+
+`scripts/lean-corpus-sweep` converts a whole directory, one module per driver
+invocation, and remembers what it did:
+
+```sh
+scripts/lean-corpus-sweep                  # every *.lean under timepiece/BookProof
+scripts/lean-corpus-sweep BookProof/Bell   # or one subdirectory
+SWEEP_RETRY=1 scripts/lean-corpus-sweep    # re-attempt whatever is not `ok`
+```
+
+State is one tab-separated line per module in `mm0/sweep-state.tsv`
+(`status · module · seconds · detail`), with a per-module transcript in
+`mm0/sweep-logs/<module>.log` and an append-only `mm0/sweep-logs/sweep.log` that
+a `tail -f` can follow. A module that already has a line is never attempted again,
+so an interrupted sweep resumes where it stopped and loses at most the module that
+was in flight. Statuses: `ok` (nanoda verified, mm0-c re-checked), `gap`
+(converted and mm0-c verified, statements *not* kernel-backed), `timeout`
+(`SWEEP_TIMEOUT`, default 3600 s per module), `failed` (build/export/nanoda/
+mm0-rs/mm0-c), `empty` (no declarations of its own). The exit status is non-zero
+while anything in the state file is not `ok`.
+
+The sweep defaults to `NANODA_MAX_BYTES=0` and picks up
+`mm0/exports/trusted.names` automatically, which is what makes an unbudgeted run
+affordable: chapters whose closure the manifest covers cost about 40 s each
+end-to-end including `lake build` (`BookProof.Bell.ChapterBell`: 15 declarations →
+293 lines in 39 s; `BookProof.Bell.ChapterTsirelson`: 34 → 580 lines in 28 s),
+versus ~6 min when every chapter re-checks 54 000 shared Mathlib declarations.
 
 ### Files that are not lake targets
 

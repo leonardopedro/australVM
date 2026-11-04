@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# lean-corpus-sweep — convert a whole Lean directory to MM0, one module at a
+# time, resumably, with a status line per module.
+#
+#   scripts/lean-corpus-sweep                  # every *.lean under BookProof/
+#   scripts/lean-corpus-sweep BookProof        # same, spelled out
+#   scripts/lean-corpus-sweep BookProof/Gamma  # a subdirectory
+#
+# Why a separate driver: `lean-corpus-mm0` converts the modules you name and
+# keeps no memory of what it already did. A corpus run is hundreds of modules
+# and tens of hours, so it has to survive an interruption, a reboot, or a Ctrl-C
+# without either redoing finished chapters or silently losing the ones that was
+# in flight. State is one line per module in $SWEEP_STATE; a module that has a
+# line is never attempted again (unless SWEEP_RETRY=1).
+#
+# Env:
+#   SWEEP_ROOT        directory under LEAN_PROJECT to sweep (default BookProof)
+#   SWEEP_STATE       state file (default mm0/sweep-state.tsv)
+#   SWEEP_LOGS        per-module logs (default mm0/sweep-logs)
+#   SWEEP_TIMEOUT     per-module wall-clock budget, seconds (default 3600)
+#   SWEEP_RETRY=1     re-attempt modules recorded as failed/gapped
+#   NANODA_MAX_BYTES  passed through; the sweep default is 0 (no budget), which
+#                     is only cheap because $NANODA_TRUSTED skips the shared
+#                     Mathlib closure — see scripts/lean-corpus-trust
+#   NANODA_TRUSTED    trusted-name manifest (default mm0/exports/trusted.names
+#                     when it exists)
+#
+# Statuses, in the state file and the log:
+#   ok        converted, nanoda verified the export, mm0-c re-checked it
+#   gap       converted and mm0-c verified, but the export was NOT kernel-backed
+#             (over the nanoda budget) — statements emitted, verdict missing
+#   timeout   hit $SWEEP_TIMEOUT; nothing recorded about the module's contents
+#   failed    the driver reported a failure (build, export, nanoda, mm0-rs, mm0-c)
+#   empty     the module exports no declarations of its own (nothing to convert)
+set -uo pipefail
+
+AVM=$(cd "$(dirname "$0")/.." && pwd)
+WS=$(cd "$AVM/.." && pwd)
+PROJ=${LEAN_PROJECT:-$WS/timepiece}
+
+# The converter needs python3, which a non-interactive shell here does not have
+# ('nix shell nixpkgs#python3' provides it interactively). Resolve it once, up
+# front, instead of letting every module fail the same way.
+if ! command -v python3 >/dev/null; then
+    if command -v nix >/dev/null; then
+        pyp=$(nix build --no-link --print-out-paths nixpkgs#python3 2>/dev/null | tail -1)
+        if [[ -n $pyp && -x $pyp/bin/python3 ]]; then
+            PATH=$pyp/bin:$PATH
+            export PATH
+        fi
+    fi
+fi
+[[ -n $(command -v python3) ]] || { echo "[FATAL] python3 not on PATH and nix could not provide it" >&2; exit 2; }
+ROOT=${SWEEP_ROOT:-${1:-BookProof}}
+STATE=${SWEEP_STATE:-$AVM/mm0/sweep-state.tsv}
+LOGDIR=${SWEEP_LOGS:-$AVM/mm0/sweep-logs}
+TIMEOUT=${SWEEP_TIMEOUT:-3600}
+RETRY=${SWEEP_RETRY:-0}
+
+# Reference the positional parameter even when SWEEP_ROOT is set, so
+# `SWEEP_ROOT=… scripts/lean-corpus-sweep BookProof/Sub` is not silently ignored.
+[[ $# -gt 0 && -n ${SWEEP_ROOT:-} ]] && { echo "[FATAL] pass either SWEEP_ROOT or an argument, not both" >&2; exit 2; }
+[[ $# -gt 1 ]] && { echo "[FATAL] at most one directory argument" >&2; exit 2; }
+
+[[ -d $PROJ/$ROOT ]] || { echo "[FATAL] no such directory: $PROJ/$ROOT" >&2; exit 2; }
+mkdir -p "$LOGDIR" "$(dirname "$STATE")"
+[[ -f $STATE ]] || : >"$STATE"
+
+if [[ -z ${NANODA_TRUSTED:-} && -f $AVM/mm0/exports/trusted.names ]]; then
+    NANODA_TRUSTED=$AVM/mm0/exports/trusted.names
+fi
+export NANODA_MAX_BYTES=${NANODA_MAX_BYTES:-0}
+[[ -n ${NANODA_TRUSTED:-} ]] && export NANODA_TRUSTED
+
+mapfile -t MODULES < <(
+    cd "$PROJ" && find "$ROOT" -name '*.lean' -type f \
+        | sed -e 's/\.lean$//' -e 's#/#.#g' | sort
+)
+
+if ((${#MODULES[@]} == 0)); then
+    echo "[FATAL] no .lean files under $PROJ/$ROOT" >&2
+    exit 2
+fi
+
+# A module is done if the state file already has a line for it. `SWEEP_RETRY=1`
+# drops the non-`ok` rows first, so a re-run after fixing a cause retries exactly
+# what did not succeed.
+if [[ $RETRY == 1 ]]; then
+    tmp=$(mktemp)
+    awk -F'\t' '$1 == "ok"' "$STATE" >"$tmp" && mv "$tmp" "$STATE"
+fi
+recorded() { awk -F'\t' -v m="$2" '$2 == m { found = 1 } END { exit !found }' "$1"; }
+
+echo "== sweep $ROOT: ${#MODULES[@]} modules"
+echo "   project     : $PROJ"
+echo "   state       : $STATE ($(wc -l <"$STATE") recorded)"
+echo "   logs        : $LOGDIR"
+echo "   nanoda      : budget ${NANODA_MAX_BYTES} B, trusted base ${NANODA_TRUSTED:-none}"
+echo
+
+declare -a DID=() RESUMED=()
+sweep_start=$(date +%s)
+for mod in "${MODULES[@]}"; do
+    n=$(( ${#DID[@]} + ${#RESUMED[@]} + 1 ))
+    if recorded "$STATE" "$mod"; then
+        RESUMED+=("$mod")
+        continue
+    fi
+    log=$LOGDIR/$mod.log
+    echo "[$n/${#MODULES[@]}] $mod"
+    t0=$(date +%s)
+    timeout "$TIMEOUT" "$AVM/scripts/lean-corpus-mm0" "$mod" >"$log" 2>&1
+    rc=$?
+    dt=$(( $(date +%s) - t0 ))
+
+    # The driver's exit code is the module's overall verdict; the log line says
+    # how many declarations went in and how many MM0 lines came out, and whether
+    # nanoda's verdict actually backs them. Read both — a module can be `ok` for
+    # mm0-c yet `gap` for the kernel, and conflating the two would credit a
+    # chapter with a kernel check it never got.
+    detail=$(grep -Eo '[0-9]+ decls → [0-9]+ lines, mm0-c OK( \(statements NOT kernel-backed\))?' "$log" | tail -1)
+    [[ -z $detail ]] && detail=$(grep -m1 -E '\[(FAIL|FATAL|WARN)\]' "$log" | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-140)
+    if (( rc == 124 )); then
+        status=timeout
+    elif (( rc != 0 )); then
+        status=failed
+    elif grep -q 'statements NOT kernel-backed' "$log"; then
+        status=gap
+    elif grep -q 'exports no declarations of its own' "$log"; then
+        status=empty
+    else
+        status=ok
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$status" "$mod" "$dt" "${detail:-—}" >>"$STATE"
+    DID+=("$mod")
+    printf '    %-7s %4ds  %s\n' "$status" "$dt" "${detail:-—}"
+    # Keep the long job honest about where it is: append-only, one line per
+    # module, so `tail -f` works and nothing is lost on a hard kill.
+    echo "$(date -Is)	$status	$mod	${dt}s	${detail:-—}" >>"$LOGDIR/sweep.log"
+done
+
+elapsed=$(( $(date +%s) - sweep_start ))
+
+echo
+echo "=================================================================="
+printf 'sweep of %s: %d modules, %d attempted this run, %d already recorded\n' \
+    "$ROOT" "${#MODULES[@]}" "${#DID[@]}" "${#RESUMED[@]}"
+if ((${#DID[@]})); then
+    printf '  this run: %s\n' "$(printf '%dh %dm' $((elapsed / 3600)) $(((elapsed % 3600) / 60)))"
+fi
+# Totals for the whole corpus, from the state file, not just this invocation:
+# a resumed sweep must report what the corpus looks like, not what it touched.
+awk -F'\t' '{ c[$1]++ } END {
+    printf "  state   : "
+    n = 0
+    for (s in c) { printf "%s %d  ", s, c[s]; n += c[s] }
+    printf "(%d total)\n", n
+}' "$STATE"
+# Name the modules that are not `ok`: a bisection after the fact needs names,
+# not counts, and this is the only place the whole corpus is listed at once.
+awk -F'\t' '$1 != "ok" { n[$1] = n[$1] (n[$1] == "" ? "" : " ") $2 }
+            END { for (s in n) printf "  %-7s : %s\n", s, n[s] }' "$STATE"
+echo "=================================================================="
+# Exit non-zero when anything in the corpus is not `ok`, so a CI wrapper and a
+# human shell both see the same verdict.
+! awk -F'\t' '$1 != "ok"' "$STATE" | grep -q .
