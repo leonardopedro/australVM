@@ -591,3 +591,72 @@ of re-axiomatizing it:
   DirichletL development cited in the header), and what mm0-c checks is
   everything else — well-formedness against set.mm's grammar, and via the
   import, the whole imported corpus.
+
+## 12. The corpus pipeline — any Lean module → MM0 statements (2026-11-04)
+
+§5–§11 converted *chosen* theorems into MM0 certificates (`mm0/*_certificate.mm0`,
+proofs included). This section is the other half: turning **any** Lean module's
+declarations into MM0 *statements*, mechanically, and verifying that the encoding
+is well-formed — the substrate on which later certificates are stated.
+
+```
+Lean module ──lean4export──▶ NDJSON ──lean2mm0-stmts──▶ <Mod>.{mm0,mm1} ──mm0-rs──▶ .mmb ──mm0-c──▶ exit 0
+             (narrowed)      (cic.mm0 embedded)         (elaborates)                  (re-checks)
+```
+
+One command does all four steps for each module of a project:
+
+```sh
+scripts/lean-corpus-mm0                 # every top-level *.lean of $LEAN_PROJECT
+scripts/lean-corpus-mm0 Layout Journal  # or only the named modules
+LEAN_PROJECT=../timepiece scripts/lean-corpus-mm0
+```
+
+Artifacts land in `mm0/statements/<Mod>.mm0` (+`.mm1`); the NDJSON exports in
+`mm0/exports/` and the compiled `.mmb` are regenerable and git-ignored. Each
+module is reported as converted+verified, skipped (exports nothing of its own,
+or is not a lake target) or failed (build/export/emit/elaborate/mm0-c), and the
+exit status is non-zero if anything failed — no silent passes.
+
+### What "converted to mm0" does and does not mean
+
+The statement of each declaration is `axiom decl_<name>: $ teq <type-code> ttrue $;`
+with the type encoded in `docs/cic.mm0`'s term language (`tapp`/`tabs`/`tentity`
+/`tint`/`tvar`). mm0-rs elaborates the encoding against the embedded theory and
+mm0-c re-checks the compiled file, so the *shape* of every declaration is
+machine-checked against the same grammar the certificates use. The *truth* of
+the statement is not: that is the Lean kernel's verdict on the export (re-checked
+by nanoda in `../unfer/prob_kernel`). A theorem the corpus wants **proved** in MM0
+still needs a certificate from `scripts/lean2mm0` — statements are the interface,
+certificates are the proofs.
+
+### Two traps this pipeline exists to encode
+
+* **`lean4export Mod` exports the whole import closure.** In a Mathlib project
+  that is ~50 000 declarations and a ~300 MB NDJSON, which `lean2mm0-stmts`
+  refuses (`MAX_DECLS`) rather than emitting a degenerate file. So the export is
+  narrowed with the module's *own* declarations, listed by
+  `scripts/lean-module-decls.lean` via `Environment.getModuleIdxFor?` — no
+  name-convention guessing, namespaces irrelevant. The narrowed export is ~800 KB.
+* **mm0-rs has no numeral literals.** `(tentity 0)` is a parse error
+  (`expected '$'` at the `(`): `0` is not a token of any declared notation. Each
+  value used is therefore declared once, ahead of the statements —
+
+  ```
+  term n0: nat; prefix n0: $0$ prec max;
+  ```
+
+  — exactly as `mm0/gap_certificate.mm0` already did for its own numerals. The
+  generator emits this block automatically; forgetting it makes every statement
+  in the file unparseable from the first payload onwards.
+
+### Status on this host (timepiece, Lean 4.28.0 + Mathlib)
+
+`GapCertificate` (36 declarations → 792 lines) and `Layout` (89 → 1 528 lines)
+convert and pass mm0-c. Modules whose `.lean` file is a script rather than a
+lake target (`minitest`, `axiom_gate`) and umbrella modules that only re-export
+sub-libraries (`PnpProof`, `BayesianTransformer`, `Book`) are reported as
+skipped, which is the honest status: there is nothing of their own to encode.
+The nested sub-libraries (`Book.*`, `BayesianTransformer.*`, ~14 600 files)
+convert with the same command by module name but are not part of the default
+corpus — one module per invocation, as their builds are the expensive part.

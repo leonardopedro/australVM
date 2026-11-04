@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# lean-corpus-mm0 — convert the Lean modules of a project into MM0 *statements*.
+#
+#   Lean module ──lean4export──▶ NDJSON (declarations only, narrowed)
+#               ──lean2mm0-stmts──▶ <Mod>.{mm0,mm1}   (cic.mm0 embedded)
+#               ──mm0-rs compile──▶ <Mod>.mmb
+#               ──mm0-c───────────▶ exit 0 = the encoding is well-formed
+#
+# What "converted to mm0" means here, stated plainly: the *structure* of every
+# declaration (its type, encoded in cic.mm0's term language) becomes an MM0
+# axiom. mm0-rs checks the encoding elaborates against the embedded theory and
+# mm0-c re-checks the compiled result. Neither checks the STATEMENT's truth —
+# that is the Lean kernel's verdict, re-checked by nanoda on the same export.
+# Proving those statements in MM0 needs certificates (`scripts/lean2mm0`), which
+# is a different, per-theorem job.
+#
+# Usage:
+#   scripts/lean-corpus-mm0                    # every top-level *.lean module
+#   scripts/lean-corpus-mm0 GapCertificate …   # only the named modules
+#   LEAN_PROJECT=/path/to/proj scripts/lean-corpus-mm0 Journal
+#
+# Env:
+#   LEAN_PROJECT        Lean project to export (default ../timepiece)
+#   LEAN_EXPORTER       lean4export binary (default: /tmp/l4e428 build)
+#   CORPUS_OUT          output root (default australVM/mm0)
+#   BUILD_TIMEOUT       per-module `lake build` budget, seconds (default 900)
+#   SKIP_BUILD=1        do not run `lake build` (olean must already exist)
+#
+# Exit codes: 0 all modules converted and mm0-c verified, 1 any failure,
+#             2 unusable environment (missing tool / project).
+set -uo pipefail
+
+AVM=$(cd "$(dirname "$0")/.." && pwd)
+WS=$(cd "$AVM/.." && pwd)
+PROJ=${LEAN_PROJECT:-$WS/timepiece}
+EXPORTER=${LEAN_EXPORTER:-/tmp/l4e428/.lake/build/bin/lean4export}
+OUT=${CORPUS_OUT:-$AVM/mm0}
+BUILD_TIMEOUT=${BUILD_TIMEOUT:-900}
+DECLS_LEAN=$AVM/scripts/lean-module-decls.lean
+
+die() { printf '\033[0;31m[FATAL]\033[0m %s\n' "$*" >&2; exit 2; }
+info() { printf '\033[0;32m[INFO]\033[0m %s\n' "$*"; }
+warn() { printf '\033[0;33m[WARN]\033[0m %s\n' "$*"; }
+err() { printf '\033[0;31m[FAIL]\033[0m %s\n' "$*"; }
+
+[[ -d $PROJ ]] || die "Lean project not found: $PROJ"
+[[ -x $EXPORTER ]] || die "lean4export not found: $EXPORTER
+  build it against the project's toolchain, e.g.
+    git clone https://github.com/leanprover/lean4export /tmp/lean4export
+    cd /tmp/lean4export && cp $PROJ/lean-toolchain . && rm -rf .lake && lake build"
+command -v lake >/dev/null || die "lake not on PATH"
+command -v mm0-rs >/dev/null || die "mm0-rs not on PATH"
+command -v mm0-c >/dev/null || die "mm0-c not on PATH (the root of trust)"
+PY=$(command -v python3) || die "python3 not on PATH (nix shell nixpkgs#python3)"
+
+mkdir -p "$OUT/exports" "$OUT/statements"
+export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-}
+
+# Default corpus: the project's top-level modules. `lean-module-decls.lean`
+# decides which declarations belong to each one, so namespaces never matter.
+if (($#)); then
+    MODULES=("$@")
+else
+    mapfile -t MODULES < <(cd "$PROJ" && ls -1 *.lean 2>/dev/null | sed 's/\.lean$//' | sort)
+fi
+((${#MODULES[@]})) || die "no Lean modules found in $PROJ"
+
+declare -a OK=() BAD=() SKIP=()
+for mod in "${MODULES[@]}"; do
+    echo
+    info "== $mod"
+    if [[ ${SKIP_BUILD:-0} != 1 ]]; then
+        if ! (cd "$PROJ" && timeout "$BUILD_TIMEOUT" lake build "$mod" >/tmp/lean-corpus-build.log 2>&1); then
+            # A `.lean` file that is not a lake target (`axiom_gate`, a script)
+            # has nothing to build — that is not a conversion failure.
+            if grep -q 'unknown target' /tmp/lean-corpus-build.log; then
+                warn "$mod: not a lake target (script or sample) — skipped"
+                SKIP+=("$mod")
+                continue
+            fi
+            err "$mod: lake build failed (last lines below) — skipped"
+            tail -3 /tmp/lean-corpus-build.log | sed 's/^/    /'
+            BAD+=("$mod (build)")
+            continue
+        fi
+    fi
+
+    decls=$(cd "$PROJ" && timeout 300 lake env lean --run "$DECLS_LEAN" "$mod" 2>/tmp/lean-corpus-decls.log)
+    if [[ -z $decls ]]; then
+        warn "$mod: exports no declarations of its own — skipped"
+        tail -2 /tmp/lean-corpus-decls.log | sed 's/^/    /'
+        SKIP+=("$mod")
+        continue
+    fi
+    n_decls=$(printf '%s\n' "$decls" | wc -l)
+
+    # Narrowed export: without the `--` list, a Mathlib project exports the whole
+    # environment (~50k decls / 300 MB) and lean2mm0-stmts refuses it.
+    ndjson=$OUT/exports/$mod.ndjson
+    if ! (cd "$PROJ" && timeout 900 lake env "$EXPORTER" "$mod" -- $decls >"$ndjson" 2>/tmp/lean-corpus-export.log); then
+        err "$mod: lean4export failed"
+        tail -3 /tmp/lean-corpus-export.log | sed 's/^/    /'
+        BAD+=("$mod (export)")
+        continue
+    fi
+
+    if ! "$PY" "$AVM/scripts/lean2mm0-stmts" emit "$ndjson" "$mod" --out "$OUT/statements" 2>/tmp/lean-corpus-emit.log; then
+        err "$mod: lean2mm0-stmts failed"
+        tail -3 /tmp/lean-corpus-emit.log | sed 's/^/    /'
+        BAD+=("$mod (emit)")
+        continue
+    fi
+
+    if ! mm0-rs compile "$OUT/statements/$mod.mm0" "$OUT/statements/$mod.mmb" >/tmp/lean-corpus-mm0rs.log 2>&1; then
+        err "$mod: mm0-rs rejected the encoding"
+        grep -m3 -A3 '^error' /tmp/lean-corpus-mm0rs.log | sed 's/^/    /'
+        BAD+=("$mod (elab)")
+        continue
+    fi
+
+    # mm0-c is the point of the exercise: it re-checks the compiled file
+    # independently of the elaborator that produced it.
+    if ! mm0-c "$OUT/statements/$mod.mmb" <"$OUT/statements/$mod.mm0" >/dev/null 2>/tmp/lean-corpus-mm0c.log; then
+        err "$mod: mm0-c refused the file"
+        tail -3 /tmp/lean-corpus-mm0c.log | sed 's/^/    /'
+        BAD+=("$mod (mm0-c)")
+        continue
+    fi
+
+    printf '    %s decls → %s lines, mm0-c OK\n' "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")"
+    OK+=("$mod")
+done
+
+echo
+echo "=================================================================="
+printf 'converted+verified %d · failed %d · skipped %d\n' "${#OK[@]}" "${#BAD[@]}" "${#SKIP[@]}"
+[[ ${#OK[@]}  -gt 0 ]] && printf '  OK      : %s\n' "${OK[*]}"
+[[ ${#SKIP[@]} -gt 0 ]] && printf '  skipped : %s\n' "${SKIP[*]}"
+[[ ${#BAD[@]}  -gt 0 ]] && printf '  FAILED  : %s\n' "${BAD[*]}"
+echo "=================================================================="
+((${#BAD[@]} == 0))

@@ -58,3 +58,10 @@ engram.md
 # carrying it (GH001, 100 MB limit) — it is a build artifact of set.mm and
 # stays on disk, out of history.
 mm0/metamath/set.mmu
+
+# Lean→MM0 corpus statement pipeline (scripts/lean-corpus-mm0): the NDJSON
+# exports and compiled .mmb are regenerable intermediates; the .mm0/.mm1
+# statements are the artifacts.
+mm0/exports/
+mm0/statements/*.mmb
+scripts/__pycache__/

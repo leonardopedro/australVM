@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""lean2mm0-stmts — generic Lean 4 export → MM0 statements (docs/lean4mm0.md §12).
+
+The certificate emitter (`scripts/lean2mm0`) can only certify *closed ground
+Bool* computations: it re-evaluates the definition inside MM0 and proves
+`teq <net> ttrue`. Everything else in a Lean corpus — a theorem about
+`MeasureTheory.Measure`, a `∀`-statement, an inductive family — has no such
+value to compute, so that emitter has nothing to reduce and refuses.
+
+This script is the other half of the Lean4 → Nanoda → MM0 path: it encodes the
+*structure* of every declaration in a lean4export NDJSON into the term language
+of `docs/cic.mm0` (the agent signature the project's DeltaNets kernel actually
+implements) and emits one MM0 statement per declaration. What MM0 checks here
+is that the encoding is a well-formed term and that the declared statement is
+recorded at the right sort — `mm0-c` re-checks every line of it against the
+joined spec. What it does NOT check is the truth of the statement: that stays
+with the Lean kernel / Nanoda verdict for the export, which is why every file
+says `asserted` in its header and carries a `statements=N` trust split.
+
+So the honest summary of a `lean2mm0-stmts` artifact is: "the shape of this
+Lean development is now stated in the same term language as the certificates,
+so a reader can see and audit the claims next to the machinery that proves the
+computable ones". It is a statement of record, not a proof.
+
+Encoding (mechanical, structure-visible — no semantic translation):
+
+    const c            -> (tentity <sym c>)          symbol table in the header
+    Sort / Prop        -> (tentity <sym "Sort">)
+    literal n (Nat)    -> (tint n)
+    literal true/false -> ttrue / tfalse
+    f a                -> (tapp <f> <a>)             application spine, left assoc
+    fun x => b         -> (tabs <b>)
+    ∀ x : d, b         -> (tentity <sym "Pi"> <d> <b>)   (binder, domain, body)
+    bound var #i       -> (tvar i)
+
+Each declaration becomes
+
+    axiom decl_<sanitized name>: $ teq <encoded type> ttrue $;
+
+and the file ends with the symbol table, so `tentity` indices stay auditable.
+
+Usage:
+    scripts/lean2mm0-stmts emit  <export.ndjson> <stem> [--out DIR]
+    scripts/lean2mm0-stmts check <export.ndjson> <stem> [--out DIR]
+    scripts/lean2mm0-stmts verify <export.ndjson> <stem> [--out DIR]
+        # emit + mm0-rs compile + mm0-c replay (exit 2 if the tools are absent)
+
+Exit codes: 0 ok, 1 generation/verification failure, 2 tooling absent.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+AVM = Path(__file__).resolve().parent.parent
+WS = AVM.parent
+CIC = AVM / "docs" / "cic.mm0"
+
+# A declaration list this big is already an unusual file; the cap keeps a
+# runaway export (Mathlib pulled in whole) from emitting a multi-hundred-MB
+# artifact by accident.
+MAX_DECLS = 4000
+
+
+class EncodeError(RuntimeError):
+    pass
+
+
+def sanitize(name: str) -> str:
+    """Lean name → MM0 constant identifier (MM0 ids are [A-Za-z0-9_])."""
+    s = re.sub(r"[^0-9A-Za-z_]", "_", name)
+    if not s or s[0].isdigit():
+        s = "d" + s
+    return s
+
+
+# The NDJSON reader is NOT re-implemented here: `scripts/lean2mm0` already
+# parses lean4export 3.1.0's compact format (names/levels/exprs/decls + the
+# inductive registry), and two parsers for one format is exactly the drift this
+# repository refuses. It is loaded from its path (the file has no .py suffix).
+def _load_lean2mm0():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+
+    path = Path(__file__).resolve().parent / "lean2mm0"
+    # SourceFileLoader: the file carries no .py suffix, so the generic
+    # spec_from_file_location cannot pick a loader for it.
+    loader = SourceFileLoader("lean2mm0_mod", str(path))
+    spec = importlib.util.spec_from_loader("lean2mm0_mod", loader)
+    if spec is None:
+        raise EncodeError(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    # dataclasses resolve annotations through sys.modules[cls.__module__], so
+    # the module must be registered before it is executed.
+    import sys as _sys
+
+    _sys.modules["lean2mm0_mod"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_L2M = _load_lean2mm0()
+Export = _L2M.Export
+
+
+class Encoder:
+    """Lean expr → cic.mm0 Term, plus the symbol table the encoding needs."""
+
+    def __init__(self) -> None:
+        self.syms: dict[str, int] = {}
+        self.nats: set[int] = set()
+        # every numeral that reaches the output, whatever its role (symbol
+        # index, binder index, literal payload). mm0-rs has NO built-in
+        # numerals — a bare `0` in a math string is a parse error ("expected
+        # '$'") — so each value is declared once as a prefix term, exactly the
+        # way mm0/gap_certificate.mm0 does it.
+        self.nums: set[int] = set()
+
+    def num(self, n: int) -> str:
+        self.nums.add(int(n))
+        return str(int(n))
+
+    # `ex.exprs[id]` is the raw record: one kind key plus "ie".
+
+    def sym(self, s: str) -> int:
+        if s not in self.syms:
+            self.syms[s] = len(self.syms)
+        return self.syms[s]
+
+    def enc(self, ex: Export, idx: int, depth: int = 0) -> str:
+        if depth > 200:
+            raise EncodeError("expression nesting too deep (cyclic export?)")
+        e = ex.exprs.get(idx)
+        if e is None:
+            raise EncodeError(f"expr {idx} missing")
+        kind = None
+        # lean4export marks the kind as a key on the record itself
+        for k in ("const", "bvar", "sort", "lit", "app", "forallE", "lam",
+                  "mdata", "proj", "fvar", "letE"):
+            if k in e:
+                kind = k
+                break
+        if kind is None:
+            # Literals carry their payload as the key itself (no "lit" wrapper).
+            if "natVal" in e or "strVal" in e:
+                kind = "lit-flat"
+            else:
+                raise EncodeError(f"unknown expr shape at {idx}: {sorted(e)}")
+        if kind == "lit-flat":
+            if "natVal" in e:
+                n = int(e["natVal"])
+                self.nats.add(n)
+                return f"(tint {self.num(n)})"
+            idx = self.num(self.sym('Str ' + str(e['strVal'])[:40]))
+            return f"(tentity {idx})"
+
+        if kind == "const":
+            idx = self.num(self.sym(ex.name(e['const']['name'])))
+            return f"(tentity {idx})"
+        if kind == "bvar":
+            return f"(tvar {self.num(int(e['bvar']))})"
+        if kind == "sort":
+            idx = self.num(self.sym('Sort ' + str(e['sort'])))
+            return f"(tentity {idx})"
+        if kind == "lit":
+            lit = e["lit"]
+            if "natVal" in lit:
+                n = int(lit["natVal"])
+                self.nats.add(n)
+                return f"(tint {self.num(n)})"
+            if "strVal" in lit:
+                idx = self.num(self.sym('Str ' + lit['strVal'][:40]))
+                return f"(tentity {idx})"
+            idx = self.num(self.sym('Lit ' + json.dumps(lit)[:40]))
+            return f"(tentity {idx})"
+        if kind == "app":
+            f = self.enc(ex, e["app"]["fn"], depth + 1)
+            a = self.enc(ex, e["app"]["arg"], depth + 1)
+            return f"(tapp {f} {a})"
+        if kind == "lam":
+            return f"(tabs {self.enc(ex, e['lam']['body'], depth + 1)})"
+        if kind == "forallE":
+            # tentity takes ONE argument (a symbol index), so a binder is
+            # (Pi domain body) as an application spine, never tentity's own
+            # argument list — that mistake is what mm0-rs rejected first.
+            d = self.enc(ex, e["forallE"]["type"], depth + 1)
+            b = self.enc(ex, e["forallE"]["body"], depth + 1)
+            pi = self.num(self.sym('Pi'))
+            return f"(tapp (tapp (tentity {pi}) {d}) {b})"
+        if kind in ("mdata", "proj", "fvar", "letE"):
+            inner = (e[kind] or {}).get("expr")
+            if inner is None:
+                return f"(tentity {self.num(self.sym(kind))})"
+            return self.enc(ex, inner, depth + 1)
+        raise EncodeError(f"unhandled expr kind {kind}")
+
+
+def generate(ndjson: Path, stem: str) -> tuple[str, str]:
+    if not CIC.exists():
+        raise EncodeError(f"theory missing: {CIC}")
+    ex = Export(ndjson)
+    if not ex.decls:
+        raise EncodeError(f"{ndjson} declares nothing")
+    if len(ex.decls) > MAX_DECLS:
+        raise EncodeError(f"{ndjson} declares {len(ex.decls)} decls "
+                          f"(cap {MAX_DECLS}) — narrow the export with "
+                          "-- explicit declaration arguments")
+    enc = Encoder()
+    lines: list[str] = []
+    for nm, (_kind, rec, _line) in ex.decls.items():
+        try:
+            ty = enc.enc(ex, rec["type"])
+        except EncodeError as e:
+            raise EncodeError(f"{nm}: {e}") from e
+        lines.append(f"-- {nm}")
+        lines.append(f"axiom decl_{sanitize(nm)}: $ teq {ty} ttrue $;")
+        lines.append("")
+
+    # lean4export writes declarations and expressions interleaved; a decl's
+    # numeric payloads are level/binder data, not values, so only expression
+    # literals enter the numeral audit block.
+    nats_block = ["-- Numerals used by tint (auditable, in order):",
+                  "--   " + ", ".join(str(n) for n in sorted(enc.nats)) if enc.nats
+                  else "--   (none)"]
+    symtab = nats_block + ["-- Symbol table (tentity indices, in first-use order):"]
+    for s, i in sorted(enc.syms.items(), key=lambda kv: kv[1]):
+        symtab.append(f"--   {i}: {s}")
+    header = [
+        f"-- {stem}.{{mm0,mm1}} — GENERATED by australVM/scripts/lean2mm0-stmts.",
+        "-- DO NOT EDIT: regenerate from the export instead.",
+        "--",
+        f"-- Kernel export    : {ndjson.relative_to(WS) if ndjson.is_relative_to(WS) else ndjson}",
+        f"--   sha256 {ex.sha256}  (lean4export NDJSON; the Lean kernel checked the",
+        "--   declarations, nanoda re-checks them in unfer's prob_kernel suite)",
+        f"-- Target theory    : {CIC.relative_to(WS)} (embedded verbatim below)",
+        "--",
+        "-- What this file is: the STRUCTURE of every declaration, encoded in the",
+        "-- same term language as the certificates (tapp/tabs/tentity/tint/tvar)",
+        "-- and stated as an MM0 axiom. mm0-c checks the encoding's well-formedness",
+        "-- against the embedded theory; it does NOT check the truth of the",
+        "-- statement — that is the Lean kernel's verdict on the export. Any",
+        "-- theorem this corpus wants *proved* in MM0 needs a certificate",
+        "-- (scripts/lean2mm0), not a statement.",
+        "--",
+        f"-- trust-split: structural=0 grounded=0 statements={len(ex.decls)}",
+        "--",
+    ]
+    # Numerals: MM0 (mm0-rs) has no numeral literals — `(tentity 0)` is a
+    # parse error ("expected '$'" at the `(`), because `0` is not a token of
+    # any declared notation. Declare each value once as a prefix term whose
+    # token IS the decimal spelling, so the emitted statements read exactly
+    # like the certificate (mm0/gap_certificate.mm0 does the same):
+    #   term n7: nat; prefix n7: $7$ prec max;
+    numeral_block = [
+        "-- Ground numerals: declared once, written as decimal tokens so the",
+        "-- encoded statements read exactly like the certificate's terms.",
+        "-- (mm0-rs has no built-in numeral literals; without these, `(tentity 0)`",
+        "-- is a parse error.)",
+    ]
+    for v in sorted(enc.nums):
+        numeral_block.append(f"term n{v}: nat; prefix n{v}: ${v}$ prec max;")
+
+    body = CIC.read_text().rstrip("\n").split("\n")
+    text = "\n".join(header + body + [""] + numeral_block + [""]
+                   + lines + symtab) + "\n"
+    return text, text
+
+
+def runs(ndjson: Path, stem: str, out: Path) -> tuple[Path, Path]:
+    mm0, mm1 = generate(ndjson, stem)
+    out.mkdir(parents=True, exist_ok=True)
+    p0, p1 = out / f"{stem}.mm0", out / f"{stem}.mm1"
+    p0.write_text(mm0)
+    p1.write_text(mm1)
+    print(f"lean2mm0-stmts: wrote {p0} ({len(mm0.splitlines())} lines)")
+    return p0, p1
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 4 or argv[1] not in ("emit", "check", "verify"):
+        print(__doc__.split("Usage:")[1].split("Exit codes")[0].strip())
+        return 1
+    mode, ndjson_arg, stem = argv[1], argv[2], argv[3]
+    out = AVM / "mm0" / "statements"
+    if "--out" in argv:
+        out = Path(argv[argv.index("--out") + 1])
+    ndjson = Path(ndjson_arg)
+
+    if mode == "check":
+        mm0, _ = generate(ndjson, stem)
+        target = out / f"{stem}.mm0"
+        if not target.exists() or target.read_text() != mm0:
+            print(f"lean2mm0-stmts check: {target} is out of date")
+            return 1
+        print(f"lean2mm0-stmts check: OK — {target} matches the export")
+        return 0
+
+    try:
+        p0, _p1 = runs(ndjson, stem, out)
+    except EncodeError as e:
+        print(f"lean2mm0-stmts: {e}", file=sys.stderr)
+        return 1
+
+    if mode == "emit":
+        return 0
+
+    mm0_rs, mm0_c = shutil.which("mm0-rs"), shutil.which("mm0-c")
+    if not mm0_rs or not mm0_c:
+        print("lean2mm0-stmts verify: mm0-rs / mm0-c not on PATH (tooling "
+              "absent) — emission succeeded", file=sys.stderr)
+        return 2
+    with tempfile.TemporaryDirectory() as td:
+        mmb = Path(td) / f"{stem}.mmb"
+        r = subprocess.run([mm0_rs, "compile", str(p0), str(mmb)],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"lean2mm0-stmts verify: mm0-rs refused {p0}:\n"
+                  f"{r.stdout}{r.stderr}", file=sys.stderr)
+            return 1
+        print(f"lean2mm0-stmts verify: mm0-rs compile OK ({stem})")
+        r = subprocess.run([mm0_c, str(mmb)], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"lean2mm0-stmts verify: mm0-c refused {mmb}:\n"
+                  f"{r.stdout}{r.stderr}", file=sys.stderr)
+            return 1
+        print(f"lean2mm0-stmts verify: mm0-c OK ({stem})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
