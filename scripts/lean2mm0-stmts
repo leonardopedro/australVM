@@ -65,8 +65,10 @@ CIC = AVM / "docs" / "cic.mm0"
 
 # A declaration list this big is already an unusual file; the cap keeps a
 # runaway export (Mathlib pulled in whole) from emitting a multi-hundred-MB
-# artifact by accident.
-MAX_DECLS = 4000
+# artifact by accident. 8000, not 4000: a real module whose declarations carry
+# large quoted syntax (`timepiece/extract_sketch_info.lean`, 4386 declarations)
+# is a legitimate corpus member, while a whole-Mathlib export is ~50 000.
+MAX_DECLS = 8000
 
 
 class EncodeError(RuntimeError):
@@ -74,11 +76,42 @@ class EncodeError(RuntimeError):
 
 
 def sanitize(name: str) -> str:
-    """Lean name → MM0 constant identifier (MM0 ids are [A-Za-z0-9_])."""
+    """Lean name → MM0 constant identifier (MM0 ids are [A-Za-z0-9_]).
+
+    LOSSY ON PURPOSE, so callers must not use it as an identity: `get_elem?`,
+    `get_elem'` and `get_elem_` all map to `get_elem_`. In a module that
+    declares several such variants the emitted axioms then collide and mm0-rs
+    refuses the whole file ("theorem 'decl_X' redeclared"). `fresh_name` is the
+    only correct entry point; this stays private-ish for its docstring alone.
+    """
     s = re.sub(r"[^0-9A-Za-z_]", "_", name)
     if not s or s[0].isdigit():
         s = "d" + s
     return s
+
+
+def fresh_name(name: str, taken: dict[str, int], used: set[str]) -> str:
+    """Injective, ORDER-INDEPENDENT Lean-name → MM0-identifier map.
+
+    `taken` is the precomputed count of declarations per sanitised base, so the
+    decision does not depend on iteration order: a base nobody else claims keeps
+    the readable `decl_List_map` (no churn for ordinary modules), while every
+    member of an ambiguous base gets the first 8 hex digits of
+    SHA-256(original name) — `get_elem?`, `get_elem'` and `get_elem_` become
+    three distinct, stable identifiers instead of one redeclared theorem.
+    """
+    base = sanitize(name)
+    if taken.get(base, 0) <= 1 and base not in used:
+        used.add(base)
+        return base
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    cand = f"{base}_{digest}"
+    n = 1
+    while cand in used:
+        n += 1
+        cand = f"{base}_{digest}_{n}"
+    used.add(cand)
+    return cand
 
 
 # The NDJSON reader is NOT re-implemented here: `scripts/lean2mm0` already
@@ -214,13 +247,18 @@ def generate(ndjson: Path, stem: str) -> tuple[str, str]:
                           "-- explicit declaration arguments")
     enc = Encoder()
     lines: list[str] = []
+    used_names: set[str] = set()
+    base_counts: dict[str, int] = {}
+    for nm in ex.decls:
+        b = sanitize(nm)
+        base_counts[b] = base_counts.get(b, 0) + 1
     for nm, (_kind, rec, _line) in ex.decls.items():
         try:
             ty = enc.enc(ex, rec["type"])
         except EncodeError as e:
             raise EncodeError(f"{nm}: {e}") from e
         lines.append(f"-- {nm}")
-        lines.append(f"axiom decl_{sanitize(nm)}: $ teq {ty} ttrue $;")
+        lines.append(f"axiom decl_{fresh_name(nm, base_counts, used_names)}: $ teq {ty} ttrue $;")
         lines.append("")
 
     # lean4export writes declarations and expressions interleaved; a decl's

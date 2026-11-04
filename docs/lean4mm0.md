@@ -700,3 +700,18 @@ file directly into `mm0/olean/<mod>.olean` and prepending that directory to
 separately: *converted*, *skipped* (does not elaborate as a standalone file, or
 exports no declarations of its own), *failed* (build error, nanoda rejection,
 mm0-rs error, mm0-c refusal).
+
+### A third trap: sanitised names collide
+
+MM0 identifiers are `[A-Za-z0-9_]`, so a Lean name is sanitised (`get_elem?` →
+`get_elem_`). The map is **lossy**: `get_elem?`, `get_elem'` and `get_elem_` all
+land on the same identifier, and a module that declares several variants then
+emits the same axiom name twice — mm0-rs rejects the whole file with
+`theorem 'decl_X' redeclared`, which reads like a theory problem but is purely a
+naming bug. `fresh_name` therefore indexes the *whole* declaration set first: a
+base nobody else claims keeps the readable identifier (no churn in existing
+artifacts — `Layout` regenerates byte-identically), while every member of an
+ambiguous base gets the first 8 hex digits of `SHA-256(original name)`. The
+result is injective AND independent of declaration order, so regeneration of the
+same export is byte-identical. Found on `timepiece/extract_sketch_info.lean`
+(31 declarations, 15 359 emitted lines).
