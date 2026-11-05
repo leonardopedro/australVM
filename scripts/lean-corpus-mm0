@@ -21,7 +21,7 @@
 #
 # Env:
 #   LEAN_PROJECT        Lean project to export (default ../timepiece)
-#   LEAN_EXPORTER       lean4export binary (default: /tmp/l4e428 build)
+#   LEAN_EXPORTER       lean4export binary (default: ../lean4export build, /tmp fallback)
 #   CORPUS_OUT          output root (default australVM/mm0)
 #   BUILD_TIMEOUT       per-module elaboration budget, seconds (default 900)
 #
@@ -47,7 +47,20 @@ set -uo pipefail
 AVM=$(cd "$(dirname "$0")/.." && pwd)
 WS=$(cd "$AVM/.." && pwd)
 PROJ=${LEAN_PROJECT:-$WS/timepiece}
-EXPORTER=${LEAN_EXPORTER:-/tmp/l4e428/.lake/build/bin/lean4export}
+# lean4export must be built against the project's own Lean version, and it used
+# to default to a /tmp build — which a reboot or a tidy-up silently removes,
+# turning every module into an "exporter died" failure. Prefer a durable build
+# in the workspace and keep /tmp only as a bring-up fallback.
+EXPORTER=${LEAN_EXPORTER:-}
+if [[ -z $EXPORTER ]]; then
+  for cand in "$WS/lean4export" /tmp/lean4export /tmp/l4e428; do
+    if [[ -x $cand/.lake/build/bin/lean4export ]]; then
+      EXPORTER=$cand/.lake/build/bin/lean4export
+      break
+    fi
+  done
+  EXPORTER=${EXPORTER:-$WS/lean4export/.lake/build/bin/lean4export}
+fi
 OUT=${CORPUS_OUT:-$AVM/mm0}
 BUILD_TIMEOUT=${BUILD_TIMEOUT:-900}
 DECLS_LEAN=$AVM/scripts/lean-module-decls.lean
