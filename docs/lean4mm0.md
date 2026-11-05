@@ -913,3 +913,14 @@ through the rest of the corpus.
 Running the sweep beside a `lake build`, or two sweeps at once, still runs out of
 memory: the guard protects the machine from one module's growth, not from two
 mechanisms each asking for a few gigabytes.
+
+**Carrying on when the host cannot fit a module.** A module that trips the floor
+is recorded as `deferred`, not `failed`: that is a statement about the host, and
+one chapter needing 10 GiB must not end a corpus run (it did, at module 466 of
+884). The sweep continues with the rest of the corpus and reports how many it
+deferred. `SWEEP_RETRY_ROUNDS` (default 1) then re-attempts the `failed`, `gap`
+and `timeout` rows at the end of the same invocation, so a transient cause —
+imports not yet built, a timeout, a busy machine — is retried without a second
+command; `empty` and `deferred` are left alone unless `SWEEP_RETRY_DEFERRED=1`.
+The state file keeps exactly one row per module, so a resumed or re-attempted run
+replaces that module's verdict instead of counting it twice.

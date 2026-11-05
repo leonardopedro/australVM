@@ -25,6 +25,9 @@
 #                     module (default 4000)
 #   SWEEP_MEM_WAIT    seconds to wait for that before giving up (default 1200)
 #   SWEEP_RETRY=1     re-attempt modules recorded as failed/gapped
+#   SWEEP_RETRY_ROUNDS  automatic re-attempt passes at the end of a run (default 1,
+#                     0 disables); a failure is often an artefact of the run
+#   SWEEP_RETRY_DEFERRED=1  also re-attempt modules deferred for memory
 #   NANODA_MAX_BYTES  passed through; the sweep default is 0 (no budget), which
 #                     is only cheap because $NANODA_TRUSTED skips the shared
 #                     Mathlib closure — see scripts/lean-corpus-trust
@@ -38,6 +41,9 @@
 #   timeout   hit $SWEEP_TIMEOUT; nothing recorded about the module's contents
 #   failed    the driver reported a failure (build, export, nanoda, mm0-rs, mm0-c)
 #   empty     the module exports no declarations of its own (nothing to convert)
+#   deferred  stopped because the host ran out of memory mid-module — a statement
+#             about the host, not the module, so the corpus run continues and a
+#             later pass (or a quieter machine) can still convert it
 #
 # Memory: one module at a time, each in its own capped cgroup, with the peak
 # charged to that cgroup recorded in the state file. A summed-RSS figure for the
@@ -139,24 +145,40 @@ echo
 
 declare -a DID=() RESUMED=()
 MEMFAILS=0
+RETRY_ROUNDS=${SWEEP_RETRY_ROUNDS:-1}
+RETRY_DEFERRED=${SWEEP_RETRY_DEFERRED:-0}
 sweep_start=$(date +%s)
-for mod in "${MODULES[@]}"; do
-    n=$(( ${#DID[@]} + ${#RESUMED[@]} + 1 ))
-    if recorded "$STATE" "$mod"; then
-        RESUMED+=("$mod")
-        continue
-    fi
+
+# Record a verdict, replacing any earlier row for the same module: a resumed or
+# re-attempted module must appear exactly once, or the totals double-count.
+record() {
+    local status=$1 mod=$2 secs=$3 detail=$4 tmp
+    tmp=$(mktemp)
+    awk -F'\t' -v m="$mod" '$2 != m' "$STATE" >"$tmp" && mv "$tmp" "$STATE"
+    printf '%s\t%s\t%s\t%s\n' "$status" "$mod" "$secs" "$detail" >>"$STATE"
+}
+
+# `empty` is a verdict about the module and `deferred` is a verdict about the
+# host, so neither is retried by default: re-running a module that needs 10 GiB
+# on a busy machine buys another ten minutes of the same answer.
+retryable() {
+    case $1 in
+        failed | gap | timeout) return 0 ;;
+        deferred) [[ ${RETRY_DEFERRED} == 1 ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+# Run one module under the memory watchdog. Sets STATUS, SECS and DETAIL for the
+# caller (DETAIL carries the peak); records nothing itself.
+run_module() {
+    local mod=$1 log t0 waited avail dpid rc cur_kb avail_kb peak_kb peak detail mem_out
     log=$LOGDIR/$mod.log
-    echo "[$n/${#MODULES[@]}] $mod"
     t0=$(date +%s)
-    # Watch the module instead of just waiting for it. A chapter peaks at 6-8 GiB,
-    # so one started while the desktop is busy is a plausible OOM victim — and when
-    # the kernel picks it, the sweep dies with it (that is how this loop lost a
-    # module without a state row). Sampling MemAvailable and killing the module's
-    # OWN process group turns that into a recorded failure with the peak attached.
-    # Wait for headroom first: one module's real footprint is ~2 GiB of anon
-    # memory on top of several GiB of Mathlib page cache, so starting one into a
-    # few hundred MiB free only burns the module.
+    # Wait for headroom first: one module costs ~2 GiB of anon memory on top of
+    # several GiB of Mathlib page cache, so starting one into a few hundred MiB
+    # free only burns the module — and, before the watchdog existed, sometimes the
+    # whole terminal's cgroup with it.
     waited=0
     while :; do
         avail=$(( $(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo) / 1024 ))
@@ -201,9 +223,7 @@ for mod in "${MODULES[@]}"; do
     done
     wait "$dpid" 2>/dev/null
     rc=$?
-    dt=$(( $(date +%s) - t0 ))
     peak=$(( peak_kb / 1024 ))
-
     # The driver's exit code is the module's overall verdict; the log line says
     # how many declarations went in and how many MM0 lines came out, and whether
     # nanoda's verdict actually backs them. Read both — a module can be `ok` for
@@ -211,42 +231,73 @@ for mod in "${MODULES[@]}"; do
     # chapter with a kernel check it never got.
     detail=$(grep -Eo '[0-9]+ decls → [0-9]+ lines, mm0-c OK( \(statements NOT kernel-backed\))?' "$log" | tail -1)
     [[ -z $detail ]] && detail=$(grep -m1 -E '\[(FAIL|FATAL|WARN)\]' "$log" | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-140)
-    if (( rc == 124 )); then
-        status=timeout
+    if (( mem_out )); then
+        # Not a verdict about the module. One heavy chapter must not end the run:
+        # the corpus is the point, and this module can be converted when the
+        # machine is quieter.
+        STATUS=deferred
+        detail="host memory fell below ${MEMFLOOR_MIB} MiB — stopped mid-module"
+        MEMFAILS=$(( MEMFAILS + 1 ))
+    elif (( rc == 124 )); then
+        STATUS=timeout
     elif (( rc == 137 )); then
-        status=failed
+        STATUS=failed
         detail="killed by SIGKILL — memory watchdog or the kernel's OOM killer"
     elif (( rc != 0 )); then
-        status=failed
+        STATUS=failed
     elif grep -q 'statements NOT kernel-backed' "$log"; then
-        status=gap
+        STATUS=gap
     elif grep -q 'exports no declarations of its own' "$log"; then
-        status=empty
+        STATUS=empty
     else
-        status=ok
+        STATUS=ok
     fi
-    # A module stopped for memory is not evidence about the module: say which
-    # limit stopped it, and keep the peak so the next attempt can budget for it.
-    if (( mem_out )); then
-        status=failed
-        detail="host memory fell below ${MEMFLOOR_MIB} MiB — stopped mid-module"
-        (( ++MEMFAILS >= 3 )) && stop_after_memfail=1
+    SECS=$(( $(date +%s) - t0 ))
+    DETAIL="${detail:-—} · peak ${peak} MiB"
+}
+
+run_pass() {
+    local label=$1 n=0 total=$(( $# - 1 )) mod
+    shift
+    echo "== pass ${label}: ${total} module(s)"
+    for mod in "$@"; do
+        n=$(( n + 1 ))
+        echo "[$n/$total] $mod"
+        run_module "$mod"
+        record "$STATUS" "$mod" "$SECS" "$DETAIL"
+        DID+=("$mod")
+        printf '    %-8s %4ds  %s\n' "$STATUS" "$SECS" "$DETAIL"
+        # Keep the long job honest about where it is: append-only, one line per
+        # module, so `tail -f` works and nothing is lost on a hard kill.
+        echo "$(date -Is)	$STATUS	$mod	${SECS}s	$DETAIL" >>"$LOGDIR/sweep.log"
+    done
+}
+
+# Pass 1: everything the state file has no verdict for yet.
+pending=()
+for mod in "${MODULES[@]}"; do
+    if recorded "$STATE" "$mod"; then
+        RESUMED+=("$mod")
     else
-        MEMFAILS=0
+        pending+=("$mod")
     fi
-    detail="${detail:-—} · peak ${peak} MiB"
-    printf '%s\t%s\t%s\t%s\n' "$status" "$mod" "$dt" "$detail" >>"$STATE"
-    DID+=("$mod")
-    printf '    %-7s %4ds  peak %5d MiB  %s\n' "$status" "$dt" "$peak" "${detail:-—}"
-    # Keep the long job honest about where it is: append-only, one line per
-    # module, so `tail -f` works and nothing is lost on a hard kill.
-    echo "$(date -Is)	$status	$mod	${dt}s	${detail:-—}" >>"$LOGDIR/sweep.log"
-    if (( ${stop_after_memfail:-0} )); then
-        echo >&2
-        echo "[STOP] three modules in a row were stopped for memory (<${MEMFLOOR_MIB} MiB available)." >&2
-        echo "       Free up memory and re-run: finished modules are recorded, this one included." >&2
+done
+(( ${#pending[@]} )) && run_pass 1 "${pending[@]}"
+
+# Later passes: re-attempt what did not convert, without a second invocation.
+round=0
+while (( round < RETRY_ROUNDS )); do
+    round=$(( round + 1 ))
+    retry=()
+    while IFS=$'\t' read -r st m _; do
+        [[ -n ${m:-} ]] || continue
+        retryable "$st" && retry+=("$m")
+    done <"$STATE"
+    if (( ${#retry[@]} == 0 )); then
+        echo "== nothing left to re-attempt"
         break
     fi
+    run_pass "retry ${round}" "${retry[@]}"
 done
 
 elapsed=$(( $(date +%s) - sweep_start ))
@@ -258,6 +309,7 @@ printf 'sweep of %s: %d modules, %d attempted this run, %d already recorded\n' \
 if ((${#DID[@]})); then
     printf '  this run: %s\n' "$(printf '%dh %dm' $((elapsed / 3600)) $(((elapsed % 3600) / 60)))"
 fi
+(( MEMFAILS )) && printf '  deferred: %d module(s) stopped for memory — re-run when the machine is quieter\n' "$MEMFAILS"
 # Totals for the whole corpus, from the state file, not just this invocation:
 # a resumed sweep must report what the corpus looks like, not what it touched.
 awk -F'\t' '{ c[$1]++ } END {
