@@ -1,0 +1,509 @@
+#!/usr/bin/env python3
+"""Publish BookProof components to Zenodo, whole components only.
+
+A *component* is a weakly connected component of the `import BookProof.*` graph
+over the Lean sources. That is the largest unit whose dependency closure stays
+inside the corpus: everything a component needs from outside is Mathlib/Std, or
+another component that is published in its own record.
+
+Three rules are enforced here rather than left to the caller:
+
+  1. A component is published whole or not at all. Every member must be
+     converted — `ok` or `empty` in mm0/sweep-state.tsv — and every export must
+     exist and be non-empty. `plan` names the members that block a component so
+     the missing work is visible instead of being silently trimmed away.
+  2. Import-only aggregator modules are dropped from the graph. Files that are
+     nothing but `import` lines are re-export bundles; their edges would fuse
+     unrelated proofs into one component and are not dependencies.
+  3. The proofs are the lean4export NDJSON files. The .mm0/.mm1 statement
+     encodings are *derived structure* — their own header says mm0-c checks the
+     encoding's well-formedness and "does NOT check the truth" — so they ship
+     beside the exports and never as a substitute for them.
+
+Usage
+  scripts/zenodo-publish components              # component table, no network
+  scripts/zenodo-publish plan [--component C]    # what would be uploaded
+  scripts/zenodo-publish publish --component C   # upload one component
+  scripts/zenodo-publish check-token             # validate credentials
+
+Publishing to Zenodo is effectively irrevocable: a record's files can only be
+changed for 45 days after publication. `publish` therefore leaves the record a
+DRAFT unless --publish is given, and does not delete anything locally unless
+both --publish and --prune are given and the upload checksum matched.
+
+Environment
+  ZENODO_TOKEN   token with deposit:write + deposit:actions; otherwise read from
+                 ~/.config/australVM/zenodo.token. Never passed on a command
+                 line, never printed.
+"""
+import argparse
+import collections
+import glob
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+
+AVM = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WS = os.path.dirname(AVM)
+PROJ = os.environ.get("LEAN_PROJECT", os.path.join(WS, "timepiece"))
+OUT = os.environ.get("CORPUS_OUT", os.path.join(AVM, "mm0"))
+EXPORTS = os.path.join(OUT, "exports")
+STATEMENTS = os.path.join(OUT, "statements")
+STATE = os.path.join(OUT, "sweep-state.tsv")
+LEDGER = os.path.join(OUT, "zenodo", "ledger.tsv")
+TOKEN_FILE = os.path.expanduser("~/.config/australVM/zenodo.token")
+# 50 GB and 100 files is the per-record cap; stay clear of both.
+MAX_RECORD_BYTES = 45 * 10**9
+MAX_RECORD_FILES = 90
+
+DEF_RE = re.compile(
+    r"^\s*(theorem|lemma|def|instance|structure|class|abbrev|inductive|example"
+    r"|noncomputable def|private theorem|protected theorem|@\[)", re.M)
+IMPORT_RE = re.compile(r"^import\s+(\S+)", re.M)
+
+
+def die(msg, code=2):
+    print(f"[FATAL] {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def info(msg):
+    print(f"[INFO] {msg}")
+
+
+# ---------------------------------------------------------------- the graph
+
+def load_graph():
+    """module -> [BookProof imports], plus the set of import-only aggregators."""
+    src = os.path.join(PROJ, "BookProof")
+    if not os.path.isdir(src):
+        die(f"no Lean sources at {src}")
+    mods, agg = {}, set()
+    for path in glob.glob(os.path.join(src, "**", "*.lean"), recursive=True):
+        mod = os.path.relpath(path, PROJ)[:-5].replace(os.sep, ".")
+        with open(path, errors="replace") as f:
+            text = f.read()
+        mods[mod] = IMPORT_RE.findall(text)
+        if mods[mod] and not DEF_RE.search(text):
+            agg.add(mod)
+    return mods, agg
+
+
+def components(mods, agg):
+    parent = {m: m for m in mods if m not in agg}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for m in parent:
+        for i in mods[m]:
+            if i in parent:
+                a, b = find(m), find(i)
+                if a != b:
+                    parent[b] = a
+    comps = collections.defaultdict(list)
+    for m in parent:
+        comps[find(m)].append(m)
+    return {r: sorted(v) for r, v in comps.items()}
+
+
+def load_state():
+    state = {}
+    if os.path.exists(STATE):
+        with open(STATE) as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 2:
+                    state[parts[1]] = parts[0]
+    return state
+
+
+def artifacts(module):
+    """Every file that belongs to a module, exports first."""
+    out = []
+    p = os.path.join(EXPORTS, module + ".ndjson")
+    if os.path.exists(p):
+        out.append(p)
+    for ext in (".mm0", ".mm1", ".mmb", ".roots"):
+        p = os.path.join(STATEMENTS, module + ext)
+        if os.path.exists(p):
+            out.append(p)
+    return out
+
+
+def survey():
+    state = load_state()
+    mods, agg = load_graph()
+    rows = []
+    for root, members in components(mods, agg).items():
+        files, blocked = [], []
+        for m in members:
+            st = state.get(m)
+            arts = artifacts(m)
+            if st not in ("ok", "empty"):
+                blocked.append((m, st or "unconverted"))
+            elif not arts or not any(os.path.getsize(a) for a in arts):
+                blocked.append((m, "no-artifact"))
+            else:
+                files.extend(arts)
+        exps = [f for f in files if f.endswith(".ndjson")]
+        rows.append({
+            "root": root,
+            "members": members,
+            "files": files,
+            "bytes": sum(os.path.getsize(f) for f in files),
+            "export_bytes": sum(os.path.getsize(f) for f in exps),
+            "exports": len(exps),
+            "blocked": blocked,
+        })
+    rows.sort(key=lambda r: -r["bytes"])
+    return rows
+
+
+def describe(r):
+    ver = "WHOLE" if not r["blocked"] else f"blocked({len(r['blocked'])})"
+    return (f"{r['bytes']/2**30:7.2f} GiB  {r['export_bytes']/2**30:7.2f} GiB exports"
+            f"  {len(r['members']):4d} mods  {ver:9}  {r['root']}")
+
+
+def cmd_components(_args):
+    rows = survey()
+    print(f"{len(rows)} component(s); proofs = export bytes\n")
+    for r in rows:
+        if r["bytes"] >= 2**20 or r["members"]:
+            print("  " + describe(r))
+    whole = [r for r in rows if not r["blocked"]]
+    print(f"\n  whole components: {len(whole)}  "
+          f"publishable now: {sum(r['bytes'] for r in whole)/2**30:.2f} GiB "
+          f"({sum(r['export_bytes'] for r in whole)/2**30:.2f} GiB of proofs)")
+    return 0
+
+
+def cmd_plan(args):
+    rows = survey()
+    if args.component:
+        rows = [r for r in rows if r["root"] == args.component]
+        if not rows:
+            die(f"no component rooted at {args.component}")
+    for r in rows:
+        if not args.component and r["bytes"] < 2**20:
+            continue
+        print(describe(r))
+        if r["blocked"]:
+            sample = ", ".join(f"{m}({s})" for m, s in r["blocked"][:6])
+            more = "" if len(r["blocked"]) <= 6 else f" … +{len(r['blocked'])-6}"
+            print(f"    blocks publishing: {sample}{more}")
+            print("    publish it only once the whole closure converts")
+        else:
+            if r["exports"] > MAX_RECORD_FILES:
+                print(f"    needs >{MAX_RECORD_FILES} files: will be archived")
+            if r["bytes"] > MAX_RECORD_BYTES:
+                print("    over the 50 GB record cap: needs a quota increase")
+    return 0
+
+
+# ---------------------------------------------------------------- transport
+
+def token():
+    tok = os.environ.get("ZENODO_TOKEN", "").strip()
+    if not tok and os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE) as f:
+            tok = f.read().strip()
+    if not tok:
+        die(f"no token: set ZENODO_TOKEN or write one to {TOKEN_FILE}")
+    return tok
+
+
+def api_base(sandbox):
+    return "https://sandbox.zenodo.org/api" if sandbox else "https://zenodo.org/api"
+
+
+def request(method, url, tok, data=None, content_type="application/json", stream=None):
+    req = urllib.request.Request(url, method=method)
+    req.add_header("Authorization", "Bearer " + tok)
+    body = None
+    if stream is not None:
+        size = os.path.getsize(stream)
+        req.add_header("Content-Type", content_type)
+        req.add_header("Content-Length", str(size))
+        body = open(stream, "rb")
+    elif data is not None:
+        body = json.dumps(data).encode()
+        req.add_header("Content-Type", content_type)
+    try:
+        with urllib.request.urlopen(req, body) as r:
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")[:400]
+        die(f"{method} {url} -> HTTP {e.code}: {detail}", 1)
+    finally:
+        if body is not None and hasattr(body, "close"):
+            body.close()
+    return json.loads(raw) if raw.strip().startswith((b"{", b"[")) else {}
+
+
+def put_file(url, path, tok, workdir):
+    """Upload one file. curl rather than urllib: urllib sent an empty body to
+    Zenodo's bucket endpoint, and curl resumes/retries properly for GiB files.
+    The token goes in a 0600 header file, so it never appears in argv (visible
+    in `ps` and /proc/<pid>/cmdline)."""
+    fd, hdr = tempfile.mkstemp(dir=workdir, prefix="hdr.")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"Authorization: Bearer {tok}\n")
+            f.write("Content-Type: application/octet-stream\n")
+        r = subprocess.run(
+            ["curl", "--fail", "--silent", "--show-error", "--location",
+             "--retry", "5", "--retry-all-errors", "--retry-delay", "5",
+             "--upload-file", path, "--header", "@" + hdr, url],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"upload failed (curl {r.returncode}): {r.stderr.strip()[:400]}", 1)
+        return r.stdout
+    finally:
+        os.unlink(hdr)
+
+
+def cmd_check_token(args):
+    tok = token()
+    base = api_base(args.sandbox)
+    me = request("GET", f"{base}/deposit/depositions?size=1", tok)
+    n = len(me) if isinstance(me, list) else 0
+    print(f"token accepted by {base}: can list deposits ({n} returned)")
+    return 0
+
+
+# --------------------------------------------------------------- publishing
+
+def provenance():
+    def git(*a):
+        try:
+            return subprocess.run(["git", "-C", *a], capture_output=True,
+                                  text=True, check=True).stdout.strip()
+        except Exception:
+            return "unknown"
+    toolchain = "unknown"
+    tc = os.path.join(PROJ, "lean-toolchain")
+    if os.path.exists(tc):
+        toolchain = open(tc).read().strip()
+    return {
+        "timepiece_commit": git(PROJ, "rev-parse", "HEAD"),
+        "australVM_commit": git(AVM, "rev-parse", "HEAD"),
+        "lean_toolchain": toolchain,
+        "source_repo": git(AVM, "remote", "get-url", "origin"),
+    }
+
+
+def sha256(path, chunk=4 << 20):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while (b := f.read(chunk)):
+            h.update(b)
+    return h.hexdigest()
+
+
+def md5_file(path, chunk=4 << 20):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        while (b := f.read(chunk)):
+            h.update(b)
+    return h.hexdigest()
+
+
+def build_manifest(r, prov):
+    entries = []
+    for f in r["files"]:
+        entries.append({
+            "file": os.path.relpath(f, OUT),
+            "bytes": os.path.getsize(f),
+            "sha256": sha256(f),
+        })
+    return {
+        "component": r["root"],
+        "modules": r["members"],
+        "artifacts": entries,
+        "provenance": prov,
+        "note": ("NDJSON files are lean4export output; the Lean kernel checked the "
+                 "declarations and nanoda re-checked them. The .mm0/.mm1 files encode "
+                 "the structure of each declaration as an MM0 axiom — mm0-c checks the "
+                 "encoding's well-formedness, not the truth of the statement."),
+    }
+
+
+def archive(r, manifest, workdir):
+    """One tar.zst per record: keeps the record at 1 file, far under the cap."""
+    stage = tempfile.mkdtemp(dir=workdir)
+    with open(os.path.join(stage, "MANIFEST.json"), "w") as f:
+        json.dump(manifest, f, indent=1)
+    with open(os.path.join(stage, "README.md"), "w") as f:
+        f.write(f"# {r['root']}\n\n"
+                f"{len(r['members'])} Lean modules, converted to lean4export NDJSON "
+                f"and MM0 statement encodings.\n\n"
+                f"Provenance: timepiece {manifest['provenance']['timepiece_commit']} "
+                f"at {manifest['provenance']['lean_toolchain']}; "
+                f"australVM {manifest['provenance']['australVM_commit']}.\n\n"
+                f"Verify with `sha256sum -c` against MANIFEST.json.\n")
+    for f in r["files"]:
+        os.symlink(f, os.path.join(stage, os.path.basename(f)))
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", r["root"]) + ".tar.zst"
+    dest = os.path.join(workdir, name)
+    # --dereference: the staging dir holds links to the artifacts, and a tar of
+    # bare symlinks would upload an archive with no data in it.
+    tar = subprocess.Popen(["tar", "-C", stage, "--create", "--dereference",
+                            "--file", "-", "."], stdout=subprocess.PIPE)
+    zst = subprocess.Popen(["zstd", "-q", "-T0", "-6", "-o", dest],
+                           stdin=tar.stdout)
+    tar.stdout.close()
+    if zst.wait() != 0 or tar.wait() != 0:
+        die("archive failed")
+    staged = sum(os.path.getsize(f) for f in r["files"])
+    if os.path.getsize(dest) < min(1024, staged):
+        die(f"archive is {os.path.getsize(dest)} B for {staged} B of artifacts; "
+            f"refusing to upload something that is not the data")
+    return dest
+
+
+def metadata(r, prov):
+    exps = r["exports"]
+    desc = (
+        f"<p>{len(r['members'])} Lean modules of the BookProof corpus at "
+        f"<code>{r['root']}</code>, with the complete dependency closure of the "
+        f"component: {exps} lean4export NDJSON proof terms and their MM0 statement "
+        f"encodings.</p>"
+        f"<p>The component has no dependencies outside the Lean standard library "
+        f"and Mathlib; modules whose only role is to re-export others are excluded. "
+        f"Published whole — no member of the closure is missing.</p>"
+        f"<p>Generated from timepiece <code>{prov['timepiece_commit']}</code> with "
+        f"<code>{prov['lean_toolchain']}</code>, pipeline australVM "
+        f"<code>{prov['australVM_commit']}</code>. NDJSON is lean4export output, "
+        f"kernel-checked by Lean and re-checked by nanoda; the .mm0/.mm1 files encode "
+        f"each declaration's structure as an MM0 axiom and are well-formedness "
+        f"checked by mm0-c, not truth checked. Per-file SHA-256 in MANIFEST.json.</p>")
+    return {
+        "metadata": {
+            "upload_type": "dataset",
+            "title": f"BookProof {r['root']}: MM0 proof corpus ({len(r['members'])} modules)",
+            "description": desc,
+            "creators": [{"name": os.environ.get("ZENODO_CREATOR", "leonardopedro")}],
+            "license": "cc-by-4.0",
+            "version": prov["timepiece_commit"][:12],
+            "keywords": ["Lean 4", "MM0", "proof corpus", "formal verification", "BookProof"],
+            "related_identifiers": [{
+                "identifier": re.sub(r"^git@github\.com:", "https://github.com/",
+                                     prov["source_repo"]).removesuffix(".git"),
+                "relation": "isDerivedFrom",
+                "scheme": "url",
+            }],
+        }
+    }
+
+
+def append_ledger(row):
+    os.makedirs(os.path.dirname(LEDGER), exist_ok=True)
+    new = not os.path.exists(LEDGER)
+    with open(LEDGER, "a") as f:
+        if new:
+            f.write("component\tdeposition\tdoi\tarchive_md5\tstatus\tpublished\n")
+        f.write("\t".join(row) + "\n")
+
+
+def cmd_publish(args):
+    rows = [r for r in survey() if r["root"] == args.component]
+    if not rows:
+        die(f"no component rooted at {args.component}")
+    r = rows[0]
+    if r["blocked"]:
+        sample = ", ".join(f"{m}({s})" for m, s in r["blocked"][:10])
+        die(f"{r['root']} is not whole: {len(r['blocked'])} module(s) unconverted "
+            f"or artifact-less ({sample}). Refusing to publish a partial proof.", 1)
+    if r["bytes"] > MAX_RECORD_BYTES or r["exports"] > MAX_RECORD_FILES:
+        die("component does not fit one record; split by component, not by size", 1)
+
+    tok = token()
+    base = api_base(args.sandbox)
+    prov = provenance()
+    workdir = args.work or tempfile.mkdtemp(prefix="zenodo-")
+    os.makedirs(workdir, exist_ok=True)
+    info(f"component {r['root']}: {len(r['members'])} modules, "
+         f"{r['bytes']/2**30:.2f} GiB ({r['export_bytes']/2**30:.2f} GiB proofs)")
+    manifest = build_manifest(r, prov)
+    info("archiving (this reads every artifact once)")
+    path = archive(r, manifest, workdir)
+    md5 = md5_file(path)
+    info(f"archive {os.path.basename(path)}  {os.path.getsize(path)/2**30:.2f} GiB  md5 {md5}")
+
+    dep = request("POST", f"{base}/deposit/depositions", tok, data=metadata(r, prov))
+    dep_id, bucket = dep["id"], dep["links"]["bucket"]
+    info(f"draft deposition {dep_id} created on {base}")
+
+    put_file(f"{bucket}/{os.path.basename(path)}", path, tok, workdir)
+    check = request("GET", f"{base}/deposit/depositions/{dep_id}", tok)
+    files = check.get("files", [])
+    got = files[0] if files else {}
+    remote_md5 = got.get("checksum", "").removeprefix("md5:")
+    remote_size = got.get("filesize")
+    if remote_md5 != md5 or remote_size != os.path.getsize(path):
+        die(f"checksum mismatch: local {md5}/{os.path.getsize(path)} vs "
+            f"remote {remote_md5}/{remote_size}. Local files kept.", 1)
+    info("remote checksum matches the local archive")
+
+    doi = check.get("doi") or check.get("metadata", {}).get("doi") or ""
+    status, published = "draft", ""
+    if args.publish:
+        pub = request("POST", f"{base}/deposit/depositions/{dep_id}/actions/publish", tok)
+        doi = pub.get("doi", doi)
+        status, published = "published", pub.get("created", "")
+        info(f"published: doi {doi}")
+    append_ledger([r["root"], str(dep_id), doi, md5, status, published])
+
+    if args.prune:
+        if not args.publish:
+            info("--prune ignored: the record is still a draft")
+        else:
+            freed = 0
+            for f in r["files"]:
+                freed += os.path.getsize(f)
+                os.remove(f)
+            info(f"pruned {len(r['files'])} local artifact(s), {freed/2**30:.2f} GiB")
+    return 0
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("components", help="component table").set_defaults(fn=cmd_components)
+
+    pl = sub.add_parser("plan", help="what would be uploaded")
+    pl.add_argument("--component")
+    pl.set_defaults(fn=cmd_plan)
+
+    ct = sub.add_parser("check-token", help="validate credentials")
+    ct.add_argument("--sandbox", action="store_true")
+    ct.set_defaults(fn=cmd_check_token)
+
+    pb = sub.add_parser("publish", help="upload one whole component")
+    pb.add_argument("--component", required=True)
+    pb.add_argument("--sandbox", action="store_true")
+    pb.add_argument("--publish", action="store_true", help="publish (irreversible)")
+    pb.add_argument("--prune", action="store_true", help="delete artifacts once published")
+    pb.add_argument("--work", help="scratch directory for the archive")
+    pb.set_defaults(fn=cmd_publish)
+
+    args = p.parse_args()
+    sys.exit(args.fn(args))
+
+
+if __name__ == "__main__":
+    main()
