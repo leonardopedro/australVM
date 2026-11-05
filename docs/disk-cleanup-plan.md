@@ -121,3 +121,26 @@ After Phase 1 and 2: `df -h /` should show >100 G free, and
 `du -sh mm0 mm0/exports mm0/statements` should show the exports directory near
 zero and statements near 5 G (only `ok` modules). Then restart the sweep; the
 quarantined modules are unrecorded, so pass 1 picks them up again by itself.
+
+## Status 2026-11-05 (phases 0 and 1 executed)
+
+Free space went from **397 M** (measured during the incident) / 12 G to **41 G**:
+`/` is at 88%. Reclaimed: 20.2 G of artifacts from the 29 non-`ok` modules (42
+files), 110 zero-byte exports, 6.5 G of unused Lean toolchains (4.36.0-rc1 and
+4.33.1), 1.7 G of the 1.95.0 Rust toolchain, and 1.3 G of `/tmp` debris
+(`negtest`, `l4e428`, `tmp.udxrqodKNH`, `openshell-vm-driver-leo-vm-dev`).
+
+Also done: the 34 ENOSPC-poisoned rows were quarantined and the state deduped to
+533 rows (504 `ok`, 10 `failed`, 13 `deferred`, 6 `empty`, 0 duplicates), leaving
+352 modules unrecorded for the next pass.
+
+One casualty, now repaired: `/tmp/l4e428` was the driver's default
+`LEAN_EXPORTER`, so removing it broke the pipeline. `scripts/lean-corpus-mm0` now
+resolves `../lean4export` first and keeps `/tmp` builds only as a fallback;
+verified by re-converting `BookProof.Bell.ChapterBell` (15 declarations → 293
+lines, mm0-c OK).
+
+Still open: `/tmp/pv-backup-pre-{scrub,rewrite}.git` (1.5 G — they hold pre-rewrite
+history of `verifiedUniqueAliases`; delete or move to external storage),
+`journalctl --vacuum` (needs root), and all of phase 2 — `nix-collect-garbage -d`
+also needs root — plus 85 G of exports still held for `ok` modules (phase 3).
