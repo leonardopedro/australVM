@@ -228,6 +228,47 @@ else
     gap "no Kopperman corpus at $kop_corpus — skipping"
 fi
 
+# ── 2d. the Dedukti (`dk`) front end ────────────────────────────────────────
+# Two fixtures, one per direction the front end has to get right. `arith.dk` is
+# inside the translated fragment: its four `rule`s must each be re-proved as
+# their own theorem (the rewrite system is checked, not assumed), and its five
+# theorems must compile — then the artifact is handed to `mm0-c` *again* here,
+# with the emitted `.mm0` on stdin, so the verdict does not rest on the built-in
+# check alone. `induction_gap.dk` is a true fact the recursion laws do not
+# convert: it must exit 1 and name both normal forms. Both halves are checked,
+# because a front end that accepted everything would pass the positive half.
+dk_dir="$unfer/logos/mm0/dk"
+if [ -f "$dk_dir/arith.dk" ]; then
+    if "$logos" mm0 dk "$dk_dir/arith.dk" --out "$tmp/dk" >"$tmp/dk.log" 2>&1; then
+        dk_rules="$(grep -c '^  dk_rule_' "$tmp/dk.log" || true)"
+        dk_all="$(grep -c '^  dk_' "$tmp/dk.log" || true)"
+        dk_thms=$((dk_all - dk_rules))
+        if mm0-c "$tmp/dk/arith.mmb" < "$tmp/dk/arith.mm0" >>"$tmp/dk.log" 2>&1; then
+            ok "dk front end certifies ($dk_rules rule(s) re-proved, $dk_thms theorem(s), mm0-c re-checked)"
+        else
+            bad "dk front end: mm0-c rejected the translated artifact"
+            tail -20 "$tmp/dk.log" | sed 's/^/      /'
+        fi
+        if [ "$dk_rules" -lt 4 ] || [ "$dk_thms" -lt 5 ]; then
+            bad "dk front end shape ($dk_rules rules, $dk_thms theorems: expected >=4 and >=5)"
+        fi
+    else
+        bad "dk front end (a fixture inside the fragment did not certify)"
+        tail -25 "$tmp/dk.log" | sed 's/^/      /'
+    fi
+
+    "$logos" mm0 dk "$dk_dir/induction_gap.dk" --out "$tmp/dk-gap" >"$tmp/dk-gap.log" 2>&1
+    dk_gap_rc=$?
+    if [ "$dk_gap_rc" -eq 1 ] && grep -q 'do not convert to a common normal form' "$tmp/dk-gap.log"; then
+        ok "dk front end refuses a non-conversion (induction named, exit 1)"
+    else
+        bad "dk front end accepted or mis-reported a non-conversion (exit $dk_gap_rc)"
+        tail -10 "$tmp/dk-gap.log" | sed 's/^/      /'
+    fi
+else
+    gap "no dk fixtures at $dk_dir — skipping"
+fi
+
 # ── 3. asking a question answers it ─────────────────────────────────────────
 "$logos" mm0 ask "is two plus three five?" --out "$tmp/q" --verify >/dev/null 2>&1
 yes_rc=$?

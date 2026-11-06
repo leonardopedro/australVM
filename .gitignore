@@ -71,3 +71,13 @@ mm0/olean/
 # one run on one host; the committed artifacts are the statements themselves.
 mm0/sweep-state.tsv
 mm0/sweep-logs/
+
+# set.mm-as-MM0 pilot (mm0/pilot): the set.mm0/set.mmu library is provisioned
+# toolchain state (548 MB), and the .mmb plus joined spec are regenerable from
+# pilot.mm1 by `mm0-rs compile` + concatenation. Only pilot.mm1 is the artifact.
+mm0/pilot/metamath
+mm0/pilot/*.mmb
+mm0/pilot/pilot_joined.mm0
+mm0/pilot/*.mmb
+mm0/pilot/joined*.mm0
+mm0/pilot/ported_stmt.mm0
