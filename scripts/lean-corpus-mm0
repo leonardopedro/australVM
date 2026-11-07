@@ -39,6 +39,17 @@
 #                       declarations are skipped, not re-checked. Create it with
 #                       scripts/lean-corpus-trust. Setting it also lifts the
 #                       default budget (the closure check is what it priced).
+#   CORPUS_STATEMENT_SAFETY
+#                       statement-size ceiling, bytes (default 67108864, 0 =
+#                       off). A statement past it is left on disk and reported
+#                       as skipped instead of compiled: mm0-rs needs roughly two
+#                       hundred heap bytes per statement byte (50 MB statement =
+#                       10 GB peak RSS), so a chapter like
+#                       BookProof.Ns.ChapterNavierStokesEsaConsolidation (472 MB
+#                       export, 968 MB statement) exhausts a 30 GB host and the
+#                       kernel kills the run. Such statements are two orders of
+#                       magnitude past the publication limit, so their mm0-c
+#                       check cannot be published either.
 #
 # Exit codes: 0 all modules converted and mm0-c verified, 1 any failure,
 #             2 unusable environment (missing tool / project).
@@ -257,6 +268,21 @@ for mod in "${MODULES[@]}"; do
         tail -3 /tmp/lean-corpus-emit.log | sed 's/^/    /'
         BAD+=("$mod (emit)")
         continue
+    fi
+
+    # Refuse to compile a statement the host cannot elaborate. The ceiling is
+    # not cosmetic: an OOM kill takes down the whole sweep, not just this
+    # module, and no publishable artefact is lost by stopping here.
+    safety=${CORPUS_STATEMENT_SAFETY:-67108864}
+    if (( safety > 0 )); then
+        stmt_bytes=$(stat -c%s "$OUT/statements/$mod.mm0")
+        if (( stmt_bytes > safety )); then
+            warn "$mod: statement is $((stmt_bytes / 1048576)) MiB, over the $((safety / 1048576)) MiB safety ceiling — not compiled or checked, artefacts left on disk (raise CORPUS_STATEMENT_SAFETY on a bigger host)"
+            printf '    %s decls → skipped: statement %s MiB over safety ceiling\n' \
+                "$n_decls" "$((stmt_bytes / 1048576))"
+            SKIP+=("$mod (statement over ceiling)")
+            continue
+        fi
     fi
 
     if ! mm0-rs compile "$OUT/statements/$mod.mm0" "$OUT/statements/$mod.mmb" >/tmp/lean-corpus-mm0rs.log 2>&1; then

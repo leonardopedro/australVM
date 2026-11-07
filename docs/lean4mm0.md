@@ -718,10 +718,24 @@ that also writes the trusted-name manifest), and an earlier attempt against
 several such exports **triggered the OOM killer**. So over-budget exports are
 reported as `GAP` — statements are still emitted and mm0-c still checks the
 encoding, but the summary says `NOT kernel-backed` and the module is *not*
-counted as converted+verified. Measured, not guessed: since a single module
-peaks under 1 GB, `NANODA_MAX_BYTES=0` (unbounded) is safe for a serial run on a
-machine with ≥3 GB free; leave the default in place when batching, where several
-kinds of heavy process overlap.
+counted as converted+verified. Measured, not guessed: the nanoda leg of a
+single module peaks under 1 GB, so `NANODA_MAX_BYTES=0` (unbounded) is safe for a
+serial run on a machine with ≥3 GB free; leave the default in place when
+batching, where several kinds of heavy process overlap.
+
+**What that 1 GB figure does *not* cover (`CORPUS_STATEMENT_SAFETY`, default
+64 MiB).** The export check is not the memory peak. Sampling the pipeline on
+2026-11-07 (30 GB host) gave `mm0-rs` **10 GB** for a 50 MB statement and the
+emitter **6.6 GB** for a 454 MB export, i.e. mm0-rs needs roughly two hundred
+heap bytes per statement byte. Two chapters crossed that line and took the whole
+run with them, twice: `BookProof.Qg.ChapterQgAssembledFlatTransfer` (446 MB
+export) and `BookProof.Ns.ChapterNavierStokesEsaConsolidation` (472 MB export →
+**968 MB statement**) both exhausted the host, and the kill left a sparse
+multi-hundred-megabyte `.mm0` behind to be cleaned up by hand. The driver now
+measures the emitted statement and, past the ceiling, records the module as
+`skipped` and stops before `mm0-rs`: such statements are two orders of magnitude
+past the 5 MB publication limit, so the mm0-c verdict they would earn could not
+be published either. Raise the ceiling only on a host with the memory to match.
 
 ### Checking the shared closure once (added 2026-11-04)
 
