@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# corpus-size-gate — keep corpus statement artefacts above the limit out of git.
+#
+# The pipeline writes multi-hundred-MB statements (one Mathlib-importing chapter
+# reaches 900 MB) and GitHub rejects any file past 100 MB outright (GH001), so
+# auditing `git add` afterwards is too late: the limit is enforced HERE, at the
+# point where the artefact is written. An oversized statement is not a failure —
+# it is converted and re-checked like any other — it just cannot be published:
+#
+#   * its path goes into the managed block of .gitignore, so `git add -A` skips it
+#   * its size and SHA-256 go into mm0/statements/LARGE.tsv, so a regenerated
+#     file can be compared against the run that was published
+#   * a rerun that shrinks it back under the limit removes the entry again
+#
+# Usage:
+#   scripts/corpus-size-gate PATH...        # gate the artefacts just written
+#   scripts/corpus-size-gate --audit [DIR]  # gate everything already in DIR
+#                                           # (default: mm0/statements)
+#
+# Options:
+#   --limit BYTES     size limit (default 5242880, env CORPUS_STATEMENT_LIMIT)
+#   --root DIR        project root (default: the parent of this script)
+#   --manifest PATH   manifest to update (default <root>/mm0/statements/LARGE.tsv)
+#   --gitignore PATH  ignore file to manage (default <root>/.gitignore)
+#
+# Stdout: one "<bytes>\t<path>" line per artefact kept out of git.
+# Exit codes: 0 nothing over the limit, 3 something was kept out of git,
+#             2 unusable environment.
+set -uo pipefail
+
+die() { printf '\033[0;31m[FATAL]\033[0m %s\n' "$*" >&2; exit 2; }
+info() { printf '\033[0;33m[WARN]\033[0m %s\n' "$*" >&2; }
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd) || die "cannot resolve the project root"
+LIMIT=${CORPUS_STATEMENT_LIMIT:-5242880}
+MANIFEST=
+GITIGNORE=
+AUDIT=0
+AUDIT_DIR=
+args=()
+while (($#)); do
+    case $1 in
+        --limit)    LIMIT=$2; shift 2 ;;
+        --limit=*)  LIMIT=${1#*=}; shift ;;
+        --root)     ROOT=$(cd "$2" && pwd) || die "no such directory: $2"; shift 2 ;;
+        --root=*)   ROOT=$(cd "${1#*=}" && pwd) || die "no such directory: ${1#*=}"; shift ;;
+        --manifest) MANIFEST=$2; shift 2 ;;
+        --manifest=*) MANIFEST=${1#*=}; shift ;;
+        --gitignore) GITIGNORE=$2; shift 2 ;;
+        --gitignore=*) GITIGNORE=${1#*=}; shift ;;
+        --audit)
+            AUDIT=1
+            shift
+            if [[ -d ${1:-} ]]; then AUDIT_DIR=$1; shift; fi
+            ;;
+        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+        -*) die "unknown option: $1" ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+
+[[ $LIMIT =~ ^[0-9]+$ ]] || die "--limit wants a byte count, got '$LIMIT'"
+command -v sha256sum >/dev/null || die "sha256sum not on PATH"
+command -v awk >/dev/null || die "awk not on PATH"
+
+GI=${GITIGNORE:-$ROOT/.gitignore}
+LARGE=${MANIFEST:-$ROOT/mm0/statements/LARGE.tsv}
+BEGIN='# >>> corpus statements above 5 MB (managed by scripts/corpus-size-gate)'
+END='# <<< corpus statements above 5 MB <<<'
+TAB=$'\t'
+
+TMP=$(mktemp -d) || die "mktemp failed"
+trap 'rm -rf "$TMP"' EXIT
+: >"$TMP/add"; : >"$TMP/del"; : >"$TMP/rows"
+
+gated=0
+abs_path() {
+    local p=$1 d
+    # Callers pass `statements/Foo.mm0`, `mm0/statements/Foo.mm0` and absolute
+    # paths alike; the root comparison below is textual, so resolve first.
+    if command -v realpath >/dev/null; then
+        realpath -m -- "$p" && return 0
+    fi
+    d=$(cd "$(dirname "$p")" 2>/dev/null && pwd) || return 1
+    printf '%s/%s\n' "$d" "$(basename "$p")"
+}
+
+gate_one() {
+    local p=$1 rel size
+    [[ -f $1 ]] || return 0               # not every module writes .roots
+    p=$(abs_path "$1") || { info "cannot resolve $1"; return 0; }
+    [[ $p == "$ROOT"/* ]] || { info "$1 is outside $ROOT — not gated"; return 0; }
+    rel=${p#"$ROOT"/}
+    size=$(stat -c%s -- "$p") || return 0
+    if (( size > LIMIT )); then
+        printf '%s\t%s\t%s\n' "$size" \
+            "$(sha256sum -- "$p" | cut -d' ' -f1)" "$rel" >>"$TMP/rows"
+        printf '/%s\n' "$rel" >>"$TMP/add"
+        printf '%s\t%s\n' "$size" "$rel"
+        gated=$((gated + 1))
+    else
+        # Under the limit: if an earlier run of this module was over it, the
+        # entry has to go, or the regenerated (publishable) statement would be
+        # silently skipped by `git add` for ever.
+        printf '/%s\n' "$rel" >>"$TMP/del"
+    fi
+}
+
+if (( AUDIT )); then
+    audit_root=$(abs_path "${AUDIT_DIR:-$ROOT/mm0/statements}") || die "cannot resolve the audit directory"
+    [[ -d $audit_root ]] || die "not a directory: ${AUDIT_DIR:-$ROOT/mm0/statements}"
+    while IFS= read -r -d '' f; do
+        gate_one "$f"
+    done < <(find "$audit_root" -type f \
+                \( -name '*.mm0' -o -name '*.mm1' -o -name '*.roots' \) -print0)
+else
+    ((${#args[@]})) || die "nothing to gate (pass artefact paths, or --audit)"
+    for a in "${args[@]}"; do gate_one "$a"; done
+fi
+
+# --- .gitignore: rewrite the managed block, leave every other line alone -----
+# The block is the only size-based mechanism git offers (it cannot match on
+# file size), so it is maintained here instead of by hand: sorted, deduped, and
+# limited to what is actually over the limit.
+: >"$TMP/before"
+: >"$TMP/after"
+: >"$TMP/have"
+if [[ -f $GI ]]; then
+    awk -v b="$BEGIN" -v e="$END" -v pre="$TMP/before" -v post="$TMP/after" '
+        $0 == b { inblock = 1; next }
+        $0 == e { inblock = 0; seen = 1; next }
+        inblock && /^\// { print; next }
+        inblock { next }
+        seen    { print > post; next }
+        { print > pre }
+    ' "$GI" >"$TMP/have" || die "cannot read $GI"
+fi
+sort -u "$TMP/have" "$TMP/add" >"$TMP/all"
+if [[ -s $TMP/del ]]; then
+    grep -vxF -f "$TMP/del" "$TMP/all" >"$TMP/kept"
+    rc=$?
+    (( rc == 0 || rc == 1 )) || die "cannot filter $GI block"
+else
+    cp "$TMP/all" "$TMP/kept"
+fi
+{
+    cat "$TMP/before"
+    printf '%s\n' "$BEGIN"
+    printf '%s\n' "# Statements up to $((LIMIT / 1048576)) MB are tracked; anything larger stays on disk"
+    printf '%s\n' '# and is listed here and in LARGE.tsv, so `git add` cannot stage it.'
+    cat "$TMP/kept"
+    printf '%s\n' "$END"
+    cat "$TMP/after"
+} >"$GI.new" || die "cannot write $GI"
+mv -- "$GI.new" "$GI"
+
+# --- LARGE.tsv: upsert the rows for what was gated -------------------------
+# Also on a run that only brought artefacts back under the limit: those rows
+# have to go too, or the manifest would describe files that are now tracked.
+if [[ -s $TMP/rows || -s $TMP/del ]]; then
+    mkdir -p -- "$(dirname "$LARGE")"
+    : >"$TMP/old"
+    : >"$TMP/header"
+    if [[ -f $LARGE ]]; then
+        grep -E "^[0-9]+${TAB}[0-9a-f]{64}${TAB}" "$LARGE" >"$TMP/old"
+        rc=$?
+        (( rc == 0 || rc == 1 )) || die "cannot read $LARGE"
+        grep -vE "^[0-9]+${TAB}[0-9a-f]{64}${TAB}" "$LARGE" >"$TMP/header"
+        rc=$?
+        (( rc == 0 || rc == 1 )) || die "cannot read $LARGE"
+    else
+        {
+            printf '%s\n' '# Corpus statements larger than 5 MB, kept out of git (see docs/lean4mm0.md §12).'
+            printf '%s\n' '# Written by scripts/corpus-size-gate; regenerate with scripts/lean-corpus-mm0 <Module>.'
+            printf 'bytes\tsha256\tpath\n'
+        } >"$TMP/header"
+    fi
+    # The manifest lists what is out of git NOW: a re-measured path takes its new
+    # row, and one that a rerun brought under the limit loses its row (its
+    # `/`-prefixed .gitignore form differs from the TSV path, hence the sed).
+    {   cut -f3 "$TMP/rows"
+        sed 's|^/||' "$TMP/del"
+    } >"$TMP/drop" 2>/dev/null || :
+    if [[ -s $TMP/old ]]; then
+        grep -vF -f "$TMP/drop" "$TMP/old" >"$TMP/oldkeep"
+        rc=$?
+        (( rc == 0 || rc == 1 )) || die "cannot filter $LARGE"
+    else
+        : >"$TMP/oldkeep"
+    fi
+    {
+        cat "$TMP/header"
+        cat "$TMP/oldkeep" "$TMP/rows" | sort -t"$TAB" -k3
+    } >"$LARGE.new" || die "cannot write $LARGE"
+    mv -- "$LARGE.new" "$LARGE"
+fi
+
+(( gated )) && exit 3
+exit 0

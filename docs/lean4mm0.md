@@ -615,11 +615,18 @@ LEAN_PROJECT=../timepiece scripts/lean-corpus-mm0
 Artifacts land in `mm0/statements/<Mod>.mm0` (+`.mm1`); the NDJSON exports in
 `mm0/exports/` and the compiled `.mmb` are regenerable and git-ignored.
 
-Only statements up to 5 MB are tracked. A single Mathlib-importing chapter
-reaches 900 MB (`BookProof.Ns.ChapterNavierStokesDiffHashimoto.mm0`), far past
-GitHub's 100 MB per-file limit, so anything larger stays on disk and out of the
-index; `mm0/statements/LARGE.tsv` records its size and SHA-256, so a regenerated
-file can be checked against the run that was published. Each
+Only statements up to 5 MB are tracked, and the pipeline enforces that itself:
+`scripts/corpus-size-gate`, called by `lean-corpus-mm0` as soon as `mm0-c` has
+accepted a module, leaves an oversized statement on disk (it is still a verified
+artefact) and adds its path to the managed block of `.gitignore`, so no later
+`git add -A` can stage it. A single Mathlib-importing chapter reaches 900 MB
+(`BookProof.Ns.ChapterNavierStokesDiffHashimoto.mm0`), far past GitHub's 100 MB
+per-file limit — which is why the limit is applied at the point of writing
+rather than by auditing the index. `mm0/statements/LARGE.tsv` records size and
+SHA-256 of everything kept out, so a regenerated file can be checked against the
+published run; a rerun that shrinks a statement under the limit removes its
+entry again, and `scripts/corpus-size-gate --audit` re-derives the whole block
+from what is on disk (for statements produced before the gate existed). Each
 module is reported as converted+verified, skipped (exports nothing of its own,
 or is not a lake target) or failed (build/export/emit/elaborate/mm0-c), and the
 exit status is non-zero if anything failed — no silent passes.

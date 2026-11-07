@@ -63,6 +63,10 @@ if [[ -z $EXPORTER ]]; then
 fi
 OUT=${CORPUS_OUT:-$AVM/mm0}
 BUILD_TIMEOUT=${BUILD_TIMEOUT:-900}
+# Statements are published up to this size; larger ones are kept on disk only.
+# Enforced below by scripts/corpus-size-gate, at the point where they are
+# written (see "Size gate" near the end of the module loop).
+STMT_LIMIT=${CORPUS_STATEMENT_LIMIT:-5242880}
 DECLS_LEAN=$AVM/scripts/lean-module-decls.lean
 
 die() { printf '\033[0;31m[FATAL]\033[0m %s\n' "$*" >&2; exit 2; }
@@ -114,7 +118,7 @@ else
 fi
 ((${#MODULES[@]})) || die "no Lean modules found in $PROJ"
 
-declare -a OK=() BAD=() SKIP=() GAPPED=()
+declare -a OK=() BAD=() SKIP=() GAPPED=() LARGE=()
 for mod in "${MODULES[@]}"; do
     echo
     info "== $mod"
@@ -272,25 +276,58 @@ for mod in "${MODULES[@]}"; do
     fi
 
     rm -f "$roots"
+
+    # --- Size gate ---------------------------------------------------------
+    # The statement limit is enforced HERE, where the artefact is written, not
+    # by auditing `git add` afterwards. Oversized statements are not a failure —
+    # they are converted and mm0-c re-checked like any other — but they cannot
+    # be published: GitHub rejects anything past 100 MB (GH001) and a single
+    # Mathlib-importing chapter reaches 900 MB. The gate leaves them on disk and
+    # adds their paths to the managed block of .gitignore (plus size + SHA-256
+    # to mm0/statements/LARGE.tsv), so no later `git add -A` can stage them. A
+    # rerun that shrinks a statement back under the limit un-ignores it again.
+    gated_n=0
+    gated_mb=0
+    gate_out=$("$AVM/scripts/corpus-size-gate" --limit "$STMT_LIMIT" \
+        --manifest "$OUT/statements/LARGE.tsv" \
+        "$OUT/statements/$mod.mm0" "$OUT/statements/$mod.mm1" \
+        "$OUT/statements/$mod.roots" 2>/tmp/lean-corpus-gate.log)
+    gate_rc=$?
+    if (( gate_rc == 3 )); then
+        gated_n=$(printf '%s\n' "$gate_out" | grep -c .)
+        gated_mb=$(printf '%s\n' "$gate_out" | awk -F'\t' '{ s += $1 } END { printf "%d", s / 1048576 }')
+        LARGE+=("$mod")
+        warn "$mod: $gated_n artifact(s) exceed $((STMT_LIMIT / 1048576)) MB — kept on disk, out of the index"
+    elif (( gate_rc == 2 )); then
+        # A gate that cannot run must not silently publish a 900 MB statement:
+        # that is the failure this exists to prevent.
+        err "$mod: size gate failed (see /tmp/lean-corpus-gate.log)"
+        BAD+=("$mod (gate)")
+        continue
+    fi
+
     # mm0-c accepted the encoding either way; say which verdict the STATEMENTS
     # have. Only a nanoda-accepted export makes them kernel-backed, so a gapped
     # module is never counted as converted+verified.
+    gate_note=
+    (( gated_n )) && gate_note=", $gated_n kept out of git (${gated_mb} MB)"
     if (( gapped )); then
-        printf '    %s decls → %s lines, mm0-c OK (statements NOT kernel-backed)\n' \
-            "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")"
+        printf '    %s decls → %s lines, mm0-c OK (statements NOT kernel-backed)%s\n' \
+            "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")" "$gate_note"
     else
-        printf '    %s decls → %s lines, mm0-c OK\n' \
-            "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")"
+        printf '    %s decls → %s lines, mm0-c OK%s\n' \
+            "$n_decls" "$(wc -l <"$OUT/statements/$mod.mm0")" "$gate_note"
         OK+=("$mod")
     fi
 done
 
 echo
 echo "=================================================================="
-printf 'converted+verified %d · gapped %d · failed %d · skipped %d\n' \
-    "${#OK[@]}" "${#GAPPED[@]}" "${#BAD[@]}" "${#SKIP[@]}"
+printf 'converted+verified %d · gapped %d · out of git %d · failed %d · skipped %d\n' \
+    "${#OK[@]}" "${#GAPPED[@]}" "${#LARGE[@]}" "${#BAD[@]}" "${#SKIP[@]}"
 [[ ${#OK[@]}     -gt 0 ]] && printf '  OK      : %s\n' "${OK[*]}"
 [[ ${#GAPPED[@]} -gt 0 ]] && printf '  GAP     : %s (statements emitted, NOT kernel-backed)\n' "${GAPPED[*]}"
+[[ ${#LARGE[@]}  -gt 0 ]] && printf '  >5 MB   : %s (on disk and hashed in mm0/statements/LARGE.tsv, not staged)\n' "${LARGE[*]}"
 [[ ${#SKIP[@]}    -gt 0 ]] && printf '  skipped : %s\n' "${SKIP[*]}"
 [[ ${#BAD[@]}     -gt 0 ]] && printf '  FAILED  : %s\n' "${BAD[*]}"
 echo "=================================================================="
