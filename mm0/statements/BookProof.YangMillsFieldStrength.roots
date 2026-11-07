@@ -1,0 +1,15 @@
+BookProof.MCMC.FockLangevin.hopStep.eq_1
+BookProof.MCMC.FockLangevin.lowerIdx.eq_1
+BookProof.MCMC.FockLangevin.raiseIdx.eq_1
+BookProof.MCMC.FockLangevin.stepAmp.eq_1
+BookProof.MCMC.FockLangevin.stepIdx.eq_1
+BookProof.YangMillsFieldStrength.hopStep_lower_single
+BookProof.YangMillsFieldStrength.hopStep_raise_single
+BookProof.YangMillsFieldStrength.hopWord_pair_same
+BookProof.YangMillsFieldStrength.magneticEnergyForm_eq_sum
+BookProof.YangMillsFieldStrength.pairWord
+BookProof.YangMillsFieldStrength.raiseIdx_lowerIdx
+BookProof.YangMillsFieldStrength.sandwich
+BookProof.YangMillsFieldStrength.sandwich_diag_magComp
+BookProof.YangMillsFieldStrength.sandwich_diag_single
+BookProof.YangMillsFieldStrength.sum_single_same

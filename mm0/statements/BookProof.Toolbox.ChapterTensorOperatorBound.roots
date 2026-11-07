@@ -1,0 +1,10 @@
+BookProof.TensorOpBound.comm_map_id
+BookProof.TensorOpBound.exists_orthonormal_repr
+BookProof.TensorOpBound.exists_orthonormal_repr._simp_1_1
+BookProof.TensorOpBound.exists_orthonormal_repr._simp_1_2
+BookProof.TensorOpBound.exists_orthonormal_repr._simp_1_3
+BookProof.TensorOpBound.exists_orthonormal_repr._simp_1_4
+BookProof.TensorOpBound.norm_map_le
+BookProof.TensorOpBound.norm_map_left_le
+BookProof.TensorOpBound.norm_map_right_le
+BookProof.TensorOpBound.norm_sum_tmul_orthonormal
