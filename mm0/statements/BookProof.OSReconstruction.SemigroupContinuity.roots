@@ -1,0 +1,6 @@
+BookProof.OSReconstruction.norm_physEvol_sub_sq_le
+BookProof.OSReconstruction.norm_sub_sq_le_two_mul_sub_inner
+BookProof.OSReconstruction.physForm_evol_self_le
+BookProof.OSReconstruction.tendsto_norm_physEvol_sub_right
+BookProof.OSReconstruction.tendsto_of_contractive_weak
+BookProof.OSReconstruction.tendsto_physEvolCompletion_right
