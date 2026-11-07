@@ -1,0 +1,15 @@
+BookProof.ChapterA.CommutesAntiUnitary
+BookProof.ChapterA.HasCommutingAntiUnitary
+BookProof.ChapterA.IsCComplex
+BookProof.ChapterA.IsCPseudoreal
+BookProof.ChapterA.IsCReal
+BookProof.ChapterA.IsCReal.hasCommutingAntiUnitary
+BookProof.ChapterA.IsConjugation.commutesAntiUnitary
+BookProof.ChapterA.IsRReal
+BookProof.ChapterA.IsRReal.cxSystem_isCReal
+BookProof.ChapterA.IsRReal.isIrreducible
+BookProof.ChapterA.cType_exhaustive
+BookProof.ChapterA.cxSystem_isCReal
+BookProof.ChapterA.not_isCPseudoreal_and_isCComplex
+BookProof.ChapterA.not_isCReal_and_isCComplex
+BookProof.ChapterA.not_isCReal_and_isCPseudoreal
