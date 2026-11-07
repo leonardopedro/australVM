@@ -1,0 +1,17 @@
+BookProof.KvnKato.Df_cx_real
+BookProof.KvnKato.Df_mul
+BookProof.KvnKato.Xf_test
+BookProof.KvnKato.cx_real
+BookProof.KvnKato.energy_identity
+BookProof.KvnKato.energy_ineq
+BookProof.KvnKato.hasCompactSupport_Df
+BookProof.KvnKato.integral_conj_mul_self
+BookProof.KvnKato.l2n
+BookProof.KvnKato.l2n._proof_1
+BookProof.KvnKato.l2n._proof_2
+BookProof.KvnKato.l2n.eq_1
+BookProof.KvnKato.l2n_eq_norm_toLp
+BookProof.KvnKato.l2n_nonneg
+BookProof.KvnKato.l2n_sq
+BookProof.KvnKato.memLp_of_cc'
+BookProof.KvnKato.norm_integral_conj_mul_le

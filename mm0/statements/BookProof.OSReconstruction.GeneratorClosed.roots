@@ -1,0 +1,6 @@
+BookProof.OSReconstruction.continuous_physEvolCompletion_apply
+BookProof.OSReconstruction.generator_isClosed
+BookProof.OSReconstruction.hasDerivAt_physEvol
+BookProof.OSReconstruction.physEvolCompletion_comp_apply
+BookProof.OSReconstruction.physEvol_sub_eq_integral
+BookProof.OSReconstruction.tendsto_average_physEvol
