@@ -1,0 +1,15 @@
+BookProof.GraphCore.pushDom.eq_1
+BookProof.ScalarDGamma.dGamma_scalar_essentiallySelfAdjointOn_fockCore
+BookProof.ScalarDGamma.dense_fockSectorDom
+BookProof.ScalarDGamma.derPow_scalar
+BookProof.ScalarDGamma.essentiallySelfAdjointOn_fockSectorDom_scalar
+BookProof.ScalarDGamma.inclPow_top_surjective
+BookProof.ScalarDGamma.isGraphCore_scalarOp
+BookProof.ScalarDGamma.norm_fockSectorOp_scalar_le
+BookProof.ScalarDGamma.scalarOp
+BookProof.ScalarDGamma.scalarOp._proof_1
+BookProof.ScalarDGamma.scalarOp_apply
+BookProof.ScalarDGamma.sectorDom_top
+BookProof.ScalarDGamma.sectorOp_scalar
+BookProof.ScalarDGamma.symmetricOn_scalarOp
+BookProof.SecondQuantizationCore.fockSectorDom.eq_1

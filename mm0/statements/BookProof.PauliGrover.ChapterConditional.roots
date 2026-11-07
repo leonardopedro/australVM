@@ -1,0 +1,15 @@
+BookProof.ChapterConditional.pCond
+BookProof.ChapterConditional.pCond.eq_1
+BookProof.ChapterConditional.pCond_nonneg
+BookProof.ChapterConditional.pCond_sum_one
+BookProof.ChapterConditional.pJoint
+BookProof.ChapterConditional.pJoint_eq_cond_mul_marg
+BookProof.ChapterConditional.pJoint_nonneg
+BookProof.ChapterConditional.pJoint_sum_one
+BookProof.ChapterConditional.pMarg
+BookProof.ChapterConditional.pMarg.eq_1
+BookProof.ChapterConditional.pMarg_eq_diagBHB
+BookProof.ChapterConditional.pMarg_eq_sum
+BookProof.ChapterConditional.pMarg_nonneg
+BookProof.ChapterConditional.pMarg_sum_one
+BookProof.ChapterConditional.trace_gram_eq_one

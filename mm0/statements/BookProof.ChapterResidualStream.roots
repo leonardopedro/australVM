@@ -1,0 +1,8 @@
+BookProof.ChapterResidualStream.norm_iterate_residual_sub_le
+BookProof.ChapterResidualStream.norm_residual_sub_le
+BookProof.ChapterResidualStream.norm_residual_sub_self
+BookProof.ChapterResidualStream.norm_residual_sub_self_le
+BookProof.ChapterResidualStream.norm_sub_residual_ge
+BookProof.ChapterResidualStream.residual
+BookProof.ChapterResidualStream.residual.eq_1
+BookProof.ChapterResidualStream.residual_injective

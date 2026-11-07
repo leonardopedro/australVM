@@ -1,0 +1,8 @@
+BookProof.ChapterGravityTimeProj.spatialProj_add_timeProj
+BookProof.ChapterGravityTimeProj.spatialProj_mul_timeProj
+BookProof.ChapterGravityTimeProj.timeProj
+BookProof.ChapterGravityTimeProj.timeProj.eq_1
+BookProof.ChapterGravityTimeProj.timeProj_idempotent
+BookProof.ChapterGravityTimeProj.timeProj_mulVec_self
+BookProof.ChapterGravityTimeProj.timeProj_mul_spatialProj
+BookProof.ChapterGravityTimeProj.trace_timeProj

@@ -1,0 +1,6 @@
+BookProof.KernelBound.kernelOp
+BookProof.KernelBound.kernelOp.eq_1
+BookProof.KernelBound.kernel_contraction
+BookProof.KernelBound.kernel_hs_sq_bound
+BookProof.KernelBound.kernel_l2_bound
+BookProof.KernelBound.kernel_row_bound

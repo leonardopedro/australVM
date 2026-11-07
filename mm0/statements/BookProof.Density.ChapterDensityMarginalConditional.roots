@@ -1,0 +1,8 @@
+BookProof.DensitySpectral.bornKernel
+BookProof.DensitySpectral.bornKernel.eq_1
+BookProof.DensitySpectral.bornKernel_col_sum
+BookProof.DensitySpectral.bornKernel_nonneg
+BookProof.DensitySpectral.bornKernel_row_sum
+BookProof.DensitySpectral.density_diag_eq_kernel_apply
+BookProof.DensitySpectral.density_diag_isProbability
+BookProof.DensitySpectral.density_marginal_conditional

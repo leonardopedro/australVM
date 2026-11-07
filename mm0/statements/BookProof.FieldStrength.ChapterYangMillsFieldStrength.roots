@@ -1,0 +1,11 @@
+BookProof.YangMillsFieldStrength.Dcov
+BookProof.YangMillsFieldStrength.Dcov.eq_1
+BookProof.YangMillsFieldStrength.Fbook
+BookProof.YangMillsFieldStrength.Fbook.eq_1
+BookProof.YangMillsFieldStrength.Fbook_antisymm
+BookProof.YangMillsFieldStrength.commutator_eq_coupling
+BookProof.YangMillsFieldStrength.fieldStrengthMul
+BookProof.YangMillsFieldStrength.fieldStrengthMul.eq_1
+BookProof.YangMillsFieldStrength.fieldStrengthMul_antisymm
+BookProof.YangMillsFieldStrength.fieldStrengthMul_eq_Fbook
+BookProof.YangMillsFieldStrength.nonabelian_fieldStrength

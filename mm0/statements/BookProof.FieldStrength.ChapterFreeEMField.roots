@@ -1,0 +1,7 @@
+BookProof.FreeEMField.Fbook_eq_emFieldStrength_of_commute
+BookProof.FreeEMField.emFieldStrength
+BookProof.FreeEMField.emFieldStrength.eq_1
+BookProof.FreeEMField.emFieldStrength_antisymm
+BookProof.FreeEMField.emFieldStrength_gauge_invariant
+BookProof.FreeEMField.emFieldStrength_isSelfAdjoint
+BookProof.FreeEMField.fieldStrengthMul_eq_emFieldStrength_of_commute

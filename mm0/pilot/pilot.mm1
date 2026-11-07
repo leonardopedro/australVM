@@ -1,0 +1,39 @@
+-- Pilot: a NEW mm0/mm1 file that reuses set.mm as a *library* instead of
+-- restating Lean terms as axioms.  Every proof below is a citation of a
+-- set.mm theorem label: `mm0-rs` elaborates the citation against
+-- metamath/set.mm0, and `mm0-c` re-checks the .mmb without knowing where the
+-- proof came from.
+--
+-- Provisioning: mm0/metamath/{set.mm0,set.mmu} produced by `mm0-from-mm`
+-- (docs/lean4mm0.md §11).  Because set.mm0 is converter output, labels are
+-- spelled as the converter spells them: `0lt1` -> `_0lt1`, `.` -> `_`.
+--
+-- Two things this pilot establishes by construction:
+--   * `delimiter` declarations are NOT inherited through `import`, so a file
+--     that writes parentheses in formulas must redeclare them (below);
+--   * a citation names only the *hypothesis* proofs — substitutions are
+--     inferred, so `'(ltlei _0re _1re)`, not `'(ltlei cc0 c1 _0re _1re)`.
+--
+-- Check:
+--   mm0-rs compile pilot.mm1 pilot.mmb
+--   cat metamath/set.mm0  <the 5 statements, as .mm0>  > pilot_joined.mm0
+--   mm0-c pilot.mmb < pilot_joined.mm0      # rc=0; alter any statement -> 255
+
+import "metamath/set.mmu";
+
+delimiter $ ( $ $ ) $;
+
+-- 1. Plain citation: set.mm's own proof, imported and re-checked.
+pub theorem pilot_zero_lt_one: $ wbr cc0 c1 clt $ = '(_0lt1);
+
+pub theorem pilot_one_re: $ wcel c1 cr $ = '(_1re);
+
+pub theorem pilot_zero_ne_one: $ wne cc0 c1 $ = '(_0ne1);
+
+-- 2. Instantiation: set.mm's `id` at a variable this file introduces.
+pub theorem pilot_id (ph: wff): $ wi ph ph $ = '(id);
+
+-- 3. Composition through two citations: 0 e. RR and 1 e. RR discharge
+--    `ltlei`'s hypotheses, yielding "0 < 1 implies 0 <= 1".
+pub theorem pilot_zero_le_one:
+  $ wi (wbr cc0 c1 clt) (wbr cc0 c1 cle) $ = '(ltlei _0re _1re);

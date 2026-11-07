@@ -1,0 +1,14 @@
+BookProof.NavierStokesFlow.NSHashimoto.exists_velEnum
+BookProof.NavierStokesFlow.NSHashimoto.exists_velHilbertBasis
+BookProof.NavierStokesFlow.NSHashimoto.ns_hashimoto_selects
+BookProof.NavierStokesFlow.NSHashimoto.ns_selfAdjoint_extension
+BookProof.NavierStokesFlow.NSHashimoto.ns_selfAdjoint_extension_unique
+BookProof.NavierStokesFlow.NSHashimoto.ns_shiftInvert_selects
+BookProof.NavierStokesFlow.NSHashimoto.velCore
+BookProof.NavierStokesFlow.NSHashimoto.velCore._proof_1
+BookProof.NavierStokesFlow.NSHashimoto.velCore._proof_2
+BookProof.NavierStokesFlow.NSHashimoto.velCore._proof_3
+BookProof.NavierStokesFlow.NSHashimoto.velCore._proof_4
+BookProof.NavierStokesFlow.NSHashimoto.velCore_dense
+BookProof.NavierStokesFlow.NSHashimoto.velCore_esa
+BookProof.NavierStokesFlow.NSHashimoto.velCore_symmetricOn

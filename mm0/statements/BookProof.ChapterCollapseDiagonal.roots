@@ -1,0 +1,4 @@
+BookProof.ChapterCollapseDiagonal.IsDiagonal
+BookProof.ChapterCollapseDiagonal.trace_diag_nullDiag_zero
+BookProof.ChapterCollapseDiagonal.trace_diagonal_mul
+BookProof.ChapterCollapseDiagonal.trace_diagonal_mul_diag

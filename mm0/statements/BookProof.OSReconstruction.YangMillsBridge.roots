@@ -1,0 +1,12 @@
+BookProof.OSReconstruction.complex_sum_quadform
+BookProof.OSReconstruction.isReflectionPositiveOn_loopProd
+BookProof.OSReconstruction.isReflectionPositive_yangMills
+BookProof.OSReconstruction.loopProd
+BookProof.OSReconstruction.loopProd.eq_1
+BookProof.OSReconstruction.loopProd_append
+BookProof.OSReconstruction.loopProd_cons
+BookProof.OSReconstruction.loopProd_nil
+BookProof.OSReconstruction.osBilin_gram
+BookProof.OSReconstruction.osBilin_gram_nonneg
+BookProof.OSReconstruction.thetaObs_loopProd
+YangMills.Loop.reflect.congr_simp

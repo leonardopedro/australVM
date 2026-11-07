@@ -613,7 +613,13 @@ LEAN_PROJECT=../timepiece scripts/lean-corpus-mm0
 ```
 
 Artifacts land in `mm0/statements/<Mod>.mm0` (+`.mm1`); the NDJSON exports in
-`mm0/exports/` and the compiled `.mmb` are regenerable and git-ignored. Each
+`mm0/exports/` and the compiled `.mmb` are regenerable and git-ignored.
+
+Only statements up to 5 MB are tracked. A single Mathlib-importing chapter
+reaches 900 MB (`BookProof.Ns.ChapterNavierStokesDiffHashimoto.mm0`), far past
+GitHub's 100 MB per-file limit, so anything larger stays on disk and out of the
+index; `mm0/statements/LARGE.tsv` records its size and SHA-256, so a regenerated
+file can be checked against the run that was published. Each
 module is reported as converted+verified, skipped (exports nothing of its own,
 or is not a lake target) or failed (build/export/emit/elaborate/mm0-c), and the
 exit status is non-zero if anything failed — no silent passes.

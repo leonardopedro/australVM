@@ -1,0 +1,14 @@
+BookProof.ChapterA3.mgammaZ.eq_1
+BookProof.ChapterA3.mgammaZ.eq_2
+BookProof.ChapterA3.mgammaZ.eq_3
+BookProof.ChapterA3.mgammaZ.eq_4
+BookProof.ChapterGammaCommutant.gamma_commutant_eq_scalars
+BookProof.ChapterGammaCommutant.gamma_commutant_scalar
+BookProof.ChapterGammaCommutant.gamma_intertwiner_unique
+_private.BookProof.ChapterGammaCommutant.0.BookProof.ChapterA3.mgammaZ.match_1.eq_1
+_private.BookProof.ChapterGammaCommutant.0.BookProof.ChapterA3.mgammaZ.match_1.eq_2
+_private.BookProof.ChapterGammaCommutant.0.BookProof.ChapterA3.mgammaZ.match_1.eq_3
+_private.BookProof.ChapterGammaCommutant.0.BookProof.ChapterA3.mgammaZ.match_1.eq_4
+_private.BookProof.ChapterGammaCommutant.0.BookProof.ChapterA3.mgammaZ.match_1.splitter
+_private.BookProof.ChapterGammaCommutant.0.BookProof.ChapterGammaCommutant.diag_of_int
+_private.BookProof.ChapterGammaCommutant.0.BookProof.ChapterGammaCommutant.offdiag_zero_of_commutes_diagonal

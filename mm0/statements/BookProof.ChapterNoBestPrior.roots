@@ -1,0 +1,6 @@
+BookProof.ChapterNoBestPrior.distinct_priors_each_preferred
+BookProof.ChapterNoBestPrior.distinct_priors_each_preferred._simp_1_1
+BookProof.ChapterNoBestPrior.distinct_priors_each_preferred._simp_1_2
+BookProof.ChapterNoBestPrior.eq_of_expectedUtility_ge_all
+BookProof.ChapterNoBestPrior.expectedUtility
+BookProof.ChapterNoBestPrior.not_uniformly_better

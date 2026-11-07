@@ -1,0 +1,14 @@
+BookProof.ChapterGravitySplit.minkForm
+BookProof.ChapterGravitySplit.minkForm.eq_1
+BookProof.ChapterGravitySplit.minkForm_comm
+BookProof.ChapterGravitySplit.minkForm_self
+BookProof.ChapterGravitySplit.parts_orthogonal
+BookProof.ChapterGravitySplit.spatialPart
+BookProof.ChapterGravitySplit.spatialPart_add_timePart
+BookProof.ChapterGravitySplit.spatialPart_orthogonal
+BookProof.ChapterGravitySplit.spatialPart_orthogonal._proof_1_1
+BookProof.ChapterGravitySplit.spatialPart_orthogonal._proof_1_2
+BookProof.ChapterGravitySplit.split_unique
+BookProof.ChapterGravitySplit.split_unique._simp_1_2
+BookProof.ChapterGravitySplit.timePart
+BookProof.ChapterGravitySplit.timePart_eq_smul

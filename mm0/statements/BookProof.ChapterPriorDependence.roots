@@ -1,0 +1,10 @@
+BookProof.ChapterBayesInference.evidence.eq_1
+BookProof.ChapterBayesInference.posterior.eq_1
+BookProof.ChapterPriorDependence.diracPrior
+BookProof.ChapterPriorDependence.diracPrior.congr_simp
+BookProof.ChapterPriorDependence.diracPrior.eq_1
+BookProof.ChapterPriorDependence.diracPrior_nonneg
+BookProof.ChapterPriorDependence.diracPrior_sum_one
+BookProof.ChapterPriorDependence.distinct_priors_distinct_posteriors
+BookProof.ChapterPriorDependence.evidence_dirac
+BookProof.ChapterPriorDependence.posterior_dirac

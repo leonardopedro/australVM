@@ -1,0 +1,6 @@
+BookProof.MCMC.inner_fixed_apply_eq_zero
+BookProof.MCMC.iterate_fixed
+BookProof.MCMC.iterate_orthogonal
+BookProof.MCMC.norm_iterate_le_of_orthogonal
+BookProof.MCMC.norm_iterate_sub_invariant_le
+BookProof.MCMC.tendsto_iterate

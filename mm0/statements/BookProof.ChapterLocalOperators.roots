@@ -1,0 +1,6 @@
+BookProof.LocalOperators.LocalField
+BookProof.LocalOperators.TranslationInvariant
+BookProof.LocalOperators.localIntegral
+BookProof.LocalOperators.localIntegral_shift
+BookProof.LocalOperators.localIntegral_translation_invariant
+BookProof.LocalOperators.not_translationInvariant_of_pointSupported

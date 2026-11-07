@@ -1,0 +1,88 @@
+-- Port of BookProof.ChapterNoBestPrior onto set.mm-as-MM0.
+--
+-- The Lean chapter (../timepiece/BookProof/ChapterNoBestPrior.lean) has four
+-- declarations: `expectedUtility` and three theorems about it.  Its proofs are
+-- one-liners by citation of Mathlib; here the same shape means citing set.mm.
+-- set.mm supplies the two atoms the chapter's proof needs: `indsum` (sum of
+-- indicator x term = sum over the subset) and `sumsn` (singleton sum).
+--
+-- Six theorems, in dependency order:
+--   cbnp_singleton_sum                      (sumsn, fveq2)
+--   cbnp_indicator_sum                      (indsum)
+--   cbnp_indicator_sum_singleton            +1 point mass  -> p a
+--   cbnp_indicator_sum_singleton_neg        -1 point mass  -> -p a
+--   cbnp_eq_at                              both tests -> p a = q a   (letri3)
+--   cbnp_eq                                 pointwise  -> p = q       (eqfnfv)
+--
+-- Lean's `forall u : Hyp -> R` is replaced by the two instantiations the Lean
+-- proof performs, because set.mm's `wral` ranges over setvars and instantiating
+-- at a compound class needs `rspa` + `wsb`.  See docs/mm0-setmm-coverage.md §6.
+--
+-- Written one declaration per line so the accompanying .mm0 spec can be
+-- derived mechanically (see the check recipe at the bottom).
+
+import "metamath/set.mmu";
+
+delimiter $ ( $ $ ) $;
+
+-- The chapter's `expectedUtility p u := sum x, p x * u x`, in set.mm's language,
+-- is the term `(csu x H (co (cfv (cv x) P) (cfv (cv x) U) cmul))`; below it is
+-- always written out, since MM0 has no lambda-free abbreviation for it here.
+
+-- Atom 1: set.mm's singleton sum, instantiated at a class-valued weight.
+pub theorem cbnp_singleton_sum {x: setvar} (P A: class): $ wi (wa (wcel A cvv) (wcel (cfv A P) cc)) (wceq (csu x (csn A) (cfv (cv x) P)) (cfv A P)) $ = '(sumsn (fveq2));
+
+-- Atom 2: set.mm's indicator factoring, at the chapter's shape.
+pub theorem cbnp_indicator_sum {x: setvar} (A O: class) (B: class x) (h1: $ wi wtru (wcel O cfn) $) (h2: $ wi wtru (wss A O) $) (h3: $ wi (wa wtru (wcel (cv x) O)) (wcel B cc) $): $ wceq (csu x O (co (cfv (cv x) (cfv A (cfv O cind))) B cmul)) (csu x A B) $ = '(ax_mp tru (indsum h1 h2 h3));
+
+-- The chapter's crux: expected utility of the point mass at `a` is `p a`.
+pub theorem cbnp_indicator_sum_singleton {x: setvar} (P H a: class) (hf: $ wcel H cfn $) (ha: $ wcel a H $) (hpc: $ wcel (cfv a P) cc $) (hv: $ wcel a cvv $) (h3: $ wi (wa wtru (wcel (cv x) H)) (wcel (cfv (cv x) P) cc) $): $ wceq (csu x H (co (cfv (cv x) (cfv (csn a) (cfv H cind))) (cfv (cv x) P) cmul)) (cfv a P) $ = '(eqtri (cbnp_indicator_sum (a1i hf) (syl (a1i ha) snssi) h3) (ax_mp (pm3_2i hv hpc) cbnp_singleton_sum));
+
+-- Check:
+--   mm0-rs compile ChapterNoBestPrior.mm1 cnbp.mmb
+--   perl -ne 'next unless /^pub /; s/^pub //; s/ = .*/;/; print' ChapterNoBestPrior.mm1 > ported_stmt.mm0
+--   cp ../metamath/set.mm0 joined.mm0 && cat ported_stmt.mm0 >> joined.mm0
+--   mm0-c cnbp.mmb < joined.mm0        # expect rc=0
+
+-- Atom 3: the negative point mass.  The Lean proof evaluates the hypothesis at
+-- both `if y = x then 1 else 0` and `if y = x then -1 else 0`; the second needs
+-- `-( p x )`, obtained here by rewriting `((-1) * ind) * p` to `ind * ((-1) * p)`
+-- (mulass, mul12) and then reusing atom 3's sibling at the weight `(-1) * p`.
+pub theorem cbnp_indicator_sum_singleton_neg {y: setvar} (P H a: class) (hindc: $ wcel (cfv (cv y) (cfv (csn a) (cfv H cind))) cc $) (hpc: $ wcel (cfv (cv y) P) cc $) (ha: $ wcel a H $) (hf: $ wcel H cfn $) (hv: $ wcel a cvv $) (hpca: $ wcel (cfv a P) cc $) (h3: $ wi (wa wtru (wcel (cv y) H)) (wcel (cfv (cv y) P) cc) $): $ wceq (csu y H (co (co (cneg c1) (cfv (cv y) (cfv (csn a) (cfv H cind))) cmul) (cfv (cv y) P) cmul)) (co (cneg c1) (cfv a P) cmul) $ = '(eqtri (sumeq2i (a1i (eqtri (ax_mp (ax_mp hpc (ax_mp hindc (ax_mp neg1cn pm3_2an3))) mulass) (ax_mp (ax_mp hpc (ax_mp hindc (ax_mp neg1cn pm3_2an3))) mul12)))) (eqtri (ax_mp tru (indsum (a1i hf) (syl (a1i ha) snssi) (syl h3 (ax_mp neg1cn (ex mulcl))))) (ax_mp (pm3_2i hv (ax_mp (pm3_2i neg1cn hpca) mulcl)) (sumsn (syl (fveq2) oveq2)))));
+
+-- Pointwise recovery: the `+1` point mass at `a` gives `q a <= p a`, the `-1`
+-- point mass gives `-q a <= -p a` (hence `p a <= q a` by `leneg`), and `letri3`
+-- turns the pair into `p a = q a`.  This is the step where Lean's
+-- `le_antisymm` sits.
+pub theorem cbnp_eq_at {y: setvar} (P Q H a: class) (hf: $ wcel H cfn $) (ha: $ wcel a H $) (hv: $ wcel a cvv $) (hindc: $ wcel (cfv (cv y) (cfv (csn a) (cfv H cind))) cc $) (hPc: $ wcel (cfv (cv y) P) cc $) (hQc: $ wcel (cfv (cv y) Q) cc $) (hPaR: $ wcel (cfv a P) cr $) (hQaR: $ wcel (cfv a Q) cr $) (hpos: $ wbr (csu y H (co (cfv (cv y) (cfv (csn a) (cfv H cind))) (cfv (cv y) Q) cmul)) (csu y H (co (cfv (cv y) (cfv (csn a) (cfv H cind))) (cfv (cv y) P) cmul)) cle $) (hneg: $ wbr (csu y H (co (co (cneg c1) (cfv (cv y) (cfv (csn a) (cfv H cind))) cmul) (cfv (cv y) Q) cmul)) (csu y H (co (co (cneg c1) (cfv (cv y) (cfv (csn a) (cfv H cind))) cmul) (cfv (cv y) P) cmul)) cle $): $ wceq (cfv a P) (cfv a Q) $ = '(mpbir (pm3_2i (mpbir (mpbi (mpbi (mpbi (mpbi hneg (breq1i (cbnp_indicator_sum_singleton_neg hindc hQc ha hf hv (ax_mp hQaR recn) (a1i hQc)))) (breq2i (cbnp_indicator_sum_singleton_neg hindc hPc ha hf hv (ax_mp hPaR recn) (a1i hPc)))) (breq1i (ax_mp (ax_mp hQaR recn) mulm1))) (breq2i (ax_mp (ax_mp hPaR recn) mulm1))) (ax_mp (pm3_2i hPaR hQaR) leneg)) (mpbi (mpbi hpos (breq1i (cbnp_indicator_sum_singleton hf ha (ax_mp hQaR recn) hv (a1i hQc)))) (breq2i (cbnp_indicator_sum_singleton hf ha (ax_mp hPaR recn) hv (a1i hPc))))) (ax_mp (pm3_2i hPaR hQaR) letri3));
+
+-- Assembly: pointwise agreement on the hypothesis space forces `p = q`.
+-- `ralrimiv` turns the per-point fact into the `A. x e. H` form that `eqfnfv`
+-- converts into function equality.  (In Lean this is `funext`, i.e. `ext x`.)
+pub theorem cbnp_eq {x: setvar} (P Q H: class) (hfnP: $ wfn P H $) (hfnQ: $ wfn Q H $) (hx: $ wi (wcel (cv x) H) (wceq (cfv (cv x) P) (cfv (cv x) Q)) $): $ wceq P Q $ = '(mpbir (ax_mp tru (ralrimiv (a1i hx))) (ax_mp (pm3_2i hfnP hfnQ) eqfnfv));
+
+-- ---------------------------------------------------------------------------
+-- Closed-form status (measured 2026-11-06, MM0 compiler only)
+--
+-- The six theorems above are checked as stated. Their closed companions
+-- (`<name>_c`, hypotheses folded into implications by the classical deduction
+-- theorem) are produced mechanically by mm0/tools/closehyps.pl. Per theorem:
+--
+--   cbnp_singleton_sum                closed as stated (no hypotheses)
+--   cbnp_indicator_sum                open: needs the closure of indsum
+--   cbnp_indicator_sum_singleton      open: needs the closure of indsum
+--   cbnp_indicator_sum_singleton_neg  open: needs indsum, sumsn
+--   cbnp_eq_at                        open: needs indsum, sumsn
+--   cbnp_eq                           open: needs indsum, sumsn
+--
+-- Everything else these proofs cite is closed automatically from set.mm's own
+-- proofs (stage two, `closehyps.pl --mma`): mpd, a1i, syl, biimpd, mpbid, mpbi,
+-- eqeq2i, eqtri, nsyl4, pm2_61i, impcon4bid, con4bid, _2thd, _2falsed, con2i,
+-- nsyl, con3i, pm5_21ni, pm5_21nii, eleq2i, mpan2.  `indsum` and `sumsn` remain
+-- because set.mm0 states the quantifier axioms with a dependent hypothesis
+-- (`axiom ax_gen {x3: setvar} (ph: wff x3): $ ph $ > $ wal x3 ph $;`), whose
+-- argument is fixed by the step's result rather than by its arguments.
+--
+-- Regenerate the companions with:
+--   perl mm0/tools/closehyps.pl mm0/pilot/ChapterNoBestPrior.mm1 \
+--        --mma mm0/metamath/set.mm --out closed_stmts.mm1

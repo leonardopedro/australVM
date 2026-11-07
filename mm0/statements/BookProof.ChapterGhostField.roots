@@ -1,0 +1,16 @@
+BookProof.GhostField.brst_charge_nilpotent
+BookProof.GhostField.brst_charge_nilpotent_ghost
+BookProof.GhostField.car
+BookProof.GhostField.numberOp
+BookProof.GhostField.numberOp.eq_1
+BookProof.GhostField.numberOp_add_hole
+BookProof.GhostField.numberOp_eq
+BookProof.GhostField.numberOp_idempotent
+BookProof.GhostField.numberOp_selfAdjoint
+BookProof.GhostField.psi
+BookProof.GhostField.psi.eq_1
+BookProof.GhostField.psiDag
+BookProof.GhostField.psiDag.eq_1
+BookProof.GhostField.psiDag_eq_conjTranspose
+BookProof.GhostField.psiDag_sq
+BookProof.GhostField.psi_sq

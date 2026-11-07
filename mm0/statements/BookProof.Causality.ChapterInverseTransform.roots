@@ -1,0 +1,15 @@
+BookProof.InverseTransform.cdf
+BookProof.InverseTransform.cdf.eq_1
+BookProof.InverseTransform.cdf_monotone
+BookProof.InverseTransform.cdf_succ_sub
+BookProof.InverseTransform.cdf_zero
+BookProof.InverseTransform.seedSet
+BookProof.InverseTransform.seedSet.eq_1
+BookProof.InverseTransform.seedSet_cover
+BookProof.InverseTransform.seedSet_cover._proof_1_5
+BookProof.InverseTransform.seedSet_cover._simp_1_2
+BookProof.InverseTransform.seedSet_cover._simp_1_3
+BookProof.InverseTransform.seedSet_cover._simp_1_4
+BookProof.InverseTransform.seedSet_disjoint
+BookProof.InverseTransform.seedSet_measure
+BookProof.InverseTransform.seedSet_total_measure

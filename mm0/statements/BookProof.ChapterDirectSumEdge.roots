@@ -1,0 +1,13 @@
+BookProof.DirectSumEdge.coe_eq_zero_of_notMem_supportFinset
+BookProof.DirectSumEdge.dsOp_edge_of_fibre_edges
+BookProof.DirectSumEdge.dsOp_edge_of_fibre_edges_le
+BookProof.DirectSumEdge.dsOp_edge_pos
+BookProof.DirectSumEdge.inner_dsCore_eq_sum
+BookProof.DirectSumEdge.inner_dsOp_eq_sum
+BookProof.DirectSumEdge.mem_supportFinset
+BookProof.DirectSumEdge.norm_sq_dsCore_eq_sum
+BookProof.DirectSumEdge.quadForm_dsOp_eq_sum
+BookProof.DirectSumEdge.supportFinset
+BookProof.DirectSumEdge.supportFinset._proof_1
+BookProof.DirectSumEdge.supportFinset._proof_2
+BookProof.DirectSumEdge.supportFinset._proof_3

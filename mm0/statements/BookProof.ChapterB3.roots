@@ -1,0 +1,17 @@
+BookProof.ChapterB3.IsPartialIsometry
+BookProof.ChapterB3.IsPartialIsometry._proof_1
+BookProof.ChapterB3.IsPartialIsometry._proof_2
+BookProof.ChapterB3.IsPartialIsometry._proof_3
+BookProof.ChapterB3.IsPartialIsometry._proof_4
+BookProof.ChapterB3.IsPartialIsometry._proof_5
+BookProof.ChapterB3.IsPartialIsometry._proof_6
+BookProof.ChapterB3.IsPartialIsometry.adjoint
+BookProof.ChapterB3.IsPartialIsometry.adjointComp_isIdempotent
+BookProof.ChapterB3.IsPartialIsometry.apply
+BookProof.ChapterB3.IsPartialIsometry.compAdjoint_isIdempotent
+BookProof.ChapterB3.adjointComp_isSelfAdjoint
+BookProof.ChapterB3.compAdjoint_isSelfAdjoint
+BookProof.ChapterB3.conditional_operator_identity
+BookProof.ChapterB3.isPartialIsometry_iff_adjointComp_isIdempotent
+BookProof.ChapterB3.isPartialIsometry_of_adjointComp_isIdempotent
+BookProof.ChapterB3.norm_map_of_adjointComp_eq

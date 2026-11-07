@@ -1,0 +1,9 @@
+BookProof.ChapterAttentionLocality.alibiScore
+BookProof.ChapterAttentionLocality.alibiScore.eq_1
+BookProof.ChapterAttentionLocality.farMass_le
+BookProof.ChapterAttentionLocality.mem_window
+BookProof.ChapterAttentionLocality.norm_headOutput_window_sub_le
+BookProof.ChapterAttentionLocality.scoreSoftmax_alibi_antitone
+BookProof.ChapterAttentionLocality.scoreSoftmax_alibi_le
+BookProof.ChapterAttentionLocality.window
+BookProof.ChapterAttentionLocality.window.eq_1

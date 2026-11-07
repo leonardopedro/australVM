@@ -1,0 +1,6 @@
+BookProof.ChapterDeepLearningMAP.exp_logObjective
+BookProof.ChapterDeepLearningMAP.isMAP_iff_maximizes_logObjective
+BookProof.ChapterDeepLearningMAP.logObjective
+BookProof.ChapterDeepLearningMAP.logObjective_le_iff
+BookProof.ChapterDeepLearningMAP.posteriorWeight
+BookProof.ChapterDeepLearningMAP.posterior_le_iff_weight

@@ -1,0 +1,10 @@
+BookProof.ChapterEntropy.card_bijections
+BookProof.ChapterEntropy.card_selfMaps
+BookProof.ChapterEntropy.exists_injective_not_surjective
+BookProof.ChapterEntropy.invertibleProb
+BookProof.ChapterEntropy.invertibleProb.eq_1
+BookProof.ChapterEntropy.invertibleProb_eq
+BookProof.ChapterEntropy.invertibleProb_isEquivalent_stirling
+BookProof.ChapterEntropy.invertibleProb_le_one
+BookProof.ChapterEntropy.invertibleProb_nonneg
+BookProof.ChapterEntropy.invertibleProb_tendsto_zero

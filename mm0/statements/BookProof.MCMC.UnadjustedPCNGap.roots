@@ -1,0 +1,16 @@
+BookProof.MCMC.UnadjustedPCN.natDeg
+BookProof.MCMC.UnadjustedPCN.natDeg.eq_1
+BookProof.MCMC.UnadjustedPCN.natDeg_zero
+BookProof.MCMC.UnadjustedPCN.one_le_natDeg
+BookProof.MCMC.UnadjustedPCN.one_le_natDeg._proof_1_1
+BookProof.MCMC.UnadjustedPCN.pcnForm
+BookProof.MCMC.UnadjustedPCN.pcnForm.eq_1
+BookProof.MCMC.UnadjustedPCN.pcnForm_le
+BookProof.MCMC.UnadjustedPCN.pcnWeight
+BookProof.MCMC.UnadjustedPCN.pcnWeight_degree_one
+BookProof.MCMC.UnadjustedPCN.pcnWeight_le_gap
+BookProof.MCMC.UnadjustedPCN.pcnWeight_le_gap._proof_1_1
+BookProof.MCMC.UnadjustedPCN.pcnWeight_nonneg
+BookProof.MCMC.UnadjustedPCN.pcn_gap_uniform
+BookProof.MCMC.UnadjustedPCN.pcn_geometric_ergodicity
+BookProof.MCMC.UnadjustedPCN.pcn_norm_le

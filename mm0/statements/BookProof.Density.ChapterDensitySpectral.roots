@@ -1,0 +1,6 @@
+BookProof.DensitySpectral.IsDensityMatrix
+BookProof.DensitySpectral.density_eigenvalues_nonneg
+BookProof.DensitySpectral.density_eigenvalues_sum_one
+BookProof.DensitySpectral.density_iff_exists_unitary_diagonal
+BookProof.DensitySpectral.density_spectral
+BookProof.DensitySpectral.isDensityMatrix_of_unitary_diagonal

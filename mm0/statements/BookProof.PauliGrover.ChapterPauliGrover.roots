@@ -1,0 +1,11 @@
+BookProof.ChapterConditional.pJoint.eq_1
+BookProof.ChapterPauliGrover.pauliGrover_cond_one
+BookProof.ChapterPauliGrover.pauliGrover_joint_one
+BookProof.ChapterPauliGrover.pauliGrover_marg_one
+BookProof.ChapterPauliGrover.pauliX
+BookProof.ChapterPauliGrover.pauliX.eq_1
+BookProof.ChapterPauliGrover.pauliX_conjTranspose
+BookProof.ChapterPauliGrover.pauliX_parametrizes_delta
+BookProof.ChapterPauliGrover.pauliX_rotates
+BookProof.ChapterPauliGrover.pauliX_sq
+BookProof.ChapterPauliGrover.pauliX_unitary

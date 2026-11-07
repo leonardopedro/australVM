@@ -1,0 +1,15 @@
+BookProof.OperatorSeries.commForm_add
+BookProof.OperatorSeries.commForm_eq_neg_two_im
+BookProof.OperatorSeries.essentiallySelfAdjointOn_finiteModes_of_bounds
+BookProof.OperatorSeries.essentiallySelfAdjointOn_finiteModes_of_series
+BookProof.OperatorSeries.seriesOp
+BookProof.OperatorSeries.seriesOp._proof_1
+BookProof.OperatorSeries.seriesOp._proof_2
+BookProof.OperatorSeries.seriesOp._proof_3
+BookProof.OperatorSeries.seriesOp.congr_simp
+BookProof.OperatorSeries.seriesOp_apply
+BookProof.OperatorSeries.seriesOp_commForm_le
+BookProof.OperatorSeries.seriesOp_hasSum
+BookProof.OperatorSeries.seriesOp_norm_le
+BookProof.OperatorSeries.seriesOp_symmetricOn
+BookProof.OperatorSeries.summable_apply

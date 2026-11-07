@@ -1,0 +1,16 @@
+BookProof.RelationShiftInvert.hasDerivAt_unitaryU_relOp
+BookProof.RelationShiftInvert.isShiftInvert_invCLMAt
+BookProof.RelationShiftInvert.mem_relDomain_iff
+BookProof.RelationShiftInvert.relDomain
+BookProof.RelationShiftInvert.relOp
+BookProof.RelationShiftInvert.relOp._proof_1
+BookProof.RelationShiftInvert.relOp._proof_2
+BookProof.RelationShiftInvert.relOpFun
+BookProof.RelationShiftInvert.relOpFun._proof_1
+BookProof.RelationShiftInvert.relOpFun_eq
+BookProof.RelationShiftInvert.relOpFun_mem
+BookProof.RelationShiftInvert.relOp_mem
+BookProof.RelationShiftInvert.relOp_unitaryU
+BookProof.RelationShiftInvert.snd_unique
+BookProof.RelationShiftInvert.unitaryU_eq_of_invCLM_eq
+BookProof.RelationShiftInvert.unitaryU_mem_relDomain

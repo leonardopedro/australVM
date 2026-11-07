@@ -1,0 +1,9 @@
+AddEquiv.toMultiplicative.eq_1
+BookProof.ChapterIPin.IPin
+BookProof.ChapterIPin.instGroupIPin
+BookProof.ChapterIPin.ipin_left
+BookProof.ChapterIPin.ipin_right
+BookProof.ChapterIPin.phiHom
+BookProof.ChapterIPin.phiHom._proof_1
+BookProof.ChapterIPin.phiHom._proof_2
+BookProof.ChapterIPin.phiHom.eq_1

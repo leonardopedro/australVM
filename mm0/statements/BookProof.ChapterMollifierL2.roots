@@ -1,0 +1,8 @@
+BookProof.MollifierL2.eLpNorm_mollify_sub_le
+BookProof.MollifierL2.eLpNorm_translate
+BookProof.MollifierL2.enorm_mollify_sq_le
+BookProof.MollifierL2.tendsto_mollify_L2
+BookProof.MollifierL2.tendsto_translate_Lp
+BookProof.MollifierL2.tendsto_translate_cc
+BookProof.MollifierL2.tendsto_translate_cc._simp_1_1
+BookProof.MollifierL2.tendsto_translate_cc._simp_1_2
