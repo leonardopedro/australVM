@@ -1,0 +1,16 @@
+BookProof.ChapterB7.eventMap_compl
+BookProof.ChapterB7.eventMap_inter
+BookProof.ChapterB7.eventMap_leftInverse
+BookProof.ChapterB7.eventMap_measure
+BookProof.ChapterB7.eventMap_union
+BookProof.ChapterB7.hadamardU
+BookProof.ChapterB7.hadamardU._proof_1
+BookProof.ChapterB7.hadamardU.eq_1
+BookProof.ChapterB7.hadamard_not_deterministic
+BookProof.ChapterB7.koopmanRep_mul
+BookProof.ChapterB7.koopman_comp
+BookProof.ChapterB7.koopman_const
+BookProof.ChapterB7.koopman_indicatorConstLp
+BookProof.ChapterB7.koopman_refl
+BookProof.ChapterG.koopmanEquiv.eq_1
+MeasureTheory.Lp.compMeasurePreservingₗᵢ.congr_simp
