@@ -1,0 +1,11 @@
+BookProof.ReflectionPositivity.kern
+BookProof.ReflectionPositivity.kern.eq_1
+BookProof.ReflectionPositivity.kern_transfer
+BookProof.ReflectionPositivity.osQuadForm
+BookProof.ReflectionPositivity.osQuadForm_eq_two_mul_kern
+BookProof.ReflectionPositivity.osQuadForm_eq_two_sum_sq
+BookProof.ReflectionPositivity.osQuadForm_nonneg
+BookProof.ReflectionPositivity.pairing_swap
+BookProof.ReflectionPositivity.pull_const
+BookProof.ReflectionPositivity.pull_const_left
+BookProof.ReflectionPositivity.sum_comm_four
