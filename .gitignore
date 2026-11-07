@@ -321,6 +321,8 @@ mm0/pilot/ported_stmt.mm0
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavine.mm1
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavineOnly.mm0
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavineOnly.mm1
+/mm0/statements/BookProof.Toolbox.ChapterTensorKatoRellich.mm0
+/mm0/statements/BookProof.Toolbox.ChapterTensorKatoRellich.mm1
 # <<< corpus statements above 5 MB <<<
 
 # The compiled set.mm library is 43 MB of pure build output; regenerate it with

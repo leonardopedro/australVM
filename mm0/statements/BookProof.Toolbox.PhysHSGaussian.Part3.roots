@@ -1,0 +1,15 @@
+PhysHSGaussian.gammaMeasure
+PhysHSGaussian.gammaMeasure_isProbability
+PhysHSGaussian.gaussian_concentration_sphere
+PhysHSGaussian.gegenbauerScaled_bound
+PhysHSGaussian.gegenbauerScaled_bound._simp_1_2
+PhysHSGaussian.gegenbauerScaled_bound._simp_1_3
+PhysHSGaussian.gegenbauerScaled_rec
+PhysHSGaussian.normSq
+PhysHSGaussian.normSq.eq_1
+PhysHSGaussian.normalization_tendsto
+PhysHSGaussian.normalization_tendsto._proof_1_2
+PhysHSGaussian.normalization_tendsto._proof_1_3
+PhysHSGaussian.normalization_tendsto._proof_1_4
+PhysHSGaussian.normalization_tendsto._simp_1_1
+PhysHSGaussian.poincare_borel_ae
