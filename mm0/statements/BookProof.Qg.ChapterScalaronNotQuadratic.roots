@@ -1,0 +1,7 @@
+BookProof.ScalaronFiberFL.WallPot.mk.congr_simp
+BookProof.ScalaronFiberFL.starobinskyWall.eq_1
+BookProof.ScalaronNotQuadratic.starobinskyPot_not_quadratic
+BookProof.ScalaronNotQuadratic.starobinskyPot_not_sum_of_squares
+BookProof.ScalaronNotQuadratic.starobinskyV_le_plateau
+BookProof.ScalaronNotQuadratic.starobinskyV_not_quadratic
+BookProof.ScalaronNotQuadratic.starobinskyV_pos
