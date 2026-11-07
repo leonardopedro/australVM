@@ -1,0 +1,13 @@
+BookProof.ChapterA3.HasAdLambda.eq_1
+BookProof.ChapterA3.conj_exp_hasAdLambda
+BookProof.ChapterA3.conj_exp_hasAdLambda._simp_1_1
+BookProof.ChapterA3.conj_exp_hasAdLambda._simp_1_3
+BookProof.ChapterA3.exp_matrix_inv
+BookProof.ChapterA3.exp_neg_mul_exp
+BookProof.ChapterA3.hasLambda_exp
+BookProof.ChapterA3.isPin_exp_of_isSpinLie
+BookProof.ChapterA3.lorentzLie_exp
+BookProof.ChapterA3.lorentzLie_exp._simp_1_1
+BookProof.ChapterA3.lorentzLie_exp._simp_1_2
+BookProof.ChapterA3.lorentzLie_exp._simp_1_3
+BookProof.ChapterA3.spinLie_exp_hasLambda_lorentz
