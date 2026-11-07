@@ -1,0 +1,4 @@
+BookProof.HermiteLadder.apply_sum_of_shift
+BookProof.HermiteLadder.norm_shift_le_of_diagonal
+BookProof.HermiteLadder.norm_sum_shift_sq
+BookProof.HermiteLadder.norm_sum_shift_sq._simp_1_1
