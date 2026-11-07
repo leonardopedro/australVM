@@ -814,8 +814,8 @@ SWEEP_RETRY=1 scripts/lean-corpus-sweep    # re-attempt whatever is not `ok`
 ```
 
 State is one tab-separated line per module in `mm0/sweep-state.tsv`
-(`status · module · seconds · detail`, the detail carrying the module's peak
-RSS), with a per-module transcript in
+(`status · module · seconds · detail · oversize`, the detail carrying the
+module's peak RSS), with a per-module transcript in
 `mm0/sweep-logs/<module>.log` and an append-only `mm0/sweep-logs/sweep.log` that
 a `tail -f` can follow. A module that already has a line is never attempted again,
 so an interrupted sweep resumes where it stopped and loses at most the module that
@@ -824,6 +824,13 @@ was in flight. Statuses: `ok` (nanoda verified, mm0-c re-checked), `gap`
 (`SWEEP_TIMEOUT`, default 3600 s per module), `failed` (build/export/nanoda/
 mm0-rs/mm0-c), `empty` (no declarations of its own). The exit status is non-zero
 while anything in the state file is not `ok`.
+
+`oversize` is `-` when a module's statements all fit, and otherwise
+`<n> files, <mb> MB`: those artefacts are on disk and hashed in
+`mm0/statements/LARGE.tsv` but kept out of git (`scripts/corpus-size-gate`), and
+the sweep's summary names the modules. It is not a status — the conversion and
+the `mm0-c` re-check did pass, so the row stays `ok`/`gap` — and it exists
+because the only other trace is one warning line inside that module's log.
 
 The sweep defaults to `NANODA_MAX_BYTES=0` and picks up
 `mm0/exports/trusted.names` automatically, which is what makes an unbudgeted run

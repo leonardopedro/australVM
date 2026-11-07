@@ -45,6 +45,13 @@
 #             about the host, not the module, so the corpus run continues and a
 #             later pass (or a quieter machine) can still convert it
 #
+# The state file is TSV: status, module, seconds, detail, and a fifth column that
+# says which modules produced statements too large to publish — `-` when none,
+# otherwise "<n> files, <mb> MB" (they are on disk and hashed in
+# mm0/statements/LARGE.tsv; see scripts/corpus-size-gate). Oversized is not a
+# status: those modules still converted and mm0-c verified them, so their row
+# stays ok (or gap) and the size is recorded beside it.
+#
 # Memory: one module at a time, each in its own capped cgroup, with the peak
 # charged to that cgroup recorded in the state file. A summed-RSS figure for the
 # same run is several times too large: `lake env`, `lean` and the exporter all
@@ -152,10 +159,24 @@ sweep_start=$(date +%s)
 # Record a verdict, replacing any earlier row for the same module: a resumed or
 # re-attempted module must appear exactly once, or the totals double-count.
 record() {
-    local status=$1 mod=$2 secs=$3 detail=$4 tmp
+    local status=$1 mod=$2 secs=$3 detail=$4 oversize=${5:--} tmp
     tmp=$(mktemp)
     awk -F'\t' -v m="$mod" '$2 != m' "$STATE" >"$tmp" && mv "$tmp" "$STATE"
-    printf '%s\t%s\t%s\t%s\n' "$status" "$mod" "$secs" "$detail" >>"$STATE"
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$status" "$mod" "$secs" "$detail" "$oversize" >>"$STATE"
+}
+
+# How many statements a module had to leave out of git, read from the driver's
+# verdict line ("…, mm0-c OK, 2 kept out of git (1520 MB)"). `-` means none.
+# This is what puts an oversized chapter's NAME in the state file: the evidence
+# is one line in one of ~900 logs, which is not something a later bisection can
+# be expected to find.
+oversize_of() {
+    local note
+    note=$(grep -Eo ', [0-9]+ kept out of git \([0-9]+ MB\)' "$1" 2>/dev/null | tail -1)
+    [[ -n $note ]] || { printf '%s\n' -; return 0; }
+    printf '%s\n' "$note" |
+        awk '{ gsub(/[^0-9]/, "", $7); printf "%s files, %s MB\n", $2, $7 }'
 }
 
 # `empty` is a verdict about the module and `deferred` is a verdict about the
@@ -254,6 +275,7 @@ run_module() {
     fi
     SECS=$(( $(date +%s) - t0 ))
     DETAIL="${detail:-—} · peak ${peak} MiB"
+    OVERSIZE=$(oversize_of "$log")
 }
 
 run_pass() {
@@ -264,12 +286,14 @@ run_pass() {
         n=$(( n + 1 ))
         echo "[$n/$total] $mod"
         run_module "$mod"
-        record "$STATUS" "$mod" "$SECS" "$DETAIL"
+        record "$STATUS" "$mod" "$SECS" "$DETAIL" "$OVERSIZE"
         DID+=("$mod")
-        printf '    %-8s %4ds  %s\n' "$STATUS" "$SECS" "$DETAIL"
+        over=
+        [[ $OVERSIZE != - ]] && over=" · kept out of git: $OVERSIZE"
+        printf '    %-8s %4ds  %s%s\n' "$STATUS" "$SECS" "$DETAIL" "$over"
         # Keep the long job honest about where it is: append-only, one line per
         # module, so `tail -f` works and nothing is lost on a hard kill.
-        echo "$(date -Is)	$STATUS	$mod	${SECS}s	$DETAIL" >>"$LOGDIR/sweep.log"
+        echo "$(date -Is)	$STATUS	$mod	${SECS}s	$DETAIL$over" >>"$LOGDIR/sweep.log"
     done
 }
 
@@ -322,6 +346,10 @@ awk -F'\t' '{ c[$1]++ } END {
 # not counts, and this is the only place the whole corpus is listed at once.
 awk -F'\t' '$1 != "ok" { n[$1] = n[$1] (n[$1] == "" ? "" : " ") $2 }
             END { for (s in n) printf "  %-7s : %s\n", s, n[s] }' "$STATE"
+# Modules whose statements were too big to publish. They are `ok`/`gap` above —
+# the conversion and the mm0-c re-check passed — so without this list the only
+# trace of an oversized chapter is a warning line inside its log.
+awk -F'\t' '$5 != "" && $5 != "-" { printf "  >5 MB   : %s — %s\n", $2, $5 }' "$STATE"
 echo "=================================================================="
 # Exit non-zero when anything in the corpus is not `ok`, so a CI wrapper and a
 # human shell both see the same verdict.
