@@ -1,0 +1,17 @@
+BookProof.ChapterA3.detExpPath
+BookProof.ChapterA3.detExpPath._proof_1
+BookProof.ChapterA3.detExpPath.eq_1
+BookProof.ChapterA3.detExpPath_add
+BookProof.ChapterA3.detExpPath_zero
+BookProof.ChapterA3.det_exp_eq_exp_trace
+BookProof.ChapterA3.det_exp_eq_exp_trace._simp_1_1
+BookProof.ChapterA3.differentiable_det
+BookProof.ChapterA3.hasDerivAt_detExpPath
+BookProof.ChapterA3.hasDerivAt_detExpPath_zero
+BookProof.ChapterA3.hasDerivAt_detExpPath_zero._simp_1_1
+BookProof.ChapterA3.hasDerivAt_det_line
+BookProof.ChapterA3.hasDerivAt_det_line._simp_1_1
+BookProof.ChapterA3.spinLie_det_exp_eq_one
+Matrix.detRowAlternating.eq_1
+MultilinearMap.alternatization.eq_1
+MultilinearMap.mkPiAlgebra.eq_1

@@ -1,0 +1,10 @@
+BookProof.ChapterA3n.projSym.eq_1
+BookProof.ChapterA3o.projAnti.eq_1
+BookProof.ChapterA3p.projAnti_mul_projSym
+BookProof.ChapterA3p.projAnti_mul_projSym._simp_1_1
+BookProof.ChapterA3p.projAnti_mul_projSym._simp_1_2
+BookProof.ChapterA3p.projSym_add_projAnti_two
+BookProof.ChapterA3p.projSym_mul_projAnti
+BookProof.ChapterA3p.projSym_mul_projAnti._simp_1_2
+BookProof.ChapterA3p.sum_signC_eq_zero
+BookProof.ChapterA3p.tensorSquare_complete_reducibility
