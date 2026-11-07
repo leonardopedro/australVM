@@ -1,0 +1,15 @@
+BookProof.ChapterH3.duhamel_scalar
+BookProof.ChapterH3.duhamel_scalar_smul
+BookProof.ChapterH3.sirkKrylov
+BookProof.ChapterH3.sirkKrylov._sunfold
+BookProof.ChapterH3.sirkKrylov._unsafe_rec
+BookProof.ChapterH3.sirkKrylov.eq_1
+BookProof.ChapterH3.sirkKrylov.eq_2
+BookProof.ChapterH3.sirkKrylov.eq_def
+BookProof.ChapterH3.sirkKrylov.match_1
+BookProof.ChapterH3.sirkKrylov_succ
+BookProof.ChapterH3.sirkKrylov_zero
+BookProof.ChapterH3.sirk_krylov_mem_adjoin
+_private.BookProof.Textbook.ChapterH3.0.BookProof.ChapterH3.sirkKrylov.match_1.eq_1
+_private.BookProof.Textbook.ChapterH3.0.BookProof.ChapterH3.sirkKrylov.match_1.eq_2
+_private.BookProof.Textbook.ChapterH3.0.BookProof.ChapterH3.sirkKrylov.match_1.splitter

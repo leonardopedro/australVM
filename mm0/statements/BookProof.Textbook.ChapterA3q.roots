@@ -1,0 +1,13 @@
+BookProof.ChapterA3q.projAnti_mul_projMixed
+BookProof.ChapterA3q.projMixed
+BookProof.ChapterA3q.projMixed_diagGen_comm
+BookProof.ChapterA3q.projMixed_idem
+BookProof.ChapterA3q.projMixed_mul_projAnti
+BookProof.ChapterA3q.projMixed_mul_projSym
+BookProof.ChapterA3q.projMixed_parityDiag_comm
+BookProof.ChapterA3q.projMixed_spinGenDiag_comm
+BookProof.ChapterA3q.projMixed_two_eq_zero
+BookProof.ChapterA3q.projMixed_uniform_comm
+BookProof.ChapterA3q.projSym_add_projAnti_add_projMixed
+BookProof.ChapterA3q.projSym_mul_projMixed
+BookProof.ChapterA3q.tensorPow_complete_reducibility

@@ -1,0 +1,13 @@
+BookProof.ChapterTimeTranslation.diagPart
+BookProof.ChapterTimeTranslation.measOp
+BookProof.ChapterTimeTranslation.measOp_apply
+BookProof.ChapterTimeTranslation.proj
+BookProof.ChapterTimeTranslation.proj.eq_1
+BookProof.ChapterTimeTranslation.rho
+BookProof.ChapterTimeTranslation.rho.eq_1
+BookProof.ChapterTimeTranslation.trace_diagPart_measOp
+BookProof.ChapterTimeTranslation.trace_diagPart_measOp._simp_1_2
+BookProof.ChapterTimeTranslation.trace_diff
+BookProof.ChapterTimeTranslation.trace_eq_iff_isDeterministic
+BookProof.ChapterTimeTranslation.trace_eq_iff_isDeterministic_pure
+BookProof.ChapterTimeTranslation.trace_rho_measOp

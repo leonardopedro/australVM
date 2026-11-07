@@ -1,0 +1,16 @@
+BookProof.ChapterB4.IsDensityMatrix
+BookProof.ChapterB4.IsPureState
+BookProof.ChapterB4.IsPureState._proof_1
+BookProof.ChapterB4.P1
+BookProof.ChapterB4.P1.eq_1
+BookProof.ChapterB4.P1_isPureState
+BookProof.ChapterB4.P2
+BookProof.ChapterB4.P2._proof_1
+BookProof.ChapterB4.P2.eq_1
+BookProof.ChapterB4.P2_isPureState
+BookProof.ChapterB4.mixed_state_isDensityMatrix
+BookProof.ChapterB4.mixed_state_not_pure
+BookProof.ChapterB4.mixed_state_satisfies_both
+BookProof.ChapterB4.no_pure_state_satisfies_both
+BookProof.ChapterB4.pure_state_satisfies_P1
+BookProof.ChapterB4.pure_state_satisfies_P2
