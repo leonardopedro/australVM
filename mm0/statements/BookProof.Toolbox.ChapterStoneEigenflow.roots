@@ -1,0 +1,4 @@
+BookProof.StoneEigenflow.exists_diagonal_stone_flow
+BookProof.StoneEigenflow.isSelfAdjointExtension_eigenvector
+BookProof.StoneEigenflow.stoneFlow_apply_core_eigenvector
+BookProof.StoneEigenflow.stoneFlow_apply_eigenvector

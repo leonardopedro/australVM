@@ -1,0 +1,16 @@
+BookProof.ChapterA.conjFixed
+BookProof.ChapterA.conjFixed._proof_1
+BookProof.ChapterA.conjFixed._proof_2
+BookProof.ChapterA.conjFixed._proof_3
+BookProof.ChapterA.conjFixed_invariant
+BookProof.ChapterA.conjFixed_isClosed
+BookProof.ChapterA.conjFixed_isSubsystem
+BookProof.ChapterA.conjFixed_ne_bot
+BookProof.ChapterA.conjFixed_ne_bot._simp_1_1
+BookProof.ChapterA.conjFixed_ne_top
+BookProof.ChapterA.conjFixed_ne_top._simp_1_1
+BookProof.ChapterA.isCReal_realification_reducible
+BookProof.ChapterA.mem_conjFixed
+BookProof.ChapterA.mem_conjFixed._simp_1
+BookProof.ChapterA.not_isCReal_of_realification_irreducible
+BookProof.ChapterA.realification_reducible_of_conjugation
