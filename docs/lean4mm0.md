@@ -1278,3 +1278,48 @@ So the honest state of the translator: it emits a derivation for every
 declaration it accepts, the derivations compile, and the two gaps it cannot
 cross — context conversion and projections — are stated in the theory's own
 vocabulary rather than papered over.
+
+### 13.8 The toolchains build again; the certificate path stops at the front-end
+
+For a stretch this repo could not be built here: `nix develop` died fetching
+`alt-ergo-2.6.3.tbz` (a mirror 504) and `cargo` outside it could not resolve the
+bridge crate. Both are gone, and the steps that fixed them are worth recording
+because none of them is discoverable from the build error:
+
+- `nix develop` fetches cleanly again (dune 3.23.1, cargo 1.97.1). Nothing in
+  the tree changed — it was the mirror.
+- The bridge crate path-depends on `arctic`, which lives in `../dynamic-arctic`
+  and was absent. The fix is the one CI already performs
+  (`.github/workflows/build-and-test.yml`): `git clone --depth 1 --branch main
+  https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic`.
+- `lib/BuiltInModules.ml` is **generated** by the `Makefile` rule
+  `lib/BuiltInModules.ml: lib/builtin/*.aui …  → python3 concat_builtins.py`.
+  A bare `dune build lib/` therefore fails with *"Some modules don't have an
+  implementation"* on `BuiltInModules`, which reads like a code defect and is
+  not one: the Makefile prereq is what creates the module. Use `make bridge` (or
+  `make all`), which builds it, the Rust library, the `.so` and the `austral`
+  binary in one step. Adding `modules_without_implementation BuiltInModules` to
+  `lib/dune` "fixes" the bare-dune error and then breaks `make bridge`, which
+  reports the opposite complaint once the generated file exists.
+
+With both halves building, `netcert` (the CLI over `uk_austral_defeq`) runs and
+answers well on the kernel's own language:
+
+| pair | verdict | report |
+| --- | --- | --- |
+| `(x + (2 + 3))` vs `(x + 5)` | equivalent | witness `[[0,0],[1,1],[5,2]]`, equal `unf_hash` |
+| `(x + 1)` vs `(x + 2)` | not equivalent | exit 1, `witness: null` |
+| `(tsubst (tsort t_lev1) …)` vs `(tsort t_lev1)` | refused | UK-4805, exit 2 |
+
+The third row is the whole story of §13.2's certificate interface, now measured.
+The kernel's conversion front-end parses **AustralVM CoreIR programs** — numeric
+expressions, let-bound `Int64` arithmetic — lowered to interaction nets by
+`deltanet_unf`. It has no λ, no Π and no substitution node, so it cannot be
+handed a CIC term at all; every refused side is one of those. `scripts/
+lean-net-cert` drives this per dumped obligation and reports the verdicts
+verbatim: on `_simp_1_1`'s ten substitution obligations, **0/10 decided, 10
+refused**. The bridge is real and the certificate is real; what is missing is the
+*encoding* between the two languages — either λ in the deltanet front-end, or a
+term-to-program encoding whose normal forms agree with β. Until one exists, the
+`tdefeq` premises in these derivations stay assumptions, and no artifact claims
+otherwise.

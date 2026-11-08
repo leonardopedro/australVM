@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""lean-net-cert — ask the kernel's deltanets about each dumped obligation.
+
+`scripts/lean-typing-proof --dump-obligations` writes one JSON line per premise
+the derivation had to assume. This runs `safestos/cranelift/target/release/
+netcert` (the CLI over `uk_austral_defeq`) on the two sides of each and reports
+what the kernel answered.
+
+The verdicts are the kernel's, not ours:
+
+  equivalent      the two sides reduce to the same net, certificate returned
+  not equivalent  both sides translated and their normal forms differ
+  refused         a side did not translate at all (netcert exit 2, UK-4805)
+
+Exit status is 0 only when every obligation was *decided* (equivalent or not) —
+a refusal means the check could not run, which must not pass silently.
+"""
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+NETCERT = ROOT / "safestos/cranelift/target/release/netcert"
+
+
+def check(lhs: str, rhs: str):
+    """(verdict, detail) for one pair, straight from netcert's report."""
+    try:
+        r = subprocess.run(
+            [str(NETCERT), lhs, rhs], capture_output=True, text=True, timeout=120
+        )
+    except FileNotFoundError:
+        return "unbuilt", f"{NETCERT} not found — run `make bridge`"
+    if r.returncode == 2:
+        return "refused", r.stderr.strip().splitlines()[-1] if r.stderr else "(no message)"
+    try:
+        report = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return "refused", "netcert printed no report"
+    if report.get("equivalent"):
+        w = report.get("witness") or []
+        return "equivalent", f"witness {len(w)} pair(s)"
+    return "not equivalent", "normal forms differ"
+
+
+def main(argv):
+    if len(argv) != 2:
+        print("usage: lean-net-cert <obligations.jsonl>", file=sys.stderr)
+        return 2
+    path = Path(argv[1])
+    if not path.exists():
+        print(f"lean-net-cert: no such file: {path}", file=sys.stderr)
+        return 2
+    counts: dict[str, int] = {}
+    decided = 0
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        ob = json.loads(line)
+        verdict, detail = check(ob["lhs"], ob["rhs"])
+        counts[verdict] = counts.get(verdict, 0) + 1
+        if verdict != "refused":
+            decided += 1
+        print(f"{verdict:<15} {ob['id']:<14} {detail}")
+    total = sum(counts.values())
+    print()
+    for k in sorted(counts):
+        print(f"  {k:<15} {counts[k]}")
+    print(f"decided by the kernel: {decided}/{total}")
+    if counts.get("refused"):
+        print(
+            "\nRefused means the kernel's conversion front-end would not translate a\n"
+            "side: it parses AustralVM CoreIR programs (`(x + (2 + 3))`, let-bound\n"
+            "Int64 arithmetic), which has no lambda, Pi or substitution node, and the\n"
+            "obligations are CIC terms. The bridge exists and answers (see `netcert`\n"
+            "on its own language); the missing piece is the term-to-program encoding."
+        )
+    return 0 if decided == total else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
