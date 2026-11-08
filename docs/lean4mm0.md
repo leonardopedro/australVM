@@ -1193,3 +1193,36 @@ it broke `_simp_1_1`, which had verified), and treating a scope mismatch as an
 assumption (it cost two structural steps on `_simp_1_1`, so a conversion that the
 elaborator accepts is better than a leaf assumption that hides it). Both were
 reverted. `max_free` stays as an origin check inside `lam_type`.
+
+### 13.6 The value is a term in the context, not a λ spine (model fix)
+
+Everything before this section treated a declaration's value as abstracting over
+the type's Π spine, so the artifact was always the *closed* judgment
+`tty tnil value type`, with one `ty_abs` per binder. That is wrong in general:
+Lean exports `theorem foo (x : α) : P x := proof` with `proof` referring to `x`
+and to the section hypotheses by **fvar**, not by a λ. A value that happens to
+carry the λs (`_simp_1_1` does) can be closed; one that does not can only be
+stated as the open judgment `tty ctx value body_type`. Emitting the closed form
+anyway is not a rule gap, it is a misreading of the export — and it showed up as
+`KeyError: 'lam'` where the peel ran out of λs.
+
+So the shape is now measured per declaration and the statement follows it:
+
+| chapter (scan) | closures | rules | assumptions |
+| --- | --- | --- | --- |
+| `BookProof.ChapterNoBestPrior` (6 decls) | 5/6 | 182 | 121 |
+| `BookProof.BalabanRG` (first 12) | 8/12 | 17,068 | 4,317 |
+| `BookProof.OSReconstruction` (first 8) | 8/8 | 166 | 106 |
+
+The OSReconstruction closures are mostly *shallow* — several are a single
+assumed leaf, because a definition whose body is a projection (`toFun`) or whose
+application goes through an unfolding has no rule here. That is worth stating
+plainly: "verified" means the artifact passes both checkers, not that the
+derivation is deep. The `rules` column is the honest measure of depth, and it is
+the one to watch as the fragment grows.
+
+The remaining failure class is unchanged and is one fix, not many: MM0 unifies
+types syntactically, so a `let`-encoded type and its unfolded form are different
+terms, and the emitter does not yet insert the `ty_deq` step where a type changes
+shape (four cases in BalabanRG, one in ChapterNoBestPrior, both with the same
+`tapp != tabs` signature).
