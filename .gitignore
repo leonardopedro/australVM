@@ -311,12 +311,16 @@ mm0/pilot/ported_stmt.mm0
 /mm0/statements/BookProof.Qg.ChapterQgMultiHalfDensity.mm1
 /mm0/statements/BookProof.Qg.ChapterQgOuterFockFlow.mm0
 /mm0/statements/BookProof.Qg.ChapterQgOuterFockFlow.mm1
+/mm0/statements/BookProof.Qg.ChapterQgTimeStepping.mm0
+/mm0/statements/BookProof.Qg.ChapterQgTimeStepping.mm1
 /mm0/statements/BookProof.Qg.ChapterQuantumGravityHalfDensity.mm0
 /mm0/statements/BookProof.Qg.ChapterQuantumGravityHalfDensity.mm1
 /mm0/statements/BookProof.Qg.ChapterScalaronDensitizedTransfer.mm0
 /mm0/statements/BookProof.Qg.ChapterScalaronDensitizedTransfer.mm1
 /mm0/statements/BookProof.Qg.ChapterScalaronWallEsa.mm0
 /mm0/statements/BookProof.Qg.ChapterScalaronWallEsa.mm1
+/mm0/statements/BookProof.Qym.ChapterYangMillsAbelianNoGap.mm0
+/mm0/statements/BookProof.Qym.ChapterYangMillsAbelianNoGap.mm1
 /mm0/statements/BookProof.Qym.ChapterYangMillsOuterFockFL.Part1.mm0
 /mm0/statements/BookProof.Qym.ChapterYangMillsOuterFockFL.Part1.mm1
 /mm0/statements/BookProof.Sirk.ChapterSirkLagrangianCanonical.mm0
@@ -327,6 +331,10 @@ mm0/pilot/ported_stmt.mm0
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavine.mm1
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavineOnly.mm0
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavineOnly.mm1
+/mm0/statements/BookProof.Toolbox.ChapterFockStatisticsCompletion.mm0
+/mm0/statements/BookProof.Toolbox.ChapterFockStatisticsCompletion.mm1
+/mm0/statements/BookProof.Toolbox.ChapterHermiteLadderOrder.mm0
+/mm0/statements/BookProof.Toolbox.ChapterHermiteLadderOrder.mm1
 /mm0/statements/BookProof.Toolbox.ChapterHermiteProductBasis.mm0
 /mm0/statements/BookProof.Toolbox.ChapterHermiteProductBasis.mm1
 /mm0/statements/BookProof.Toolbox.ChapterTensorKatoRellich.mm0
