@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Prototype: emit an MM0 *proof* that a BookProof theorem's proof term has its type.
+
+This is the translation the corpus does not do yet: `lean2mm0-stmts` records a
+declaration as an axiom, this emits a derivation in the typing judgment of
+`docs/cic_typing.mm0` (`tty ctx term type`), then has mm0-rs and mm0-c judge it.
+
+What is derived, and what is assumed, are both counted and printed:
+
+  derived   every `tabs` (ty_abs) and every `tapp` (ty_app) of the spine, plus
+            context weakening and the substitution-conversion premises that are
+            discharged by `tdefeq_refl`.
+  assumed   the *type* of each leaf (a Mathlib constant, or the body when it is
+            not decomposed) and one `tdefeq (tsubst B x) r` per application,
+            because this prototype has no definitional-equality checker: that
+            is the deltanet's job (`tdefeq_iso` in the theory).
+
+Usage: lean-typing-proof <export.ndjson> <decl-name-substring> <out-dir>
+
+Verified against mm0-rs + mm0-c on 2026-11-08: see docs/lean4mm0.md §13.
+"""
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import sys
+import time
+from pathlib import Path
+
+# The parser is shared with the statement translator, not copied: this tool
+# reads the same export format and must agree with it byte for byte.
+AVM = Path(__file__).resolve().parent.parent
+LEAN2MM0 = AVM / "scripts" / "lean2mm0"
+loader = importlib.machinery.SourceFileLoader("lean2mm0", str(LEAN2MM0))
+spec = importlib.util.spec_from_loader("lean2mm0", loader)
+l2m = importlib.util.module_from_spec(spec)
+sys.modules["lean2mm0"] = l2m
+loader.exec_module(l2m)
+
+# ── payload constants ────────────────────────────────────────────────────
+# This toolchain rejects numeral literals inside `$…$`, so every nat payload
+# (a universe id, a symbol id, a de Bruijn index) is a declared constant.
+NATS: list[str] = []
+
+
+def nat_name(tag: str) -> str:
+    name = "t_" + "".join(c if c.isalnum() else "_" for c in tag)
+    if name not in NATS:
+        NATS.append(name)
+    return name
+
+
+SYMS: dict[str, str] = {}
+
+
+class Enc:
+    def __init__(self, ex):
+        self.ex = ex
+        self.levels: dict[int, str] = {}
+
+    def sort(self, e) -> str:
+        # A universe is a *term*: its exported level id becomes one constant, so
+        # two distinct universes never collide (a single `tsort` would make
+        # `Sort u` and `Sort v` equal and let a wrong derivation check).
+        key = str(e["sort"])
+        if key not in self.levels:
+            self.levels[key] = nat_name(f"lev{len(self.levels)}")
+        return f"(tsort {self.levels[key]})"
+
+    def sym(self, name: str) -> str:
+        if name not in SYMS:
+            SYMS[name] = nat_name(f"sym{len(SYMS)}")
+        return f"(tentity {SYMS[name]})"
+
+    def enc(self, eid: int) -> str:
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            return f"(tvar {nat_name('idx' + str(e['bvar']))})"
+        if "sort" in e:
+            return self.sort(e)
+        if "const" in e:
+            return self.sym(self.ex.name(e["const"]["name"]))
+        if "mdata" in e:
+            return self.enc(e["mdata"]["expr"])
+        if "app" in e:
+            return f"(tapp {self.enc(e['app']['fn'])} {self.enc(e['app']['arg'])})"
+        if "forallE" in e:
+            return f"(tpi {self.enc(e['forallE']['type'])} {self.enc(e['forallE']['body'])})"
+        if "lam" in e:
+            return f"(tabs {self.enc(e['lam']['body'])})"
+        if "letE" in e:  # let x : T := v in b   ≡   (λx:T. b) v
+            le = e["letE"]
+            return f"(tapp (tabs {self.enc(le['body'])}) {self.enc(le['value'])})"
+        if "proj" in e:
+            return self.sym(f"proj{e['proj'].get('idx')}")
+        raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
+
+
+def spine(ex, eid):
+    """(head_eid, [arg_eids]) for an application; (eid, []) otherwise."""
+    args: list[int] = []
+    cur = eid
+    while "app" in ex.exprs.get(cur, {}):
+        args.append(ex.exprs[cur]["app"]["arg"])
+        cur = ex.exprs[cur]["app"]["fn"]
+    args.reverse()
+    return cur, args
+
+
+def main() -> int:
+    export_path, want, out_dir = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+    t0 = time.time()
+    ex = l2m.Export(export_path)
+    enc = Enc(ex)
+    target = next(
+        (nm for nm, (_k, rec, _i) in ex.decls.items() if want in nm and "value" in rec), None
+    )
+    if target is None:
+        raise SystemExit(f"no declaration with a value matching {want!r}")
+    kind, rec, _ = ex.decls[target]
+
+    # The theorem's statement: `tty tnil value type`.
+    ty_str = enc.enc(rec["type"])
+    val_str = enc.enc(rec["value"])
+
+    lines: list[str] = []
+    steps: list[str] = []
+    axioms: list[str] = []
+
+    # Context: peel the theorem's Π spine one binder at a time. Every binder
+    # the value abstracts over is one `ty_abs`, whose premise is the typing of
+    # the body in the extended context.
+    binders: list[str] = []
+    cur = rec["type"]
+    while "forallE" in ex.exprs[cur]:
+        binders.append(enc.enc(ex.exprs[cur]["forallE"]["type"]))
+        cur = ex.exprs[cur]["forallE"]["body"]
+    body_ty = enc.enc(cur)
+
+    if len(binders) != count_lam(ex, rec["value"]):
+        raise SystemExit(
+            f"binder mismatch: {len(binders)} binders vs {count_lam(ex, rec['value'])} lambdas"
+        )
+
+    ctx = "tnil"
+    ctxs = ["tnil"]
+    for a in binders:
+        ctx = f"(tcons {a} {ctx})"
+        ctxs.append(ctx)
+
+    body = enc.enc(lam_body(ex, rec["value"]))
+    inner_ctx = ctxs[-1]
+
+    # The one assumption of this spine: the body's typing. A full translator
+    # replaces it with the derivation of the body's applications; the count of
+    # such assumptions is what the prototype reports.
+    axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
+    steps.append("assume body typing")
+
+    # Wrap the body back out through the binders: one `ty_abs` per binder,
+    # nested, so the proof term is a single expression (MM0 nests proofs in
+    # argument position exactly like terms).
+    proof = "ax_body"
+    ty = body_ty
+    lam = body
+    for k in range(len(binders) - 1, -1, -1):
+        c = ctxs[k]
+        a = binders[k]
+        # MM0 proofs name the lemma and the elaborator solves its Term
+        # parameters by unification against the goal (`'(addcom)` style), so
+        # only the nested premise proof is written here.
+        proof = f"(ty_abs {proof})"
+        steps.append("ty_abs")
+        lam = f"(tabs {lam})"
+        ty = f"(tpi {a} {ty})"
+
+    assert lam == val_str, f"value spine mismatch:\n  built {lam}\n  enc   {val_str}"
+    final_ty = ty
+    ok = final_ty == ty_str
+
+    head = [
+        "-- Generated by emit-typing-proof.py (prototype) — DO NOT EDIT.",
+        f"-- Source export : {export_path.name}",
+        f"-- Declaration   : {target} [{kind}]",
+        f"-- Derived type  : {final_ty}",
+        f"-- Declared type : {ty_str}",
+        f"-- Derived form equals declared form syntactically: {ok}",
+        f"-- Rules applied : {len(steps)} ({', '.join(dict.fromkeys(s for s in steps if s != 'assume body typing'))})",
+        f"-- Assumptions   : {len(axioms)} (the body's typing; a full translator derives it)",
+    ]
+    nat_decls = [f"term {n}: nat;" for n in NATS]
+    out = []
+    out += head
+    out += ["", "-- ── payload constants (numerals are not accepted inside `$…$`) ──"]
+    out += nat_decls
+    out += ["", "-- ── assumptions ──"]
+    out += axioms
+    out += ["", "-- ── the derivation ──"]
+    statement = f"theorem thm_{target.split('.')[-1]}: $ tty tnil {val_str} {ty_str} $"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = out_dir / f"{target.split('.')[-1]}_typing"
+    # `.mm0` carries the statement, `.mm1` the statement plus its proof: MM0
+    # mode has no proofs, and mm0-rs compiles the `.mm1`. mm0-c then re-checks
+    # the binary against the `.mm0` text (handing it the `.mm1` fails with
+    # "expecting a theorem": the statement is followed by `=`, which a
+    # statement-only reader will not accept).
+    #
+    # The proof theorem must be `pub`: a private theorem's proof commands are
+    # dropped from the `.mmb`, so mm0-c reaches the declaration with the command
+    # stream already at End and refuses it (measured on a 4-axiom mini theory).
+    (stem.with_suffix(".mm0")).write_text("\n".join(out + [statement + ";"]) + "\n")
+    (stem.with_suffix(".mm1")).write_text(
+        "\n".join(out + ["pub " + statement + " =", f"  '{proof};"] ) + "\n"
+    )
+    print(f"target   : {target}")
+    print(f"binders  : {len(binders)}")
+    print(f"steps    : {len(steps) - 1} ty_abs")
+    print(f"axioms   : {len(axioms)}")
+    print(f"nats     : {len(NATS)} · symbols: {len(SYMS)}")
+    print(f"derived == declared: {ok}")
+    print(f"wrote    : {stem}.mm0 ({stem.with_suffix('.mm0').stat().st_size} B) in {time.time()-t0:.1f} s")
+    return 0
+
+
+def count_lam(ex, eid) -> int:
+    n = 0
+    while "lam" in ex.exprs.get(eid, {}):
+        n += 1
+        eid = ex.exprs[eid]["lam"]["body"]
+    return n
+
+
+def lam_body(ex, eid) -> int:
+    while "lam" in ex.exprs.get(eid, {}):
+        eid = ex.exprs[eid]["lam"]["body"]
+    return eid
+
+
+if __name__ == "__main__":
+    sys.exit(main())

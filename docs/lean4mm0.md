@@ -958,3 +958,57 @@ imports not yet built, a timeout, a busy machine — is retried without a second
 command; `empty` and `deferred` are left alone unless `SWEEP_RETRY_DEFERRED=1`.
 The state file keeps exactly one row per module, so a resumed or re-attempted run
 replaces that module's verdict instead of counting it twice.
+
+## 13. The first proof, not just the statement (2026-11-08)
+
+Everything above this section translates *statements*. A statement of record is
+an axiom with a Lean-shaped name; nothing in the corpus says why it is true, and
+§9.2 measured the consequence (0 of 593 artefacts certificate-backed). This
+section is the first artefact that closes that gap: one real `BookProof`
+declaration whose proof term is *typed* in MM0 and judged by both checkers.
+
+**The theory.** `docs/cic_typing.mm0` extends `docs/cic.mm0` with the judgment
+`tty (ctx: Term) (term: Term) (type: Term)` and its rules — `ty_var0`, `ty_varS`
+(weakening), `ty_pi`, `ty_abs`, `ty_app`, plus `tdefeq` with `refl`/`symm`/
+`trans` and the conversion rule `ty_deq`. Size: **5,661 B / 102 lines**, 26
+term/def, 21 axiom/theorem; `mm0-c` accepts it on its own (exit 0). It is the
+"Π/λ/App typing + conversion" theory the translator needs, separate from
+`cic.mm0` so the statement-of-record theory stays frozen.
+
+**The artefact.** `scripts/lean-typing-proof` (prototype) reads the same
+`lean4export` NDJSON the statement translator reads — it *imports* `lean2mm0`
+rather than copying the parser — and emits `mm0/proto/_simp_1_1_typing.{mm0,mm1}`
+for `BookProof.ChapterNoBestPrior.distinct_priors_each_preferred._simp_1_1`:
+
+| measurement | value |
+| --- | --- |
+| Π binders in the declaration | 2 |
+| derived type vs declared type | equal, syntactically |
+| rule applications in the proof | 3 (2 × `ty_abs`, 1 axiom leaf) |
+| statement text | 2,594 B (1,433 B excluding the generator header) |
+| proof term text | 23 B — `ty_abs (ty_abs ax_body)` |
+| verified binary (`.mmb`) | 7,240 B |
+| assumptions (body typing) | 1 |
+| wall clock | 1.8 s |
+
+`mm0-rs compile` reports no `sorry` and `mm0-c` exits 0 on the concatenation
+(`cic.mm0` + extension + statement), which is the same two-checker standard the
+statement corpus is held to.
+
+**What a full translator still has to discharge.** The proof above is honest
+about its one leaf: the body's typing is assumed, and each `tapp` in a real
+proof needs a `tdefeq (tsubst B x) r` premise that only a definitional-equality
+checker can produce — `tdefeq_iso` in the extension is where the deltanet enters
+(`unfer/logos/src/mm0/dk.rs` refuses to fake it, which is why the existing
+emitter declines these theorems by name). So the remaining work is not syntax:
+it is one β/conversion obligation per application node.
+
+**Four traps worth not rediscovering.** (1) A proof-carrying theorem must be
+declared `pub`: a private theorem's proof commands are dropped from the `.mmb`,
+and `mm0-c` then reports `expecting a theorem` at a declaration whose command
+stream has already reached `End`. (2) `mm0-c` re-checks the binary against the
+*statement* file (`X.mm0`), not the `X.mm1` the binary was compiled from; handed
+the `.mm1` it fails at the `=` after the statement. (3) Numerals are not
+accepted inside `$…$` — every universe/level/symbol id becomes a declared
+constant. (4) Rule parameters are solved by unification (`'(addcom)` style), so
+term arguments are *not* written into the proof; writing them is a syntax error.

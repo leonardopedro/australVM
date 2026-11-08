@@ -1,0 +1,102 @@
+-- cic_typing.mm0 — the typing and conversion extension of docs/cic.mm0.
+--
+-- cic.mm0 gives the *term language* of the pipeline (the deltanet agent
+-- signature) and judgmental equality `teq`. It has no typing judgment, so a
+-- statement emitted for it can record what a declaration *is*, never that a
+-- proof term *has* the declared type. This file adds exactly that judgment and
+-- the rules a Lean-to-MM0 proof translator needs to build derivations with it.
+--
+-- Scope, stated rather than implied:
+--
+--  * This is the first-order, untyped spine of the λΠ fragment: `tpi` (a
+--    binder), `tabs`, `tapp`, a context spine of types, and conversion. It is
+--    *not* a CIC checker: universes are not stratified, inductive families and
+--    recursors have no eliminators, and `tdefeq` is a relation supplied by
+--    premises, not decided here.
+--  * `tdefeq` is deliberately a premise-carrying relation. Its real decision
+--    procedure in this project is the deltanet reducer: two types are
+--    convertible when their nets are isomorphic (`valid_iso` in cic.mm0), and
+--    `tdefeq_iso` is the bridge to that certificate. A translator therefore
+--    discharges conversion by *emitting a witness*, not by trusting a solver.
+--  * Every rule states its premises with `>` (hypothesis binders). MM0 has no
+--    internal modus ponens, so a `->`-inside-formula axiom could never be
+--    applied — see the phase-D note in cic.mm0.
+--
+-- Constants have no typing rule here on purpose. A constant's type is an
+-- assumption of each artifact (it is a Mathlib lemma), so the *generated* file
+-- carries one `axiom` per constant it uses, in plain sight; a rule here would
+-- hide that count behind a schema.
+--
+-- Validate with (imports are concatenated, as the toolchain requires):
+--   mm0-rs join docs/cic_typing.mm0 out.mm0 && mm0-rs compile out.mm0 out.mmb
+--   mm0-c out.mmb < out.mm0
+
+import "cic.mm0";
+
+-- ── Terms the typing judgment speaks about ───────────────────────────────
+
+term tpi (a b: Term): Term;        -- Π a b: `b` is the codomain in the context
+                                   -- extended by `a` (binder = `tvar 0`)
+term tsort (s: nat): Term;         -- a universe as a *term*, so types live in
+                                   -- `Term` and one encoding serves both sides
+term tsucc (n: nat): nat;          -- context shifting in `ty_varS`
+term tzero: nat;                   -- the head index 0 as a declared constant:
+                                   -- this toolchain rejects numeral literals
+                                   -- inside `$…$`, so `0` cannot be written
+                                   -- directly (`(tvar 0)` is a parse error).
+
+-- ── The judgment ─────────────────────────────────────────────────────────
+
+-- `tty c t a`: in context `c` (a `tcons` spine, innermost first), term `t`
+-- has type `a`.
+term tty (c t a: Term): Prop;
+
+-- `tdefeq a b`: the types `a` and `b` are convertible.
+term tdefeq (a b: Term): Prop;
+
+-- ── Context ──────────────────────────────────────────────────────────────
+
+-- The head of the context types `tvar 0`; this is the only rule that *reads*
+-- a context entry, so a derivation can only use a variable it bound.
+axiom ty_var0 (a c: Term): $ tty (tcons a c) (tvar tzero) a $;
+
+-- Weakening under a binder: shifting the index by one, one binder at a time.
+axiom ty_varS (a b c: Term) (i: nat):
+  $ tty c (tvar i) a $ > $ tty (tcons b c) (tvar (tsucc i)) a $;
+
+-- ── The λΠ fragment ──────────────────────────────────────────────────────
+
+axiom ty_pi (c a b: Term) (s: nat):
+  $ tty c a (tsort s) $ > $ tty (tcons a c) b (tsort s) $ >
+  $ tty c (tpi a b) (tsort s) $;
+
+axiom ty_abs (c body a b: Term):
+  $ tty (tcons a c) body b $ > $ tty c (tabs body) (tpi a b) $;
+
+-- Application. The codomain of the function is a *type in the extended
+-- context*, so applying it must substitute the argument; `r` names the result
+-- and the premise says the substituted form converts to it. Naming `r`
+-- explicitly is what lets a generated derivation state the exact type it
+-- needs, instead of silently relying on the elaborator's conversion.
+axiom ty_app (c f x a b r: Term):
+  $ tty c f (tpi a b) $ > $ tty c x a $ > $ tdefeq (tsubst b x) r $ >
+  $ tty c (tapp f x) r $;
+
+-- ── Conversion of types ──────────────────────────────────────────────────
+
+axiom tdefeq_refl (a: Term): $ tdefeq a a $;
+axiom tdefeq_symm (a b: Term): $ tdefeq a b $ > $ tdefeq b a $;
+axiom tdefeq_trans (a b c: Term): $ tdefeq a b $ > $ tdefeq b c $ > $ tdefeq a c $;
+
+-- Conversion is used on terms, not just on their types: a term of a
+-- convertible type is a term of the other type.
+axiom ty_deq (c t a b: Term):
+  $ tty c t a $ > $ tdefeq a b $ > $ tty c t b $;
+
+-- The bridge to the project's actual decision procedure: a witnessed net
+-- isomorphism is a conversion. `cert` is the π packaged by
+-- `deltanet::unf::isomorphism_witness`; the kernel-side check of the pairing
+-- is `IsomorphismWitness::verifies`, so MM0 records the entailment and the
+-- certificate does the deciding.
+axiom tdefeq_iso (a b cert: Term):
+  $ valid_iso a b cert $ > $ tdefeq a b $;
