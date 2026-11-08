@@ -1012,3 +1012,50 @@ the `.mm1` it fails at the `=` after the statement. (3) Numerals are not
 accepted inside `$…$` — every universe/level/symbol id becomes a declared
 constant. (4) Rule parameters are solved by unification (`'(addcom)` style), so
 term arguments are *not* written into the proof; writing them is a syntax error.
+
+### 13.1 The body's derivation, not an assumption (2026-11-08)
+
+The artifact above assumes the body's typing: one axiom closes the statement, and
+that axiom is exactly what "translate the proof" means to remove. `--spine` on
+the same declaration derives it instead, and the difference is the translator's
+worklist in numbers:
+
+| | body assumed | `--spine` derivation |
+| --- | --- | --- |
+| rules applied | 3 | 22 (`ty_app` 10, `ty_var` 5, `ty_abs` 3, `ty_deq` 3, const-type 5, type-as-term 1) |
+| assumptions | 1 | 19 (5 constant types, 10 substitution, 3 conversion, 1 type-as-term) |
+| statement | 2,594 B | 9,641 B |
+| proof term | 23 B | 414 B (18 nested rule applications) |
+| verified binary | 7,240 B | 11,160 B |
+
+Both modes derive the *declared* type — the spine mode checks
+`derived == declared` on the encoded forms, and `mm0-rs` reports no `sorry` with
+`mm0-c` at exit 0. The 5 constant types are Mathlib's declarations (an axiom per
+constant is the honest form: a rule would hide the count). The interesting
+entries are the other 14:
+
+* **10 substitution obligations.** `ty_app` concludes at `r` from the premise
+  `tdefeq (tsubst b x) r`. `tsubst` is a term constructor, not a rewrite MM0 can
+  perform, so every application (β-redex) is one premise. These are the deltanet's
+  workload: discharging one means emitting a `valid_iso` witness for the two
+  concrete net encodings (`tdefeq_iso`), and *that* checker — deltanet normal
+  forms for cic-encoded terms — is the piece of the full translator that does not
+  exist yet. Everything upstream of it (export parsing, encoding, the derivation
+  itself) now runs.
+* **3 conversion obligations** from `ty_deq`, where the inferred type is
+  β-equivalent but not syntactically equal to the expected one.
+* **1 type-as-term.** A Π or a sort passed as an implicit argument needs
+  `ty_pi`'s universe, and universes are not stratified in this fragment; it is
+  assumed and counted rather than papered over.
+
+Two encoding facts this cost, worth stating because they are silent when wrong:
+the derivation must name variables the way the theory does — `tvar (tsucc tzero)`,
+not a flat index constant, or `ty_varS` cannot unify — and substituting under a
+binder must lift the argument and lower the indices above it, or `ty_app` fails
+with `t1 != tsucc` deep inside a nested application.
+
+There is also a cheaper shape available, recorded rather than taken: concluding
+each `ty_app` at `r := (tsubst b x)` makes every substitution premise
+`tdefeq_refl`, at the price of one *deferred* substitution nest, so 10 obligations
+become 1 large one at the boundary. That trades many small deltanet checks for a
+single big one, and is the natural knob once the checker exists.

@@ -15,9 +15,12 @@ What is derived, and what is assumed, are both counted and printed:
             because this prototype has no definitional-equality checker: that
             is the deltanet's job (`tdefeq_iso` in the theory).
 
-Usage: lean-typing-proof <export.ndjson> <decl-name-substring> <out-dir>
+Usage: lean-typing-proof <export.ndjson> <decl-name-substring> <out-dir> [--spine]
 
-Verified against mm0-rs + mm0-c on 2026-11-08: see docs/lean4mm0.md §13.
+Without `--spine` the body's typing is one axiom (the smallest artifact that
+closes the statement). With `--spine` the body's applications are derived with
+ty_var/ty_abs/ty_app, and the substitutions `ty_app` premise needs become the
+counted obligations a deltanet has to discharge.
 """
 from __future__ import annotations
 
@@ -54,9 +57,14 @@ SYMS: dict[str, str] = {}
 
 
 class Enc:
-    def __init__(self, ex):
+    def __init__(self, ex, succ_idx: bool = False):
         self.ex = ex
         self.levels: dict[int, str] = {}
+        # `cic_typing.mm0` names variables by *term* (`tvar (tsucc tzero)`), so
+        # weakening is the theory's `tsucc`; the statement corpus writes flat
+        # index constants instead (its artifacts have no weakening steps). The
+        # typing derivation needs the first form, the corpus the second.
+        self.succ_idx = succ_idx
 
     def sort(self, e) -> str:
         # A universe is a *term*: its exported level id becomes one constant, so
@@ -75,7 +83,13 @@ class Enc:
     def enc(self, eid: int) -> str:
         e = self.ex.exprs[eid]
         if "bvar" in e:
-            return f"(tvar {nat_name('idx' + str(e['bvar']))})"
+            k = e["bvar"]
+            if not self.succ_idx:
+                return f"(tvar {nat_name('idx' + str(k))})"
+            idx = "tzero"
+            for _ in range(k):
+                idx = f"(tsucc {idx})"
+            return f"(tvar {idx})"
         if "sort" in e:
             return self.sort(e)
         if "const" in e:
@@ -108,10 +122,14 @@ def spine(ex, eid):
 
 
 def main() -> int:
-    export_path, want, out_dir = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+    spine = "--spine" in sys.argv
+    export_path, want, out_dir = Path(argv[0]), argv[1], Path(argv[2])
     t0 = time.time()
     ex = l2m.Export(export_path)
-    enc = Enc(ex)
+    # The typing derivation writes variables as the theory names them (succ
+    # chains); the statement-only artifact keeps the corpus' flat index form.
+    enc = Enc(ex, succ_idx=spine)
     target = next(
         (nm for nm, (_k, rec, _i) in ex.decls.items() if want in nm and "value" in rec), None
     )
@@ -131,9 +149,12 @@ def main() -> int:
     # the value abstracts over is one `ty_abs`, whose premise is the typing of
     # the body in the extended context.
     binders: list[str] = []
+    binder_ty_eids: list[int] = []
     cur = rec["type"]
     while "forallE" in ex.exprs[cur]:
-        binders.append(enc.enc(ex.exprs[cur]["forallE"]["type"]))
+        bte = ex.exprs[cur]["forallE"]["type"]
+        binder_ty_eids.append(bte)
+        binders.append(enc.enc(bte))
         cur = ex.exprs[cur]["forallE"]["body"]
     body_ty = enc.enc(cur)
 
@@ -151,16 +172,28 @@ def main() -> int:
     body = enc.enc(lam_body(ex, rec["value"]))
     inner_ctx = ctxs[-1]
 
-    # The one assumption of this spine: the body's typing. A full translator
-    # replaces it with the derivation of the body's applications; the count of
-    # such assumptions is what the prototype reports.
-    axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
-    steps.append("assume body typing")
+    # Two modes. The default assumes the body's typing (one axiom). `--spine`
+    # builds the derivation instead (see Deriver), which turns the single
+    # assumption into one constant-type axiom per Mathlib constant used and one
+    # substitution obligation per application.
+    if spine:
+        d = Deriver(ex, enc, export_path)
+        base_proof = d.check(
+            lam_body(ex, rec["value"]), cur, list(reversed(binder_ty_eids))
+        )
+        axioms += d.axioms
+        steps += d.rules
+        const_axioms, subst_obligations = len(d.const_ax), len(d.beta_ax)
+    else:
+        axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
+        steps.append("assume body typing")
+        base_proof = "ax_body"
+        const_axioms, subst_obligations = 0, 0
 
     # Wrap the body back out through the binders: one `ty_abs` per binder,
     # nested, so the proof term is a single expression (MM0 nests proofs in
     # argument position exactly like terms).
-    proof = "ax_body"
+    proof = base_proof
     ty = body_ty
     lam = body
     for k in range(len(binders) - 1, -1, -1):
@@ -185,8 +218,10 @@ def main() -> int:
         f"-- Derived type  : {final_ty}",
         f"-- Declared type : {ty_str}",
         f"-- Derived form equals declared form syntactically: {ok}",
-        f"-- Rules applied : {len(steps)} ({', '.join(dict.fromkeys(s for s in steps if s != 'assume body typing'))})",
-        f"-- Assumptions   : {len(axioms)} (the body's typing; a full translator derives it)",
+        f"-- Rules applied : {len(steps)}"
+        f" ({', '.join(f'{r} ×{steps.count(r)}' for r in dict.fromkeys(steps))})",
+        f"-- Assumptions   : {len(axioms)} ({const_axioms} constant types, "
+        f"{subst_obligations} substitution obligations)"
     ]
     nat_decls = [f"term {n}: nat;" for n in NATS]
     out = []
@@ -214,12 +249,247 @@ def main() -> int:
     )
     print(f"target   : {target}")
     print(f"binders  : {len(binders)}")
-    print(f"steps    : {len(steps) - 1} ty_abs")
-    print(f"axioms   : {len(axioms)}")
+    print(f"rules    : {' · '.join(f'{r} ×{steps.count(r)}' for r in dict.fromkeys(steps))}")
+    print(f"axioms   : {len(axioms)} ({const_axioms} constant types, {subst_obligations} substitution)")
+    print(f"mode     : {'spine derivation' if spine else 'body typing assumed'}")
     print(f"nats     : {len(NATS)} · symbols: {len(SYMS)}")
     print(f"derived == declared: {ok}")
     print(f"wrote    : {stem}.mm0 ({stem.with_suffix('.mm0').stat().st_size} B) in {time.time()-t0:.1f} s")
     return 0
+
+
+# ── the spine derivation (`--spine`) ─────────────────────────────────────
+
+
+class Deriver:
+    """Build the derivation of a term's typing, bottom-up.
+
+    Every case of the λΠ fragment maps to one rule of `docs/cic_typing.mm0`:
+    `ty_var0`/`ty_varS` for a variable (one `ty_varS` per context entry between
+    it and the head), `ty_abs` for a lambda, `ty_app` for an application. The
+    types of the constants a proof term applies are not derivable here — they
+    are Mathlib's declarations — so each distinct (context, constant) pair is
+    one axiom, counted and named in the artifact.
+
+    `ty_app` concludes at `r` from the premise `tdefeq (tsubst b x) r`: the
+    substitution is a *term* of the theory, not something MM0 rewrites, so each
+    application contributes exactly one substitution obligation. Those
+    obligations are the workload the deltanet has to discharge (`tdefeq_iso`
+    over a `valid_iso` witness); they are emitted as axioms, counted, and
+    reported rather than hidden.
+    """
+
+    def __init__(self, ex, enc, path: Path):
+        self.ex = ex
+        self.enc = enc
+        self.path = path
+        self._ind_types: dict[str, int] | None = None
+        self.next_id = max(ex.exprs) + 1
+        self.axioms: list[str] = []
+        self.const_ax: dict[tuple[str, str], str] = {}
+        self.beta_ax: dict[tuple[str, str], str] = {}
+        self.oblig: list[str] = []
+        self.rules: list[str] = []
+
+    # ── export manipulation ──────────────────────────────────────────────
+    def mk(self, d: dict) -> int:
+        i = self.next_id
+        self.next_id += 1
+        self.ex.exprs[i] = d
+        return i
+
+    def ind_type(self, nm: str) -> int | None:
+        """The type of an inductive constant.
+
+        `Export` keeps inductives for their constructors and recursors but drops
+        the type of the inductive itself, which is exactly what a *type* applied
+        as a term needs (`Exists`, `Set`, ...). One pass over the export when it
+        is first asked for, keyed by the same flattened names.
+        """
+        if self._ind_types is None:
+            self._ind_types = {}
+            import json
+
+            for line in self.path.read_text().splitlines():
+                if '"inductive"' not in line:
+                    continue
+                d = json.loads(line)
+                for t in d["inductive"].get("types", []):
+                    if "type" in t:
+                        self._ind_types[self.ex.name(t["name"])] = t["type"]
+        return self._ind_types.get(nm)
+
+    def strip(self, eid: int) -> int:
+        while "mdata" in self.ex.exprs[eid]:
+            eid = self.ex.exprs[eid]["mdata"]["expr"]
+        return eid
+
+    def lift(self, eid: int, delta: int, cutoff: int = 0) -> int:
+        """Every `bvar` at or above `cutoff` shifted up by `delta`."""
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            return eid if e["bvar"] < cutoff else self.mk({"bvar": e["bvar"] + delta})
+        if "sort" in e or "const" in e or "proj" in e:
+            return eid
+        if "mdata" in e:
+            return self.mk({"mdata": {"expr": self.lift(e["mdata"]["expr"], delta, cutoff)}})
+        if "app" in e:
+            return self.mk({"app": {"fn": self.lift(e["app"]["fn"], delta, cutoff),
+                                    "arg": self.lift(e["app"]["arg"], delta, cutoff)}})
+        for k in ("forallE", "lam"):
+            if k in e:
+                d = dict(e[k])
+                d["type"] = self.lift(d["type"], delta, cutoff)
+                d["body"] = self.lift(d["body"], delta, cutoff + 1)
+                return self.mk({k: d})
+        raise SystemExit(f"lift: unhandled expression {sorted(e.keys())}")
+
+    def subst0(self, eid: int, arg: int, depth: int = 0) -> int:
+        """`eid[bvar depth := arg]`, with de Bruijn bookkeeping.
+
+        Removing the binder at `depth` moves every index above it down by one,
+        and inserting `arg` under a binder means lifting it first — the same two
+        steps Lean's `instantiate` is built from. Getting this wrong shows up as
+        a unification failure inside `ty_app`, not as a wrong type.
+        """
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            k = e["bvar"]
+            if k == depth:
+                return arg
+            return eid if k < depth else self.mk({"bvar": k - 1})
+        if "sort" in e or "const" in e or "proj" in e:
+            return eid
+        if "mdata" in e:
+            return self.mk({"mdata": {"expr": self.subst0(e["mdata"]["expr"], arg, depth)}})
+        if "app" in e:
+            return self.mk({"app": {"fn": self.subst0(e["app"]["fn"], arg, depth),
+                                    "arg": self.subst0(e["app"]["arg"], arg, depth)}})
+        for k in ("forallE", "lam"):
+            if k in e:
+                d = dict(e[k])
+                d["type"] = self.subst0(d["type"], arg, depth)
+                d["body"] = self.subst0(d["body"], self.lift(arg, 1), depth + 1)
+                return self.mk({k: d})
+        raise SystemExit(f"subst0: unhandled expression {sorted(e.keys())}")
+
+    # ── contexts ─────────────────────────────────────────────────────────
+    def ctx_str(self, env: list[int]) -> str:
+        """`env[0]` is the innermost binder, which is what `tvar tzero` names."""
+        out = "tnil"
+        for t in reversed(env):
+            out = f"(tcons {self.enc.enc(self.strip(t))} {out})"
+        return out
+
+    # ── the rules ────────────────────────────────────────────────────────
+    def var_proof(self, k: int) -> str:
+        p = "ty_var0"
+        for _ in range(k):
+            p = f"(ty_varS {p})"
+        return p
+
+    def infer(self, eid: int, env: list[int]):
+        """(type_eid, mm1 proof term) for a term whose type can be inferred."""
+        ex, enc = self.ex, self.enc
+        eid = self.strip(eid)
+        e = ex.exprs[eid]
+        if "bvar" in e:
+            k = e["bvar"]
+            if k >= len(env):
+                raise SystemExit(f"infer: bvar {k} is not bound by the {len(env)} context entries")
+            self.rules.append("ty_var")
+            return env[k], self.var_proof(k)
+        if "const" in e:
+            nm = ex.name(e["const"]["name"])
+            decl = ex.decls.get(nm)
+            raw_ty = decl[1]["type"] if decl is not None and "type" in decl[1] else None
+            if raw_ty is None:
+                raw_ty = self.ind_type(nm)
+            if raw_ty is None:
+                raise SystemExit(f"infer: no exported type for constant {nm}")
+            ty = self.strip(raw_ty)
+            ctx = self.ctx_str(env)
+            key = (ctx, enc.enc(eid))
+            if key not in self.const_ax:
+                ax = f"ax_const_{len(self.const_ax)}"
+                self.axioms.append(
+                    f"-- {nm}\naxiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.enc(ty)} $;"
+                )
+                self.const_ax[key] = ax
+            self.rules.append("const type")
+            return ty, self.const_ax[key]
+        if "letE" in e:
+            le = e["letE"]
+            eid = self.mk({"app": {"fn": self.mk({"lam": {"body": le["body"]}}),
+                                    "arg": le["value"]}})
+            return self.infer(eid, env)
+        if "app" in e:
+            fty, fproof = self.infer(e["app"]["fn"], env)
+            fte = ex.exprs[self.strip(fty)]
+            if "forallE" not in fte:
+                raise SystemExit(
+                    "infer: the function's type is not a Π, so it cannot be applied: "
+                    + enc.enc(self.strip(fty))[:160]
+                )
+            dom = fte["forallE"]["type"]
+            aproof = self.check(e["app"]["arg"], dom, env)
+            x = self.strip(e["app"]["arg"])
+            b = self.strip(fte["forallE"]["body"])
+            res = self.subst0(b, x)
+            b_s, x_s = enc.enc(b), enc.enc(x)
+            key = (b_s, x_s)
+            if key not in self.beta_ax:
+                ax = f"ax_subst_{len(self.beta_ax)}"
+                self.axioms.append(
+                    f"-- (λ{self.enc.enc(dom)}. _) applied to {x_s[:80]}\n"
+                    f"axiom {ax}: $ tdefeq (tsubst {b_s} {x_s}) {enc.enc(self.strip(res))} $;"
+                )
+                self.beta_ax[key] = ax
+                self.oblig.append(ax)
+            self.rules.append("ty_app")
+            return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
+        raise SystemExit(f"infer: unhandled expression {sorted(e.keys())}")
+
+    def check(self, eid: int, expected: int, env: list[int]) -> str:
+        """A proof term for `tty ctx eid expected`, in the given context."""
+        ex, enc = self.ex, self.enc
+        eid, expected = self.strip(eid), self.strip(expected)
+        e = ex.exprs[eid]
+        # A Π-type or a sort used *as a term* (an implicit type argument) has
+        # no rule in this fragment: `ty_pi` would need the universe of the Π,
+        # and universe levels are not stratified here (theory scope). It becomes
+        # an assumption, counted, instead of an unstated shortcut.
+        if "forallE" in e or "sort" in e:
+            ctx = self.ctx_str(env)
+            ax = f"ax_type_{len(self.axioms)}"
+            self.axioms.append(
+                f"-- a type used as a term (Π/sort): no rule in the fragment\n"
+                f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.enc(expected)} $;"
+            )
+            self.oblig.append(ax)
+            self.rules.append("type-as-term (assumed)")
+            return ax
+        if "lam" in e:
+            fe = ex.exprs[expected]
+            if "forallE" not in fe:
+                raise SystemExit("check: a lambda against a non-Π type")
+            inner = self.check(e["lam"]["body"], fe["forallE"]["body"],
+                               [fe["forallE"]["type"]] + env)
+            self.rules.append("ty_abs")
+            return f"(ty_abs {inner})"
+        ty, p = self.infer(eid, env)
+        if enc.enc(self.strip(ty)) == enc.enc(expected):
+            return p
+        ctx = self.ctx_str(env)
+        ax = f"ax_deq_{len(self.oblig)}"
+        self.axioms.append(
+            f"-- conversion: inferred {enc.enc(self.strip(ty))[:80]} vs expected "
+            f"{enc.enc(expected)[:80]}\n"
+            f"axiom {ax}: $ tdefeq {enc.enc(self.strip(ty))} {enc.enc(expected)} $;"
+        )
+        self.oblig.append(ax)
+        self.rules.append("ty_deq")
+        return f"(ty_deq {p} {ax})"
 
 
 def count_lam(ex, eid) -> int:
