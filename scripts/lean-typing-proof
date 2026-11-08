@@ -454,6 +454,15 @@ class Deriver:
         if "tsubst" in e:
             return {"tsubst": [self.to_tree(e["tsubst"]["b"], depth + 1),
                                self.to_tree(e["tsubst"]["x"], depth + 1)]}
+        if "proj" in e:
+            st = e["proj"]
+            return {"proj": [self.to_tree(st["struct"], depth + 1),
+                             {"nat": st.get("idx", 0)}]}
+        if "letE" in e:
+            le = e["letE"]
+            return {"app": [{"lam": [self.to_tree(le["type"], depth + 1),
+                                      self.to_tree(le["body"], depth + 1)]},
+                             self.to_tree(le["value"], depth + 1)]}
         if "mdata" in e:
             return self.to_tree(e["mdata"]["expr"], depth + 1)
         raise SystemExit(f"to_tree: unhandled expression {sorted(e.keys())}")
@@ -480,6 +489,12 @@ class Deriver:
         if "app" in e:
             return self.mk({"app": {"fn": self.lift(e["app"]["fn"], delta, cutoff),
                                     "arg": self.lift(e["app"]["arg"], delta, cutoff)}})
+        if "letE" in e:
+            d = dict(e["letE"])
+            d["type"] = self.lift(d["type"], delta, cutoff)
+            d["value"] = self.lift(d["value"], delta, cutoff)
+            d["body"] = self.lift(d["body"], delta, cutoff + 1)
+            return self.mk({"letE": d})
         for k in ("forallE", "lam"):
             if k in e:
                 d = dict(e[k])
@@ -514,6 +529,12 @@ class Deriver:
         if "app" in e:
             return self.mk({"app": {"fn": self.subst0(e["app"]["fn"], arg, depth),
                                     "arg": self.subst0(e["app"]["arg"], arg, depth)}})
+        if "letE" in e:
+            d = dict(e["letE"])
+            d["type"] = self.subst0(d["type"], arg, depth)
+            d["value"] = self.subst0(d["value"], arg, depth)
+            d["body"] = self.subst0(d["body"], self.lift(arg, 1), depth + 1)
+            return self.mk({"letE": d})
         for k in ("forallE", "lam"):
             if k in e:
                 d = dict(e[k])
@@ -547,6 +568,12 @@ class Deriver:
             )
         if "lam" in e:
             return self.max_free(e["lam"]["body"], depth + 1)
+        if "letE" in e:
+            return max(
+                self.max_free(e["letE"]["type"], depth),
+                self.max_free(e["letE"]["value"], depth),
+                self.max_free(e["letE"]["body"], depth + 1),
+            )
         if "tsubst" in e:
             return max(
                 self.max_free(e["tsubst"]["b"], depth + 1),
@@ -719,7 +746,11 @@ class Deriver:
             return self.lam_type(eid, env)
         if "letE" in e:
             le = e["letE"]
-            eid = self.mk({"app": {"fn": self.mk({"lam": {"body": le["body"]}}),
+            # The export carries the binding's declared type, which is the λ's
+            # domain; without it `lam_type` had nothing to decompose and the
+            # declaration died on a KeyError rather than on a proof obligation.
+            eid = self.mk({"app": {"fn": self.mk({"lam": {"type": le["type"],
+                                                       "body": le["body"]}}),
                                     "arg": le["value"]}})
             return self.infer(eid, env)
         if "app" in e:

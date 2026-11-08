@@ -104,8 +104,16 @@ def main() -> int:
         if "value" in rec and nm.startswith(prefix)
     ]
     scope.sort()
-    if limit:
-        scope = scope[:limit]
+    if limit and len(scope) > limit:
+        if "--stride" in sys.argv:
+            # A sample spread over the whole scope, not its first `limit` entries:
+            # an export lists its *dependencies* first and alphabetically, so
+            # `scope[:limit]` samples the same library definitions in every
+            # chapter and says nothing about the chapter's own proofs.
+            step = (len(scope) - 1) / (limit - 1) if limit > 1 else 0
+            scope = [scope[round(i * step)] for i in range(limit)]
+        else:
+            scope = scope[:limit]
     print(f"export : {export_path.name}")
     print(f"scope  : {len(scope)} declarations under {prefix}")
     print(f"mode   : spine derivation{', substitution deferred' if defer else ''}")

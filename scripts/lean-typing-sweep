@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Run the typing-derivation pipeline over every chapter export, and re-check it.
+
+A chapter export contains its *dependencies* as well as the declarations it
+introduces, and those dependencies carry their own namespaces (`AbsoluteValue.abs`
+appears in dozens of exports). A per-chapter total is therefore not a census: it
+double-counts library declarations. This sweep records one row per
+**declaration**, and de-duplicates by name, so the summary describes a population
+of distinct proofs rather than of repetitions.
+
+For each export it emits up to `--limit` declarations, verifies each with
+`mm0-rs` + `mm0-c` (through `lean-proof-scan`), and then re-derives every artifact
+that passed with `lean-typing-check` — the independent check that the derivation
+follows the theory's rules.
+
+Usage:
+  lean-typing-sweep <export-dir> <out.tsv> [--limit N] [--max-mb M] [--chapters N]
+
+`--max-mb` skips exports larger than M megabytes, `--chapters` bounds the run; the
+summary always states how many exports were covered and skipped.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+AVM = Path(__file__).resolve().parent.parent
+SCAN = AVM / "scripts" / "lean-proof-scan"
+CHECK = AVM / "scripts" / "lean-typing-check"
+
+#   pass  ✓ AbsoluteValue.abs [def] rules=52 assumptions=36
+PASS = re.compile(r"^\s+pass\s+✓\s+(\S+)\s+\[(\w+)\]\s+rules=(\d+)\s+assumptions=(\d+)")
+#   mm0-rs ✗ AbsoluteValue.add_le: ...
+FAIL = re.compile(r"^\s+(emit|mm0-rs|mm0-c)\s+✗\s+(\S+):\s*(.*)$")
+CLOSURES = re.compile(r"verified closures\s*:\s*(\d+)/(\d+)")
+
+
+def run(cmd, **kw):
+    env = dict(os.environ)
+    env["PATH"] = f"{os.path.expanduser('~/.local/bin')}:{env.get('PATH', '')}"
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, **kw)
+
+
+def arg(argv, flag, default):
+    for a in argv:
+        if a == flag and argv.index(a) + 1 < len(argv):
+            return int(argv[argv.index(a) + 1])
+        if a.startswith(flag + "="):
+            return int(a.split("=", 1)[1])
+    return default
+
+
+def one(export: Path, limit: int) -> list[dict]:
+    """Per-declaration rows for one export."""
+    out = Path(tempfile.mkdtemp(prefix="sweep-"))
+    rows: list[dict] = []
+    try:
+        s = run([str(SCAN), str(export), "", str(out), f"--limit={limit}",
+                 "--stride"], timeout=1800)
+        text = s.stdout + s.stderr
+        passed: dict[str, dict] = {}
+        for line in text.splitlines():
+            if m := PASS.match(line):
+                rows.append({"chapter": export.stem, "decl": m.group(1),
+                             "kind": m.group(2), "status": "closed",
+                             "rules": int(m.group(3)),
+                             "assumptions": int(m.group(4)),
+                             "selfcheck": "", "detail": ""})
+                passed[m.group(1)] = rows[-1]
+            elif m := FAIL.match(line):
+                rows.append({"chapter": export.stem, "decl": m.group(2),
+                             "kind": "", "status": m.group(1),
+                             "rules": 0, "assumptions": 0,
+                             "selfcheck": "", "detail": m.group(3)[:160]})
+        # Re-derive each artifact the checkers accepted, rule by rule.
+        for sub in sorted(p for p in out.iterdir() if p.is_dir()):
+            art = next((p for p in sub.glob("*.mm1")
+                        if not p.name.startswith("full")), None)
+            if art is None:
+                continue
+            c = run([str(CHECK), str(art)], timeout=600)
+            verdict = "re-derived" if c.returncode == 0 else "disagreed"
+            detail = ""
+            if c.returncode != 0:
+                for line in (c.stdout + c.stderr).splitlines():
+                    if line.strip().startswith("class"):
+                        detail = line.split(None, 1)[1].strip()
+                        break
+            # Match the artifact back to its declaration by directory name.
+            for row in rows:
+                if re.sub(r"[^A-Za-z0-9_]", "_", row["decl"].split(".")[-1]) \
+                        .strip("_") == sub.name or sub.name.endswith(
+                            re.sub(r"[^A-Za-z0-9_]", "_", row["decl"].split(".")[-1])):
+                    row["selfcheck"] = verdict
+                    if detail:
+                        row["detail"] = detail
+                    break
+        return rows
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if len(argv) < 2:
+        print(__doc__.strip().splitlines()[0])
+        return 2
+    export_dir, out_tsv = Path(argv[0]), Path(argv[1])
+    limit = arg(argv, "--limit", 4)
+    max_mb = arg(argv, "--max-mb", 60)
+    chapters = arg(argv, "--chapters", 0) or None
+
+    exports = sorted(export_dir.glob("*.ndjson"), key=lambda p: p.stat().st_size)
+    skipped = [p for p in exports if p.stat().st_size > max_mb * 1024 * 1024]
+    exports = [p for p in exports if p.stat().st_size <= max_mb * 1024 * 1024]
+    if chapters:
+        exports = exports[:chapters]
+
+    all_rows: list[dict] = []
+    with out_tsv.open("w") as fh:
+        fh.write("chapter\tdecl\tkind\tstatus\trules\tassumptions\tselfcheck\tdetail\n")
+        for i, export in enumerate(exports, 1):
+            rows = one(export, limit)
+            all_rows.extend(rows)
+            for r in rows:
+                fh.write("\t".join(str(r[k]) for k in (
+                    "chapter", "decl", "kind", "status", "rules", "assumptions",
+                    "selfcheck", "detail")) + "\n")
+            fh.flush()
+            closed = sum(1 for r in rows if r["status"] == "closed")
+            print(f"[{i}/{len(exports)}] {export.stem}: {closed}/{len(rows)} closed",
+                  flush=True)
+
+    # De-duplicate: the same library declaration arrives through many exports.
+    uniq: dict[str, dict] = {}
+    for r in all_rows:
+        uniq.setdefault(r["decl"], r)
+    distinct = list(uniq.values())
+    closed = [r for r in distinct if r["status"] == "closed"]
+    rederived = [r for r in closed if r["selfcheck"] == "re-derived"]
+    disagreed = [r for r in closed if r["selfcheck"] == "disagreed"]
+    unrechecked = [r for r in closed if r["selfcheck"] == ""]
+
+    print()
+    print(f"exports            : {len(exports)} covered, {len(skipped)} skipped "
+          f"(larger than {max_mb} MB)")
+    print(f"declarations seen  : {len(all_rows)} ({len(distinct)} distinct)")
+    print(f"closed by mm0      : {len(closed)}/{len(distinct)} distinct")
+    print(f"rules / assumptions: {sum(r['rules'] for r in closed)} / "
+          f"{sum(r['assumptions'] for r in closed)}")
+    print(f"re-derived         : {len(rederived)} "
+          f"({len(disagreed)} disagreed, {len(unrechecked)} without an artifact)")
+    by_status: dict[str, int] = {}
+    for r in distinct:
+        if r["status"] != "closed":
+            by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+    if by_status:
+        print("non-closures by stage:")
+        for k, n in sorted(by_status.items(), key=lambda kv: -kv[1]):
+            print(f"  {n:5d}  {k}")
+    classes: dict[str, int] = {}
+    for r in disagreed:
+        if r["detail"]:
+            classes[r["detail"]] = classes.get(r["detail"], 0) + 1
+    if classes:
+        print("self-check disagreement classes:")
+        for k, n in sorted(classes.items(), key=lambda kv: -kv[1])[:10]:
+            print(f"  {n:5d}  {k}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

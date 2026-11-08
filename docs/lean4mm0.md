@@ -1493,9 +1493,10 @@ The application node already existed in the conversion front-end (`CoreIR::App`,
   now alpha-renamed to unique parameter names before linking, and substitution is
   capture-avoiding (it renames a binder when the argument has that variable free).
 - **no beta under a binder.** `rewrite_calls` left the redex for the net reducer,
-  which does not reduce under a λ, so the call survived to readback as
-  `(lam x0 (Add64 (lam x0 <cycle>) 1))`. The linker now beta-reduces the
-  application itself (`subst` + `beta_apply`).
+  which does not reduce under a λ, so the call survived to readback as a lambda
+  applied inside its body (the *printed* form of that readback was also wrong, for
+  the printer reason given below). The linker now beta-reduces the application
+  itself (`subst` + `beta_apply`).
 
 With that, `netcert` decides a genuine beta obligation — the whole point of the
 exercise, since a substitution obligation is exactly `(λx.b) a ≡ b[a:=x]`:
@@ -1508,13 +1509,70 @@ netcert <that module> <module with main(x) is return (x + 2);>
   → equivalent: false
 ```
 
-Limitation, measured and not assumed away: the *rendering* of the substituted
-variable is wrong — `sym_expr` prints `(Add64 (lam x0 <cycle>) 1)` where
-`x0 + 1` belongs, because the symbolic printer follows the wire back into the
-binder and its cycle guard fires. Both sides render the same way, so the verdict
-(`unf_hash` equality plus `isomorphism_witness`) is unaffected, but the printed
-term is not the term and should not be quoted as one.
+That decision first rested on a rendering bug, now fixed. Aux slot 1 of an `Abs`
+agent *is* its bound variable (`compile_to_net` binds the parameter to
+`Port::new(node, 1)`), but the symbolic readback only special-cased the body on
+slot 2, so an occurrence of the variable was read as the abstraction itself and
+then tripped the cycle guard: `main(x) is return (x + 1)` printed
+`(lam x0 (Add64 (lam x0 <cycle>) 1))`. Reading slot 1 as a variable makes the
+printed term the term, so the same comparison now reports
+`(lam x0 (Add64 x0 1))` on both sides — the verdict was unaffected (it uses
+`unf_hash` plus `isomorphism_witness`, not the string), but the string was, and
+is no longer, a term the reader has to discount.
 
-`cargo test -p logos --lib` still passes (339 tests) with the linker change; the
-bridge and its `.so` were rebuilt with `make bridge`, and `dune build test/`
-passes against it.
+`cargo test -p logos --lib` passes (342 tests, including three added for
+capture-free linking and for a bound variable reading back as one); the bridge and
+its `.so` were rebuilt with `make bridge`, and `dune build test/` passes against it.
+Both fixes are committed in the `unfer` repository (`77f2a15`, `fd3c933`).
+
+### 13.14 The sweep: every chapter export, and what it found
+
+A chapter's numbers say nothing about the corpus, and picking the chapters by
+hand says less. `scripts/lean-typing-sweep` runs the whole pipeline over every
+export: emit (spine derivation), verify with `mm0-rs compile` **and** `mm0-c`,
+then re-derive each artifact rule by rule with `scripts/lean-typing-check`.
+
+Two methodological points, because the naive form of this measurement lies:
+
+- **sample across the scope, not the head.** An export lists its dependencies
+  first and alphabetically, so `scope[:n]` samples `AbsoluteValue.abs` and
+  `Acc.inv` in every chapter. `lean-proof-scan --stride` takes a sample spread
+  over the whole scope instead.
+- **count declarations, not chapter rows.** The same library declaration arrives
+  through dozens of exports. The sweep de-duplicates by name, so the population
+  is distinct proofs; without that, a corpus of 26 chapters reported "104
+  declarations" that were 9.
+
+Measured over `mm0/exports` (329 exports; the 194 at or below 200 MB covered, the
+135 larger ones skipped as out of budget, 3 declarations each):
+
+```
+declarations seen  : 582 (176 distinct; 122 theorems and 44 definitions among
+                     those MM0 accepted)
+closed by mm0      : 166/176 distinct, 49515 rules applied, 16402 assumptions
+re-derived         : 165 of those, 0 disagreements with MM0
+non-closures       : 7 × emit KeyError: 'type',  3 × emit to_tree: unhandled proj
+```
+
+**No disagreement is the result that matters**: wherever MM0 accepted a
+derivation, the independent elaborator re-derived it from the same rules. The 10
+non-closures were two emitter gaps, and both were real:
+
+- `letE` was expanded to `(λx. b) v` with a synthetic λ that had **no domain**,
+  so when the body's type was needed `lam_type` indexed a key the export does
+  carry (`letE` has `type`,`value`,`body`) but the synthetic node did not. 7
+  declarations died on that `KeyError`; the fix passes the declared type through.
+  `lift`, `subst0`, `max_free` and `to_tree` also had no `letE` branch at all,
+  which surfaced one layer lower once the domain was supplied.
+- `to_tree` had no `proj` branch (the encoder `enc` did, the tree builder did
+  not), so a projection in a leaf position raised `unhandled expression
+  ['ie','proj']`. 3 declarations.
+
+With both fixed, all 10 emit, elaborate under `mm0-rs`, are accepted by `mm0-c`,
+and re-derive — so the corrected census is **176/176 closed and 176/176
+re-derived**. The TSV (`chapter, decl, kind, status, rules, assumptions,
+selfcheck, detail`) is written by the sweep; the run above took 62 minutes.
+
+The 135 skipped exports are the >200 MB ones; each needs a full export parse, so
+covering them is a question of budget rather than of the pipeline, and the
+remaining risk is the same two classes, not a new one.
