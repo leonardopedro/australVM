@@ -295,6 +295,8 @@ mm0/pilot/ported_stmt.mm0
 /mm0/statements/BookProof.Ns.ChapterNsTimeIndependentFlow.mm1
 /mm0/statements/BookProof.Ode.ChapterOdeChartTransfer.mm0
 /mm0/statements/BookProof.Ode.ChapterOdeChartTransfer.mm1
+/mm0/statements/BookProof.OSReconstruction.L2Multiplier.mm0
+/mm0/statements/BookProof.OSReconstruction.L2Multiplier.mm1
 /mm0/statements/BookProof.Qg.ChapterQg3DCrossTermEsa.mm0
 /mm0/statements/BookProof.Qg.ChapterQg3DCrossTermEsa.mm1
 /mm0/statements/BookProof.Qg.ChapterQgAssembledTransfer.mm0
@@ -347,6 +349,8 @@ mm0/pilot/ported_stmt.mm0
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavine.mm1
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavineOnly.mm0
 /mm0/statements/BookProof.Toolbox.ChapterFarisLavineOnly.mm1
+/mm0/statements/BookProof.Toolbox.ChapterFermionFock.mm0
+/mm0/statements/BookProof.Toolbox.ChapterFermionFock.mm1
 /mm0/statements/BookProof.Toolbox.ChapterFockDifferingBasesEsa.mm0
 /mm0/statements/BookProof.Toolbox.ChapterFockDifferingBasesEsa.mm1
 /mm0/statements/BookProof.Toolbox.ChapterFockPairPerturbation.mm0
@@ -361,6 +365,8 @@ mm0/pilot/ported_stmt.mm0
 /mm0/statements/BookProof.Toolbox.ChapterHermiteLadderOrder.mm1
 /mm0/statements/BookProof.Toolbox.ChapterHermiteProductBasis.mm0
 /mm0/statements/BookProof.Toolbox.ChapterHermiteProductBasis.mm1
+/mm0/statements/BookProof.Toolbox.ChapterHermiteProductCore.mm0
+/mm0/statements/BookProof.Toolbox.ChapterHermiteProductCore.mm1
 /mm0/statements/BookProof.Toolbox.ChapterHermiteQuadraticEsa.mm0
 /mm0/statements/BookProof.Toolbox.ChapterHermiteQuadraticEsa.mm1
 /mm0/statements/BookProof.Toolbox.ChapterTensorCompleteness.mm0
