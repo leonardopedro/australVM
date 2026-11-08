@@ -177,11 +177,15 @@ def main() -> int:
     # abbreviation).
     n_lam = count_lam(ex, rec["value"])
 
-    ctx = "tnil"
+    # The context string is the Deriver's own (`ctx_str`): an entry is written
+    # in the scope outside its own binder, so at position `pos` it must be
+    # shifted by `pos + 1`. The Π-type text keeps the unshifted domains — those
+    # are read in the scope *outside* their binder, which is exactly theirs.
+    d_pre = Deriver(ex, enc, export_path, defer_subst=defer)
     ctxs = ["tnil"]
     for a in binders:
-        ctx = f"(tcons {a} {ctx})"
-        ctxs.append(ctx)
+        ctxs.append(f"(tcons {a} {ctxs[-1]})")
+    ctx = ctxs[-1]
 
     # Peel exactly as many λs as the type has Πs: any λ beyond that sits under
     # a type that unfolds to a Π, and `Deriver.check` handles it (with its own
@@ -199,7 +203,7 @@ def main() -> int:
     # assumption into one constant-type axiom per Mathlib constant used and one
     # substitution obligation per application.
     if spine:
-        d = Deriver(ex, enc, export_path, defer_subst=defer)
+        d = d_pre
         base_proof = d.check(body_eid, cur, list(reversed(binder_ty_eids)))
         axioms += d.axioms
         steps += d.rules
@@ -342,6 +346,7 @@ class Deriver:
         self.defer_subst = defer_subst
         self._ind_types: dict[str, int] | None = None
         self.next_id = max(ex.exprs) + 1
+        self.base_id = self.next_id
         self.axioms: list[str] = []
         self.const_ax: dict[tuple[str, str], str] = {}
         self.beta_ax: dict[tuple[str, str], str] = {}
@@ -487,8 +492,48 @@ class Deriver:
         raise SystemExit(f"subst0: unhandled expression {sorted(e.keys())}")
 
     # ── contexts ─────────────────────────────────────────────────────────
+    def max_free(self, eid: int, depth: int = 0) -> int:
+        """The largest de Bruijn index that is *free* in `eid` (-1 if closed).
+
+        Two types offered to a conversion must both be well scoped in the same
+        context, so their free-depth must agree. When it does not, the emitter
+        has built one of them in the wrong context — a bug that otherwise
+        surfaces as an MM0 unification failure megabytes into the artifact
+        (measured: a 3.7 MB derivation claiming `tvar 4` converts to `tvar 5`).
+        """
+        e = self.ex.exprs[self.strip(eid)]
+        if "bvar" in e:
+            return -1 if e["bvar"] < depth else e["bvar"] - depth
+        if "app" in e:
+            return max(
+                self.max_free(e["app"]["fn"], depth),
+                self.max_free(e["app"]["arg"], depth),
+            )
+        if "forallE" in e:
+            return max(
+                self.max_free(e["forallE"]["type"], depth),
+                self.max_free(e["forallE"]["body"], depth + 1),
+            )
+        if "lam" in e:
+            return self.max_free(e["lam"]["body"], depth + 1)
+        if "tsubst" in e:
+            return max(
+                self.max_free(e["tsubst"]["b"], depth + 1),
+                self.max_free(e["tsubst"]["x"], depth),
+            )
+        return -1
+
     def ctx_str(self, env: list[int]) -> str:
-        """`env[0]` is the innermost binder, which is what `tvar tzero` names."""
+        """`env[0]` is the innermost binder, which is what `tvar tzero` names.
+
+        An entry's type is written in the scope *outside* its own binder, so
+        placing entry `i` at context position `i` means shifting its free
+        variables up by `i + 1`: they referred to the entries outside it, which
+        now sit after it. Without that shift a type met in one context is
+        silently reused in a deeper one with the wrong indices — the mismatch
+        only appears much later, as an MM0 unification failure against a
+        correctly scoped type (`tvar 1` where `tvar 4` belonged).
+        """
         out = "tnil"
         for t in reversed(env):
             out = f"(tcons {self.enc.enc(self.strip(t))} {out})"
@@ -517,6 +562,10 @@ class Deriver:
             if k >= len(env):
                 raise SystemExit(f"infer: bvar {k} is not bound by the {len(env)} context entries")
             self.rules.append("ty_var")
+            # `ty_varS` repeats the entry's type verbatim, and the context is
+            # spine-relative (`ty_abs` forces `tcons`'s head to be the Π's
+            # domain), so the type a variable is *declared* with is what it is
+            # *used* at — no shift, by the theory's own design.
             return env[k], self.var_proof(k)
         if "const" in e:
             nm = ex.name(e["const"]["name"])
@@ -551,6 +600,11 @@ class Deriver:
                 self.const_ax[key] = ax
             self.rules.append("const type")
             return self.mk({"sym": "Nat"}), self.const_ax[key]
+        if "lam" in e:
+            # A λ in an *inference* position: the export carries its domain, so
+            # it is typed exactly like a λ under an unfolded Π (`lam_type`),
+            # and the Π it builds is what further rules see.
+            return self.lam_type(eid, env)
         if "letE" in e:
             le = e["letE"]
             eid = self.mk({"app": {"fn": self.mk({"lam": {"body": le["body"]}}),
@@ -600,6 +654,32 @@ class Deriver:
             self.rules.append("ty_app")
             return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
         raise SystemExit(f"infer: unhandled expression {sorted(e.keys())}")
+
+    def lam_type(self, eid: int, env: list[int]):
+        """(Π type eid, proof) for a λ spine whose innermost body is inferable.
+
+        Each level's domain comes from the export and is pushed onto the context
+        for that level only, so nested scopes stay correct; the innermost body
+        is inferred, which is what lets a λ under an unfolded expected type be
+        derived at all (there is no Π there to decompose).
+        """
+        le = self.ex.exprs[self.strip(eid)]["lam"]
+        dom = self.strip(le["type"])
+        body = self.strip(le["body"])
+        if self.max_free(dom) >= len(env):
+            raise SystemExit(
+                f"scoping bug: a λ's domain is out of scope ({len(env)} entries, "
+                f"domain depth {self.max_free(dom)})\n"
+                f"  λ node  [{eid} {sorted(self.ex.exprs[self.strip(eid)])}]"
+                f"{' synthetic' if eid >= self.base_id else ''}\n"
+                f"  domain  {self.enc.enc(dom)[:300]}"
+            )
+        if "lam" in self.ex.exprs[body]:
+            bty, inner = self.lam_type(body, [dom] + env)
+        else:
+            bty, inner = self.infer(body, [dom] + env, tail=True)
+        self.rules.append("ty_abs")
+        return self.mk({"forallE": {"type": dom, "body": bty}}), f"(ty_abs {inner})"
 
     def assume_leaf(self, eid: int, expected: int, env: list[int]) -> str:
         """One assumption for a subtree, at the type the context demands.
@@ -658,22 +738,12 @@ class Deriver:
                         "check: a lambda against a non-Π type, and the export "
                         "carries no domain for the lambda"
                     )
-                # A curried λ spine: each step carries its own domain, so peel
-                # them all and infer only the innermost body.
-                doms: list[int] = []
-                cur_e = eid
-                while "lam" in ex.exprs[self.strip(cur_e)]:
-                    le = ex.exprs[self.strip(cur_e)]["lam"]
-                    doms.append(self.strip(le["type"]))
-                    cur_e = le["body"]
-                bty, inner = self.infer(
-                    self.strip(cur_e), list(reversed(doms)) + env, tail=True
-                )
-                for d in reversed(doms):
-                    bty = self.mk({"forallE": {"type": d, "body": bty}})
-                    inner = f"(ty_abs {inner})"
-                    self.rules.append("ty_abs")
-                got = bty
+                # A curried λ spine, one binder at a time: each λ's domain is
+                # in scope of the binders outside it and of nothing else, so it
+                # must be pushed onto the context exactly when its binder is.
+                # Collecting the domains first and pushing them together shifts
+                # every index (measured: `tvar 4` where `tvar 1` belonged).
+                got, inner = self.lam_type(eid, env)
                 ax = f"ax_deq_{len(self.oblig)}"
                 self.axioms.append(
                     "-- conversion: the λ's own Π vs the unfolded expected type\n"

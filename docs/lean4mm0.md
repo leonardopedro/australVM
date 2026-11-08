@@ -1152,3 +1152,44 @@ The next step on this path is environmental: restore `dynamic-arctic` (or build
 with that feature's dependency removed) and the alt-ergo mirror, then run
 `netcert` on the dumped pairs and teach the emitter to prefer a certified
 `tdefeq_iso` over the counted axiom.
+
+### 13.5 A second chapter, and what the remaining failure class is
+
+`BookProof.BalabanRG` (scan of the first 12 declarations in the namespace, via
+`BookProof.BalabanRG.BlockOperator.ndjson` — a module's declarations land in the
+shared namespace, not under the file's name, so the prefix is the namespace):
+
+| | before | after |
+| --- | --- | --- |
+| verified closures | 4/12 | **8/12** |
+| failures on "expression form outside the fragment" | 7 | 0 |
+| failures on elaboration (`sorry`) | 1 | 4 |
+
+The seven closed at once when `infer` gained a λ case: the export carries each
+λ's domain, so a λ in an *inference* position is typed exactly like one under an
+unfolded Π (`lam_type`) instead of raising. The four that remain all fail the
+same way, and it is now one class rather than a mystery:
+
+```
+terms do not match: tapp != tabs
+terms do not match: tapp != tentity
+```
+
+MM0 unifies **types syntactically**, so a type written `(tapp (tabs …) v)` (the
+encoding of a `let`) and the same type written in its unfolded form are different
+terms to the elaborator — even though the theory has `tdefeq` precisely to bridge
+them. The emitter does not yet know where to insert that step, so a derivation
+that is correct about *what* converts still loses the elaboration. This is the
+same signature as §13.2's `eq_of_expectedUtility_ge_all` (`tapp != tabs`,
+`tvar != tpi`), now reproduced on four independent declarations, so the next fix
+is a single one: canonicalise the encoding (β-reduce `letE` when encoding) and/or
+insert a `ty_deq` at each place a type form changes shape across a binder.
+
+A related diagnosis worth keeping: the two attempts at that fix which *looked*
+right both made artifacts weaker or broke them, and the measurements said so —
+lifting context entries (the context is spine-relative: `ty_abs` forces `tcons`'s
+head to be the Π's domain, so an entry is used exactly as declared, and shifting
+it broke `_simp_1_1`, which had verified), and treating a scope mismatch as an
+assumption (it cost two structural steps on `_simp_1_1`, so a conversion that the
+elaborator accepts is better than a leaf assumption that hides it). Both were
+reverted. `max_free` stays as an origin check inside `lam_type`.

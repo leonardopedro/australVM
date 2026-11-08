@@ -87,6 +87,13 @@ def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
 def main() -> int:
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     defer = "--defer-subst" in sys.argv
+    # A module's declarations often live in a shared namespace (a `namespace`
+    # block), so the prefix is the namespace, not the file stem; `--limit` keeps
+    # a namespace-wide scan to a bounded proof of concept.
+    limit = 0
+    for a in sys.argv[1:]:
+        if a.startswith("--limit="):
+            limit = int(a.split("=", 1)[1])
     export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
     extra = ["--spine"] + (["--defer-subst"] if defer else [])
 
@@ -97,6 +104,8 @@ def main() -> int:
         if "value" in rec and nm.startswith(prefix)
     ]
     scope.sort()
+    if limit:
+        scope = scope[:limit]
     print(f"export : {export_path.name}")
     print(f"scope  : {len(scope)} declarations under {prefix}")
     print(f"mode   : spine derivation{', substitution deferred' if defer else ''}")
