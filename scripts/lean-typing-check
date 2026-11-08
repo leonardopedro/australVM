@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+"""Re-check an emitted typing derivation rule by rule, and say where it breaks.
+
+`docs/cic_typing.mm0` is a handful of rules; MM0 checks a derivation by
+unification, so when one fails it reports the *first* place two terms differ
+without naming the rule, the premise, or the term that is wrong. That is why the
+`tvar != tpi` class stayed unattributed: the message is true and useless.
+
+This tool is the miniature elaborator that attributes it. It reads the rules from
+the theory file itself (not a hand-copied table, so the two cannot drift), reads a
+derivation's proof term, and walks it bottom-up: unify each rule's *conclusion*
+with the goal, then check every premise against the corresponding subproof. The
+first premise that cannot be satisfied is reported with its path (`ty_app premise
+2`), the rule it belongs to, and the two terms that disagree — the attribution
+MM0 does not give.
+
+Interface:
+
+  lean-typing-check <artifact.mm1> [--theory <cic_typing.mm0>] [--first]
+
+Every `pub theorem` in the artifact is checked against its statement. A premise
+discharged by a local `axiom` (a leaf the emitter assumed, a constant's type, a
+conversion, a field fact) is reported as **assumed**, counted separately: the
+checker's job is to prove the *derivation* sound given those, not to invent them.
+
+Exit status: 0 when every theorem checks, 1 when one does not, 2 on a parse error.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+AVM = Path(__file__).resolve().parent.parent
+THEORY = AVM / "docs" / "cic_typing.mm0"
+
+TOKEN = re.compile(r"\(|\)|[^\s()]+")
+
+
+# ── terms ─────────────────────────────────────────────────────────────────
+def parse_term(tokens: list[str], i: int = 0):
+    """(term, next index) for MM0 formulas: a head symbol then its arguments.
+
+    MM0 writes `tty (tcons a c) (tvar tzero) a`: the head is a *bare* symbol and
+    the arguments follow, parenthesised or not, so a formula is not an
+    s-expression and `(f a)` is just `f` applied to `a`.
+    """
+    if i >= len(tokens):
+        raise SystemExit("parse: unexpected end of formula")
+    head_tok = tokens[i]
+    if head_tok == "(":
+        raise SystemExit(f"parse: formula starts with '(' at token {i}")
+    i += 1
+    args = []
+    while i < len(tokens) and tokens[i] != ")":
+        if tokens[i] == "(":
+            sub, i = parse_term(tokens, i + 1)
+            args.append(sub)
+        else:
+            args.append(tokens[i])
+            i += 1
+    if i < len(tokens) and tokens[i] == ")":
+        i += 1
+    return (head_tok, *args) if args else head_tok, i
+
+
+def parse_formula(text: str):
+    toks = TOKEN.findall(text)
+    if not toks:
+        raise SystemExit("parse: empty formula")
+    term, i = parse_term(toks, 0)
+    if i != len(toks):
+        raise SystemExit(f"parse: trailing tokens in {text!r}")
+    return term
+
+
+def parse_sexpr(tokens: list[str], i: int = 0):
+    """(proof, next index) for MM0 proof terms: `(ty_abs (ty_varS ty_var0))`.
+
+    A proof term *is* an s-expression (unlike a formula), because a rule
+    application is a parenthesised list whose head is the rule's name.
+    """
+    if i >= len(tokens):
+        raise SystemExit("parse: unexpected end of proof term")
+    if tokens[i] != "(":
+        return tokens[i], i + 1
+    i += 1
+    items = []
+    while i < len(tokens) and tokens[i] != ")":
+        sub, i = parse_sexpr(tokens, i)
+        items.append(sub)
+    if i >= len(tokens):
+        raise SystemExit("parse: unbalanced '(' in a proof term")
+    if not items:
+        raise SystemExit("parse: empty proof term")
+    return (items[0], *items[1:]) if len(items) > 1 else items[0], i + 1
+
+
+def show(t) -> str:
+    if isinstance(t, str):
+        return t
+    return "(" + " ".join(show(a) for a in t) + ")"
+
+
+def head(t) -> str:
+    return t[0] if isinstance(t, tuple) else t
+
+
+def walk(t, out: list[str]) -> None:
+    """Every head symbol in a term, for the failure class (tvar/tpi/tapp/...)."""
+    if isinstance(t, tuple):
+        out.append(t[0])
+        for a in t:
+            walk(a, out)
+    else:
+        out.append(t)
+
+
+# ── rules ─────────────────────────────────────────────────────────────────
+class Rule:
+    __slots__ = ("name", "vars", "premises", "concl")
+
+    def __init__(self, name, vars_, premises, concl):
+        self.name = name
+        self.vars = vars_          # in declaration order
+        self.premises = premises   # formulas
+        self.concl = concl
+
+    def __repr__(self):
+        return f"<{self.name}/{len(self.premises)}>"
+
+
+# A rule may bind its variables in several groups — `(c s a f: Term) (i: nat)`
+# is one axiom, not a malformed one with the second group dropped.
+AXIOM = re.compile(r"axiom\s+(\w+)\s*((?:\([^)]*\)\s*)*):\s*(.*?);", re.S)
+COMMENT = re.compile(r"--[^\n]*")
+FORMULA = re.compile(r"\$(.*?)\$", re.S)
+
+
+def strip_comments(text: str) -> str:
+    return COMMENT.sub("", text)
+
+
+def parse_vars(spec: str | None) -> list[str]:
+    """Rule variables, renamed `?x` so a variant of the rule's own binder cannot
+    be confused with a name in the derivation being checked."""
+    if not spec:
+        return []
+    names: list[str] = []
+    # Groups are comma-joined, not concatenated: `... (c s a f: Term) (i: nat)`
+    # otherwise parses its last name and the second sort into one word (`Termi`).
+    body = ",".join(re.findall(r"\(([^)]*)\)", spec))
+    for group in body.split(","):
+        if ":" not in group:
+            raise SystemExit(f"parse: variable group without a sort: {group!r}")
+        lhs, _sort = group.split(":", 1)
+        names.extend("?" + n for n in lhs.split())
+    return names
+
+
+def rename(t, names: dict[str, str]):
+    if isinstance(t, str):
+        return names.get(t, t)
+    return (t[0], *(rename(a, names) for a in t[1:]))
+
+
+def load_theory(path: Path) -> dict[str, Rule]:
+    text = strip_comments(path.read_text())
+    rules: dict[str, Rule] = {}
+    for m in AXIOM.finditer(text):
+        name, vspec, body = m.group(1), m.group(2), m.group(3)
+        formulas = [parse_formula(f) for f in FORMULA.findall(body)]
+        if not formulas:
+            continue
+        vars_ = parse_vars(vspec)
+        # The binders are renamed inside the formulas too, not just in the
+        # variable list: a rule's `c` and a declaration's `c` are different
+        # symbols, and leaving one of them bare made every rule look unappliable.
+        names = {v[1:]: v for v in vars_}
+        formulas = [rename(f, names) for f in formulas]
+        rules[name] = Rule(name, vars_, formulas[:-1], formulas[-1])
+    if not rules:
+        raise SystemExit(f"theory: no rules parsed from {path}")
+    return rules
+
+
+# ── unification ───────────────────────────────────────────────────────────
+class Mismatch(Exception):
+    def __init__(self, got, expected):
+        self.got = got
+        self.expected = expected
+        super().__init__(f"{show(got)} vs {show(expected)}")
+
+
+def resolve(t, subst):
+    if isinstance(t, str):
+        return subst.get(t, t)
+    return (t[0], *(resolve(a, subst) for a in t[1:]))
+
+
+def unify(pattern, actual, subst) -> bool:
+    """Symmetric first-order unification over `?`-variables.
+
+    Directional matching is not enough for this theory: `ty_deq`'s first premise
+    `tty c t a` has a variable the *conclusion* does not mention, so its value can
+    only come from the subproof (`ax_deq_0` or a rule conclusion). Binding an
+    unknown on either side is what lets the checker read it off.
+    """
+    def bind(var: str, val):
+        # Two unbound variables must not point at each other (`?x := ?y` then
+        # `?y := ?x` recursed forever); the smaller name is the representative.
+        if isinstance(val, str) and val.startswith("?"):
+            if val == var:
+                return True
+            keep, drop = sorted((var, val))
+            subst[drop] = keep
+            return True
+        subst[var] = val
+        return True
+
+    if isinstance(pattern, str):
+        if pattern.startswith("?"):
+            if pattern in subst:
+                return unify(subst[pattern], actual, subst)
+            return bind(pattern, actual)
+        if isinstance(actual, str) and actual.startswith("?"):
+            if actual in subst:
+                return unify(pattern, subst[actual], subst)
+            return bind(actual, pattern)
+        if pattern != actual:
+            raise Mismatch(pattern, actual)
+        return True
+    if isinstance(actual, str):
+        if actual.startswith("?"):
+            if actual in subst:
+                return unify(pattern, subst[actual], subst)
+            return bind(actual, pattern)
+        raise Mismatch(instantiate(pattern, subst), actual)
+    if pattern[0] != actual[0] or len(pattern) != len(actual):
+        raise Mismatch(instantiate(pattern, subst), actual)
+    for p, a in zip(pattern[1:], actual[1:]):
+        unify(p, a, subst)
+    return True
+
+
+VARPOOL: set[str] = set()
+
+
+def instantiate(t, subst):
+    if isinstance(t, str):
+        return subst.get(t, t)
+    return (t[0], *(instantiate(a, subst) for a in t[1:]))
+
+
+def unknowns(t) -> set[str]:
+    out: set[str] = set()
+
+    def go(x):
+        if isinstance(x, str):
+            if x.startswith("?"):
+                out.add(x)
+        else:
+            for a in x:
+                go(a)
+    go(t)
+    return out
+
+
+# ── artifacts ─────────────────────────────────────────────────────────────
+# Names carry Lean's primes (`thm_add_le'`), so `\w` alone is not enough.
+THEOREM = re.compile(r"pub\s+theorem\s+([\w']+)\s*:\s*(.*?);", re.S)
+ART_AXIOM = re.compile(r"axiom\s+([\w']+)\s*:\s*(.*?);", re.S)
+PROOF = re.compile(r"=\s*'(.*)$", re.S)
+
+
+def load_artifact(path: Path):
+    text = strip_comments(path.read_text())
+    facts: dict[str, tuple] = {}
+    for m in ART_AXIOM.finditer(text):
+        forms = FORMULA.findall(m.group(2))
+        if forms:
+            facts[m.group(1)] = parse_formula(forms[0])
+    theorems = []
+    for m in THEOREM.finditer(text):
+        stmt_body = m.group(2)
+        forms = FORMULA.findall(stmt_body)
+        if not forms:
+            continue
+        proof_m = PROOF.search(stmt_body)
+        if not proof_m:
+            continue
+        proof_text = proof_m.group(1).rstrip()
+        theorems.append((m.group(1), parse_formula(forms[0]),
+                         parse_sexpr(TOKEN.findall(proof_text))[0]))
+    return facts, theorems
+
+
+class Checker:
+    def __init__(self, rules: dict[str, Rule], facts: dict[str, tuple]):
+        self.rules = rules
+        self.facts = facts
+        VARPOOL.clear()
+        for r in rules.values():
+            VARPOOL.update(r.vars)
+        self.assumed: list[str] = []
+        self.applied: list[str] = []
+        self.subst: dict[str, object] = {}
+        self.serial = 0
+        self.failure: tuple[list[str], str, object, object] | None = None
+
+    def freshen(self, rule: Rule):
+        """The rule with per-application variable names (`?7_?a`).
+
+        Two instances of `ty_abs` in one derivation both use `?a`; sharing one
+        substitution across a whole theorem (which is what lets a binding found
+        in premise 1 be used by premise 2) would confuse them without this.
+        """
+        self.serial += 1
+        tag = f"?{self.serial}_"
+        names = {v: tag + v[1:] for v in rule.vars}
+        return ([rename(p, names) for p in rule.premises],
+                rename(rule.concl, names))
+
+    def fail(self, path, why, got=None, expected=None):
+        if self.failure is None:
+            self.failure = (list(path), why, got, expected)
+        raise Mismatch(got, expected) if got is not None else StopIteration(why)
+
+    def statement_of(self, proof):
+        """The statement a *named* proof discharges, if it is a local fact."""
+        if isinstance(proof, str) and proof in self.facts:
+            return self.facts[proof]
+        return None
+
+    def check_unknown_vars(self, want, arg, subst):
+        """Fill the premise's leftover variables from the subproof's own shape.
+
+        `ty_deq`'s `a`, `ty_varS`'s `b` and friends appear in no other premise,
+        so the value must be read off the subproof: a local fact states it
+        outright, and a rule application determines it by its conclusion.
+        """
+        stmt = self.statement_of(arg)
+        candidates = []
+        if stmt is not None:
+            candidates.append(stmt)
+        elif isinstance(arg, tuple):
+            inner = self.rules.get(arg[0])
+            if inner is not None:
+                candidates.append(inner.concl)
+        for cand in candidates:
+            try:
+                unify(want, cand, subst)
+                return instantiate(want, subst)
+            except Mismatch:
+                continue
+        return want
+
+    def check(self, goal, proof, path):
+        if self.failure is not None:
+            return
+        goal = instantiate(goal, self.subst)
+        if isinstance(proof, str):
+            # A rule with no premises is applied by naming it (`ty_var0`), which
+            # is the same spelling as a local fact — so it must be looked up in
+            # the theory before being treated as an assumption.
+            bare = self.rules.get(proof)
+            if bare is not None and not bare.premises:
+                prem, concl = self.freshen(bare)
+                try:
+                    unify(concl, goal, self.subst)
+                except Mismatch:
+                    self.fail(path, f"`{proof}` cannot conclude the goal",
+                              concl, goal)
+                    return
+                self.applied.append(proof)
+                return
+            stmt = self.statement_of(proof)
+            if stmt is None:
+                self.fail(path, f"`{proof}` is neither a rule application nor a "
+                                f"declared fact")
+                return
+            try:
+                unify(stmt, goal, self.subst)
+            except Mismatch:
+                self.fail(path, f"{proof} proves a different statement",
+                          stmt, goal)
+                return
+            self.assumed.append(proof)
+            return
+
+        rule = self.rules.get(proof[0])
+        if rule is None:
+            self.fail(path, f"`{proof[0]}` is not a rule of the theory")
+            return
+        premises, concl = self.freshen(rule)
+        self.applied.append(rule.name)
+        try:
+            unify(concl, goal, self.subst)
+        except Mismatch:
+            self.fail(path, f"`{rule.name}` cannot conclude the goal",
+                      instantiate(concl, self.subst), goal)
+            return
+        args = proof[1:]
+        if len(args) != len(premises):
+            self.fail(path, f"`{rule.name}` has {len(premises)} premises "
+                            f"but {len(args)} subproofs")
+            return
+        for i, (prem, arg) in enumerate(zip(premises, args), 1):
+            self.check(instantiate(prem, self.subst), arg,
+                       path + [f"{rule.name} premise {i}"])
+            if self.failure is not None:
+                return
+
+
+# ── reporting ─────────────────────────────────────────────────────────────
+def first_diff(a, b, path="") -> tuple[str, str, str]:
+    """Where two terms first diverge: (path, left head, right head).
+
+    A whole-term head dump is unreadable on a 3 MB context; the *first* place the
+    two disagree is the attribution this tool exists to produce — `tvar != tpi`
+    is exactly `left= tvar, right = tpi` at some path.
+    """
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        if a[0] != b[0]:
+            return (f"{path}:{a[0]}" if path else a[0], a[0], b[0])
+        for i, (x, y) in enumerate(zip(a[1:], b[1:]), 1):
+            got = first_diff(x, y, f"{path}/{a[0]}[{i}]")
+            if got[1] != got[2]:
+                return got
+        return (path or a[0], a[0], b[0])
+    if isinstance(a, tuple) or isinstance(b, tuple):
+        return (path or "term", show(a), show(b))
+    if a == b:
+        return (path, a, a)
+    return (path or "term", a, b)
+
+
+def failure_class(got, expected) -> str:
+    if got is None or expected is None:
+        return "?"
+    _where, left, right = first_diff(got, expected)
+    if left == right:
+        return f"{left} (structure differs)"
+    return f"{left} != {right}"
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if not argv:
+        print(__doc__.strip().splitlines()[0])
+        return 2
+    artifact = Path(argv[0])
+    theory = THEORY
+    if "--theory" in argv:
+        theory = Path(argv[argv.index("--theory") + 1])
+    first = "--first" in argv
+
+    rules = load_theory(theory)
+    facts, theorems = load_artifact(artifact)
+    if not theorems:
+        raise SystemExit(f"{artifact}: no `pub theorem` to check "
+                         f"(is this an artifact with a derivation?)")
+
+    ok = 0
+    fails = 0
+    classes: dict[str, int] = {}
+    for name, goal, proof in theorems:
+        c = Checker(rules, facts)
+        try:
+            c.check(goal, proof, [name])
+        except (Mismatch, StopIteration):
+            pass
+        if c.failure is None:
+            ok += 1
+            if not first:
+                print(f"  ok    {name}: {len(c.applied)} rule step(s), "
+                      f"{len(c.assumed)} assumed premise(s)")
+        else:
+            fails += 1
+            path, why, got, expected = c.failure
+            klass = failure_class(got, expected)
+            classes[klass] = classes.get(klass, 0) + 1
+            print(f"  FAIL  {name}")
+            print(f"        at      {'.'.join(path)}")
+            if got is not None and expected is not None:
+                print(f"        differs {first_diff(got, expected)[0]}")
+            print(f"        reason  {why}")
+            if got is not None:
+                print(f"        got     {show(got)[:200]}")
+                print(f"        wanted  {show(expected)[:200]}")
+            print(f"        class   {klass}")
+            if first:
+                break
+
+    print(f"checked {len(theorems)} theorem(s): {ok} re-derived, {fails} broken")
+    for klass, n in sorted(classes.items(), key=lambda kv: -kv[1]):
+        print(f"    {n}  {klass}")
+    return 0 if fails == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

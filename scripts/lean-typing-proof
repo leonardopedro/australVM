@@ -117,6 +117,9 @@ class Enc:
             # `0` and `1` stay distinct without pretending the theory has Nat
             # computation (it does not; that is the deltanet's arithmetic).
             return self.sym(f"nat{e['natVal']}")
+        if "strVal" in e:
+            # Same treatment for a string literal: opaque, distinct per content.
+            return self.sym(f"str{e['strVal']}")
         if "sym" in e:  # a synthetic constant this emitter invented (see `Nat`)
             return self.sym(e["sym"])
         if "tsubst" in e:  # a *deferred* substitution (see Deriver.defer_subst)
@@ -272,7 +275,12 @@ def main() -> int:
     out += ["", "-- ── assumptions ──"]
     out += axioms
     out += ["", "-- ── the derivation ──"]
-    statement = f"theorem thm_{target.split('.')[-1]}: $ tty {goal_ctx} {goal_term} {goal_ty} $"
+    # The name is sanitised: MM0's lexer rejects Lean's trailing prime
+    # (`thm_add_le'` was a parse error, so the artifact never reached the proof
+    # at all and the run was counted as a failure of the derivation).
+    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
+                                 for c in target.split(".")[-1])
+    statement = f"theorem {thm_name}: $ tty {goal_ctx} {goal_term} {goal_ty} $"
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = out_dir / f"{target.split('.')[-1]}_typing"
     # `.mm0` carries the statement, `.mm1` the statement plus its proof: MM0
@@ -347,6 +355,7 @@ class Deriver:
         self.const_ax: dict[tuple[str, str], str] = {}
         self.beta_ax: dict[tuple[str, str], str] = {}
         self.field_ax: dict[tuple[str, int], str] = {}
+        self._ind_decls: dict[str, dict] | None = None
         self.oblig: list[str] = []
         self.oblig_tree: list[dict] = []
         self.leaf_ax: list[str] = []
@@ -358,6 +367,28 @@ class Deriver:
         self.next_id += 1
         self.ex.exprs[i] = d
         return i
+
+    def ind_decl(self, nm: str) -> dict | None:
+        """The inductive record for `nm`, from the export's `inductive` blocks.
+
+        `Export.decls` cannot serve this: the format's inductive record has no
+        top-level `"name"`, so the kind-indexed registration loop skips it and
+        only the *constructors* and *recursors* it lists are registered
+        separately (`ex.ctors`/`ex.recs`). A projection needs the record itself —
+        its single type and its constructor's binder spine — so one pass over the
+        export when first asked for, keyed by qualified name.
+        """
+        if self._ind_decls is None:
+            self._ind_decls = {}
+            import json
+
+            for line in self.path.read_text().splitlines():
+                if '"inductive"' not in line:
+                    continue
+                ind = json.loads(line)["inductive"]
+                for t in ind.get("types", []):
+                    self._ind_decls[self.ex.name(t["name"])] = ind
+        return self._ind_decls.get(nm)
 
     def ind_type(self, nm: str) -> int | None:
         """The type of an inductive constant.
@@ -407,6 +438,8 @@ class Deriver:
             return {"sort": e["sort"]}
         if "natVal" in e:
             return {"nat": e["natVal"]}
+        if "strVal" in e:
+            return {"str": e["strVal"]}
         if "sym" in e:
             return {"const": e["sym"]}
         if "app" in e:
@@ -435,7 +468,8 @@ class Deriver:
         e = self.ex.exprs[eid]
         if "bvar" in e:
             return eid if e["bvar"] < cutoff else self.mk({"bvar": e["bvar"] + delta})
-        if "sort" in e or "const" in e or "proj" in e or "natVal" in e or "sym" in e:
+        if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
+                or "strVal" in e or "sym" in e):
             return eid
         if "tsubst" in e:
             return self.mk({"tsubst": {
@@ -469,7 +503,7 @@ class Deriver:
                 return arg
             return eid if k < depth else self.mk({"bvar": k - 1})
         if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
-                or "sym" in e):
+                or "strVal" in e or "sym" in e):
             return eid
         if "tsubst" in e:
             return self.mk({"tsubst": {
@@ -543,17 +577,21 @@ class Deriver:
             p = f"(ty_varS {p})"
         return p
 
-    def field_type(self, type_name: str, idx: int):
+    def field_type(self, type_name: str, idx: int, args: list[int] | None = None):
         """The field type a projection reads, taken from the constructor type.
 
-        `Π params. Π fields. S params` — with no parameters the field domain is
-        used as-is (and it is closed, so no shifting is involved). Parameterised
-        structures would need the fields instantiated at the structure's
-        arguments; this returns None for them, which the caller turns into the
-        counted leaf it was before.
+        `Π params. Π fields. S params`: peeling `numParams + idx` binders leaves
+        the field's domain under the parameter binders, so it must be
+        instantiated at the structure's own arguments before it can type
+        anything in the current scope. Substituting innermost-first (`bvar 0` is
+        the last parameter) is what `ty_app`'s substitution does, and `subst0`
+        shifts the remaining indices down as each binder goes away.
+
+        Returns None when the declaration does not determine the field — a
+        recursive or multi-constructor inductive, or a structure type reached as
+        a bare variable, where no arguments are available to instantiate with.
         """
-        decl = self.ex.decls.get(type_name)
-        ind = decl[1].get("inductive") if decl is not None else None
+        ind = self.ind_decl(type_name)
         if not ind:
             return None
         types = ind.get("types") or []
@@ -561,12 +599,14 @@ class Deriver:
         if len(types) != 1 or len(ctors) != 1 or types[0].get("isRec"):
             return None
         ctor = ctors[0]
-        if ctor.get("numParams"):
-            return None
+        nparams = ctor.get("numParams") or 0
+        if nparams:
+            if args is None or len(args) < nparams:
+                return None
         if idx >= ctor.get("numFields", 0):
             return None
         cur = self.strip(ctor["type"])
-        for _ in range(idx):
+        for _ in range(nparams + idx):
             e = self.ex.exprs.get(cur, {})
             if "forallE" not in e:
                 return None
@@ -574,7 +614,10 @@ class Deriver:
         e = self.ex.exprs.get(cur, {})
         if "forallE" not in e:
             return None
-        return self.strip(e["forallE"]["type"])
+        fld = self.strip(e["forallE"]["type"])
+        for a in reversed(args[:nparams] if nparams else []):
+            fld = self.subst0(fld, a)
+        return self.strip(fld)
 
     def infer(self, eid: int, env: list[int], tail: bool = False):
         """(type_eid, mm1 proof term) for a term whose type can be inferred.
@@ -594,11 +637,11 @@ class Deriver:
             # not from the use site.
             st = e["proj"]
             sty, sproof = self.infer(st["struct"], env, tail=False)
-            fld = self.field_type(self.ex.name(st["typeName"]), st["idx"])
+            # The structure's type carries the arguments a parameterised field
+            # must be instantiated at: `S a0 a1` gives [a0, a1] for `S p0 p1`.
+            _, sargs = spine(self.ex, self.strip(sty))
+            fld = self.field_type(self.ex.name(st["typeName"]), st["idx"], sargs)
             if fld is None:
-                # Parameterised structures (and anything but a single-constructor
-                # inductive) need the field type at the structure's *arguments*,
-                # which this fragment cannot substitute yet.
                 raise Unfoldable(eid)
             key = (enc.enc(sty), st["idx"])
             if key not in self.field_ax:
@@ -655,6 +698,20 @@ class Deriver:
                 self.const_ax[key] = ax
             self.rules.append("const type")
             return self.mk({"sym": "Nat"}), self.const_ax[key]
+        if "strVal" in e:
+            # A string literal: like a numeral, an opaque leaf whose type is the
+            # opaque `String` symbol.
+            ctx = self.ctx_str(env)
+            key = (ctx, enc.enc(eid))
+            if key not in self.const_ax:
+                ax = f"ax_const_{len(self.const_ax)}"
+                self.axioms.append(
+                    f"-- String literal {e['strVal']!r}\n"
+                    f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.sym('String')} $;"
+                )
+                self.const_ax[key] = ax
+            self.rules.append("const type")
+            return self.mk({"sym": "String"}), self.const_ax[key]
         if "lam" in e:
             # A λ in an *inference* position: the export carries its domain, so
             # it is typed exactly like a λ under an unfolded Π (`lam_type`),
@@ -803,7 +860,11 @@ class Deriver:
                 # every index (measured: `tvar 4` where `tvar 1` belonged).
                 got, inner = self.lam_type(eid, env)
                 ax = self.deq_ax(self.strip(got), expected)
-                return f"(ty_deq (ty_abs {inner}) {ax})"
+                # `lam_type` already wrapped this λ in its own `ty_abs`, so
+                # adding one here abstracted a second time: the premise then sat
+                # one context entry deeper than the term's own scope (measured:
+                # a 2-λ term with 3 `ty_abs`, refused as an extra context entry).
+                return f"(ty_deq {inner} {ax})"
             inner = self.check(e["lam"]["body"], fe["forallE"]["body"],
                                [fe["forallE"]["type"]] + env, tail=tail)
             self.rules.append("ty_abs")

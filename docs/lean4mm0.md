@@ -1337,24 +1337,34 @@ conclude `tty c (tproj s i) F`. The `tfield` instance is emitted once per
 (structure type, index) *from the declaration*, so it records a structure's field
 layout rather than assuming a use site's typing.
 
-Measured on `BookProof.OSReconstruction` (8 declarations, `--spine`):
-**171 rules (was 166), 106 assumptions (unchanged), 8/8 verified**.
-`OSState.pos` goes 2 → 3 rules, `LinearFunctional.map_smul` and `toFun` 1 → 2,
-each now deriving the projection and keeping the field fact as an axiom instead
-of assuming the whole term. Parameterised structures (`numParams > 0`) still fall
-back to the counted leaf: their field type must be instantiated at the
-structure's arguments and this fragment has no substitution at that position yet.
+**Correction (the numbers first reported here were wrong).** The rule as
+originally written could never fire: `Export.decls` stores an inductive's record
+*itself*, not a wrapper around it, so the lookup `decl[1].get("inductive")` was
+always `None` and every projection fell back to the counted leaf. The "171 rules
+(was 166)" below was therefore not about projections at all. Two further defects
+kept them dead once the lookup was fixed, and both are now fixed and measured:
+
+- the field type of a *parameterised* structure (`Setoid p`, `PProd p q`) needs
+  the arguments of the structure type substituted for the constructor's parameter
+  binders, innermost first (`subst0`), read off the applied type's spine;
+- the emitter's `Enc` had no case for a string literal (`strVal`), which aborted
+  the declarations that use one (`AEMeasurable`).
+
+Measured after the fixes (`--spine`, both checkers): `BookProof.OSReconstruction`
+**8/8 closures, 1390 rules, 811 assumptions**; `BookProof.Textbook.ChapterF8`
+**8/8, 1023 rules**; `BookProof.ChapterNoBestPrior` **6/6, 967 rules**;
+`BookProof.Sirk.ChapterKrylovShiftSpan` **6/6, 102 rules**. A single parameterised
+projection now derives and checks end to end — `Setoid.r` emits
+`tfield (Setoid α) 0 (α → α → Prop)` from the constructor type and its artifact is
+accepted by `mm0-rs` and `mm0-c`.
 
 **Context conversion.** `tctx_deq` with `tctx_deq_nil`/`tctx_deq_cons` and
 `ty_ctx` now state that entrywise-convertible contexts are interchangeable —
 the precondition for the `tvar != tpi` class, which is otherwise unstatable.
-It is deliberately **not wired** into the emitter, and the class is therefore not
-closed: the emitter builds exactly one context per proof, so it never has two
-contexts to relate, and a `ty_ctx` wrapper would be decoration. The mismatch
-MM0 reports is between the context the *rule* instantiates and the one my proof
-was built with; attributing it needs a self-check of the emitted derivations
-(a miniature elaborator over the five rules in use), which does not exist yet.
-I am not claiming the rule fixes that class — only that the theory can now say it.
+It is deliberately **not wired** into the emitter: the emitter builds exactly one
+context per proof, so a `ty_ctx` wrapper would relate nothing. The mismatch MM0
+reports is between the context a *rule* instantiates and the one the proof was
+built in, and §13.12 is the tool that now attributes it.
 
 **On the liquid-types route** (asked as an alternative): `PLAN_liquid_types.md`
 says the status is "Done so far: this plan, `docs/LIQUID.md` (L0 spec), and the
@@ -1365,6 +1375,13 @@ superset of this translator's work rather than a shorter path to the same
 obligations, and it would not touch the netcert front-end language gap in §13.8.
 
 ### 13.10 The term-to-CoreIR encoding: the front-end has no application node
+
+**Superseded by §13.13.** The conclusion below — that beta is inexpressible — was
+reached with the *statement-list* dialect, whose parser has no definitions at all.
+The module dialect does have application (`CoreIR::App` plus `link_functions`),
+and once its linking was made capture-avoiding and beta-reducing, `netcert`
+decides a real beta obligation. The negative result stands only for the dialect the
+emitter writes, which is why the encoding below is still circular there.
 
 The plan for §13.8's gap was to encode a CIC term as a CoreIR program so the
 deltanet could reduce a substitution for real. The front-end does accept more
@@ -1414,3 +1431,90 @@ assumptions, and the failures concentrate in the largest terms — where one
 context-class mismatch (§13.7) is enough to sink the whole declaration, since a
 single unproven premise leaves the theorem `sorry`. A closure rate quoted without
 the rules column would therefore be misleading at both ends.
+
+### 13.12 A miniature elaborator that attributes the failure
+
+MM0 checks a derivation by unification, so a failure reports the *first* place two
+terms differ — with `file:line:col` into a single-line megabyte artifact, no rule
+name and no premise. `tvar != tpi` was exactly that: a true message that says
+nothing about where the derivation went wrong. `scripts/lean-typing-check` is the
+elaborator that attributes it.
+
+It reads the rules **from `docs/cic_typing.mm0` itself** (so theory and checker
+cannot drift), parses a proof term out of an emitted artifact, and walks it
+bottom-up: unify each rule's conclusion with the goal, then check every premise
+against its subproof — MM0 does the same work, but here a failure is *reported*.
+
+```
+lean-typing-check <artifact.mm1> [--theory <file>] [--first]
+```
+
+Two pieces make it an elaborator rather than a pretty-printer. Rule variables are
+alpha-renamed per application (`?7_a`), because two instances of `ty_abs` in one
+derivation both use `?a` while the substitution is shared across the whole
+theorem. And the substitution *must* be shared: `ty_deq`'s first premise
+`tty c t a` has a variable the conclusion never mentions, so its value can only be
+read off the subproof (`ty_varS`'s `b` is the same shape) — unification is
+therefore symmetric over unknowns on both sides.
+
+A premise discharged by a local `axiom` (a leaf the emitter assumed, a constant's
+type, a conversion, a field fact) is reported as **assumed** and counted: the
+checker proves the derivation sound *given* those, it does not invent them.
+
+Attribution, on a deliberately broken derivation (leaf used at the wrong context
+head — the shape of the `tvar != tpi` class):
+
+```
+FAIL  thm_bad
+      at      thm_bad
+      differs /tty[1]/tcons[1]:tentity
+      reason  ax_leaf_0 proves a different statement
+      class   tentity != tpi
+```
+
+That is the attribution MM0 does not give: the path into the two terms, and the
+first pair of symbols that disagree. On real artifacts it re-derives what both
+checkers accept (`thm_add_le_`: 9 rule steps, 2 assumed premises, exit 0) and
+exits 1 with the same shape of report when one does not.
+
+It also found that the artifacts for primed declarations (`AbsoluteValue.add_le'`)
+never reached their proof at all: MM0's lexer rejects a trailing prime, so
+`pub theorem thm_add_le':` was a *parse* error and the run was being counted as a
+failed derivation. The emitter now sanitises the theorem name.
+
+### 13.13 A real beta obligation, decided
+
+The application node already existed in the conversion front-end (`CoreIR::App`,
+`link_functions`); what did not work was the linking. Two defects in
+`unfer/logos/src/translate.rs`:
+
+- **capture.** Every function's parameters were used verbatim, so inlining
+  `f(x) = x + 1` into `main(x) = f(x)` captured the caller's `x`. Functions are
+  now alpha-renamed to unique parameter names before linking, and substitution is
+  capture-avoiding (it renames a binder when the argument has that variable free).
+- **no beta under a binder.** `rewrite_calls` left the redex for the net reducer,
+  which does not reduce under a λ, so the call survived to readback as
+  `(lam x0 (Add64 (lam x0 <cycle>) 1))`. The linker now beta-reduces the
+  application itself (`subst` + `beta_apply`).
+
+With that, `netcert` decides a genuine beta obligation — the whole point of the
+exercise, since a substitution obligation is exactly `(λx.b) a ≡ b[a:=x]`:
+
+```
+# main(x) is return f(x);  where  f(x) is return (x + 1);
+netcert <that module> <module with main(x) is return (x + 1);>
+  → equivalent: true, witness present
+netcert <that module> <module with main(x) is return (x + 2);>
+  → equivalent: false
+```
+
+Limitation, measured and not assumed away: the *rendering* of the substituted
+variable is wrong — `sym_expr` prints `(Add64 (lam x0 <cycle>) 1)` where
+`x0 + 1` belongs, because the symbolic printer follows the wire back into the
+binder and its cycle guard fires. Both sides render the same way, so the verdict
+(`unf_hash` equality plus `isomorphism_witness`) is unaffected, but the printed
+term is not the term and should not be quoted as one.
+
+`cargo test -p logos --lib` still passes (339 tests) with the linker change; the
+bridge and its `.so` were rebuilt with `make bridge`, and `dune build test/`
+passes against it.
