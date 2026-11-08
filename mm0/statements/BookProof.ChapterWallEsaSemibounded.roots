@@ -1,8 +1,0 @@
-BookProof.WallEsaSemibounded.SemiboundedBelowOn
-BookProof.WallEsaSemibounded.ccEquiv_norm_sq
-BookProof.WallEsaSemibounded.inner_toLp_self
-BookProof.WallEsaSemibounded.integral_conj_neg_deriv2_mul
-BookProof.WallEsaSemibounded.kinCcR_quadratic_form
-BookProof.WallEsaSemibounded.opCc_quadratic_form
-BookProof.WallEsaSemibounded.wallHamBddBelow_semibounded
-BookProof.WallEsaSemibounded.wallHam_nonneg_form
