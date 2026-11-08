@@ -1363,3 +1363,54 @@ Lean4 → Austral-with-liquid-types → MM0 would first require building L0
 (refinement inference, Why3 discharge, erasure before CPS lowering). It is a
 superset of this translator's work rather than a shorter path to the same
 obligations, and it would not touch the netcert front-end language gap in §13.8.
+
+### 13.10 The term-to-CoreIR encoding: the front-end has no application node
+
+The plan for §13.8's gap was to encode a CIC term as a CoreIR program so the
+deltanet could reduce a substitution for real. The front-end does accept more
+than arithmetic — a function declaration translates:
+
+```
+netcert 'function f(x: Int64): Int64 is return (x + 1); end;' <same>
+  → equivalent, sym_expr (Add64 x 1), witness [[0,0],[1,1],[2,2]]
+```
+
+but it has **no application**: a call in the same fragment is not inlined, it is
+dropped, and the body comes back instead of the reduct.
+
+```
+netcert 'function f(x: Int64): Int64 is return (x + 1); end; return f(3);' 'return (3 + 1);'
+  → sym_expr_a (Add64 x 1)   (the `return f(3)` vanished), sym_expr_b 4
+  → equivalent: false
+```
+
+So the encoding cannot express β at all: `(λx.b) x` has no image under a language
+whose only binding form is a named, non-applicable definition. A Gödel-style
+structural encoding would be injective and decidable — but it would decide
+*syntactic* equality, and the obligations were produced by a substitution pass,
+so certifying them that way is circular (it would "prove" `tsubst b x = r` by
+checking `r = r`). The honest options remain: λ (or an application node) in the
+deltanet front-end, or an encoder whose nets implement substitution — neither
+exists, so `netcert` still decides 0 of these obligations and the artifacts keep
+the premises as assumptions.
+
+### 13.11 Closure rate against size
+
+Scanned with an empty namespace prefix (`--limit` per chapter), which is what
+reaches the declarations this module owns when the namespace differs from the
+file stem:
+
+| chapter | closures | rules | assumptions |
+| --- | --- | --- | --- |
+| `BookProof.Sirk.ChapterKrylovShiftSpan` | 6/6 | 95 | 50 |
+| `BookProof.Textbook.ChapterF8` | 1/4 | 349 | 155 |
+| `BookProof.ChapterNoBestPrior` | 5/6 | 182 | 121 |
+| `BookProof.OSReconstruction` (first 8) | 8/8 | 171 | 106 |
+| `BookProof.BalabanRG` (first 12) | 8/12 | 17,068 | 4,317 |
+
+The rate tracks **proof size, not chapter**: small chapters close completely,
+`ChapterF8`'s single closing declaration is a 349-rule derivation with 155
+assumptions, and the failures concentrate in the largest terms — where one
+context-class mismatch (§13.7) is enough to sink the whole declaration, since a
+single unproven premise leaves the theorem `sorry`. A closure rate quoted without
+the rules column would therefore be misleading at both ends.
