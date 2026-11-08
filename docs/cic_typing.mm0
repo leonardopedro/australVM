@@ -119,3 +119,34 @@ term tcert (b a r w: Term): Term;
 
 axiom tcert_witness (b a r w: Term):
   $ valid_iso (tsubst b a) r (tcert b a r w) $;
+
+-- ── Projections ───────────────────────────────────────────────────────────
+--
+-- A projection has no typing rule in the λΠ core: its type is a *field* of the
+-- structure it reads, so the fragment needs the field relation as data. `tfield
+-- A i F` says "index i of structure type A has type F"; the translator emits
+-- one instance per field of each structure it sees, taken from the inductive's
+-- constructor type, so the fact is checked against the declaration rather than
+-- assumed per use site.
+term tproj (s: Term) (i: nat): Term;
+term tfield (s: Term) (i: nat) (f: Term): Prop;
+
+axiom ty_proj (c s a f: Term) (i: nat):
+  $ tty c s a $ > $ tfield a i f $ > $ tty c (tproj s i) f $;
+
+-- ── Context conversion ────────────────────────────────────────────────────
+--
+-- Contexts are syntactic here (`tcons`-chains), and `ty_var0`/`ty_varS` read
+-- entries verbatim, so a derivation whose context entry is a *reference* to a
+-- Π cannot be used where the Π itself is required. Definitionally equal
+-- contexts are interchangeable in the calculus, so the relation is stated:
+-- entrywise conversion under the same spine.
+term tctx_deq (c d: Term): Prop;
+
+axiom tctx_deq_nil: $ tctx_deq tnil tnil $;
+
+axiom tctx_deq_cons (a b c d: Term):
+  $ tdefeq a b $ > $ tctx_deq c d $ > $ tctx_deq (tcons a c) (tcons b d) $;
+
+axiom ty_ctx (c d t a: Term):
+  $ tctx_deq c d $ > $ tty d t a $ > $ tty c t a $;

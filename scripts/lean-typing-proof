@@ -107,7 +107,11 @@ class Enc:
             le = e["letE"]
             return f"(tapp (tabs {self.enc(le['body'])}) {self.enc(le['value'])})"
         if "proj" in e:
-            return self.sym(f"proj{e['proj'].get('idx')}")
+            st = e["proj"]
+            idx = "tzero"
+            for _ in range(st.get("idx", 0)):
+                idx = f"(tsucc {idx})"
+            return f"(tproj {self.enc(st['struct'])} {idx})"
         if "natVal" in e:
             # A numeral as a *term*: one opaque constant per distinct numeral, so
             # `0` and `1` stay distinct without pretending the theory has Nat
@@ -119,6 +123,13 @@ class Enc:
             t = e["tsubst"]
             return f"(tsubst {self.enc(t['b'])} {self.enc(t['x'])})"
         raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
+
+
+def _nat_lit(n: int) -> str:
+    out = "tzero"
+    for _ in range(n):
+        out = f"(tsucc {out})"
+    return out
 
 
 def spine(ex, eid):
@@ -335,6 +346,7 @@ class Deriver:
         self.axioms: list[str] = []
         self.const_ax: dict[tuple[str, str], str] = {}
         self.beta_ax: dict[tuple[str, str], str] = {}
+        self.field_ax: dict[tuple[str, int], str] = {}
         self.oblig: list[str] = []
         self.oblig_tree: list[dict] = []
         self.leaf_ax: list[str] = []
@@ -531,6 +543,39 @@ class Deriver:
             p = f"(ty_varS {p})"
         return p
 
+    def field_type(self, type_name: str, idx: int):
+        """The field type a projection reads, taken from the constructor type.
+
+        `Π params. Π fields. S params` — with no parameters the field domain is
+        used as-is (and it is closed, so no shifting is involved). Parameterised
+        structures would need the fields instantiated at the structure's
+        arguments; this returns None for them, which the caller turns into the
+        counted leaf it was before.
+        """
+        decl = self.ex.decls.get(type_name)
+        ind = decl[1].get("inductive") if decl is not None else None
+        if not ind:
+            return None
+        types = ind.get("types") or []
+        ctors = ind.get("ctors") or []
+        if len(types) != 1 or len(ctors) != 1 or types[0].get("isRec"):
+            return None
+        ctor = ctors[0]
+        if ctor.get("numParams"):
+            return None
+        if idx >= ctor.get("numFields", 0):
+            return None
+        cur = self.strip(ctor["type"])
+        for _ in range(idx):
+            e = self.ex.exprs.get(cur, {})
+            if "forallE" not in e:
+                return None
+            cur = self.strip(e["forallE"]["body"])
+        e = self.ex.exprs.get(cur, {})
+        if "forallE" not in e:
+            return None
+        return self.strip(e["forallE"]["type"])
+
     def infer(self, eid: int, env: list[int], tail: bool = False):
         """(type_eid, mm1 proof term) for a term whose type can be inferred.
 
@@ -543,9 +588,30 @@ class Deriver:
         eid = self.strip(eid)
         e = ex.exprs[eid]
         if "proj" in e:
-            # A projection's type needs the structure's type, which the export
-            # does not carry per node; `_check` turns this into a counted leaf.
-            raise Unfoldable(eid)
+            # A projection's type is a field of the structure, so the structure
+            # must be typed first (`ty_proj` takes that proof as its premise) and
+            # the field relation must be named. Both come from the declaration,
+            # not from the use site.
+            st = e["proj"]
+            sty, sproof = self.infer(st["struct"], env, tail=False)
+            fld = self.field_type(self.ex.name(st["typeName"]), st["idx"])
+            if fld is None:
+                # Parameterised structures (and anything but a single-constructor
+                # inductive) need the field type at the structure's *arguments*,
+                # which this fragment cannot substitute yet.
+                raise Unfoldable(eid)
+            key = (enc.enc(sty), st["idx"])
+            if key not in self.field_ax:
+                ax = f"ax_field_{len(self.field_ax)}"
+                self.axioms.append(
+                    f"-- field {st['idx']} of {self.ex.name(st['typeName'])}: "
+                    f"taken from the constructor type\n"
+                    f"axiom {ax}: $ tfield {enc.enc(sty)} "
+                    f"{_nat_lit(st['idx'])} {enc.enc(fld)} $;"
+                )
+                self.field_ax[key] = ax
+            self.rules.append("ty_proj")
+            return fld, f"(ty_proj {sproof} {self.field_ax[key]})"
         if "bvar" in e:
             k = e["bvar"]
             if k >= len(env):

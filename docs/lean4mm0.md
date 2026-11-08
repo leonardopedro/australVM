@@ -1323,3 +1323,43 @@ refused**. The bridge is real and the certificate is real; what is missing is th
 term-to-program encoding whose normal forms agree with β. Until one exists, the
 `tdefeq` premises in these derivations stay assumptions, and no artifact claims
 otherwise.
+
+### 13.9 Projections derive; context conversion is stated but unused
+
+Two rules the fragment lacked are now in `docs/cic_typing.mm0` (theory: 34
+term/defs, 28 ax/thm, elaborates clean).
+
+**Projections.** `proj` nodes carry their structure's *type name* (`{"idx",
+"struct", "typeName"}`), so the field type is recoverable from the inductive's
+constructor type — `Π params. Π fields. S params`, peel `idx` binders, read the
+domain. The rule is `ty_proj`: type the structure, name the fact `tfield A i F`,
+conclude `tty c (tproj s i) F`. The `tfield` instance is emitted once per
+(structure type, index) *from the declaration*, so it records a structure's field
+layout rather than assuming a use site's typing.
+
+Measured on `BookProof.OSReconstruction` (8 declarations, `--spine`):
+**171 rules (was 166), 106 assumptions (unchanged), 8/8 verified**.
+`OSState.pos` goes 2 → 3 rules, `LinearFunctional.map_smul` and `toFun` 1 → 2,
+each now deriving the projection and keeping the field fact as an axiom instead
+of assuming the whole term. Parameterised structures (`numParams > 0`) still fall
+back to the counted leaf: their field type must be instantiated at the
+structure's arguments and this fragment has no substitution at that position yet.
+
+**Context conversion.** `tctx_deq` with `tctx_deq_nil`/`tctx_deq_cons` and
+`ty_ctx` now state that entrywise-convertible contexts are interchangeable —
+the precondition for the `tvar != tpi` class, which is otherwise unstatable.
+It is deliberately **not wired** into the emitter, and the class is therefore not
+closed: the emitter builds exactly one context per proof, so it never has two
+contexts to relate, and a `ty_ctx` wrapper would be decoration. The mismatch
+MM0 reports is between the context the *rule* instantiates and the one my proof
+was built with; attributing it needs a self-check of the emitted derivations
+(a miniature elaborator over the five rules in use), which does not exist yet.
+I am not claiming the rule fixes that class — only that the theory can now say it.
+
+**On the liquid-types route** (asked as an alternative): `PLAN_liquid_types.md`
+says the status is "Done so far: this plan, `docs/LIQUID.md` (L0 spec), and the
+`LiquidPragma` carrier in `lib/Common.ml`. Not done: everything else." — so
+Lean4 → Austral-with-liquid-types → MM0 would first require building L0
+(refinement inference, Why3 discharge, erasure before CPS lowering). It is a
+superset of this translator's work rather than a shorter path to the same
+obligations, and it would not touch the netcert front-end language gap in §13.8.
