@@ -100,3 +100,22 @@ axiom ty_deq (c t a b: Term):
 -- certificate does the deciding.
 axiom tdefeq_iso (a b cert: Term):
   $ valid_iso a b cert $ > $ tdefeq a b $;
+
+-- ── Substitution certificates (external deltanet check) ────────────────────
+--
+-- `ty_app` needs `tdefeq (tsubst b x) r`, but `tsubst` is a term constructor:
+-- MM0 cannot reduce it. The theory already routes conversions through
+-- `tdefeq_iso`/`valid_iso`, and this is the certificate a translator names for
+-- one: the two terms and the kernel's isomorphism witness digest `w`
+-- (`IsomorphismWitness` of the redex's net against its reduct's net, as
+-- returned by `uk_austral_defeq`).
+--
+-- The deciding is external by construction — MM0 has no net semantics — so the
+-- entailment is recorded here and the *translator* is what refuses to emit an
+-- instance whose witness the kernel did not return. `scripts/lean-net-cert`
+-- drives that check; `scripts/lean-typing-proof --dump-obligations` writes the
+-- pairs it consumes.
+term tcert (b a r w: Term): Term;
+
+axiom tcert_witness (b a r w: Term):
+  $ valid_iso (tsubst b a) r (tcert b a r w) $;

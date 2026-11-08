@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import sys
 import time
 from pathlib import Path
@@ -107,6 +108,16 @@ class Enc:
             return f"(tapp (tabs {self.enc(le['body'])}) {self.enc(le['value'])})"
         if "proj" in e:
             return self.sym(f"proj{e['proj'].get('idx')}")
+        if "natVal" in e:
+            # A numeral as a *term*: one opaque constant per distinct numeral, so
+            # `0` and `1` stay distinct without pretending the theory has Nat
+            # computation (it does not; that is the deltanet's arithmetic).
+            return self.sym(f"nat{e['natVal']}")
+        if "sym" in e:  # a synthetic constant this emitter invented (see `Nat`)
+            return self.sym(e["sym"])
+        if "tsubst" in e:  # a *deferred* substitution (see Deriver.defer_subst)
+            t = e["tsubst"]
+            return f"(tsubst {self.enc(t['b'])} {self.enc(t['x'])})"
         raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
 
 
@@ -124,6 +135,7 @@ def spine(ex, eid):
 def main() -> int:
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     spine = "--spine" in sys.argv
+    defer = "--defer-subst" in sys.argv
     export_path, want, out_dir = Path(argv[0]), argv[1], Path(argv[2])
     t0 = time.time()
     ex = l2m.Export(export_path)
@@ -158,10 +170,12 @@ def main() -> int:
         cur = ex.exprs[cur]["forallE"]["body"]
     body_ty = enc.enc(cur)
 
-    if len(binders) != count_lam(ex, rec["value"]):
-        raise SystemExit(
-            f"binder mismatch: {len(binders)} binders vs {count_lam(ex, rec['value'])} lambdas"
-        )
+# A value may abstract over more binders than its type's Π spine shows: the
+    # extra λs sit under a type that unfolds to a Π, and `Deriver.check` pays a
+    # conversion for each. The count is reported, not enforced (an enforced
+    # equality refused `not_uniformly_better`, whose type's tail is a reducible
+    # abbreviation).
+    n_lam = count_lam(ex, rec["value"])
 
     ctx = "tnil"
     ctxs = ["tnil"]
@@ -169,7 +183,15 @@ def main() -> int:
         ctx = f"(tcons {a} {ctx})"
         ctxs.append(ctx)
 
-    body = enc.enc(lam_body(ex, rec["value"]))
+    # Peel exactly as many λs as the type has Πs: any λ beyond that sits under
+    # a type that unfolds to a Π, and `Deriver.check` handles it (with its own
+    # domain from the export) plus the conversion it costs.
+    body_eid = rec["value"]
+    for _ in range(len(binders)):
+        # One λ at a time: `lam_body` peels the whole spine, which would leave
+        # the extra λs (and their binders) unaccounted for in the context.
+        body_eid = ex.exprs[body_eid]["lam"]["body"]
+    body = enc.enc(body_eid)
     inner_ctx = ctxs[-1]
 
     # Two modes. The default assumes the body's typing (one axiom). `--spine`
@@ -177,25 +199,24 @@ def main() -> int:
     # assumption into one constant-type axiom per Mathlib constant used and one
     # substitution obligation per application.
     if spine:
-        d = Deriver(ex, enc, export_path)
-        base_proof = d.check(
-            lam_body(ex, rec["value"]), cur, list(reversed(binder_ty_eids))
-        )
+        d = Deriver(ex, enc, export_path, defer_subst=defer)
+        base_proof = d.check(body_eid, cur, list(reversed(binder_ty_eids)))
         axioms += d.axioms
         steps += d.rules
         const_axioms, subst_obligations = len(d.const_ax), len(d.beta_ax)
+        d_oblig = d.oblig_tree
     else:
         axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
         steps.append("assume body typing")
         base_proof = "ax_body"
         const_axioms, subst_obligations = 0, 0
+        d_oblig: list[dict] = []
 
     # Wrap the body back out through the binders: one `ty_abs` per binder,
     # nested, so the proof term is a single expression (MM0 nests proofs in
     # argument position exactly like terms).
     proof = base_proof
     ty = body_ty
-    lam = body
     for k in range(len(binders) - 1, -1, -1):
         c = ctxs[k]
         a = binders[k]
@@ -204,12 +225,30 @@ def main() -> int:
         # only the nested premise proof is written here.
         proof = f"(ty_abs {proof})"
         steps.append("ty_abs")
-        lam = f"(tabs {lam})"
         ty = f"(tpi {a} {ty})"
 
-    assert lam == val_str, f"value spine mismatch:\n  built {lam}\n  enc   {val_str}"
+    # Deferred substitution leaves the derived type as a nest of `tsubst`
+    # nodes: one conversion at the boundary closes it, where the eager shape
+    # paid one obligation per application.
+    if defer and ty != ty_str:
+        axioms.append(
+            "-- one normalisation obligation: the deferred substitution nest\n"
+            f"axiom ax_norm: $ tdefeq {ty} {ty_str} $;"
+        )
+        proof = f"(ty_deq {proof} ax_norm)"
+        steps.append("ty_deq (deferred)")
+        ty = ty_str
+
     final_ty = ty
     ok = final_ty == ty_str
+    if not ok:
+        # The statement is generated from the encoded *value*, so a derivation
+        # that concludes any other type is not this theorem's proof; refusing is
+        # the only honest outcome.
+        raise SystemExit(
+            "derived type is not the declared type:\n"
+            f"  derived  {final_ty[:200]}\n  declared {ty_str[:200]}"
+        )
 
     head = [
         "-- Generated by emit-typing-proof.py (prototype) — DO NOT EDIT.",
@@ -218,6 +257,7 @@ def main() -> int:
         f"-- Derived type  : {final_ty}",
         f"-- Declared type : {ty_str}",
         f"-- Derived form equals declared form syntactically: {ok}",
+        f"-- Binders       : {len(binders)} in the type's Π spine, {n_lam} in the value",
         f"-- Rules applied : {len(steps)}"
         f" ({', '.join(f'{r} ×{steps.count(r)}' for r in dict.fromkeys(steps))})",
         f"-- Assumptions   : {len(axioms)} ({const_axioms} constant types, "
@@ -247,11 +287,20 @@ def main() -> int:
     (stem.with_suffix(".mm1")).write_text(
         "\n".join(out + ["pub " + statement + " =", f"  '{proof};"] ) + "\n"
     )
+    # The conversion obligations, structurally: the interface the external
+    # deltanet check consumes (`scripts/lean-net-cert`). Written even when empty
+    # so a caller never has to distinguish "no file" from "no obligations".
+    Path(str(stem) + "_obligations.jsonl").write_text(
+        "".join(json.dumps(o, sort_keys=True) + "\n" for o in d_oblig)
+    )
     print(f"target   : {target}")
     print(f"binders  : {len(binders)}")
     print(f"rules    : {' · '.join(f'{r} ×{steps.count(r)}' for r in dict.fromkeys(steps))}")
     print(f"axioms   : {len(axioms)} ({const_axioms} constant types, {subst_obligations} substitution)")
-    print(f"mode     : {'spine derivation' if spine else 'body typing assumed'}")
+    mode = "spine derivation" if spine else "body typing assumed"
+    if defer:
+        mode += ", substitution deferred"
+    print(f"mode     : {mode}")
     print(f"nats     : {len(NATS)} · symbols: {len(SYMS)}")
     print(f"derived == declared: {ok}")
     print(f"wrote    : {stem}.mm0 ({stem.with_suffix('.mm0').stat().st_size} B) in {time.time()-t0:.1f} s")
@@ -259,6 +308,10 @@ def main() -> int:
 
 
 # ── the spine derivation (`--spine`) ─────────────────────────────────────
+
+
+class Unfoldable(Exception):
+    """A type that is a Π only after unfolding a definition (no per-node types)."""
 
 
 class Deriver:
@@ -279,16 +332,22 @@ class Deriver:
     reported rather than hidden.
     """
 
-    def __init__(self, ex, enc, path: Path):
+    def __init__(self, ex, enc, path: Path, defer_subst: bool = False):
         self.ex = ex
         self.enc = enc
         self.path = path
+        # Deferred substitution: conclude `ty_app` at `(tsubst b x)` itself, so
+        # the premise is `tdefeq_refl` and the redex is left for one normalisation
+        # obligation at the boundary. Fewer obligations, each one bigger.
+        self.defer_subst = defer_subst
         self._ind_types: dict[str, int] | None = None
         self.next_id = max(ex.exprs) + 1
         self.axioms: list[str] = []
         self.const_ax: dict[tuple[str, str], str] = {}
         self.beta_ax: dict[tuple[str, str], str] = {}
         self.oblig: list[str] = []
+        self.oblig_tree: list[dict] = []
+        self.leaf_ax: list[str] = []
         self.rules: list[str] = []
 
     # ── export manipulation ──────────────────────────────────────────────
@@ -317,7 +376,52 @@ class Deriver:
                 for t in d["inductive"].get("types", []):
                     if "type" in t:
                         self._ind_types[self.ex.name(t["name"])] = t["type"]
+                # Recursors (`Eq.rec`, `Nat.rec`, ...) and constructors are not
+                # decls in `Export.decls`, and a proof term applies both. The
+                # record keys are `recs` and `ctors`.
+                for r in d["inductive"].get("recs", []) + d["inductive"].get("ctors", []):
+                    if "type" in r:
+                        self._ind_types[self.ex.name(r["name"])] = r["type"]
         return self._ind_types.get(nm)
+
+    def to_tree(self, eid: int, depth: int = 0) -> dict:
+        """A substitution-obligation side as a plain tree, for the certificate checker.
+
+        `scripts/lean-net-cert` has to hand `uk_austral_defeq` two fragments and
+        compare the answer with what the derivation claimed, so it needs the
+        terms structurally, not as MM0 strings. Constants keep their Lean names
+        (not the emitter's `t_symN`), because that is what a reader can check
+        against the export.
+        """
+        if depth > 4096:
+            raise SystemExit("to_tree: expression too deep (cycle?)")
+        eid = self.strip(eid)
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            return {"bvar": e["bvar"]}
+        if "const" in e:
+            return {"const": self.ex.name(e["const"]["name"])}
+        if "sort" in e:
+            return {"sort": e["sort"]}
+        if "natVal" in e:
+            return {"nat": e["natVal"]}
+        if "sym" in e:
+            return {"const": e["sym"]}
+        if "app" in e:
+            return {"app": [self.to_tree(e["app"]["fn"], depth + 1),
+                            self.to_tree(e["app"]["arg"], depth + 1)]}
+        if "forallE" in e:
+            return {"pi": [self.to_tree(e["forallE"]["type"], depth + 1),
+                            self.to_tree(e["forallE"]["body"], depth + 1)]}
+        if "lam" in e:
+            return {"lam": [self.to_tree(e["lam"].get("type", eid), depth + 1),
+                            self.to_tree(e["lam"]["body"], depth + 1)]}
+        if "tsubst" in e:
+            return {"tsubst": [self.to_tree(e["tsubst"]["b"], depth + 1),
+                               self.to_tree(e["tsubst"]["x"], depth + 1)]}
+        if "mdata" in e:
+            return self.to_tree(e["mdata"]["expr"], depth + 1)
+        raise SystemExit(f"to_tree: unhandled expression {sorted(e.keys())}")
 
     def strip(self, eid: int) -> int:
         while "mdata" in self.ex.exprs[eid]:
@@ -329,8 +433,12 @@ class Deriver:
         e = self.ex.exprs[eid]
         if "bvar" in e:
             return eid if e["bvar"] < cutoff else self.mk({"bvar": e["bvar"] + delta})
-        if "sort" in e or "const" in e or "proj" in e:
+        if "sort" in e or "const" in e or "proj" in e or "natVal" in e or "sym" in e:
             return eid
+        if "tsubst" in e:
+            return self.mk({"tsubst": {
+                "b": self.lift(e["tsubst"]["b"], delta, cutoff),
+                "x": self.lift(e["tsubst"]["x"], delta, cutoff)}})
         if "mdata" in e:
             return self.mk({"mdata": {"expr": self.lift(e["mdata"]["expr"], delta, cutoff)}})
         if "app" in e:
@@ -358,8 +466,13 @@ class Deriver:
             if k == depth:
                 return arg
             return eid if k < depth else self.mk({"bvar": k - 1})
-        if "sort" in e or "const" in e or "proj" in e:
+        if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
+                or "sym" in e):
             return eid
+        if "tsubst" in e:
+            return self.mk({"tsubst": {
+                "b": self.subst0(e["tsubst"]["b"], arg, depth),
+                "x": self.subst0(e["tsubst"]["x"], arg, depth)}})
         if "mdata" in e:
             return self.mk({"mdata": {"expr": self.subst0(e["mdata"]["expr"], arg, depth)}})
         if "app" in e:
@@ -388,8 +501,14 @@ class Deriver:
             p = f"(ty_varS {p})"
         return p
 
-    def infer(self, eid: int, env: list[int]):
-        """(type_eid, mm1 proof term) for a term whose type can be inferred."""
+    def infer(self, eid: int, env: list[int], tail: bool = False):
+        """(type_eid, mm1 proof term) for a term whose type can be inferred.
+
+        `tail` marks a term whose inferred type *is* the goal, which is the only
+        place a deferred substitution can be left unreduced: a deferred type has
+        no Π structure, so anything applied to it would have to be converted
+        back to its reduct first, paying the obligation anyway.
+        """
         ex, enc = self.ex, self.enc
         eid = self.strip(eid)
         e = ex.exprs[eid]
@@ -418,25 +537,48 @@ class Deriver:
                 self.const_ax[key] = ax
             self.rules.append("const type")
             return ty, self.const_ax[key]
+        if "natVal" in e:
+            # A numeral's type is `Nat`, which is opaque here: the numeral is a
+            # constant-like leaf, one axiom, the same shape as Mathlib's.
+            ctx = self.ctx_str(env)
+            key = (ctx, enc.enc(eid))
+            if key not in self.const_ax:
+                ax = f"ax_const_{len(self.const_ax)}"
+                self.axioms.append(
+                    f"-- Nat literal {e['natVal']}\n"
+                    f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.sym('Nat')} $;"
+                )
+                self.const_ax[key] = ax
+            self.rules.append("const type")
+            return self.mk({"sym": "Nat"}), self.const_ax[key]
         if "letE" in e:
             le = e["letE"]
             eid = self.mk({"app": {"fn": self.mk({"lam": {"body": le["body"]}}),
                                     "arg": le["value"]}})
             return self.infer(eid, env)
         if "app" in e:
-            fty, fproof = self.infer(e["app"]["fn"], env)
+            fty, fproof = self.infer(e["app"]["fn"], env, tail=False)
             fte = ex.exprs[self.strip(fty)]
             if "forallE" not in fte:
-                raise SystemExit(
-                    "infer: the function's type is not a Π, so it cannot be applied: "
-                    + enc.enc(self.strip(fty))[:160]
-                )
+                # The function's type is a Π only after unfolding a definition
+                # (`foo a b` where `foo` is reducible): the export carries no
+                # per-node types, so the domain cannot be recovered here. `check`
+                # turns this into one counted assumption at the expected type.
+                raise Unfoldable(self.strip(fty))
             dom = fte["forallE"]["type"]
-            aproof = self.check(e["app"]["arg"], dom, env)
+            aproof = self.check(e["app"]["arg"], dom, env, tail=False)
             x = self.strip(e["app"]["arg"])
             b = self.strip(fte["forallE"]["body"])
-            res = self.subst0(b, x)
             b_s, x_s = enc.enc(b), enc.enc(x)
+            if self.defer_subst and tail:
+                # No reduct computed: the result type *is* the unreduced
+                # substitution, and `tdefeq_refl` discharges the premise.
+                self.rules.append("ty_app (deferred)")
+                return (
+                    self.mk({"tsubst": {"b": b, "x": x}}),
+                    f"(ty_app {fproof} {aproof} (tdefeq_refl))",
+                )
+            res = self.subst0(b, x)
             key = (b_s, x_s)
             if key not in self.beta_ax:
                 ax = f"ax_subst_{len(self.beta_ax)}"
@@ -446,11 +588,45 @@ class Deriver:
                 )
                 self.beta_ax[key] = ax
                 self.oblig.append(ax)
+                self.oblig_tree.append({
+                    "id": ax,
+                    "kind": "substitution",
+                    "lhs": f"(tsubst {b_s} {x_s})",
+                    "rhs": enc.enc(self.strip(res)),
+                    "b": self.to_tree(b),
+                    "x": self.to_tree(x),
+                    "r": self.to_tree(self.strip(res)),
+                })
             self.rules.append("ty_app")
             return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
         raise SystemExit(f"infer: unhandled expression {sorted(e.keys())}")
 
-    def check(self, eid: int, expected: int, env: list[int]) -> str:
+    def assume_leaf(self, eid: int, expected: int, env: list[int]) -> str:
+        """One assumption for a subtree, at the type the context demands.
+
+        The smallest honest retreat from a rule the fragment cannot apply: the
+        subtree's typing is asserted, named, and counted, and the artifact says
+        which class of unfolding forced it.
+        """
+        ctx = self.ctx_str(env)
+        ax = f"ax_leaf_{len(self.leaf_ax)}"
+        self.axioms.append(
+            "-- applied through a definitional unfolding (no rule in the fragment)\n"
+            f"axiom {ax}: $ tty {ctx} {self.enc.enc(eid)} {self.enc.enc(expected)} $;"
+        )
+        self.leaf_ax.append(ax)
+        self.oblig.append(ax)
+        self.rules.append("assumed (unfolded Π)")
+        return ax
+
+    def check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
+        """`_check`, with an unfolding turned into a counted assumption."""
+        try:
+            return self._check(eid, expected, env, tail=tail)
+        except Unfoldable:
+            return self.assume_leaf(self.strip(eid), self.strip(expected), env)
+
+    def _check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
         """A proof term for `tty ctx eid expected`, in the given context."""
         ex, enc = self.ex, self.enc
         eid, expected = self.strip(eid), self.strip(expected)
@@ -472,12 +648,45 @@ class Deriver:
         if "lam" in e:
             fe = ex.exprs[expected]
             if "forallE" not in fe:
-                raise SystemExit("check: a lambda against a non-Π type")
+                # The expected type is a Π only after unfolding (`Set.Image f`,
+                # an abbreviation, a reducible def). The λ still carries its
+                # domain, so infer the body and pay one conversion from the type
+                # this rule builds to the type the context expects.
+                dom = e["lam"].get("type")
+                if dom is None:
+                    raise SystemExit(
+                        "check: a lambda against a non-Π type, and the export "
+                        "carries no domain for the lambda"
+                    )
+                # A curried λ spine: each step carries its own domain, so peel
+                # them all and infer only the innermost body.
+                doms: list[int] = []
+                cur_e = eid
+                while "lam" in ex.exprs[self.strip(cur_e)]:
+                    le = ex.exprs[self.strip(cur_e)]["lam"]
+                    doms.append(self.strip(le["type"]))
+                    cur_e = le["body"]
+                bty, inner = self.infer(
+                    self.strip(cur_e), list(reversed(doms)) + env, tail=True
+                )
+                for d in reversed(doms):
+                    bty = self.mk({"forallE": {"type": d, "body": bty}})
+                    inner = f"(ty_abs {inner})"
+                    self.rules.append("ty_abs")
+                got = bty
+                ax = f"ax_deq_{len(self.oblig)}"
+                self.axioms.append(
+                    "-- conversion: the λ's own Π vs the unfolded expected type\n"
+                    f"axiom {ax}: $ tdefeq {enc.enc(got)} {enc.enc(expected)} $;"
+                )
+                self.oblig.append(ax)
+                self.rules.append("ty_deq")
+                return f"(ty_deq (ty_abs {inner}) {ax})"
             inner = self.check(e["lam"]["body"], fe["forallE"]["body"],
-                               [fe["forallE"]["type"]] + env)
+                               [fe["forallE"]["type"]] + env, tail=tail)
             self.rules.append("ty_abs")
             return f"(ty_abs {inner})"
-        ty, p = self.infer(eid, env)
+        ty, p = self.infer(eid, env, tail=tail)
         if enc.enc(self.strip(ty)) == enc.enc(expected):
             return p
         ctx = self.ctx_str(env)

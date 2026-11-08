@@ -1059,3 +1059,96 @@ each `ty_app` at `r := (tsubst b x)` makes every substitution premise
 `tdefeq_refl`, at the price of one *deferred* substitution nest, so 10 obligations
 become 1 large one at the boundary. That trades many small deltanet checks for a
 single big one, and is the natural knob once the checker exists.
+
+### 13.2 One chapter, measured end to end (2026-11-08)
+
+`scripts/lean-proof-scan` runs the emitter per declaration, assembles each
+artifact against `docs/cic.mm0` + `docs/cic_typing.mm0`, and asks both checkers
+whether the derivation closes — so what it reports is *verified* closures, not
+emitted files. On `BookProof.ChapterNoBestPrior` (the 6 declarations the module
+itself contributes; the export's other 10,593 belong to its dependencies):
+
+| declaration | kind | rules | assumptions | verdict |
+| --- | --- | --- | --- | --- |
+| `distinct_priors_each_preferred` | thm | 27 | 19 | verified |
+| `distinct_priors_each_preferred._simp_1_1` | thm | 27 | 19 | verified |
+| `distinct_priors_each_preferred._simp_1_2` | thm | 78 | 50 | verified |
+| `expectedUtility` | def | 48 | 32 | verified |
+| `not_uniformly_better` | thm | 7 | 1 | verified (body assumed) |
+| `eq_of_expectedUtility_ge_all` | thm | — | — | **not verified** |
+
+5 of 6, 187 rule applications, 121 assumptions, 14 s total. Four of the closures
+are structural (the derivation follows the proof term); `not_uniformly_better` is
+not: its type's tail is a reducible abbreviation, so the body's applications have
+no Π to decompose, and the whole body is one counted assumption. That distinction
+is visible in the artifact rather than buried in it — the assumption is named
+`ax_leaf_0` and the rule list says `assumed (unfolded Π)`.
+
+The one failure is a 3.7 MB derivation (2,672 assumptions, 1,430 applications)
+whose elaboration `mm0-rs` rejects with a term/type form disagreement
+(`tapp != tabs`, `tvar != tpi`) inside a nested conversion. It is a real open
+bug in the emitter, not a theory gap: the same shapes verify in the other five.
+It is recorded here rather than hidden by lowering the scope.
+
+Two rule gaps the scan closed on the way, both of which had been *silent*
+guesses before they were classes: a λ whose expected type is a Π only after
+unfolding now gets its domain from the export, infers its body, and pays one
+conversion (it used to raise); a Π/sort used as a term is one counted axiom (it
+used to be an unstated shortcut). A `natVal` node is an opaque constant per
+numeral, and `Nat.rec`/`Eq.rec`/constructor types are read from the export's
+inductive records (`recs`/`ctors`) instead of being reported missing.
+
+### 13.3 Deferred substitution: measured, and not taken
+
+`--defer-subst` concludes each *tail* application at `(tsubst b x)` itself, so
+the `ty_app` premise becomes `tdefeq_refl` and the redex is left for one
+normalisation obligation at the boundary. Measured against the eager shape on
+the same chapter:
+
+| declaration | eager | deferred |
+| --- | --- | --- |
+| `distinct_priors_each_preferred` | 27 rules, 19 assumptions | 28, 19 |
+| `…._simp_1_1` | 27, 19 | 28, 19 |
+| `…._simp_1_2` | 78, 50 | 79, 50 |
+| `expectedUtility` | 48, 32 | 49, 32 |
+| `not_uniformly_better` | 7, 1 | 7, 1 |
+
+One extra rule and **the same number of assumptions** per declaration. The
+reason is structural: only a tail application can be deferred (a deferred type
+has no Π structure, so anything applied to it must be converted back first), and
+a proof term's spine has exactly one tail application — so deferral swaps one
+substitution obligation for one normalisation obligation, and the normalisation
+one is the *bigger* of the two. The eager shape is therefore kept as the
+default; the flag stays because the trade flips if a whole spine ever sits in
+tail position (a term whose head is applied once, deeply), which is a shape to
+look for rather than assume.
+
+### 13.4 The certificate interface (blocked on the toolchain here)
+
+Discharging a substitution obligation means convincing something *outside* MM0:
+`tcert (b a r w)` and `tcert_witness` now give that certificate a form in
+`docs/cic_typing.mm0` — the two terms and the kernel's isomorphism-witness
+digest — and `scripts/lean-typing-proof` writes every obligation structurally to
+`<stem>_obligations.jsonl` (10 lines / 8,813 B for `_simp_1_1`), which is the
+input a checker consumes. `safestos/cranelift/src/bin/netcert.rs` is the
+front-end: two fragments in, the kernel's own `AustralDefeqReport` out
+(`uk_austral_defeq`), exit 0/1/2 for equivalent / not / could-not-run.
+
+It could not be *run* in this environment, so no obligation has been discharged
+yet and none is claimed:
+
+* `nix develop` (the OCaml shell, and the only place `cargo` was on `PATH`)
+  fails to build — `alt-ergo-2.6.3.tbz` is unavailable (`curl: 22 … 504`), twice,
+  so `dune` cannot be invoked;
+* `cargo` outside that shell cannot resolve the bridge crate at all:
+  `arctic = { path = "../../../dynamic-arctic" }` and that directory does not
+  exist in this checkout (`.cargo` and a 401-crate registry cache are present,
+  so this is a missing sibling repo, not a registry problem);
+* there is no prebuilt `safestos/cranelift/target/` and no
+  `libaustral_cranelift_bridge.so`, so the check cannot be reached by linking a
+  prebuilt bridge either.
+
+The next step on this path is environmental: restore `dynamic-arctic` (or build
+with that feature's dependency removed) and the alt-ergo mirror, then run
+`netcert` on the dumped pairs and teach the emitter to prefer a certified
+`tdefeq_iso` over the counted axiom.

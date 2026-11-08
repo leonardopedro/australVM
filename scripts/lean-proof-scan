@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Scan a Lean export: emit a typing derivation per declaration, verify it, report.
+
+For every declaration of one module that carries a value (a theorem's proof term
+or a definition's body) this runs `scripts/lean-typing-proof --spine`, assembles
+the artifact against `docs/cic.mm0` + `docs/cic_typing.mm0`, and asks both
+checkers (`mm0-rs compile` for elaboration and `sorry`, `mm0-c` for the kernel)
+whether the derivation closes. What is reported is therefore *verified* closures,
+not emitted files.
+
+A declaration that the deriver cannot express is recorded with the reason it
+gave and the class of that reason, so the histogram is the worklist: each class
+is a rule the theory or the emitter does not have yet.
+
+Usage: lean-proof-scan <export.ndjson> <module-prefix> <work-dir> [--defer-subst]
+
+Exit status is 0 when the scan itself ran (whatever it found), 1 when nothing
+in scope could be verified.
+"""
+from __future__ import annotations
+
+import collections
+import importlib.machinery
+import importlib.util
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+AVM = Path(__file__).resolve().parent.parent
+EMITTER = AVM / "scripts" / "lean-typing-proof"
+LEAN2MM0 = AVM / "scripts" / "lean2mm0"
+THEORIES = [AVM / "docs" / "cic.mm0", AVM / "docs" / "cic_typing.mm0"]
+
+loader = importlib.machinery.SourceFileLoader("lean2mm0", str(LEAN2MM0))
+spec = importlib.util.spec_from_loader("lean2mm0", loader)
+l2m = importlib.util.module_from_spec(spec)
+sys.modules["lean2mm0"] = l2m
+loader.exec_module(l2m)
+
+
+def theory_text() -> str:
+    """The two theories as one self-contained prefix (`cic_typing` imports `cic`)."""
+    parts = []
+    for p in THEORIES:
+        for line in p.read_text().splitlines():
+            if line.startswith("import"):
+                continue
+            parts.append(line)
+    return "\n".join(parts) + "\n"
+
+
+def last_meaningful(text: str) -> str:
+    for line in reversed(text.strip().splitlines()):
+        if line.strip():
+            return line.strip()
+    return "(no output)"
+
+
+def classify(reason: str) -> str:
+    """One bucket per kind of missing support, keyed on the deriver's own words."""
+    for pat, label in (
+        (r"no exported type for constant", "constant type missing from export"),
+        (r"the function's type is not a Π", "applied non-function (type-level application)"),
+        (r"unhandled expression", "expression form outside the fragment"),
+        (r"bvar .* not bound", "index escape (substitution bug, not a class)"),
+        (r"binder mismatch", "value/type λ-spine mismatch"),
+        (r"lambda against a non-Π", "λ checked against a non-Π type"),
+        (r"failed to unify", "MM0 elaboration rejected the derivation"),
+        (r"uses sorry|contains sorry", "outstanding obligation became sorry"),
+        (r"MemoryError|memory", "out of memory"),
+    ):
+        if re.search(pat, reason, re.I):
+            return label
+    return "other"
+
+
+def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["PATH"] = str(Path.home() / ".local" / "bin") + os.pathsep + env.get("PATH", "")
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, **kw)
+
+
+def main() -> int:
+    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+    defer = "--defer-subst" in sys.argv
+    export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
+    extra = ["--spine"] + (["--defer-subst"] if defer else [])
+
+    ex = l2m.Export(export_path)
+    scope = [
+        (nm, kind)
+        for nm, (kind, rec, _i) in ex.decls.items()
+        if "value" in rec and nm.startswith(prefix)
+    ]
+    scope.sort()
+    print(f"export : {export_path.name}")
+    print(f"scope  : {len(scope)} declarations under {prefix}")
+    print(f"mode   : spine derivation{', substitution deferred' if defer else ''}")
+    print()
+
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    prefix_text = theory_text()
+
+    closed: list[tuple[str, str, int, int]] = []
+    failed: list[tuple[str, str]] = []
+    t0 = time.time()
+
+    for nm, kind in scope:
+        short = nm[len(prefix):] if nm.startswith(prefix) else nm
+        out = work / re.sub(r"[^A-Za-z0-9_]", "_", short).strip("_")
+        r = run([str(EMITTER), str(export_path), nm, str(out)] + extra)
+        if r.returncode != 0:
+            failed.append((short, last_meaningful(r.stdout + r.stderr)))
+            print(f"  emit  ✗ {short}: {failed[-1][1][:110]}")
+            continue
+        # The artifact's path is what the emitter says it wrote, not a guess:
+        # the stem is the declaration's last name component plus `_typing`.
+        wrote = re.search(r"wrote\s*:\s*(\S+)\.mm0", r.stdout)
+        if wrote is None:
+            failed.append((short, "emitter succeeded without naming its artifact"))
+            continue
+        stem = Path(wrote.group(1))
+        full0 = out / "full.mm0"
+        full1 = out / "full.mm1"
+        full0.write_text(prefix_text + stem.with_suffix(".mm0").read_text())
+        full1.write_text(prefix_text + stem.with_suffix(".mm1").read_text())
+        c = run(["mm0-rs", "compile", str(full1), str(out / "full.mmb")])
+        if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
+            failed.append((short, "mm0-rs: " + last_meaningful(c.stdout + c.stderr)))
+            print(f"  mm0-rs ✗ {short}: {failed[-1][1][:110]}")
+            continue
+        k = run(["mm0-c", str(out / "full.mmb")], stdin=open(full0))
+        if k.returncode != 0:
+            failed.append((short, "mm0-c: " + last_meaningful(k.stdout + k.stderr)))
+            print(f"  mm0-c ✗ {short}: {failed[-1][1][:110]}")
+            continue
+        head = stem.with_suffix(".mm0").read_text()
+        rules = int(re.search(r"Rules applied : (\d+)", head).group(1))
+        axs = int(re.search(r"Assumptions   : (\d+)", head).group(1))
+        closed.append((short, kind, rules, axs))
+        print(f"  pass  ✓ {short} [{kind}] rules={rules} assumptions={axs}")
+
+    print()
+    print(f"verified closures : {len(closed)}/{len(scope)}")
+    if closed:
+        tot_r = sum(c[2] for c in closed)
+        tot_a = sum(c[3] for c in closed)
+        print(f"rules applied     : {tot_r} · assumptions: {tot_a} "
+              f"({tot_a / len(closed):.1f} per declaration)")
+    if failed:
+        hist = collections.Counter(classify(reason) for _n, reason in failed)
+        print("failure classes   :")
+        for label, n in hist.most_common():
+            print(f"  {n:3d}  {label}")
+        print("reasons (first of each class):")
+        seen = set()
+        for short, reason in failed:
+            lab = classify(reason)
+            if lab in seen:
+                continue
+            seen.add(lab)
+            print(f"  [{lab}] {short}: {reason[:160]}")
+    print(f"elapsed           : {time.time() - t0:.1f} s")
+    return 0 if closed else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
