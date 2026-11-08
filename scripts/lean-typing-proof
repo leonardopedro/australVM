@@ -604,9 +604,12 @@ class Deriver:
             fte = ex.exprs[self.strip(fty)]
             if "forallE" not in fte:
                 # The function's type is a Π only after unfolding a definition
-                # (`foo a b` where `foo` is reducible): the export carries no
-                # per-node types, so the domain cannot be recovered here. `check`
-                # turns this into one counted assumption at the expected type.
+                # (`foo a b` where `foo` is reducible) or is named by reference
+                # to a context entry. Following either reference and converting
+                # with `ty_deq` was tried and measured (docs §13.7): it never
+                # fires, because the reference is resolved on the *type* while
+                # the mismatch MM0 reports is on the context head, which no rule
+                # can convert. So this stays the counted leaf it was.
                 raise Unfoldable(self.strip(fty))
             dom = fte["forallE"]["type"]
             aproof = self.check(e["app"]["arg"], dom, env, tail=False)
@@ -733,13 +736,7 @@ class Deriver:
                 # Collecting the domains first and pushing them together shifts
                 # every index (measured: `tvar 4` where `tvar 1` belonged).
                 got, inner = self.lam_type(eid, env)
-                ax = f"ax_deq_{len(self.oblig)}"
-                self.axioms.append(
-                    "-- conversion: the λ's own Π vs the unfolded expected type\n"
-                    f"axiom {ax}: $ tdefeq {enc.enc(got)} {enc.enc(expected)} $;"
-                )
-                self.oblig.append(ax)
-                self.rules.append("ty_deq")
+                ax = self.deq_ax(self.strip(got), expected)
                 return f"(ty_deq (ty_abs {inner}) {ax})"
             inner = self.check(e["lam"]["body"], fe["forallE"]["body"],
                                [fe["forallE"]["type"]] + env, tail=tail)
@@ -748,16 +745,34 @@ class Deriver:
         ty, p = self.infer(eid, env, tail=tail)
         if enc.enc(self.strip(ty)) == enc.enc(expected):
             return p
-        ctx = self.ctx_str(env)
-        ax = f"ax_deq_{len(self.oblig)}"
+        ax = self.deq_ax(self.strip(ty), expected)
+        return f"(ty_deq {p} {ax})"
+
+    def deq_ax(self, got: int, want: int) -> str:
+        """A conversion between two type forms, labelled by why it is needed.
+
+        Two `Sort`s are the one case the fragment cannot even *state*: universe
+        levels are opaque symbols here (`t_lev0`, `t_lev9` by first sight), so a
+        level-varying pair is never the same term and the theory has no level
+        algebra to relate them. Collapsing them silently would be asserting
+        `Type : Type`; naming the class keeps the gap countable, the same way
+        the unfolded-Π leaves are.
+        """
+        ex, enc = self.ex, self.enc
+        kinds = (ex.exprs.get(got, {}), ex.exprs.get(want, {}))
+        both_sorts = all("sort" in k for k in kinds)
+        tag = "lev" if both_sorts else "deq"
+        ax = f"ax_{tag}_{len(self.oblig)}"
         self.axioms.append(
-            f"-- conversion: inferred {enc.enc(self.strip(ty))[:80]} vs expected "
-            f"{enc.enc(expected)[:80]}\n"
-            f"axiom {ax}: $ tdefeq {enc.enc(self.strip(ty))} {enc.enc(expected)} $;"
+            ("-- conversion between universe levels (not stratified in this "
+             "theory)\n" if both_sorts else
+             f"-- conversion: inferred {enc.enc(got)[:80]} vs expected "
+             f"{enc.enc(want)[:80]}\n")
+            + f"axiom {ax}: $ tdefeq {enc.enc(got)} {enc.enc(want)} $;"
         )
         self.oblig.append(ax)
-        self.rules.append("ty_deq")
-        return f"(ty_deq {p} {ax})"
+        self.rules.append("ty_deq (universe level)" if both_sorts else "ty_deq")
+        return ax
 
 
 def count_lam(ex, eid) -> int:

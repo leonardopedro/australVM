@@ -1226,3 +1226,55 @@ types syntactically, so a `let`-encoded type and its unfolded form are different
 terms, and the emitter does not yet insert the `ty_deq` step where a type changes
 shape (four cases in BalabanRG, one in ChapterNoBestPrior, both with the same
 `tapp != tabs` signature).
+
+### 13.7 What "insert a `ty_deq`" cannot fix (measured)
+
+The plan for the residual failures was to insert a conversion step where a type
+changes shape. That plan is wrong, and the measurement is worth recording so it
+is not tried a fourth time.
+
+`ty_deq` is already applied everywhere a term's type and the expected type
+differ: 2,072 uses in `eq_of_expectedUtility_ge_all`, 4,292 `ty_app` steps. The
+failures are elsewhere. MM0 reports them **on the context**, not on a term:
+
+```
+tty (tcons (tvar 6) (tcons (tvar 5) ...))
+ =?=
+tty (tcons (tpi ... ) (tcons ...))
+terms do not match: tvar != tpi
+```
+
+The `tcons` head is the Π's domain, and `ty_var0`/`ty_varS` read entries
+verbatim, so the theory has **no rule that converts a context entry into the
+type it denotes**. A conversion on the term (`ty_deq p ax`) does not help: the
+proof of the *function* is fine, the context the rule is handed is not. Closing
+this class needs a theory change (context conversion, or a congruence rule on
+`tcons` plus a way to justify it) — a design decision, not an emitter patch.
+
+Three consequences, each measured:
+
+1. **Universe levels were the unattributed cause of a large share.** `Sort` is
+   encoded as an opaque symbol per level, assigned by first sight, so
+   `tsort t_lev0` and `tsort t_lev9` are never the same term and the theory has
+   no level algebra. 1,468 conversions in `eq_of_expectedUtility_ge_all` are of
+   this kind. They are now their own counted class (`ax_lev_*`,
+   "universe level"), because collapsing them silently would be asserting
+   `Type : Type`. Closures did not change (5/6) — the artifact now names the gap
+   instead of hiding it inside `ax_deq`.
+2. **Resolving references to the Π they denote never fires.** A `bvar` type
+   was resolved through the context and a `const` through its declared type,
+   with a conversion step inserted when either yielded a Π. Across 26
+   declarations in three chapters (`ChapterNoBestPrior`, `BalabanRG`,
+   `OSReconstruction`) the branch fired zero times, because the resolved value
+   is a *type* while the mismatch is on the context head as above. It was
+   removed rather than left in place as a plausible-looking path.
+3. **Deepening the shallow closures is a rule gap, not emitter work.**
+   `OSReconstruction` stays 8/8 with 166 rules and 106 assumptions. Its shallow
+   cases are `proj` (no `ty_proj` in the theory, and the export carries no
+   per-node structure type to state one) and applications that need the type of
+   an unfolded definition. Both need new rules; the emitter cannot derive them.
+
+So the honest state of the translator: it emits a derivation for every
+declaration it accepts, the derivations compile, and the two gaps it cannot
+cross — context conversion and projections — are stated in the theory's own
+vocabulary rather than papered over.
