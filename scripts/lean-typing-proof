@@ -27,6 +27,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -66,6 +67,12 @@ class Enc:
         # index constants instead (its artifacts have no weakening steps). The
         # typing derivation needs the first form, the corpus the second.
         self.succ_idx = succ_idx
+        # The export is a DAG and `enc` re-expands it: a term mentioned twice
+        # was encoded twice, and the derivation walks the same terms again on
+        # every rule it shares them between. Memoised by id, bounded by the
+        # total size of the cached strings.
+        self._memo: dict[int, str] = {}
+        self._memo_bytes = 0
 
     def sort(self, e) -> str:
         # A universe is a *term*: its exported level id becomes one constant, so
@@ -82,6 +89,16 @@ class Enc:
         return f"(tentity {SYMS[name]})"
 
     def enc(self, eid: int) -> str:
+        s = self._memo.get(eid)
+        if s is not None:
+            return s
+        s = self._enc(eid)
+        if self._memo_bytes < ENC_MEMO_BYTES:
+            self._memo[eid] = s
+            self._memo_bytes += len(s)
+        return s
+
+    def _enc(self, eid: int) -> str:
         e = self.ex.exprs[eid]
         if "bvar" in e:
             k = e["bvar"]
@@ -128,6 +145,35 @@ class Enc:
         raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
 
 
+def peak_mb() -> int:
+    """Peak resident set of this process, in MB (Linux `ru_maxrss` is KB)."""
+    import resource
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+
+
+# Cap on the de Bruijn rewrite memos. Both are pure functions of their key,
+# so dropping one only costs recomputation; at ~200 B/entry this bounds them
+# at a couple of hundred megabytes while a declaration's derivation touches
+# far fewer distinct (expression, shift) pairs than that.
+MEMO_MAX = 1_000_000
+
+# Total size of the strings `Enc` caches; past it new encodings are simply not
+# cached (they are recomputed, never wrong).
+ENC_MEMO_BYTES = 64 << 20
+
+
+def stats(msg: str) -> None:
+    """Stage-level memory report, only when `LTP_STATS` is set.
+
+    Emission of a large declaration allocates in several distinct places (the
+    proof string, the axiom list, the obligation trees, the file text), and
+    which one dominates decides what to change. Guessing at that was wrong
+    twice, so it is measured.
+    """
+    if os.environ.get("LTP_STATS"):
+        print(f"[stats] {msg}: peak {peak_mb()} MB", file=sys.stderr, flush=True)
+
+
 def _nat_lit(n: int) -> str:
     out = "tzero"
     for _ in range(n):
@@ -152,7 +198,11 @@ def main() -> int:
     defer = "--defer-subst" in sys.argv
     export_path, want, out_dir = Path(argv[0]), argv[1], Path(argv[2])
     t0 = time.time()
-    ex = l2m.Export(export_path)
+    # Lazily: one declaration reaches a few thousand expressions of a chapter's
+    # millions, and materialising the rest cost more memory than the whole
+    # derivation (measured: 3.8 GB to parse `ChapterH1`, 6 798 expressions used).
+    ex = l2m.Export(export_path, lazy=True)
+    stats("export indexed")
     # The typing derivation writes variables as the theory names them (succ
     # chains); the statement-only artifact keeps the corpus' flat index form.
     enc = Enc(ex, succ_idx=spine)
@@ -165,7 +215,11 @@ def main() -> int:
 
     # The theorem's statement: `tty tnil value type`.
     ty_str = enc.enc(rec["type"])
+    if os.environ.get("LTP_STATS"):
+        stats(f"type encoded ({len(ty_str)} B)")
     val_str = enc.enc(rec["value"])
+    if os.environ.get("LTP_STATS"):
+        stats(f"value encoded ({len(val_str)} B)")
 
     lines: list[str] = []
     steps: list[str] = []
@@ -237,6 +291,9 @@ def main() -> int:
 
     proof = base_proof
     goal_ctx, goal_term, goal_ty = inner_ctx, body, body_ty
+    if spine:
+        stats(f"derivation ({len(steps)} rules, proof {len(base_proof)} B, "
+              f"{len(axioms)} axioms")
     if closed:
         # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
         # term is a single expression (MM0 nests proofs in argument position
@@ -296,6 +353,7 @@ def main() -> int:
     (stem.with_suffix(".mm1")).write_text(
         "\n".join(out + ["pub " + statement + " =", f"  '{proof};"] ) + "\n"
     )
+    stats(f"artifacts written ({stem.with_suffix('.mm1').stat().st_size >> 20} MB)")
     # The conversion obligations, structurally: the interface the external
     # deltanet check consumes (`scripts/lean-net-cert`). Written even when empty
     # so a caller never has to distinguish "no file" from "no obligations".
@@ -360,6 +418,11 @@ class Deriver:
         self.oblig_tree: list[dict] = []
         self.leaf_ax: list[str] = []
         self.rules: list[str] = []
+        # Memos for the two structural rewrites. A term is a DAG, and both
+        # rebuild it node by node: without the memo `lift` synthesised 7.9 M
+        # nodes (692 MB of live dicts, 6 GB peak RSS) for one declaration.
+        self._lift_memo: dict[tuple[int, int, int], int] = {}
+        self._subst_memo: dict[tuple[int, int, int], int] = {}
 
     # ── export manipulation ──────────────────────────────────────────────
     def mk(self, d: dict) -> int:
@@ -382,12 +445,15 @@ class Deriver:
             self._ind_decls = {}
             import json
 
-            for line in self.path.read_text().splitlines():
-                if '"inductive"' not in line:
-                    continue
-                ind = json.loads(line)["inductive"]
-                for t in ind.get("types", []):
-                    self._ind_decls[self.ex.name(t["name"])] = ind
+            # Streamed, not `read_text()`: the export is hundreds of megabytes
+            # and the inductive blocks are a handful of its lines.
+            with self.path.open("rb") as fh:
+                for line in fh:
+                    if b'"inductive"' not in line:
+                        continue
+                    ind = json.loads(line)["inductive"]
+                    for t in ind.get("types", []):
+                        self._ind_decls[self.ex.name(t["name"])] = ind
         return self._ind_decls.get(nm)
 
     def ind_type(self, nm: str) -> int | None:
@@ -402,19 +468,21 @@ class Deriver:
             self._ind_types = {}
             import json
 
-            for line in self.path.read_text().splitlines():
-                if '"inductive"' not in line:
-                    continue
-                d = json.loads(line)
-                for t in d["inductive"].get("types", []):
-                    if "type" in t:
-                        self._ind_types[self.ex.name(t["name"])] = t["type"]
-                # Recursors (`Eq.rec`, `Nat.rec`, ...) and constructors are not
-                # decls in `Export.decls`, and a proof term applies both. The
-                # record keys are `recs` and `ctors`.
-                for r in d["inductive"].get("recs", []) + d["inductive"].get("ctors", []):
-                    if "type" in r:
-                        self._ind_types[self.ex.name(r["name"])] = r["type"]
+            with self.path.open("rb") as fh:
+                for line in fh:
+                    if b'"inductive"' not in line:
+                        continue
+                    d = json.loads(line)
+                    for t in d["inductive"].get("types", []):
+                        if "type" in t:
+                            self._ind_types[self.ex.name(t["name"])] = t["type"]
+                    # Recursors (`Eq.rec`, `Nat.rec`, ...) and constructors are
+                    # not decls in `Export.decls`, and a proof term applies
+                    # both. The record keys are `recs` and `ctors`.
+                    for r in (d["inductive"].get("recs", [])
+                              + d["inductive"].get("ctors", [])):
+                        if "type" in r:
+                            self._ind_types[self.ex.name(r["name"])] = r["type"]
         return self._ind_types.get(nm)
 
     def to_tree(self, eid: int, depth: int = 0) -> dict:
@@ -473,7 +541,22 @@ class Deriver:
         return eid
 
     def lift(self, eid: int, delta: int, cutoff: int = 0) -> int:
-        """Every `bvar` at or above `cutoff` shifted up by `delta`."""
+        """Every `bvar` at or above `cutoff` shifted up by `delta`.
+
+        Memoised on `(eid, delta, cutoff)`: the result is a pure function of
+        those, so one node per key, however many times the parent mentions it.
+        """
+        key = (eid, delta, cutoff)
+        got = self._lift_memo.get(key)
+        if got is not None:
+            return got
+        out = self._lift(eid, delta, cutoff)
+        if len(self._lift_memo) > MEMO_MAX:
+            self._lift_memo.clear()
+        self._lift_memo[key] = out
+        return out
+
+    def _lift(self, eid: int, delta: int, cutoff: int = 0) -> int:
         e = self.ex.exprs[eid]
         if "bvar" in e:
             return eid if e["bvar"] < cutoff else self.mk({"bvar": e["bvar"] + delta})
@@ -510,7 +593,20 @@ class Deriver:
         and inserting `arg` under a binder means lifting it first — the same two
         steps Lean's `instantiate` is built from. Getting this wrong shows up as
         a unification failure inside `ty_app`, not as a wrong type.
+
+        Memoised on `(eid, arg, depth)` for the same reason as `lift`.
         """
+        key = (eid, arg, depth)
+        got = self._subst_memo.get(key)
+        if got is not None:
+            return got
+        out = self._subst0(eid, arg, depth)
+        if len(self._subst_memo) > MEMO_MAX:
+            self._subst_memo.clear()
+        self._subst_memo[key] = out
+        return out
+
+    def _subst0(self, eid: int, arg: int, depth: int = 0) -> int:
         e = self.ex.exprs[eid]
         if "bvar" in e:
             k = e["bvar"]
@@ -799,6 +895,14 @@ class Deriver:
                 })
             self.rules.append("ty_app")
             return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
+        if "forallE" in e or "sort" in e:
+            # A Π-type or a sort reached in an *inference* position (as a λ's
+            # body, or as the function of an application). `_check` already
+            # treats the same node as a counted assumption — `ty_pi` would need
+            # the universe of the Π, and levels are not stratified here — and
+            # `check` turns this into that same leaf, so the declaration keeps
+            # a derivation with one more named assumption instead of dying.
+            raise Unfoldable(eid)
         raise SystemExit(f"infer: unhandled expression {sorted(e.keys())}")
 
     def lam_type(self, eid: int, env: list[int]):

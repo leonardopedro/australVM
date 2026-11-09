@@ -80,11 +80,16 @@ def classify(reason: str) -> str:
 
 EMIT_TIMEOUT = 240
 EMIT_MEM_GB = 8
-MM0_RS_TIMEOUT = 240
+# Both bounds are *budgets*, not properties of the derivation, and both are
+# overridable so a row can be re-measured instead of only classified: a proof
+# term of 10^6 nodes is not rejected by either checker, it outlasts the budget
+# (measured: a 102 MB / 37 441-rule artifact needs 819 s of `mm0-rs` and 0.8 s
+# of `mm0-c`, the latter being where the verdict actually comes from).
+MM0_RS_TIMEOUT = int(os.environ.get("SCAN_MM0_RS_TIMEOUT", "240"))
 # `mm0-rs` on a 10^5-rule term reached 13 GB before the timeout; left alone it
 # takes the machine's memory with it, so the child is bounded on its own. A
 # capped allocation fails inside the child instead of OOM-killing the sweep.
-MM0_RS_MEM_GB = 10
+MM0_RS_MEM_GB = int(os.environ.get("SCAN_MM0_RS_MEM_GB", "10"))
 
 
 def cap_mem(gb: int):
@@ -124,7 +129,10 @@ def main() -> int:
     export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
     extra = ["--spine"] + (["--defer-subst"] if defer else [])
 
-    ex = l2m.Export(export_path)
+    # Lazy: the scan only needs the declaration table, and materialising every
+    # expression of a 460 MB export cost 7 GB before the first declaration was
+    # emitted — the memory the emitter was blamed for.
+    ex = l2m.Export(export_path, lazy=True)
     scope = [
         (nm, kind)
         for nm, (kind, rec, _i) in ex.decls.items()

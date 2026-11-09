@@ -180,10 +180,19 @@ def one(export: Path, limit: int, only: Path | None,
                     return True
                 return re.sub(r"[^A-Za-z0-9_]", "_", r["decl"]).strip("_") == key
             if art.stat().st_size > check_max_mb * 1024 * 1024:
+                mb = art.stat().st_size >> 20
                 for row in rows:
                     if match(row):
+                        # The checker's own reason is the classification; the
+                        # size only says why this row was not re-derived rule
+                        # by rule. Overwriting the reason with the size made
+                        # "malformed artifact" and "the checker ran out of
+                        # budget" indistinguishable in the TSV, which is the
+                        # question the column is read to answer.
+                        why = row["detail"]
                         row["selfcheck"] = "over cap"
-                        row["detail"] = f"artifact {art.stat().st_size >> 20} MB"
+                        row["detail"] = (f"{why}; artifact {mb} MB" if why
+                                         else f"artifact {mb} MB")
                         break
                 continue
             c = run([str(CHECK), str(art)], timeout=300)

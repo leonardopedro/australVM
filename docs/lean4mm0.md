@@ -1637,24 +1637,29 @@ exports            : 329 covered, 0 skipped (larger than 10000 MB)
 sample             : the chapter's own declarations (roots), 0 export(s) had none recorded
 declarations seen  : 493 (489 distinct)
 provenance         : 489 the chapter's own declaration(s), 0 from its dependency closure
-closed by mm0      : 398/489 distinct
-rules / assumptions: 4153375 / 900051
-re-derived         : 371 (0 disagreed, 27 over the 32 MB self-check cap, 0 timed out, 0 unmatched)
-rules shared with MM0: 1368541/1368541 rule application(s) in the proof terms the check re-derived
+closed by mm0      : 436/489 distinct
+rules / assumptions: 5616666 / 1216576
+re-derived         : 404 (0 disagreed, 36 over the 32 MB self-check cap, 0 timed out, 0 unmatched)
+rules shared with MM0: 1472874/1472874 rule application(s) in the proof terms the check re-derived
 non-closures by stage:
-     82  emit
-      8  mm0-rs
+     25  emit
+     27  mm0-rs
       1  mm0-c
 ```
 
+The `emit` rows here are the merged outcome of this sweep and the retry of §13.17
+(34 of them closed, 13 moved on to the checkers); §13.17 also says why the
+`mm0-rs` count grew from 8 to 27 while the `emit` count fell by 57.
+
 So the dependency problem of §13.15 is gone (0 of 489 declarations came from a
-closure), and on what is left the pipeline closes **398 of 489** declaration
-names and re-derives **371**, with **every one of the 1 368 541 rule
-applications in those terms present in MM0** — still 100%. The shared-rule
-total is only 4.5% above the 176-declaration sample's 1 309 544 despite covering
-2.8× the declaration names and 2.1× the re-derivations (371 against 176): the
-chapter-own terms average 3 689 rule applications against the sampled
-dependency terms' 7 441, i.e. roughly half the size. The 493 rows exceed the 489
+closure), and on what is left the pipeline closes **436 of 489** declaration
+names and re-derives **404**, with **every one of the 1 472 874 rule
+applications in those terms present in MM0** — still 100%, and still with **no
+`disagreed` row**. The shared-rule total is only 12.5% above the
+176-declaration sample's 1 309 544 despite covering 2.8× the declaration names
+and 2.3× the re-derivations (404 against 176): the chapter-own terms average
+3 646 rule applications against the sampled dependency terms' 7 441, i.e.
+roughly half the size. The 493 rows exceed the 489
 distinct names because four declarations are rooted in two chapters each; the
 closure and re-derivation counts are per name, the rule totals per row.
 
@@ -1663,22 +1668,27 @@ only. Splitting the 493 rows at 200 MB (194 exports below, 135 above):
 
 | outcome | ≤200 MB (357 decls) | >200 MB (136 decls) |
 | --- | ---: | ---: |
-| verified, term re-derived | 298 | 77 |
-| closed, term over the 32 MB self-check cap | 24 | 3 |
-| `emit`: over 8 GiB (memory bound) | 12 | 53 |
-| `emit`: over 240 s (time bound) | 12 | 1 |
-| `emit`: unhandled `['forallE','ie']` | 4 | 0 |
-| `mm0-rs` artifact (88–558 MB) | 7 | 1 |
+| verified, term re-derived | 299 | 105 |
+| closed, term over the 32 MB self-check cap | 28 | 8 |
+| `emit`: over 8 GiB (memory bound) | 4 | 10 |
+| `emit`: over 240 s (time bound) | 8 | 3 |
+| `mm0-rs`: over 10 GiB / over 240 s | 8 / 3 | 5 / 3 |
+| `mm0-rs` artifact under the sweep's budget | 7 | 1 |
 | `mm0-c` artifact (100 MB) | 0 | 1 |
 
+The `forallE`/`ie` class of the first pass is gone from this table entirely: all
+four declarations close (8–76 s each) once `infer` has a sort branch, and their
+`ie` nodes are Π types rather than an inference gap of the encoding.
+
 Below 200 MB the failures are spread across five classes and are mostly *not*
-the emitter's memory: 12 time bounds, 7 `mm0-rs` artifacts, 4 occurrences of the
-`forallE`/`ie` inference gap. Above 200 MB there is essentially **one** class —
-the emitter exceeding 8 GiB on 53 of 136 declarations (39%, against 3.4%
-below) — and the `forallE`/`ie` gap does not appear at all. So extending the
-sweep did change the failure profile: the remaining >200 MB work is an emitter
-memory question, not a coverage-of-the-language question, while the language
-questions live entirely in the smaller exports.
+the emitter's memory: 8 time bounds, 7 `mm0-rs` artifacts, 8 `mm0-rs` memory
+bounds. Above 200 MB the largest single class is now the emitter's **remaining**
+memory bound — 10 of 136 declarations (7%, against 53 of 136 = 39% before the
+two fixes of §13.17) — followed by the checkers' budgets on the artifacts that
+the emitter does produce (9 of 136). So the fixes did change the failure
+profile in the direction §13.15 predicted, but they did not remove the >200 MB
+class: what they removed is the *overhead* half of it, and what is left is
+derivation size on both sides of the pipeline.
 
 **The 15 exports that first reported nothing.** In the first pass these showed
 `0/0 closed` — not because they had no own declarations, but because the sweep
@@ -1696,7 +1706,116 @@ sweep now matches `⏱` as a `CAPPED` row, and the 15 were retried at
 In the first pass all 30 of those declarations ended on the emitter cap, so
 nothing was recorded at all; at the larger budget 15 still hit that cap, while
 the other 15 get a proof term out and then meet the next bound — 7 of them at
-`mm0-rs`, which writes an 88–425 MB artifact and refuses it. That class is
-counted separately from disagreement: the checker never accepted the term, so
-there is nothing to agree or disagree with, and it is not evidence about the
-translation.
+`mm0-rs`, which writes an 88–425 MB artifact. That class is counted separately
+from disagreement: at the sweep's 240 s budget the checker has not returned a
+verdict either way, so there is nothing to agree or disagree with — and §13.17
+measures what happens when it is given the time.
+
+### 13.17 Where the 8 GiB went, and what the `mm0-rs` artifacts were
+
+Three follow-ups to §13.16: the 65 declarations whose emission exceeded 8 GiB,
+the 4 that died on `['forallE','ie']`, and the 8 artifacts `mm0-rs` never
+returned a verdict on.
+
+**The emitter's memory had two causes, and neither was the derivation.**
+
+1. *An eager parse.* `Export.__init__` decoded every NDJSON record into a dict
+   before the first declaration was emitted — 3.79 GB for a 248 MB export, held
+   for the whole run. `LazyExprs` now keeps a dense `array('q')` of record
+   offsets and decodes on demand (`CACHE_MAX` 200 000 records), and the id of an
+   expression record is found by `rfind` + `IE_RE` because `"ie"` is last on most
+   records but first on `sort` and `lam`.
+2. *Unmemoised DAG rebuilds.* `Deriver.lift`/`subst0` rebuilt a shared subterm
+   once per occurrence, so one spine derivation synthesised **7.9 M nodes**
+   (6.7 GB peak) on a term whose DAG is orders of magnitude smaller. Both are
+   now memoised on `(eid, delta, cutoff)` and `(eid, arg, depth)` with
+   `MEMO_MAX = 1_000_000` entries, and `Enc.enc` is memoised by eid under a
+   64 MB budget — a root string too big to cache stops caching instead of
+   pinning the table.
+
+Measured on `BookProof.Textbook.ChapterH1.duhamel_phiOp1`: derivation peak
+573 MB, artifact write 679 MB, 8.0 s end to end, and the `.mm0`, `.mm1` and the
+obligations file are byte-identical (`cmp`) to the copy the instrumented build
+wrote before the sampler was removed.
+
+**What the retry converted.** The 78 rows that were `emit`-bound or
+`['forallE','ie']` were re-run at the same 8 GiB / 240 s budgets:
+
+| first-pass class | closed | still memory-bound | still time-bound | reached the checkers |
+| --- | ---: | ---: | ---: | ---: |
+| `emit`: over 8 GiB (65) | 34 | 18 | 0 | 13 |
+| `emit`: over 240 s (13) | 0 | 0 | 7 | 6 |
+| `emit`: `['forallE','ie']` (4) | 4 | 0 | 0 | 0 |
+
+so `emit` fell from 82 rows to 25, closed names from 398 to **436**, re-derived
+from 371 to **404**, and the emitted rule total from 4 153 375 to **5 616 666**
+(assumptions 900 051 → 1 216 576, shared rules 1 368 541 → 1 472 874, still 100%
+and still zero disagreements). The 19 rows that now reach the checkers instead of
+failing in the emitter are why `mm0-rs` grew from 8 rows to 27: **the memory fix
+moved the boundary downstream rather than removing it.** What is left of the
+>200 MB class is real derivation size — 18 declarations still exceed 8 GiB, and
+the largest of them (a 1.36 M-rule term) builds ~1.4 GB of obligations alone.
+
+**The `forallE`/`ie` gap.** `infer()` had no Π/sort branch, so an `ie` node in a
+type position raised `unhandled expression`; the encoding was fine and the
+inference was missing. It now raises `Unfoldable(eid)`, which `check`'s
+`assume_leaf` records as a *counted* assumption, so the declaration closes with
+its assumptions itemised instead of failing outright. All four close and
+re-derive: `ChapterB4.pure_state_satisfies_P2` (71 716 rules / 14 026
+assumptions), `YangMillsFormClosureND.magCutoffOp_eq_sum_cre` (148 808 / 31 837),
+`YangMillsFormClosureND.occProj_comp_magCutoffOp_comp_occProj` (137 463 / 30 009)
+and `BrstLongitudinalExact.brstCharge` (38 066 / 8 105).
+
+**The 8 `mm0-rs` artifacts were not malformed: the checker ran out of budget.**
+Re-run with `SCAN_MM0_RS_TIMEOUT` raised from the sweep's 240 s:
+
+| artifact | rules | `mm0-rs` | `mm0-c` | verdict |
+| --- | ---: | ---: | ---: | --- |
+| 34.9 MB | 71 716 | 17.4 s | <1 s | accepted |
+| 52 MB | 148 808 | 31 s | <1 s | accepted |
+| 88 MB (`WeylHamiltonian.selfAdjoint_sq_isPositive`) | 37 773 | 513 s (with emit) | in that 513 s | closed, 8 742 assumptions |
+| 102 MB (`ChapterSirkTruncation.adjoint_reconstruction_eq`) | 37 441 | 828 s (with emit) | in that 828 s | closed, 9 168 assumptions |
+| 102 MB, checked by hand | 37 441 | 819 s | 0.82 s / 113 MB | `9195 ax/thm`, no `sorry` |
+| 135 MB (`ChapterStoneResolvent.UnboundedSelfAdjoint.approxU_cauchy`) | 50 799 | 343 s (with emit) | in that 343 s | closed, 13 328 assumptions |
+| 137 MB (`FriedrichsFormGap.formSpace_norm_bound`) | 101 026 | 293 s (with emit) | in that 293 s | closed |
+
+Four of the eight closed **through the pipeline** (`lean-proof-scan` +
+`mm0-rs` + `mm0-c`) at the larger budget, so the class is closed rather than
+merely out of time — and not monotonically in size: the 137 MB artifact needed
+293 s and the 135 MB one 343 s where the 102 MB one needed 828 s, because what
+`mm0-rs` pays for is the length of the longest proof term, not the bytes of the
+file. Nothing in those runs is an error: the 102 MB artifact
+elaborates in **66 s**
+with `-n` (proof checking off) and takes 819 s with it, so ~92% of the cost is
+`mm0-rs` checking the proof — and `mm0-c`, the kernel that actually has to
+agree, re-verifies the compiled `.mmb` in under a second. The cost tracks *term*
+size rather than file size: that artifact is 18 822 lines averaging 5 709
+characters (longest 2.57 M) where a 49 MB artifact averages 809, i.e. one huge
+proof term instead of many small ones. mm0-rs has no progress or verbosity flag,
+so a row that is still elaborating prints nothing at all — which is why the
+first pass could not tell the two classes apart from its own output.
+
+Both budgets are therefore budgets, not verdicts, and both are now overridable
+(`SCAN_MM0_RS_TIMEOUT`, `SCAN_MM0_RS_MEM_GB`) so a row can be re-measured rather
+than only classified; the sweep also stopped overwriting the checker's reason
+with the artifact size, which is what made the original 8 rows unclassifiable:
+
+```bash
+# one declaration, generous checker budget
+SCAN_MM0_RS_TIMEOUT=2700 SCAN_MM0_RS_MEM_GB=12 \
+python3 scripts/lean-proof-scan mm0/exports/<chapter>.ndjson "" <work> \
+  --only=<one-name-per-line>
+```
+
+What remains open is 25 `emit` (14 memory, 11 time), 27 `mm0-rs` (13 memory,
+6 time, 8 under the sweep's budget) and 1 `mm0-c` — 53 of 489 declarations, all
+of them bounded rather than wrong, and the ones whose artifact size is known
+(88–558 MB) are all at or above the 88 MB case that closed in 513 s.
+
+The self-check has a third bound, and it is not the sweep's `--check-max-mb`
+being conservative: `scripts/lean-typing-check` on the 88 MB term died with
+`MemoryError` inside `instantiate` at a 9 GiB cap after 147 s, because that
+function rebuilds a whole type tree once per `unify` call. So the 36 `over cap`
+rows are a memory property of the *checker*, not an arbitrary cap — the natural
+next step is the same treatment the emitter got (memoise or skip the rebuild
+when the substitution touches none of the term's variables), not a larger cap.

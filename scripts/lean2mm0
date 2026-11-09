@@ -69,7 +69,9 @@ Exit codes: 0 ok, 1 generation/self-check failure, 2 tooling absent (verify).
 
 from __future__ import annotations
 
+import array
 import hashlib
+import itertools
 import json
 import re
 import shutil
@@ -279,50 +281,171 @@ class RecInfo:
     ctor_names: tuple     # canon ctor names, positionally = cidx
 
 
-class Export:
+def file_sha256(path: Path) -> str:
+    """Hash a file without holding it in memory (exports reach 1.2 GB)."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class LazyExprs:
+    """`Export.exprs`, parsed on first use instead of up front.
+
+    A chapter export is its whole dependency closure: `ChapterH1` carries
+    4 507 062 expressions in 248 MB, and parsing them all as Python dicts costs
+    3.8 GB (measured). One declaration's derivation reaches 6 798 of them —
+    0.15% — so for a tool that runs once per declaration the parse was the
+    memory it was killed for, not the derivation.
+
+    Ids are assigned by lean4export in file order, so the offsets fit an
+    `array('q')` indexed by id (36 MB for the export above, against 3.8 GB of
+    dicts); a file that breaks that property falls back to a dict. Nodes the
+    caller synthesises (`Deriver.mk`) live in `extra` and are never written.
+    """
+
+    # A derivation revisits the same nodes many times (every `enc`/`infer`
+    # walk, every type lookup), so uncached lazy reads re-parse and re-seek a
+    # 250 MB file per visit: measured 336 s against 35 s eager. The cache is
+    # bounded and simply emptied when full — a walking derivation touches tens
+    # of thousands of nodes, far below the bound.
+    CACHE_MAX = 200_000
+
     def __init__(self, path: Path):
+        self._path = path
+        self._off = array.array("q")
+        self._map: dict[int, int] | None = None
+        self.extra: dict[int, dict] = {}
+        self._cache: dict[int, dict] = {}
+        self._fh = None
+
+    def add(self, eid: int, off: int) -> None:
+        if self._map is None and eid == len(self._off):
+            self._off.append(off)
+            return
+        if self._map is None:
+            self._map = {i: o for i, o in enumerate(self._off)}
+            self._off = array.array("q")
+        self._map[eid] = off
+
+    def _offset(self, eid: int) -> int | None:
+        if self._map is not None:
+            return self._map.get(eid)
+        return self._off[eid] if 0 <= eid < len(self._off) else None
+
+    def __getitem__(self, eid: int) -> dict:
+        d = self.extra.get(eid)
+        if d is not None:
+            return d
+        d = self._cache.get(eid)
+        if d is not None:
+            return d
+        off = self._offset(eid)
+        if off is None:
+            raise KeyError(eid)
+        if self._fh is None:
+            self._fh = open(self._path, "rb")
+        self._fh.seek(off)
+        d = json.loads(self._fh.readline())
+        if len(self._cache) >= self.CACHE_MAX:
+            self._cache.clear()
+        self._cache[eid] = d
+        return d
+
+    def get(self, eid: int, default=None) -> dict | None:
+        try:
+            return self[eid]
+        except KeyError:
+            return default
+
+    def __setitem__(self, eid: int, d: dict) -> None:
+        self.extra[eid] = d
+
+    def __contains__(self, eid: int) -> bool:
+        return eid in self.extra or self._offset(eid) is not None
+
+    def __iter__(self):
+        ids = range(len(self._off)) if self._map is None else self._map
+        return itertools.chain(iter(ids), iter(self.extra))
+
+    def __len__(self) -> int:
+        return (len(self._off) if self._map is None else len(self._map)) + len(self.extra)
+
+
+# `"ie":<id>` — the id field of an expression record. Precompiled: the index
+# pass matches it once per expression, 4.5 M times for a large chapter.
+IE_RE = re.compile(rb'"ie":(\d+)')
+
+
+class Export:
+    def __init__(self, path: Path, lazy: bool = False):
         self.names: dict[int, str] = {}
         self.levels: dict[int, dict] = {}
-        self.exprs: dict[int, dict] = {}
         self.decls: dict[str, tuple[str, dict, int]] = {}
         self.ctors: dict[str, CtorInfo] = {}
         self.recs: dict[str, RecInfo] = {}
         self.inductive_names: set[str] = set()
         self._spine_cache: dict[int, tuple] = {}
         self._pending_inductives: list[dict] = []
-        self.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-        for i, line in enumerate(path.read_text().splitlines()):
-            if not line.strip():
-                continue
-            d = json.loads(line)
-            if "in" in d:
-                # `pre` is the *id of the parent Name*, not a character count:
-                # lean4export builds `.str n s` as {"pre": <dumpName n>, "str": s}
-                # (Export.lean). Components therefore have to be re-joined with
-                # the separator, or every name comes back flattened —
-                # `BookProof.conjugateₗᵢ` → `BookProofconjugateₗᵢ` — which makes
-                # symbols unreadable AND makes name lookups (e.g. a `--only`
-                # root list) silently match nothing.
-                if "str" in d:
-                    s = d["str"]
-                    parent = self.names.get(s.get("pre")) or ""
-                    self.names[d["in"]] = f"{parent}.{s['str']}" if parent else s["str"]
-                else:
-                    n = d["num"]
-                    parent = self.names.get(n.get("pre")) or ""
-                    self.names[d["in"]] = f"{parent}.{n['i']}" if parent else str(n["i"])
-            if "il" in d:
-                self.levels[d["il"]] = d
-            if "ie" in d:
-                self.exprs[d["ie"]] = d
-            for k in ("axiom", "thm", "def", "inductive", "ctor", "opaque"):
-                if k in d and isinstance(d[k], dict) and "name" in d[k]:
-                    nm = self.names.get(d[k]["name"], f"?{d[k]['name']}")
-                    self.decls[nm] = (k, d[k], i)
-            if "inductive" in d:
-                # name ids inside may not be in the table yet (the format
-                # emits names lazily); register after the full parse.
-                self._pending_inductives.append(d["inductive"])
+        self.sha256 = file_sha256(path)
+        # `lazy` keeps expression records on disk: the statement translator
+        # walks an export end to end and wants them all, the typing emitter
+        # wants one declaration's reachable subgraph.
+        self.exprs: dict[int, dict] | LazyExprs = LazyExprs(path) if lazy else {}
+        with path.open("rb") as fh:
+            i = -1
+            while True:
+                off = fh.tell()
+                raw = fh.readline()
+                if not raw:
+                    break
+                i += 1
+                if raw.isspace():
+                    continue
+                if lazy:
+                    p = raw.rfind(b'"ie":')
+                    m = IE_RE.match(raw, p) if p >= 0 else None
+                    if m is not None:
+                        # An expression record: index it, do not parse it. The
+                        # id field is *last* on most records
+                        # (`{"app":{…},"ie":7}`) and first only on `sort` and
+                        # `lam`, so it is found by `rfind`, not by prefix, and
+                        # it is a number only at the top level of the record.
+                        self.exprs.add(int(m.group(1)), off)
+                        continue
+                d = json.loads(raw)
+                if "in" in d:
+                    # `pre` is the *id of the parent Name*, not a character
+                    # count: lean4export builds `.str n s` as
+                    # {"pre": <dumpName n>, "str": s} (Export.lean). Components
+                    # therefore have to be re-joined with the separator, or
+                    # every name comes back flattened — `BookProof.conjugateₗᵢ`
+                    # → `BookProofconjugateₗᵢ` — which makes symbols unreadable
+                    # AND makes name lookups (e.g. a `--only` root list)
+                    # silently match nothing.
+                    if "str" in d:
+                        s = d["str"]
+                        parent = self.names.get(s.get("pre")) or ""
+                        self.names[d["in"]] = (f"{parent}.{s['str']}"
+                                               if parent else s["str"])
+                    else:
+                        n = d["num"]
+                        parent = self.names.get(n.get("pre")) or ""
+                        self.names[d["in"]] = (f"{parent}.{n['i']}"
+                                               if parent else str(n["i"]))
+                if "il" in d:
+                    self.levels[d["il"]] = d
+                if "ie" in d:
+                    self.exprs[d["ie"]] = d
+                for k in ("axiom", "thm", "def", "inductive", "ctor", "opaque"):
+                    if k in d and isinstance(d[k], dict) and "name" in d[k]:
+                        nm = self.names.get(d[k]["name"], f"?{d[k]['name']}")
+                        self.decls[nm] = (k, d[k], i)
+                if "inductive" in d:
+                    # name ids inside may not be in the table yet (the format
+                    # emits names lazily); register after the full parse.
+                    self._pending_inductives.append(d["inductive"])
         for ind in self._pending_inductives:
             self._register_inductive(ind)
         self._pending_inductives = []
