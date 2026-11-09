@@ -78,6 +78,24 @@ def classify(reason: str) -> str:
     return "other"
 
 
+EMIT_TIMEOUT = 240
+EMIT_MEM_GB = 8
+MM0_RS_TIMEOUT = 240
+# `mm0-rs` on a 10^5-rule term reached 13 GB before the timeout; left alone it
+# takes the machine's memory with it, so the child is bounded on its own. A
+# capped allocation fails inside the child instead of OOM-killing the sweep.
+MM0_RS_MEM_GB = 10
+
+
+def cap_mem(gb: int):
+    """A `preexec_fn` bounding a child's address space."""
+    def apply() -> None:
+        import resource
+        lim = gb * 1024 ** 3
+        resource.setrlimit(resource.RLIMIT_AS, (lim, lim))
+    return apply
+
+
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["PATH"] = str(Path.home() / ".local" / "bin") + os.pathsep + env.get("PATH", "")
@@ -91,9 +109,18 @@ def main() -> int:
     # block), so the prefix is the namespace, not the file stem; `--limit` keeps
     # a namespace-wide scan to a bounded proof of concept.
     limit = 0
+    # `--only=FILE`: restrict the scope to names listed one per line. A chapter
+    # export carries its whole dependency closure, in which the chapter's own
+    # declarations are a few dozen out of tens of thousands, so a sample drawn
+    # from the export at large is a sample of Mathlib — the roots file that
+    # records what the chapter itself states is the only way to aim at it.
+    only: set[str] | None = None
     for a in sys.argv[1:]:
         if a.startswith("--limit="):
             limit = int(a.split("=", 1)[1])
+        elif a.startswith("--only="):
+            only = {l.strip() for l in
+                    Path(a.split("=", 1)[1]).read_text().splitlines() if l.strip()}
     export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
     extra = ["--spine"] + (["--defer-subst"] if defer else [])
 
@@ -102,6 +129,7 @@ def main() -> int:
         (nm, kind)
         for nm, (kind, rec, _i) in ex.decls.items()
         if "value" in rec and nm.startswith(prefix)
+        and (only is None or nm in only)
     ]
     scope.sort()
     if limit and len(scope) > limit:
@@ -131,10 +159,24 @@ def main() -> int:
     for nm, kind in scope:
         short = nm[len(prefix):] if nm.startswith(prefix) else nm
         out = work / re.sub(r"[^A-Za-z0-9_]", "_", short).strip("_")
-        r = run([str(EMITTER), str(export_path), nm, str(out)] + extra)
+        # The emitter holds the whole derivation in memory, and on the largest
+        # chapters that is tens of GB (`ChapterEsaClosureCore` reached 11.9 GB
+        # on one declaration). Bound it like `mm0-rs` and say which bound was
+        # hit, instead of letting it OOM the machine.
+        try:
+            r = run([str(EMITTER), str(export_path), nm, str(out)] + extra,
+                    timeout=EMIT_TIMEOUT, preexec_fn=cap_mem(EMIT_MEM_GB))
+        except subprocess.TimeoutExpired:
+            failed.append((short, f"emit: over {EMIT_TIMEOUT} s"))
+            print(f"  emit  ⏱ {short}: over {EMIT_TIMEOUT} s")
+            continue
         if r.returncode != 0:
-            failed.append((short, last_meaningful(r.stdout + r.stderr)))
-            print(f"  emit  ✗ {short}: {failed[-1][1][:110]}")
+            if r.returncode == -6 or "MemoryError" in (r.stdout + r.stderr):
+                failed.append((short, f"emit: over {EMIT_MEM_GB} GiB"))
+                print(f"  emit  ✗ {short}: over {EMIT_MEM_GB} GiB")
+            else:
+                failed.append((short, last_meaningful(r.stdout + r.stderr)))
+                print(f"  emit  ✗ {short}: {failed[-1][1][:110]}")
             continue
         # The artifact's path is what the emitter says it wrote, not a guess:
         # the stem is the declaration's last name component plus `_typing`.
@@ -147,7 +189,20 @@ def main() -> int:
         full1 = out / "full.mm1"
         full0.write_text(prefix_text + stem.with_suffix(".mm0").read_text())
         full1.write_text(prefix_text + stem.with_suffix(".mm1").read_text())
-        c = run(["mm0-rs", "compile", str(full1), str(out / "full.mmb")])
+        # `mm0-rs` is superlinear in proof size: a 10^5-rule term took >12
+        # minutes and 13 GB without finishing. Bound it, and report the bound
+        # as its own outcome rather than as a verdict on the derivation.
+        try:
+            c = run(["mm0-rs", "compile", str(full1), str(out / "full.mmb")],
+                    timeout=MM0_RS_TIMEOUT, preexec_fn=cap_mem(MM0_RS_MEM_GB))
+        except subprocess.TimeoutExpired:
+            failed.append((short, f"mm0-rs: over {MM0_RS_TIMEOUT} s"))
+            print(f"  mm0-rs ⏱ {short}: over {MM0_RS_TIMEOUT} s")
+            continue
+        if c.returncode == -6 or "memory allocation" in (c.stdout + c.stderr):
+            failed.append((short, f"mm0-rs: over {MM0_RS_MEM_GB} GiB"))
+            print(f"  mm0-rs ✗ {short}: over {MM0_RS_MEM_GB} GiB")
+            continue
         if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
             failed.append((short, "mm0-rs: " + last_meaningful(c.stdout + c.stderr)))
             print(f"  mm0-rs ✗ {short}: {failed[-1][1][:110]}")

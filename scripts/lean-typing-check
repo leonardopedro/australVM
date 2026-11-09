@@ -16,12 +16,20 @@ MM0 does not give.
 
 Interface:
 
-  lean-typing-check <artifact.mm1> [--theory <cic_typing.mm0>] [--first]
+  lean-typing-check <artifact.mm1> [--theory <cic_typing.mm0>] [--first] [--rules]
 
 Every `pub theorem` in the artifact is checked against its statement. A premise
 discharged by a local `axiom` (a leaf the emitter assumed, a constant's type, a
 conversion, a field fact) is reported as **assumed**, counted separately: the
 checker's job is to prove the *derivation* sound given those, not to invent them.
+
+Each re-derivation also reports how much of the derivation it actually shares
+with MM0: the rule applications in the artifact's own proof term, and how many of
+them the check re-applied. `shared < total` means the check stopped short and the
+verdict covers only part of the proof. The artifact's `Rules applied` comment
+(the emitter's own tally) is reported next to it when present, because it is a
+different quantity — it counts the emitter's construction steps, not the proof's
+nodes, and the two are not meant to be equal.
 
 Exit status: 0 when every theorem checks, 1 when one does not, 2 on a parse error.
 """
@@ -29,6 +37,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 AVM = Path(__file__).resolve().parent.parent
@@ -435,6 +444,35 @@ def first_diff(a, b, path="") -> tuple[str, str, str]:
     return (path or "term", a, b)
 
 
+def census(proof, rules) -> dict[str, int]:
+    """MM0's own rule applications in a proof term, per rule name.
+
+    Every node whose head is a rule of the theory is one application — that is
+    exactly what MM0 checks, one proof command per node. A leaf naming a local
+    fact is an assumption, not an application, and is not counted here.
+    """
+    out: dict[str, int] = {}
+
+    def go(p):
+        if isinstance(p, str):
+            if p in rules:
+                out[p] = out.get(p, 0) + 1
+            return
+        if p[0] in rules:
+            out[p[0]] = out.get(p[0], 0) + 1
+        for a in p[1:]:
+            go(a)
+
+    go(proof)
+    return out
+
+
+def header_tally(path: Path) -> int | None:
+    """The emitter's own `Rules applied` count, for comparison only."""
+    m = re.search(r"^--\s+Rules applied\s*:\s*(\d+)", path.read_text(), re.M)
+    return int(m.group(1)) if m else None
+
+
 def failure_class(got, expected) -> str:
     if got is None or expected is None:
         return "?"
@@ -464,17 +502,31 @@ def main() -> int:
     ok = 0
     fails = 0
     classes: dict[str, int] = {}
+    total_rules = 0
+    total_shared = 0
+    per_rule: Counter = Counter()
     for name, goal, proof in theorems:
         c = Checker(rules, facts)
         try:
             c.check(goal, proof, [name])
         except (Mismatch, StopIteration):
             pass
+        applied = Counter(c.applied)
+        mm0_rules = census(proof, rules)
+        n_mm0 = sum(mm0_rules.values())
+        # How much of MM0's side the re-derivation actually covered: per rule
+        # name, the smaller of the two counts. Fewer than `n_mm0` means the
+        # check stopped short of part of the proof, whatever the verdict says.
+        shared = sum(min(applied[k], v) for k, v in mm0_rules.items())
+        total_rules += n_mm0
+        total_shared += shared
+        per_rule.update(mm0_rules)
+        pct = f"{100 * shared / n_mm0:.0f}%" if n_mm0 else "n/a"
         if c.failure is None:
             ok += 1
             if not first:
-                print(f"  ok    {name}: {len(c.applied)} rule step(s), "
-                      f"{len(c.assumed)} assumed premise(s)")
+                print(f"  ok    {name}: {shared}/{n_mm0} rule application(s) shared "
+                      f"with MM0 ({pct}), {len(c.assumed)} assumed premise(s)")
         else:
             fails += 1
             path, why, got, expected = c.failure
@@ -493,6 +545,17 @@ def main() -> int:
                 break
 
     print(f"checked {len(theorems)} theorem(s): {ok} re-derived, {fails} broken")
+    print(f"rules shared with MM0: {total_shared}/{total_rules} rule application(s)"
+          + (f" ({100 * total_shared / total_rules:.1f}%)" if total_rules else ""))
+    tally = header_tally(artifact)
+    if tally is not None:
+        print(f"emitter's tally      : {tally} step(s) — a different quantity: the "
+              f"emitter counts its own construction steps, MM0 checks the proof's "
+              f"{total_rules} node(s)")
+    if "--rules" in argv and per_rule:
+        print("per rule:")
+        for r, n in per_rule.most_common():
+            print(f"  {n:6d}  {r}")
     for klass, n in sorted(classes.items(), key=lambda kv: -kv[1]):
         print(f"    {n}  {klass}")
     return 0 if fails == 0 else 1
