@@ -1637,23 +1637,27 @@ exports            : 329 covered, 0 skipped (larger than 10000 MB)
 sample             : the chapter's own declarations (roots), 0 export(s) had none recorded
 declarations seen  : 493 (489 distinct)
 provenance         : 489 the chapter's own declaration(s), 0 from its dependency closure
-closed by mm0      : 436/489 distinct
-rules / assumptions: 5616666 / 1216576
-re-derived         : 404 (0 disagreed, 36 over the 32 MB self-check cap, 0 timed out, 0 unmatched)
+closed by mm0      : 447/489 distinct
+rules / assumptions: 7847904 / 1718066
+re-derived         : 404 (0 disagreed, 41 over the 32 MB self-check cap, 6 not yet re-checked, 0 timed out)
 rules shared with MM0: 1472874/1472874 rule application(s) in the proof terms the check re-derived
 non-closures by stage:
      25  emit
-     27  mm0-rs
+     16  mm0-rs
       1  mm0-c
 ```
 
 The `emit` rows here are the merged outcome of this sweep and the retry of §13.17
 (34 of them closed, 13 moved on to the checkers); §13.17 also says why the
-`mm0-rs` count grew from 8 to 27 while the `emit` count fell by 57.
+`mm0-rs` count grew from 8 to 27 while the `emit` count fell by 57, and §13.17
+plus §13.18 account for the 11 further rows that the larger-budget classification
+pass closed (the 88–558 MB artifacts and six `mm0-rs`-bound rows).
 
 So the dependency problem of §13.15 is gone (0 of 489 declarations came from a
-closure), and on what is left the pipeline closes **436 of 489** declaration
-names and re-derives **404**, with **every one of the 1 472 874 rule
+closure), and on what is left the pipeline closes **447 of 489** declaration
+names and re-derives **404 rows (400 distinct names: a name rooted in two
+chapters is re-checked once per artifact)**, with **every one of the 1 472 874
+rule
 applications in those terms present in MM0** — still 100%, and still with **no
 `disagreed` row**. The shared-rule total is only 12.5% above the
 176-declaration sample's 1 309 544 despite covering 2.8× the declaration names
@@ -1666,14 +1670,15 @@ closure and re-derivation counts are per name, the rule totals per row.
 **Does the failure class change with export size?** Yes, and in one direction
 only. Splitting the 493 rows at 200 MB (194 exports below, 135 above):
 
-| outcome | ≤200 MB (357 decls) | >200 MB (136 decls) |
+| outcome | ≤200 MB (353 decls) | >200 MB (136 decls) |
 | --- | ---: | ---: |
-| verified, term re-derived | 299 | 105 |
-| closed, term over the 32 MB self-check cap | 28 | 8 |
+| verified, term re-derived | 295 | 105 |
+| closed, term over the 32 MB self-check cap | 33 | 8 |
+| closed, self-check not yet run | 3 | 3 |
 | `emit`: over 8 GiB (memory bound) | 4 | 10 |
 | `emit`: over 240 s (time bound) | 8 | 3 |
-| `mm0-rs`: over 10 GiB / over 240 s | 8 / 3 | 5 / 3 |
-| `mm0-rs` artifact under the sweep's budget | 7 | 1 |
+| `mm0-rs`: over 10 GiB / over 240 s | 7 / 1 | 5 / 0 |
+| `mm0-rs` artifact (360 / 425 / 558 MB) | 2 | 1 |
 | `mm0-c` artifact (100 MB) | 0 | 1 |
 
 The `forallE`/`ie` class of the first pass is gone from this table entirely: all
@@ -1681,11 +1686,11 @@ four declarations close (8–76 s each) once `infer` has a sort branch, and thei
 `ie` nodes are Π types rather than an inference gap of the encoding.
 
 Below 200 MB the failures are spread across five classes and are mostly *not*
-the emitter's memory: 8 time bounds, 7 `mm0-rs` artifacts, 8 `mm0-rs` memory
-bounds. Above 200 MB the largest single class is now the emitter's **remaining**
-memory bound — 10 of 136 declarations (7%, against 53 of 136 = 39% before the
-two fixes of §13.17) — followed by the checkers' budgets on the artifacts that
-the emitter does produce (9 of 136). So the fixes did change the failure
+the emitter's memory: 8 emit time bounds, 2 `mm0-rs` artifacts, 7 `mm0-rs` memory
+bounds, 1 `mm0-rs` time bound. Above 200 MB the largest single class is now the
+emitter's **remaining** memory bound — 10 of 136 declarations (7%, against 53 of
+136 = 39% before the two fixes of §13.17) — followed by the checkers'
+bounds on the artifacts the emitter does produce (7 of 136). So the fixes did change the failure
 profile in the direction §13.15 predicted, but they did not remove the >200 MB
 class: what they removed is the *overhead* half of it, and what is left is
 derivation size on both sides of the pipeline.
@@ -1807,15 +1812,87 @@ python3 scripts/lean-proof-scan mm0/exports/<chapter>.ndjson "" <work> \
   --only=<one-name-per-line>
 ```
 
-What remains open is 25 `emit` (14 memory, 11 time), 27 `mm0-rs` (13 memory,
-6 time, 8 under the sweep's budget) and 1 `mm0-c` — 53 of 489 declarations, all
-of them bounded rather than wrong, and the ones whose artifact size is known
-(88–558 MB) are all at or above the 88 MB case that closed in 513 s.
+What remains open after the classification pass is 25 `emit` (14 memory, 11
+time), 16 `mm0-rs` (12 memory, 1 time, 3 proof terms of 360–558 MB) and 1
+`mm0-c` — 42 of 489 declarations, all of them bounded rather than wrong.
 
-The self-check has a third bound, and it is not the sweep's `--check-max-mb`
-being conservative: `scripts/lean-typing-check` on the 88 MB term died with
-`MemoryError` inside `instantiate` at a 9 GiB cap after 147 s, because that
-function rebuilds a whole type tree once per `unify` call. So the 36 `over cap`
-rows are a memory property of the *checker*, not an arbitrary cap — the natural
-next step is the same treatment the emitter got (memoise or skip the rebuild
-when the substitution touches none of the term's variables), not a larger cap.
+**Five of the eight artifacts closed, and size is not what decides it.** Re-run
+through the pipeline itself at a 2700 s `mm0-rs` budget: 88 MB in 513 s, 102 MB
+in 828 s, 135 MB in 343 s, 137 MB in 293 s, 240 MB in 1 839 s. The three that
+did not (360, 425, 558 MB) died on `mm0-rs`'s **memory**, not its clock, each
+within 341–431 s of starting — `over 12 GiB`. So the class splits: a 137 MB
+artifact with 101 026 rule applications needs 293 s, while a 102 MB one needs
+828 s, because what `mm0-rs` pays for is the length of the longest proof term,
+not the bytes of the file; and past ~360 MB the elaborator's own memory is the
+bound, independently of the constant. Six further `mm0-rs`-bound rows closed in
+the same pass, the largest a 666 943-rule term (`QuantumGravity3DGauge.ccr_poly`,
+467 s) — which is the useful part of the answer: **the largest derivations are
+not the hardest ones to check.**
+
+The self-check had a third bound of its own, and it was a bug rather than a
+cap — see §13.18.
+
+### 13.18 The self-check's bound was a bug, and the retry passes are one flag
+
+**The checker, not the cap.** `--check-max-mb 32` was read as a conservative
+budget for an expensive check; it was hiding a defect. `scripts/lean-typing-check`
+died with `MemoryError` on the 88 MB term at a 9 GiB cap after 147 s, and the
+whole of the resident set was in one function:
+
+```python
+def instantiate(t, subst):          # before
+    if isinstance(t, str):
+        return subst.get(t, t)
+    return (t[0], *(instantiate(a, subst) for a in t[1:]))
+```
+
+A term here is a **DAG** — the same context subtree sits at many positions — and
+that rebuild turns every sharing level back into a tree, so the cost is
+exponential in the sharing depth rather than linear in the term. `check` calls
+it once per proof node (`goal = instantiate(goal, self.subst)` and once per
+premise), which is 37 773 times on that artifact.
+
+Three guards, and they are each measurable:
+
+1. A term that mentions no variable at all cannot be changed by any
+   substitution, so it is returned unchanged. That answer is cached by identity
+   (`_VARLESS`, bounded at 4 096 entries — *unbounded*, the cache retained every
+   goal the derivation built and cost 6 GiB in 108 s, more than the rebuild it
+   replaced).
+2. A term whose only variables are free in the current substitution is returned
+   unchanged too (`_bound_by`), which is what stops the rebuild from
+   materialising terms it would then throw away.
+3. What does get rebuilt is memoised on `id`, so a shared subtree is built once
+   and the result is shared — the rebuild is linear in the DAG again.
+
+Measured: the same 88 MB artifact now runs in **1.2–1.4 GB** instead of dying at
+9 GiB, and the verdict is unchanged. Semantics were A/B'd against the committed
+checker on a 1 MB artifact (1 940 rules, 4 777 proof nodes): old and new print
+the same three lines, `4777/4777 rule application(s) shared with MM0 (100%)`,
+`1 re-derived, 0 broken`.
+
+**One flag for both retry passes.** §13.17 and the classification above were run
+by two ad-hoc scripts (`retry-emit.py`, `classify8.sh`) that each re-implemented
+the sweep's loop — which is why one of them wrote its verdict into the wrong
+column and could not be folded back without hand-editing. Both are now
+`lean-typing-sweep --retry`:
+
+```bash
+S=~/.local/state/australVM-lean
+scripts/lean-typing-sweep mm0/exports $S/sweep-own.merged.tsv \
+  --retry $S/sweep-own.merged.tsv --stages emit,mm0-rs \
+  --emit-timeout 900 --emit-mem-gb 10 \
+  --mm0rs-timeout 1200 --mm0rs-mem-gb 10 \
+  --scan-timeout 5400 --check-max-mb 200 --check-timeout 900
+```
+
+`--retry` re-asks each open row's question — was the declaration too large, or
+only over the bound the first pass gave it? — aims the scan at exactly those
+names, and rewrites the TSV in place, so the TSV *is* the state and re-running
+the same command resumes. `--stages` selects which half to re-measure (`emit`,
+`mm0-rs`, `mm0-c`, or `selfcheck` for rows that closed but were never
+re-derived). Every budget is a flag, and whatever a row hits is written into its
+`detail` with the budget in brackets, so "still open" names the bound instead of
+suggesting malformed output. `SCAN_EMIT_TIMEOUT` / `SCAN_EMIT_MEM_GB` joined the
+`mm0-rs` overrides in `scripts/lean-proof-scan`, so the emitter's bounds are
+overridable the same way.

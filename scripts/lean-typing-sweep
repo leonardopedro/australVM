@@ -22,10 +22,24 @@ contributed, so a census of them is the census that means anything.
 Usage:
   lean-typing-sweep <export-dir> <out.tsv> [--limit N] [--max-mb M] [--chapters N]
                     [--own] [--roots-dir DIR[:DIR…]]
+  lean-typing-sweep <export-dir> <out.tsv> --retry <prev.tsv> [budgets…]
 
-`--check-max-mb` skips the *self-check* of an artifact larger than that (the
-emitter's proof term for one declaration measured 157 MB and took the checker
-minutes and 7.7 GB); such a row is reported as over the cap, not as agreement.
+`--retry` is the second half of a sweep: it re-asks each row the previous run
+left open — was the declaration too large, or only over the bound it was given?
+— aiming the scan at exactly those names, and rewriting the TSV in place, so
+repeating the command resumes. The budgets are flags rather than constants:
+`--emit-timeout`, `--emit-mem-gb`, `--mm0rs-timeout`, `--mm0rs-mem-gb`,
+`--check-max-mb`, `--check-timeout`, `--scan-timeout`. `--stages emit,mm0-rs`
+narrows the pass to rows that stopped at those stages (the classification half).
+Whatever a row hits is
+written into its `detail`, so "still open" names the bound instead of implying
+malformed output.
+
+`--check-max-mb` skips the *self-check* of an artifact larger than that; such a
+row is reported as over the cap, not as agreement. The cap is a budget like the
+others: the checker's own memory was the reason a 93 MB term was capped, and
+with the DAG-preserving `instantiate` in `lean-typing-check` it now runs in
+~1.2 GB, so the cap can be raised (or the row re-measured by `--retry`).
 
 `--roots-dir` adds a second place to look for a roots file — the 55 exports
 whose statement set was deferred have none under `mm0/statements`, and a roots
@@ -102,8 +116,44 @@ def declared_in(art: Path) -> str | None:
     return None
 
 
+COLS = ("chapter", "decl", "own", "kind", "status", "rules", "assumptions",
+        "selfcheck", "shared", "nodes", "detail")
+
+
+def read_tsv(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    cols = None
+    for line in path.read_text().splitlines():
+        cells = line.split("\t")
+        if cols is None:
+            cols = cells
+            continue
+        got = dict(zip(cols, cells))
+        rows.append({k: got.get(k, "") for k in COLS})
+    return rows
+
+
+def write_tsv(path: Path, rows: list[dict]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w") as fh:
+        fh.write("\t".join(COLS) + "\n")
+        for r in rows:
+            fh.write("\t".join(str(r.get(k, "")) for k in COLS) + "\n")
+    tmp.replace(path)
+
+
+def stage_of(r: dict) -> str:
+    """Where a row stopped: the failing stage, or `selfcheck` if it closed."""
+    return r["status"] if r["status"] != "closed" else "selfcheck"
+
+
+def is_open(r: dict) -> bool:
+    """A row that is not fully settled: not closed, or not re-derived."""
+    return r["status"] != "closed" or r["selfcheck"] != "re-derived"
+
+
 def one(export: Path, limit: int, only: Path | None,
-        check_max_mb: int) -> list[dict]:
+        check_max_mb: int, check_timeout: int = 300) -> list[dict]:
     """Per-declaration rows for one export."""
     out = Path(tempfile.mkdtemp(prefix="sweep-", dir=WORK_DIR))
     rows: list[dict] = []
@@ -195,7 +245,7 @@ def one(export: Path, limit: int, only: Path | None,
                                          else f"artifact {mb} MB")
                         break
                 continue
-            c = run([str(CHECK), str(art)], timeout=300)
+            c = run([str(CHECK), str(art)], timeout=check_timeout)
             if c.returncode == 124:
                 for row in rows:
                     if match(row):
@@ -223,6 +273,94 @@ def one(export: Path, limit: int, only: Path | None,
         shutil.rmtree(out, ignore_errors=True)
 
 
+def retry(base: Path, out: Path, export_dir: Path, check_max_mb: int,
+          check_timeout: int, budgets: str, limit: int = 0,
+          stages: set[str] | None = None) -> int:
+    """Re-measure the rows a previous run left open, at the given budgets.
+
+    One pass re-asks every open row's question — was this declaration too large,
+    or only over the bound the first pass gave it? — and rewrites the TSV in
+    place, so the same command repeated resumes instead of restarting. A row is
+    left open only after being measured against these budgets, and its `detail`
+    says which bound it hit, so "still open" is a measurement and not a guess.
+    """
+    rows = read_tsv(base)
+    chapters: dict[str, list[dict]] = {}
+    for r in rows:
+        # `--stages` is how the classification half is asked separately: the
+        # rows that stopped at `emit` are a different question (was the budget
+        # the bound?) from the ones that closed but were never re-derived.
+        if is_open(r) and (stages is None or stage_of(r) in stages):
+            chapters.setdefault(r["chapter"], []).append(r)
+    todo = sum(len(v) for v in chapters.values())
+    print(f"retry              : {len(rows)} row(s) in {base}, {todo} open "
+          f"across {len(chapters)} export(s) ({budgets})", flush=True)
+    if not todo:
+        print("nothing to do: every row is closed and re-derived", flush=True)
+        return 0
+
+    def size(ch: str) -> int:
+        p = export_dir / f"{ch}.ndjson"
+        return p.stat().st_size if p.exists() else 1 << 62
+
+    converted = missing = 0
+    for n, chapter in enumerate(sorted(chapters, key=size), 1):
+        export = export_dir / f"{chapter}.ndjson"
+        if not export.exists():
+            missing += 1
+            print(f"[{n}/{len(chapters)}] {chapter}: no export under {export_dir}",
+                  flush=True)
+            continue
+        named = [r["decl"] for r in chapters[chapter] if not r["decl"].startswith("<")]
+        if not named:
+            continue
+        box = Path(tempfile.mkdtemp(prefix="retry-", dir=WORK_DIR))
+        only = box / f"{chapter}.roots"
+        only.write_text("\n".join(named) + "\n")
+        try:
+            # `--limit=0` is unlimited: the rows under retry are the sample.
+            new = one(export, limit, only, check_max_mb, check_timeout)
+        finally:
+            shutil.rmtree(box, ignore_errors=True)
+        got = {r["decl"]: r for r in new}
+        for row in chapters[chapter]:
+            r = got.get(row["decl"])
+            if r is None:
+                continue
+            if r["status"] == "closed":
+                for k in ("kind", "status", "rules", "assumptions",
+                          "selfcheck", "shared", "nodes", "detail"):
+                    row[k] = r[k]
+                converted += 1
+            else:
+                row["status"] = r["status"]
+                row["detail"] = (f"{r['detail']} [{budgets}]" if r["detail"]
+                                 else budgets)
+        write_tsv(out, rows)
+        left = sum(1 for r in chapters[chapter] if is_open(r))
+        print(f"[{n}/{len(chapters)}] {chapter}: {len(chapters[chapter]) - left}"
+              f"/{len(chapters[chapter])} converted, {left} still open", flush=True)
+
+    left_rows = [r for r in rows if is_open(r)]
+    print()
+    print(f"retry              : {converted} converted, {len(left_rows)} still "
+          f"open" + (f", {missing} export(s) absent" if missing else ""))
+    by_stage: dict[str, int] = {}
+    for r in left_rows:
+        by_stage[stage_of(r)] = by_stage.get(stage_of(r), 0) + 1
+    for k, v in sorted(by_stage.items(), key=lambda kv: -kv[1]):
+        print(f"  {v:5d}  {k}")
+    classes: dict[str, int] = {}
+    for r in left_rows:
+        key = re.sub(r"[:;].*", "", r["detail"])[:60]
+        classes[key] = classes.get(key, 0) + 1
+    if classes:
+        print("open rows by measured bound:")
+        for k, v in sorted(classes.items(), key=lambda kv: -kv[1])[:10]:
+            print(f"  {v:5d}  {k}")
+    return 0
+
+
 def main() -> int:
     argv = sys.argv[1:]
     if len(argv) < 2:
@@ -234,6 +372,12 @@ def main() -> int:
     chapters = arg(argv, "--chapters", 0) or None
     own = "--own" in argv
     resume = "--resume" in argv
+    retry_src = None
+    for i, a in enumerate(argv):
+        if a == "--retry" and i + 1 < len(argv):
+            retry_src = Path(argv[i + 1])
+        elif a.startswith("--retry="):
+            retry_src = Path(a.split("=", 1)[1])
     global WORK_DIR
     for i, a in enumerate(argv):
         if a == "--work-dir" and i + 1 < len(argv):
@@ -243,6 +387,23 @@ def main() -> int:
     if WORK_DIR:
         Path(WORK_DIR).mkdir(parents=True, exist_ok=True)
     check_max_mb = arg(argv, "--check-max-mb", 32)
+    check_timeout = arg(argv, "--check-timeout", 300)
+    # Budgets pass straight through to the scan, which owns the per-declaration
+    # bounds (emit memory/time, `mm0-rs` memory/time). They are recorded in the
+    # row's `detail` so a re-measurement says what it was measured against.
+    global SCAN_TIMEOUT
+    SCAN_TIMEOUT = arg(argv, "--scan-timeout", SCAN_TIMEOUT)
+    budgets = []
+    for flag, var in (("--emit-timeout", "SCAN_EMIT_TIMEOUT"),
+                      ("--emit-mem-gb", "SCAN_EMIT_MEM_GB"),
+                      ("--mm0rs-timeout", "SCAN_MM0_RS_TIMEOUT"),
+                      ("--mm0rs-mem-gb", "SCAN_MM0_RS_MEM_GB")):
+        v = arg(argv, flag, 0)
+        if v:
+            os.environ[var] = str(v)
+        budgets.append(f"{var.split('_', 1)[1].lower()}="
+                       f"{os.environ.get(var, '-')}")
+    budgets = " ".join(budgets)
     no_roots: list[str] = []
     roots_dirs = [ROOTS]
     for i, a in enumerate(argv):
@@ -250,6 +411,24 @@ def main() -> int:
             roots_dirs += [Path(d) for d in argv[i + 1].split(os.pathsep)]
         elif a.startswith("--roots-dir="):
             roots_dirs += [Path(d) for d in a.split("=", 1)[1].split(os.pathsep)]
+
+    if retry_src is not None:
+        # The TSV is the state: re-running the same command resumes where the
+        # last one stopped, and every open row has already been measured
+        # against these budgets by the time it is written back.
+        base = out_tsv if out_tsv.exists() and out_tsv.stat().st_size \
+            else retry_src
+        stages = None
+        for i, a in enumerate(argv):
+            v = None
+            if a == "--stages" and i + 1 < len(argv):
+                v = argv[i + 1]
+            elif a.startswith("--stages="):
+                v = a.split("=", 1)[1]
+            if v:
+                stages = {s.strip() for s in v.split(",") if s.strip()}
+        return retry(base, out_tsv, export_dir, check_max_mb, check_timeout,
+                     budgets, stages=stages)
 
     exports = sorted(export_dir.glob("*.ndjson"), key=lambda p: p.stat().st_size)
     skipped = [p for p in exports if p.stat().st_size > max_mb * 1024 * 1024]
@@ -305,7 +484,7 @@ def main() -> int:
                           flush=True)
                     continue
                 only = roots
-            rows = one(export, limit, only, check_max_mb)
+            rows = one(export, limit, only, check_max_mb, check_timeout)
             # Provenance is recorded for every row, aimed or not: a row is the
             # chapter's own declaration iff the chapter's roots name it, and
             # without a roots file there is nothing to compare against.

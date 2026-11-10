@@ -78,8 +78,11 @@ def classify(reason: str) -> str:
     return "other"
 
 
-EMIT_TIMEOUT = 240
-EMIT_MEM_GB = 8
+# Overridable for the same reason the `mm0-rs` budgets below are: a retry pass
+# asks whether a declaration is *large* or merely over the budget the first pass
+# gave it, and only a re-run at a different bound answers that.
+EMIT_TIMEOUT = int(os.environ.get("SCAN_EMIT_TIMEOUT", "240"))
+EMIT_MEM_GB = int(os.environ.get("SCAN_EMIT_MEM_GB", "8"))
 # Both bounds are *budgets*, not properties of the derivation, and both are
 # overridable so a row can be re-measured instead of only classified: a proof
 # term of 10^6 nodes is not rejected by either checker, it outlasts the budget
