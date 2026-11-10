@@ -1922,7 +1922,42 @@ re-running those three with that scratch changed all three verdicts: they emit
 worth keeping in mind as a general lesson about this corpus — *the failure text
 names the bound only if the harness is told where to put its files*.
 
+**What the self-check costs, per rule.** The remaining `over cap` rows are the
+ones whose artifacts were too big to try, so the question is what a check of one
+costs and therefore what cap is a budget rather than a guess. Three artifacts,
+timed end to end with `/usr/bin/time -v`, all re-deriving at 100% shared:
+
+| artifact | rules shared | wall | peak RSS | per rule |
+| --- | ---: | ---: | ---: | ---: |
+| 82 MB (`physForm_evol_self_le`) | 173 945 | 322.7 s | 1.34 GiB | 1.86 ms / 7.7 KB |
+| 137 MB (`formSpace_norm_bound`) | 281 805 | 442.0 s | 2.50 GiB | 1.57 ms / 8.9 KB |
+
+So the cost is linear in **rule applications**, about 1.7 ms and 8 KB each, and
+only incidentally in bytes: 82 and 137 MB differ by 1.7× in size and 1.4× in
+time because they differ by 1.6× in rules. That makes the budget computable from
+the rule count already in the sweep's TSV instead of handing every row the same
+3 600 s: at 1.7 ms per rule the 28 rows still open predict 1.8 h in total and
+1 134 s at worst.
+
+The rate is not uniform, and that is the one caveat: `brst_leakage_bound` has
+234 390 rules, which predicts 398 s, and it had burned 2 200 s of CPU when it
+was sampled. Per-rule cost there is over 9 ms, ~5× the table above, so a row's
+rule count bounds the check from below but does not certify it will fit a fixed
+cap. Which artifact shape sets that off is not measured yet.
+
 ### 13.19 `mm0-rs`'s memory, measured per node
+
+**The `--mm0rs-mem-gb` cap bounds address space, not RSS.** `cap_mem()` applies
+`RLIMIT_AS`, and a growing arena's address space runs ahead of its resident
+pages, so a row can sit on the boundary and land on either side of the same cap.
+`brst_leakage_bound` is that row: 240.7 MB, 55 532 axioms, and byte-identical
+(`md5 519c6f32…`) across every attempt, so nothing about the input differs. Run
+without a cap it closes in 1 839 s end to end; run under `--mm0rs-mem-gb 10` the
+same bytes stop at `over 10 GiB` after peaking around 9.7 GiB of RSS. "97% of the
+cap" is therefore not "nearly passing" — what the row needs is a cap above its
+*arena*, and any comparison of rows by cap has to be read as a VM limit. This is
+what made the 448 → 447 movement above look like a measurement when it was an
+artefact of where the limit was drawn.
 
 The class left over from §13.17 is now the largest one, and it was not obvious
 what it is a function of. Two measurements settle it, both with
@@ -1984,6 +2019,12 @@ and both driver jobs died with it; the unrelated processes survived. No state
 was lost, because the TSV is the resume state (493 rows intact, 421 re-derived,
 sharing still 2 939 445/2 939 445), and the pass resumed from its 31 open rows.
 The harness fix is procedural rather than a flag: **one sweep at a time**, with
-the memory caps at 8 GiB so a single child plus the box's other work stays
-inside the budget. A per-child limit is a bound on one process's damage, never
-on the pipeline's — the same lesson §13.18's `TMPDIR` finding made for disk.
+the budgets left where the census above was measured. Lowering them is not the
+safe default it looks like — re-running the same pass with the caps at 8 GiB
+flipped `brst_leakage_bound` (240.7 MB, closes uncapped in 1 839 s) from `closed`
+to `mm0-rs: over 8 GiB`, which moved 234 390 rules out of the closed column and
+the closed count from 448 to 447 without the machine or the term changing at
+all. A budget is part of the measurement, so tightening it to save memory buys a
+*different* result rather than a cheaper one. A per-child limit is a bound on
+one process's damage, never on the pipeline's — the same lesson §13.18's
+`TMPDIR` finding made for disk.
