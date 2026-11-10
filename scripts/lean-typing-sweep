@@ -49,7 +49,10 @@ one a conversion writes.
 `--max-mb` skips exports larger than M megabytes, `--chapters` bounds the run; the
 summary always states how many exports were covered and skipped. `--work-dir`
 moves the per-declaration artifacts off `/tmp` (a 16 GB tmpfs here) onto a disk
-with room; `--resume` skips exports already recorded in the output TSV.
+with room, and gives the child processes their `TMPDIR` there too — the emitter
+keeps its own scratch in the default temp directory, so a 541 MB term fills the
+tmpfs and dies with `[Errno 122] Disk quota exceeded` under a memory budget;
+`--resume` skips exports already recorded in the output TSV.
 """
 from __future__ import annotations
 
@@ -87,6 +90,16 @@ SHARED = re.compile(r"rules shared with MM0:\s*(\d+)/(\d+)")
 def run(cmd, **kw):
     env = dict(os.environ)
     env["PATH"] = f"{os.path.expanduser('~/.local/bin')}:{env.get('PATH', '')}"
+    # The emitter keeps its own scratch in `tempfile`'s default directory, which
+    # on this host is the 16 GB `/tmp` tmpfs; a 541 MB proof term plus the
+    # elaborator's copy fills it, and the child dies with
+    # `OSError: [Errno 122] Disk quota exceeded` — under a budget that looks
+    # like an emitter bound but is only where the files were put. Children of a
+    # `--work-dir` run therefore take their scratch from that disk instead.
+    if WORK_DIR:
+        scratch = Path(WORK_DIR) / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        env["TMPDIR"] = str(scratch)
     return subprocess.run(cmd, capture_output=True, text=True, env=env, **kw)
 
 

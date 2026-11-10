@@ -1637,24 +1637,25 @@ exports            : 329 covered, 0 skipped (larger than 10000 MB)
 sample             : the chapter's own declarations (roots), 0 export(s) had none recorded
 declarations seen  : 493 (489 distinct)
 provenance         : 489 the chapter's own declaration(s), 0 from its dependency closure
-closed by mm0      : 447/489 distinct
-rules / assumptions: 7847904 / 1718066
-re-derived         : 404 (0 disagreed, 41 over the 32 MB self-check cap, 6 not yet re-checked, 0 timed out)
+closed by mm0      : 448/489 distinct
+rules / assumptions: 7856144 / 1719842
+re-derived         : 404 (0 disagreed, 42 over the 32 MB self-check cap, 6 not yet re-checked, 0 timed out)
 rules shared with MM0: 1472874/1472874 rule application(s) in the proof terms the check re-derived
 non-closures by stage:
-     25  emit
-     16  mm0-rs
+     20  emit
+     20  mm0-rs
       1  mm0-c
 ```
 
 The `emit` rows here are the merged outcome of this sweep and the retry of §13.17
 (34 of them closed, 13 moved on to the checkers); §13.17 also says why the
 `mm0-rs` count grew from 8 to 27 while the `emit` count fell by 57, and §13.17
-plus §13.18 account for the 11 further rows that the larger-budget classification
-pass closed (the 88–558 MB artifacts and six `mm0-rs`-bound rows).
+plus §13.18 account for the 12 further rows the larger-budget passes closed (five
+of the eight 88–558 MB artifacts, six `mm0-rs`-bound rows, and one row that the
+final whole-corpus retry of §13.17 settled).
 
 So the dependency problem of §13.15 is gone (0 of 489 declarations came from a
-closure), and on what is left the pipeline closes **447 of 489** declaration
+closure), and on what is left the pipeline closes **448 of 489** declaration
 names and re-derives **404 rows (400 distinct names: a name rooted in two
 chapters is re-checked once per artifact)**, with **every one of the 1 472 874
 rule
@@ -1670,27 +1671,35 @@ closure and re-derivation counts are per name, the rule totals per row.
 **Does the failure class change with export size?** Yes, and in one direction
 only. Splitting the 493 rows at 200 MB (194 exports below, 135 above):
 
-| outcome | ≤200 MB (353 decls) | >200 MB (136 decls) |
+| outcome | ≤200 MB (357 rows) | >200 MB (136 rows) |
 | --- | ---: | ---: |
-| verified, term re-derived | 295 | 105 |
-| closed, term over the 32 MB self-check cap | 33 | 8 |
-| closed, self-check not yet run | 3 | 3 |
-| `emit`: over 8 GiB (memory bound) | 4 | 10 |
-| `emit`: over 240 s (time bound) | 8 | 3 |
-| `mm0-rs`: over 10 GiB / over 240 s | 7 / 1 | 5 / 0 |
-| `mm0-rs` artifact (360 / 425 / 558 MB) | 2 | 1 |
+| verified, term re-derived | 299 | 105 |
+| closed, term over the self-check cap, not yet re-checked | 36 | 12 |
+| `emit`: over 10 GiB (memory bound) | 5 | 12 |
+| `emit`: over 900 s (time bound) | 3 | 0 |
+| `mm0-rs`: over 10 GiB (memory bound) | 14 | 5 |
+| `mm0-rs` artifact, itself over the budget | 0 | 1 |
 | `mm0-c` artifact (100 MB) | 0 | 1 |
 
 The `forallE`/`ie` class of the first pass is gone from this table entirely: all
 four declarations close (8–76 s each) once `infer` has a sort branch, and their
 `ie` nodes are Π types rather than an inference gap of the encoding.
 
-Below 200 MB the failures are spread across five classes and are mostly *not*
-the emitter's memory: 8 emit time bounds, 2 `mm0-rs` artifacts, 7 `mm0-rs` memory
-bounds, 1 `mm0-rs` time bound. Above 200 MB the largest single class is now the
-emitter's **remaining** memory bound — 10 of 136 declarations (7%, against 53 of
-136 = 39% before the two fixes of §13.17) — followed by the checkers'
-bounds on the artifacts the emitter does produce (7 of 136). So the fixes did change the failure
+**The remaining classes are not size-driven the way the old ones were.** Below
+200 MB the open rows are `emit` time (3), `emit` memory (5) and `mm0-rs` memory
+(14): the elaborator, not the emitter. Above 200 MB the emitter's **remaining**
+memory bound is the largest class — 12 of 136 rows (9%, against 53 of 136 = 39%
+before the two fixes of §13.17) — followed by `mm0-rs` memory (5) and the two
+checker artifacts.
+
+And the class is size-driven after all, just at a much bigger constant: the rows
+`mm0-rs` bounds carry artifacts of **300, 338, 345, 349, 360, 380, 382, 386, 474,
+506, 552, 557, 558, 586, 607 and 1 024 MB**, plus three that failed before a size
+was recorded. The class begins at 300 MB and no row in it is smaller, so the
+elaborator's bound is a threshold on length, not on shape, and the constant that
+sets it is what §13.19 measures.
+
+So the fixes did change the failure
 profile in the direction §13.15 predicted, but they did not remove the >200 MB
 class: what they removed is the *overhead* half of it, and what is left is
 derivation size on both sides of the pipeline.
@@ -1812,9 +1821,11 @@ python3 scripts/lean-proof-scan mm0/exports/<chapter>.ndjson "" <work> \
   --only=<one-name-per-line>
 ```
 
-What remains open after the classification pass is 25 `emit` (14 memory, 11
-time), 16 `mm0-rs` (12 memory, 1 time, 3 proof terms of 360–558 MB) and 1
-`mm0-c` — 42 of 489 declarations, all of them bounded rather than wrong.
+The retry now re-measures the whole open set in one pass, and it converted one
+more row (a 500 KB artifact that the earlier budget had cut off at the wrong
+stage), so what remains open is 20 `emit` (17 memory, 3 time), 20 `mm0-rs` (all
+of them memory) and 1 `mm0-c` — 41 of 489 declarations, all of them bounded
+rather than wrong.
 
 **Five of the eight artifacts closed, and size is not what decides it.** Re-run
 through the pipeline itself at a 2700 s `mm0-rs` budget: 88 MB in 513 s, 102 MB
@@ -1822,12 +1833,15 @@ in 828 s, 135 MB in 343 s, 137 MB in 293 s, 240 MB in 1 839 s. The three that
 did not (360, 425, 558 MB) died on `mm0-rs`'s **memory**, not its clock, each
 within 341–431 s of starting — `over 12 GiB`. So the class splits: a 137 MB
 artifact with 101 026 rule applications needs 293 s, while a 102 MB one needs
-828 s, because what `mm0-rs` pays for is the length of the longest proof term,
-not the bytes of the file; and past ~360 MB the elaborator's own memory is the
-bound, independently of the constant. Six further `mm0-rs`-bound rows closed in
-the same pass, the largest a 666 943-rule term (`QuantumGravity3DGauge.ccr_poly`,
-467 s) — which is the useful part of the answer: **the largest derivations are
-not the hardest ones to check.**
+828 s, because what `mm0-rs` pays for is not the bytes of the file. Six further
+`mm0-rs`-bound rows closed in the same pass, the largest a 666 943-rule term
+(`QuantumGravity3DGauge.ccr_poly`, 467 s) — which is the useful part of the
+answer: **the largest derivations are not the hardest ones to check.**
+
+The whole-corpus retry measured the remaining 41 rows once more at the widest
+budgets this machine can hold (900 s / 10 GiB for `emit`, 1 200 s / 10 GiB for
+`mm0-rs`): nothing else converted, and every row's `detail` now names the bound
+it hit, so "still open" is a measurement rather than an unfinished run.
 
 The self-check had a third bound of its own, and it was a bug rather than a
 cap — see §13.18.
@@ -1896,3 +1910,80 @@ re-derived). Every budget is a flag, and whatever a row hits is written into its
 suggesting malformed output. `SCAN_EMIT_TIMEOUT` / `SCAN_EMIT_MEM_GB` joined the
 `mm0-rs` overrides in `scripts/lean-proof-scan`, so the emitter's bounds are
 overridable the same way.
+
+**Three rows that were neither bound.** Re-running the corpus surfaced three
+`emit` rows whose `detail` read `OSError: [Errno 122] Disk quota exceeded`. That
+is not a budget: `/tmp` on this host is a 16 GB tmpfs, the emitter keeps its own
+`TemporaryDirectory` there, and a 541 MB proof term plus the elaborator's copy
+fills it — so a disk full surfaced as a pipeline failure under a memory budget.
+The retry pass now points its children's `TMPDIR` at `--work-dir`'s disk, and
+re-running those three with that scratch changed all three verdicts: they emit
+(607, 552 and 1 024 MB) and then hit `mm0-rs`'s memory bound like the rest. It is
+worth keeping in mind as a general lesson about this corpus — *the failure text
+names the bound only if the harness is told where to put its files*.
+
+### 13.19 `mm0-rs`'s memory, measured per node
+
+The class left over from §13.17 is now the largest one, and it was not obvious
+what it is a function of. Two measurements settle it, both with
+`/usr/bin/time -v` on artifacts the pipeline had already emitted:
+
+| artifact | nodes (`(`) | peak RSS | `mm0-rs compile` |
+| --- | ---: | ---: | ---: |
+| 1.07 MB (`multiShiftSeq_succ`) | 111 985 | 60.1 MiB | 0.27 s |
+| 82 MB (`selfAdjoint_sq_isPositive`) | 9 490 023 | 3.49 GiB | 505 s |
+
+That is one line, not two: **RSS ≈ 19 MB + 385 bytes per node**, and **≈ 53 µs
+per node**. The fit is what predicts the failures. The smallest artifact the
+10 GiB cap rejects is 315 MB (`trial_cubic_quartic_bounded_below_general`), which
+carries 24 796 581 opens: 385 B × 24.8 M ≈ 9.0 GiB of RSS and more than 10 GiB of
+address space, so the cap fires after ~400 s — which is exactly when and how it
+died. Nothing under 300 MB is in the class because 300 MB is where the line
+crosses 10 GiB; the 1 024 MB artifact (`essentiallySelfAdjointOn_add_bounded`)
+would need ≈ 30 GiB.
+
+So the bound is the elaborator's constant per node, not the shape of the term,
+and the correction matters: §13.17's paragraph guessed "shape, not length" from
+artifact sizes that a truncated `report.py` class key had mangled into
+`artifact 10`/`artifact 30`. What the sizes actually are is in that table now.
+
+**Duplicate axioms are not the lever.** The 315 MB artifact holds 187 632 `axiom`
+statements for only 2 858 distinct bodies — one body is repeated 33 801 times —
+which looks like an obvious 98.5% saving. Hashing the bodies shows it is not:
+those repeats are the *small* substitution axioms, so deduplicating them removes
+14.7% of the text (296.6 MB of axiom text, 253.0 MB distinct) and leaves the node
+count where it is. The bytes — and the memory — are in the handful of genuinely
+large terms, one of them a single 21.5 MB axiom.
+
+What would move this class is therefore the elaborator itself: 385 B/node is
+Rust AST overhead that a shared/DAG representation would cut, and `mm0-rs` reads
+the same text as a tree. Until then the honest statement for the translator's
+own correctness is the one §13.16 makes: these rows' *emitted* terms are checked
+by `mm0-c` (that is what "closed" means), and what `mm0-rs` adds is elaboration,
+which is where the 20 rows stop.
+
+**The three `emit: over 900 s` rows are the same knee, later.** The question was
+whether the rows that outlast the emitter's 900 s cap are nearly done or are
+growing without bound, so one of them was re-run with that cap alone lifted
+(5 400 s) and the memory cap left at 10 GiB. `selfAdjointExtension_eq_adjoint`
+kept emitting for **1 158.9 s** — only 29% past the cap, which is why "nearly
+done" was the tempting reading — and then printed `emit ✗ … over 10 GiB`. It is
+not a slow row; it is a row whose term is still growing when the memory bound
+stops it, and the time cap happened to fire first only because 900 s is below
+where 10 GiB is reached. The remaining two rows of that class are unmeasured:
+their probe was lost mid-run (next paragraph), and they are listed as open with
+their bound rather than classified.
+
+**`RLIMIT_AS` is per child, not per box.** The re-derivation pass and that probe
+ran concurrently, each with every child capped at 10 GiB — a cap that says
+nothing about the *sum*, on a 30 GB host already running a `lean` elaboration at
+3.1 GiB, a rustc LTO build and a 4.4 GB `/tmp` tmpfs. At 09:32:29 the kernel
+reported a **global** OOM (`constraint=CONSTRAINT_NONE`) and killed one of our
+`mm0-rs` children — 9.38 GiB resident, i.e. its own cap, `oom_score_adj 200` —
+and both driver jobs died with it; the unrelated processes survived. No state
+was lost, because the TSV is the resume state (493 rows intact, 421 re-derived,
+sharing still 2 939 445/2 939 445), and the pass resumed from its 31 open rows.
+The harness fix is procedural rather than a flag: **one sweep at a time**, with
+the memory caps at 8 GiB so a single child plus the box's other work stays
+inside the budget. A per-child limit is a bound on one process's damage, never
+on the pipeline's — the same lesson §13.18's `TMPDIR` finding made for disk.
