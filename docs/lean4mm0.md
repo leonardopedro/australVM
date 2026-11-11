@@ -1685,6 +1685,9 @@ only. Splitting the 493 rows at 200 MB (194 exports below, 135 above):
 | `mm0-rs` artifact, itself over the budget | 0 | 1 |
 | `mm0-c` artifact (100 MB) | 0 | 1 |
 
+The `emit`/`mm0-rs` split in this table is the one these budgets measured; §13.21
+re-asks both questions at the host's ceiling and moves one row from each side.
+
 The `forallE`/`ie` class of the first pass is gone from this table entirely: all
 four declarations close (8–76 s each) once `infer` has a sort branch, and their
 `ie` nodes are Π types rather than an inference gap of the encoding.
@@ -2098,4 +2101,120 @@ Two corrections came out of this pass, both about counting:
 Nothing in the corpus is now left in the state §13.16's census described (closed
 but never re-derived). What remains open is not a question about the types: it
 is the 41 rows whose term does not fit the machine's budgets, and every one of
-them says which budget in its `detail`.
+them says which budget in its `detail`. That count is final, but the split
+between stages is not: §13.21 re-ran the 20 `mm0-rs` rows and the 3 time-bounded
+`emit` rows, and one row from each side changed class. The current split is the
+one in §13.21.
+
+### 13.21 Both remaining budgets, probed to the host's ceiling (2026-11-11)
+
+§13.20 left exactly two questions about the 41 bounded rows: do the 20 `mm0-rs`
+rows close at a larger cap, and do the 3 `emit: over 900 s` rows finish given
+more clock? Each was asked in its own TSV — 20 rows across 16 exports, and the 3
+rows across their 3 exports — so that no other row was revisited and only one
+sweep ran at a time (§13.19).
+
+**The `mm0-rs` answer is 0 of 20, and 12 GiB is as far as this host can ask.**
+Re-run at `--mm0rs-mem-gb 12` with the emit budget left at 1 800 s / 10 GiB:
+
+| verdict at 12 GiB | rows |
+| --- | ---: |
+| still `over 12 GiB` | 19 |
+| `over 3600 s` (clock, not memory) | 1 |
+| closed and re-derived | **0** |
+
+12 GiB is not an arbitrary stopping point: `MemAvailable` was ~13 GB for the
+whole run and `/proc/meminfo` reported `SwapFree: 196 kB`, so a larger
+`RLIMIT_AS` would have had the kernel's global OOM killer (§13.19) decide the
+outcome instead of the budget. The children grew into it exactly as §13.19's fit
+predicts — the largest were observed between **10.6 and 12.3 GiB RSS over 13 to
+32 min**, all of them ending well inside their 3 600 s clock. The cap, not the
+clock, is what stops these rows.
+
+Nor is the class a little above it. Spending the fit on the cap: 12 GiB of arena
+is ~33 M nodes, which is 290–420 MB of artifact text at the 8.6–12.7 B/node the
+§13.19 artifacts measure. The class's census sizes are **300–1 024 MB**, so the
+cap sits at the class's floor; only its very smallest member could fit, and the
+1 024 MB row would need ≈ 30 GiB. Per row, what each one needs is therefore "an
+`mm0-rs` arena above 12 GiB", up to ~30 GiB at the top, and the latter is not a
+budget this box can offer at all:
+
+| declaration (chapter) | artifact | at 12 GiB |
+| --- | ---: | --- |
+| `sirk_error_bound_of_crouzeix` (ChapterH2) | 345 MB | over 12 GiB |
+| `norm_physEvol_sub_sq_le` (SemigroupContinuity) | 506 MB | over 12 GiB |
+| `tendsto_physEvolCompletion_right` (SemigroupContinuity) | 607 MB | over 12 GiB |
+| `tendsto_physEvolCompletionRightFun` (TransferSemigroupRight) | 586 MB | over 12 GiB |
+| `whiteningEquiv_left_inverse` (ChapterSirkWhitening) | 558 MB | over 12 GiB |
+| `hashimoto_multishift_selects_esa` (ChapterEsaClosure) | — | over 12 GiB |
+| `compress_isSelfAdjoint` (ChapterCrouzeixSelfAdjoint) | 474 MB | over 12 GiB |
+| `Df_lyapCut` (ChapterKvnKatoEsa) | 386 MB | over 12 GiB |
+| `apply_sum_of_diagonal` (ChapterHermiteRelativeBound) | — | over 12 GiB |
+| `isPosCol_shiftCol_opCol_of_form_gap` (ChapterYangMillsFockGapChain) | 382 MB | over 12 GiB |
+| `apply_sum_of_shift` (ChapterHermiteLadderShift) | — | over 12 GiB |
+| `commForm_square_comparison` (ChapterFarisLavineDenseCore) | 557 MB | over 12 GiB |
+| `symmetricOn_square_comparison` (ChapterFarisLavineDenseCore) | 552 MB | over 12 GiB |
+| `deficiencyTrivialAt_of_dense` (ChapterKatoRellichDeficiency) | 360 MB | over 12 GiB |
+| `essentiallySelfAdjointOn_add_bounded` (ChapterKatoRellichDeficiency) | 1 024 MB | over 12 GiB |
+| `fock_gap_of_bounded_interaction` (ChapterFockInteractionStability) | 380 MB | over 12 GiB |
+| `reduceGenerator_isHermitian` (ChapterH7) | 349 MB | over 12 GiB |
+| `trial_cubic_quartic_bounded_below_general` (ChapterFockCubicQuarticStability) | 300 MB | **over 3600 s** |
+| `compress_sub_const` (ChapterSirkCrouzeixNumericalRange) | 338 MB | over 12 GiB |
+| `sirk_error_bound_numericalRange_decay` (ChapterSirkCrouzeixNumericalRange) | 425 MB | over 12 GiB |
+
+Seventeen of the twenty carry a census artifact size; the other three recorded
+their bound without one. The single row that swapped memory for time is the
+smallest artifact in the class, which is the fit working in the other direction:
+at ~24.8 M opens it is the one member whose arena can sit near 10–12 GiB, so it
+is slow rather than oversized: 3 600 s was not enough to elaborate it at 12 GiB.
+Its verdict is a clock bound reached inside a memory budget that the rest of the
+class blows through, so it is the one row here a larger clock alone could move.
+
+**The `emit` answer splits three ways, and the clock was worth trying.** The same
+three rows at `--emit-timeout 5400`, everything else at the budgets above:
+
+| declaration | at 900 s | at 5 400 s | what it needs |
+| --- | --- | --- | --- |
+| `selfAdjointExtension_eq_adjoint` | over 900 s | emit `over 10 GiB` | an emitter arena above 10 GiB — it reaches the bound at ~1 159 s and would keep growing |
+| `comm_map_id` | over 900 s | **emitted**; then `mm0-rs` `over 12 GiB` | an elaborator arena above 12 GiB; the clock was the only thing blocking the emit |
+| `adjoint_aeval` | over 900 s | still emitting at 5 400 s, ~4.2 GB RSS, flat | clock, not memory — and no bound is known past 5 400 s |
+
+So the class is not homogeneous: raising the clock converts one of the three from
+"could not emit" to "emitted, and now bound by the elaborator's arena like the
+twenty above", leaves one exactly where §13.19 found it (memory, at 1 159 s of
+emitting), and leaves one genuinely unfinished with memory flat, which is the
+only row in the corpus whose need is open-ended time.
+
+**One harness bug came out of this, and it cost three hours before it was seen.**
+A check verdict was allowed to land on the first row whose declaration matched,
+whether or not that row had closed, so a row that failed `mm0-rs` could read
+`over 12 GiB; check: over 3600 s` — two stages, one of which never ran on that
+artifact. It does now: `scripts/lean-typing-sweep` mutates a check verdict only
+on a closed row and skips the stage otherwise, and a killed checker is recorded
+as `timeout` instead of aborting the sweep. The price of the fix is that a row
+which fails the elaborator no longer re-records its artifact size — which is why
+three rows above have no size.
+
+Splicing both probes back in moves one row from each side and no row out of the
+open set:
+
+```
+rows 493 · distinct 489 · closed names 448
+rules 7856144 assumptions 1719842
+selfcheck {'re-derived': 452}
+shared 8750509 / 8750509
+non-closure: {'emit': 19, 'mm0-rs': 21, 'mm0-c': 1}
+
+452  verified
+ 20  mm0-rs: over 12 GiB
+ 18  emit: over 10 GiB
+  1  emit: over 5400 s
+  1  mm0-rs: over 3600 s
+  1  mm0-c artifact
+```
+
+`selfAdjointExtension_eq_adjoint` moves from `emit` time to `emit` memory (it was
+counted as time only because 900 s fired before 10 GiB did), and `comm_map_id`
+moves from `emit` to `mm0-rs`. The totals that matter are unchanged: 448 of 489
+names close, all 452 closed rows re-derive, 8 750 509 of 8 750 509 applications
+are shared, and every one of the 41 open rows names the budget it hit.

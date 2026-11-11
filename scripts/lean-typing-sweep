@@ -242,28 +242,45 @@ def one(export: Path, limit: int, only: Path | None,
                 if owner is not None and r["decl"] == owner:
                     return True
                 return re.sub(r"[^A-Za-z0-9_]", "_", r["decl"]).strip("_") == key
+            # A verdict belongs to the declaration the artifact was emitted for,
+            # and only a declaration the checkers accepted has an artifact to
+            # re-derive. The scan can name one declaration twice (a failed
+            # attempt and a later accepted one), so asking the first row that
+            # matches let a check verdict land on a row that never closed and
+            # read as "over 12 GiB; check: over 3600 s" — two stages at once.
+            target = next((r for r in rows if r["status"] == "closed"
+                           and match(r)), None)
+            if target is None:
+                continue
             if art.stat().st_size > check_max_mb * 1024 * 1024:
                 mb = art.stat().st_size >> 20
-                for row in rows:
-                    if match(row):
-                        # The checker's own reason is the classification; the
-                        # size only says why this row was not re-derived rule
-                        # by rule. Overwriting the reason with the size made
-                        # "malformed artifact" and "the checker ran out of
-                        # budget" indistinguishable in the TSV, which is the
-                        # question the column is read to answer.
-                        why = row["detail"]
-                        row["selfcheck"] = "over cap"
-                        row["detail"] = (f"{why}; artifact {mb} MB" if why
-                                         else f"artifact {mb} MB")
-                        break
+                # The checker's own reason is the classification; the size only
+                # says why this row was not re-derived rule by rule.
+                # Overwriting the reason with the size made "malformed
+                # artifact" and "the checker ran out of budget"
+                # indistinguishable in the TSV, which is the question the
+                # column is read to answer.
+                why = target["detail"]
+                target["selfcheck"] = "over cap"
+                target["detail"] = (f"{why}; artifact {mb} MB" if why
+                                    else f"artifact {mb} MB")
                 continue
-            c = run([str(CHECK), str(art)], timeout=check_timeout)
-            if c.returncode == 124:
-                for row in rows:
-                    if match(row):
-                        row["selfcheck"] = "timeout"
-                        break
+            # The checker can also outlive the wall clock itself (it is not
+            # capped the way the emitter and mm0-rs are), and then subprocess
+            # kills it and raises instead of returning 124. Both are the same
+            # outcome — the check did not finish in its budget — so both are
+            # recorded, rather than aborting the whole sweep on the first one.
+            killed = False
+            try:
+                c = run([str(CHECK), str(art)], timeout=check_timeout)
+            except subprocess.TimeoutExpired:
+                c, killed = None, True
+            if killed or c.returncode == 124:
+                target["selfcheck"] = "timeout"
+                if killed:
+                    target["detail"] = (
+                        (target["detail"] + "; " if target["detail"] else "")
+                        + f"check: over {check_timeout} s")
                 continue
             verdict = "re-derived" if c.returncode == 0 else "disagreed"
             shared = SHARED.search(c.stdout + c.stderr)
@@ -273,14 +290,11 @@ def one(export: Path, limit: int, only: Path | None,
                     if line.strip().startswith("class"):
                         detail = line.split(None, 1)[1].strip()
                         break
-            for row in rows:
-                if match(row):
-                    row["selfcheck"] = verdict
-                    if shared:
-                        row["shared"], row["nodes"] = shared.group(1), shared.group(2)
-                    if detail:
-                        row["detail"] = detail
-                    break
+            target["selfcheck"] = verdict
+            if shared:
+                target["shared"], target["nodes"] = shared.group(1), shared.group(2)
+            if detail:
+                target["detail"] = detail
         return rows
     finally:
         shutil.rmtree(out, ignore_errors=True)
@@ -335,7 +349,12 @@ def retry(base: Path, out: Path, export_dir: Path, check_max_mb: int,
             new = one(export, limit, only, check_max_mb, check_timeout)
         finally:
             shutil.rmtree(box, ignore_errors=True)
-        got = {r["decl"]: r for r in new}
+        # Closed beats failed when the scan names a declaration twice.
+        got: dict[str, dict] = {}
+        for r in new:
+            prev = got.get(r["decl"])
+            if prev is None or (prev["status"] != "closed" and r["status"] == "closed"):
+                got[r["decl"]] = r
         for row in chapters[chapter]:
             r = got.get(row["decl"])
             if r is None:
