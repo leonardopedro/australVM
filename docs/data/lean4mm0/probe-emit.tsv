@@ -1,0 +1,4 @@
+chapter	decl	own	kind	status	rules	assumptions	selfcheck	shared	nodes	detail
+BookProof.Toolbox.ChapterEsaClosureCore	BookProof.EsaClosure.selfAdjointExtension_eq_adjoint	own		emit	0	0				over 10 GiB [emit_timeout=5400 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12]
+BookProof.Toolbox.ChapterTensorOperatorBound	BookProof.TensorOpBound.comm_map_id	own		mm0-rs	0	0				over 12 GiB [emit_timeout=5400 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12]
+BookProof.Textbook.ChapterH8	BookProof.ChapterH8.adjoint_aeval	own		emit	0	0				over 5400 s [emit_timeout=5400 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12]

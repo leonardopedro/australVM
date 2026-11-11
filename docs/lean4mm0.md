@@ -2218,3 +2218,91 @@ counted as time only because 900 s fired before 10 GiB did), and `comm_map_id`
 moves from `emit` to `mm0-rs`. The totals that matter are unchanged: 448 of 489
 names close, all 452 closed rows re-derive, 8 750 509 of 8 750 509 applications
 are shared, and every one of the 41 open rows names the budget it hit.
+
+The census and both probes' TSVs and logs are in
+[`data/lean4mm0/`](data/lean4mm0/README.md), so these numbers can be re-read
+without re-running a sweep.
+
+### 13.22 What the arena would have to be, per node
+
+§13.21 says the 21 memory-bound rows need "an arena above 12 GiB". That is a
+true but useless answer, because 12 GiB is where this box stops and the rows are
+not all equally far past it. The actionable question is how far `mm0-rs`'s
+cost per node has to fall for them to fit the machine it is already on. Both
+halves of it are measurable from artifacts that already exist.
+
+**Node counts, counted rather than inferred.** Seventeen of the twenty-one
+artifacts survived under `classify-work/` and `emit-long/`; counting `(` in each
+gives the nodes `mm0-rs` elaborates, and the census's size-based guesses were far
+too low — a 764 MB artifact holds **91.0 M nodes**, not the ~24 M its bytes
+suggested at the 315 MB point. Four artifacts were cleaned up and are marked
+estimated: their sizes (506, 586, 607, 1 024 MB) times the class's median
+9.36 B/node.
+
+At §13.19's measured 385 B/node, fitting 12 GiB is a per-node budget:
+
+| declaration | nodes | arena at 385 B/node | fits 12 GiB at | shrink |
+| --- | ---: | ---: | ---: | ---: |
+| `essentiallySelfAdjointOn_add_bounded` (est.) | 114 760 260 | 41.1 GiB | 112 B | **3.43×** |
+| `apply_sum_of_diagonal` | 91 051 484 | 32.6 GiB | 142 B | 2.72× |
+| `apply_sum_of_shift` | 86 331 453 | 31.0 GiB | 149 B | 2.58× |
+| `hashimoto_multishift_selects_esa` | 85 486 260 | 30.7 GiB | 151 B | 2.55× |
+| `comm_map_id` | 82 212 229 | 29.5 GiB | 157 B | 2.46× |
+| `tendsto_physEvolCompletion_right` (est.) | 68 026 833 | 24.4 GiB | 189 B | 2.03× |
+| `tendsto_physEvolCompletionRightFun` (est.) | 65 673 351 | 23.5 GiB | 196 B | 1.96× |
+| `whiteningEquiv_left_inverse` | 64 500 413 | 23.1 GiB | 200 B | 1.93× |
+| `commForm_square_comparison` | 62 171 099 | 22.3 GiB | 207 B | 1.86× |
+| `symmetricOn_square_comparison` | 61 930 195 | 22.2 GiB | 208 B | 1.85× |
+| `norm_physEvol_sub_sq_le` (est.) | 56 707 706 | 20.3 GiB | 227 B | 1.69× |
+| `sirk_error_bound_numericalRange_decay` | 52 722 249 | 18.9 GiB | 244 B | 1.58× |
+| `compress_isSelfAdjoint` | 51 274 982 | 18.4 GiB | 251 B | 1.53× |
+| `isPosCol_shiftCol_opCol_of_form_gap` | 42 143 625 | 15.1 GiB | 306 B | 1.26× |
+| `deficiencyTrivialAt_of_dense` | 41 434 610 | 14.9 GiB | 311 B | 1.24× |
+| `sirk_error_bound_of_crouzeix` | 40 248 496 | 14.4 GiB | 320 B | 1.20× |
+| `compress_sub_const` | 37 646 935 | 13.5 GiB | 342 B | 1.12× |
+| `reduceGenerator_isHermitian` | 37 597 740 | 13.5 GiB | 343 B | 1.12× |
+| `Df_lyapCut` | 35 568 621 | 12.8 GiB | 362 B | 1.06× |
+| `fock_gap_of_bounded_interaction` | 33 887 707 | 12.2 GiB | 380 B | 1.01× |
+| `trial_cubic_quartic_bounded_below_general` | 24 796 432 | 8.9 GiB | 520 B | — fits |
+
+So the harness needs **1.0–3.4× less per node**, and the distribution is not
+flat: six of the twenty-one rows would fit at half the current cost (≤ 192 B),
+while the four biggest need 2.5–3.4×.
+
+Two of the probe's own verdicts are checked by this table, which is why it is
+worth writing down. `trial_cubic_quartic_bounded_below_general` is the one row
+§13.21 found clock-bound rather than memory-bound, and at 24.8 M nodes it is the
+one row whose arena fits 12 GiB (8.9 GiB) — the table says it should fail on
+time, and it did. `fock_gap_of_bounded_interaction` (12.2 GiB) and `Df_lyapCut`
+(12.8 GiB) are the two rows the same table puts nearest the cap from above, and
+both are recorded `over 12 GiB`. Neither was tuned to agree: the fit comes from
+§13.19's two spot measurements and the nodes were counted from the artifacts
+that failed.
+
+**A shared AST would be far more than enough — and the text-level repetition is
+not where it comes from.** Hash-consing sampled statements (every 17th `axiom`)
+from each artifact gives the number of *distinct* subtrees:
+
+| ratio distinct/total nodes | artifacts |
+| --- | --- |
+| 0.1–0.3% | `whiteningEquiv_left_inverse`, `hashimoto_multishift_selects_esa`, `apply_sum_of_diagonal`, `apply_sum_of_shift`, `commForm_square_comparison`, `symmetricOn_square_comparison`, `deficiencyTrivialAt_of_dense`, `fock_gap_of_bounded_interaction`, `reduceGenerator_isHermitian`, `sirk_error_bound_numericalRange_decay` |
+| 0.3–0.6% | `sirk_error_bound_of_crouzeix`, `compress_isSelfAdjoint`, `Df_lyapCut`, `isPosCol_shiftCol_opCol_of_form_gap`, `trial_cubic_quartic_bounded_below_general`, `compress_sub_const` |
+
+A hash-consed term keeps **1 node in 170–1 000** of what the current
+representation allocates. At 385 B per *distinct* node the largest **measured**
+artifact (`apply_sum_of_diagonal`, 91.0 M nodes at 0.2%) would hold ~182 000
+nodes, ~70 MB — a hundredth of the 12 GiB it needs now. The shrink required is
+3.4×, so interning does not merely cover it; it makes the question disappear,
+and the top rows stop needing a bigger box at all.
+
+That is worth separating from §13.19's dedup finding, which went the other way.
+Deduplicating *statements* saves 14.7% of the text, and counting nodes per
+statement confirms it: only **0.1–2.4%** of an artifact's nodes sit in repeated
+statements (99.7% of `sirk_error_bound_of_crouzeix`'s 40.2 M nodes are in lines
+that occur once). The saving is not in the statements; it is in the subterm
+tree, where the same `tapp`/`tabs` spine appears again and again inside
+different axioms. A fix aimed at repeated axiom *text* would therefore miss it,
+and §13.19's conclusion that "what would move this class is the elaborator" is
+now quantified: **385 B/node → ≤ 112 B/node**, or share the subtrees and get
+~0.4–2 B/node, which is the same sentence as "stop allocating a tree per
+statement".

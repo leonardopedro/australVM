@@ -1,0 +1,23 @@
+retry              : 20 row(s) in /home/leo/.local/state/australVM-lean/probe-mm0rs.tsv, 20 open across 16 export(s) (emit_timeout=1800 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12)
+[1/16] BookProof.Toolbox.ChapterHermiteLadderShift: 0/1 converted, 1 still open
+[2/16] BookProof.Textbook.ChapterH2: 0/1 converted, 1 still open
+[3/16] BookProof.OSReconstruction.SemigroupContinuity: 0/2 converted, 2 still open
+[4/16] BookProof.OSReconstruction.TransferSemigroupRight: 0/1 converted, 1 still open
+[5/16] BookProof.Sirk.ChapterSirkWhitening: 0/1 converted, 1 still open
+[6/16] BookProof.Toolbox.ChapterFarisLavineDenseCore: 0/2 converted, 2 still open
+[7/16] BookProof.Toolbox.ChapterKatoRellichDeficiency: 0/2 converted, 2 still open
+[8/16] BookProof.Toolbox.ChapterFockInteractionStability: 0/1 converted, 1 still open
+[9/16] BookProof.Textbook.ChapterH7: 0/1 converted, 1 still open
+[10/16] BookProof.Toolbox.ChapterFockCubicQuarticStability: 0/1 converted, 1 still open
+[11/16] BookProof.Toolbox.ChapterEsaClosure: 0/1 converted, 1 still open
+[12/16] BookProof.Sirk.ChapterSirkCrouzeixNumericalRange: 0/2 converted, 2 still open
+[13/16] BookProof.Sirk.ChapterCrouzeixSelfAdjoint: 0/1 converted, 1 still open
+[14/16] BookProof.Toolbox.ChapterKvnKatoEsa: 0/1 converted, 1 still open
+[15/16] BookProof.Toolbox.ChapterHermiteRelativeBound: 0/1 converted, 1 still open
+[16/16] BookProof.Qym.ChapterYangMillsFockGapChain: 0/1 converted, 1 still open
+
+retry              : 0 converted, 20 still open
+     20  mm0-rs
+open rows by measured bound:
+     19  over 12 GiB [emit_timeout=1800 emit_mem_gb=10 mm0_rs_timeout
+      1  over 3600 s [emit_timeout=1800 emit_mem_gb=10 mm0_rs_timeout
