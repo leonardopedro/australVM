@@ -1668,6 +1668,10 @@ roughly half the size. The 493 rows exceed the 489
 distinct names because four declarations are rooted in two chapters each; the
 closure and re-derivation counts are per name, the rule totals per row.
 
+This is the census of *that* pass, at a 32 MB self-check cap and a 10 GiB
+`mm0-rs` cap; §13.18–§13.20 lift both and end with all 452 closed rows
+re-derived and 8 750 509/8 750 509 applications shared (§13.20).
+
 **Does the failure class change with export size?** Yes, and in one direction
 only. Splitting the 493 rows at 200 MB (194 exports below, 135 above):
 
@@ -1924,26 +1928,31 @@ names the bound only if the harness is told where to put its files*.
 
 **What the self-check costs, per rule.** The remaining `over cap` rows are the
 ones whose artifacts were too big to try, so the question is what a check of one
-costs and therefore what cap is a budget rather than a guess. Three artifacts,
-timed end to end with `/usr/bin/time -v`, all re-deriving at 100% shared:
+costs and therefore what cap is a budget rather than a guess. Two artifacts,
+timed end to end with `/usr/bin/time -v`, both re-deriving at 100% shared:
 
-| artifact | rules shared | wall | peak RSS | per rule |
+| artifact | applications shared | wall | peak RSS | per application |
 | --- | ---: | ---: | ---: | ---: |
 | 82 MB (`physForm_evol_self_le`) | 173 945 | 322.7 s | 1.34 GiB | 1.86 ms / 7.7 KB |
 | 137 MB (`formSpace_norm_bound`) | 281 805 | 442.0 s | 2.50 GiB | 1.57 ms / 8.9 KB |
 
 So the cost is linear in **rule applications**, about 1.7 ms and 8 KB each, and
-only incidentally in bytes: 82 and 137 MB differ by 1.7× in size and 1.4× in
-time because they differ by 1.6× in rules. That makes the budget computable from
-the rule count already in the sweep's TSV instead of handing every row the same
-3 600 s: at 1.7 ms per rule the 28 rows still open predict 1.8 h in total and
-1 134 s at worst.
+only incidentally in bytes: 82 and 137 MB differ by 1.7× in size and only 1.4×
+in time while differing by 1.6× in applications.
 
-The rate is not uniform, and that is the one caveat: `brst_leakage_bound` has
-234 390 rules, which predicts 398 s, and it had burned 2 200 s of CPU when it
-was sampled. Per-rule cost there is over 9 ms, ~5× the table above, so a row's
-rule count bounds the check from below but does not certify it will fit a fixed
-cap. Which artifact shape sets that off is not measured yet.
+The tempting next step — predict each row's check from the `rules` column the
+sweep already records — does not work, and the measurements say so directly. A
+row's `rules` and the applications its check replays are *different counts and not
+proportional*: `physForm_evol_self_le` records 259 533 rules and replays 173 945
+applications (0.67×), `formSpace_norm_bound` records 101 026 and replays 281 805
+(2.8×). Predictions made from the TSV therefore say nothing about the check —
+the column measures emission, the checker measures replay — and the budget has to
+come from a measurement of the artifact, not from a column of the table.
+
+The per-application rate also moves with the term: `brst_leakage_bound` replays
+803 650 applications in ~2 760 s, 3.4 ms each, twice the table's average. So a
+fixed time cap can only ever report "over the cap" for the slow end of the
+corpus; it cannot distinguish "nearly done" from "a quarter done".
 
 ### 13.19 `mm0-rs`'s memory, measured per node
 
@@ -1958,6 +1967,14 @@ cap" is therefore not "nearly passing" — what the row needs is a cap above its
 *arena*, and any comparison of rows by cap has to be read as a VM limit. This is
 what made the 448 → 447 movement above look like a measurement when it was an
 artefact of where the limit was drawn.
+
+Raised to 12 GiB the same row closes and re-derives (803 650/803 650 applications
+shared, ~2 760 s), which pins the error to the cap rather than to the corpus: the
+10 GiB setting had classified as open four rows — `canH_coe_velH`, `ccr_poly`,
+`brst_leakage_bound`, `cauchySeq_of_dense_of_isometry` — whose RSS peaks sit
+between 9.7 and 11 GiB. Their reported outcome was therefore a property of the
+harness, and the census left by a 10 GiB cap (444 names) is not the census of the
+corpus (448).
 
 The class left over from §13.17 is now the largest one, and it was not obvious
 what it is a function of. Two measurements settle it, both with
@@ -2028,3 +2045,57 @@ all. A budget is part of the measurement, so tightening it to save memory buys a
 *different* result rather than a cheaper one. A per-child limit is a bound on
 one process's damage, never on the pipeline's — the same lesson §13.18's
 `TMPDIR` finding made for disk.
+
+### 13.20 The corpus re-derives in full: 452 rows, every rule shared
+
+§13.19 ended on four rows that had closed at a larger budget and failed at 10
+GiB. The open question was whether the 10 GiB census was the corpus's or the
+cap's. It was the cap's. Those four rows, re-run alone at
+`--mm0rs-mem-gb 12` with everything else unchanged (their own 4-row TSV, so
+only they were visited), all emit, compile and **re-derive**:
+
+| row | rules | applications shared | check |
+| --- | ---: | ---: | --- |
+| `canH_coe_velH` | 341 811 | 228 909 / 228 909 | re-derived |
+| `ccr_poly` | 666 943 | 644 813 / 644 813 | re-derived |
+| `brst_leakage_bound` | 234 390 | 803 650 / 803 650 | re-derived, ~2 760 s |
+| `cauchySeq_of_dense_of_isometry` | 122 304 | 483 167 / 483 167 | re-derived |
+
+Their `mm0-rs` peak RSS was observed between 9.7 and 11.9 GiB, so the 10 GiB
+`RLIMIT_AS` cut them off mid-arena: the earlier classification
+(`mm0-rs: over 10 GiB`, four rows and 2 160 539 applications) described the
+harness, not the terms. Splice those four verdicts back into the 493-row TSV and the
+census is complete — every row that closes is now re-derived:
+
+```
+rows 493 · distinct 489 · closed names 448
+rules 7856144 assumptions 1719842
+selfcheck {'re-derived': 452}
+shared 8750509 / 8750509
+non-closure: {'emit': 20, 'mm0-rs': 20, 'mm0-c': 1}
+```
+
+So **448 of 489** declaration names close in MM0 and **all 452 closed rows
+re-derive**, sharing **8 750 509 of 8 750 509 rule applications (100%)** — 1.11×
+applications per emitted rule, and no row whose proof term disagrees with its
+MM0 proof. The 41 remaining rows are all bounded: 20 `emit` (17 memory, 3 time),
+20 `mm0-rs` memory and 1 `mm0-c`, each recorded with the bound it hit.
+
+Two corrections came out of this pass, both about counting:
+
+- **`rules` and *rule applications* are different columns and not
+  proportional.** A row's `rules` is what the emitter produced; the number the
+  checker replays (and the number `shared`/`nodes` hold) is the applications in
+  the proof term. They differ by 0.67× in one direction and 2.8× in the other,
+  so the "budget from the TSV" prediction §13.18 drew from them was invalid and
+  a row it called a 1 134 s check (`ccr_poly`) really needs about a factor more.
+  The per-application cost, measured, is 1.6–3.4 ms.
+- **A 452-row re-derivation count against 448 names is not a contradiction.**
+  A name rooted in two chapters is emitted into two artifacts and re-checked
+  once per artifact, so rows exceed names by exactly those duplicates — the same
+  reason §13.16 reported 404 rows for 400 names.
+
+Nothing in the corpus is now left in the state §13.16's census described (closed
+but never re-derived). What remains open is not a question about the types: it
+is the 41 rows whose term does not fit the machine's budgets, and every one of
+them says which budget in its `detail`.
