@@ -1,0 +1,7 @@
+target   : BookProof.ChapterH8.adjoint_aeval
+binders  : 6
+rules    : const type ×452728 · ty_deq (universe level) ×305918 · ty_app ×718692 · ty_deq ×101523 · ty_var ×265956 · ty_abs ×181 · type-as-term (assumed) ×9
+axioms   : 410137 (548 constant types, 2139 substitution)
+mode     : spine derivation
+nats     : 349 · symbols: 313
+wrote    : /home/leo/.local/state/australVM-lean/aeval-full/out/adjoint_aeval_typing.mm0 (1297596934 B) in 5752.4 s

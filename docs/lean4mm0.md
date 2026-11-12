@@ -2695,16 +2695,54 @@ process as it is made. The one real step is at the end — 920 MB at t=5 676 s t
 1 519 MB 72 s later — where the proof string itself is built and wrapped
 (`proofb` 53 970 316 B) and both artifacts are copied out.
 
-**What is not established.** This measures the `emit` stage only. The row's
-`mm0-rs`/`mm0-c` and self-check stages were never reached (the row stopped at
-`emit`), so "the artifact is judged" is still open for it, and a 1.21 GiB `.mm0`
-is a much larger input to those stages than anything they have been given. The
-other 18 `emit` rows are re-measured separately, under the budgets their census
-rows record; that table is
-[`reemit.tsv`](data/lean4mm0/reemit.tsv), and a row that now reaches
-`mm0-rs` is still a row bounded by that stage, not a closed one.
+**The other 18 `emit` rows.** Each was re-run on its own under the budget its
+census row records (900 s and 10 GiB for seventeen of them, 5 400 s for
+`EsaClosure`), one at a time, artifacts deleted after each row was measured:
 
-The trace is
-[`emit-trace-aeval-full.tsv`](data/lean4mm0/emit-trace-aeval-full.tsv) and the
-run's own report is
-[`emit-run-aeval-full.log`](data/lean4mm0/emit-run-aeval-full.log).
+| declaration | budget | elapsed | peak | outcome |
+| --- | ---: | ---: | ---: | --- |
+| `FockPairPerturbation.abs_re_inner_pairVec_le` | 900 s | 189 s | 1 159 MB | emitted 1.04 GiB |
+| `EsaClosure.selfAdjointExtension_eq_adjoint` | 5 400 s | 1 158 s | 3 154 MB | emitted 2.73 GiB |
+| `SmFarisLavine.CoreData.esa_core` | 900 s | 558 s | 3 105 MB | emitted 2.50 GiB |
+| `FullQuadratic.fqOp.eq_1` | 900 s | 56 s | 832 MB | emitted 0.87 GiB |
+| `QgOuterFock.qgSectorHam.eq_1` | 900 s | 98 s | 1 319 MB | emitted 1.19 GiB |
+| `YmOuterFockFL.abs_levi_le_one` | 900 s | 61 s | 1 506 MB | emitted 0.76 GiB |
+| `SmComparisonEsa.equiv_pgLp` | 900 s | 301 s | 3 513 MB | emitted 4.06 GiB |
+| `YangMillsHermite.CoreRep._sizeOf_1` | 900 s | 900 s | 8 793 MB | timeout |
+| `QgAssembledFlatTransfer.deficiencyTrivialAt_total_of_flat` | 900 s | 853 s | 9 993 MB | `MemoryError` |
+| `YmAbelianFock.coreRep_op_add` | 900 s | 901 s | 8 665 MB | timeout |
+| `NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime` | 900 s | 167 s | 9 962 MB | `MemoryError` |
+| `SirkPerSystem.diagKR_sirk_crouzeix_domain` | 900 s | 900 s | 3 376 MB | timeout |
+| `SmHamiltonian.smField.eq_1` | 900 s | 96 s | 1 240 MB | emitted 1.28 GiB |
+| `SirkTruncation.transfer_defect_le_of_leakage` | 900 s | 329 s | 2 294 MB | emitted 1.93 GiB |
+| `KatoRellich.dense_range_add_relBounded` | 900 s | 901 s | 3 721 MB | timeout |
+| `FockFieldPerturbation.abs_re_inner_fieldVec_le` | 900 s | 182 s | 862 MB | emitted 0.83 GiB |
+| `ChapterH7.compress_isSelfAdjoint` | 900 s | 802 s | 1 499 MB | emitted 1.10 GiB |
+| `FockCubicQuarticStability.cubic_form_eq` | 900 s | 435 s | 1 355 MB | emitted 1.38 GiB |
+
+Fourteen of nineteen emit, thirteen of them inside their old 900 s clock
+(`equiv_pgLp` produces 4.06 GiB in 301 s). The bound moved, it did not vanish:
+
+- **Four rows now spend the whole budget under the cap and do not finish.**
+  Their peak RSS is 3.4–8.8 GB, so the 10 GiB cap was masking unfinished
+  derivations rather than a leak; at 900 s the clock, not memory, ends them.
+  Whether they need 2 000 s or 20 000 s is not measured here.
+- **Two rows still die at ~10 GiB, but somewhere new.** Both exit with
+  `MemoryError` from `emit_obligation`, one at t=167 s and one at t=853 s, in the
+  f-string that builds the assumption line and in the `json.dumps` of the
+  obligation record. That is one obligation's tree plus its serialization — the
+  retained state is gone, and what is left is the size of a single obligation.
+  Streaming the record per node instead of building one string would be the next
+  thing to try; it is not measured.
+
+**What is not established.** All nineteen are `emit` measurements. None of them
+has been through `mm0-rs`, `mm0-c` or the self-check — the census rows stopped at
+`emit` and still do — so "the artifact is judged" is open for every one of them,
+and a 4.06 GiB `.mm0` is a far larger input to those stages than anything they
+have been given. A row that emits is not a closed row.
+
+The full-budget trace is
+[`emit-trace-aeval-full.tsv`](data/lean4mm0/emit-trace-aeval-full.tsv), the run's
+own report is
+[`emit-run-aeval-full.log`](data/lean4mm0/emit-run-aeval-full.log), and the row
+table is [`reemit.tsv`](data/lean4mm0/reemit.tsv).
