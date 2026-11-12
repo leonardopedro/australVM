@@ -1,6 +1,6 @@
 # Lean 4 → MM0 typing census and probe measurements
 
-The measurements behind §13.16–§13.25 of [`../../lean4mm0.md`](../../lean4mm0.md).
+The measurements behind §13.16–§13.26 of [`../../lean4mm0.md`](../../lean4mm0.md).
 Produced by `scripts/lean-typing-sweep` over `mm0/exports` (329 exports of the
 BookProof corpus), one sweep at a time.
 
@@ -16,6 +16,8 @@ BookProof corpus), one sweep at a time.
 | `enc-probe.py`, `enc-probe.txt` | §13.25's encoder-only baseline: same loader and `Enc` on `adjoint_aeval` with no derivation, so what it costs to *hold* the statement is separated from what the derivation adds. Transcript is its output on `ChapterH8`. |
 | `emit-snapshot-aeval-tm4.txt`, `emit-snapshot-aeval-tm6.txt` | §13.25's two `tracemalloc` top-12 snapshots of the emitter, with the `t` they were taken at. Line numbers resolve against the `scripts/lean-typing-proof` revision of the same date; `tm4`'s numbers shifted when the sampler grew columns, so the doc quotes only `tm6`'s. |
 | `emit-trace-aeval-tm6.tsv` | §13.25's growth trace of `adjoint_aeval`: one row per ~5 s sample, columns as `scripts/lean-typing-proof` writes them (`rss_mb`, `traced_mb`, `uord_mb`, `free_mb`, `mmap_mb`, `obnodes`, the accumulator byte counts, and the derivation counters). It ends at t=5 550 s because it was stopped by hand once the t=900 s snapshot was in hand — with `tracemalloc` in the process it runs an order of magnitude slower per obligation than the terminal run, so it is the composition measurement and its last row is **not** a budget outcome. The level curve is the terminal run's own trace (§13.21, every 10 s, no `tracemalloc`). |
+| `emit-trace-aeval-terminal.tsv` | The full 10 GiB trace of `adjoint_aeval` (§13.21/§13.25): 795 samples at 10 s, ending at the cap. Columns are the pre-`tracemalloc` set (`t rss_mb peak_mb exprs memo_by memo_n rules axioms oblig lift msubst depth stack …`); no `uord`/`traced`/`obnodes`, which is why it measures level and `tm6` measures composition. |
+| `emit-trace-aeval-stream.tsv` | §13.26's after-the-fix trace: the same command as `emit-trace-aeval-terminal.tsv` with `oblig_sink` streaming and the `to_tree` memo, capped at 4 GiB and stopped by its 2 400 s budget at 116 874 obligations. `obnodes` is 0 on every row by construction — the deriver retains no obligation trees, so the column that used to grow now measures that it does not. |
 
 ## Columns
 

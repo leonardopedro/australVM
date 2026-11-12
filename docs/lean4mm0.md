@@ -2566,8 +2566,85 @@ table rather than from taste:
 
 Steps 1 and 2 are independent: (1) divides the 24.5 kB per obligation by the
 measured redundancy factor, (2) removes it from the resident set altogether by
-writing each obligation out and dropping it. Neither needs a larger arena, and
-together they are the whole of the 19 `emit` rows' memory story.
+writing each obligation out and dropping it. Neither needs a larger arena.
+Both are implemented and measured in §13.26 (7.8× less RSS per obligation,
+peak 2 084 → 1 164 MB).
 
 The trace, both snapshots and `enc-probe.py` with its transcript are in
 [`data/lean4mm0/`](data/lean4mm0/README.md).
+
+### 13.26 Streaming the obligations is worth 7×, and the axiom text is next
+
+Steps 1 and 2 of §13.25 are implemented in `scripts/lean-typing-proof` and
+measured here.
+
+*Streaming.* `Deriver` takes an `oblig_sink`; `emit_obligation()` writes
+`json.dumps(obj, sort_keys=True)` and the object is never referenced again, so
+`oblig_tree` holds nothing. `main()` opens the `.jsonl` before the derivation
+(the target is known by then: the file is `{target}_typing_obligations.jsonl`)
+and closes it after `check` returns. The old end-of-run `write_text("\n".join(…))`
+also had to hold the whole serialised file as one string; that peak is gone too.
+
+*Memo.* `to_tree` takes a `memo` keyed on the stripped expression id, and the
+three sides of one obligation (`b`, `x`, `r`) share one memo. It is the caller's
+memo, not the deriver's: a deriver-wide cache would trade duplicate dicts for an
+equally large retained one.
+
+**The output is byte-identical.** On
+`_private.Init.Prelude.0.Nat.div_rec_lemma.match_1_1` (ChapterA3e, 20
+substitution obligations) the old and new versions produce the same `.mm0`
+(47 306 B), the same `.mm1` (48 359 B) and the same `.jsonl` (37 340 B), byte for
+byte. The streamed 930-record file from the run below parses with zero bad lines.
+
+**Measured on `adjoint_aeval`**, same command, 4 GiB address-space cap, 2 400 s
+budget, trace on, no `tracemalloc`; both runs are directly comparable because
+the derivation is deterministic (`msubst` reaches 90 161 at the same point in
+both):
+
+| obligations | before, RSS | after, RSS | saved |
+| ---: | ---: | ---: | ---: |
+| 24 867 | 1 374 | 895 | 479 |
+| 49 805 | 1 459 | 928 | 531 |
+| 85 034 | 1 949 | 1 055 | 894 |
+| 100 025 | 2 110 | 1 104 | 1 006 |
+| 115 842 | 2 277 | 1 145 | 1 132 |
+
+Peak RSS 2 084 → **1 164 MB**. The marginal cost over the last third of each run
+is the number that matters, because it is what a longer budget multiplies:
+**24.8 kB per obligation before, 3.2 kB after** — 7.8× less.
+
+**Two things the change did not do.**
+
+First, the run ends at its 2 400 s budget with **210 MB of obligations on disk**
+and `obnodes` at 0 for every row. That is the whole point of streaming: the
+10 GiB run produced no artifact at all, and the same kill now leaves 930
+complete records. The trade is that a budget-killed run leaves a *partial*
+`.jsonl`, so a consumer must treat a truncated last line as "discard this file"
+— `lean-net-cert` reads it line by line and stops there.
+
+Second, the remaining growth has a different owner. At 116 874 obligations the
+largest single accumulator is **axiom text at 444 MB, 39% of RSS** — the
+`ax_subst_N` lines themselves, ~12 kB each early on, ~3 kB by the end. Those
+bytes are in the `.mm0`/`.mm1` artifacts by design, so they can only be removed
+by writing the artifacts incrementally too, which is the same streaming move one
+level up. The obligation trees, by contrast, are now bounded by what actually
+got written: 4 641 584 printed nodes over 930 records, 45.4 B of JSON per node
+against the 73.4 B each node cost as a dict — streaming halves the byte cost of
+the same structure on top of not retaining it.
+
+**What this does not establish.** The 1 132 MB saving at 115 842 obligations is
+measured as a total; splitting it into "no longer retained" and "no longer
+rebuilt" is not. The retained share is *bounded* by the tree population —
+4.64 M nodes at 73.4 B is 341 MB at this point — and the rest is build churn and
+the arena it left behind, which is the same mechanism §13.25's `free` column
+showed. Nor is the end of the run seen: extrapolating the last-third rate,
+409 586 obligations would land near 2.1 GB, under the 4 GiB cap and far under
+the 10 GiB that stopped the earlier run — so on this declaration the binding
+constraint would move from memory back to the clock. That is arithmetic on a
+measured rate, not a run that reached 21 600 s.
+
+The two traces are
+[`emit-trace-aeval-terminal.tsv`](data/lean4mm0/emit-trace-aeval-terminal.tsv)
+(the 10 GiB run, before) and
+[`emit-trace-aeval-stream.tsv`](data/lean4mm0/emit-trace-aeval-stream.tsv)
+(after).
