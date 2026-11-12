@@ -2431,3 +2431,143 @@ So the ordering is not "shave bytes", it is:
 The emitter's side of this list is smaller and better understood: §13.21's trace
 is measuring what grows there now, and the answer decides whether the 19 `emit`
 rows are a memory fix or a representation fix.
+
+### 13.25 The emitter's 10 GiB is accumulated obligation trees, built three times over
+
+§13.24 ended on the question the 19 `emit` rows turn on: is the emitter's 10 GiB
+an accumulation of nodes or a representation cost? `adjoint_aeval` was traced
+from inside the emitter — a sampler thread appends a TSV row every ~5 s from the
+emitter's own state, alongside `tracemalloc`'s totals, `mallinfo2`'s live/free
+split and a node count walked over the pending obligation trees. Four readings
+were wrong at the start, and each was retired by measuring rather than arguing.
+
+**`exprs` is not a node count.** The column that looked like growth
+(1 925 961 → 1 982 337) is the export's expression *index*, plus nodes
+synthesised into `extra`; it is flat from t=80 s on. The export is indexed once
+and never re-materialised.
+
+**The proof string is not the consumer.** Proofs are assembled as nested
+f-strings, so an O(n²) text build was the first hypothesis. Measured `proofb` —
+the largest returned proof string — is **1.17 MB at 1.55 GB RSS**. Dead.
+
+**The representation is not the consumer either.** The same loader and `Enc` on
+the same declaration with no derivation at all reach **193 MB in 2.0 s**: 80 MB
+for the index, 16.7 MB for the value's encoding, 73.1 MB for the encoder memo's
+1 724 entries (`enc-probe.py`). Everything above 193 MB is the derivation.
+
+**The terminal outcome is unchanged, and it is the clock that was never
+binding.** The 10 GiB run ends at **8 111.9 s of emit** with no output, i.e.
+`over 10 GiB` well inside the 21 600 s the row was given (§13.21).
+
+**What the derivation holds.** `obnodes` counts the dicts in
+`Deriver.oblig_tree`, the payload the obligation JSONL is written from at the
+end: 544 438 at t=80 s, 1.26 M at t=419 s, 1.38 M at t=2 576 s — and flat for
+the next 1 282 s. `to_tree` has no cache: it rebuilds `{"bvar":…}`,
+`{"const":…}` and `{"app":[…]}` per obligation and the trees stay resident
+until the file is written.
+
+The split, one run at a 4 GiB cap (`uord` is glibc's `uordblks`, `free` its
+`fordblks`, `mmap` `hblkhd`):
+
+| t (s) | rss | peak | traced | uord | free | mmap | obnodes | obligations | msubst |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10.2 | 211 | 265 | 32 | 133 | 47 | 30 | 0 | 0 | 0 |
+| 80.8 | 561 | 562 | 216 | 342 | 4 | 64 | 544 438 | 5 607 | 41 880 |
+| 419.1 | 1 103 | 1 111 | 522 | 678 | 9 | 97 | 1 255 850 | 11 018 | 51 891 |
+| 846.3 | 1 205 | 1 251 | 553 | 711 | 9 | 164 | 1 280 946 | 11 306 | 55 346 |
+| 1 219.8 | 1 397 | 2 084 | 635 | 797 | 391 | 164 | 1 308 146 | 11 597 | 59 602 |
+| 2 576.1 | 1 546 | 2 084 | 779 | 950 | 378 | 164 | 1 378 422 | 12 478 | 63 926 |
+| 3 160.4 | 1 546 | 2 084 | 779 | 950 | 380 | 164 | 1 378 422 | 12 478 | 63 926 |
+| 3 858.3 | 1 548 | 2 084 | 779 | 950 | 381 | 164 | 1 378 422 | 12 478 | 63 926 |
+
+That table measures *composition*, not level, and it has to be read that way:
+`tracemalloc` plus a walk of 1.4 M dicts every sample slows the emitter by
+roughly an order of magnitude, so this run reaches 12 478 obligations at
+t=2 576 s where the terminal run reached the same count at t≈60 s. Two things in
+it still hold independent of the slowdown. The ratio `uord`/traced/RSS is stable,
+so the shares below are usable. And `free` reaches **381 MB**: a quarter of this
+run's RSS is arena the allocator holds but no longer uses, interleaved with live
+blocks so `malloc_trim` cannot return it — a real but secondary term, not the
+one that reaches the cap. (The last three rows are flat only because they all
+fall inside one obligation: the obligation, lift and msubst counters are
+identical across them.)
+
+**The terminal run's own curve is the level measurement.** Its 795 samples,
+sampled every 10 s with no `tracemalloc` in the process:
+
+| t (s) | rss | obligations | msubst | kB of RSS per obligation |
+| ---: | ---: | ---: | ---: | ---: |
+| 502 | 1 374 | 24 996 | 90 161 | 55.0 |
+| 1 004 | 1 434 | 39 911 | 92 147 | 35.9 |
+| 1 506 | 1 750 | 55 068 | 97 098 | 31.8 |
+| 2 008 | 1 841 | 70 962 | 99 099 | 25.9 |
+| 2 500 | 2 090 | 85 849 | 105 468 | 24.3 |
+| 3 505 | 2 278 | 117 327 | 110 284 | 19.4 |
+| 4 509 | 2 634 | 152 465 | 119 519 | 17.3 |
+| 5 004 | 3 285 | 170 484 | 181 665 | 19.3 |
+| 6 006 | 4 304 | 204 511 | 229 828 | 21.0 |
+| 7 002 | 5 268 | 237 168 | 252 698 | 22.2 |
+| 7 503 | 5 710 | 252 556 | 289 621 | 22.6 |
+| 8 020 | **10 013** | 409 586 | 470 584 | 24.4 |
+
+Two regimes, and the ratio between them is the finding. RSS sits **flat for
+minutes** while obligations keep arriving — 6 333→6 334 MB from t=7 824 to
+7 944, over 3 612 new obligations — and then steps. The step that ends the run
+is +3 679 MB in 60 s (t=7 960.7→8 019.6) while obligations go 265 948 → 409 586:
+**143 638 obligations at 25.6 kB each**. Cumulative RSS per obligation is
+19–24 kB from t=2 008 to the cap. Flat stretches are arena being reused; the
+steps are new pages for retirement-age payload. Either way the level is set by
+how many obligations have been accumulated, not by how deep the derivation is.
+
+**Where the live heap goes** — snapshot at t=1 099.3 s (RSS 1 383 MB, 620 MB
+traced), lines resolved against the revision that produced it:
+
+| line | allocation | MB | objects | B/object |
+| ---: | --- | ---: | ---: | ---: |
+| 750 | `{"app": [fn, arg]}` in `to_tree` | 165.1 | 2 579 573 | 64 |
+| 740 | `{"const": name}` in `to_tree` | 76.6 | 832 162 | 92 |
+| 929 | `(tcons …)` type encoding | 70.1 | 189 | 371 kB |
+| 1041 | axiom text | 69.5 | 188 | 370 kB |
+| 1118 | per-obligation text | 61.6 | 573 | 107 kB |
+| 738 | `{"bvar": n}` in `to_tree` | 42.9 | 466 603 | 92 |
+| 119 | `(tapp …)` | 34.7 | 305 | 114 kB |
+| 121 | `(tpi …)` | 25.4 | 830 | 31 kB |
+| 862 | `subst0` app node | 15.5 | 168 814 | 92 |
+| 1126 | `(tsubst …)` | 13.8 | 573 | 24 kB |
+
+Structural copies are **284.6 MB in 3 878 338 dicts, 73.4 B per node**; the same
+population as text is the ~270 MB of the four string lines, at 24–371 kB per
+obligation rather than per node. So the emitter is not node-expensive: at 73 B
+a retained node it is already **5.2× below `mm0-rs`'s 385 B/node** (§13.22). It
+is *redundant*, in two measured ways. There are 3.0 structural dicts in the heap
+for every one node `obnodes` finds in `oblig_tree` (3.88 M vs 1.31 M), so each
+obligation's tree is materialised about three times — once for the text, once
+into the stored tree, and once more in a representation that does not survive
+the obligation's turn. And the population is
+large per obligation: 3 878 338 dicts over 11 597 obligations is **334 nodes and
+24.5 kB of tree per obligation** — which is the same 24.4 kB per obligation the
+terminal run's cap divides out to (§13.21: 10 GiB at 8 111.9 s). Two independent
+measurements, one at 1.4 GB and one at 10 GiB, give the same per-obligation
+cost. **The emitter's 10 GiB *is* the accumulated obligation trees.**
+
+That answers §13.24's closing question. The 19 `emit` rows are **not** a node
+representation problem and not a proof-string problem; they are an accumulation
+problem with a measurable redundancy factor, and the fix order follows from the
+table rather than from taste:
+
+1. **Cache `to_tree`.** Measured 3× redundancy over 284.6 MB at the 1.4 GB
+   point; a cache keyed on the expression id would make it 1×.
+2. **Stream the obligation JSONL.** `oblig_tree` exists only to be written
+   once at the end, so writing each obligation as it is created removes the
+   retained trees entirely instead of shrinking them.
+3. **Only then** the arena and the allocator: 381 MB of `free` says the process
+   is also holding pages it cannot return, but trimming cannot compact around
+   live blocks, so this is the last lever and the smallest.
+
+Steps 1 and 2 are independent: (1) divides the 24.5 kB per obligation by the
+measured redundancy factor, (2) removes it from the resident set altogether by
+writing each obligation out and dropping it. Neither needs a larger arena, and
+together they are the whole of the 19 `emit` rows' memory story.
+
+The trace, both snapshots and `enc-probe.py` with its transcript are in
+[`data/lean4mm0/`](data/lean4mm0/README.md).

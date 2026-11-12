@@ -1,0 +1,6 @@
+indexed      :     80 MB,   1925961 exprs,    1.9 s
+type encoded :     83 MB,     428405 B,    1.9 s
+value encoded:    193 MB,   16684751 B,    2.0 s
+parse cache  :    193 MB,      2811 nodes cached (0.5 MB of dicts, cap 200000)
+encoder memo :     73.1 MB, 1724 entries
+final rss    :    193 MB,    2.0 s
