@@ -174,6 +174,125 @@ def stats(msg: str) -> None:
         print(f"[stats] {msg}: peak {peak_mb()} MB", file=sys.stderr, flush=True)
 
 
+# ── growth trace (`LTP_TRACE`) ─────────────────────────────────────────────
+#
+# "It hit 10 GiB at 8 889 s" does not say what grew. Two things answer it: the
+# emitter's accumulators (the export's lazy table, the encoding memo, the rule
+# and axiom lists, the two rewrite memos, the obligation list) say *which* one
+# is unbounded, and the `_check` recursion stack says which subterm the emitter
+# was standing in while the growth happened. Sampled by a daemon thread so the
+# numbers are the emitter's own, not a guess from `/proc`.
+
+
+def _label(ex, eid: int) -> str:
+    """A short human key for one expression: its constant, or kind."""
+    e = ex.exprs.get(eid) or {}
+    if "const" in e:
+        return ex.name(e["const"]["name"])
+    if "app" in e:
+        head, _ = spine(ex, eid)
+        he = ex.exprs.get(head) or {}
+        if "const" in he:
+            return "app·" + ex.name(he["const"]["name"])
+        return "app·" + (next(iter(he)) if he else "?")
+    return next(iter(e)) if e else "?"
+
+
+def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
+    """Sample the emitter's own state to `$LTP_TRACE` (TSV), every `period` s."""
+    path = os.environ.get("LTP_TRACE")
+    if not path:
+        return
+    import threading
+
+    stop = threading.Event()
+
+    def rss_mb() -> int:
+        try:
+            with open("/proc/self/statm") as fh:
+                return int(fh.read().split()[1]) * 4096 >> 20
+        except OSError:
+            return -1
+
+    def trim() -> None:
+        """Return free arenas to the OS, so RSS separates live from retired.
+
+        The emitter builds and drops very large proof strings; if the bytes
+        RSS holds are freed ones the allocator kept, RSS would keep climbing
+        after the derivation stopped growing, and no accumulator would explain
+        it. `malloc_trim` answers that without changing the program's data.
+        """
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except OSError:
+            pass
+
+    def acc_bytes(d) -> int:
+        """One level deep over every Deriver attribute: containers + items.
+
+        Total live bytes the derivation itself holds, so the columns that
+        count *entries* can be checked against the RSS they are supposed to
+        explain.
+        """
+        if d is None:
+            return 0
+        total = 0
+        for v in d.__dict__.values():
+            total += sys.getsizeof(v)
+            if isinstance(v, dict):
+                for k, item in v.items():
+                    total += sys.getsizeof(k) + sys.getsizeof(item)
+            elif isinstance(v, (list, tuple, set, frozenset)):
+                for item in v:
+                    total += sys.getsizeof(item)
+        return total
+
+    def body() -> None:
+        t0 = time.time()
+        with open(path, "a", buffering=1) as fh:
+            # `rules`/`oblig`/`msubst` are *counts*: they say how many steps
+            # ran, not how many bytes they cost. `axb`/`rulb` are the byte
+            # totals of the axiom and rule lists, so which list holds the RSS
+            # is measured rather than inferred from its length; `axmax` is the
+            # longest single axiom, because one huge `tdefeq` can dwarf the
+            # rest of the list.
+            # `exprs` is the export's index size, not a growth signal: the
+            # lazy table reports every expression in the file from the first
+            # sample. What grows is `extra` (nodes the derivation synthesises
+            # for `lift`/`subst0`), which `exb` sizes, plus `liftb`/`substb`,
+            # the shallow bytes of the two memo values.
+            fh.write("t\trss_mb\tpeak_mb\texprs\tmemo_by\tmemo_n\trules"
+                     "\taxioms\toblig\tlift\tmsubst\tdepth\tstack"
+                     "\taxb\trulb\toblb\taxmax\textra\texb\tliftb\tsubstb"
+                     "\taccb\trss_trim\n")
+            while not stop.is_set():
+                d = deriver_fn()
+                st = d._stack[-8:] if d is not None else []
+                trim()
+                fh.write("\t".join(str(x) for x in (
+                    round(time.time() - t0, 1), rss_mb(), peak_mb(),
+                    len(ex.exprs), enc._memo_bytes, len(enc._memo),
+                    len(d.rules) if d else 0, len(d.axioms) if d else 0,
+                    len(d.oblig) if d else 0, len(d._lift_memo) if d else 0,
+                    len(d._subst_memo) if d else 0, len(d._stack) if d else 0,
+                    ">".join(f"{eid}:{_label(ex, eid)}" for eid in st),
+                    sum(map(len, d.axioms)) if d else 0,
+                    sum(map(len, d.rules)) if d else 0,
+                    sum(map(len, d.oblig)) if d else 0,
+                    max(map(len, d.axioms), default=0) if d else 0,
+                    len(ex.exprs.extra),
+                    sum(map(sys.getsizeof, ex.exprs.extra.values())),
+                    sum(map(sys.getsizeof, d._lift_memo.values())) if d else 0,
+                    sum(map(sys.getsizeof, d._subst_memo.values())) if d else 0,
+                    acc_bytes(d), rss_mb(),
+                )) + "\n")
+                stop.wait(period)
+
+    threading.Thread(target=body, name="ltp-trace", daemon=True).start()
+
+
 def _nat_lit(n: int) -> str:
     out = "tzero"
     for _ in range(n):
@@ -251,6 +370,11 @@ def main() -> int:
     # shifted by `pos + 1`. The Π-type text keeps the unshifted domains — those
     # are read in the scope *outside* their binder, which is exactly theirs.
     d_pre = Deriver(ex, enc, export_path, defer_subst=defer)
+    # The trace starts before the derivation, so the sampler can attribute growth
+    # to the subterm the deriver is inside (the box keeps the reference so the
+    # thread does not need to know which branch of `main` built the deriver).
+    box: dict = {"d": d_pre}
+    start_trace(ex, enc, lambda: box["d"])
     ctxs = ["tnil"]
     for a in binders:
         ctxs.append(f"(tcons {a} {ctxs[-1]})")
@@ -423,6 +547,8 @@ class Deriver:
         # nodes (692 MB of live dicts, 6 GB peak RSS) for one declaration.
         self._lift_memo: dict[tuple[int, int, int], int] = {}
         self._subst_memo: dict[tuple[int, int, int], int] = {}
+        # Active `_check` frames, innermost last: the growth trace samples this.
+        self._stack: list[int] = []
 
     # ── export manipulation ──────────────────────────────────────────────
     def mk(self, d: dict) -> int:
@@ -957,6 +1083,16 @@ class Deriver:
             return self.assume_leaf(self.strip(eid), self.strip(expected), env)
 
     def _check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
+        # The stack is the trace's only view of where in the term the emitter is.
+        # It costs one list op per visited node, which is why it is a plain list.
+        st = self._stack
+        st.append(eid)
+        try:
+            return self._chk(eid, expected, env, tail)
+        finally:
+            st.pop()
+
+    def _chk(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
         """A proof term for `tty ctx eid expected`, in the given context."""
         ex, enc = self.ex, self.enc
         eid, expected = self.strip(eid), self.strip(expected)
