@@ -2648,3 +2648,63 @@ The two traces are
 (the 10 GiB run, before) and
 [`emit-trace-aeval-stream.tsv`](data/lean4mm0/emit-trace-aeval-stream.tsv)
 (after).
+
+### 13.27 `adjoint_aeval` finishes: 1 519 MB at the point that used to stop it
+
+§13.26 left one accumulator standing: the axiom text, 444 MB and 39% of RSS at
+116 874 obligations, which is in the artifact by design. The artifact is where
+it now goes, as it is built.
+
+`Deriver.add_axiom()` writes each assumption to a spool file
+(`{stem}_axioms.tmp`) instead of a list. The header that precedes the
+assumptions is only known once the derivation returns (it counts the rules), so
+the two artifacts are assembled afterwards — prefix, then the spool copied
+through `shutil.copyfileobj`, then the derivation — and the spool is unlinked.
+The bytes are again identical, not merely equivalent: on the ChapterA3e sample
+`.mm0` (47 306 B), `.mm1` (48 359 B) and `.jsonl` (37 340 B) all match the
+previous revision exactly.
+
+Rules are counted rather than retained: `self.rules` was one pointer per applied
+rule — **1 845 001** of them on this declaration — for a header summary that
+needs the count and the order of first appearance.
+
+**The full 21 600 s budget**, same command and declaration as §13.25's terminal
+run, 10 GiB address-space cap, trace on:
+
+| obligations | before, RSS | after, RSS |
+| ---: | ---: | ---: |
+| 99 879 | 2 110 | 582 |
+| 200 176 | 4 233 | 775 |
+| 314 803 | 6 850 | 1 016 |
+| 409 586 | 10 013 | 1 519 |
+
+Where the old run stopped: the before column ends at t=8 019.6 s with 10 013 MB
+at 409 586 obligations, killed by the cap. **This run ends at t=5 752.4 s because
+the declaration finished**, with peak RSS 1 662 MB — of 21 600 s available, so
+the clock had 74% left. What it wrote: a `.mm0` of 1 297 596 934 B (1.21 GiB), a
+`.mm1` of 1 351 567 314 B, and 2 139 obligation records totalling
+1 290 539 598 B — about 3.8 GiB that used to be resident, or would have been
+resident had the run lived that long. 410 137 assumptions (548 constant types,
+2 139 substitution obligations) and 1 845 001 rule applications.
+
+**Growth is no longer the story; the two remaining humps are.** From 39 322
+obligations at t=626 s (539 MB) to 409 589 at t=5 747 s (1 519 MB) the RSS rises
+~2.4 kB per obligation, and the shape is not a staircase: 557 MB at t=1 242 s and
+582 MB at t=1 890 s are within noise of each other, because the text leaves the
+process as it is made. The one real step is at the end — 920 MB at t=5 676 s to
+1 519 MB 72 s later — where the proof string itself is built and wrapped
+(`proofb` 53 970 316 B) and both artifacts are copied out.
+
+**What is not established.** This measures the `emit` stage only. The row's
+`mm0-rs`/`mm0-c` and self-check stages were never reached (the row stopped at
+`emit`), so "the artifact is judged" is still open for it, and a 1.21 GiB `.mm0`
+is a much larger input to those stages than anything they have been given. The
+other 18 `emit` rows are re-measured separately, under the budgets their census
+rows record; that table is
+[`reemit.tsv`](data/lean4mm0/reemit.tsv), and a row that now reaches
+`mm0-rs` is still a row bounded by that stage, not a closed one.
+
+The trace is
+[`emit-trace-aeval-full.tsv`](data/lean4mm0/emit-trace-aeval-full.tsv) and the
+run's own report is
+[`emit-run-aeval-full.log`](data/lean4mm0/emit-run-aeval-full.log).
