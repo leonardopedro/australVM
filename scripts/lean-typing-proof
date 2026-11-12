@@ -28,6 +28,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import time
 import traceback
@@ -161,6 +162,24 @@ MEMO_MAX = 1_000_000
 # Total size of the strings `Enc` caches; past it new encodings are simply not
 # cached (they are recomputed, never wrong).
 ENC_MEMO_BYTES = 64 << 20
+
+
+def _step_add(hist: dict[str, int], order: list[str], name: str,
+              n: int = 1) -> None:
+    """Count `n` applications of `name`, remembering first-appearance order.
+
+    A `list[str]` of rule names was one pointer per application — 1.8 M of them
+    at the 10 GiB point — for a header summary (§13.27).
+    """
+    if name in hist:
+        hist[name] += n
+    else:
+        hist[name] = n
+        order.append(name)
+
+
+def _step_summary(order: list[str], hist: dict[str, int]) -> str:
+    return ", ".join(f"{r} ×{hist[r]}" for r in order)
 
 
 def stats(msg: str) -> None:
@@ -368,14 +387,14 @@ def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
                 fh.write("\t".join(str(x) for x in (
                     round(time.time() - t0, 1), rss_mb(), peak_mb(),
                     len(ex.exprs), enc._memo_bytes, len(enc._memo),
-                    len(d.rules) if d else 0, len(d.axioms) if d else 0,
+                    d.rule_count if d else 0, d.ax_count if d else 0,
                     len(d.oblig) if d else 0, len(d._lift_memo) if d else 0,
                     len(d._subst_memo) if d else 0, len(d._stack) if d else 0,
                     ">".join(f"{eid}:{_label(ex, eid)}" for eid in st),
-                    sum(map(len, list(d.axioms))) if d else 0,
-                    sum(map(len, list(d.rules))) if d else 0,
+                    d.ax_bytes if d else 0,
+                    sum(len(k) * v for k, v in d.rule_hist.items()) if d else 0,
                     sum(map(len, list(d.oblig))) if d else 0,
-                    max(map(len, list(d.axioms)), default=0) if d else 0,
+                    d.ax_max if d else 0,
                     len(ex.exprs.extra),
                     sum(map(sys.getsizeof, list(ex.exprs.extra.values()))),
                     sum(map(sys.getsizeof, list(d._lift_memo.values()))) if d else 0,
@@ -449,7 +468,10 @@ def main() -> int:
         stats(f"value encoded ({len(val_str)} B)")
 
     lines: list[str] = []
-    steps: list[str] = []
+    # Rules are counted, not retained: one pointer per applied rule was 1.8 M
+    # at the 10 GiB point, and the only reader is the header summary (§13.27).
+    steps_hist: dict[str, int] = {}
+    steps_order: list[str] = []
     axioms: list[str] = []
 
     # Context: peel the theorem's Π spine one binder at a time. Every binder
@@ -483,12 +505,20 @@ def main() -> int:
     stem = out_dir / f"{target.split('.')[-1]}_typing"
     oblig_path = Path(str(stem) + "_obligations.jsonl")
     oblig_fh = oblig_path.open("w")
+    # The assumptions are streamed the same way: §13.27 measures 444 MB of
+    # axiom text at 116 874 obligations, and every byte of it is in the artifact
+    # anyway. The spool is concatenated into both `.mm0` and `.mm1` afterwards
+    # (the header that precedes it is only known once the derivation is done),
+    # so the artifact is byte-identical to the retained version.
+    ax_path = Path(str(stem) + "_axioms.tmp")
+    ax_fh = ax_path.open("w") if spine else None
 
     # The context string is the Deriver's own (`ctx_str`): an entry is written
     # in the scope outside its own binder, so at position `pos` it must be
     # shifted by `pos + 1`. The Π-type text keeps the unshifted domains — those
     # are read in the scope *outside* their binder, which is exactly theirs.
-    d_pre = Deriver(ex, enc, export_path, defer_subst=defer, oblig_sink=oblig_fh)
+    d_pre = Deriver(ex, enc, export_path, defer_subst=defer,
+                    oblig_sink=oblig_fh, axiom_sink=ax_fh)
     # The trace starts before the derivation, so the sampler can attribute growth
     # to the subterm the deriver is inside (the box keeps the reference so the
     # thread does not need to know which branch of `main` built the deriver).
@@ -521,24 +551,28 @@ def main() -> int:
     if spine:
         d = d_pre
         base_proof = d.check(body_eid, cur, list(reversed(binder_ty_eids)))
-        axioms += d.axioms
-        steps += d.rules
+        ax_total = d.ax_count
+        for r in d.rule_order:
+            _step_add(steps_hist, steps_order, r, d.rule_hist[r])
         const_axioms, subst_obligations = len(d.const_ax), len(d.beta_ax)
         d_oblig = d.oblig_tree
     else:
         axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
-        steps.append("assume body typing")
+        _step_add(steps_hist, steps_order, "assume body typing")
         base_proof = "ax_body"
         const_axioms, subst_obligations = 0, 0
+        ax_total = len(axioms)
         d_oblig: list[dict] = []
 
     oblig_fh.close()
+    if ax_fh is not None:
+        ax_fh.close()
 
     proof = base_proof
     goal_ctx, goal_term, goal_ty = inner_ctx, body, body_ty
     if spine:
-        stats(f"derivation ({len(steps)} rules, proof {len(base_proof)} B, "
-              f"{len(axioms)} axioms")
+        stats(f"derivation ({sum(steps_hist.values())} rules, "
+              f"proof {len(base_proof)} B, {ax_total} axioms")
     if closed:
         # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
         # term is a single expression (MM0 nests proofs in argument position
@@ -546,7 +580,7 @@ def main() -> int:
         ty = body_ty
         for k in range(len(binders) - 1, -1, -1):
             proof = f"(ty_abs {proof})"
-            steps.append("ty_abs")
+            _step_add(steps_hist, steps_order, "ty_abs")
             ty = f"(tpi {binders[k]} {ty})"
         if spine:
             # The wrapping is only valid if it reproduces the declared type.
@@ -564,19 +598,22 @@ def main() -> int:
         "-- Judgment      : " + ("closed" if closed else "open, in the type's context")
         + f" ({len(binders)} binders)",
         f"-- Value λs      : {n_lam} (typed inside the derivation, not around it)",
-        f"-- Rules applied : {len(steps)}"
-        f" ({', '.join(f'{r} ×{steps.count(r)}' for r in dict.fromkeys(steps))})",
-        f"-- Assumptions   : {len(axioms)} ({const_axioms} constant types, "
+        f"-- Rules applied : {sum(steps_hist.values())}"
+        f" ({_step_summary(steps_order, steps_hist)})",
+        f"-- Assumptions   : {ax_total} ({const_axioms} constant types, "
         f"{subst_obligations} substitution obligations)"
     ]
     nat_decls = [f"term {n}: nat;" for n in NATS]
+    # Everything before the assumptions, in the order and with the separators the
+    # one-shot `"\n".join(out)` produced. The assumptions themselves come next,
+    # out of the spool (or the local list when there is no spool), and the
+    # derivation last.
     out = []
     out += head
     out += ["", "-- ── payload constants (numerals are not accepted inside `$…$`) ──"]
     out += nat_decls
     out += ["", "-- ── assumptions ──"]
-    out += axioms
-    out += ["", "-- ── the derivation ──"]
+    pre = "\n".join(out) + "\n"
     # The name is sanitised: MM0's lexer rejects Lean's trailing prime
     # (`thm_add_le'` was a parse error, so the artifact never reached the proof
     # at all and the run was counted as a failure of the derivation).
@@ -592,10 +629,24 @@ def main() -> int:
     # The proof theorem must be `pub`: a private theorem's proof commands are
     # dropped from the `.mmb`, so mm0-c reaches the declaration with the command
     # stream already at End and refuses it (measured on a 4-axiom mini theory).
-    (stem.with_suffix(".mm0")).write_text("\n".join(out + [statement + ";"]) + "\n")
-    (stem.with_suffix(".mm1")).write_text(
-        "\n".join(out + ["pub " + statement + " =", f"  '{proof};"] ) + "\n"
-    )
+    tail0 = "\n-- ── the derivation ──\n" + statement + ";\n"
+    tail1 = ("\n-- ── the derivation ──\n" + "pub " + statement + " =\n"
+             + f"  '{proof};\n")
+    # Written in pieces: the prefix, the spooled assumptions copied through
+    # (`shutil.copyfileobj`, so their bytes are never in this process twice),
+    # then the tail. Concatenated in memory this is 444 MB of axiom text on
+    # `adjoint_aeval`, before it is even a string.
+    for suffix, tail in ((".mm0", tail0), (".mm1", tail1)):
+        with stem.with_suffix(suffix).open("w") as fh:
+            fh.write(pre)
+            if ax_fh is not None:
+                with ax_path.open("r") as spool:
+                    shutil.copyfileobj(spool, fh, 1 << 20)
+            else:
+                fh.write("".join(a + "\n" for a in axioms))
+            fh.write(tail)
+    if ax_fh is not None:
+        ax_path.unlink()
     stats(f"artifacts written ({stem.with_suffix('.mm1').stat().st_size >> 20} MB)")
     # The conversion obligations, structurally: the interface the external
     # deltanet check consumes (`scripts/lean-net-cert`). Written even when empty
@@ -608,8 +659,8 @@ def main() -> int:
         )
     print(f"target   : {target}")
     print(f"binders  : {len(binders)}")
-    print(f"rules    : {' · '.join(f'{r} ×{steps.count(r)}' for r in dict.fromkeys(steps))}")
-    print(f"axioms   : {len(axioms)} ({const_axioms} constant types, {subst_obligations} substitution)")
+    print(f"rules    : {' · '.join(f'{r} ×{steps_hist[r]}' for r in steps_order)}")
+    print(f"axioms   : {ax_total} ({const_axioms} constant types, {subst_obligations} substitution)")
     mode = "spine derivation" if spine else "body typing assumed"
     if defer:
         mode += ", substitution deferred"
@@ -645,7 +696,7 @@ class Deriver:
     """
 
     def __init__(self, ex, enc, path: Path, defer_subst: bool = False,
-                 oblig_sink=None):
+                 oblig_sink=None, axiom_sink=None):
         self.ex = ex
         self.enc = enc
         self.path = path
@@ -656,7 +707,16 @@ class Deriver:
         self._ind_types: dict[str, int] | None = None
         self.next_id = max(ex.exprs) + 1
         self.base_id = self.next_id
+        # The artifact text is *streamed* too: `axiom_sink` is an open file and
+        # each `axiom …;` line is written as it is built, so the deriver holds
+        # none of them (§13.27: 444 MB of axiom text at 116 874 obligations).
+        # With no sink the old accumulate-and-return list stays, for the
+        # in-process callers and the non-spine path.
+        self.axiom_sink = axiom_sink
         self.axioms: list[str] = []
+        self.ax_count = 0
+        self.ax_bytes = 0
+        self.ax_max = 0
         # Largest proof string returned so far (bytes); see `_check`.
         self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}
@@ -672,7 +732,12 @@ class Deriver:
         self.oblig_sink = oblig_sink
         self.oblig_tree: list[dict] = []
         self.leaf_ax: list[str] = []
-        self.rules: list[str] = []
+        # Rules are counted, not retained: `rules` was one pointer per
+        # application (1.8 M at the 10 GiB point) for a header summary. The
+        # order of first appearance is kept because the summary lists it that way.
+        self.rule_hist: dict[str, int] = {}
+        self.rule_order: list[str] = []
+        self.rule_count = 0
         # Memos for the two structural rewrites. A term is a DAG, and both
         # rebuild it node by node: without the memo `lift` synthesised 7.9 M
         # nodes (692 MB of live dicts, 6 GB peak RSS) for one declaration.
@@ -680,6 +745,32 @@ class Deriver:
         self._subst_memo: dict[tuple[int, int, int], int] = {}
         # Active `_check` frames, innermost last: the growth trace samples this.
         self._stack: list[int] = []
+
+    def add_axiom(self, text: str) -> None:
+        """Hand one artifact assumption to the sink, or retain it.
+
+        `text` may span several lines (a comment plus the `axiom` line); the
+        sink writes it followed by a newline, exactly as `"\n".join(out)` would
+        have, so a streamed artifact is byte-identical to a retained one.
+        """
+        n = len(text)
+        self.ax_count += 1
+        self.ax_bytes += n
+        if n > self.ax_max:
+            self.ax_max = n
+        if self.axiom_sink is not None:
+            self.axiom_sink.write(text + "\n")
+        else:
+            self.axioms.append(text)
+
+    def add_rule(self, name: str) -> None:
+        """Count one applied rule (§13.27: the list was 1.8 M pointers)."""
+        self.rule_count += 1
+        if name in self.rule_hist:
+            self.rule_hist[name] += 1
+        else:
+            self.rule_hist[name] = 1
+            self.rule_order.append(name)
 
     def emit_obligation(self, obj: dict) -> None:
         """Hand one certificate obligation to the sink, or retain it.
@@ -1058,20 +1149,20 @@ class Deriver:
             key = (enc.enc(sty), st["idx"])
             if key not in self.field_ax:
                 ax = f"ax_field_{len(self.field_ax)}"
-                self.axioms.append(
+                self.add_axiom(
                     f"-- field {st['idx']} of {self.ex.name(st['typeName'])}: "
                     f"taken from the constructor type\n"
                     f"axiom {ax}: $ tfield {enc.enc(sty)} "
                     f"{_nat_lit(st['idx'])} {enc.enc(fld)} $;"
                 )
                 self.field_ax[key] = ax
-            self.rules.append("ty_proj")
+            self.add_rule("ty_proj")
             return fld, f"(ty_proj {sproof} {self.field_ax[key]})"
         if "bvar" in e:
             k = e["bvar"]
             if k >= len(env):
                 raise SystemExit(f"infer: bvar {k} is not bound by the {len(env)} context entries")
-            self.rules.append("ty_var")
+            self.add_rule("ty_var")
             # `ty_varS` repeats the entry's type verbatim, and the context is
             # spine-relative (`ty_abs` forces `tcons`'s head to be the Π's
             # domain), so the type a variable is *declared* with is what it is
@@ -1090,11 +1181,11 @@ class Deriver:
             key = (ctx, enc.enc(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
-                self.axioms.append(
+                self.add_axiom(
                     f"-- {nm}\naxiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.enc(ty)} $;"
                 )
                 self.const_ax[key] = ax
-            self.rules.append("const type")
+            self.add_rule("const type")
             return ty, self.const_ax[key]
         if "natVal" in e:
             # A numeral's type is `Nat`, which is opaque here: the numeral is a
@@ -1103,12 +1194,12 @@ class Deriver:
             key = (ctx, enc.enc(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
-                self.axioms.append(
+                self.add_axiom(
                     f"-- Nat literal {e['natVal']}\n"
                     f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.sym('Nat')} $;"
                 )
                 self.const_ax[key] = ax
-            self.rules.append("const type")
+            self.add_rule("const type")
             return self.mk({"sym": "Nat"}), self.const_ax[key]
         if "strVal" in e:
             # A string literal: like a numeral, an opaque leaf whose type is the
@@ -1117,12 +1208,12 @@ class Deriver:
             key = (ctx, enc.enc(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
-                self.axioms.append(
+                self.add_axiom(
                     f"-- String literal {e['strVal']!r}\n"
                     f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.sym('String')} $;"
                 )
                 self.const_ax[key] = ax
-            self.rules.append("const type")
+            self.add_rule("const type")
             return self.mk({"sym": "String"}), self.const_ax[key]
         if "lam" in e:
             # A λ in an *inference* position: the export carries its domain, so
@@ -1158,7 +1249,7 @@ class Deriver:
             if self.defer_subst and tail:
                 # No reduct computed: the result type *is* the unreduced
                 # substitution, and `tdefeq_refl` discharges the premise.
-                self.rules.append("ty_app (deferred)")
+                self.add_rule("ty_app (deferred)")
                 return (
                     self.mk({"tsubst": {"b": b, "x": x}}),
                     f"(ty_app {fproof} {aproof} (tdefeq_refl))",
@@ -1167,7 +1258,7 @@ class Deriver:
             key = (b_s, x_s)
             if key not in self.beta_ax:
                 ax = f"ax_subst_{len(self.beta_ax)}"
-                self.axioms.append(
+                self.add_axiom(
                     f"-- (λ{self.enc.enc(dom)}. _) applied to {x_s[:80]}\n"
                     f"axiom {ax}: $ tdefeq (tsubst {b_s} {x_s}) {enc.enc(self.strip(res))} $;"
                 )
@@ -1185,7 +1276,7 @@ class Deriver:
                     "x": self.to_tree(x, memo=memo),
                     "r": self.to_tree(self.strip(res), memo=memo),
                 })
-            self.rules.append("ty_app")
+            self.add_rule("ty_app")
             return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
         if "forallE" in e or "sort" in e:
             # A Π-type or a sort reached in an *inference* position (as a λ's
@@ -1220,7 +1311,7 @@ class Deriver:
             bty, inner = self.lam_type(body, [dom] + env)
         else:
             bty, inner = self.infer(body, [dom] + env, tail=True)
-        self.rules.append("ty_abs")
+        self.add_rule("ty_abs")
         return self.mk({"forallE": {"type": dom, "body": bty}}), f"(ty_abs {inner})"
 
     def assume_leaf(self, eid: int, expected: int, env: list[int]) -> str:
@@ -1232,13 +1323,13 @@ class Deriver:
         """
         ctx = self.ctx_str(env)
         ax = f"ax_leaf_{len(self.leaf_ax)}"
-        self.axioms.append(
+        self.add_axiom(
             "-- applied through a definitional unfolding (no rule in the fragment)\n"
             f"axiom {ax}: $ tty {ctx} {self.enc.enc(eid)} {self.enc.enc(expected)} $;"
         )
         self.leaf_ax.append(ax)
         self.oblig.append(ax)
-        self.rules.append("assumed (unfolded Π)")
+        self.add_rule("assumed (unfolded Π)")
         return ax
 
     def check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
@@ -1278,13 +1369,13 @@ class Deriver:
         # an assumption, counted, instead of an unstated shortcut.
         if "forallE" in e or "sort" in e:
             ctx = self.ctx_str(env)
-            ax = f"ax_type_{len(self.axioms)}"
-            self.axioms.append(
+            ax = f"ax_type_{self.ax_count}"
+            self.add_axiom(
                 f"-- a type used as a term (Π/sort): no rule in the fragment\n"
                 f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.enc(expected)} $;"
             )
             self.oblig.append(ax)
-            self.rules.append("type-as-term (assumed)")
+            self.add_rule("type-as-term (assumed)")
             return ax
         if "lam" in e:
             fe = ex.exprs[expected]
@@ -1313,7 +1404,7 @@ class Deriver:
                 return f"(ty_deq {inner} {ax})"
             inner = self.check(e["lam"]["body"], fe["forallE"]["body"],
                                [fe["forallE"]["type"]] + env, tail=tail)
-            self.rules.append("ty_abs")
+            self.add_rule("ty_abs")
             return f"(ty_abs {inner})"
         ty, p = self.infer(eid, env, tail=tail)
         if enc.enc(self.strip(ty)) == enc.enc(expected):
@@ -1336,7 +1427,7 @@ class Deriver:
         both_sorts = all("sort" in k for k in kinds)
         tag = "lev" if both_sorts else "deq"
         ax = f"ax_{tag}_{len(self.oblig)}"
-        self.axioms.append(
+        self.add_axiom(
             ("-- conversion between universe levels (not stratified in this "
              "theory)\n" if both_sorts else
              f"-- conversion: inferred {enc.enc(got)[:80]} vs expected "
@@ -1344,7 +1435,7 @@ class Deriver:
             + f"axiom {ax}: $ tdefeq {enc.enc(got)} {enc.enc(want)} $;"
         )
         self.oblig.append(ax)
-        self.rules.append("ty_deq (universe level)" if both_sorts else "ty_deq")
+        self.add_rule("ty_deq (universe level)" if both_sorts else "ty_deq")
         return ax
 
 
