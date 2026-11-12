@@ -1,0 +1,60 @@
+-- mm0-comparator v1 — approved statements for service_isolation_certificate
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: service_isolation_certificate
+-- theory: docs/service_isolation.mm0 sha256:a64cda00f09704178c2d671aa792d622bdbae8b16963e3655aa788a8e0753809
+-- closure-sha256: b496c7466a94ce7bbe6e47b01e0ce1e41d57eaa64d96d05eb5ff52532258562c
+-- theory-sha256: 47243fbc7b7f5a58dd22b9219233f08a3d71d188e46eb671be66af352d82841a
+-- statements-sha256: 0a90b1d33d3e35665f19d68664a87ff6c505bafdcc2254e8c29c08cc394a3884
+
+provable sort Prop;
+sort Svc;
+sort H;
+sort P;
+sort D;
+delimiter $ ( ) $;
+term svc_paypal: Svc;
+term svc_mm0web: Svc;
+term svc_refi: Svc;
+term h_paypal: H;
+term h_mm0web: H;
+term h_refi: H;
+term p_paypal: P;
+term p_mm0web: P;
+term p_refi: P;
+term d_paypal: D;
+term d_mm0web: D;
+term d_refi: D;
+term is_state (s: Svc) (h: H): Prop;
+term is_listen (s: Svc) (p: P): Prop;
+term is_bundle (s: Svc) (d: D): Prop;
+term differsH (a b: H): Prop;
+term differsP (a b: P): Prop;
+term differsD (a b: D): Prop;
+term sep_state (a b: Svc): Prop;
+term sep_listen (a b: Svc): Prop;
+term sep_bundle (a b: Svc): Prop;
+term isolated (a b: Svc): Prop;
+axiom state_sep (a b: Svc) (h1 h2: H):
+  $ is_state a h1 $ > $ is_state b h2 $ > $ differsH h1 h2 $ > $ sep_state a b $;
+axiom listen_sep (a b: Svc) (x1 x2: P):
+  $ is_listen a x1 $ > $ is_listen b x2 $ > $ differsP x1 x2 $ > $ sep_listen a b $;
+axiom bundle_sep (a b: Svc) (d1 d2: D):
+  $ is_bundle a d1 $ > $ is_bundle b d2 $ > $ differsD d1 d2 $ > $ sep_bundle a b $;
+axiom iso_intro (a b: Svc):
+  $ sep_state a b $ > $ sep_listen a b $ > $ sep_bundle a b $ > $ isolated a b $;
+axiom iso_symm (a b: Svc): $ isolated a b $ > $ isolated b a $;
+axiom l0: $ is_state svc_mm0web h_mm0web $;
+axiom l1: $ is_listen svc_mm0web p_mm0web $;
+axiom l2: $ is_bundle svc_mm0web d_mm0web $;
+axiom l3: $ is_state svc_refi h_refi $;
+axiom l4: $ is_listen svc_refi p_refi $;
+axiom l5: $ is_bundle svc_refi d_refi $;
+axiom l6: $ differsH h_mm0web h_refi $;
+axiom l7: $ differsP p_mm0web p_refi $;
+axiom l8: $ differsD d_mm0web d_refi $;
+theorem l9: $ isolated svc_mm0web svc_refi $;
+theorem l10: $ isolated svc_refi svc_mm0web $;

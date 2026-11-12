@@ -1,0 +1,116 @@
+-- mm0-comparator v1 — approved statements for quasi_rh_certificate
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: quasi_rh_certificate
+-- theory: docs/cic.mm0 sha256:718ed4ab37e49d19356bb854642cae7ced0e0ceffdc757ebc7878d5f256bc11b
+-- closure-sha256: a6da3a01b616af440258c5ccb06112277f874501a3d1e5428ebec423d5e4c804
+-- theory-sha256: f906599cee3197ce9323a58116169010c2377c76e0501ea1cbd86d27fd65564f
+-- statements-sha256: e389afd523f4faf0fe6327bf5f69487495bf4f14628a709ef0104a50a9c8f9ac
+
+provable sort Prop;
+sort Term;
+sort nat;
+delimiter $ ( ) $;
+term tvar (i: nat): Term;
+term tapp (f a: Term): Term;
+term tabs (b: Term): Term;
+term tint (n: nat): Term;
+term tf64 (bits: nat): Term;
+term ttrue: Term;
+term tfalse: Term;
+term tcon (tag: nat): Term;
+term tnil: Term;
+term tcons (h t: Term): Term;
+term tfold (f i l: Term): Term;
+term tdup (level: nat): Term;
+term tera: Term;
+term tprim (op: nat): Term;
+term tentity (sym: nat): Term;
+term tsubst (b a: Term): Term;
+term teval (op n m: nat): nat;
+term teq (t u: Term): Prop;
+term timp (p q: Prop): Prop;
+infixr timp: $->$ prec 25;
+axiom teq_refl (t: Term): $ teq t t $;
+axiom teq_symm (t u: Term): $ teq t u $ > $ teq u t $;
+axiom teq_trans (t u v: Term): $ teq t u $ > $ teq u v $ > $ teq t v $;
+axiom tsubst_beta (b a: Term): $ teq (tapp (tabs b) a) (tsubst b a) $;
+axiom teq_subst (b b2 a a2: Term):
+  $ teq b b2 $ > $ teq a a2 $ > $ teq (tsubst b a) (tsubst b2 a2) $;
+axiom teq_app (f f2 a a2: Term):
+  $ teq f f2 $ > $ teq a a2 $ > $ teq (tapp f a) (tapp f2 a2) $;
+axiom fold_nil (f i: Term): $ teq (tfold f i tnil) i $;
+axiom fold_cons (f i h t: Term):
+  $ teq (tfold f i (tcons h t)) (tapp (tapp f h) (tfold f i t)) $;
+axiom prim_eval (op n m: nat):
+  $ teq (tapp (tapp (tprim op) (tint n)) (tint m)) (tint (teval op n m)) $;
+axiom era_collapse (t: Term): $ teq (tapp tera t) tera $;
+term valid_iso (t u cert: Term): Prop;
+axiom net_isomorphism_step (t u cert: Term):
+  $ valid_iso t u cert $ > $ teq t u $;
+term l0: nat;
+prefix l0: $0$ prec max;
+term l1: nat;
+prefix l1: $1$ prec max;
+term l2: nat;
+prefix l2: $2$ prec max;
+term l3: nat;
+prefix l3: $3$ prec max;
+term l4: nat;
+prefix l4: $4$ prec max;
+term l5: nat;
+prefix l5: $5$ prec max;
+term l6: nat;
+prefix l6: $7$ prec max;
+term l7: nat;
+prefix l7: $8$ prec max;
+term l8: nat;
+prefix l8: $13$ prec max;
+term l9: nat;
+prefix l9: $1250$ prec max;
+term l10: nat;
+prefix l10: $8749$ prec max;
+term l11: nat;
+prefix l11: $8750$ prec max;
+term l12: nat;
+prefix l12: $9000$ prec max;
+term l13: nat;
+prefix l13: $10000$ prec max;
+term l14: nat;
+prefix l14: $70000$ prec max;
+def l15: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 3) (tint 8750)) (tint 8750))) (tapp (tapp (tprim 3) (tint 4)) (tint 4))) $;
+def l16: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8))) (tint 8750)) $;
+def l17: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tapp (tapp (tprim 2) (tint 8)) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8)))) $;
+def l18: Term = $ (tapp (tapp (tprim 5) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8))) (tint 10000)) $;
+def l19: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 1) (tint 10000)) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8)))) (tint 1250)) $;
+def l20: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 2) (tapp (tapp (tprim 1) (tint 10000)) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8)))) (tint 8))) (tint 10000)) $;
+def l21: Term = $ (tapp (tapp (tprim 5) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8))) (tint 9000)) $;
+def l22: Term = $ (tapp (tapp (tprim 5) (tint 8749)) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8))) $;
+def l23: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 3) (tapp (tapp (tprim 2) (tint 1)) (tint 10000))) (tint 10000))) (tapp (tapp (tprim 5) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tint 7)) (tint 10000))) (tint 8))) (tapp (tapp (tprim 2) (tint 1)) (tint 10000)))) $;
+axiom l24: $ teq (tint (teval 3 4 4)) ttrue $;
+axiom l25: $ teq (tint (teval 3 1250 1250)) ttrue $;
+axiom l26: $ teq (tint (teval 3 8750 8750)) ttrue $;
+axiom l27: $ teq (tint (teval 3 10000 10000)) ttrue $;
+axiom l28: $ teq (tint (teval 3 70000 70000)) ttrue $;
+axiom l29: $ teq (tint (teval 5 8749 8750)) ttrue $;
+axiom l30: $ teq (tint (teval 5 8750 9000)) ttrue $;
+axiom l31: $ teq (tint (teval 5 8750 10000)) ttrue $;
+axiom l32: $ teq (tint (teval 2 1 10000)) (tint 10000) $;
+axiom l33: $ teq (tint (teval 2 7 10000)) (tint 70000) $;
+axiom l34: $ teq (tint (teval 2 8 8750)) (tint 70000) $;
+axiom l35: $ teq (tint (teval 2 1250 8)) (tint 10000) $;
+axiom l36: $ teq (tint (teval 1 10000 8750)) (tint 1250) $;
+axiom l37: $ teq (tapp (tapp (tprim 13) ttrue) ttrue) ttrue $;
+axiom l38: $ teq (tapp (tapp (tentity 0) (tint 70000)) (tint 8)) (tint 8750) $;
+theorem l39: $ teq l15 ttrue $;
+theorem l40: $ teq l16 ttrue $;
+theorem l41: $ teq l17 ttrue $;
+theorem l42: $ teq l18 ttrue $;
+theorem l43: $ teq l19 ttrue $;
+theorem l44: $ teq l20 ttrue $;
+theorem l45: $ teq l21 ttrue $;
+theorem l46: $ teq l22 ttrue $;
+theorem l47: $ teq l23 ttrue $;

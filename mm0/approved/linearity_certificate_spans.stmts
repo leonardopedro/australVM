@@ -1,0 +1,84 @@
+-- mm0-comparator v1 — approved statements for linearity_certificate_spans
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: linearity_certificate_spans
+-- theory: docs/memsafe.mm0 sha256:73e75fa97cfaf72493053dd4c664ca00c6b11538644e4500f3d2cde396b39edd
+-- closure-sha256: 709158f38732cc2260c10829fd29468ac8c5c169afd81a592b15db7cb4a68ccb
+-- theory-sha256: ef6e46e2c30e023b2ab12ac77de9f89928a76fc04f710366d18b79ac10cf47de
+-- statements-sha256: 8ee11500176dbb4f04310f5957e0b55ea80760e464bf4a008f7f811313366705
+
+provable sort Prop;
+sort St;
+sort Ev;
+sort L;
+delimiter $ ( ) $;
+term st_idle: St;
+term st_owned: St;
+term st_read: St;
+term st_write: St;
+term e_acq: Ev;
+term e_cons: Ev;
+term e_reacq: Ev;
+term e_bor: Ev;
+term e_bw: Ev;
+term e_reb: Ev;
+term e_unbor: Ev;
+term e_drop: Ev;
+term trans (s: St) (e: Ev) (s2: St): Prop;
+axiom t_acq:  $ trans st_idle e_acq st_owned $;
+axiom t_reacq: $ trans st_idle e_reacq st_owned $;
+axiom t_cons: $ trans st_owned e_cons st_idle $;
+axiom t_drop: $ trans st_owned e_drop st_idle $;
+axiom t_bor:  $ trans st_owned e_bor st_read $;
+axiom t_bw:   $ trans st_owned e_bw st_write $;
+axiom t_reb:  $ trans st_owned e_reb st_write $;
+axiom t_bor_nested: $ trans st_read e_bor st_read $;
+axiom t_unbor_read: $ trans st_read e_unbor st_owned $;
+axiom t_unbor_write: $ trans st_write e_unbor st_owned $;
+term tl_nil: L;
+term tl_cons (e: Ev) (l: L): L;
+term run (l: L) (s: St) (s2: St): Prop;
+axiom run_nil (s: St): $ run tl_nil s s $;
+axiom run_cons (e: Ev) (l: L) (s: St) (s2: St) (s3: St):
+  $ trans s e s2 $ > $ run l s2 s3 $ > $ run (tl_cons e l) s s3 $;
+def l0: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+theorem l1: $ run l0 st_idle st_idle $;
+def l2: L = $ (tl_cons e_acq (tl_cons e_reb (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+theorem l3: $ run l2 st_idle st_idle $;
+def l4: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l5: $ run l4 st_idle st_idle $;
+def l6: L = $ (tl_cons e_acq (tl_cons e_reb (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+theorem l7: $ run l6 st_idle st_idle $;
+def l8: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l9: $ run l8 st_idle st_idle $;
+def l10: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l11: $ run l10 st_idle st_idle $;
+def l12: L = $ (tl_cons e_acq (tl_cons e_bw (tl_cons e_unbor (tl_cons e_cons tl_nil)))) $;
+theorem l13: $ run l12 st_idle st_idle $;
+def l14: L = $ (tl_cons e_acq (tl_cons e_reb (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+theorem l15: $ run l14 st_idle st_idle $;
+def l16: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l17: $ run l16 st_idle st_idle $;
+def l18: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l19: $ run l18 st_idle st_idle $;
+def l20: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_unbor (tl_cons e_cons tl_nil)))) $;
+theorem l21: $ run l20 st_idle st_idle $;
+def l22: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_unbor (tl_cons e_cons tl_nil)))) $;
+theorem l23: $ run l22 st_idle st_idle $;
+def l24: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l25: $ run l24 st_idle st_idle $;
+def l26: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l27: $ run l26 st_idle st_idle $;
+def l28: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l29: $ run l28 st_idle st_idle $;
+def l30: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l31: $ run l30 st_idle st_idle $;
+def l32: L = $ (tl_cons e_acq (tl_cons e_drop tl_nil)) $;
+theorem l33: $ run l32 st_idle st_idle $;
+def l34: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+theorem l35: $ run l34 st_idle st_idle $;
+def l36: L = $ (tl_cons e_acq (tl_cons e_bor (tl_cons e_unbor (tl_cons e_drop tl_nil)))) $;
+theorem l37: $ run l36 st_idle st_idle $;

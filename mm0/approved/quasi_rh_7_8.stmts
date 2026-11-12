@@ -1,0 +1,16 @@
+-- mm0-comparator v1 — approved statements for quasi_rh_7_8
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: quasi_rh_7_8
+-- theory: mm0/metamath/set.mm0 sha256:8ebe5ea36e6db9e8b26c8dbe6f4af166bae859a377ac1f9e93ab616260b6a8c9
+-- closure-sha256: 48dbc45a6738318c9e35db13781199f18495e5a61272ff94b60b30b8079da5c1
+-- theory-sha256: a5f1603ca493b374a2f6e7557b9e907a25338df79162e89fdbc0e408dea111e6
+-- statements-sha256: 65625b21a09cc672385e604564305231417e132bf41e81f9814cf2a7aa549e10
+
+import "metamath/set.mmu";
+delimiter $ ( $ $ ) $;
+axiom l0 (s: class):
+  $ wcel s cc $ > $ wbr (co c7 cdiv c8) (cfv s cre) clt $ > $ wne (cfv s czeta) cc0 $;

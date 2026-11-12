@@ -1,0 +1,124 @@
+-- mm0-comparator v1 — approved statements for gap_certificate
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: gap_certificate
+-- theory: docs/cic.mm0 sha256:718ed4ab37e49d19356bb854642cae7ced0e0ceffdc757ebc7878d5f256bc11b
+-- closure-sha256: bf0e2abafa886385cc7b99c8594c7d08a7667455013a7d847ef8980a9fa625d9
+-- theory-sha256: f906599cee3197ce9323a58116169010c2377c76e0501ea1cbd86d27fd65564f
+-- statements-sha256: d4c2ffa4fc416a68c69b3e9a9b6368047857505d77930485edf28261a551093b
+
+provable sort Prop;
+sort Term;
+sort nat;
+delimiter $ ( ) $;
+term tvar (i: nat): Term;
+term tapp (f a: Term): Term;
+term tabs (b: Term): Term;
+term tint (n: nat): Term;
+term tf64 (bits: nat): Term;
+term ttrue: Term;
+term tfalse: Term;
+term tcon (tag: nat): Term;
+term tnil: Term;
+term tcons (h t: Term): Term;
+term tfold (f i l: Term): Term;
+term tdup (level: nat): Term;
+term tera: Term;
+term tprim (op: nat): Term;
+term tentity (sym: nat): Term;
+term tsubst (b a: Term): Term;
+term teval (op n m: nat): nat;
+term teq (t u: Term): Prop;
+term timp (p q: Prop): Prop;
+infixr timp: $->$ prec 25;
+axiom teq_refl (t: Term): $ teq t t $;
+axiom teq_symm (t u: Term): $ teq t u $ > $ teq u t $;
+axiom teq_trans (t u v: Term): $ teq t u $ > $ teq u v $ > $ teq t v $;
+axiom tsubst_beta (b a: Term): $ teq (tapp (tabs b) a) (tsubst b a) $;
+axiom teq_subst (b b2 a a2: Term):
+  $ teq b b2 $ > $ teq a a2 $ > $ teq (tsubst b a) (tsubst b2 a2) $;
+axiom teq_app (f f2 a a2: Term):
+  $ teq f f2 $ > $ teq a a2 $ > $ teq (tapp f a) (tapp f2 a2) $;
+axiom fold_nil (f i: Term): $ teq (tfold f i tnil) i $;
+axiom fold_cons (f i h t: Term):
+  $ teq (tfold f i (tcons h t)) (tapp (tapp f h) (tfold f i t)) $;
+axiom prim_eval (op n m: nat):
+  $ teq (tapp (tapp (tprim op) (tint n)) (tint m)) (tint (teval op n m)) $;
+axiom era_collapse (t: Term): $ teq (tapp tera t) tera $;
+term valid_iso (t u cert: Term): Prop;
+axiom net_isomorphism_step (t u cert: Term):
+  $ valid_iso t u cert $ > $ teq t u $;
+term l0: nat;
+prefix l0: $0$ prec max;
+term l1: nat;
+prefix l1: $1$ prec max;
+term l2: nat;
+prefix l2: $2$ prec max;
+term l3: nat;
+prefix l3: $3$ prec max;
+term l4: nat;
+prefix l4: $4$ prec max;
+term l5: nat;
+prefix l5: $5$ prec max;
+term l6: nat;
+prefix l6: $13$ prec max;
+term l7: nat;
+prefix l7: $15$ prec max;
+term l8: nat;
+prefix l8: $255$ prec max;
+term l9: nat;
+prefix l9: $300$ prec max;
+term l10: nat;
+prefix l10: $555$ prec max;
+term l11: nat;
+prefix l11: $10000$ prec max;
+term l12: nat;
+prefix l12: $19320$ prec max;
+term l13: nat;
+prefix l13: $19875$ prec max;
+term l14: nat;
+prefix l14: $20000$ prec max;
+term l15: nat;
+prefix l15: $20430$ prec max;
+term l16: nat;
+prefix l16: $40000$ prec max;
+def l17: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 3) (tint 19875)) (tint 19875))) (tapp (tapp (tprim 3) (tint 4)) (tint 4))) $;
+def l18: Term = $ (tapp (tapp (tprim 13) (tapp (tapp (tprim 3) (tint 300)) (tint 300))) (tapp (tapp (tprim 3) (tint 4)) (tint 4))) $;
+def l19: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tint 19875)) $;
+def l20: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 0) (tint 300)) (tint 255))) (tint 555)) $;
+def l21: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tint 19320)) $;
+def l22: Term = $ (tapp (tapp (tprim 3) (tapp (tapp (tprim 0) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tint 20430)) $;
+def l23: Term = $ (tapp (tapp (tprim 5) (tint 0)) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) $;
+def l24: Term = $ (tapp (tapp (tprim 5) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tapp (tapp (tprim 0) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) $;
+def l25: Term = $ (tapp (tapp (tprim 13) (tapp (tprim 15) (tapp (tapp (tprim 5) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tapp (tapp (tprim 2) (tint 2)) (tint 2))) (tint 10000))) (tint 2))) (tapp (tapp (tprim 1) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))))) (tapp (tprim 15) (tapp (tapp (tprim 5) (tapp (tapp (tprim 0) (tapp (tapp (tprim 1) (tint 19875)) (tint 0))) (tapp (tapp (tprim 0) (tint 300)) (tint 255)))) (tapp (tapp (tentity 0) (tapp (tapp (tprim 2) (tapp (tapp (tprim 2) (tint 2)) (tint 2))) (tint 10000))) (tint 2))))) $;
+axiom l26: $ teq (tint (teval 0 300 255)) (tint 555) $;
+axiom l27: $ teq (tint (teval 0 19875 555)) (tint 20430) $;
+axiom l28: $ teq (tint (teval 3 4 4)) ttrue $;
+axiom l29: $ teq (tint (teval 3 300 300)) ttrue $;
+axiom l30: $ teq (tint (teval 3 555 555)) ttrue $;
+axiom l31: $ teq (tint (teval 3 19320 19320)) ttrue $;
+axiom l32: $ teq (tint (teval 3 19875 19875)) ttrue $;
+axiom l33: $ teq (tint (teval 3 20430 20430)) ttrue $;
+axiom l34: $ teq (tint (teval 5 0 19320)) ttrue $;
+axiom l35: $ teq (tint (teval 5 19320 20430)) ttrue $;
+axiom l36: $ teq (tint (teval 5 20000 19320)) tfalse $;
+axiom l37: $ teq (tint (teval 5 20430 20000)) tfalse $;
+axiom l38: $ teq (tint (teval 2 2 2)) (tint 4) $;
+axiom l39: $ teq (tint (teval 2 4 10000)) (tint 40000) $;
+axiom l40: $ teq (tint (teval 1 19875 0)) (tint 19875) $;
+axiom l41: $ teq (tint (teval 1 19875 555)) (tint 19320) $;
+axiom l42: $ teq (tapp (tapp (tprim 13) ttrue) ttrue) ttrue $;
+axiom l43: $ teq (tapp (tapp (tentity 0) (tint 40000)) (tint 2)) (tint 20000) $;
+axiom l44: $ teq (tapp (tprim 15) tfalse) ttrue $;
+theorem l45: $ teq l17 ttrue $;
+theorem l46: $ teq l18 ttrue $;
+theorem l47: $ teq l19 ttrue $;
+theorem l48: $ teq l20 ttrue $;
+theorem l49: $ teq l21 ttrue $;
+theorem l50: $ teq l22 ttrue $;
+theorem l51: $ teq l23 ttrue $;
+theorem l52: $ teq l24 ttrue $;
+theorem l53: $ teq l25 ttrue $;
