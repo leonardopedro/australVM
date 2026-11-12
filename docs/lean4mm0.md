@@ -2188,11 +2188,15 @@ arena grows past 10 GiB and the emitter dies on the bound. So the flat RSS was a
 plateau, not a ceiling: the node count keeps climbing and the flat allocation is
 just the reused working set.
 
-**That closes the class.** No row in the corpus is now bound by time alone. Two
-of the three emit failures are the emitter's 10 GiB arena, one converted to a
-12 GiB elaborator arena and got further than either, and the 21 `mm0-rs` rows
-are the elaborator's arena. Raising clocks converts nothing further; the whole
-41-row open set is a memory question, which is what §13.22 sizes.
+**That closes the class.** No row is left open in the emit stage because of the
+clock: two of the three are the emitter's 10 GiB arena, and the third converted
+to a 12 GiB elaborator arena and got further than either. What remains on time is
+the single `mm0-rs` row §13.22 already identified — `trial_cubic_…` at
+`over 3600 s` — and that is the smallest term in the memory class, i.e. it is
+slow *because* it is the one member that does fit its arena, so it is the same
+memory story read backwards. Raising clocks converts nothing further; 39 of the
+41 open rows are arena size (the 41st is the lone `mm0-c` artifact), which is
+what §13.22 sizes.
 
 **One harness bug came out of this, and it cost three hours before it was seen.**
 A check verdict was allowed to land on the first row whose declaration matched,
