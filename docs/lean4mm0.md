@@ -2025,9 +2025,9 @@ kept emitting for **1 158.9 s** — only 29% past the cap, which is why "nearly
 done" was the tempting reading — and then printed `emit ✗ … over 10 GiB`. It is
 not a slow row; it is a row whose term is still growing when the memory bound
 stops it, and the time cap happened to fire first only because 900 s is below
-where 10 GiB is reached. The remaining two rows of that class are unmeasured:
+where 10 GiB is reached. The remaining two rows of that class are unmeasured at this point:
 their probe was lost mid-run (next paragraph), and they are listed as open with
-their bound rather than classified.
+their bound rather than classified — §13.21 measures both.
 
 **`RLIMIT_AS` is per child, not per box.** The re-derivation pass and that probe
 ran concurrently, each with every child capped at 10 GiB — a cap that says
@@ -2170,20 +2170,29 @@ is slow rather than oversized: 3 600 s was not enough to elaborate it at 12 GiB.
 Its verdict is a clock bound reached inside a memory budget that the rest of the
 class blows through, so it is the one row here a larger clock alone could move.
 
-**The `emit` answer splits three ways, and the clock was worth trying.** The same
-three rows at `--emit-timeout 5400`, everything else at the budgets above:
+**The `emit` answer splits two ways, and only one of the clock's three tries paid.**
+The same three rows at `--emit-timeout 5400`, everything else at the budgets
+above, then the still-open one again at `--emit-timeout 21600`:
 
-| declaration | at 900 s | at 5 400 s | what it needs |
-| --- | --- | --- | --- |
-| `selfAdjointExtension_eq_adjoint` | over 900 s | emit `over 10 GiB` | an emitter arena above 10 GiB — it reaches the bound at ~1 159 s and would keep growing |
-| `comm_map_id` | over 900 s | **emitted**; then `mm0-rs` `over 12 GiB` | an elaborator arena above 12 GiB; the clock was the only thing blocking the emit |
-| `adjoint_aeval` | over 900 s | still emitting at 5 400 s, ~4.2 GB RSS, flat | clock, not memory — and no bound is known past 5 400 s |
+| declaration | at 900 s | at 5 400 s | at 21 600 s | what it needs |
+| --- | --- | --- | --- | --- |
+| `selfAdjointExtension_eq_adjoint` | over 900 s | emit `over 10 GiB` | — | an emitter arena above 10 GiB — it reaches the bound at ~1 159 s and would keep growing |
+| `comm_map_id` | over 900 s | **emitted**; then `mm0-rs` `over 12 GiB` | — | an elaborator arena above 12 GiB; the clock was the only thing blocking the emit |
+| `adjoint_aeval` | over 900 s | still emitting at 5 400 s, ~4.2 GB RSS | emit `over 10 GiB` at 8 889 s | an emitter arena above 10 GiB; the clock was never the binding constraint |
 
-So the class is not homogeneous: raising the clock converts one of the three from
-"could not emit" to "emitted, and now bound by the elaborator's arena like the
-twenty above", leaves one exactly where §13.19 found it (memory, at 1 159 s of
-emitting), and leaves one genuinely unfinished with memory flat, which is the
-only row in the corpus whose need is open-ended time.
+`adjoint_aeval` was the one row that looked open-ended: at 5 400 s it was still
+emitting with RSS flat at ~4.2 GB, which is what a slow-but-finite elaboration
+looks like. The 6-hour clock says otherwise. It does not finish, and it does not
+reach the clock either — between 5 400 s and 8 889 s (2 h 28 min of emitting) its
+arena grows past 10 GiB and the emitter dies on the bound. So the flat RSS was a
+plateau, not a ceiling: the node count keeps climbing and the flat allocation is
+just the reused working set.
+
+**That closes the class.** No row in the corpus is now bound by time alone. Two
+of the three emit failures are the emitter's 10 GiB arena, one converted to a
+12 GiB elaborator arena and got further than either, and the 21 `mm0-rs` rows
+are the elaborator's arena. Raising clocks converts nothing further; the whole
+41-row open set is a memory question, which is what §13.22 sizes.
 
 **One harness bug came out of this, and it cost three hours before it was seen.**
 A check verdict was allowed to land on the first row whose declaration matched,
@@ -2207,15 +2216,15 @@ non-closure: {'emit': 19, 'mm0-rs': 21, 'mm0-c': 1}
 
 452  verified
  20  mm0-rs: over 12 GiB
- 18  emit: over 10 GiB
-  1  emit: over 5400 s
+ 19  emit: over 10 GiB
   1  mm0-rs: over 3600 s
   1  mm0-c artifact
 ```
 
 `selfAdjointExtension_eq_adjoint` moves from `emit` time to `emit` memory (it was
-counted as time only because 900 s fired before 10 GiB did), and `comm_map_id`
-moves from `emit` to `mm0-rs`. The totals that matter are unchanged: 448 of 489
+counted as time only because 900 s fired before 10 GiB did), `comm_map_id` moves
+from `emit` to `mm0-rs`, and `adjoint_aeval` moves from a 5 400 s clock to the
+same 10 GiB emit arena at 8 889 s. The totals that matter are unchanged: 448 of 489
 names close, all 452 closed rows re-derive, 8 750 509 of 8 750 509 applications
 are shared, and every one of the 41 open rows names the budget it hit.
 

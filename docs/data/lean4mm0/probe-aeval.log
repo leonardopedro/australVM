@@ -1,0 +1,7 @@
+retry              : 1 row(s) in /home/leo/.local/state/australVM-lean/probe-aeval.tsv, 1 open across 1 export(s) (emit_timeout=21600 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12)
+[1/1] BookProof.Textbook.ChapterH8: 0/1 converted, 1 still open
+
+retry              : 0 converted, 1 still open
+      1  emit
+open rows by measured bound:
+      1  over 10 GiB [emit_timeout=21600 emit_mem_gb=10 mm0_rs_timeou

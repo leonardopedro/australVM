@@ -482,7 +482,7 @@ BookProof.Toolbox.ChapterFriedrichsFormGap	BookProof.FriedrichsFormGap.formSpace
 BookProof.Toolbox.ChapterFriedrichsFormGap	BookProof.FriedrichsFormGap.friedrichs_quadForm_lower_bound._simp_1_1	own	thm	closed	86	62	re-derived	60	60	
 BookProof.Toolbox.ChapterWeylHamiltonian	BookProof.WeylHamiltonian.selfAdjoint_sq_isPositive	own	thm	closed	37773	8742	re-derived	61621	61621	
 BookProof.Toolbox.ChapterWeylHamiltonian	BookProof.WeylHamiltonian.weylHamiltonian_isSelfAdjoint._simp_1_1	own	thm	closed	109	64	re-derived	314	314	
-BookProof.Textbook.ChapterH8	BookProof.ChapterH8.adjoint_aeval	own		emit	0	0				over 5400 s [emit_timeout=5400 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12]
+BookProof.Textbook.ChapterH8	BookProof.ChapterH8.adjoint_aeval	own		emit	0	0				over 10 GiB [emit_timeout=21600 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12]
 BookProof.Textbook.ChapterH8	BookProof.ChapterH8.sirk_nested_orders_le	own	thm	closed	353	170	re-derived	1294	1294	
 BookProof.Textbook.ChapterH7	BookProof.ChapterH7.compress_isSelfAdjoint	own		emit	0	0				over 10 GiB [emit_timeout=900 emit_mem_gb=10 mm0_rs_timeout=1200 mm0_rs_mem_gb=10]
 BookProof.Textbook.ChapterH7	BookProof.ChapterH7.reduceGenerator_isHermitian	own		mm0-rs	0	0				over 12 GiB [emit_timeout=1800 emit_mem_gb=10 mm0_rs_timeout=3600 mm0_rs_mem_gb=12]

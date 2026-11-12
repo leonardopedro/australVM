@@ -6,10 +6,11 @@ BookProof corpus), one sweep at a time.
 
 | file | what it is |
 | --- | --- |
-| `census-own.tsv` | The 493-row census: one row per own declaration, merged from the sweep with the 4-row 12 GiB pass and both probes spliced in. This is the authoritative table behind every count quoted in the doc. |
+| `census-own.tsv` | The 493-row census: one row per own declaration, merged from the sweep with the 4-row 12 GiB pass and all three probes spliced in. This is the authoritative table behind every count quoted in the doc. |
 | `probe-mm0rs.tsv` | The 20 `mm0-rs` rows re-run at `--mm0rs-mem-gb 12` (§13.21). |
 | `probe-emit.tsv` | The 3 `emit: over 900 s` rows re-run at `--emit-timeout 5400` (§13.21). |
-| `probe-mm0rs.log`, `probe-emit.log` | The sweeps' own output, including the budget line each run measured under. |
+| `probe-aeval.tsv` | The one row still open after that (`adjoint_aeval`) re-run at `--emit-timeout 21600` — over 10 GiB at 8 889 s, so the 6-hour clock never fired (§13.21). |
+| `probe-mm0rs.log`, `probe-emit.log`, `probe-aeval.log` | The sweeps' own output, including the budget line each run measured under. |
 
 ## Columns
 
