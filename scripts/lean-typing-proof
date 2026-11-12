@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 # The parser is shared with the statement translator, not copied: this tool
@@ -239,38 +240,131 @@ def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
         if d is None:
             return 0
         total = 0
-        for v in d.__dict__.values():
+        # `list(...)` is one C-level pass holding the GIL: the derivation adds
+        # attributes from the main thread, and a Python-level loop over the
+        # live view raises `dictionary changed size during iteration`.
+        for v in list(d.__dict__.values()):
             total += sys.getsizeof(v)
             if isinstance(v, dict):
-                for k, item in v.items():
+                # Same reason as above: the two rewrite memos are live.
+                for k, item in list(v.items()):
                     total += sys.getsizeof(k) + sys.getsizeof(item)
             elif isinstance(v, (list, tuple, set, frozenset)):
                 for item in v:
                     total += sys.getsizeof(item)
         return total
 
+    def _tree_nodes(d) -> int:
+        """Structural nodes retained in `oblig_tree` (the certificate payload).
+
+        Counted iteratively: a term's tree is deep enough that recursion would
+        hit the interpreter's limit, and this runs in a sampler thread.
+        """
+        n = 0
+        stack = [d.oblig_tree]
+        while stack:
+            v = stack.pop()
+            if isinstance(v, dict):
+                n += 1
+                stack.extend(v.values())
+            elif isinstance(v, list):
+                stack.extend(v)
+        return n
+
+    def mall_mb() -> tuple:
+        """(in-use, free-in-arena, mmapped) MB straight from glibc.
+
+        `tracemalloc` covers objects Python allocated; this covers the other
+        half of RSS: bytes the allocator holds but no live object owns (free
+        blocks in an arena that `malloc_trim` cannot return), and large blocks
+        the allocator mapped. `free` large next to a flat RSS is fragmentation,
+        not a leak, and the difference matters because only one of the two is
+        fixed by changing the representation.
+        """
+        try:
+            import ctypes
+
+            # `mallinfo2` returns an 80-byte struct *by value*: ctypes needs
+            # the struct as `restype` (a by-ref call passed the pointer as the
+            # hidden sret argument and segfaulted the process).
+            class MI(ctypes.Structure):
+                _fields_ = [(f, ctypes.c_size_t) for f in (
+                    "arena", "ordblks", "smblks", "hblks", "hblkhd", "usmblks",
+                    "fsmblks", "uordblks", "fordblks", "keepcost")]
+
+            libc = ctypes.CDLL("libc.so.6")
+            libc.mallinfo2.restype = MI
+            libc.mallinfo2.argtypes = []
+            mi = libc.mallinfo2()
+            return (round(mi.uordblks / 1e6), round(mi.fordblks / 1e6),
+                    round(mi.hblkhd / 1e6))
+        except (OSError, AttributeError):
+            return (0, 0, 0)
+
+    def _traced_mb() -> tuple:
+        """(current, peak) Python-allocated MB, or (0, 0) with the tracer off."""
+        if not snap_at:
+            return (0, 0)
+        import tracemalloc
+
+        cur, peak = tracemalloc.get_traced_memory()
+        return (round(cur / 1048576, 1), round(peak / 1048576, 1))
+
     def body() -> None:
-        t0 = time.time()
-        with open(path, "a", buffering=1) as fh:
-            # `rules`/`oblig`/`msubst` are *counts*: they say how many steps
-            # ran, not how many bytes they cost. `axb`/`rulb` are the byte
-            # totals of the axiom and rule lists, so which list holds the RSS
-            # is measured rather than inferred from its length; `axmax` is the
-            # longest single axiom, because one huge `tdefeq` can dwarf the
-            # rest of the list.
-            # `exprs` is the export's index size, not a growth signal: the
-            # lazy table reports every expression in the file from the first
-            # sample. What grows is `extra` (nodes the derivation synthesises
-            # for `lift`/`subst0`), which `exb` sizes, plus `liftb`/`substb`,
-            # the shallow bytes of the two memo values.
-            fh.write("t\trss_mb\tpeak_mb\texprs\tmemo_by\tmemo_n\trules"
-                     "\taxioms\toblig\tlift\tmsubst\tdepth\tstack"
-                     "\taxb\trulb\toblb\taxmax\textra\texb\tliftb\tsubstb"
-                     "\taccb\trss_trim\n")
-            while not stop.is_set():
-                d = deriver_fn()
-                st = d._stack[-8:] if d is not None else []
-                trim()
+        try:
+            sample()
+        except Exception as exc:  # a dead sampler must say so, not go quiet
+            with open(path + ".err", "w") as fh:
+                fh.write(f"trace stopped: {type(exc).__name__}: {exc}\n")
+
+    # `tracemalloc` answers the question the hand-listed accumulators cannot:
+    # of the RSS, how much is Python objects at all? A traced total that tracks
+    # RSS means the bytes are in the object graph (and a snapshot names the
+    # line); a traced total far below RSS means they are C-level buffers or
+    # allocator retention, where no accumulator will ever show them.
+    snap_at = float(os.environ.get("LTP_TRACE_SNAP", "0") or 0)
+    if snap_at:
+        import tracemalloc
+
+        tracemalloc.start(5)
+
+    def snap(fh) -> None:
+        import tracemalloc
+
+        stats = tracemalloc.take_snapshot().statistics("lineno")[:12]
+        with open(path + ".mem", "w") as mfh:
+            mfh.write(f"tracemalloc snapshot at t={round(time.time() - t0, 1)} s\n")
+            for s in stats:
+                mfh.write(f"{s.size / 1e6:9.1f} MB  {s.count:9d}  {s.traceback}\n")
+                fh.write(f"# mem: {s.size / 1e6:.1f} MB {s.count} {s.traceback}\n")
+
+    t0 = time.time()
+    state = {"snapped": False}
+    fh = open(path, "a", buffering=1)
+
+    def sample() -> None:
+        # `rules`/`oblig`/`msubst` are *counts*: they say how many steps
+        # ran, not how many bytes they cost. `axb`/`rulb` are the byte
+        # totals of the axiom and rule lists, so which list holds the RSS
+        # is measured rather than inferred from its length; `axmax` is the
+        # longest single axiom, because one huge `tdefeq` can dwarf the
+        # rest of the list.
+        # `exprs` is the export's index size, not a growth signal: the
+        # lazy table reports every expression in the file from the first
+        # sample. What grows is `extra` (nodes the derivation synthesises
+        # for `lift`/`subst0`), which `exb` sizes, plus `liftb`/`substb`,
+        # the shallow bytes of the two memo values.
+        fh.write("t\trss_mb\tpeak_mb\texprs\tmemo_by\tmemo_n\trules"
+                 "\taxioms\toblig\tlift\tmsubst\tdepth\tstack"
+                 "\taxb\trulb\toblb\taxmax\textra\texb\tliftb\tsubstb"                     "\taccb\trss_trim\tproofb\ttraced_mb\ttpeak_mb"
+                     "\tuord_mb\tfree_mb\tmmap_mb\tobnodes\n")
+        if snap_at:
+            fh.write(f"# tracemalloc on, snapshot at t>={snap_at} s\n")
+        while not stop.is_set():
+            d = deriver_fn()
+            st = list(d._stack[-8:]) if d is not None else []
+            trim()
+            try:
                 fh.write("\t".join(str(x) for x in (
                     round(time.time() - t0, 1), rss_mb(), peak_mb(),
                     len(ex.exprs), enc._memo_bytes, len(enc._memo),
@@ -278,17 +372,31 @@ def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
                     len(d.oblig) if d else 0, len(d._lift_memo) if d else 0,
                     len(d._subst_memo) if d else 0, len(d._stack) if d else 0,
                     ">".join(f"{eid}:{_label(ex, eid)}" for eid in st),
-                    sum(map(len, d.axioms)) if d else 0,
-                    sum(map(len, d.rules)) if d else 0,
-                    sum(map(len, d.oblig)) if d else 0,
-                    max(map(len, d.axioms), default=0) if d else 0,
+                    sum(map(len, list(d.axioms))) if d else 0,
+                    sum(map(len, list(d.rules))) if d else 0,
+                    sum(map(len, list(d.oblig))) if d else 0,
+                    max(map(len, list(d.axioms)), default=0) if d else 0,
                     len(ex.exprs.extra),
-                    sum(map(sys.getsizeof, ex.exprs.extra.values())),
-                    sum(map(sys.getsizeof, d._lift_memo.values())) if d else 0,
-                    sum(map(sys.getsizeof, d._subst_memo.values())) if d else 0,
+                    sum(map(sys.getsizeof, list(ex.exprs.extra.values()))),
+                    sum(map(sys.getsizeof, list(d._lift_memo.values()))) if d else 0,
+                    sum(map(sys.getsizeof, list(d._subst_memo.values()))) if d else 0,
                     acc_bytes(d), rss_mb(),
+                    int(d.__dict__.get("_proof_bytes", 0)) if d else 0,
+                    *_traced_mb(), *mall_mb(),
+                    _tree_nodes(d) if d else 0,
                 )) + "\n")
-                stop.wait(period)
+            except Exception:  # one bad sample must not end the trace
+                fh.write(f"# sample error at t={round(time.time() - t0, 1)}: "
+                         f"{traceback.format_exc().replace(chr(10), ' | ')}\n")
+            ts = time.time() - t0
+            if snap_at and not state["snapped"] and ts >= snap_at:
+                state["snapped"] = True
+                try:
+                    snap(fh)
+                except Exception:
+                    fh.write("# snapshot failed: "
+                             f"{traceback.format_exc().replace(chr(10), ' | ')}\n")
+            stop.wait(period)
 
     threading.Thread(target=body, name="ltp-trace", daemon=True).start()
 
@@ -534,6 +642,8 @@ class Deriver:
         self.next_id = max(ex.exprs) + 1
         self.base_id = self.next_id
         self.axioms: list[str] = []
+        # Largest proof string returned so far (bytes); see `_check`.
+        self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}
         self.beta_ax: dict[tuple[str, str], str] = {}
         self.field_ax: dict[tuple[str, int], str] = {}
@@ -1088,9 +1198,18 @@ class Deriver:
         st = self._stack
         st.append(eid)
         try:
-            return self._chk(eid, expected, env, tail)
+            out = self._chk(eid, expected, env, tail)
         finally:
             st.pop()
+        # A proof term is one nested string, and every rule copies its children
+        # into the parent's text. So the live proof's *size* — not its node
+        # count — is what the RSS has to pay for, and at a concatenation it is
+        # paid twice (child + the copy being built). Kept as a plain int: the
+        # trace thread reads it, the derivation never does.
+        n = len(out)
+        if n > self._proof_bytes:
+            self._proof_bytes = n
+        return out
 
     def _chk(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
         """A proof term for `tty ctx eid expected`, in the given context."""
