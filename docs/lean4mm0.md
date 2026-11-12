@@ -2319,3 +2319,115 @@ and §13.19's conclusion that "what would move this class is the elaborator" is
 now quantified: **385 B/node → ≤ 112 B/node**, or share the subtrees and get
 ~0.4–2 B/node, which is the same sentence as "stop allocating a tree per
 statement".
+
+### 13.23 What a shared arena actually costs, measured in mm0-rs
+
+§13.22's "~0.4–2 B/node" was arithmetic: the measured distinct ratio times the
+measured 385 B/node. This is the other half — a prototype that builds the two
+representations and counts the bytes they hold, using mm0-rs's own parser
+(`mm1_parser`) on the artifacts that failed. It lives at
+[`data/lean4mm0/arena_proto.rs`](data/lean4mm0/arena_proto.rs), runs as
+`cargo run --release --bin arena_proto -- <file.mm1> [stride]` in an mm0-rs
+checkout, and its transcripts are in
+[`data/lean4mm0/arena-probe.txt`](data/lean4mm0/arena-probe.txt).
+
+A node here is a node of the **math expression**, which is where the text's
+parentheses actually live. The lisp parser does not expand `$ … $`: a `Formula`
+is a span, and the tree that grows during elaboration is the `QExpr` tree the
+math parser builds per statement. So the prototype rebuilds those trees from the
+same spans, in two shapes:
+
+- **tree**: `span` + kind + `Box<[child]>` per node — the shape `QExpr` has
+  (`IdentApp`/`App` carry a `Span`, a `TermId` and a boxed child slice);
+- **arena**: a hash-consed node store keyed on kind plus child ids, with the
+  children in one shared pool.
+
+Both are measured by a counting global allocator (bytes requested, not
+`size_of` arithmetic), on the two largest artifacts that survived on disk:
+
+| artifact | text | formulas | tree nodes measured | tree B/node | distinct | arena B/distinct | arena B/node |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `apply_sum_of_diagonal` | 800.9 MB | 71 649 | 98 326 003 (half, stride 2) | 40 | 15 523 (0.02%) | 69 | 0.011 |
+| `physForm_evol_self_le` | 86.1 MB | 59 135 | 14 758 422 (all) | 40 | 6 627 (0.04%) | 60 | 0.027 |
+
+Two things follow, and the second one corrects §13.22.
+
+**The shared arena is cheap by four orders of magnitude.** 0.011–0.027 B per
+node occurrence, against 385 B — because the distinct ratio on math nodes is
+0.02–0.04%, not the 0.1–0.6% the statement-level sample gave. The whole
+`apply_sum_of_diagonal` formula set interns to 15 523 distinct nodes, 1.08 MB
+for half the file. Interning is not a compromise here; it is free.
+
+**The tree is not the 385 B.** At 40 B per tree node, and ~2.2 tree nodes per
+parenthesis (each `(` opens one group, and every atom is a node too), the
+QExpr-shaped representation is ~88 B per parenthesised node — about a quarter of
+what the elaborator actually spends. The full `apply_sum_of_diagonal` set is
+~197 M tree nodes ≈ 7.9 GB, which is a large share of a 12 GiB budget but not
+all of it, and mm0-rs elaborates statement by statement, so it does not hold all
+of them at once: its largest single formula is 2.8 M nodes, 112 MB. So sharing
+the formula tree removes a real quarter and leaves the other three quarters
+unexplained. §13.22's "385 B/node → ≤ 112 B/node" stands as the requirement; the
+answer to *where the 112 B would come from* is now partly measured and partly
+open.
+
+The prototype's own bugs are worth one line, because both would have produced a
+wrong conclusion quietly: counting only `SExpr` nodes misses every formula (the
+lisp parse of the 800 MB artifact is 2.8 M nodes against 87.6 M parens inside
+`$ … $`), and a tokenizer that advances one byte per node instead of one atom
+inflated the tree by 6.4× — 40 B/node looks the same either way, but the *node
+count* and therefore every total did not.
+
+### 13.24 The mm0-rs work, ordered by how many rows it unblocks
+
+§13.22 sized the requirement and §13.23 measured two of its parts. What is left
+is a work list, and the ordering that matters is not "biggest win" but "how many
+of the 20 memory-bound rows stop failing". Two of the 41 open rows do not appear
+here at all: `trial_cubic_quartic_bounded_below_general` is clock-bound at
+`mm0-rs` (§13.22), and the 19 `emit` rows are the emitter's arena (§13.21), a
+different program.
+
+The ladder below is §13.22's table inverted into a work list: at a per-node
+cost of B bytes, the rows that fit are the ones whose need is at least B. The
+counts are cumulative, and the last row is the whole class.
+
+| # | change | cost reached | rows unblocked | nearest row it adds |
+| ---: | --- | ---: | ---: | --- |
+| 1 | Per-phase heap accounting in the elaborator (`--features memory` exists; nothing reports per phase) | — | 0 | §13.23: the formula tree is ~88 B of the 385 B/node, so 3/4 of the cost has no measurement yet |
+| 2 | Hash-cons the formula tree (`QExpr`) | −88 | 0 (adds headroom) | §13.23: 0.011–0.027 B/occurrence at 0.02–0.04% distinct |
+| 3 | Drop one word per node (385 → 380 B) | 380 | 1 | `fock_gap_of_bounded_interaction` |
+| 4 | → 362 B | 362 | 2 | `Df_lyapCut` |
+| 5 | → 343 B | 343 | 3 | `reduceGenerator_isHermitian` |
+| 6 | → 342 B | 342 | 4 | `compress_sub_const` |
+| 7 | → 320 B | 320 | 5 | `sirk_error_bound_of_crouzeix` |
+| 8 | → 311 B | 311 | 6 | `deficiencyTrivialAt_of_dense` |
+| 9 | → 306 B | 306 | 7 | `isPosCol_shiftCol_opCol_of_form_gap` |
+| 10 | → 251 B | 251 | 8 | `compress_isSelfAdjoint` |
+| 11 | → 244 B | 244 | 9 | `sirk_error_bound_numericalRange_decay` |
+| 12 | → 227 B | 227 | 10 | `norm_physEvol_sub_sq_le` |
+| 13 | → 208 B | 208 | 11 | `symmetricOn_square_comparison` |
+| 14 | → 200 B | 200 | 13 | `whiteningEquiv_left_inverse` |
+| 15 | → 189 B | 189 | 15 | `tendsto_physEvolCompletion_right` |
+| 16 | → 157 B | 157 | 16 | `comm_map_id` |
+| 17 | → 149 B | 149 | 18 | `apply_sum_of_shift` |
+| 18 | → 142 B | 142 | 19 | `apply_sum_of_diagonal` |
+| 19 | → 112 B (3.43×) | 112 | 20 | `essentiallySelfAdjointOn_add_bounded` |
+
+The shape of that table is the finding: shaving buys rows one at a time all the
+way down — 1.3% of the cost buys the first row, 3.43× is needed for the last —
+and the only step that skips the queue is sharing, because sharing is the one
+change whose cost per node is already measured at four orders below the budget.
+So the ordering is not "shave bytes", it is:
+
+1. **Measure the split** (§13.23 leaves 3/4 of 385 B unaccounted). Any of the
+   later steps taken without it is a guess, and §13.19 already paid for one
+   guessed cause (the 10 GiB cap looked like the corpus's limit for two rounds).
+2. **Intern the formula tree.** Measured, cheap, and it must happen whatever the
+   split says, because 88 B/node of it is text-shaped by construction.
+3. **Only then** decide between sharing the elaborated structures and shaving
+   the per-node layout. The ladder says shaving alone needs 3.43× to clear all
+   20 rows and 1.01× to clear one; sharing is the only step that plausibly
+   clears them all at once.
+
+The emitter's side of this list is smaller and better understood: §13.21's trace
+is measuring what grows there now, and the answer decides whether the 19 `emit`
+rows are a memory fix or a representation fix.

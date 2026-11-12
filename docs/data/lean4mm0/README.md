@@ -11,6 +11,8 @@ BookProof corpus), one sweep at a time.
 | `probe-emit.tsv` | The 3 `emit: over 900 s` rows re-run at `--emit-timeout 5400` (§13.21). |
 | `probe-aeval.tsv` | The one row still open after that (`adjoint_aeval`) re-run at `--emit-timeout 21600` — over 10 GiB at 8 889 s, so the 6-hour clock never fired (§13.21). |
 | `probe-mm0rs.log`, `probe-emit.log`, `probe-aeval.log` | The sweeps' own output, including the budget line each run measured under. |
+| `arena_proto.rs` | The prototype behind §13.23: builds math-expression trees and a hash-consed arena over the same formulas, and counts the heap each holds with a counting allocator. A `src/bin` of an mm0-rs checkout (upstream `digama0/mm0`), not of this repo. |
+| `arena-probe.txt` | Its transcripts on the two largest surviving artifacts, with the checkout's commit. |
 
 ## Columns
 

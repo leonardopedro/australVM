@@ -1,0 +1,46 @@
+# arena_proto on the two surviving artifacts (upstream mm0-rs clone, 2026-11-12)
+# checkout: 0d414c0
+
+## apply_sum_of_diagonal (800.9 MB, stride 2 -- half the formulas)
+file        : /home/leo/.local/state/australVM-lean/classify-work/BookProof_HermiteRelative_apply_sum_of_diagonal/work/BookProof_HermiteRelative_apply_sum_of_diagonal/apply_sum_of_diagonal_typing.mm1
+text        : 800.9 MB
+parse errors: 0
+statements  : 71882
+formulas    : 71649 (2821048 lisp nodes)
+heap parsed : 262.3 MB, peak 1067.3 MB
+sample      : 35825 of 71649 formulas (stride 2)
+tree nodes  : 98326003 (largest single formula 2808385)
+tree heap   : 3933.0 MB = 40 B/node (peak 5001.0 MB)
+interned    : 15523 distinct / 98326003 nodes (0.02%)
+node size   : TreeNode 40 B, mm0-rs ExprNode 16 B
+arena heap  : 1.08 MB = 69 B per distinct node, 0.011 B per node
+	Command being timed: "./target/release/arena_proto /home/leo/.local/state/australVM-lean/classify-work/BookProof_HermiteRelative_apply_sum_of_diagonal/work/BookProof_HermiteRelative_apply_sum_of_diagonal/apply_sum_of_diagonal_typing.mm1 2"
+	User time (seconds): 11.10
+	System time (seconds): 3.05
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:14.16
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+
+## physForm_evol_self_le (86.1 MB, all formulas)
+file        : /home/leo/.local/state/australVM-lean/classify-work/BookProof_OSReconstruction_physForm_evol_self_le/work/BookProof_OSReconstruction_physForm_evol_self_le/physForm_evol_self_le_typing.mm1
+text        : 86.1 MB
+parse errors: 0
+statements  : 59313
+formulas    : 59135 (599822 lisp nodes)
+heap parsed : 43.0 MB, peak 131.1 MB
+tree nodes  : 14758422 (largest single formula 568003)
+tree heap   : 590.3 MB = 40 B/node (peak 722.4 MB)
+interned    : 6627 distinct / 14758422 nodes (0.04%)
+node size   : TreeNode 40 B, mm0-rs ExprNode 16 B
+arena heap  : 0.40 MB = 60 B per distinct node, 0.027 B per node
+	Command being timed: "./target/release/arena_proto /home/leo/.local/state/australVM-lean/classify-work/BookProof_OSReconstruction_physForm_evol_self_le/work/BookProof_OSReconstruction_physForm_evol_self_le/physForm_evol_self_le_typing.mm1 1"
+	User time (seconds): 1.50
+	System time (seconds): 0.41
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.91
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
