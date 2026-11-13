@@ -399,6 +399,10 @@ $ grep trust-split mm0/flux1d_certificate.mm0
 -- trust-split: structural=5 grounded=15 certificates=3
 ```
 
+(W4 superseded these numbers with a fourth obligation: the committed artifact now
+reads `-- trust-split: structural=6 grounded=15 certificates=4` and
+`-- assumed: 1`; the block above is the S3 measurement it was met on.)
+
 What that means, precisely: the three statements in
 `mm0/flux1d_certificate.mm0` are the kernel's obligations written as
 polynomial identities (`consistency`: `2·f − f = f`; `conservation`:
