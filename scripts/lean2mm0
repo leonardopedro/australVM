@@ -81,6 +81,28 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# W0: the emission primitives live in scripts/mm0_emit.py so the second
+# frontend (scripts/au2mm0, W2) reuses them instead of forking this file.
+# `TranspileError` is the module's error class, so every existing `raise` and
+# `except` below is unchanged.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mm0_emit import (  # noqa: E402  (sibling module, not a package)
+    SIGNATURE_TERMS,
+    EmitError as TranspileError,
+    axiom,
+    check_proof_refs,
+    check_spec_proof_parity,
+    coverage_line,
+    defn,
+    grounded_axiom,
+    numeral_lines,
+    pinned_split,
+    prim_bridge,
+    pub_theorem,
+    theorem,
+    trust_split_line,
+)
+
 # ── paths ────────────────────────────────────────────────────────────────
 
 AVM = Path(__file__).resolve().parent.parent          # australVM/
@@ -214,36 +236,6 @@ def out_paths(stem: str) -> tuple[Path, Path]:
     return OUT_DIR / f"{stem}.mm0", OUT_DIR / f"{stem}.mm1"
 
 
-def trust_split_line(stem: str, structural: int, grounded: int,
-                     certificates: int) -> str:
-    """The machine-readable trust split, read by scripts/verify-invariants."""
-    return (f"-- trust-split: structural={structural} grounded={grounded} "
-            f"certificates={certificates}")
-
-
-# The agent signature of docs/cic.mm0, in declaration order. Which of these a
-# generated file actually uses is *reported in the artifact* (§9.4): a reader
-# must be able to tell a checked rule from a reserved one, and prose goes stale
-# the moment the encoder changes.
-SIGNATURE_TERMS = [
-    "tvar", "tapp", "tabs", "tint", "tf64", "ttrue", "tfalse", "tcon",
-    "tnil", "tcons", "tfold", "tdup", "tera", "tprim", "tentity",
-    "tsubst", "teval",
-]
-
-
-def coverage_line(body: str) -> str:
-    """Which signature terms the generated declarations mention.
-
-    `body` must be the generated part only — the `.mm0` embeds `cic.mm0`
-    verbatim for audit, so scanning the whole file would report every
-    declaration as used.
-    """
-    used = [t for t in SIGNATURE_TERMS if re.search(rf"\b{t}\b", body)]
-    unused = [t for t in SIGNATURE_TERMS if t not in used]
-    return (f"-- theory coverage: used={','.join(used) or '-'} "
-            f"unused={','.join(unused) or '-'}")
-
 # prim_tag bytes from unfer/logos/src/deltanet/unf.rs (load-bearing: renaming
 # a variant must not silently re-tag; this table mirrors that mapping).
 PRIM_TAG = {
@@ -253,10 +245,6 @@ PRIM_TAG = {
 # tentity symbol table of the emitted file (the agent signature has no
 # integer-division primitive; division is a symbol-level function).
 ENTITY_SYM = {"idiv": 0}
-
-
-class TranspileError(Exception):
-    """Any loud failure: unknown construct, value disagreement, drift."""
 
 
 # ── NDJSON loading (three namespaces: in=name, il=level, ie=expr) ────────
@@ -1442,19 +1430,9 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
     # the trust split, reported in the header and tagged per def below
     n_struct = sum(1 for _, _, node, _ in encoded if not isinstance(node, Lit))
     n_ground = len(encoded) - n_struct
-    budget = BUDGETS.get(stem)
-    if budget is None:
-        raise TranspileError(
-            f"{stem}: no trust-split budget in BUDGETS — add one (the split is "
-            "a pinned contract, not a statistic)")
     actual = {"structural": n_struct, "grounded": n_ground,
               "certificates": len(encoded)}
-    if actual != budget:
-        raise TranspileError(
-            f"{stem}: trust split widened/drifted: {actual} != pinned {budget}. "
-            "Movement toward `grounded` means mm0-c checks less of this "
-            "certificate; if that is intended, edit BUDGETS in the same commit "
-            "and say why in the artifact header.")
+    pinned_split(stem, BUDGETS, actual)
 
     # ---- content groups (numerals are collected as math strings are built,
     # so the numeral block is rendered strictly LAST, before assembly) ----
@@ -1501,7 +1479,7 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
             def_lines.append("--   grounded: body evaluated to its literal (trust split above).")
         else:
             def_lines.append("--   structural: net spine checked by mm0-c (trust split above).")
-        def_lines.append(f"def {defname}: Term = $ {term_of(node, reg.num)} $;")
+        def_lines.append(defn(defname, "Term", term_of(node, reg.num)))
         def_lines.append("")
 
     bridge_lines: list[str] = [
@@ -1518,8 +1496,8 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
             rhs = f"(tint {reg.num(r)})"
         else:
             rhs = "ttrue" if r else "tfalse"
-        stmt = f"teq (tint (teval {tag} {reg.num(a)} {reg.num(b)})) {rhs}"
-        bridge_lines.append(f"axiom {bridge_name(op, a, b)}: $ {stmt} $;")
+        bridge_lines.append(prim_bridge(bridge_name(op, a, b), tag,
+                                        reg.num(a), reg.num(b), rhs))
     bridge_lines.append("")
 
     direct_lines: list[str] = [
@@ -1530,25 +1508,21 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
         f"--   tentity {ENTITY_SYM['idiv']} = idiv (integer division)",
     ]
     for name, stmt in sorted(reg.directs.items()):
-        direct_lines.append(f"axiom {name}: $ {stmt} $;")
+        direct_lines.append(axiom(name, stmt))
     direct_lines.append("")
 
     thm_spec: list[str] = []
     thm_mm1: list[str] = []
     for thm, defname, _node, proof in encoded:
         stmt = f"teq {defname} ttrue"
-        wrapped = proof if proof.startswith("(") else f"({proof})"
-        thm_spec.append(f"theorem {thm}: $ {stmt} $;")
-        thm_mm1.append(f"pub theorem {thm}: $ {stmt} $ = '{wrapped};")
+        thm_spec.append(theorem(thm, stmt))
+        thm_mm1.append(pub_theorem(thm, stmt, proof))
 
-    numeral_lines = [
+    num_lines = [
         "-- Ground numerals: declared once, written as decimal tokens so the",
         "-- emitted arithmetic reads exactly like the certificate:",
         "--   teq (tint (teval 1 19875 555)) (tint 19320)   -- 19875 - 555",
-    ]
-    for n in sorted(reg.numerals):
-        numeral_lines.append(f"term n{n}: nat; prefix n{n}: ${n}$ prec max;")
-    numeral_lines.append("")
+    ] + numeral_lines(reg.numerals) + [""]
 
     # ---- assemble: identical streams except `pub ` and the proof tail ----
     pairs: list[tuple[str, str]] = []
@@ -1567,7 +1541,7 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
         add(line)
     add(coverage)
     add("")
-    for line in numeral_lines:
+    for line in num_lines:
         add(line)
     for line in def_lines:
         add(line)
@@ -1583,32 +1557,10 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
     mm1_lines = [m for _, m in pairs]
 
     # self-check 1: the two files differ ONLY in `pub ` and the proof tail
-    stripped = [re.sub(r"^pub ", "", m) for m in mm1_lines]
-    stripped = [re.sub(r" = '[\s\S]*;$", ";", s) for s in stripped]
-    if len(mm0_lines) != len(stripped):
-        raise TranspileError("spec/proof line counts differ")
-    for i, (a_, b_) in enumerate(zip(mm0_lines, stripped), 1):
-        if a_ != b_:
-            raise TranspileError(f"spec/proof divergence at line {i}:\n"
-                                 f"  mm0: {a_}\n  mm1: {b_}")
+    check_spec_proof_parity(mm0_lines, mm1_lines)
 
     # self-check 2: every proof reference is declared somewhere in the file
-    declared = set()
-    for line in mm1_lines:
-        m = re.match(r"(?:pub )?(?:theorem|axiom|def|term) ([A-Za-z_][A-Za-z0-9_]*)", line)
-        if m:
-            declared.add(m.group(1))
-    ref_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-    for line in mm1_lines:
-        if " = '" not in line:
-            continue
-        proof = line.split("= '", 1)[1]
-        for t in ref_re.findall(proof):
-            if t in ("teq_trans", "teq_app", "teq_refl", "prim_eval"):
-                continue
-            if t not in declared:
-                raise TranspileError(f"proof references undeclared {t!r}: "
-                                     f"{line[:120]}")
+    check_proof_refs(mm1_lines)
 
     mm0 = "\n".join(header_prepend(header, cic_lines, mm0_lines)) + "\n"
     mm1 = "\n".join(header_prepend(header, cic_lines, mm1_lines)) + "\n"

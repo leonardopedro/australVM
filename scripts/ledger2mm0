@@ -34,6 +34,20 @@ import sys
 import tempfile
 from pathlib import Path
 
+# W0: the emission primitives live in scripts/mm0_emit.py so a second frontend
+# reuses them instead of forking them. Migrating must not change a byte of the
+# generated certificates — that is what `ledger2mm0 check` pins against
+# mm0/linearity_certificate*.{mm0,mm1}.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mm0_emit import (  # noqa: E402  (sibling module, not a package)
+    coverage_line,
+    defn,
+    pub_theorem,
+    theorem,
+    trust_split_line,
+)
+
+
 AVM = Path(__file__).resolve().parent.parent          # australVM/
 THEORY = AVM / "docs" / "memsafe.mm0"                 # target theory
 LEDGER_DIR = AVM / "mm0" / "ledgers"                  # pinned ledgers
@@ -217,14 +231,6 @@ def theory_axioms(theory: str) -> dict[str, str]:
     return out
 
 
-def coverage_line(body: str, terms: list[str]) -> str:
-    import re
-    used = [t for t in terms if re.search(rf"\b{re.escape(t)}\b", body)]
-    unused = [t for t in terms if t not in used]
-    return (f"-- theory coverage: used={','.join(used) or '-'} "
-            f"unused={','.join(unused) or '-'}")
-
-
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -269,12 +275,6 @@ def certificates(ledger: dict, tamper: str | None = None) -> list[dict]:
     return out
 
 
-def trust_split_line(stem: str, structural: int, grounded: int,
-                     certificates: int) -> str:
-    return (f"-- trust-split: structural={structural} grounded={grounded} "
-            f"certificates={certificates}")
-
-
 def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
     theory = THEORY.read_text()
     ledger = load_ledger(src["ledger"])
@@ -305,12 +305,11 @@ def generate_source(src: dict, tamper: str | None = None) -> tuple[str, str]:
         mm0_body.append(f"-- {label}\n--   timeline: {events}")
         mm1_body.append(f"-- {label}\n--   timeline: {events}")
         term = timeline_term(c["events"])
-        goal = f"$ run {c['name']}_timeline st_idle st_idle $"
-        mm0_body.append(f"def {c['name']}_timeline: L = $ {term} $;\n"
-                        f"theorem {c['name']}: {goal};\n")
+        goal = f"run {c['name']}_timeline st_idle st_idle"
+        decl = defn(f"{c['name']}_timeline", "L", term)
+        mm0_body.append(f"{decl}\n{theorem(c['name'], goal)}\n")
         proof = proof_term(c["steps"])
-        mm1_body.append(f"def {c['name']}_timeline: L = $ {term} $;\n"
-                        f"pub theorem {c['name']}: {goal} = '{proof};\n")
+        mm1_body.append(f"{decl}\n{pub_theorem(c['name'], goal, proof)}\n")
 
     mm0_gen = "\n".join(mm0_body)
     mm1_gen = "\n".join(mm1_body)

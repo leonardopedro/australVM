@@ -11,6 +11,7 @@ all:
 	cd named-argument && $(MAKE)
 	cd record && $(MAKE)
 	cd union && $(MAKE)
+	cd verified-kernel/flux1d && $(MAKE)
 
 .PHONY: clean
 clean:
@@ -25,3 +26,4 @@ clean:
 	cd named-argument && $(MAKE) clean
 	cd record && $(MAKE) clean
 	cd union && $(MAKE) clean
+	cd verified-kernel/flux1d && $(MAKE) clean

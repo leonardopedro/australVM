@@ -14,7 +14,7 @@ import os, re, sys
 
 KEEP_HEAD = {"sort", "provable", "strict", "term", "def", "axiom",
              "delimiter", "notation", "prefix", "infixl", "infixr",
-             "theorem", "pub", "abstract"}
+             "theorem", "pub", "abstract", "import"}
 KNOWN = KEEP_HEAD | {"local", "lisp", "do"}
 
 # notation statements over local names are dropped; the only public notation

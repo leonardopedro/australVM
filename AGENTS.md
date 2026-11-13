@@ -65,6 +65,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   as an explained gap, never as a false failure.
 - `scripts/check-links` — relative markdown links resolve
   (CI: `.github/workflows/linkcheck.yml`).
+- `scripts/au2mm0` — reflects an Austral kernel's obligations to integer
+  polynomials and decides them twice (symbolic expansion + exact sampling),
+  refusing `div`/`float` as a gap. `emit` exits 2 until the W2 prover lands,
+  so the tool cannot write a certificate it has not proved.
+- `scripts/mm0-comparator` — approved MM0 statements, held out (approve /
+  check / selftest). A generated statement is compared against
+  `mm0/approved/<artifact>.stmts` plus a dependency-closure and theory hash;
+  an artifact without an approval is reported as a `[gap]` by
+  `verify-invariants`, never a silent pass.
 - `scripts/check-todo-ledger` — code files (`*.rs`/`*.sh`/`*.py`/`*.toml`)
   carry no `TODO`/`FIXME`/`HACK`/`XXX` marker unless the file is reviewed in
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a

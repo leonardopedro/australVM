@@ -147,6 +147,101 @@ else
     gap "Phase D: mm0 toolchain absent (mm0-rs/mm0-c not on PATH; see docs/lean4mm0.md §5)"
 fi
 
+# `docs/kernel_alg.mm0` is the theory W2's symbolic certificates will rest on
+# (the single `int_ring_transfer` bridge). It is gated from the day it exists,
+# not from the day the first artifact cites it: an ungated theory file rots
+# silently, and this one carries the trust budget.
+if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+    _alg_tmp="$(mktemp -d)"
+    _alg_out="$(mm0-rs compile "$repo_root/docs/kernel_alg.mm0" \
+        "$_alg_tmp/kernel_alg.mmb" 2>&1)"
+    if [ $? -eq 0 ] && mm0-c "$_alg_tmp/kernel_alg.mmb" \
+            < "$repo_root/docs/kernel_alg.mm0"; then
+        echo "  [detail] ${_alg_out##*$'\n'}"
+        check "W2: docs/kernel_alg.mm0 accepted by mm0-rs + mm0-c" true
+    else
+        printf '%s\n' "$_alg_out" | tail -3 >&2
+        check "W2: docs/kernel_alg.mm0 accepted by mm0-rs + mm0-c" false
+    fi
+    rm -rf "$_alg_tmp"
+fi
+
+# --- W1: the flux1d spec surface compiles and its obligations hold at a point ---
+# The point test is not the proof; the certificate is. It is gated anyway because
+# it is the only check that the *execution* side of the spec surface is still the
+# module the obligations talk about.
+_flux_dir="$repo_root/examples/verified-kernel/flux1d"
+if [ -x "$repo_root/austral" ] && [ -f "$repo_root/libaustral_cranelift_bridge.so" ]; then
+    _flux_tmp="$(mktemp -d)"
+    if LD_LIBRARY_PATH="$repo_root" "$repo_root/austral" compile \
+            "$_flux_dir/Flux1d.aui,$_flux_dir/Flux1d.aum" \
+            --entrypoint=Flux1d:main --output="$_flux_tmp/flux1d" \
+            >"$_flux_tmp/log" 2>&1 \
+       && "$_flux_tmp/flux1d"; then
+        check "W1: Flux1d builds and its three obligations hold at the example state" true
+    else
+        tail -5 "$_flux_tmp/log" >&2
+        check "W1: Flux1d builds and its three obligations hold at the example state" false
+    fi
+    rm -rf "$_flux_tmp"
+else
+    gap "W1: Flux1d not built here (repo-root austral binary or the cranelift bridge .so is absent)"
+fi
+
+# The obligations are decided twice (symbolic expansion + exact sampling) and
+# the tool refuses a weakened scheme or a division; `emit` refuses until the
+# ring-normalization prover exists, which is what keeps it from writing an
+# unchecked statement.
+check_py "W2: au2mm0 decides Flux1d's three obligations (both routes agree)" \
+    python3 "$repo_root/scripts/au2mm0" check \
+    "$repo_root/examples/verified-kernel/flux1d/flux1d.obligations.json"
+check_py "W2: au2mm0 self-test (weakened scheme refused, division refused as a gap)" \
+    python3 "$repo_root/scripts/au2mm0" selftest
+
+# --- W3: approved statements, held out ---
+#
+# `verify` above regenerates each statement from the same export it verifies, so
+# a weakened definition is reproduced faithfully and the drift gate cannot see
+# it. The comparator closes that hole by diffing the regenerated statement
+# stream against a file a human approved in a commit that touched only
+# mm0/approved/, and by pinning the dependency closure and the theory hashes.
+#
+# An artifact with no approval is a [gap], never a silent pass: the point is to
+# make "nobody has looked at this statement yet" visible in the gate's output
+# rather than indistinguishable from "it was checked".
+if [ -f "$repo_root/scripts/mm0-comparator" ]; then
+    for _art in "$repo_root"/mm0/*.mm0; do
+        [ -e "$_art" ] || continue
+        _stem="$(basename "$_art" .mm0)"
+        [ -f "$repo_root/mm0/$_stem.mm1" ] || continue
+        if [ -f "$repo_root/mm0/approved/$_stem.stmts" ]; then
+            # Exit 2 is "cannot verify here" (a pinned theory file such as
+            # set.mm0 is untracked toolchain state), which is a gap by the same
+            # convention as a missing interpreter — not a refusal.
+            _rc=0
+            if command -v python3 >/dev/null 2>&1; then
+                python3 "$repo_root/scripts/mm0-comparator" check "$_stem" \
+                    || _rc=$?
+            else
+                _rc=2
+            fi
+            if [ "$_rc" -eq 0 ]; then
+                check "W3: $_stem matches its approved statements" true
+            elif [ "$_rc" -eq 2 ]; then
+                gap "W3: $_stem could not be checked here (see the comparator's message above)"
+            else
+                check "W3: $_stem matches its approved statements" false
+            fi
+        else
+            gap "W3: $_stem has no approved statements (run scripts/mm0-comparator approve $_stem, then commit mm0/approved/)"
+        fi
+    done
+    check_py "W3: comparator self-test (all three negative controls refuse)" \
+        python3 "$repo_root/scripts/mm0-comparator" selftest
+else
+    gap "W3: scripts/mm0-comparator absent — approved statements are not gated"
+fi
+
 # --- logos: the CNL → DeltaNet → MM0 math fragment (unfer/docs/LOGOS_MM0.md) ---
 #
 # A sentence of the math fragment is compiled by unfer/logos's own pipeline
