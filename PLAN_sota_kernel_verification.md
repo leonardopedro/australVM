@@ -191,6 +191,32 @@ $ bash scripts/verify-invariants 2>&1 | tail -1
 verify-invariants: 77 passed, 0 explained gap(s), 0 failed
 ```
 
+### §3.3 After S4/S5 (measured 2026-11-13)
+
+```
+$ bash scripts/verify-invariants 2>&1 | tail -1
+verify-invariants: 81 passed, 1 explained gap(s), 0 failed
+  [gap] W3: flux1d_certificate has no approved statements (owner commit)
+  [pass] W1: Flux1d compiles through the CPS JIT and its four obligations hold …
+  [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically …
+  [detail] flux1d probe: 4 identit(ies), 1000 states, max relative deviation 0.000e+00
+  [pass] W6: no certificate claims a float path is proved
+
+$ grep -E "trust-split|assumed:|code:" mm0/flux1d_certificate.mm0
+-- trust-split: structural=6 grounded=15 certificates=4
+-- assumed: 1 (uniform_state: l = r (a uniform interface))
+-- code: cps=6299960658a4a79cbbe45e42a8b8ece931bc05c33f30113ef57e70dfcc95865a obj=unrecorded target=host
+
+$ cd examples/verified-kernel/flux1d && make && echo $?
+CPS JIT: Generated 5 functions (7773 bytes)
+CPS JIT: 5 functions compiled
+0
+
+$ python3 scripts/au2mm0 selftest
+au2mm0 selftest: sign flip refused; division refused as a gap; false obligation
+not emitted; new assumption refused; OK
+```
+
 The approval queue is empty and stays empty by construction: a new artifact
 arrives unapproved, so it shows up as a `[gap]` until an owner commit holds its
 statements out.
@@ -642,12 +668,12 @@ CNL feature and should be written into its README before anything else here.
 | sprint | workstreams | exit criterion (a command, not a feeling) |
 |---|---|---|
 | S1 | W0, W3 | `scripts/mm0-comparator` rejects all three negative controls; `lean2mm0 check` byte-identical — **met 2026-11-12** |
-| S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**; the `netcert` half is blocked on the CPS-IR carrier (no buildable `dune` toolchain here) |
+| S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; the `netcert` half is blocked on the CPS-IR carrier — `nix develop --command dune --version` still fails on one dependency in this environment |
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13** (fingerprint recorded, not checked; probe measured `max relative deviation 0.000e+00`) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` |
-| S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers |
+| S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W6 2026-11-13 (§3.3)**; the W7 row's scripts exist but its corpus lives in the sibling `unfer` repo and has no kernel-content sentences yet |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated
