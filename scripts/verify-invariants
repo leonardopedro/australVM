@@ -178,6 +178,9 @@ _flux_obl="$repo_root/examples/verified-kernel/flux1d/flux1d.obligations.json"
 if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     _cert_tmp="$(mktemp -d)"
     _cert_code=""
+    _obj=""
+    _obj_arch=""
+    _cert_obj_arch=""
     if [ -x "$repo_root/austral" ] \
         && [ -f "$repo_root/libaustral_cranelift_bridge.so" ]; then
         ( cd "$repo_root/examples/verified-kernel/flux1d" \
@@ -187,7 +190,24 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
                 --output="$_cert_tmp/flux1d.bin" ) \
             >"$_cert_tmp/cps.log" 2>&1
         if [ -f "$_cert_tmp/flux1d.cps" ]; then
+            # The object digest comes from the bridge compiling the same bytes
+            # into its AVCE capture. It is host-native, so the arch is part of
+            # the record and the comparison below only holds byte-identity when
+            # the committed arch is this host's — otherwise the certificate is
+            # still compared, with the two code lines normalised, and the
+            # incomparable object digest is reported rather than faked.
+            _obj=""
+            _obj_arch=""
+            _obj_line="$(python3 "$repo_root/scripts/cps-fingerprint" --object \
+                "$_cert_tmp/flux1d.cps" 2>"$_cert_tmp/obj.log")" || _obj_line=""
+            if [ -n "$_obj_line" ]; then
+                _obj="${_obj_line%% *}"
+                _obj_arch="${_obj_line##*arch=}"
+            else
+                gap "W5: object digest not re-derivable (see $_cert_tmp/obj.log)"
+            fi
             _cert_code="--code $_cert_tmp/flux1d.cps"
+            [ -n "$_obj" ] && _cert_code="$_cert_code --obj $_obj --obj-arch $_obj_arch"
         else
             gap "W5: CPS bytes not emitted (--emit-cps wrote no file)"
         fi
@@ -204,15 +224,23 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     _norm_code() {
         sed 's/^-- code: .*/-- code: <cps>/; s/^-- code-status: .*/-- code-status: <cps>/' "$1"
     }
+    # The committed artifact records the arch its object digest was taken on; a
+    # different host cannot reproduce that number, so it normalises instead of
+    # failing and the mismatch is reported as a gap by the W5 (checked) block.
+    _cert_obj_arch="$(sed -n 's/.*arch=\([a-z0-9_]*\).*/\1/p' \
+        "$repo_root/mm0/flux1d_certificate.mm0" 2>/dev/null | head -1)"
     _cert_same() {
-        if [ -n "$_cert_code" ]; then
-            cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1"
-            return
-        fi
         case "$1" in
             _probe.c) cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1" ;;
-            *) diff -q <(_norm_code "$_cert_tmp/flux1d$1") \
-                       <(_norm_code "$repo_root/mm0/flux1d$1") >/dev/null ;;
+            *)
+                if [ -n "$_cert_code" ] \
+                    && { [ -z "$_obj" ] || [ "$_cert_obj_arch" = "$_obj_arch" ]; }; then
+                    cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1"
+                else
+                    diff -q <(_norm_code "$_cert_tmp/flux1d$1") \
+                            <(_norm_code "$repo_root/mm0/flux1d$1") >/dev/null
+                fi
+                ;;
         esac
     }
     if python3 "$repo_root/scripts/au2mm0" emit "$_flux_obl" \
@@ -266,6 +294,24 @@ PY
                 echo "      recorded=$_fp_recorded bridge=$_fp_bridge mutated=$_fp_mut" >&2
                 check "W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes" false
             fi
+            # The object half: recorded only when the bridge produced an object
+            # for these bytes, and compared only on the architecture it was
+            # taken on. An artifact from another arch is a stated gap, never a
+            # silent pass and never a false failure.
+            _obj_recorded="$(sed -n 's/^-- code: .*obj=\([0-9a-f]\{64\}\).*/\1/p' \
+                "$repo_root/mm0/flux1d_certificate.mm0" | head -1)"
+            if [ -z "$_obj_recorded" ]; then
+                gap "W5: object digest unrecorded in the committed certificate"
+            elif [ -z "$_obj" ]; then
+                gap "W5: object digest not re-derived (bridge could not compile the bytes)"
+            elif [ "$_cert_obj_arch" != "$_obj_arch" ]; then
+                gap "W5: object digest not comparable (recorded arch=$_cert_obj_arch, this host $_obj_arch)"
+            elif [ "$_obj" = "$_obj_recorded" ]; then
+                check "W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object ($_obj_arch)" true
+            else
+                echo "      recorded=$_obj_recorded bridge=$_obj" >&2
+                check "W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object ($_obj_arch)" false
+            fi
         fi
 
         # W7 anchor: the statements a CNL citation points at must be what the
@@ -290,6 +336,75 @@ PY
             fi
         else
             gap "W7: flipped-coefficient certificate not re-checked (no mm0 toolchain)"
+        fi
+
+        # W8: the ISA layer. Three separate things are checked, because the
+        # artifact, the citations and the instruction subset fail differently:
+        # (a) mm0-c accepts the theory (it refuses unproved theorems, so a
+        #     `theorem` line without a proof is a gate failure, not a footnote);
+        # (b) every gap-hypothesis is cited and pinned, and a stale pin is
+        #     refused — the W7 discipline applied to layer-1 certificates;
+        # (c) scripts/isa-census measures the opcodes the decoder actually
+        #     consumes against ISA_REGISTRY and against the artifact's table,
+        #     with a negative control proving the diff can fail.
+        if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+            if mm0-rs compile "$repo_root/mm0/isa.mm0" "$_cert_tmp/isa.mmb" \
+                    >"$_cert_tmp/isa.log" 2>&1 \
+                && mm0-c "$_cert_tmp/isa.mmb" < "$repo_root/mm0/isa.mm0" \
+                    >/dev/null 2>&1; then
+                echo "  [detail] $(grep -E 'sorts,' "$_cert_tmp/isa.log" | tail -1)"
+                check "W8: mm0/isa.mm0 accepted by mm0-rs + mm0-c, no sorry" true
+            else
+                tail -3 "$_cert_tmp/isa.log" >&2
+                check "W8: mm0/isa.mm0 accepted by mm0-rs + mm0-c, no sorry" false
+            fi
+        else
+            gap "W8: mm0/isa.mm0 not re-checked (no mm0 toolchain)"
+        fi
+
+        if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
+            if python3 "$repo_root/scripts/isa-hypotheses" "$repo_root/mm0/isa.mm0" \
+                    >"$_cert_tmp/hyp.log" 2>&1; then
+                sed '0,/sha256=[0-9a-f]/s//sha256=0/' "$repo_root/mm0/isa.mm0" \
+                    > "$_cert_tmp/isa-tampered.mm0"
+                if python3 "$repo_root/scripts/isa-hypotheses" \
+                        "$_cert_tmp/isa-tampered.mm0" >/dev/null 2>&1; then
+                    check "W8: an uncited or stale hypothesis is refused" false
+                else
+                    echo "  [detail] $(cat "$_cert_tmp/hyp.log")"
+                    check "W8: an uncited or stale hypothesis is refused" true
+                fi
+            else
+                cat "$_cert_tmp/hyp.log" >&2
+                check "W8: every gap-hypothesis cites a pinned artifact" false
+            fi
+        else
+            gap "W8: hypothesis citations not checked (scripts/isa-hypotheses missing)"
+        fi
+
+        _census="$repo_root/safestos/cranelift/target/release/isa_census"
+        if [ -n "$_cert_code" ] && [ -x "$_census" ]; then
+            if "$_census" "$_cert_tmp/flux1d.cps" "$repo_root/mm0/isa.mm0" \
+                    >"$_cert_tmp/census.log" 2>&1; then
+                check "W8: scripts/isa-census covers the emitted opcodes" true
+                grep -E '^  used:' "$_cert_tmp/census.log" | sed 's/^/      /' >&2
+            else
+                cat "$_cert_tmp/census.log" >&2
+                check "W8: scripts/isa-census covers the emitted opcodes" false
+            fi
+            # Negative control: an opcode the decoder does not accept, declared
+            # in a copy of the model, must be reported — otherwise the census
+            # would be measuring agreement between a table and itself.
+            cp "$repo_root/mm0/isa.mm0" "$_cert_tmp/isa-bogus.mm0"
+            printf '%s\n' '-- op 0x7f bogus' >> "$_cert_tmp/isa-bogus.mm0"
+            if "$_census" "$_cert_tmp/flux1d.cps" "$_cert_tmp/isa-bogus.mm0" \
+                    >/dev/null 2>&1; then
+                check "W8: isa-census refuses a model opcode the decoder rejects" false
+            else
+                check "W8: isa-census refuses a model opcode the decoder rejects" true
+            fi
+        else
+            gap "W8: opcode census not run (no emitted CPS or no isa_census binary)"
         fi
 
         # W6: the generated probe is a test, and it has to actually run.

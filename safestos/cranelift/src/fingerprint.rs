@@ -47,6 +47,59 @@ pub extern "C" fn austral_cps_fingerprint(bytes: *const u8, len: usize) -> *mut 
     }
 }
 
+/// The object digest: sha256 over the `AVCE` capture of a CPS module — i.e. the
+/// machine code cranelift actually emitted for those bytes, not a record of a
+/// file on disk.
+///
+/// The capture is host-native (`cranelift_native`), so this number describes
+/// *this* architecture's codegen: `austral_object_arch` names it, and the
+/// certificate records both. A reader on another architecture can re-derive
+/// nothing from the digest, which is why the artifact says so instead of
+/// pretending the number is portable.
+///
+/// Reproducibility caveat, measured: cranelift-module allocates `FuncId`s from a
+/// process-global counter, so the *second* module compiled in one process
+/// encodes different declaration indices than the first and fingerprints
+/// differently. The digest is therefore defined for the first compilation in a
+/// fresh process — which is what `scripts/cps-fingerprint` always does (one
+/// call, then exit) and what `verify-invariants` compares. A caller that needs
+/// it twice should fork rather than assume stability.
+///
+/// Returns NULL when the module does not compile (there is then no object to
+/// fingerprint, and the artifact must fall back to `obj=unrecorded`).
+#[no_mangle]
+pub extern "C" fn austral_object_fingerprint(bytes: *const u8, len: usize) -> *mut c_char {
+    if bytes.is_null() {
+        return std::ptr::null_mut();
+    }
+    let ir = unsafe { std::slice::from_raw_parts(bytes, len) };
+    let mut cap = match crate::capture::CaptureModule::new() {
+        Ok(cap) => cap,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    if crate::cps::compile_cps_to_clif(&mut cap, ir).is_err() {
+        return std::ptr::null_mut();
+    }
+    if cap.defined().is_empty() {
+        return std::ptr::null_mut();
+    }
+    let object = cap.encode_avce();
+    austral_cps_fingerprint(object.as_ptr(), object.len())
+}
+
+/// Host architecture the object digest was taken on (`x86_64`, `aarch64`, …).
+#[no_mangle]
+pub extern "C" fn austral_object_arch() -> *mut c_char {
+    let arch = match crate::capture::CaptureModule::new() {
+        Ok(cap) => cap.arch_name(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match CString::new(arch) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +135,61 @@ mod tests {
     #[test]
     fn null_bytes_is_refused_not_dereferenced() {
         assert!(austral_cps_fingerprint(std::ptr::null(), 0).is_null());
+        assert!(austral_object_fingerprint(std::ptr::null(), 0).is_null());
+    }
+
+    /// The minimal valid v2 module: magic, module name, one function returning
+    /// 42 (same shape as `lib.rs::compile_guard_tests::healthy_module_ir`).
+    fn tiny_cps() -> Vec<u8> {
+        let mut ir: Vec<u8> = Vec::new();
+        ir.extend_from_slice(&0x43505332u32.to_le_bytes()); // magic v2
+        ir.extend_from_slice(&2u32.to_le_bytes());
+        ir.extend_from_slice(b"m0");
+        ir.extend_from_slice(&1u32.to_le_bytes()); // func count
+        ir.extend_from_slice(&2u32.to_le_bytes());
+        ir.extend_from_slice(b"f0");
+        ir.extend_from_slice(&0u32.to_le_bytes()); // param count
+        ir.push(0); // return type i64
+        let mut body: Vec<u8> = vec![0x07u8, 0x01]; // return (int_lit 42)
+        body.extend_from_slice(&42i64.to_le_bytes());
+        ir.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        ir.extend_from_slice(&body);
+        ir
+    }
+    /// Stability across runs is a property of *fresh processes* (see the
+    /// caveat on `austral_object_fingerprint`: the second module in a process
+    /// gets different declaration ids), so it is checked where it is true —
+    /// `verify-invariants` re-derives the flux1d digest in a new process every
+    /// run and compares it to the pinned value. What a unit test can hold is
+    /// that a module produces a well-formed digest and arch, and that two
+    /// different modules do not collide.
+    #[test]
+    fn the_object_digest_is_well_formed_and_arch_named() {
+        let ir = tiny_cps();
+        let a = austral_object_fingerprint(ir.as_ptr(), ir.len());
+        assert!(!a.is_null(), "tiny CPS failed to compile");
+        let a = unsafe { CString::from_raw(a) }
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+
+        let mut other = ir.clone();
+        let last = other.len() - 1;
+        other[last] ^= 0x01; // a different literal in the body
+        let b = austral_object_fingerprint(other.as_ptr(), other.len());
+        if !b.is_null() {
+            let b = unsafe { CString::from_raw(b) }
+                .to_string_lossy()
+                .to_string();
+            assert_ne!(a, b, "two different modules must not collide");
+        }
+
+        let arch = austral_object_arch();
+        assert!(!arch.is_null());
+        let arch = unsafe { CString::from_raw(arch) }
+            .to_string_lossy()
+            .to_string();
+        assert!(!arch.is_empty());
     }
 }

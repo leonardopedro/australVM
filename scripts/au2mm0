@@ -557,7 +557,8 @@ def ring_gap(message: str):
 
 
 def emit(doc: dict, stem: str, source: Path, out_dir: Path | None = None,
-         code_path: Path | None = None, target: str = "host") -> int:
+         code_path: Path | None = None, target: str = "host",
+         obj_hash: str | None = None, obj_arch: str | None = None) -> int:
     theory_lines = THEORY.read_text().splitlines()
     prover = mm0_ring.Prover()
     obligations = []
@@ -677,10 +678,13 @@ def emit(doc: dict, stem: str, source: Path, out_dir: Path | None = None,
         assumed_line(assumed_all),
         *witnesses,
         code_line("unrecorded" if code_path is None else sha256(code_path),
-                  "unrecorded", target),
+                  "unrecorded" if obj_hash is None else obj_hash, target),
         code_status_line(
-            "recorded (cps = sha256 of the --emit-cps bytes); obj unrecorded — "
-            "no object file is written by this path" if code_path is not None
+            f"recorded (cps = sha256 of the --emit-cps bytes; obj = sha256 of "
+            f"the AVCE capture of those bytes, arch={obj_arch or 'unknown'})"
+            if code_path is not None and obj_hash is not None
+            else "recorded (cps = sha256 of the --emit-cps bytes); obj "
+                 "unrecorded — no bridge object was supplied" if code_path is not None
             else "unrecorded (no --code bytes supplied; the kernel is named "
                  "only by the Source: digest)"),
         float_gap_line(f"mm0/{stem}_probe.c"),
@@ -781,18 +785,25 @@ def main(argv: list[str]) -> int:
         print(f"au2mm0: {command} needs an obligations file", file=sys.stderr)
         return 3
     out_dir, code_path, target = None, None, "host"
+    obj_hash, obj_arch = None, None
     rest = argv[3:]
     while rest:
         option, rest = rest[0], rest[1:]
-        if option not in ("--out", "--code", "--target") or not rest:
+        if option not in ("--out", "--code", "--target", "--obj", "--obj-arch") \
+                or not rest:
             print(f"au2mm0: unknown option {option!r} "
-                  f"(only --out, --code, --target)", file=sys.stderr)
+                  f"(only --out, --code, --obj, --obj-arch, --target)",
+                  file=sys.stderr)
             return 3
         value, rest = rest[0], rest[1:]
         if option == "--out":
             out_dir = Path(value)
         elif option == "--code":
             code_path = Path(value)
+        elif option == "--obj":
+            obj_hash = value
+        elif option == "--obj-arch":
+            obj_arch = value
         else:
             target = value
     if code_path is not None and not code_path.is_file():
@@ -808,7 +819,7 @@ def main(argv: list[str]) -> int:
         stem = doc.get("stem") or doc.get("module", "kernel").lower()
         try:
             return emit(doc, stem, Path(argv[2]).resolve(), out_dir,
-                        code_path, target)
+                        code_path, target, obj_hash, obj_arch)
         except (OutOfFragment, RingGap, mm0_ring.RingError) as err:
             print(f"au2mm0: {stem}: [gap] {err}", file=sys.stderr)
             return 2

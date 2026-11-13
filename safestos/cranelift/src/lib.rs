@@ -20,6 +20,7 @@ pub mod cps;
 pub mod ecma;
 pub mod federation;
 pub mod fingerprint;
+pub mod isa;
 pub mod liquid_attest;
 pub mod module;
 #[cfg(feature = "cedar")]

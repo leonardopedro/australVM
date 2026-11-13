@@ -192,6 +192,7 @@ fn emit_expr<M: Module>(
     module_name: &str,
 ) -> Result<Value, String> {
     let opcode = reader.read_u8()?;
+    crate::isa::note(opcode);
     match opcode {
         0x01 => {
             let val = reader.read_i64()?;
@@ -666,9 +667,9 @@ fn emit_stmt_list<M: Module>(
         }
         match reader.peek_u8() {
             Some(0x07) => {
-                reader.read_u8()?;
+                crate::isa::note(reader.read_u8()?);
                 if reader.peek_u8() == Some(0x04) {
-                    reader.read_u8()?; // App
+                    crate::isa::note(reader.read_u8()?); // App
                     let func_name = reader.read_string()?;
                     let arg_count = reader.read_u32()?;
                     let mut args = Vec::new();
@@ -756,7 +757,7 @@ fn emit_stmt_list<M: Module>(
                 return Ok(());
             }
             Some(0x08) => {
-                reader.read_u8()?;
+                crate::isa::note(reader.read_u8()?);
                 let cond = emit_expr(
                     jit,
                     reader,
@@ -816,7 +817,7 @@ fn emit_stmt_list<M: Module>(
                 mgr.switch_to_block(merge_block);
             }
             Some(0x09) => {
-                reader.read_u8()?;
+                crate::isa::note(reader.read_u8()?);
 
                 let header_block = mgr.create_block();
                 let body_block = mgr.create_block();
@@ -870,7 +871,7 @@ fn emit_stmt_list<M: Module>(
                 mgr.switch_to_block(exit_block);
             }
             Some(0x0A) => {
-                reader.read_u8()?;
+                crate::isa::note(reader.read_u8()?);
                 let cond = emit_expr(
                     jit,
                     reader,
@@ -939,7 +940,7 @@ fn emit_stmt_list<M: Module>(
                 mgr.switch_to_block(merge_block);
             }
             Some(0x03) => {
-                reader.read_u8()?;
+                crate::isa::note(reader.read_u8()?);
                 let name = reader.read_string()?;
                 let val = emit_expr(
                     jit,
@@ -961,7 +962,7 @@ fn emit_stmt_list<M: Module>(
                 mgr.builder.def_var(var, val);
             }
             Some(0x30) => {
-                reader.read_u8()?;
+                crate::isa::note(reader.read_u8()?);
                 let ptr = emit_expr(
                     jit,
                     reader,
