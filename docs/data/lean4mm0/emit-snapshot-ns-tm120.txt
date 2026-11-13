@@ -1,0 +1,13 @@
+tracemalloc snapshot at t=120.8 s
+   1067.8 MB         20  /home/leo/Projects/australVM/scripts/lean-typing-proof:120
+      0.1 MB         12  /home/leo/Projects/australVM/scripts/lean-typing-proof:388
+      0.1 MB        926  <frozen importlib._bootstrap_external>:511
+      0.1 MB        299  /usr/lib/python3.14/ctypes/__init__.py:421
+      0.1 MB        489  <frozen importlib._bootstrap>:491
+      0.0 MB        182  /home/leo/Projects/australVM/scripts/lean-typing-proof:335
+      0.0 MB         60  /usr/lib/python3.14/ctypes/__init__.py:491
+      0.0 MB        131  /usr/lib/python3.14/ctypes/_layout.py:282
+      0.0 MB         58  /usr/lib/python3.14/ctypes/__init__.py:609
+      0.0 MB        152  /home/leo/Projects/australVM/scripts/lean-typing-proof:336
+      0.0 MB         13  /home/leo/Projects/australVM/scripts/lean-typing-proof:555
+      0.0 MB         27  /usr/lib/python3.14/ctypes/__init__.py:216

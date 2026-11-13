@@ -2796,6 +2796,22 @@ and this declaration's is larger than the memory left after everything else.
 That is the next wall, and it is a different change (encoding into a spool,
 not into a string); it is not attempted here.
 
+**Where that row's bytes are, measured rather than inferred.** The same row was
+re-run with `LTP_TRACE_SNAP=120` (a `tracemalloc` snapshot at t≥120 s, 5-deep
+tracebacks). At t=120.7 s RSS is 6 859 MB, peak 7 698 MB, and traced Python
+memory is 1 018.8 MB — so four fifths of it is *not* Python objects. Of the
+traced part, **1 067.8 MB sits in 20 allocations on one line**, `Enc._enc`'s
+`f"(tapp {self.enc(fn)} {self.enc(arg)})"` (line 120): twenty live term strings
+of roughly 53 MB each. The export index that dominates the rest is
+**8 078 904 expressions** — this chapter's export is simply huge, and the lazy
+index is built before the derivation starts. So the row is over the cap for two
+independent reasons: an 8 M-expression index (~5.8 GB, not in the traced part)
+and a handful of 53 MB term strings on top of it. A streamed encoder would
+remove the second, not the first. The snapshot is
+[`emit-snapshot-ns-tm120.txt`](data/lean4mm0/emit-snapshot-ns-tm120.txt) (the
+`tracemalloc` run itself was cut short by the harness after 787 s, so the row's
+outcome is the one in the table above, measured without `tracemalloc`).
+
 **The four 900 s timeouts, given 5 400 s.** Three of them do not need a bigger
 clock at all — they need less memory, and the old 900 s timeout was reporting a
 clock bound for a memory wall:
