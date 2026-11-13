@@ -19,6 +19,7 @@ pub mod cps;
 #[cfg(feature = "ecmascript")]
 pub mod ecma;
 pub mod federation;
+pub mod fingerprint;
 pub mod liquid_attest;
 pub mod module;
 #[cfg(feature = "cedar")]

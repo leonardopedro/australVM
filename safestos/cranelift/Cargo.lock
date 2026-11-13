@@ -220,6 +220,7 @@ dependencies = [
  "rsffi",
  "serde",
  "serde_json",
+ "sha2",
  "target-lexicon",
  "toml 0.8.23",
  "unfer_consensus",

@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Ask the JIT bridge for the sha256 of a CPS file — the code fingerprint, checked.
+
+`au2mm0` records `code: cps = <sha256>` using Python's `hashlib`. That is a
+record, not a check: it hashes a file the emitter itself just wrote, so the only
+thing it can catch is a file changing on disk afterwards, and it says nothing
+about whether the number describes the bytes the runtime would execute.
+
+This script hashes through `libaustral_cranelift_bridge.so`'s
+`austral_cps_fingerprint` — the crate that compiles and runs those bytes. When
+the gate compares the certificate's line against this number, agreement is a
+statement about the *runtime's* view of the code; a disagreement between the two
+independent implementations (Rust `sha2` vs Python `hashlib`) is a real
+disagreement that neither side can paper over.
+
+Usage:
+    scripts/cps-fingerprint <cps-file>        # prints hex sha256, exit 0
+    scripts/cps-fingerprint --selftest        # checks the primitive both ways
+
+Exit: 0 ok, 1 the bridge disagrees with hashlib, 2 could not run (no .so).
+"""
+
+import ctypes
+import hashlib
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CANDIDATES = [
+    ROOT / "libaustral_cranelift_bridge.so",
+    ROOT / "safestos" / "cranelift" / "target" / "release" / "libaustral_cranelift_bridge.so",
+]
+
+
+def load():
+    for cand in CANDIDATES:
+        if not cand.is_file():
+            continue
+        try:
+            lib = ctypes.CDLL(str(cand))
+        except OSError:
+            continue
+        fn = lib.austral_cps_fingerprint
+        fn.restype = ctypes.c_void_p
+        fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+        free = lib.cranelift_free_string
+        free.restype = None
+        free.argtypes = [ctypes.c_void_p]
+        return cand, fn, free
+    return None, None, None
+
+
+def fingerprint(fn, free, data: bytes) -> str:
+    ptr = fn(data, len(data))
+    if not ptr:
+        raise RuntimeError("bridge refused the buffer")
+    try:
+        return ctypes.string_at(ptr).decode("ascii")
+    finally:
+        free(ptr)
+
+
+def main(argv):
+    path, fn, free = load()
+    if fn is None:
+        print(
+            "cps-fingerprint: [gap] no bridge cdylib found "
+            f"(looked in {', '.join(str(c) for c in CANDIDATES)}); "
+            "run `make bridge`",
+            file=sys.stderr,
+        )
+        return 2
+
+    if len(argv) == 2 and argv[1] == "--selftest":
+        bad = 0
+        for label, blob in [
+            ("empty", b""),
+            ("cps-header", b"\x00\x01AUS\x00"),
+            ("flipped", b"\x00\x01AUS\x01"),
+        ]:
+            got = fingerprint(fn, free, blob)
+            want = hashlib.sha256(blob).hexdigest()
+            ok = got == want
+            bad += 0 if ok else 1
+            print(f"{'ok  ' if ok else 'DIFF'} {label:12} {got}")
+        if bad == 0:
+            a = fingerprint(fn, free, b"cps")
+            b = fingerprint(fn, free, b"cpT")
+            if a == b:
+                print("FAIL the primitive is constant: a one-byte change was invisible")
+                return 1
+            print("ok   one flipped byte changes the digest")
+        print(f"bridge: {path}")
+        return 0 if bad == 0 else 1
+
+    if len(argv) != 2:
+        print(__doc__.strip().splitlines()[-2], file=sys.stderr)
+        return 2
+    target = pathlib.Path(argv[1])
+    if not target.is_file():
+        print(f"cps-fingerprint: no such file: {target}", file=sys.stderr)
+        return 2
+    print(fingerprint(fn, free, target.read_bytes()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

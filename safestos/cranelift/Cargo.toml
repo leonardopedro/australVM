@@ -23,6 +23,10 @@ target-lexicon = "0.13"
 cedar-policy = { version = "4.11.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+# src/fingerprint.rs: the code-fingerprint digest. Already in the lock as a
+# transitive dep (0.10.9), so this promotes a tree entry to a direct one
+# rather than adding a crate the build did not already compile.
+sha2 = "0.10"
 unfer_ffi = { path = "../../../unfer/unfer_ffi", optional = true }
 # PLAN_valen §4 Tier 1: the reference `extern rust` crate. Its rs_* symbols
 # are registered under the rs_ namespace (RS_FFI_SYMBOLS), gated by the

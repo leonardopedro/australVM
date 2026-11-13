@@ -232,6 +232,42 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
             echo "      committed artifact is stale — run: python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json --code <cps>" >&2
             check "$_cert_claim" false
         fi
+        # W5 (checked): the `cps=` digest in the certificate header must be the
+        # *bridge's* digest of the bytes `--emit-cps` just wrote, not a number
+        # only the emitter's own hashlib ever computed. Two implementations
+        # (Rust `sha2` behind `austral_cps_fingerprint`, Python `hashlib` in
+        # `au2mm0`) plus one negative control: a mutated copy of the same bytes
+        # has to fingerprint differently, or the comparison is true of nothing.
+        if [ -n "$_cert_code" ]; then
+            _fp_bridge="$(python3 "$repo_root/scripts/cps-fingerprint" \
+                "$_cert_tmp/flux1d.cps" 2>"$_cert_tmp/fp.log")"
+            _fp_rc=$?
+            _fp_recorded="$(sed -n 's/^-- code: cps=\([0-9a-f]\{64\}\).*/\1/p' \
+                "$repo_root/mm0/flux1d_certificate.mm0" | head -1)"
+            _fp_mut=""
+            if [ "$_fp_rc" -eq 0 ] && [ -n "$_fp_recorded" ]; then
+                python3 - "$_cert_tmp/flux1d.cps" "$_cert_tmp/flux1d-mut.cps" <<'PY'
+import sys
+blob = bytearray(open(sys.argv[1], 'rb').read())
+if not blob:
+    sys.exit(1)
+blob[0] ^= 0xFF
+open(sys.argv[2], 'wb').write(blob)
+PY
+                _fp_mut="$(python3 "$repo_root/scripts/cps-fingerprint" \
+                    "$_cert_tmp/flux1d-mut.cps" 2>>"$_cert_tmp/fp.log")"
+            fi
+            if [ "$_fp_rc" -ne 0 ]; then
+                gap "W5: code fingerprint not checked through the bridge (see $_cert_tmp/fp.log)"
+            elif [ "$_fp_bridge" = "$_fp_recorded" ] \
+                && [ -n "$_fp_mut" ] && [ "$_fp_mut" != "$_fp_recorded" ]; then
+                check "W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes" true
+            else
+                echo "      recorded=$_fp_recorded bridge=$_fp_bridge mutated=$_fp_mut" >&2
+                check "W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes" false
+            fi
+        fi
+
         # W7 anchor: the statements a CNL citation points at must be what the
         # proof proves. Flip one coefficient in the `consistency` statement and
         # leave the proofs alone: mm0 has to refuse it, or "this sentence cites

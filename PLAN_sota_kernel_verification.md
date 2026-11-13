@@ -656,10 +656,61 @@ byte-stable across runs (same sha256 twice, 7,773 bytes, 5 functions), so a
 certificate whose kernel moved fails the gate. `target=host` rather than
 `uname -m` keeps the committed artifact host-neutral.
 
-**Open:** the object hash is unrecorded, and being *recorded* rather than
-*checked*, no artifact yet demonstrates the `code-drift` acceptance experiment.
-Both need a CPS-IR-level entry point in the bridge (a new `uk_*` symbol and a
-full S29 checklist); the measured cost is the decision point §9 records.
+**Promoted to checked, 2026-11-13.** The decision point above is settled the
+cheap way: the fingerprint is now computed *by the runtime*, without adding a
+`uk_*` symbol, so no manifest grant and no S29 checklist are involved.
+
+- `safestos/cranelift/src/fingerprint.rs` exports
+  `austral_cps_fingerprint(bytes, len) -> *mut c_char`: sha256 (`sha2`, already
+  in the lock at 0.10.9 as a transitive dep) over exactly the bytes the JIT is
+  handed. It is an ordinary FFI export, like `austral_defeq_translate` —
+  deliberately *not* callable from compiled Austral code. Three unit tests,
+  including the published digest of the empty input rather than a value
+  compared to itself:
+
+  ```
+  $ cargo test --release --lib fingerprint
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 49 filtered out
+  $ nm -D target/release/libaustral_cranelift_bridge.so | grep austral_cps_fingerprint
+  000000000012301c T austral_cps_fingerprint
+  ```
+
+- `scripts/cps-fingerprint <file>` asks that export for a file's digest (ctypes), so
+  the gate's number comes from the crate that compiles and runs the bytes, not
+  from the emitter hashing what it just wrote. `--selftest` additionally holds
+  the Rust digest against `hashlib` on three inputs and requires a one-byte
+  change to be visible.
+- `verify-invariants` holds the certificate's committed `cps=` to the bridge's
+  digest of the freshly `--emit-cps`'d bytes, and requires a mutated copy of
+  those same bytes to fingerprint *differently* — otherwise the comparison would
+  be true of nothing. Measured:
+
+  ```
+  [pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
+  verify-invariants: 84 passed, 0 explained gap(s), 0 failed
+  ```
+
+  and the control, with the committed digest edited to start `0…`:
+
+  ```
+  [FAIL] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
+  exit=1
+  ```
+
+  The artifact was restored with `git checkout -- mm0/flux1d_certificate.mm0`
+  afterwards; the run above is the only one that saw the tampered header.
+
+**Still open:** the object hash stays `unrecorded` — this path writes no object
+file, and `code-status` says so rather than implying otherwise. Recording it
+means taking the cranelift-emitted code bytes from the bridge (`au_*`), which is
+honest work but not what unblocks W8: the ISA model consumes the CPS layer.
+
+**Also measured (and it changes the acceptance text above):** the `code-drift`
+experiment cannot be demonstrated with `netcert`, because `netcert` does not
+normalize arithmetic — it reports *not equivalent* for `2*(3*x + x*x)` vs
+`6*x + 2*x*x` (W1, item 3). The semantics-preserving-edit half is demonstrated
+today by the byte-identity comparison of the re-emitted certificate instead,
+which is what the gate actually does.
 
 ### W6 — The float gap, stated instead of hidden  *(2–3 days)*
 
@@ -846,7 +897,7 @@ number here would be a claim without a command.
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
-| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13** (fingerprint recorded, not checked; probe measured `max relative deviation 0.000e+00`) |
+| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; fingerprint **checked 2026-11-13** through the bridge (`84 passed`), object hash still `unrecorded` and labelled so; probe measured `max relative deviation 0.000e+00` |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **not started**, and deliberately unscored: the artifact, the census script and the negative control do not exist, so there is nothing to measure |
