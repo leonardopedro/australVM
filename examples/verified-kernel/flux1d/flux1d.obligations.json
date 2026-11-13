@@ -64,6 +64,21 @@
         {"call": "delta", "args": [{"var": "r"}, {"var": "l"}]}
       ]},
       "rhs": {"int": 0}
+    },
+    {
+      "name": "uniform_state",
+      "kind": "uniformity",
+      "statement": "l = r => delta l r = 0",
+      "vars": ["l", "r"],
+      "hypotheses": [
+        {
+          "label": "l = r (a uniform interface)",
+          "lhs": {"var": "l"},
+          "rhs": {"var": "r"}
+        }
+      ],
+      "lhs": {"call": "delta", "args": [{"var": "l"}, {"var": "r"}]},
+      "rhs": {"int": 0}
     }
   ]
 }

@@ -67,18 +67,19 @@ module body Flux1d is
             ((((r1.momentum + r2.momentum) + r3.momentum) = 0) and
              (((r1.energy + r2.energy) + r3.energy) = 0));
 
-        -- The exit code names which obligation failed, so a mismatch is
-        -- visible to the harness rather than only to a reader.
-        if ok_consistency then
-            if ok_symmetry then
-                if ok_conservation then
-                    return ExitSuccess();
-                else
-                    return ExitFailure();
-                end if;
-            else
-                return ExitFailure();
-            end if;
+
+        -- uniform_state: on a uniform interface (l = r) the operator vanishes.
+        -- `ExitFailure` carries no payload, so the harness distinguishes the
+        -- obligations by running the checks it cares about, not by the code.
+        let s: State := State(rho => 2, momentum => 2, energy => 2);
+        let du: State := delta(s, s);
+        let ok_uniform: Bool := ((du.rho = 0) and
+            ((du.momentum = 0) and (du.energy = 0)));
+
+        let ok_all: Bool := ok_consistency and (ok_symmetry and
+            (ok_conservation and ok_uniform));
+        if ok_all then
+            return ExitSuccess();
         else
             return ExitFailure();
         end if;
