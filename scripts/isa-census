@@ -20,4 +20,10 @@ if [ ! -x "$BIN" ]; then
     exit 2
 fi
 
+# With one argument, check the module against the committed model: an
+# uncovered opcode must fail the default invocation, not only the gate's.
+if [ "$#" -eq 1 ] && [ -f "$ROOT/mm0/isa.mm0" ]; then
+    exec "$BIN" "$1" "$ROOT/mm0/isa.mm0"
+fi
+
 exec "$BIN" "$@"

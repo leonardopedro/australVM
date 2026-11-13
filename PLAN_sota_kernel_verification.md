@@ -122,7 +122,8 @@ Exact (grep/ls-verified for this plan):
 | **kernel-spec surface (flux algebra) in Austral** | `examples/verified-kernel/flux1d/` (spec + execution side, obligations sidecar) | **partial** (no CPS-IR carrier yet) |
 | comparator: approved statement vs generated | `scripts/mm0-comparator` (diff + closure hash + theory hash, 3 negative controls) | **exists** (S1); `mm0/approved/` empty on purpose |
 | **`assumed=N` budget** | `-- assumed:` + `-- witness:` emitted by `au2mm0`, pinned in `BUDGETS` and gated; `lean-typing-check --assumed-json` for Lean artifacts | **exists** (flux1d: `assumed=1`; lean2mm0 gap below) |
-| **code fingerprint in the certificate** | `-- code: cps=<sha256> obj=unrecorded target=host`, re-derived from `--emit-cps` bytes by `verify-invariants` | **exists, recorded not checked** (§9) |
+| **code fingerprint in the certificate** | `-- code: cps=<sha256> obj=<sha256> target=host`, both digests **checked** by `verify-invariants` — CPS from the bridge's `austral_cps_fingerprint`, object from the AVCE capture of the cranelift-emitted code, `arch=` named | **exists, checked** (W5) |
+| **ISA model of the emitted subset** | `mm0/isa.mm0` (23 opcodes, definition-only, 4 pinned hypotheses), `ISA_REGISTRY` in `safestos/cranelift/src/isa.rs`, `scripts/isa-census` | **exists** (W8/S8) |
 | **generated float probe** | `mm0/flux1d_probe.c` emitted from the certified AST; compiled and run by `verify-invariants` | **exists** (tested, not proved) |
 | **GPU codegen** | — | **absent, and out of scope (§6)** |
 
@@ -210,6 +211,7 @@ $ grep -E "trust-split|assumed:|code:" mm0/flux1d_certificate.mm0
 -- trust-split: structural=6 grounded=15 certificates=4
 -- assumed: 1 (uniform_state: l = r (a uniform interface))
 -- code: cps=6299960658a4a79cbbe45e42a8b8ece931bc05c33f30113ef57e70dfcc95865a obj=unrecorded target=host
+-- (re-measured later the same day with the object digest recorded: obj=ceed355c…, see §3.4)
 
 $ cd examples/verified-kernel/flux1d && make && echo $?
 CPS JIT: Generated 5 functions (7773 bytes)
@@ -224,6 +226,34 @@ not emitted; new assumption refused; OK
 The approval queue is empty and stays empty by construction: a new artifact
 arrives unapproved, so it shows up as a `[gap]` until an owner commit holds its
 statements out.
+
+### §3.4 After W8 + object fingerprint (measured 2026-11-13)
+
+```
+$ bash scripts/verify-invariants 2>&1 | tail -1
+verify-invariants: 90 passed, 0 explained gap(s), 0 failed
+  [pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
+  [pass] W5 (checked): the certificate's object digest is the bridge's digest of the compiled code
+  [pass] W8: mm0/isa.mm0 accepted by mm0-rs + mm0-c, no sorry
+  [pass] W8: every gap-hypothesis in the ISA model is cited and pinned
+  [pass] W8: scripts/isa-census covers the emitted opcodes
+  [pass] W8: isa-census refuses a model opcode the decoder rejects
+
+$ ./scripts/cps-fingerprint --object /tmp/flux1d.cps
+ceed355c0e8a150e68bc0e61439eb62e85fa48eb6f50807f6d637205ec07d2cb arch=aarch64
+
+$ ./scripts/isa-census /tmp/flux1d.cps
+isa-census: /tmp/flux1d.cps — 557 opcode read(s), 8 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
+  used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x07 return, 0x08 if, 0x14 cmp_eq, 0x16 and
+  result: covered — every opcode used is declared in the decoder and in the artifact
+```
+
+Note what the census exposes: the certified kernel reads 8 of the 23 declared
+opcodes. Arithmetic in the certified fragment lowers to `App
+Austral.Pervasive::trappingAdd`, not to `0x05 add` — that opcode is emitted only
+by the while-loop increment in `Compiler_cps.ml`. So "the emitted subset" is 8
+opcodes for this module and 23 for the emitter as a whole, and both numbers are
+measured rather than asserted.
 
 Two absences deserve emphasis because they are the ones that make the SOTA claim
 currently indefensible:
@@ -700,10 +730,38 @@ cheap way: the fingerprint is now computed *by the runtime*, without adding a
   The artifact was restored with `git checkout -- mm0/flux1d_certificate.mm0`
   afterwards; the run above is the only one that saw the tampered header.
 
-**Still open:** the object hash stays `unrecorded` — this path writes no object
-file, and `code-status` says so rather than implying otherwise. Recording it
-means taking the cranelift-emitted code bytes from the bridge (`au_*`), which is
-honest work but not what unblocks W8: the ISA model consumes the CPS layer.
+**Object hash recorded and checked, 2026-11-13.** The bridge gained
+`austral_object_fingerprint(bytes, len)` and `austral_object_arch()` (same
+plain-FFI route, no `uk_*`): the module is compiled through the JIT's own
+`compile_cps_to_clif` into a `CaptureModule`, and the digest is sha256 over
+`CaptureModule::encode_avce()` — the same bytes `avm-exec` consumes. `au2mm0
+takes `--obj <digest> --obj-arch <arch>`, so the certificate now says
+
+```
+-- code: cps=62999606…95865a obj=ceed355c…d2cb target=host
+-- code-status: recorded (cps = sha256 of the --emit-cps bytes, obj = sha256 of the
+   AVCE capture of those bytes, arch=aarch64)
+```
+
+and `verify-invariants` re-derives both: the CPS digest from the fresh
+`--emit-cps` bytes, the object digest from a fresh compile of those bytes. A
+semantics-preserving edit to the emitter moves `obj=` and fails the gate; the
+demonstration that the two digests are independent is the negative control below.
+
+Two limits are written into the code and the gate instead of being smoothed over:
+
+- **Architecture.** The capture is host-native (`cranelift_native`), so the
+  digest is only comparable on the same `arch`. The gate compares it when the
+  recorded `arch=` matches `uname -m` and reports a `[gap]` otherwise — never a
+  pass, never a failure. On this host: `arch=aarch64`.
+- **Process scope.** cranelift-module allocates `FuncId`s from a process-global
+  counter, so the *second* module compiled in one process encodes different
+  declaration indices and fingerprints differently. The digest is defined for
+  the first compilation of a fresh process, which is what `scripts/cps-fingerprint`
+  and the gate both do. This is why the unit test asserts well-formedness and
+  non-collision, while stability across runs is held by the gate (which compares
+  a fresh process's digest to the pinned one on every run) — a claim is tested
+  where it is true.
 
 **Also measured (and it changes the acceptance text above):** the `code-drift`
 experiment cannot be demonstrated with `netcert`, because `netcert` does not
@@ -814,7 +872,7 @@ for a question. That is additive on top of a corpus that can now state kernel
 content, and the plan's warning stands: it must not be built on the type-level
 encoding.
 
-### W8 — An ISA model that only fills the gaps  *(nothing started; 1–2 weeks after W2/W3)*
+### W8 — An ISA model that only fills the gaps  *(model + census landed 2026-11-13; proofs conditional)*
 
 **Why:** AlphaProof Code's strongest structural idea is a *definition-only*
 semantics of the instruction set (~8k trusted lines) with the proofs about it
@@ -831,7 +889,7 @@ theorem crosses exactly one boundary:
 |---|---|---|
 | source = Austral judgments (linearity, layout/memory safety, refinements) | `mm0/linearity_certificate`, `mm0/layout_certificate`, `mm0/gap_certificate`, each with its ledger's sha256 in the header | **yes** (re-emitted, gated) |
 | IR = the CPS machine built by W2's theory | `mm0/*_certificate.mm0` theory lines + `kernel_alg.mm0` | **yes** |
-| ISA = decode/step relation over registers and memory | `mm0/isa.mm0` | **no — this is the new artifact** |
+| ISA = decode/step relation over registers and memory | `mm0/isa.mm0` | **yes — landed 2026-11-13** |
 
 The ISA model never restates a source-level guarantee. It states the two
 transitions it alone can prove, taking the layer-1 certificates as **hypotheses**:
@@ -860,17 +918,17 @@ as `SYMBOL_REGISTRY`'s census, with an `ISA_REGISTRY` beside it:
 ```
 austral compile examples/verified-kernel/flux1d/flux1d.aum --use-cps-jit \
   --emit-cps=/tmp/flux1d.cps        # the IR the model must cover
-scripts/isa-census                 # [gap] does not exist: would diff emitted opcodes
-                                   # against mm0/isa.mm0's declared instruction table
+./scripts/isa-census /tmp/flux1d.cps   # decoder vs artifact vs measured
 ```
 
 An uncovered opcode is a gate failure, not a footnote — the census is what stops
 the model drifting into "the ISA" when the claim is "the bytes we emit".
 
-**[gap] The model itself.** Neither repo ships one: `mm0/statements/` holds
-`BookProof.*` only, and the mm0 project's own theories (Peano, set.mm) contain no
-machine-code semantics, so this is authored or translated, not imported. The two
-plausible sources, and what each costs:
+**[gap] → answered 2026-11-13.** Neither repo ships a machine-code semantics, so the
+model was authored for the emitted subset rather than imported (the Lanyon
+choice): 23 opcode rules, no translator in the TCB, every rule a definition or a
+cited hypothesis. Sail remains the route if the claim ever needs to leave this
+emitter; the two costs below are unchanged.
 
 - **Sail** (the maintained RISC-V/AArch64 models): a new emitter, `sail2mm0`,
   sibling to `lean2mm0`, and a translation whose fidelity is itself an unproved
@@ -878,14 +936,41 @@ plausible sources, and what each costs:
 - **Authored from the ISA manual** for a small subset (RV64I integer core), the
   Lanyon-style choice: fewer rules, each reviewable, no translator in the TCB.
 
-Both are weeks of work and neither is on the W0–W7 critical path, which is why
-this is last and unscored.
+Both are weeks of work and neither is on the W0–W7 critical path.
 
-**Exit criteria (named, not met):** `mm0/isa.mm0` passes `mm0-rs compile` +
-`mm0-c`; `scripts/isa-census` reports zero uncovered opcodes for the flux1d IR;
-`verify-invariants` has a negative control where a hand-edited certificate
-citation is refused. Until those three exist this row is unscored in §5 — a
-number here would be a claim without a command.
+**Landed 2026-11-13 — the model.** `mm0/isa.mm0` is authored (not translated),
+`-- layer: ISA`, `-- proof-status: theory — definition-only, zero proved
+theorems and zero sorry`, coverage line `used=… unused=…`, and three `-- cites:`
+lines pinning `linearity_certificate`, `layout_certificate` and `kernel_alg` by
+sha256. 5 sorts, 22 term/def, 21 axiom/theorem, 23 opcode rows (`-- op 0xNN
+name`). It contains **no `theorem`**: `mm0-c` rejects any unproved theorem
+(`error: some theorems used sorry`), so each refinement is an `axiom` with a
+`-- gap-hypothesis:` line naming its cite — AlphaProof's definition-only posture,
+enforced by the checker rather than by intent. Measured:
+
+```
+$ mm0-rs compile mm0/isa.mm0 /tmp/isa.mmb && mm0-c /tmp/isa.mmb < mm0/isa.mm0
+  (5 sorts, 22 term/def, 21 ax/thm — exit 0, no sorry)
+$ python3 scripts/isa-hypotheses mm0/isa.mm0
+exit 0; with one cite's sha256 edited to start 0…: exit 1 (uncited/stale refused)
+```
+
+**Landed — the census.** `safestos/cranelift/src/isa.rs` holds `ISA_REGISTRY`
+(the same shape as `SYMBOL_REGISTRY`: opcode, name, operands, class), plus
+`note`/`clear`/`snapshot`. The measurement is the *decoder's own* count: the
+seven opcode-read sites in `cps.rs` call `crate::isa::note(code)`, so the number
+comes from the parser that runs the bytes, not from a second decoder written to
+agree. `src/bin/isa_census.rs` diffs decoder vs artifact vs measured and exits
+1 on any uncovered or overstated opcode, 2 when it cannot run.
+
+Both negative controls are live in the gate: appending `-- op 0x7f bogus` to a
+copy of the model makes the census fail (the decoder does not accept `0x7f`), and
+stripping/staling a citation makes `isa-hypotheses` fail. The plan's
+`**Exit criteria (named, not met)**` block is therefore replaced by the run above;
+what remains open is the *content* of the assumptions — `step_refines` is now a
+named, cited hypothesis, not a proved theorem, and the ISA model inherits any bug
+in the linearity certificate. That residue is the point: it is visible, pinned,
+and one sha256 away from being caught.
 
 ---
 
@@ -897,10 +982,10 @@ number here would be a claim without a command.
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
-| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; fingerprint **checked 2026-11-13** through the bridge (`84 passed`), object hash still `unrecorded` and labelled so; probe measured `max relative deviation 0.000e+00` |
+| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`90 passed`): `cps=62999606…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); probe measured `max relative deviation 0.000e+00` |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **not started**, and deliberately unscored: the artifact, the census script and the negative control do not exist, so there is nothing to measure |
+| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`90 passed, 0 failed`; census reports 557 opcode reads, 8 distinct used, 23 declared, `result: covered`; both negative controls trip) — *met as a model of the subset*, with `step_refines` conditional on the two cited certificates rather than proved |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated
@@ -967,22 +1052,34 @@ a wrong theorem, and the only defence is the independent evaluator, which is a
 1. **Spec carrier:** compiler-preserved annotations (W1 option A) vs sidecar
    `.auspec` (option B). A gives tighter coupling and a mutation test that bites;
    B avoids touching CPS IR. Recommend A with B as fallback.
-2. **Fingerprint checked vs recorded** (W5). Checked costs a new S29-registered
-   `uk_*` symbol; recorded costs nothing but weaker claim. Recommend recorded
-   first.
+2. **Fingerprint checked vs recorded** (W5) — **settled 2026-11-13, without an
+   owner decision.** Checked turned out not to require a `uk_*` symbol at all: a
+   plain FFI export (`austral_cps_fingerprint`, `austral_object_fingerprint`)
+   is not callable from compiled Austral code, so there is no manifest grant and
+   no S29 checklist. Both digests are checked; what the owner still owns is the
+   `arch=` policy below.
+2b. **Arch policy for the object digest.** The capture is host-native, so
+   `obj=` is comparable only on the recorded architecture; the gate reports a
+   `[gap]` on a different host rather than passing or failing. Alternative:
+   record one digest per target triple (needs a cross-compile path the bridge
+   does not have). Recommend keeping the single arch-named digest.
 3. **Exact fragment width.** W2 starts at `Int64`/`Nat64`. Widening to a fixed-point
    or rational model is what makes the certificates cover real numerics; it is a
    separate theory change and should not be smuggled into S3.
 4. **Where the flux example lives:** `examples/verified-kernel/` (new tree) vs
    extending `examples/kernel/UnferKernel`. New tree keeps the `uk_*` demo intact.
-5. **W8 ISA source:** translate a Sail model (`sail2mm0`, translator in the TCB) vs
+5. **W8 ISA source** — **taken 2026-11-13: authored**, for the 23 emitted
+   opcodes. Translate a Sail model (`sail2mm0`, translator in the TCB) vs
    author an RV64I integer subset from the manual (more review, no translator).
    Recommend authoring the subset first — it is what the census will show we emit —
    and treating a Sail translation as the follow-up that widens it.
-6. **W8 conditioning:** the ISA theorem takes our linearity/layout certificates as
-   hypotheses, so it inherits their bugs. The alternative is an independent proof
-   at ISA level, which duplicates the guarantee in a weaker fragment. Recommend the
-   conditioned form with pinned citations.
+6. **W8 conditioning** — **taken 2026-11-13: conditioned, pinned.** The ISA
+   axioms take our linearity/layout certificates as hypotheses, so they inherit
+   their bugs; each cite carries a sha256 and `scripts/isa-hypotheses` refuses a
+   stale one. The alternative is an independent proof at ISA level, which
+   duplicates the guarantee in a weaker fragment. The remaining owner question is
+   whether `step_refines` should eventually be a proved theorem over a
+   machine-checked encoder (that needs `encdec`'s codec to exist in `lib/`).
 
 ---
 

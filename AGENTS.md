@@ -101,6 +101,18 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
   marker is reported `[stale]` so it leaves with the work. Markdown
   historical status prose is out of scan scope by policy.
+- `scripts/cps-fingerprint <cps>` — the bridge's own sha256 of the bytes
+  (`austral_cps_fingerprint`); `--object <cps>` gives the digest of the
+  cranelift-emitted code capture plus `arch=`. Not JIT symbols: no manifest
+  grant applies. The object digest is host-native and defined for the first
+  compilation in a fresh process, so `verify-invariants` only compares it on a
+  matching arch and reports `[gap]` otherwise.
+- `scripts/isa-census <module.cps>` — diffs the JIT decoder's own opcode count
+  (`crate::isa::note`, `ISA_REGISTRY` in `safestos/cranelift/src/isa.rs`), the
+  `-- op 0xNN` table in `mm0/isa.mm0`, and what the module actually read; exits
+  1 on any uncovered or overstated opcode. `scripts/isa-hypotheses <isa.mm0>`
+  refuses a `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or
+  missing. `ISA_REGISTRY` is the instruction-side twin of `SYMBOL_REGISTRY`.
 - Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
   `make bridge`, all guarded by `check-bridge-fresh`), `run-examples.sh`,
   `test-programs/runner.py`, `demo_module/run_demo.sh`.
