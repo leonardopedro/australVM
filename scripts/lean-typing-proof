@@ -182,6 +182,32 @@ def _step_summary(order: list[str], hist: dict[str, int]) -> str:
     return ", ".join(f"{r} ×{hist[r]}" for r in order)
 
 
+def _json_write_str(out, s: str) -> None:
+    """Write `json.dumps(s)` without materialising it (§13.28).
+
+    The two large fields of a certificate record are MM0 terms (hundreds of MB
+    at the top of the corpus), and `json.dumps` would hold a second copy of each
+    to hand to the sink. Chunks are escaped separately and their quotes dropped,
+    which is the same bytes because JSON escaping is per character; a chunk edge
+    is moved off a high surrogate so a pair is never split.
+    """
+    chunk = 1 << 16
+    if len(s) <= chunk:
+        out.write(json.dumps(s))
+        return
+    out.write('"')
+    i, n = 0, len(s)
+    while i < n:
+        j = i + chunk
+        if j >= n:
+            j = n
+        elif "\ud800" <= s[j - 1] <= "\udbff":
+            j += 1
+        out.write(json.dumps(s[i:j])[1:-1])
+        i = j
+    out.write('"')
+
+
 def stats(msg: str) -> None:
     """Stage-level memory report, only when `LTP_STATS` is set.
 
@@ -746,22 +772,30 @@ class Deriver:
         # Active `_check` frames, innermost last: the growth trace samples this.
         self._stack: list[int] = []
 
-    def add_axiom(self, text: str) -> None:
+    def add_axiom(self, *chunks: str) -> None:
         """Hand one artifact assumption to the sink, or retain it.
 
-        `text` may span several lines (a comment plus the `axiom` line); the
-        sink writes it followed by a newline, exactly as `"\n".join(out)` would
-        have, so a streamed artifact is byte-identical to a retained one.
+        The assumption arrives as one or more pieces that are written in order and
+        then a newline, exactly as `"\n".join(out)` would have, so a streamed
+        artifact is byte-identical to a retained one. It takes pieces because on
+        the largest obligations the `axiom` line *is* three term texts (`b`, `x`
+        and the reduct) and joining them into a fourth string is the copy that
+        failed at 10 GiB (`docs/lean4mm0.md` §13.28).
         """
-        n = len(text)
+        sink = self.axiom_sink
+        if sink is None:
+            self.axioms.append("".join(chunks))
+        else:
+            for piece in chunks:
+                sink.write(piece)
+            sink.write("\n")
+        n = 0
+        for piece in chunks:
+            n += len(piece)
         self.ax_count += 1
         self.ax_bytes += n
         if n > self.ax_max:
             self.ax_max = n
-        if self.axiom_sink is not None:
-            self.axiom_sink.write(text + "\n")
-        else:
-            self.axioms.append(text)
 
     def add_rule(self, name: str) -> None:
         """Count one applied rule (§13.27: the list was 1.8 M pointers)."""
@@ -772,18 +806,121 @@ class Deriver:
             self.rule_hist[name] = 1
             self.rule_order.append(name)
 
-    def emit_obligation(self, obj: dict) -> None:
-        """Hand one certificate obligation to the sink, or retain it.
+    def emit_obligation(self, ax: str, lhs: str, rhs: str,
+                        b: int, x: int, r: int) -> None:
+        """Hand one substitution certificate to the sink, or retain it.
 
-        The bytes are the same either way — `sort_keys=True` and one object per
-        line — so a streamed `.jsonl` is identical to what the accumulate path
-        writes at the end. Only the lifetime differs, and that is the point: a
-        written obligation is unreachable from the deriver.
+        The bytes are the same either way — `sort_keys=True` ordering, default
+        separators, one object per line — so a streamed `.jsonl` is identical to
+        what the accumulate path writes at the end. What differs is the shape of
+        the work: `json.dumps` of the record builds one string for the whole
+        obligation, and on the two largest obligations in the corpus that string
+        did not fit beside the tree it encoded (`docs/lean4mm0.md` §13.28). The
+        sunk path therefore walks the expression graph and writes each node as it
+        reaches it — no dict tree, no record string — so what one obligation
+        costs is its recursion depth rather than its size.
         """
-        if self.oblig_sink is not None:
-            self.oblig_sink.write(json.dumps(obj, sort_keys=True) + "\n")
+        sink = self.oblig_sink
+        if sink is None:
+            memo: dict = {}
+            self.oblig_tree.append({
+                "id": ax,
+                "kind": "substitution",
+                "lhs": lhs,
+                "rhs": rhs,
+                "b": self.to_tree(b, memo=memo),
+                "x": self.to_tree(x, memo=memo),
+                "r": self.to_tree(r, memo=memo),
+            })
+            return
+        # Key order of `sort_keys=True`: b, id, kind, lhs, r, rhs, x.
+        sink.write('{"b": ')
+        self.tree_json(b, sink)
+        sink.write(', "id": ')
+        _json_write_str(sink, ax)
+        sink.write(', "kind": "substitution", "lhs": ')
+        _json_write_str(sink, lhs)
+        sink.write(', "r": ')
+        self.tree_json(r, sink)
+        sink.write(', "rhs": ')
+        _json_write_str(sink, rhs)
+        sink.write(', "x": ')
+        self.tree_json(x, sink)
+        sink.write("}\n")
+
+    def tree_json(self, eid: int, out) -> None:
+        """`to_tree`'s node for `eid`, written as JSON instead of built.
+
+        Same cases, same order, same bytes as `json.dumps(to_tree(eid))`; the
+        difference is that no intermediate dict or string is ever materialised,
+        so the peak is the recursion stack, not the subtree. `to_tree`'s memo has
+        no counterpart here and none is wanted: JSON has no references, so a
+        shared subtree is written out once per path either way, and a memo would
+        only re-introduce the retained dicts.
+        """
+        eid = self.strip(eid)
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            # `bvar`/`natVal`/`idx` are ints in some exports and decimal strings
+            # in others (Lean writes big numerals as strings), so all three go
+            # through `json.dumps` rather than a format — same bytes either way.
+            out.write('{"bvar": ' + json.dumps(e["bvar"]) + "}")
+        elif "const" in e:
+            out.write('{"const": ')
+            _json_write_str(out, self.ex.name(e["const"]["name"]))
+            out.write("}")
+        elif "sort" in e:
+            out.write('{"sort": ' + json.dumps(e["sort"]) + "}")
+        elif "natVal" in e:
+            out.write('{"nat": ' + json.dumps(e["natVal"]) + "}")
+        elif "strVal" in e:
+            out.write('{"str": ')
+            _json_write_str(out, e["strVal"])
+            out.write("}")
+        elif "sym" in e:
+            out.write('{"const": ')
+            _json_write_str(out, e["sym"])
+            out.write("}")
+        elif "app" in e:
+            out.write('{"app": [')
+            self.tree_json(e["app"]["fn"], out)
+            out.write(", ")
+            self.tree_json(e["app"]["arg"], out)
+            out.write("]}")
+        elif "forallE" in e:
+            out.write('{"pi": [')
+            self.tree_json(e["forallE"]["type"], out)
+            out.write(", ")
+            self.tree_json(e["forallE"]["body"], out)
+            out.write("]}")
+        elif "lam" in e:
+            out.write('{"lam": [')
+            self.tree_json(e["lam"].get("type", eid), out)
+            out.write(", ")
+            self.tree_json(e["lam"]["body"], out)
+            out.write("]}")
+        elif "tsubst" in e:
+            out.write('{"tsubst": [')
+            self.tree_json(e["tsubst"]["b"], out)
+            out.write(", ")
+            self.tree_json(e["tsubst"]["x"], out)
+            out.write("]}")
+        elif "proj" in e:
+            st = e["proj"]
+            out.write('{"proj": [')
+            self.tree_json(st["struct"], out)
+            out.write(', {"nat": ' + json.dumps(st.get("idx", 0)) + "}]}")
+        elif "letE" in e:
+            le = e["letE"]
+            out.write('{"app": [{"lam": [')
+            self.tree_json(le["type"], out)
+            out.write(", ")
+            self.tree_json(le["body"], out)
+            out.write("]}, ")
+            self.tree_json(le["value"], out)
+            out.write("]}")
         else:
-            self.oblig_tree.append(obj)
+            raise SystemExit(f"tree_json: unhandled expression {sorted(e.keys())}")
 
     # ── export manipulation ──────────────────────────────────────────────
     def mk(self, d: dict) -> int:
@@ -1258,24 +1395,19 @@ class Deriver:
             key = (b_s, x_s)
             if key not in self.beta_ax:
                 ax = f"ax_subst_{len(self.beta_ax)}"
+                # Encoded once: the axiom line and the certificate's `rhs`
+                # used to encode the same term twice, which on a large enough
+                # obligation is a second copy of the largest string in flight
+                # (§13.28).
+                r_s = enc.enc(self.strip(res))
+                rr = self.strip(res)
                 self.add_axiom(
-                    f"-- (λ{self.enc.enc(dom)}. _) applied to {x_s[:80]}\n"
-                    f"axiom {ax}: $ tdefeq (tsubst {b_s} {x_s}) {enc.enc(self.strip(res))} $;"
+                    f"-- (λ{self.enc.enc(dom)}. _) applied to {x_s[:80]}\n",
+                    f"axiom {ax}: $ tdefeq (tsubst {b_s} {x_s}) ", r_s, " $;",
                 )
                 self.beta_ax[key] = ax
                 self.oblig.append(ax)
-                # One memo for the three sides: `b`, `x` and `r` share subterms,
-                # and the memo dies with the dict that is written out below.
-                memo: dict = {}
-                self.emit_obligation({
-                    "id": ax,
-                    "kind": "substitution",
-                    "lhs": f"(tsubst {b_s} {x_s})",
-                    "rhs": enc.enc(self.strip(res)),
-                    "b": self.to_tree(b, memo=memo),
-                    "x": self.to_tree(x, memo=memo),
-                    "r": self.to_tree(self.strip(res), memo=memo),
-                })
+                self.emit_obligation(ax, f"(tsubst {b_s} {x_s})", r_s, b, x, rr)
             self.add_rule("ty_app")
             return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
         if "forallE" in e or "sort" in e:
