@@ -173,8 +173,18 @@ fi
 # from skipped into checked.
 kernel_cert="$repo_root/mm0/flux1d_certificate.mm0"
 kernel_args=()
+# Whether the emitter in this checkout can express the kernel theory at all. The
+# citation checks below are only meaningful when it can: `--kernel-certificate`
+# missing means `theory: kernel` is an unknown theory, so every kernel line is
+# skipped and "nothing was cited" would be a fact about the emitter, not about
+# the certificate. That is a gap (an answered-with-a-reason absence, like the
+# missing-interpreter cases) rather than a failure of this repo's code.
+kernel_supported=0
 if [ -f "$kernel_cert" ]; then
     kernel_args=(--kernel-certificate "$kernel_cert")
+    if "$logos" mm0 claims --help 2>&1 | grep -q -- '--kernel-certificate'; then
+        kernel_supported=1
+    fi
 else
     gap "no kernel certificate at $kernel_cert — kernel claims will be skipped"
 fi
@@ -191,7 +201,7 @@ fi
 # every line *did* reach its expectation after being skipped), and a fragment
 # that started "proving" the accuracy line would be claiming more than the
 # certificate states — which is the one failure this whole layer exists to avoid.
-if [ -f "$kernel_cert" ]; then
+if [ "$kernel_supported" = 1 ]; then
     uncited=""
     for name in consistency conservation symmetry uniform_state; do
         grep -q "\[cited: flux1d_certificate\.$name\]" "$tmp/claims.log" \
@@ -221,6 +231,8 @@ if [ -f "$kernel_cert" ]; then
         bad "kernel corpus: the drifted certificate was rejected for the wrong reason"
         tail -8 "$tmp/drift.log" | sed 's/^/      /'
     fi
+elif [ -f "$kernel_cert" ]; then
+    gap "the emitter cannot express the kernel theory (no --kernel-certificate): kernel content and its drift anchor unchecked"
 fi
 
 # The corpus must have produced real certificates and at least one unproved

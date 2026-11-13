@@ -195,18 +195,42 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
         gap "W5: code fingerprint not re-derivable (no ./austral + bridge here)"
     fi
     # shellcheck disable=SC2086  # _cert_code is a flag pair, empty when absent
+    # Without `--code` the artifact's two header lines record `cps=unrecorded`,
+    # so a straight `cmp` against an artifact emitted with the fingerprint would
+    # fail on the one field this environment cannot re-derive. The comparison
+    # below normalises exactly those two lines and holds everything else to
+    # byte-identity, so the missing fingerprint stays a gap (recorded above, W5)
+    # while a drifted proof, statement or probe still fails.
+    _norm_code() {
+        sed 's/^-- code: .*/-- code: <cps>/; s/^-- code-status: .*/-- code-status: <cps>/' "$1"
+    }
+    _cert_same() {
+        if [ -n "$_cert_code" ]; then
+            cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1"
+            return
+        fi
+        case "$1" in
+            _probe.c) cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1" ;;
+            *) diff -q <(_norm_code "$_cert_tmp/flux1d$1") \
+                       <(_norm_code "$repo_root/mm0/flux1d$1") >/dev/null ;;
+        esac
+    }
     if python3 "$repo_root/scripts/au2mm0" emit "$_flux_obl" \
             --out "$_cert_tmp" $_cert_code >"$_cert_tmp/emit.log" 2>&1; then
         _cert_ok=true
         for _suffix in _certificate.mm0 _certificate.mm1 _probe.c; do
-            cmp -s "$_cert_tmp/flux1d$_suffix" "$repo_root/mm0/flux1d$_suffix" \
-                || _cert_ok=false
+            _cert_same "$_suffix" || _cert_ok=false
         done
+        if [ -n "$_cert_code" ]; then
+            _cert_claim="W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it"
+        else
+            _cert_claim="W2/W6: flux1d certificate and probe re-emit byte-identically apart from the code fingerprint, and mm0 re-accepts it"
+        fi
         if [ "$_cert_ok" = true ]; then
-            check "W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it" true
+            check "$_cert_claim" true
         else
             echo "      committed artifact is stale — run: python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json --code <cps>" >&2
-            check "W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it" false
+            check "$_cert_claim" false
         fi
         # W7 anchor: the statements a CNL citation points at must be what the
         # proof proves. Flip one coefficient in the `consistency` statement and
