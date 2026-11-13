@@ -94,56 +94,121 @@ class Enc:
         s = self._memo.get(eid)
         if s is not None:
             return s
-        s = self._enc(eid)
+        parts: list[str] = []
+        self._enc(eid, parts)
+        s = "".join(parts)
         if self._memo_bytes < ENC_MEMO_BYTES:
             self._memo[eid] = s
             self._memo_bytes += len(s)
         return s
 
-    def _enc(self, eid: int) -> str:
+    def _enc(self, eid: int, out: list[str]) -> None:
+        """Append `eid`'s encoding to `out`, token by token, in emit order.
+
+        Appending instead of returning a string is what keeps the encoder's
+        memory proportional to *one* term rather than to its recursion depth.
+        The `return f"(tapp {self.enc(fn)} {self.enc(arg)})"` this replaces held
+        one finished string alive at every level of the spine, so a term with
+        53 MB of text cost twenty of them at once (~1.1 GB measured on
+        `nsOuterFock…singleTime`); the token sequence, and therefore every
+        byte written, is identical.
+        """
+        s = self._memo.get(eid)
+        if s is not None:
+            out.append(s)
+            return
+        mark = len(out)
+        self._enc_tokens(eid, out)
+        # Cache the *small* encodings only. Those are the ones a derivation
+        # reuses (types, constants, short spines), and a handful of tokens joins
+        # cheaply; a multi-megabyte term is deliberately left streamed, because
+        # materialising it at an inner level is the cost this change removes.
+        # Without this the encoder would recompute shared subtrees from scratch
+        # (measured: 12 min and climbing on a row that takes 200 s with it).
+        if len(out) - mark <= 64 and self._memo_bytes < ENC_MEMO_BYTES:
+            s = "".join(out[mark:])
+            out[mark:] = [s]
+            self._memo[eid] = s
+            self._memo_bytes += len(s)
+
+    def _enc_tokens(self, eid: int, out: list[str]) -> None:
         e = self.ex.exprs[eid]
         if "bvar" in e:
             k = e["bvar"]
             if not self.succ_idx:
-                return f"(tvar {nat_name('idx' + str(k))})"
+                out.append(f"(tvar {nat_name('idx' + str(k))})")
+                return
             idx = "tzero"
             for _ in range(k):
                 idx = f"(tsucc {idx})"
-            return f"(tvar {idx})"
+            out.append(f"(tvar {idx})")
+            return
         if "sort" in e:
-            return self.sort(e)
+            out.append(self.sort(e))
+            return
         if "const" in e:
-            return self.sym(self.ex.name(e["const"]["name"]))
+            out.append(self.sym(self.ex.name(e["const"]["name"])))
+            return
         if "mdata" in e:
-            return self.enc(e["mdata"]["expr"])
+            self._enc(e["mdata"]["expr"], out)
+            return
         if "app" in e:
-            return f"(tapp {self.enc(e['app']['fn'])} {self.enc(e['app']['arg'])})"
+            out.append("(tapp ")
+            self._enc(e["app"]["fn"], out)
+            out.append(" ")
+            self._enc(e["app"]["arg"], out)
+            out.append(")")
+            return
         if "forallE" in e:
-            return f"(tpi {self.enc(e['forallE']['type'])} {self.enc(e['forallE']['body'])})"
+            out.append("(tpi ")
+            self._enc(e["forallE"]["type"], out)
+            out.append(" ")
+            self._enc(e["forallE"]["body"], out)
+            out.append(")")
+            return
         if "lam" in e:
-            return f"(tabs {self.enc(e['lam']['body'])})"
+            out.append("(tabs ")
+            self._enc(e["lam"]["body"], out)
+            out.append(")")
+            return
         if "letE" in e:  # let x : T := v in b   ≡   (λx:T. b) v
             le = e["letE"]
-            return f"(tapp (tabs {self.enc(le['body'])}) {self.enc(le['value'])})"
+            out.append("(tapp (tabs ")
+            self._enc(le["body"], out)
+            out.append(") ")
+            self._enc(le["value"], out)
+            out.append(")")
+            return
         if "proj" in e:
             st = e["proj"]
             idx = "tzero"
             for _ in range(st.get("idx", 0)):
                 idx = f"(tsucc {idx})"
-            return f"(tproj {self.enc(st['struct'])} {idx})"
+            out.append("(tproj ")
+            self._enc(st["struct"], out)
+            out.append(f" {idx})")
+            return
         if "natVal" in e:
             # A numeral as a *term*: one opaque constant per distinct numeral, so
             # `0` and `1` stay distinct without pretending the theory has Nat
             # computation (it does not; that is the deltanet's arithmetic).
-            return self.sym(f"nat{e['natVal']}")
+            out.append(self.sym(f"nat{e['natVal']}"))
+            return
         if "strVal" in e:
             # Same treatment for a string literal: opaque, distinct per content.
-            return self.sym(f"str{e['strVal']}")
+            out.append(self.sym(f"str{e['strVal']}"))
+            return
         if "sym" in e:  # a synthetic constant this emitter invented (see `Nat`)
-            return self.sym(e["sym"])
+            out.append(self.sym(e["sym"]))
+            return
         if "tsubst" in e:  # a *deferred* substitution (see Deriver.defer_subst)
             t = e["tsubst"]
-            return f"(tsubst {self.enc(t['b'])} {self.enc(t['x'])})"
+            out.append("(tsubst ")
+            self._enc(t["b"], out)
+            out.append(" ")
+            self._enc(t["x"], out)
+            out.append(")")
+            return
         raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
 
 

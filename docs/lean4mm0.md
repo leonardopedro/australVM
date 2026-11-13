@@ -2861,3 +2861,43 @@ row needs the term encoder to stream, which is not done.
 
 The measurements of this round are
 [`round3.tsv`](data/lean4mm0/round3.tsv).
+
+### 13.29 The encoder streams its term text; the copies were per level, not per term
+
+§13.28 left one row unfinished in `Enc._enc` and named the line: the
+`f"(tapp {self.enc(fn)} {self.enc(arg)})"` f-string. That f-string builds a
+*finished string at every level of the spine*, so while the outermost term is
+being built each level's string is still alive — on
+`nsOuterFock…singleTime` the `tracemalloc` snapshot showed twenty of them, about
+53 MB each (§13.28). The fix is not to spool the term but to never build the
+intermediate strings: `_enc(eid, out)` now **appends tokens** to one list in emit
+order, and `enc(eid)` joins that list once at the top. The token sequence is
+unchanged, so the bytes are unchanged by construction.
+
+One thing had to be kept, and the first attempt did not: `enc` used to memoise
+*every* child encoding within a 64 MB budget, which is what keeps shared subtrees
+from being re-encoded. Appending to a list dropped that, and the effect of
+dropping it is not subtle — the row that takes 200 s ran 12 minutes without
+finishing before the run was killed. So `_enc` now memoises the **small**
+encodings (≤ 64 tokens, joined and cached, which covers the shared types and
+short spines the budget was actually holding) and deliberately leaves multi-
+megabyte terms streamed, which is the point of the change.
+
+**Byte identity, re-measured, not assumed:**
+
+| artifact | bytes | `cmp` |
+| --- | ---: | --- |
+| `ChapterSirkMultiShift.multiShiftSeq_succ` `.mm0` / `.mm1` / `.jsonl` | 1 012 315 / 1 074 760 / 893 654 | equal |
+| `FockPairPerturbation.abs_re_inner_pairVec_le` `.mm0` / `.mm1` / `.jsonl` | 1 041 771 375 / 1 075 343 397 / 1 012 915 095 | equal |
+
+The 1.04 GiB row is the same one §13.27 timed at 189 s, so it doubles as the
+speed check: **200.4 s / 1 646 732 kB peak before, 187.6 s / 1 599 224 kB after**
+(both runs on this host with the six-hour `dense_range` run of §13.30 in flight,
+so the two numbers share their contention).
+
+**What this does not fix.** §13.28 measured where the `nsOuterFock` row's bytes
+actually are: about 1.1 GB in those live term strings, and ~5.8 GB in the export
+index of 8 078 904 expressions, which is built before the derivation starts.
+Removing the strings removes the smaller half. Whether the row now fits under
+10 GiB is a measurement this change has made possible, not one it has produced;
+it is recorded as §13.30 when the run comes back.

@@ -1,0 +1,126 @@
+-- mm0-comparator v1 — approved statements for flux1d_certificate
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: flux1d_certificate
+-- closure-sha256: 01ba7608ce71eaea225acbf71c34eb7c15ec1c807be919f4108a616ef52010cc
+-- theory-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+-- statements-sha256: b07f40497049720548918c43bd77ab15a4f0aa4dff3969f819f61122303dfb47
+
+provable sort Prop;
+sort l0;
+sort l1;
+sort l2;
+delimiter $ ( ) $;
+term l3: l0;
+prefix l3: $0$ prec max;
+term l4: l0;
+prefix l4: $1$ prec max;
+term l5 (n: l0): l1;
+term l6 (i: l0): l1;
+term l7 (a b: l1): l1;
+term l8 (a b: l1): l1;
+term l9 (a: l1): l1;
+def l10 (a b: l1): l1 = $ l7 a (l9 b) $;
+term l11 (a b: l1): Prop;
+axiom l12 (a: l1): $ l11 a a $;
+axiom l13 (a b: l1): $ l11 a b $ > $ l11 b a $;
+axiom l14 (a b c: l1): $ l11 a b $ > $ l11 b c $ > $ l11 a c $;
+axiom l15 (a a2 b b2: l1):
+  $ l11 a a2 $ > $ l11 b b2 $ > $ l11 (l7 a b) (l7 a2 b2) $;
+axiom l16 (a a2 b b2: l1):
+  $ l11 a a2 $ > $ l11 b b2 $ > $ l11 (l8 a b) (l8 a2 b2) $;
+axiom l17 (a a2: l1): $ l11 a a2 $ > $ l11 (l9 a) (l9 a2) $;
+axiom l18 (a b: l1): $ l11 (l7 a b) (l7 b a) $;
+axiom l19 (a b c: l1):
+  $ l11 (l7 (l7 a b) c) (l7 a (l7 b c)) $;
+axiom l20 (a: l1): $ l11 (l7 a (l5 l3)) a $;
+axiom l21 (a: l1): $ l11 (l7 a (l9 a)) (l5 l3) $;
+axiom l22 (a: l1): $ l11 (l9 (l9 a)) a $;
+axiom l23 (a b: l1): $ l11 (l8 a b) (l8 b a) $;
+axiom l24 (a b c: l1):
+  $ l11 (l8 (l8 a b) c) (l8 a (l8 b c)) $;
+axiom l25 (a: l1): $ l11 (l8 a (l5 l4)) a $;
+axiom l26 (a b c: l1):
+  $ l11 (l8 a (l7 b c)) (l7 (l8 a b) (l8 a c)) $;
+axiom l27 (a: l1): $ l11 (l7 (l5 l3) a) a $;
+axiom l28 (a b: l1):
+  $ l11 (l9 (l7 a b)) (l7 (l9 a) (l9 b)) $;
+axiom l29 (a b: l1): $ l11 (l8 (l9 a) b) (l9 (l8 a b)) $;
+axiom l30 (a b: l1): $ l11 (l8 a (l9 b)) (l9 (l8 a b)) $;
+axiom l31: $ l11 (l9 (l5 l3)) (l5 l3) $;
+axiom l32 (a: l1): $ l11 (l8 (l5 l3) a) (l5 l3) $;
+term l33 (n m: l0): l0;
+term l34 (n m: l0): l0;
+term l35 (x y: l2): l2;
+term l36 (x y: l2): l2;
+term l37 (x: l2): l2;
+term l38 (n: l0): l2;
+term l39 (s i: l0): l2;
+def l40 (x y: l2): l2 = $ l35 x (l37 y) $;
+def l41: l2 = $ l38 l3 $;
+term l42 (x y: l2): Prop;
+axiom l43 (x: l2): $ l42 x x $;
+axiom l44 (x y: l2): $ l42 x y $ > $ l42 y x $;
+axiom l45 (x y z: l2): $ l42 x y $ > $ l42 y z $ > $ l42 x z $;
+axiom l46 (x x2 y y2: l2):
+  $ l42 x x2 $ > $ l42 y y2 $ > $ l42 (l35 x y) (l35 x2 y2) $;
+axiom l47 (x x2 y y2: l2):
+  $ l42 x x2 $ > $ l42 y y2 $ > $ l42 (l36 x y) (l36 x2 y2) $;
+axiom l48 (x x2: l2): $ l42 x x2 $ > $ l42 (l37 x) (l37 x2) $;
+axiom l49 (x y: l2): $ l42 (l35 x y) (l35 y x) $;
+axiom l50 (x y z: l2):
+  $ l42 (l35 (l35 x y) z) (l35 x (l35 y z)) $;
+axiom l51 (x: l2): $ l42 (l35 x l41) x $;
+axiom l52 (x: l2): $ l42 (l35 x (l37 x)) l41 $;
+axiom l53 (x y: l2): $ l42 (l36 x y) (l36 y x) $;
+axiom l54 (x y z: l2):
+  $ l42 (l36 (l36 x y) z) (l36 x (l36 y z)) $;
+axiom l55 (x: l2): $ l42 (l36 x (l38 l4)) x $;
+axiom l56 (x: l2): $ l42 (l36 l41 x) l41 $;
+axiom l57 (x y z: l2):
+  $ l42 (l36 x (l35 y z)) (l35 (l36 x y) (l36 x z)) $;
+axiom l58 (x y: l2): $ l42 x y $ > $ l42 (l40 x y) l41 $;
+axiom l59 (x y: l2): $ l42 (l40 x y) l41 $ > $ l42 x y $;
+term l60 (p: l1) (s: l0): l2;
+axiom l61 (i s: l0): $ l42 (l60 (l6 i) s) (l39 s i) $;
+axiom l62 (n s: l0): $ l42 (l60 (l5 n) s) (l38 n) $;
+axiom l63 (a b: l1) (s: l0):
+  $ l42 (l60 (l7 a b) s) (l35 (l60 a s) (l60 b s)) $;
+axiom l64 (a b: l1) (s: l0):
+  $ l42 (l60 (l8 a b) s) (l36 (l60 a s) (l60 b s)) $;
+axiom l65 (a: l1) (s: l0):
+  $ l42 (l60 (l9 a) s) (l37 (l60 a s)) $;
+axiom l66 (p q: l1) (s: l0):
+  $ l11 p q $ > $ l42 (l60 p s) (l60 q s) $;
+term l67: l0;
+prefix l67: $2$ prec max;
+term l68: l0;
+prefix l68: $3$ prec max;
+term l69: l0;
+prefix l69: $6$ prec max;
+term l70: l0;
+prefix l70: $9$ prec max;
+theorem l71(a b r: l1): $ l11 (l7 b (l7 a r)) (l7 a (l7 b r)) $;
+theorem l72(a b r: l1): $ l11 (l8 b (l8 a r)) (l8 a (l8 b r)) $;
+axiom l73: $ l11 (l8 (l5 l67) (l5 l68)) (l5 l69) $;
+axiom l74: $ l11 (l7 (l8 (l5 l69) (l6 l3)) (l9 (l8 (l5 l68) (l6 l3)))) (l8 (l5 l68) (l6 l3)) $;
+axiom l75: $ l11 (l7 (l8 (l5 l67) (l8 (l6 l3) (l6 l3))) (l9 (l8 (l6 l3) (l6 l3)))) (l8 (l6 l3) (l6 l3)) $;
+axiom l76: $ l11 (l7 (l8 (l5 l68) (l6 l3)) (l8 (l5 l69) (l6 l3))) (l8 (l5 l70) (l6 l3)) $;
+axiom l77: $ l11 (l7 (l8 (l5 l70) (l6 l3)) (l9 (l8 (l5 l68) (l6 l3)))) (l8 (l5 l69) (l6 l3)) $;
+axiom l78: $ l11 (l7 (l8 (l6 l3) (l6 l3)) (l8 (l5 l67) (l8 (l6 l3) (l6 l3)))) (l8 (l5 l68) (l8 (l6 l3) (l6 l3))) $;
+axiom l79: $ l11 (l7 (l8 (l5 l68) (l8 (l6 l3) (l6 l3))) (l9 (l8 (l6 l3) (l6 l3)))) (l8 (l5 l67) (l8 (l6 l3) (l6 l3))) $;
+axiom l80: $ l11 (l7 (l8 (l5 l68) (l6 l4)) (l8 (l5 l69) (l6 l4))) (l8 (l5 l70) (l6 l4)) $;
+axiom l81: $ l11 (l7 (l8 (l5 l70) (l6 l4)) (l9 (l8 (l5 l68) (l6 l4)))) (l8 (l5 l69) (l6 l4)) $;
+axiom l82: $ l11 (l7 (l8 (l6 l4) (l6 l4)) (l8 (l5 l67) (l8 (l6 l4) (l6 l4)))) (l8 (l5 l68) (l8 (l6 l4) (l6 l4))) $;
+axiom l83: $ l11 (l7 (l8 (l5 l68) (l8 (l6 l4) (l6 l4))) (l9 (l8 (l6 l4) (l6 l4)))) (l8 (l5 l67) (l8 (l6 l4) (l6 l4))) $;
+axiom l84: $ l11 (l7 (l8 (l5 l68) (l6 l67)) (l8 (l5 l69) (l6 l67))) (l8 (l5 l70) (l6 l67)) $;
+axiom l85: $ l11 (l7 (l8 (l5 l70) (l6 l67)) (l9 (l8 (l5 l68) (l6 l67)))) (l8 (l5 l69) (l6 l67)) $;
+axiom l86: $ l11 (l7 (l8 (l6 l67) (l6 l67)) (l8 (l5 l67) (l8 (l6 l67) (l6 l67)))) (l8 (l5 l68) (l8 (l6 l67) (l6 l67))) $;
+axiom l87: $ l11 (l7 (l8 (l5 l68) (l8 (l6 l67) (l6 l67))) (l9 (l8 (l6 l67) (l6 l67)))) (l8 (l5 l67) (l8 (l6 l67) (l6 l67))) $;
+theorem l88 (s: l0): $ l42 (l60 (l7 (l8 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))) (l5 l67)) (l9 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))))) s) (l60 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))) s) $;
+theorem l89 (s: l0): $ l42 (l60 (l7 (l7 (l7 (l7 (l8 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))) (l5 l67)) (l9 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))))) (l9 (l7 (l8 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))) (l5 l67)) (l9 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))))))) (l7 (l7 (l8 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))) (l5 l67)) (l9 (l7 (l8 (l6 l67) (l5 l68)) (l8 (l6 l67) (l6 l67))))) (l9 (l7 (l8 (l7 (l8 (l6 l67) (l5 l68)) (l8 (l6 l67) (l6 l67))) (l5 l67)) (l9 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4)))))))) (l7 (l7 (l8 (l7 (l8 (l6 l67) (l5 l68)) (l8 (l6 l67) (l6 l67))) (l5 l67)) (l9 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))))) (l9 (l7 (l8 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))) (l5 l67)) (l9 (l7 (l8 (l6 l67) (l5 l68)) (l8 (l6 l67) (l6 l67)))))))) s) (l60 (l5 l3) s) $;
+theorem l90 (s: l0): $ l42 (l60 (l7 (l7 (l7 (l8 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))) (l5 l67)) (l9 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))))) (l9 (l7 (l8 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))) (l5 l67)) (l9 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))))))) (l7 (l7 (l8 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))) (l5 l67)) (l9 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))))) (l9 (l7 (l8 (l7 (l8 (l6 l3) (l5 l68)) (l8 (l6 l3) (l6 l3))) (l5 l67)) (l9 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4)))))))) s) (l60 (l5 l3) s) $;
+theorem l91 (s: l0): $ l42 (l60 (l7 (l7 (l8 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))) (l5 l67)) (l9 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))))) (l9 (l7 (l8 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))) (l5 l67)) (l9 (l7 (l8 (l6 l4) (l5 l68)) (l8 (l6 l4) (l6 l4))))))) s) (l60 (l5 l3) s) $;
