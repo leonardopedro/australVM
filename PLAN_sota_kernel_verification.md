@@ -89,6 +89,10 @@ false.
   deterministic certificate; hiring 80 agents to search for one is a strategy for
   a different problem class, and it would put an unauditable megabyte count in the
   TCB's shadow.
+- **Adopt, differently (W8):** the definition-only-semantics split. Their ISA
+  model is trusted and their Lean proofs are not; here the *source-level* proofs
+  already exist, so W8's ISA layer takes them as hypotheses instead of restating
+  linearity, refinements and memory safety one level down.
 - **Note the asymmetry honestly:** AlphaProof's claim is about the *bytes that
   run* and explicitly excludes the Rust compiler from trust. Our cranelift path
   keeps the OCaml compiler, the bridge, and Cranelift inside trust. W5 narrows
@@ -715,6 +719,79 @@ for a question. That is additive on top of a corpus that can now state kernel
 content, and the plan's warning stands: it must not be built on the type-level
 encoding.
 
+### W8 — An ISA model that only fills the gaps  *(nothing started; 1–2 weeks after W2/W3)*
+
+**Why:** AlphaProof Code's strongest structural idea is a *definition-only*
+semantics of the instruction set (~8k trusted lines) with the proofs about it
+untrusted. We have the opposite half: real proofs about linear types, liquid
+refinement types and memory safety, but they are about CPS IR, not about the
+bytes. Building an ISA model from scratch here would prove the three guarantees a
+second time at a lower level, in a weaker fragment, and the two proofs would be
+free to disagree. So the model is designed to **consume** them.
+
+**The layering (this is the whole design).** Three semantics layers, and each
+theorem crosses exactly one boundary:
+
+| layer | artifact | already exists? |
+|---|---|---|
+| source = Austral judgments (linearity, layout/memory safety, refinements) | `mm0/linearity_certificate`, `mm0/layout_certificate`, `mm0/gap_certificate`, each with its ledger's sha256 in the header | **yes** (re-emitted, gated) |
+| IR = the CPS machine built by W2's theory | `mm0/*_certificate.mm0` theory lines + `kernel_alg.mm0` | **yes** |
+| ISA = decode/step relation over registers and memory | `mm0/isa.mm0` | **no — this is the new artifact** |
+
+The ISA model never restates a source-level guarantee. It states the two
+transitions it alone can prove, taking the layer-1 certificates as **hypotheses**:
+
+- `encdec` — for the emitted subset, `decode (encode i) = i`.
+- `step_refines` — one ISA step (state → state′) implements one CPS-IR step,
+  **assuming** the IR-level typing and linearity invariants that
+  `linearity_certificate` / `layout_certificate` already establish.
+- `bounds_from_layout` — the per-access memory obligations the step relation
+  needs are discharged by citing the layout discipline's block bounds, not by
+  re-proving arithmetic. This is precisely "the model fills in the gaps": each
+  gap is a named hypothesis with a citation, and `verify-invariants` refuses an
+  uncited one.
+
+Consequences that must be stated and not softened: this makes the ISA model
+*conditional* on our own proofs, so a bug in the linearity certificate would
+propagate into the machine-code claim. That is the honest trade — the
+alternative is two independent proofs of linearity, and the plan's §7 discipline
+applies: the citation must be pinned (as in W7) so a drifted certificate cannot
+be cited.
+
+**Subset discipline (measured, not assumed).** The model covers exactly the
+instructions the emitter produces for the certified fragment — the same mechanism
+as `SYMBOL_REGISTRY`'s census, with an `ISA_REGISTRY` beside it:
+
+```
+austral compile examples/verified-kernel/flux1d/flux1d.aum --use-cps-jit \
+  --emit-cps=/tmp/flux1d.cps        # the IR the model must cover
+scripts/isa-census                 # [gap] does not exist: would diff emitted opcodes
+                                   # against mm0/isa.mm0's declared instruction table
+```
+
+An uncovered opcode is a gate failure, not a footnote — the census is what stops
+the model drifting into "the ISA" when the claim is "the bytes we emit".
+
+**[gap] The model itself.** Neither repo ships one: `mm0/statements/` holds
+`BookProof.*` only, and the mm0 project's own theories (Peano, set.mm) contain no
+machine-code semantics, so this is authored or translated, not imported. The two
+plausible sources, and what each costs:
+
+- **Sail** (the maintained RISC-V/AArch64 models): a new emitter, `sail2mm0`,
+  sibling to `lean2mm0`, and a translation whose fidelity is itself an unproved
+  claim. Cheapest path to a *trusted-by-provenance* semantics.
+- **Authored from the ISA manual** for a small subset (RV64I integer core), the
+  Lanyon-style choice: fewer rules, each reviewable, no translator in the TCB.
+
+Both are weeks of work and neither is on the W0–W7 critical path, which is why
+this is last and unscored.
+
+**Exit criteria (named, not met):** `mm0/isa.mm0` passes `mm0-rs compile` +
+`mm0-c`; `scripts/isa-census` reports zero uncovered opcodes for the flux1d IR;
+`verify-invariants` has a negative control where a hand-edited certificate
+citation is refused. Until those three exist this row is unscored in §5 — a
+number here would be a claim without a command.
+
 ---
 
 ## §5 Sprint order and exit criteria
@@ -728,6 +805,7 @@ encoding.
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13** (fingerprint recorded, not checked; probe measured `max relative deviation 0.000e+00`) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
+| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **not started**, and deliberately unscored: the artifact, the census script and the negative control do not exist, so there is nothing to measure |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated
@@ -750,6 +828,9 @@ statements and defeat the purpose.
   workers that converge.
 - **PDE well-posedness, CFL, divergence-free preservation.** Same boundary Lanyon
   draws; state it in the artifact rather than implying it.
+- **Verifying "the ISA".** W8 models the instruction subset the emitter actually
+  produces, measured by a census. A full-ISA semantics is a different project with
+  a different trust story.
 
 ---
 
@@ -777,6 +858,7 @@ statements and defeat the purpose.
 | generated certificates | no | no | re-checked, never trusted |
 | `mm0/approved/*.stmts` | — | **yes** | this is the statement of record |
 | OCaml compiler + bridge + Cranelift | yes | yes | W5 records, does not remove |
+| `mm0/isa.mm0` (W8) | — | **yes, when it exists** | definition-only semantics is trusted by construction; the proofs over it are not |
 | reflected polynomial reflection | — | **yes** | a reflector bug is a soundness bug; this is why the dual-path check is mandatory and why the reflector is ≤ 500 lines |
 
 The last row is new risk and must be stated in the README: a wrong reflection is
@@ -798,6 +880,14 @@ a wrong theorem, and the only defence is the independent evaluator, which is a
    separate theory change and should not be smuggled into S3.
 4. **Where the flux example lives:** `examples/verified-kernel/` (new tree) vs
    extending `examples/kernel/UnferKernel`. New tree keeps the `uk_*` demo intact.
+5. **W8 ISA source:** translate a Sail model (`sail2mm0`, translator in the TCB) vs
+   author an RV64I integer subset from the manual (more review, no translator).
+   Recommend authoring the subset first — it is what the census will show we emit —
+   and treating a Sail translation as the follow-up that widens it.
+6. **W8 conditioning:** the ISA theorem takes our linearity/layout certificates as
+   hypotheses, so it inherits their bugs. The alternative is an independent proof
+   at ISA level, which duplicates the guarantee in a weaker fragment. Recommend the
+   conditioned form with pinned citations.
 
 ---
 
