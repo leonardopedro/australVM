@@ -1,0 +1,9 @@
+stage	what	budget_s	peak_mb	outcome	elapsed_s	note
+emit	NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime	1200	9988	MemoryError	277	§13.28 fix; dies in `Enc._enc`, building the term text
+emit	QgAssembledFlatTransfer.deficiencyTrivialAt_total_of_flat	1200	9789	timeout	1201	§13.28 fix; 1 000 s MemoryError -> runs out the clock at 9 789 MB
+clock	YangMillsHermite.CoreRep._sizeOf_1	5400	9837	MemoryError	3618	memory wall, not clock
+clock	YmAbelianFock.coreRep_op_add	5400	10111	MemoryError	24447	2 222 090 obligations; the 5 400 s clock did not take effect
+clock	SirkPerSystem.diagKR_sirk_crouzeix_domain	5400	9989	MemoryError	3277	memory wall, not clock
+clock	KatoRellich.dense_range_add_relBounded	5400	7845	timeout	5401	still running at the clock; 522 000 obligations at t=5 005 s
+mm0-rs	adjoint_aeval .mm1, bare (1 351 567 314 B)	3600	2	rc=1	9	`error: sort not found` at line 10: the artifact is a fragment, the theory must be prepended
+mm0-rs	theory + adjoint_aeval .mm1 (1 351 582 571 B)	3600	10457	SIGABRT	190	`memory allocation of 112 bytes failed` during `elab`; no `.mmb` written

@@ -2746,3 +2746,102 @@ The full-budget trace is
 own report is
 [`emit-run-aeval-full.log`](data/lean4mm0/emit-run-aeval-full.log), and the row
 table is [`reemit.tsv`](data/lean4mm0/reemit.tsv).
+
+### 13.28 Three copies out of the assumption path; the wall moves into the encoder
+
+§13.27 ended with two rows dying inside `emit_obligation` and described the next
+step: stream each obligation's record per node instead of building one JSON
+string. That is done, and this section reports what it bought and what it did
+not.
+
+**Three copies removed, all of them in the per-obligation path.**
+
+- The obligation record is written **node by node**. `Deriver.emit_obligation`
+  used to hand a dict tree to `json.dumps`, which built the whole record as one
+  string beside the tree it encoded; now `tree_json` walks the expression graph
+  and writes each node as it reaches it — `{"bvar": 3}`, `{"const": ["x", []]}`,
+  `{"app": [` … `]}` — and a module-level `_json_write_str` escapes long strings
+  in 64 KiB chunks (a chunk edge is moved off a high surrogate, so no pair is
+  split), so the two term fields never exist as one string either. Key order and
+  separators are `sort_keys=True` and the defaults: `b, id, kind, lhs, r, rhs,
+  x`, `", "` and `": "`.
+- The assumption line is written in **pieces**. On a β-reduction the line is
+  `tdefeq (tsubst {b} {x}) {r}` — three term texts, and joining them into a
+  fourth string was the copy that failed at 10 GiB. `add_axiom(*chunks)` writes
+  the pieces to the spool in order and then a newline; the retain path still
+  joins once, because the in-process callers have the memory.
+- The reduct is encoded **once**. The axiom line and the `rhs` field of the
+  obligation both need `enc.enc(strip(res))`; the call site computed it twice
+  before, holding two multi-GB copies.
+
+**The artifacts are byte-identical, not merely equivalent.** On the ChapterA3e
+sample (`.mm0` 47 306 B, `.mm1` 48 359 B, `.jsonl` 37 340 B) and on a
+932 584 058 B `FullQuadratic.fqOp.eq_1` artifact (63 MB of obligations), every
+file `cmp`s equal to the previous revision's.
+
+**The two `MemoryError` rows, re-run at 1 200 s and 10 GiB.** One still dies, one
+does not:
+
+| declaration | before | after |
+| --- | --- | --- |
+| `NsOuterFock.…singleTime` | `MemoryError` at 167 s, 9 962 MB, in the assumption f-string | `MemoryError` at 277 s, 9 988 MB, in **`Enc._enc`** |
+| `QgAssembledFlatTransfer.deficiencyTrivialAt_total_of_flat` | `MemoryError` at 853 s, 9 993 MB, in `json.dumps` of the record | **timeout at 1 201 s**, 9 789 MB — no `MemoryError` |
+
+So the record streaming and the axiom chunking did what they were for: the row
+that died in serialization now runs out its clock instead. The other row's wall
+is not in the obligation path at all — it is the **term text**: `Enc._enc` builds
+`(tapp …)` by recursing into `self.enc(fn)` and `self.enc(arg)` and formats the
+results into a new string, so one term is a string the size of its whole tree,
+and this declaration's is larger than the memory left after everything else.
+That is the next wall, and it is a different change (encoding into a spool,
+not into a string); it is not attempted here.
+
+**The four 900 s timeouts, given 5 400 s.** Three of them do not need a bigger
+clock at all — they need less memory, and the old 900 s timeout was reporting a
+clock bound for a memory wall:
+
+| declaration | new clock | outcome | peak |
+| --- | ---: | --- | ---: |
+| `YangMillsHermite.CoreRep._sizeOf_1` | 5 400 s | `MemoryError` at t=3 618 s | 9 837 MB |
+| `YmAbelianFock.coreRep_op_add` | 5 400 s | `MemoryError` at t=24 447 s | 10 111 MB |
+| `SirkPerSystem.diagKR_sirk_crouzeix_domain` | 5 400 s | `MemoryError` at t=3 277 s | 9 989 MB |
+| `KatoRellich.dense_range_add_relBounded` | 5 400 s | **still unfinished at t=5 401 s** | 7 845 MB |
+
+`dense_range_add_relBounded` is the one genuinely clock-bound row: RSS climbs
+steadily (4 668 MB at t=2 000 s with 229 051 obligations, 6 134 MB at 438 541,
+7 768 MB at 522 000 at t=5 005 s) and it was killed with memory still 2.4 GB
+under the cap. How much time it needs is not measured; a 5 400 s clock is not
+enough.
+
+**One caveat on `coreRep_op_add`, reported as measured.** Its row asked for a
+5 400 s clock and the row ran 24 447 s before the allocator gave out, so the
+clock did not bound it. `timeout` does kill this script when tried on its own
+(rc=124 on a 1 s clock applied to a 72 s row), and nothing in the emitter
+installs a signal handler, so the cause is in the harness and not in what is
+being measured; the row's *outcome* — 2 222 090 obligations, `MemoryError` at
+10 111 MB — stands either way.
+
+**`mm0-rs` on the 1.21 GiB artifact: it does not compile within 10 GiB.** Two
+runs, because the first was the wrong command:
+
+- `mm0-rs compile adjoint_aeval_typing.mm1` **as emitted** fails in 9 s with
+  `error: sort not found` on `term t_lev0: nat;` (line 10). That is not a defect
+  of the artifact: the emitter writes a *fragment*, and `scripts/lean-proof-scan`
+  prepends the two theories (`docs/cic.mm0`, `docs/cic_typing.mm0`, minus their
+  `import` lines) before any stage sees it. Fed the bare file, `mm0-rs` has no
+  sorts at all and rejects the first declaration.
+- With the theory prepended (1 351 582 571 B, 14 199 B of theory), `mm0-rs`
+  starts elaborating and **aborts after ~190 s** with `memory allocation of 112
+  bytes failed` (SIGABRT), peak RSS 10 457 MB, no `.mmb` written. So the answer to
+  "where does it stop" is: inside `elab`, at the 10 GiB cap, before the proof is
+  checked. Whether a larger cap would finish is not measured.
+
+**What is not established.** The 19 `emit` rows are still emit-only measurements.
+`mm0-rs` has now been given one artifact — the largest `emit` row there is, 410 137
+assumptions — and it does not fit in 10 GiB, so nothing in that table has been
+*judged* by a proof checker. The four clock rows are still four, and one of them
+(`dense_range_add_relBounded`) has no measured finishing time. The `nsOuterFock`
+row needs the term encoder to stream, which is not done.
+
+The measurements of this round are
+[`round3.tsv`](data/lean4mm0/round3.tsv).
