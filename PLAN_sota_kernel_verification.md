@@ -346,15 +346,33 @@ the one-word load `__slot_get` already was).
 Acceptance, measured:
 
 1. builds and runs — **met** (`make`; exit 0), and the gate above is now part of
-   `scripts/verify-invariants`. `make test` itself was not run: it needs `dune`,
-   which is not buildable here (below).
-2. obligation nodes in CPS IR — **not met, blocked**: the carrier is a compiler
-   change and `nix develop --command dune --version` fails on a missing
-   dependency in this environment, so nothing on the OCaml side can be built or
-   tested from here. The sidecar is the fallback this section already sanctions;
-   it is *not* a scope decision made here — the `[gap]` is the missing toolchain.
-3. `netcert` distinguishes a mutated kernel — **not met**, follows from 2: the
-   obligations never reach the compiler, so there is no CPS IR to ask about.
+   `scripts/verify-invariants`. `make test` — **met 2026-11-13** on a clean tree
+   (`rm -rf _build austral`): `161 tests`, 18 suites `OK`, `0 FAILED`, exit 0,
+   under `nix develop .#ocaml` (see the toolchain note below for why not `default`).
+2. obligation nodes in CPS IR — **not met, no longer blocked**: the carrier is
+   still a compiler change nothing has started on, but the OCaml side now builds
+   and tests here, so the `[gap]` that stood here is gone and this is ordinary
+   work again. The sidecar remains the fallback this section already sanctions.
+3. `netcert` distinguishes a mutated kernel — **not met, and now measured to be
+   the wrong instrument**: `netcert` compares the *symbolic expression* it parses
+   (`sym_expr_a`/`sym_expr_b` in its JSON) and does not normalize arithmetic, so
+   it reports not-equivalent for `2*(3*x + x*x)` vs `6*x + 2*x*x` and for
+   `2*f(u) - f(u)` vs `f(u)` alike:
+
+   ```
+   $ safestos/cranelift/target/release/netcert '2 * (3 * x + x * x)' '6 * x + 2 * x * x'
+   {"equivalent":false,"sym_expr_a":"(Mul64 2 (Mul64 (Add64 (Mul64 3 x) x) x))",
+    "sym_expr_b":"(Mul64 (Mul64 (Add64 (Mul64 6 x) 2) x) x)",…,"witness":null}
+    exit=1
+   ```
+
+   So as an obligation oracle it would answer *not equivalent* for every pair,
+   mutated or not — a check that cannot fail is not a check. The algebraic
+   direction is W2's (`auv2mm0 selftest` already refuses the weakened scheme,
+   item 4 above); `netcert` stays what it is good at, deciding *conversion* of
+   typing derivations (`scripts/lean-net-cert`). Recording this reassignment here
+   rather than leaving an acceptance criterion pointed at a tool that cannot meet
+   it.
 4. mutation of the subject — **met at the checker level** by
    `scripts/au2mm0 selftest`, but the mutation that bites is in **`numFlux`**, not
    `flux`: all three obligations hold for *any* physical flux, so weakening
@@ -364,6 +382,32 @@ Acceptance, measured:
    `f − f = f` false and is refused. That distinction is the useful part: these
    statements constrain the numerical scheme, and W2 must add a statement that
    constrains the constitutive law if the flux itself is to be certified.
+
+**The toolchain, measured 2026-11-13.** Getting `make test` to run on this host
+took three separate faults, and only the last is in this repo:
+
+1. `nix develop` could not realize its shell at all. The pinned channel's
+   `alt-ergo` fails inside its *own* build — `ocamlopt` reports
+   `I/O error: as --debug-prefix-map …`, i.e. no assembler is reachable in that
+   sandbox — and because `devShells.default` carries the prover, the whole shell
+   is unbuildable, taking the OCaml toolchain down with it (this host is
+   `aarch64-linux`; the failure reproduced with 36 GB free, so it is not the disk
+   that a first attempt blamed). `devShells.ocaml` is now the same nixpkgs minus
+   why3/alt-ergo/z3: `dune 3.23.1`, `OCaml 5.4.1`.
+2. Two `dune`-independent hangups: `builtins.getFlake` on this working tree copies
+   it into the store (`refi/target` alone is 14 GB), so the flake is addressed as
+   `git+file://$PWD#ocaml`; and 30 GB of `unfer/target/debug` plus 21 GB of a
+   stale `_build` had to go.
+3. `test/dune` omitted `../lib/liquid/golden/vc-fold-premises.mlw` from
+   `LiquidVCTest`'s `(deps …)`, so the golden was never staged and the test could
+   only pass on a `_build` that already contained it. Fixed; that is why the honest
+   number above comes from `rm -rf _build austral` rather than a warm tree.
+
+`dune build @runtest --force` still reports 9 failures in `LiquidVCTest`
+(`compiling … failed (exit 127)`, empty stderr) — dune re-runs those tests under
+its sandbox, where `compiler ()` computes a path to `austral.exe` the sandbox does
+not contain. `make test` (the documented entry point) does not take that path and
+is green; the forced run is recorded here so nobody mistakes it for a pass.
 
 The sidecar's JSON shape is the shape an obligation node would serialise to, so
 when the carrier lands the prover's input does not change — `defs` (named
@@ -799,7 +843,7 @@ number here would be a claim without a command.
 | sprint | workstreams | exit criterion (a command, not a feeling) |
 |---|---|---|
 | S1 | W0, W3 | `scripts/mm0-comparator` rejects all three negative controls; `lean2mm0 check` byte-identical — **met 2026-11-12** |
-| S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; the `netcert` half is blocked on the CPS-IR carrier — `nix develop --command dune --version` still fails on one dependency in this environment |
+| S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13** (fingerprint recorded, not checked; probe measured `max relative deviation 0.000e+00`) |

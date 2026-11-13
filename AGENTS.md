@@ -53,6 +53,18 @@ in-process via native `uk_*` symbols registered in the JIT.
   regenerable cache: `rm -rf _build/default/.ppx/<hash>` is safe).
   `../scripts/check-elf-interpreters` (workspace gate) catches the dead-
   loader half of this class across all repos in one scan.
+- **When `nix develop` itself will not build (measured 2026-11-13, aarch64).**
+  This channel's `alt-ergo` fails inside its own build (`ocamlopt: I/O error:
+  as --debug-prefix-map …` — no assembler reachable in that sandbox), and since
+  `devShells.default` carries the prover, the whole shell is unbuildable and no
+  `dune` command can run at all. `nix develop .#ocaml` is the same nixpkgs and the
+  same OCaml/rust/python inputs without why3/alt-ergo/z3; it is enough for
+  `make all` and `make test` (measured: 161 tests, 18 suites, 0 failures on a
+  clean `_build`) and **not** enough for anything that must *prove* —
+  `LiquidWhy3.prove` then takes its structured-skip path. Use `.#ocaml` to build,
+  `default` to prove. Address the flake as `git+file://$PWD#ocaml`: a plain path
+  makes nix copy the whole worktree (14 GB of `refi/target`) into the store
+  before it starts.
 
 ## Scripts & gates
 

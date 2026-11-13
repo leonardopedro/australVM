@@ -252,6 +252,41 @@
           inherit buildInputs;
         };
 
+        # The OCaml side of the tree — `make all`, `make test`, the CPS/JIT
+        # paths — needs no prover, and on an aarch64 host the prover half cannot
+        # be realized at all: this channel's alt-ergo fails inside its *own*
+        # build (ocamlopt reports `I/O error: as --debug-prefix-map …`, so no
+        # assembler is reachable in that sandbox), which makes `nix develop`
+        # refuse to produce any shell — including the one `make test` needs.
+        # This shell is the same nixpkgs, the same OCaml, minus why3/alt-ergo/z3,
+        # so it differs from `default` only in what it leaves out.
+        #
+        # What is lost here: `LiquidWhy3.prove` finds no prover and takes its
+        # structured-skip path, so the `.mlw` goldens that
+        # `scripts/verify-invariants` discharges with why3/z3 are not proved in
+        # this shell. Use `devShells.default` for anything that must *prove*, and
+        # this one for anything that must *build* on a host where the prover
+        # package is unbuildable.
+        devShells.ocaml = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            gmp
+            python311
+            rustc
+            cargo
+            ocamlPackages.ocaml
+            ocamlPackages.dune_3
+            ocamlPackages.findlib
+            ocamlPackages.odoc
+            ocamlPackages.yojson
+            ocamlPackages.ppx_deriving
+            ocamlPackages.ounit2
+            ocamlPackages.menhir
+            ocamlPackages.sexplib
+            ocamlPackages.ppx_sexp_conv
+            ocamlPackages.zarith
+          ];
+        };
+
         # Shell for iterating on the from-mm build: nix develop .#mm0hs
         devShells.mm0hs = pkgs.mkShell {
           packages = [ ghcEnv pkgs.alex pkgs.happy ];

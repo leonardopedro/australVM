@@ -90,7 +90,11 @@
        ../lib/liquid/golden/vc-callsite-and-invariant.mlw
        ../lib/liquid/golden/vc-operators.mlw
        ../lib/liquid/golden/vc-arithmetic.mlw
-       ../lib/liquid/golden/vc-projection.mlw))
+       ../lib/liquid/golden/vc-projection.mlw
+       ; The fold golden belongs in this list for the same reason as the other
+       ; four: it was the one left out, so the test passed only on a `_build`
+       ; that already happened to contain it and failed on every clean tree.
+       ../lib/liquid/golden/vc-fold-premises.mlw))
 
 (tests
  (names JitTest)
