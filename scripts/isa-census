@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# isa-census — which CPS instructions does a module use, and does mm0/isa.mm0
+# declare exactly what the decoder accepts?
+#
+# The measurement is taken from the bridge itself: `isa_census` compiles the
+# given CPS module through `cps::compile_cps_to_clif` (the same parser the JIT
+# uses, with a capture module so nothing executes), records every opcode the
+# decoder consumed, and diffs three sets — decoder (`ISA_REGISTRY`), artifact
+# (`mm0/isa.mm0`'s `-- op` table) and measured.
+#
+# Usage: scripts/isa-census <module.cps> [<isa.mm0>]
+# Exit:  0 covered and consistent, 1 uncovered/inconsistent, 2 could not run.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN="$ROOT/safestos/cranelift/target/release/isa_census"
+
+if [ ! -x "$BIN" ]; then
+    echo "isa-census: [gap] $BIN not built — run 'make bridge'" >&2
+    exit 2
+fi
+
+exec "$BIN" "$@"

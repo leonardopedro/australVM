@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""isa-hypotheses — every gap in mm0/isa.mm0 must be cited and pinned.
+
+W8's design says the ISA model fills in the gaps of the AustralVM proofs and
+that each gap is a *named hypothesis with a citation*. A comment saying so is
+not a check, so this script is the check:
+
+* every `-- cites: <path> sha256=<hex>` line must name a file that exists and
+  whose digest still equals the pin (as in W7's citations);
+* every `-- gap-hypothesis: <name> — <...>` line must mention `cite=` and must
+  reference an artifact listed in the `cites:` block — a hypothesis citing
+  something the file never pins is uncited in the only sense that matters;
+* every `axiom` in the file must be either covered by a gap-hypothesis line or
+  be a congruence/step axiom from the declared list (the theory itself is the
+  trusted definition; the point is that nothing *extra* sneaks in silently).
+
+Usage: scripts/isa-hypotheses [<isa.mm0>]
+Exit: 0 all cited and pinned, 1 a citation is missing/stale, 2 cannot run.
+"""
+
+import hashlib
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+DEFAULT_ISA = ROOT / "mm0" / "isa.mm0"
+
+CITE = re.compile(r"^--\s*cites:\s*(\S+)\s+sha256=([0-9a-f]{64})\s*$")
+GAP = re.compile(r"^--\s*gap-hypothesis:\s*([A-Za-z0-9_]+)\s*[—-]\s*(.*)$")
+AXIOM = re.compile(r"^\s*axiom\s+([A-Za-z0-9_]+)")
+
+# The theory's own definitions: congruence and step rules. They are trusted by
+# being read, not by being cited to an artifact, and that list is fixed here so
+# a new axiom cannot appear without a decision.
+THEORY_AXIOMS = {
+    "req_refl",
+    "req_symm",
+    "req_trans",
+    "radd_comm",
+    "radd_assoc",
+    "rmul_assoc",
+    "rmul_distrib",
+    "reg_setreg_same",
+    "reg_setreg_other",
+    "run_add_def",
+    "run_sub_def",
+    "run_mul_def",
+    "run_move_def",
+    "ir_add_sem",
+    "ir_mul_sem",
+    "ir_sub_sem",
+    "encdec",
+}
+
+
+def main(argv):
+    path = pathlib.Path(argv[1]) if len(argv) > 1 else DEFAULT_ISA
+    if not path.is_file():
+        print(f"isa-hypotheses: no such file: {path}", file=sys.stderr)
+        return 2
+    text = path.read_text()
+    problems = []
+
+    cites = {}
+    for line in text.splitlines():
+        m = CITE.match(line.strip())
+        if m:
+            cites[m.group(1)] = m.group(2)
+
+    if not cites:
+        problems.append("no `-- cites:` lines: the layer-1 hypotheses are unpinned")
+
+    for name, want in cites.items():
+        target = (ROOT / name) if not name.startswith("/") else pathlib.Path(name)
+        if not target.is_file():
+            problems.append(f"cites {name}: file is gone")
+            continue
+        got = hashlib.sha256(target.read_bytes()).hexdigest()
+        if got != want:
+            problems.append(
+                f"cites {name}: pinned {want[:12]}… does not match the artifact {got[:12]}…"
+            )
+
+    gaps = {}
+    for line in text.splitlines():
+        m = GAP.match(line.strip())
+        if m:
+            gaps[m.group(1)] = m.group(2).strip()
+
+    for name, body in gaps.items():
+        if "cite=" not in body:
+            problems.append(f"gap-hypothesis {name}: no `cite=` — uncited hypothesis")
+        cited = [c for c in cites if pathlib.Path(c).name.split(".")[0] in body]
+        # `cite=` may name a pinned artifact by basename (linearity_certificate,
+        # layout_certificate, …) or the census. A mention that matches nothing
+        # pinned is the failure the plan's "refuses an uncited one" means.
+        if "cite=" in body and not cited and "isa-census" not in body:
+            problems.append(
+                f"gap-hypothesis {name}: cites nothing pinned in this file — {body!r}"
+            )
+
+    axioms = set()
+    for line in text.splitlines():
+        m = AXIOM.match(line)
+        if m:
+            axioms.add(m.group(1))
+
+    for ax in sorted(axioms - THEORY_AXIOMS):
+        if ax not in gaps:
+            problems.append(
+                f"axiom {ax}: neither a theory axiom nor a named gap-hypothesis"
+            )
+    for ax in sorted(gaps):
+        if ax not in axioms and ax not in ("bounds_from_layout", "encdec"):
+            problems.append(f"gap-hypothesis {ax}: names no axiom in the file")
+
+    if problems:
+        for p in problems:
+            print(f"isa-hypotheses: FAIL {p}", file=sys.stderr)
+        return 1
+
+    print(
+        f"isa-hypotheses: {len(cites)} pinned citation(s), "
+        f"{len(gaps)} cited hypothesis/hypotheses, {len(axioms)} axiom(s) accounted for"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
