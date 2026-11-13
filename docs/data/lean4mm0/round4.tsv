@@ -1,0 +1,6 @@
+stage	what	budget_s	peak_mb	outcome	elapsed_s	note
+emit	NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime	1200	8798	MemoryError	31	§13.29 encoder; 67.5 M tokens held as Python strs; dies in `enc`'s join after the export indexes (8 130 166 exprs)
+emit	NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime	1200	9545	MemoryError	50	token chunks coalesced; the 1.94 GB type and value texts are resident from startup; dies writing an axiom
+emit	NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime	1200	9749	MemoryError	970	type and value spooled to disk; `b`/`x`/reduct still built as strings, the largest axiom line 2.24 GB
+emit	NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime	1200	3985	timeout	1201	§13.30: statement and substitution lines streamed; 2 189 MB resident at the clock, 9 262 axioms · 44 816 rules, no MemoryError
+clock	KatoRellich.dense_range_add_relBounded	21600	10108	MemoryError	5916	6× the clock of round 3: dies with 609 298 obligations and 2 966 164 exprs, still in `add_axiom` — the clock was never the binding resource
