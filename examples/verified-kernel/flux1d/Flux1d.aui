@@ -10,14 +10,18 @@ module Flux1d is
       * consistency — `numFlux u u = flux u`;
       * conservation — the residuals of a periodic cell cycle sum to zero,
         because the interface flux is telescoping;
-      * symmetry — `delta l r` is antisymmetric in its two arguments.
+      * symmetry — `delta l r` is antisymmetric in its two arguments;
+      * uniform state — on a uniform interface (`l = r`) the operator
+        vanishes. This is the one obligation with a *hypothesis*, so it is also
+        the one the certificate records under `-- assumed:` (an assumption is
+        what a reader cannot check inside the artifact).
 
     The same three functions are the kernel that runs: `Flux1d.aum` is the
     execution side, compiled by this compiler with no separate C and no
     separate proof text. The obligations are stated in
     `flux1d.obligations.json` (the reflected form W2 consumes); the CPS-IR
     carrier that would replace that sidecar is W1's fallback decision, recorded
-    in the plan.
+    in the plan. `mm0/flux1d_certificate` proves all four.
 
     The arithmetic is exact integer arithmetic on `Int64`. The certificates
     are over ℤ; `Int64` wraps, so every certificate carries the assumption
@@ -38,7 +42,7 @@ module Flux1d is
     function residual(prev: State, cur: State, next: State): State;
 
     """
-    Run the three obligations on one concrete state vector. This is a *test* of
+    Run the four obligations on one concrete state vector. This is a *test* of
     the spec, not its proof: it exercises the identities at a point, while the
     certificates in `mm0/flux1d_certificate` quantify over the variables.
     """

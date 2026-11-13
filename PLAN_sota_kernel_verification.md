@@ -114,11 +114,12 @@ Exact (grep/ls-verified for this plan):
 | proof-term derivation check | `scripts/lean-proof-scan`, `lean-typing-proof`, `lean-typing-check` | **exists** |
 | kernel obbligation oracle | `safestos/cranelift/.../netcert`, `uk_austral_defeq`, `scripts/lean-net-cert` | **exists** |
 | C backend | `--target-type=c` (`lib/CliParser.ml`) | **exists** |
-| symbolic (class-of-states) certificate | theory only: `docs/kernel_alg.mm0` 149 lines (`int_ring_transfer`), accepted by `mm0-rs` + `mm0-c` | **absent** (no emitter/certificate yet) |
-| **kernel-spec surface (flux algebra) in Austral** | — | **absent** |
+| symbolic (class-of-states) certificate | `mm0/flux1d_certificate.{mm0,mm1}` — 4 obligations over `docs/kernel_alg.mm0`, 15 grounded + 6 structural facts, one hypothesis eliminated by substitution, `mm0-rs` + `mm0-c` accept the `peq` chain | **exists** (flux1d; approval pending) |
+| **kernel-spec surface (flux algebra) in Austral** | `examples/verified-kernel/flux1d/` (spec + execution side, obligations sidecar) | **partial** (no CPS-IR carrier yet) |
 | comparator: approved statement vs generated | `scripts/mm0-comparator` (diff + closure hash + theory hash, 3 negative controls) | **exists** (S1); `mm0/approved/` empty on purpose |
-| **`assumed=N` budget** | printed by `lean-typing-check`, not pinned | **partial** |
-| **code fingerprint in the certificate** | — | **absent** |
+| **`assumed=N` budget** | `-- assumed:` + `-- witness:` emitted by `au2mm0`, pinned in `BUDGETS` and gated; `lean-typing-check --assumed-json` for Lean artifacts | **exists** (flux1d: `assumed=1`; lean2mm0 gap below) |
+| **code fingerprint in the certificate** | `-- code: cps=<sha256> obj=unrecorded target=host`, re-derived from `--emit-cps` bytes by `verify-invariants` | **exists, recorded not checked** (§9) |
+| **generated float probe** | `mm0/flux1d_probe.c` emitted from the certified AST; compiled and run by `verify-invariants` | **exists** (tested, not proved) |
 | **GPU codegen** | — | **absent, and out of scope (§6)** |
 
 ### §3.1 Baseline (measured 2026-11-12, before W0/W3)
@@ -188,6 +189,32 @@ With W1's example gate and `au2mm0`'s two gates wired in:
 ```
 $ bash scripts/verify-invariants 2>&1 | tail -1
 verify-invariants: 77 passed, 0 explained gap(s), 0 failed
+```
+
+### §3.3 After S4/S5 (measured 2026-11-13)
+
+```
+$ bash scripts/verify-invariants 2>&1 | tail -1
+verify-invariants: 81 passed, 1 explained gap(s), 0 failed
+  [gap] W3: flux1d_certificate has no approved statements (owner commit)
+  [pass] W1: Flux1d compiles through the CPS JIT and its four obligations hold …
+  [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically …
+  [detail] flux1d probe: 4 identit(ies), 1000 states, max relative deviation 0.000e+00
+  [pass] W6: no certificate claims a float path is proved
+
+$ grep -E "trust-split|assumed:|code:" mm0/flux1d_certificate.mm0
+-- trust-split: structural=6 grounded=15 certificates=4
+-- assumed: 1 (uniform_state: l = r (a uniform interface))
+-- code: cps=6299960658a4a79cbbe45e42a8b8ece931bc05c33f30113ef57e70dfcc95865a obj=unrecorded target=host
+
+$ cd examples/verified-kernel/flux1d && make && echo $?
+CPS JIT: Generated 5 functions (7773 bytes)
+CPS JIT: 5 functions compiled
+0
+
+$ python3 scripts/au2mm0 selftest
+au2mm0 selftest: sign flip refused; division refused as a gap; false obligation
+not emitted; new assumption refused; OK
 ```
 
 The approval queue is empty and stays empty by construction: a new artifact
@@ -300,8 +327,17 @@ obligations are `consistency` (`numFlux u u = flux u`), `conservation`
 (`delta a b + delta b c + delta c a = 0`, the telescoping cycle) and `symmetry`
 (`delta l r + delta r l = 0`). `make` compiles with the repo-root `austral` and
 runs: `main` checks all three on one state vector and exits 0; the run is gated
-by `verify-invariants` as `W1: Flux1d builds and its three obligations hold at
-the example state`.
+by `verify-invariants` as `W1: Flux1d compiles through the CPS JIT and its four
+obligations hold at the example state` (four since W4 added `uniform_state`).
+
+**Re-measured 2026-11-13:** the example now compiles and runs through
+`--use-cps-jit` — `CPS JIT: Generated 5 functions (7773 bytes)` /
+`5 functions compiled`, exit 0 — which is the same CPS the W5 fingerprint
+records. Reaching that took two bridge fixes, both found by this gate rather
+than by reading the code: the JIT had no `And`/`Or` arms (every Austral module
+that conjoints conditions was rejected as `Unknown opcode: 0x16`), and `MDeref`
+lowered to a `__deref` callee that nothing registered (the JIT now treats it as
+the one-word load `__slot_get` already was).
 
 Acceptance, measured:
 
@@ -368,8 +404,62 @@ decimal fact `peq (tint nC) <sum of ones>` (the same posture as `teval` in
 subterm positions by `peq_cong_add`/`peq_cong_mul`/`peq_cong_neg`. Coefficient
 arithmetic never appears, so `litadd`/`litmul` stay unused for this fragment.
 
-- **New theory `docs/kernel_alg.mm0`** — *written 2026-11-12*: 149 lines,
-  `mm0-rs compile` and `mm0-c` both exit 0 (4 sorts, 20 term/def, 38 ax/thm).
+- **New theory `docs/kernel_alg.mm0`** — *written 2026-11-12, extended 2026-11-12*:
+  164 lines, `mm0-rs compile` and `mm0-c` both exit 0 (4 sorts, 20 term/def,
+  44 ax/thm). The five laws added since the first draft (`padd_zero_l`,
+  `pneg_add`, `pmul_neg_l`, `pmul_neg_r`, `pneg_zero`, `pmul_zero_l`) are the
+  ones a normalizer needs to move a sign from a sum to its terms; each is an
+  identity of every commutative ring, i.e. the same standard as `padd_assoc`,
+  and the artifact header says which of them a certificate used.
+
+**Landed (2026-11-12): the first symbolic certificate.** `scripts/mm0_ring.py`
+is a proof-producing normalizer, and `scripts/au2mm0 emit` writes
+`mm0/<stem>_certificate.{mm0,mm1}`:
+
+```
+$ python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json
+au2mm0: wrote mm0/flux1d_certificate.mm0 and flux1d_certificate.mm1
+        (3 certificate(s), 2 helper(s), 15 grounded fact(s))
+au2mm0: flux1d: mm0-rs + mm0-c accepted the certificate
+$ grep trust-split mm0/flux1d_certificate.mm0
+-- trust-split: structural=5 grounded=15 certificates=3
+```
+
+(W4 superseded these numbers with a fourth obligation: the committed artifact now
+reads `-- trust-split: structural=6 grounded=15 certificates=4` and
+`-- assumed: 1`; the block above is the S3 measurement it was met on.)
+
+What that means, precisely: the three statements in
+`mm0/flux1d_certificate.mm0` are the kernel's obligations written as
+polynomial identities (`consistency`: `2·f − f = f`; `conservation`:
+the cycle residuals sum to 0; `symmetry`: `delta l r + delta r l = 0`), and
+`mm0-c` re-checks a `peq` chain for each — one ring law per step, with the
+coefficient arithmetic grounded as 15 visible `cf_` decimal facts, each
+re-checked by exact integer sampling before it is written. The chain is closed
+by the theory's single trusted `int_ring_transfer`.
+
+The proof design was validated against the root of trust *before* the
+normalizer was written: `mm0` proof applications take no term arguments, so a
+step is a bare law name (`(padd_comm)`) whose arguments unify from the statement
+being proved. The two derived lemmas the normalizer needs (`ring_swap`,
+`ring_pmul_swap`, three law applications each) are emitted as `pub theorem`s in
+the artifact, so `mm0-c` checks them too.
+
+**What W2 still owes:**
+1. **Approval.** `mm0/approved/flux1d_certificate.stmts` does not exist, so
+   `scripts/mm0-comparator check` reports `7 approved, 1 gap` and
+   `verify-invariants` carries exactly one explained gap. That is the held-out
+   review step, not a bug: the statements are the thing a reader audits.
+2. **Hypotheses.** An obligation with hypotheses is refused as a gap (exit 2),
+   not silently weakened; flux1d's three are unconditional. The theory already
+   supports the hypothesis form (`peq p q` under `rcomp` equalities).
+3. **Beyond degree-2/one state.** The prover is general in its fragment
+   (`+ − ×`, integer literals) and has no dimension limit, but no other kernel
+   exercises it yet.
+4. **The reflection step is trusted.** `mm0-c` cannot see kernel → polynomial.
+   `check` decides it twice (expansion + exact sampling) and `emit` refuses on
+   disagreement, which is the most this shape can do; a *proof* of reflection
+   needs the CPS-IR carrier of W1 acceptance 2.
   Changing it is a theory change: edit its line in `BUDGETS` in the same commit.
   Target ≤ 150 lines, defined-only except for *one* transfer rule per class:
   - `tint`, `tadd`, `tmul`, `tneg` with `teq` congruence rules — exact integer
@@ -463,6 +553,27 @@ arithmetic never appears, so `litadd`/`litmul` stay unused for this fragment.
 - **Acceptance:** raising `assumed` without editing `BUDGETS` fails
   `verify-invariants`; a mutation adds one assumed leaf and is refused.
 
+**Landed 2026-11-13.** `flux1d.obligations.json` gained `uniform_state`
+(`l = r ⇒ delta l r = 0`), the first obligation with a non-empty `hypotheses`
+array. `au2mm0` eliminates such a hypothesis by *substitution on the locus*:
+solve `a = b` for a variable that occurs in no other monomial with integer
+coefficients (else `[gap]`), substitute into both sides, and count the surviving
+hypothesis set as `assumed`. A hypothesis the prover cannot eliminate is counted
+and pinned, never assumed silently; `BUDGETS["flux1d"]` is now
+`{structural: 6, grounded: 15, certificates: 4, assumed: 1}`, and
+`verify-invariants` refuses a rise without the pin. Each obligation also emits
+`-- witness: l=1 r=1`, found by grid search over
+`HYPOTHESIS_GRID = (1, 0, -1, 2, -2, 3)`; a grid miss is reported as a `[gap]`
+("may be vacuous"), not as a claim that no witness exists. The fourth selftest
+anchor covers this path.
+
+**Open:** `lean2mm0` still emits no `-- assumed:` line, because its inputs carry
+no assumed leaves to count (`mm0_emit.assumed_line` is the helper it would call,
+and `lean-typing-check --assumed-json` is the source it would read). Measured
+example: `lean-typing-check --assumed-json mm0/proto/_simp_1_1_typing.mm1` ⇒
+`count=1 names=['ax_body']`. Wiring it into `lean2mm0` is a one-line gate but
+needs a Lean module whose export actually contains an `assumed` leaf.
+
 ### W5 — Narrow the TCB: code fingerprint in the certificate  *(1 week)*
 
 **Why:** AlphaProof's strongest claim is that the proof is about the bytes that
@@ -483,6 +594,25 @@ gap *legible and checkable*.
   status line says `code-drift`. A semantics-changing edit ⇒ `netcert` says
   *not equivalent* ⇒ certificate refused.
 
+**Landed 2026-11-13 (recorded route).** `au2mm0 emit … --code <cps> --target …`
+writes
+
+```
+-- code: cps=62999606…95865a obj=unrecorded target=host
+-- code-status: recorded (cps = sha256 of the --emit-cps bytes); obj unrecorded — no object file is written by this path
+```
+
+`verify-invariants` re-derives the CPS with
+`austral compile … --use-cps-jit --emit-cps=<tmp>` and re-emits; the digest is
+byte-stable across runs (same sha256 twice, 7,773 bytes, 5 functions), so a
+certificate whose kernel moved fails the gate. `target=host` rather than
+`uname -m` keeps the committed artifact host-neutral.
+
+**Open:** the object hash is unrecorded, and being *recorded* rather than
+*checked*, no artifact yet demonstrates the `code-drift` acceptance experiment.
+Both need a CPS-IR-level entry point in the bridge (a new `uk_*` symbol and a
+full S29 checklist); the measured cost is the decision point §9 records.
+
 ### W6 — The float gap, stated instead of hidden  *(2–3 days)*
 
 - The C backend (`--target-type=c`) and the JIT path both emit, from the *same*
@@ -494,6 +624,23 @@ gap *legible and checkable*.
   otherwise; the wording is gated by `scripts/check-todo-ledger`-style string
   check in `verify-invariants` (a claim that says "proved" next to a float path
   fails the gate).
+
+**Landed 2026-11-13.** `au2mm0` renders `mm0/flux1d_probe.c` from the *same*
+post-substitution AST as the `peq` chain (one `c_expr` renderer, both consumers),
+with the `float-gap:` line in the certificate header and
+`* Status: tested-not-proved. … this says what was tested.` in the probe's own
+header. 1,000 states. Measured:
+
+```
+$ cc -O2 -o /tmp/probe mm0/flux1d_probe.c -lm && /tmp/probe
+flux1d probe: 4 identit(ies), 1000 states, max relative deviation 0.000e+00
+```
+
+`verify-invariants` compiles and runs the probe (a missing `cc` is a `[gap]`,
+never a pass), compares the emitted source byte-for-byte with the committed one,
+and runs the claim-string check: every `mm0/*_certificate.mm0` is scanned for a
+line containing both "float" and "proved" unless it also says
+not-proved/unproved/tested-not-proved.
 
 ### W7 — Question answering over the kernel corpus  *(1–2 weeks, last)*
 
@@ -521,12 +668,12 @@ CNL feature and should be written into its README before anything else here.
 | sprint | workstreams | exit criterion (a command, not a feeling) |
 |---|---|---|
 | S1 | W0, W3 | `scripts/mm0-comparator` rejects all three negative controls; `lean2mm0 check` byte-identical — **met 2026-11-12** |
-| S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**; the `netcert` half is blocked on the CPS-IR carrier (no buildable `dune` toolchain here) |
-| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned |
-| S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated |
-| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green |
+| S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; the `netcert` half is blocked on the CPS-IR carrier — `nix develop --command dune --version` still fails on one dependency in this environment |
+| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
+| S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
+| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13** (fingerprint recorded, not checked; probe measured `max relative deviation 0.000e+00`) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` |
-| S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers |
+| S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W6 2026-11-13 (§3.3)**; the W7 row's scripts exist but its corpus lives in the sibling `unfer` repo and has no kernel-content sentences yet |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated
@@ -571,7 +718,7 @@ statements and defeat the purpose.
 | item | trusted before | trusted after | note |
 |---|---|---|---|
 | `mm0-c` | yes | yes | unchanged, ~frozen |
-| theory lines (`cic.mm0` + …) | 484 | 484 + ≤150 (`kernel_alg.mm0`) | pinned by `BUDGETS` |
+| theory lines (`cic.mm0` + …) | 484 | 484 + 164 (`kernel_alg.mm0`) | pinned by `BUDGETS` |
 | `int_ring_transfer` | — | **yes** | one rule, one review, hash-pinned |
 | generated certificates | no | no | re-checked, never trusted |
 | `mm0/approved/*.stmts` | — | **yes** | this is the statement of record |

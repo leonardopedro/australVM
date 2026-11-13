@@ -104,6 +104,61 @@ def coverage_line(body: str, signature_terms=None) -> str:
             f"unused={','.join(unused) or '-'}")
 
 
+def assumed_line(names) -> str:
+    """`-- assumed: N (a, b)` — the leaves the artifact does not prove.
+
+    Read by scripts/verify-invariants and pinned in `BUDGETS`, because `assumed`
+    is the part of the trust budget a reader cannot check inside the file: the
+    proof would verify just as well with one more assumption behind it.
+    """
+    names = list(names)
+    return f"-- assumed: {len(names)} ({', '.join(names) if names else '-'})"
+
+
+def witness_line(obligation: str, values: dict, hypotheses: int) -> str:
+    """One concrete state meeting an obligation's hypotheses (W4 vacuity check).
+
+    An obligation whose hypotheses cannot be met holds for the wrong reason, and
+    no proof inside the artifact can show that it can. Exhibiting a state is the
+    cheap version of the satisfiability obligation; on a state vector of this
+    size it costs one grid search.
+    """
+    state = " ".join(f"{k}={v}" for k, v in values.items())
+    return (f"-- witness: {obligation}: {state or '-'} meets all "
+            f"{hypotheses} hypothesis/hypotheses")
+
+
+def code_line(cps: str, obj: str, target: str) -> str:
+    """`-- code:` — which bytes the certificate is about (W5).
+
+    The certificate quantifies over polynomials; `docs/kernel_alg.mm0` cannot
+    see the program. Recording the CPS IR (and, when a path writes one, the
+    object) makes the gap *legible*: a reader can diff the fingerprint against a
+    rebuild instead of trusting that "the kernel" means what it meant. It is
+    recorded, not checked — promoting it would need a `uk_*` symbol and the full
+    checklist, which is the §9 decision point of the plan.
+    """
+    return f"-- code: cps={cps} obj={obj} target={target}"
+
+
+def code_status_line(status: str) -> str:
+    return f"-- code-status: {status}"
+
+
+def float_gap_line(probe: str, tolerance: str = "1e-8",
+                   status: str = "tested-not-proved") -> str:
+    """`-- float-gap:` — the idealization, stated instead of hidden (W6).
+
+    Every certificate here is an identity over ℤ; a kernel that runs in IEEE
+    double is a *different* claim, and no amount of `mm0-c` output moves it. The
+    probe named here is generated from the same reflected expression the `peq`
+    chain was built from, so the test cannot drift from the proof by hand — but
+    it is a test, and the status says so in the artifact.
+    """
+    return (f"-- float-gap: idealization=integer exact probe={probe} "
+            f"tolerance={tolerance} status={status}")
+
+
 def pinned_split(stem: str, budgets: dict, actual: dict) -> dict:
     """Refuse a trust split that drifted from its pinned row.
 

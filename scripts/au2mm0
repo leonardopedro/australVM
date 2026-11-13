@@ -14,11 +14,12 @@ they disagree. One route is symbolic (expand to a coefficient dict); the other
 evaluates both sides at deterministic points with exact Python integers, so a
 bug in the expansion shows up as a disagreement rather than as a certificate.
 
-WHAT THIS DOES NOT DO. `emit` is not implemented yet: a certificate needs a
-proof chain (`peq` steps justified one ring law at a time), and the prover that
-builds it is W2's main body of work. `emit` therefore refuses with exit 2 rather
-than writing an unchecked statement; `check` is complete and is what W1's
-mutation test uses.
+TWO COMMANDS. `check` decides the obligations. `emit` writes
+`mm0/<stem>_certificate.{mm0,mm1}`: a certificate over `docs/kernel_alg.mm0`
+whose proof is a `peq` chain produced by `scripts/mm0_ring` (one ring law per
+step, coefficient arithmetic grounded as visible decimal facts), closed by the
+theory's single trusted `int_ring_transfer` rule. When `mm0-rs` and `mm0-c` are
+on `PATH`, `emit` re-checks its own artifact before claiming success.
 
 EXIT CODES
   0  every obligation is an identity, both routes agree
@@ -29,10 +30,41 @@ EXIT CODES
 
 from __future__ import annotations
 
+import contextlib
+import io
+import itertools
 import json
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
+# W0: declaration rendering, coverage/trust-split lines and the spec/proof
+# parity check live in scripts/mm0_emit.py; the prover itself in mm0_ring.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mm0_emit import (  # noqa: E402  (sibling modules, not a package)
+    assumed_line,
+    axiom,
+    code_line,
+    code_status_line,
+    check_proof_refs,
+    check_spec_proof_parity,
+    coverage_line,
+    float_gap_line,
+    numeral_lines,
+    pub_theorem,
+    render,
+    theorem,
+    trust_split_line,
+    witness_line,
+)
+import mm0_ring  # noqa: E402
+
+AVM = Path(__file__).resolve().parent.parent
+THEORY = AVM / "docs" / "kernel_alg.mm0"
+OUT_DIR = AVM / "mm0"
 MAX_DEPTH = 64
 SAMPLE_POINTS = [(-3, 2, 5), (0, 0, 0), (7, -1, 11), (1, 1, 1)]
 
@@ -174,6 +206,224 @@ def evaluate(node, values: dict) -> int:
     return left * right
 
 
+# A hypothesis is a constraint on the state, so the witness search is a grid
+# over component values; 6^4 is 1296 states, small enough to be exhaustive.
+HYPOTHESIS_GRID = (1, 0, -1, 2, -2, 3)
+MAX_WITNESS_STATES = 4096
+
+
+def poly_ast(poly: dict, vars_: list[str]):
+    """A reflected AST for a coefficient dict indexed by `vars_`."""
+    acc = None
+    for exps, coeff in sorted(poly.items(), key=lambda kv: (sum(kv[0]), kv[0])):
+        if coeff == 0:
+            continue
+        factors = [("var", vars_[i])
+                   for i, e in enumerate(exps) for _ in range(e)]
+        if not factors:
+            term = ("int", coeff)          # constant term
+        else:
+            folded = factors[0]
+            for factor in factors[1:]:
+                folded = ("mul", folded, factor)
+            # Write unit coefficients as the variable itself: a reader auditing
+            # the statement should see `x0`, not `1 * x0`.
+            term = (folded if coeff == 1 else
+                    ("neg", folded) if coeff == -1 else
+                    ("mul", ("int", coeff), folded))
+        acc = term if acc is None else ("add", acc, term)
+    return ("int", 0) if acc is None else acc
+
+
+def subst_ast(node, var_name: str, replacement):
+    tag = node[0]
+    if tag == "int":
+        return node
+    if tag == "var":
+        return replacement if node[1] == var_name else node
+    if tag == "neg":
+        return ("neg", subst_ast(node[1], var_name, replacement))
+    return (tag, subst_ast(node[1], var_name, replacement),
+            subst_ast(node[2], var_name, replacement))
+
+
+def eliminate_hypothesis(hyp, env: dict, defs: dict, vars_: list[str]):
+    """Solve `a = b` for one variable: (label, variable, replacement) or None.
+
+    MM0 theorems carry no hypotheses — a theorem's statement is a single
+    `$ … $` — so the theory's way to say "on the locus where a = b" is to
+    *substitute* the solved variable into both sides. On that locus `x = t`
+    makes `p` and `p[x := t]` the same function, so the substituted identity is
+    exactly the obligation restricted to the locus. Complete for the shapes a
+    kernel uses (an interface condition equating two components); anything else
+    is a gap, never a dropped hypothesis — a certificate that ignored one would
+    claim more than the kernel does.
+    """
+    names = {v: i for i, v in enumerate(vars_)}
+    try:
+        poly = expand(("sub", reflect(hyp["lhs"], env, defs),
+                       reflect(hyp["rhs"], env, defs)), names)
+    except KeyError:
+        raise Malformed("a hypothesis mentions a variable that is not in `vars`")
+    linear = [key for key in poly if sum(key)]
+    if not linear:
+        if poly.get(tuple(0 for _ in vars_), 0) != 0:
+            raise RingGap("hypothesis is unsatisfiable (a nonzero constant = 0)")
+        return None                       # 0 = 0: nothing to eliminate
+    # Solvable iff the equation is linear in a pivot variable that appears in
+    # no other monomial: then `x_i = -rest / c` is a graph over the locus, and
+    # substituting it loses nothing. `l = r` qualifies (pivot `l`); a degree-2
+    # constraint does not, and is a gap rather than a guess.
+    pivot = None
+    for key in poly:
+        appearing = [j for j, e in enumerate(key) if e]
+        if len(appearing) != 1:
+            continue
+        index = appearing[0]
+        if key[index] != 1 or poly[key] == 0:
+            continue
+        if sum(1 for other in poly if other[index]) != 1:
+            continue
+        pivot = key
+        break
+    if pivot is None:
+        raise RingGap("hypothesis is not linear in a variable it alone "
+                      "constrains; eliminating a general constraint needs "
+                      "ideal arithmetic")
+    key = pivot
+    coeff = poly[key]
+    rest = {k: v for k, v in poly.items() if k != key}
+    if any(value % coeff for value in rest.values()):
+        raise RingGap(f"hypothesis solves to {vars_[index]} = …/{coeff}; "
+                      "only integer-coefficient elimination is exact")
+    solved = {k: -value // coeff for k, value in rest.items()}
+    label = hyp.get("label")
+    if not label:
+        label = f"{vars_[index]} = {symbol(poly_ast(solved, vars_), {})}"
+    return (label, vars_[index], poly_ast(solved, vars_))
+
+
+def apply_hypotheses(obligation: dict, env: dict, defs: dict,
+                     vars_: list[str]) -> tuple:
+    """Substitute every declared hypothesis: (lhs, rhs, labels used)."""
+    lhs = reflect(obligation["lhs"], env, defs)
+    rhs = reflect(obligation["rhs"], env, defs)
+    assumed = []
+    for hyp in obligation.get("hypotheses") or []:
+        solved = eliminate_hypothesis(hyp, env, defs, vars_)
+        if solved is None:
+            continue
+        label, var_name, replacement = solved
+        assumed.append(label)
+        lhs = subst_ast(lhs, var_name, replacement)
+        rhs = subst_ast(rhs, var_name, replacement)
+    return lhs, rhs, assumed
+
+
+def find_witness(obligation: dict, env: dict, defs: dict,
+                 vars_: list[str]) -> dict:
+    """Exhibit one state meeting every hypothesis — W4's vacuity check.
+
+    An obligation whose hypotheses cannot be met holds for the wrong reason, and
+    nothing inside the artifact can show otherwise; the cheapest honest answer is
+    a concrete state. A grid miss is reported as a gap, not as unsatisfiability:
+    the grid is a search, not a decision procedure.
+    """
+    pairs = [(reflect(hyp["lhs"], env, defs), reflect(hyp["rhs"], env, defs))
+             for hyp in obligation.get("hypotheses") or []]
+    if not pairs:
+        return {v: 0 for v in vars_}
+    space = len(HYPOTHESIS_GRID) ** len(vars_)
+    if space > MAX_WITNESS_STATES:
+        raise RingGap(f"witness search space too large ({space} states); "
+                      "give the obligation an explicit `witness`")
+    for combo in itertools.product(HYPOTHESIS_GRID, repeat=len(vars_)):
+        values = dict(zip(vars_, combo))
+        if all(evaluate(a, values) == evaluate(b, values) for a, b in pairs):
+            return values
+    raise RingGap("no state on the sampled grid meets the hypotheses — the "
+                  "obligation may be vacuous")
+
+
+# The probe's sample count and tolerance are in the artifact header, not only in
+# this file: a test whose strength is unpublished is indistinguishable from a
+# formality.
+PROBE_STATES = 1000
+PROBE_TOLERANCE = "1e-8"
+
+
+def c_expr(node, rename: dict) -> str:
+    """Render a reflected expression as C99 `double` infix code.
+
+    `rename` gives every sample its own C identifier: two obligations may both
+    quantify over a variable called `l`, and a probe with two `double l`s in one
+    scope is a compile error, not a test.
+    """
+    tag = node[0]
+    if tag == "int":
+        return f"{node[1]}.0"
+    if tag == "var":
+        return rename[node[1]]
+    if tag == "neg":
+        return f"(-{c_expr(node[1], rename)})"
+    spin = {"add": "+", "sub": "-", "mul": "*"}[tag]
+    return f"({c_expr(node[1], rename)} {spin} {c_expr(node[2], rename)})"
+
+
+def render_probe(stem: str, entries: list[tuple], source: Path) -> str:
+    """A generated C99 validity probe, from the certified expressions (W6).
+
+    Same reflected AST the `peq` chain was built from — after the same
+    hypothesis substitution — so the test cannot drift from the proof the way a
+    hand-written check would. It is a *test*: it samples double-precision states
+    and reports the worst relative deviation, and the artifact's `-- float-gap:`
+    line says exactly that. Nothing here upgrades to a proof of the float
+    behaviour, and no artifact may claim it does.
+    """
+    lines = [
+        f"/* {stem}_probe.c — generated by scripts/au2mm0; do not edit.",
+        f" * Source: {source.relative_to(AVM) if source.is_relative_to(AVM) else source}",
+        f" * {len(entries)} identit(ies), {PROBE_STATES} sampled states, tolerance "
+        f"{PROBE_TOLERANCE}.",
+        " * Status: tested-not-proved. A certificate over the integers says",
+        " * nothing about IEEE double rounding; this says what was tested. */",
+        "#include <math.h>",
+        "#include <stdio.h>",
+        "",
+        "static double lcg(unsigned long long *s) {",
+        "    *s = (*s * 6364136223846793005ULL) + 1442695040888963407ULL;",
+        "    return -2.0 + 4.0 * ((double)((*s >> 11) & 0xFFFFFF) / 16777216.0);",
+        "}",
+        "",
+        "int main(void) {",
+        "    unsigned long long seed = 12345ULL;",
+        "    double worst = 0.0;",
+        f"    for (int t = 0; t < {PROBE_STATES}; ++t) {{",
+    ]
+    for index, (name, vars_, lhs, rhs) in enumerate(entries):
+        rename = {var: f"{var}_{index}" for var in vars_}
+        for renamed in rename.values():
+            lines.append(f"        double {renamed} = lcg(&seed);")
+        lines.append(f"        /* {name} */")
+        lines.append("        {")
+        lines.append(f"            double lhs = {c_expr(lhs, rename)};")
+        lines.append(f"            double rhs = {c_expr(rhs, rename)};")
+        lines.append("            double scale = 1.0 + fabs(lhs) + fabs(rhs);")
+        lines.append("            double rel = fabs(lhs - rhs) / scale;")
+        lines.append("            if (rel > worst) worst = rel;")
+        lines.append("        }")
+    lines += [
+        "    }",
+        f'    printf("{stem} probe: %d identit(ies), {PROBE_STATES} states, '
+        'max relative deviation %.3e\\n", '
+        f'{len(entries)}, worst);',
+        f"    return worst <= {PROBE_TOLERANCE} ? 0 : 1;",
+        "}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def check(doc: dict) -> tuple[int, list[str]]:
     defs = {}
     for entry in doc["defs"]:
@@ -186,14 +436,18 @@ def check(doc: dict) -> tuple[int, list[str]]:
         vars_ = obligation.get("vars", [])
         try:
             env = {v: ("var", v) for v in vars_}
-            lhs = reflect(obligation["lhs"], env, defs)
-            rhs = reflect(obligation["rhs"], env, defs)
+            lhs, rhs, assumed = apply_hypotheses(obligation, env, defs, vars_)
             # Variable order is the obligation's own `vars` list, so the
             # exponent tuples have a fixed width and every name is registered
             # before expansion (an unregistered name is a reflection bug).
             names = {v: i for i, v in enumerate(vars_)}
             poly_l = expand(lhs, names)
             poly_r = expand(rhs, names)
+            witness = find_witness(obligation, env, defs, vars_)
+        except RingGap as err:
+            lines.append(f"  [gap]  {name}: {err}")
+            gaps += 1
+            continue
         except OutOfFragment as err:
             # A gap is the only way to say "could not decide"; it is never a pass
             # and never a failure of the obligation.
@@ -223,10 +477,293 @@ def check(doc: dict) -> tuple[int, list[str]]:
                 failures += 1
                 break
         else:
+            under = ""
+            if assumed:
+                under = (f" under {len(assumed)} hypothesis/hypotheses "
+                         f"({'; '.join(assumed)}), witness "
+                         + " ".join(f"{k}={v}" for k, v in witness.items()))
             lines.append(
                 f"  [ok]   {name}: {obligation.get('statement', '')} "
-                f"(lhs-rhs = 0 over {len(vars_)} variable(s))")
+                f"(lhs-rhs = 0 over {len(vars_)} variable(s){under})")
     return failures, lines, gaps
+
+
+# ── emission (W2) ────────────────────────────────────────────────────────
+
+# The theory's own numerals are n0/n1; artifacts declare the rest.
+BASE_NUMERALS = {0, 1}
+
+# The terms a symbolic kernel certificate can mention, in the order the artifact
+# reports them (as with SIGNATURE_TERMS in scripts/mm0_emit.py).
+KERNEL_TERMS = [
+    "tint", "pvar", "padd", "pmul", "pneg", "peq", "ev", "req",
+    "rcomp", "radd", "rmul", "rneg", "rlit",
+]
+
+# The two derived lemmas the prover needs. Both are three law applications; a
+# certificate that quietly stopped proving them would lose the reordering step
+# its `peq` chain is built from, so they are emitted as `pub theorem`s that
+# mm0-c re-checks rather than assumed.
+HELPERS = [
+    ("ring_swap", "(a b r: Poly)",
+     "$ peq (padd b (padd a r)) (padd a (padd b r)) $",
+     "(peq_trans (peq_symm (padd_assoc)) "
+     "(peq_trans (peq_cong_add (padd_comm) (peq_refl)) (padd_assoc)))"),
+    ("ring_pmul_swap", "(a b r: Poly)",
+     "$ peq (pmul b (pmul a r)) (pmul a (pmul b r)) $",
+     "(peq_trans (peq_symm (pmul_assoc)) "
+     "(peq_trans (peq_cong_mul (pmul_comm) (peq_refl)) (pmul_assoc)))"),
+]
+
+# Trust splits are contracts, not statistics: a certificate that moved proof
+# work into `grounded` would still verify, so the movement must be refused. Pin
+# the numbers here, in the same commit as any intended change.
+BUDGETS: dict[str, dict] = {
+    # W4: `assumed` is the count of hypotheses the certificate did not prove
+    # (each one is used by substitution, and the artifact names it), and
+    # `structural` grew by one when `uniform_state` joined the obligation set.
+    "flux1d": {"structural": 6, "grounded": 15, "certificates": 4,
+               "assumed": 1},
+}
+
+
+def to_ring(node, names: dict):
+    """Map the reflected Austral AST onto the prover's term syntax."""
+    tag = node[0]
+    if tag == "int":
+        return mm0_ring.lit(node[1])
+    if tag == "var":
+        return mm0_ring.var(names[node[1]])
+    if tag == "add":
+        return mm0_ring.add(to_ring(node[1], names), to_ring(node[2], names))
+    if tag == "mul":
+        return mm0_ring.mul(to_ring(node[1], names), to_ring(node[2], names))
+    if tag == "neg":
+        return mm0_ring.neg(to_ring(node[1], names))
+    if tag == "sub":
+        # `psub a b` is a def for `padd a (pneg b)`: the certificate spells the
+        # definition out so every step is a law of the theory.
+        return mm0_ring.add(to_ring(node[1], names),
+                            mm0_ring.neg(to_ring(node[2], names)))
+    raise ring_gap(f"operator {tag!r} has no polynomial model")
+
+
+class RingGap(Exception):
+    """An obligation the prover does not cover; reported as a gap, not a pass."""
+
+
+def ring_gap(message: str):
+    return RingGap(message)
+
+
+def emit(doc: dict, stem: str, source: Path, out_dir: Path | None = None,
+         code_path: Path | None = None, target: str = "host") -> int:
+    theory_lines = THEORY.read_text().splitlines()
+    prover = mm0_ring.Prover()
+    obligations = []
+    gaps = []
+    assumed_all: list[str] = []
+    witnesses: list[str] = []
+    probe_entries: list[tuple] = []
+    for obligation in doc["obligations"]:
+        name = obligation.get("name", "<unnamed>")
+        vars_ = obligation.get("vars", [])
+        names = {v: i for i, v in enumerate(vars_)}
+        defs = {}
+        for entry in doc["defs"]:
+            defs[entry["name"]] = (list(entry.get("params", [])), entry.get("body"))
+        try:
+            env = {v: ("var", v) for v in vars_}
+            # A hypothesis is eliminated by substitution, so `lhs`/`rhs` here are
+            # the obligation restricted to its locus; the header records what was
+            # assumed, and the witness records that the locus is inhabited.
+            lhs_ast, rhs_ast, assumed = apply_hypotheses(
+                obligation, env, defs, vars_)
+            witness = find_witness(obligation, env, defs, vars_)
+            lhs = to_ring(lhs_ast, names)
+            rhs = to_ring(rhs_ast, names)
+        except RingGap as err:
+            gaps.append(f"{name}: {err}")
+            continue
+        except OutOfFragment as err:
+            gaps.append(f"{name}: {err}")
+            continue
+        except RingGap as err:
+            gaps.append(f"{name}: {err}")
+            continue
+        seq_l, proof_l = prover.normalize(lhs)
+        seq_r, proof_r = prover.normalize(rhs)
+        if seq_l != seq_r:
+            print(f"au2mm0: {name}: the two sides normalize differently "
+                  f"({seq_l} vs {seq_r}) — refusing to emit", file=sys.stderr)
+            return 1
+        peq = f"(peq_trans {proof_l} (peq_symm {proof_r}))"
+        statement = (" (s: nat)",
+                     f"$ req (ev {mm0_ring.text(lhs)} s) "
+                     f"(ev {mm0_ring.text(rhs)} s) $",
+                     f"(int_ring_transfer {peq})")
+        obligations.append((name, statement))
+        probe_entries.append((name, list(vars_), lhs_ast, rhs_ast))
+        if assumed:
+            assumed_all.extend(f"{name}: {label}" for label in assumed)
+            witnesses.append(witness_line(
+                name, witness, len(obligation.get("hypotheses") or [])))
+
+    if gaps:
+        for gap_message in gaps:
+            print(f"au2mm0: [gap] {stem}: {gap_message}", file=sys.stderr)
+        print("au2mm0: emit refuses when an obligation is outside the prover's "
+              "fragment — a certificate with a hole in it is worse than none",
+              file=sys.stderr)
+        return 2
+
+    # The statement file and the proof file must differ only in `pub ` and the
+    # proof tail; `check_spec_proof_parity` is what enforces that, so both lists
+    # are built from the same entries.
+    entries: list[tuple[str, str]] = []      # (statement line, proof line)
+    for (name, binder, math, proof) in HELPERS:
+        entries.append((_spec(name, binder, math), _pub(name, binder, math, proof)))
+    for (name, stmt) in prover.facts:
+        line = f"axiom {name}: {stmt};"
+        entries.append((line, line))
+    for (name, (binder, math, proof)) in obligations:
+        entries.append((_spec(name, binder, math), _pub(name, binder, math, proof)))
+
+    spec_body = [a for (a, _) in entries]
+    proof_body = [b for (_, b) in entries]
+    text_for_numbers = "\n".join(spec_body)
+    numerals = {int(n) for n in re.findall(r"\bn(\d+)\b", text_for_numbers)}
+    numerals -= BASE_NUMERALS
+
+    structural = len(HELPERS) + len(obligations)
+    grounded = len(prover.facts)
+    certificates = len(obligations)
+    actual = {"structural": structural, "grounded": grounded,
+              "certificates": certificates, "assumed": len(assumed_all)}
+    budget = BUDGETS.get(stem)
+    if budget is not None and budget != actual:
+        print(f"au2mm0: {stem}: trust split {actual} drifted from the pinned "
+              f"{budget} — movement toward `grounded` means mm0-c checks less "
+              f"of this certificate; if that is intended, edit BUDGETS in "
+              f"scripts/au2mm0 in the same commit and say why here",
+              file=sys.stderr)
+        return 1
+
+    header = [
+        f"-- kernel certificate — {stem} (generated by scripts/au2mm0).",
+        "--",
+        f"-- Source: {source.relative_to(AVM)} "
+        f"(sha256 {sha256(source)})",
+        f"-- Theory: docs/kernel_alg.mm0 (sha256 {sha256(THEORY)})",
+        "--",
+        "-- What is claimed: every obligation of the kernel is an identity in",
+        "-- the free commutative ring on the state's components, proved here as",
+        "-- a `peq` chain and carried to the numeric domain by the theory's",
+        "-- single trusted bridge (`int_ring_transfer`). Variable `nj` is",
+        "-- component j of the state: `ev (pvar nj) s` is `rcomp s j`.",
+        "--",
+        "-- What is NOT claimed: that a real-valued kernel evaluates this way.",
+        "-- Reflection (kernel source -> these polynomials) is trusted, and the",
+        "-- artifact's statements are what a reader audits: `consistency`,",
+        "-- `conservation`, `symmetry` are the kernel's own obligations, not",
+        "-- this emitter's paraphrase of them.",
+        "--",
+        "-- Coefficients are not expanded to repeated summands: each literal",
+        "-- combination is a visible `cf_` fact, counted `grounded` below and",
+        "-- re-checked by exact integer sampling before it is written.",
+        "--",
+        trust_split_line(stem, structural, grounded, certificates),
+        coverage_line("\n".join(spec_body), KERNEL_TERMS),
+        assumed_line(assumed_all),
+        *witnesses,
+        code_line("unrecorded" if code_path is None else sha256(code_path),
+                  "unrecorded", target),
+        code_status_line(
+            "recorded (cps = sha256 of the --emit-cps bytes); obj unrecorded — "
+            "no object file is written by this path" if code_path is not None
+            else "unrecorded (no --code bytes supplied; the kernel is named "
+                 "only by the Source: digest)"),
+        float_gap_line(f"mm0/{stem}_probe.c"),
+        "",
+    ]
+
+    shared = header + theory_lines + [""] + numeral_lines(numerals) + [""]
+    mm0_lines = shared + spec_body + [""]
+    mm1_lines = shared + proof_body + [""]
+
+    try:
+        check_spec_proof_parity(mm0_lines, mm1_lines)
+        check_proof_refs(mm1_lines, builtin_refs=())
+    except Exception as err:                     # EmitError, both checks
+        print(f"au2mm0: {stem}: {err}", file=sys.stderr)
+        return 1
+
+    out_dir = OUT_DIR if out_dir is None else out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    mm0_path = out_dir / f"{stem}_certificate.mm0"
+    mm1_path = out_dir / f"{stem}_certificate.mm1"
+    probe_path = out_dir / f"{stem}_probe.c"
+    mm0_path.write_text(render(mm0_lines))
+    mm1_path.write_text(render(mm1_lines))
+    probe_path.write_text(render_probe(stem, probe_entries, source))
+    shown = mm0_path if out_dir != OUT_DIR else mm0_path.relative_to(AVM)
+    print(f"au2mm0: wrote {shown}, {mm1_path.name} and {probe_path.name} "
+          f"({certificates} certificate(s), {structural - certificates} "
+          f"helper(s), {grounded} grounded fact(s))")
+    return verify_emitted(mm0_path, mm1_path, stem)
+
+
+def sha256(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_emitted(mm0_path: Path, mm1_path: Path, stem: str) -> int:
+    """Re-check the artifact with the root of trust when it is installed."""
+    rs = _tool("MM0_RS", "mm0-rs")
+    mc = _tool("MM0_C", "mm0-c")
+    if not rs or not mc:
+        print("au2mm0: mm0-rs/mm0-c not on PATH — artifact written but NOT "
+              "re-checked here (verified by scripts/verify-invariants where "
+              "the toolchain exists)")
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        mmb = Path(tmp) / "cert.mmb"
+        proc = subprocess.run([rs, "compile", str(mm1_path), str(mmb)],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            print(f"au2mm0: {stem}: mm0-rs refused the proof:\n"
+                  f"{proc.stdout}{proc.stderr}", file=sys.stderr)
+            return 1
+        proc = subprocess.run([mc, str(mmb)], stdin=open(mm0_path),
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            print(f"au2mm0: {stem}: mm0-c refused the artifact:\n"
+                  f"{proc.stdout}{proc.stderr}", file=sys.stderr)
+            return 1
+    print(f"au2mm0: {stem}: mm0-rs + mm0-c accepted the certificate")
+    return 0
+
+
+def _tool(env: str, name: str) -> str | None:
+    import os
+    if os.environ.get(env):
+        return os.environ[env]
+    found = shutil.which(name)
+    if found:
+        return found
+    for cand in (Path.home() / ".local/bin" / name,):
+        if cand.exists():
+            return str(cand)
+    return None
+
+
+def _spec(name, binder, math):
+    return f"theorem {name}{binder}: {math};"
+
+
+def _pub(name, binder, math, proof):
+    return f"pub theorem {name}{binder}: {math} = '{proof};"
 
 
 def main(argv: list[str]) -> int:
@@ -243,18 +780,38 @@ def main(argv: list[str]) -> int:
     if len(argv) < 3:
         print(f"au2mm0: {command} needs an obligations file", file=sys.stderr)
         return 3
+    out_dir, code_path, target = None, None, "host"
+    rest = argv[3:]
+    while rest:
+        option, rest = rest[0], rest[1:]
+        if option not in ("--out", "--code", "--target") or not rest:
+            print(f"au2mm0: unknown option {option!r} "
+                  f"(only --out, --code, --target)", file=sys.stderr)
+            return 3
+        value, rest = rest[0], rest[1:]
+        if option == "--out":
+            out_dir = Path(value)
+        elif option == "--code":
+            code_path = Path(value)
+        else:
+            target = value
+    if code_path is not None and not code_path.is_file():
+        print(f"au2mm0: --code {code_path}: no such file (pass the CPS bytes "
+              f"written by --emit-cps)", file=sys.stderr)
+        return 3
     try:
         doc = load(Path(argv[2]))
     except (Malformed, OSError) as err:
         print(f"au2mm0: {err}", file=sys.stderr)
         return 3
     if command == "emit":
-        print("au2mm0: emit is not implemented: a certificate needs the ring-"
-              "normalization proof chain (W2 prover), and this tool will not "
-              "write a statement it cannot prove.\n"
-              "        `check` is complete; see PLAN_sota_kernel_verification.md "
-              "§4 W2.", file=sys.stderr)
-        return 2
+        stem = doc.get("stem") or doc.get("module", "kernel").lower()
+        try:
+            return emit(doc, stem, Path(argv[2]).resolve(), out_dir,
+                        code_path, target)
+        except (OutOfFragment, RingGap, mm0_ring.RingError) as err:
+            print(f"au2mm0: {stem}: [gap] {err}", file=sys.stderr)
+            return 2
     try:
         failures, lines, gaps = check(doc)
     except Malformed as err:
@@ -306,7 +863,47 @@ def selftest() -> int:
         print("au2mm0 selftest: a division was not refused as a gap",
               file=sys.stderr)
         return 1
-    print("au2mm0 selftest: sign flip refused; division refused as a gap; OK")
+    # Anchor 3: `emit` is the point where a false claim would become a
+    # certificate, so it must refuse a statement that is not an identity rather
+    # than write the artifact and let a reader assume it was checked.
+    false_doc = json.loads(json.dumps(doc))
+    false_doc["obligations"][0]["rhs"] = {"int": 1}
+    failures, _, _ = check(false_doc)
+    if not failures:
+        print("au2mm0 selftest: a false obligation passed `check`",
+              file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory() as tmp:
+        with contextlib.redirect_stderr(io.StringIO()):
+            rc = emit(false_doc, "flux1d", source, Path(tmp))
+        if rc != 1:
+            print(f"au2mm0 selftest: `emit` did not refuse a false obligation "
+                  f"(exit {rc})", file=sys.stderr)
+            return 1
+        if any(Path(tmp).iterdir()):
+            print("au2mm0 selftest: `emit` wrote files for a false obligation",
+                  file=sys.stderr)
+            return 1
+    # Anchor 4 (W4): a hypothesis is an assumption the reader cannot check
+    # inside the artifact — the proof would verify just as well with it. So
+    # adding one must move `assumed`, and the pin must refuse the move until
+    # somebody re-reviews the certificate.
+    hyp_doc = json.loads(json.dumps(doc))
+    hyp_doc["obligations"][0]["hypotheses"] = [
+        {"label": "u = 0", "lhs": {"var": "u"}, "rhs": {"int": 0}}]
+    with tempfile.TemporaryDirectory() as tmp:
+        with contextlib.redirect_stderr(io.StringIO()) as drift:
+            rc = emit(hyp_doc, "flux1d", source, Path(tmp))
+        if rc != 1:
+            print(f"au2mm0 selftest: `emit` accepted an unpinned new assumption "
+                  f"(exit {rc})", file=sys.stderr)
+            return 1
+        if "assumed" not in drift.getvalue():
+            print("au2mm0 selftest: the refusal did not name `assumed`",
+                  file=sys.stderr)
+            return 1
+    print("au2mm0 selftest: sign flip refused; division refused as a gap; "
+          "false obligation not emitted; new assumption refused; OK")
     return 0
 
 

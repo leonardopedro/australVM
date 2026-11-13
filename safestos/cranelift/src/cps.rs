@@ -231,6 +231,10 @@ fn emit_expr<M: Module>(
                 let offset_val = args[1];
                 let addr = mgr.builder.ins().iadd(ptr, offset_val);
                 return Ok(mgr.builder.ins().load(types::I64, MemFlags::new(), addr, 0));
+            } else if func_name == "__deref" {
+                // (ptr) -> val: `MDeref` lowers to this. Every value in this JIT is
+                // one 64-bit word, so a dereference is a load of the pointee.
+                return Ok(mgr.builder.ins().load(types::I64, MemFlags::new(), args[0], 0));
             } else if func_name == "__record_new" {
                 // (size, field1, field2, ...) -> ptr
                 let size_val = args[0];
@@ -497,6 +501,60 @@ fn emit_expr<M: Module>(
             let cmp = mgr.builder.ins().icmp(IntCC::NotEqual, a, b);
             Ok(mgr.builder.ins().uextend(types::I64, cmp))
         }
+        // 0x16 / 0x17: boolean And / Or. `And`/`Or` in the source lower to these
+        // opcodes (lib/CpsGen.ml), and their operands are already 0/1 i64 — the
+        // comparisons above widen with `uextend`. Implemented as a bitwise
+        // `band`/`bor` on those, which is the truth table for 0/1 inputs and
+        // matches the `bnot` at 0x19 (a 0/1 complement) the serializer emits in
+        // the same style. Without these two arms any module that conjoins two
+        // conditions — including every kernel `main` that checks its own
+        // obligations — was rejected as "Unknown opcode: 0x16".
+        0x16 => {
+            let a = emit_expr(
+                jit,
+                reader,
+                mgr,
+                vars,
+                name_map,
+                import_map,
+                caller_name,
+                module_name,
+            )?;
+            let b = emit_expr(
+                jit,
+                reader,
+                mgr,
+                vars,
+                name_map,
+                import_map,
+                caller_name,
+                module_name,
+            )?;
+            Ok(mgr.builder.ins().band(a, b))
+        }
+        0x17 => {
+            let a = emit_expr(
+                jit,
+                reader,
+                mgr,
+                vars,
+                name_map,
+                import_map,
+                caller_name,
+                module_name,
+            )?;
+            let b = emit_expr(
+                jit,
+                reader,
+                mgr,
+                vars,
+                name_map,
+                import_map,
+                caller_name,
+                module_name,
+            )?;
+            Ok(mgr.builder.ins().bor(a, b))
+        }
         0x18 => {
             let a = emit_expr(
                 jit,
@@ -635,6 +693,12 @@ fn emit_stmt_list<M: Module>(
                         let offset_val = args[1];
                         let addr = mgr.builder.ins().iadd(ptr, offset_val);
                         let val = mgr.builder.ins().load(types::I64, MemFlags::new(), addr, 0);
+                        mgr.builder.ins().return_(&[val]);
+                        mgr.terminated = true;
+                        return Ok(());
+                    } else if func_name == "__deref" {
+                        // Same intrinsic as the emit_expr arm; see the comment there.
+                        let val = mgr.builder.ins().load(types::I64, MemFlags::new(), args[0], 0);
                         mgr.builder.ins().return_(&[val]);
                         mgr.terminated = true;
                         return Ok(());

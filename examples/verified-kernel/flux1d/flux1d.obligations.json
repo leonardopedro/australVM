@@ -1,7 +1,7 @@
 {
   "module": "Flux1d",
   "source": "examples/verified-kernel/flux1d/Flux1d.aum",
-  "note": "Reflected form of the three obligations. This sidecar is W1's fallback carrier (decision recorded in PLAN_sota_kernel_verification.md \u00a79): the compiler cannot yet attach obligation nodes to CPS IR, so the reflected AST is written next to the kernel and audited against it. The shape of this file is what an obligation node in CPS IR JSON would serialise to, so `scripts/au2mm0` does not change when the carrier moves.",
+  "note": "Reflected form of the four obligations. This sidecar is W1's fallback carrier (decision recorded in PLAN_sota_kernel_verification.md \u00a79): the compiler cannot yet attach obligation nodes to CPS IR, so the reflected AST is written next to the kernel and audited against it. The shape of this file is what an obligation node in CPS IR JSON would serialise to, so `scripts/au2mm0` does not change when the carrier moves.",
   "assumptions": [
     "The kernel computes on Int64, which wraps. The certificate is over the integers and covers the scheme for inputs that do not overflow; pinning the range is W4."
   ],
@@ -63,6 +63,21 @@
         {"call": "delta", "args": [{"var": "l"}, {"var": "r"}]},
         {"call": "delta", "args": [{"var": "r"}, {"var": "l"}]}
       ]},
+      "rhs": {"int": 0}
+    },
+    {
+      "name": "uniform_state",
+      "kind": "uniformity",
+      "statement": "l = r => delta l r = 0",
+      "vars": ["l", "r"],
+      "hypotheses": [
+        {
+          "label": "l = r (a uniform interface)",
+          "lhs": {"var": "l"},
+          "rhs": {"var": "r"}
+        }
+      ],
+      "lhs": {"call": "delta", "args": [{"var": "l"}, {"var": "r"}]},
       "rhs": {"int": 0}
     }
   ]
