@@ -25,7 +25,9 @@ counted obligations a deltanet has to discharge.
 from __future__ import annotations
 
 import importlib.machinery
+import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -60,6 +62,184 @@ def nat_name(tag: str) -> str:
 SYMS: dict[str, str] = {}
 
 
+# Tokens are appended to a term's encoding one at a time, and one term on
+# `nsOuterFock…singleTime` is 67.5 M tokens: kept as individual Python strings
+# that is ~57 B of object header and pointer apiece, ~3.8 GB for text worth a
+# few hundred MB, and the process died joining it (§13.30). Coalescing every
+# ~64 KiB of tokens into one chunk leaves memory at the size of the text, and
+# the chunk boundaries never reach the bytes written.
+ENC_CHUNK = 64 << 10
+
+
+class _Hasher:
+    """A sha256 over text that arrives in chunks (see `Enc.digest`).
+
+    Two distinct expression ids can encode to the same term text, and the
+    substitution memo must not then make two axioms where one was — keying it
+    by id produced 143 axioms for 141 texts on `multiShiftSeq_succ`. Hashing the
+    text keeps the equality the strings had without holding them.
+    """
+
+    __slots__ = ("h", "held")
+
+    def __init__(self):
+        self.h = hashlib.sha256()
+        self.held = ""
+
+    def write(self, s: str) -> None:
+        if self.held:
+            s = self.held + s
+            self.held = ""
+        if s and "\ud800" <= s[-1] <= "\udbff":
+            self.held, s = s[-1], s[:-1]
+        if s:
+            self.h.update(s.encode())
+
+    def digest(self) -> bytes:
+        if self.held:
+            self.h.update(self.held.encode())
+            self.held = ""
+        return self.h.digest()
+
+
+class _JsonStr:
+    """`_json_write_str` for text that arrives in chunks and never as a whole.
+
+    Escaping is per character, so chunks can be escaped separately as long as a
+    surrogate pair is not split across two of them: a trailing high surrogate is
+    held back and escaped with the chunk that completes it.
+    """
+
+    __slots__ = ("out", "held")
+
+    def __init__(self, out):
+        self.out = out
+        self.held = ""
+        out.write('"')
+
+    def write(self, s: str) -> None:
+        if self.held:
+            s = self.held + s
+            self.held = ""
+        if s and "\ud800" <= s[-1] <= "\udbff":
+            self.held, s = s[-1], s[:-1]
+        if s:
+            self.out.write(json.dumps(s)[1:-1])
+
+    def close(self) -> None:
+        if self.held:
+            self.out.write(json.dumps(self.held)[1:-1])
+            self.held = ""
+        self.out.write('"')
+
+
+def _put_piece(out, enc, piece) -> int:
+    """Write one statement piece to `out`, returning its size in bytes.
+
+    A piece is plain text, `("enc", eid)` for an encoded term, or
+    `("tsubst", b, x)` for the deferred substitution both the axiom line and
+    the certificate's `lhs` spell out.
+    """
+    if isinstance(piece, str):
+        out.write(piece)
+        return len(piece)
+    n = 0
+    if piece[0] == "enc":
+        return enc.write(piece[1], out)
+    if piece[0] == "tsubst":
+        out.write("(tsubst ")
+        n = 9 + enc.write(piece[1], out)
+        out.write(" ")
+        n += 1 + enc.write(piece[2], out)
+        out.write(")")
+        return n + 1
+    raise SystemExit(f"unknown piece {piece[0]!r}")
+
+
+def _put_json(out, enc, piece) -> None:
+    """`_json_write_str` of a piece, streaming an encoded term through it."""
+    if isinstance(piece, str):
+        _json_write_str(out, piece)
+        return
+    w = _JsonStr(out)
+    _put_piece(w, enc, piece)
+    w.close()
+
+
+def _piece_str(enc, piece) -> str:
+    """A piece as a string, for the in-process path that retains its records."""
+    if isinstance(piece, str):
+        return piece
+    buf = io.StringIO()
+    _put_piece(buf, enc, piece)
+    return buf.getvalue()
+
+
+class _Head:
+    """A buffer that stops an encoding once `n` characters are in hand."""
+
+    class _Done(Exception):
+        pass
+
+    __slots__ = ("n", "parts", "chars", "tokens")
+
+    def __init__(self, n: int):
+        self.n = n
+        self.parts: list[str] = []
+        self.chars = 0
+        self.tokens = 0
+
+    def append(self, t: str) -> None:
+        t = t[: self.n - self.chars]
+        self.parts.append(t)
+        self.chars += len(t)
+        self.tokens += 1
+        if self.chars >= self.n:
+            raise _Head._Done
+
+
+class EncBuf:
+    """A term encoding under construction, held as a few large chunks.
+
+    With a `sink` the chunks are written out as they fill instead of being
+    kept, so a term whose text is gigabytes can be materialised on disk
+    without ever existing in memory (see `Enc.spool`).
+    """
+
+    __slots__ = ("chunks", "pend", "pend_chars", "tokens", "sink", "bytes")
+
+    def __init__(self, sink=None):
+        self.chunks: list[str] = []
+        self.pend: list[str] = []
+        self.pend_chars = 0
+        self.tokens = 0
+        self.sink = sink
+        self.bytes = 0
+
+    def _flush(self) -> None:
+        if not self.pend:
+            return
+        s = "".join(self.pend)
+        self.pend.clear()
+        self.pend_chars = 0
+        if self.sink is None:
+            self.chunks.append(s)
+        else:
+            self.sink.write(s)
+            self.bytes += len(s)
+
+    def append(self, t: str) -> None:
+        self.pend.append(t)
+        self.pend_chars += len(t)
+        self.tokens += 1
+        if self.pend_chars >= ENC_CHUNK:
+            self._flush()
+
+    def take(self) -> str:
+        self._flush()
+        return "".join(self.chunks)
+
+
 class Enc:
     def __init__(self, ex, succ_idx: bool = False):
         self.ex = ex
@@ -75,6 +255,7 @@ class Enc:
         # total size of the cached strings.
         self._memo: dict[int, str] = {}
         self._memo_bytes = 0
+        self._digest: dict[int, bytes] = {}
 
     def sort(self, e) -> str:
         # A universe is a *term*: its exported level id becomes one constant, so
@@ -94,15 +275,67 @@ class Enc:
         s = self._memo.get(eid)
         if s is not None:
             return s
-        parts: list[str] = []
-        self._enc(eid, parts)
-        s = "".join(parts)
+        buf = EncBuf()
+        self._enc(eid, buf)
+        s = buf.take()
         if self._memo_bytes < ENC_MEMO_BYTES:
             self._memo[eid] = s
             self._memo_bytes += len(s)
         return s
 
-    def _enc(self, eid: int, out: list[str]) -> None:
+    def write(self, eid: int, sink) -> int:
+        """Append `eid`'s encoding to `sink`, returning its size in bytes.
+
+        The term never becomes a string: this is what an artifact line made of
+        several term texts needs, since on `nsOuterFock…singleTime` one of them
+        is 2.2 GB (§13.30).
+        """
+        buf = EncBuf(sink)
+        self._enc(eid, buf)
+        buf._flush()
+        return buf.bytes
+
+    def digest(self, eid: int) -> bytes:
+        """sha256 of `eid`'s encoding, computed without materialising it."""
+        d = self._digest.get(eid)
+        if d is not None:
+            return d
+        h = _Hasher()
+        buf = EncBuf(h)
+        self._enc(eid, buf)
+        buf._flush()
+        d = h.digest()
+        # One 32-byte digest per expression seen: the memo is a convenience (a
+        # miss recomputes), so it is simply dropped when it gets large.
+        if len(self._digest) > 200_000:
+            self._digest.clear()
+        self._digest[eid] = d
+        return d
+
+    def head(self, eid: int, n: int) -> str:
+        """The first `n` characters of `eid`'s encoding, and no more."""
+        buf = _Head(n)
+        try:
+            self._enc(eid, buf)
+        except _Head._Done:
+            pass
+        return "".join(buf.parts)
+
+    def spool(self, eid: int, path: Path) -> int:
+        """Write `eid`'s encoding to `path`, never holding it as one string.
+
+        `enc` returns the whole text, which on `nsOuterFock…singleTime` is
+        1.94 GB for the type and 1.94 GB again for the value; both stayed
+        resident for the whole run, and the statement f-string then copied
+        them twice more (§13.30). The bytes are the same ones `enc` produces.
+        """
+        with path.open("w") as fh:
+            buf = EncBuf(fh)
+            self._enc(eid, buf)
+            buf._flush()
+            return buf.bytes
+
+    def _enc(self, eid: int, out: EncBuf) -> None:
         """Append `eid`'s encoding to `out`, token by token, in emit order.
 
         Appending instead of returning a string is what keeps the encoder's
@@ -117,7 +350,7 @@ class Enc:
         if s is not None:
             out.append(s)
             return
-        mark = len(out)
+        mark = out.tokens
         self._enc_tokens(eid, out)
         # Cache the *small* encodings only. Those are the ones a derivation
         # reuses (types, constants, short spines), and a handful of tokens joins
@@ -125,13 +358,17 @@ class Enc:
         # materialising it at an inner level is the cost this change removes.
         # Without this the encoder would recompute shared subtrees from scratch
         # (measured: 12 min and climbing on a row that takes 200 s with it).
-        if len(out) - mark <= 64 and self._memo_bytes < ENC_MEMO_BYTES:
-            s = "".join(out[mark:])
-            out[mark:] = [s]
+        if out.tokens - mark <= 64 and self._memo_bytes < ENC_MEMO_BYTES:
+            # Encode it a second time, into a buffer of its own: a few tokens
+            # copy for nothing, and the parent's tokens stay where they are
+            # instead of being spliced out of a half-built chunk list.
+            small = EncBuf()
+            self._enc_tokens(eid, small)
+            s = small.take()
             self._memo[eid] = s
             self._memo_bytes += len(s)
 
-    def _enc_tokens(self, eid: int, out: list[str]) -> None:
+    def _enc_tokens(self, eid: int, out: EncBuf) -> None:
         e = self.ex.exprs[eid]
         if "bvar" in e:
             k = e["bvar"]
@@ -518,6 +755,37 @@ def _nat_lit(n: int) -> str:
     return out
 
 
+def _put(fh, piece) -> None:
+    """Write a statement piece: a str, or a spool file copied through.
+
+    A `Path` piece is text already on disk because it was too large to keep in
+    memory; `copyfileobj` streams it into the artifact a megabyte at a time.
+    """
+    if isinstance(piece, Path):
+        with piece.open("r") as sp:
+            shutil.copyfileobj(sp, fh, 1 << 20)
+    else:
+        fh.write(piece)
+
+
+def _spool_head(path: Path, n: int) -> str:
+    with path.open("r") as fh:
+        return fh.read(n)
+
+
+def _spool_eq(path: Path, s: str) -> bool:
+    """Whether `path`'s text is exactly `s`, without holding the file too."""
+    i = 0
+    with path.open("r") as fh:
+        while True:
+            block = fh.read(1 << 20)
+            if not block:
+                return i == len(s)
+            if s[i:i + len(block)] != block:
+                return False
+            i += len(block)
+
+
 def spine(ex, eid):
     """(head_eid, [arg_eids]) for an application; (eid, []) otherwise."""
     args: list[int] = []
@@ -550,13 +818,18 @@ def main() -> int:
         raise SystemExit(f"no declaration with a value matching {want!r}")
     kind, rec, _ = ex.decls[target]
 
-    # The theorem's statement: `tty tnil value type`.
-    ty_str = enc.enc(rec["type"])
-    if os.environ.get("LTP_STATS"):
-        stats(f"type encoded ({len(ty_str)} B)")
-    val_str = enc.enc(rec["value"])
-    if os.environ.get("LTP_STATS"):
-        stats(f"value encoded ({len(val_str)} B)")
+    # The theorem's statement: `tty tnil value type`. Its two term texts are
+    # spooled rather than materialised: at 1.94 GB each (§13.30) they were the
+    # whole memory budget before the derivation began, and the statement
+    # string that embedded them copied both a second time.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = out_dir / f"{target.split('.')[-1]}_typing"
+    ty_path = Path(str(stem) + "_type.tmp")
+    val_path = Path(str(stem) + "_value.tmp")
+    ty_bytes = enc.spool(rec["type"], ty_path)
+    stats(f"type spooled ({ty_bytes} B)")
+    val_bytes = enc.spool(rec["value"], val_path)
+    stats(f"value spooled ({val_bytes} B)")
 
     lines: list[str] = []
     # Rules are counted, not retained: one pointer per applied rule was 1.8 M
@@ -592,8 +865,6 @@ def main() -> int:
     # A run that is killed by its budget now leaves a partial `.jsonl` — a
     # truncated last line is the caller's cue to discard it — where before it
     # left no file at all.
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = out_dir / f"{target.split('.')[-1]}_typing"
     oblig_path = Path(str(stem) + "_obligations.jsonl")
     oblig_fh = oblig_path.open("w")
     # The assumptions are streamed the same way: §13.27 measures 444 MB of
@@ -636,7 +907,9 @@ def main() -> int:
     if closed:
         for _ in range(len(binders)):
             body_eid = ex.exprs[body_eid]["lam"]["body"]
-    body = enc.enc(body_eid)
+    # A closed value is stated by its own text, so the stripped body is only
+    # needed when it is the statement's term or an assumed typing's term.
+    body = None if (closed and spine) else enc.enc(body_eid)
     inner_ctx = ctxs[-1]
 
     if spine:
@@ -674,13 +947,14 @@ def main() -> int:
             _step_add(steps_hist, steps_order, "ty_abs")
             ty = f"(tpi {binders[k]} {ty})"
         if spine:
-            # The wrapping is only valid if it reproduces the declared type.
-            if ty != ty_str:
+            # The wrapping is only valid if it reproduces the declared type,
+            # which is on disk: comparing it there costs nothing.
+            if not _spool_eq(ty_path, ty):
                 raise SystemExit(
                     "derived type is not the declared type:\n"
-                    f"  derived  {ty[:200]}\n  declared {ty_str[:200]}"
+                    f"  derived  {ty[:200]}\n  declared {_spool_head(ty_path, 200)}"
                 )
-        goal_ctx, goal_term, goal_ty = "tnil", val_str, ty_str
+        goal_ctx, goal_term, goal_ty = "tnil", val_path, ty_path
 
     head = [
         "-- Generated by emit-typing-proof.py (prototype) — DO NOT EDIT.",
@@ -710,7 +984,10 @@ def main() -> int:
     # at all and the run was counted as a failure of the derivation).
     thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
                                  for c in target.split(".")[-1])
-    statement = f"theorem {thm_name}: $ tty {goal_ctx} {goal_term} {goal_ty} $"
+    # The statement is written in pieces rather than built: its term texts are
+    # gigabytes (§13.30), and the f-string that used to hold it kept a second
+    # copy for the `.mm0` tail and a third for the `.mm1` one.
+    thm_head = f"theorem {thm_name}: $ tty {goal_ctx} "
     # `.mm0` carries the statement, `.mm1` the statement plus its proof: MM0
     # mode has no proofs, and mm0-rs compiles the `.mm1`. mm0-c then re-checks
     # the binary against the `.mm0` text (handing it the `.mm1` fails with
@@ -720,9 +997,8 @@ def main() -> int:
     # The proof theorem must be `pub`: a private theorem's proof commands are
     # dropped from the `.mmb`, so mm0-c reaches the declaration with the command
     # stream already at End and refuses it (measured on a 4-axiom mini theory).
-    tail0 = "\n-- ── the derivation ──\n" + statement + ";\n"
-    tail1 = ("\n-- ── the derivation ──\n" + "pub " + statement + " =\n"
-             + f"  '{proof};\n")
+    tail0 = "\n-- ── the derivation ──\n"
+    tail1 = "\n-- ── the derivation ──\npub "
     # Written in pieces: the prefix, the spooled assumptions copied through
     # (`shutil.copyfileobj`, so their bytes are never in this process twice),
     # then the tail. Concatenated in memory this is 444 MB of axiom text on
@@ -736,8 +1012,16 @@ def main() -> int:
             else:
                 fh.write("".join(a + "\n" for a in axioms))
             fh.write(tail)
+            fh.write(thm_head)
+            _put(fh, goal_term)
+            fh.write(" ")
+            _put(fh, goal_ty)
+            fh.write(" $")
+            fh.write(";\n" if suffix == ".mm0" else f" =\n  '{proof};\n")
     if ax_fh is not None:
         ax_path.unlink()
+    ty_path.unlink()
+    val_path.unlink()
     stats(f"artifacts written ({stem.with_suffix('.mm1').stat().st_size >> 20} MB)")
     # The conversion obligations, structurally: the interface the external
     # deltanet check consumes (`scripts/lean-net-cert`). Written even when empty
@@ -811,7 +1095,7 @@ class Deriver:
         # Largest proof string returned so far (bytes); see `_check`.
         self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}
-        self.beta_ax: dict[tuple[str, str], str] = {}
+        self.beta_ax: dict[tuple[bytes, bytes], str] = {}
         self.field_ax: dict[tuple[str, int], str] = {}
         self._ind_decls: dict[str, dict] | None = None
         self.oblig: list[str] = []
@@ -837,7 +1121,7 @@ class Deriver:
         # Active `_check` frames, innermost last: the growth trace samples this.
         self._stack: list[int] = []
 
-    def add_axiom(self, *chunks: str) -> None:
+    def add_axiom(self, *chunks) -> None:
         """Hand one artifact assumption to the sink, or retain it.
 
         The assumption arrives as one or more pieces that are written in order and
@@ -849,14 +1133,14 @@ class Deriver:
         """
         sink = self.axiom_sink
         if sink is None:
-            self.axioms.append("".join(chunks))
+            text = "".join(_piece_str(self.enc, c) for c in chunks)
+            self.axioms.append(text)
+            n = len(text)
         else:
+            n = 0
             for piece in chunks:
-                sink.write(piece)
+                n += _put_piece(sink, self.enc, piece)
             sink.write("\n")
-        n = 0
-        for piece in chunks:
-            n += len(piece)
         self.ax_count += 1
         self.ax_bytes += n
         if n > self.ax_max:
@@ -871,7 +1155,7 @@ class Deriver:
             self.rule_hist[name] = 1
             self.rule_order.append(name)
 
-    def emit_obligation(self, ax: str, lhs: str, rhs: str,
+    def emit_obligation(self, ax: str, lhs, rhs,
                         b: int, x: int, r: int) -> None:
         """Hand one substitution certificate to the sink, or retain it.
 
@@ -891,8 +1175,8 @@ class Deriver:
             self.oblig_tree.append({
                 "id": ax,
                 "kind": "substitution",
-                "lhs": lhs,
-                "rhs": rhs,
+                "lhs": _piece_str(self.enc, lhs),
+                "rhs": _piece_str(self.enc, rhs),
                 "b": self.to_tree(b, memo=memo),
                 "x": self.to_tree(x, memo=memo),
                 "r": self.to_tree(r, memo=memo),
@@ -904,11 +1188,11 @@ class Deriver:
         sink.write(', "id": ')
         _json_write_str(sink, ax)
         sink.write(', "kind": "substitution", "lhs": ')
-        _json_write_str(sink, lhs)
+        _put_json(sink, self.enc, lhs)
         sink.write(', "r": ')
         self.tree_json(r, sink)
         sink.write(', "rhs": ')
-        _json_write_str(sink, rhs)
+        _put_json(sink, self.enc, rhs)
         sink.write(', "x": ')
         self.tree_json(x, sink)
         sink.write("}\n")
@@ -1447,7 +1731,6 @@ class Deriver:
             aproof = self.check(e["app"]["arg"], dom, env, tail=False)
             x = self.strip(e["app"]["arg"])
             b = self.strip(fte["forallE"]["body"])
-            b_s, x_s = enc.enc(b), enc.enc(x)
             if self.defer_subst and tail:
                 # No reduct computed: the result type *is* the unreduced
                 # substitution, and `tdefeq_refl` discharges the premise.
@@ -1457,22 +1740,24 @@ class Deriver:
                     f"(ty_app {fproof} {aproof} (tdefeq_refl))",
                 )
             res = self.subst0(b, x)
-            key = (b_s, x_s)
+            # Keyed by the digest of the texts, which are gigabytes and are
+            # streamed straight to the sink below (§13.30); hashing keeps the
+            # text-equality dedup that keying by id would lose.
+            key = (enc.digest(b), enc.digest(x))
             if key not in self.beta_ax:
                 ax = f"ax_subst_{len(self.beta_ax)}"
-                # Encoded once: the axiom line and the certificate's `rhs`
-                # used to encode the same term twice, which on a large enough
-                # obligation is a second copy of the largest string in flight
-                # (§13.28).
-                r_s = enc.enc(self.strip(res))
+                # Three term texts, streamed: on the largest obligation here
+                # the joined line is 2.2 GB, so holding `b`, `x` and the
+                # reduct as strings was a third of the memory budget.
                 rr = self.strip(res)
                 self.add_axiom(
-                    f"-- (λ{self.enc.enc(dom)}. _) applied to {x_s[:80]}\n",
-                    f"axiom {ax}: $ tdefeq (tsubst {b_s} {x_s}) ", r_s, " $;",
+                    f"-- (λ{self.enc.enc(dom)}. _) applied to {enc.head(x, 80)}\n",
+                    f"axiom {ax}: $ tdefeq (tsubst ",
+                    ("enc", b), " ", ("enc", x), ") ", ("enc", rr), " $;",
                 )
                 self.beta_ax[key] = ax
                 self.oblig.append(ax)
-                self.emit_obligation(ax, f"(tsubst {b_s} {x_s})", r_s, b, x, rr)
+                self.emit_obligation(ax, ("tsubst", b, x), ("enc", rr), b, x, rr)
             self.add_rule("ty_app")
             return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
         if "forallE" in e or "sort" in e:

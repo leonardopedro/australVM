@@ -2901,3 +2901,89 @@ index of 8 078 904 expressions, which is built before the derivation starts.
 Removing the strings removes the smaller half. Whether the row now fits under
 10 GiB is a measurement this change has made possible, not one it has produced;
 it is recorded as §13.30 when the run comes back.
+
+### 13.30 The statement was 3.9 GB before the derivation began
+
+§13.29 ended with the encoder streaming and the `nsOuterFock` row untested. It
+was tested, and it failed sooner: `MemoryError` at **t=30.5 s, 8 510 MB**, in
+`enc`'s `"".join(parts)`. The instrumented run names the number that decided
+everything:
+
+```
+ENC-MEMORY eid=8130165 parts=67574067 peak_mb=9391
+```
+
+Sixty-seven and a half million tokens for *one* term. Appending tokens removed
+the per-level strings but made each token its own Python string, ~57 B of header
+and pointer apiece: **~3.8 GB of objects for a few hundred MB of text**. So the
+encoder change of §13.29 is necessary and not sufficient, and the fix is at the
+level below it: `EncBuf` now coalesces tokens into 64 KiB chunks, and `_enc`
+re-encodes a subtree into a buffer of its own when it is memoised instead of
+splicing tokens out of the parent's half-built chunk list.
+
+That reached t=50 s. `LTP_STATS` then answered where the rest of the baseline
+was, and the answer is not the derivation at all:
+
+```
+[stats] export indexed: peak 215 MB
+[stats] type encoded (1943238865 B): peak 3986 MB
+[stats] value encoded (1943238432 B): peak 5840 MB
+```
+
+**The type text is 1.94 GB and the value text is 1.94 GB**, both encoded before
+the derivation starts and both then retained, because the statement line `theorem …: $ tty tnil <value> <type> $` is built with an
+f-string, and that one f-string was kept twice, once in the `.mm0` tail and once
+in the `.mm1` tail. Three copies of 1.94 GB, held from startup: that is the
+whole 10 GiB budget, and the derivation's own growth is what actually killed
+each run.
+
+The fix is the spool the row needed all along, applied where the bytes are:
+
+- `Enc.spool(eid, path)` writes an encoding straight to a file, so the type and
+  value texts exist on disk and never in memory.
+- `Enc.write(eid, sink)` and `Enc.head(eid, n)` let a line that is made of
+  several term texts be written in pieces — the largest substitution axiom on
+  this row is **2 244 970 499 B**, three term texts joined, and all three were
+  strings before this.
+- The statement is written as pieces (head, term, space, type, `$`) into both
+  artifacts instead of being a string that both tails embed.
+- A closed value is stated by its own text, so the stripped body is no longer
+  encoded when it is not the statement's term: 740 MB of encoding that no line
+  of this row ever read.
+
+**Text equality had to survive the streaming.** The substitution memo was keyed
+by `(b_text, x_text)`. Keying it by `(b_eid, x_eid)` is cheaper and *wrong*: two
+distinct ids can encode to the same text, and the difference showed up as
+143 substitution axioms against 141 for the same declaration. The key is now the
+sha256 of each streamed text (`Enc.digest`), which has the equality the strings
+had and holds 32 B per expression.
+
+**Byte identity, `cmp` against the committed emitter, on the row that exercises
+substitution axioms and both artifacts:**
+
+| artifact | bytes | `cmp` |
+| --- | ---: | --- |
+| `ChapterSirkMultiShift.multiShiftSeq_succ` `.mm0` / `.mm1` / `.jsonl` | 1 012 315 / 1 074 760 / 893 654 | equal |
+
+**The row, measured at every stage** (`LTP_TRACE`, 10 GiB cap, 1 200 s clock,
+one run at a time; [`round4.tsv`](data/lean4mm0/round4.tsv)):
+
+| stage | outcome | at | peak |
+| --- | --- | ---: | ---: |
+| §13.29 encoder (token list) | `MemoryError` in `join`, 67.5 M tokens | 31 s | 8 798 MB |
+| + chunked buffer | `MemoryError` writing an axiom; 3.9 GB of statements resident | 50 s | 9 545 MB |
+| + statement spooled | `MemoryError`; largest axiom line 2.24 GB as strings | 970 s | 9 749 MB |
+| + substitution lines streamed | **runs out its clock**, 9 262 axioms · 44 816 rules, 2 189 MB resident | 1 201 s | **3 985 MB** |
+
+The row now sits at 2.2 GB for the whole derivation, with the 10 GiB cap never
+approached, and it does not finish within 1 200 s — which is a different problem
+from the one it had, and the one a longer clock tests. It is running with 7 200 s
+while this is written.
+
+**`dense_range_add_relBounded` does not need a clock, it needs memory.** §13.28
+left it unfinished at its 5 400 s clock (7 845 MB, 522 000 obligations), which
+left open whether it was slow or merely outlived its clock. With a 21 600 s
+clock it dies anyway — `MemoryError` at **t=5 916.1 s, 10 107 MB**, in
+`add_axiom`, with 2 966 164 expressions and **609 298 obligations** written. Six
+times the clock changed the outcome not at all: that row's cost is per-obligation
+retention, and it reaches the cap before any clock in that range would stop it.
