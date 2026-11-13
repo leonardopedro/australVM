@@ -114,8 +114,8 @@ Exact (grep/ls-verified for this plan):
 | proof-term derivation check | `scripts/lean-proof-scan`, `lean-typing-proof`, `lean-typing-check` | **exists** |
 | kernel obbligation oracle | `safestos/cranelift/.../netcert`, `uk_austral_defeq`, `scripts/lean-net-cert` | **exists** |
 | C backend | `--target-type=c` (`lib/CliParser.ml`) | **exists** |
-| symbolic (class-of-states) certificate | theory only: `docs/kernel_alg.mm0` 149 lines (`int_ring_transfer`), accepted by `mm0-rs` + `mm0-c` | **absent** (no emitter/certificate yet) |
-| **kernel-spec surface (flux algebra) in Austral** | — | **absent** |
+| symbolic (class-of-states) certificate | `mm0/flux1d_certificate.{mm0,mm1}` — 3 obligations over `docs/kernel_alg.mm0`, 15 grounded facts, `mm0-rs` + `mm0-c` accept the `peq` chain | **exists** (flux1d; approval pending) |
+| **kernel-spec surface (flux algebra) in Austral** | `examples/verified-kernel/flux1d/` (spec + execution side, obligations sidecar) | **partial** (no CPS-IR carrier yet) |
 | comparator: approved statement vs generated | `scripts/mm0-comparator` (diff + closure hash + theory hash, 3 negative controls) | **exists** (S1); `mm0/approved/` empty on purpose |
 | **`assumed=N` budget** | printed by `lean-typing-check`, not pinned | **partial** |
 | **code fingerprint in the certificate** | — | **absent** |
@@ -368,8 +368,58 @@ decimal fact `peq (tint nC) <sum of ones>` (the same posture as `teval` in
 subterm positions by `peq_cong_add`/`peq_cong_mul`/`peq_cong_neg`. Coefficient
 arithmetic never appears, so `litadd`/`litmul` stay unused for this fragment.
 
-- **New theory `docs/kernel_alg.mm0`** — *written 2026-11-12*: 149 lines,
-  `mm0-rs compile` and `mm0-c` both exit 0 (4 sorts, 20 term/def, 38 ax/thm).
+- **New theory `docs/kernel_alg.mm0`** — *written 2026-11-12, extended 2026-11-12*:
+  164 lines, `mm0-rs compile` and `mm0-c` both exit 0 (4 sorts, 20 term/def,
+  44 ax/thm). The five laws added since the first draft (`padd_zero_l`,
+  `pneg_add`, `pmul_neg_l`, `pmul_neg_r`, `pneg_zero`, `pmul_zero_l`) are the
+  ones a normalizer needs to move a sign from a sum to its terms; each is an
+  identity of every commutative ring, i.e. the same standard as `padd_assoc`,
+  and the artifact header says which of them a certificate used.
+
+**Landed (2026-11-12): the first symbolic certificate.** `scripts/mm0_ring.py`
+is a proof-producing normalizer, and `scripts/au2mm0 emit` writes
+`mm0/<stem>_certificate.{mm0,mm1}`:
+
+```
+$ python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json
+au2mm0: wrote mm0/flux1d_certificate.mm0 and flux1d_certificate.mm1
+        (3 certificate(s), 2 helper(s), 15 grounded fact(s))
+au2mm0: flux1d: mm0-rs + mm0-c accepted the certificate
+$ grep trust-split mm0/flux1d_certificate.mm0
+-- trust-split: structural=5 grounded=15 certificates=3
+```
+
+What that means, precisely: the three statements in
+`mm0/flux1d_certificate.mm0` are the kernel's obligations written as
+polynomial identities (`consistency`: `2·f − f = f`; `conservation`:
+the cycle residuals sum to 0; `symmetry`: `delta l r + delta r l = 0`), and
+`mm0-c` re-checks a `peq` chain for each — one ring law per step, with the
+coefficient arithmetic grounded as 15 visible `cf_` decimal facts, each
+re-checked by exact integer sampling before it is written. The chain is closed
+by the theory's single trusted `int_ring_transfer`.
+
+The proof design was validated against the root of trust *before* the
+normalizer was written: `mm0` proof applications take no term arguments, so a
+step is a bare law name (`(padd_comm)`) whose arguments unify from the statement
+being proved. The two derived lemmas the normalizer needs (`ring_swap`,
+`ring_pmul_swap`, three law applications each) are emitted as `pub theorem`s in
+the artifact, so `mm0-c` checks them too.
+
+**What W2 still owes:**
+1. **Approval.** `mm0/approved/flux1d_certificate.stmts` does not exist, so
+   `scripts/mm0-comparator check` reports `7 approved, 1 gap` and
+   `verify-invariants` carries exactly one explained gap. That is the held-out
+   review step, not a bug: the statements are the thing a reader audits.
+2. **Hypotheses.** An obligation with hypotheses is refused as a gap (exit 2),
+   not silently weakened; flux1d's three are unconditional. The theory already
+   supports the hypothesis form (`peq p q` under `rcomp` equalities).
+3. **Beyond degree-2/one state.** The prover is general in its fragment
+   (`+ − ×`, integer literals) and has no dimension limit, but no other kernel
+   exercises it yet.
+4. **The reflection step is trusted.** `mm0-c` cannot see kernel → polynomial.
+   `check` decides it twice (expansion + exact sampling) and `emit` refuses on
+   disagreement, which is the most this shape can do; a *proof* of reflection
+   needs the CPS-IR carrier of W1 acceptance 2.
   Changing it is a theory change: edit its line in `BUDGETS` in the same commit.
   Target ≤ 150 lines, defined-only except for *one* transfer rule per class:
   - `tint`, `tadd`, `tmul`, `tneg` with `teq` congruence rules — exact integer
@@ -522,7 +572,7 @@ CNL feature and should be written into its README before anything else here.
 |---|---|---|
 | S1 | W0, W3 | `scripts/mm0-comparator` rejects all three negative controls; `lean2mm0 check` byte-identical — **met 2026-11-12** |
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**; the `netcert` half is blocked on the CPS-IR carrier (no buildable `dune` toolchain here) |
-| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned |
+| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12** (3 obligations, `structural=5 grounded=15 certificates=3`, keyed by `s: nat` so the statement is about a class of states; approval pending) |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated |
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` |
@@ -571,7 +621,7 @@ statements and defeat the purpose.
 | item | trusted before | trusted after | note |
 |---|---|---|---|
 | `mm0-c` | yes | yes | unchanged, ~frozen |
-| theory lines (`cic.mm0` + …) | 484 | 484 + ≤150 (`kernel_alg.mm0`) | pinned by `BUDGETS` |
+| theory lines (`cic.mm0` + …) | 484 | 484 + 164 (`kernel_alg.mm0`) | pinned by `BUDGETS` |
 | `int_ring_transfer` | — | **yes** | one rule, one review, hash-pinned |
 | generated certificates | no | no | re-checked, never trusted |
 | `mm0/approved/*.stmts` | — | **yes** | this is the statement of record |

@@ -14,11 +14,12 @@ they disagree. One route is symbolic (expand to a coefficient dict); the other
 evaluates both sides at deterministic points with exact Python integers, so a
 bug in the expansion shows up as a disagreement rather than as a certificate.
 
-WHAT THIS DOES NOT DO. `emit` is not implemented yet: a certificate needs a
-proof chain (`peq` steps justified one ring law at a time), and the prover that
-builds it is W2's main body of work. `emit` therefore refuses with exit 2 rather
-than writing an unchecked statement; `check` is complete and is what W1's
-mutation test uses.
+TWO COMMANDS. `check` decides the obligations. `emit` writes
+`mm0/<stem>_certificate.{mm0,mm1}`: a certificate over `docs/kernel_alg.mm0`
+whose proof is a `peq` chain produced by `scripts/mm0_ring` (one ring law per
+step, coefficient arithmetic grounded as visible decimal facts), closed by the
+theory's single trusted `int_ring_transfer` rule. When `mm0-rs` and `mm0-c` are
+on `PATH`, `emit` re-checks its own artifact before claiming success.
 
 EXIT CODES
   0  every obligation is an identity, both routes agree
@@ -29,10 +30,35 @@ EXIT CODES
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
+# W0: declaration rendering, coverage/trust-split lines and the spec/proof
+# parity check live in scripts/mm0_emit.py; the prover itself in mm0_ring.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mm0_emit import (  # noqa: E402  (sibling modules, not a package)
+    axiom,
+    check_proof_refs,
+    check_spec_proof_parity,
+    coverage_line,
+    numeral_lines,
+    pub_theorem,
+    render,
+    theorem,
+    trust_split_line,
+)
+import mm0_ring  # noqa: E402
+
+AVM = Path(__file__).resolve().parent.parent
+THEORY = AVM / "docs" / "kernel_alg.mm0"
+OUT_DIR = AVM / "mm0"
 MAX_DEPTH = 64
 SAMPLE_POINTS = [(-3, 2, 5), (0, 0, 0), (7, -1, 11), (1, 1, 1)]
 
@@ -229,6 +255,253 @@ def check(doc: dict) -> tuple[int, list[str]]:
     return failures, lines, gaps
 
 
+# ── emission (W2) ────────────────────────────────────────────────────────
+
+# The theory's own numerals are n0/n1; artifacts declare the rest.
+BASE_NUMERALS = {0, 1}
+
+# The terms a symbolic kernel certificate can mention, in the order the artifact
+# reports them (as with SIGNATURE_TERMS in scripts/mm0_emit.py).
+KERNEL_TERMS = [
+    "tint", "pvar", "padd", "pmul", "pneg", "peq", "ev", "req",
+    "rcomp", "radd", "rmul", "rneg", "rlit",
+]
+
+# The two derived lemmas the prover needs. Both are three law applications; a
+# certificate that quietly stopped proving them would lose the reordering step
+# its `peq` chain is built from, so they are emitted as `pub theorem`s that
+# mm0-c re-checks rather than assumed.
+HELPERS = [
+    ("ring_swap", "(a b r: Poly)",
+     "$ peq (padd b (padd a r)) (padd a (padd b r)) $",
+     "(peq_trans (peq_symm (padd_assoc)) "
+     "(peq_trans (peq_cong_add (padd_comm) (peq_refl)) (padd_assoc)))"),
+    ("ring_pmul_swap", "(a b r: Poly)",
+     "$ peq (pmul b (pmul a r)) (pmul a (pmul b r)) $",
+     "(peq_trans (peq_symm (pmul_assoc)) "
+     "(peq_trans (peq_cong_mul (pmul_comm) (peq_refl)) (pmul_assoc)))"),
+]
+
+# Trust splits are contracts, not statistics: a certificate that moved proof
+# work into `grounded` would still verify, so the movement must be refused. Pin
+# the numbers here, in the same commit as any intended change.
+BUDGETS: dict[str, dict] = {
+    "flux1d": {"structural": 5, "grounded": 15, "certificates": 3},
+}
+
+
+def to_ring(node, names: dict):
+    """Map the reflected Austral AST onto the prover's term syntax."""
+    tag = node[0]
+    if tag == "int":
+        return mm0_ring.lit(node[1])
+    if tag == "var":
+        return mm0_ring.var(names[node[1]])
+    if tag == "add":
+        return mm0_ring.add(to_ring(node[1], names), to_ring(node[2], names))
+    if tag == "mul":
+        return mm0_ring.mul(to_ring(node[1], names), to_ring(node[2], names))
+    if tag == "neg":
+        return mm0_ring.neg(to_ring(node[1], names))
+    if tag == "sub":
+        # `psub a b` is a def for `padd a (pneg b)`: the certificate spells the
+        # definition out so every step is a law of the theory.
+        return mm0_ring.add(to_ring(node[1], names),
+                            mm0_ring.neg(to_ring(node[2], names)))
+    raise ring_gap(f"operator {tag!r} has no polynomial model")
+
+
+class RingGap(Exception):
+    """An obligation the prover does not cover; reported as a gap, not a pass."""
+
+
+def ring_gap(message: str):
+    return RingGap(message)
+
+
+def emit(doc: dict, stem: str, source: Path, out_dir: Path | None = None) -> int:
+    theory_lines = THEORY.read_text().splitlines()
+    prover = mm0_ring.Prover()
+    obligations = []
+    gaps = []
+    for obligation in doc["obligations"]:
+        name = obligation.get("name", "<unnamed>")
+        if obligation.get("hypotheses"):
+            gaps.append(f"{name}: hypothesis elimination is not implemented")
+            continue
+        vars_ = obligation.get("vars", [])
+        names = {v: i for i, v in enumerate(vars_)}
+        defs = {}
+        for entry in doc["defs"]:
+            defs[entry["name"]] = (list(entry.get("params", [])), entry.get("body"))
+        try:
+            env = {v: ("var", v) for v in vars_}
+            lhs = to_ring(reflect(obligation["lhs"], env, defs), names)
+            rhs = to_ring(reflect(obligation["rhs"], env, defs), names)
+        except OutOfFragment as err:
+            gaps.append(f"{name}: {err}")
+            continue
+        except RingGap as err:
+            gaps.append(f"{name}: {err}")
+            continue
+        seq_l, proof_l = prover.normalize(lhs)
+        seq_r, proof_r = prover.normalize(rhs)
+        if seq_l != seq_r:
+            print(f"au2mm0: {name}: the two sides normalize differently "
+                  f"({seq_l} vs {seq_r}) — refusing to emit", file=sys.stderr)
+            return 1
+        peq = f"(peq_trans {proof_l} (peq_symm {proof_r}))"
+        statement = (" (s: nat)",
+                     f"$ req (ev {mm0_ring.text(lhs)} s) "
+                     f"(ev {mm0_ring.text(rhs)} s) $",
+                     f"(int_ring_transfer {peq})")
+        obligations.append((name, statement))
+
+    if gaps:
+        for gap_message in gaps:
+            print(f"au2mm0: [gap] {stem}: {gap_message}", file=sys.stderr)
+        print("au2mm0: emit refuses when an obligation is outside the prover's "
+              "fragment — a certificate with a hole in it is worse than none",
+              file=sys.stderr)
+        return 2
+
+    # The statement file and the proof file must differ only in `pub ` and the
+    # proof tail; `check_spec_proof_parity` is what enforces that, so both lists
+    # are built from the same entries.
+    entries: list[tuple[str, str]] = []      # (statement line, proof line)
+    for (name, binder, math, proof) in HELPERS:
+        entries.append((_spec(name, binder, math), _pub(name, binder, math, proof)))
+    for (name, stmt) in prover.facts:
+        line = f"axiom {name}: {stmt};"
+        entries.append((line, line))
+    for (name, (binder, math, proof)) in obligations:
+        entries.append((_spec(name, binder, math), _pub(name, binder, math, proof)))
+
+    spec_body = [a for (a, _) in entries]
+    proof_body = [b for (_, b) in entries]
+    text_for_numbers = "\n".join(spec_body)
+    numerals = {int(n) for n in re.findall(r"\bn(\d+)\b", text_for_numbers)}
+    numerals -= BASE_NUMERALS
+
+    structural = len(HELPERS) + len(obligations)
+    grounded = len(prover.facts)
+    certificates = len(obligations)
+    actual = {"structural": structural, "grounded": grounded,
+              "certificates": certificates}
+    budget = BUDGETS.get(stem)
+    if budget is not None and budget != actual:
+        print(f"au2mm0: {stem}: trust split {actual} drifted from the pinned "
+              f"{budget} — movement toward `grounded` means mm0-c checks less "
+              f"of this certificate; if that is intended, edit BUDGETS in "
+              f"scripts/au2mm0 in the same commit and say why here",
+              file=sys.stderr)
+        return 1
+
+    header = [
+        f"-- kernel certificate — {stem} (generated by scripts/au2mm0).",
+        "--",
+        f"-- Source: {source.relative_to(AVM)} "
+        f"(sha256 {sha256(source)})",
+        f"-- Theory: docs/kernel_alg.mm0 (sha256 {sha256(THEORY)})",
+        "--",
+        "-- What is claimed: every obligation of the kernel is an identity in",
+        "-- the free commutative ring on the state's components, proved here as",
+        "-- a `peq` chain and carried to the numeric domain by the theory's",
+        "-- single trusted bridge (`int_ring_transfer`). Variable `nj` is",
+        "-- component j of the state: `ev (pvar nj) s` is `rcomp s j`.",
+        "--",
+        "-- What is NOT claimed: that a real-valued kernel evaluates this way.",
+        "-- Reflection (kernel source -> these polynomials) is trusted, and the",
+        "-- artifact's statements are what a reader audits: `consistency`,",
+        "-- `conservation`, `symmetry` are the kernel's own obligations, not",
+        "-- this emitter's paraphrase of them.",
+        "--",
+        "-- Coefficients are not expanded to repeated summands: each literal",
+        "-- combination is a visible `cf_` fact, counted `grounded` below and",
+        "-- re-checked by exact integer sampling before it is written.",
+        "--",
+        trust_split_line(stem, structural, grounded, certificates),
+        coverage_line("\n".join(spec_body), KERNEL_TERMS),
+        "",
+    ]
+
+    shared = header + theory_lines + [""] + numeral_lines(numerals) + [""]
+    mm0_lines = shared + spec_body + [""]
+    mm1_lines = shared + proof_body + [""]
+
+    try:
+        check_spec_proof_parity(mm0_lines, mm1_lines)
+        check_proof_refs(mm1_lines, builtin_refs=())
+    except Exception as err:                     # EmitError, both checks
+        print(f"au2mm0: {stem}: {err}", file=sys.stderr)
+        return 1
+
+    out_dir = OUT_DIR if out_dir is None else out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    mm0_path = out_dir / f"{stem}_certificate.mm0"
+    mm1_path = out_dir / f"{stem}_certificate.mm1"
+    mm0_path.write_text(render(mm0_lines))
+    mm1_path.write_text(render(mm1_lines))
+    shown = mm0_path if out_dir != OUT_DIR else mm0_path.relative_to(AVM)
+    print(f"au2mm0: wrote {shown} and {mm1_path.name} "
+          f"({certificates} certificate(s), {structural - certificates} "
+          f"helper(s), {grounded} grounded fact(s))")
+    return verify_emitted(mm0_path, mm1_path, stem)
+
+
+def sha256(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_emitted(mm0_path: Path, mm1_path: Path, stem: str) -> int:
+    """Re-check the artifact with the root of trust when it is installed."""
+    rs = _tool("MM0_RS", "mm0-rs")
+    mc = _tool("MM0_C", "mm0-c")
+    if not rs or not mc:
+        print("au2mm0: mm0-rs/mm0-c not on PATH — artifact written but NOT "
+              "re-checked here (verified by scripts/verify-invariants where "
+              "the toolchain exists)")
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        mmb = Path(tmp) / "cert.mmb"
+        proc = subprocess.run([rs, "compile", str(mm1_path), str(mmb)],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            print(f"au2mm0: {stem}: mm0-rs refused the proof:\n"
+                  f"{proc.stdout}{proc.stderr}", file=sys.stderr)
+            return 1
+        proc = subprocess.run([mc, str(mmb)], stdin=open(mm0_path),
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            print(f"au2mm0: {stem}: mm0-c refused the artifact:\n"
+                  f"{proc.stdout}{proc.stderr}", file=sys.stderr)
+            return 1
+    print(f"au2mm0: {stem}: mm0-rs + mm0-c accepted the certificate")
+    return 0
+
+
+def _tool(env: str, name: str) -> str | None:
+    import os
+    if os.environ.get(env):
+        return os.environ[env]
+    found = shutil.which(name)
+    if found:
+        return found
+    for cand in (Path.home() / ".local/bin" / name,):
+        if cand.exists():
+            return str(cand)
+    return None
+
+
+def _spec(name, binder, math):
+    return f"theorem {name}{binder}: {math};"
+
+
+def _pub(name, binder, math, proof):
+    return f"pub theorem {name}{binder}: {math} = '{proof};"
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] in ("-h", "--help"):
         print(__doc__.strip())
@@ -243,18 +516,24 @@ def main(argv: list[str]) -> int:
     if len(argv) < 3:
         print(f"au2mm0: {command} needs an obligations file", file=sys.stderr)
         return 3
+    out_dir = None
+    if len(argv) > 3:
+        if argv[3] != "--out" or len(argv) < 5:
+            print("au2mm0: the only option is `--out <dir>`", file=sys.stderr)
+            return 3
+        out_dir = Path(argv[4])
     try:
         doc = load(Path(argv[2]))
     except (Malformed, OSError) as err:
         print(f"au2mm0: {err}", file=sys.stderr)
         return 3
     if command == "emit":
-        print("au2mm0: emit is not implemented: a certificate needs the ring-"
-              "normalization proof chain (W2 prover), and this tool will not "
-              "write a statement it cannot prove.\n"
-              "        `check` is complete; see PLAN_sota_kernel_verification.md "
-              "§4 W2.", file=sys.stderr)
-        return 2
+        stem = doc.get("stem") or doc.get("module", "kernel").lower()
+        try:
+            return emit(doc, stem, Path(argv[2]).resolve(), out_dir)
+        except (OutOfFragment, RingGap, mm0_ring.RingError) as err:
+            print(f"au2mm0: {stem}: [gap] {err}", file=sys.stderr)
+            return 2
     try:
         failures, lines, gaps = check(doc)
     except Malformed as err:
@@ -306,7 +585,29 @@ def selftest() -> int:
         print("au2mm0 selftest: a division was not refused as a gap",
               file=sys.stderr)
         return 1
-    print("au2mm0 selftest: sign flip refused; division refused as a gap; OK")
+    # Anchor 3: `emit` is the point where a false claim would become a
+    # certificate, so it must refuse a statement that is not an identity rather
+    # than write the artifact and let a reader assume it was checked.
+    false_doc = json.loads(json.dumps(doc))
+    false_doc["obligations"][0]["rhs"] = {"int": 1}
+    failures, _, _ = check(false_doc)
+    if not failures:
+        print("au2mm0 selftest: a false obligation passed `check`",
+              file=sys.stderr)
+        return 1
+    with tempfile.TemporaryDirectory() as tmp:
+        with contextlib.redirect_stderr(io.StringIO()):
+            rc = emit(false_doc, "flux1d", source, Path(tmp))
+        if rc != 1:
+            print(f"au2mm0 selftest: `emit` did not refuse a false obligation "
+                  f"(exit {rc})", file=sys.stderr)
+            return 1
+        if any(Path(tmp).iterdir()):
+            print("au2mm0 selftest: `emit` wrote files for a false obligation",
+                  file=sys.stderr)
+            return 1
+    print("au2mm0 selftest: sign flip refused; division refused as a gap; "
+          "false obligation not emitted; OK")
     return 0
 
 

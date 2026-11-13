@@ -166,6 +166,35 @@ if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
     rm -rf "$_alg_tmp"
 fi
 
+# --- W2: the symbolic certificate itself ---
+# Regenerated into a scratch directory and compared with the committed artifact:
+# drift means the prover, the theory or the obligation file moved and the
+# certificate was not refreshed. `emit` re-checks the proof with mm0-rs + mm0-c
+# itself, so a green run means the `peq` chain is still accepted by the root of
+# trust, not merely that a file exists.
+_flux_obl="$repo_root/examples/verified-kernel/flux1d/flux1d.obligations.json"
+if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
+    _cert_tmp="$(mktemp -d)"
+    if python3 "$repo_root/scripts/au2mm0" emit "$_flux_obl" \
+            --out "$_cert_tmp" >"$_cert_tmp/emit.log" 2>&1; then
+        if cmp -s "$_cert_tmp/flux1d_certificate.mm0" \
+                "$repo_root/mm0/flux1d_certificate.mm0" \
+            && cmp -s "$_cert_tmp/flux1d_certificate.mm1" \
+                "$repo_root/mm0/flux1d_certificate.mm1"; then
+            check "W2: flux1d certificate re-emits byte-identically and mm0 re-accepts it" true
+        else
+            echo "      committed certificate is stale — run: python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json" >&2
+            check "W2: flux1d certificate re-emits byte-identically and mm0 re-accepts it" false
+        fi
+    else
+        tail -4 "$_cert_tmp/emit.log" >&2
+        check "W2: flux1d certificate re-emits byte-identically and mm0 re-accepts it" false
+    fi
+    rm -rf "$_cert_tmp"
+fi
+check_py "W2: au2mm0 self-test (weakened scheme refused, division refused as a gap, false obligation not emitted)" \
+    python3 "$repo_root/scripts/au2mm0" selftest
+
 # --- W1: the flux1d spec surface compiles and its obligations hold at a point ---
 # The point test is not the proof; the certificate is. It is gated anyway because
 # it is the only check that the *execution* side of the spec surface is still the
@@ -195,8 +224,7 @@ fi
 check_py "W2: au2mm0 decides Flux1d's three obligations (both routes agree)" \
     python3 "$repo_root/scripts/au2mm0" check \
     "$repo_root/examples/verified-kernel/flux1d/flux1d.obligations.json"
-check_py "W2: au2mm0 self-test (weakened scheme refused, division refused as a gap)" \
-    python3 "$repo_root/scripts/au2mm0" selftest
+
 
 # --- W3: approved statements, held out ---
 #

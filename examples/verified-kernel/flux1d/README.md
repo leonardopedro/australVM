@@ -42,6 +42,20 @@ serialise to, so moving the carrier later does not change the prover — the
 decision and its fallback are recorded in `PLAN_sota_kernel_verification.md`
 §9.
 
+## The certificate
+
+```bash
+python3 scripts/au2mm0 check flux1d.obligations.json   # decide the obligations
+python3 scripts/au2mm0 emit  flux1d.obligations.json   # write + re-check mm0/
+```
+
+`emit` writes `mm0/flux1d_certificate.{mm0,mm1}`: the three obligations as
+polynomial identities over `docs/kernel_alg.mm0`, each closed by a `peq` chain
+(one ring law per step) and carried to the numeric domain by the theory's single
+trusted `int_ring_transfer`. Coefficient arithmetic is grounded as visible `cf_`
+decimal facts, counted in the artifact's `-- trust-split:` line and pinned in
+`BUDGETS` in `scripts/au2mm0`.
+
 The certificate is over ℤ. `Int64` wraps, so a certificate covers the scheme
 only for inputs that do not overflow; pinning that range is W4 and the
 assumption is written into the certificate header rather than left implicit.
