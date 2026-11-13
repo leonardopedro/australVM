@@ -661,6 +661,60 @@ CNL feature and should be written into its README before anything else here.
   a kernel property as content. An agent that emits into a type-level encoding can
   only be answered vacuously.
 
+**Landed 2026-11-13 (the corpus half; no agent loop).** `unfer/logos` has a third
+fragment (`unfer/logos/src/mm0/kernel.rs`), selected by a `theory: kernel` line in
+a claims file. It answers by **citation**: a sentence is
+lowered to the same polynomials the certificate used (expanding the kernel's
+definitions from the obligations sidecar), and it is `proved` when some theorem of
+`mm0/flux1d_certificate.mm0` states exactly the same identity up to renaming the
+variables — hypothesis included, which is why `delta l r = 0 when l = r` cites
+`uniform_state` while `delta l r = 0` does not.
+
+The citation is **pinned**, and that is the part that makes it worth something: the
+certificate's `-- Source:` line carries the sha256 of the sidecar it was emitted
+from, and a sidecar that does not hash to it is refused rather than believed. A
+sidecar that grew an obligation the certificate never proved is refused too (the
+theorem has to exist by name). So a citation cannot outlive the artifact it cites.
+
+`unfer/logos/mm0/claims.txt` gained the five lines this section asked for
+(`theory: kernel`):
+
+```
+proved: for all u: numerical flux of u and u agrees with flux of u
+proved: for all l, r: delta of l and r plus delta of r and l equals zero
+proved: for all a, b, c: delta of a and b plus delta of b and c plus delta of c and a equals zero
+proved: delta of l and r equals zero when l equals r
+unproved: the scheme is second order accurate
+```
+
+Measured (`scripts/logos2mm0`, which now passes `--kernel-certificate` and counts
+the shapes):
+
+```
+[pass] claim corpus certifies (52 lines, every expectation held)
+[pass] kernel corpus cites flux1d_certificate (4 obligation(s), 1 honest unproved)
+[pass] kernel corpus refuses a certificate whose pinned sidecar digest does not match
+```
+
+What the fragment deliberately cannot do: refute. "Not an identity" is not
+"false", and turning one into the other is a semantic claim about the numeric
+domain this layer has no proof of, so such sentences come back `unproved` with the
+reason — including a true identity the certificate happens not to state. The
+`unproved: the scheme is second order accurate` line is the same boundary stated
+as content: order of accuracy is a property of the scheme, not an identity in
+ℤ[x⃗], so it must never start "proving".
+
+The tamper anchor is now two-sided: `verify-invariants` flips a coefficient in the
+`consistency` theorem's statement and leaves the proofs alone, and mm0 has to
+refuse the result (a citation of a statement that is no longer proved would be
+evidence about nothing); `logos2mm0` tampers the pinned digest instead.
+
+**Still open:** question answering *over the corpus* (the W7 title) — the
+fragment decides sentences, and there is no query layer that finds the sentences
+for a question. That is additive on top of a corpus that can now state kernel
+content, and the plan's warning stands: it must not be built on the type-level
+encoding.
+
 ---
 
 ## §5 Sprint order and exit criteria
@@ -672,8 +726,8 @@ CNL feature and should be written into its README before anything else here.
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13** (fingerprint recorded, not checked; probe measured `max relative deviation 0.000e+00`) |
-| S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` |
-| S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W6 2026-11-13 (§3.3)**; the W7 row's scripts exist but its corpus lives in the sibling `unfer` repo and has no kernel-content sentences yet |
+| S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
+| S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated

@@ -29,6 +29,12 @@
 #      accepts everything would pass (1)–(4) and is worthless, so this is the
 #      check that makes the others mean something.
 #
+#   6. the kernel-content section (`theory: kernel`) reaches its verdicts by
+#      *citing* `mm0/flux1d_certificate.mm0` — four obligations by name, plus one
+#      true property of the scheme that must stay `unproved`. The citation is
+#      pinned: a certificate whose `-- Source:` digest does not match the sidecar
+#      is refused, which is checked here as a sixth negative control.
+#
 # Tooling discipline, as in `unfer/scripts/smoke_gate`: no cargo or no mm0
 # toolchain is a documented [gap] (exit 0) rather than a permanent red on
 # machines that cannot run it; cargo present but the emitter misbehaving is a
@@ -161,11 +167,60 @@ else
 fi
 
 # ── 2. the corpus, with its expectations ────────────────────────────────────
-if "$logos" mm0 claims "$corpus" --out "$tmp/corpus" --verify >"$tmp/claims.log" 2>&1; then
+# The `theory: kernel` section is decided by citing `mm0/flux1d_certificate.mm0`
+# — the W7 content sentences ("the numerical flux agrees with the physical flux
+# when the states agree"). Passing the certificate here is what turns those lines
+# from skipped into checked.
+kernel_cert="$repo_root/mm0/flux1d_certificate.mm0"
+kernel_args=()
+if [ -f "$kernel_cert" ]; then
+    kernel_args=(--kernel-certificate "$kernel_cert")
+else
+    gap "no kernel certificate at $kernel_cert — kernel claims will be skipped"
+fi
+if "$logos" mm0 claims "$corpus" --out "$tmp/corpus" --verify ${kernel_args[@]+"${kernel_args[@]}"} >"$tmp/claims.log" 2>&1; then
     ok "claim corpus certifies ($(grep -c '^\[*[a-z]' "$tmp/claims.log" || true) lines, every expectation held)"
 else
     bad "claim corpus (an expectation was not met, or a certificate was rejected)"
     tail -25 "$tmp/claims.log" | sed 's/^/      /'
+fi
+
+# ── 2a. kernel content: cited, hypothesis-aware, and honestly unproved ───────
+# Three verdict shapes have to survive the run, so all three are counted. A run
+# that cited nothing would still exit 0 (the corpus above would be green because
+# every line *did* reach its expectation after being skipped), and a fragment
+# that started "proving" the accuracy line would be claiming more than the
+# certificate states — which is the one failure this whole layer exists to avoid.
+if [ -f "$kernel_cert" ]; then
+    uncited=""
+    for name in consistency conservation symmetry uniform_state; do
+        grep -q "\[cited: flux1d_certificate\.$name\]" "$tmp/claims.log" \
+            || uncited="$uncited $name"
+    done
+    accuracy="$(grep -c '^unproved the scheme is second order accurate' "$tmp/claims.log" || true)"
+    if [ -z "$uncited" ] && [ "$accuracy" -eq 1 ]; then
+        ok "kernel corpus cites flux1d_certificate (4 obligation(s), 1 honest unproved)"
+    else
+        bad "kernel corpus (uncited:${uncited:- none}, accuracy lines that stayed unproved: $accuracy)"
+        grep -E '^(proved|unproved|true|false) ' "$tmp/claims.log" | tail -8 | sed 's/^/      /'
+    fi
+
+    # The anchor: a certificate whose pinned obligations digest does not match
+    # the sidecar on disk must be refused, not read. Without this, the kernel
+    # lines would be citations of whatever happens to lie next to them.
+    sed 's/(sha256 [0-9a-f]*)/(sha256 0000000000000000000000000000000000000000000000000000000000000000)/' \
+        "$kernel_cert" > "$tmp/drifted.mm0"
+    printf 'theory: kernel\nproved: for all u: numerical flux of u and u agrees with flux of u\n' \
+        > "$tmp/drift.txt"
+    if "$logos" mm0 claims "$tmp/drift.txt" --kernel-certificate "$tmp/drifted.mm0" \
+            >"$tmp/drift.log" 2>&1; then
+        bad "kernel corpus: a drifted obligations digest was accepted (the citation is not pinned)"
+    elif grep -q 'pins obligations sha256' "$tmp/drift.log"; then
+        ok "kernel corpus refuses a certificate whose pinned sidecar digest does not match"
+    else
+        bad "kernel corpus: the drifted certificate was rejected for the wrong reason"
+        tail -8 "$tmp/drift.log" | sed 's/^/      /'
+    fi
 fi
 
 # The corpus must have produced real certificates and at least one unproved

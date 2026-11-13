@@ -208,6 +208,30 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
             echo "      committed artifact is stale — run: python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json --code <cps>" >&2
             check "W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it" false
         fi
+        # W7 anchor: the statements a CNL citation points at must be what the
+        # proof proves. Flip one coefficient in the `consistency` statement and
+        # leave the proofs alone: mm0 has to refuse it, or "this sentence cites
+        # theorem X" would be evidence about nothing.
+        if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+            mkdir -p "$_cert_tmp/tamper"
+            awk '/^theorem consistency/ && !done {
+                     gsub(/\(tint n2\)/, "(tint n5)"); done = 1
+                 }
+                 { print }' "$_cert_tmp/flux1d_certificate.mm0" \
+                > "$_cert_tmp/tamper/flux1d_certificate.mm0"
+            cp "$_cert_tmp/flux1d_certificate.mm1" "$_cert_tmp/tamper/"
+            if mm0-rs compile "$_cert_tmp/tamper/flux1d_certificate.mm0" \
+                    "$_cert_tmp/tamper/tampered.mmb" >/dev/null 2>&1 \
+                && mm0-c "$_cert_tmp/tamper/tampered.mmb" \
+                    < "$_cert_tmp/tamper/flux1d_certificate.mm0" >/dev/null 2>&1; then
+                check "W7: a certificate with a flipped coefficient is refused" false
+            else
+                check "W7: a certificate with a flipped coefficient is refused" true
+            fi
+        else
+            gap "W7: flipped-coefficient certificate not re-checked (no mm0 toolchain)"
+        fi
+
         # W6: the generated probe is a test, and it has to actually run.
         if command -v cc >/dev/null 2>&1; then
             if cc -O2 -o "$_cert_tmp/probe" "$_cert_tmp/flux1d_probe.c" -lm \
