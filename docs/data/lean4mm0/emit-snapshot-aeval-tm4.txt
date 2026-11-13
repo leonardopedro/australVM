@@ -1,0 +1,13 @@
+tracemalloc snapshot at t=447.1 s
+    159.7 MB    2495507  /home/leo/Projects/australVM/scripts/lean-typing-proof:702
+     73.9 MB     802796  /home/leo/Projects/australVM/scripts/lean-typing-proof:692
+     59.4 MB        549  /home/leo/Projects/australVM/scripts/lean-typing-proof:1070
+     50.7 MB        177  /home/leo/Projects/australVM/scripts/lean-typing-proof:993
+     50.4 MB        178  /home/leo/Projects/australVM/scripts/lean-typing-proof:881
+     41.7 MB     453291  /home/leo/Projects/australVM/scripts/lean-typing-proof:690
+     35.0 MB        300  /home/leo/Projects/australVM/scripts/lean-typing-proof:119
+     24.4 MB        784  /home/leo/Projects/australVM/scripts/lean-typing-proof:121
+     13.8 MB     149501  /home/leo/Projects/australVM/scripts/lean-typing-proof:814
+     13.3 MB        549  /home/leo/Projects/australVM/scripts/lean-typing-proof:1078
+      5.1 MB      10455  /home/leo/Projects/australVM/scripts/lean-typing-proof:1236
+      3.3 MB      51890  /home/leo/Projects/australVM/scripts/lean-typing-proof:787

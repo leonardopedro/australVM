@@ -1,6 +1,6 @@
 # Lean 4 → MM0 typing census and probe measurements
 
-The measurements behind §13.16–§13.22 of [`../../lean4mm0.md`](../../lean4mm0.md).
+The measurements behind §13.16–§13.27 of [`../../lean4mm0.md`](../../lean4mm0.md).
 Produced by `scripts/lean-typing-sweep` over `mm0/exports` (329 exports of the
 BookProof corpus), one sweep at a time.
 
@@ -13,6 +13,13 @@ BookProof corpus), one sweep at a time.
 | `probe-mm0rs.log`, `probe-emit.log`, `probe-aeval.log` | The sweeps' own output, including the budget line each run measured under. |
 | `arena_proto.rs` | The prototype behind §13.23: builds math-expression trees and a hash-consed arena over the same formulas, and counts the heap each holds with a counting allocator. A `src/bin` of an mm0-rs checkout (upstream `digama0/mm0`), not of this repo. |
 | `arena-probe.txt` | Its transcripts on the two largest surviving artifacts, with the checkout's commit. |
+| `enc-probe.py`, `enc-probe.txt` | §13.25's encoder-only baseline: same loader and `Enc` on `adjoint_aeval` with no derivation, so what it costs to *hold* the statement is separated from what the derivation adds. Transcript is its output on `ChapterH8`. |
+| `emit-snapshot-aeval-tm4.txt`, `emit-snapshot-aeval-tm6.txt` | §13.25's two `tracemalloc` top-12 snapshots of the emitter, with the `t` they were taken at. Line numbers resolve against the `scripts/lean-typing-proof` revision of the same date; `tm4`'s numbers shifted when the sampler grew columns, so the doc quotes only `tm6`'s. |
+| `emit-trace-aeval-tm6.tsv` | §13.25's growth trace of `adjoint_aeval`: one row per ~5 s sample, columns as `scripts/lean-typing-proof` writes them (`rss_mb`, `traced_mb`, `uord_mb`, `free_mb`, `mmap_mb`, `obnodes`, the accumulator byte counts, and the derivation counters). It ends at t=5 550 s because it was stopped by hand once the t=900 s snapshot was in hand — with `tracemalloc` in the process it runs an order of magnitude slower per obligation than the terminal run, so it is the composition measurement and its last row is **not** a budget outcome. The level curve is the terminal run's own trace (§13.21, every 10 s, no `tracemalloc`). |
+| `emit-trace-aeval-terminal.tsv` | The full 10 GiB trace of `adjoint_aeval` (§13.21/§13.25): 795 samples at 10 s, ending at the cap. Columns are the pre-`tracemalloc` set (`t rss_mb peak_mb exprs memo_by memo_n rules axioms oblig lift msubst depth stack …`); no `uord`/`traced`/`obnodes`, which is why it measures level and `tm6` measures composition. |
+| `reemit.tsv` | §13.27's re-measurement of the nineteen `emit` rows of [`census-own.tsv`](census-own.tsv) after both streams, each under the budget its census row records and one at a time (`emitted` / `timeout` / `rc=1` = `MemoryError`), with peak RSS, elapsed time and the artifact size. Fourteen emit; four time out under the cap; two still reach ~10 GiB inside `emit_obligation`. Supersedes the `emit` rows of the census — those rows still say "over 10 GiB". |
+| `emit-trace-aeval-full.tsv`, `emit-run-aeval-full.log` | §13.27's full-budget run of `adjoint_aeval` after both streams: 567 samples at 10 s to t=5 747.7 s, where the declaration **finished** (5 752.4 s, peak 1 662 MB, `.mm0` 1 297 596 934 B) instead of reaching the 10 GiB cap. The log is the emitter's own report — rules, assumptions, artifact size. |
+| `emit-trace-aeval-stream.tsv` | §13.26's after-the-fix trace: the same command as `emit-trace-aeval-terminal.tsv` with `oblig_sink` streaming and the `to_tree` memo, capped at 4 GiB and stopped by its 2 400 s budget at 116 874 obligations. `obnodes` is 0 on every row by construction — the deriver retains no obligation trees, so the column that used to grow now measures that it does not. |
 
 ## Columns
 
@@ -39,6 +46,11 @@ nix develop -c scripts/lean-typing-sweep mm0/exports <out.tsv> \
   --mm0rs-timeout 3600 --mm0rs-mem-gb 12 \
   --check-max-mb 2000 --check-timeout 3600 --scan-timeout 10800
 ```
+
+The emitter trace is the one artifact here that is not produced by the sweep: it
+is `LTP_TRACE=<out.tsv> LTP_TRACE_SNAP=<s> scripts/lean-proof-scan …
+--limit=1 --only=<file>`, so the scan applies its own `cap_mem` and the trace
+records the budget the emitter died in.
 
 `--retry <tsv>` re-measures only the rows a previous run left open and rewrites
 the file in place, so the command above resumes rather than restarts. Children

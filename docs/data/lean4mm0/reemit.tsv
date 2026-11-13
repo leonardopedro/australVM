@@ -1,0 +1,19 @@
+chapter	decl	budget_s	peak_mb	status	elapsed_s	mm0_b	axioms	rules	oblig
+BookProof.Toolbox.ChapterFockPairPerturbation	BookProof.FockPairPerturbation.abs_re_inner_pairVec_le	900	1159	emitted	189	1041771375	467710	1929299	1256
+BookProof.Toolbox.ChapterEsaClosureCore	BookProof.EsaClosure.selfAdjointExtension_eq_adjoint	5400	3154	emitted	1158	2931086276	163977	684228	3091
+BookProof.Sm.ChapterSmFarisLavine	BookProof.SmFarisLavine.CoreData.esa_core	900	3105	emitted	558	2680041375	82520	323955	2974
+BookProof.Qym.ChapterYangMillsAbelianEsa	BookProof.FullQuadratic.fqOp.eq_1	900	832	emitted	56	932584058	220969	1009749	462
+BookProof.Qg.ChapterQgOuterFockFullFL	BookProof.QgOuterFock.qgSectorHam.eq_1	900	1319	emitted	98	1279392565	322742	1599850	471
+BookProof.Qym.ChapterYangMillsOuterFockFL.Part2	BookProof.YmOuterFockFL.abs_levi_le_one	900	1506	emitted	61	814365997	62776	358231	5135
+BookProof.Sm.ChapterSmComparisonEsa	BookProof.SmComparisonEsa.equiv_pgLp	900	3513	emitted	301	4354934901	849242	5226453	351
+BookProof.Qym.ChapterYangMillsHermite	BookProof.YangMillsHermite.CoreRep._sizeOf_1	900	8793	timeout 900s	900	0	0	0	235
+BookProof.Qg.ChapterQgAssembledFlatTransfer	BookProof.QgAssembledFlatTransfer.deficiencyTrivialAt_total_of_flat	900	9993	rc=1	853	0	0	0	140
+BookProof.Qym.ChapterYangMillsAbelianFockEsa	BookProof.YmAbelianFock.coreRep_op_add	900	8665	timeout 900s	901	0	0	0	511
+BookProof.Ns.ChapterNsOuterFockSingleTime	BookProof.NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime	900	9962	rc=1	167	0	0	0	350
+BookProof.Sirk.ChapterSirkPerSystem	BookProof.ChapterSirkPerSystem.diagKR_sirk_crouzeix_domain	900	3376	timeout 900s	900	0	0	0	223
+BookProof.Sm.ChapterSmYukawaCoupling	BookProof.SmHamiltonian.smField.eq_1	900	1240	emitted	96	1372060597	310518	1909429	283
+BookProof.Sirk.ChapterSirkTruncation	BookProof.ChapterSirkTruncation.transfer_defect_le_of_leakage	900	2294	emitted	329	2072181724	245911	1111097	1424
+BookProof.Toolbox.ChapterKatoRellichRelative	BookProof.KatoRellich.dense_range_add_relBounded	900	3721	timeout 900s	901	0	0	0	3817
+BookProof.Toolbox.ChapterFockFieldPerturbation	BookProof.FockFieldPerturbation.abs_re_inner_fieldVec_le	900	862	emitted	182	891550036	399857	1629734	784
+BookProof.Textbook.ChapterH7	BookProof.ChapterH7.compress_isSelfAdjoint	900	1499	emitted	802	1183550317	344976	1559431	1649
+BookProof.Toolbox.ChapterFockCubicQuarticStability	BookProof.FockCubicQuarticStability.cubic_form_eq	900	1355	emitted	435	1480916900	763230	3161805	995
