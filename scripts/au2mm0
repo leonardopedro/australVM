@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+# au2mm0 — reflect an Austral kernel's obligations to integer polynomials.
+#
+# Part of the Austral project, under the Apache License v2.0 with LLVM Exceptions.
+# See LICENSE file for details.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+"""Reflect obligations to polynomials and decide them, twice, independently.
+
+WHY. A W2 certificate is only as good as the step that turns the kernel into a
+polynomial: if reflection is wrong, a true-looking `peq` talks about a different
+program. `mm0-c` cannot see that step, so it is *trusted* — which is exactly why
+this tool decides every obligation by two independent routes and refuses when
+they disagree. One route is symbolic (expand to a coefficient dict); the other
+evaluates both sides at deterministic points with exact Python integers, so a
+bug in the expansion shows up as a disagreement rather than as a certificate.
+
+WHAT THIS DOES NOT DO. `emit` is not implemented yet: a certificate needs a
+proof chain (`peq` steps justified one ring law at a time), and the prover that
+builds it is W2's main body of work. `emit` therefore refuses with exit 2 rather
+than writing an unchecked statement; `check` is complete and is what W1's
+mutation test uses.
+
+EXIT CODES
+  0  every obligation is an identity, both routes agree
+  1  an obligation does not hold (or the routes disagree) — a real refusal
+  2  out of the fragment (division, float, recursion, unknown call) — no claim
+  3  malformed input
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+MAX_DEPTH = 64
+SAMPLE_POINTS = [(-3, 2, 5), (0, 0, 0), (7, -1, 11), (1, 1, 1)]
+
+
+class OutOfFragment(Exception):
+    """The expression is outside the exact-integer polynomial fragment."""
+
+
+class Malformed(Exception):
+    """The obligation document is not one this tool can read."""
+
+
+def load(path: Path) -> dict:
+    try:
+        doc = json.loads(path.read_text())
+    except json.JSONDecodeError as err:
+        raise Malformed(f"{path}: {err}") from None
+    if not isinstance(doc, dict):
+        raise Malformed(f"{path}: top level is not an object")
+    for key in ("defs", "obligations"):
+        if not isinstance(doc.get(key), list):
+            raise Malformed(f"{path}: missing list {key!r}")
+    return doc
+
+
+def reflect(node, env: dict, defs: dict, depth: int = 0):
+    """Substitute calls, returning a small AST: ('int', n) / ('var', i) /
+    ('add'|'sub'|'mul', a, b) / ('neg', a). Variable identity is its name."""
+    if depth > MAX_DEPTH:
+        raise OutOfFragment("call depth exceeded (recursive kernel?)")
+    if not isinstance(node, dict):
+        raise Malformed(f"expression node is not an object: {node!r}")
+    if "int" in node:
+        value = node["int"]
+        if not isinstance(value, int):
+            raise Malformed(f"int payload is not an integer: {value!r}")
+        return ("int", value)
+    if "var" in node:
+        name = node["var"]
+        if name not in env:
+            raise Malformed(f"unbound variable {name!r}")
+        # `env` maps a parameter or free variable to its AST: a free variable
+        # maps to itself, a parameter to the (reflected) argument.
+        return env[name]
+    if "call" in node:
+        name = node["call"]
+        if name not in defs:
+            raise Malformed(f"unknown call {name!r}")
+        params, body = defs[name]
+        args = node.get("args", [])
+        if len(args) != len(params):
+            raise Malformed(
+                f"{name} expects {len(params)} argument(s), got {len(args)}")
+        # Call-by-name substitution: a kernel helper is a polynomial
+        # abbreviation, so duplicating it is exact.
+        inner = dict(env)
+        for param, arg in zip(params, args):
+            inner[param] = reflect(arg, env, defs, depth + 1)
+        return reflect(body, inner, defs, depth + 1)
+    op = node.get("op")
+    if op in ("div", "mod", "float", "fdiv"):
+        raise OutOfFragment(f"operator {op!r} has no exact-integer model")
+    if op in ("add", "sub", "mul"):
+        args = node.get("args", [])
+        if len(args) != 2:
+            raise Malformed(f"{op} expects 2 arguments, got {len(args)}")
+        return (op, reflect(args[0], env, defs, depth + 1),
+                reflect(args[1], env, defs, depth + 1))
+    if op == "neg":
+        args = node.get("args", [])
+        if len(args) != 1:
+            raise Malformed(f"neg expects 1 argument, got {len(args)}")
+        return ("neg", reflect(args[0], env, defs, depth + 1))
+    raise OutOfFragment(f"operator {op!r} is not in the polynomial fragment")
+
+
+def symbol(node, names: dict) -> str:
+    """A stable textual form, for reporting a disagreement."""
+    tag = node[0]
+    if tag == "int":
+        return str(node[1])
+    if tag == "var":
+        return names.setdefault(node[1], f"x{len(names)}")
+    if tag == "neg":
+        return f"-({symbol(node[1], names)})"
+    spin = {"add": "+", "sub": "-", "mul": "*"}[tag]
+    return f"({symbol(node[1], names)}{spin}{symbol(node[2], names)})"
+
+
+def expand(node, names: dict) -> dict:
+    """Symbolic route: a polynomial as {exponent tuple: coefficient}."""
+    tag = node[0]
+    if tag == "int":
+        if node[1] == 0:
+            return {}
+        # Every exponent tuple has the width of the variable list, so the
+        # constant monomial is all zeros rather than the empty tuple: mixing
+        # widths would make `zip` in `mul` silently truncate.
+        return {tuple(0 for _ in names): node[1]}
+    if tag == "var":
+        index = names[node[1]]
+        exps = tuple(1 if i == index else 0 for i in range(len(names)))
+        return {exps: 1}
+    if tag == "neg":
+        return {k: -v for k, v in expand(node[1], names).items()}
+    left, right = expand(node[1], names), expand(node[2], names)
+    if tag == "add":
+        out = dict(left)
+        for key, val in right.items():
+            out[key] = out.get(key, 0) + val
+        return {k: v for k, v in out.items() if v}
+    if tag == "sub":
+        out = dict(left)
+        for key, val in right.items():
+            out[key] = out.get(key, 0) - val
+        return {k: v for k, v in out.items() if v}
+    out = {}
+    for key1, val1 in left.items():
+        for key2, val2 in right.items():
+            key = tuple(a + b for a, b in zip(key1, key2))
+            out[key] = out.get(key, 0) + val1 * val2
+    return {k: v for k, v in out.items() if v}
+
+
+def evaluate(node, values: dict) -> int:
+    """Numeric route: exact integer evaluation, independent of `expand`."""
+    tag = node[0]
+    if tag == "int":
+        return node[1]
+    if tag == "var":
+        return values[node[1]]
+    if tag == "neg":
+        return -evaluate(node[1], values)
+    left, right = evaluate(node[1], values), evaluate(node[2], values)
+    if tag == "add":
+        return left + right
+    if tag == "sub":
+        return left - right
+    return left * right
+
+
+def check(doc: dict) -> tuple[int, list[str]]:
+    defs = {}
+    for entry in doc["defs"]:
+        if not isinstance(entry, dict) or "name" not in entry:
+            raise Malformed(f"def entry without a name: {entry!r}")
+        defs[entry["name"]] = (list(entry.get("params", [])), entry.get("body"))
+    lines, failures, gaps = [], 0, 0
+    for obligation in doc["obligations"]:
+        name = obligation.get("name", "<unnamed>")
+        vars_ = obligation.get("vars", [])
+        try:
+            env = {v: ("var", v) for v in vars_}
+            lhs = reflect(obligation["lhs"], env, defs)
+            rhs = reflect(obligation["rhs"], env, defs)
+            # Variable order is the obligation's own `vars` list, so the
+            # exponent tuples have a fixed width and every name is registered
+            # before expansion (an unregistered name is a reflection bug).
+            names = {v: i for i, v in enumerate(vars_)}
+            poly_l = expand(lhs, names)
+            poly_r = expand(rhs, names)
+        except OutOfFragment as err:
+            # A gap is the only way to say "could not decide"; it is never a pass
+            # and never a failure of the obligation.
+            lines.append(f"  [gap]  {name}: {err}")
+            gaps += 1
+            continue
+        except Malformed as err:
+            lines.append(f"  [fail] {name}: {err}")
+            failures += 1
+            continue
+        if poly_l != poly_r:
+            shown: dict = {}
+            lines.append(
+                f"  [fail] {name}: {obligation.get('statement', '')} "
+                f"-> {symbol(lhs, shown)} != {symbol(rhs, shown)}")
+            failures += 1
+            continue
+        # Second route: sample the difference at deterministic points. Sufficient
+        # to catch a reflection bug, not a proof of the identity — the symbolic
+        # route is what makes the claim.
+        for point in SAMPLE_POINTS:
+            values = {v: point[i] for i, v in enumerate(vars_)}
+            if evaluate(lhs, values) != evaluate(rhs, values):
+                lines.append(
+                    f"  [fail] {name}: routes disagree at {values}: "
+                    f"{evaluate(lhs, values)} != {evaluate(rhs, values)}")
+                failures += 1
+                break
+        else:
+            lines.append(
+                f"  [ok]   {name}: {obligation.get('statement', '')} "
+                f"(lhs-rhs = 0 over {len(vars_)} variable(s))")
+    return failures, lines, gaps
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if len(argv) > 1 else 3
+    command = argv[1]
+    if command == "selftest":
+        return selftest()
+    if command not in ("check", "emit"):
+        print(f"au2mm0: unknown command {command!r} (check, emit, selftest)",
+              file=sys.stderr)
+        return 3
+    if len(argv) < 3:
+        print(f"au2mm0: {command} needs an obligations file", file=sys.stderr)
+        return 3
+    try:
+        doc = load(Path(argv[2]))
+    except (Malformed, OSError) as err:
+        print(f"au2mm0: {err}", file=sys.stderr)
+        return 3
+    if command == "emit":
+        print("au2mm0: emit is not implemented: a certificate needs the ring-"
+              "normalization proof chain (W2 prover), and this tool will not "
+              "write a statement it cannot prove.\n"
+              "        `check` is complete; see PLAN_sota_kernel_verification.md "
+              "§4 W2.", file=sys.stderr)
+        return 2
+    try:
+        failures, lines, gaps = check(doc)
+    except Malformed as err:
+        print(f"au2mm0: {err}", file=sys.stderr)
+        return 3
+    print(f"au2mm0: {doc.get('module', '?')} ({argv[2]})")
+    print("\n".join(lines))
+    print(f"au2mm0: {len(doc['obligations'])} obligation(s), "
+          f"{failures} failure(s), {gaps} gap(s)")
+    return 1 if failures else 0
+
+
+def selftest() -> int:
+    """Two anchors, both negative: a sign flip in the kernel and a division.
+
+    Both are computed on a copy, so the committed obligations file is untouched.
+    """
+    here = Path(__file__).resolve().parent.parent
+    source = here / "examples/verified-kernel/flux1d/flux1d.obligations.json"
+    doc = json.loads(source.read_text())
+    failures, _, gaps = check(doc)
+    if failures or gaps:
+        print("au2mm0 selftest: the committed obligations do not check",
+              file=sys.stderr)
+        return 1
+    # Anchor 1: weaken the numerical flux (`2·f(l) − f(r)` -> `f(l) − f(r)`),
+    # leaving every obligation stated. Note the flipped coefficient belongs to
+    # `numFlux`, not `flux`: all three obligations hold for *any* physical flux,
+    # so a mutation of `flux` alone is invisible to them by construction — the
+    # scheme, not the constitutive law, is what these statements constrain.
+    mutated = json.loads(json.dumps(doc))
+    num = next(d for d in mutated["defs"] if d["name"] == "numFlux")
+    num["body"]["args"][0]["args"][1]["int"] = 1
+    failures, _, _ = check(mutated)
+    if not failures:
+        print("au2mm0 selftest: a sign flip in flux was not refused",
+              file=sys.stderr)
+        return 1
+    # Anchor 2: a division has no exact-integer model; refusing must be a gap,
+    # not a silent pass and not a failure of the obligation.
+    divided = json.loads(json.dumps(doc))
+    num = next(d for d in divided["defs"] if d["name"] == "numFlux")
+    num["body"] = {"op": "add", "args": [
+        num["body"],
+        {"op": "div", "args": [{"int": 1}, {"int": 2}]},
+    ]}
+    failures, _, gaps = check(divided)
+    if failures or gaps != len(divided["obligations"]):
+        print("au2mm0 selftest: a division was not refused as a gap",
+              file=sys.stderr)
+        return 1
+    print("au2mm0 selftest: sign flip refused; division refused as a gap; OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

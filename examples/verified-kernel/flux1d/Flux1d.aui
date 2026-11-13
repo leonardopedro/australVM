@@ -1,0 +1,46 @@
+module Flux1d is
+    """
+    The kernel-spec surface for a 1-D finite-volume flux scheme (W1 of
+    PLAN_sota_kernel_verification.md).
+
+    This is deliberately *not* a general-purpose DSL. It is the smallest
+    carrier in which the three kernel obligations can be stated as identities
+    over a class of states rather than as one closed computation:
+
+      * consistency — `numFlux u u = flux u`;
+      * conservation — the residuals of a periodic cell cycle sum to zero,
+        because the interface flux is telescoping;
+      * symmetry — `delta l r` is antisymmetric in its two arguments.
+
+    The same three functions are the kernel that runs: `Flux1d.aum` is the
+    execution side, compiled by this compiler with no separate C and no
+    separate proof text. The obligations are stated in
+    `flux1d.obligations.json` (the reflected form W2 consumes); the CPS-IR
+    carrier that would replace that sidecar is W1's fallback decision, recorded
+    in the plan.
+
+    The arithmetic is exact integer arithmetic on `Int64`. The certificates
+    are over ℤ; `Int64` wraps, so every certificate carries the assumption
+    "no overflow on the certified range" in its header until W4 pins it.
+    """
+    type State: Free;
+
+    """The physical flux of one state, componentwise: `f(x) = 3x + x²`."""
+    function flux(u: State): State;
+
+    """The numerical flux: `2·f(l) − f(r)` (a two-point, left-biased form)."""
+    function numFlux(l: State, r: State): State;
+
+    """`numFlux l r − numFlux r l` — the antisymmetric interface operator."""
+    function delta(l: State, r: State): State;
+
+    """One cell's residual: the flux in minus the flux out."""
+    function residual(prev: State, cur: State, next: State): State;
+
+    """
+    Run the three obligations on one concrete state vector. This is a *test* of
+    the spec, not its proof: it exercises the identities at a point, while the
+    certificates in `mm0/flux1d_certificate` quantify over the variables.
+    """
+    function main(): ExitCode;
+end module.

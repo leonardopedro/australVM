@@ -1,0 +1,600 @@
+#!/usr/bin/env python3
+"""mm0-comparator — approved statements, held out (W3 of
+PLAN_sota_kernel_verification.md).
+
+The hole this closes: `scripts/lean2mm0 verify` regenerates the statement from
+the same export it verifies, so a weakened definition is reproduced faithfully
+and the drift gate cannot see it. Approval must be a separate artifact, read
+rather than produced by the comparator.
+
+An approval is `mm0/approved/<artifact>.stmts`: the canonical statement
+skeleton plus the pinned hashes below, copied by hand into a commit that
+touches only `mm0/approved/`, so the diff shows a human decided.
+
+Published statements (what the artifact *says*):
+  * regenerated from the committed `.mm1` through `mm0/pairing/gen_mm0.py`
+    (the pairing rule generator — reused, not reimplemented);
+  * local names canonicalized by stream order (`l0`, `l1`, …), so renaming an
+    internal helper does not ask for re-approval but reordering does;
+  * diffed against the approved copy.
+
+Dependency closure (what the statement *rests on*): sha256 over the sorted
+set of `term`/`def`/`axiom`/`theorem` names each statement transitively
+depends on, plus a sha256 per theory file the artifact embeds or imports.
+This is the step a statement diff alone cannot do: a definition can keep its
+name and its statement while its body weakens.
+
+Usage:
+    scripts/mm0-comparator approve <artifact> [...]   # write mm0/approved/
+    scripts/mm0-comparator check [<artifact> ...]     # all approved and unapproved
+    scripts/mm0-comparator selftest                   # the three negative controls
+
+Exit codes: 0 ok (gaps are printed, not failed), 1 refusal, 2 cannot verify
+(tooling or theory file absent — the `[gap]` convention of
+scripts/verify-invariants).
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+AVM = Path(__file__).resolve().parent.parent
+MM0 = AVM / "mm0"
+APPROVED = MM0 / "approved"
+GEN_MM0 = MM0 / "pairing" / "gen_mm0.py"
+
+# Which emitter owns which artifact. `check` proves the committed .mm1/.mm0 is
+# exactly what the emitter produces *now*; the comparator then works from the
+# .mm1. An artifact with no emitter entry is compared as committed (the
+# comparator says so in its output rather than pretending the freshness check
+# ran).
+EMITTERS = {
+    "gap_certificate": ("scripts/lean2mm0", "check"),
+    "layout_certificate": ("scripts/lean2mm0", "check"),
+    "quasi_rh_certificate": ("scripts/lean2mm0", "check"),
+    "quasi_rh_7_8": ("scripts/lean2mm0", "check"),
+    "linearity_certificate": ("scripts/ledger2mm0", "check"),
+    "linearity_certificate_spans": ("scripts/ledger2mm0", "check"),
+    "service_isolation_certificate": ("scripts/service_iso2mm0", "check"),
+}
+
+# MM0 identifier charset (mm0-rs), used for reference extraction. Note `-` is
+# absent: it cannot appear in a declared name.
+IDENT = r"[A-Za-z_][A-Za-z0-9_?!+*/<>=|&$%^~#@.]*"
+IDENT_RE = re.compile(IDENT)
+DECL_RE = re.compile(r"^(sort|term|def|axiom|theorem)\s+(" + IDENT + ")")
+IMPORT_RE = re.compile(r'^import\s+"?([^";]+)"?\s*;')
+
+HASH_KEY = "-- held-out-sha256: "
+NAME_KEY = "-- closure-sha256: "
+THEORY_KEY = "-- theory-sha256: "
+STATEMENTS_KEY = "-- statements-sha256: "
+ARTIFACT_KEY = "-- artifact: "
+THEORY_LINE = "-- theory: "
+
+EMITTER_CACHE: dict[str, str] = {}
+
+
+class Refusal(Exception):
+    """The artifact does not match its approval (exit 1)."""
+
+
+class Unverifiable(Exception):
+    """Cannot decide here: tooling or a recorded theory file is absent (exit 2)."""
+
+
+# ── text utilities ───────────────────────────────────────────────────────
+
+
+def strip_comments(text: str) -> str:
+    """Drop `--` comments outside math strings; `$` toggles math."""
+    out, i, n, in_math = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_math:
+            out.append(c)
+            if c == "$":
+                in_math = False
+            i += 1
+            continue
+        if c == "$":
+            in_math = True
+            out.append(c)
+            i += 1
+            continue
+        if text.startswith("--", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def split_statements(text: str) -> list[str]:
+    """Split a statement stream on depth-0 `;` outside math strings."""
+    stmts: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    in_math = False
+    for c in text:
+        cur.append(c)
+        if in_math:
+            if c == "$":
+                in_math = False
+            continue
+        if c == "$":
+            in_math = True
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == ";" and depth == 0:
+            stmt = "".join(cur).strip()
+            if stmt:
+                stmts.append(stmt)
+            cur = []
+    tail = "".join(cur).strip()
+    if tail:
+        raise Refusal(f"trailing text after the last statement: {tail[:80]!r}")
+    return stmts
+
+
+def declarations(stmts: list[str]) -> list[tuple[str, str, str]]:
+    out = []
+    for text in stmts:
+        m = DECL_RE.match(text)
+        if m:
+            out.append((m.group(1), m.group(2), text))
+    return out
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# ── the artifact: statements, canonicalized ──────────────────────────────
+
+
+def generate_statements(mm1: Path, tmp: Path) -> list[str]:
+    """Regenerate the public statement stream through the pairing generator."""
+    if not GEN_MM0.exists():
+        raise Unverifiable(f"pairing generator absent: {GEN_MM0}")
+    raw = tmp / (mm1.stem + ".stmts.raw")
+    v = subprocess.run([sys.executable, str(GEN_MM0), str(mm1), str(raw)],
+                       capture_output=True, text=True)
+    if v.returncode != 0:
+        raise Unverifiable(f"gen_mm0 refused {mm1.name}: {v.stderr.strip()[:200]}")
+    return split_statements(strip_comments(raw.read_text()))
+
+
+def theory_entries(stem: str, artifact_root: Path) -> list[tuple[str, str]]:
+    """(relative path, text) for every theory file the artifact embeds/imports.
+
+    Embedded theory: the `.mm0` begins with the theory verbatim (lean2mm0's
+    assembly), so it is found by exact prefix match against `docs/*.mm0`.
+    Imported theory: recorded in the artifact's own `-- theory source:` line
+    (the set.mm statement layer), resolved from the repo root.
+    """
+    mm0 = artifact_root / f"{stem}.mm0"
+    text = mm0.read_text()
+    lines = text.rstrip("\n").split("\n")
+    # Emitters name their theory in the header: `-- Target theory: <path>`
+    # (lean2mm0/ledger2mm0/… embed it) or `-- theory source: <path>` (the
+    # set.mm statement layer imports it).
+    # `theory source:` first: for the set.mm layer `Target theory:` names the
+    # import string, while `theory source:` names the file on disk.
+    src = (re.search(r"^--\s*theory source\s*:\s*(\S+)", text, re.M)
+           or re.search(r"^--\s*Target theory\s*:\s*(\S+)", text, re.M))
+    if src:
+        rel = src.group(1).strip()
+        # Header paths are spelled relative to the repo (`docs/…`) or to the
+        # workspace (`australVM/docs/…`, which lean2mm0 emits); try both.
+        for base in (AVM, MM0, AVM.parent):
+            cand = (base / rel)
+            if cand.exists():
+                return [(cand.resolve().relative_to(AVM).as_posix(),
+                         cand.read_text())]
+        return [(rel, "")]
+    for cand in sorted((AVM / "docs").glob("*.mm0")):
+        rel = cand.relative_to(AVM).as_posix()
+        block = cand.read_text().rstrip("\n").split("\n")
+        if lines[:len(block)] == block:
+            return [(rel, cand.read_text())]
+    imports = [m.group(1).strip() for line in lines
+               for m in [IMPORT_RE.match(line)] if m]
+    return [(imp, "") for imp in imports]
+
+
+def canonical(stmts: list[str], theory_names: set[str]) -> list[str]:
+    """Rename artifact-local declarations by stream order.
+
+    Theory names are kept verbatim: a change to `teq` or `peq` is a theory
+    change, visible through the theory hash, not a local rename.
+    """
+    declared = [name for _k, name, _t in declarations(stmts)]
+    local = [n for n in dict.fromkeys(declared) if n not in theory_names]
+    mapping = {n: f"l{i}" for i, n in enumerate(local)}
+    if not mapping:
+        return stmts
+    # Longest first so `l1` never rewrites the prefix of `l10`-like originals.
+    alts = "|".join(re.escape(n) for n in sorted(mapping, key=len, reverse=True))
+    boundary = r"[A-Za-z0-9_?!+*/<>=|&$%^~#@.]"
+    pattern = re.compile(rf"(?<!{boundary})({alts})(?!{boundary})")
+    return [pattern.sub(lambda m: mapping[m.group(1)], s) for s in stmts]
+
+
+def closure_names(stmts: list[str]) -> set[str]:
+    """Every declared name each statement transitively references."""
+    decls = declarations(stmts)
+    names = {n for _k, n, _t in decls}
+    deps: dict[str, set[str]] = {}
+    for _kind, name, text in decls:
+        deps.setdefault(name, set()).update(
+            t for t in IDENT_RE.findall(text) if t in names and t != name)
+    seen: set[str] = set()
+    stack = list(names)
+    while stack:
+        n = stack.pop()
+        for d in deps.get(n, ()):
+            if d not in seen:
+                seen.add(d)
+                stack.append(d)
+    seen |= names
+    return seen
+
+
+def held_out(stmts: list[str], theories: list[tuple[str, str]]) -> dict:
+    stamps = []
+    for rel, text in theories:
+        path = AVM / rel
+        if text:
+            stamps.append(f"{rel} sha256:{sha256_text(text)}")
+        elif path.exists():
+            stamps.append(f"{rel} sha256:{sha256_file(path)}")
+        else:
+            stamps.append(f"{rel} unprovisioned")
+    stamps.sort()
+    names = sorted(closure_names(stmts))
+    return {
+        "closure": sha256_text("\n".join(names)),
+        "theory": sha256_text("\n".join(stamps)),
+        "statements": sha256_text("\n".join(stmts)),
+        "theory_lines": stamps,
+    }
+
+
+# ── approved files ───────────────────────────────────────────────────────
+
+
+def approved_path(stem: str, approved_root: Path) -> Path:
+    return approved_root / f"{stem}.stmts"
+
+
+def read_approved(path: Path) -> tuple[dict, list[str]]:
+    meta: dict[str, str] = {}
+    body: list[str] = []
+    for line in path.read_text().splitlines():
+        if line.startswith(THEORY_LINE):
+            meta.setdefault("theory", "")
+            meta["theory"] += line[len(THEORY_LINE):].strip() + "\n"
+        elif line.startswith(ARTIFACT_KEY):
+            meta["artifact"] = line[len(ARTIFACT_KEY):].strip()
+        elif line.startswith(NAME_KEY):
+            meta["closure"] = line[len(NAME_KEY):].strip()
+        elif line.startswith(THEORY_KEY):
+            meta["theory_hash"] = line[len(THEORY_KEY):].strip()
+        elif line.startswith(STATEMENTS_KEY):
+            meta["statements"] = line[len(STATEMENTS_KEY):].strip()
+        elif line.startswith(HASH_KEY):
+            meta["held_out"] = line[len(HASH_KEY):].strip()
+        elif line.startswith("--"):
+            continue
+        else:
+            body.append(line)
+    # Statements can span lines (a hyphen-broken axiom), so re-split the body
+    # text rather than treating each file line as one statement.
+    return meta, split_statements("\n".join(body))
+
+
+def write_approved(stem: str, stmts: list[str], theories: list[tuple[str, str]],
+                   approved_root: Path) -> Path:
+    info = held_out(stmts, theories)
+    lines = [
+        f"-- mm0-comparator v1 — approved statements for {stem}",
+        "--",
+        "-- Written by `scripts/mm0-comparator approve` and copied into a commit",
+        "-- that touches only mm0/approved/: the diff is the human decision.",
+        "-- `scripts/mm0-comparator check` refuses any statement, closure or",
+        "-- theory mismatch against this file.",
+        f"{ARTIFACT_KEY}{stem}",
+    ]
+    for stamp in info["theory_lines"]:
+        lines.append(f"{THEORY_LINE}{stamp}")
+    lines += [
+        f"{NAME_KEY}{info['closure']}",
+        f"{THEORY_KEY}{info['theory']}",
+        f"{STATEMENTS_KEY}{info['statements']}",
+        "",
+    ]
+    path = approved_path(stem, approved_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines + stmts) + "\n")
+    return path
+
+
+def diff_excerpt(got: list[str], want: list[str]) -> str:
+    import difflib
+    diff = list(difflib.unified_diff(want, got, fromfile="approved",
+                                     tofile="generated", lineterm="", n=1))
+    return "\n".join(diff[:24])
+
+
+# ── the comparison ───────────────────────────────────────────────────────
+
+
+def emitter_check(stem: str, artifact_root: Path) -> None:
+    if artifact_root.resolve() != MM0.resolve():
+        return                              # a fixture tree: no emitter owns it
+    entry = EMITTERS.get(stem)
+    if entry is None:
+        print(f"[note] {stem}: no emitter registered — compared as committed")
+        return
+    script, mode = entry
+    if script in EMITTER_CACHE:
+        return
+    v = subprocess.run([sys.executable, str(AVM / script), mode],
+                       capture_output=True, text=True)
+    if v.returncode != 0:
+        raise Unverifiable(f"{script} {mode} failed for {stem}: "
+                           f"{(v.stderr or v.stdout).strip()[:200]}")
+    EMITTER_CACHE[script] = "ok"
+
+
+def check_one(stem: str, artifact_root: Path, approved_root: Path,
+              theory_root: Path | None) -> str:
+    """Return a one-line result; raise Refusal/Unverifiable on a mismatch."""
+    path = approved_path(stem, approved_root)
+    if not path.exists():
+        raise Unverifiable(
+            f"{stem}: no approved statements ({path.relative_to(AVM)} absent) — "
+            f"run `scripts/mm0-comparator approve {stem}` and commit the file")
+    emitter_check(stem, artifact_root)
+    meta, want = read_approved(path)
+
+    with tempfile.TemporaryDirectory() as td:
+        got = generate_statements(artifact_root / f"{stem}.mm1", Path(td))
+    theories = theory_entries(stem, artifact_root)
+    if theory_root is not None:
+        theories = [(rel, (theory_root / rel).read_text()
+                     if (theory_root / rel).exists() else "")
+                    for rel, _text in theories]
+    theory_names = {n for rel, text in theories
+                    for _k, n, _t in declarations(split_statements(
+                        strip_comments(text)))}
+    got = canonical(got, theory_names)
+    info = held_out(got, theories)
+
+    if meta.get("statements") and meta["statements"] != info["statements"]:
+        if got != want:
+            raise Refusal(f"{stem}: statements differ from the approved file\n"
+                          f"{diff_excerpt(got, want)}")
+        raise Refusal(f"{stem}: statement text matches but {STATEMENTS_KEY}"
+                      f"{meta['statements']} does not hash it "
+                      f"(approved copy edited?)")
+    if got != want:
+        raise Refusal(f"{stem}: statements differ from the approved file\n"
+                      f"{diff_excerpt(got, want)}")
+    if meta.get("closure") and meta["closure"] != info["closure"]:
+        raise Refusal(f"{stem}: dependency closure changed: approved "
+                      f"{meta['closure'][:16]}…, now {info['closure'][:16]}…")
+    # An approval that pinned a theory file's hash cannot be re-checked on a
+    # machine where that file is not provisioned (set.mm0 is untracked
+    # toolchain state). That is an explained gap, not a refusal: refusing would
+    # make the approval machine-dependent, and passing would hide the absence.
+    for line in meta.get("theory", "").splitlines():
+        if "sha256:" in line and "unprovisioned" in "\n".join(info["theory_lines"]):
+            rel = line.rsplit(" sha256:", 1)[0]
+            if any(s.startswith(rel + " ") and s.endswith("unprovisioned")
+                   for s in info["theory_lines"]):
+                raise Unverifiable(
+                    f"{stem}: theory file {rel} is pinned in the approval but not "
+                    "provisioned here — cannot re-check it")
+    if meta.get("theory_hash") and meta["theory_hash"] != info["theory"]:
+        raise Refusal(f"{stem}: theory changed: approved "
+                      f"{meta['theory_hash'][:16]}…, now {info['theory'][:16]}…"
+                      f"\n  one of: {', '.join(info['theory_lines'])}")
+    return (f"{stem}: {len(got)} statements, closure {info['closure'][:16]}…, "
+            f"theory {info['theory'][:16]}…")
+
+
+def artifacts(root: Path) -> list[str]:
+    out = []
+    for mm0 in sorted(root.glob("*.mm0")):
+        if (root / f"{mm0.stem}.mm1").exists():
+            out.append(mm0.stem)
+    return out
+
+
+# ── modes ────────────────────────────────────────────────────────────────
+
+
+def cmd_approve(args) -> int:
+    stems = args.artifacts or artifacts(MM0)
+    failed = 0
+    for stem in stems:
+        try:
+            emitter_check(stem, MM0)
+            theories = theory_entries(stem, MM0)
+            with tempfile.TemporaryDirectory() as td:
+                stmts = generate_statements(MM0 / f"{stem}.mm1", Path(td))
+            theory_names = {n for _rel, text in theories
+                            for _k, n, _t in declarations(split_statements(
+                                strip_comments(text)))}
+            stmts = canonical(stmts, theory_names)
+            path = write_approved(stem, stmts, theories, APPROVED)
+            print(f"mm0-comparator: approved {stem} — "
+                  f"{path.relative_to(AVM)} ({len(stmts)} statements)")
+        except Unverifiable as e:
+            print(f"[gap]  {e}")
+            failed += 1
+    return 2 if failed else 0
+
+
+def cmd_check(args) -> int:
+    stems = args.artifacts or artifacts(MM0)
+    gaps = failures = 0
+    for stem in stems:
+        try:
+            print(f"[ok]   {check_one(stem, MM0, APPROVED, None)}")
+        except Unverifiable as e:
+            print(f"[gap]  {e}")
+            gaps += 1
+        except Refusal as e:
+            print(f"[FAIL] {e}")
+            failures += 1
+    if failures:
+        print(f"mm0-comparator: {failures} artifact(s) refused", file=sys.stderr)
+        return 1
+    print(f"mm0-comparator: {len(stems) - gaps} approved, {gaps} gap(s)")
+    return 0
+
+
+def cmd_selftest(args) -> int:
+    """The three negative controls W3 requires, plus the clean path.
+
+    Control 1 mutates the numeral in the artifact's own statement stream — the
+    exact stand-in for a changed source obligation that the emitter would
+    faithfully regenerate. Control 2 weakens the theory file. Control 3 edits
+    the approved copy, proving the comparator reads it instead of trusting its
+    own output.
+    """
+    stem = "gap_certificate" if (MM0 / "gap_certificate.mm1").exists() \
+        else artifacts(MM0)[0]
+    theories = theory_entries(stem, MM0)
+    if not theories or not theories[0][1]:
+        raise Unverifiable(f"selftest needs an embedded theory for {stem}")
+    theory_rel = theories[0][0]
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        # A clean approval written from the committed artifact.
+        with tempfile.TemporaryDirectory() as gen_td:
+            stmts = generate_statements(MM0 / f"{stem}.mm1", Path(gen_td))
+        theory_names = {n for _rel, text in theories
+                        for _k, n, _t in declarations(split_statements(
+                            strip_comments(text)))}
+        stmts = canonical(stmts, theory_names)
+        good = write_approved(stem, stmts, theories, tmp / "good")
+        check_one(stem, MM0, good.parent, None)
+        print(f"mm0-comparator selftest: clean approval accepted ({stem})")
+
+        # Control 1 — a changed numeral in the emitted statement stream.
+        art = tmp / "art"
+        art.mkdir()
+        for ext in ("mm0", "mm1"):
+            shutil.copy(MM0 / f"{stem}.{ext}", art / f"{stem}.{ext}")
+        text = (art / f"{stem}.mm1").read_text()
+        m = None
+        for m in re.finditer(r"\$\d+\$", text):
+            pass                                 # take the LAST numeral token
+        if m is None:
+            raise Unverifiable(f"selftest: {stem} carries no numeral to mutate")
+        old = m.group(0)
+        new = "$" + str(int(old.strip("$")) + 1) + "$"
+        mutated = text[:m.start()] + new + text[m.end():]
+        (art / f"{stem}.mm1").write_text(mutated)
+        try:
+            check_one(stem, art, good.parent, None)
+        except Refusal as e:
+            if "statement" not in str(e):
+                raise Refusal(f"selftest[1]: refused for the wrong reason: {e}")
+            print("mm0-comparator selftest: changed numeral refused — "
+                  "statement diff fired")
+        else:
+            raise Refusal("selftest[1]: a changed numeral passed "
+                          "(the statement diff is not firing)")
+
+        # Control 2 — weaken the theory file the artifact rests on.
+        troot = tmp / "theory"
+        target = troot / theory_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(theories[0][1] +
+                          "\n-- weakened by selftest: one body would change here\n")
+        try:
+            check_one(stem, MM0, good.parent, troot)
+        except Refusal as e:
+            if "theory" not in str(e):
+                raise Refusal(f"selftest[2]: refused for the wrong reason: {e}")
+            print("mm0-comparator selftest: weakened theory refused — "
+                  "theory hash fired")
+        else:
+            raise Refusal("selftest[2]: a weakened theory passed "
+                          "(the theory hash is not firing)")
+
+        # Control 3 — tamper with the approved copy itself.
+        bad = tmp / "bad" / f"{stem}.stmts"
+        bad.parent.mkdir(parents=True, exist_ok=True)
+        lines = good.read_text().splitlines()
+        for i, line in enumerate(lines):
+            if not line.startswith("--") and "l0" in line:
+                lines[i] = line.replace("l0", "l1", 1)
+                break
+        else:
+            raise Unverifiable("selftest[3]: no canonical name to tamper")
+        bad.write_text("\n".join(lines) + "\n")
+        try:
+            check_one(stem, MM0, bad.parent, None)
+        except Refusal as e:
+            if "statement" not in str(e):
+                raise Refusal(f"selftest[3]: refused for the wrong reason: {e}")
+            print("mm0-comparator selftest: tampered approval refused — "
+                  "the approved file is what gets read")
+        else:
+            raise Refusal("selftest[3]: a tampered approval passed "
+                          "(the comparator trusts its own output)")
+    print("mm0-comparator selftest: OK — all three negative controls refuse")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(
+        prog="mm0-comparator",
+        description="Compare generated MM0 statements against approved, held-out ones.")
+    sub = p.add_subparsers(dest="mode", required=True)
+    for name in ("approve", "check"):
+        s = sub.add_parser(name)
+        s.add_argument("artifacts", nargs="*")
+    sub.add_parser("selftest")
+    args = p.parse_args(argv)
+    try:
+        if args.mode == "approve":
+            return cmd_approve(args)
+        if args.mode == "check":
+            return cmd_check(args)
+        return cmd_selftest(args)
+    except Refusal as e:
+        print(f"mm0-comparator: REFUSED: {e}", file=sys.stderr)
+        return 1
+    except Unverifiable as e:
+        print(f"mm0-comparator: cannot verify: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,86 @@
+module body Flux1d is
+    record State: Free is
+        rho: Int64;
+        momentum: Int64;
+        energy: Int64;
+    end;
+
+    -- f(x) = 3x + x² ; componentwise on the three conserved densities.
+    function flux(u: State): State is
+        let fr: Int64 := (u.rho * 3) + (u.rho * u.rho);
+        let fm: Int64 := (u.momentum * 3) + (u.momentum * u.momentum);
+        let fe: Int64 := (u.energy * 3) + (u.energy * u.energy);
+        return State(rho => fr, momentum => fm, energy => fe);
+    end;
+
+    -- 2·f(l) − f(r), the two-point numerical flux.
+    function numFlux(l: State, r: State): State is
+        let fl: State := flux(l);
+        let fr: State := flux(r);
+        let nr: Int64 := (fl.rho * 2) - fr.rho;
+        let nm: Int64 := (fl.momentum * 2) - fr.momentum;
+        let ne: Int64 := (fl.energy * 2) - fr.energy;
+        return State(rho => nr, momentum => nm, energy => ne);
+    end;
+
+    -- The antisymmetric interface operator.
+    function delta(l: State, r: State): State is
+        let a: State := numFlux(l, r);
+        let b: State := numFlux(r, l);
+        return State(rho => a.rho - b.rho,
+                     momentum => a.momentum - b.momentum,
+                     energy => a.energy - b.energy);
+    end;
+
+    -- Flux in minus flux out.
+    function residual(prev: State, cur: State, next: State): State is
+        let in_flux: State := numFlux(cur, next);
+        let out_flux: State := numFlux(prev, cur);
+        return State(rho => in_flux.rho - out_flux.rho,
+                     momentum => in_flux.momentum - out_flux.momentum,
+                     energy => in_flux.energy - out_flux.energy);
+    end;
+
+    function main(): ExitCode is
+        let a: State := State(rho => 1, momentum => 2, energy => 3);
+        let b: State := State(rho => -4, momentum => 5, energy => -6);
+        let c: State := State(rho => 7, momentum => -8, energy => 9);
+
+        -- consistency: numFlux u u = flux u
+        let fa: State := flux(a);
+        let na: State := numFlux(a, a);
+        let ok_consistency: Bool := (fa.rho = na.rho) and
+            ((fa.momentum = na.momentum) and (fa.energy = na.energy));
+
+        -- symmetry: delta l r + delta r l = 0
+        let d1: State := delta(a, b);
+        let d2: State := delta(b, a);
+        let ok_symmetry: Bool := ((d1.rho + d2.rho) = 0) and
+            (((d1.momentum + d2.momentum) = 0) and
+             ((d1.energy + d2.energy) = 0));
+
+        -- conservation: the periodic cycle's residuals sum to zero
+        let r1: State := residual(a, b, c);
+        let r2: State := residual(b, c, a);
+        let r3: State := residual(c, a, b);
+        let ok_conservation: Bool := (((r1.rho + r2.rho) + r3.rho) = 0) and
+            ((((r1.momentum + r2.momentum) + r3.momentum) = 0) and
+             (((r1.energy + r2.energy) + r3.energy) = 0));
+
+        -- The exit code names which obligation failed, so a mismatch is
+        -- visible to the harness rather than only to a reader.
+        if ok_consistency then
+            if ok_symmetry then
+                if ok_conservation then
+                    return ExitSuccess();
+                else
+                    return ExitFailure();
+                end if;
+            else
+                return ExitFailure();
+            end if;
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

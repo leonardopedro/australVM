@@ -1,0 +1,69 @@
+{
+  "module": "Flux1d",
+  "source": "examples/verified-kernel/flux1d/Flux1d.aum",
+  "note": "Reflected form of the three obligations. This sidecar is W1's fallback carrier (decision recorded in PLAN_sota_kernel_verification.md \u00a79): the compiler cannot yet attach obligation nodes to CPS IR, so the reflected AST is written next to the kernel and audited against it. The shape of this file is what an obligation node in CPS IR JSON would serialise to, so `scripts/au2mm0` does not change when the carrier moves.",
+  "assumptions": [
+    "The kernel computes on Int64, which wraps. The certificate is over the integers and covers the scheme for inputs that do not overflow; pinning the range is W4."
+  ],
+  "defs": [
+    {
+      "name": "flux",
+      "params": ["u"],
+      "body": {"op": "add", "args": [
+        {"op": "mul", "args": [{"var": "u"}, {"int": 3}]},
+        {"op": "mul", "args": [{"var": "u"}, {"var": "u"}]}
+      ]}
+    },
+    {
+      "name": "numFlux",
+      "params": ["l", "r"],
+      "body": {"op": "sub", "args": [
+        {"op": "mul", "args": [{"call": "flux", "args": [{"var": "l"}]}, {"int": 2}]},
+        {"call": "flux", "args": [{"var": "r"}]}
+      ]}
+    },
+    {
+      "name": "delta",
+      "params": ["l", "r"],
+      "body": {"op": "sub", "args": [
+        {"call": "numFlux", "args": [{"var": "l"}, {"var": "r"}]},
+        {"call": "numFlux", "args": [{"var": "r"}, {"var": "l"}]}
+      ]}
+    }
+  ],
+  "obligations": [
+    {
+      "name": "consistency",
+      "kind": "consistency",
+      "statement": "numFlux u u = flux u",
+      "vars": ["u"],
+      "lhs": {"call": "numFlux", "args": [{"var": "u"}, {"var": "u"}]},
+      "rhs": {"call": "flux", "args": [{"var": "u"}]}
+    },
+    {
+      "name": "conservation",
+      "kind": "conservation",
+      "statement": "delta a b + delta b c + delta c a = 0",
+      "vars": ["a", "b", "c"],
+      "lhs": {"op": "add", "args": [
+        {"op": "add", "args": [
+          {"call": "delta", "args": [{"var": "a"}, {"var": "b"}]},
+          {"call": "delta", "args": [{"var": "b"}, {"var": "c"}]}
+        ]},
+        {"call": "delta", "args": [{"var": "c"}, {"var": "a"}]}
+      ]},
+      "rhs": {"int": 0}
+    },
+    {
+      "name": "symmetry",
+      "kind": "symmetry",
+      "statement": "delta l r + delta r l = 0",
+      "vars": ["l", "r"],
+      "lhs": {"op": "add", "args": [
+        {"call": "delta", "args": [{"var": "l"}, {"var": "r"}]},
+        {"call": "delta", "args": [{"var": "r"}, {"var": "l"}]}
+      ]},
+      "rhs": {"int": 0}
+    }
+  ]
+}
