@@ -67,6 +67,12 @@ CARGO_FLAGS ?= --offline
 .PHONY: bridge
 bridge: lib/BuiltInModules.ml
 	cargo build --release $(CARGO_FLAGS) --manifest-path safestos/cranelift/Cargo.toml
+# `check-bridge-fresh` compares mtimes, but cargo compares fingerprints: after a
+# no-op rebuild it leaves the `.so` older than a source whose bytes it has
+# already seen, and the gate then refuses a link that is in fact current. The
+# touch records what actually happened — a bridge build ran against these
+# sources — instead of asking the `.so` to lie about its age.
+	@touch $(BRIDGE_SRC)
 	AUSTRAL_BRIDGE_DIR=$(CURDIR)/$(BRIDGE_CARGO_DIR) dune build lib/ bin/
 	cp _build/default/bin/austral.exe $(BIN)
 	@echo "--- Bridge rebuilt: $(CURDIR)/$(BRIDGE_CARGO_DIR)/libaustral_cranelift_bridge.so"
