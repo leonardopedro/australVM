@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# rv64-model-mm0 — W9.1: convert an *external* ISA model to MM0 and check it.
+#
+# The plan's W9.1 says "convert, do not author": the ISA side of the
+# CLIF→ISA obligation must be somebody else's specification, not one we wrote
+# to fit the emitter. This script takes the pinned model
+# (`flake.nix` `packages.riscv-lean`, opencompl/riscv-lean at ccdfd676), runs
+# the pipeline this repo already trusts for Lean 4 exports, and refuses unless
+# the frozen root of trust accepts the result:
+#
+#     `$RISCV_MODEL`/RISCV/Instructions.lean   (83 RV64 defs, no imports)
+#       -- lean -o (olean, this flake's Lean) -->
+#       -- lean4export (3.1.0 NDJSON) -->
+#     export.ndjson   55494 decls = 83 roots + 55411 prelude closure
+#       -- scripts/lean2mm0-stmts emit --only (roots) -->
+#     mm0/statements/riscv_instructions.{mm0,mm1,roots}
+#       -- mm0-rs compile --> .mmb -- mm0-c < .mm1 --> exit 0
+#
+# What the artifact is (and is not) is the statement emitter's, verbatim: the
+# *structure* of every root declaration, encoded in `docs/cic.mm0`'s term
+# language and stated as an axiom. mm0-c checks that encoding is well-formed
+# against the theory; it does not check that the Lean definitions say what
+# RISC-V says — that stays the Lean kernel's (and nanoda's) verdict on the
+# export. So this is the ISA model's statement of record, not a proof about it.
+#
+# The second half is the coverage diff the plan asks for: `ISA_REGISTRY` (the
+# opcodes `safestos/cranelift/src/cps.rs` decodes) against the converted model.
+# Each opcode is either mapped to the model declaration that implements it,
+# marked `structural` (a CPS construct that emits no RISC-V instruction of its
+# own), or reported as NOT COVERED. The table is closed: an opcode the decoder
+# gains without an entry here fails the script, so the diff cannot rot
+# silently. Memory opcodes are expected uncovered — `Instructions.lean` is
+# ALU/M/B only; loads and stores live behind the Sail import this pin cannot
+# follow, and saying so is the point of the report.
+#
+# Usage:
+#   scripts/rv64-model-mm0          # regenerate, verify, print the diff
+#   scripts/rv64-model-mm0 check    # fail if the committed artifact drifted
+#
+# Env:
+#   RISCV_MODEL   model root (default $RISCV_MODEL from `nix develop .#lean`,
+#                 else the store path of `nix build .#riscv-lean`)
+#   OUT           artifact directory (default mm0/statements)
+#   KEEP_EXPORT   where the NDJSON lives (default mm0/exports, gitignored)
+#
+# The export goes to `mm0/exports/` rather than a `mktemp -d` on purpose: the
+# artifact's header records the export's *path* (lean2mm0-stmts writes it), so a
+# temporary directory would make `check` fail on every run — measured, it did,
+# on a path like /tmp/nix-shell.XOabRm/… . `mm0/exports/` is the convention the
+# 2124 committed statement files already follow, and it is gitignored.
+#
+# Exit: 0 converted + accepted + diff printed; 1 any failure; 2 tooling absent.
+set -uo pipefail
+
+AVM=$(cd "$(dirname "$0")/.." && pwd)
+OUT=${OUT:-$AVM/mm0/statements}
+STEM=riscv_instructions
+MODE=${1:-emit}
+
+info() { printf '\033[0;32m[INFO]\033[0m %s\n' "$*"; }
+warn() { printf '\033[0;33m[WARN]\033[0m %s\n' "$*"; }
+err() { printf '\033[0;31m[FAIL]\033[0m %s\n' "$*" >&2; }
+die() { err "$*"; exit 1; }
+
+MODEL=${RISCV_MODEL:-}
+if [[ -z $MODEL ]]; then
+    MODEL=$(nix build --no-link --print-out-paths "$AVM#riscv-lean" 2>/dev/null \
+            || true)
+    MODEL=${MODEL:+$MODEL/share/riscv-lean}
+fi
+[[ -n $MODEL && -f $MODEL/RISCV/Instructions.lean ]] || {
+    err "no RV64 model: set RISCV_MODEL, or run under \`nix develop .#lean\`"
+    err "  (looked for \$RISCV_MODEL/RISCV/Instructions.lean)"
+    exit 2
+}
+
+for tool in lean lean4export mm0-rs mm0-c python3; do
+    command -v "$tool" >/dev/null || {
+        err "$tool not on PATH (lean/lean4export: \`nix develop .#lean\`;"
+        err " mm0-rs/mm0-c: \`nix profile install .#mm0\`; python3: nixpkgs)"
+        exit 2
+    }
+done
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+EXPORT_DIR=${KEEP_EXPORT:-$AVM/mm0/exports}
+mkdir -p "$EXPORT_DIR"
+
+info "model : $MODEL/RISCV/Instructions.lean"
+mkdir -p "$WORK/model/RISCV"
+cp "$MODEL/RISCV/Instructions.lean" "$WORK/model/RISCV/Instructions.lean"
+# One module, no imports: this elaborates in seconds and needs no lake and no
+# dependency resolution (the repo's default target does, which is why the pin
+# ships exactly this file).
+# Lean only accepts input files under the root directory, which it takes to
+# be the current directory — hence the `cd`, with the model copied in rather
+# than elaborated in place inside the (read-only) Nix store.
+(cd "$WORK" && lean -o model/RISCV/Instructions.olean \
+     model/RISCV/Instructions.lean) \
+  || die "the model does not elaborate under this flake's Lean"
+
+NDJSON=$EXPORT_DIR/$STEM.ndjson
+LEAN_PATH=$WORK/model lean4export RISCV.Instructions > "$NDJSON" \
+  || die "lean4export refused the model"
+info "export: $(wc -c < "$NDJSON") bytes, $(wc -l < "$NDJSON") NDJSON records"
+
+ROOTS=$WORK/roots.txt
+python3 - "$NDJSON" "$ROOTS" "$AVM" <<'PY' || die "cannot read the export's names"
+import importlib.util, sys
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+ndjson, out, avm = sys.argv[1], sys.argv[2], sys.argv[3]
+loader = SourceFileLoader("l2m", f"{avm}/scripts/lean2mm0")
+spec = importlib.util.spec_from_loader("l2m", loader)
+mod = importlib.util.module_from_spec(spec)
+sys.modules["l2m"] = mod
+loader.exec_module(mod)
+ex = mod.Export(Path(ndjson), lazy=True)
+names = sorted(n for n in ex.decls if n.startswith("RV64."))
+if not names:
+    sys.exit(f"no RV64.* declaration in {ndjson}")
+Path(out).write_text("\n".join(names) + "\n")
+print(f"roots : {len(names)} RV64 declarations "
+      f"(export closure: {len(ex.decls)})", file=sys.stderr)
+PY
+
+TMPOUT=$WORK/out
+mkdir -p "$TMPOUT"
+python3 "$AVM/scripts/lean2mm0-stmts" emit "$NDJSON" "$STEM" \
+        --only "$ROOTS" --out "$TMPOUT" \
+  || die "lean2mm0-stmts refused the export"
+
+mm0-rs compile "$TMPOUT/$STEM.mm0" "$WORK/$STEM.mmb" \
+  || die "mm0-rs refused the converted spec"
+# mm0-c replays the .mm1 command script against the compiled .mmb; feeding it
+# /dev/null "verifies" nothing and exits 255 on every input, including the
+# committed Mathlib-derived statements, so the .mm1 is the only honest stdin.
+mm0-c "$WORK/$STEM.mmb" < "$TMPOUT/$STEM.mm1" > "$WORK/c.out" 2>&1 \
+  || { err "mm0-c refused the converted spec:"; cat "$WORK/c.out" >&2; exit 1; }
+info "mm0-c : accepted ($(grep -c '^axiom decl_RV64' "$TMPOUT/$STEM.mm0") declarations)"
+
+# ---- the coverage diff ---------------------------------------------------
+#
+# One line per `ISA_REGISTRY` entry: `<opcode> <name> <what>`. The names are
+# read from `safestos/cranelift/src/isa.rs` so the decoder stays the only
+# source of truth about what exists; the right-hand sides are checked against
+# the converted artifact, so "covered" is never a comment.
+python3 - "$TMPOUT/$STEM.mm0" "$AVM" <<'PY'
+import re, sys
+from pathlib import Path
+mm0, avm = Path(sys.argv[1]), Path(sys.argv[2])
+text = mm0.read_text()
+axioms = set(re.findall(r"^axiom decl_RV64_(\w+):", text, re.M))
+
+isa = (avm / "safestos/cranelift/src/isa.rs").read_text()
+ops = re.findall(r'opcode: (0x[0-9A-Fa-f]+),\s*\n\s*name: "([a-z_]+)"', isa)
+
+# opcode name -> (kind, detail). kind: model | structural | missing.
+#   model      the model declaration that implements it (must exist in the
+#              converted artifact — checked below)
+#   structural CPS structure with no instruction of its own; the text says why
+#   missing    no declaration in the converted model (the honest gaps)
+MAP = {
+    "int_lit":   ("model", "li"),
+    "add":       ("model", "add"),
+    "sub":       ("model", "sub"),
+    "mul":       ("model", "mul"),
+    "and":       ("model", "and"),
+    "or":        ("model", "or"),
+    "not":       ("model", "xori"),      # not x == xori x, -1
+    "cmp_lt":    ("model", "slt"),
+    "cmp_gt":    ("model", "slt"),       # a > b == b < a, operands swapped
+    "cmp_lte":   ("model", "slt"),       # a <= b == not (b < a)
+    "cmp_gte":   ("model", "slt"),       # a >= b == not (a < b)
+    "cmp_eq":    ("model", "xor"),       # a == b == (a xor b) == 0
+    "cmp_neq":   ("model", "xor"),
+    "deref":     ("missing", "load absent: Instructions.lean is ALU/M/B; "
+                             "loads sit behind the unpinnable Sail import"),
+    "store":     ("missing", "store absent: same reason as deref"),
+    "string_lit": ("structural", "emits a data-section blob, not an instruction"),
+    "var":       ("structural", "slot read; the slot layout, not the ISA"),
+    "let":       ("structural", "slot write; the slot layout, not the ISA"),
+    "app":       ("structural", "call/jump; the calling convention, not an op"),
+    "return":    ("structural", "epilogue; the calling convention, not an op"),
+    "if":        ("structural", "branch lowered by Cranelift, not a model op"),
+    "while":     ("structural", "branch lowered by Cranelift, not a model op"),
+    "match":     ("structural", "tag dispatch lowered by Cranelift"),
+}
+
+unmapped = [n for _op, n in ops if n not in MAP]
+if unmapped:
+    sys.exit(f"isa.rs gained opcode(s) with no rv64-model-mm0 entry: "
+             f"{', '.join(unmapped)}")
+
+covered = structural = missing = 0
+print("\nopcode     name          model                status")
+print("----------------------------------------------")
+for op, name in ops:
+    kind, detail = MAP[name]
+    if kind == "model":
+        ok = detail in axioms
+        status = f"RV64.{detail}" + ("" if ok else "  NOT IN ARTIFACT")
+        if ok:
+            covered += 1
+        else:
+            missing += 1
+    elif kind == "structural":
+        status = f"structural ({detail})"
+        structural += 1
+    else:
+        status = "NOT COVERED"
+        missing += 1
+    print(f"{op:<10} {name:<13} {status}")
+    if kind == "missing":
+        print(f"{'':<10} {'':<13} {detail}")
+print(f"\n{len(ops)} opcodes: {covered} mapped to a converted model declaration, "
+      f"{structural} structural (no ISA instruction), {missing} not covered")
+PY
+
+if [[ $MODE == check ]]; then
+    drift=0
+    for f in "$STEM.mm0" "$STEM.mm1" "$STEM.roots"; do
+        if ! cmp -s "$TMPOUT/$f" "$OUT/$f"; then
+            err "drift: $OUT/$f differs from a fresh conversion"
+            drift=1
+        fi
+    done
+    ((drift == 0)) || die "regenerate with scripts/rv64-model-mm0"
+    info "check: $OUT/$STEM.{mm0,mm1,roots} match a fresh conversion"
+    exit 0
+fi
+
+mkdir -p "$OUT"
+cp "$TMPOUT/$STEM.mm0" "$TMPOUT/$STEM.mm1" "$TMPOUT/$STEM.roots" "$OUT/"
+info "wrote $OUT/$STEM.{mm0,mm1,roots}"

@@ -339,8 +339,53 @@
         # W9.1's toolchain, deliberately separate from `.ocaml` and `default`:
         # nothing in the OCaml build needs Lean, and a shell that carried both
         # would make Lean's 4.35.0 store closure mandatory for `make test`.
+        # The external ISA model W9.1 converts (`PLAN_sota_kernel_verification.md`
+        # §W9.1: "convert, do not author"): opencompl/riscv-lean's bitblastable
+        # RV64 operation semantics, pinned by commit, fetched rather than
+        # vendored so the conversion's input has a name and a digest.
+        #
+        # Only `RISCV/Instructions.lean` is shipped, and that is deliberate: it
+        # is the one file in that repo with **no imports**. The default target
+        # imports `RISCV.SailToRV64`, whose lake dependency `Lean_RV64D` is a
+        # git dependency at `rev = "main"` — unpinnable as a flake input and
+        # un-fetchable from inside a sandbox. Measured 2026-11-14: the single
+        # file elaborates under this flake's Lean 4.30.0 in 2.2 s even though
+        # the repo's `lean-toolchain` names 4.32.2; the version gap lives in
+        # BitVec APIs this file does not touch.
+        #
+        #     nix develop .#lean -c env | grep RISCV_MODEL
+        #     scripts/rv64-model-mm0            # convert + mm0-c
+        packages.riscv-lean = pkgs.stdenvNoCC.mkDerivation {
+          pname = "riscv-lean";
+          version = "ccdfd676";
+          src = pkgs.fetchFromGitHub {
+            owner = "opencompl";
+            repo = "riscv-lean";
+            rev = "ccdfd67647b334a830e220c4caef0f067cd9e15c";
+            hash = "sha256-SaV/eT7LUbcrKut4R0KbG503t2jVj/8jXCjDFHEagCg=";
+          };
+          dontBuild = true;
+          installPhase = ''
+            runHook preInstall
+            install -Dm644 RISCV/Instructions.lean \
+              $out/share/riscv-lean/RISCV/Instructions.lean
+            runHook postInstall
+          '';
+        };
+
+        # `python3` and the MM0 pair are here because the one job this shell
+        # exists for (`scripts/rv64-model-mm0`, W9.1) needs all four tools on
+        # one PATH — a conversion that half-runs is the failure mode the plan
+        # forbids reporting as a gap.
         devShells.lean = pkgs.mkShell {
-          packages = [ pkgs.lean4 self.packages.${system}.lean4export ];
+          packages = [
+            pkgs.lean4
+            self.packages.${system}.lean4export
+            self.packages.${system}.mm0
+            pkgs.python3
+          ];
+          RISCV_MODEL =
+            "${self.packages.${system}.riscv-lean}/share/riscv-lean";
         };
 
         # Shell for iterating on the from-mm build: nix develop .#mm0hs

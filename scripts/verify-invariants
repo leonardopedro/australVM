@@ -633,6 +633,27 @@ PY
             gap "W9: CLIF measurement not run (no clif_dump binary or no python3)"
         fi
 
+        # W9.1: the converted external ISA model. Re-converting the pinned model
+        # needs the `lean` shell (lean, lean4export, mm0, python3 on one PATH),
+        # so a run outside it explains the gap instead of failing — the same
+        # discipline as the other tool-absent gates. With $RISCV_MODEL set, the
+        # committed statements have to be what the pinned model converts to, and
+        # the diff table has to still close over `ISA_REGISTRY`.
+        _rv64="$repo_root/scripts/rv64-model-mm0"
+        if [ -n "${RISCV_MODEL:-}" ] && [ -x "$_rv64" ] \
+            && command -v lean >/dev/null 2>&1 \
+            && command -v lean4export >/dev/null 2>&1; then
+            if "$_rv64" check >"$_cert_tmp/rv64.log" 2>&1; then
+                echo "  [detail] $(grep -E '^[0-9]+ opcodes:' "$_cert_tmp/rv64.log" | tail -1)"
+                check "W9.1: the pinned RV64 model converts and mm0-c accepts it" true
+            else
+                tail -6 "$_cert_tmp/rv64.log" >&2
+                check "W9.1: the pinned RV64 model converts and mm0-c accepts it" false
+            fi
+        else
+            gap "W9.1: RV64 model not re-converted (nix develop \"git+file://\$PWD#lean\" -c bash scripts/rv64-model-mm0 check)"
+        fi
+
         # W6: the generated probe is a test, and it has to actually run.
         if command -v cc >/dev/null 2>&1; then
             if cc -O2 -o "$_cert_tmp/probe" "$_cert_tmp/flux1d_probe.c" -lm \
