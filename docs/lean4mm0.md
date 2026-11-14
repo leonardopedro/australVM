@@ -3137,3 +3137,77 @@ ctx)` result memo; (2) the row's clock, which should be **14 400 s** once (1)
 lands — raising it before that just buys another unfinished run, which is what
 §13.30's 7 200 s and this section's 10 800 s both measured; (3) the 124 GB
 obligation file, which no consumer of this row needs in one piece.
+
+### 13.32 A readable obligation stream, and a `check` result memo that pays only where it is measured to
+
+Two changes, one to what the emitter writes and one to how much it walks. The
+first is a format addition with an exact equality to the old artifact; the second
+is a memo whose safety condition took one wrong attempt to find.
+
+#### The 124 GB obligation file, in bounded parts
+
+`_obligations.jsonl` was already written streaming — the writer never holds one —
+but the reader is the side that cannot cope. On `nsOuterFock…singleTime` it is
+124 GB, so it cannot be opened, grepped, transferred, or indexed by a consumer
+that wants obligation 17 000 near the end.
+
+`LTP_OBLIG_CHUNK=<bytes>` rolls the stream into `part-NNN.jsonl` files, always on
+a line boundary, and adds two small files beside them:
+
+- `_obligations.manifest.json` — the part list with each part's byte size, line
+  count, and first/last obligation id, plus the total.
+- `_obligations.index.jsonl` — one line per obligation: `id`, `part`, `off`,
+  `len`. For a row this size that is a few megabytes, and it is what turns "scan
+  90 GB" into one `seek`.
+
+The line format is untouched, so the parts are not a new encoding — they are the
+old file, cut. Measured on `multiShiftSeq_succ` at a 200 kB limit: four parts,
+`cat *.part-*.jsonl | cmp` equal to the single-file artifact byte for byte, 141
+manifest lines and index entries matching, and 21 sampled index records read back
+by `seek`+`read` parse and carry the id the index promised.
+
+The bound is `limit` bytes **plus at most one certificate**: a line is atomic, and
+the largest certificate in the corpus is 8.25 GB (§13.31), so a part can be that
+large no matter what limit is asked for. With the default 2 GiB, the ns row
+becomes 62 parts and a final one that rolling may leave empty — an empty part is
+removed rather than published. Unset, the emitter writes the historical single
+file exactly as before, which is why every earlier artifact in this document
+still `cmp`s.
+
+#### The `check` memo, and the header it broke
+
+The proposal §13.31 left was a memo keyed by `(eid, expected type, context)`,
+which is the same environment tuple the context memo already uses. The hazard is
+not the key, it is the *side effects*: `check` allocates axiom names in call
+order, so a memo that skips a call would renumber every axiom after it.
+
+So only an **axiom-free** result is stored — one that emitted neither an axiom nor
+an obligation. Such a call consumed no name, and replaying its string is
+indistinguishable from recomputing it… except for one thing the first attempt
+missed: the rule counters. The `.mm0` header prints `-- Rules applied : …` in
+first-appearance order, so skipping 60 000 `ty_var` applications changed the
+artifact:
+
+```
+< -- Rules applied : 1891430 (const type ×592727, …, ty_var ×71, …)
+> -- Rules applied : 1929299 (const type ×620796, …, ty_var ×8974, …)
+```
+
+Two bytes smaller, at line 6. Each entry therefore keeps the exact **sequence** of
+rule names its call applied, and a hit replays it through `_apply_rules` — counts,
+first-appearance order, and the enclosing call's own recording. With the replay,
+on `FockPairPerturbation.abs_re_inner_pairVec_le` (833 184 lookups, 36 075 hits,
+384 results kept in 11 583 B of proof text):
+
+| artifact | bytes | `cmp` against the committed emitter |
+| --- | ---: | --- |
+| `.mm0` | 1 041 771 375 | equal |
+| `.mm1` | 1 075 343 397 | equal |
+| `.jsonl` | 1 012 915 095 | equal |
+
+And the timing is neutral on that row: **73.2 s with the memo, 70.9 s without**
+— inside the run-to-run spread, because the 4.3 % of lookups that hit are tiny
+proof strings. The memo is on by default (`LTP_CHK_MEMO=0` disables it) because
+it is byte-neutral and never slower than the walk it replaces by design, but the
+row that motivated it is the one that decides whether it was worth writing:
+`nsOuterFock…singleTime`, where the gaps are minutes rather than microseconds.

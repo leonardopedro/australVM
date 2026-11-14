@@ -465,6 +465,16 @@ MEMO_MAX = 1_000_000
 # cached (they are recomputed, never wrong).
 ENC_MEMO_BYTES = 64 << 20
 
+# Total size of the proof strings the `check` result memo holds. Proofs are
+# nested text, so this is a real budget: the same cap as the encoding memo would
+# hold few of a term's derivations, and 512 MB is measured against a 10 GiB cap
+# (§13.32) — past it new results are simply not cached.
+CHK_MEMO_BYTES = 512 << 20
+
+# The rule sequences kept beside those proofs: 8 B per cell, so 4 M cells is
+# 32 MB. Past the budget a call is simply not memoised (it is recomputed).
+CHK_RULE_CELLS = 4 << 20
+
 
 def _step_add(hist: dict[str, int], order: list[str], name: str,
               n: int = 1) -> None:
@@ -508,6 +518,143 @@ def _json_write_str(out, s: str) -> None:
         out.write(json.dumps(s[i:j])[1:-1])
         i = j
     out.write('"')
+
+
+# Two gigabytes per part: large enough that a row with a few obligations is one
+# file, small enough that a 124 GB stream is 62 of them rather than one file no
+# reader can open (§13.32).
+OBLIG_PART_BYTES = 2 * 1024 ** 3
+
+
+class ObligationSink:
+    """The certificate stream: one JSON object per line, rolled into parts.
+
+    The obligation file is the largest artifact this emitter writes — 124 GB on
+    `nsOuterFock…singleTime` (§13.31) — and it is written streaming already:
+    each certificate goes out as it is created, so the *writer* never holds one.
+    The reader is the side that cannot cope: a 124 GB `.jsonl` is not openable,
+    greppable, or transferable in one piece, and every consumer that wants
+    obligation 17 000 has to scan 90 GB of text to find it.
+
+    So a part is bounded. `limit` bytes into a part the sink closes it and opens
+    the next, always on a line boundary, and the concatenation of the parts is
+    byte for byte the single file this used to write — the line format, the
+    `sort_keys` ordering and the separators are untouched. Next to the parts go
+    two small files: a manifest (parts, sizes, line counts, first/last id) and
+    an index (one line per obligation: id, part, byte offset, byte length), so
+    a consumer can jump to one certificate without reading the other 123 GB.
+
+    `limit=0` keeps the historical single-file artifact exactly, with no
+    manifest and no index.
+    """
+
+    def __init__(self, stem: Path, limit: int = 0) -> None:
+        self.stem = Path(stem)
+        self.limit = limit
+        self.lines = 0
+        self.bytes = 0
+        self.parts: list[dict] = []
+        self._index_fh = None
+        self._fh = None
+        self._part = -1
+        self._part_bytes = 0
+        self._part_lines = 0
+        self._first_id: str | None = None
+        self._last_id: str | None = None
+        self._line_off = 0
+        self._line_id: str | None = None
+        self._open()
+
+    def _part_path(self, n: int) -> Path:
+        if self.limit:
+            return Path(f"{self.stem}_obligations.part-{n:03d}.jsonl")
+        return Path(f"{self.stem}_obligations.jsonl")
+
+    def _open(self) -> None:
+        self._part += 1
+        self._fh = self._part_path(self._part).open("w")
+        self._part_bytes = 0
+        self._part_lines = 0
+        self._first_id = None
+        self._last_id = None
+        if self.limit and self._index_fh is None:
+            self._index_fh = Path(f"{self.stem}_obligations.index.jsonl").open("w")
+
+    def begin(self, ax: str) -> None:
+        """Start one certificate: its id is all the index needs from it."""
+        self._line_id = ax
+        self._line_off = self._part_bytes
+
+    def write(self, s: str) -> None:
+        self._fh.write(s)
+
+    def end_line(self) -> None:
+        """Finish a certificate: account for its bytes, index it, maybe roll.
+
+        The size comes from `fstat` rather than from counting characters: the
+        parts are bounded in *bytes*, and a term text is not guaranteed ASCII
+        (Lean symbols are). One `flush`+`fstat` per certificate is 24 383 calls
+        on the largest row, against lines that take minutes.
+        """
+        self._fh.flush()
+        end = os.fstat(self._fh.fileno()).st_size
+        n = end - self._line_off
+        self._part_bytes = end
+        self._part_lines += 1
+        self.lines += 1
+        self.bytes += n
+        if self._line_id is not None:
+            if self._first_id is None:
+                self._first_id = self._line_id
+            self._last_id = self._line_id
+            if self._index_fh is not None:
+                self._index_fh.write(
+                    f'{{"id": {json.dumps(self._line_id)}, '
+                    f'"part": {self._part}, "off": {self._line_off}, '
+                    f'"len": {n}}}\n')
+        if self.limit and self._part_bytes >= self.limit:
+            self._roll()
+
+    def _roll(self) -> None:
+        self._fh.close()
+        self.parts.append({
+            "path": self._part_path(self._part).name,
+            "bytes": self._part_bytes,
+            "lines": self._part_lines,
+            "first_id": self._first_id,
+            "last_id": self._last_id,
+        })
+        self._open()
+
+    def close(self) -> None:
+        if self._fh is None:
+            return
+        self._fh.close()
+        self._fh = None
+        if self.limit and self._part_lines == 0:
+            # Rolling closes a part the moment it is full, so the last part can
+            # be empty. An empty artifact is not a part: remove it.
+            self._part_path(self._part).unlink(missing_ok=True)
+        else:
+            self.parts.append({
+                "path": self._part_path(self._part).name,
+                "bytes": self._part_bytes,
+                "lines": self._part_lines,
+                "first_id": self._first_id,
+                "last_id": self._last_id,
+            })
+        if self._index_fh is not None:
+            self._index_fh.close()
+            self._index_fh = None
+        if self.limit:
+            Path(f"{self.stem}_obligations.manifest.json").write_text(
+                json.dumps({
+                    "format": "lean-typing-proof/obligations",
+                    "lines": self.lines,
+                    "bytes": self.bytes,
+                    "part_bytes_limit": self.limit,
+                    "parts": self.parts,
+                }, indent=1) + "\n")
 
 
 _OBTRACE = None
@@ -572,6 +719,8 @@ def census(ex, enc, d) -> None:
             rows += [
                 ("context memo", d._ctx_memo_bytes),
                 ("context entries", len(d._ctx_memo)),
+                ("check result memo", d._chk_memo_bytes),
+                ("check results kept", len(d._chk_memo)),
                 ("obligation list", sum(map(len, list(d.oblig)))),
                 ("lift memo", sys.getsizeof(d._lift_memo)),
                 ("subst memo", sys.getsizeof(d._subst_memo)),
@@ -790,7 +939,7 @@ def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
                  "\taxioms\toblig\tlift\tmsubst\tdepth\tstack"
                  "\taxb\trulb\toblb\taxmax\textra\texb\tliftb\tsubstb"                     "\taccb\trss_trim\tproofb\ttraced_mb\ttpeak_mb"
                      "\tuord_mb\tfree_mb\tmmap_mb\tobnodes\tctxby\tctxn"
-                     "\tctxcall\tctxhit\tctxscan\n")
+                     "\tctxcall\tctxhit\tctxscan\tchkcall\tchkhit\tchkby\n")
         if snap_at:
             fh.write(f"# tracemalloc on, snapshot at t>={snap_at} s\n")
         while not stop.is_set():
@@ -821,6 +970,8 @@ def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
                     len(d._ctx_memo) if d else 0,
                     d._ctx_calls if d else 0, d._ctx_hits if d else 0,
                     d._ctx_scan if d else 0,
+                    d._chk_calls if d else 0, d._chk_hits if d else 0,
+                    d._chk_memo_bytes if d else 0,
                 )) + "\n")
             except Exception:  # one bad sample must not end the trace
                 fh.write(f"# sample error at t={round(time.time() - t0, 1)}: "
@@ -966,9 +1117,10 @@ def main() -> int:
     # cost 24.5 kB per obligation and reached 10 GiB on `adjoint_aeval` (§13.25).
     # A run that is killed by its budget now leaves a partial `.jsonl` — a
     # truncated last line is the caller's cue to discard it — where before it
-    # left no file at all.
-    oblig_path = Path(str(stem) + "_obligations.jsonl")
-    oblig_fh = oblig_path.open("w")
+    # left no file at all. `LTP_OBLIG_CHUNK=<bytes>` rolls it into bounded parts
+    # with a manifest and an index (§13.32); unset keeps the single file.
+    oblig_sink = ObligationSink(
+        stem, limit=int(os.environ.get("LTP_OBLIG_CHUNK", "0") or 0))
     # The assumptions are streamed the same way: §13.27 measures 444 MB of
     # axiom text at 116 874 obligations, and every byte of it is in the artifact
     # anyway. The spool is concatenated into both `.mm0` and `.mm1` afterwards
@@ -982,7 +1134,7 @@ def main() -> int:
     # shifted by `pos + 1`. The Π-type text keeps the unshifted domains — those
     # are read in the scope *outside* their binder, which is exactly theirs.
     d_pre = Deriver(ex, enc, export_path, defer_subst=defer,
-                    oblig_sink=oblig_fh, axiom_sink=ax_fh)
+                    oblig_sink=oblig_sink, axiom_sink=ax_fh)
     # The trace starts before the derivation, so the sampler can attribute growth
     # to the subterm the deriver is inside (the box keeps the reference so the
     # thread does not need to know which branch of `main` built the deriver).
@@ -1034,7 +1186,7 @@ def main() -> int:
         ax_total = len(axioms)
         d_oblig: list[dict] = []
 
-    oblig_fh.close()
+    oblig_sink.close()
     if ax_fh is not None:
         ax_fh.close()
 
@@ -1042,7 +1194,16 @@ def main() -> int:
     goal_ctx, goal_term, goal_ty = inner_ctx, body, body_ty
     if spine:
         stats(f"derivation ({sum(steps_hist.values())} rules, "
-              f"proof {len(base_proof)} B, {ax_total} axioms")
+              f"proof {len(base_proof)} B, {ax_total} axioms)")
+        # The result memo's own accounting goes to stderr: it is about the walk,
+        # not about an artifact byte, and a report line would change the console
+        # every consumer of this row already diffs.
+        if d._chk_calls:
+            print(f"[chk-memo] {d._chk_calls} lookups, {d._chk_hits} hits "
+                  f"({100.0 * d._chk_hits / d._chk_calls:.1f} %), "
+                  f"{d._chk_saved} B of proofs replayed, "
+                  f"{len(d._chk_memo)} kept in {d._chk_memo_bytes} B",
+                  file=sys.stderr, flush=True)
     if closed:
         # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
         # term is a single expression (MM0 nests proofs in argument position
@@ -1246,6 +1407,27 @@ class Deriver:
         self._ctx_calls = 0
         self._ctx_hits = 0
         self._ctx_scan = 0
+        # Result memo for `check` (§13.32). A term is shared, and the same
+        # subterm is checked at the same type in the same context many times;
+        # an identical derivation under the identical key produces the identical
+        # proof string. Only *axiom-free* results are stored: a call that emitted
+        # an axiom or an obligation can never be skipped, because the axiom names
+        # are allocated in call order and the artifact text depends on them. The
+        # rules a call applied are part of that text too — the `.mm0` header
+        # carries the rule summary, and its first-appearance order is the walk's
+        # order — so each entry keeps the exact sequence of rule names it applied
+        # and a hit replays it. That is what makes a hit byte-neutral (measured:
+        # without the replay the header said `ty_var ×71` where the artifact
+        # needed `×8974`).
+        self._chk_memo: dict[tuple[int, int, tuple[int, ...], bool],
+                             tuple[str, tuple[str, ...]]] = {}
+        self._chk_rec: list[str] | None = None
+        self._chk_memo_bytes = 0
+        self._chk_rule_cells = 0
+        self._chk_on = os.environ.get("LTP_CHK_MEMO", "1") != "0"
+        self._chk_calls = 0
+        self._chk_hits = 0
+        self._chk_saved = 0
 
     def add_axiom(self, *chunks) -> None:
         """Hand one artifact assumption to the sink, or retain it.
@@ -1280,13 +1462,21 @@ class Deriver:
                       _label(self.ex, top) if top >= 0 else "-")
 
     def add_rule(self, name: str) -> None:
-        """Count one applied rule (§13.27: the list was 1.8 M pointers)."""
+        """Count one applied rule (§13.27: the list was 1.8 M pointers).
+
+        `_chk_rec` is non-`None` only while a `check` call is being recorded for
+        the result memo, and then it takes the name too: the sequence, not the
+        counts, because the header lists rules in first-appearance order.
+        """
         self.rule_count += 1
         if name in self.rule_hist:
             self.rule_hist[name] += 1
         else:
             self.rule_hist[name] = 1
             self.rule_order.append(name)
+        rec = self._chk_rec
+        if rec is not None:
+            rec.append(name)
 
     def emit_obligation(self, ax: str, lhs, rhs,
                         b: int, x: int, r: int) -> None:
@@ -1316,6 +1506,7 @@ class Deriver:
             })
             return
         # Key order of `sort_keys=True`: b, id, kind, lhs, r, rhs, x.
+        sink.begin(ax)
         sink.write('{"b": ')
         self.tree_json(b, sink)
         sink.write(', "id": ')
@@ -1329,6 +1520,7 @@ class Deriver:
         sink.write(', "x": ')
         self.tree_json(x, sink)
         sink.write("}\n")
+        sink.end_line()
 
     def tree_json(self, eid: int, out) -> None:
         """`to_tree`'s node for `eid`, written as JSON instead of built.
@@ -1961,11 +2153,78 @@ class Deriver:
         return ax
 
     def check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
-        """`_check`, with an unfolding turned into a counted assumption."""
+        """`_check`, memoised per (term, expected type, context) when it can be.
+
+        The memo only ever holds a result whose computation emitted no axiom and
+        no obligation, so replaying it is indistinguishable from recomputing it
+        in the artifacts: the returned string is the same, the axiom table is the
+        same, the obligation stream is the same, and the rule sequence it applied
+        is replayed by `_apply_rules`. It is `_check`'s own output that is cached,
+        after the `Unfoldable` fallback, so an assumed leaf is cached only if the
+        leaf axiom was emitted by an earlier identical call — which cannot happen
+        (that call emitted an axiom), so assumed leaves are simply not cached.
+        `LTP_CHK_MEMO=0` turns it off.
+        """
+        if not self._chk_on:
+            return self._check_or_assume(eid, expected, env, tail)
+        key = (self.strip(eid), self.strip(expected), tuple(env), tail)
+        self._chk_calls += 1
+        prev = self._chk_rec
+        got = self._chk_memo.get(key)
+        if got is not None:
+            out, seq = got
+            self._chk_hits += 1
+            self._chk_saved += len(out)
+            if seq:
+                self._apply_rules(seq, prev)
+            return out
+        ax0, ob0 = self.ax_count, len(self.oblig)
+        mine: list[str] = []
+        self._chk_rec = mine
+        try:
+            out = self._check_or_assume(eid, expected, env, tail)
+        finally:
+            self._chk_rec = prev
+        if prev is not None:
+            prev.extend(mine)
+        # `len(self.oblig)` rather than `ax_count` alone: a leaf or conversion
+        # appends one entry there per axiom it emits, and `add_axiom` is the
+        # only writer of both counters. Both are checked because an axiom that
+        # is written to the sink has still been named.
+        if self.ax_count == ax0 and len(self.oblig) == ob0:
+            if (len(self._chk_memo) < MEMO_MAX
+                    and self._chk_memo_bytes < CHK_MEMO_BYTES
+                    and self._chk_rule_cells + len(mine) <= CHK_RULE_CELLS):
+                self._chk_memo[key] = (out, tuple(mine))
+                self._chk_memo_bytes += len(out)
+                self._chk_rule_cells += len(mine)
+        return out
+
+    def _check_or_assume(self, eid: int, expected: int, env: list[int],
+                         tail: bool) -> str:
         try:
             return self._check(eid, expected, env, tail=tail)
         except Unfoldable:
             return self.assume_leaf(self.strip(eid), self.strip(expected), env)
+
+    def _apply_rules(self, seq: tuple[str, ...], rec: list[str] | None) -> None:
+        """Replay a memoised call's rule applications, in its own order.
+
+        The same three things `add_rule` does, once per name: the count, the
+        first-appearance order the header prints, and the enclosing call's own
+        recorder. Replayed in sequence, so a hit leaves the counters where the
+        recomputation would have left them, byte for byte.
+        """
+        hist, order = self.rule_hist, self.rule_order
+        for name in seq:
+            self.rule_count += 1
+            if name in hist:
+                hist[name] += 1
+            else:
+                hist[name] = 1
+                order.append(name)
+            if rec is not None:
+                rec.append(name)
 
     def _check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
         # The stack is the trace's only view of where in the term the emitter is.
