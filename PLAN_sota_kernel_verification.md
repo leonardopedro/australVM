@@ -1124,22 +1124,51 @@ ISA formalization instead of to a probability kernel:
 - the cost is unknown until a candidate is picked, and the plan must keep saying
   `[gap]` until a conversion actually compiles. The two known costs are
   unchanged from W8's analysis: a translator in the TCB (Lean→MM0 already is
-  one, but a *checked* one) or a hand-authored subset (reviewable, but ours).
+  one, but a *checked* one) or a hand-authored subset (reviewable, but ours).### W9.2 Cranelift-IR model in MM0
 
-### W9.2 Cranelift-IR model in MM0
-
-`mm0/clif.mm0` — sorts for values, types and blocks of the *subset of CLIF the
-bridge emits*, derived from the bridge's own output rather than from the
-Cranelift manual:
+`mm0/clif.mm0` — sorts for values, types and instruction forms of the *subset
+of CLIF the bridge emits*, derived from the bridge's own output rather than from
+the Cranelift manual:
 
 - an emitter, `scripts/clif2mm0`, dumps the CLIF for a module (the bridge
 already builds it into a `CaptureModule`) and emits one declaration per
 instruction form it sees, in the spirit of `mm0_emit.py`'s coverage line;
 - the CPS→CLIF lowering stays trusted (it is Rust code, and `mm0-c` cannot see
-  it), so the model's first job is to make that lowering's *output shape* a
-  measured fact: the census discipline, one layer down;
-- `[gap]` until the emitter exists: today the only measurement of the lowering
-  is the object digest, which says "unchanged", not "correct".
+it), so the model's first job is to make that lowering's *output shape* a
+measured fact: the census discipline, one layer down;
+
+**Status 2026-11-14 — the measurement exists.** `safestos/cranelift/src/bin/clif_dump.rs`
+wraps the capture backend, intercepts each `Context::func` at define time (before
+the backend lowers it) and reports one line per instruction — mnemonic, operand
+count, result count, operand/result types — so the output is a shape, not a
+pretty-print. `scripts/clif2mm0` measures the same corpus as the opcode census
+(both now call `scripts/cps-corpus`, so the two "emitted subsets" cannot drift
+apart) and writes one constructor per measured form, with the arity in the
+argument list and the type tuple in the name:
+
+```
+term iadd__i64_i64__r_i64 (a b: val): op;   -- 58 use(s), 2 operand(s), 1 result(s)
+```
+
+Measured: **14 forms, 645 instructions over 9 modules** (`i64`/`i8` only;
+`iconst`, `iadd`, `band`, `icmp`, `uextend`, `load`, `store`, `call` at four
+arities, `brif`, `jump`, `return`). 14 is fewer than the 23 opcodes on purpose:
+the CLIF layer is coarser (`call` covers `app`; `load`/`store` are the memory
+path) and the mapping between the two layers is W9.3's job, not a name match.
+
+What is checked on every `verify-invariants` run: `mm0-rs` compiles
+`mm0/clif.mm1` and `mm0-c` checks the committed declarations against it (a
+mismatched declaration is refused — measured, not assumed); `-- proves: 0
+theorems` is pinned, and mm0 will not accept a `theorem` here without its proof
+in the `.mm1`, so this layer cannot decorate itself later; `scripts/clif2mm0`
+re-runs the measurement and diffs the file (a form the lowering starts or stops
+emitting is a diff, not stale prose), with a negative control that appends a
+form the lowering never emits and requires the check to fail.
+
+What it still is **not**: a semantics. `clif_step` and the CLIF→ISA refinement
+are W9.3 and remain `[gap]`. The object digest no longer stands alone — it now
+has a companion that says what instructions the bytes were made of — but
+"shape matches" is not "semantics refines", and the plan keeps them apart.
 
 ### W9.3 Refinement: CLIF step → ISA step, reusing the certificates
 
@@ -1181,7 +1210,7 @@ for the emitted subset, with the layer-1 facts entering as hypotheses:
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00` |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **unstarted 2026-11-14**: `[gap]` on all three (no conversion, no `scripts/clif2mm0`, no refinement artifact); the direction and its non-goals are recorded in §4b |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 9-module corpus (**14 forms, 645 instructions**), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; W9.1 (external ISA conversion) and W9.3 (CLIF→ISA refinement) are still `[gap]`; the direction and its non-goals are recorded in §4b |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact

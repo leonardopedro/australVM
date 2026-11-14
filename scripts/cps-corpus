@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# cps-corpus — compile every example that has a CPS path into the directory
+# given as $1, and print one `.cps` path per line on stdout.
+#
+# Exists because "the emitted subset" is a claim about the emitter, not about
+# one kernel: flux1d reads 8 of the 23 opcodes, so a flux1d-only measurement
+# never sees `cmp_lt`, let alone `while`/`store`. Two tools measure that subset
+# (`scripts/isa-census` at the opcode layer, `scripts/clif2mm0` at the CLIF
+# layer) and they must measure the *same* modules, or their two "subsets" can
+# disagree while each check is green. So the list lives here once.
+#
+# Exit: 0 on success, 2 with a `[gap]` line on stderr if the corpus could not be
+# built (no toolchain, or an example that no longer compiles). Nothing here
+# executes a module: both compiles go to C (`--target-type=c`), which needs
+# neither a C compiler nor a host linker, and the measurements read the CPS.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEST="${1:-}"
+if [ -z "$DEST" ]; then
+    echo "cps-corpus: usage: scripts/cps-corpus <dest-dir>" >&2
+    exit 2
+fi
+mkdir -p "$DEST"
+
+if [ -n "${AUSTRAL_BIN:-}" ]; then
+    austral="$AUSTRAL_BIN"
+else
+    austral="$ROOT/austral"
+fi
+if [ ! -x "$austral" ] || [ ! -f "$ROOT/libaustral_cranelift_bridge.so" ]; then
+    echo "cps-corpus: [gap] no ./austral or bridge .so — cannot build the corpus" >&2
+    exit 2
+fi
+
+# The corpus is compiled with `--target-type=c`: the measurement reads the CPS
+# file, not the executable, and the C target needs neither a C compiler nor a
+# host linker. That matters for the kernel entry — `uk_version` and its
+# neighbours are registered in the JIT, not exported by the bridge `.so` unless
+# built with `unfer-kernel`, so linking an exe for it fails on symbols the
+# measurement never touches.
+#
+# `--allow-all` because these tools measure emitted bytes: a kernel call would
+# otherwise be refused by the default-deny engine before it could be counted.
+# The grant question belongs to `modhost`, and nothing here is executed.
+#
+# dir:module[:sources] — the module name is the declared one, not the directory
+# name, which is why it is written down instead of derived.
+entries=(
+    "verified-kernel/flux1d:Flux1d"
+    "fib:Example.Fibonacci"
+    "union:Example.Union"
+    "record:Example.Record"
+    "generic-union:Example.GenericUnion"
+    "named-argument:Example.NamedArgument"
+    "identity:Example.Identity"
+    "kernel:TestKernel:UnferKernel.aui,UnferKernel.aum TestKernel.aum"
+    "memory-ops:Example.MemoryOps"
+)
+
+for entry in "${entries[@]}"; do
+    dir="${entry%%:*}"
+    rest="${entry#*:}"
+    mod="${rest%%:*}"
+    if [ "$rest" = "$mod" ]; then
+        # A module with an interface is one comma pair; a body-only module
+        # (`memory-ops`) is just the `.aum`, so the `.aui` probe may fail.
+        aui=$(cd "$ROOT/examples/$dir" && ls *.aui 2>/dev/null | head -1)
+        aum=$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)
+        if [ -n "$aui" ]; then srcs=("$aui,$aum"); else srcs=("$aum"); fi
+    else
+        read -r -a srcs <<< "${rest#*:}"
+    fi
+    name="$(basename "$dir")"
+    if ! ( cd "$ROOT/examples/$dir" \
+        && LD_LIBRARY_PATH="$ROOT" "$austral" compile "${srcs[@]}" \
+            --entrypoint="$mod:main" --use-cps-jit --allow-all \
+            --target-type=c \
+            --emit-cps="$DEST/$name.cps" --output="$DEST/$name.c" ) \
+            >"$DEST/$name.log" 2>&1; then
+        echo "cps-corpus: [gap] examples/$dir did not compile — corpus incomplete" >&2
+        tail -3 "$DEST/$name.log" >&2
+        exit 2
+    fi
+    if ! grep -q '[1-9][0-9]* functions compiled' "$DEST/$name.log"; then
+        echo "cps-corpus: [gap] examples/$dir compiled no function — nothing to measure" >&2
+        exit 2
+    fi
+    echo "$DEST/$name.cps"
+done

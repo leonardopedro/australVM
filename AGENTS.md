@@ -96,6 +96,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `mm0/approved/<artifact>.stmts` plus a dependency-closure and theory hash;
   an artifact without an approval is reported as a `[gap]` by
   `verify-invariants`, never a silent pass.
+- `scripts/clif2mm0` — emits/checks `mm0/clif.mm0`, the CLIF *shape* model
+  (W9.2): `clif_dump` (a bridge binary) measures the instruction forms the CPS
+  lowering really produces, and this generator writes one declaration per form
+  with the arity in the argument list. It proves nothing (`-- proves: 0
+  theorems`, pinned); a theorem there needs a proof in `mm0/clif.mm1`. The
+  corpus it measures is `scripts/cps-corpus`, shared with `scripts/isa-census`
+  so the opcode layer and the CLIF layer cannot measure different modules.
 - `scripts/check-todo-ledger` — code files (`*.rs`/`*.sh`/`*.py`/`*.toml`)
   carry no `TODO`/`FIXME`/`HACK`/`XXX` marker unless the file is reviewed in
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a

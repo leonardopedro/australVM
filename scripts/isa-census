@@ -16,7 +16,9 @@
 # flux1d reads 8 of the 23 opcodes, so a flux1d-only census never sees `cmp_lt`,
 # let alone `while`/`store`. The corpus below is every example whose CPS path
 # compiles at least one function; each is compiled with `--emit-cps` into a
-# scratch directory and the union is censused. Modules the JIT cannot compile
+# scratch directory and the union is censused. The list itself is
+# `scripts/cps-corpus`, shared with `scripts/clif2mm0` so that the two layers
+# measure the same modules. Modules the JIT cannot compile
 # today (`hello-world`, `memory`: the `__embed` string path) are excluded, and
 # the union line reports how many opcodes the corpus still never exercises
 # rather than implying the subset is fully exercised.
@@ -63,68 +65,23 @@ if [ "${#args[@]}" -eq 1 ] && [ -f "$ROOT/mm0/isa.mm0" ]; then
 fi
 
 if [ "$corpus" -eq 1 ]; then
-    if [ -n "${AUSTRAL_BIN:-}" ]; then
-        austral="$AUSTRAL_BIN"
-    else
-        austral="$ROOT/austral"
-    fi
-    if [ ! -x "$austral" ] || [ ! -f "$ROOT/libaustral_cranelift_bridge.so" ]; then
-        echo "isa-census: [gap] no ./austral or bridge .so — cannot build the corpus" >&2
-        exit 2
-    fi
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    # The corpus is compiled with `--target-type=c`: the census reads the CPS
-    # file, not the executable, and the C target needs neither a C compiler nor
-    # a host linker. That matters for the kernel entry — `uk_version` and its
-    # neighbours are registered in the JIT, not exported by the bridge `.so`
-    # unless built with `unfer-kernel`, so linking an exe for it fails on
-    # symbols the census never touches.
-    #
-    # dir:module[:sources] — the module name is the declared one, not the
-    # directory name, which is why it is written down instead of derived.
-    entries=(
-        "verified-kernel/flux1d:Flux1d"
-        "fib:Example.Fibonacci"
-        "union:Example.Union"
-        "record:Example.Record"
-        "generic-union:Example.GenericUnion"
-        "named-argument:Example.NamedArgument"
-        "identity:Example.Identity"
-        "kernel:TestKernel:UnferKernel.aui,UnferKernel.aum TestKernel.aum"
-        "memory-ops:Example.MemoryOps"
-    )
-    cps_files=()
-    for entry in "${entries[@]}"; do
-        dir="${entry%%:*}"
-        rest="${entry#*:}"
-        mod="${rest%%:*}"
-        if [ "$rest" = "$mod" ]; then
-            # A module with an interface is one comma pair; a body-only module
-            # (`memory-ops`) is just the `.aum`, so the `.aui` probe may fail.
-            aui=$(cd "$ROOT/examples/$dir" && ls *.aui 2>/dev/null | head -1)
-            aum=$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)
-            if [ -n "$aui" ]; then srcs=("$aui,$aum"); else srcs=("$aum"); fi
-        else
-            read -r -a srcs <<< "${rest#*:}"
-        fi
-        name="$(basename "$dir")"
-        if ! ( cd "$ROOT/examples/$dir" \
-            && LD_LIBRARY_PATH="$ROOT" "$austral" compile "${srcs[@]}" \
-                --entrypoint="$mod:main" --use-cps-jit --allow-all \
-                --target-type=c \
-                --emit-cps="$tmp/$name.cps" --output="$tmp/$name.c" ) \
-                >"$tmp/$name.log" 2>&1; then
-            echo "isa-census: [gap] examples/$dir did not compile — corpus incomplete" >&2
-            tail -3 "$tmp/$name.log" >&2
-            exit 2
-        fi
-        if ! grep -q '[1-9][0-9]* functions compiled' "$tmp/$name.log"; then
-            echo "isa-census: [gap] examples/$dir compiled no function — nothing to measure" >&2
-            exit 2
-        fi
-        cps_files+=("$tmp/$name.cps")
-    done
+    # The corpus itself lives in `scripts/cps-corpus`, shared with
+    # `scripts/clif2mm0`: the opcode layer and the CLIF layer must measure the
+    # same modules, or their two "emitted subsets" can disagree while each
+    # check passes. That helper owns the compile flags and the entry list.
+    # Through a file, not a process substitution: `mapfile < <(...)` reports
+    # only its own status, so a corpus helper that exited 2 after printing some
+    # paths would be censused as if it had succeeded.
+    if ! "$ROOT/scripts/cps-corpus" "$tmp" > "$tmp/corpus.list"; then
+        exit 2
+    fi
+    mapfile -t cps_files < "$tmp/corpus.list"
+    if [ "${#cps_files[@]}" -eq 0 ]; then
+        echo "isa-census: [gap] the corpus compiled no module" >&2
+        exit 2
+    fi
     exec "$BIN" --isa "$ROOT/mm0/isa.mm0" --allow-all "${cps_files[@]}"
 fi
 

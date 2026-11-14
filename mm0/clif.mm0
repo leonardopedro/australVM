@@ -1,0 +1,53 @@
+-- clif.mm0 — the Cranelift-IR layer of the verified kernel (W9.2 of
+-- PLAN_sota_kernel_verification.md).
+--
+-- layer: CLIF
+-- measured-by: scripts/clif2mm0 --write, from
+--   safestos/cranelift/target/release/clif_dump over scripts/cps-corpus
+-- clif-forms: 14
+-- clif-instructions: 645
+-- clif-types: i64,i8
+-- proves: 0 theorems
+--
+-- WHAT THIS IS. One declaration per instruction form the bridge's own
+-- lowering emits, with the form's measured arity in its argument list and
+-- its operand/result types in its name. It is a model of the *shape* of
+-- the lowering's output — the thing the object digest cannot state — and
+-- nothing more.
+--
+-- WHAT IT IS NOT. Not a semantics and not a theorem: `clif_step` and the
+-- CLIF→ISA refinement are W9.3 and are not claimed here. mm0 will not let
+-- a `theorem` appear in a specification without a proof in the `.mm1`, so
+-- the `proves: 0 theorems` line is enforced by mm0-c rather than promised
+-- by this comment. `scripts/verify-invariants` additionally re-runs this
+-- generator, so a form the lowering starts emitting — or stops emitting —
+-- is a diff, not a stale model.
+--
+-- Terminators: the value operands are counted, the branch targets are
+-- blocks and are not values, so `brif` here takes one operand. That is
+-- the measurement, not a simplification.
+
+sort val;                       -- an SSA value in a function
+sort ty;                        -- a CLIF value type
+sort op;                        -- an emitted instruction form
+
+-- Value types the corpus produced.
+term ty_i64: ty;
+term ty_i8: ty;
+
+-- Measured instruction forms, sorted; the comment is the count in the
+-- corpus measurement. A constructor's argument list is the operand list.
+term band__i64_i64__r_i64 (a b: val): op;   -- 11 use(s), 2 operand(s), 1 result(s)
+term brif__i8__r_none (a: val): op;   -- 9 use(s), 1 operand(s), 0 result(s)
+term call__i64__r_i64 (a: val): op;   -- 23 use(s), 1 operand(s), 1 result(s)
+term call__i64_i64__r_i64 (a b: val): op;   -- 54 use(s), 2 operand(s), 1 result(s)
+term call__i64_i64_i64__r_i64 (a b c: val): op;   -- 3 use(s), 3 operand(s), 1 result(s)
+term call__none__r_i64: op;   -- 1 use(s), 0 operand(s), 1 result(s)
+term iadd__i64_i64__r_i64 (a b: val): op;   -- 58 use(s), 2 operand(s), 1 result(s)
+term icmp__i64_i64__r_i8 (a b: val): op;   -- 29 use(s), 2 operand(s), 1 result(s)
+term iconst__none__r_i64: op;   -- 256 use(s), 0 operand(s), 1 result(s)
+term jump__none__r_none: op;   -- 10 use(s), 0 operand(s), 0 result(s)
+term load__i64__r_i64 (a: val): op;   -- 111 use(s), 1 operand(s), 1 result(s)
+term return__i64__r_none (a: val): op;   -- 27 use(s), 1 operand(s), 0 result(s)
+term store__i64_i64__r_none (a b: val): op;   -- 33 use(s), 2 operand(s), 0 result(s)
+term uextend__i8__r_i64 (a: val): op;   -- 20 use(s), 1 operand(s), 1 result(s)

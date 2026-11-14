@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""clif2mm0 — emit (and check) the Cranelift-IR model, `mm0/clif.mm0` (W9.2).
+
+The CPS→CLIF lowering is Rust code that `mm0-c` cannot see, so the certified
+chain used to stop at the CPS IR and resume at the object digest. The digest
+says "the bytes did not change"; it does not say what they were made of. This
+script closes that *measurement* gap, not yet the proof gap: it asks the bridge
+itself (`safestos/cranelift/target/release/clif_dump`, which compiles through
+`cps::compile_cps_to_clif` with the capture backend) what instruction forms the
+lowering produces for the corpus in `scripts/cps-corpus`, and writes one
+declaration per form:
+
+    term iadd__i64_i64__r_i64 (a b: val): op;   -- 2 operand(s), 1 result(s)
+
+The name encodes the measured shape — mnemonic, operand types, result types —
+so the file cannot claim an arity the measurement did not see: the constructor's
+argument count *is* the operand count, and a form whose types changed is a
+different name, i.e. a diff.
+
+WHAT THIS FILE IS, AND IS NOT. It is a model of the *shape* of the lowering's
+output, and it proves nothing: `-- proves: 0 theorems` is part of the header and
+`scripts/verify-invariants` pins it. MM0 will not let a `theorem` line sit in a
+specification without a proof — `mm0-c` prints "expecting a theorem" — so a
+theorem added here later must arrive with its proof in `mm0/clif.mm1`, which is
+the right pressure: W9.3's `clif_step`/refinement belongs to a layer that can
+state semantics, and this layer deliberately only states shapes. Both halves are
+checked: `mm0-rs` compiles `clif.mm1`, `mm0-c` checks the declarations against
+that compiled artifact (a mismatch is refused), and `scripts/clif2mm0` refuses
+a committed file that a fresh measurement of the corpus no longer reproduces.
+
+Usage:
+    scripts/clif2mm0                     # check the committed model is current
+    scripts/clif2mm0 --write             # regenerate mm0/clif.mm0 and .mm1
+    scripts/clif2mm0 [--write] <cps>...  # measure only these modules
+    scripts/clif2mm0 --model <file>      # check a copy (the gate's negative control)
+Exit: 0 current/emitted, 1 drift, 2 could not run (reported as `[gap]` upstream).
+"""
+
+import os
+import subprocess
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL = os.path.join(ROOT, "mm0", "clif.mm0")
+PROOF = os.path.join(ROOT, "mm0", "clif.mm1")
+BIN = os.path.join(ROOT, "safestos", "cranelift", "target", "release", "clif_dump")
+CORPUS = os.path.join(ROOT, "scripts", "cps-corpus")
+
+
+def die_gap(msg):
+    print(f"clif2mm0: [gap] {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def measure(paths):
+    """Run the bridge's own measurement over `paths`; return form -> count."""
+    if not os.access(BIN, os.X_OK):
+        die_gap(f"{BIN} not built — run 'make bridge'")
+    cmd = [BIN, "--allow-all", *paths]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        die_gap(f"clif-dump failed: {res.stderr.strip().splitlines()[-1:] or res.returncode}")
+    forms = {}
+    instructions = 0
+    seen_module = 0
+    for line in res.stdout.splitlines():
+        if line.startswith("module "):
+            seen_module += 1
+            continue
+        if not line.startswith("inst "):
+            continue
+        # inst <mnemonic> <n args> <n results> <argtypes> -> <resulttypes>
+        head, types = line.split(" -> ", 1)
+        parts = head.split()
+        if len(parts) != 5:
+            die_gap(f"unparseable measurement line: {line!r}")
+        _, mnemonic, n_args, n_res, arg_types = parts
+        args = () if arg_types == "none" else tuple(arg_types.split(","))
+        results = () if types.strip() == "none" else tuple(types.strip().split(","))
+        # The two spellings of the arity must agree: if they ever do not, the
+        # measurement is broken and the model would encode the wrong shape.
+        if len(args) != int(n_args) or len(results) != int(n_res):
+            die_gap(f"arity disagrees with its type list: {line!r}")
+        key = (mnemonic, args, results)
+        forms[key] = forms.get(key, 0) + 1
+        instructions += 1
+    if seen_module == 0:
+        die_gap("the measurement named no module — nothing was measured")
+    if instructions == 0:
+        die_gap("the measurement produced no instruction — nothing was measured")
+    return forms, instructions
+
+
+def ident(text):
+    return "".join(c if (c.isalnum() or c == "_") else "_" for c in text)
+
+
+def form_name(key):
+    mnemonic, args, results = key
+    a = "_".join(ident(t) for t in args) if args else "none"
+    r = "_".join(ident(t) for t in results) if results else "none"
+    return f"{ident(mnemonic)}__{a}__r_{r}"
+
+
+def render(forms, instructions):
+    types = sorted({t for (_, args, results) in forms for t in (*args, *results)})
+    names = {key: form_name(key) for key in forms}
+    if len(set(names.values())) != len(names):
+        collide = sorted({n for n in names.values() if list(names.values()).count(n) > 1})
+        die_gap(f"two measured forms share a name ({', '.join(collide)}) — the model would merge them")
+
+    out = []
+    out.append("-- clif.mm0 — the Cranelift-IR layer of the verified kernel (W9.2 of")
+    out.append("-- PLAN_sota_kernel_verification.md).")
+    out.append("--")
+    out.append("-- layer: CLIF")
+    out.append("-- measured-by: scripts/clif2mm0 --write, from")
+    out.append("--   safestos/cranelift/target/release/clif_dump over scripts/cps-corpus")
+    out.append("-- clif-forms: %d" % len(forms))
+    out.append("-- clif-instructions: %d" % instructions)
+    out.append("-- clif-types: %s" % ",".join(types))
+    out.append("-- proves: 0 theorems")
+    out.append("--")
+    out.append("-- WHAT THIS IS. One declaration per instruction form the bridge's own")
+    out.append("-- lowering emits, with the form's measured arity in its argument list and")
+    out.append("-- its operand/result types in its name. It is a model of the *shape* of")
+    out.append("-- the lowering's output — the thing the object digest cannot state — and")
+    out.append("-- nothing more.")
+    out.append("--")
+    out.append("-- WHAT IT IS NOT. Not a semantics and not a theorem: `clif_step` and the")
+    out.append("-- CLIF→ISA refinement are W9.3 and are not claimed here. mm0 will not let")
+    out.append("-- a `theorem` appear in a specification without a proof in the `.mm1`, so")
+    out.append("-- the `proves: 0 theorems` line is enforced by mm0-c rather than promised")
+    out.append("-- by this comment. `scripts/verify-invariants` additionally re-runs this")
+    out.append("-- generator, so a form the lowering starts emitting — or stops emitting —")
+    out.append("-- is a diff, not a stale model.")
+    out.append("--")
+    out.append("-- Terminators: the value operands are counted, the branch targets are")
+    out.append("-- blocks and are not values, so `brif` here takes one operand. That is")
+    out.append("-- the measurement, not a simplification.")
+    out.append("")
+    out.append("sort val;                       -- an SSA value in a function")
+    out.append("sort ty;                        -- a CLIF value type")
+    out.append("sort op;                        -- an emitted instruction form")
+    out.append("")
+    out.append("-- Value types the corpus produced.")
+    for t in types:
+        out.append(f"term ty_{ident(t)}: ty;")
+    out.append("")
+    out.append("-- Measured instruction forms, sorted; the comment is the count in the")
+    out.append("-- corpus measurement. A constructor's argument list is the operand list.")
+    for key in sorted(names.values()):
+        mnemonic, args, results = next(k for k, v in names.items() if v == key)
+        params = " ".join(chr(ord("a") + i) for i in range(len(args)))
+        sig = f" ({params}: val)" if params else ""
+        out.append(
+            f"term {key}{sig}: op;"
+            f"   -- {forms[(mnemonic, args, results)]} use(s),"
+            f" {len(args)} operand(s), {len(results)} result(s)"
+        )
+    out.append("")
+    return "\n".join(out)
+
+
+def build_corpus():
+    if not os.access(CORPUS, os.X_OK):
+        die_gap(f"{CORPUS} is not executable")
+    tmp = tempfile.mkdtemp(prefix="clif2mm0-")
+    try:
+        res = subprocess.run([CORPUS, tmp], capture_output=True, text=True)
+        if res.returncode != 0:
+            die_gap(res.stderr.strip() or "the corpus did not build")
+        paths = [p for p in res.stdout.splitlines() if p.strip()]
+        if not paths:
+            die_gap("the corpus compiled no module")
+        return measure(paths)
+    finally:
+        for name in os.listdir(tmp):
+            os.unlink(os.path.join(tmp, name))
+        os.rmdir(tmp)
+
+
+def main(argv):
+    write = "--write" in argv
+    model = MODEL
+    rest = []
+    it = iter(argv)
+    for arg in it:
+        if arg == "--model":
+            try:
+                model = next(it)
+            except StopIteration:
+                die_gap("--model needs a path")
+        else:
+            rest.append(arg)
+    paths = [a for a in rest if not a.startswith("--")]
+    unknown = [a for a in rest if a.startswith("--") and a != "--write"]
+    if unknown:
+        die_gap(f"unknown flag {unknown[0]}")
+    if paths:
+        forms, instructions = measure(paths)
+    else:
+        forms, instructions = build_corpus()
+    text = render(forms, instructions)
+    label = "form(s)" if len(forms) != 1 else "form"
+    if write:
+        if model != MODEL:
+            die_gap("--model cannot be combined with --write")
+        with open(MODEL, "w") as f:
+            f.write(text)
+        with open(PROOF, "w") as f:
+            f.write(text)
+        print(f"clif2mm0: wrote {os.path.relpath(MODEL, ROOT)} and .mm1 — "
+              f"{len(forms)} {label}, {instructions} instruction(s), 0 theorems")
+        return 0
+    try:
+        with open(model) as f:
+            committed = f.read()
+    except FileNotFoundError:
+        print(f"clif2mm0: FAIL {os.path.relpath(model, ROOT)} is missing — "
+              "run scripts/clif2mm0 --write", file=sys.stderr)
+        return 1
+    if committed != text:
+        import difflib
+        diff = list(difflib.unified_diff(
+            committed.splitlines(), text.splitlines(),
+            f"{os.path.relpath(model, ROOT)} (committed)",
+            "mm0/clif.mm0 (measured)", lineterm="", n=1))
+        print("\n".join(diff[:40]), file=sys.stderr)
+        print("clif2mm0: FAIL the committed model is not what the corpus measures "
+              "— run scripts/clif2mm0 --write", file=sys.stderr)
+        return 1
+    try:
+        with open(PROOF) as f:
+            if f.read() != committed:
+                print("clif2mm0: FAIL mm0/clif.mm1 differs from the specification of "
+                      "the same statements", file=sys.stderr)
+                return 1
+    except FileNotFoundError:
+        print("clif2mm0: FAIL mm0/clif.mm1 is missing", file=sys.stderr)
+        return 1
+    print(f"clif2mm0: OK — {len(forms)} {label}, {instructions} instruction(s) over "
+          f"{'the corpus' if not paths else f'{len(paths)} module(s)'}, 0 theorems")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
