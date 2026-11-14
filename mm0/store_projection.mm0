@@ -1,0 +1,90 @@
+-- store_projection.{mm0,mm1} — W9.3's *surviving* memory obligation, stated.
+--
+-- W9.3 asks whether the emitted instruction is the model's instruction. For
+-- `store` the strong form is **refuted** (measured 2026-11-14, and gated by
+-- `scripts/mem-refines`), not merely unproved:
+--
+--   emitted (mm0/clif.mm0:58)      model (LeanRV64D/InstsEnd.lean:67365)
+--   term store__i64_i64__r_none    def execute_STORE (imm : BitVec 12)
+--     (a b: val): op                            (rs2 : regidx)
+--     2 operands, 0 results                     (rs1 : regidx)
+--     address, value                            (width : Nat)
+--     width fixed in the form name            : SailM ExecutionResult
+--                                     assert (width ≤b xlen_bytes)
+--                                     vmem_write rs1 offset width data
+--                                              (Store Data) false false false
+--                                     → RETIRE_SUCCESS | .Err e
+--
+-- Different arity, different result, different address space (the model reads
+-- rs1/rs2 from the register file and translates the address; the emitted form
+-- takes a linear pointer). No encoding of the emitted term *is* the model's
+-- function, so the obligation this file states is the projection, not the
+-- identification:
+--
+--     after the register read, the immediate addition and the (never-taken for
+--     an in-bounds linear address) fault branch are projected away,
+--     execute_STORE with width = 8 describes the same state change as the
+--     emitted store.i64 on an 8-byte-aligned address inside the JIT's memory.
+--
+-- Stated in the vocabulary below, with no ambiguity about what is claimed:
+--
+--     aligned8 a  ⇒  in_linear_space a  ⇒  store_projects s a v
+--
+-- where `store_projects s a v` is intended to mean
+-- `jit_store_i64 s a v = isa_store_w8 s a v`. The equality itself is *not*
+-- stated here: MM0 has no built-in equality, and defining one would import a
+-- theory this artifact has not earned. The relation is named; what it should
+-- mean is in the sentence above, where a reviewer can disagree with it.
+--
+-- What this file is NOT: a certificate. There is no `axiom` and no `theorem`
+-- in it — the two state transformers and the relation are *uninterpreted*, so
+-- nothing here says the projection holds, and `scripts/verify-invariants`
+-- refuses any `axiom` or `theorem` in this file so it cannot start claiming
+-- one. The `[gap]` is the honest state: the claim is written down, cited, and
+-- left unproved. Proving it needs a semantics for `jit_store_i64` (today a
+-- Cranelift instruction, not a Lean definition) and a simulation argument
+-- between two state types — neither exists in this repo.
+--
+-- Citations are by content: the emitted shape, the converted model declaration,
+-- and the ISA model the projection has to reach. A stale digest means this
+-- comment is describing files that have since changed, and the gate fails.
+-- cites: mm0/clif.mm0 sha256=f69c96eadc40f05318c3d8fe7040a45ccf1955c30da53dc0a9363e5ab5fcac54
+-- cites: mm0/statements/rv64_memory.mm0 sha256=ab0e372d5288bafcc18813cd2f610e266cc04468061a5f6f7713004ddfdffa5b
+-- cites: mm0/isa.mm0 sha256=012db5170dd18054e9f7458dac0079f91516c9a5f0acd674c77203cec50859b6
+--
+-- certificate: [gap] — nothing in `mm0/approved/` bears on this claim, and an
+--   approval is the owner's commit, not a script's. If `mm0/approved/` ever
+--   gains an entry naming this artifact, the gap line and the missing proof
+--   have to go together; `scripts/verify-invariants` fails until they do.
+
+-- theory: self-declared vocabulary — the sorts and terms below are this
+-- artifact's whole theory; it imports no rule from `cic.mm0` or `isa.mm0`, so
+-- there is no `used=` coverage list to state (the statement is about shape, and
+-- it is the *files it cites* that carry the semantics).
+--
+-- `provable sort Prop` is how this repo's MM0 files get a proposition sort
+-- (see `mm0/clif.mm0:30`); without it `: Prop` is "sort not found" — measured,
+-- not guessed.
+sort St;                        -- machine state (registers + memory), uninterpreted
+sort Val;                       -- addresses and stored values, uninterpreted
+provable sort Prop;
+
+-- Preconditions of the projection. Named, not defined: `aligned8` is 8-byte
+-- alignment, `in_linear_space` is "inside the JIT's memory image", which is a
+-- smaller set than the model's address space (the model also has MMIO, PMP
+-- windows and faulting translations, and those are exactly the cases the
+-- projection excludes).
+term aligned8 (a: Val): Prop;
+term in_linear_space (a: Val): Prop;
+
+-- The two state transformers. `jit_store_i64` is the emitted instruction's
+-- effect (8 bytes at a linear address); `isa_store_w8` is `execute_STORE` after
+-- the register read, the immediate addition and the fault branch have been
+-- projected away, at width = 8.
+term jit_store_i64 (s: St) (a v: Val): St;
+term isa_store_w8 (s: St) (a v: Val): St;
+
+-- The obligation's relation: "these two agree here". Uninterpreted for the
+-- reason given above — naming the claim is this layer's job; deciding it is
+-- the theorem's.
+term store_projects (s: St) (a v: Val): Prop;

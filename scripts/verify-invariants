@@ -121,6 +121,15 @@ for artifact in "$repo_root"/mm0/*.mm0; do
         fi
         continue
     fi
+    # An obligation artifact that imports no shared theory says so instead: its
+    # vocabulary is the sorts and terms it declares itself (W9.3's
+    # `store_projection.mm0`), so there is no `used=` rule list to ground and
+    # nothing to compare against. Claiming an imported theory without the line
+    # still falls through to the check below, so this is not an escape hatch.
+    if grep -q '^-- theory: self-declared vocabulary' "$artifact"; then
+        check "Phase D: $name declares its own vocabulary (no imported theory)" true
+        continue
+    fi
     used="$(sed -n 's/^-- theory coverage: used=\([^ ]*\) unused=.*/\1/p' "$artifact")"
     if [ -z "$used" ]; then
         check "Phase D: $name states its theory coverage" false
@@ -654,26 +663,69 @@ PY
             gap "W9.1: RV64 model not re-converted (nix develop \"git+file://\$PWD#lean\" -c bash scripts/rv64-model-mm0 check)"
         fi
 
-        # W9.3, refutation half: `store` does NOT lower to the model's
-        # `execute_STORE`. The emitted form takes (address, value) and returns
-        # nothing; the model's function takes (imm, rs2, rs1, width), reads the
-        # register file and can return a fault. The check reads the committed
-        # `mm0/clif.mm0` and `mm0/statements/rv64_memory.mm0` plus the pinned
-        # model source, so the verdict is measured, not retyped. Exit 1 is the
-        # interesting case: it means the shapes *agree* now, and the stronger
-        # correspondence must be re-argued instead of silently kept.
-        if [[ -x "$repo_root/scripts/store-refines" ]] \
+        # W9.3, refutation half: `load`/`store` do NOT lower to the model's
+        # `execute_LOAD`/`execute_STORE`. The emitted forms take an address
+        # (and, for store, a value) and return a value or nothing; the model's
+        # functions take the architectural operands, read the register file and
+        # can return a fault. The check reads the committed `mm0/clif.mm0` and
+        # `mm0/statements/rv64_memory.mm0` plus the pinned model source, so the
+        # verdict is measured, not retyped. Exit 1 is the interesting case: it
+        # means the shapes *agree* now, and the stronger correspondence must be
+        # re-argued instead of silently kept.
+        if [[ -x "$repo_root/scripts/mem-refines" ]] \
             && command -v nix >/dev/null 2>&1; then
-            if "$repo_root/scripts/store-refines" >"$_cert_tmp/store.log" 2>&1; then
-                echo "  [detail] $(grep -m1 'execute_STORE has' "$_cert_tmp/store.log" \
+            if "$repo_root/scripts/mem-refines" >"$_cert_tmp/mem.log" 2>&1; then
+                echo "  [detail] $(grep -m1 'REFUTED as stated' "$_cert_tmp/mem.log" \
                     | sed 's/^ *//')"
-                check "W9.3: the JIT's store is refuted as the model's execute_STORE" true
+                check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" true
             else
-                tail -6 "$_cert_tmp/store.log" >&2
-                check "W9.3: the JIT's store is refuted as the model's execute_STORE" false
+                tail -6 "$_cert_tmp/mem.log" >&2
+                check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" false
             fi
         else
-            gap "W9.3: store correspondence not checked (no nix, or scripts/store-refines missing)"
+            gap "W9.3: memory correspondence not checked (no nix, or scripts/mem-refines missing)"
+        fi
+
+        # W9.3, statement half: `mm0/store_projection.mm0` names the claim that
+        # survives the refutation, with pinned citations and no assertion. Same
+        # discipline as `clif.mm0`: sorts and terms only, so `mm0-c` accepting
+        # it means "the obligation is well-formed", never "the obligation
+        # holds".
+        _proj="$repo_root/mm0/store_projection.mm0"
+        if [[ -f $_proj ]] && mm0-rs compile "$repo_root/mm0/store_projection.mm1" \
+                "$_cert_tmp/store_projection.mmb" >"$_cert_tmp/proj.log" 2>&1 \
+            && mm0-c "$_cert_tmp/store_projection.mmb" < "$_proj" \
+                >>"$_cert_tmp/proj.log" 2>&1; then
+            echo "  [detail] $(grep -m1 'term/def' "$_cert_tmp/proj.log" | sed 's/^ *//')"
+            if grep -qE '^(axiom|theorem) ' "$_proj"; then
+                echo "  [detail] store_projection.mm0 asserts what it has not proved" >&2
+                check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" false
+            elif grep -q '^term store_projects ' "$_proj" \
+                && grep -q '^-- certificate: \[gap\]' "$_proj"; then
+                check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" true
+            else
+                echo "  [detail] missing the relation symbol or the [gap] line" >&2
+                check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" false
+            fi
+        else
+            sed -n '1,8p' "$_cert_tmp/proj.log" >&2
+            check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" false
+        fi
+        # … and its citations must still describe the files they name.
+        _proj_cites=$(sed -n 's/^-- cites: \([^ ]*\) sha256=\([0-9a-f]\{64\}\)$/\1 \2/p' "$_proj")
+        _proj_n=0
+        _proj_bad=""
+        while read -r _cpath _cpin; do
+            [ -n "$_cpath" ] || continue
+            _proj_n=$((_proj_n + 1))
+            _cactual="$(sha256sum "$repo_root/$_cpath" 2>/dev/null | cut -d' ' -f1)"
+            [ "$_cactual" = "$_cpin" ] || _proj_bad="$_proj_bad $_cpath"
+        done <<< "$_proj_cites"
+        if [ "$_proj_n" -ge 3 ] && [ -z "$_proj_bad" ]; then
+            check "W9.3: the projection's citations still match their artifacts ($_proj_n pinned)" true
+        else
+            echo "  [detail] stale citations:${_proj_bad:- none} of $_proj_n (expected >= 3)" >&2
+            check "W9.3: the projection's citations still match their artifacts" false
         fi
 
         # W6: the generated probe is a test, and it has to actually run.

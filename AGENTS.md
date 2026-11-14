@@ -230,16 +230,25 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `$RISCV_MEMORY_MODEL`) on purpose, so entering it may trigger the one-time
   28-minute Sail build. `.github/workflows/w9-isa-model.yml` runs `check`
   weekly, because a PR should not wait for that build.
-- `scripts/store-refines` — refutes the tempting shortcut "the JIT's `store`
-  lowers to the model's `execute_STORE`". It reads the *committed* artifacts
-  (`mm0/clif.mm0`'s `store__*` forms: 2 operands, 0 results) and the *pinned*
-  `LeanRV64D/InstsEnd.lean` signature (4 arguments, returns `SailM
-  ExecutionResult`, checks `width ≤ xlen_bytes`, can fault in `vmem_write`), so
-  the verdict is measured instead of retyped. Exit 0 = refuted (the expected
-  state), 1 = the shapes now agree (re-argue the correspondence), 2 = evidence
-  missing. `verify-invariants` runs it and pins the refutation as `[pass]`; what
-  remains provable is the *projection* (width 8, aligned, fault branch never
-  taken), which nothing in the tree proves yet.
+- `scripts/mem-refines` — refutes the tempting shortcut "the JIT's memory op
+  lowers to the model's `execute_LOAD`/`execute_STORE`", for **both** opcodes.
+  It reads the *committed* artifacts (`mm0/clif.mm0`'s `load__i64__r_i64`: 1
+  operand, 1 result; `store__*`: 2 operands, 0 results) and the *pinned*
+  `LeanRV64D/InstsEnd.lean` signatures (`execute_LOAD`: 5 arguments;
+  `execute_STORE`: 4; both return `SailM ExecutionResult`, check `width ≤
+  xlen_bytes` and can fault in `vmem_read`/`vmem_write`), so the verdict is
+  measured instead of retyped. Exit 0 = refuted (the expected state), 1 = the
+  shapes now agree (re-argue the correspondence), 2 = evidence missing.
+  `verify-invariants` runs it and pins the refutation as `[pass]`.
+- `mm0/store_projection.mm0` — the claim that *survives* that refutation,
+  stated and cited but not asserted: `aligned8 a ⇒ in_linear_space a ⇒
+  store_projects s a v` over uninterpreted state transformers
+  (`jit_store_i64`, `isa_store_w8`), with `-- certificate: [gap]`, three pinned
+  citations and **no** `axiom`/`theorem`. `mm0-c` accepting it means "the
+  obligation is well-formed", never "it holds". It declares its own vocabulary
+  (`-- theory: self-declared vocabulary`), which `verify-invariants` accepts in
+  place of a `used=` coverage list; membership is still a W3 `[gap]` until the
+  owner approves it.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
