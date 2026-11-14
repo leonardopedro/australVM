@@ -347,19 +347,67 @@ PY
         # (c) scripts/isa-census measures the opcodes the decoder actually
         #     consumes against ISA_REGISTRY and against the artifact's table,
         #     with a negative control proving the diff can fail.
+        # MM0 splits specification from proof: mm0-rs compiles `isa.mm1` (the
+        # same statements, each theorem carrying its proof) and mm0-c re-checks
+        # that proof against `isa.mm0`, the specification it also reads. So the
+        # pair is what is accepted — compiling the specification alone would
+        # only prove it parses, and would pass with every proof missing.
         if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
-            if mm0-rs compile "$repo_root/mm0/isa.mm0" "$_cert_tmp/isa.mmb" \
+            if mm0-rs compile "$repo_root/mm0/isa.mm1" "$_cert_tmp/isa.mmb" \
                     >"$_cert_tmp/isa.log" 2>&1 \
+                && ! grep -q 'sorry' "$_cert_tmp/isa.log" \
                 && mm0-c "$_cert_tmp/isa.mmb" < "$repo_root/mm0/isa.mm0" \
                     >/dev/null 2>&1; then
                 echo "  [detail] $(grep -E 'sorts,' "$_cert_tmp/isa.log" | tail -1)"
-                check "W8: mm0/isa.mm0 accepted by mm0-rs + mm0-c, no sorry" true
+                check "W8: mm0/isa.mm0 + isa.mm1 accepted by mm0-rs + mm0-c, no sorry" true
             else
                 tail -3 "$_cert_tmp/isa.log" >&2
-                check "W8: mm0/isa.mm0 accepted by mm0-rs + mm0-c, no sorry" false
+                check "W8: mm0/isa.mm0 + isa.mm1 accepted by mm0-rs + mm0-c, no sorry" false
             fi
         else
             gap "W8: mm0/isa.mm0 not re-checked (no mm0 toolchain)"
+        fi
+
+        # The encdec block is generated from ISA_REGISTRY and its 23 proofs are
+        # checked above; what this adds is that the committed artifacts are the
+        # ones the generator produces *now* (a table edit without a regenerate),
+        # that the count is 23/23, and the negative control: dropping one table
+        # line must leave a theorem unprovable rather than silently accepted, so
+        # a `theorem` cannot outlive the equation it was proved from.
+        if [ -x "$repo_root/scripts/isa-encdec" ] && command -v mm0-rs >/dev/null 2>&1 \
+                && command -v mm0-c >/dev/null 2>&1; then
+            if "$repo_root/scripts/isa-encdec" >"$_cert_tmp/encdec.log" 2>&1; then
+                echo "  [detail] $(cat "$_cert_tmp/encdec.log")"
+                check "W8: encdec table and its proofs are current" true
+            else
+                cat "$_cert_tmp/encdec.log" >&2
+                check "W8: encdec table and its proofs are current" false
+            fi
+            # Control: move one table entry off its byte (0x05 -> 0x06 in
+            # `enc_add`). The proof file is unchanged, so if `encdec_add` still
+            # checked, the theorem would not be *about* the byte it names — the
+            # exact vacuity this section replaced. mm0-rs must refuse.
+            if python3 - "$repo_root/mm0/isa.mm1" "$_cert_tmp/isa-moved.mm1" <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src).read()
+old = 'axiom enc_add: $ beq (ienc ins_add) n5 $;'
+if old not in text:
+    sys.exit('no `axiom enc_add ... n5` line to move')
+open(dst, 'w').write(text.replace(old, old.replace('n5 $;', 'n6 $;'), 1))
+PY
+            then
+                if mm0-rs compile "$_cert_tmp/isa-moved.mm1" \
+                        "$_cert_tmp/isa-moved.mmb" >/dev/null 2>&1; then
+                    check "W8: a table entry moved off its byte breaks its proof" false
+                else
+                    check "W8: a table entry moved off its byte breaks its proof" true
+                fi
+            else
+                check "W8: a table entry moved off its byte breaks its proof" false
+            fi
+        else
+            gap "W8: encdec proofs not re-checked (no mm0 toolchain or script)"
         fi
 
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
@@ -391,6 +439,17 @@ PY
             else
                 cat "$_cert_tmp/census.log" >&2
                 check "W8: scripts/isa-census covers the emitted opcodes" false
+            fi
+            # One module does not measure "the emitted subset": flux1d reads 8
+            # of the 23 opcodes. The corpus check compiles every example whose
+            # CPS path produces a function and censuses the union, so an opcode
+            # added to the decoder is caught even if flux1d never emits it.
+            if "$repo_root/scripts/isa-census" --corpus >"$_cert_tmp/corpus.log" 2>&1; then
+                grep -E '^isa-census: ' "$_cert_tmp/corpus.log" | sed 's/^/      /' >&2
+                check "W8: the corpus census covers every opcode the examples emit" true
+            else
+                tail -3 "$_cert_tmp/corpus.log" >&2
+                check "W8: the corpus census covers every opcode the examples emit" false
             fi
             # Negative control: an opcode the decoder does not accept, declared
             # in a copy of the model, must be reported — otherwise the census

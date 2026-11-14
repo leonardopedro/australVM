@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
-# isa-census — which CPS instructions does a module use, and does mm0/isa.mm0
-# declare exactly what the decoder accepts?
+# isa-census — which CPS instructions do the emitted modules use, and does
+# mm0/isa.mm0 declare exactly what the decoder accepts?
 #
 # The measurement is taken from the bridge itself: `isa_census` compiles the
-# given CPS module through `cps::compile_cps_to_clif` (the same parser the JIT
+# given CPS module(s) through `cps::compile_cps_to_clif` (the same parser the JIT
 # uses, with a capture module so nothing executes), records every opcode the
 # decoder consumed, and diffs three sets — decoder (`ISA_REGISTRY`), artifact
 # (`mm0/isa.mm0`'s `-- op` table) and measured.
 #
-# Usage: scripts/isa-census <module.cps> [<isa.mm0>]
+# Usage: scripts/isa-census [--corpus] <module.cps>...
+#        scripts/isa-census --corpus        # the example corpus, compiled here
 # Exit:  0 covered and consistent, 1 uncovered/inconsistent, 2 could not run.
+#
+# `--corpus` exists because one module does not measure "the emitted subset":
+# flux1d reads 8 of the 23 opcodes, so a flux1d-only census never sees `cmp_lt`,
+# let alone `while`/`store`. The corpus below is every example whose CPS path
+# compiles at least one function; each is compiled with `--emit-cps` into a
+# scratch directory and the union is censused. Modules the JIT cannot compile
+# today (`hello-world`, `memory`: the `__embed` string path) are excluded, and
+# the union line reports how many opcodes the corpus still never exercises
+# rather than implying the subset is fully exercised.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,10 +30,66 @@ if [ ! -x "$BIN" ]; then
     exit 2
 fi
 
+corpus=0
+args=()
+for a in "$@"; do
+    case "$a" in
+        --corpus) corpus=1 ;;
+        *) args+=("$a") ;;
+    esac
+done
+
 # With one argument, check the module against the committed model: an
 # uncovered opcode must fail the default invocation, not only the gate's.
-if [ "$#" -eq 1 ] && [ -f "$ROOT/mm0/isa.mm0" ]; then
-    exec "$BIN" "$1" "$ROOT/mm0/isa.mm0"
+if [ "${#args[@]}" -eq 1 ] && [ -f "$ROOT/mm0/isa.mm0" ]; then
+    exec "$BIN" --isa "$ROOT/mm0/isa.mm0" "${args[0]}"
 fi
 
-exec "$BIN" "$@"
+if [ "$corpus" -eq 1 ]; then
+    if [ -n "${AUSTRAL_BIN:-}" ]; then
+        austral="$AUSTRAL_BIN"
+    else
+        austral="$ROOT/austral"
+    fi
+    if [ ! -x "$austral" ] || [ ! -f "$ROOT/libaustral_cranelift_bridge.so" ]; then
+        echo "isa-census: [gap] no ./austral or bridge .so — cannot build the corpus" >&2
+        exit 2
+    fi
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # dir:module — the module name is the declared one, not the directory name,
+    # which is why it is written down instead of derived.
+    entries=(
+        "verified-kernel/flux1d:Flux1d"
+        "fib:Example.Fibonacci"
+        "union:Example.Union"
+        "record:Example.Record"
+        "generic-union:Example.GenericUnion"
+        "named-argument:Example.NamedArgument"
+        "identity:Example.Identity"
+    )
+    cps_files=()
+    for entry in "${entries[@]}"; do
+        dir="${entry%%:*}"
+        mod="${entry##*:}"
+        src=$(cd "$ROOT/examples/$dir" && ls *.aui | head -1),$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)
+        name="$(basename "$dir")"
+        if ! ( cd "$ROOT/examples/$dir" \
+            && LD_LIBRARY_PATH="$ROOT" "$austral" compile "$src" \
+                --entrypoint="$mod:main" --use-cps-jit \
+                --emit-cps="$tmp/$name.cps" --output="$tmp/$name.bin" ) \
+                >"$tmp/$name.log" 2>&1; then
+            echo "isa-census: [gap] examples/$dir did not compile — corpus incomplete" >&2
+            tail -3 "$tmp/$name.log" >&2
+            exit 2
+        fi
+        if ! grep -q '[1-9][0-9]* functions compiled' "$tmp/$name.log"; then
+            echo "isa-census: [gap] examples/$dir compiled no function — nothing to measure" >&2
+            exit 2
+        fi
+        cps_files+=("$tmp/$name.cps")
+    done
+    exec "$BIN" --isa "$ROOT/mm0/isa.mm0" "${cps_files[@]}"
+fi
+
+exec "$BIN" --isa "$ROOT/mm0/isa.mm0" ${args[@]+"${args[@]}"}

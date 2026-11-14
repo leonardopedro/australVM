@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# obj-drift-control — does a *semantics-preserving* emitter edit really move
+# `code.obj`, and does the gate really refuse it?
+#
+# W5's object digest is only worth recording if a change to the emitted code
+# moves it. A digest that is stable because nothing ever moves it proves
+# nothing, so this script performs the experiment instead of describing it:
+#
+#   1. patch the emitter so the CPS module lists its functions in reverse.
+#      Function order in the module is not semantic — the JIT indexes by
+#      name — so the program must behave identically;
+#   2. rebuild, compile the certified kernel, and record `cps=` / `obj=`;
+#   3. run the program: identical output and exit status is the "semantics
+#      preserving" half;
+#   4. run `scripts/verify-invariants`: it must FAIL the W5 object check;
+#   5. restore the emitter, rebuild, and confirm both digests are back to the
+#      pinned values (so a green tree stays green).
+#
+# It mutates `lib/CpsGen.ml` for the duration and restores it on every exit
+# path (including failure and Ctrl-C), then rebuilds — that rebuild is not
+# optional, or the tree would be left with a binary that disagrees with its
+# source.
+#
+# Usage: scripts/obj-drift-control     (needs dune + the JIT bridge; run under
+#                                      `nix develop` if dune is not on PATH)
+# Exit: 0 the control holds, 1 it does not, 2 could not run.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC="$ROOT/lib/CpsGen.ml"
+BIN="$ROOT/austral"
+KERNEL_DIR="$ROOT/examples/verified-kernel/flux1d"
+KERNEL_SRC="Flux1d.aui,Flux1d.aum"
+
+say()  { printf '%s\n' "$*"; }
+fail() { printf 'obj-drift-control: FAIL %s\n' "$*" >&2; }
+
+for tool in dune; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        say "obj-drift-control: [gap] $tool not on PATH — run this under 'nix develop'"
+        exit 2
+    }
+done
+if [ ! -x "$BIN" ] || [ ! -f "$ROOT/libaustral_cranelift_bridge.so" ]; then
+    say "obj-drift-control: [gap] no ./austral or bridge .so — run 'make all' first"
+    exit 2
+fi
+
+work="$(mktemp -d)"
+backup="$work/CpsGen.ml.orig"
+
+restore() {
+    if [ -f "$backup" ]; then
+        cp "$backup" "$SRC"
+        ( cd "$ROOT" && dune build bin/austral.exe ) >/dev/null 2>&1
+        cp "$ROOT/_build/default/bin/austral.exe" "$BIN"
+        rm -f "$backup"
+    fi
+}
+trap 'restore; rm -rf "$work"' EXIT INT TERM
+
+emit() { # emit <cps-out> <log>
+    ( cd "$KERNEL_DIR" && LD_LIBRARY_PATH="$ROOT" "$BIN" compile "$KERNEL_SRC" \
+        --entrypoint=Flux1d:main --use-cps-jit --emit-cps="$1" \
+        --output="$2" ) >"$2.log" 2>&1
+}
+
+fp() { # fp <flag-or-empty> <cps>
+    "$ROOT/scripts/cps-fingerprint" ${1:+"$1"} "$2"
+}
+
+# ── pinned values, before touching anything ────────────────────────────────
+cp "$SRC" "$backup"
+if ! emit "$work/base.cps" "$work/base.bin"; then
+    fail "the kernel did not compile before the patch"
+    exit 2
+fi
+base_cps="$(fp "" "$work/base.cps")"
+base_obj="$(fp --object "$work/base.cps")"
+base_out="$("$work/base.bin" 2>&1)"; base_code=$?
+say "before: cps=${base_cps:0:12}… obj=${base_obj%% *} out=$base_code"
+
+# ── 1. the semantics-preserving edit ───────────────────────────────────────
+python3 - "$SRC" <<'PY' || exit 2
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+old = "  List.iter (serialize_function_def w) funcs;"
+new = "  List.iter (serialize_function_def w) (List.rev funcs);"
+if old not in text:
+    sys.exit("obj-drift-control: the emitter line to patch is not there (emitter moved)")
+p.write_text(text.replace(old, new, 1))
+PY
+if ! ( cd "$ROOT" && dune build bin/austral.exe ) >"$work/build.log" 2>&1; then
+    fail "the patched emitter did not build"
+    tail -5 "$work/build.log" >&2
+    exit 2
+fi
+cp "$ROOT/_build/default/bin/austral.exe" "$BIN"
+
+# ── 2-3. rebuild the kernel with it: same behaviour, different bytes ───────
+if ! emit "$work/patched.cps" "$work/patched.bin"; then
+    fail "the patched emitter did not compile the kernel"
+    exit 1
+fi
+patched_cps="$(fp "" "$work/patched.cps")"
+patched_obj="$(fp --object "$work/patched.cps")"
+patched_out="$("$work/patched.bin" 2>&1)"; patched_code=$?
+say "after:  cps=${patched_cps:0:12}… obj=${patched_obj%% *} out=$patched_code"
+
+status=0
+if [ "$patched_code" != "$base_code" ] || [ "$patched_out" != "$base_out" ]; then
+    fail "the edit changed behaviour, so it is not a semantics-preserving control"
+    status=1
+fi
+if [ "$patched_obj" = "$base_obj" ]; then
+    fail "obj= did not move — the digest is not sensitive to emitted code"
+    status=1
+fi
+if [ "$patched_cps" = "$base_cps" ]; then
+    fail "cps= did not move — the patch did not reach the serializer"
+    status=1
+fi
+
+# ── 4. the gate must refuse the certificate ────────────────────────────────
+if bash "$ROOT/scripts/verify-invariants" >"$work/gate.log" 2>&1; then
+    fail "verify-invariants passed while the emitted object had changed"
+    status=1
+elif ! grep -q '^\[FAIL\] W5 (checked): the certificate.s obj digest is the bridge' \
+        "$work/gate.log"; then
+    fail "the gate failed, but not on the W5 object digest"
+    grep -E '^\[FAIL\]' "$work/gate.log" | head -5 >&2
+    status=1
+else
+    say "gate:   $(grep -F 'obj digest' "$work/gate.log" | head -1)"
+fi
+
+# ── 5. restore and confirm the pinned digests come back ────────────────────
+restore
+if ! emit "$work/restored.cps" "$work/restored.bin"; then
+    fail "the restored emitter did not compile the kernel"
+    exit 1
+fi
+restored_cps="$(fp "" "$work/restored.cps")"
+restored_obj="$(fp --object "$work/restored.cps")"
+if [ "$restored_cps" != "$base_cps" ] || [ "$restored_obj" != "$base_obj" ]; then
+    fail "the digests did not return to their pre-patch values after restoring"
+    status=1
+fi
+
+if [ "$status" -eq 0 ]; then
+    say "obj-drift-control: held — a semantics-preserving edit moved obj=${base_obj%% *}…→${patched_obj%% *}…, the gate refused it, and the pinned digests returned"
+fi
+exit "$status"

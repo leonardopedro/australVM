@@ -110,9 +110,22 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
 - `scripts/isa-census <module.cps>` — diffs the JIT decoder's own opcode count
   (`crate::isa::note`, `ISA_REGISTRY` in `safestos/cranelift/src/isa.rs`), the
   `-- op 0xNN` table in `mm0/isa.mm0`, and what the module actually read; exits
-  1 on any uncovered or overstated opcode. `scripts/isa-hypotheses <isa.mm0>`
-  refuses a `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or
-  missing. `ISA_REGISTRY` is the instruction-side twin of `SYMBOL_REGISTRY`.
+  1 on any uncovered or overstated opcode. `--corpus` compiles the example
+  modules whose CPS path produces a function and censuses the union (one module
+  only measures one kernel). `scripts/isa-hypotheses <isa.mm0>` refuses a
+  `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or missing.
+  `ISA_REGISTRY` is the instruction-side twin of `SYMBOL_REGISTRY`.
+- `scripts/isa-encdec [--write]` — regenerates the `encdec` table and its 23
+  proofs in `mm0/isa.mm0`, and derives `mm0/isa.mm1` (the MM0 proof file) from
+  it. MM0 splits the two: `mm0-rs compile mm0/isa.mm1` then
+  `mm0-c <mmb> < mm0/isa.mm0`. Editing `isa.mm0` by hand requires `--write`
+  afterwards, or the gate reports the proof file stale.
+- `lib/Cps_codec.ml` is the OCaml opcode table; `CpsGen` writes every opcode
+  through it, and `test/CpsCodecTest.ml` holds it to `mm0/isa.mm0`.
+- `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
+  emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
+  is restored. It rebuilds the compiler twice, so it is not in
+  `verify-invariants`; run it under `nix develop` (needs `dune`).
 - Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
   `make bridge`, all guarded by `check-bridge-fresh`), `run-examples.sh`,
   `test-programs/runner.py`, `demo_module/run_demo.sh`.
