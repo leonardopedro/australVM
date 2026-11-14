@@ -36,6 +36,10 @@ let create_writer () : writer = {
 let write_u8 w b =
   Buffer.add_char w.buf (Char.chr (b land 0xFF))
 
+(* Every opcode goes through `Cps_codec` so the encoder and the JIT decoder
+   share one table; `test/CpsCodecTest.ml` checks the round trip. *)
+let write_op w op = write_u8 w (Cps_codec.to_byte op)
+
 let write_u32 w n =
   let open Int32 in
   let b0 = to_int (logand n 0xFFl) in
@@ -162,10 +166,10 @@ and string_of_stmt = function
 let rec serialize_cps_expr w expr =
   match expr with
   | IntLit n ->
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       write_i64 w n
   | BoolLit b ->
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       write_i64 w (if b then 1L else 0L)
   | FloatLit f ->
       (* The CPS binary has one 64-bit literal opcode and no float type, so a
@@ -176,7 +180,7 @@ let rec serialize_cps_expr w expr =
          whole module, and the truncation quietly changed the program's
          constants. Rounding is explicit now, and an unrepresentable constant is
          a compile error rather than a surprise. *)
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       if Float.is_nan f || Float.is_integer f = false && Float.abs f >= 9.2233720368547758e18
       then
         err
@@ -187,86 +191,86 @@ let rec serialize_cps_expr w expr =
   | StringLit s ->
       (* 0x21 = string/byte constant. The JIT embeds the bytes in memory and
          yields a Span pointer (heap {data, size}); see cps.rs. *)
-      write_u8 w 0x21;
+      write_op w Cps_codec.String_lit;
       let bytes = Bytes.of_string s in
       write_u32 w (Int32.of_int (Bytes.length bytes));
       write_bytes w bytes
   | Var name ->
-      write_u8 w 0x02;
+      write_op w Cps_codec.Var;
       write_string w name
   | App (fname, args) ->
-      write_u8 w 0x04;
+      write_op w Cps_codec.App;
       write_string w fname;
       write_u32 w (Int32.of_int (List.length args));
       List.iter (serialize_cps_expr w) args
   | Deref e ->
-      write_u8 w 0x20;
+      write_op w Cps_codec.Deref;
       serialize_cps_expr w e
   | CmpLt (a, b) ->
-      write_u8 w 0x10;
+      write_op w Cps_codec.Cmp_lt;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | CmpGt (a, b) ->
-      write_u8 w 0x11;
+      write_op w Cps_codec.Cmp_gt;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | CmpLte (a, b) ->
-      write_u8 w 0x12;
+      write_op w Cps_codec.Cmp_lte;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | CmpGte (a, b) ->
-      write_u8 w 0x13;
+      write_op w Cps_codec.Cmp_gte;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | CmpEq (a, b) ->
-      write_u8 w 0x14;
+      write_op w Cps_codec.Cmp_eq;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | CmpNeq (a, b) ->
-      write_u8 w 0x15;
+      write_op w Cps_codec.Cmp_neq;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | And (a, b) ->
-      write_u8 w 0x16;
+      write_op w Cps_codec.And;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | Or (a, b) ->
-      write_u8 w 0x17;
+      write_op w Cps_codec.Or;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | Add (a, b) ->
-      write_u8 w 0x05;
+      write_op w Cps_codec.Add;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | Sub (a, b) ->
-      write_u8 w 0x06;
+      write_op w Cps_codec.Sub;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | Mul (a, b) ->
-      write_u8 w 0x18;
+      write_op w Cps_codec.Mul;
       serialize_cps_expr w a;
       serialize_cps_expr w b
   | Not e ->
-      write_u8 w 0x19;
+      write_op w Cps_codec.Not;
       serialize_cps_expr w e
 
 and serialize_cps_stmt w = function
   | Skip -> ()
   | Let (name, value, body) ->
-      write_u8 w 0x03;
+      write_op w Cps_codec.Let;
       write_string w name;
       serialize_cps_expr w value;
       serialize_cps_stmt w body
   | Assign (name, value) ->
-      write_u8 w 0x03;
+      write_op w Cps_codec.Let;
       write_string w name;
       serialize_cps_expr w value
   | Store (ptr, value) ->
-      write_u8 w 0x30;
+      write_op w Cps_codec.Store;
       serialize_cps_expr w ptr;
       serialize_cps_expr w value
   | If (cond, then_branch, else_branch) ->
-      write_u8 w 0x08;
+      write_op w Cps_codec.If;
       serialize_cps_expr w cond;
       let then_w = { buf = Buffer.create 64 } in
       serialize_cps_stmt then_w then_branch;
@@ -279,7 +283,7 @@ and serialize_cps_stmt w = function
       write_u32 w (Int32.of_int (Bytes.length else_data));
       write_bytes w else_data
   | While (cond, body) ->
-      write_u8 w 0x09;
+      write_op w Cps_codec.While;
       serialize_cps_expr w cond;
       let body_w = { buf = Buffer.create 64 } in
       serialize_cps_stmt body_w body;
@@ -287,7 +291,7 @@ and serialize_cps_stmt w = function
       write_u32 w (Int32.of_int (Bytes.length body_data));
       write_bytes w body_data
   | Match (cond, cases, default) ->
-      write_u8 w 0x0A;
+      write_op w Cps_codec.Match;
       serialize_cps_expr w cond;
       write_u32 w (Int32.of_int (List.length cases));
       List.iter (fun (val_, body) ->
@@ -309,7 +313,7 @@ and serialize_cps_stmt w = function
   | Discard e ->
       serialize_cps_expr w e
   | Return e ->
-      write_u8 w 0x07;
+      write_op w Cps_codec.Return;
       serialize_cps_expr w e
 
 let serialize_function_def w func =
@@ -356,48 +360,48 @@ let serialize_functions ?(module_name: string option) (funcs: function_def list)
 let rec compile_expr w ctx expr =
   match expr with
   | MIntConstant s ->
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       let n = try Int64.of_string s with _ -> 0L in
       write_i64 w n
 
   | MBoolConstant b ->
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       write_i64 w (if b then 1L else 0L)
 
   | MLocalVar (id, _) ->
-      write_u8 w 0x02;
+      write_op w Cps_codec.Var;
       write_string w (ident_string id)
 
   | MParamVar (id, _) ->
-      write_u8 w 0x02;
+      write_op w Cps_codec.Var;
       write_string w (ident_string id)
 
   | MTemporary (id, _) ->
-      write_u8 w 0x02;
+      write_op w Cps_codec.Var;
       write_string w (ident_string id)
 
   | MConstVar (qname, _) ->
-      write_u8 w 0x02;
+      write_op w Cps_codec.Var;
       write_string w (qident_debug_name qname)
 
   | MComparison (op, lhs, rhs) ->
       compile_binop w op lhs rhs
 
   | MIfExpression (cond, tbranch, fbranch) ->
-      write_u8 w 0x08;
+      write_op w Cps_codec.If;
       compile_expr w ctx cond;
       compile_expr w ctx tbranch;
       compile_expr w ctx fbranch
 
   | MDeref expr ->
-      write_u8 w 0x09;
+      write_op w Cps_codec.While;
       compile_expr w ctx expr
 
   | MSizeOf _ | MSlotAccessor _ | MPointerSlotAccessor _ 
   | MArrayIndex _ | MSpanIndex _ | MEmbed _ | MRecordConstructor _
   | MUnionConstructor _ | MGenericFunVar _ | MConcreteFunVar _
   | MTypecast _ | MConjunction _ | MDisjunction _ | MNegation _ ->
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       write_i64 w 0L
 
   | MConcreteFuncall (_, qname, args, _) ->
@@ -410,24 +414,27 @@ let rec compile_expr w ctx expr =
   | MConcreteMethodCall _ | MGenericMethodCall _ | MFptrCall _
   | MNilConstant | MFloatConstant _ | MStringConstant _
   | MCast (_, _) ->
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       write_i64 w 0L
 
 and compile_binop w op lhs rhs =
+  (* Through the table, like every other opcode site: a comparison code that
+     exists here and not in `Cps_codec` is a byte the decoder would read as
+     some other instruction. *)
   let opcode = match op with
-    | Equal -> 0x14
-    | NotEqual -> 0x15
-    | LessThan -> 0x10
-    | LessThanOrEqual -> 0x12
-    | GreaterThan -> 0x11
-    | GreaterThanOrEqual -> 0x13
+    | Equal -> Cps_codec.Cmp_eq
+    | NotEqual -> Cps_codec.Cmp_neq
+    | LessThan -> Cps_codec.Cmp_lt
+    | LessThanOrEqual -> Cps_codec.Cmp_lte
+    | GreaterThan -> Cps_codec.Cmp_gt
+    | GreaterThanOrEqual -> Cps_codec.Cmp_gte
   in
-  write_u8 w opcode;
+  write_op w opcode;
   compile_expr w () lhs;
   compile_expr w () rhs
 
 and compile_funcall w func_name args =
-  write_u8 w 0x04;
+  write_op w Cps_codec.App;
   write_string w func_name;
   write_u32 w (Int32.of_int (List.length args));
   List.iter (compile_expr w ()) args
@@ -437,9 +444,9 @@ let rec compile_stmt w ctx stmt =
   | MSkip -> ()
 
   | MLet (id, _, body) ->
-      write_u8 w 0x03;
+      write_op w Cps_codec.Let;
       write_string w (ident_string id);
-      write_u8 w 0x01;
+      write_op w Cps_codec.Int_lit;
       write_i64 w 0L;
       compile_stmt w ctx body
 
@@ -454,7 +461,7 @@ let rec compile_stmt w ctx stmt =
 
   | MIf (cond, then_stmt, else_stmt) ->
       compile_expr w ctx cond;
-      write_u8 w 0x08;
+      write_op w Cps_codec.If;
       compile_stmt w ctx then_stmt;
       compile_stmt w ctx else_stmt
 
@@ -466,7 +473,7 @@ let rec compile_stmt w ctx stmt =
 
   | MWhile (cond, body) ->
       compile_expr w ctx cond;
-      write_u8 w 0x08;
+      write_op w Cps_codec.If;
       compile_stmt w ctx body
 
   | MFor (_, start, end_, body) ->
@@ -485,21 +492,21 @@ let rec compile_stmt w ctx stmt =
       compile_expr w ctx expr
 
   | MReturn expr ->
-      write_u8 w 0x07;
+      write_op w Cps_codec.Return;
       compile_expr w ctx expr
 
   | MLetTmp (id, _, expr) ->
-      write_u8 w 0x03;
+      write_op w Cps_codec.Let;
       write_string w (ident_string id);
       compile_expr w ctx expr;
-      write_u8 w 0x02;
+      write_op w Cps_codec.Var;
       write_string w (ident_string id)
 
   | MAssignTmp (id, expr) ->
-      write_u8 w 0x03;
+      write_op w Cps_codec.Let;
       write_string w (ident_string id);
       compile_expr w ctx expr;
-      write_u8 w 0x02;
+      write_op w Cps_codec.Var;
       write_string w (ident_string id)
 
   | MDestructure (_, expr, body) ->
@@ -558,7 +565,7 @@ let compile_function_expr name params body =
   write_u32 w 1l;
   write_string w name;
   write_u32 w (Int32.of_int (List.length params));
-  write_u8 w 0x01;
+  write_op w Cps_codec.Int_lit;
   let temp_w = create_writer () in
   compile_stmt temp_w () body;
   let body_bytes = to_bytes temp_w in

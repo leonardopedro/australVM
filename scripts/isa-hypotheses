@@ -50,8 +50,18 @@ THEORY_AXIOMS = {
     "ir_add_sem",
     "ir_mul_sem",
     "ir_sub_sem",
-    "encdec",
+    # The encdec section: byte equality's one congruence and transitivity.
+    # `encdec` is no longer an axiom — it is 23 theorems proved from the table
+    # below (see scripts/isa-encdec), so removing it here is what keeps a
+    # regression from quietly turning it back into an assumption.
+    "ieq_trans",
+    "beq_cong_dec",
 }
+
+# The table those theorems rest on: `enc_<op>` / `dec_<op>`, generated from
+# `ISA_REGISTRY`. Trusted as data, checked by scripts/isa-census against the
+# JIT's decoder and by test/CpsCodecTest.ml against lib/Cps_codec.ml.
+TABLE_AXIOM = re.compile(r"^(enc|dec)_[a-z_]+$")
 
 
 def main(argv):
@@ -107,9 +117,10 @@ def main(argv):
             axioms.add(m.group(1))
 
     for ax in sorted(axioms - THEORY_AXIOMS):
-        if ax not in gaps:
+        if ax not in gaps and not TABLE_AXIOM.match(ax):
             problems.append(
-                f"axiom {ax}: neither a theory axiom nor a named gap-hypothesis"
+                f"axiom {ax}: neither a theory axiom, a table line, nor a "
+                "named gap-hypothesis"
             )
     for ax in sorted(gaps):
         if ax not in axioms and ax not in ("bounds_from_layout", "encdec"):

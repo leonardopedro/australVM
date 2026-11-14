@@ -3,19 +3,17 @@
 --
 -- layer: ISA
 -- instruction-table: cps-v2, 23 opcodes, measured by scripts/isa-census
--- proof-status: theory — definitions and axioms only, zero proved theorems and
---   zero `sorry`. mm0-c is the reason this file has no `theorem` line: it
---   refuses any theorem whose proof is missing (`error: some theorems used
---   sorry`), so a refinement that is not proved yet is written as an `axiom`
---   and is trusted, exactly as AlphaProof's definition-only semantics is: the
---   trusted part of an ISA model *is* its step relation, auditable line by
---   line. Each such axiom carries a `-- gap-hypothesis:` line naming the
---   layer-1 artifact that discharges its side conditions, and
---   scripts/verify-invariants refuses one whose citations are missing or whose
---   pinned digest no longer matches. Nothing here is called a theorem, so
---   nothing here can be mistaken for a proof.
+-- proof-status: theory — 23 proved theorems (the encdec round trip, one per
+--   emitted opcode) and four cited axioms (`add_refines`, `mul_refines`,
+--   `sub_refines`, `bounds_from_layout`), zero `sorry`. The split matters: what
+--   is proved is the byte layer's self-consistency; what is assumed is that the
+--   step relation refines the CPS-IR semantics, which is where the layer-1
+--   certificates enter, each with a pinned citation. mm0-c rejects a theorem
+--   whose proof is missing (`error: some theorems used sorry`), so the proofs
+--   live in `mm0/isa.mm1` — the file mm0-rs compiles — and mm0-c checks them
+--   against this specification.
 --
--- theory coverage: used=req,radd,rmul,rneg,reg,setreg,neq,nat_eq,enc,dec,linear,typed,in_bounds,run_add,run_sub,run_mul,run_move,ir_add,ir_sub,ir_mul unused=n0,n1
+-- theory coverage: used=req,radd,rmul,rneg,reg,setreg,neq,linear,typed,in_bounds,run_add,run_sub,run_mul,run_move,ir_add,ir_sub,ir_mul,ienc,idec,ieq,beq,ins_add,ins_and,ins_app,ins_cmp_eq,ins_cmp_gt,ins_cmp_gte,ins_cmp_lt,ins_cmp_lte,ins_cmp_neq,ins_deref,ins_if,ins_int_lit,ins_let,ins_match,ins_mul,ins_not,ins_or,ins_return,ins_store,ins_string_lit,ins_sub,ins_var,ins_while unused=n0
 --
 -- cites: mm0/linearity_certificate.mm0 sha256=9eedc905fd7cd093e40f17e6735a0ea7ee763485370661fa5e0ce59fb7b336bf
 -- cites: mm0/layout_certificate.mm0 sha256=20055174ee1e6942b9ef307737e44467f8eb338e67677f6427b4a0f450f6fa25
@@ -151,19 +149,161 @@ term ir_sub (s: St) (dst a b: nat): St;
 axiom ir_sub_sem (s: St) (dst a b: nat):
   $ req (reg (ir_sub s dst a b) dst) (radd (reg s a) (rneg (reg s b))) $;
 
--- ── encdec: decode (encode i) = i, for the emitted subset ────────────────
--- The byte round trip is a property of two implementations (lib/CpsGen.ml
--- writes, src/cps.rs reads), not of a ring, so it is not provable in this file
--- and is not claimed to be. What exists is operational evidence and the census
--- states it: 23/23 declared opcodes are emitted by one side and accepted by the
--- other, and a module compiles only if the decoder consumes exactly the bytes
--- the encoder wrote. `status=measured-not-proved` so nobody counts it as a proof.
-term enc (i: nat): nat;         -- opcode index -> byte
-term dec (b: nat): nat;         -- byte -> opcode index
-term nat_eq (i j: nat): Prop;
+-- ── encdec: decode (encode i) = i, proved instruction by instruction ────
+-- This section used to be one axiom over uninterpreted `enc`/`dec`, annotated
+-- `status=measured-not-proved`. That was honest but nearly empty: an
+-- uninterpreted `enc` says nothing about any byte, so the axiom could be true
+-- of a model that encoded every instruction as 0. MM0 has no pattern matching
+-- or recursion, so a codec cannot be *defined* here either — but it can be
+-- *stated*, finitely, one equation per emitted opcode, and then the round trip
+-- is a theorem of those equations rather than a promise.
+--
+-- What is trusted now is the table: `enc_<op>` says which byte introduces each
+-- instruction, `dec_<op>` says the decoder maps it back. That is 46 short lines
+-- a reader can audit against the ISA manual's opcode bytes, and it is the same
+-- table `ISA_REGISTRY` holds (`scripts/isa-census` compares it to the JIT's own
+-- decoder) and `lib/Cps_codec.ml` holds (`test/CpsCodecTest.ml` compares it to
+-- this file). Each `encdec_<op>` theorem below is proved from exactly its two
+-- table lines: no case is assumed, so a byte that no longer decodes to the
+-- instruction claimed for it cannot keep its theorem.
+--
+-- The generated block is written by `scripts/isa-encdec --write` from
+-- `ISA_REGISTRY`; `verify-invariants` refuses a stale block, re-checks the
+-- proofs with mm0-rs and mm0-c, and counts the instances.
+term ienc (i: Ins): nat;        -- instruction -> its opcode byte
+term idec (b: nat): Ins;        -- opcode byte -> instruction (within the subset)
+term ieq (a b: Ins): Prop;      -- instruction equality
+term beq (a b: nat): Prop;      -- byte equality
 
--- gap-hypothesis: encdec — pinned cite=isa-census (23/23 opcodes), status=measured-not-proved
-axiom encdec (i: nat): $ nat_eq (dec (enc i)) i $;
+axiom ieq_trans (a b c: Ins): $ ieq a b $ > $ ieq b c $ > $ ieq a c $;
+-- Rewriting under `idec`, the one congruence the round trip needs.
+axiom beq_cong_dec (a b: nat): $ beq a b $ > $ ieq (idec a) (idec b) $;
+
+-- BEGIN GENERATED encdec (scripts/isa-encdec --write)
+
+-- Opcode bytes used by the table below (0x.. to decimal).
+term n2: nat; prefix n2: $2$ prec max;
+term n3: nat; prefix n3: $3$ prec max;
+term n4: nat; prefix n4: $4$ prec max;
+term n5: nat; prefix n5: $5$ prec max;
+term n6: nat; prefix n6: $6$ prec max;
+term n7: nat; prefix n7: $7$ prec max;
+term n8: nat; prefix n8: $8$ prec max;
+term n9: nat; prefix n9: $9$ prec max;
+term n10: nat; prefix n10: $10$ prec max;
+term n16: nat; prefix n16: $16$ prec max;
+term n17: nat; prefix n17: $17$ prec max;
+term n18: nat; prefix n18: $18$ prec max;
+term n19: nat; prefix n19: $19$ prec max;
+term n20: nat; prefix n20: $20$ prec max;
+term n21: nat; prefix n21: $21$ prec max;
+term n22: nat; prefix n22: $22$ prec max;
+term n23: nat; prefix n23: $23$ prec max;
+term n24: nat; prefix n24: $24$ prec max;
+term n25: nat; prefix n25: $25$ prec max;
+term n32: nat; prefix n32: $32$ prec max;
+term n33: nat; prefix n33: $33$ prec max;
+term n48: nat; prefix n48: $48$ prec max;
+
+-- The instruction set, one constant per opcode.
+term ins_int_lit: Ins;
+term ins_var: Ins;
+term ins_let: Ins;
+term ins_app: Ins;
+term ins_add: Ins;
+term ins_sub: Ins;
+term ins_return: Ins;
+term ins_if: Ins;
+term ins_while: Ins;
+term ins_match: Ins;
+term ins_cmp_lt: Ins;
+term ins_cmp_gt: Ins;
+term ins_cmp_lte: Ins;
+term ins_cmp_gte: Ins;
+term ins_cmp_eq: Ins;
+term ins_cmp_neq: Ins;
+term ins_and: Ins;
+term ins_or: Ins;
+term ins_mul: Ins;
+term ins_not: Ins;
+term ins_deref: Ins;
+term ins_string_lit: Ins;
+term ins_store: Ins;
+
+-- The table: instruction -> byte (`enc`) and byte -> instruction
+-- (`dec`), then the round trip proved from the two, per instruction.
+axiom enc_int_lit: $ beq (ienc ins_int_lit) n1 $;
+axiom dec_int_lit: $ ieq (idec n1) ins_int_lit $;
+theorem encdec_int_lit: $ ieq (idec (ienc ins_int_lit)) ins_int_lit $;
+axiom enc_var: $ beq (ienc ins_var) n2 $;
+axiom dec_var: $ ieq (idec n2) ins_var $;
+theorem encdec_var: $ ieq (idec (ienc ins_var)) ins_var $;
+axiom enc_let: $ beq (ienc ins_let) n3 $;
+axiom dec_let: $ ieq (idec n3) ins_let $;
+theorem encdec_let: $ ieq (idec (ienc ins_let)) ins_let $;
+axiom enc_app: $ beq (ienc ins_app) n4 $;
+axiom dec_app: $ ieq (idec n4) ins_app $;
+theorem encdec_app: $ ieq (idec (ienc ins_app)) ins_app $;
+axiom enc_add: $ beq (ienc ins_add) n5 $;
+axiom dec_add: $ ieq (idec n5) ins_add $;
+theorem encdec_add: $ ieq (idec (ienc ins_add)) ins_add $;
+axiom enc_sub: $ beq (ienc ins_sub) n6 $;
+axiom dec_sub: $ ieq (idec n6) ins_sub $;
+theorem encdec_sub: $ ieq (idec (ienc ins_sub)) ins_sub $;
+axiom enc_return: $ beq (ienc ins_return) n7 $;
+axiom dec_return: $ ieq (idec n7) ins_return $;
+theorem encdec_return: $ ieq (idec (ienc ins_return)) ins_return $;
+axiom enc_if: $ beq (ienc ins_if) n8 $;
+axiom dec_if: $ ieq (idec n8) ins_if $;
+theorem encdec_if: $ ieq (idec (ienc ins_if)) ins_if $;
+axiom enc_while: $ beq (ienc ins_while) n9 $;
+axiom dec_while: $ ieq (idec n9) ins_while $;
+theorem encdec_while: $ ieq (idec (ienc ins_while)) ins_while $;
+axiom enc_match: $ beq (ienc ins_match) n10 $;
+axiom dec_match: $ ieq (idec n10) ins_match $;
+theorem encdec_match: $ ieq (idec (ienc ins_match)) ins_match $;
+axiom enc_cmp_lt: $ beq (ienc ins_cmp_lt) n16 $;
+axiom dec_cmp_lt: $ ieq (idec n16) ins_cmp_lt $;
+theorem encdec_cmp_lt: $ ieq (idec (ienc ins_cmp_lt)) ins_cmp_lt $;
+axiom enc_cmp_gt: $ beq (ienc ins_cmp_gt) n17 $;
+axiom dec_cmp_gt: $ ieq (idec n17) ins_cmp_gt $;
+theorem encdec_cmp_gt: $ ieq (idec (ienc ins_cmp_gt)) ins_cmp_gt $;
+axiom enc_cmp_lte: $ beq (ienc ins_cmp_lte) n18 $;
+axiom dec_cmp_lte: $ ieq (idec n18) ins_cmp_lte $;
+theorem encdec_cmp_lte: $ ieq (idec (ienc ins_cmp_lte)) ins_cmp_lte $;
+axiom enc_cmp_gte: $ beq (ienc ins_cmp_gte) n19 $;
+axiom dec_cmp_gte: $ ieq (idec n19) ins_cmp_gte $;
+theorem encdec_cmp_gte: $ ieq (idec (ienc ins_cmp_gte)) ins_cmp_gte $;
+axiom enc_cmp_eq: $ beq (ienc ins_cmp_eq) n20 $;
+axiom dec_cmp_eq: $ ieq (idec n20) ins_cmp_eq $;
+theorem encdec_cmp_eq: $ ieq (idec (ienc ins_cmp_eq)) ins_cmp_eq $;
+axiom enc_cmp_neq: $ beq (ienc ins_cmp_neq) n21 $;
+axiom dec_cmp_neq: $ ieq (idec n21) ins_cmp_neq $;
+theorem encdec_cmp_neq: $ ieq (idec (ienc ins_cmp_neq)) ins_cmp_neq $;
+axiom enc_and: $ beq (ienc ins_and) n22 $;
+axiom dec_and: $ ieq (idec n22) ins_and $;
+theorem encdec_and: $ ieq (idec (ienc ins_and)) ins_and $;
+axiom enc_or: $ beq (ienc ins_or) n23 $;
+axiom dec_or: $ ieq (idec n23) ins_or $;
+theorem encdec_or: $ ieq (idec (ienc ins_or)) ins_or $;
+axiom enc_mul: $ beq (ienc ins_mul) n24 $;
+axiom dec_mul: $ ieq (idec n24) ins_mul $;
+theorem encdec_mul: $ ieq (idec (ienc ins_mul)) ins_mul $;
+axiom enc_not: $ beq (ienc ins_not) n25 $;
+axiom dec_not: $ ieq (idec n25) ins_not $;
+theorem encdec_not: $ ieq (idec (ienc ins_not)) ins_not $;
+axiom enc_deref: $ beq (ienc ins_deref) n32 $;
+axiom dec_deref: $ ieq (idec n32) ins_deref $;
+theorem encdec_deref: $ ieq (idec (ienc ins_deref)) ins_deref $;
+axiom enc_string_lit: $ beq (ienc ins_string_lit) n33 $;
+axiom dec_string_lit: $ ieq (idec n33) ins_string_lit $;
+theorem encdec_string_lit: $ ieq (idec (ienc ins_string_lit)) ins_string_lit $;
+axiom enc_store: $ beq (ienc ins_store) n48 $;
+axiom dec_store: $ ieq (idec n48) ins_store $;
+theorem encdec_store: $ ieq (idec (ienc ins_store)) ins_store $;
+
+-- END GENERATED encdec
+
 
 -- ── step_refines: one ISA step is one CPS-IR step ────────────────────────
 -- The three refinements the emitted arithmetic needs. Each takes the layer-1

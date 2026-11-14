@@ -101,6 +101,17 @@
  (modules JitTest)
  (libraries austral_cps_gen austral_rust_bridge ounit2))
 
+; The CPS opcode table: the encoder (lib/Cps_codec.ml, used by CpsGen) and the
+; decoder must be one table, and that table must be the one `mm0/isa.mm0`
+; declares, since the ISA model's encdec theorem is about those bytes. The
+; artifact is a declared dependency for the same reason the VC goldens are:
+; without it dune does not stage the file and the comparison would be vacuous.
+(tests
+ (names CpsCodecTest)
+ (modules CpsCodecTest)
+ (libraries austral_cps_gen ounit2 str)
+ (deps ../mm0/isa.mm0))
+
 ; avm-pkg spec task 2.1: the package totality pass and the Derivation
 ; JSON export (lib/Totality.ml, lib/DerivAst.ml). Hand-built typed ASTs —
 ; no codegen, so austral_core alone is enough.

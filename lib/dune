@@ -46,7 +46,7 @@
   (public_name austral.austral_cps_gen)
   (libraries austral_core austral_caml)
   (wrapped false)
-  (modules CpsGen Compiler_cps))
+  (modules CpsGen Cps_codec Compiler_cps))
 
 ; Rust Cranelift Bridge
 (library
