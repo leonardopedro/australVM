@@ -138,11 +138,14 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   1 on any uncovered or overstated opcode. `--corpus` compiles the example
   modules whose CPS path produces a function and censuses the union (one module
   only measures one kernel), and requires the opcodes left unexercised to be
-  exactly its `UNREACHABLE_OPCODES` pin (`sub`, `mul`, `match`) — they are
-  decodable IR with no producer in `lib/Compiler_cps.ml`, since `a - b`/`a * b`
-  lower to `app`s of `Austral.Pervasive::trappingSubtract`/`trappingMultiply`,
-  which makes "20 of 23" a reason rather than a shortfall. An opcode that
-  becomes emitted shrinks the pin; one that becomes uncovered fails the census. `scripts/isa-hypotheses <isa.mm0>` refuses a
+  exactly its `UNREACHABLE_OPCODES` pin. That pin is **empty since 2026-11-14**
+  (23 of 23 emitted, 905 reads): `sub`/`mul` now come from
+  `Compiler_cps.trapping_arith_op` turning the Pervasive
+  `trappingSubtract`/`trappingMultiply` calls into 0x06/0x18 (the JIT keeps the
+  trap-on-overflow contract via `emit_trapping_arith`), and `match` is one 0x0A
+  instead of a `CmpEq`+`If` chain. An opcode that stops being emitted without a
+  reason written in the pin fails the census, so coverage cannot silently
+  regress. `scripts/isa-hypotheses <isa.mm0>` refuses a
   `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or missing, and
   classifies each one by content: `content-checked` only when every term/sort
   the hypothesis mentions is declared by a cited artifact. `bounds_from_layout`
@@ -194,6 +197,19 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   writes NDJSON to stdout (`LEAN_PATH=<dir> lean4export <Mod> > out.ndjson`);
   giving it a second positional argument panics, because argv after the module
   names is a *constant* list, not an output path.
+- `scripts/rv64-model-mm0 [check]` — the W9.1 conversion, end to end:
+  `$RISCV_MODEL/RISCV/Instructions.lean` (flake `packages.riscv-lean`, i.e.
+  opencompl/riscv-lean pinned at `ccdfd676`; only the one import-free file is
+  shipped, because the repo's default target pulls a Sail dependency at
+  `rev = "main"`) → `lean` → `lean4export` → `lean2mm0-stmts emit --only` →
+  `mm0/statements/riscv_instructions.{mm0,mm1,roots}` → `mm0-rs compile` +
+  `mm0-c < .mm1` (exit 0). It then prints the `ISA_REGISTRY` diff: 13 opcodes
+  map to a converted declaration, 8 are structural (no ISA instruction), and
+  `deref`/`store` are **not covered** — `Instructions.lean` is ALU/M/B only, and
+  saying so is required. It exits non-zero if `isa.rs` gains an opcode with no
+  table entry, so the diff cannot rot. `check` re-converts and diffs the
+  committed artifact. Runs under `nix develop "git+file://$PWD#lean"` (that
+  shell carries lean, lean4export, `mm0` and python3 together on purpose).
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

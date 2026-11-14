@@ -293,6 +293,38 @@ currently indefensible:
    weakened definition is reproduced faithfully by regeneration, so the drift gate
    cannot see it. This is exactly the hole `comparator` was built to close.
 
+### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-14)
+
+```
+$ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
+verify-invariants: 106 passed, 2 explained gap(s), 0 failed
+  [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
+  [detail] 23 opcodes: 13 mapped to a converted model declaration,
+           8 structural (no ISA instruction), 2 not covered
+  [pass] W9: mm0/clif.mm0 is what the corpus lowering measures
+  [detail] clif2mm0: 20 form(s), 853 instruction(s), 0 theorems
+  [gap]  W3: isa has no approved statements (owner commit)
+  [gap]  W3: slot_layout has no approved statements (owner commit)
+$ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
+verify-invariants: 105 passed, 3 explained gap(s), 0 failed   # + W9.1 no lean shell
+
+$ ./scripts/isa-census --corpus | head -1
+isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
+  result: covered — every opcode used is declared in the decoder and in the artifact
+
+$ grep '^-- code:' mm0/flux1d_certificate.mm0
+-- code: cps=5dfcdfe8…d26d1 obj=ad3340b6…f0224 target=host
+  # re-emitted; the statements are byte-identical, only this line moved
+$ make test                                                  # exit 0
+```
+
+The three `[FAIL]`s this work produced before those two re-emits were the
+expected ones — the certificate pinned the CPS and object digests of the *old*
+lowering. They are refreshed with `au2mm0 emit … --code … --obj …`, and the
+certificate's statements (and therefore `mm0/approved/flux1d_certificate.stmts`)
+are unchanged: only the `-- code:` line moved. That is the intended relation —
+a lowering change is a digest diff, not a re-approval.
+
 ---
 
 ## §4 Workstreams
@@ -1111,9 +1143,90 @@ invariant proved, one premise about the compiler left visible.
 
 ### W9.1 ISA model: convert, do not author
 
-`[gap]` — no external ISA model is in the repo yet. The *toolchain* is no
-longer the blocker (provisioned 2026-11-14, `flake.nix` `packages.lean` /
-`packages.lean4export` / `devShells.lean`):
+**Status 2026-11-14 — converted, accepted, and diffed; coverage is partial and
+named.** An external RV64 model is now pinned and converted by one command,
+`scripts/rv64-model-mm0`:
+
+```bash
+nix develop "git+file://$PWD#lean" -c bash scripts/rv64-model-mm0
+# [INFO] model : …/riscv-lean-ccdfd676/share/riscv-lean/RISCV/Instructions.lean
+# roots : 83 RV64 declarations (export closure: 55494)
+# 3 sorts, 30 term/def, 94 ax/thm
+# [INFO] mm0-c : accepted (83 declarations)
+# 23 opcodes: 13 mapped to a converted model declaration, 8 structural
+#             (no ISA instruction), 2 not covered
+```
+
+The model is **opencompl/riscv-lean** at commit
+`ccdfd67647b334a830e220c4caef0f067cd9e15c`, pinned in `flake.nix` as
+`packages.riscv-lean` (`sha256-SaV/eT7LUbcrKut4R0KbG503t2jVj/8jXCjDFHEagCg=`)
+and provisioned into `devShells.lean` as `$RISCV_MODEL`. It is fetched, not
+vendored, so the conversion's input has a name and a digest. The pin ships
+exactly one file, `RISCV/Instructions.lean`, and that is the honest part of the
+choice:
+
+- it is the only file in that repo with **no imports**, so it elaborates
+  without Lake, without network, and without the `Lean_RV64D` git dependency
+  (a lake dep at `rev = "main"` — unpinnable as a flake input, unfetchable in a
+  sandbox) that the repo's default target `RISCV.Basic` requires;
+- the repo's `lean-toolchain` names Lean 4.32.2; this file elaborates under the
+  flake's 4.30.0 in 2.2 s (measured), so no toolchain bump was needed. The
+  version gap is not "probably fine" — the file compiles, and BitVec APIs that
+  changed between those releases are in the files it does not import;
+- what that costs is stated in the diff, not hidden: the model is **ALU + M +
+  Zba/Zbb/Zbs** (630 lines, 83 `def`s, `namespace RV64`). It has no loads, no
+  stores and no branches — those live in `Skeleton.lean`/`SailPure.lean`, i.e.
+  behind the Sail import this pin cannot follow.
+
+The conversion reuses the pipeline this repo already trusts
+(`scripts/lean2mm0-stmts`, statements of record as MM0 axioms — structure only;
+*truth* stays with the Lean kernel and nanoda's re-check of the export, exactly
+as `docs/lean4mm0.md` scopes it): olean → `lean4export` (55,494 decls, 340 MB
+NDJSON) → roots via `scripts/lean2mm0`'s `Export` reader (dotted names:
+`RV64.add`, 83 of them) → `lean2mm0-stmts emit --only` → 414-line
+`mm0/statements/riscv_instructions.{mm0,mm1,roots}` (41,986 bytes) →
+`mm0-rs compile` (3 sorts, 30 term/def, 94 ax/thm) → `mm0-c < .mm1` **exit 0**.
+
+One measured trap, now encoded in the script: `lean2mm0-stmts verify`'s own
+mm0-c leg is a false negative — it runs `mm0-c <mmb>` with stdin `/dev/null`,
+which exits 255 for known-good artifacts (`cmd: null`, `cmds:` empty). The
+canonical form is `mm0-c <mmb> < <stem>.mm1`, which is what the script runs and
+what `verify-invariants` does for every other artifact.
+
+**Coverage, stated as the diff the script prints:** of the 23 `ISA_REGISTRY`
+opcodes, 13 map to a converted declaration (`int_lit→li`, `add→add`, `sub→sub`,
+`mul→mul`, `and→and`, `or→or`, `not→xori`, the four orderings→`slt`, `cmp_eq`/
+`cmp_neq`→`xor`), 8 are CPS structure with no instruction of its own (`var`,
+`let`, `app`, `return`, `if`, `while`, `match`, `string_lit`), and **2 are not
+covered**: `deref` and `store`, for the reason above. The mapping is closed by
+the script (`isa.rs` gaining an opcode with no entry fails it), and "mapped" is
+checked against the artifact, not asserted in a comment. So the W9.1 acceptance
+limb "every opcode the JIT decodes is in the converted model" is **not met, and
+cannot be met by this file**; it is met for the 21 non-memory/structural ones,
+with the memory pair a named `[gap]` whose remedy is a Sail-importing pin (or a
+memory model) rather than a bigger table.
+
+**The gate, and its control.** `verify-invariants` runs `scripts/rv64-model-mm0
+check` when the `lean` shell is active (`$RISCV_MODEL` set) and fails on drift;
+outside it the check is an explained `[gap]`, never a pass. Drift detection was
+mutation-measured: appending one line to a copy of the statements and pointing
+`OUT` at that directory gives `[FAIL] drift: … differs from a fresh conversion`,
+exit 1. That control also caught a real defect in this script's first version —
+the export was written to `mktemp -d`, and `lean2mm0-stmts` records the export's
+*path* in the artifact header, so every `check` failed against an unchanged
+tree (`/tmp/nix-shell.XOabRm/…` vs `/tmp/nix-shell.UAs9Zy/…`). The export now
+lives at the gitignored `mm0/exports/riscv_instructions.ndjson`, the convention
+the 2124 committed statement files already follow; the artifact is reproducible
+byte-for-byte across runs.
+
+Each mapping entry is a claim about semantics that the conversion does **not**
+prove: `mm0-c` accepts the RV64 declarations as statements about `BitVec`, and
+nothing here says the JIT's `mul` is the model's `mul`. That is W9.3's
+obligation, and the mapping table is its vocabulary — with the caveat that a
+table entry is currently an argument from reading, not a theorem.
+
+The toolchain it runs on (provisioned 2026-11-14, `flake.nix` `packages.lean` /
+`packages.lean4export` / `packages.riscv-lean` / `devShells.lean`):
 
 ```bash
 nix develop .#lean -c bash -c 'lean --version; lake --version'
@@ -1131,24 +1244,15 @@ takes the module name and writes NDJSON to **stdout**:
 argument is parsed as another module name, panics in `decodeNameLit`, and leaves
 no output file — the first thing to get wrong here.
 
-What is still missing is the model itself: no Lean/RISC-V/AArch64 ISA
-formalization is pinned in this repo, so no conversion has been attempted and
-nothing is claimed. The next step is a choice, not a build: pin a candidate
-(e.g. a Lean 4 RISC-V model) as a `fetchFromGitHub` input at the export
-boundary and convert *that*, or write the Sail sibling. The route is the one
-`scripts/lean2mm0` already implements for Lean 4 exports, applied to an existing
-ISA formalization instead of to a probability kernel:
-
-- candidates: a Lean 4 RISC-V or AArch64 memory model (the Lanyon/AlphaProof
-  posture: the model *is* the ISA, so no translation fidelity claim is invented
-  here), or Sail's RISC-V model through a `sail2mm0` sibling to `lean2mm0`;
-- acceptance: `mm0-c` accepts the converted specification, and the emitted
-  subset diff (the census, retargeted) shows every opcode the JIT decodes is in
-  the converted model — otherwise the conversion is not covering the claim;
-- the cost is unknown until a candidate is picked, and the plan must keep saying
-  `[gap]` until a conversion actually compiles. The two known costs are
-  unchanged from W8's analysis: a translator in the TCB (Lean→MM0 already is
-  one, but a *checked* one) or a hand-authored subset (reviewable, but ours).### W9.2 Cranelift-IR model in MM0
+The two costs W8 predicted are both visible now, and neither is retired: the
+converter (`lean2mm0-stmts`) is in the TCB and is not itself verified (what
+`mm0-c` checks is that the emitted statements are well-formed in `cic.mm0`'s
+term language, not that they are the Lean definitions' meaning), and the
+coverage question is answered by a hand-written mapping table rather than by a
+proof of correspondence. Pinning the *Sail* RISC-V model instead would close
+the memory-opcode gap and make the same converter's output richer; it was not
+done here because Sail's Lean export path adds a Lake project (and its own
+toolchain) to a pin whose whole value so far was that it needs neither.### W9.2 Cranelift-IR model in MM0
 
 `mm0/clif.mm0` — sorts for values, types and instruction forms of the *subset
 of CLIF the bridge emits*, derived from the bridge's own output rather than from
@@ -1174,28 +1278,48 @@ argument list and the type tuple in the name:
 term iadd__i64_i64__r_i64 (a b: val): op;   -- 58 use(s), 2 operand(s), 1 result(s)
 ```
 
-Measured: **18 forms, 800 instructions over 12 modules** (`i64`/`i8` only;
-`iconst`, `iadd`, `band`, `bor`, `bnot`, `icmp`, `uextend`, `load`, `store`,
-`call` at four arities, `brif`, `jump`, `return`). 18 is fewer than the 23
-opcodes on purpose: the CLIF layer is coarser (`call` covers `app`; `load`/`store`
-are the memory path) and the mapping between the two layers is W9.3's job, not a
-name match.
+Measured after the `sub`/`mul`/`match` producers landed: **20 forms, 853
+instructions over 12 modules** (`i64`/`i8` only; `iconst`, `iadd`, `isub`,
+`imul`, `band`, `bor`, `bnot`, `icmp`, `uextend`, `load`, `store`, `call` at four
+arities, `brif`, `jump`, `return` — the exact list is in `mm0/clif.mm0`). The
+count is lower than the 23 opcodes on purpose: the CLIF layer is coarser (`call`
+covers `app`; `load`/`store` are the memory path) and the mapping between the two
+layers is W9.3's job, not a name match. The two additions over the first
+measurement (18 forms) are the arithmetic instructions, and they appear because
+the CPS layer started emitting them — the corpus grew by a `*` in
+`examples/control-flow`, not by new forms in Cranelift.
 
-**Corpus coverage is now a pinned set, not a shortfall.** The corpus grew on
+**Corpus coverage is now complete and still pinned.** The corpus grew on
 2026-11-14 from 9 to 12 modules: `examples/control-flow` exists only to drive the
-eight opcodes the other examples never emitted (`while`, `cmp_gt`, `cmp_lte`,
-`cmp_gte`, `cmp_neq`, `or`, `not`, and the `for`-loop `add`), and
-`examples/generic-record` + `examples/ffi` contribute `string_lit`. The union is
-**20 of 23 opcodes** (914 reads), and `scripts/isa-census` now *checks* that the
-three unexercised ones are exactly its `UNREACHABLE_OPCODES` pin (`sub`, `mul`,
-`match`), failing in both directions: an opcode that becomes covered must shrink
-the pin, and one that becomes uncovered must be measured or explained. The pin's
-evidence is in the lowering, not in taste — `a - b` and `a * b` lower to `app`
-calls of `Austral.Pervasive::trappingSubtract`/`trappingMultiply`, and `case`
-lowers to a `CmpEq` + `If` chain, so `Sub`/`Mul`/`Match` are decodable IR with no
-producer in `lib/Compiler_cps.ml` (measured 2026-11-14; the negative control —
-pinning only `sub mul` — fails with `match is uncovered and not declared
-unreachable`).
+opcodes the other examples never emitted (`while`, `cmp_gt`, `cmp_lte`,
+`cmp_gte`, `cmp_neq`, `or`, `not`, the `for`-loop `add`, and — since the last
+three producers landed — `sub` via its `i - 1` and `mul` via `Scale`'s `x * k`),
+and `examples/generic-record` + `examples/ffi` contribute `string_lit`. The union
+is **23 of 23 opcodes** (905 reads over 12 modules), and `scripts/isa-census`
+*checks* that the unexercised set is exactly its `UNREACHABLE_OPCODES` pin — now
+**empty**, failing in both directions: an opcode that becomes uncovered without
+a reason written in the pin fails, and so does a pin that still names an opcode
+the corpus emits. Closing the last three was a lowering change, not a corpus
+trick:
+
+- `a - b` and `a * b` arrive as calls to
+  `Austral.Pervasive::trappingSubtract`/`trappingMultiply`, and
+  `Compiler_cps.trapping_arith_op` now emits `Sub`/`Mul` for those two callees.
+  The JIT implements both opcodes with the *same* trap-on-overflow contract as
+  the methods (`cps.rs`'s `emit_trapping_arith` branches to the registered
+  symbol rather than using wrapping `isub`/`imul`), so the instruction is a new
+  encoding of old semantics. Measured at runtime: `6 * 7 - 7 = 35` exits 0, and
+  `maximum_int64 * 2` / `minimum_int64 - 1` still die with `Overflow in
+trappingMultiply (Int64)` / `… trappingSubtract …` (exit 255) instead of
+  wrapping. `+` keeps its call deliberately: 0x05 doubles as the `for` loop's
+  increment, and that path is left alone;
+- `Mt.MCase` lowers to `Match` (0x0A) instead of a `CmpEq` + `If` chain over the
+  tag slot, so tag dispatch is one instruction (and the union example's opcode
+  count falls from 7 distinct to 6 because the comparison disappears).
+
+The negative control the pin always had still holds: naming an opcode the corpus
+emits fails the gate with `… is in the unreachable pin but the corpus now emits
+it`.
 
 What is checked on every `verify-invariants` run: `mm0-rs` compiles
 `mm0/clif.mm1` and `mm0-c` checks the committed declarations against it (a
@@ -1282,11 +1406,11 @@ The remaining work is exactly what it was, now with a place to put it:
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
-| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00` |
+| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**18 forms, 800 instructions**, and 20 of 23 CPS opcodes with the other three pinned unreachable), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; W9.1 (external ISA conversion) is still `[gap]` (toolchain now provisioned — `nix develop .#lean` — no model pinned yet), and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
-| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14 for ALU/M/B, `[gap]` for memory**: opencompl/riscv-lean at `ccdfd676` is a flake input, `scripts/rv64-model-mm0` converts 83 `RV64.*` declarations to `mm0/statements/riscv_instructions.{mm0,mm1,roots}` and `mm0-rs`+`mm0-c` accept them, the `ISA_REGISTRY` diff is closed in both directions (13 mapped, 8 structural, `deref`/`store` **not covered** — the pinned file has no loads/stores), re-checked by `verify-invariants` in the `lean` shell and reported as a `[gap]` elsewhere; and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
+| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Re-measured 2026-11-14**: 905 reads over 12 modules, **23 distinct**, 23 declared, `UNREACHABLE_OPCODES` now empty (the `sub`/`mul`/`match` producers landed). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated
