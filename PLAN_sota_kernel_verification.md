@@ -1111,9 +1111,13 @@ invariant proved, one premise about the compiler left visible.
 
 ### W9.1 ISA model: convert, do not author
 
-`[gap]` — no external ISA model is in the repo yet. The route is the one
-`scripts/lean2mm0` already implements for Lean 4 exports, applied to an existing
-ISA formalization instead of to a probability kernel:
+`[gap]` — no external ISA model is in the repo yet. Measured 2026-11-14:
+`command -v lean lake elan lean4export sail` finds none of them on this host, and
+no `*.lean`/Sail model is in the tree, so the conversion cannot be attempted
+here until a toolchain is provisioned; the plan stays `[gap]` rather than
+claiming the candidate works. The route is the one `scripts/lean2mm0` already
+implements for Lean 4 exports, applied to an existing ISA formalization instead
+of to a probability kernel:
 
 - candidates: a Lean 4 RISC-V or AArch64 memory model (the Lanyon/AlphaProof
   posture: the model *is* the ISA, so no translation fidelity claim is invented
