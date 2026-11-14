@@ -168,6 +168,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   - A `.mm0` statement's premises (`$ A $ > $ B $`) become named binder
     hypotheses designed by the script (`h1`, `h2`, …) in the `.mm1`, which is
     how a proof stays a plain term instead of needing a lambda.
+- The new arithmetic lowering is regression-tested in
+  `safestos/cranelift/tests/cps_tests.rs`: `sub_opcode_computes_the_difference`
+  and `mul_opcode_computes_the_product` check the value (operand order
+  included), and `sub_opcode_traps_on_overflow` / `mul_opcode_traps_on_overflow`
+  check the trap. The trap is `std::process::abort`, uncatchable in-process, so
+  those two re-exec the test binary as a child (`--exact arith_trap_child_exit`,
+  env `AVM_ARITH_TRAP`) and assert SIGABRT plus the `Overflow in
+  trappingSubtract/Multiply (Int64)` message. Without `emit_trapping_arith`'s
+  `brif` both would return a wrapped i64 and exit 0.
 - `lib/Cps_codec.ml` is the OCaml opcode table; `CpsGen` writes every opcode
   through it, and `test/CpsCodecTest.ml` holds it to `mm0/isa.mm0`.
 - `mm0/slot_layout.mm0`/`.mm1` — the `St`-level layout model `bounds_from_layout`
@@ -197,19 +206,49 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   writes NDJSON to stdout (`LEAN_PATH=<dir> lean4export <Mod> > out.ndjson`);
   giving it a second positional argument panics, because argv after the module
   names is a *constant* list, not an output path.
-- `scripts/rv64-model-mm0 [check]` — the W9.1 conversion, end to end:
-  `$RISCV_MODEL/RISCV/Instructions.lean` (flake `packages.riscv-lean`, i.e.
-  opencompl/riscv-lean pinned at `ccdfd676`; only the one import-free file is
-  shipped, because the repo's default target pulls a Sail dependency at
-  `rev = "main"`) → `lean` → `lean4export` → `lean2mm0-stmts emit --only` →
-  `mm0/statements/riscv_instructions.{mm0,mm1,roots}` → `mm0-rs compile` +
-  `mm0-c < .mm1` (exit 0). It then prints the `ISA_REGISTRY` diff: 13 opcodes
-  map to a converted declaration, 8 are structural (no ISA instruction), and
-  `deref`/`store` are **not covered** — `Instructions.lean` is ALU/M/B only, and
-  saying so is required. It exits non-zero if `isa.rs` gains an opcode with no
-  table entry, so the diff cannot rot. `check` re-converts and diffs the
-  committed artifact. Runs under `nix develop "git+file://$PWD#lean"` (that
-  shell carries lean, lean4export, `mm0` and python3 together on purpose).
+- `scripts/rv64-model-mm0 [check]` — the W9.1 conversion, end to end, over two
+  pinned models:
+  - `$RISCV_MODEL` (`packages.riscv-lean`: opencompl/riscv-lean at `ccdfd676`,
+    only its import-free `RISCV/Instructions.lean`) → `mm0/statements/
+    riscv_instructions.{mm0,mm1,roots}` — 83 `RV64.*` declarations, 3 sorts /
+    30 term-def / 94 ax-thm, `mm0-c` exit 0;
+  - `$RISCV_MEMORY_MODEL` (`packages.sail-riscv-lean`: the repo's own
+    `lake-manifest` lock, `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631`,
+    built to oleans by the derivation — ~28 min, cached in the store) →
+    `mm0/statements/rv64_memory.{mm0,mm1,roots}` for
+    `LeanRV64D.Functions.execute_LOAD`/`execute_STORE`, 3 sorts / 30 term-def /
+    13 ax-thm, `mm0-c` exit 0. Unset and unbuildable → that stem is skipped and
+    `deref`/`store` are reported NOT COVERED, never silently assumed.
+  Both go through `lean` → `lean4export` → `lean2mm0-stmts emit --only` →
+  `mm0-rs compile` → `mm0-c < .mm1`. The script then prints the `ISA_REGISTRY`
+  diff: **15 opcodes map to a converted declaration, 8 are structural, 0 are
+  uncovered**. The table is closed (an `isa.rs` opcode with no entry fails it),
+  and "mapped" is checked against the artifact, so a missing declaration reads
+  `NOT IN ARTIFACT`, not as covered. `check` re-converts and diffs both stems.
+  Runs under `nix develop "git+file://$PWD#lean"`: that shell carries lean,
+  lean4export, `mm0`, python3 and **both** model paths (`$RISCV_MODEL`,
+  `$RISCV_MEMORY_MODEL`) on purpose, so entering it may trigger the one-time
+  28-minute Sail build. `.github/workflows/w9-isa-model.yml` runs `check`
+  weekly, because a PR should not wait for that build.
+- `scripts/mem-refines` — refutes the tempting shortcut "the JIT's memory op
+  lowers to the model's `execute_LOAD`/`execute_STORE`", for **both** opcodes.
+  It reads the *committed* artifacts (`mm0/clif.mm0`'s `load__i64__r_i64`: 1
+  operand, 1 result; `store__*`: 2 operands, 0 results) and the *pinned*
+  `LeanRV64D/InstsEnd.lean` signatures (`execute_LOAD`: 5 arguments;
+  `execute_STORE`: 4; both return `SailM ExecutionResult`, check `width ≤
+  xlen_bytes` and can fault in `vmem_read`/`vmem_write`), so the verdict is
+  measured instead of retyped. Exit 0 = refuted (the expected state), 1 = the
+  shapes now agree (re-argue the correspondence), 2 = evidence missing.
+  `verify-invariants` runs it and pins the refutation as `[pass]`.
+- `mm0/store_projection.mm0` — the claim that *survives* that refutation,
+  stated and cited but not asserted: `aligned8 a ⇒ in_linear_space a ⇒
+  store_projects s a v` over uninterpreted state transformers
+  (`jit_store_i64`, `isa_store_w8`), with `-- certificate: [gap]`, three pinned
+  citations and **no** `axiom`/`theorem`. `mm0-c` accepting it means "the
+  obligation is well-formed", never "it holds". It declares its own vocabulary
+  (`-- theory: self-declared vocabulary`), which `verify-invariants` accepts in
+  place of a `used=` coverage list; membership is still a W3 `[gap]` until the
+  owner approves it.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
