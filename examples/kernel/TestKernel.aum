@@ -1,0 +1,22 @@
+-- TestKernel — the smallest module that calls into the unfer kernel.
+--
+-- `TestKernel.au` is the pre-modular spelling of this program and no longer
+-- parses (the compiler accepts `.aum`/`.aui` only), so this file keeps the demo
+-- alive in the syntax the compiler actually reads. Its other purpose is
+-- measurement: `scripts/isa-census --corpus` includes it so the opcode census
+-- sees a module whose body is a foreign `uk_*` call, not just arithmetic.
+
+import UnferKernel (
+    kernelVersion
+);
+
+module body TestKernel is
+    function main(): ExitCode is
+        let version: Int64 := kernelVersion();
+        if version = 1 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

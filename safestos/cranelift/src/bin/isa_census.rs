@@ -12,7 +12,13 @@
 //! measurement is taken from the code path that runs, not from a second decoder
 //! that could drift from it. Nothing is executed.
 //!
-//! Usage: `isa-census [--isa <isa.mm0>] <module.cps>...`
+//! Usage: `isa-census [--isa <isa.mm0>] [--allow-all] <module.cps>...`
+//!
+//! `--allow-all` installs the AllowAll authorizer for the measurement. A module
+//! that calls the kernel (`uk_*`) is gated by the Cedar engine's default deny,
+//! which would make the census refuse to *parse* bytes it should be counting;
+//! nothing is executed here (the module is a `CaptureModule`), so the grant
+//! question is not this tool's to answer — `modhost` is where it is asked.
 //!
 //! Several modules are censused separately and reported together, because "the
 //! emitted subset" is a claim about the emitter, not about one kernel: flux1d
@@ -41,14 +47,17 @@ fn main() {
 }
 
 fn run() -> Result<String, String> {
-    let usage = "usage: isa-census [--isa <isa.mm0>] <module.cps>...";
+    let usage = "usage: isa-census [--isa <isa.mm0>] [--allow-all] <module.cps>...";
     let mut mm0_path: Option<PathBuf> = None;
     let mut modules: Vec<PathBuf> = Vec::new();
+    let mut allow_all = false;
     let mut args = std::env::args_os().skip(1).peekable();
     while let Some(arg) = args.next() {
         let s = arg.to_string_lossy().into_owned();
         if s == "--isa" {
             mm0_path = Some(PathBuf::from(args.next().ok_or(usage)?));
+        } else if s == "--allow-all" {
+            allow_all = true;
         } else if s.starts_with("--") {
             return Err(format!("unknown flag {s}; {usage}"));
         } else {
@@ -64,6 +73,9 @@ fn run() -> Result<String, String> {
     }
     if modules.is_empty() {
         return Err(usage.into());
+    }
+    if allow_all {
+        austral_cranelift_bridge::auth::set_allow_all();
     }
 
     let declared: BTreeSet<u8> = ISA_REGISTRY.iter().map(|i| i.opcode).collect();

@@ -20,6 +20,18 @@
 # today (`hello-world`, `memory`: the `__embed` string path) are excluded, and
 # the union line reports how many opcodes the corpus still never exercises
 # rather than implying the subset is fully exercised.
+#
+# `examples/kernel` is in the corpus because a module that calls the kernel is
+# not just another example: `uk_version` is an `app` (0x04) whose callee is an
+# imported symbol, and whether the emitter encodes it like any other call is a
+# measurement, not an assumption. It is the only entry with an explicit source
+# list (`dir:module:sources`) because it needs `UnferKernel` linked in ahead of
+# the demo; the others are single-module directories.
+#
+# Both compiles and the census pass `--allow-all`: this script measures emitted
+# bytes, and a kernel call would otherwise be refused by the default-deny engine
+# before it could be counted. Nothing is executed here — the census compiles
+# into a capture module — and the grant question belongs to `modhost`.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,8 +69,15 @@ if [ "$corpus" -eq 1 ]; then
     fi
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    # dir:module — the module name is the declared one, not the directory name,
-    # which is why it is written down instead of derived.
+    # The corpus is compiled with `--target-type=c`: the census reads the CPS
+    # file, not the executable, and the C target needs neither a C compiler nor
+    # a host linker. That matters for the kernel entry — `uk_version` and its
+    # neighbours are registered in the JIT, not exported by the bridge `.so`
+    # unless built with `unfer-kernel`, so linking an exe for it fails on
+    # symbols the census never touches.
+    #
+    # dir:module[:sources] — the module name is the declared one, not the
+    # directory name, which is why it is written down instead of derived.
     entries=(
         "verified-kernel/flux1d:Flux1d"
         "fib:Example.Fibonacci"
@@ -67,17 +86,24 @@ if [ "$corpus" -eq 1 ]; then
         "generic-union:Example.GenericUnion"
         "named-argument:Example.NamedArgument"
         "identity:Example.Identity"
+        "kernel:TestKernel:UnferKernel.aui,UnferKernel.aum TestKernel.aum"
     )
     cps_files=()
     for entry in "${entries[@]}"; do
         dir="${entry%%:*}"
-        mod="${entry##*:}"
-        src=$(cd "$ROOT/examples/$dir" && ls *.aui | head -1),$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)
+        rest="${entry#*:}"
+        mod="${rest%%:*}"
+        if [ "$rest" = "$mod" ]; then
+            srcs=("$(cd "$ROOT/examples/$dir" && ls *.aui | head -1),$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)")
+        else
+            read -r -a srcs <<< "${rest#*:}"
+        fi
         name="$(basename "$dir")"
         if ! ( cd "$ROOT/examples/$dir" \
-            && LD_LIBRARY_PATH="$ROOT" "$austral" compile "$src" \
-                --entrypoint="$mod:main" --use-cps-jit \
-                --emit-cps="$tmp/$name.cps" --output="$tmp/$name.bin" ) \
+            && LD_LIBRARY_PATH="$ROOT" "$austral" compile "${srcs[@]}" \
+                --entrypoint="$mod:main" --use-cps-jit --allow-all \
+                --target-type=c \
+                --emit-cps="$tmp/$name.cps" --output="$tmp/$name.c" ) \
                 >"$tmp/$name.log" 2>&1; then
             echo "isa-census: [gap] examples/$dir did not compile — corpus incomplete" >&2
             tail -3 "$tmp/$name.log" >&2
@@ -89,7 +115,7 @@ if [ "$corpus" -eq 1 ]; then
         fi
         cps_files+=("$tmp/$name.cps")
     done
-    exec "$BIN" --isa "$ROOT/mm0/isa.mm0" "${cps_files[@]}"
+    exec "$BIN" --isa "$ROOT/mm0/isa.mm0" --allow-all "${cps_files[@]}"
 fi
 
 exec "$BIN" --isa "$ROOT/mm0/isa.mm0" ${args[@]+"${args[@]}"}

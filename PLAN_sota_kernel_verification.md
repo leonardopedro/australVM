@@ -123,7 +123,7 @@ Exact (grep/ls-verified for this plan):
 | comparator: approved statement vs generated | `scripts/mm0-comparator` (diff + closure hash + theory hash, 3 negative controls) | **exists** (S1); `mm0/approved/` empty on purpose |
 | **`assumed=N` budget** | `-- assumed:` + `-- witness:` emitted by `au2mm0`, pinned in `BUDGETS` and gated; `lean-typing-check --assumed-json` for Lean artifacts | **exists** (flux1d: `assumed=1`; lean2mm0 gap below) |
 | **code fingerprint in the certificate** | `-- code: cps=<sha256> obj=<sha256> target=host`, both digests **checked** by `verify-invariants` — CPS from the bridge's `austral_cps_fingerprint`, object from the AVCE capture of the cranelift-emitted code, `arch=` named | **exists, checked** (W5) |
-| **ISA model of the emitted subset** | `mm0/isa.mm0` + `isa.mm1` (23 opcodes; `encdec` **proved** as 23 theorems from the table; 4 pinned hypotheses left), `ISA_REGISTRY`, `lib/Cps_codec.ml`, `scripts/isa-census --corpus` | **exists, codec proved** (W8/S8) |
+| **ISA model of the emitted subset** | `mm0/isa.mm0` + `isa.mm1` (23 opcodes; `encdec` **proved** as 23 theorems from the table, `step_refines` **proved** as 3 more; 1 pinned citation left), `ISA_REGISTRY`, `lib/Cps_codec.ml`, `scripts/isa-census --corpus` | **exists, codec and step relation proved** (W8/S8) |
 | **generated float probe** | `mm0/flux1d_probe.c` emitted from the certified AST; compiled and run by `verify-invariants` | **exists** (tested, not proved) |
 | **GPU codegen** | — | **absent, and out of scope (§6)** |
 
@@ -247,8 +247,9 @@ $ ./scripts/cps-fingerprint --object /tmp/flux1d.cps
 ceed355c0e8a150e68bc0e61439eb62e85fa48eb6f50807f6d637205ec07d2cb arch=aarch64
 
 $ ./scripts/isa-census --corpus
-isa-census: 7 modules — 707 opcode read(s), 9 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
-  per module: flux1d.cps: 8 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …
+isa-census: 8 modules — 725 opcode read(s), 9 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
+  per module: flux1d.cps: 8 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …;
+              kernel.cps: 7 distinct, 18 read(s) — the `uk_version` demo
   used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x07 return, 0x08 if, 0x10 cmp_lt, 0x14 cmp_eq, 0x16 and
   result: covered — every opcode used is declared in the decoder and in the artifact
 
@@ -922,25 +923,29 @@ theorem crosses exactly one boundary:
 | IR = the CPS machine built by W2's theory | `mm0/*_certificate.mm0` theory lines + `kernel_alg.mm0` | **yes** |
 | ISA = decode/step relation over registers and memory | `mm0/isa.mm0` | **yes — landed 2026-11-13** |
 
-The ISA model never restates a source-level guarantee. It states the two
-transitions it alone can prove, taking the layer-1 certificates as **hypotheses**:
+The ISA model never restates a source-level guarantee. Two of its three
+statements are now **proved**, and only the memory one is a citation:
 
-- `encdec` — for the emitted subset, `decode (encode i) = i`.
-- `step_refines` — one ISA step (state → state′) implements one CPS-IR step,
-  **assuming** the IR-level typing and linearity invariants that
-  `linearity_certificate` / `layout_certificate` already establish.
+- `encdec` — for the emitted subset, `decode (encode i) = i`. **Proved**, 23
+theorems in `mm0/isa.mm1`, from the 23-row table that `ISA_REGISTRY`,
+`lib/Cps_codec.ml` and `test/CpsCodecTest.ml` hold to each other.
+- `step_refines` — one ISA step (state → state′) implements one CPS-IR step.
+  **Proved** (2026-11-14) as `add_refines`/`mul_refines`/`sub_refines`: both
+  sides are defined to compute the same `radd`/`rmul`/`radd∘rneg` into the same
+  destination register, so `req_trans` + `req_symm` close it. The premises
+  (`linear`, `in_bounds`) stay in the statement but are *not used by the proof* —
+  which is the measurement that the old axiom was double-counting, not a gap.
 - `bounds_from_layout` — the per-access memory obligations the step relation
   needs are discharged by citing the layout discipline's block bounds, not by
-  re-proving arithmetic. This is precisely "the model fills in the gaps": each
-  gap is a named hypothesis with a citation, and `verify-invariants` refuses an
-  uncited one.
+  re-proving arithmetic. This is the one remaining named hypothesis with a
+  citation, and `verify-invariants` refuses an uncited or stale one.
 
-Consequences that must be stated and not softened: this makes the ISA model
-*conditional* on our own proofs, so a bug in the linearity certificate would
-propagate into the machine-code claim. That is the honest trade — the
-alternative is two independent proofs of linearity, and the plan's §7 discipline
-applies: the citation must be pinned (as in W7) so a drifted certificate cannot
-be cited.
+Consequences that must be stated and not softened, in the order they now hold:
+the byte layer is no longer assumed at all, and the step relation is no longer
+assumed; what is still *conditional* is the memory obligation, which inherits any
+bug in the layout certificate. That is the honest trade — the alternative is two
+independent proofs of block bounds — and the plan's §7 discipline applies: the
+citation must be pinned (as in W7) so a drifted certificate cannot be cited.
 
 **Subset discipline (measured, not assumed).** The model covers exactly the
 instructions the emitter produces for the certified fragment — the same mechanism
@@ -972,11 +977,11 @@ Both are weeks of work and neither is on the W0–W7 critical path.
 **Landed 2026-11-13 — the model.** `mm0/isa.mm0` is authored (not translated),
 `-- layer: ISA`, coverage line `used=… unused=…`, and three `-- cites:` lines
 pinning `linearity_certificate`, `layout_certificate` and `kernel_alg` by sha256.
-5 sorts, 23 opcode rows (`-- op 0xNN name`), and — since the encdec work below —
-**23 proved theorems**. The three refinements (`add_refines`, `mul_refines`,
-`sub_refines`) and `bounds_from_layout` remain `axiom`s with
-`-- gap-hypothesis:` lines, which is AlphaProof's definition-only posture for the
-step relation, enforced by `scripts/isa-hypotheses` rather than by intent.
+5 sorts, 23 opcode rows (`-- op 0xNN name`), and — since the encdec and
+step-refinement work below — **26 proved theorems**, one cited hypothesis
+(`bounds_from_layout`). The `run_*` / `ir_*` pairs remain `axiom`s on purpose:
+they are the definition of the step relation, the AlphaProof definition-only
+posture, and a reader audits them by eye rather than a citation.
 
 **Landed 2026-11-13 — encdec, proved instead of assumed.** The first version of
 this section was one axiom over uninterpreted `enc`/`dec`, annotated
@@ -1029,8 +1034,9 @@ CPS path produces a function (`flux1d`, `fib`, `union`, `record`, `generic-union
 contribution:
 
 ```
-isa-census: 7 modules — 707 opcode read(s), 9 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
-  per module: flux1d.cps: 8 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …
+isa-census: 8 modules — 725 opcode read(s), 9 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
+  per module: flux1d.cps: 8 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …;
+              kernel.cps: 7 distinct, 18 read(s) — the `uk_version` demo
   used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x07 return, 0x08 if, 0x10 cmp_lt, 0x14 cmp_eq, 0x16 and
   declared but not used here (covered by the model, 14): 0x05 add, 0x06 sub, 0x09 while, 0x0a match, …
   result: covered — every opcode used is declared in the decoder and in the artifact
@@ -1055,10 +1061,10 @@ run.
 The census controls are live in the gate: `-- op 0x7f bogus` added to a copy of
 the model makes the census fail (the decoder does not accept `0x7f`), and
 stripping or staling a citation makes `isa-hypotheses` fail. What remains open is
-the *content* of the four remaining assumptions — the step relation is a named,
-cited hypothesis, not a proved theorem — so the ISA model inherits any bug in the
-linearity certificate. That residue is the point: it is visible, pinned, and one
-sha256 away from being caught. The byte layer is no longer part of it.
+small and named: one cited hypothesis (`bounds_from_layout`), so the ISA model
+inherits any bug in the *layout* certificate — and nothing else. The byte layer
+and the step relation are no longer part of it: both are proved, and the gate
+fails if either regresses to an axiom.
 
 ---
 
@@ -1073,7 +1079,7 @@ sha256 away from being caught. The byte layer is no longer part of it.
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`93 passed`): `cps=62999606…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00` |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`93 passed, 0 failed`; the corpus census reports 707 opcode reads over 7 modules, 9 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion:** `encdec` is no longer an axiom — it is 23 theorems (`mm0/isa.mm1`) proved from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check. Still conditional: the four step-relation axioms cite the layer-1 certificates rather than re-proving them |
+| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`93 passed, 0 failed`; the corpus census reports 725 opcode reads over 8 modules — including a module whose body is a `uk_version` call — 9 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. One citation remains: `bounds_from_layout` |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated
@@ -1165,11 +1171,12 @@ a wrong theorem, and the only defence is the independent evaluator, which is a
    axioms take our linearity/layout certificates as hypotheses, so they inherit
    their bugs; each cite carries a sha256 and `scripts/isa-hypotheses` refuses a
    stale one. The alternative is an independent proof at ISA level, which
-   duplicates the guarantee in a weaker fragment. The remaining owner question is
-   whether `step_refines` should eventually be a proved theorem over a
-   machine-checked encoder. That encoder now exists — `lib/Cps_codec.ml` is the
-   table the emitter writes through, and `mm0/isa.mm1` proves the round trip for
-   all 23 entries — so what is left on this item is the step relation itself.
+   duplicates the guarantee in a weaker fragment. **Answered 2026-11-14:** the
+   encoder exists (`lib/Cps_codec.ml`, the table the emitter writes through, with
+   the round trip proved for all 23 entries) and the step relation is now proved
+   rather than assumed (`add_refines`/`mul_refines`/`sub_refines` in
+   `mm0/isa.mm1`). One citation remains, `bounds_from_layout`, which is a layout
+   fact and not a step fact.
 
 ---
 

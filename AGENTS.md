@@ -116,12 +116,28 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or missing.
   `ISA_REGISTRY` is the instruction-side twin of `SYMBOL_REGISTRY`.
 - `scripts/isa-encdec [--write]` — regenerates the `encdec` table and its 23
-  proofs in `mm0/isa.mm0`, and derives `mm0/isa.mm1` (the MM0 proof file) from
-  it. MM0 splits the two: `mm0-rs compile mm0/isa.mm1` then
+  proofs plus the three `step_refines` proofs in `mm0/isa.mm0`, and derives
+  `mm0/isa.mm1` (the MM0 proof file) from it. MM0 splits the two:
+  `mm0-rs compile mm0/isa.mm1 <mmb>` (output is positional, not `-o`) then
   `mm0-c <mmb> < mm0/isa.mm0`. Editing `isa.mm0` by hand requires `--write`
-  afterwards, or the gate reports the proof file stale.
+  afterwards, or the gate reports the proof file stale. A `theorem` in the
+  `.mm0` with no entry in the script's proof table is a hard error, never a
+  silent `sorry`.
+  - MM0 has no lambda in proof terms and proof-position arguments are
+    *hypotheses*, not terms: `(req_trans run_add_def (req_symm ir_add_sem))`
+    works, `(req_trans (run_add_def s dst a b) ...)` fails with "too many
+    arguments" — term arguments are inferred from the goal.
+  - A `.mm0` statement's premises (`$ A $ > $ B $`) become named binder
+    hypotheses designed by the script (`h1`, `h2`, …) in the `.mm1`, which is
+    how a proof stays a plain term instead of needing a lambda.
 - `lib/Cps_codec.ml` is the OCaml opcode table; `CpsGen` writes every opcode
   through it, and `test/CpsCodecTest.ml` holds it to `mm0/isa.mm0`.
+- `examples/kernel/TestKernel.aum` is the smallest module that calls the kernel
+  (`uk_version`); `isa-census --corpus` includes it. The corpus compiles with
+  `--target-type=c` (no host linker, so `uk_*` need not exist in the `.so`) and
+  passes `--allow-all` to both the compiler and the census — the census measures
+  bytes in a capture module and never executes them, so the grant question stays
+  with `modhost`.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

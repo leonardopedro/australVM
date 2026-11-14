@@ -3,11 +3,13 @@
 --
 -- layer: ISA
 -- instruction-table: cps-v2, 23 opcodes, measured by scripts/isa-census
--- proof-status: theory — 23 proved theorems (the encdec round trip, one per
---   emitted opcode) and four cited axioms (`add_refines`, `mul_refines`,
---   `sub_refines`, `bounds_from_layout`), zero `sorry`. The split matters: what
---   is proved is the byte layer's self-consistency; what is assumed is that the
---   step relation refines the CPS-IR semantics, which is where the layer-1
+-- proof-status: theory — 26 proved theorems (the encdec round trip for each of
+--   the 23 emitted opcodes, and the three step refinements `add_refines`,
+--   `mul_refines`, `sub_refines`) and ONE cited hypothesis
+--   (`bounds_from_layout`), zero `sorry`. The split matters: what is proved is
+--   the byte layer's self-consistency and that one ISA step is one CPS-IR step;
+--   what is assumed is that a typed, linear state has its slots in bounds, which
+--   is where the layer-1
 --   certificates enter, each with a pinned citation. mm0-c rejects a theorem
 --   whose proof is missing (`error: some theorems used sorry`), so the proofs
 --   live in `mm0/isa.mm1` — the file mm0-rs compiles — and mm0-c checks them
@@ -35,11 +37,13 @@
 -- is worse than a pinned dependence that a reader can follow.
 --
 -- WHAT IS TRUSTED. The `-- op` table below, the `run_*` axioms (one per emitted
--- arithmetic/control instruction: the step relation as a definition) and the
--- nine congruence laws on `req`. Everything else is either a hypothesis with a
--- citation or a statement marked unproved. `scripts/isa-census` measures the
--- table against the instructions the JIT actually decodes, so the file cannot
--- drift into "the ISA" while the claim stays "the bytes we emit".
+-- arithmetic/control instruction: the step relation as a definition), the
+-- `ir_*` semantics of the same instructions one layer up, and the congruence
+-- laws on `req`. Every theorem in the file is proved (26 of them), and exactly
+-- one statement is assumed rather than proved from this file alone:
+-- `bounds_from_layout`, which cites the layout certificate. `scripts/isa-census`
+-- measures the table against the instructions the JIT actually decodes, so the
+-- file cannot drift into "the ISA" while the claim stays "the bytes we emit".
 
 provable sort Prop;
 
@@ -306,23 +310,34 @@ theorem encdec_store: $ ieq (idec (ienc ins_store)) ins_store $;
 
 
 -- ── step_refines: one ISA step is one CPS-IR step ────────────────────────
--- The three refinements the emitted arithmetic needs. Each takes the layer-1
--- hypotheses as premises rather than re-establishing them; the `-- gap-
--- hypothesis:` line names who discharges them, and the digest is pinned in the
--- header. Proving these inside mm0 is W8's remaining work — until then they are
--- axioms, which is why the header says `zero proved theorems`.
--- gap-hypothesis: add_refines — cite=linearity_certificate (H-LIN), cite=layout_certificate (H-BND)
-axiom add_refines (s: St) (dst a b: nat):
+-- The three refinements the emitted arithmetic needs, **proved** (proofs in
+-- `mm0/isa.mm1`): `run_add` and `ir_add` both compute `radd (reg s a) (reg s b)`
+-- into `dst` — `run_add_def` says so for the step relation, `ir_add_sem` says so
+-- for the CPS opcode — and `req` is transitive and symmetric, so the two agree
+-- on the destination register. Same shape for `mul` and `sub`.
+--
+-- Two things this proof measures. First, an earlier version of this file carried
+-- the three as axioms, which double-counted the same assumption: they followed
+-- from lines already in the file, so they were not gaps but restatements. Second,
+-- the premises (`linear`, `in_bounds`) are *not used* by the proofs — the
+-- refinement of arithmetic holds without them, because a register read is all
+-- either side does. They stay in the statement on purpose: they are the
+-- preconditions under which the step is ever *taken* in a kernel, and dropping
+-- them here would quietly strengthen the claim while the world still needs them
+-- (`bounds_from_layout` below is where they actually bite).
+--
+-- What this does NOT prove: that either side matches the hardware. That is the
+-- `run_*_def`/`ir_*_sem` pair — definition-only, read by eye — plus the one
+-- remaining cited hypothesis below.
+theorem add_refines (s: St) (dst a b: nat):
   $ linear s $ > $ in_bounds s a $ > $ in_bounds s b $ >
   $ req (reg (run_add s dst a b) dst) (reg (ir_add s dst a b) dst) $;
 
--- gap-hypothesis: mul_refines — cite=linearity_certificate (H-LIN), cite=layout_certificate (H-BND)
-axiom mul_refines (s: St) (dst a b: nat):
+theorem mul_refines (s: St) (dst a b: nat):
   $ linear s $ > $ in_bounds s a $ > $ in_bounds s b $ >
   $ req (reg (run_mul s dst a b) dst) (reg (ir_mul s dst a b) dst) $;
 
--- gap-hypothesis: sub_refines — cite=linearity_certificate (H-LIN), cite=layout_certificate (H-BND)
-axiom sub_refines (s: St) (dst a b: nat):
+theorem sub_refines (s: St) (dst a b: nat):
   $ linear s $ > $ in_bounds s a $ > $ in_bounds s b $ >
   $ req (reg (run_sub s dst a b) dst) (reg (ir_sub s dst a b) dst) $;
 

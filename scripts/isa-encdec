@@ -59,7 +59,68 @@ def registry():
     return sorted(ops)
 
 
+# The theorems that are not table instances: one proof term each. A theorem in
+# `isa.mm0` that is in neither this table nor the table-derived set is an error,
+# never a silent `sorry` — a certificate must not assert what it has not proved.
+#
+# A `.mm0` statement with premises is written here as `$ A $ > $ B $ > $ C $`
+# (MM0 has no named hypothesis binders), but the proof file can name them, and
+# this script does: the statement is split on `$ > $` and the premises become
+# binders `h1 .. hn`. That is what lets the proofs be plain terms — no lambda
+# syntax is involved, and the `.mm1` statement is *derived* from the `.mm0` one,
+# so the two cannot say different things. mm0-c independently re-checks the
+# compiled result against `isa.mm0` either way.
+STEP_PROOFS = {
+    # Both sides compute `radd (reg s a) (reg s b)` into `dst`; symmetry and
+    # transitivity of `req` close it. `h1..h3` (linear/in_bounds) are unused.
+    #
+    # Term arguments are *inferred* in proof position — writing
+    # `(run_add_def s dst a b)` here is read as applying the theorem to a proof
+    # named `s` and fails with "too many arguments" (measured). So the terms
+    # stay bare and unification recovers them from the goal.
+    "add_refines": "req_trans run_add_def (req_symm ir_add_sem)",
+    "mul_refines": "req_trans run_mul_def (req_symm ir_mul_sem)",
+    "sub_refines": "req_trans run_sub_def (req_symm ir_sub_sem)",
+}
+
+
+def _split_head(text):
+    """Split `theorem ... (binders): formula` at the colon outside parens."""
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == ":" and depth == 0:
+            return text[:i], text[i + 1:]
+    raise SystemExit("isa-encdec: a theorem statement has no `:` before its formula")
+
+
+def _norm(text):
+    return " ".join(text.split())
+
+
+def step_theorem(stmt, term):
+    """`theorem` statement + proof term -> a `pub theorem` line with named hyps."""
+    head, formula = _split_head(stmt)
+    m = re.match(r"^theorem\s+([A-Za-z0-9_]+)(.*)$", head, re.S)
+    if not m:
+        raise SystemExit(f"isa-encdec: cannot parse theorem head {head!r}")
+    name, binders = m.group(1), _norm(m.group(2))
+    # The statement is `$ A $ > $ B $ > $ C $`: the separator swallows the two
+    # `$` delimiters it sits between, so each piece is re-wrapped as a formula.
+    parts = [p.strip("$").strip() for p in _norm(formula).split("$ > $")]
+    if len(parts) == 1:
+        return f"pub theorem {name} {binders}: {parts[0]} = '({term});"
+    hyps = " ".join(f"(h{i + 1}: $ {p} $)" for i, p in enumerate(parts[:-1]))
+    concl = f"$ {parts[-1]} $"
+    return f"pub theorem {name} {binders} {hyps}: {concl} = '({term});"
+
+
 def proof(name):
+    if name in STEP_PROOFS:
+        return STEP_PROOFS[name]
     return f"ieq_trans (beq_cong_dec enc_{name}) dec_{name}"
 
 
@@ -98,14 +159,48 @@ def splice(mm0_text, generated):
 
 
 def proof_file(mm0_text):
-    """`isa.mm1` = the same specification, with a proof clause per theorem."""
-    def add(match):
-        name, stmt = match.group(1), match.group(2)
-        return f"pub theorem {name}: {stmt} = '({proof(name[len('encdec_'):])});"
+    """`isa.mm1` = the same specification, with a proof clause per theorem.
 
-    body, n = THEOREM.subn(add, mm0_text)
+    Statements can span lines (the refinements do), so this scans per theorem
+    rather than per line: a `theorem name:` opens a statement that ends at the
+    first line ending in `;`. Any theorem name without a proof term is fatal.
+    """
+    lines = mm0_text.splitlines()
+    out = []
+    n = 0
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^theorem\s+([A-Za-z0-9_]+)\b", line)
+        if not m:
+            out.append(line)
+            i += 1
+            continue
+        name = m.group(1)
+        chunk = [line]
+        while not chunk[-1].rstrip().endswith(";"):
+            i += 1
+            if i >= len(lines):
+                raise SystemExit(f"isa-encdec: theorem {name} never ends with `;`")
+            chunk.append(lines[i])
+        stmt = "\n".join(chunk).rstrip()[:-1]  # drop the terminating `;`
+        if name.startswith("encdec_"):
+            term = proof(name[len("encdec_"):])
+            # No premises: the statement text is copied verbatim, with the
+            # visibility marker added, so it cannot drift from the `.mm0`.
+            out.append(re.sub(r"^theorem\b", "pub theorem", stmt) + f" = '({term});")
+        elif name in STEP_PROOFS:
+            out.append(step_theorem(stmt, STEP_PROOFS[name]))
+        else:
+            raise SystemExit(
+                f"isa-encdec: theorem {name} has no proof term — add one to "
+                "STEP_PROOFS rather than emitting an unproved theorem"
+            )
+        n += 1
+        i += 1
+
     if n == 0:
-        raise SystemExit("isa-encdec: the specification has no encdec theorems")
+        raise SystemExit("isa-encdec: the specification has no theorems")
     header = (
         "-- isa.mm1 — the proof file for mm0/isa.mm0 (generated by\n"
         "-- scripts/isa-encdec --write; do not edit).\n"
@@ -113,10 +208,11 @@ def proof_file(mm0_text):
         "-- MM0 splits the specification (`.mm0`, read by mm0-c, the root of\n"
         "-- trust) from the proofs (this file, read by mm0-rs). Every theorem\n"
         "-- below is `pub` because a theorem with an explicit proof is what the\n"
-        f"-- proof file contributes: {n} encdec instance(s), each discharged by\n"
-        "-- the table's two equations plus `ieq_trans`/`beq_cong_dec`.\n\n"
+        f"-- proof file contributes: {n} theorem(s) — the encdec instances\n"
+        "-- (discharged by the table's two equations plus `ieq_trans`/\n"
+        "-- `beq_cong_dec`) and the step refinements.\n\n"
     )
-    return header + body
+    return header + "\n".join(out)
 
 
 def main(argv):
@@ -151,13 +247,22 @@ def main(argv):
     proved = len(THEOREM.findall(want_mm0))
     if proved != len(ops):
         problems.append(f"{proved} proved instance(s) for {len(ops)} table entries")
+    for name in STEP_PROOFS:
+        if not re.search(rf"^theorem\s+{name}\b", want_mm0, re.MULTILINE):
+            problems.append(f"step theorem {name} is missing from {ISA_MM0.name}")
+        if re.search(rf"^axiom\s+{name}\b", want_mm0, re.MULTILINE):
+            problems.append(
+                f"{name} is an axiom again — it was proved, so an axiom there "
+                "would be the assumption coming back"
+            )
 
     if problems:
         for p in problems:
             print(f"isa-encdec: FAIL {p}", file=sys.stderr)
         return 1
     print(
-        f"isa-encdec: {len(ops)}/{len(ops)} encdec instances proved from the table; "
+        f"isa-encdec: {len(ops)}/{len(ops)} encdec instances proved from the table, "
+        f"{len(STEP_PROOFS)} step refinement(s) proved; "
         "mm0/isa.mm0 and mm0/isa.mm1 are current"
     )
     return 0
