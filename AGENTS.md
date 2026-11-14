@@ -225,8 +225,21 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   uncovered**. The table is closed (an `isa.rs` opcode with no entry fails it),
   and "mapped" is checked against the artifact, so a missing declaration reads
   `NOT IN ARTIFACT`, not as covered. `check` re-converts and diffs both stems.
-  Runs under `nix develop "git+file://$PWD#lean"` (that shell carries lean,
-  lean4export, `mm0` and python3 together on purpose).
+  Runs under `nix develop "git+file://$PWD#lean"`: that shell carries lean,
+  lean4export, `mm0`, python3 and **both** model paths (`$RISCV_MODEL`,
+  `$RISCV_MEMORY_MODEL`) on purpose, so entering it may trigger the one-time
+  28-minute Sail build. `.github/workflows/w9-isa-model.yml` runs `check`
+  weekly, because a PR should not wait for that build.
+- `scripts/store-refines` — refutes the tempting shortcut "the JIT's `store`
+  lowers to the model's `execute_STORE`". It reads the *committed* artifacts
+  (`mm0/clif.mm0`'s `store__*` forms: 2 operands, 0 results) and the *pinned*
+  `LeanRV64D/InstsEnd.lean` signature (4 arguments, returns `SailM
+  ExecutionResult`, checks `width ≤ xlen_bytes`, can fault in `vmem_write`), so
+  the verdict is measured instead of retyped. Exit 0 = refuted (the expected
+  state), 1 = the shapes now agree (re-argue the correspondence), 2 = evidence
+  missing. `verify-invariants` runs it and pins the refutation as `[pass]`; what
+  remains provable is the *projection* (width 8, aligned, fault branch never
+  taken), which nothing in the tree proves yet.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

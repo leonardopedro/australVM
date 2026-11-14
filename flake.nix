@@ -461,6 +461,14 @@
           ];
           RISCV_MODEL =
             "${self.packages.${system}.riscv-lean}/share/riscv-lean";
+          # Both stems are then available without the script's `nix build`
+          # fallback. This makes entering the shell depend on the 28-minute
+          # Sail model build the first time (store-cached afterwards); the
+          # script still falls back on its own if the variable is cleared, so a
+          # lean shell without this line would only report `deref`/`store` as
+          # NOT COVERED rather than lying about them.
+          RISCV_MEMORY_MODEL =
+            "${self.packages.${system}.sail-riscv-lean}/lib/lean";
         };
 
         # Shell for iterating on the from-mm build: nix develop .#mm0hs

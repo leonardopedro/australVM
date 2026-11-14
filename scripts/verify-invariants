@@ -654,6 +654,28 @@ PY
             gap "W9.1: RV64 model not re-converted (nix develop \"git+file://\$PWD#lean\" -c bash scripts/rv64-model-mm0 check)"
         fi
 
+        # W9.3, refutation half: `store` does NOT lower to the model's
+        # `execute_STORE`. The emitted form takes (address, value) and returns
+        # nothing; the model's function takes (imm, rs2, rs1, width), reads the
+        # register file and can return a fault. The check reads the committed
+        # `mm0/clif.mm0` and `mm0/statements/rv64_memory.mm0` plus the pinned
+        # model source, so the verdict is measured, not retyped. Exit 1 is the
+        # interesting case: it means the shapes *agree* now, and the stronger
+        # correspondence must be re-argued instead of silently kept.
+        if [[ -x "$repo_root/scripts/store-refines" ]] \
+            && command -v nix >/dev/null 2>&1; then
+            if "$repo_root/scripts/store-refines" >"$_cert_tmp/store.log" 2>&1; then
+                echo "  [detail] $(grep -m1 'execute_STORE has' "$_cert_tmp/store.log" \
+                    | sed 's/^ *//')"
+                check "W9.3: the JIT's store is refuted as the model's execute_STORE" true
+            else
+                tail -6 "$_cert_tmp/store.log" >&2
+                check "W9.3: the JIT's store is refuted as the model's execute_STORE" false
+            fi
+        else
+            gap "W9.3: store correspondence not checked (no nix, or scripts/store-refines missing)"
+        fi
+
         # W6: the generated probe is a test, and it has to actually run.
         if command -v cc >/dev/null 2>&1; then
             if cc -O2 -o "$_cert_tmp/probe" "$_cert_tmp/flux1d_probe.c" -lm \

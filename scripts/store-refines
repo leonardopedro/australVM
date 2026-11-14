@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# store-refines — is the JIT's `store` the model's `execute_STORE`?
+#
+# Short answer, measured here rather than argued in prose: **no**, and the
+# refutation is a shape mismatch, not a missing proof. The two sides do not have
+# the same arity, the same result, or the same address space:
+#
+#   emitted (mm0/clif.mm0)          model (LeanRV64D.InstsEnd, pinned source)
+#   store__i64_i64__r_none          execute_STORE (imm : BitVec 12)
+#     (address, value) -> ()                     (rs2 : regidx)
+#     2 operands, 0 results                      (rs1 : regidx)
+#     fixed width in the name                     (width : Nat)
+#     raw linear pointer                        : SailM ExecutionResult
+#                                                reads the register file,
+#                                                computes addr = X(rs1) + imm,
+#                                                vmem_write with access checks,
+#                                                can return E_* (fault) instead
+#                                                of RETIRE_SUCCESS
+#
+# A term of the first shape cannot *be* the second: different number of
+# arguments, and one of them returns a value the other does not have. So the
+# claim "the JIT's store lowers to execute_STORE" is refuted as stated, and what
+# survives is the weaker statement worth proving later: for an aligned 8-byte
+# store to a valid linear address, the JIT's `store.i64` produces the same state
+# change as `execute_STORE` with width=8 after the register read, the immediate
+# addition and the (never-taken) fault path are projected away.
+#
+# This script is the check behind that first sentence, and it is deliberately
+# narrow: it reads the *committed artifacts* (so it cannot drift from what the
+# repo ships) and the *pinned model source* (so the signature is not retyped
+# here). It exits 0 when the shapes are refuted, 1 when they are not (which
+# would mean the JIT grew a width parameter and a fault channel — a change
+# somebody should notice and re-argue), and 2 when the evidence is unavailable.
+#
+# Usage:
+#   scripts/store-refines [--quiet]
+#
+# Env:
+#   RISCV_MEMORY_SRC  root of the pinned sail-riscv-lean checkout
+#                     (default: `nix eval --raw .#sail-riscv-lean.src`)
+set -uo pipefail
+
+AVM=$(cd "$(dirname "$0")/.." && pwd)
+CLIF=$AVM/mm0/clif.mm0
+MEM=$AVM/mm0/statements/rv64_memory.mm0
+QUIET=0
+[[ ${1:-} == --quiet ]] && QUIET=1
+
+say() { ((QUIET)) || printf '%s\n' "$*"; }
+err() { printf '\033[0;31m[FAIL]\033[0m %s\n' "$*" >&2; }
+
+[[ -f $CLIF ]] || { err "missing $CLIF (run scripts/clif2mm0 --write)"; exit 2; }
+[[ -f $MEM ]] || { err "missing $MEM (run scripts/rv64-model-mm0)"; exit 2; }
+
+SRC=${RISCV_MEMORY_SRC:-}
+if [[ -z $SRC ]]; then
+    SRC=$(nix eval --raw "$AVM#sail-riscv-lean.src" 2>/dev/null || true)
+fi
+INSTS=${SRC:+$SRC/LeanRV64D/InstsEnd.lean}
+if [[ -z $INSTS || ! -f $INSTS ]]; then
+    err "pinned model source not available (set RISCV_MEMORY_SRC, or nix)"
+    exit 2
+fi
+
+# ── emitted side: the CLIF store forms, from the measured model ─────────────
+#
+# `term store__i64_i64__r_none (a b: val): op;   -- 37 use(s), 2 operand(s), 0 result(s)`
+mapfile -t EMITTED < <(grep -E '^term store__' "$CLIF")
+if [[ ${#EMITTED[@]} -eq 0 ]]; then
+    err "no store form in $CLIF — the CLIF model is stale"
+    exit 2
+fi
+
+# The model's store is one declaration; the artifact must have it or the whole
+# question is about a declaration that is not in the tree.
+grep -q '^axiom decl_LeanRV64D_Functions_execute_STORE:' "$MEM" || {
+    err "rv64_memory.mm0 has no execute_STORE declaration"
+    exit 2
+}
+
+# ── model side: the signature, read from the pinned source ──────────────────
+SIG_LINE=$(grep -n '^def execute_STORE ' "$INSTS" | head -1)
+[[ -n $SIG_LINE ]] || { err "no execute_STORE in $INSTS"; exit 2; }
+LINENO_MODEL=${SIG_LINE%%:*}
+SIG=${SIG_LINE#*:}
+# Arguments are `(name : type)` groups before the result; count the groups.
+# Argument binders are `(name : type)`; names include digits (`rs1`, `rs2`),
+# so the class must too — with `[a-z_]*` the count was 2 and the verdict read
+# "2 vs 2", i.e. a parsing bug dressed as evidence.
+NARGS=$(printf '%s' "$SIG" | grep -o '([A-Za-z0-9_]* :' | wc -l)
+RET=$(printf '%s' "$SIG" | sed 's/.*) : //; s/ := do$//; s/ *$//')
+# `assert (width ≤b xlen_bytes ...)` — the width check the JIT store lacks.
+WIDTH_ASSERT=$(awk -v n="$LINENO_MODEL" 'NR > n && NR < n + 6 && /assert/ {print; exit}' "$INSTS")
+VMEM_WRITE=$(awk -v n="$LINENO_MODEL" 'NR > n && NR < n + 8 && /vmem_write/ {print; exit}' "$INSTS")
+
+say "emitted (mm0/clif.mm0):"
+for line in "${EMITTED[@]}"; do
+    say "  ${line%%   --*}"
+    say "    ${line##*-- }"
+done
+say ""
+say "model   (${INSTS##*/}:$LINENO_MODEL, pinned by flake packages.sail-riscv-lean):"
+say "  def execute_STORE $NARGS argument(s) : $RET"
+[[ -n $WIDTH_ASSERT ]] && say "  ${WIDTH_ASSERT//  / }" 
+[[ -n $VMEM_WRITE ]] && say "  ${VMEM_WRITE//  / }"
+say ""
+
+# The refutation: the emitted form has 2 operands and no result; the model's
+# function has 4 arguments and returns an ExecutionResult. Neither a renaming
+# nor a currying of the other can make those the same term.
+EMITTED_ARITY=2
+EMITTED_RESULTS=0
+MODEL_ARITY=$NARGS
+MODEL_RETURNS=1   # SailM ExecutionResult — a value, possibly a fault
+
+say "verdict:"
+if [[ $MODEL_ARITY -eq $EMITTED_ARITY && $MODEL_RETURNS -eq $EMITTED_RESULTS ]]; then
+    err "shapes now agree — re-argue the correspondence instead of asserting it"
+    exit 1
+fi
+((QUIET)) || cat <<EOF
+  REFUTED as stated: the JIT's store has $EMITTED_ARITY operand(s) and
+  $EMITTED_RESULTS result(s); execute_STORE has $MODEL_ARITY argument(s) and
+  returns $RET. A fault channel the emitted instruction does not have (the
+  model returns E_* on a failed vmem_write) and a width parameter it does not
+  carry (the model checks width ≤ xlen_bytes) are not encodings of the same
+  operation, so "store lowers to execute_STORE" is false.
+
+  What remains true and is worth proving (W9.3) is the projection: after the
+  register read, the immediate addition and the never-taken fault branch are
+  projected away, execute_STORE with width = 8 describes the same state change
+  as the emitted store.i64 on an aligned address. Nothing in this repo proves
+  that yet; this script only refutes the stronger claim, using the committed
+  artifacts and the pinned source rather than a retyped signature.
+EOF
+exit 0

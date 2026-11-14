@@ -1,0 +1,67 @@
+# W9.1: convert the pinned external ISA models and hold the committed MM0 to
+# them.
+#
+# This is a separate workflow on purpose. The ALU conversion needs the `lean`
+# dev shell; the memory conversion needs `packages.sail-riscv-lean`, which
+# compiles a 45 MB Sail-generated Lean model (~28 min cold, cached afterwards).
+# Putting that on every pull request would make the PR signal about a build
+# queue rather than about the change, so this runs weekly and on demand — and it
+# is the only place the *committed* artifacts are re-derived from the pins in
+# CI. `scripts/verify-invariants` has the same check, but reports an explained
+# `[gap]` when the lean shell is absent, which is the normal PR case.
+#
+# `check` (not a bare re-emit) is the point: it fails when the committed
+# `mm0/statements/riscv_instructions.*` or `rv64_memory.*` differ from a fresh
+# conversion, i.e. when the pins, the converter or the checked-in statements
+# drifted apart. It also re-runs `mm0-rs compile` + `mm0-c` on both stems, so a
+# green run means the root of trust still accepts them.
+name: W9.1 ISA model conversion
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  convert:
+    name: both stems convert and match the committed artifacts
+    runs-on: ubuntu-latest
+    # Cold: ~28 min of Sail model build + two lean4export runs (340 MB and
+    # 783 MB) + mm0. The bound is generous so a slow runner reports a failure
+    # rather than a cancelled job that looks like an infrastructure blip.
+    timeout-minutes: 120
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703 # nixbuild/nix-quick-install-action@v30
+
+      # The Sail model derivation is the expensive part; the cache key follows
+      # the nix files, so a flake bump rebuilds it and an unchanged pin does not.
+      - name: nix cache
+        uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6 # nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-isa-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-isa-${{ runner.os }}-${{ runner.arch }}-,nix-isa-
+
+      # Disk: the two NDJSON exports are ~1.1 GB and `mm0/exports/` is
+      # gitignored, so they land in the workspace, not the checkout diff.
+      - name: free disk
+        run: df -h /
+
+      - name: convert the pinned models and diff the committed statements
+        run: |
+          nix develop "git+file://$PWD#lean" -c bash -c '
+            set -o pipefail
+            scripts/rv64-model-mm0 check 2>&1 | tee /tmp/rv64.log
+            # The coverage line is the W9.1 acceptance limb; a named-but-absent
+            # declaration would already fail `check`, so this guards the
+            # opposite drift: a converter that silently stops emitting something.
+            grep -q "0 not covered" /tmp/rv64.log || {
+              echo "::error::ISA_REGISTRY coverage regressed" >&2; exit 1; }
+            grep -q "check: 2 stem(s) match" /tmp/rv64.log || {
+              echo "::error::expected both stems (ALU + memory) to be checked" >&2
+              exit 1; }
+          '
