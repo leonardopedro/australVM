@@ -510,6 +510,91 @@ def _json_write_str(out, s: str) -> None:
     out.write('"')
 
 
+_OBTRACE = None
+
+
+def _ob_trace(idx: int, gap: float, took: float, nbytes: int, label: str) -> None:
+    """One line per axiom: what the last assumption cost, and how big it was.
+
+    The 10-second trace shows rules per sample, which is the *derivation*'s
+    clock; on a term whose assumptions are gigabytes the assumption write is
+    the whole sample, and a per-obligation line says by how much. `gap` is the
+    time since the previous assumption was finished (the term walk in between),
+    `took` the write itself.
+    """
+    global _OBTRACE
+    fh = _OBTRACE
+    if fh is None:
+        path = os.environ.get("LTP_OBTRACE")
+        if not path:
+            return
+        fh = _OBTRACE = open(path, "a", buffering=1)
+    fh.write(f"{idx}\t{round(gap, 3)}\t{round(took, 3)}\t{nbytes}\t{label}\n")
+
+
+def census(ex, enc, d) -> None:
+    """Print the live derivation's byte split, only when `LTP_CENSUS` is set.
+
+    Late binding on purpose: it is called from a `finally`, so on a
+    `MemoryError` it must stay allocation-light (the walk is iterative and the
+    numbers are shallow sizes). It is what separates the emitter's own
+    containers from the export's parse table, which is the part no memo would
+    ever show.
+    """
+    if not os.environ.get("LTP_CENSUS"):
+        return
+    try:
+        def walk(table) -> int:
+            # `ex.exprs` is a `LazyExprs` (an id array plus a bounded cache),
+            # not a dict, so the id array is charged too: it is 8 B per
+            # expression of the whole chapter's closure.
+            if hasattr(table, "_cache"):
+                total = sys.getsizeof(table._off)
+                recs = list(table._cache.values())
+            else:
+                total = sys.getsizeof(table)
+                recs = list(table.values())
+            for rec in recs:
+                total += sys.getsizeof(rec)
+                for v in rec.values():
+                    total += sys.getsizeof(v)
+                    if isinstance(v, dict):
+                        for w in v.values():
+                            total += sys.getsizeof(w)
+            return total
+
+        rows = [
+            ("export parse table", walk(ex.exprs)),
+            ("synthetic nodes", walk(ex.exprs.extra)),
+            ("encoding memo", enc._memo_bytes),
+        ]
+        if d is not None:
+            rows += [
+                ("context memo", d._ctx_memo_bytes),
+                ("context entries", len(d._ctx_memo)),
+                ("obligation list", sum(map(len, list(d.oblig)))),
+                ("lift memo", sys.getsizeof(d._lift_memo)),
+                ("subst memo", sys.getsizeof(d._subst_memo)),
+                ("const axioms", sum(sys.getsizeof(k) + sys.getsizeof(v)
+                                    for k, v in list(d.const_ax.items()))),
+                ("beta axioms", sum(sys.getsizeof(k) + sys.getsizeof(v)
+                                   for k, v in list(d.beta_ax.items()))),
+                ("leaf axioms", sum(map(sys.getsizeof, d.leaf_ax))),
+                ("largest proof", d._proof_bytes),
+            ]
+        print("[census] live emitter, MB", file=sys.stderr, flush=True)
+        for name, n in rows:
+            print(f"[census]   {n / 1e6:10.1f}  {name}", file=sys.stderr, flush=True)
+        if d is not None:
+            print(f"[census]   {d._ctx_calls:10d}  context lookups "
+                  f"({d._ctx_hits} hits, {d._ctx_scan} entries scanned)",
+                  file=sys.stderr, flush=True)
+        print(f"[census]   {peak_mb():10d}  peak RSS (MB)", file=sys.stderr, flush=True)
+    except Exception as exc:  # a census must never hide the real failure
+        print(f"[census] failed: {type(exc).__name__}: {exc}", file=sys.stderr,
+              flush=True)
+
+
 def stats(msg: str) -> None:
     """Stage-level memory report, only when `LTP_STATS` is set.
 
@@ -704,7 +789,8 @@ def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
         fh.write("t\trss_mb\tpeak_mb\texprs\tmemo_by\tmemo_n\trules"
                  "\taxioms\toblig\tlift\tmsubst\tdepth\tstack"
                  "\taxb\trulb\toblb\taxmax\textra\texb\tliftb\tsubstb"                     "\taccb\trss_trim\tproofb\ttraced_mb\ttpeak_mb"
-                     "\tuord_mb\tfree_mb\tmmap_mb\tobnodes\n")
+                     "\tuord_mb\tfree_mb\tmmap_mb\tobnodes\tctxby\tctxn"
+                     "\tctxcall\tctxhit\tctxscan\n")
         if snap_at:
             fh.write(f"# tracemalloc on, snapshot at t>={snap_at} s\n")
         while not stop.is_set():
@@ -731,10 +817,26 @@ def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
                     int(d.__dict__.get("_proof_bytes", 0)) if d else 0,
                     *_traced_mb(), *mall_mb(),
                     _tree_nodes(d) if d else 0,
+                    d._ctx_memo_bytes if d else 0,
+                    len(d._ctx_memo) if d else 0,
+                    d._ctx_calls if d else 0, d._ctx_hits if d else 0,
+                    d._ctx_scan if d else 0,
                 )) + "\n")
             except Exception:  # one bad sample must not end the trace
                 fh.write(f"# sample error at t={round(time.time() - t0, 1)}: "
                          f"{traceback.format_exc().replace(chr(10), ' | ')}\n")
+            # `LTP_STACK=<n>`: every n-th sample also dumps the live Python
+            # stack to `$LTP_TRACE.stack`. It runs here, on the daemon thread,
+            # because a watchdog that dumps from a signal arrived in the middle
+            # of the first write and ceased to exist with it (§13.31).
+            stack_every = int(os.environ.get("LTP_STACK", "0") or 0)
+            if stack_every:
+                state["ticks"] = state.get("ticks", 0) + 1
+                if state["ticks"] % stack_every == 0:
+                    import faulthandler
+                    with open(str(path) + ".stack", "a") as sfh:
+                        sfh.write(f"--- t={round(time.time() - t0, 1)} ---\n")
+                        faulthandler.dump_traceback(file=sfh)
             ts = time.time() - t0
             if snap_at and not state["snapped"] and ts >= snap_at:
                 state["snapped"] = True
@@ -914,7 +1016,11 @@ def main() -> int:
 
     if spine:
         d = d_pre
-        base_proof = d.check(body_eid, cur, list(reversed(binder_ty_eids)))
+        try:
+            base_proof = d.check(body_eid, cur, list(reversed(binder_ty_eids)))
+        except MemoryError:
+            census(ex, enc, d)
+            raise
         ax_total = d.ax_count
         for r in d.rule_order:
             _step_add(steps_hist, steps_order, r, d.rule_hist[r])
@@ -1042,6 +1148,7 @@ def main() -> int:
     print(f"mode     : {mode}")
     print(f"nats     : {len(NATS)} · symbols: {len(SYMS)}")
     print(f"wrote    : {stem}.mm0 ({stem.with_suffix('.mm0').stat().st_size} B) in {time.time()-t0:.1f} s")
+    census(ex, enc, d if spine else None)
     return 0
 
 
@@ -1120,6 +1227,25 @@ class Deriver:
         self._subst_memo: dict[tuple[int, int, int], int] = {}
         # Active `_check` frames, innermost last: the growth trace samples this.
         self._stack: list[int] = []
+        # Context text is built by nesting `tcons` around every entry, so one
+        # call copies the whole context and the same context is asked for at
+        # every leaf beneath it. Keyed by the environment itself, which is a
+        # tuple of expression ids and therefore already immutable; the value is
+        # the identical string the rebuild produced, so no byte of an artifact
+        # depends on whether a lookup hit.
+        self._ax_epoch = time.time()
+        self._ctx_memo: dict[tuple[int, ...], str] = {}
+        self._ctx_memo_bytes = 0
+        # What the memo actually bought (`LTP_TRACE` columns `ctxcall`,
+        # `ctxhit`, `ctxscan`): the key is the environment itself, so every
+        # lookup hashes and copies one entry per binder, which is the same
+        # order as the text it avoids building. Whether that is a win is a
+        # measurement, not an argument — on `dense` it is 648 144 hits for 163
+        # contexts and takes the row from 5 916 s to 307 s, on `nsOuterFock` it
+        # is 7 451 hits and the run is neutral to within a second (§13.31).
+        self._ctx_calls = 0
+        self._ctx_hits = 0
+        self._ctx_scan = 0
 
     def add_axiom(self, *chunks) -> None:
         """Hand one artifact assumption to the sink, or retain it.
@@ -1131,6 +1257,8 @@ class Deriver:
         and the reduct) and joining them into a fourth string is the copy that
         failed at 10 GiB (`docs/lean4mm0.md` §13.28).
         """
+        t_enter = time.time()
+        gap = t_enter - self._ax_epoch
         sink = self.axiom_sink
         if sink is None:
             text = "".join(_piece_str(self.enc, c) for c in chunks)
@@ -1145,6 +1273,11 @@ class Deriver:
         self.ax_bytes += n
         if n > self.ax_max:
             self.ax_max = n
+        self._ax_epoch = time.time()
+        if os.environ.get("LTP_OBTRACE"):
+            top = self._stack[-1] if self._stack else -1
+            _ob_trace(self.ax_count, gap, self._ax_epoch - t_enter, n,
+                      _label(self.ex, top) if top >= 0 else "-")
 
     def add_rule(self, name: str) -> None:
         """Count one applied rule (§13.27: the list was 1.8 M pointers)."""
@@ -1554,9 +1687,18 @@ class Deriver:
         only appears much later, as an MM0 unification failure against a
         correctly scoped type (`tvar 1` where `tvar 4` belonged).
         """
+        key = tuple(env)
+        self._ctx_calls += 1
+        self._ctx_scan += len(env)
+        got = self._ctx_memo.get(key)
+        if got is not None:
+            self._ctx_hits += 1
+            return got
         out = "tnil"
         for t in reversed(env):
             out = f"(tcons {self.enc.enc(self.strip(t))} {out})"
+        self._ctx_memo[key] = out
+        self._ctx_memo_bytes += len(out)
         return out
 
     # ── the rules ────────────────────────────────────────────────────────

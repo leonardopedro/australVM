@@ -3012,3 +3012,128 @@ clock it dies anyway — `MemoryError` at **t=5 916.1 s, 10 107 MB**, in
 `add_axiom`, with 2 966 164 expressions and **609 298 obligations** written. Six
 times the clock changed the outcome not at all: that row's cost is per-obligation
 retention, and it reaches the cap before any clock in that range would stop it.
+
+### 13.31 `dense_range_add_relBounded` finishes in 307 s: the context was rebuilt at every leaf
+
+The last paragraph of §13.30 is wrong, and the trace rows that contradict it were
+already in the file. At the 10 GiB cap `dense` held **177 MB** in the deriver's
+own containers (`accb`), its trimmed RSS was within 17 MB of its RSS, and
+`axmax` had not moved for hours: nothing was retained. The row was *slow*, and
+the 21 600 s clock was measuring the wrong thing about it.
+
+The cost is one function. Every assumption line that mentions the context —
+`ax_const`, `ax_type`, `ax_deq`, `ax_leaf`, the substitution lines — calls
+`ctx_str(env)`, which writes one `tcons` around each binder, so a context of *n*
+entries is O(n²) characters. A typing derivation stands in a context and walks
+every leaf beneath it, so each leaf asks for the same context again; on
+`dense`'s sixteen binders the run makes **648 307 lookups for 163 distinct
+contexts**, 648 144 of them hits, 48 entries hashed per lookup. The text is now
+memoised by the environment itself — a tuple of expression ids, which is already
+immutable and already shared — and the memo returns the very string the rebuild
+produced, so no output byte changes.
+
+| | before (§13.30) | after |
+| --- | --- | --- |
+| outcome | `MemoryError` | **finishes** |
+| wall clock | 5 916.1 s to the cap | **307.6 s** |
+| peak RSS | 10 107 MB (cap) | **2 007 MB** (cap 8 GiB) |
+| obligations | 609 298 written | 619 976 written |
+| rules · assumptions | — (killed at 2 966 164 expressions) | 2 708 694 · 624 425 |
+
+The artifacts are the ones that row always wanted: `.mm0` 13 396 035 927 B,
+`.mm1` 13 623 937 462 B, `.jsonl` 7 546 051 022 B. The last obligation line is
+`ax_subst_9696` (538 kB, the exact seven keys `sort_keys` orders), which matches
+the 9 697 substitution axioms in the report — the streamed file is complete, not
+truncated at the clock.
+
+**Byte identity, on the largest row both emitters finish.** The memo returns the
+string the rebuild produced, so the artifacts of a memoised run must be
+the committed emitter's byte for byte, and on
+`FockPairPerturbation.abs_re_inner_pairVec_le` they are:
+
+| artifact | bytes | `cmp` |
+| --- | ---: | --- |
+| `.mm0` | 1 041 771 375 | equal |
+| `.mm1` | 1 075 343 397 | equal |
+| `.jsonl` | 1 012 915 095 | equal |
+
+Same row, same machine, same hour: **73 s with the memo against 258 s
+without** — 3.5× on a term of a gigabyte, with the `.mm0` unchanged.
+`multiShiftSeq_succ` (§13.30) stays `cmp`-equal as well.
+
+**What the memo costs where it does not pay.** On `nsOuterFock…singleTime` the
+contexts are long and the reuse is small: 7 521 lookups, 7 451 hits, 14 entries
+hashed per lookup. Measured against the committed emitter on the same row, the
+same work takes **334.2 s** (committed) and **335.7 s** (memoised) — the hit path
+is cheaper than the rebuild and the miss path is a tuple copy, so the memo is
+neutral there rather than harmful. Its retention is 190 MB of context text in
+163 strings at `dense`'s peak, inside an 8 GiB cap.
+
+**Three instruments, all env-gated, none of them touching an artifact byte:**
+
+- `LTP_OBTRACE=<path>` writes one line per assumption — `idx`, the seconds
+  since the previous one (`gap`), the seconds it took to write (`took`), its
+  bytes, and the term the emitter was standing in. This is the instrument that
+  separated "the emitter is slow" into "its texts are slow" and "the walk to
+  the next text is slow" (below).
+- `LTP_STACK=<n>` dumps every thread's stack into `$LTP_TRACE.stack` on every
+  n-th trace sample, from the tracing thread itself. A `faulthandler` watchdog
+  armed to dump on a timer wrote its first dump straight into the process's
+  death — a run vanished at exactly t=120 s, the moment of its first dump — so
+  the dump now happens on the thread that is already awake.
+- `LTP_CENSUS=1` prints the byte split (export parse table, synthetic nodes,
+  encoding memo, context memo, obligation list, memo dicts, const/beta/leaf
+  axioms, largest proof, peak RSS) at the end of a run and on a `MemoryError`.
+
+The trace grew `ctxby`, `ctxn`, `ctxcall`, `ctxhit` and `ctxscan` for this
+section; every earlier column is unchanged.
+
+#### Where the `nsOuterFock…singleTime` row's time actually goes
+
+§13.30 ended this row at "a handful of rules a minute" and left the cause open.
+`LTP_OBTRACE` splits every second of it into two numbers, and the split is not
+the one the artifact sizes suggest. Over the 3-hour run's 24 383 assumptions:
+
+| | seconds | share |
+| --- | ---: | ---: |
+| writing the assumption lines (`took`), 47.8 GB of text | 570 | 12.5 % |
+| walking from one assumption to the next (`gap`) | 3 916 | 87.5 % |
+| startup (export index, 1.94 GB + 1.94 GB statement spools) | ~640 | rest |
+
+The 38 GB of axiom text §13.30 saw accreting in the tail is written at 60 MB/s
+when it is written at all; what takes the minutes is the `infer` that precedes
+it. And the gaps are extremely concentrated: **eleven** gaps exceed 200 s and
+they sum to 6 324 s of the 8 282 s run — 76 % of the wall clock is eleven
+single calls.
+
+| assumption | `gap` s | `took` s | bytes | what it is |
+| ---: | ---: | ---: | ---: | --- |
+| 9 280 | 1 134 | 0.0 | 2 268 | one `infer` over a shared subtree, output two kilobytes |
+| 9 279 | 429 | 85.4 | 5 798 976 831 | the gap is 5× the write of a 5.8 GB line |
+| 24 380 | 1 908 | 13.1 | 1 799 569 526 | the longest single call of the run, 32 minutes |
+| 24 382 | 523 | 71.8 | 3 857 649 407 | 9 minutes of walk, then 3.9 GB written |
+| 24 379 | 81 | 147.1 | 8 254 713 455 | the largest line, 8.25 GB |
+
+The stack samples agree with the split rather than the intuition: in the flat
+regions they land in `Deriver.infer`/`_check` recursion, and in the writing
+ones in `tree_json` → `Enc._enc_tokens`, never in a container or a memo.
+
+**Can it finish?** Every counter says yes and none of them is unbounded: RSS sits
+at **2 250 MB** with the cap at 10 GiB, `axmax` freezes at 8 254 713 455 B after
+t=2 700 s, and both long runs converge on the same endpoint — **125 408 rules ·
+24 035 obligations** (`ns-long2` reaches the rule count at t=6 965 s, this run
+was 7 rules and 5 obligations short when it was stopped by hand at t=8 282 s,
+short of its 3-hour clock). What it cannot do is finish inside a clock that has
+been tried so far, and the reason is now named: a handful of individual `infer`
+calls of 300–1 900 s each, which emit kilobytes apiece. The row's price is
+~48 GB of axiom text and a **124 GB** obligation file, and its wall clock is
+three to four hours on this host — twice what §13.30 assumed, and *time on
+repeated inference*, not memory, not text.
+
+What that leaves, in order: (1) the walk itself — `infer` is re-entered under
+the same context for the same expression across those long gaps, and the `ctx`
+memo's key (the environment tuple) is already the right key for a per-`(eid,
+ctx)` result memo; (2) the row's clock, which should be **14 400 s** once (1)
+lands — raising it before that just buys another unfinished run, which is what
+§13.30's 7 200 s and this section's 10 800 s both measured; (3) the 124 GB
+obligation file, which no consumer of this row needs in one piece.

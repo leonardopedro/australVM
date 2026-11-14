@@ -1,0 +1,3 @@
+stage	what	budget_s	peak_mb	outcome	elapsed_s	note
+emit	KatoRellich.dense_range_add_relBounded	900	2007	ok	307.6	§13.31: context text memoised — the row that died at 5 916.1 s / 10 107 MB now finishes: 2 708 694 rules · 624 425 assumptions · 619 976 obligations, .mm0 13 396 035 927 B, .mm1 13 623 937 462 B, .jsonl 7 546 051 022 B
+emit	NsOuterFock.nsOuterFock_farisLavine_timeIndependent_singleTime	10800	3991	stopped	8282	§13.31: 10 GiB cap never approached (2 250 MB resident at the end); 125 401 rules · 24 380 assumptions · 24 030 obligations, 47.8 GB of axiom text and a 124 GB obligation file; eleven single calls between assumptions account for 6 324 s of the 8 282 — stopped by hand seven rules short of the 125 408 both long runs converge on
