@@ -64,7 +64,18 @@ in-process via native `uk_*` symbols registered in the JIT.
   `LiquidWhy3.prove` then takes its structured-skip path. Use `.#ocaml` to build,
   `default` to prove. Address the flake as `git+file://$PWD#ocaml`: a plain path
   makes nix copy the whole worktree (14 GB of `refi/target`) into the store
-  before it starts.
+  before it starts. `dune` itself (3.23.1 with OCaml 5.4.1, measured 2026-11-14)
+  exists only inside that shell — the host has none — so every `make` target
+  that needs it is reached through the shell:
+
+  ```bash
+  nix develop "git+file://$PWD#ocaml" -c make all     # or test / bridge
+  ```
+
+  `check-dune` (an order-only prerequisite of `$(BIN)` and `bridge`) refuses
+  outside the shell and prints that command, because the alternative was a
+  `dune: command not found` arriving after `make bridge` had already rebuilt
+  cargo.
 
 ## Scripts & gates
 

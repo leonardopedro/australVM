@@ -46,9 +46,23 @@ check-bridge-fresh:
 lib/BuiltInModules.ml: lib/builtin/*.aui lib/builtin/*.aum lib/prelude.h lib/prelude.c
 	python3 concat_builtins.py
 
+# dune is not installed on the host: it comes from the flake's `ocaml`
+# devShell (`devShells.default` carries why3/alt-ergo and cannot be built on an
+# aarch64 host — see AGENTS.md). Running `make` outside that shell used to fail
+# with a bare `dune: command not found` *after* `make bridge` had spent five
+# minutes in cargo, so the check runs first and names the command to use.
+.PHONY: check-dune
+check-dune:
+	@command -v dune >/dev/null 2>&1 || { \
+	  echo "error: dune is not on PATH." >&2; \
+	  echo "       dune is provided by the flake's ocaml shell, not by this host:" >&2; \
+	  echo "       nix develop \"git+file://\$$PWD#ocaml\" -c make $(MAKECMDGOALS)" >&2; \
+	  exit 1; \
+	}
+
 # Order-only: the freshness gate must RUN whenever the binary is considered,
 # but a phony check must never make the binary rebuild by itself.
-$(BIN): $(SRC) | check-bridge-fresh
+$(BIN): $(SRC) | check-bridge-fresh check-dune
 	dune build lib/ bin/
 	cp _build/default/bin/austral.exe $(BIN)
 
@@ -65,7 +79,7 @@ $(BIN): $(SRC) | check-bridge-fresh
 # needed; if a *new* crate is ever added, run `make bridge CARGO_FLAGS=` once.
 CARGO_FLAGS ?= --offline
 .PHONY: bridge
-bridge: lib/BuiltInModules.ml
+bridge: lib/BuiltInModules.ml | check-dune
 	cargo build --release $(CARGO_FLAGS) --manifest-path safestos/cranelift/Cargo.toml
 # `check-bridge-fresh` compares mtimes, but cargo compares fingerprints: after a
 # no-op rebuild it leaves the `.so` older than a source whose bytes it has
