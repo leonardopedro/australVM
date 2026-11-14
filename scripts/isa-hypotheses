@@ -14,8 +14,19 @@ not a check, so this script is the check:
   be a congruence/step axiom from the declared list (the theory itself is the
   trusted definition; the point is that nothing *extra* sneaks in silently).
 
+A pinned digest proves the cited file did not drift. It does not prove the file
+*says anything about the hypothesis* — and for `bounds_from_layout` it does not:
+`layout_certificate.mm0` is the encoding of CPS terms, with no slots, blocks or
+`in_bounds` in it. So each hypothesis is also classified by content: a
+hypothesis is `content-checked` only when every symbol its statement uses is
+declared by at least one cited artifact. That is a necessary condition, not a
+sufficient one (a declaration proves the vocabulary exists, not the claim), so
+the count of unchecked ones is pinned in `mm0/isa.mm0` as
+`-- unchecked-citations: N` and the gate fails if measurement and pin disagree —
+an unchecked citation can be declared, but not added silently.
+
 Usage: scripts/isa-hypotheses [<isa.mm0>]
-Exit: 0 all cited and pinned, 1 a citation is missing/stale, 2 cannot run.
+Exit: 0 all cited and pinned, 1 a citation is missing/stale/unaccounted, 2 cannot run.
 """
 
 import hashlib
@@ -29,6 +40,11 @@ DEFAULT_ISA = ROOT / "mm0" / "isa.mm0"
 CITE = re.compile(r"^--\s*cites:\s*(\S+)\s+sha256=([0-9a-f]{64})\s*$")
 GAP = re.compile(r"^--\s*gap-hypothesis:\s*([A-Za-z0-9_]+)\s*[—-]\s*(.*)$")
 AXIOM = re.compile(r"^\s*axiom\s+([A-Za-z0-9_]+)")
+DECL = re.compile(r"^\s*(?:term|sort)\s+([A-Za-z0-9_]+)")
+UNCHECKED_PIN = re.compile(r"^--\s*unchecked-citations:\s*(\d+)\s*$", re.MULTILINE)
+# Tokens that are not model vocabulary: keywords, sorts of the metalanguage and
+# the numeral constants the generated table declares.
+NOT_VOCAB = {"axiom", "theorem", "term", "sort", "Prop", "nat"}
 
 # The theory's own definitions: congruence and step rules. They are trusted by
 # being read, not by being cited to an artifact, and that list is fixed here so
@@ -116,6 +132,53 @@ def main(argv):
         if m:
             axioms.add(m.group(1))
 
+    # ── content, not just provenance ────────────────────────────────────────
+    # What can the cited artifacts actually say? A hypothesis is content-checked
+    # when every term/sort its statement mentions is declared by one of them.
+    cited_vocab = set()
+    for name in cites:
+        target = (ROOT / name) if not name.startswith("/") else pathlib.Path(name)
+        if target.is_file():
+            cited_vocab |= set(re.findall(DECL.pattern, target.read_text(), re.MULTILINE))
+
+    def statement_symbols(ax):
+        """Identifiers in `ax`'s statement that the model declares itself."""
+        lines = text.splitlines()
+        out = []
+        for i, line in enumerate(lines):
+            if re.match(rf"^\s*(axiom|theorem|def)\s+{re.escape(ax)}\b", line):
+                chunk = [line]
+                j = i
+                while not chunk[-1].rstrip().endswith(";") and j + 1 < len(lines):
+                    j += 1
+                    chunk.append(lines[j])
+                out = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", " ".join(chunk))
+                break
+        return [s for s in out if s in model_vocab and s not in NOT_VOCAB]
+
+    # `DECL` is anchored, and this runs over the whole file rather than a line.
+    model_vocab = set(re.findall(DECL.pattern, text, re.MULTILINE))
+    unchecked = []
+    for name in sorted(gaps):
+        if name not in axioms:
+            continue  # proved, not assumed: nothing to discharge
+        missing = [s for s in statement_symbols(name) if s not in cited_vocab]
+        if missing:
+            unchecked.append((name, missing))
+
+    pin = UNCHECKED_PIN.search(text)
+    declared_unchecked = int(pin.group(1)) if pin else None
+    if declared_unchecked is None:
+        problems.append(
+            "no `-- unchecked-citations: N` line — the uncovered citations must "
+            "be counted, not merely possible"
+        )
+    elif declared_unchecked != len(unchecked):
+        problems.append(
+            f"unchecked-citations pin says {declared_unchecked}, measured "
+            f"{len(unchecked)} ({', '.join(n for n, _ in unchecked) or 'none'})"
+        )
+
     for ax in sorted(axioms - THEORY_AXIOMS):
         if ax not in gaps and not TABLE_AXIOM.match(ax):
             problems.append(
@@ -131,9 +194,16 @@ def main(argv):
             print(f"isa-hypotheses: FAIL {p}", file=sys.stderr)
         return 1
 
+    checked = len([n for n in gaps if n in axioms]) - len(unchecked)
+    detail = ""
+    for name, missing in unchecked:
+        detail += (
+            f" — {name}: no cited artifact declares {', '.join(missing)}"
+        )
     print(
         f"isa-hypotheses: {len(cites)} pinned citation(s), "
-        f"{len(gaps)} cited hypothesis/hypotheses, {len(axioms)} axiom(s) accounted for"
+        f"{len(gaps)} cited hypothesis/hypotheses ({checked} content-checked, "
+        f"{len(unchecked)} unchecked{detail}), {len(axioms)} axiom(s) accounted for"
     )
     return 0
 

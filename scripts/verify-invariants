@@ -422,9 +422,19 @@ PY
                     echo "  [detail] $(cat "$_cert_tmp/hyp.log")"
                     check "W8: an uncited or stale hypothesis is refused" true
                 fi
+                # The unchecked count is pinned, so an unchecked citation cannot
+                # be added — or a real one quietly re-labelled as checked.
+                sed 's/^-- unchecked-citations: 1$/-- unchecked-citations: 0/' \
+                    "$repo_root/mm0/isa.mm0" > "$_cert_tmp/isa-relabelled.mm0"
+                if python3 "$repo_root/scripts/isa-hypotheses" \
+                        "$_cert_tmp/isa-relabelled.mm0" >/dev/null 2>&1; then
+                    check "W8: an unchecked citation cannot be re-labelled as checked" false
+                else
+                    check "W8: an unchecked citation cannot be re-labelled as checked" true
+                fi
             else
                 cat "$_cert_tmp/hyp.log" >&2
-                check "W8: every gap-hypothesis cites a pinned artifact" false
+                check "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" false
             fi
         else
             gap "W8: hypothesis citations not checked (scripts/isa-hypotheses missing)"

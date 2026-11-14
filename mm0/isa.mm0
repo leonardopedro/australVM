@@ -21,6 +21,17 @@
 -- cites: mm0/layout_certificate.mm0 sha256=20055174ee1e6942b9ef307737e44467f8eb338e67677f6427b4a0f450f6fa25
 -- cites: mm0/flux1d_certificate.mm0 sha256=300e763dc165ab48b7d38f716af1fa1a76652fe0d9bd888d31c53ac26d56fb7a
 --
+-- unchecked-citations: 1
+--   `bounds_from_layout` is the one hypothesis whose citation does not even
+--   share its vocabulary: `layout_certificate.mm0` is the encoding of CPS terms
+--   (tapp/tabs/tfold/…), and none of the three artifacts declares `in_bounds`,
+--   `typed` or a slot/block notion (`scripts/isa-hypotheses` measures this and
+--   the gate pins the count). So its `-- cites:` line freezes provenance, not
+--   content: it says "the argument for block bounds lives in the layout
+--   discipline", and what would turn that into a discharge is a state↔slot
+--   bridge stated in mm0 — a `St`-level layout model the artifacts do not have.
+--   That is recorded here as an open obligation, not dressed as a citation.
+--
 -- WHY THIS FILE IS SMALL. Building an ISA semantics from scratch here would
 -- prove linear types, refinements and memory safety a second time at a lower
 -- level, in a weaker fragment, and the two proofs would be free to disagree.
@@ -341,11 +352,20 @@ theorem sub_refines (s: St) (dst a b: nat):
   $ linear s $ > $ in_bounds s a $ > $ in_bounds s b $ >
   $ req (reg (run_sub s dst a b) dst) (reg (ir_sub s dst a b) dst) $;
 
--- ── bounds_from_layout: the memory obligations come from the layout ──────
--- The step relation needs "slot i is inside its block" at every access; the
--- layout discipline already establishes it, so the model cites rather than
--- re-proves it. A `deref` (0x20) or `store` (0x30) is in the subset only under
--- this hypothesis — that is what stops memory safety being proved twice.
--- gap-hypothesis: bounds_from_layout — cite=layout_certificate (H-BND)
+-- ── bounds_from_layout: the last assumption, and what it is worth ──────
+-- The step relation needs "slot i is inside its block" at every access. THIS IS
+-- THE ONE REMAINING `axiom` THAT IS NOT A DEFINITION, and its citation is
+-- provenance rather than content: `layout_certificate.mm0` encodes CPS *terms*
+-- and has no `in_bounds`, `typed` or slot notion at all (measured by
+-- `scripts/isa-hypotheses`, counted in the header). It stays a named hypothesis
+-- because the obligation is real and belongs to the memory argument; it is not
+-- claimed as discharged. Discharging it needs a `St`-level layout model in mm0 —
+-- slots, blocks, and the invariant that a typed, linear state keeps `i` inside
+-- its block — which no artifact currently states.
+--
+-- A `deref` (0x20) or `store` (0x30) is in the subset only under this
+-- hypothesis: that is what stops memory safety being proved twice, and it is
+-- also why the corpus census is worth having (the examples exercise neither).
+-- gap-hypothesis: bounds_from_layout — cite=layout_certificate (H-BND), content=unchecked
 axiom bounds_from_layout (s: St) (i: nat):
   $ typed s $ > $ linear s $ > $ in_bounds s i $;

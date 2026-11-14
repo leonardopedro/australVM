@@ -123,7 +123,7 @@ Exact (grep/ls-verified for this plan):
 | comparator: approved statement vs generated | `scripts/mm0-comparator` (diff + closure hash + theory hash, 3 negative controls) | **exists** (S1); `mm0/approved/` empty on purpose |
 | **`assumed=N` budget** | `-- assumed:` + `-- witness:` emitted by `au2mm0`, pinned in `BUDGETS` and gated; `lean-typing-check --assumed-json` for Lean artifacts | **exists** (flux1d: `assumed=1`; lean2mm0 gap below) |
 | **code fingerprint in the certificate** | `-- code: cps=<sha256> obj=<sha256> target=host`, both digests **checked** by `verify-invariants` — CPS from the bridge's `austral_cps_fingerprint`, object from the AVCE capture of the cranelift-emitted code, `arch=` named | **exists, checked** (W5) |
-| **ISA model of the emitted subset** | `mm0/isa.mm0` + `isa.mm1` (23 opcodes; `encdec` **proved** as 23 theorems from the table, `step_refines` **proved** as 3 more; 1 pinned citation left), `ISA_REGISTRY`, `lib/Cps_codec.ml`, `scripts/isa-census --corpus` | **exists, codec and step relation proved** (W8/S8) |
+| **ISA model of the emitted subset** | `mm0/isa.mm0` + `isa.mm1` (23 opcodes; `encdec` **proved** as 23 theorems from the table, `step_refines` **proved** as 3 more; 1 citation reported content-unchecked), `ISA_REGISTRY`, `lib/Cps_codec.ml`, `scripts/isa-census --corpus` | **exists, codec and step relation proved** (W8/S8) |
 | **generated float probe** | `mm0/flux1d_probe.c` emitted from the certified AST; compiled and run by `verify-invariants` | **exists** (tested, not proved) |
 | **GPU codegen** | — | **absent, and out of scope (§6)** |
 
@@ -1061,10 +1061,16 @@ run.
 The census controls are live in the gate: `-- op 0x7f bogus` added to a copy of
 the model makes the census fail (the decoder does not accept `0x7f`), and
 stripping or staling a citation makes `isa-hypotheses` fail. What remains open is
-small and named: one cited hypothesis (`bounds_from_layout`), so the ISA model
-inherits any bug in the *layout* certificate — and nothing else. The byte layer
-and the step relation are no longer part of it: both are proved, and the gate
-fails if either regresses to an axiom.
+small and named, and it is now honest about its size: one hypothesis,
+`bounds_from_layout`, whose citation is *provenance, not content* —
+`scripts/isa-hypotheses` measures that no cited artifact declares `in_bounds`,
+`typed` or a slot notion, reports `content=unchecked`, and the count is pinned in
+the model so it can neither grow nor be quietly re-labelled (both controls are in
+the gate). Discharging it needs a `St`-level layout model in mm0 — slots, blocks,
+and the invariant that a typed, linear state keeps `i` inside its block — which
+no artifact states today. The byte layer and the step relation are no longer part
+of the residue: both are proved, and the gate fails if either regresses to an
+axiom.
 
 ---
 
@@ -1079,7 +1085,7 @@ fails if either regresses to an axiom.
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`93 passed`): `cps=62999606…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00` |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`93 passed, 0 failed`; the corpus census reports 725 opcode reads over 8 modules — including a module whose body is a `uk_version` call — 9 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. One citation remains: `bounds_from_layout` |
+| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`94 passed, 0 failed`; the corpus census reports 725 opcode reads over 8 modules — including a module whose body is a `uk_version` call — 9 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. One citation remains, and it is now *labelled for what it is*: `bounds_from_layout` is reported `content=unchecked` by `scripts/isa-hypotheses` because no cited artifact declares `in_bounds`/`typed`, and the count is pinned in `mm0/isa.mm0` so it cannot be added to or silently re-labelled |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated

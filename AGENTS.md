@@ -113,7 +113,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   1 on any uncovered or overstated opcode. `--corpus` compiles the example
   modules whose CPS path produces a function and censuses the union (one module
   only measures one kernel). `scripts/isa-hypotheses <isa.mm0>` refuses a
-  `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or missing.
+  `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or missing, and
+  classifies each one by content: `content-checked` only when every term/sort
+  the hypothesis mentions is declared by a cited artifact. `bounds_from_layout`
+  is not (no cited artifact has `in_bounds`/`typed`), so it reports `unchecked`
+  and its count is pinned as `-- unchecked-citations: N` in `mm0/isa.mm0` — an
+  unchecked citation can be declared, but not added or re-labelled silently.
   `ISA_REGISTRY` is the instruction-side twin of `SYMBOL_REGISTRY`.
 - `scripts/isa-encdec [--write]` — regenerates the `encdec` table and its 23
   proofs plus the three `step_refines` proofs in `mm0/isa.mm0`, and derives
