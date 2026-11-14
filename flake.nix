@@ -248,6 +248,55 @@
             '';
           };
 
+        # Lean 4, for W9.1 (PLAN_sota_kernel_verification.md §4b): the ISA model
+        # must be *converted from an existing formalization*, not authored here,
+        # and the candidates are Lean 4 projects. The host has no `lean`/`lake`
+        # (measured 2026-11-14: `command -v lean lake elan` finds nothing), so the
+        # toolchain comes from this flake like dune does, and only when asked for:
+        #
+        #     nix develop .#lean            # lean + lake + lean4export on PATH
+        #     nix build .#lean4export       # just the exporter
+        #
+        # `lean` and `lean4export` are the *same* upstream version by
+        # construction: `lean4export`'s tag matches `pkgs.lean4.version` as this
+        # flake pins it (4.30.0 from this input's nixos-unstable, not the
+        # registry's newer 4.35.0), because an exporter that disagrees with the
+        # elaborator's format produces NDJSON the consumer cannot read, and it
+        # fails far from the cause. Bumping the nixpkgs input renames the tag
+        # here too — the `lean4export` build is what tells you.
+        packages.lean = pkgs.lean4;
+
+        packages.lean4export = pkgs.stdenv.mkDerivation {
+          pname = "lean4export";
+          version = pkgs.lean4.version;
+          src = pkgs.fetchFromGitHub {
+            owner = "leanprover";
+            repo = "lean4export";
+            rev = "a3e35a584f59b390667db7269cd37fca8575e4bf"; # tag v4.30.0
+            hash = "sha256-LysjGOikBaaOdZdwxA+RwzfnQweTaU3kpFuWc6LxmXc=";
+          };
+          nativeBuildInputs = [ pkgs.lean4 ];
+          # `lake` reads `lean-toolchain` and, under elan, would insist on
+          # fetching exactly that release. Here the toolchain is the one in the
+          # store, so the pin is redundant and only makes lake look for a
+          # download it cannot perform; removing it builds against
+          # `pkgs.lean4`, which is the same version the file names.
+          postPatch = ''
+            rm -f lean-toolchain
+          '';
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$TMPDIR
+            lake build
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 .lake/build/bin/lean4export $out/bin/lean4export
+            runHook postInstall
+          '';
+        };
+
         devShells.default = pkgs.mkShell {
           inherit buildInputs;
         };
@@ -285,6 +334,13 @@
             ocamlPackages.ppx_sexp_conv
             ocamlPackages.zarith
           ];
+        };
+
+        # W9.1's toolchain, deliberately separate from `.ocaml` and `default`:
+        # nothing in the OCaml build needs Lean, and a shell that carried both
+        # would make Lean's 4.35.0 store closure mandatory for `make test`.
+        devShells.lean = pkgs.mkShell {
+          packages = [ pkgs.lean4 self.packages.${system}.lean4export ];
         };
 
         # Shell for iterating on the from-mm build: nix develop .#mm0hs

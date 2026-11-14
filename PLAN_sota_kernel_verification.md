@@ -1111,13 +1111,33 @@ invariant proved, one premise about the compiler left visible.
 
 ### W9.1 ISA model: convert, do not author
 
-`[gap]` — no external ISA model is in the repo yet. Measured 2026-11-14:
-`command -v lean lake elan lean4export sail` finds none of them on this host, and
-no `*.lean`/Sail model is in the tree, so the conversion cannot be attempted
-here until a toolchain is provisioned; the plan stays `[gap]` rather than
-claiming the candidate works. The route is the one `scripts/lean2mm0` already
-implements for Lean 4 exports, applied to an existing ISA formalization instead
-of to a probability kernel:
+`[gap]` — no external ISA model is in the repo yet. The *toolchain* is no
+longer the blocker (provisioned 2026-11-14, `flake.nix` `packages.lean` /
+`packages.lean4export` / `devShells.lean`):
+
+```bash
+nix develop .#lean -c bash -c 'lean --version; lake --version'
+# Lean (version 4.30.0, commit v4.30.0, Release)
+# Lake version 5.0.0-src+v4.30.0 (Lean version 4.30.0)
+```
+
+`lean4export` is built here rather than fetched (`pkgs` has no package for it)
+against *this* input's `lean4`, tag v4.30.0, and emits format 3.1.0 — the same
+NDJSON version the pinned fixtures and `scripts/lean2mm0` expect, measured by
+exporting a one-definition file (339 MB for a `def x : Nat := 1`, which is why
+the model conversion is a size problem as well as a semantic one). Its usage
+takes the module name and writes NDJSON to **stdout**:
+`LEAN_PATH=<dir> lean4export <Module> > out.ndjson`. A second positional
+argument is parsed as another module name, panics in `decodeNameLit`, and leaves
+no output file — the first thing to get wrong here.
+
+What is still missing is the model itself: no Lean/RISC-V/AArch64 ISA
+formalization is pinned in this repo, so no conversion has been attempted and
+nothing is claimed. The next step is a choice, not a build: pin a candidate
+(e.g. a Lean 4 RISC-V model) as a `fetchFromGitHub` input at the export
+boundary and convert *that*, or write the Sail sibling. The route is the one
+`scripts/lean2mm0` already implements for Lean 4 exports, applied to an existing
+ISA formalization instead of to a probability kernel:
 
 - candidates: a Lean 4 RISC-V or AArch64 memory model (the Lanyon/AlphaProof
   posture: the model *is* the ISA, so no translation fidelity claim is invented

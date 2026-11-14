@@ -174,6 +174,14 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   passes `--allow-all` to both the compiler and the census — the census measures
   bytes in a capture module and never executes them, so the grant question stays
   with `modhost`.
+- Lean 4 is not on the host either; it comes from the flake's `lean` shell
+  (`nix develop "git+file://$PWD#lean" -c …`): Lean 4.30.0, Lake 5.0.0 and a
+  locally built `lean4export` (tag v4.30.0, NDJSON format 3.1.0). Keep lean's
+  version and the exporter's tag equal — the pin is `pkgs.lean4.version` from
+  this input's nixpkgs, not the registry's newer release. `lean4export <Mod>`
+  writes NDJSON to stdout (`LEAN_PATH=<dir> lean4export <Mod> > out.ndjson`);
+  giving it a second positional argument panics, because argv after the module
+  names is a *constant* list, not an output path.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
