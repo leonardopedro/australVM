@@ -24,7 +24,12 @@
 # `examples/kernel` is in the corpus because a module that calls the kernel is
 # not just another example: `uk_version` is an `app` (0x04) whose callee is an
 # imported symbol, and whether the emitter encodes it like any other call is a
-# measurement, not an assumption. It is the only entry with an explicit source
+# measurement, not an assumption. `examples/memory-ops` is there for the other
+# half of the table: it stores through a write reference and reads it back, so
+# 0x20 `deref` and 0x30 `store` are measured instead of merely declared. (It is
+# also the example that exposed both memory paths as broken: the store was
+# lowered to an assignment to a never-read variable, and the load to an
+# `__deref` call.) It is the only entry with an explicit source
 # list (`dir:module:sources`) because it needs `UnferKernel` linked in ahead of
 # the demo; the others are single-module directories.
 #
@@ -87,6 +92,7 @@ if [ "$corpus" -eq 1 ]; then
         "named-argument:Example.NamedArgument"
         "identity:Example.Identity"
         "kernel:TestKernel:UnferKernel.aui,UnferKernel.aum TestKernel.aum"
+        "memory-ops:Example.MemoryOps"
     )
     cps_files=()
     for entry in "${entries[@]}"; do
@@ -94,7 +100,11 @@ if [ "$corpus" -eq 1 ]; then
         rest="${entry#*:}"
         mod="${rest%%:*}"
         if [ "$rest" = "$mod" ]; then
-            srcs=("$(cd "$ROOT/examples/$dir" && ls *.aui | head -1),$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)")
+            # A module with an interface is one comma pair; a body-only module
+            # (`memory-ops`) is just the `.aum`, so the `.aui` probe may fail.
+            aui=$(cd "$ROOT/examples/$dir" && ls *.aui 2>/dev/null | head -1)
+            aum=$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)
+            if [ -n "$aui" ]; then srcs=("$aui,$aum"); else srcs=("$aum"); fi
         else
             read -r -a srcs <<< "${rest#*:}"
         fi

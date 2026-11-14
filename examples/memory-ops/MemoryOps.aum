@@ -1,0 +1,30 @@
+-- MemoryOps — a small module whose body writes through a reference and reads
+-- the value back, so the opcode census can measure the memory instructions
+-- (0x20 `deref`, 0x30 `store`) instead of listing them as declared but never
+-- exercised by any module in the corpus.
+--
+-- The write is a path assignment (`cell->value := 7`): the lvalue is an address,
+-- which is what the emitter turns into a store. `main` checks the round trip,
+-- so this is a runnable example rather than a measurement stub.
+
+module body Example.MemoryOps is
+    record Cell: Free is
+        value: Int32;
+    end;
+
+    generic [R: Region]
+    function poke(cell: &![Cell, R]): Int32 is
+        cell->value := 7;
+        return cell->value;
+    end;
+
+    function main(): ExitCode is
+        var cell: Cell := Cell(value => 0);
+        let seen: Int32 := poke(&!cell);
+        if seen = 7 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

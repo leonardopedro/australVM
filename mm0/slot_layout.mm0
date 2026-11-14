@@ -1,0 +1,87 @@
+-- slot_layout.mm0 — the St-level layout model the ISA layer cites (W8).
+--
+-- layer: layout
+-- proof-status: theory — 2 proved theorems (`in_bounds_alloc`, `mem_alloc`),
+--   zero `sorry`, zero cited hypotheses. Every statement below is either a
+--   definition, an inductive-relation rule (the `mem` constructors) or a
+--   congruence law; nothing is assumed about a compiler.
+--
+-- WHY THIS FILE EXISTS. `mm0/isa.mm0` needs `in_bounds (s: St) (i: nat)` at
+-- every memory access, and it used to declare that predicate as an opaque
+-- `term` while citing `layout_certificate.mm0` — an artifact that encodes CPS
+-- *terms* and declares no slots, blocks or bounds at all. A sha256 pin proved
+-- the file had not drifted; it never made the citation mean anything (measured
+-- by `scripts/isa-hypotheses`, which reported the hypothesis `content=unchecked`).
+--
+-- This file gives the predicate a definition instead of a citation: a state
+-- carries the list of slot indices its layout placed, and `in_bounds s i` is
+-- *defined* as membership of `i` in that list. There is nothing to assume about
+-- arithmetic — no `lt`, no capacities — because a slot that the layout did not
+-- place is simply not a member. What is left to prove is that the property
+-- survives allocation, and that is a theorem here.
+--
+-- WHAT THIS DOES NOT DO. It does not prove `bounds_from_layout`. The remaining
+-- premise is a statement about the *compiler*: that the layout pass lists every
+-- slot its code later dereferences. That sentence now has a vocabulary to be
+-- stated in — `mem`/`slots` — where before it had none, and the invariant's
+-- preservation is checked here rather than asserted. The pass itself is OCaml
+-- code; mm0 cannot see it, and this file does not pretend otherwise.
+
+-- theory coverage: used=scons,mem,seq,slots,alloc unused=n0,snil
+
+provable sort Prop;
+delimiter $ ( ) $;
+
+sort nat;
+term n0: nat; prefix n0: $0$ prec max;
+
+-- ── Slot lists ───────────────────────────────────────────────────────────
+-- A layout is the *list* of slot indices it placed. Indices, not spans: the
+-- question the step relation asks is "did the layout place this slot", and
+-- answering it needs membership, not arithmetic. Capacities and offsets would
+-- be a different question (does the block have room for a wider value), and
+-- this file deliberately does not answer it by postulating `lt`.
+sort Slots;
+term snil: Slots;
+term scons (i: nat) (t: Slots): Slots;
+term mem (i: nat) (l: Slots): Prop;
+
+-- The two `mem` introduction rules. These are the inductive relation's
+-- constructors, the same posture as `tcons`/`tnil` in the certificates: they
+-- say what membership *means*, and every use of `mem` is an elimination of
+-- one of them.
+axiom mem_here (i: nat) (l: Slots): $ mem i (scons i l) $;
+axiom mem_there (i j: nat) (l: Slots): $ mem i l $ > $ mem i (scons j l) $;
+
+-- Equality on layouts, with the congruence `mem` needs. Kept separate from
+-- `mem` so a proof that rewrites a layout has to say so.
+term seq (l m: Slots): Prop;
+axiom seq_refl (l: Slots): $ seq l l $;
+axiom seq_symm (l m: Slots): $ seq l m $ > $ seq m l $;
+axiom seq_trans (l m n: Slots): $ seq l m $ > $ seq m n $ > $ seq l n $;
+axiom mem_cong (i: nat) (l m: Slots): $ seq l m $ > $ mem i l $ > $ mem i m $;
+
+-- ── States and allocation ────────────────────────────────────────────────
+-- `St` here is a layout-carrying state, not the register file: the ISA model
+-- has its own `St`, and the two agree on exactly the vocabulary this file
+-- defines (that is what makes the citation checkable at all).
+sort St;
+term slots (s: St): Slots;
+term alloc (s: St) (i: nat): St;
+
+-- The allocation rule: a fresh slot is consed onto the layout. Direction is
+-- stated alloc-first because that is the way `in_bounds_alloc` rewrites it.
+axiom slots_alloc (s: St) (i: nat): $ seq (slots (alloc s i)) (scons i (slots s)) $;
+
+-- ── The predicate: a definition, not an assumption ───────────────────────
+def in_bounds (s: St) (i: nat): Prop = $ mem i (slots s) $;
+
+-- ── What the model proves ────────────────────────────────────────────────
+-- Allocation only adds a slot, so a slot that was in bounds stays in bounds.
+-- This is the invariant a step relation needs to carry across the `alloc`
+-- transition, and it is a theorem of the definitions above.
+theorem mem_alloc (s: St) (i: nat) (j: nat):
+  $ mem i (slots s) $ > $ mem i (slots (alloc s j)) $;
+
+theorem in_bounds_alloc (s: St) (i: nat) (j: nat):
+  $ in_bounds s i $ > $ in_bounds (alloc s j) i $;

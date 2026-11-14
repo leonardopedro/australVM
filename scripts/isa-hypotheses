@@ -41,6 +41,11 @@ CITE = re.compile(r"^--\s*cites:\s*(\S+)\s+sha256=([0-9a-f]{64})\s*$")
 GAP = re.compile(r"^--\s*gap-hypothesis:\s*([A-Za-z0-9_]+)\s*[—-]\s*(.*)$")
 AXIOM = re.compile(r"^\s*axiom\s+([A-Za-z0-9_]+)")
 DECL = re.compile(r"^\s*(?:term|sort)\s+([A-Za-z0-9_]+)")
+# A symbol the cited artifact *reasons about*: it appears in the statement of a
+# `def` or a `theorem`, not merely in a `term` declaration. Declaring the
+# vocabulary is necessary; proving something in it is what makes the citation
+# checkable at all.
+REASONED = re.compile(r"^\s*(?:def|theorem)\s+.*", re.MULTILINE)
 UNCHECKED_PIN = re.compile(r"^--\s*unchecked-citations:\s*(\d+)\s*$", re.MULTILINE)
 # Tokens that are not model vocabulary: keywords, sorts of the metalanguage and
 # the numeral constants the generated table declares.
@@ -133,18 +138,49 @@ def main(argv):
             axioms.add(m.group(1))
 
     # ── content, not just provenance ────────────────────────────────────────
+    # A `def` that appears in both this model and a cited artifact is the same
+    # definition stated twice (`in_bounds` is: the ISA layer needs the predicate
+    # in its own file, and `slot_layout.mm0` needs a definition it can prove
+    # things about). Two copies that disagree would make the citation true of a
+    # predicate the ISA layer does not use, so their bodies must match.
+    DEF = re.compile(r"^def\s+([A-Za-z0-9_]+).*?=\s*(\$.*?\$)\s*;", re.MULTILINE | re.DOTALL)
+    own_defs = {n: " ".join(b.split()) for n, b in DEF.findall(text)}
+    for name in cites:
+        target = (ROOT / name) if not name.startswith("/") else pathlib.Path(name)
+        if not target.is_file():
+            continue
+        for dname, body in DEF.findall(target.read_text()):
+            if dname in own_defs and " ".join(body.split()) != own_defs[dname]:
+                problems.append(
+                    f"def {dname}: this model and {pathlib.Path(name).name} "
+                    "define it differently — one of the two is not the predicate "
+                    "the citation covers"
+                )
+
     # What can the cited artifacts actually say? A hypothesis is content-checked
-    # when every term/sort its statement mentions is declared by one of them.
+    # when every term/sort its conclusion mentions is declared *and reasoned
+    # about* by one of them.
     cited_vocab = set()
+    reasoned_vocab = set()
     for name in cites:
         target = (ROOT / name) if not name.startswith("/") else pathlib.Path(name)
         if target.is_file():
-            cited_vocab |= set(re.findall(DECL.pattern, target.read_text(), re.MULTILINE))
+            body = target.read_text()
+            cited_vocab |= set(re.findall(DECL.pattern, body, re.MULTILINE))
+            for stmt in REASONED.findall(body):
+                reasoned_vocab |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", stmt))
 
-    def statement_symbols(ax):
-        """Identifiers in `ax`'s statement that the model declares itself."""
+    def conclusion_symbols(ax):
+        """Vocabulary the hypothesis *concludes* about, not its premises'.
+
+        A gap-hypothesis carries one debt: the predicate it concludes. Its
+        premises (`typed`, `linear`) name other layers' predicates, pinned by
+        their own `-- cites:` lines; requiring the layout artifact to know them
+        would ask the wrong file. So the claim checked here is: some cited
+        artifact defines and reasons about the conclusion's vocabulary.
+        """
         lines = text.splitlines()
-        out = []
+        chunk = []
         for i, line in enumerate(lines):
             if re.match(rf"^\s*(axiom|theorem|def)\s+{re.escape(ax)}\b", line):
                 chunk = [line]
@@ -152,8 +188,10 @@ def main(argv):
                 while not chunk[-1].rstrip().endswith(";") and j + 1 < len(lines):
                     j += 1
                     chunk.append(lines[j])
-                out = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", " ".join(chunk))
                 break
+        stmt = " ".join(chunk)
+        conclusion = stmt.rsplit("$ > $", 1)[-1]
+        out = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", conclusion)
         return [s for s in out if s in model_vocab and s not in NOT_VOCAB]
 
     # `DECL` is anchored, and this runs over the whole file rather than a line.
@@ -162,7 +200,16 @@ def main(argv):
     for name in sorted(gaps):
         if name not in axioms:
             continue  # proved, not assumed: nothing to discharge
-        missing = [s for s in statement_symbols(name) if s not in cited_vocab]
+        missing = [
+            s
+            for s in conclusion_symbols(name)
+            # A hypothesis is only *checkable* by an artifact that reasons about
+            # its vocabulary: `mm0/slot_layout.mm0` declares `in_bounds` and
+            # proves `in_bounds_alloc`, so citing it means something. A file
+            # that merely repeats the names does not, which is why a `term`
+            # declaration alone is not enough.
+            if s not in cited_vocab or s not in reasoned_vocab
+        ]
         if missing:
             unchecked.append((name, missing))
 

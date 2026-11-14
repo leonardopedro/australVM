@@ -1,0 +1,37 @@
+-- slot_layout.mm1 — the proof file for mm0/slot_layout.mm0.
+--
+-- The `.mm0` is the statement; this file carries the two proofs and is checked
+-- by `mm0-c` against the `.mm0` on every `verify-invariants` run, so the two
+-- cannot disagree. Term arguments are inferred in proof position (MM0 has no
+-- lambda and proof arguments are hypotheses), which is why `mem_there h` is
+-- written without `i`, `j` or the slot list: the goal fixes them.
+
+provable sort Prop;
+delimiter $ ( ) $;
+
+sort nat;
+term n0: nat; prefix n0: $0$ prec max;
+sort Slots;
+term snil: Slots;
+term scons (i: nat) (t: Slots): Slots;
+term mem (i: nat) (l: Slots): Prop;
+axiom mem_here (i: nat) (l: Slots): $ mem i (scons i l) $;
+axiom mem_there (i j: nat) (l: Slots): $ mem i l $ > $ mem i (scons j l) $;
+term seq (l m: Slots): Prop;
+axiom seq_refl (l: Slots): $ seq l l $;
+axiom seq_symm (l m: Slots): $ seq l m $ > $ seq m l $;
+axiom seq_trans (l m n: Slots): $ seq l m $ > $ seq m n $ > $ seq l n $;
+axiom mem_cong (i: nat) (l m: Slots): $ seq l m $ > $ mem i l $ > $ mem i m $;
+sort St;
+term slots (s: St): Slots;
+term alloc (s: St) (i: nat): St;
+axiom slots_alloc (s: St) (i: nat): $ seq (slots (alloc s i)) (scons i (slots s)) $;
+def in_bounds (s: St) (i: nat): Prop = $ mem i (slots s) $;
+
+pub theorem mem_alloc (s: St) (i: nat) (j: nat) (h: $ mem i (slots s) $):
+  $ mem i (slots (alloc s j)) $
+  = '(mem_cong (seq_symm slots_alloc) (mem_there h));
+
+pub theorem in_bounds_alloc (s: St) (i: nat) (j: nat) (h: $ in_bounds s i $):
+  $ in_bounds (alloc s j) i $
+  = '(mem_alloc h);

@@ -364,6 +364,33 @@ PY
                 tail -3 "$_cert_tmp/isa.log" >&2
                 check "W8: mm0/isa.mm0 + isa.mm1 accepted by mm0-rs + mm0-c, no sorry" false
             fi
+
+            # The layout model the memory hypothesis cites: `in_bounds` is a
+            # definition there and `in_bounds_alloc` is proved about it, which
+            # is what makes `bounds_from_layout`'s citation checkable rather
+            # than decorative. Control: the monotonicity proof must depend on
+            # its step — replacing the symm step with the raw allocation
+            # equation reverses the equality and must be refused.
+            if mm0-rs compile "$repo_root/mm0/slot_layout.mm1" "$_cert_tmp/slot.mmb" \
+                    >"$_cert_tmp/slot.log" 2>&1 \
+                && ! grep -q 'sorry' "$_cert_tmp/slot.log" \
+                && mm0-c "$_cert_tmp/slot.mmb" < "$repo_root/mm0/slot_layout.mm0" \
+                    >/dev/null 2>&1; then
+                echo "  [detail] $(grep -E 'sorts,' "$_cert_tmp/slot.log" | tail -1)"
+                check "W8: mm0/slot_layout.mm0 + .mm1 accepted, in_bounds_alloc proved" true
+            else
+                tail -3 "$_cert_tmp/slot.log" >&2
+                check "W8: mm0/slot_layout.mm0 + .mm1 accepted, in_bounds_alloc proved" false
+            fi
+            sed 's/(seq_symm slots_alloc)/(slots_alloc)/' \
+                "$repo_root/mm0/slot_layout.mm1" > "$_cert_tmp/slot-bad.mm1"
+            if mm0-rs compile "$_cert_tmp/slot-bad.mm1" "$_cert_tmp/slot-bad.mmb" \
+                    >"$_cert_tmp/slot-bad.log" 2>&1 \
+                && ! grep -q 'sorry' "$_cert_tmp/slot-bad.log"; then
+                check "W8: the allocation-monotonicity proof depends on its direction" false
+            else
+                check "W8: the allocation-monotonicity proof depends on its direction" true
+            fi
         else
             gap "W8: mm0/isa.mm0 not re-checked (no mm0 toolchain)"
         fi
@@ -424,7 +451,9 @@ PY
                 fi
                 # The unchecked count is pinned, so an unchecked citation cannot
                 # be added — or a real one quietly re-labelled as checked.
-                sed 's/^-- unchecked-citations: 1$/-- unchecked-citations: 0/' \
+                # (The model pins 0 now that `bounds_from_layout` cites the
+                # layout model, so the control *adds* a phantom one.)
+                sed 's/^-- unchecked-citations: 0$/-- unchecked-citations: 1/' \
                     "$repo_root/mm0/isa.mm0" > "$_cert_tmp/isa-relabelled.mm0"
                 if python3 "$repo_root/scripts/isa-hypotheses" \
                         "$_cert_tmp/isa-relabelled.mm0" >/dev/null 2>&1; then

@@ -137,6 +137,19 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
     how a proof stays a plain term instead of needing a lambda.
 - `lib/Cps_codec.ml` is the OCaml opcode table; `CpsGen` writes every opcode
   through it, and `test/CpsCodecTest.ml` holds it to `mm0/isa.mm0`.
+- `mm0/slot_layout.mm0`/`.mm1` — the `St`-level layout model `bounds_from_layout`
+  cites: `in_bounds` is *defined* as membership in the slot list a state carries
+  (`def in_bounds … = $ mem i (slots s) $`), and `in_bounds_alloc` proves
+  allocation never drops a slot. `isa.mm0` repeats the same definition and
+  `isa-hypotheses` refuses the two copies if they differ. The one unprovable
+  premise left is about the compiler: that the layout pass lists every slot its
+  code later dereferences.
+- Memory instructions are emitted from source now: `MDeref` lowers to `Deref`
+  (0x20) and `MAssign` on a pointer-like target lowers to `Store` (0x30). Before
+  that, deref was a call to the `__deref` pseudo-function and a store through a
+  reference was an assignment to a never-read `__assign_target` (silently
+  dropped). `examples/memory-ops` is the runnable module that keeps both paths
+  exercised, and it is in `isa-census --corpus` so they stay measured.
 - `examples/kernel/TestKernel.aum` is the smallest module that calls the kernel
   (`uk_version`); `isa-census --corpus` includes it. The corpus compiles with
   `--target-type=c` (no host linker, so `uk_*` need not exist in the `.so`) and

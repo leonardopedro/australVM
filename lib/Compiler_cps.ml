@@ -22,6 +22,13 @@ module Mt = Mtast
 let qident_to_string q =
   Identifier.qident_debug_name q
 
+(** Does this type denote something that can be stored through — the same set
+    `get_expr_type` treats as a dereference target? *)
+let is_pointer_like (ty: mono_ty): bool =
+  match ty with
+  | MonoPointer _ | MonoAddress _ | MonoReadRef _ | MonoWriteRef _ -> true
+  | _ -> false
+
 let ends_with s suffix =
   let len_s = String.length s in
   let len_suffix = String.length suffix in
@@ -229,7 +236,12 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
        | "NULL", [] -> IntLit 0L
        | "$1", [a] -> a
        | _ -> App ("__embed", cargs))
-  | Mt.MDeref e -> App ("__deref", [convert_expr e])
+  | Mt.MDeref e ->
+      (* The load has its own opcode (0x20), and the JIT decodes it as a load
+         from the pointer — `__deref` survives in `cps.rs` for binaries emitted
+         before this line existed. Emitting the instruction rather than a call
+         is what lets `scripts/isa-census` see memory traffic at all. *)
+      Deref (convert_expr e)
   | Mt.MTypecast (e, _) -> convert_expr e
   | Mt.MSizeOf _ -> IntLit 0L
   | Mt.MSlotAccessor (e, name, _) -> 
@@ -285,7 +297,18 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
   | Mt.MAssign (dest, src) ->
       let dest_expr = convert_expr dest in
       let src_expr = convert_expr src in
+      (* The pointer-like test must come *first*: `MAssign` is the store form
+         (`*r = v`, typed as a write reference, see TypingPass), and its target
+         is often a plain `Var`, which the second branch would otherwise rebind
+         instead of storing through. *)
       (match dest_expr with
+       | _ when is_pointer_like (get_expr_type dest) ->
+           (* `*dest = src`: the frontend hands us the *address* to write, so
+              this is the store instruction (0x30). The old fallback assigned
+              to a variable named `__assign_target` that nothing reads — the
+              store was silently dropped, which is why the census never saw
+              0x30. *)
+           Store (dest_expr, src_expr)
        | Var name -> Assign (name, src_expr)
        | _ -> Assign ("__assign_target", src_expr))
   | Mt.MAssignVar (q, src) ->

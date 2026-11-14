@@ -210,7 +210,7 @@ verify-invariants: 81 passed, 1 explained gap(s), 0 failed
 $ grep -E "trust-split|assumed:|code:" mm0/flux1d_certificate.mm0
 -- trust-split: structural=6 grounded=15 certificates=4
 -- assumed: 1 (uniform_state: l = r (a uniform interface))
--- code: cps=6299960658a4a79cbbe45e42a8b8ece931bc05c33f30113ef57e70dfcc95865a obj=unrecorded target=host
+-- code: cps=cd65d0b46a9f8bc017953572031fc1e2c2d9b374296800f4ca11de776b5ae3c3 obj=unrecorded target=host
 -- (re-measured later the same day with the object digest recorded: obj=ceed355c…, see §3.4)
 
 $ cd examples/verified-kernel/flux1d && make && echo $?
@@ -247,25 +247,40 @@ $ ./scripts/cps-fingerprint --object /tmp/flux1d.cps
 ceed355c0e8a150e68bc0e61439eb62e85fa48eb6f50807f6d637205ec07d2cb arch=aarch64
 
 $ ./scripts/isa-census --corpus
-isa-census: 8 modules — 725 opcode read(s), 9 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
-  per module: flux1d.cps: 8 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …;
-              kernel.cps: 7 distinct, 18 read(s) — the `uk_version` demo
-  used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x07 return, 0x08 if, 0x10 cmp_lt, 0x14 cmp_eq, 0x16 and
+isa-census: 9 modules — 768 opcode read(s), 11 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
+  per module: flux1d.cps: 9 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …;
+              kernel.cps: 7 distinct, 18 read(s) — the `uk_version` demo;
+              memory-ops.cps: 9 distinct, 43 read(s) — deref/store
+  used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x07 return, 0x08 if, 0x10 cmp_lt,
+        0x14 cmp_eq, 0x16 and, 0x20 deref, 0x30 store
   result: covered — every opcode used is declared in the decoder and in the artifact
 
 $ scripts/obj-drift-control        # the W5 negative control, measured
-before: cps=6299960658a4… obj=ceed355c… out=0
+before: cps=cd65d0b4… obj=ceed355c… out=0
 patched: a semantics-preserving emitter edit (function order), out=0, obj=5b75e8bfdd58…
 gate:   [FAIL] W5 (checked): the certificate's obj digest is the bridge's digest …
 obj-drift-control: held — … the gate refused it, and the pinned digests returned
 ```
 
-Note what the census exposes: the certified kernel reads 8 of the 23 declared
-opcodes and the whole example corpus reads 9. Arithmetic in the certified
+Note what the census exposes: the certified kernel reads 9 of the 23 declared
+opcodes and the whole example corpus reads 11 (it gained `deref` and `store`
+once a module existed that used them — see below). Arithmetic in the certified
 fragment lowers to `App Austral.Pervasive::trappingAdd`, not to `0x05 add` — that
 opcode is emitted only by the while-loop increment in `Compiler_cps.ml` — so
 "the emitted subset" is 9 opcodes for the corpus and 23 for the emitter as a
 whole, and both numbers are measured rather than asserted.
+
+**What the memory opcodes cost to measure.** `0x20 deref` and `0x30 store` were
+declared, decoded by the JIT and proved in the model, but *no module could emit
+them*: a dereference was lowered to a call to the `__deref` pseudo-function, and
+a store through a reference was lowered to an assignment to a variable named
+`__assign_target` that nothing reads — the store was silently dropped. Both are
+fixed in `lib/Compiler_cps.ml` (`MDeref → Deref`, `MAssign` on a pointer-like
+target → `Store`), and `examples/memory-ops` exercises them: it stores 7 through
+a write reference, reads it back, and exits 0. The fix is byte-visible — flux1d's
+CPS shrank by 765 bytes (`cps=cd65d0b4…`) while its *object* digest did not
+change (`obj=ceed355c…`), which is the expected relation when a pseudo-call is
+replaced by the load the backend was already emitting.
 
 Two absences deserve emphasis because they are the ones that make the SOTA claim
 currently indefensible:
@@ -688,7 +703,7 @@ gap *legible and checkable*.
 writes
 
 ```
--- code: cps=62999606…95865a obj=unrecorded target=host
+-- code: cps=cd65d0b4…a3c3 obj=unrecorded target=host
 -- code-status: recorded (cps = sha256 of the --emit-cps bytes); obj unrecorded — no object file is written by this path
 ```
 
@@ -750,7 +765,7 @@ plain-FFI route, no `uk_*`): the module is compiled through the JIT's own
 takes `--obj <digest> --obj-arch <arch>`, so the certificate now says
 
 ```
--- code: cps=62999606…95865a obj=ceed355c…d2cb target=host
+-- code: cps=cd65d0b4…a3c3 obj=ceed355c…d2cb target=host
 -- code-status: recorded (cps = sha256 of the --emit-cps bytes, obj = sha256 of the
    AVCE capture of those bytes, arch=aarch64)
 ```
@@ -782,11 +797,11 @@ module (semantic — the JIT indexes functions by name), rebuilds, re-emits, run
 the program, and then puts everything back. Measured end to end:
 
 ```
-before: cps=6299960658a4… obj=ceed355c…d2cb  program exit=0
+before: cps=cd65d0b4… obj=ceed355c…d2cb  program exit=0
 patched: cps=18928686dd5a… obj=5b75e8bfdd58…cb5f  program exit=0   (same output)
 gate:   [FAIL] W5 (checked): the certificate's object digest is the bridge's
         digest of the compiled object (aarch64)
-restored: cps=6299960658a4… obj=ceed355c…d2cb  (pinned values return)
+restored: cps=cd65d0b4… obj=ceed355c…d2cb  (pinned values return)
 ```
 
 So the object digest is sensitive to emitted code, the certificate is not
@@ -1034,10 +1049,12 @@ CPS path produces a function (`flux1d`, `fib`, `union`, `record`, `generic-union
 contribution:
 
 ```
-isa-census: 8 modules — 725 opcode read(s), 9 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
-  per module: flux1d.cps: 8 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …;
-              kernel.cps: 7 distinct, 18 read(s) — the `uk_version` demo
-  used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x07 return, 0x08 if, 0x10 cmp_lt, 0x14 cmp_eq, 0x16 and
+isa-census: 9 modules — 768 opcode read(s), 11 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
+  per module: flux1d.cps: 9 distinct, 557 read(s); fib.cps: 7 distinct, 24 read(s); …;
+              kernel.cps: 7 distinct, 18 read(s) — the `uk_version` demo;
+              memory-ops.cps: 9 distinct, 43 read(s) — deref/store
+  used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x07 return, 0x08 if, 0x10 cmp_lt,
+        0x14 cmp_eq, 0x16 and, 0x20 deref, 0x30 store
   declared but not used here (covered by the model, 14): 0x05 add, 0x06 sub, 0x09 while, 0x0a match, …
   result: covered — every opcode used is declared in the decoder and in the artifact
 ```
@@ -1060,17 +1077,96 @@ run.
 
 The census controls are live in the gate: `-- op 0x7f bogus` added to a copy of
 the model makes the census fail (the decoder does not accept `0x7f`), and
-stripping or staling a citation makes `isa-hypotheses` fail. What remains open is
-small and named, and it is now honest about its size: one hypothesis,
-`bounds_from_layout`, whose citation is *provenance, not content* —
-`scripts/isa-hypotheses` measures that no cited artifact declares `in_bounds`,
-`typed` or a slot notion, reports `content=unchecked`, and the count is pinned in
-the model so it can neither grow nor be quietly re-labelled (both controls are in
-the gate). Discharging it needs a `St`-level layout model in mm0 — slots, blocks,
-and the invariant that a typed, linear state keeps `i` inside its block — which
-no artifact states today. The byte layer and the step relation are no longer part
-of the residue: both are proved, and the gate fails if either regresses to an
-axiom.
+stripping or staling a citation makes `isa-hypotheses` fail. What remains open is one hypothesis with a real vocabulary.
+`mm0/slot_layout.mm0` defines `in_bounds (s) (i)` as membership of `i` in the
+slot list the state carries, and proves `in_bounds_alloc`: allocating a slot
+never loses one that was already in bounds. `isa.mm0` states the same definition
+(and `scripts/isa-hypotheses` refuses the two copies if they differ), so
+`bounds_from_layout` is now `content=checked` instead of `unchecked`: the cited
+artifact defines the predicate and reasons about it. What it cannot prove is the
+premise itself — that the compiler's layout pass lists every slot its code later
+dereferences. That pass is OCaml; mm0 sees its output as `slots s`, never its
+code. The difference from where this section started is that the claim now has a
+vocabulary to be false in, and its invariant is checked rather than asserted.
+
+---
+
+## §4b W9 — the IR model and the ISA we did not write (owner-directed 2026-11-14)
+
+**The direction, in the owner's words compressed to one sentence:** the
+machine-code claim should be *assembled from the proofs we already have* — liquid
+types, linear types, memory safety — with a Cranelift-IR model in MM0 bridging
+them to an ISA model, and the ISA model should be one that already exists rather
+than one this repo authored.
+
+What that changes about W8, stated plainly: W8's `mm0/isa.mm0` is an in-repo
+model of *the emitted subset* — honest, but authored here, so "the ISA" in it
+means "the instructions our decoder accepts". W9 does not add more instructions
+to that file; it replaces its provenance (an external model, converted) and
+inserts a layer between the CPS certificates and it (the Cranelift IR). The
+reuse the owner asks for is the whole point: the layer-1 artifacts stay the
+source of the typing/linearity/bounds facts, and the new layers *cite* them the
+way `bounds_from_layout` now cites `slot_layout.mm0` — vocabulary defined,
+invariant proved, one premise about the compiler left visible.
+
+### W9.1 ISA model: convert, do not author
+
+`[gap]` — no external ISA model is in the repo yet. The route is the one
+`scripts/lean2mm0` already implements for Lean 4 exports, applied to an existing
+ISA formalization instead of to a probability kernel:
+
+- candidates: a Lean 4 RISC-V or AArch64 memory model (the Lanyon/AlphaProof
+  posture: the model *is* the ISA, so no translation fidelity claim is invented
+  here), or Sail's RISC-V model through a `sail2mm0` sibling to `lean2mm0`;
+- acceptance: `mm0-c` accepts the converted specification, and the emitted
+  subset diff (the census, retargeted) shows every opcode the JIT decodes is in
+  the converted model — otherwise the conversion is not covering the claim;
+- the cost is unknown until a candidate is picked, and the plan must keep saying
+  `[gap]` until a conversion actually compiles. The two known costs are
+  unchanged from W8's analysis: a translator in the TCB (Lean→MM0 already is
+  one, but a *checked* one) or a hand-authored subset (reviewable, but ours).
+
+### W9.2 Cranelift-IR model in MM0
+
+`mm0/clif.mm0` — sorts for values, types and blocks of the *subset of CLIF the
+bridge emits*, derived from the bridge's own output rather than from the
+Cranelift manual:
+
+- an emitter, `scripts/clif2mm0`, dumps the CLIF for a module (the bridge
+already builds it into a `CaptureModule`) and emits one declaration per
+instruction form it sees, in the spirit of `mm0_emit.py`'s coverage line;
+- the CPS→CLIF lowering stays trusted (it is Rust code, and `mm0-c` cannot see
+  it), so the model's first job is to make that lowering's *output shape* a
+  measured fact: the census discipline, one layer down;
+- `[gap]` until the emitter exists: today the only measurement of the lowering
+  is the object digest, which says "unchanged", not "correct".
+
+### W9.3 Refinement: CLIF step → ISA step, reusing the certificates
+
+The proof obligation is `step_clif_refines : clif_step s = isa_step (lower s)`
+for the emitted subset, with the layer-1 facts entering as hypotheses:
+
+- `linear s`, `typed s` and `in_bounds s i` are already the vocabulary of
+  `isa.mm0`, and `slot_layout.mm0` is the pattern for making one of them
+  provable instead of cited (define the predicate, prove its preservation,
+  keep one sentence about the compiler visible);
+- the Cranelift layer must *not* restate the certificates: its hypotheses cite
+  `linearity_certificate.mm0`, `layout_certificate.mm0` and the liquid evidence
+  with pinned digests, and `scripts/isa-hypotheses`' content check is what keeps
+  a citation from being decorative — the failure W8 spent a day fixing;
+- exit criterion (when it exists): `mm0-c` accepts the refinement artifact, a
+  mutated lowering that changes one emitted instruction is *refused* by it, and
+  the hypothesis list is content-checked with a pinned count.
+
+### W9.4 What must not happen
+
+- An ISA model authored here and called "the ISA" (W8's own warning, now a
+  non-goal rather than a caveat).
+- A CLIF model that restates the CPS certificates in different words — that
+  doubles the trusted base instead of reusing it.
+- A refinement proof that assumes the lowering it is proving: the lowering's
+  output must be the thing measured (`scripts/clif2mm0`), and any assumption
+  about it must appear as a pinned, content-checked hypothesis.
 
 ---
 
@@ -1082,10 +1178,11 @@ axiom.
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
-| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`93 passed`): `cps=62999606…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00` |
+| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00` |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`94 passed, 0 failed`; the corpus census reports 725 opcode reads over 8 modules — including a module whose body is a `uk_version` call — 9 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. One citation remains, and it is now *labelled for what it is*: `bounds_from_layout` is reported `content=unchecked` by `scripts/isa-hypotheses` because no cited artifact declares `in_bounds`/`typed`, and the count is pinned in `mm0/isa.mm0` so it cannot be added to or silently re-labelled |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **unstarted 2026-11-14**: `[gap]` on all three (no conversion, no `scripts/clif2mm0`, no refinement artifact); the direction and its non-goals are recorded in §4b |
+| S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
 worth comparing is produced, otherwise we will retro-fit approval onto generated

@@ -15,22 +15,22 @@
 --   live in `mm0/isa.mm1` — the file mm0-rs compiles — and mm0-c checks them
 --   against this specification.
 --
--- theory coverage: used=req,radd,rmul,rneg,reg,setreg,neq,linear,typed,in_bounds,run_add,run_sub,run_mul,run_move,ir_add,ir_sub,ir_mul,ienc,idec,ieq,beq,ins_add,ins_and,ins_app,ins_cmp_eq,ins_cmp_gt,ins_cmp_gte,ins_cmp_lt,ins_cmp_lte,ins_cmp_neq,ins_deref,ins_if,ins_int_lit,ins_let,ins_match,ins_mul,ins_not,ins_or,ins_return,ins_store,ins_string_lit,ins_sub,ins_var,ins_while unused=n0
+-- theory coverage: used=n1,radd,rmul,rneg,req,reg,setreg,neq,linear,typed,mem,slots,run_add,run_sub,run_mul,run_move,ir_add,ir_mul,ir_sub,ienc,idec,ieq,beq,n2,n3,n4,n5,n6,n7,n8,n9,n10,n16,n17,n18,n19,n20,n21,n22,n23,n24,n25,n32,n33,n48,ins_int_lit,ins_var,ins_let,ins_app,ins_add,ins_sub,ins_return,ins_if,ins_while,ins_match,ins_cmp_lt,ins_cmp_gt,ins_cmp_lte,ins_cmp_gte,ins_cmp_eq,ins_cmp_neq,ins_and,ins_or,ins_mul,ins_not,ins_deref,ins_string_lit,ins_store unused=n0,scons
 --
 -- cites: mm0/linearity_certificate.mm0 sha256=9eedc905fd7cd093e40f17e6735a0ea7ee763485370661fa5e0ce59fb7b336bf
 -- cites: mm0/layout_certificate.mm0 sha256=20055174ee1e6942b9ef307737e44467f8eb338e67677f6427b4a0f450f6fa25
--- cites: mm0/flux1d_certificate.mm0 sha256=300e763dc165ab48b7d38f716af1fa1a76652fe0d9bd888d31c53ac26d56fb7a
+-- cites: mm0/flux1d_certificate.mm0 sha256=147c1fbb36edb66e24925001114d2711e513551b2b15c71004a11702c6b731d5
+-- cites: mm0/slot_layout.mm0 sha256=67b61dc15a3b6bcc5bfe1da2a39edea08f0305e9c1978e1a9625cfa152a8965d
 --
--- unchecked-citations: 1
---   `bounds_from_layout` is the one hypothesis whose citation does not even
---   share its vocabulary: `layout_certificate.mm0` is the encoding of CPS terms
---   (tapp/tabs/tfold/…), and none of the three artifacts declares `in_bounds`,
---   `typed` or a slot/block notion (`scripts/isa-hypotheses` measures this and
---   the gate pins the count). So its `-- cites:` line freezes provenance, not
---   content: it says "the argument for block bounds lives in the layout
---   discipline", and what would turn that into a discharge is a state↔slot
---   bridge stated in mm0 — a `St`-level layout model the artifacts do not have.
---   That is recorded here as an open obligation, not dressed as a citation.
+-- unchecked-citations: 0
+--   `bounds_from_layout` used to cite `layout_certificate.mm0`, which is the
+--   encoding of CPS terms (tapp/tabs/tfold/…) and declares no `in_bounds`, no
+--   `typed`, nothing about slots. `scripts/isa-hypotheses` measured that and
+--   called it `content=unchecked`; the citation is now `mm0/slot_layout.mm0`,
+--   which *defines* `in_bounds` and proves `in_bounds_alloc` about it. The
+--   remaining premise is no longer a missing vocabulary, it is one sentence
+--   about the compiler: that the layout pass lists every slot its code later
+--   dereferences. mm0 cannot see the pass, so that sentence stays an axiom.
 --
 -- WHY THIS FILE IS SMALL. Building an ISA semantics from scratch here would
 -- prove linear types, refinements and memory safety a second time at a lower
@@ -126,7 +126,24 @@ axiom reg_setreg_other (s: St) (i j: nat) (v: R):
 -- ── The layer-1 hypotheses: cited, never proved here ─────────────────────
 term linear (s: St): Prop;      -- linearity of the live bindings (H-LIN)
 term typed (s: St): Prop;       -- refinement typing of live values (H-REF)
-term in_bounds (s: St) (i: nat): Prop;  -- block bounds of the i-th slot (H-BND)
+
+-- ── Slot layout: a definition, not an opaque predicate ───────────────────
+-- This used to be `term in_bounds (s: St) (i: nat): Prop;` — an uninterpreted
+-- name with a citation to an artifact that had no notion of bounds in it. A
+-- predicate with no definition cannot be the subject of a proof, and so the
+-- memory obligation could only ever be restated. It has a definition now: a
+-- state carries the list of slot indices its layout placed, and being in bounds
+-- *is* membership in that list (no arithmetic, no capacities).
+--
+-- `mm0/slot_layout.mm0` is the artifact that states this model and proves the
+-- invariant's preservation (`in_bounds_alloc`: allocating a slot never loses an
+-- existing one). That is why this citation is checkable rather than decorative:
+-- the cited file defines `in_bounds` and reasons about it.
+sort Slots;
+term scons (i: nat) (t: Slots): Slots;
+term mem (i: nat) (l: Slots): Prop;
+term slots (s: St): Slots;
+def in_bounds (s: St) (i: nat): Prop = $ mem i (slots s) $;
 
 -- ── The step relation: definitions of the emitted subset ─────────────────
 -- One axiom per instruction the certified fragment needs. "Definition-only" in
@@ -352,20 +369,22 @@ theorem sub_refines (s: St) (dst a b: nat):
   $ linear s $ > $ in_bounds s a $ > $ in_bounds s b $ >
   $ req (reg (run_sub s dst a b) dst) (reg (ir_sub s dst a b) dst) $;
 
--- ── bounds_from_layout: the last assumption, and what it is worth ──────
--- The step relation needs "slot i is inside its block" at every access. THIS IS
--- THE ONE REMAINING `axiom` THAT IS NOT A DEFINITION, and its citation is
--- provenance rather than content: `layout_certificate.mm0` encodes CPS *terms*
--- and has no `in_bounds`, `typed` or slot notion at all (measured by
--- `scripts/isa-hypotheses`, counted in the header). It stays a named hypothesis
--- because the obligation is real and belongs to the memory argument; it is not
--- claimed as discharged. Discharging it needs a `St`-level layout model in mm0 —
--- slots, blocks, and the invariant that a typed, linear state keeps `i` inside
--- its block — which no artifact currently states.
+-- ── bounds_from_layout: the last assumption, stated in a vocabulary ──────
+-- The step relation needs "slot i is in bounds" at every access. With
+-- `in_bounds` now *defined* as membership in the layout's slot list, this axiom
+-- says one thing, and says it precisely: a typed, linear state's layout has
+-- placed every slot its code dereferences.
+--
+-- What is proved elsewhere: that membership survives allocation
+-- (`slot_layout.mm0`: `in_bounds_alloc`), so the invariant is not something a
+-- step can silently lose. What is not provable here: that the compiler's layout
+-- pass emits the list this axiom quantifies over. That pass is OCaml; mm0 sees
+-- its output as `slots s`, never its code. The gap is therefore one sentence
+-- about the emitter rather than a missing vocabulary, which is the difference
+-- between a pinned assumption and a citation that could not be asked.
 --
 -- A `deref` (0x20) or `store` (0x30) is in the subset only under this
--- hypothesis: that is what stops memory safety being proved twice, and it is
--- also why the corpus census is worth having (the examples exercise neither).
--- gap-hypothesis: bounds_from_layout — cite=layout_certificate (H-BND), content=unchecked
+-- hypothesis: that is what stops memory safety being proved twice.
+-- gap-hypothesis: bounds_from_layout — cite=slot_layout (H-BND)
 axiom bounds_from_layout (s: St) (i: nat):
   $ typed s $ > $ linear s $ > $ in_bounds s i $;
