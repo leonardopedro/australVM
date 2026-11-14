@@ -377,6 +377,81 @@
         # exists for (`scripts/rv64-model-mm0`, W9.1) needs all four tools on
         # one PATH — a conversion that half-runs is the failure mode the plan
         # forbids reporting as a gap.
+        # The memory half of the ISA model. `RISCV/Instructions.lean` above is
+        # ALU/M/B only; loads and stores are in the Sail-generated RV64 model the
+        # repo depends on (`Lean_RV64D`, pinned by the workspace's own
+        # `lake-manifest.json` at 11d8fa2, which itself requires `lean-sail` at
+        # 0794631). Those two are fetched here and built into oleans, because
+        # `lean4export` takes a module *name* and needs its imports compiled.
+        #
+        # Upstream's lakefile asks for `rev = "main"`; the manifest is the lock,
+        # and these two hashes are that lock. `lean-toolchain` and
+        # `lake-manifest.json` are removed and the git requirement is rewritten
+        # as a path requirement, so the build is offline: no Lake update, no
+        # toolchain download, and the flake's Lean 4.30.0 compiles sources the
+        # repo wrote for 4.29.0 (measured 2026-11-14: 124 oleans in 27m50s).
+        #
+        #     nix develop .#lean -c env | grep RISCV_MEMORY_MODEL
+        #     scripts/rv64-model-mm0        # converts execute_LOAD/execute_STORE
+        packages.sail-lean = pkgs.fetchFromGitHub {
+          owner = "rems-project";
+          repo = "lean-sail";
+          rev = "079463134b9c50450b8393e1566a09fc492a34d9";
+          hash = "sha256-yCbITYkwctZcGFcdmWqtd7NPbvp5VVVBsjec78ZSkaU=";
+        };
+
+        packages.sail-riscv-lean = pkgs.stdenvNoCC.mkDerivation {
+          pname = "sail-riscv-lean";
+          version = "11d8fa21";
+          src = pkgs.fetchFromGitHub {
+            owner = "opencompl";
+            repo = "sail-riscv-lean";
+            rev = "11d8fa212a60c05dcc9fe5db925dd4d06dad65b5";
+            hash = "sha256-Je5Se3dhdHdEccb5b9ssLndIaCNZu2wBSjFXXjfJSpM=";
+          };
+          nativeBuildInputs = [ pkgs.lean4 ];
+          dontConfigure = true;
+          buildPhase = ''
+            runHook preBuild
+            ws=$NIX_BUILD_TOP/ws
+            mkdir -p "$ws"
+            cp -r ${self.packages.${system}.sail-lean} "$ws/sail"
+            cp -r . "$ws/model"
+            chmod -R u+w "$ws"
+            rm -f "$ws"/sail/lean-toolchain "$ws"/sail/lake-manifest.json \
+                  "$ws"/model/lean-toolchain "$ws"/model/lake-manifest.json
+            cat > "$ws/model/lakefile.toml" <<'LAKEFILE'
+        name = "Lean_RV64D"
+        defaultTargets = ["LeanRV64D"]
+        moreLeanArgs = ["--tstack=400000"]
+
+        [[lean_lib]]
+        name = "LeanRV64D"
+        leanOptions.weak.linter.style.nameCheck = false
+        moreLeancArgs= ["-fbracket-depth=500"]
+
+        [[require]]
+        name = "Sail"
+        path = "../sail"
+        LAKEFILE
+            cd "$ws/model"
+            lake build
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            # One olean tree, with the dependency merged in: `lean4export`
+            # resolves `LeanRV64D`'s imports from the search path, and the
+            # `Sail.*` oleans are built under the dependency's own `.lake`, not
+            # under the model's (an install that missed them fails with
+            # "unknown module prefix 'Sail'" — measured).
+            mkdir -p $out/lib/lean
+            cp -r .lake/build/lib/lean/* $out/lib/lean/
+            cp -r "$NIX_BUILD_TOP/ws/sail/.lake/build/lib/lean/"* $out/lib/lean/
+            runHook postInstall
+          '';
+        };
+
         devShells.lean = pkgs.mkShell {
           packages = [
             pkgs.lean4

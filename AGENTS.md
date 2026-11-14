@@ -206,19 +206,27 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   writes NDJSON to stdout (`LEAN_PATH=<dir> lean4export <Mod> > out.ndjson`);
   giving it a second positional argument panics, because argv after the module
   names is a *constant* list, not an output path.
-- `scripts/rv64-model-mm0 [check]` — the W9.1 conversion, end to end:
-  `$RISCV_MODEL/RISCV/Instructions.lean` (flake `packages.riscv-lean`, i.e.
-  opencompl/riscv-lean pinned at `ccdfd676`; only the one import-free file is
-  shipped, because the repo's default target pulls a Sail dependency at
-  `rev = "main"`) → `lean` → `lean4export` → `lean2mm0-stmts emit --only` →
-  `mm0/statements/riscv_instructions.{mm0,mm1,roots}` → `mm0-rs compile` +
-  `mm0-c < .mm1` (exit 0). It then prints the `ISA_REGISTRY` diff: 13 opcodes
-  map to a converted declaration, 8 are structural (no ISA instruction), and
-  `deref`/`store` are **not covered** — `Instructions.lean` is ALU/M/B only, and
-  saying so is required. It exits non-zero if `isa.rs` gains an opcode with no
-  table entry, so the diff cannot rot. `check` re-converts and diffs the
-  committed artifact. Runs under `nix develop "git+file://$PWD#lean"` (that
-  shell carries lean, lean4export, `mm0` and python3 together on purpose).
+- `scripts/rv64-model-mm0 [check]` — the W9.1 conversion, end to end, over two
+  pinned models:
+  - `$RISCV_MODEL` (`packages.riscv-lean`: opencompl/riscv-lean at `ccdfd676`,
+    only its import-free `RISCV/Instructions.lean`) → `mm0/statements/
+    riscv_instructions.{mm0,mm1,roots}` — 83 `RV64.*` declarations, 3 sorts /
+    30 term-def / 94 ax-thm, `mm0-c` exit 0;
+  - `$RISCV_MEMORY_MODEL` (`packages.sail-riscv-lean`: the repo's own
+    `lake-manifest` lock, `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631`,
+    built to oleans by the derivation — ~28 min, cached in the store) →
+    `mm0/statements/rv64_memory.{mm0,mm1,roots}` for
+    `LeanRV64D.Functions.execute_LOAD`/`execute_STORE`, 3 sorts / 30 term-def /
+    13 ax-thm, `mm0-c` exit 0. Unset and unbuildable → that stem is skipped and
+    `deref`/`store` are reported NOT COVERED, never silently assumed.
+  Both go through `lean` → `lean4export` → `lean2mm0-stmts emit --only` →
+  `mm0-rs compile` → `mm0-c < .mm1`. The script then prints the `ISA_REGISTRY`
+  diff: **15 opcodes map to a converted declaration, 8 are structural, 0 are
+  uncovered**. The table is closed (an `isa.rs` opcode with no entry fails it),
+  and "mapped" is checked against the artifact, so a missing declaration reads
+  `NOT IN ARTIFACT`, not as covered. `check` re-converts and diffs both stems.
+  Runs under `nix develop "git+file://$PWD#lean"` (that shell carries lean,
+  lean4export, `mm0` and python3 together on purpose).
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

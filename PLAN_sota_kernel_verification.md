@@ -299,8 +299,8 @@ currently indefensible:
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
 verify-invariants: 106 passed, 2 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
-  [detail] 23 opcodes: 13 mapped to a converted model declaration,
-           8 structural (no ISA instruction), 2 not covered
+  [detail] 23 opcodes: 15 mapped to a converted model declaration,
+           8 structural (no ISA instruction), 0 not covered
   [pass] W9: mm0/clif.mm0 is what the corpus lowering measures
   [detail] clif2mm0: 20 form(s), 853 instruction(s), 0 theorems
   [gap]  W3: isa has no approved statements (owner commit)
@@ -1143,27 +1143,43 @@ invariant proved, one premise about the compiler left visible.
 
 ### W9.1 ISA model: convert, do not author
 
-**Status 2026-11-14 — converted, accepted, and diffed; coverage is partial and
-named.** An external RV64 model is now pinned and converted by one command,
-`scripts/rv64-model-mm0`:
+**Status 2026-11-14 — converted, accepted, and the diff is closed.** An external
+RV64 model is pinned and converted by one command, `scripts/rv64-model-mm0`, in
+two stems because the Lean model splits along exactly the line the emitter does:
 
 ```bash
 nix develop "git+file://$PWD#lean" -c bash scripts/rv64-model-mm0
-# [INFO] model : …/riscv-lean-ccdfd676/share/riscv-lean/RISCV/Instructions.lean
-# roots : 83 RV64 declarations (export closure: 55494)
+# [INFO] ALU model    : …/riscv-lean-ccdfd676/share/riscv-lean/RISCV/Instructions.lean
+# [INFO] riscv_instructions: export 340046657 bytes, 6355791 records
+#   roots: 83 of 55494 exported declarations
 # 3 sorts, 30 term/def, 94 ax/thm
-# [INFO] mm0-c : accepted (83 declarations)
-# 23 opcodes: 13 mapped to a converted model declaration, 8 structural
-#             (no ISA instruction), 2 not covered
+# [INFO]   mm0-c accepted (83 declarations)
+# [INFO] memory model : …/sail-riscv-lean-11d8fa21/lib/lean (Lean_RV64D)
+# [INFO] rv64_memory: export 782800603 bytes, 13689978 records
+#   roots: 2 of 167940 exported declarations
+# 3 sorts, 30 term/def, 13 ax/thm
+# [INFO]   mm0-c accepted (2 declarations)
+# 23 opcodes: 15 mapped to a converted model declaration, 8 structural
+#             (no ISA instruction), 0 not covered
 ```
 
-The model is **opencompl/riscv-lean** at commit
-`ccdfd67647b334a830e220c4caef0f067cd9e15c`, pinned in `flake.nix` as
-`packages.riscv-lean` (`sha256-SaV/eT7LUbcrKut4R0KbG503t2jVj/8jXCjDFHEagCg=`)
-and provisioned into `devShells.lean` as `$RISCV_MODEL`. It is fetched, not
-vendored, so the conversion's input has a name and a digest. The pin ships
-exactly one file, `RISCV/Instructions.lean`, and that is the honest part of the
-choice:
+**Two pins, each converted from its own specification.** The ALU half is
+**opencompl/riscv-lean** at `ccdfd67647b334a830e220c4caef0f067cd9e15c`
+(`flake.nix` `packages.riscv-lean`,
+`sha256-SaV/eT7LUbcrKut4R0KbG503t2jVj/8jXCjDFHEagCg=`, exposed as
+`$RISCV_MODEL`). The memory half is the Sail-generated model that repo itself
+depends on: **opencompl/sail-riscv-lean** at `11d8fa21` (`Lean_RV64D`) plus
+**rems-project/lean-sail** at `0794631`, the exact commits in the upstream
+`lake-manifest.json` — the lakefile asks for `rev = "main"`, the manifest is the
+lock, and those two hashes are that lock. `packages.sail-riscv-lean` builds them
+to oleans (28 min, cached in the store) with the git requirement rewritten as a
+path requirement and both `lean-toolchain`/`lake-manifest.json` removed, so the
+build is offline and the flake's Lean 4.30.0 compiles sources upstream wrote for
+4.29.0 (measured). Both are fetched, not vendored, so each conversion's input
+has a name and a digest.
+
+The ALU pin ships exactly one file, `RISCV/Instructions.lean`, and that is the
+honest part of the choice:
 
 - it is the only file in that repo with **no imports**, so it elaborates
   without Lake, without network, and without the `Lean_RV64D` git dependency
@@ -1173,19 +1189,24 @@ choice:
   flake's 4.30.0 in 2.2 s (measured), so no toolchain bump was needed. The
   version gap is not "probably fine" — the file compiles, and BitVec APIs that
   changed between those releases are in the files it does not import;
-- what that costs is stated in the diff, not hidden: the model is **ALU + M +
-  Zba/Zbb/Zbs** (630 lines, 83 `def`s, `namespace RV64`). It has no loads, no
-  stores and no branches — those live in `Skeleton.lean`/`SailPure.lean`, i.e.
-  behind the Sail import this pin cannot follow.
+- what that costs is stated in the diff, not hidden: that file is **ALU + M +
+  Zba/Zbb/Zbs** (630 lines, 83 `def`s, `namespace RV64`) and has no loads, no
+  stores and no branches. That is why there is a second stem: the memory
+  declarations (`execute_LOAD`, `execute_STORE`) are in the Sail-generated
+  `LeanRV64D.InstsEnd`, and converting them meant paying the Sail cost rather
+  than writing a substitute.
 
 The conversion reuses the pipeline this repo already trusts
 (`scripts/lean2mm0-stmts`, statements of record as MM0 axioms — structure only;
 *truth* stays with the Lean kernel and nanoda's re-check of the export, exactly
-as `docs/lean4mm0.md` scopes it): olean → `lean4export` (55,494 decls, 340 MB
-NDJSON) → roots via `scripts/lean2mm0`'s `Export` reader (dotted names:
-`RV64.add`, 83 of them) → `lean2mm0-stmts emit --only` → 414-line
-`mm0/statements/riscv_instructions.{mm0,mm1,roots}` (41,986 bytes) →
-`mm0-rs compile` (3 sorts, 30 term/def, 94 ax/thm) → `mm0-c < .mm1` **exit 0**.
+as `docs/lean4mm0.md` scopes it): olean → `lean4export` → roots via
+`scripts/lean2mm0`'s `Export` reader (dotted names: `RV64.add`,
+`LeanRV64D.Functions.execute_LOAD`) → `lean2mm0-stmts emit --only` →
+`mm0/statements/<stem>.{mm0,mm1,roots}` → `mm0-rs compile` → `mm0-c < .mm1`
+**exit 0** for both stems. The two exports are 340 MB / 55,494 decls and 783 MB /
+167,940 decls; the second is 13× larger because `InstsEnd` is a 45 MB generated
+file, and the export is the cheap part of that pin — the build is the expensive
+part.
 
 One measured trap, now encoded in the script: `lean2mm0-stmts verify`'s own
 mm0-c leg is a false negative — it runs `mm0-c <mmb>` with stdin `/dev/null`,
@@ -1194,17 +1215,19 @@ canonical form is `mm0-c <mmb> < <stem>.mm1`, which is what the script runs and
 what `verify-invariants` does for every other artifact.
 
 **Coverage, stated as the diff the script prints:** of the 23 `ISA_REGISTRY`
-opcodes, 13 map to a converted declaration (`int_lit→li`, `add→add`, `sub→sub`,
-`mul→mul`, `and→and`, `or→or`, `not→xori`, the four orderings→`slt`, `cmp_eq`/
-`cmp_neq`→`xor`), 8 are CPS structure with no instruction of its own (`var`,
-`let`, `app`, `return`, `if`, `while`, `match`, `string_lit`), and **2 are not
-covered**: `deref` and `store`, for the reason above. The mapping is closed by
-the script (`isa.rs` gaining an opcode with no entry fails it), and "mapped" is
-checked against the artifact, not asserted in a comment. So the W9.1 acceptance
-limb "every opcode the JIT decodes is in the converted model" is **not met, and
-cannot be met by this file**; it is met for the 21 non-memory/structural ones,
-with the memory pair a named `[gap]` whose remedy is a Sail-importing pin (or a
-memory model) rather than a bigger table.
+opcodes, **15 map to a converted declaration** (`int_lit→RV64.li`, `add→add`,
+`sub→sub`, `mul→mul`, `and→and`, `or→or`, `not→xori`, the four orderings→`slt`,
+`cmp_eq`/`cmp_neq`→`xor`, and `deref→LeanRV64D.Functions.execute_LOAD`,
+`store→execute_STORE`), 8 are CPS structure with no instruction of its own
+(`var`, `let`, `app`, `return`, `if`, `while`, `match`, `string_lit`), and **0
+are uncovered**. The mapping is closed by the script (`isa.rs` gaining an opcode
+with no entry fails it) and "mapped" is checked against *the artifact the entry
+names*, so a declaration that is not there prints `NOT IN ARTIFACT` and fails
+rather than counting as covered. The W9.1 acceptance limb — "every opcode the
+JIT decodes is in the converted model" — is therefore **met**, with one
+qualification that belongs in the same sentence: `structural` means "no RISC-V
+instruction of its own", not "verified", and the CPS→instruction shape for
+`if`/`while`/`match` is Cranelift's (`mm0/clif.mm0` measures it).
 
 **The gate, and its control.** `verify-invariants` runs `scripts/rv64-model-mm0
 check` when the `lean` shell is active (`$RISCV_MODEL` set) and fails on drift;
@@ -1220,10 +1243,11 @@ the 2124 committed statement files already follow; the artifact is reproducible
 byte-for-byte across runs.
 
 Each mapping entry is a claim about semantics that the conversion does **not**
-prove: `mm0-c` accepts the RV64 declarations as statements about `BitVec`, and
-nothing here says the JIT's `mul` is the model's `mul`. That is W9.3's
-obligation, and the mapping table is its vocabulary — with the caveat that a
-table entry is currently an argument from reading, not a theorem.
+prove: `mm0-c` accepts the declarations as statements about `BitVec`/the Sail
+monad, and nothing here says the JIT's `mul` is the model's `mul` or that the
+JIT's `store` is Sail's `execute_STORE`. That is W9.3's obligation, and the
+mapping table is its vocabulary — with the caveat that a table entry is
+currently an argument from reading, not a theorem.
 
 The toolchain it runs on (provisioned 2026-11-14, `flake.nix` `packages.lean` /
 `packages.lean4export` / `packages.riscv-lean` / `devShells.lean`):
@@ -1244,15 +1268,16 @@ takes the module name and writes NDJSON to **stdout**:
 argument is parsed as another module name, panics in `decodeNameLit`, and leaves
 no output file — the first thing to get wrong here.
 
-The two costs W8 predicted are both visible now, and neither is retired: the
-converter (`lean2mm0-stmts`) is in the TCB and is not itself verified (what
-`mm0-c` checks is that the emitted statements are well-formed in `cic.mm0`'s
-term language, not that they are the Lean definitions' meaning), and the
-coverage question is answered by a hand-written mapping table rather than by a
-proof of correspondence. Pinning the *Sail* RISC-V model instead would close
-the memory-opcode gap and make the same converter's output richer; it was not
-done here because Sail's Lean export path adds a Lake project (and its own
-toolchain) to a pin whose whole value so far was that it needs neither.### W9.2 Cranelift-IR model in MM0
+The two costs W8 predicted are both still visible: the converter
+(`lean2mm0-stmts`) is in the TCB and is not itself verified (what `mm0-c`
+checks is that the emitted statements are well-formed in `cic.mm0`'s term
+language, not that they are the Lean definitions' meaning), and the coverage
+question is answered by a hand-written mapping table rather than by a proof of
+correspondence. What changed is the third one — the Sail cost was paid rather
+than avoided: the memory stem needs a Lake project, two pinned git
+dependencies and a 28-minute derivation, and it is worth it because the
+alternative was either an uncovered `deref`/`store` or a memory model authored
+here, which is the thing W9.4 forbids.### W9.2 Cranelift-IR model in MM0
 
 `mm0/clif.mm0` — sorts for values, types and instruction forms of the *subset
 of CLIF the bridge emits*, derived from the bridge's own output rather than from
@@ -1413,7 +1438,7 @@ The remaining work is exactly what it was, now with a place to put it:
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14 for ALU/M/B, `[gap]` for memory**: opencompl/riscv-lean at `ccdfd676` is a flake input, `scripts/rv64-model-mm0` converts 83 `RV64.*` declarations to `mm0/statements/riscv_instructions.{mm0,mm1,roots}` and `mm0-rs`+`mm0-c` accept them, the `ISA_REGISTRY` diff is closed in both directions (13 mapped, 8 structural, `deref`/`store` **not covered** — the pinned file has no loads/stores), re-checked by `verify-invariants` in the `lean` shell and reported as a `[gap]` elsewhere; and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, and `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere; and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Re-measured 2026-11-14**: 905 reads over 12 modules, **23 distinct**, 23 declared, `UNREACHABLE_OPCODES` now empty (the `sub`/`mul`/`match` producers landed). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
