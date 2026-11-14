@@ -1311,7 +1311,11 @@ trick:
   encoding of old semantics. Measured at runtime: `6 * 7 - 7 = 35` exits 0, and
   `maximum_int64 * 2` / `minimum_int64 - 1` still die with `Overflow in
 trappingMultiply (Int64)` / `… trappingSubtract …` (exit 255) instead of
-  wrapping. `+` keeps its call deliberately: 0x05 doubles as the `for` loop's
+  wrapping. `safestos/cranelift/tests/cps_tests.rs` pins all four behaviours
+  without a compiler in the loop: the two opcodes' values (including operand
+  order) run in-process, and the two overflow cases re-exec the test binary as
+  a child, because the trap is `process::abort` — asserted as SIGABRT plus the
+  message, `29 passed, 1 ignored` in that file (measured 2026-11-14). `+` keeps its call deliberately: 0x05 doubles as the `for` loop's
   increment, and that path is left alone;
 - `Mt.MCase` lowers to `Match` (0x0A) instead of a `CmpEq` + `If` chain over the
   tag slot, so tag dispatch is one instruction (and the union example's opcode

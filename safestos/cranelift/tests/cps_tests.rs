@@ -202,6 +202,119 @@ fn trapping_divide_resolves_and_executes() {
     assert_eq!(execute(compile(&cps)), 42);
 }
 
+// ── The sub/mul instructions (0x06/0x18) ───────────────────────────
+//
+// Since 2026-11-14 `Compiler_cps.trapping_arith_op` emits these for `-`/`*`
+// instead of an `App` to the Pervasive methods, so they are no longer decodable
+// IR with no producer — and no longer exercised only through the call path.
+// The tests above still cover the call form (older binaries still emit it);
+// these cover what the compiler produces now.
+
+/// Body that returns `a <opcode> b`, the shape the CPS emitter writes for a
+/// two-operand arithmetic expression.
+fn body_binop(opcode: u8, a: i64, b: i64) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(0x07); // tail/return context
+    body.push(opcode);
+    body.push(0x01); // iconst a
+    write_i64(&mut body, a);
+    body.push(0x01); // iconst b
+    write_i64(&mut body, b);
+    body
+}
+
+#[test]
+fn sub_opcode_computes_the_difference() {
+    let cps = cps_v1_named("op_sub", &body_binop(0x06, 44, 2));
+    assert_eq!(execute(compile(&cps)), 42);
+    // Operand order is not commutative: the same operands the other way round
+    // must be the negated result, or `a - b` was lowered as `b - a`.
+    let cps = cps_v1_named("op_sub_swapped", &body_binop(0x06, 2, 44));
+    assert_eq!(execute(compile(&cps)), -42);
+}
+
+#[test]
+fn mul_opcode_computes_the_product() {
+    let cps = cps_v1_named("op_mul", &body_binop(0x18, 6, 7));
+    assert_eq!(execute(compile(&cps)), 42);
+    let cps = cps_v1_named("op_mul_negative", &body_binop(0x18, -6, 7));
+    assert_eq!(execute(compile(&cps)), -42);
+}
+
+/// The trap half of the contract: `-`/`*` abort on overflow
+/// (`BuiltInModules.ml`), so the instruction must not wrap. The abort is
+/// `std::process::abort` — uncatchable in-process — so the assertion is made in
+/// a child process running this same binary, which is also the only way to
+/// observe the message a user sees.
+///
+/// Without the `brif` in `emit_trapping_arith`, both cases would return a
+/// wrapped i64 and exit 0; this test is what makes that a failure rather than
+/// a silently wrong number.
+fn run_trap_child(opcode: &str, kind: &str) -> std::process::Output {
+    std::process::Command::new(std::env::current_exe().expect("test binary path"))
+        .args([
+            "--exact",
+            "arith_trap_child_exit",
+            "--nocapture",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .env("AVM_ARITH_TRAP", format!("{opcode}:{kind}"))
+        .output()
+        .expect("re-exec the test binary")
+}
+
+fn assert_trapped(out: &std::process::Output, expected: &str) {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "overflow must abort, not return a wrapped value (stderr: {stderr})"
+    );
+    assert!(
+        stderr.contains(expected),
+        "expected {expected:?} on stderr, got: {stderr}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            out.status.signal(),
+            Some(6),
+            "the trap path must abort (SIGABRT), not exit with a code: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn sub_opcode_traps_on_overflow() {
+    let out = run_trap_child("sub", "over");
+    assert_trapped(&out, "Overflow in trappingSubtract (Int64)");
+}
+
+#[test]
+fn mul_opcode_traps_on_overflow() {
+    let out = run_trap_child("mul", "over");
+    assert_trapped(&out, "Overflow in trappingMultiply (Int64)");
+}
+
+/// Not a test of its own: the child half of the two tests above. Ignored so it
+/// only runs when re-executed with `AVM_ARITH_TRAP` set; the values are the
+/// overflow operands, so this process is expected to abort.
+#[test]
+#[ignore]
+fn arith_trap_child_exit() {
+    let spec = std::env::var("AVM_ARITH_TRAP").expect("only meaningful as a child process");
+    let (opcode, kind) = spec.split_once(':').expect("op:kind");
+    let (op, name, a, b) = match (opcode, kind) {
+        ("sub", "over") => (0x06, "child_sub_over", i64::MIN, 1),
+        ("mul", "over") => (0x18, "child_mul_over", i64::MAX, 2),
+        other => panic!("unknown child spec {other:?}"),
+    };
+    let cps = cps_v1_named(name, &body_binop(op, a, b));
+    let _ = execute(compile(&cps));
+    panic!("the child reached the wrap-free result instead of aborting");
+}
+
 /// X4a: two modules exporting the same name in one thread.
 #[test]
 fn two_run_exports_in_one_thread_both_compile_and_keep_their_own_body() {

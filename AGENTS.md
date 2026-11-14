@@ -168,6 +168,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   - A `.mm0` statement's premises (`$ A $ > $ B $`) become named binder
     hypotheses designed by the script (`h1`, `h2`, …) in the `.mm1`, which is
     how a proof stays a plain term instead of needing a lambda.
+- The new arithmetic lowering is regression-tested in
+  `safestos/cranelift/tests/cps_tests.rs`: `sub_opcode_computes_the_difference`
+  and `mul_opcode_computes_the_product` check the value (operand order
+  included), and `sub_opcode_traps_on_overflow` / `mul_opcode_traps_on_overflow`
+  check the trap. The trap is `std::process::abort`, uncatchable in-process, so
+  those two re-exec the test binary as a child (`--exact arith_trap_child_exit`,
+  env `AVM_ARITH_TRAP`) and assert SIGABRT plus the `Overflow in
+  trappingSubtract/Multiply (Int64)` message. Without `emit_trapping_arith`'s
+  `brif` both would return a wrapped i64 and exit 0.
 - `lib/Cps_codec.ml` is the OCaml opcode table; `CpsGen` writes every opcode
   through it, and `test/CpsCodecTest.ml` holds it to `mm0/isa.mm0`.
 - `mm0/slot_layout.mm0`/`.mm1` — the `St`-level layout model `bounds_from_layout`
