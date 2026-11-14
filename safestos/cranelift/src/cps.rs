@@ -45,6 +45,43 @@ fn declare_import<M: Module>(jit: &mut M, name: &str, argc: usize) -> Result<Fun
         .map_err(|e| format!("Failed to declare import {}: {}", name, e))
 }
 
+/// Emit the checked form of the `sub`/`mul` instruction.
+///
+/// The language's `-`/`*` trap on overflow (`BuiltInModules.ml`), so the opcodes
+/// must trap too: now that the lowering emits them, a wrapping `isub`/`imul`
+/// would silently change program meaning. The overflow branch calls the very
+/// helper the call-based lowering used, so both paths abort with the same
+/// message and cannot drift.
+fn emit_trapping_arith<M: Module>(
+    jit: &mut M,
+    mgr: &mut BlockManager,
+    a: Value,
+    b: Value,
+    op: char,
+) -> Result<Value, String> {
+    let (res, overflow) = match op {
+        '-' => mgr.builder.ins().ssub_overflow(a, b),
+        _ => mgr.builder.ins().smul_overflow(a, b),
+    };
+    let ok_block = mgr.create_block();
+    let overflow_block = mgr.create_block();
+    mgr.builder
+        .ins()
+        .brif(overflow, overflow_block, &[], ok_block, &[]);
+    mgr.switch_to_block(overflow_block);
+    let symbol = if op == '-' {
+        "Austral.Pervasive::trappingSubtract"
+    } else {
+        "Austral.Pervasive::trappingMultiply"
+    };
+    let fid = declare_import(jit, symbol, 2)?;
+    let fref = jit.declare_func_in_func(fid, mgr.builder.func);
+    mgr.builder.ins().call(fref, &[a, b]);
+    mgr.emit_jump(ok_block);
+    mgr.switch_to_block(ok_block);
+    Ok(res)
+}
+
 pub struct CpsModule {
     pub name_map: HashMap<String, FuncId>,
     pub module_name: String,
@@ -353,7 +390,7 @@ fn emit_expr<M: Module>(
                 caller_name,
                 module_name,
             )?;
-            Ok(mgr.builder.ins().isub(a, b))
+            emit_trapping_arith(jit, mgr, a, b, '-')
         }
         0x10 => {
             let a = emit_expr(
@@ -577,7 +614,7 @@ fn emit_expr<M: Module>(
                 caller_name,
                 module_name,
             )?;
-            Ok(mgr.builder.ins().imul(a, b))
+            emit_trapping_arith(jit, mgr, a, b, '*')
         }
         0x19 => {
             let a = emit_expr(

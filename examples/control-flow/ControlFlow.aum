@@ -9,6 +9,7 @@
 --   cmp_gte  `x >= 100`             cmp_neq  `x != 0`
 --   or       `a or b`               not      `not a`
 --   while    the counting loop      add      the `for` loop's increment
+--   sub      `i - 1`                mul      `Scale`'s `x * k`
 --
 -- `add` is the subtle one: `+` in Austral source is not this opcode, it lowers to
 -- an `app` of `Austral.Pervasive::trappingAdd`, so the only emitter path to 0x05
@@ -52,6 +53,13 @@ module body Example.ControlFlow is
         return steps;
     end;
 
+    -- `-` is exercised above (`i - 1`); `*` needs a program of its own. Both
+    -- arrive at the emitter as `Austral.Pervasive::trappingMultiply`/
+    -- `::trappingSubtract` calls and become 0x18/0x06 in `Compiler_cps`.
+    function Scale(x: Int64, k: Int64): Int64 is
+        return x * k;
+    end;
+
     -- `MFor` carries the only `add` (0x05) the emitter can produce.
     function SumTo(n: Index): Int64 is
         var total: Int64 := 0;
@@ -69,6 +77,7 @@ module body Example.ControlFlow is
         Classify(0);
         CountDown(3);
         SumTo(4);
+        Scale(6, 7);
         if AtLeastHundred(50) and IsNonZero(1) then
             skip;
         end if;

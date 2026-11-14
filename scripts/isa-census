@@ -68,20 +68,26 @@ if [ "${#args[@]}" -eq 1 ] && [ -f "$ROOT/mm0/isa.mm0" ]; then
     exec "$BIN" --isa "$ROOT/mm0/isa.mm0" "${args[0]}"
 fi
 
-# The opcodes the current lowering cannot emit from any source program, with
-# the evidence for each (measured 2026-11-14, at 20 of 23 covered):
+# The opcodes the current lowering cannot emit from any source program. Empty
+# since 2026-11-14, when the last three were closed in the lowering rather than
+# in this list:
 #
-#   sub, mul  `lib/Compiler_cps.ml` constructs no `Sub`/`Mul`: `a - b` and
-#             `a * b` in Austral source lower to `app` calls of
-#             `Austral.Pervasive::trappingSubtract`/`trappingMultiply` (visible
-#             in any corpus `.cps`), so the opcodes are decodable IR, not
-#             emitted IR.
-#   match     `Mt.MCase` lowers to a chain of `CmpEq` + `If` over the tag slot
-#             (`Compiler_cps.ml`, the `MCase` arm), never to `Match`.
+#   sub, mul  `a - b` / `a * b` reach the emitter as calls to the Pervasive
+#             trapping methods; `Compiler_cps.trapping_arith_op` now emits
+#             `Sub`/`Mul` for those two callees. The JIT implements both with
+#             the methods' trap-on-overflow contract (`cps.rs`'s
+#             `emit_trapping_arith` branches to the registered symbol on
+#             overflow), so the instruction is a new encoding of the same
+#             semantics, not a new behaviour. `+` keeps its call deliberately.
+#   match     `Mt.MCase` lowers to `Match` (0x0A) instead of a `CmpEq` + `If`
+#             chain, so tag dispatch is one instruction.
 #
-# They stay declared in `mm0/isa.mm0` because the *decoder* accepts them and the
-# model describes the decoder; this list states what the *emitter* lacks.
-UNREACHABLE_OPCODES="sub mul match"
+# Keeping the opcodes declared in `mm0/isa.mm0` is still right — the model
+# describes the decoder, and the decoder always accepted them. This list is
+# about the *emitter*, and it is checked both ways: an opcode that becomes
+# emittable but stays pinned fails the gate, and so does one that stops being
+# emitted without a reason being written here.
+UNREACHABLE_OPCODES=""
 
 if [ "$corpus" -eq 1 ]; then
     tmp="$(mktemp -d)"

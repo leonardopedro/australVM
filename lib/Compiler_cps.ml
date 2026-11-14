@@ -132,6 +132,20 @@ let rec get_expr_type (expr: Mt.mexpr): mono_ty =
   | Mt.MArrayIndex (e, _, _) -> (match get_expr_type e with MonoPointer ty | MonoAddress ty | MonoSpan (ty, _) | MonoSpanMut (ty, _) -> ty | _ -> MonoUnit)
   | Mt.MSpanIndex (e, _, _) -> (match get_expr_type e with MonoPointer ty | MonoAddress ty | MonoSpan (ty, _) | MonoSpanMut (ty, _) -> ty | _ -> MonoUnit)
 
+(** `a - b` / `a * b` reach us as calls to the Pervasive trapping methods
+    (TypeCheckExpr.augment_arithmetic), and the JIT has had `sub`/`mul` opcodes
+    all along — unused, because a call was simpler. Emit the instruction now so
+    the arithmetic layer is measurable and refinable; the JIT implements both
+    opcodes with the same trap-on-overflow contract as the methods (`cps.rs`),
+    so this is not a semantic change. `+` deliberately keeps its call: 0x05
+    doubles as the `for`-loop increment, and leaving it alone keeps that path
+    unchanged. *)
+let trapping_arith_op (q: qident): [ `Sub | `Mul ] option =
+  let name = qident_to_string q in
+  if ends_with name "trappingSubtract" then Some `Sub
+  else if ends_with name "trappingMultiply" then Some `Mul
+  else None
+
 let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   match expr with
   | Mt.MNilConstant -> IntLit 0L
@@ -177,11 +191,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
            name (build_cps_function uses `ident_string name`) into a flat JIT
            function table, so the call must use the unqualified name too. The
            qualified debug name ("UnferKernel::wrapModel") would not resolve. *)
-        App (ident_string (original_name q), List.map convert_expr args)
+        (match trapping_arith_op q, args with
+         | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
+         | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
+         | _ -> App (ident_string (original_name q), List.map convert_expr args))
   | Mt.MGenericFuncall (id, args, _) ->
       App ("monomorph_" ^ show_mono_id id, List.map convert_expr args)
   | Mt.MConcreteMethodCall (_, q, args, _) ->
-      App (qident_to_string q, List.map convert_expr args)
+      (match trapping_arith_op q, args with
+       | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
+       | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
+       | _ -> App (qident_to_string q, List.map convert_expr args))
   | Mt.MGenericMethodCall (_, id, args, _) ->
       App ("method_" ^ show_mono_id id, List.map convert_expr args)
   | Mt.MFptrCall (id, args, _) ->
@@ -344,7 +364,6 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
                | None -> i)
           | _ -> i
         in
-        let tag_check = CmpEq (Var tag_name, IntLit (Int64.of_int tag_idx)) in
         (* Bind union fields: load from offsets 8, 16, ... *)
         let binding_stmts = List.mapi (fun j (Mtast.MonoBinding { rename; _ }) ->
           let offset = (j + 1) * 8 in
@@ -354,10 +373,15 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
         ) bindings in
         let body_stmt = convert_stmt body in
         let combined = List.fold_right (fun s acc -> Block (s, acc)) binding_stmts body_stmt in
-        If (tag_check, combined, Skip)
+        (Int64.of_int tag_idx, combined)
       ) whens in
-      let combined_cases = List.fold_right (fun s acc -> Block (s, acc)) case_stmts Skip in
-      Block (scrutinee_let, Block (tag_load, combined_cases))
+      (* 0x0A, not a chain of `If`s. The JIT's match instruction evaluates the
+         scrutinee once and dispatches on the tag, which is exactly what the
+         chain computed — but as one instruction the tag dispatch is visible to
+         the census and to the ISA model, instead of being a control-flow
+         pattern the lowering hid. The empty default branch reproduces the old
+         `Skip` for a tag no case names. *)
+      Block (scrutinee_let, Block (tag_load, Match (Var tag_name, case_stmts, Skip)))
   | Mt.MWhile (cond, body) ->
       While (convert_expr cond, convert_stmt body)
   | Mt.MFor (id, start_expr, end_expr, body) ->

@@ -4,8 +4,8 @@
 -- layer: CLIF
 -- measured-by: scripts/clif2mm0 --write, from
 --   safestos/cranelift/target/release/clif_dump over scripts/cps-corpus
--- clif-forms: 18
--- clif-instructions: 800
+-- clif-forms: 20
+-- clif-instructions: 853
 -- clif-types: i64,i8
 -- proves: 0 theorems
 --
@@ -41,21 +41,23 @@ term ty_i8: ty;
 term band__i64_i64__r_i64 (a b: val): op;   -- 12 use(s), 2 operand(s), 1 result(s)
 term bnot__i64__r_i64 (a: val): op;   -- 1 use(s), 1 operand(s), 1 result(s)
 term bor__i64_i64__r_i64 (a b: val): op;   -- 1 use(s), 2 operand(s), 1 result(s)
-term brif__i8__r_none (a: val): op;   -- 15 use(s), 1 operand(s), 0 result(s)
+term brif__i8__r_none (a: val): op;   -- 37 use(s), 1 operand(s), 0 result(s)
 term call__i64__r_i64 (a: val): op;   -- 35 use(s), 1 operand(s), 1 result(s)
-term call__i64_i64__r_i64 (a b: val): op;   -- 61 use(s), 2 operand(s), 1 result(s)
+term call__i64_i64__r_i64 (a b: val): op;   -- 63 use(s), 2 operand(s), 1 result(s)
 term call__i64_i64_i64__r_i64 (a b c: val): op;   -- 3 use(s), 3 operand(s), 1 result(s)
 term call__none__r_i64: op;   -- 1 use(s), 0 operand(s), 1 result(s)
 term iadd__i64_i64__r_i64 (a b: val): op;   -- 60 use(s), 2 operand(s), 1 result(s)
-term icmp__i64_i64__r_i8 (a b: val): op;   -- 42 use(s), 2 operand(s), 1 result(s)
-term iconst__none__r_i64: op;   -- 307 use(s), 0 operand(s), 1 result(s)
+term icmp__i64_i64__r_i8 (a b: val): op;   -- 37 use(s), 2 operand(s), 1 result(s)
+term iconst__none__r_i64: op;   -- 304 use(s), 0 operand(s), 1 result(s)
 term iconst__none__r_i8: op;   -- 13 use(s), 0 operand(s), 1 result(s)
-term jump__none__r_none: op;   -- 19 use(s), 0 operand(s), 0 result(s)
+term jump__none__r_none: op;   -- 38 use(s), 0 operand(s), 0 result(s)
 term load__i64__r_i64 (a: val): op;   -- 113 use(s), 1 operand(s), 1 result(s)
-term return__i64__r_none (a: val): op;   -- 40 use(s), 1 operand(s), 0 result(s)
+term return__i64__r_none (a: val): op;   -- 41 use(s), 1 operand(s), 0 result(s)
+term smul_overflow__i64_i64__r_i64_i8 (a b: val): op;   -- 10 use(s), 2 operand(s), 2 result(s)
+term ssub_overflow__i64_i64__r_i64_i8 (a b: val): op;   -- 12 use(s), 2 operand(s), 2 result(s)
 term store__i64_i64__r_none (a b: val): op;   -- 37 use(s), 2 operand(s), 0 result(s)
 term store__i8_i64__r_none (a b: val): op;   -- 13 use(s), 2 operand(s), 0 result(s)
-term uextend__i8__r_i64 (a: val): op;   -- 27 use(s), 1 operand(s), 1 result(s)
+term uextend__i8__r_i64 (a: val): op;   -- 22 use(s), 1 operand(s), 1 result(s)
 
 -- ── The step relation, and the obligation it does not discharge ──────
 --
@@ -75,10 +77,10 @@ term uextend__i8__r_i64 (a: val): op;   -- 27 use(s), 1 operand(s), 1 result(s)
 -- content and pinned by digest — the same four artifacts `mm0/isa.mm0`
 -- cites for `linear`/`typed`/`in_bounds`, plus the ISA model the CLIF
 -- step has to refine into:
--- cites: mm0/isa.mm0 sha256=b0aa23c611ea6a0b264e7c166a6a2632aeb4d438048a675cdd4b84687a08103c
+-- cites: mm0/isa.mm0 sha256=012db5170dd18054e9f7458dac0079f91516c9a5f0acd674c77203cec50859b6
 -- cites: mm0/linearity_certificate.mm0 sha256=9eedc905fd7cd093e40f17e6735a0ea7ee763485370661fa5e0ce59fb7b336bf
 -- cites: mm0/layout_certificate.mm0 sha256=20055174ee1e6942b9ef307737e44467f8eb338e67677f6427b4a0f450f6fa25
--- cites: mm0/flux1d_certificate.mm0 sha256=147c1fbb36edb66e24925001114d2711e513551b2b15c71004a11702c6b731d5
+-- cites: mm0/flux1d_certificate.mm0 sha256=4ae37ccd22c8e91a543965fc887101c9b18aeb1e41df944bb884175eac5aa476
 -- cites: mm0/slot_layout.mm0 sha256=67b61dc15a3b6bcc5bfe1da2a39edea08f0305e9c1978e1a9625cfa152a8965d
 --
 -- certificate: [gap] — `mm0/approved/` carries no approval for `isa`,
