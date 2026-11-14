@@ -1637,9 +1637,9 @@ class Deriver:
                 ax = f"ax_field_{len(self.field_ax)}"
                 self.add_axiom(
                     f"-- field {st['idx']} of {self.ex.name(st['typeName'])}: "
-                    f"taken from the constructor type\n"
-                    f"axiom {ax}: $ tfield {enc.enc(sty)} "
-                    f"{_nat_lit(st['idx'])} {enc.enc(fld)} $;"
+                    "taken from the constructor type\n",
+                    f"axiom {ax}: $ tfield ", ("enc", sty), " ",
+                    f"{_nat_lit(st['idx'])} ", ("enc", fld), " $;",
                 )
                 self.field_ax[key] = ax
             self.add_rule("ty_proj")
@@ -1668,7 +1668,8 @@ class Deriver:
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
-                    f"-- {nm}\naxiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.enc(ty)} $;"
+                    f"-- {nm}\naxiom {ax}: $ tty {ctx} ", ("enc", eid), " ",
+                    ("enc", ty), " $;",
                 )
                 self.const_ax[key] = ax
             self.add_rule("const type")
@@ -1682,7 +1683,8 @@ class Deriver:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
                     f"-- Nat literal {e['natVal']}\n"
-                    f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.sym('Nat')} $;"
+                    f"axiom {ax}: $ tty {ctx} ", ("enc", eid),
+                    f" {enc.sym('Nat')} $;",
                 )
                 self.const_ax[key] = ax
             self.add_rule("const type")
@@ -1696,7 +1698,8 @@ class Deriver:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
                     f"-- String literal {e['strVal']!r}\n"
-                    f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.sym('String')} $;"
+                    f"axiom {ax}: $ tty {ctx} ", ("enc", eid),
+                    f" {enc.sym('String')} $;",
                 )
                 self.const_ax[key] = ax
             self.add_rule("const type")
@@ -1806,8 +1809,9 @@ class Deriver:
         ctx = self.ctx_str(env)
         ax = f"ax_leaf_{len(self.leaf_ax)}"
         self.add_axiom(
-            "-- applied through a definitional unfolding (no rule in the fragment)\n"
-            f"axiom {ax}: $ tty {ctx} {self.enc.enc(eid)} {self.enc.enc(expected)} $;"
+            "-- applied through a definitional unfolding (no rule in the fragment)\n",
+            f"axiom {ax}: $ tty {ctx} ", ("enc", eid), " ",
+            ("enc", expected), " $;",
         )
         self.leaf_ax.append(ax)
         self.oblig.append(ax)
@@ -1853,8 +1857,9 @@ class Deriver:
             ctx = self.ctx_str(env)
             ax = f"ax_type_{self.ax_count}"
             self.add_axiom(
-                f"-- a type used as a term (Π/sort): no rule in the fragment\n"
-                f"axiom {ax}: $ tty {ctx} {enc.enc(eid)} {enc.enc(expected)} $;"
+                "-- a type used as a term (Π/sort): no rule in the fragment\n",
+                f"axiom {ax}: $ tty {ctx} ", ("enc", eid), " ",
+                ("enc", expected), " $;",
             )
             self.oblig.append(ax)
             self.add_rule("type-as-term (assumed)")
@@ -1912,9 +1917,9 @@ class Deriver:
         self.add_axiom(
             ("-- conversion between universe levels (not stratified in this "
              "theory)\n" if both_sorts else
-             f"-- conversion: inferred {enc.enc(got)[:80]} vs expected "
-             f"{enc.enc(want)[:80]}\n")
-            + f"axiom {ax}: $ tdefeq {enc.enc(got)} {enc.enc(want)} $;"
+             f"-- conversion: inferred {enc.head(got, 80)} vs expected "
+             f"{enc.head(want, 80)}\n"),
+            f"axiom {ax}: $ tdefeq ", ("enc", got), " ", ("enc", want), " $;",
         )
         self.oblig.append(ax)
         self.add_rule("ty_deq (universe level)" if both_sorts else "ty_deq")

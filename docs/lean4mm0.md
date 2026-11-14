@@ -2977,8 +2977,33 @@ one run at a time; [`round4.tsv`](data/lean4mm0/round4.tsv)):
 
 The row now sits at 2.2 GB for the whole derivation, with the 10 GiB cap never
 approached, and it does not finish within 1 200 s — which is a different problem
-from the one it had, and the one a longer clock tests. It is running with 7 200 s
-while this is written.
+from the one it had, and the one a longer clock tests.
+
+**The 2-hour run found the last joined string.** It died at t=1 673.7 s with
+3 722 MB resident and a `MemoryError` in `add_axiom`, not in the encoder: six
+axiom sites (`ax_field`, `ax_const` for a constant and for a literal,
+`ax_leaf`, `ax_type`, and `ax_deq`) still built their line by putting two full
+term texts into one f-string. At that point the two texts were large enough that
+the single allocation for their join, with the copies the f-string makes, was
+about 4.5 GB — the cap was 7 GB away and the allocation still did not fit. All
+six now hand `add_axiom` pieces, so no axiom line on this row is a string:
+the largest is **8 254 713 455 B** and it streams.
+
+Byte identity was re-checked after this change on both rows already in the table
+and on a third that exercises the converted sites heavily —
+`FockPairPerturbation.abs_re_inner_pairVec_le`, `.mm0` 1 041 771 375 B /
+`.mm1` 1 075 343 397 B / `.jsonl` 1 012 915 095 B — every file `cmp`-equal to
+the previous emitter's output.
+
+**With pieces everywhere, the row runs out a 7 200 s clock instead of dying:**
+2 082 MB resident at the end (peak 3 985 MB, which is the startup of the export
+index, not the derivation), **125 408 rules · 24 388 assumptions · 24 035
+obligations**, 8.1 GB of artifacts on disk. It is not close to finishing at two
+hours: past t≈3 170 s the derivation is deep in a subtree where it adds a
+handful of rules a minute, so the honest statement is that this row's *memory*
+problem is solved (2.1 GB under a 10 GiB cap, from a row that used to die in the
+first 31 s) and its *time* problem is now visible for the first time, at a scale
+the two-hour clock does not bound.
 
 **`dense_range_add_relBounded` does not need a clock, it needs memory.** §13.28
 left it unfinished at its 5 400 s clock (7 845 MB, 522 000 obligations), which
