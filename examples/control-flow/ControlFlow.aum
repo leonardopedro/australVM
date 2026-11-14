@@ -1,0 +1,80 @@
+-- ControlFlow — the measurement example for W9's opcode/CLIF census.
+--
+-- It exists because the other examples leave eight declared opcodes unexercised,
+-- and a corpus that never emits an instruction cannot say anything about how it
+-- is lowered. Every construction here is chosen for the *opcode* it produces
+-- (scripts/isa-census --corpus), not for what the program means:
+--
+--   cmp_gt   `x > 10`                cmp_lte  `x <= 0`
+--   cmp_gte  `x >= 100`             cmp_neq  `x != 0`
+--   or       `a or b`               not      `not a`
+--   while    the counting loop      add      the `for` loop's increment
+--
+-- `add` is the subtle one: `+` in Austral source is not this opcode, it lowers to
+-- an `app` of `Austral.Pervasive::trappingAdd`, so the only emitter path to 0x05
+-- is the increment `MFor` generates. That is why the `for` loop is here rather
+-- than another `total + i`.
+module body Example.ControlFlow is
+    function Classify(x: Int64): Int64 is
+        if x > 10 then
+            return 2;
+        else if x <= 0 then
+            return 0;
+        else
+            return 1;
+        end if;
+    end;
+
+    function AtLeastHundred(x: Int64): Bool is
+        return x >= 100;
+    end;
+
+    function IsNonZero(x: Int64): Bool is
+        return x /= 0;
+    end;
+
+    function EitherOf(a: Bool, b: Bool): Bool is
+        return a or b;
+    end;
+
+    function Invert(a: Bool): Bool is
+        return not a;
+    end;
+
+    -- `while` with a `>` guard: 0x09 and 0x11 in one loop.
+    function CountDown(n: Int64): Int64 is
+        var i: Int64 := n;
+        var steps: Int64 := 0;
+        while i > 0 do
+            steps := steps + 1;
+            i := i - 1;
+        end while;
+        return steps;
+    end;
+
+    -- `MFor` carries the only `add` (0x05) the emitter can produce.
+    function SumTo(n: Index): Int64 is
+        var total: Int64 := 0;
+        for i from 0 to n do
+            total := total + 1;
+        end for;
+        return total;
+    end;
+
+    -- No printing: `printLn` lowers to `Austral.Pervasive::print`, which the
+    -- JIT does not register, and this example is compiled for its CPS, not run.
+    -- A call in statement position is the idiom for `fib`'s `Fibonacci(30);`.
+    function main(): ExitCode is
+        Classify(20);
+        Classify(0);
+        CountDown(3);
+        SumTo(4);
+        if AtLeastHundred(50) and IsNonZero(1) then
+            skip;
+        end if;
+        if EitherOf(false, Invert(false)) then
+            skip;
+        end if;
+        return ExitSuccess();
+    end;
+end module body.

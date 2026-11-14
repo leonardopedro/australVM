@@ -19,9 +19,13 @@
 # scratch directory and the union is censused. The list itself is
 # `scripts/cps-corpus`, shared with `scripts/clif2mm0` so that the two layers
 # measure the same modules. Modules the JIT cannot compile
-# today (`hello-world`, `memory`: the `__embed` string path) are excluded, and
-# the union line reports how many opcodes the corpus still never exercises
-# rather than implying the subset is fully exercised.
+# today (`hello-world`, `memory`: the `__embed` string path) are excluded.
+#
+# The union is *checked*, not merely printed: the opcodes left unexercised must
+# be exactly UNREACHABLE below, so "20 of 23" is a measurement with a reason
+# rather than a shortfall. An opcode that starts being emitted (a lowering gain)
+# fails this gate until the pin shrinks — which is the point, because a stale
+# `unreachable` list is how a model quietly stops covering the emitter.
 #
 # `examples/kernel` is in the corpus because a module that calls the kernel is
 # not just another example: `uk_version` is an `app` (0x04) whose callee is an
@@ -64,6 +68,21 @@ if [ "${#args[@]}" -eq 1 ] && [ -f "$ROOT/mm0/isa.mm0" ]; then
     exec "$BIN" --isa "$ROOT/mm0/isa.mm0" "${args[0]}"
 fi
 
+# The opcodes the current lowering cannot emit from any source program, with
+# the evidence for each (measured 2026-11-14, at 20 of 23 covered):
+#
+#   sub, mul  `lib/Compiler_cps.ml` constructs no `Sub`/`Mul`: `a - b` and
+#             `a * b` in Austral source lower to `app` calls of
+#             `Austral.Pervasive::trappingSubtract`/`trappingMultiply` (visible
+#             in any corpus `.cps`), so the opcodes are decodable IR, not
+#             emitted IR.
+#   match     `Mt.MCase` lowers to a chain of `CmpEq` + `If` over the tag slot
+#             (`Compiler_cps.ml`, the `MCase` arm), never to `Match`.
+#
+# They stay declared in `mm0/isa.mm0` because the *decoder* accepts them and the
+# model describes the decoder; this list states what the *emitter* lacks.
+UNREACHABLE_OPCODES="sub mul match"
+
 if [ "$corpus" -eq 1 ]; then
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
@@ -82,7 +101,42 @@ if [ "$corpus" -eq 1 ]; then
         echo "isa-census: [gap] the corpus compiled no module" >&2
         exit 2
     fi
-    exec "$BIN" --isa "$ROOT/mm0/isa.mm0" --allow-all "${cps_files[@]}"
+    # Not `exec`: the report has to be inspected before this script's own
+    # verdict is known. Capture, print verbatim, keep the binary's status.
+    report="$("$BIN" --isa "$ROOT/mm0/isa.mm0" --allow-all "${cps_files[@]}")"
+    status=$?
+    printf '%s\n' "$report"
+    [ "$status" -eq 0 ] || exit "$status"
+
+    # The unexercised set, from the binary's own line. Empty when the corpus
+    # reaches everything, which is then compared against the pin like any other
+    # mismatch — an empty-but-undeclared coverage is still a change to record.
+    uncovered="$(printf '%s\n' "$report" \
+        | sed -n 's/.*declared but not used here[^:]*: //p' \
+        | tr ',' '\n' \
+        | sed 's/^ *0x[0-9a-f][0-9a-f]* */ /; s/^ *//; s/ *$//' \
+        | grep -v '^$' \
+        | sort -u)"
+    expected="$(printf '%s\n' $UNREACHABLE_OPCODES | sort -u)"
+    if [ "$uncovered" != "$expected" ]; then
+        echo "isa-census: FAIL the unexercised opcode set is not the pinned one" >&2
+        echo "  pinned unreachable: $(printf '%s ' $expected)" >&2
+        echo "  actually uncovered:  $(printf '%s ' $uncovered)" >&2
+        if [ -n "$uncovered" ]; then
+            for op in $uncovered; do
+                printf '%s\n' "$expected" | grep -qx "$op" \
+                    || echo "  $op is uncovered and not declared unreachable:" \
+                            "measure a program that emits it, or say why in UNREACHABLE_OPCODES" >&2
+            done
+        fi
+        for op in $expected; do
+            printf '%s\n' "$uncovered" | grep -qx "$op" \
+                || echo "  $op is in the unreachable pin but the corpus now emits it:" \
+                        "shrink UNREACHABLE_OPCODES to $(printf '%s ' $(printf '%s\n' "$uncovered"))" >&2
+        done
+        exit 1
+    fi
+    exit 0
 fi
 
 exec "$BIN" --isa "$ROOT/mm0/isa.mm0" ${args[@]+"${args[@]}"}

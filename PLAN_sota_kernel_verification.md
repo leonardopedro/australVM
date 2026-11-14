@@ -1174,11 +1174,28 @@ argument list and the type tuple in the name:
 term iadd__i64_i64__r_i64 (a b: val): op;   -- 58 use(s), 2 operand(s), 1 result(s)
 ```
 
-Measured: **14 forms, 645 instructions over 9 modules** (`i64`/`i8` only;
-`iconst`, `iadd`, `band`, `icmp`, `uextend`, `load`, `store`, `call` at four
-arities, `brif`, `jump`, `return`). 14 is fewer than the 23 opcodes on purpose:
-the CLIF layer is coarser (`call` covers `app`; `load`/`store` are the memory
-path) and the mapping between the two layers is W9.3's job, not a name match.
+Measured: **18 forms, 800 instructions over 12 modules** (`i64`/`i8` only;
+`iconst`, `iadd`, `band`, `bor`, `bnot`, `icmp`, `uextend`, `load`, `store`,
+`call` at four arities, `brif`, `jump`, `return`). 18 is fewer than the 23
+opcodes on purpose: the CLIF layer is coarser (`call` covers `app`; `load`/`store`
+are the memory path) and the mapping between the two layers is W9.3's job, not a
+name match.
+
+**Corpus coverage is now a pinned set, not a shortfall.** The corpus grew on
+2026-11-14 from 9 to 12 modules: `examples/control-flow` exists only to drive the
+eight opcodes the other examples never emitted (`while`, `cmp_gt`, `cmp_lte`,
+`cmp_gte`, `cmp_neq`, `or`, `not`, and the `for`-loop `add`), and
+`examples/generic-record` + `examples/ffi` contribute `string_lit`. The union is
+**20 of 23 opcodes** (914 reads), and `scripts/isa-census` now *checks* that the
+three unexercised ones are exactly its `UNREACHABLE_OPCODES` pin (`sub`, `mul`,
+`match`), failing in both directions: an opcode that becomes covered must shrink
+the pin, and one that becomes uncovered must be measured or explained. The pin's
+evidence is in the lowering, not in taste — `a - b` and `a * b` lower to `app`
+calls of `Austral.Pervasive::trappingSubtract`/`trappingMultiply`, and `case`
+lowers to a `CmpEq` + `If` chain, so `Sub`/`Mul`/`Match` are decodable IR with no
+producer in `lib/Compiler_cps.ml` (measured 2026-11-14; the negative control —
+pinning only `sub mul` — fails with `match is uncovered and not declared
+unreachable`).
 
 What is checked on every `verify-invariants` run: `mm0-rs` compiles
 `mm0/clif.mm1` and `mm0-c` checks the committed declarations against it (a
@@ -1189,15 +1206,49 @@ re-runs the measurement and diffs the file (a form the lowering starts or stops
 emitting is a diff, not stale prose), with a negative control that appends a
 form the lowering never emits and requires the check to fail.
 
-What it still is **not**: a semantics. `clif_step` and the CLIF→ISA refinement
-are W9.3 and remain `[gap]`. The object digest no longer stands alone — it now
-has a companion that says what instructions the bytes were made of — but
-"shape matches" is not "semantics refines", and the plan keeps them apart.
+What it still is **not**: a semantics. The CLIF→ISA refinement is W9.3 and
+remains unproved. The object digest no longer stands alone — it now has a
+companion that says what instructions the bytes were made of, and (since
+2026-11-14) the *name* of the step relation the refinement has to be about — but
+"shape matches" is not "semantics refines", and the plan keeps them apart: the
+step relation is vocabulary without a definition, and no theorem mentions it.
 
 ### W9.3 Refinement: CLIF step → ISA step, reusing the certificates
 
 The proof obligation is `step_clif_refines : clif_step s = isa_step (lower s)`
 for the emitted subset, with the layer-1 facts entering as hypotheses:
+
+**Status 2026-11-14 — stated, cited, and refusal-tested; not proved.**
+`mm0/clif.mm0` now declares the relation and nothing more:
+
+```
+sort St;                        -- a machine state: registers + memory, uninterpreted
+term clif_step (s: St) (o: op) (t: St): Prop;
+```
+
+`mm0-c` accepts it as `5 sorts, 21 term/def, 0 ax/thm` — the relation is a
+*symbol*, not an axiom: a `term …: Prop` says the vocabulary exists, an `axiom`
+would say the relation holds, and only the latter is a claim. The obligation
+itself is written where the file's reader will see it (`clif_step s o t ⇒
+isa_step (lower o) s t`), with the layer-1 artifacts it may draw on cited by
+pinned digest — `mm0/isa.mm0` plus the same four certificates `isa.mm0` cites
+(`linearity`, `layout`, `flux1d`, `slot_layout`).
+
+What is **certified** is nothing, and the file says so: `-- certificate: [gap]`
+because `mm0/approved/` has no `isa` approval. That is not modesty, it is the
+approval rule — a certificate is an owner commit, so this layer cannot mint one
+for itself. The state is enforced in four places rather than described:
+`verify-invariants` fails the artifact if an `axiom`/`theorem` appears in it, if
+any `-- cites:` digest stops matching the file it names, if the obligation line
+or the `clif_step` declaration disappears, or if `mm0/approved/isa.stmts`
+exists while the file still claims `[gap]` (then the citation and the proof must
+arrive together). Each was mutation-tested: adding `axiom mischief …` and
+touching `mm0/approved/isa.stmts` turns them red (measured 2026-11-14: `101
+passed, 5 failed` — the three above plus, by construction, mm0-c's acceptance
+and the drift check, since the mutated file is no longer what the generator
+emits), and the tree is restored afterwards.
+
+The remaining work is exactly what it was, now with a place to put it:
 
 - `linear s`, `typed s` and `in_bounds s i` are already the vocabulary of
   `isa.mm0`, and `slot_layout.mm0` is the pattern for making one of them
@@ -1234,7 +1285,7 @@ for the emitted subset, with the layer-1 facts entering as hypotheses:
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00` |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 9-module corpus (**14 forms, 645 instructions**), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; W9.1 (external ISA conversion) and W9.3 (CLIF→ISA refinement) are still `[gap]`; the direction and its non-goals are recorded in §4b |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**18 forms, 800 instructions**, and 20 of 23 CPS opcodes with the other three pinned unreachable), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; W9.1 (external ISA conversion) is still `[gap]` (toolchain now provisioned — `nix develop .#lean` — no model pinned yet), and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact

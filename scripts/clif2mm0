@@ -23,7 +23,15 @@ output, and it proves nothing: `-- proves: 0 theorems` is part of the header and
 specification without a proof — `mm0-c` prints "expecting a theorem" — so a
 theorem added here later must arrive with its proof in `mm0/clif.mm1`, which is
 the right pressure: W9.3's `clif_step`/refinement belongs to a layer that can
-state semantics, and this layer deliberately only states shapes. Both halves are
+state semantics, and this layer deliberately only states shapes.
+
+The one thing it adds beyond shapes is W9.3's *vocabulary*: `sort St` and
+`term clif_step (s: St) (o: op) (t: St): Prop` — a relation symbol, with no
+`axiom` and no theorem attached, so the obligation `clif_step s o t ⇒
+isa_step (lower o) s t` can be written down without being claimed. The cited
+artifacts are pinned by digest at generation time and the certification state is
+`[gap]`; both are checked by `scripts/verify-invariants` rather than trusted to
+this comment. Both halves are
 checked: `mm0-rs` compiles `clif.mm1`, `mm0-c` checks the declarations against
 that compiled artifact (a mismatch is refused), and `scripts/clif2mm0` refuses
 a committed file that a fresh measurement of the corpus no longer reproduces.
@@ -36,6 +44,7 @@ Usage:
 Exit: 0 current/emitted, 1 drift, 2 could not run (reported as `[gap]` upstream).
 """
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -46,6 +55,25 @@ MODEL = os.path.join(ROOT, "mm0", "clif.mm0")
 PROOF = os.path.join(ROOT, "mm0", "clif.mm1")
 BIN = os.path.join(ROOT, "safestos", "cranelift", "target", "release", "clif_dump")
 CORPUS = os.path.join(ROOT, "scripts", "cps-corpus")
+
+
+# The artifacts the refinement may cite: the ISA model plus the layer-1
+# certificates it draws `linear`/`typed`/`in_bounds` from. Digests are computed
+# at generation time, so a certificate edit makes this file drift — which is the
+# intended pressure: the citation is to *content*, not to a path that may have
+# been rewritten underneath it.
+CITES = [
+    "mm0/isa.mm0",
+    "mm0/linearity_certificate.mm0",
+    "mm0/layout_certificate.mm0",
+    "mm0/flux1d_certificate.mm0",
+    "mm0/slot_layout.mm0",
+]
+
+
+def sha256_of(rel):
+    with open(os.path.join(ROOT, rel), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 def die_gap(msg):
@@ -140,6 +168,7 @@ def render(forms, instructions):
     out.append("-- blocks and are not values, so `brif` here takes one operand. That is")
     out.append("-- the measurement, not a simplification.")
     out.append("")
+    out.append("provable sort Prop;")
     out.append("sort val;                       -- an SSA value in a function")
     out.append("sort ty;                        -- a CLIF value type")
     out.append("sort op;                        -- an emitted instruction form")
@@ -159,6 +188,36 @@ def render(forms, instructions):
             f"   -- {forms[(mnemonic, args, results)]} use(s),"
             f" {len(args)} operand(s), {len(results)} result(s)"
         )
+    out.append("")
+    out.append("-- ── The step relation, and the obligation it does not discharge ──────")
+    out.append("--")
+    out.append("-- W9.3's obligation, stated exactly (PLAN §4b):")
+    out.append("--")
+    out.append("--     clif_step s o s'  ⇒  isa_step (lower o) s s'")
+    out.append("--")
+    out.append("-- `clif_step` is a *relation symbol*, declared so the obligation has a")
+    out.append("-- vocabulary to be written in, and nothing asserts it: there is no")
+    out.append("-- `axiom clif_step …` here and no theorem about it in the `.mm1`. The")
+    out.append("-- distinction is the whole point of the layer — a specification may name")
+    out.append("-- a relation it has not defined, but a certificate may not claim one it")
+    out.append("-- has not proved. `scripts/verify-invariants` refuses any `axiom` or")
+    out.append("-- `theorem` in this file, so the relation cannot quietly become either.")
+    out.append("--")
+    out.append("-- What the refinement *may* assume is the layer-1 vocabulary, cited by")
+    out.append("-- content and pinned by digest — the same four artifacts `mm0/isa.mm0`")
+    out.append("-- cites for `linear`/`typed`/`in_bounds`, plus the ISA model the CLIF")
+    out.append("-- step has to refine into:")
+    for rel in CITES:
+        out.append(f"-- cites: {rel} sha256={sha256_of(rel)}")
+    out.append("--")
+    out.append("-- certificate: [gap] — `mm0/approved/` carries no approval for `isa`,")
+    out.append("--   and an approval is the owner's commit, not a script's. So the")
+    out.append("--   obligation is stated with citations and left uncertified on purpose;")
+    out.append("--   `scripts/verify-invariants` fails this gap if `mm0/approved/isa.stmts`")
+    out.append("--   appears, because then the citation must name it and a proof must")
+    out.append("--   arrive with it. Nothing here is pinned as `approved` by itself.")
+    out.append("sort St;                        -- a machine state: registers + memory, uninterpreted")
+    out.append("term clif_step (s: St) (o: op) (t: St): Prop;")
     out.append("")
     return "\n".join(out)
 

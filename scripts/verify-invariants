@@ -555,6 +555,59 @@ PY
             gap "W9: mm0/clif.mm0 not re-checked (no mm0 toolchain)"
         fi
 
+        # W9.3: the obligation is *stated*, and certification is refused
+        # mechanically. `mm0/clif.mm0` names the relation (`term clif_step …:
+        # Prop`) and must not assert it — an `axiom` there would be an
+        # unproved claim dressed as vocabulary, and a `theorem` cannot exist
+        # without its proof in the .mm1 anyway. The certificate line is the
+        # owner's decision to make, so the file may say `[gap]` only while
+        # `mm0/approved/` has no `isa` approval; once the approval lands, the
+        # gap line must be replaced by a citation and a proof, and this fails
+        # until it is. That is the difference between stating an obligation and
+        # certifying it, enforced rather than described.
+        _clif="$repo_root/mm0/clif.mm0"
+        if grep -q '^term clif_step ' "$_clif" \
+                && grep -q 'clif_step s o' "$_clif" \
+                && ! grep -qE '^(axiom|theorem) ' "$_clif"; then
+            check "W9.3: clif_step is vocabulary — declared, stated, never axiomatized" true
+        else
+            check "W9.3: clif_step is vocabulary — declared, stated, never axiomatized" false
+        fi
+        # Every pinned citation must still describe the file it names. A digest
+        # is not a proof of relevance, but a stale one means the obligation is
+        # citing content that has since been rewritten.
+        sed -n 's/^-- cites: \([^ ]*\) sha256=\([0-9a-f]\{64\}\)$/\1 \2/p' \
+            "$_clif" > "$_cert_tmp/clif-cites.txt"
+        _cite_bad=""
+        _cite_n=0
+        while read -r _cite_path _cite_pin; do
+            [ -n "$_cite_path" ] || continue
+            _cite_n=$((_cite_n + 1))
+            _cite_actual="$(sha256sum "$repo_root/$_cite_path" 2>/dev/null | cut -d' ' -f1)"
+            [ "$_cite_actual" = "$_cite_pin" ] || _cite_bad="$_cite_bad $_cite_path"
+        done < "$_cert_tmp/clif-cites.txt"
+        if [ "$_cite_n" -ge 5 ] && [ -z "$_cite_bad" ]; then
+            check "W9.3: the refinement's citations still match their artifacts ($_cite_n pinned)" true
+        else
+            echo "  [detail] stale citations:${_cite_bad:- none} of $_cite_n (expected >= 5)" >&2
+            check "W9.3: the refinement's citations still match their artifacts" false
+        fi
+        if [ -e "$repo_root/mm0/approved/isa.stmts" ]; then
+            if grep -q '^-- certificate: \[gap\]' "$_clif"; then
+                echo "  [detail] mm0/approved/isa.stmts exists — clif.mm0 must cite it, not a gap" >&2
+                check "W9.3: certification state matches mm0/approved/" false
+            else
+                check "W9.3: certification state matches mm0/approved/" true
+            fi
+        else
+            if grep -q '^-- certificate: \[gap\]' "$_clif"; then
+                check "W9.3: certification state matches mm0/approved/" true
+            else
+                echo "  [detail] no isa approval, yet clif.mm0 does not say [gap]" >&2
+                check "W9.3: certification state matches mm0/approved/" false
+            fi
+        fi
+
         _clif_dump="$repo_root/safestos/cranelift/target/release/clif_dump"
         if [ -x "$_clif_dump" ] && command -v python3 >/dev/null 2>&1; then
             if python3 "$repo_root/scripts/clif2mm0" >"$_cert_tmp/clif2mm0.log" 2>&1; then

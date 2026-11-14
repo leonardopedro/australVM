@@ -56,6 +56,14 @@ entries=(
     "identity:Example.Identity"
     "kernel:TestKernel:UnferKernel.aui,UnferKernel.aum TestKernel.aum"
     "memory-ops:Example.MemoryOps"
+    # W9.2 coverage entries: these three are in the corpus for the opcodes only
+    # *they* emit, not for what they compute. `control-flow` is the deliberate
+    # one (`while`, `cmp_gt`/`cmp_lte`/`cmp_gte`/`cmp_neq`, `or`, `not`, and the
+    # `for`-loop `add`); `generic-record` and `ffi` are the two remaining
+    # examples that compile on the CPS path and they contribute `string_lit`.
+    "control-flow:Example.ControlFlow"
+    "generic-record:Example.GenericRecord"
+    "ffi:Example.FFI"
 )
 
 for entry in "${entries[@]}"; do

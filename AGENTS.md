@@ -114,6 +114,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   theorems`, pinned); a theorem there needs a proof in `mm0/clif.mm1`. The
   corpus it measures is `scripts/cps-corpus`, shared with `scripts/isa-census`
   so the opcode layer and the CLIF layer cannot measure different modules.
+  Since 2026-11-14 the file also declares W9.3's step *vocabulary* — `sort St;`
+  and `term clif_step (s: St) (o: op) (t: St): Prop;` — and states the
+  obligation `clif_step s o t ⇒ isa_step (lower o) s t` with five pinned
+  `-- cites:` digests and `-- certificate: [gap]`. It must contain no `axiom`
+  and no `theorem`: `verify-invariants` fails if either appears, and also fails
+  the `[gap]` line once `mm0/approved/isa.stmts` exists (the owner's approval
+  is what turns a stated obligation into a cited one).
 - `scripts/check-todo-ledger` — code files (`*.rs`/`*.sh`/`*.py`/`*.toml`)
   carry no `TODO`/`FIXME`/`HACK`/`XXX` marker unless the file is reviewed in
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
@@ -130,7 +137,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `-- op 0xNN` table in `mm0/isa.mm0`, and what the module actually read; exits
   1 on any uncovered or overstated opcode. `--corpus` compiles the example
   modules whose CPS path produces a function and censuses the union (one module
-  only measures one kernel). `scripts/isa-hypotheses <isa.mm0>` refuses a
+  only measures one kernel), and requires the opcodes left unexercised to be
+  exactly its `UNREACHABLE_OPCODES` pin (`sub`, `mul`, `match`) — they are
+  decodable IR with no producer in `lib/Compiler_cps.ml`, since `a - b`/`a * b`
+  lower to `app`s of `Austral.Pervasive::trappingSubtract`/`trappingMultiply`,
+  which makes "20 of 23" a reason rather than a shortfall. An opcode that
+  becomes emitted shrinks the pin; one that becomes uncovered fails the census. `scripts/isa-hypotheses <isa.mm0>` refuses a
   `-- gap-hypothesis:` whose `-- cites:` sha256 pin is stale or missing, and
   classifies each one by content: `content-checked` only when every term/sort
   the hypothesis mentions is declared by a cited artifact. `bounds_from_layout`
