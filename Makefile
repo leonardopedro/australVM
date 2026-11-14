@@ -56,9 +56,17 @@ $(BIN): $(SRC) | check-bridge-fresh
 # Builds the Rust cranelift bridge, redeploys the .so, and rebuilds the
 # OCaml binary. Run after touching safestos/cranelift/src/*.rs or after
 # pulling a new unfer commit (the bridge statically links unfer_ffi).
+#
+# `--offline` because a plain build first refreshes the crates.io index, and
+# on this host that fetch never completes: the build prints nothing for tens
+# of minutes (it looks like linking, since output is buffered) and eventually
+# dies, while the same build offline finishes in ~7 min. Every dependency is
+# either in the cargo cache or a path dep into ../unfer, so the network is not
+# needed; if a *new* crate is ever added, run `make bridge CARGO_FLAGS=` once.
+CARGO_FLAGS ?= --offline
 .PHONY: bridge
 bridge: lib/BuiltInModules.ml
-	cargo build --release --manifest-path safestos/cranelift/Cargo.toml
+	cargo build --release $(CARGO_FLAGS) --manifest-path safestos/cranelift/Cargo.toml
 	AUSTRAL_BRIDGE_DIR=$(CURDIR)/$(BRIDGE_CARGO_DIR) dune build lib/ bin/
 	cp _build/default/bin/austral.exe $(BIN)
 	@echo "--- Bridge rebuilt: $(CURDIR)/$(BRIDGE_CARGO_DIR)/libaustral_cranelift_bridge.so"
