@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 117 passed, 4 explained gap(s), 0 failed
+verify-invariants: 118 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -326,8 +326,9 @@ verify-invariants: 117 passed, 4 explained gap(s), 0 failed
   [gap]  W3: store_projection has no approved statements (owner commit)
   [gap]  W3: store_projection_toy has no approved statements (owner commit)
 w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(44 stmt)
+  [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 116 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
+verify-invariants: 117 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -709,21 +710,28 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[gap]`, awaiting owner commit; the claim itself stays `[gap]` (§W9.3) |
   | `mm0/store_projection_toy.mm0` | the toy model's 15 theorem *statements* and its 13 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 44 | none — compile+check is the gate | `[gap]`, awaiting owner commit |
 
-  The `stmts` column is measured, not remembered: `verify-invariants` runs
-  `mm0-comparator approve --dry-run` for every unapproved artifact and prints one
-  `w3-pending:` line, so the table is cross-checked by
+  The `stmts` column is **checked**, not remembered. `verify-invariants` runs
+  `mm0-comparator approve --dry-run` for every unapproved artifact, prints one
+  `w3-pending:` line …
 
   ```
   $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants \
-      | grep '^w3-pending:'
+      | grep -E '^w3-pending:|the plan.s §W3'
   w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(44 stmt)
+  [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   ```
 
-  (measured 2026-11-15; the entries are in the table's row order). A row whose
-  number disagrees with this line is stale, and the fix is to read the line, not
-  to re-derive the count by hand. The same counts via the owner's route
-  (`approve --approved-root /tmp/appr2 …` then `check --approved-root /tmp/appr2
-  …`) gave `4 approved, 0 gap(s)`. The flow needs no hand-written files from the
+  … and then parses this table and diffs the two. Disagreement fails the gate in
+  both directions, naming the row: a cell that no longer matches the file
+  (`isa(table says 192, file says 193)`) and a row left behind for an artifact
+  that is *not* pending here (`flux1d_certificate(row left behind for an artifact
+  that is not pending here)`) — the second is what happens after an approval
+  lands and the row is forgotten, and its count would then be checking nothing.
+  Measured 2026-11-15 by perturbing both at once: `1 failed`, with exactly those
+  two messages. The entries are in the table's row order; the fix for a stale
+  cell is to read the `w3-pending:` line, not to re-derive the count by hand. The
+  same counts via the owner's route (`approve --approved-root /tmp/appr2 …` then
+  `check --approved-root /tmp/appr2 …`) gave `4 approved, 0 gap(s)`. The flow needs no hand-written files from the
   owner: approve into a scratch root, `check` against it, read the statements
   (`approve --dry-run <artifact>` prints exactly those), then commit
   `mm0/approved/<artifact>.stmts` — a commit touching only `mm0/approved/`.

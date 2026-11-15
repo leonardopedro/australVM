@@ -981,6 +981,7 @@ check_py "W2: au2mm0 decides Flux1d's four obligations (both routes agree, hypot
 # rather than indistinguishable from "it was checked".
 if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     _w3_line=""
+    _w3_pairs=""
     for _art in "$repo_root"/mm0/*.mm0; do
         [ -e "$_art" ] || continue
         _stem="$(basename "$_art" .mm0)"
@@ -1028,10 +1029,57 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
                 [ -n "$_w3_n" ] || _w3_n="unmeasurable"
             fi
             _w3_line="$_w3_line $_stem($_w3_n stmt)"
+            case "$_w3_n" in
+                ''|*[!0-9]*) ;;  # unmeasurable here: no number to compare
+                *) _w3_pairs="$_w3_pairs $_stem=$_w3_n" ;;
+            esac
         fi
     done
     if [ -n "$_w3_line" ]; then
         echo "w3-pending:$_w3_line"
+    fi
+    # … and the plan's §W3 table states the same numbers in its `stmts` column,
+    # which is where a reader gets them. Compare, don't trust: every row for an
+    # artifact still unapproved must carry the measured count, and a row left
+    # behind for an approved artifact is stale the other way (its approval is
+    # checked by the statement diff, so the row no longer has a job). A table
+    # cell is the kind of copied number that is right the day it is written.
+    _plan_file="$repo_root/PLAN_sota_kernel_verification.md"
+    _w3_plan="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $4
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            if (cell ~ /^[0-9]+$/) print path "=" cell
+        }' "$_plan_file")"
+    _w3_bad=""
+    _w3_rows=0
+    for _pair in $_w3_pairs; do
+        _w3_rows=$((_w3_rows + 1))
+        _p_stem="${_pair%%=*}"
+        _p_n="${_pair##*=}"
+        _p_row="$(printf '%s\n' "$_w3_plan" | grep -x "$_p_stem=[0-9]*" | head -1)"
+        case "$_p_row" in
+            "") _w3_bad="$_w3_bad $_p_stem(no row, file says $_p_n)" ;;
+            "$_p_stem=$_p_n") ;;
+            *) _w3_bad="$_w3_bad $_p_stem(table says ${_p_row##*=}, file says $_p_n)" ;;
+        esac
+    done
+    for _row in $_w3_plan; do
+        _r_stem="${_row%%=*}"
+        case " $_w3_pairs " in
+            *" $_r_stem="*) ;;
+            *) _w3_bad="$_w3_bad $_r_stem(row left behind for an artifact that is not pending here)" ;;
+        esac
+    done
+    if [ -n "$_w3_pairs" ] && [ -z "$_w3_bad" ]; then
+        check "W3: the plan's §W3 stmts column matches the measured counts ($_w3_rows row(s))" true
+    elif [ -z "$_w3_pairs" ]; then
+        gap "W3: the plan's §W3 stmts column not compared (no count measurable here)"
+    else
+        echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
+        check "W3: the plan's §W3 stmts column matches the measured counts" false
     fi
     check_py "W3: comparator self-test (all three negative controls refuse)" \
         python3 "$repo_root/scripts/mm0-comparator" selftest
