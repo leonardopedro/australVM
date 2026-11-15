@@ -3,16 +3,16 @@
 -- `mm0-c` checks these proofs against the `.mm0` specification on every
 -- `verify-invariants` run, so statement and proof cannot disagree. Proof
 -- arguments are hypotheses and term arguments are inferred in proof position,
--- which is why most proofs are one symbol: the goal fixes `m`, `a`, `b`, `v`.
--- Only the two-cell theorems are longer, because they compose two axioms.
+-- which is why most proofs are one symbol: the goal fixes the addresses. Only
+-- the two-store theorem is longer, because it composes two axioms.
 --
 -- Always keep this file's declarations in the same order as the `.mm0`:
 -- `mm0-c` matches them in order, and a swap surfaces as an unrelated unify
 -- failure elsewhere.
 --
--- Read the `.mm0` header for what these nine theorems do *not* cover; the short
--- version is that both sides are defined as the same write/read, so this is the
--- projection's shape, not the projection.
+-- Read the `.mm0` header for what these thirteen theorems do *not* cover; the
+-- short version is that both sides are defined as the same write/read, so this
+-- is the projection's shape, not the projection.
 
 provable sort Prop;
 delimiter $ ( ) $;
@@ -23,15 +23,25 @@ term init: Mem;
 term unset: Val;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
+term notfull (m: Mem): Prop;
 term vne (x y: Val): Prop;
 term veq (x y: Val): Prop;
 axiom veq_refl (x: Val): $ veq x x $;
 axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
 axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
 axiom get_init (a: Val): $ veq (get init a) unset $;
+axiom init_notfull: $ notfull init $;
+axiom put_notfull (m: Mem) (a v: Val) (k: $ notfull m $):
+  $ notfull (put m a v) $;
 axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
-axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $) (k: $ notfull m $):
   $ veq (get (put m a v) b) (get m b) $;
+axiom at_drop (m: Mem) (x y z: Val) (vx vy vz: Val)
+  (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
+  $ veq (get (put (put (put m x vx) y vy) z vz) x) unset $;
+axiom at_keep_prev (m: Mem) (x y z: Val) (vx vy vz: Val)
+  (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
+  $ veq (get (put (put (put m x vx) y vy) z vz) y) vy $;
 
 def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
@@ -58,23 +68,52 @@ pub theorem toy_load_projection (m: Mem) (a: Val):
   $ veq (jit_load_i64 m a) (isa_load_w8 m a) $
   = '(veq_refl);
 
-pub theorem toy_jit_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+pub theorem toy_jit_store_load_other (m: Mem) (a b v: Val)
+    (h: $ vne a b $) (k: $ notfull m $):
   $ veq (get (jit_store_i64 m a v) b) (get m b) $
-  = '(at_put_other (h));
+  = '(at_put_other (h) (k));
 
-pub theorem toy_isa_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+pub theorem toy_isa_store_load_other (m: Mem) (a b v: Val)
+    (h: $ vne a b $) (k: $ notfull m $):
   $ veq (get (isa_store_w8 m a v) b) (get m b) $
-  = '(at_put_other (h));
+  = '(at_put_other (h) (k));
 
--- `at_put_other` needs `vne b a`, the caller has `vne a b`, so the first step is
--- symmetry; then "read unchanged" and "read-after-write" compose by `veq_trans`,
--- whose middle term is inferred from the two hypotheses.
-pub theorem toy_jit_two_cells_preserved
-  (m: Mem) (a b va vb: Val) (h: $ vne a b $):
-  $ veq (get (jit_store_i64 (jit_store_i64 m a va) b vb) a) va $
-  = '(veq_trans (at_put_other (vne_sym (h))) (at_put));
+-- `at_put_other` needs `vne b a` (the caller has `vne a b`, hence `vne_sym`) and
+-- `notfull` of the memory it is applied to — which for `put init a va` comes from
+-- `init_notfull` through `put_notfull`. Then "read unchanged" and
+-- "read-after-write" compose by `veq_trans`, whose middle term is inferred.
+pub theorem toy_jit_two_cells_preserved (a b va vb: Val) (h: $ vne a b $):
+  $ veq (get (jit_store_i64 (jit_store_i64 init a va) b vb) a) va $
+  = '(veq_trans (at_put_other (vne_sym (h)) (put_notfull (init_notfull))) (at_put));
 
-pub theorem toy_isa_two_cells_preserved
-  (m: Mem) (a b va vb: Val) (h: $ vne a b $):
-  $ veq (get (isa_store_w8 (isa_store_w8 m a va) b vb) a) va $
-  = '(veq_trans (at_put_other (vne_sym (h))) (at_put));
+pub theorem toy_isa_two_cells_preserved (a b va vb: Val) (h: $ vne a b $):
+  $ veq (get (isa_store_w8 (isa_store_w8 init a va) b vb) a) va $
+  = '(veq_trans (at_put_other (vne_sym (h)) (put_notfull (init_notfull))) (at_put));
+
+pub theorem toy_jit_third_store_drops_oldest
+    (a b c va vb vc: Val) (hab: $ vne a b $) (hac: $ vne a c $)
+    (hbc: $ vne b c $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) a) unset $
+  = '(at_drop (hab) (hac) (hbc));
+
+-- The same axiom, with the memory that two stores left behind: `at_drop` is
+-- stated for an arbitrary starting memory, which is what lets it fire on the
+-- fourth store rather than only on the third.
+pub theorem toy_jit_fourth_store_drops_oldest
+    (a b c d va vb vc vd: Val) (hbc: $ vne b c $) (hbd: $ vne b d $)
+    (hcd: $ vne c d $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) b) unset $
+  = '(at_drop (hbc) (hbd) (hcd));
+
+pub theorem toy_jit_recent_cells_readable
+    (a b c d va vb vc vd: Val) (hbc: $ vne b c $) (hbd: $ vne b d $)
+    (hcd: $ vne c d $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c) vc $
+  = '(at_keep_prev (hbc) (hbd) (hcd));
+
+pub theorem toy_fourth_store_projection
+    (a b c d va vb vc vd: Val):
+  $ veq
+      (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c)
+      (get (isa_store_w8 (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) c vc) d vd) c) $
+  = '(veq_refl);
