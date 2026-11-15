@@ -9,7 +9,7 @@
 -- check that the projection then goes through, from named and cited memory
 -- axioms, with nothing assumed about the compiler.
 --
--- WHAT IS PROVED HERE (18 theorems, 0 sorry):
+-- WHAT IS PROVED HERE (23 theorems, 0 sorry):
 --
 --   toy_init_unset                a fresh memory reads `unset` at every address
 --   toy_jit_store_visible         a store makes the value visible at the
@@ -33,6 +33,14 @@
 --   toy_jit_fourth_store_drops_oldest  a fourth does the same to the next oldest
 --   toy_jit_recent_cells_readable the two most recent stores both survive
 --   toy_fourth_store_projection   the projection still holds on that deep memory
+--   toy_jit_store32_visible       a width-4 store is visible at its address,
+--                                 through the narrowing the width applies
+--   toy_store32_projection        the two width-4 definitions agree there
+--   toy_load32_projection         the two width-4 loads return the same value
+--   toy_width4_load_after_wide_store    a width-4 load of a cell written at
+--                                 width 8 returns the narrowed value
+--   toy_width4_store_load_roundtrip     a width-4 store read back at width 4
+--                                 returns the same narrowed value (idempotence)
 --
 -- THE CAPACITY IS THE POINT. The memory is **two cells**, and the axioms below
 -- characterise it in the four cases a two-cell memory has. A write either hits
@@ -75,6 +83,20 @@
 -- survivors. That is not a formal consistency proof — MM0 has no model-checking
 -- entry point here — and this file does not claim one.
 --
+-- A SECOND WIDTH, AND WHAT IT CAN MEAN HERE. The real claim is about width 8,
+-- so proving the same shape at another width tests that nothing in the
+-- “two sides agree” argument is specific to one width. `Val` holds no bits, so a
+-- narrower width cannot be a truncation of a stored bit pattern; it is modelled
+-- as an uninterpreted `narrow4` applied to the value, with the two laws every
+-- truncation obeys and nothing else: it is idempotent (`narrow4_idem`) and it
+-- respects value equality (`narrow4_cong`). The width-4 load definitions narrow
+-- on the way out, so the narrowing appears *in a proof* rather than only in a
+-- name: a width-4 load of a cell written at width 8 returns `narrow4 v` by
+-- congruence on `at_put`, and storing at width 4 then reading at width 4 returns
+-- the same value because narrowing twice is narrowing once. What this does not
+-- say is that `narrow4` is Cranelift's `i32` truncation or the ISA's 4-byte
+-- write: those are still uninterpreted, exactly as `put`/`get` are.
+--
 -- WHAT IS *NOT* PROVED, and it is the whole distance to W9.3: that the emitted
 -- Cranelift instruction computes `jit_store_i64`, that Sail's `vmem_write` at
 -- width 8 computes `isa_store_w8`, that an aligned address stays in the linear
@@ -110,6 +132,11 @@ sort Mem;
 term init: Mem;
 -- The content of an empty cell.
 term unset: Val;
+-- Narrowing a value to four bytes, uninterpreted: `Val` carries no bits, so this
+-- is the *interface* of a narrower width rather than its implementation. The two
+-- axioms below are the laws a truncation has, and they are what lets the width-4
+-- theorems say something a renaming could not.
+term narrow4 (x: Val): Val;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
 -- "At least one cell is still free", so the next write evicts nothing.
@@ -132,6 +159,14 @@ term veq (x y: Val): Prop;
 axiom veq_refl (x: Val): $ veq x x $;
 axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
 axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
+
+-- The two laws of a narrowing: it is idempotent, and it takes equal values to
+-- equal values. The second is what lets a proof about `get` reach a proof about
+-- a narrowed `get` — without it the toy's equality is too weak to push anything
+-- through `narrow4`, and the width-4 theorems below would be unprovable for a
+-- reason that has nothing to do with memory.
+axiom narrow4_cong (x y: Val) (h: $ veq x y $): $ veq (narrow4 x) (narrow4 y) $;
+axiom narrow4_idem (x: Val): $ veq (narrow4 (narrow4 x)) (narrow4 x) $;
 
 -- ── The toy memory's semantics: four cases, one axiom each ───────────────
 -- Free cell: a fresh memory is empty, and the state after one store still has a
@@ -216,6 +251,13 @@ def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def jit_load_i64 (m: Mem) (a: Val): Val = $ get m a $;
 def isa_load_w8 (m: Mem) (a: Val): Val = $ get m a $;
+-- The same four transformers one width down. The stores narrow as they write and
+-- the loads narrow as they read, which is where a width can differ from another
+-- width at all in a world without bit patterns.
+def jit_store_i32 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def isa_store_w4 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def jit_load_i32 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
+def isa_load_w4 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
 
 -- ── What the model proves ────────────────────────────────────────────────
 -- Note that these are theorems about the *definitions*, not restatements of
@@ -324,3 +366,29 @@ theorem toy_fourth_store_projection
   $ veq
       (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c)
       (get (isa_store_w8 (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) c vc) d vd) c) $;
+
+-- ── The same projection one width down ────────────────────────────────────
+-- Nothing above mentions a width in its *proof*, and these are the theorems that
+-- say so in the artifact rather than in a comment. Note that the two width-4
+-- sides are again defined as the same term — that is the toy's licence, and it is
+-- the same licence the width-8 ones take.
+theorem toy_jit_store32_visible (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (narrow4 v) $;
+
+theorem toy_store32_projection (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (get (isa_store_w4 m a v) a) $;
+
+theorem toy_load32_projection (m: Mem) (a: Val):
+  $ veq (jit_load_i32 m a) (isa_load_w4 m a) $;
+
+-- A width-4 read of a cell written at width 8 sees the narrowed value: `at_put`
+-- gives the value, and congruence carries it through the narrowing the load
+-- applies. This is the width difference showing up in a proof.
+theorem toy_width4_load_after_wide_store (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i64 m a v) a) (narrow4 v) $;
+
+-- And a width-4 store read back at width 4 returns that same narrowed value,
+-- because narrowing twice is narrowing once: congruence on `at_put` gives
+-- `narrow4 (narrow4 v)`, and idempotence turns it into `narrow4 v`.
+theorem toy_width4_store_load_roundtrip (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i32 m a v) a) (narrow4 v) $;

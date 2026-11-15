@@ -278,13 +278,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   **not** closed under `put` — `put_init_notfull` says only that the state after
   one store on `init` has a free cell; an earlier closure axiom (`put_notfull`)
   was removed when the refresh case showed it cannot hold with `at_drop`.
-  Fifteen cited axioms all told, `3 sorts, 12 term/def, 33 ax/thm`, no `sorry`.
-  **Toy theorem count: 18**
+  Seventeen cited axioms all told, `3 sorts, 17 term/def, 40 ax/thm`, no `sorry`.
+  **Toy theorem count: 23**
   (keep the number on this line) — pinned: `verify-invariants` compares the
   number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
   `.mm1`, and this line and the matching one in the plan, so a new theorem with
-  stale prose is a red gate. **Toy axiom count: 15** — pinned the same way, from
-  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 12 term/def, 33 ax/thm**
+  stale prose is a red gate. **Toy axiom count: 17** — pinned the same way, from
+  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 17 term/def, 40 ax/thm**
   (keep it on one line) — the figures `mm0-rs` prints, which is the authority
   here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2. Both
   sides are defined as the same write/read. The store-then-load-*elsewhere* pair
@@ -295,7 +295,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   shows a third store at `a` refreshing it in place while `b` stays readable,
   `toy_jit_refresh_keeps_held_cells`/`toy_jit_refresh_no_new_held` show `b` stays
   held and nothing new becomes held, and `toy_jit_repeated_refresh_never_evicts`
-  shows two refreshes at `a` still leave `b`'s value readable;
+  shows two refreshes at `a` still leave `b`'s value readable. A second width
+  (`jit_store_i32`/`isa_store_w4`, `jit_load_i32`/`isa_load_w4`, with an
+  uninterpreted `narrow4` carrying only idempotence and congruence) proves the
+  same shape at width 4, plus `toy_width4_load_after_wide_store` and
+  `toy_width4_store_load_roundtrip` — there the narrowing is in the *proof*,
+  since the width-4 loads narrow on the way out and `veq` alone cannot push
+  through a function without `narrow4_cong`;
   `toy_jit_third_store_drops_oldest` and
   `toy_jit_fourth_store_drops_oldest` fire the *same* `at_drop` axiom on a fresh
   and then a two-store memory — it is stated for an arbitrary `m` so it can fire
@@ -316,7 +322,7 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   and uses the same four transformer names, so a proof cannot drift onto a
   neighbouring (easier) statement; and it checks that the witness holds exactly
   the axioms the artifact declares, so a new axiom cannot slip past the model.
-  It also mutation-tests the file ten ways,
+  It also mutation-tests the file twelve ways,
   one per substantive axiom: rewriting `at_put`'s conclusion to "read
   unchanged", `at_put_other`'s preserved value to `unset`, `veq_trans`'s
   conclusion to reflexive, `at_drop`'s `unset` to the written value,

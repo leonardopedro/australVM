@@ -85,7 +85,14 @@ impl Mem {
         false
     }
 
-    /// `notfull m`: fewer than two cells.
+    /// `narrow4 x`: a value narrowed to four bytes. Chosen to *lose* information
+/// (`x % 2`), not as the identity, so that the idempotence axiom is checked
+/// against a real truncation rather than against a function that does nothing.
+fn narrow4(x: u8) -> u8 {
+    x % 2
+}
+
+/// `notfull m`: fewer than two cells.
     fn notfull(self) -> bool {
         self.n < 2
     }
@@ -97,6 +104,13 @@ impl Mem {
         }
         format!("[{}]", parts.join(","))
     }
+}
+
+/// `narrow4 x`: a value narrowed to four bytes. Deliberately information-losing
+/// (`x % 2`) rather than the identity, so the idempotence axiom is checked
+/// against a real truncation and not against a function that does nothing.
+fn narrow4(x: u8) -> u8 {
+    x % 2
 }
 
 struct Row {
@@ -219,6 +233,38 @@ fn main() {
             }
         }
         rows.push(row("vne_sym", true, n, ce));
+    }
+
+    // narrow4_cong (x y) (veq x y): veq (narrow4 x) (narrow4 y).
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for &x in &atoms_v {
+            for &y in &atoms_v {
+                n += 1;
+                if x == y && narrow4(x) != narrow4(y) && ce.is_none() {
+                    ce = Some(format!("x={x} y={y} -> {} vs {}", narrow4(x), narrow4(y)));
+                }
+            }
+        }
+        rows.push(row("narrow4_cong", true, n, ce));
+    }
+
+    // narrow4_idem (x): veq (narrow4 (narrow4 x)) (narrow4 x).
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for &x in &atoms_v {
+            n += 1;
+            if narrow4(narrow4(x)) != narrow4(x) && ce.is_none() {
+                ce = Some(format!(
+                    "x={x} -> narrow4(narrow4 x)={} narrow4 x={}",
+                    narrow4(narrow4(x)),
+                    narrow4(x)
+                ));
+            }
+        }
+        rows.push(row("narrow4_idem", true, n, ce));
     }
 
     // get_init (a): get init a = unset.
@@ -615,6 +661,21 @@ fn main() {
             }
         }
         rows.push(row("put_held_other_unguarded", false, n, ce));
+    }
+
+    // "Narrowing to four bytes is the identity" — the discarded alternative that
+    // would make the width-4 theorems vacuous. It has to fail, otherwise the
+    // idempotence axiom says nothing about losing information.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for &x in &atoms_v {
+            n += 1;
+            if narrow4(x) != x && ce.is_none() {
+                ce = Some(format!("x={x} -> narrow4 x={}", narrow4(x)));
+            }
+        }
+        rows.push(row("narrow4_is_identity", false, n, ce));
     }
 
     // ── Report ──────────────────────────────────────────────────────────────

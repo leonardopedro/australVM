@@ -21,6 +21,7 @@ sort Val;
 sort Mem;
 term init: Mem;
 term unset: Val;
+term narrow4 (x: Val): Val;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
 term notfull (m: Mem): Prop;
@@ -30,6 +31,8 @@ term veq (x y: Val): Prop;
 axiom veq_refl (x: Val): $ veq x x $;
 axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
 axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
+axiom narrow4_cong (x y: Val) (h: $ veq x y $): $ veq (narrow4 x) (narrow4 y) $;
+axiom narrow4_idem (x: Val): $ veq (narrow4 (narrow4 x)) (narrow4 x) $;
 axiom get_init (a: Val): $ veq (get init a) unset $;
 axiom init_notfull: $ notfull init $;
 axiom put_init_notfull (a v: Val): $ notfull (put init a v) $;
@@ -60,6 +63,10 @@ def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def jit_load_i64 (m: Mem) (a: Val): Val = $ get m a $;
 def isa_load_w8 (m: Mem) (a: Val): Val = $ get m a $;
+def jit_store_i32 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def isa_store_w4 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def jit_load_i32 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
+def isa_load_w4 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
 
 pub theorem toy_init_unset (a: Val):
   $ veq (get init a) unset $
@@ -184,3 +191,28 @@ pub theorem toy_fourth_store_projection
       (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c)
       (get (isa_store_w8 (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) c vc) d vd) c) $
   = '(veq_refl);
+
+-- Width 4, the same shape. `at_put` alone, with the definitions unfolding to the
+-- narrowing store.
+pub theorem toy_jit_store32_visible (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (narrow4 v) $
+  = '(at_put);
+
+pub theorem toy_store32_projection (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (get (isa_store_w4 m a v) a) $
+  = '(veq_refl);
+
+pub theorem toy_load32_projection (m: Mem) (a: Val):
+  $ veq (jit_load_i32 m a) (isa_load_w4 m a) $
+  = '(veq_refl);
+
+-- The width shows up here: the load narrows what it reads, so the proof has to
+-- carry `at_put` through `narrow4`, which is `narrow4_cong`.
+pub theorem toy_width4_load_after_wide_store (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i64 m a v) a) (narrow4 v) $
+  = '(narrow4_cong (at_put));
+
+-- … and twice: congruence gives `narrow4 (narrow4 v)`, idempotence collapses it.
+pub theorem toy_width4_store_load_roundtrip (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i32 m a v) a) (narrow4 v) $
+  = '(veq_trans (narrow4_cong (at_put)) (narrow4_idem));
