@@ -752,13 +752,13 @@ PY
             _toy_shape="$(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
             echo "  [detail] $_toy_shape"
             if grep -q 'sorry' "$_cert_tmp/toy.log"; then
-                check "W9.3: the toy projection's twenty-three theorems check without sorry" false
+                check "W9.3: the toy projection's theorems check without sorry" false
             else
-                check "W9.3: the toy projection's twenty-three theorems check without sorry" true
+                check "W9.3: the toy projection's theorems check without sorry" true
             fi
         else
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
-            check "W9.3: the toy projection's twenty-three theorems check without sorry" false
+            check "W9.3: the toy projection's theorems check without sorry" false
         fi
         # A count in prose is a claim like any other, and the one that goes stale
         # first: add a theorem or an axiom and the paragraph describing the file

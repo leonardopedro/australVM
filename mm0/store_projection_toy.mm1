@@ -133,6 +133,18 @@ pub theorem toy_isa_refresh_keeps_other_cell (a b va vb va2: Val)
          (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)))
        (at_put));
 
+-- The refresh read back at its own address: `at_put`, once. No hypothesis — a
+-- write is visible where it wrote, whatever else the memory holds — which is why
+-- the companion theorem above needs `vne` and this one does not. Together they
+-- are the whole refresh case: the new value at `a`, the old one still at `b`.
+pub theorem toy_jit_refresh_visible (a b va vb va2: Val):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va2 $
+  = '(at_put);
+
+pub theorem toy_isa_refresh_visible (a b va vb va2: Val):
+  $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) a) va2 $
+  = '(at_put);
+
 -- The held-set half of the refresh case. `at_put_held_keeps` needs the other
 -- cell to be held beforehand, which the second store establishes (`put_held`),
 -- and that `a` is still held after it — which is `put_held_other`: a write

@@ -9,7 +9,7 @@
 -- check that the projection then goes through, from named and cited memory
 -- axioms, with nothing assumed about the compiler.
 --
--- WHAT IS PROVED HERE (23 theorems, 0 sorry):
+-- WHAT IS PROVED HERE (25 theorems, 0 sorry):
 --
 --   toy_init_unset                a fresh memory reads `unset` at every address
 --   toy_jit_store_visible         a store makes the value visible at the
@@ -24,6 +24,11 @@
 --   toy_jit_refresh_keeps_other_cell   a store at an address the memory
 --   toy_isa_refresh_keeps_other_cell   already holds updates that cell in place
 --                                 and leaves the other cell readable
+--   toy_jit_refresh_visible       … and the refreshed address reads the *new*
+--   toy_isa_refresh_visible       value back (no `vne` guard needed: what a
+--                                 write returns at its own address does not
+--                                 depend on the rest of the memory, while
+--                                 whether the other cell survives does)
 --   toy_jit_refresh_keeps_held_cells   … and leaves the other cell *held*
 --   toy_jit_refresh_no_new_held    … and holds no address it did not hold
 --   toy_jit_repeated_refresh_never_evicts  two refreshes at one address still
@@ -311,6 +316,23 @@ theorem toy_jit_refresh_keeps_other_cell (a b va vb va2: Val)
 theorem toy_isa_refresh_keeps_other_cell (a b va vb va2: Val)
   (h: $ vne a b $):
   $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) b) vb $;
+
+-- The read half of the same case, and the one a program actually observes: after
+-- the refresh, a load at the refreshed address returns the *new* value. Without
+-- it the refresh case would say only that the write did no harm to the other
+-- cell, which an implementation that dropped every write could also satisfy.
+-- `at_put` alone gives it — a write is visible at the address it wrote — and
+-- that is the point: the refresh is a write like any other for the address it
+-- touches, and unlike one for every other address. There is **no `vne` guard
+-- here**, while its companion theorem above needs one, and that asymmetry is
+-- itself the content: which value you read back after a write does not depend on
+-- how many cells the memory holds or whether the other cell is distinct, whereas
+-- whether the *other* cell survives does.
+theorem toy_jit_refresh_visible (a b va vb va2: Val):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va2 $;
+
+theorem toy_isa_refresh_visible (a b va vb va2: Val):
+  $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) a) va2 $;
 
 -- The held-set half of the same case: the refresh leaves `b` held, and creates
 -- no address that was not held before. Those are the two directions the size of

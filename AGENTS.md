@@ -278,13 +278,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   **not** closed under `put` — `put_init_notfull` says only that the state after
   one store on `init` has a free cell; an earlier closure axiom (`put_notfull`)
   was removed when the refresh case showed it cannot hold with `at_drop`.
-  Seventeen cited axioms all told, `3 sorts, 17 term/def, 40 ax/thm`, no `sorry`.
-  **Toy theorem count: 23**
+  Seventeen cited axioms all told, `3 sorts, 17 term/def, 42 ax/thm`, no `sorry`.
+  **Toy theorem count: 25**
   (keep the number on this line) — pinned: `verify-invariants` compares the
   number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
   `.mm1`, and this line and the matching one in the plan, so a new theorem with
   stale prose is a red gate. **Toy axiom count: 17** — pinned the same way, from
-  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 17 term/def, 40 ax/thm**
+  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 17 term/def, 42 ax/thm**
   (keep it on one line) — the figures `mm0-rs` prints, which is the authority
   here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2.
   This is required at every site that quotes the shape, not just here: both
@@ -299,7 +299,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   shows a third store at `a` refreshing it in place while `b` stays readable,
   `toy_jit_refresh_keeps_held_cells`/`toy_jit_refresh_no_new_held` show `b` stays
   held and nothing new becomes held, and `toy_jit_repeated_refresh_never_evicts`
-  shows two refreshes at `a` still leave `b`'s value readable. A second width
+  shows two refreshes at `a` still leave `b`'s value readable.
+  `toy_jit_refresh_visible`/`toy_isa_refresh_visible` close the same case from the
+  other side — the *refreshed* address reads the new value back — and carry **no
+  `vne` guard**, which is the asymmetry worth knowing: what a write returns at its
+  own address does not depend on the rest of the memory, whether the other cell
+  survives does. A second width
   (`jit_store_i32`/`isa_store_w4`, `jit_load_i32`/`isa_load_w4`, with an
   uninterpreted `narrow4` carrying only idempotence and congruence) proves the
   same shape at width 4, plus `toy_width4_load_after_wide_store` and
