@@ -922,6 +922,42 @@ MUTATIONS
             fi
         fi
 
+        # The same witness once more, in Lean (`mm0/toy_witness/ToyWitness.lean`):
+        # same model, independent checker, and the candidates the toy rejected are
+        # *theorems about their negations* rather than counterexample strings
+        # printed by a program I wrote. Two checkers on one model is the point —
+        # they fail differently, and a wrong reading of an `if` in one does not
+        # reproduce in the other.
+        if command -v lean >/dev/null 2>&1; then
+            _lean_rc=0
+            lean "$repo_root/mm0/toy_witness/ToyWitness.lean" \
+                >"$_cert_tmp/leanwit.log" 2>&1 || _lean_rc=$?
+            _lean_ax="$(sed -n 's/^lean-witness-axioms: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
+            _lean_br="$(sed -n 's/^lean-witness-broken: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
+            if [ "$_lean_rc" -eq 0 ] && [ -n "$_lean_ax" ] && [ "$_lean_ax" = "$_ax_file" ]; then
+                echo "  [detail] $(grep -m1 '^lean-witness: ' "$_cert_tmp/leanwit.log")"
+                check "W9.3: a Lean interpreter proves the same $(printf '%s\n' "$_lean_ax" | grep -c .) axioms" true
+            else
+                grep -E 'error' "$_cert_tmp/leanwit.log" | head -5 >&2
+                echo "  [detail] lean axioms vs artifact: [$(echo "$_lean_ax" | tr '\n' ' ')]" >&2
+                check "W9.3: a Lean interpreter proves the same axioms" false
+            fi
+            if [ ! -s "$_cert_tmp/witness.log" ]; then
+                gap "W9.3: rejected-candidate cross-check not run (rustc absent)"
+            else
+                _rust_br="$(sed -n 's/^\[reject\]  *\([a-z0-9_]*\).*/\1/p' "$_cert_tmp/witness.log" | sort)"
+                if [ -n "$_lean_br" ] && [ "$_lean_br" = "$_rust_br" ]; then
+                    check "W9.3: both witnesses reject the same candidates" true
+                else
+                    echo "  [detail] rejected: lean=[$(echo "$_lean_br" | tr '\n' ' ')]" \
+                         "rust=[$(echo "$_rust_br" | tr '\n' ' ')]" >&2
+                    check "W9.3: both witnesses reject the same candidates" false
+                fi
+            fi
+        else
+            gap "W9.3: the Lean witness check not run (lean not on PATH)"
+        fi
+
         # W6: the generated probe is a test, and it has to actually run.
         if command -v cc >/dev/null 2>&1; then
             if cc -O2 -o "$_cert_tmp/probe" "$_cert_tmp/flux1d_probe.c" -lm \

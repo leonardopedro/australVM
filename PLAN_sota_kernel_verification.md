@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 119 passed, 4 explained gap(s), 0 failed
+verify-invariants: 121 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -313,8 +313,10 @@ verify-invariants: 119 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (23 theorem(s), 17 axiom(s))
   [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 17 term/def, 40 ax/thm)
   [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
-  [detail] toy-witness: 13/13 axioms hold in the witness; 3/3 rejected candidates fail as they must
-  [pass] W9.3: the witness exercises all 13 axioms the toy declares
+  [detail] toy-witness: 17/17 axioms hold in the witness; 4/4 rejected candidates fail as they must
+  [pass] W9.3: a Lean interpreter proves the same 17 axioms
+  [pass] W9.3: both witnesses reject the same candidates
+  [pass] W9.3: the witness exercises all 17 axioms the toy declares
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
   [detail] mutations refused: toy_jit_store_visible(refused),
            toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused),
@@ -332,7 +334,7 @@ w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_p
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 118 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
+verify-invariants: 118 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean interpreter + W9.1)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -1613,6 +1615,49 @@ where `rustc` is absent, never a silent pass) and also compares the axiom names
 it holds against the `axiom` declarations in the `.mm0`, so an axiom added to
 the artifact without teaching the model about it is a red gate — the same drift
 control the theorem count gets.
+
+**The same witness, once more, in a second checker.** The Rust program is a
+*model*: it enumerates cells and reports counterexamples. A program I wrote can
+be wrong in the same direction as the axioms it checks, so the toy's axiom set
+is also stated as a Lean 4 interpreter, `mm0/toy_witness/ToyWitness.lean`, with
+the same `put`/`get`/`held`/`notfull`/`narrow4` and the same 17 axioms — but
+here each axiom is a theorem proved by `decide`/`native_decide` over the finite
+enumeration `allMems` (273 two-cell memories), and each rejected candidate is a
+theorem about its *negation*. Two checkers disagreeing would be the finding; on
+this set they agree, and they fail differently (the Rust witness prints the
+killing memory; Lean refuses the proof). `verify-invariants` runs `lean` on the
+file in the `lean` shell (a `[gap]` elsewhere) and requires the axiom-name list
+it prints to equal the `.mm0`'s, and requires the rejected-candidate list to
+agree with the Rust witness's `[reject]` rows, so a candidate that only one
+checker refuses is a red gate.
+
+**Where the witness argument breaks.** The point of having the witness is to say
+plainly where it stops being evidence, and the Lean file is where those limits
+are machine-checked rather than asserted:
+
+- `put_notfull` is *false* in the model (proved: `put_notfull_breaks`), and so
+  are `at_put_other`/`put_held_other` without their `notfull` guards
+  (`at_put_other_unguarded_breaks`, `put_held_other_unguarded_breaks`) and
+  `narrow4 = identity` (`narrow4_is_identity_breaks`, at `x = 2`). These four
+  are theorems, not comments — the gate would go red if one of them stopped
+  being refutable.
+- The model has **at most two cells**; `put` is `((a,v) :: filter (·.1 ≠ a)).take 2`.
+  There is no arithmetic in it, which is why "refresh never evicts" had to be
+  proved as membership in both directions (`at_put_held_keeps` /
+  `at_put_held_no_new`) rather than as a count.
+- `veq` is equality on `Val`, which makes consistency cheap: a degenerate model
+  with `veq := ⊤` satisfies every axiom. The content comes from the instance
+  proofs and the rejected candidates, not from consistency alone — which is
+  exactly why the rejected rows are the check's real content.
+- `narrow4 := x % 2` is *a* function satisfying the two laws, not Cranelift's
+  truncation; the width-4 side proves the projection's *shape* does not mention 8,
+  not that `i32` truncation is this function. The real `narrow4` is uninterpreted
+  at both widths.
+- The check is exhaustive over a finite domain (4 atoms, `0 = unset`).
+  `--domain 4|6|7` in the Rust witness gives the identical verdict, so it is not
+  a size artifact, but it is not a proof over an arbitrary `Val` — an instance
+  needing more atoms is the same equality pattern renamed, which is an argument
+  the header makes and neither program establishes.
 
 - **Toy theorem count: 23** — pinned, not just described: `verify-invariants`
   fails if `mm0/store_projection_toy.mm0` declares a different number of

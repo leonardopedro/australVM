@@ -313,11 +313,19 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   that address's pair removed and the result truncated to two, `get` = first
   match else `unset`, `held` = the address is one of the pairs, `notfull` =
   fewer than two): every axiom is checked over all two-cell memories on a small
-  atom domain, and the three axiom candidates the toy rejected — `put_notfull`
-  and the unguarded `at_put_other`/`put_held_other` — must each *fail* there
-  with a counterexample, so the guards are checked rather than assumed. It is
+  atom domain,  and the four rejected candidates — `put_notfull`, the unguarded
+  `at_put_other`/`put_held_other`, and `narrow4_is_identity` — must each *fail*
+  there with a counterexample, so the guards (and the width-4 narrowing) are
+  checked rather than assumed. It is
   exhaustive over that finite domain, not a proof over arbitrary `Val`, and it
-  is `[gap]`, never a pass, where `rustc` is absent. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  is `[gap]`, never a pass, where `rustc` is absent. The same axiom set is
+  stated a second time, as Lean 4 theorems, in `mm0/toy_witness/ToyWitness.lean`
+  (`decide`/`native_decide` over 273 two-cell memories): the four rejected
+  candidates are theorems about their negations, and a degenerate `veq := ⊤`
+  model is noted as a consistency trap (content comes from the instance proofs).
+  `verify-invariants` runs `lean` on it in the `lean` shell and requires its
+  axiom and rejected-candidate lists to agree with the `.mm0` and the Rust
+  witness. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
   neighbouring (easier) statement; and it checks that the witness holds exactly
