@@ -3309,6 +3309,10 @@ it (**396 entries, 9 parts, 6 spanning, 0 bad**). The casualty is only the
 certificate being written: its last part ends anywhere, and no index entry names
 it, so a consumer that iterates the index never sees a truncated record.
 
+Reading a chunked stream — the index, the `segs` of a spanning record, the
+manifest, and what a stopped or killed run leaves — is written for consumers in
+[obligation-stream.md](obligation-stream.md).
+
 A killed run still has no manifest, so `scripts/oblig-manifest <stem>` rebuilds
 one: from the index when it survived (records, first/last ids per part, and the
 `fragmented` flag — `stat` per part plus one pass over the index), and from a
