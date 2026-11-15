@@ -338,12 +338,14 @@ nix-shell -p python3 --run "bash scripts/verify-invariants"
 nix-shell -p python3 --run "python3 scripts/check-links"
 ```
 
-Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines,
-and the gate's `w3-pending:` line states how many statements each one would hold
-out (`grep '^w3-pending:'`). The plan's §W3 `stmts` column is checked against
-those numbers on every run — a cell that disagrees, or a row left behind for an
-already-approved artifact, fails `verify-invariants` with the row named, so edit
-the table only by reading that line.
+Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines.
+The gate prints two measured-size lines: `w3-pending:` (what each unapproved
+artifact would hold out) and `w3-approved:` (what each approved one holds now, so
+a shrunk artifact is visible even though its statement diff is the enforcement).
+The plan's §W3 `stmts` column is checked against the pending numbers on every run
+— a cell that disagrees, or a row left behind for an already-approved artifact,
+fails `verify-invariants` with the row named, so edit the table only by reading
+that line.
 
 ## Gotchas
 

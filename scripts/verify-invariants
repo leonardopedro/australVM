@@ -979,9 +979,21 @@ check_py "W2: au2mm0 decides Flux1d's four obligations (both routes agree, hypot
 # An artifact with no approval is a [gap], never a silent pass: the point is to
 # make "nobody has looked at this statement yet" visible in the gate's output
 # rather than indistinguishable from "it was checked".
+# How many statements an artifact holds out right now, measured by the
+# comparator's own `--dry-run` — the output an owner reviews before approving.
+# Empty (not 0) when it cannot be measured here, so a caller prints `?` rather
+# than a number that would read as "nothing to approve".
+w3_measure() {
+    local stem="$1"
+    command -v python3 >/dev/null 2>&1 || return 0
+    ( cd "$repo_root" && python3 scripts/mm0-comparator approve --dry-run "$stem" 2>/dev/null ) \
+        | sed -n "s/.*would approve $stem — \([0-9][0-9]*\) statement.*/\1/p" | head -1
+}
+
 if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     _w3_line=""
     _w3_pairs=""
+    _w3_ok=""
     for _art in "$repo_root"/mm0/*.mm0; do
         [ -e "$_art" ] || continue
         _stem="$(basename "$_art" .mm0)"
@@ -1012,6 +1024,13 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
             else
                 check "W3: $_stem matches its approved statements" false
             fi
+            # Approved artifacts are counted too: the statement diff is what
+            # *enforces* their contents, but a size printed next to the one that
+            # was approved is what makes a shrunk artifact visible to a reader,
+            # and an artifact that stops producing statements is how a weakened
+            # emitter shows up first.
+            _w3_a_n="$(w3_measure "$_stem")"
+            _w3_ok="$_w3_ok $_stem(${_w3_a_n:-?} stmt)"
         else
             gap "W3: $_stem has no approved statements (run scripts/mm0-comparator approve $_stem, then commit mm0/approved/)"
             # How much each approval would hold out is a fact the plan's §W3
@@ -1021,13 +1040,8 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
             # the end as `w3-pending:` — one entry per artifact, in the table's
             # column order, so the table can be diffed against a command instead
             # of trusted.
-            _w3_n="?"
-            if command -v python3 >/dev/null 2>&1; then
-                _w3_n="$(cd "$repo_root" \
-                    && python3 scripts/mm0-comparator approve --dry-run "$_stem" 2>/dev/null \
-                    | sed -n "s/.*would approve $_stem — \([0-9][0-9]*\) statement.*/\1/p" | head -1)"
-                [ -n "$_w3_n" ] || _w3_n="unmeasurable"
-            fi
+            _w3_n="$(w3_measure "$_stem")"
+            [ -n "$_w3_n" ] || _w3_n="unmeasurable"
             _w3_line="$_w3_line $_stem($_w3_n stmt)"
             case "$_w3_n" in
                 ''|*[!0-9]*) ;;  # unmeasurable here: no number to compare
@@ -1037,6 +1051,9 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     done
     if [ -n "$_w3_line" ]; then
         echo "w3-pending:$_w3_line"
+    fi
+    if [ -n "$_w3_ok" ]; then
+        echo "w3-approved:$_w3_ok"
     fi
     # … and the plan's §W3 table states the same numbers in its `stmts` column,
     # which is where a reader gets them. Compare, don't trust: every row for an

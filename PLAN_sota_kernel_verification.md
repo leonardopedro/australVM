@@ -326,6 +326,7 @@ verify-invariants: 118 passed, 4 explained gap(s), 0 failed
   [gap]  W3: store_projection has no approved statements (owner commit)
   [gap]  W3: store_projection_toy has no approved statements (owner commit)
 w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(44 stmt)
+w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
 verify-invariants: 117 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
@@ -711,17 +712,27 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/store_projection_toy.mm0` | the toy model's 15 theorem *statements* and its 13 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 44 | none — compile+check is the gate | `[gap]`, awaiting owner commit |
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
-  `mm0-comparator approve --dry-run` for every unapproved artifact, prints one
-  `w3-pending:` line …
+  `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
+  prints a `w3-pending:` and a `w3-approved:` line …
 
   ```
   $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants \
-      | grep -E '^w3-pending:|the plan.s §W3'
+      | grep -E '^w3-(pending|approved):|the plan.s §W3'
   w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(44 stmt)
+  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   ```
 
-  … and then parses this table and diffs the two. Disagreement fails the gate in
+  … and then parses this table and diffs the pending line against it. The
+  approved line is a report, not an enforcement: an approved artifact is held by
+  its statement diff, but the *size* printed next to it is what makes a shrunk
+  artifact visible in the gate output — measured 2026-11-15 by deleting one axiom
+  from `mm0/flux1d_certificate.mm1`, which moved its entry to `(99 stmt)` and
+  turned `[FAIL] W3: flux1d_certificate matches its approved statements`, then
+  restoring the file. A `?` in either line means "could not measure here" (the
+  comparator refused: no `python3`, or an emitter reporting a stale `.mm1`), never
+  zero — a zero would read as "this artifact no longer says anything", which is a
+  finding of its own and must not be spelled the same way as an unavailable tool. Disagreement fails the gate in
   both directions, naming the row: a cell that no longer matches the file
   (`isa(table says 192, file says 193)`) and a row left behind for an artifact
   that is *not* pending here (`flux1d_certificate(row left behind for an artifact
