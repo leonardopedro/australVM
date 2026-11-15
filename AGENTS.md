@@ -314,6 +314,11 @@ nix-shell -p python3 --run "bash scripts/verify-invariants"
 nix-shell -p python3 --run "python3 scripts/check-links"
 ```
 
+Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines,
+and the gate's `w3-pending:` line states how many statements each one would hold
+out (`grep '^w3-pending:'`) — that is the measured form of the plan's §W3 `stmts`
+column, so compare it instead of trusting the table.
+
 ## Gotchas
 
 - Cross-module foreign calls resolve to the *interface* decl_id, not the body's

@@ -921,6 +921,7 @@ check_py "W2: au2mm0 decides Flux1d's four obligations (both routes agree, hypot
 # make "nobody has looked at this statement yet" visible in the gate's output
 # rather than indistinguishable from "it was checked".
 if [ -f "$repo_root/scripts/mm0-comparator" ]; then
+    _w3_line=""
     for _art in "$repo_root"/mm0/*.mm0; do
         [ -e "$_art" ] || continue
         _stem="$(basename "$_art" .mm0)"
@@ -953,8 +954,26 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
             fi
         else
             gap "W3: $_stem has no approved statements (run scripts/mm0-comparator approve $_stem, then commit mm0/approved/)"
+            # How much each approval would hold out is a fact the plan's §W3
+            # table states per row, and a hand-copied number drifts the moment
+            # an artifact grows a statement. So the count is measured here, from
+            # the same `--dry-run` output the owner reviews, and printed once at
+            # the end as `w3-pending:` — one entry per artifact, in the table's
+            # column order, so the table can be diffed against a command instead
+            # of trusted.
+            _w3_n="?"
+            if command -v python3 >/dev/null 2>&1; then
+                _w3_n="$(cd "$repo_root" \
+                    && python3 scripts/mm0-comparator approve --dry-run "$_stem" 2>/dev/null \
+                    | sed -n "s/.*would approve $_stem — \([0-9][0-9]*\) statement.*/\1/p" | head -1)"
+                [ -n "$_w3_n" ] || _w3_n="unmeasurable"
+            fi
+            _w3_line="$_w3_line $_stem($_w3_n stmt)"
         fi
     done
+    if [ -n "$_w3_line" ]; then
+        echo "w3-pending:$_w3_line"
+    fi
     check_py "W3: comparator self-test (all three negative controls refuse)" \
         python3 "$repo_root/scripts/mm0-comparator" selftest
 else
