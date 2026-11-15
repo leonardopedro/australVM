@@ -359,6 +359,74 @@ fn main() {
         rows.push(row("at_put_held_other", true, n, ce));
     }
 
+    // at_put_held_keeps (m) (x y w) (vne x y) (held m y) (held m x): held (put m x w) y.
+    //
+    // The two held-set facts are what carries "a refresh never evicts" in a toy
+    // with no arithmetic: instead of a count, the two directions a size could
+    // move in are each a membership statement.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for m in &mems {
+            for &x in &atoms_v {
+                if !m.held(x) {
+                    continue;
+                }
+                for &y in &atoms_v {
+                    if x == y || !m.held(y) {
+                        continue;
+                    }
+                    for &w in &atoms_v {
+                        n += 1;
+                        let p = m.put(x, w);
+                        if !p.held(y) && ce.is_none() {
+                            ce = Some(format!(
+                                "m={} x={x} y={y} w={w} -> put={} lost the cell at {y}",
+                                m.show(),
+                                p.show()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        rows.push(row("at_put_held_keeps", true, n, ce));
+    }
+
+    // at_put_held_no_new (m) (x y w) (vne x y) (held (put m x w) y): held m y.
+    //
+    // No `held m x` premise, deliberately: `put` introduces no address but the
+    // one it writes, so the statement is true of any write, and the guard a first
+    // draft carried here was rejected by this checker as unnecessary.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for m in &mems {
+            for &x in &atoms_v {
+                for &y in &atoms_v {
+                    if x == y {
+                        continue;
+                    }
+                    for &w in &atoms_v {
+                        let p = m.put(x, w);
+                        if !p.held(y) {
+                            continue;
+                        }
+                        n += 1;
+                        if !m.held(y) && ce.is_none() {
+                            ce = Some(format!(
+                                "m={} x={x} y={y} w={w} -> put={} holds {y} but m did not",
+                                m.show(),
+                                p.show()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        rows.push(row("at_put_held_no_new", true, n, ce));
+    }
+
     // at_put_other (m) (a b v) (vne a b) (notfull m): get (put m a v) b = get m b.
     {
         let mut ce = None;

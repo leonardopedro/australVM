@@ -266,7 +266,9 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   model: a **two-cell** memory whose capacity is characterised by one axiom per
   case — a refresh (`at_put_held_other`, with `put_held`/`put_held_other`: a
   write to an address the memory already holds replaces that cell and leaves the
-  other one), a free cell (`at_put_other`, guarded by `notfull m`: a write
+  other one; `at_put_held_keeps` + `at_put_held_no_new`: the *set* of held
+  addresses is unchanged, which is how the toy proves "a refresh never evicts"
+  without arithmetic — membership in both directions instead of a count), a free cell (`at_put_other`, guarded by `notfull m`: a write
   leaves other addresses alone), full and evicting (`at_drop`: three
   pairwise-distinct stores and the earliest address reads `unset`), full and
   keeping (`at_keep_prev`: the previous pair's newest survives). Two guards are
@@ -276,13 +278,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   **not** closed under `put` — `put_init_notfull` says only that the state after
   one store on `init` has a free cell; an earlier closure axiom (`put_notfull`)
   was removed when the refresh case showed it cannot hold with `at_drop`.
-  Thirteen cited axioms all told, `3 sorts, 12 term/def, 28 ax/thm`, no `sorry`.
-  **Toy theorem count: 15**
+  Fifteen cited axioms all told, `3 sorts, 12 term/def, 33 ax/thm`, no `sorry`.
+  **Toy theorem count: 18**
   (keep the number on this line) — pinned: `verify-invariants` compares the
   number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
   `.mm1`, and this line and the matching one in the plan, so a new theorem with
-  stale prose is a red gate. **Toy axiom count: 13** — pinned the same way, from
-  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 12 term/def, 28 ax/thm**
+  stale prose is a red gate. **Toy axiom count: 15** — pinned the same way, from
+  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 12 term/def, 33 ax/thm**
   (keep it on one line) — the figures `mm0-rs` prints, which is the authority
   here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2. Both
   sides are defined as the same write/read. The store-then-load-*elsewhere* pair
@@ -290,7 +292,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   from before the store;  `toy_jit_two_cells_preserved` shows a store at `a` then
   a distinct `b` leave `a` readable (axioms composed through `veq_trans` with a
   `notfull` fact from `put_init_notfull`); `toy_jit_refresh_keeps_other_cell`
-  shows a third store at `a` refreshing it in place while `b` stays readable;
+  shows a third store at `a` refreshing it in place while `b` stays readable,
+  `toy_jit_refresh_keeps_held_cells`/`toy_jit_refresh_no_new_held` show `b` stays
+  held and nothing new becomes held, and `toy_jit_repeated_refresh_never_evicts`
+  shows two refreshes at `a` still leave `b`'s value readable;
   `toy_jit_third_store_drops_oldest` and
   `toy_jit_fourth_store_drops_oldest` fire the *same* `at_drop` axiom on a fresh
   and then a two-store memory — it is stated for an arbitrary `m` so it can fire
@@ -311,17 +316,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   and uses the same four transformer names, so a proof cannot drift onto a
   neighbouring (easier) statement; and it checks that the witness holds exactly
   the axioms the artifact declares, so a new axiom cannot slip past the model.
-  It also mutation-tests the file eight ways,
+  It also mutation-tests the file ten ways,
   one per substantive axiom: rewriting `at_put`'s conclusion to "read
   unchanged", `at_put_other`'s preserved value to `unset`, `veq_trans`'s
   conclusion to reflexive, `at_drop`'s `unset` to the written value,
   `at_keep_prev`'s `vy` to `vx`, `at_put_held_other`'s preserved value to
-  `unset`, `put_held`'s held *address* to the held *value*, and
-  `put_init_notfull`'s one-store state to `init` must make `mm0-rs` refuse at
+  `unset`, `put_held`'s held *address* to the held *value*,
+  `put_init_notfull`'s one-store state to `init`, `at_put_held_keeps`'s kept
+  address to the written one, and `at_put_held_no_new`'s `held m y` to
+  `held init y` must make `mm0-rs` refuse at
   `toy_jit_store_visible`, `toy_jit_store_load_other`,
   `toy_jit_two_cells_preserved`, `toy_jit_third_store_drops_oldest`,
-  `toy_jit_recent_cells_readable`, `toy_jit_refresh_keeps_other_cell` (twice) and
-  `toy_jit_two_cells_preserved` respectively — a proof that survived its own
+  `toy_jit_recent_cells_readable`, `toy_jit_refresh_keeps_other_cell` (twice),
+  `toy_jit_two_cells_preserved`, `toy_jit_refresh_keeps_held_cells` and
+  `toy_jit_refresh_no_new_held` respectively — a proof that survived its own
   axiom being falsified would be deriving the claim from something else, and is
   reported as a failure. A mutation that fails to apply is a failure too. The
   control was itself tested by making the mutations no-ops (patterns that match

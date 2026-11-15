@@ -9,7 +9,7 @@
 -- check that the projection then goes through, from named and cited memory
 -- axioms, with nothing assumed about the compiler.
 --
--- WHAT IS PROVED HERE (15 theorems, 0 sorry):
+-- WHAT IS PROVED HERE (18 theorems, 0 sorry):
 --
 --   toy_init_unset                a fresh memory reads `unset` at every address
 --   toy_jit_store_visible         a store makes the value visible at the
@@ -24,6 +24,10 @@
 --   toy_jit_refresh_keeps_other_cell   a store at an address the memory
 --   toy_isa_refresh_keeps_other_cell   already holds updates that cell in place
 --                                 and leaves the other cell readable
+--   toy_jit_refresh_keeps_held_cells   … and leaves the other cell *held*
+--   toy_jit_refresh_no_new_held    … and holds no address it did not hold
+--   toy_jit_repeated_refresh_never_evicts  two refreshes at one address still
+--                                 leave the other cell's value readable
 --   toy_jit_third_store_drops_oldest   a third distinct store drops the earliest
 --                                 address (capacity 2, FIFO)
 --   toy_jit_fourth_store_drops_oldest  a fourth does the same to the next oldest
@@ -159,6 +163,29 @@ axiom at_put_held_other (m: Mem) (x y w: Val) (h: $ vne x y $)
   (k: $ held m x $):
   $ veq (get (put m x w) y) (get m y) $;
 
+-- The held *set* is what a refresh leaves alone, and saying it in membership
+-- terms is how this toy proves "a refresh never evicts" without arithmetic: the
+-- written address is held afterwards (`put_held`), every other held address is
+-- still held (`at_put_held_keeps`), and nothing becomes held
+-- (`at_put_held_no_new`). Those three together say the set of held addresses —
+-- hence its size — is unchanged by a refresh, which is the property a program
+-- storing repeatedly to one address relies on.
+--
+-- `at_put_held_keeps` carries the guard `held m x` — the write must be a
+-- refresh, because a write to a *fresh* address in a full memory evicts, and
+-- `scripts/toy-witness` exhibits that memory. `at_put_held_no_new` needs no
+-- guard beyond `vne x y`: a write introduces no held address other than the one
+-- it writes, so a held address that is not the written one was already held. An
+-- earlier draft guarded it with `held m x` too, and the witness checker rejected
+-- the *guard* — the statement is true without it, so dropping it made the axiom
+-- stronger and the rejection honest.
+axiom at_put_held_keeps (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held m y $) (k: $ held m x $):
+  $ held (put m x w) y $;
+axiom at_put_held_no_new (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held (put m x w) y $):
+  $ held m y $;
+
 -- Free cell, writing elsewhere: nothing is evicted, so every other address
 -- keeps its content. Guarded by `notfull`, for the same reason `put_notfull` is
 -- not an axiom: an unguarded version would claim unbounded memory and
@@ -242,6 +269,30 @@ theorem toy_jit_refresh_keeps_other_cell (a b va vb va2: Val)
 theorem toy_isa_refresh_keeps_other_cell (a b va vb va2: Val)
   (h: $ vne a b $):
   $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) b) vb $;
+
+-- The held-set half of the same case: the refresh leaves `b` held, and creates
+-- no address that was not held before. Those are the two directions the size of
+-- the held set could move in, which is why "the number of held addresses does
+-- not change" is proved as membership rather than counted — the toy has no
+-- arithmetic, and interval-free membership is what a real lowering would need
+-- anyway to argue that a repeated store cannot push a live cell out.
+theorem toy_jit_refresh_keeps_held_cells (a b va vb va2: Val)
+  (h: $ vne a b $):
+  $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $;
+
+theorem toy_jit_refresh_no_new_held (a b va vb va2: Val) (h: $ vne a b $)
+  (k: $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $):
+  $ held (jit_store_i64 (jit_store_i64 init a va) b vb) b $;
+
+-- And the consequence a program depends on: store `a`, store `b`, then refresh
+-- `a` twice, and `b`'s value is still what a load returns. Nothing is evicted by
+-- repetition at one address, however many times it repeats — the two-step case
+-- is the induction step, and the axiom it rests on (`at_put_held_other`) is
+-- stated for an arbitrary memory, so the step does not depend on how many
+-- refreshes came before it.
+theorem toy_jit_repeated_refresh_never_evicts (a b va vb va2 va3: Val)
+  (h: $ vne a b $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a va3) b) vb $;
 
 -- Capacity 2, oldest out first: the third distinct store drops the earliest
 -- address. This is the eviction case, and it is an axiom instance rather than a

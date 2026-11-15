@@ -41,6 +41,12 @@ axiom put_held_other (m: Mem) (a b v: Val) (h: $ vne a b $)
 axiom at_put_held_other (m: Mem) (x y w: Val) (h: $ vne x y $)
   (k: $ held m x $):
   $ veq (get (put m x w) y) (get m y) $;
+axiom at_put_held_keeps (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held m y $) (k: $ held m x $):
+  $ held (put m x w) y $;
+axiom at_put_held_no_new (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held (put m x w) y $):
+  $ held m y $;
 axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $) (k: $ notfull m $):
   $ veq (get (put m a v) b) (get m b) $;
 axiom at_drop (m: Mem) (x y z: Val) (vx vy vz: Val)
@@ -119,6 +125,37 @@ pub theorem toy_isa_refresh_keeps_other_cell (a b va vb va2: Val)
        (at_put_held_other (h)
          (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)))
        (at_put));
+
+-- The held-set half of the refresh case. `at_put_held_keeps` needs the other
+-- cell to be held beforehand, which the second store establishes (`put_held`),
+-- and that `a` is still held after it — which is `put_held_other`: a write
+-- elsewhere keeps a held cell while a cell is free, and `put_init_notfull` says
+-- the one-store memory has one. `at_put_held_no_new` is the same fact backwards.
+pub theorem toy_jit_refresh_keeps_held_cells (a b va vb va2: Val)
+    (h: $ vne a b $):
+  $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $
+  = '(at_put_held_keeps (h) (put_held)
+       (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)));
+
+pub theorem toy_jit_refresh_no_new_held (a b va vb va2: Val) (h: $ vne a b $)
+    (k: $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $):
+  $ held (jit_store_i64 (jit_store_i64 init a va) b vb) b $
+  = '(at_put_held_no_new (h) (k));
+
+-- Two refreshes, chained: each one leaves `b` alone (`at_put_held_other`, with
+-- `put_held` saying the address is held for the next one), and `at_put` says what
+-- `b` holds. The middle term of each `veq_trans` is a read of `b` from the
+-- memory the neighbouring step produced, which is why the steps compose without
+-- mentioning how many came before.
+pub theorem toy_jit_repeated_refresh_never_evicts (a b va vb va2 va3: Val)
+    (h: $ vne a b $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a va3) b) vb $
+  = '(veq_trans
+       (at_put_held_other (h) (put_held))
+       (veq_trans
+         (at_put_held_other (h)
+           (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)))
+         (at_put)));
 
 pub theorem toy_jit_third_store_drops_oldest
     (a b c va vb vc: Val) (hab: $ vne a b $) (hac: $ vne a c $)

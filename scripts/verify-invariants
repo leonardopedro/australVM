@@ -752,13 +752,13 @@ PY
             _toy_shape="$(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
             echo "  [detail] $_toy_shape"
             if grep -q 'sorry' "$_cert_tmp/toy.log"; then
-                check "W9.3: the toy projection's fifteen theorems check without sorry" false
+                check "W9.3: the toy projection's eighteen theorems check without sorry" false
             else
-                check "W9.3: the toy projection's fifteen theorems check without sorry" true
+                check "W9.3: the toy projection's eighteen theorems check without sorry" true
             fi
         else
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
-            check "W9.3: the toy projection's fifteen theorems check without sorry" false
+            check "W9.3: the toy projection's eighteen theorems check without sorry" false
         fi
         # A count in prose is a claim like any other, and the one that goes stale
         # first: add a theorem or an axiom and the paragraph describing the file
@@ -868,12 +868,14 @@ $ veq (get (put (put (put m x vx) y vy) z vz) y) vy $|$ veq (get (put (put (put 
 $ veq (get (put m x w) y) (get m y) $|$ veq (get (put m x w) y) unset $|toy_jit_refresh_keeps_other_cell
 $ held (put m a v) a $|$ held (put m a v) v $|toy_jit_refresh_keeps_other_cell
 $ notfull (put init a v) $|$ notfull init $|toy_jit_two_cells_preserved
+$ held (put m x w) y $;|$ held (put m x w) x $;|toy_jit_refresh_keeps_held_cells
+$ held m y $;|$ held init y $;|toy_jit_refresh_no_new_held
 MUTATIONS
-        if $_mut_ok && [ "$_mut_n" -eq 8 ]; then
+        if $_mut_ok && [ "$_mut_n" -eq 10 ]; then
             echo "  [detail] mutations refused:$(echo "$_mut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" true
         else
-            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 8)" >&2
+            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 10)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" false
         fi
 
