@@ -3118,17 +3118,22 @@ The stack samples agree with the split rather than the intuition: in the flat
 regions they land in `Deriver.infer`/`_check` recursion, and in the writing
 ones in `tree_json` → `Enc._enc_tokens`, never in a container or a memo.
 
-**Can it finish?** Every counter says yes and none of them is unbounded: RSS sits
-at **2 250 MB** with the cap at 10 GiB, `axmax` freezes at 8 254 713 455 B after
-t=2 700 s, and both long runs converge on the same endpoint — **125 408 rules ·
-24 035 obligations** (`ns-long2` reaches the rule count at t=6 965 s, this run
-was 7 rules and 5 obligations short when it was stopped by hand at t=8 282 s,
-short of its 3-hour clock). What it cannot do is finish inside a clock that has
+**Can it finish?** Memory is not the limit and never was: RSS sits at
+**2 250 MB** with the cap at 10 GiB, and `axmax` freezes at 8 254 713 455 B after
+t=2 700 s. The two long runs agreed to within 7 rules and 5 obligations at
+**125 408 rules · 24 035 obligations** (`ns-long2` reaches the rule count at
+t=6 965 s, this run was short when it was stopped by hand at t=8 282 s, short of
+its 3-hour clock) — but §13.32 measures what that agreement actually was: not a
+terminal state the walk converges on, but two runs stopped at comparable elapsed
+times. A 14 400 s run passed 125 408 and was still draining at roughly one rule
+per 400 s when its clock killed it. What it cannot do is finish inside a clock that has
 been tried so far, and the reason is now named: a handful of individual `infer`
 calls of 300–1 900 s each, which emit kilobytes apiece. The row's price is
 ~48 GB of axiom text and a **124 GB** obligation file, and its wall clock is
 three to four hours on this host — twice what §13.30 assumed, and *time on
-repeated inference*, not memory, not text.
+repeated inference*, not memory, not text. The 14 400 s run in §13.32 settles
+that estimate in the other direction: the first three hours buy 125 417 of the
+rules at a rate that keeps falling.
 
 What that leaves, in order: (1) the walk itself — `infer` is re-entered under
 the same context for the same expression across those long gaps, and the `ctx`
@@ -3166,13 +3171,12 @@ old file, cut. Measured on `multiShiftSeq_succ` at a 200 kB limit: four parts,
 manifest lines and index entries matching, and 21 sampled index records read back
 by `seek`+`read` parse and carry the id the index promised.
 
-The bound is `limit` bytes **plus at most one certificate**: a line is atomic, and
-the largest certificate in the corpus is 8.25 GB (§13.31), so a part can be that
-large no matter what limit is asked for. With the default 2 GiB, the ns row
-becomes 62 parts and a final one that rolling may leave empty — an empty part is
-removed rather than published. Unset, the emitter writes the historical single
-file exactly as before, which is why every earlier artifact in this document
-still `cmp`s.
+The bound is `limit` bytes **plus at most one certificate**: a line is atomic, so
+a part can be as large as the largest single certificate no matter what limit is
+asked for — 25 GB on the ns row, measured below. A final part that rolling
+leaves empty is removed rather than published. Unset, the emitter writes the
+historical single file exactly as before, which is why every earlier artifact in
+this document still `cmp`s.
 
 #### The `check` memo, and the header it broke
 
@@ -3193,7 +3197,8 @@ artifact:
 > -- Rules applied : 1929299 (const type ×620796, …, ty_var ×8974, …)
 ```
 
-Two bytes smaller, at line 6. Each entry therefore keeps the exact **sequence** of
+The two artifacts diverge at line 6, in that header. Each entry therefore keeps
+the exact **sequence** of
 rule names its call applied, and a hit replays it through `_apply_rules` — counts,
 first-appearance order, and the enclosing call's own recording. With the replay,
 on `FockPairPerturbation.abs_re_inner_pairVec_le` (833 184 lookups, 36 075 hits,
@@ -3207,7 +3212,79 @@ on `FockPairPerturbation.abs_re_inner_pairVec_le` (833 184 lookups, 36 075 hits,
 
 And the timing is neutral on that row: **73.2 s with the memo, 70.9 s without**
 — inside the run-to-run spread, because the 4.3 % of lookups that hit are tiny
-proof strings. The memo is on by default (`LTP_CHK_MEMO=0` disables it) because
-it is byte-neutral and never slower than the walk it replaces by design, but the
-row that motivated it is the one that decides whether it was worth writing:
-`nsOuterFock…singleTime`, where the gaps are minutes rather than microseconds.
+proof strings (a third run, under the trace instruments, took 75.3 s at a 520 MB
+peak).
+
+#### The 14 400 s run: the row does not complete
+
+`nsOuterFock…singleTime` was then run with both changes, a 14 400 s clock,
+`LTP_CHK_MEMO=1`, `LTP_OBLIG_CHUNK=2147483648`, and the trace and census
+instruments. It was killed by its clock with **no artifact finished**:
+
+| at the kill | value |
+| --- | ---: |
+| active wall clock | 14 305 s (28 298 s of host suspend aside) |
+| rules · assumptions · obligations | 125 417 · 24 394 · 24 041 |
+| axiom text spooled | 76 673 521 917 B (76.7 GB) |
+| obligation stream written | 199 715 045 782 B (199.7 GB), 21 parts |
+| peak RSS | 3 992 MB (cap 10 GiB) |
+| `.mm0` / `.mm1` | none — never reached the write phase |
+
+The clock accounting is worth stating because the trace does not show it: the
+host suspended for 28 298 s mid-run, `time.monotonic` counts that and
+`timeout`'s `ITIMER_REAL` does not, so the emitter outlived its nominal clock by
+exactly the suspend and was killed at t=42 603.8 of trace time = 14 305 s of
+active time (cross-checked against 10 913 s of CPU over 39 213 s elapsed).
+
+**What §13.31 got wrong.** Its "endpoint" of 125 408 rules · 24 035 obligations
+is not terminal. This run passed it at t=38 895 and was still producing when it
+died: 125 408 → 125 417 rules in the last 3 100 s, three of them in the last
+1 300 s. The drain rate at the end is ~1 rule per 400 s, and neither the
+assumption count nor the obligation count is closing either. Two runs agreeing to
+within 7 rules was two runs stopped at comparable elapsed time, not convergence.
+
+**What the memo did, on the row it was written for.** 51 631 lookups, **17 493
+hits (33.9 %)**, and **5 481 B of proof text replayed** over 14 305 s. A hit rate
+of a third sounds like a win and is not one: the walk reliably re-checks cheap
+terms like the bound variable of a spine, and the minutes are spent inside single
+`infer` calls building certificates of tens of gigabytes, which the memo cannot
+touch because they emit obligations and are therefore never stored. At comparable
+elapsed time
+there is no difference from §13.31's run either (this one had 125 395 rules at
+t=6 808 s; `ns-long2` reached 125 408 at t=6 965 s). So `LTP_CHK_MEMO` ships
+**off by default**: byte-neutral, measured neutral, and 512 MB of ceiling not
+paid for.
+
+#### Chunking measured on the real row
+
+21 parts, no single part smaller than the 2 GiB limit it was asked for, and this
+distribution (bytes):
+
+| min | median | max |
+| ---: | ---: | ---: |
+| 2 152 844 168 | 11 773 636 045 | 25 252 047 487 |
+
+The bound is exactly what the design says and it is weaker than the 124 GB
+framing suggests: a part is `limit` **plus one certificate**, and the largest
+part the sink wrote is **25 252 047 487 B**. Splitting a *line* would break the
+format, so a consumer that wants uniform 2 GiB parts on this row cannot have
+them — the parts are bounded, the individual certificates are not.
+
+One failure mode showed up only because the run was killed rather than finished:
+the manifest is written by `close()`, so a clock-killed run has parts and no
+manifest, and the index was buffered, so it was lost with the process. The index
+is now line-buffered and the contract is measured, by killing a 72 s row with
+`SIGKILL` mid-walk: **562 index entries, 6 parts, every entry resolving to a
+complete certificate whose `id` matches, 0 pointing past EOF**. The only casualty
+is the certificate being written at that instant — the last part ends without a
+newline, and no index entry names it, so a consumer that iterates the index never
+sees the truncated line. A killed run still needs a manifest rebuilt from its
+parts, which is a directory listing plus 21 `stat`s.
+
+What that leaves for this row, in order: (1) the certificates, not the walk —
+tens-of-gigabytes single `infer` results are the actual cost, and a size cap per
+certificate (or an emitter that streams one) is the only thing that would make
+the row's parts uniform; (2) the drain — at ~1 rule per 400 s the last few rules are
+hours each, so a "finished" run needs either a much larger clock or a reason to
+stop; (3) `LTP_CHK_MEMO`, which is correct, cheap, and did not pay: it stays
+available and off.

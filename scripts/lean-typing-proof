@@ -578,7 +578,13 @@ class ObligationSink:
         self._first_id = None
         self._last_id = None
         if self.limit and self._index_fh is None:
-            self._index_fh = Path(f"{self.stem}_obligations.index.jsonl").open("w")
+            # Line buffered, so a kill leaves an index whose every entry names a
+            # *complete* certificate. On the ns row the emitter is stopped by
+            # its clock (§13.32) and the manifest, which can only be written at
+            # a clean `close`, never appears; a durable index is then the only
+            # way to locate a certificate without scanning 200 GB.
+            self._index_fh = Path(
+                f"{self.stem}_obligations.index.jsonl").open("w", buffering=1)
 
     def begin(self, ax: str) -> None:
         """Start one certificate: its id is all the index needs from it."""
@@ -1424,7 +1430,7 @@ class Deriver:
         self._chk_rec: list[str] | None = None
         self._chk_memo_bytes = 0
         self._chk_rule_cells = 0
-        self._chk_on = os.environ.get("LTP_CHK_MEMO", "1") != "0"
+        self._chk_on = os.environ.get("LTP_CHK_MEMO", "0") == "1"
         self._chk_calls = 0
         self._chk_hits = 0
         self._chk_saved = 0
@@ -2163,7 +2169,12 @@ class Deriver:
         after the `Unfoldable` fallback, so an assumed leaf is cached only if the
         leaf axiom was emitted by an earlier identical call — which cannot happen
         (that call emitted an axiom), so assumed leaves are simply not cached.
-        `LTP_CHK_MEMO=0` turns it off.
+
+        Off by default: it is byte-neutral (§13.32 `cmp`s all three artifacts),
+        but on both rows measured — `abs_re_inner_pairVec_le` and
+        `nsOuterFock…singleTime` — it neither sped the walk up nor slowed it
+        measurably, so it stays opt-in until a row shows it paying.
+        `LTP_CHK_MEMO=1` turns it on.
         """
         if not self._chk_on:
             return self._check_or_assume(eid, expected, env, tail)
