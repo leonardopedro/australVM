@@ -29,6 +29,7 @@ Usage:
     scripts/mm0-comparator approve --dry-run <artifact>   # show, write nothing
     scripts/mm0-comparator check [<artifact> ...]     # all approved and unapproved
     scripts/mm0-comparator selftest                   # the three negative controls
+    scripts/mm0-comparator emitters                   # the EMITTERS registry, one row per stem
 
 Both modes take `--approved-root DIR` (default `mm0/approved`). That flag is
 how an artifact nobody has approved yet gets its flow exercised end to end
@@ -603,6 +604,21 @@ def cmd_selftest(args) -> int:
     return 0
 
 
+def cmd_emitters(_args) -> int:
+    """`<stem>\t<script>\t<mode>` for every registered emitter.
+
+    The plan's §W3 table says which command owns each artifact; the table is
+    prose until something compares it with this registry. `verify-invariants`
+    reads these lines and requires every emitter cell to name a `script` that
+    exists and is executable, with the same `mode` this function reports — and
+    every cell that says "none" to be genuinely absent here.
+    """
+    for stem in sorted(EMITTERS):
+        script, mode = EMITTERS[stem]
+        print(f"{stem}\t{script}\t{mode}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         prog="mm0-comparator",
@@ -622,12 +638,15 @@ def main(argv: list[str]) -> int:
         "--dry-run", action="store_true",
         help="print the statements that would be approved, write nothing")
     sub.add_parser("selftest")
+    sub.add_parser("emitters")
     args = p.parse_args(argv)
     try:
         if args.mode == "approve":
             return cmd_approve(args)
         if args.mode == "check":
             return cmd_check(args)
+        if args.mode == "emitters":
+            return cmd_emitters(args)
         return cmd_selftest(args)
     except Refusal as e:
         print(f"mm0-comparator: REFUSED: {e}", file=sys.stderr)

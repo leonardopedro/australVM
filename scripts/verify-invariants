@@ -1179,6 +1179,69 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
         check "W3: the plan's §W3 stmts column matches the measured counts" false
     fi
+    # … and the emitter column has to name something real. The `isa` row claims
+    # `scripts/isa-encdec check` is "registered in EMITTERS", so that command must
+    # exist, be executable, and be the script+mode the comparator actually
+    # registers for the stem; the three rows that say "none" must be genuinely
+    # unowned, or a reader is told nothing keeps an artifact fresh when a check
+    # would in fact run. Without this the column is prose — rename the script, or
+    # register an emitter for a stem the table says has none, and the `stmts`
+    # comparison stays green while the table misdescribes what owns the file.
+    _w3_reg="$(cd "$repo_root" && python3 scripts/mm0-comparator emitters 2>/dev/null)"
+    _w3_emit_rows="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $5
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            print path "\t" cell
+        }' "$_plan_file")"
+    _w3_emit_bad=""
+    _w3_emit_rows_n=0
+    while IFS="$(printf '\t')" read -r _e_stem _e_cell; do
+        [ -n "$_e_stem" ] || continue
+        _w3_emit_rows_n=$((_w3_emit_rows_n + 1))
+        _e_reg="$(printf '%s\n' "$_w3_reg" | awk -F'\t' -v s="$_e_stem" '$1==s{print $2" "$3}')"
+        case "$_e_cell" in
+            none*)
+                if [ -n "$_e_reg" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(says none, but EMITTERS registers '$_e_reg')"
+                fi
+                ;;
+            '`'*'`'*)
+                _e_cmd="$(printf '%s' "$_e_cell" | sed -n 's/^`\([^`]*\)`.*/\1/p')"
+                _e_script="${_e_cmd%% *}"
+                _e_mode=""
+                case "$_e_cmd" in
+                    *' '*) _e_mode="${_e_cmd#* }" ;;
+                esac
+                if [ -z "$_e_cmd" ] || [ -z "$_e_script" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(emitter cell has an empty command)"
+                elif [ ! -f "$repo_root/$_e_script" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(names '$_e_script', which does not exist)"
+                elif [ ! -x "$repo_root/$_e_script" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(names '$_e_script', which is not executable)"
+                elif [ "$_e_reg" != "$_e_script $_e_mode" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(cell says '$_e_cmd', EMITTERS says '${_e_reg:-nothing}')"
+                fi
+                ;;
+            *)
+                _w3_emit_bad="$_w3_emit_bad $_e_stem(emitter cell names no command and does not say none: '$(printf '%s' "$_e_cell" | cut -c1-40)')"
+                ;;
+        esac
+    done <<EOF
+$_w3_emit_rows
+EOF
+    if [ -z "$_w3_reg" ]; then
+        gap "W3: the plan's §W3 emitter column not compared (the comparator printed no registry)"
+    elif [ "$_w3_emit_rows_n" -eq 0 ]; then
+        gap "W3: the plan's §W3 emitter column not compared (no table row carries one)"
+    elif [ -z "$_w3_emit_bad" ]; then
+        check "W3: every §W3 emitter cell names a real command ($_w3_emit_rows_n row(s))" true
+    else
+        echo "  [detail] §W3 emitter column:${_w3_emit_bad}" >&2
+        check "W3: every §W3 emitter cell names a real command" false
+    fi
     check_py "W3: comparator self-test (all three negative controls refuse)" \
         python3 "$repo_root/scripts/mm0-comparator" selftest
 else

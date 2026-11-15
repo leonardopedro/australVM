@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 121 passed, 4 explained gap(s), 0 failed
+verify-invariants: 122 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -333,8 +333,9 @@ verify-invariants: 121 passed, 4 explained gap(s), 0 failed
 w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(61 stmt)
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
+  [pass] W3: every §W3 emitter cell names a real command (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 118 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean interpreter + W9.1)
+verify-invariants: 119 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean interpreter + W9.1)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -726,6 +727,7 @@ the artifact, so `mm0-c` checks them too.
   w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(61 stmt)
   w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
+  [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   ```
 
   … and then parses this table and diffs the pending line against it. The
@@ -743,6 +745,25 @@ the artifact, so `mm0-c` checks them too.
   that is *not* pending here (`flux1d_certificate(row left behind for an artifact
   that is not pending here)`) — the second is what happens after an approval
   lands and the row is forgotten, and its count would then be checking nothing.
+
+  The **emitter column is checked the same way**, because a column saying which
+  command owns an artifact is a claim like `stmts` is. `mm0-comparator emitters`
+  prints the registry the comparator actually uses (`<stem>\t<script>\t<mode>`,
+  the single source of truth for `EMITTERS`), and `verify-invariants` parses this
+  table's fifth column and requires, per row: a cell that names a command
+  (`` `scripts/isa-encdec check` ``) must name a file that exists and is
+  executable, with the same script *and* mode the registry holds — so a renamed
+  emitter, or a mode change, is red; a cell that says `none` must be *genuinely*
+  unowned, so registering an emitter for `slot_layout` makes the table wrong
+  rather than merely incomplete; and a cell in neither form fails, which is what
+  stops the column drifting back into prose. Measured 2026-11-15 with four
+  drift controls on copies of this table (a nonexistent script, `isa` changed to
+  `none`, a real-but-unregistered `scripts/toy-witness` on `store_projection`, and
+  a free-form cell): each one turned `[FAIL] W3: every §W3 emitter cell names a
+  real command` with the row named, and the committed table passes (4 rows).
+  The check is static — it proves the command *is there* and *is the one
+  registered*, not that it runs; running it is what `mm0-comparator approve`/
+  `check` does once an approval exists (`emitter_check`).
   Measured 2026-11-15 by perturbing both at once: `1 failed`, with exactly those
   two messages. The entries are in the table's row order; the fix for a stale
   cell is to read the `w3-pending:` line, not to re-derive the count by hand. The

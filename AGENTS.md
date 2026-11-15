@@ -373,7 +373,12 @@ a shrunk artifact is visible even though its statement diff is the enforcement).
 The plan's §W3 `stmts` column is checked against the pending numbers on every run
 — a cell that disagrees, or a row left behind for an already-approved artifact,
 fails `verify-invariants` with the row named, so edit the table only by reading
-that line.
+that line. The table's `emitter that owns it` column is checked too: a cell
+naming a command (`` `scripts/isa-encdec check` ``) must name a file that exists
+and is executable with the script *and* mode `python3 scripts/mm0-comparator
+emitters` reports for that stem, a cell saying `none` must be genuinely
+unregistered, and any other wording fails — the registry in `EMITTERS` is the
+single source of truth, so add an emitter there first and then update the row.
 
 ## Gotchas
 
