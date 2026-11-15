@@ -838,6 +838,47 @@ MUTATIONS
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" false
         fi
 
+        # The axioms are consistent because a concrete model satisfies them, and
+        # that model lives in the toy's header as prose. `scripts/toy-witness`
+        # runs it instead: every axiom, universally quantified, over all memories
+        # of at most two cells and a small atom domain, plus the three candidates
+        # the toy rejected — each of which must fail there, or the guard it was
+        # given was unnecessary and the rejection was wrong. This is exhaustive
+        # over a finite domain, not a proof over an arbitrary `Val` (the file's
+        # header says so); what it buys is that the witness is executed rather
+        # than asserted, which is how `put_notfull` would have been caught.
+        _wit_rc=-1
+        if command -v rustc >/dev/null 2>&1; then
+            _wit_rc=0
+            "$repo_root/scripts/toy-witness" >"$_cert_tmp/witness.log" 2>&1 || _wit_rc=$?
+        fi
+        if [ "$_wit_rc" -eq 0 ]; then
+            echo "  [detail] $(tail -1 "$_cert_tmp/witness.log")"
+            check "W9.3: the toy's axioms hold in a concrete model (no counterexample)" true
+        elif [ "$_wit_rc" -ge 0 ] && [ "$_wit_rc" -ne 2 ]; then
+            grep -E '^\[FAIL\]' "$_cert_tmp/witness.log" >&2 \
+                || tail -5 "$_cert_tmp/witness.log" >&2
+            check "W9.3: the toy's axioms hold in a concrete model (no counterexample)" false
+        else
+            gap "W9.3: toy axioms not run against a concrete model (rustc not on PATH)"
+        fi
+        # A new axiom must be *checked*, not just declared: the names the witness
+        # proves are compared with the names the artifact carries, so adding an
+        # axiom to the `.mm0` without teaching the model about it is red.
+        if [ -s "$_cert_tmp/witness.log" ]; then
+            _ax_file="$(sed -n 's/^axiom \([a-z0-9_]*\).*/\1/p' "$_toy" | sort)"
+            _ax_wit="$(sed -n 's/^\[hold\]  *\([a-z0-9_]*\).*/\1/p' \
+                "$_cert_tmp/witness.log" | sort)"
+            _ax_n="$(printf '%s\n' "$_ax_file" | grep -c . || true)"
+            if [ "$_ax_n" -gt 0 ] && [ "$_ax_file" = "$_ax_wit" ]; then
+                check "W9.3: the witness exercises all $_ax_n axioms the toy declares" true
+            else
+                echo "  [detail] axioms: artifact=[$(echo "$_ax_file" | tr '\n' ' ')]" \
+                     "witness=[$(echo "$_ax_wit" | tr '\n' ' ')]" >&2
+                check "W9.3: the witness exercises every axiom the toy declares" false
+            fi
+        fi
+
         # W6: the generated probe is a test, and it has to actually run.
         if command -v cc >/dev/null 2>&1; then
             if cc -O2 -o "$_cert_tmp/probe" "$_cert_tmp/flux1d_probe.c" -lm \

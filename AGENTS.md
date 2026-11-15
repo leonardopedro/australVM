@@ -53,6 +53,9 @@ in-process via native `uk_*` symbols registered in the JIT.
   regenerable cache: `rm -rf _build/default/.ppx/<hash>` is safe).
   `../scripts/check-elf-interpreters` (workspace gate) catches the dead-
   loader half of this class across all repos in one scan.
+  `scripts/toy-witness` compiles `scripts/toy-witness.rs` with `rustc` on every
+  run (no cargo, no build directory) and exits 2 when `rustc` is missing, which
+  `verify-invariants` reports as a `[gap]`.
 - **When `nix develop` itself will not build (measured 2026-11-13, aarch64).**
   This channel's `alt-ergo` fails inside its own build (`ocamlopt: I/O error:
   as --debug-prefix-map …` — no assembler reachable in that sandbox), and since
@@ -291,14 +294,21 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   again; and `toy_jit_recent_cells_readable` says what the fourth store kept.
   Dropping `vne a b` or `notfull m` makes the different-address theorems
   unprovable, so both side conditions are load-bearing. The axioms are
-  consistent by an informal witness (memory = a list of at most two
-  `(address, value)` pairs, `put` = cons on the list with that address's pair
-  removed and the result truncated to two, `get` = first match else `unset`,
-  `held` = the address is one of the pairs, `notfull` = fewer than two); that
-  witness is prose, not a formal proof, and the header says so. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  consistent by a witness that `scripts/toy-witness` **executes** (memory = a
+  list of at most two `(address, value)` pairs, `put` = cons on the list with
+  that address's pair removed and the result truncated to two, `get` = first
+  match else `unset`, `held` = the address is one of the pairs, `notfull` =
+  fewer than two): every axiom is checked over all two-cell memories on a small
+  atom domain, and the three axiom candidates the toy rejected — `put_notfull`
+  and the unguarded `at_put_other`/`put_held_other` — must each *fail* there
+  with a counterexample, so the guards are checked rather than assumed. It is
+  exhaustive over that finite domain, not a proof over arbitrary `Val`, and it
+  is `[gap]`, never a pass, where `rustc` is absent. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
-  neighbouring (easier) statement. It also mutation-tests the file eight ways,
+  neighbouring (easier) statement; and it checks that the witness holds exactly
+  the axioms the artifact declares, so a new axiom cannot slip past the model.
+  It also mutation-tests the file eight ways,
   one per substantive axiom: rewriting `at_put`'s conclusion to "read
   unchanged", `at_put_other`'s preserved value to `unset`, `veq_trans`'s
   conclusion to reflexive, `at_drop`'s `unset` to the written value,

@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 115 passed, 4 explained gap(s), 0 failed
+verify-invariants: 117 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -311,6 +311,9 @@ verify-invariants: 115 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy projection's fifteen theorems check without sorry
   [detail] 3 sorts, 12 term/def, 28 ax/thm
   [pass] W9.3: the toy's theorem count agrees with the plan and AGENTS (15)
+  [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
+  [detail] toy-witness: 13/13 axioms hold in the witness; 3/3 rejected candidates fail as they must
+  [pass] W9.3: the witness exercises all 13 axioms the toy declares
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
   [detail] mutations refused: toy_jit_store_visible(refused),
            toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused),
@@ -324,7 +327,7 @@ verify-invariants: 115 passed, 4 explained gap(s), 0 failed
   [gap]  W3: store_projection_toy has no approved statements (owner commit)
 w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(44 stmt)
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 114 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
+verify-invariants: 116 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -1492,8 +1495,44 @@ first matching pair else `unset`, `held m a` = some pair has address `a`,
 `notfull m` = fewer than two pairs, `veq` equality on `Val`. Under it a refresh
 keeps the other pair, a write elsewhere into a one-pair memory keeps it, three
 distinct writes leave exactly the last two, and after them the middle one is the
-older survivor. That is not a formal consistency proof (MM0 has no
-model-checking entry point here) and the file does not claim one.
+older survivor.
+
+**The witness is executed, not asserted.** Prose is how a false witness survives
+review, so `scripts/toy-witness` (`scripts/toy-witness.rs`, one file, no
+dependencies, compiled with `rustc`) is the same witness as code, and it checks
+every axiom — universally quantified — over all memories of at most two cells
+and all atoms of a small domain:
+
+```
+$ nix develop "git+file://$PWD#ocaml" -c bash scripts/toy-witness
+[hold]   at_drop                       4882500 instance(s)
+…
+[reject] put_notfull                       650 instance(s) — m=[(0,0)] a=1 v=0 -> put=[(1,0),(0,0)] has no free cell
+[reject] at_put_other_unguarded          65100 instance(s) — m=[(0,0),(1,1)] a=2 b=1 v=0 -> get 1 was 1 now 0
+[reject] put_held_other_unguarded        23000 instance(s) — m=[(0,0),(1,0)] a=2 b=1 v=0 -> put=[(2,0),(0,0)] no longer holds 1
+toy-witness: 13/13 axioms hold in the witness; 3/3 rejected candidates fail as they must
+```
+
+The three `[reject]` rows are the check's real content: the axioms the toy
+*considered and dropped* must fail, and each fails with the memory that kills it.
+`put_notfull` is the closure axiom removed in the previous revision — the machine
+form of the correction above — and the two unguarded preservation axioms fail for
+the reason their guards exist. A candidate that *held* would be reported
+`[FAIL] … holds in the witness, so the .mm0 rejects it for no reason`; an axiom
+that failed would print its counterexample. Both directions matter, so the run
+is a check on the guard choice, not just on the axioms.
+
+Thresholds, stated rather than implied: the check is exhaustive over a finite
+domain (5 atoms, `0` = `unset`; `--domain 4|6|7` give the identical verdict, so
+the result is not a size artifact) and it is *not* a proof over an arbitrary
+`Val` — an instance needing more atoms than the domain has is the same equality
+pattern renamed, which is an argument the header makes and this program does not
+establish. What it establishes is that the witness runs and that the rejected
+candidates are rejected for a reason. `verify-invariants` runs it (a `[gap]`
+where `rustc` is absent, never a silent pass) and also compares the axiom names
+it holds against the `axiom` declarations in the `.mm0`, so an axiom added to
+the artifact without teaching the model about it is a red gate — the same drift
+control the theorem count gets.
 
 - **Toy theorem count: 15** — pinned, not just described: `verify-invariants`
   fails if `mm0/store_projection_toy.mm0` declares a different number of
@@ -1647,7 +1686,7 @@ The remaining work is exactly what it was, now with a place to put it:
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a two-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 15 theorems from 13 cited axioms, including a refresh keeping the other cell, the third store dropping the earliest address and the fourth dropping the next, with an informal list model for consistency, no `sorry`, gated to cite the current claim and reuse its four transformer names, and mutation-tested in eight ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a two-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 15 theorems from 13 cited axioms, including a refresh keeping the other cell, the third store dropping the earliest address and the fourth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all two-cell memories on a small domain, and the three rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim and reuse its four transformer names, and mutation-tested in eight ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Re-measured 2026-11-14**: 905 reads over 12 modules, **23 distinct**, 23 declared, `UNREACHABLE_OPCODES` now empty (the `sub`/`mul`/`match` producers landed). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
