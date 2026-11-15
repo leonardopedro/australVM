@@ -310,6 +310,7 @@ verify-invariants: 114 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy model proves the stated projection, not a neighbour
   [pass] W9.3: the toy projection's thirteen theorems check without sorry
   [detail] 3 sorts, 11 term/def, 23 ax/thm
+  [pass] W9.3: the toy's theorem count agrees with the plan and AGENTS (13)
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
   [detail] mutations refused: toy_jit_store_visible(refused),
            toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused),

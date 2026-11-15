@@ -770,7 +770,8 @@ PY
         _toy_thm_docs=""
         for _doc in "$repo_root/PLAN_sota_kernel_verification.md" "$repo_root/AGENTS.md"; do
             _doc_n="$(grep -i 'toy theorem count:' "$_doc" \
-                | sed 's/.*toy theorem count: *\([0-9][0-9]*\).*/\1/' | sort -u | tr '\n' ' ')"
+                | sed 's/.*[Tt]oy theorem count: *\([0-9][0-9]*\).*/\1/' \
+                | sort -u | tr '\n' ' ')"
             if [ "$_doc_n" != "$_toy_thm_spec " ]; then
                 _toy_thm_docs="$_toy_thm_docs $(basename "$_doc")(say ${_doc_n:-nothing})"
             fi

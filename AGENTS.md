@@ -267,10 +267,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   (`at_keep_prev`: the previous pair's newest survives). An *unconditional*
   preservation axiom would describe unbounded memory and contradict `at_drop`,
   which is why `notfull` is there rather than implied. Ten cited axioms all
-  told, `3 sorts, 11 term/def, 23 ax/thm`, no `sorry`. **Toy theorem count:
-  13** — pinned: `verify-invariants` compares the number of `theorem`s in the
-  `.mm0`, the number of `pub theorem`s proved in the `.mm1`, and this line and
-  the matching one in the plan, so a new theorem with stale prose is a red gate. Both
+  told, `3 sorts, 11 term/def, 23 ax/thm`, no `sorry`. **Toy theorem count: 13**
+  (keep the number on this line) — pinned: `verify-invariants` compares the
+  number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
+  `.mm1`, and this line and the matching one in the plan, so a new theorem with
+  stale prose is a red gate. Both
   sides are defined as the same write/read. The store-then-load-*elsewhere* pair
   (`toy_jit_store_load_other`, `toy_isa_store_load_other`) returns the value
   from before the store; `toy_jit_two_cells_preserved` shows a store at `a` then
