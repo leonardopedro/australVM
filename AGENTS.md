@@ -261,41 +261,54 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   and now covers load as well — the refutation leaving only a projection is the
   same argument for both.- `mm0/store_projection_toy.mm0` + `.mm1` — the projection *proved* on a toy
   model: a **two-cell** memory whose capacity is characterised by one axiom per
-  case — a free cell (`at_put_other`, guarded by `notfull m`: a write leaves
-  other addresses alone), full and evicting (`at_drop`: three pairwise-distinct
-  stores and the earliest address reads `unset`), full and keeping
-  (`at_keep_prev`: the previous pair's newest survives). An *unconditional*
-  preservation axiom would describe unbounded memory and contradict `at_drop`,
-  which is why `notfull` is there rather than implied. Ten cited axioms all
-  told, `3 sorts, 11 term/def, 23 ax/thm`, no `sorry`. **Toy theorem count: 13**
+  case — a refresh (`at_put_held_other`, with `put_held`/`put_held_other`: a
+  write to an address the memory already holds replaces that cell and leaves the
+  other one), a free cell (`at_put_other`, guarded by `notfull m`: a write
+  leaves other addresses alone), full and evicting (`at_drop`: three
+  pairwise-distinct stores and the earliest address reads `unset`), full and
+  keeping (`at_keep_prev`: the previous pair's newest survives). Two guards are
+  load-bearing: an *unconditional* preservation axiom would describe unbounded
+  memory and contradict `at_drop`, and `put_held_other` needs `notfull` because a
+  write to a fresh address in a full memory evicts the oldest cell. `notfull` is
+  **not** closed under `put` — `put_init_notfull` says only that the state after
+  one store on `init` has a free cell; an earlier closure axiom (`put_notfull`)
+  was removed when the refresh case showed it cannot hold with `at_drop`.
+  Thirteen cited axioms all told, `3 sorts, 12 term/def, 28 ax/thm`, no `sorry`.
+  **Toy theorem count: 15**
   (keep the number on this line) — pinned: `verify-invariants` compares the
   number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
   `.mm1`, and this line and the matching one in the plan, so a new theorem with
   stale prose is a red gate. Both
   sides are defined as the same write/read. The store-then-load-*elsewhere* pair
   (`toy_jit_store_load_other`, `toy_isa_store_load_other`) returns the value
-  from before the store; `toy_jit_two_cells_preserved` shows a store at `a` then
+  from before the store;  `toy_jit_two_cells_preserved` shows a store at `a` then
   a distinct `b` leave `a` readable (axioms composed through `veq_trans` with a
-  `notfull` fact from `put_notfull`); `toy_jit_third_store_drops_oldest` and
+  `notfull` fact from `put_init_notfull`); `toy_jit_refresh_keeps_other_cell`
+  shows a third store at `a` refreshing it in place while `b` stays readable;
+  `toy_jit_third_store_drops_oldest` and
   `toy_jit_fourth_store_drops_oldest` fire the *same* `at_drop` axiom on a fresh
   and then a two-store memory — it is stated for an arbitrary `m` so it can fire
   again; and `toy_jit_recent_cells_readable` says what the fourth store kept.
   Dropping `vne a b` or `notfull m` makes the different-address theorems
   unprovable, so both side conditions are load-bearing. The axioms are
   consistent by an informal witness (memory = a list of at most two
-  `(address, value)` pairs, `put = cons + take 1`, `get` = first match else
-  `unset`, `notfull` = fewer than two); that witness is prose, not a formal
-  proof, and the header says so. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  `(address, value)` pairs, `put` = cons on the list with that address's pair
+  removed and the result truncated to two, `get` = first match else `unset`,
+  `held` = the address is one of the pairs, `notfull` = fewer than two); that
+  witness is prose, not a formal proof, and the header says so. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
-  neighbouring (easier) statement. It also mutation-tests the file five ways,
+  neighbouring (easier) statement. It also mutation-tests the file eight ways,
   one per substantive axiom: rewriting `at_put`'s conclusion to "read
   unchanged", `at_put_other`'s preserved value to `unset`, `veq_trans`'s
-  conclusion to reflexive, `at_drop`'s `unset` to the written value, and
-  `at_keep_prev`'s `vy` to `vx` must make `mm0-rs` refuse at
+  conclusion to reflexive, `at_drop`'s `unset` to the written value,
+  `at_keep_prev`'s `vy` to `vx`, `at_put_held_other`'s preserved value to
+  `unset`, `put_held`'s held *address* to the held *value*, and
+  `put_init_notfull`'s one-store state to `init` must make `mm0-rs` refuse at
   `toy_jit_store_visible`, `toy_jit_store_load_other`,
-  `toy_jit_two_cells_preserved`, `toy_jit_third_store_drops_oldest` and
-  `toy_jit_recent_cells_readable` respectively — a proof that survived its own
+  `toy_jit_two_cells_preserved`, `toy_jit_third_store_drops_oldest`,
+  `toy_jit_recent_cells_readable`, `toy_jit_refresh_keeps_other_cell` (twice) and
+  `toy_jit_two_cells_preserved` respectively — a proof that survived its own
   axiom being falsified would be deriving the claim from something else, and is
   reported as a failure. A mutation that fails to apply is a failure too. The
   control was itself tested by making the mutations no-ops (patterns that match
