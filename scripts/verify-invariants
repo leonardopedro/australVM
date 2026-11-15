@@ -759,30 +759,45 @@ PY
             check "W9.3: the toy projection's fifteen theorems check without sorry" false
         fi
         # A count in prose is a claim like any other, and the one that goes stale
-        # first: add a theorem and the paragraph describing the file quietly
-        # overstates what it used to say. So the count is pinned in two places
-        # that must agree with the files — how many `theorem`s the spec declares,
-        # how many it proves, and the single `toy theorem count: N` line in the
-        # plan and in AGENTS.md. Any disagreement is a failure, because either
-        # the prose describes an older file or a proof went missing.
-        _toy_thm_spec="$(grep -c '^theorem ' "$_toy")"
-        _toy_thm_proof="$(grep -c '^pub theorem ' "$repo_root/mm0/store_projection_toy.mm1")"
-        _toy_thm_docs=""
-        for _doc in "$repo_root/PLAN_sota_kernel_verification.md" "$repo_root/AGENTS.md"; do
-            _doc_n="$(grep -i 'toy theorem count:' "$_doc" \
-                | sed 's/.*[Tt]oy theorem count: *\([0-9][0-9]*\).*/\1/' \
-                | sort -u | tr '\n' ' ')"
-            if [ "$_doc_n" != "$_toy_thm_spec " ]; then
-                _toy_thm_docs="$_toy_thm_docs $(basename "$_doc")(say ${_doc_n:-nothing})"
+        # first: add a theorem or an axiom and the paragraph describing the file
+        # quietly overstates what it used to say. So both counts are pinned in two
+        # places that must agree with the files — how many `theorem`/`axiom`
+        # declarations the spec carries, how many the proofs carry, and the single
+        # `toy theorem count: N` / `toy axiom count: N` line in the plan and in
+        # AGENTS.md. Any disagreement is a failure, because either the prose
+        # describes an older file or a proof went missing.
+        _toy_proofs="$repo_root/mm0/store_projection_toy.mm1"
+        _toy_counts=""
+        _toy_counts_bad=""
+        for _kind in theorem axiom; do
+            case "$_kind" in
+                theorem)
+                    _spec="$(grep -c '^theorem ' "$_toy")"
+                    _proof="$(grep -c '^pub theorem ' "$_toy_proofs")" ;;
+                axiom)
+                    _spec="$(grep -c '^axiom ' "$_toy")"
+                    _proof="$(grep -c '^axiom ' "$_toy_proofs")" ;;
+            esac
+            _toy_counts="$_toy_counts $_kind=$_spec"
+            if [ "$_spec" -le 0 ] || [ "$_spec" != "$_proof" ]; then
+                _toy_counts_bad="$_toy_counts_bad file/$_kind(declares $_spec, proves $_proof)"
             fi
+            for _doc in "$repo_root/PLAN_sota_kernel_verification.md" "$repo_root/AGENTS.md"; do
+                _doc_n="$(grep -i "toy $_kind count:" "$_doc" \
+                    | sed "s/.*[Tt]oy $_kind count: *\([0-9][0-9]*\).*/\1/" \
+                    | sort -u | tr '\n' ' ')"
+                if [ "$_doc_n" != "$_spec " ]; then
+                    _toy_counts_bad="$_toy_counts_bad $(basename "$_doc")/$_kind(says $(printf '%s' "${_doc_n:-nothing}" | sed 's/ *$//;s/ /+/g')|file says $_spec)"
+                fi
+            done
         done
-        if [ "$_toy_thm_spec" -gt 0 ] && [ "$_toy_thm_spec" = "$_toy_thm_proof" ] \
-                && [ -z "$_toy_thm_docs" ]; then
-            check "W9.3: the toy's theorem count agrees with the plan and AGENTS ($_toy_thm_spec)" true
+        if [ -z "$_toy_counts_bad" ]; then
+            _thm_n="$(grep -c '^theorem ' "$_toy")"
+            _ax_n="$(grep -c '^axiom ' "$_toy")"
+            check "W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS ($_thm_n theorem(s), $_ax_n axiom(s))" true
         else
-            echo "  [detail] theorem count: spec=$_toy_thm_spec proved=$_toy_thm_proof" \
-                 "docs:${_toy_thm_docs:- agree}" >&2
-            check "W9.3: the toy's theorem count agrees with the plan and AGENTS" false
+            echo "  [detail] counts:$_toy_counts disagree:$_toy_counts_bad" >&2
+            check "W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS" false
         fi
         # Negative control: the proofs must depend on the axioms they cite.
         # A theorem that checks after its axiom has been falsified is provable

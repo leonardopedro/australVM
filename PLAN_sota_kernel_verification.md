@@ -310,7 +310,7 @@ verify-invariants: 117 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy model proves the stated projection, not a neighbour
   [pass] W9.3: the toy projection's fifteen theorems check without sorry
   [detail] 3 sorts, 12 term/def, 28 ax/thm
-  [pass] W9.3: the toy's theorem count agrees with the plan and AGENTS (15)
+  [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (15 theorem(s), 13 axiom(s))
   [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
   [detail] toy-witness: 13/13 axioms hold in the witness; 3/3 rejected candidates fail as they must
   [pass] W9.3: the witness exercises all 13 axioms the toy declares
@@ -1539,6 +1539,11 @@ control the theorem count gets.
   `theorem`s, if the `.mm1` proves a different number, or if this line or the one
   in `AGENTS.md` still carries the old count. Add a theorem to the toy and both
   lines move with it, or the gate is red.
+- **Toy axiom count: 13** — pinned the same way, against the `.mm0`'s `axiom`
+  declarations and the `.mm1`'s, so adding an axiom (as the refresh case did)
+  fails the gate until both documents say so. The count is what a reader uses to
+  size the trust footprint of the toy, which makes a stale one a misstatement
+  rather than a typo.
 
 15 theorems check under `mm0-c` with no `sorry` (`3 sorts, 12 term/def,
 28 ax/thm`, 13 of them axioms): a fresh memory reads `unset`; the JIT-side store
