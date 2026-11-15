@@ -1460,7 +1460,13 @@ first matching pair else `unset`, `notfull` = fewer than two pairs. That is not
 a formal consistency proof (MM0 has no model-checking entry point here) and the
 file does not claim one.
 
-Thirteen theorems check under `mm0-c` with no `sorry` (`3 sorts, 11 term/def,
+- **Toy theorem count: 13** — pinned, not just described: `verify-invariants`
+  fails if `mm0/store_projection_toy.mm0` declares a different number of
+  `theorem`s, if the `.mm1` proves a different number, or if this line or the one
+  in `AGENTS.md` still carries the old count. Add a theorem to the toy and both
+  lines move with it, or the gate is red.
+
+13 theorems check under `mm0-c` with no `sorry` (`3 sorts, 11 term/def,
 23 ax/thm`, 10 of them axioms): a fresh memory reads `unset`; the JIT-side store
 is visible at the written address; the width-8 model side is; the two agree
 there; the two load definitions return the same value; while a cell is free a

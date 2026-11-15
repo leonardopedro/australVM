@@ -758,6 +758,31 @@ PY
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
             check "W9.3: the toy projection's thirteen theorems check without sorry" false
         fi
+        # A count in prose is a claim like any other, and the one that goes stale
+        # first: add a theorem and the paragraph describing the file quietly
+        # overstates what it used to say. So the count is pinned in two places
+        # that must agree with the files — how many `theorem`s the spec declares,
+        # how many it proves, and the single `toy theorem count: N` line in the
+        # plan and in AGENTS.md. Any disagreement is a failure, because either
+        # the prose describes an older file or a proof went missing.
+        _toy_thm_spec="$(grep -c '^theorem ' "$_toy")"
+        _toy_thm_proof="$(grep -c '^pub theorem ' "$repo_root/mm0/store_projection_toy.mm1")"
+        _toy_thm_docs=""
+        for _doc in "$repo_root/PLAN_sota_kernel_verification.md" "$repo_root/AGENTS.md"; do
+            _doc_n="$(grep -i 'toy theorem count:' "$_doc" \
+                | sed 's/.*toy theorem count: *\([0-9][0-9]*\).*/\1/' | sort -u | tr '\n' ' ')"
+            if [ "$_doc_n" != "$_toy_thm_spec " ]; then
+                _toy_thm_docs="$_toy_thm_docs $(basename "$_doc")(say ${_doc_n:-nothing})"
+            fi
+        done
+        if [ "$_toy_thm_spec" -gt 0 ] && [ "$_toy_thm_spec" = "$_toy_thm_proof" ] \
+                && [ -z "$_toy_thm_docs" ]; then
+            check "W9.3: the toy's theorem count agrees with the plan and AGENTS ($_toy_thm_spec)" true
+        else
+            echo "  [detail] theorem count: spec=$_toy_thm_spec proved=$_toy_thm_proof" \
+                 "docs:${_toy_thm_docs:- agree}" >&2
+            check "W9.3: the toy's theorem count agrees with the plan and AGENTS" false
+        fi
         # Negative control: the proofs must depend on the axioms they cite.
         # A theorem that checks after its axiom has been falsified is provable
         # from something else, which would make the file prove less than its
