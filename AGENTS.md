@@ -282,7 +282,9 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
   `.mm1`, and this line and the matching one in the plan, so a new theorem with
   stale prose is a red gate. **Toy axiom count: 13** — pinned the same way, from
-  the `axiom` declarations on both sides. Both
+  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 12 term/def, 28 ax/thm**
+  (keep it on one line) — the figures `mm0-rs` prints, which is the authority
+  here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2. Both
   sides are defined as the same write/read. The store-then-load-*elsewhere* pair
   (`toy_jit_store_load_other`, `toy_isa_store_load_other`) returns the value
   from before the store;  `toy_jit_two_cells_preserved` shows a store at `a` then

@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 118 passed, 4 explained gap(s), 0 failed
+verify-invariants: 119 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -311,6 +311,7 @@ verify-invariants: 118 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy projection's fifteen theorems check without sorry
   [detail] 3 sorts, 12 term/def, 28 ax/thm
   [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (15 theorem(s), 13 axiom(s))
+  [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 12 term/def, 28 ax/thm)
   [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
   [detail] toy-witness: 13/13 axioms hold in the witness; 3/3 rejected candidates fail as they must
   [pass] W9.3: the witness exercises all 13 axioms the toy declares
@@ -329,7 +330,7 @@ w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_p
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 117 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
+verify-invariants: 118 passed, 5 explained gap(s), 0 failed   # + W9.1 no lean shell
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -1563,6 +1564,13 @@ control the theorem count gets.
   fails the gate until both documents say so. The count is what a reader uses to
   size the trust footprint of the toy, which makes a stale one a misstatement
   rather than a typo.
+- **Toy shape: 3 sorts, 12 term/def, 28 ax/thm** — the same figures, pinned to
+  the *compiler's* summary line rather than to a recount here: `mm0-rs` counts
+  `provable sort Prop` as a sort and a `grep '^sort '` does not, so a hand count
+  would pin 2 sorts and be wrong from the start. `verify-invariants` takes the
+  line `mm0-rs` prints and requires this exact figure in both documents, which is
+  what keeps the `3 sorts, N term/def, M ax/thm` quoted elsewhere in this plan
+  from drifting away from the file it describes.
 
 15 theorems check under `mm0-c` with no `sorry` (`3 sorts, 12 term/def,
 28 ax/thm`, 13 of them axioms): a fresh memory reads `unset`; the JIT-side store
