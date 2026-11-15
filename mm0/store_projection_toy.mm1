@@ -59,6 +59,16 @@ axiom at_keep_prev (m: Mem) (x y z: Val) (vx vy vz: Val)
   (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
   $ veq (get (put (put (put m x vx) y vy) z vz) y) vy $;
 
+-- The second width-8 store: the other refresh order, uninterpreted (a different
+-- ordering is not a composition of `put`). Its two laws are the mirror of
+-- `at_put`/`at_put_held_other` — a refresh keeps the value the cell had — which
+-- is what makes the projection fail on the refresh trace at the end.
+term isa_store_w8_keep (m: Mem) (a v: Val): Mem;
+axiom keep_at_put_held (m: Mem) (x w: Val) (k: $ held m x $):
+  $ veq (get (isa_store_w8_keep m x w) x) (get m x) $;
+axiom keep_at_put_other (m: Mem) (x y w: Val) (h: $ vne x y $):
+  $ veq (get (isa_store_w8_keep m x w) y) (get m y) $;
+
 def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def jit_load_i64 (m: Mem) (a: Val): Val = $ get m a $;
@@ -228,3 +238,23 @@ pub theorem toy_width4_load_after_wide_store (m: Mem) (a v: Val):
 pub theorem toy_width4_store_load_roundtrip (m: Mem) (a v: Val):
   $ veq (jit_load_i32 (jit_store_i32 m a v) a) (narrow4 v) $
   = '(veq_trans (narrow4_cong (at_put)) (narrow4_idem));
+
+-- The second definition read back: its own law, against the name a reader looks
+-- for. Nothing composes — the store simply does not change this address.
+pub theorem toy_keep_store_invisible (m: Mem) (a v: Val) (k: $ held m a $):
+  $ veq (get (isa_store_w8_keep m a v) a) (get m a) $
+  = '(keep_at_put_held (k));
+
+-- Where the projection fails. The JIT trace is the refresh trace of the case
+-- above, so `toy_jit_refresh_visible` reads `va2` here while this definition
+-- reads `va`: the value from before the refresh. The two steps are the keep
+-- law (a held cell keeps its value) and the JIT side reaching the cell it wrote
+-- first (`at_put_held_other`, with `put_held` saying the third store refreshed
+-- rather than evicted).
+pub theorem toy_keep_refresh_misses_the_write (a b va vb va2: Val)
+    (h: $ vne a b $):
+  $ veq (get (isa_store_w8_keep (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va $
+  = '(veq_trans
+       (keep_at_put_held
+         (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)))
+       (veq_trans (at_put_other (vne_sym (h)) (put_init_notfull)) (at_put)));

@@ -278,13 +278,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   **not** closed under `put` — `put_init_notfull` says only that the state after
   one store on `init` has a free cell; an earlier closure axiom (`put_notfull`)
   was removed when the refresh case showed it cannot hold with `at_drop`.
-  Seventeen cited axioms all told, `3 sorts, 17 term/def, 42 ax/thm`, no `sorry`.
-  **Toy theorem count: 25**
+  Nineteen cited axioms all told, `3 sorts, 18 term/def, 46 ax/thm`, no `sorry`.
+  **Toy theorem count: 27**
   (keep the number on this line) — pinned: `verify-invariants` compares the
   number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
   `.mm1`, and this line and the matching one in the plan, so a new theorem with
-  stale prose is a red gate. **Toy axiom count: 17** — pinned the same way, from
-  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 17 term/def, 42 ax/thm**
+  stale prose is a red gate. **Toy axiom count: 19** — pinned the same way, from
+  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 18 term/def, 46 ax/thm**
   (keep it on one line) — the figures `mm0-rs` prints, which is the authority
   here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2.
   This is required at every site that quotes the shape, not just here: both
@@ -300,6 +300,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `toy_jit_refresh_keeps_held_cells`/`toy_jit_refresh_no_new_held` show `b` stays
   held and nothing new becomes held, and `toy_jit_repeated_refresh_never_evicts`
   shows two refreshes at `a` still leave `b`'s value readable.
+  `toy_keep_store_invisible`/`toy_keep_refresh_misses_the_write` exist to show
+  where the projection *fails*: `isa_store_w8_keep` is a second width-8 store
+  with the other refresh order (first write wins), so on the same refresh trace
+  it reads the value from before the refresh while the JIT side reads the new
+  one. Both sides of every projection theorem are the same `put`, which is the
+  assumption this pair makes visible.
   `toy_jit_refresh_visible`/`toy_isa_refresh_visible` close the same case from the
   other side — the *refreshed* address reads the new value back — and carry **no
   `vne` guard**, which is the asymmetry worth knowing: what a write returns at its
@@ -322,8 +328,9 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   that address's pair removed and the result truncated to two, `get` = first
   match else `unset`, `held` = the address is one of the pairs, `notfull` =
   fewer than two): every axiom is checked over all two-cell memories on a small
-  atom domain,  and the four rejected candidates — `put_notfull`, the unguarded
-  `at_put_other`/`put_held_other`, and `narrow4_is_identity` — must each *fail*
+  atom domain,  and the five rejected candidates — `put_notfull`, the unguarded
+  `at_put_other`/`put_held_other`, `keep_store_visible`, and
+  `narrow4_is_identity` — must each *fail*
   there with a counterexample, so the guards (and the width-4 narrowing) are
   checked rather than assumed. It is
   exhaustive over that finite domain, not a proof over arbitrary `Val`, and it

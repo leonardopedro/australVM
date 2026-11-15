@@ -63,6 +63,12 @@ def notfull (m : Mem) : Bool := m.length < 2
 def narrow4 (x : Atom) : Atom :=
   ⟨x.val % 2, Nat.lt_of_lt_of_le (Nat.mod_lt _ (by decide)) (by decide)⟩
 
+/-- `isa_store_w8_keep m a v`: the second width-8 store, with the *other* refresh
+order — a write to a held address keeps the value the cell already has. The model
+is the identity: nothing readable moves, which is exactly what its two laws say,
+and why a definition with this ordering cannot make a refresh visible. -/
+def keep (m : Mem) (_a _v : Atom) : Mem := m
+
 /-- Every memory the quantifiers range over: the empty one, all one-cell ones,
 and all two-cell ones. Two-cell memories include shapes `put` never builds (both
 cells at one address); they are still values of `Mem` the axioms quantify over. -/
@@ -150,6 +156,16 @@ theorem ax_at_drop :
         if distinct3 x y z then get (put (put (put m x vx) y vy) z vz) x = unset else true := by
   native_decide
 
+theorem ax_keep_at_put_held :
+    allMems.all fun m => allAtoms fun x => allAtoms fun w =>
+      if held m x then get (keep m x w) x = get m x else true := by
+  decide
+
+theorem ax_keep_at_put_other :
+    allMems.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun w =>
+      if x ≠ y then get (keep m x w) y = get m y else true := by
+  decide
+
 theorem ax_at_keep_prev :
     allMems.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun z =>
       allAtoms fun vx => allAtoms fun vy => allAtoms fun vz =>
@@ -188,6 +204,15 @@ theorem put_held_other_unguarded_breaks :
   have : held (put [(0, 0), (1, 0)] 2 0) 1 = true := h _ 2 1 0 (by decide) (by decide)
   exact absurd this (by decide)
 
+/-- "The second width-8 store is visible at the address it wrote" — the projection
+instance the other four theorems would need. False under the other refresh order,
+and false here: the store keeps the old value, which is where the projection
+breaks. -/
+theorem keep_store_visible_breaks : ¬ (∀ (m : Mem) (a v : Atom), get (keep m a v) a = v) := by
+  intro h
+  have : get (keep [] 0 1) 0 = 1 := h [] 0 1
+  exact absurd this (by decide)
+
 /-- "Narrowing to four bytes is the identity" — false, and if it held the width-4
 theorems would say nothing: a value that fits in four bytes is not every value. -/
 theorem narrow4_is_identity_breaks : ¬ (∀ x : Atom, narrow4 x = x) := by
@@ -222,11 +247,11 @@ def checkedAxioms : List String :=
   ["veq_refl", "veq_trans", "vne_sym", "narrow4_cong", "narrow4_idem", "get_init",
    "init_notfull", "put_init_notfull", "at_put", "put_held", "put_held_other",
    "at_put_held_other", "at_put_held_keeps", "at_put_held_no_new", "at_put_other",
-   "at_drop", "at_keep_prev"]
+   "at_drop", "at_keep_prev", "keep_at_put_held", "keep_at_put_other"]
 
 def brokenCandidates : List String :=
   ["put_notfull", "at_put_other_unguarded", "put_held_other_unguarded",
-   "narrow4_is_identity"]
+   "keep_store_visible", "narrow4_is_identity"]
 
 #eval do
   IO.println s!"lean-witness: {checkedAxioms.length} axiom(s) hold in the list model, \

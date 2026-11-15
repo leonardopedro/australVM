@@ -90,9 +90,17 @@ impl Mem {
 /// against a real truncation rather than against a function that does nothing.
 fn narrow4(x: u8) -> u8 {
     x % 2
-}
+}    /// `isa_store_w8_keep m a v`: the second width-8 store, with the other
+    /// refresh order — a write to a held address keeps the value the cell
+    /// already has. The model is the identity, which is exactly what its two
+    /// laws say: nothing readable moves, at the written address or anywhere
+    /// else. The store being a no-op is the point — a definition with this
+    /// ordering cannot make a refresh visible.
+    fn keep(self, _a: u8, _v: u8) -> Mem {
+        self
+    }
 
-/// `notfull m`: fewer than two cells.
+    /// `notfull m`: fewer than two cells.
     fn notfull(self) -> bool {
         self.n < 2
     }
@@ -578,6 +586,71 @@ fn main() {
         rows.push(row("at_keep_prev", true, n, ce));
     }
 
+    // keep_at_put_held (m) (x w) (held m x): get (keep m x w) x = get m x.
+    //
+    // The second width-8 store's first law: a refresh under the other ordering
+    // keeps the value the cell already had. The model is the identity, so this
+    // is the statement that the ordering is observable only in what it does
+    // *not* do — and the rejected candidate below is the same statement with the
+    // new value on the right, which must fail.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for m in &mems {
+            for &x in &atoms_v {
+                if !m.held(x) {
+                    continue;
+                }
+                for &w in &atoms_v {
+                    n += 1;
+                    let k = m.keep(x, w);
+                    if k.get(x) != m.get(x) && ce.is_none() {
+                        ce = Some(format!(
+                            "m={} x={x} w={w} -> keep={} read {x} as {} not {}",
+                            m.show(),
+                            k.show(),
+                            k.get(x),
+                            m.get(x)
+                        ));
+                    }
+                }
+            }
+        }
+        rows.push(row("keep_at_put_held", true, n, ce));
+    }
+
+    // keep_at_put_other (m) (x y w) (vne x y): get (keep m x w) y = get m y.
+    //
+    // The second law: no other address is disturbed. Unlike `put`, this needs no
+    // `notfull` premise, because a store that keeps the old value adds no cell
+    // and so can never evict.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for m in &mems {
+            for &x in &atoms_v {
+                for &y in &atoms_v {
+                    if x == y {
+                        continue;
+                    }
+                    for &w in &atoms_v {
+                        n += 1;
+                        let k = m.keep(x, w);
+                        if k.get(y) != m.get(y) && ce.is_none() {
+                            ce = Some(format!(
+                                "m={} x={x} y={y} w={w} -> get {y} was {} now {}",
+                                m.show(),
+                                m.get(y),
+                                k.get(y)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        rows.push(row("keep_at_put_other", true, n, ce));
+    }
+
     // ── Candidates the toy considered and rejected ──────────────────────────
     // Each of these *must* fail here; a candidate that holds would mean the
     // guard it was given in the `.mm0` is unnecessary, and the rejection was
@@ -661,6 +734,33 @@ fn main() {
             }
         }
         rows.push(row("put_held_other_unguarded", false, n, ce));
+    }
+
+    // "The second width-8 store is visible at the address it wrote" — the
+    // projection instance the toy's other four theorems would need. It has to
+    // fail: under the other refresh order a write leaves the old value there,
+    // which is precisely where the projection breaks, and a checker that did not
+    // reject this would be certifying a definition it never examined.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for m in &mems {
+            for &a in &atoms_v {
+                for &v in &atoms_v {
+                    n += 1;
+                    let k = m.keep(a, v);
+                    if k.get(a) != v && ce.is_none() {
+                        ce = Some(format!(
+                            "m={} a={a} v={v} -> keep={} reads {a} as {}, not {v}",
+                            m.show(),
+                            k.show(),
+                            k.get(a)
+                        ));
+                    }
+                }
+            }
+        }
+        rows.push(row("keep_store_visible", false, n, ce));
     }
 
     // "Narrowing to four bytes is the identity" — the discarded alternative that

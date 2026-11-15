@@ -247,6 +247,24 @@ axiom at_keep_prev (m: Mem) (x y z: Val) (vx vy vz: Val)
   (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
   $ veq (get (put (put (put m x vx) y vy) z vz) y) vy $;
 
+-- ── A second width-8 store, with the other refresh order ─────────────────
+-- Every projection theorem below is true by construction, because both sides
+-- are defined as the same `put`. That is the assumption this section makes
+-- visible: `isa_store_w8_keep` is a store with the *other* refresh order — when
+-- the written address is already held, the value the cell already has stays
+-- (first write wins), where `put` keeps the newest. It is an uninterpreted
+-- `term` rather than a `def`, because a different ordering is not expressible
+-- as a composition of `put`; that is part of what the assumption is.
+term isa_store_w8_keep (m: Mem) (a v: Val): Mem;
+
+-- Its two observable laws. A refresh of a held cell changes nothing readable at
+-- that address, and no other address is disturbed — a store that keeps the old
+-- value adds no cell, so unlike `put` this needs no `notfull` guard.
+axiom keep_at_put_held (m: Mem) (x w: Val) (k: $ held m x $):
+  $ veq (get (isa_store_w8_keep m x w) x) (get m x) $;
+axiom keep_at_put_other (m: Mem) (x y w: Val) (h: $ vne x y $):
+  $ veq (get (isa_store_w8_keep m x w) y) (get m y) $;
+
 -- ── The two sides of the projection, concretely ──────────────────────────
 -- The emitted instruction's effect and the model's effect at width 8, both
 -- defined as the same write. In the real projection these are *different*
@@ -414,3 +432,21 @@ theorem toy_width4_load_after_wide_store (m: Mem) (a v: Val):
 -- `narrow4 (narrow4 v)`, and idempotence turns it into `narrow4 v`.
 theorem toy_width4_store_load_roundtrip (m: Mem) (a v: Val):
   $ veq (jit_load_i32 (jit_store_i32 m a v) a) (narrow4 v) $;
+
+-- ── Where the projection fails, once the two sides differ ─────────────────
+-- The second definition read back at the address it wrote: nothing. This is
+-- `keep_at_put_held` restated against the name a reader looks for, and it is
+-- the mirror of `toy_jit_store_visible` — one store makes the new value visible
+-- at its address, the other leaves the old one there.
+theorem toy_keep_store_invisible (m: Mem) (a v: Val) (k: $ held m a $):
+  $ veq (get (isa_store_w8_keep m a v) a) (get m a) $;
+
+-- And where the projection actually fails: on the refresh trace of the case
+-- above — store `a`, store `b`, refresh `a` — the JIT side reads the new value
+-- (`toy_jit_refresh_visible` says `va2`), while this definition reads `va`: the
+-- value from *before* the refresh. The two agree on every trace where only free
+-- cells are taken, which is exactly why the assumption is easy to miss: the
+-- toy's projection theorems never exercise a differing ordering.
+theorem toy_keep_refresh_misses_the_write (a b va vb va2: Val)
+  (h: $ vne a b $):
+  $ veq (get (isa_store_w8_keep (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va $;
