@@ -1673,12 +1673,17 @@ are machine-checked rather than asserted:
   the *compiler's* summary line rather than to a recount here: `mm0-rs` counts
   `provable sort Prop` as a sort and a `grep '^sort '` does not, so a hand count
   would pin 2 sorts and be wrong from the start. `verify-invariants` takes the
-  line `mm0-rs` prints and requires this exact figure in both documents, which is
-  what keeps the `3 sorts, N term/def, M ax/thm` quoted elsewhere in this plan
-  from drifting away from the file it describes.
+  line `mm0-rs` prints and requires it at **every** site that quotes the shape,
+  not just at this bullet: the §3.5 transcript's `[detail]` and `[pass]` lines,
+  this bullet in the plan and in `AGENTS.md`, and the prose below. One anchor is
+  what lets a retired figure survive — the toy's `term/def` count already grew
+  from 12 to 17 when the width-4 definitions landed, and a gate that pinned only
+  the bullet would have stayed green while the transcript quoted the older file.
+  The figure is never written into `verify-invariants` itself: a comment quoting
+  it is a ninth site, and the one that historically went stale.
 
-23 theorems check under `mm0-c` with no `sorry` (`3 sorts, 17 term/def,
-40 ax/thm`, 17 of them axioms): a fresh memory reads `unset`; the JIT-side store
+23 theorems check under `mm0-c` with no `sorry` — `3 sorts, 17 term/def, 40 ax/thm`,
+17 of them axioms: a fresh memory reads `unset`; the JIT-side store
 is visible at the written address; the width-8 model side is; the two agree
 there; the two load definitions return the same value; while a cell is free a
 store leaves other addresses alone; two distinct stores into a fresh memory

@@ -286,7 +286,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   stale prose is a red gate. **Toy axiom count: 17** — pinned the same way, from
   the `axiom` declarations on both sides. **Toy shape: 3 sorts, 17 term/def, 40 ax/thm**
   (keep it on one line) — the figures `mm0-rs` prints, which is the authority
-  here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2. Both
+  here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2.
+  This is required at every site that quotes the shape, not just here: both
+  documents' bullets and their backticked prose, plus the plan's transcript
+  `[detail]`/`[pass]` lines — so a figure that grew (12 → 17 when the width-4
+  definitions landed) cannot survive in one paragraph after another is fixed. Both
   sides are defined as the same write/read. The store-then-load-*elsewhere* pair
   (`toy_jit_store_load_other`, `toy_isa_store_load_other`) returns the value
   from before the store;  `toy_jit_two_cells_preserved` shows a store at `a` then

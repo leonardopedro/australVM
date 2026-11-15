@@ -801,19 +801,36 @@ PY
             echo "  [detail] counts:$_toy_counts disagree:$_toy_counts_bad" >&2
             check "W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS" false
         fi
-        # The figures the plan quotes for the toy's *shape* — "3 sorts, 12
-        # term/def, 28 ax/thm" — are pinned to the compiler's own count rather
-        # than to a recount by hand, because the two disagree in a way that is
-        # easy to miss: `mm0-rs` counts `provable sort Prop` as a sort, and
-        # `grep '^sort '` does not, so a hand count would have pinned 2 sorts
-        # and been wrong from the first line. Whatever `mm0-rs` prints is the
-        # authority, and both documents must quote exactly that.
+        # The figures the plan quotes for the toy's *shape* are pinned to the
+        # compiler's own count rather than to a recount by hand, because the two
+        # disagree in a way that is easy to miss: `mm0-rs` counts
+        # `provable sort Prop` as a sort and `grep '^sort '` does not, so a hand
+        # count pins 2 sorts and is wrong from the first line. Whatever `mm0-rs`
+        # prints is the authority — and it is pinned at *every* site that quotes
+        # it: the §3.5 transcript's `[detail]` line and its `[pass]` line, the
+        # bullet in the plan and in AGENTS, and the prose that summarises what
+        # the theorems are. One anchor is how a retired figure survives — the
+        # toy's term/def count already grew once when the width-4 definitions
+        # landed, and repairing the bullet while leaving the transcript alone
+        # keeps the gate green while the measurement line quotes an older file.
         if [ -n "$_toy_shape" ]; then
             _shape_bad=""
-            for _doc in "$repo_root/PLAN_sota_kernel_verification.md" "$repo_root/AGENTS.md"; do
-                grep -qF "Toy shape: $_toy_shape" "$_doc" \
-                    || _shape_bad="$_shape_bad $(basename "$_doc")"
-            done
+            while IFS='|' read -r _doc _site; do
+                [ -n "$_site" ] || continue
+                case "$_doc" in
+                    PLAN) _path="$repo_root/PLAN_sota_kernel_verification.md" ;;
+                    AGENTS) _path="$repo_root/AGENTS.md" ;;
+                esac
+                grep -qF -- "$_site" "$_path" \
+                    || _shape_bad="$_shape_bad $(basename "$_path")[$(printf '%s' "$_site" | cut -c1-28)]"
+            done <<EOF
+PLAN|  [detail] $_toy_shape
+PLAN|counts ($_toy_shape)
+PLAN|Toy shape: $_toy_shape
+PLAN|\`$_toy_shape\`
+AGENTS|Toy shape: $_toy_shape
+AGENTS|\`$_toy_shape\`
+EOF
             if [ -z "$_shape_bad" ]; then
                 check "W9.3: the toy's shape figures match what mm0-rs counts ($_toy_shape)" true
             else
