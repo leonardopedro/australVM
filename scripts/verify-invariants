@@ -750,13 +750,13 @@ PY
             && mm0-c "$_cert_tmp/toy.mmb" < "$_toy" >>"$_cert_tmp/toy.log" 2>&1; then
             echo "  [detail] $(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
             if grep -q 'sorry' "$_cert_tmp/toy.log"; then
-                check "W9.3: the toy projection's six theorems check without sorry" false
+                check "W9.3: the toy projection's nine theorems check without sorry" false
             else
-                check "W9.3: the toy projection's six theorems check without sorry" true
+                check "W9.3: the toy projection's nine theorems check without sorry" true
             fi
         else
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
-            check "W9.3: the toy projection's six theorems check without sorry" false
+            check "W9.3: the toy projection's nine theorems check without sorry" false
         fi
         # Negative control: the proofs must depend on the axioms they cite.
         # A theorem that checks after its axiom has been falsified is provable
@@ -796,13 +796,14 @@ PY
             fi
         done <<'MUTATIONS'
 $ veq (get (put m a v) a) v $|$ veq (get (put m a v) a) (get m a) $|toy_jit_store_visible
-$ veq (get (put m a v) b) unset $|$ veq (get (put m a v) b) v $|toy_jit_store_load_other
+$ veq (get (put m a v) b) (get m b) $|$ veq (get (put m a v) b) unset $|toy_jit_store_load_other
+$ veq x z $|$ veq x x $|toy_jit_two_cells_preserved
 MUTATIONS
-        if $_mut_ok && [ "$_mut_n" -eq 2 ]; then
+        if $_mut_ok && [ "$_mut_n" -eq 3 ]; then
             echo "  [detail] mutations refused:$(echo "$_mut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" true
         else
-            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 2)" >&2
+            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 3)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" false
         fi
 

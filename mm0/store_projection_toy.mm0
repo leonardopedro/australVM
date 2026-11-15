@@ -6,26 +6,34 @@
 -- real proof needs a semantics for `jit_store_i64`/`jit_load_i64` and a
 -- simulation between two state types. Those are not in this repo. What *can* be
 -- settled today is the shape: pick concrete operations for the two sides and
--- check that the projection then goes through, from a named and cited memory
--- axiom, with nothing assumed about the compiler.
+-- check that the projection then goes through, from named and cited memory
+-- axioms, with nothing assumed about the compiler.
 --
--- WHAT IS PROVED HERE (6 theorems, 0 sorry):
+-- WHAT IS PROVED HERE (9 theorems, 0 sorry):
 --
---   toy_jit_store_visible   a store through the JIT's definition makes the
---                           value visible at the written address
---   toy_isa_store_visible   the same for the model's definition at width 8
---   toy_store_projection    the two definitions agree at the written address
---   toy_load_projection     the two load definitions return the same value
---   toy_jit_store_load_other   a load from a *different* address after a store
---                           reads what a single-cell memory says it should
---   toy_isa_store_load_other   the same for the model's definition at width 8
+--   toy_init_unset            a fresh memory reads `unset` at every address
+--   toy_jit_store_visible     a store through the JIT's definition makes the
+--                             value visible at the written address
+--   toy_isa_store_visible     the same for the model's definition at width 8
+--   toy_store_projection      the two definitions agree at the written address
+--   toy_load_projection       the two load definitions return the same value
+--   toy_jit_store_load_other  a load from a *different* address after a store
+--                             returns what was there before the store
+--   toy_isa_store_load_other  the same for the model's definition at width 8
+--   toy_jit_two_cells_preserved   two stores at *distinct* addresses both stay
+--                             readable: the second does not clobber the first
+--   toy_isa_two_cells_preserved   the same for the model's definition
 --
--- The last pair is why the toy memory is one cell rather than opaque: with a
--- single cell, "store then load somewhere else" is the case where the store is
--- *not* visible, and it is the case a projection proof is most likely to get
--- wrong (it is where an implementation that forgot to preserve the other
--- bytes, or that aliased the address, would differ). Here it is stated and
--- proved rather than left unmentioned.
+-- The memory is **two cells**: `put` writes the free cell, evicting the older
+-- one, so a second store at a different address leaves the first address's
+-- content intact. That is why the store-then-load-elsewhere theorems say "the
+-- value before the store" rather than "unset" — with a single cell the earlier
+-- write would be gone, and with two it survives. What the toy is deliberately
+-- *silent* about is eviction: after three distinct stores the oldest address
+-- may have been dropped, and no axiom here says which. That is a real gap in
+-- the model, not an oversight in the proof, and it is the same gap the real
+-- obligation has in a different form (nobody has proved how many outstanding
+-- cells the lowering keeps).
 --
 -- WHAT IS *NOT* PROVED, and it is the whole distance to W9.3: that the emitted
 -- Cranelift instruction computes `jit_store_i64`, that Sail's `vmem_write` at
@@ -34,8 +42,7 @@
 -- `veq` are uninterpreted and the two sides are *defined to be the same term*,
 -- so the theorems say "if both sides are this operation, they agree" — which is
 -- true, cheap, and exactly as strong as it looks. The real content sits in the
--- axioms below (`at_put`: read-after-write at the written address), and those
--- are cited assumptions, not theorems.
+-- axioms below and those are cited assumptions, not theorems.
 --
 -- Keeping this file separate from `store_projection.mm0` is deliberate: that
 -- artifact must contain no `axiom` and no `theorem` so it cannot quietly become
@@ -43,43 +50,48 @@
 -- enforces exactly that on it. Proofs live here, claims live there, and this
 -- file cites the claim it models by digest.
 --
--- theory coverage: used=put,get,unset,veq,vne unused=none
+-- theory coverage: used=put,get,init,unset,veq,vne unused=none
 -- cites: mm0/store_projection.mm0 sha256=2b94039df2faccf5d4be102dfec17e2e72260271b64e6495c15249465ef86df7
 
 provable sort Prop;
 delimiter $ ( ) $;
 
--- ── The toy memory: one cell ──────────────────────────────────────────────
--- `Mem` holds at most one (address, value) pair — a single cell — and `Val` is
--- both address and value, uninterpreted. Nothing here is 64-bit, aligned or
--- linear, so no theorem can claim more than the definitions say; what the
--- single cell buys is that "load from an address that was not written" has a
--- meaning (`unset`) instead of being undecidable, which is what makes the
--- store-then-load-different case provable at all.
+-- ── The toy memory: two cells ────────────────────────────────────────────
+-- `Mem` is a two-cell memory, `Val` is both address and value; both are
+-- uninterpreted, so nothing here is 64-bit, aligned or linear. The two cells
+-- are not exposed as a constructor: `put` and `get` are the interface, and what
+-- the two-cell capacity *means* is stated axiom by axiom below rather than
+-- derived from a data layout.
 sort Val;
 sort Mem;
+-- The memory handed to the program: both cells empty.
+term init: Mem;
+-- The content of an empty cell.
+term unset: Val;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
--- The empty content of a cell at an address it does not hold.
-term unset: Val;
 -- Address inequality, uninterpreted like `veq`; the axioms below take it as a
 -- hypothesis rather than deciding it.
 term vne (x y: Val): Prop;
 
--- Value equality, as an uninterpreted predicate with its reflexivity axiom.
--- Stating it as a `term` + `axiom` instead of importing an equality theory is
--- what keeps this file's coverage line honest: `veq` is the only equality the
--- proofs use, and it is assumed, not derived.
+-- Value equality, as an uninterpreted predicate with the three facts the
+-- proofs chain through. Stating these instead of importing an equality theory
+-- is what keeps this file's coverage line honest: `veq` is the only equality
+-- used, and it is assumed, not derived. `veq_trans` is what lets "read
+-- unchanged" and "read-after-write" compose into "the earlier store survived".
 term veq (x y: Val): Prop;
 axiom veq_refl (x: Val): $ veq x x $;
+axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
+axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
 
--- The toy's memory semantics, in two axioms — the two cases a one-cell memory
--- has. A write is visible at the address written; at any other address the
--- cell that write replaced is gone, so the read is `unset` rather than
--- whatever was there before. Both are cited assumptions, not theorems.
+-- The toy's memory semantics: a fresh memory is empty; a write is visible at
+-- the address written; and a write at one address leaves every *other*
+-- address's content as it was — the two-cell capacity, stated where it is
+-- used. All four are cited assumptions.
+axiom get_init (a: Val): $ veq (get init a) unset $;
 axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
 axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $):
-  $ veq (get (put m a v) b) unset $;
+  $ veq (get (put m a v) b) (get m b) $;
 
 -- ── The two sides of the projection, concretely ──────────────────────────
 -- The emitted instruction's effect and the model's effect at width 8, both
@@ -93,8 +105,11 @@ def isa_load_w8 (m: Mem) (a: Val): Val = $ get m a $;
 
 -- ── What the model proves ────────────────────────────────────────────────
 -- Note that these are theorems about the *definitions*, not restatements of
--- `at_put`: the goal is written in terms of `jit_store_i64`/`isa_store_w8` and
--- the proofs go through only because the definitions unfold to `put`.
+-- the axioms: the goals are written in terms of `jit_store_i64` /
+-- `isa_store_w8` and the proofs go through only because the definitions unfold.
+theorem toy_init_unset (a: Val):
+  $ veq (get init a) unset $;
+
 theorem toy_jit_store_visible (m: Mem) (a v: Val):
   $ veq (get (jit_store_i64 m a v) a) v $;
 
@@ -107,12 +122,25 @@ theorem toy_store_projection (m: Mem) (a v: Val):
 theorem toy_load_projection (m: Mem) (a: Val):
   $ veq (jit_load_i64 m a) (isa_load_w8 m a) $;
 
--- Store, then load from an address other than the one written. The hypothesis
--- `vne a b` is the toy's stand-in for the real claim's `aligned8`/linearity
--- side conditions: something about the addresses must be known, and here it is
--- the weakest thing that makes the single cell's answer determinate.
+-- Store, then load from an address other than the one written: the second cell
+-- holds the value the store did not touch, so the read is unchanged. The
+-- hypothesis `vne a b` is the toy's stand-in for the real claim's
+-- `aligned8`/linearity side conditions: something about the addresses must be
+-- known, and here it is the weakest thing that makes the answer determinate.
 theorem toy_jit_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
-  $ veq (get (jit_store_i64 m a v) b) unset $;
+  $ veq (get (jit_store_i64 m a v) b) (get m b) $;
 
 theorem toy_isa_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
-  $ veq (get (isa_store_w8 m a v) b) unset $;
+  $ veq (get (isa_store_w8 m a v) b) (get m b) $;
+
+-- And the case the second cell exists for: store at `a`, then store at a
+-- *different* address `b`, then read `a` — the earlier store is still there.
+-- This is where the axioms have to compose: "read unchanged" turns the outer
+-- read into the inner one, and read-after-write supplies the value.
+theorem toy_jit_two_cells_preserved
+  (m: Mem) (a b va vb: Val) (h: $ vne a b $):
+  $ veq (get (jit_store_i64 (jit_store_i64 m a va) b vb) a) va $;
+
+theorem toy_isa_two_cells_preserved
+  (m: Mem) (a b va vb: Val) (h: $ vne a b $):
+  $ veq (get (isa_store_w8 (isa_store_w8 m a va) b vb) a) va $;

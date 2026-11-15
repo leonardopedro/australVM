@@ -259,24 +259,34 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   place of a `used=` coverage list; membership is still a W3 `[gap]` until the
   owner approves it. The file is named for the obligation it was created for
   and now covers load as well — the refutation leaving only a projection is the
-  same argument for both.
-- `mm0/store_projection_toy.mm0` + `.mm1` — the projection *proved* on a toy
-  model: a **one-cell** memory (`put`/`get` with `unset` for an address the
-  single cell does not hold), both sides defined as the same write/read, six
-  theorems discharged from two cited axioms (`at_put`, read-after-write at the
-  written address; `at_put_other`, `unset` at a different address under a
-  `vne a b` hypothesis) plus `veq_refl`. The stored-then-loaded-*elsewhere* pair
-  (`toy_jit_store_load_other`, `toy_isa_store_load_other`) is the case where the
-  store is not visible, and dropping its `vne` hypothesis makes it unprovable —
-  the side condition is load-bearing, not decoration. It proves the shape  and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  same argument for both.- `mm0/store_projection_toy.mm0` + `.mm1` — the projection *proved* on a toy
+  model: a **two-cell** memory (`put`/`get`; a write takes the free cell and
+  evicts the older one), both sides defined as the same write/read, nine
+  theorems discharged from six cited axioms (`veq_refl`, `veq_trans`, `vne_sym`,
+  `get_init`, `at_put` for read-after-write, `at_put_other` for "a write at
+  another address leaves that address's content alone" under a `vne a b`
+  hypothesis) — `3 sorts, 10 term/def, 15 ax/thm`, no `sorry`. The
+  stored-then-loaded-*elsewhere* pair (`toy_jit_store_load_other`,
+  `toy_isa_store_load_other`) returns the value from before the store, and
+  `toy_jit_two_cells_preserved` / `toy_isa_two_cells_preserved` show a store at
+  `a` and then at a distinct `b` leave `a` readable — the case the second cell
+  exists for, and the one where the axioms have to compose through `veq_trans`.
+  Dropping the `vne` hypothesis makes the different-address theorems unprovable,
+  so the side condition is load-bearing, not decoration. The toy says nothing
+  about eviction after three distinct stores, and its header says so. It proves
+  the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
-  neighbouring (easier) statement. It also mutation-tests the file: rewriting
-  `at_put`'s conclusion to "read unchanged" and `at_put_other`'s to "the written
-  value" must make `mm0-rs` refuse at `toy_jit_store_visible` and
-  `toy_jit_store_load_other` respectively — a proof that survived its own axiom
-  being falsified would be deriving the claim from something else, and is
-  reported as a failure.
+  neighbouring (easier) statement. It also mutation-tests the file in three
+  ways: rewriting `at_put`'s conclusion to "read unchanged", `at_put_other`'s
+  preserved value to `unset`, and `veq_trans`'s conclusion to reflexive must
+  make `mm0-rs` refuse at `toy_jit_store_visible`, `toy_jit_store_load_other`
+  and `toy_jit_two_cells_preserved` respectively — a proof that survived its own
+  axiom being falsified would be deriving the claim from something else, and is
+  reported as a failure. A mutation that fails to apply is a failure too. The
+  control was itself tested by making all three no-ops (patterns that match
+  nothing, patterns that change nothing, patterns that break the file
+  elsewhere): all three scratch runs report `1 failed`, exit 1.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
