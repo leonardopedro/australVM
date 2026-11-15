@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Rebuild the obligation manifest of a stream that never closed cleanly.
+
+`lean-typing-proof` writes the certificate stream in parts under
+`LTP_OBLIG_CHUNK` and beside them a manifest (parts, bytes, record count) and an
+index (one line per certificate). Both are written at the end of a clean run —
+except the index, which is line buffered, so a run stopped by its clock leaves a
+usable index and no manifest (§13.32: the ns row is killed at 14 400 s and its
+200 GB of parts cannot be consumed without one).
+
+This reads the parts back and writes the manifest. Two sources:
+
+* **with the index** (the normal case, killed or not): records, first/last ids
+  and the fragmentation flag all come from the index, and each part's record
+  count is the number of records that *end* in it, so a certificate split across
+  parts is counted once. One `stat` per part plus one pass over the index.
+* **without the index**: one streaming pass over the parts, counting newlines.
+  That is only correct when every part ends on a record boundary — a part cut
+  inside a certificate has no way to say so — so the tool refuses when a part
+  other than the last does not end with a newline, rather than writing a
+  manifest that calls two halves of a certificate two records.
+
+    scripts/oblig-manifest <stem>
+
+`<stem>` is the emitter's own: `<outdir>/<declaration>_typing`, so the parts are
+`<stem>_obligations.part-NNN.jsonl` beside it.
+
+Exit codes: 0 the manifest was written, 1 the parts cannot be described (refused),
+2 no parts found.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import sys
+
+FORMAT = "lean-typing-proof/obligations"
+PART_GLOB = "_obligations.part-*.jsonl"
+
+
+def parts_of(stem: str) -> list[str]:
+    return sorted(glob.glob(stem + PART_GLOB))
+
+
+def from_index(stem: str, parts: list[str], index: str) -> dict:
+    """Describe the parts using the index, which already knows their split."""
+    sizes = [os.path.getsize(p) for p in parts]
+    per_part = [{"path": os.path.basename(p), "bytes": n, "records": 0,
+                 "first_id": None, "last_id": None}
+                for p, n in zip(parts, sizes)]
+    total = 0
+    fragmented = False
+    last_id = None
+    with open(index, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            total += 1
+            end = rec["part"]
+            if rec.get("segs"):
+                fragmented = True
+                end = rec["segs"][-1][0]
+            row = per_part[end]
+            row["records"] += 1
+            if row["first_id"] is None:
+                row["first_id"] = rec["id"]
+            row["last_id"] = rec["id"]
+            last_id = rec["id"]
+    # A part that only holds the tail of a certificate starts with no id of its
+    # own: name it after the record it helped hold, so the manifest stays a
+    # usable map of the directory.
+    for i, row in enumerate(per_part):
+        if row["first_id"] is None and i:
+            row["first_id"] = per_part[i - 1]["last_id"]
+    return {
+        "format": FORMAT,
+        "records": total,
+        "bytes": sum(sizes),
+        "fragmented": fragmented,
+        "parts": per_part,
+        "last_id": last_id,
+    }
+
+
+def _id_of(raw: bytes) -> str | None:
+    """The certificate's `id`, which is written within its first few hundred bytes.
+
+    The record's key order is `b, id, kind, lhs, r, rhs, x`, so the id is near
+    the front even when the certificate is tens of gigabytes: this reads one
+    buffer per record, not the record.
+    """
+    at = raw.find(b'"id": "')
+    if at < 0:
+        return None
+    end = raw.find(b'"', at + 7)
+    return raw[at + 7:end].decode("utf-8", "replace") if end > 0 else None
+
+
+def _ends_clean(path: str) -> bool:
+    n = os.path.getsize(path)
+    if n == 0:
+        return True
+    with open(path, "rb") as fh:
+        fh.seek(n - 1)
+        return fh.read(1) == b"\n"
+
+
+def from_parts(parts: list[str]) -> dict | None:
+    """Count records by scanning, or `None` if a part cuts a record in half."""
+    rows = []
+    total_bytes = 0
+    records = 0
+    for i, p in enumerate(parts):
+        n = os.path.getsize(p)
+        total_bytes += n
+        lines = 0
+        first = last = None
+        with open(p, "rb") as fh:
+            for raw in fh:
+                lines += 1
+                rid = _id_of(raw)
+                if rid is not None:
+                    if first is None:
+                        first = rid
+                    last = rid
+        clean = _ends_clean(p)
+        if not clean and i != len(parts) - 1:
+            return None
+        count = lines if clean else lines - 1
+        records += count
+        rows.append({"path": os.path.basename(p), "bytes": n,
+                     "records": count,
+                     "first_id": first, "last_id": last})
+    return {"format": FORMAT, "records": records, "bytes": total_bytes,
+            "fragmented": False, "parts": rows, "last_id": None}
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        print("oblig-manifest: rebuilds <stem>_obligations.manifest.json from "
+              "the parts beside it", file=sys.stderr)
+        print(f"usage: {os.path.basename(argv[0])} <stem>", file=sys.stderr)
+        return 2
+    stem = argv[1]
+    parts = parts_of(stem)
+    if not parts:
+        print(f"oblig-manifest: no {PART_GLOB} beside {stem}", file=sys.stderr)
+        return 2
+    index = stem + "_obligations.index.jsonl"
+    if os.path.exists(index):
+        man = from_index(stem, parts, index)
+        source = f"index ({os.path.getsize(index)} B)"
+    else:
+        man = from_parts(parts)
+        if man is None:
+            print("oblig-manifest: no index and a part ends mid-record, so the "
+                  "record boundaries are not recoverable; refusing to guess",
+                  file=sys.stderr)
+            return 1
+        source = "a line scan of the parts"
+    # The limit the parts were rolled at is theirs, not this tool's: a killed run
+    # never wrote it down, so it is reported from the parts themselves.
+    man["part_bytes_limit"] = max(row["bytes"] for row in man["parts"])
+    man["rebuilt"] = True
+    out = stem + "_obligations.manifest.json"
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(man, fh, indent=1)
+        fh.write("\n")
+    print(f"oblig-manifest: {out} from {source}: {man['records']} records, "
+          f"{man['bytes']} B, {len(man['parts'])} parts, "
+          f"fragmented={man['fragmented']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

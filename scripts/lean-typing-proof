@@ -557,12 +557,15 @@ class ObligationSink:
         self._index_fh = None
         self._fh = None
         self._part = -1
-        self._part_bytes = 0
-        self._part_lines = 0
+        self._part_bytes = 0          # bytes in the open part, counted on write
+        self._part_records = 0        # records that *ended* in the open part
         self._first_id: str | None = None
         self._last_id: str | None = None
-        self._line_off = 0
-        self._line_id: str | None = None
+        self._rec_id: str | None = None
+        self._rec_bytes = 0
+        self._since = 0               # characters written since the last fstat
+        self._segs: list[list[int]] = []
+        self._fragmented = False
         self._open()
 
     def _part_path(self, n: int) -> Path:
@@ -574,7 +577,7 @@ class ObligationSink:
         self._part += 1
         self._fh = self._part_path(self._part).open("w")
         self._part_bytes = 0
-        self._part_lines = 0
+        self._part_records = 0
         self._first_id = None
         self._last_id = None
         if self.limit and self._index_fh is None:
@@ -587,37 +590,109 @@ class ObligationSink:
                 f"{self.stem}_obligations.index.jsonl").open("w", buffering=1)
 
     def begin(self, ax: str) -> None:
-        """Start one certificate: its id is all the index needs from it."""
-        self._line_id = ax
-        self._line_off = self._part_bytes
+        """Start one certificate: its id is all the index needs from it.
+
+        With `limit=0` there is no index and no roll, so this must stay free:
+        the single-file path is the historical artifact and pays for nothing
+        (§13.32 measures the counting paths against it).
+
+        The size is taken with `fstat` here, once per certificate, because a
+        record's offsets must be exact and a roll can land anywhere inside it.
+        """
+        if not self.limit:
+            return
+        self._fh.flush()
+        self._part_bytes = os.fstat(self._fh.fileno()).st_size
+        self._since = 0
+        self._rec_id = ax
+        self._rec_bytes = 0
+        self._segs = [[self._part, self._part_bytes, 0]]
 
     def write(self, s: str) -> None:
+        """Write a piece of the open certificate, rolling the part if full.
+
+        Bytes, not characters: the parts are bounded in bytes and a certificate
+        text is not guaranteed ASCII. `str.isascii()` is a scan with no
+        allocation, so the common case costs one pass over the piece and no
+        encoding; anything else is measured exactly by encoding it.
+
+        The roll happens *inside* a certificate, which is what makes the parts
+        uniform: a part used to close only on a record boundary and was therefore
+        `limit` plus one certificate — 25 GB on the ns row (§13.32). Rolling
+        here keeps every part at `limit` plus at most the piece being written (a
+        few characters to `ENC_CHUNK` bytes), and the certificate is indexed as
+        the list of segments it occupies, so a reader still gets one record.
+        """
+        if not self.limit:
+            self._fh.write(s)
+            return
         self._fh.write(s)
+        # `len` is characters, and a character is at most four bytes, so this is
+        # a lower bound on what has been written. It is enough to decide when to
+        # pay for an exact size: `fstat` then measures the part, and a part goes
+        # over the limit by at most the one piece written since that check (a
+        # piece is bounded by `ENC_CHUNK`).
+        self._since += len(s)
+        if self._part_bytes + self._since >= self.limit:
+            self._fh.flush()
+            self._part_bytes = os.fstat(self._fh.fileno()).st_size
+            self._since = 0
+            if self._part_bytes >= self.limit:
+                self._roll_mid()
+
+    def _roll_mid(self) -> None:
+        """Close the full part and continue the certificate in the next one."""
+        self._fragmented = True
+        self._segs[-1][2] = self._part_bytes - self._segs[-1][1]
+        self._fh.close()
+        self.parts.append({
+            "path": self._part_path(self._part).name,
+            "bytes": self._part_bytes,
+            "records": self._part_records,
+            "first_id": self._first_id,
+            "last_id": self._last_id,
+        })
+        self._open()
+        self._segs.append([self._part, 0, 0])
+        self._since = 0
 
     def end_line(self) -> None:
-        """Finish a certificate: account for its bytes, index it, maybe roll.
+        """Finish a certificate: verify its bytes, index it, close a full part.
 
-        The size comes from `fstat` rather than from counting characters: the
-        parts are bounded in *bytes*, and a term text is not guaranteed ASCII
-        (Lean symbols are). One `flush`+`fstat` per certificate is 24 383 calls
-        on the largest row, against lines that take minutes.
+        The byte count is kept on write rather than taken from one `fstat` per
+        certificate, because a roll can now happen mid-certificate. `fstat` is
+        still called here — once per certificate, 24 391 times on the largest row
+        — but only to check the count against the file, so a counting bug fails
+        loudly instead of writing an index that points at nothing.
         """
+        if not self.limit:
+            self.lines += 1
+            return
         self._fh.flush()
         end = os.fstat(self._fh.fileno()).st_size
-        n = end - self._line_off
         self._part_bytes = end
-        self._part_lines += 1
+        self._since = 0
+        segs = self._segs
+        segs[-1][2] = end - segs[-1][1]
+        n = sum(seg[2] for seg in segs)
+        self._rec_bytes = n
+        self._part_records += 1
         self.lines += 1
         self.bytes += n
-        if self._line_id is not None:
+        if self._rec_id is not None:
             if self._first_id is None:
-                self._first_id = self._line_id
-            self._last_id = self._line_id
+                self._first_id = self._rec_id
+            self._last_id = self._rec_id
             if self._index_fh is not None:
+                first = segs[0]
                 self._index_fh.write(
-                    f'{{"id": {json.dumps(self._line_id)}, '
-                    f'"part": {self._part}, "off": {self._line_off}, '
-                    f'"len": {n}}}\n')
+                    f'{{"id": {json.dumps(self._rec_id)}, '
+                    f'"part": {first[0]}, "off": {first[1]}, "len": {n}'
+                    + ("" if len(segs) == 1 else
+                       ', "segs": ' + json.dumps(segs))
+                    + "}\n")
+        self._rec_id = None
+        self._segs = []
         if self.limit and self._part_bytes >= self.limit:
             self._roll()
 
@@ -626,7 +701,7 @@ class ObligationSink:
         self.parts.append({
             "path": self._part_path(self._part).name,
             "bytes": self._part_bytes,
-            "lines": self._part_lines,
+            "records": self._part_records,
             "first_id": self._first_id,
             "last_id": self._last_id,
         })
@@ -637,7 +712,7 @@ class ObligationSink:
             return
         self._fh.close()
         self._fh = None
-        if self.limit and self._part_lines == 0:
+        if self.limit and self._part_bytes == 0:
             # Rolling closes a part the moment it is full, so the last part can
             # be empty. An empty artifact is not a part: remove it.
             self._part_path(self._part).unlink(missing_ok=True)
@@ -645,7 +720,7 @@ class ObligationSink:
             self.parts.append({
                 "path": self._part_path(self._part).name,
                 "bytes": self._part_bytes,
-                "lines": self._part_lines,
+                "records": self._part_records,
                 "first_id": self._first_id,
                 "last_id": self._last_id,
             })
@@ -656,9 +731,10 @@ class ObligationSink:
             Path(f"{self.stem}_obligations.manifest.json").write_text(
                 json.dumps({
                     "format": "lean-typing-proof/obligations",
-                    "lines": self.lines,
+                    "records": self.lines,
                     "bytes": self.bytes,
                     "part_bytes_limit": self.limit,
+                    "fragmented": self._fragmented,
                     "parts": self.parts,
                 }, indent=1) + "\n")
 

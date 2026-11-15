@@ -3249,42 +3249,132 @@ of a third sounds like a win and is not one: the walk reliably re-checks cheap
 terms like the bound variable of a spine, and the minutes are spent inside single
 `infer` calls building certificates of tens of gigabytes, which the memo cannot
 touch because they emit obligations and are therefore never stored. At comparable
-elapsed time
-there is no difference from §13.31's run either (this one had 125 395 rules at
-t=6 808 s; `ns-long2` reached 125 408 at t=6 965 s). So `LTP_CHK_MEMO` ships
+elapsed time there is no difference from §13.31's run either (this one had 125 395
+rules at t=6 808 s; `ns-long2` reached 125 408 at t=6 965 s). So `LTP_CHK_MEMO` ships
 **off by default**: byte-neutral, measured neutral, and 512 MB of ceiling not
 paid for.
 
-#### Chunking measured on the real row
+#### Chunking measured on the real row, and why parts were not uniform
 
-21 parts, no single part smaller than the 2 GiB limit it was asked for, and this
+The first version of this rolled the stream at record boundaries only, so the row
+measured 21 parts and no part smaller than the 2 GiB limit — but this
 distribution (bytes):
 
 | min | median | max |
 | ---: | ---: | ---: |
 | 2 152 844 168 | 11 773 636 045 | 25 252 047 487 |
 
-The bound is exactly what the design says and it is weaker than the 124 GB
-framing suggests: a part is `limit` **plus one certificate**, and the largest
-part the sink wrote is **25 252 047 487 B**. Splitting a *line* would break the
-format, so a consumer that wants uniform 2 GiB parts on this row cannot have
-them — the parts are bounded, the individual certificates are not.
+A part was `limit` **plus one certificate**, and on this row certificates reach
+tens of gigabytes, so the parts were bounded by a number consumers cannot
+predict: 25 GB is not a chunk anyone can read either. Splitting a *line* would
+break the format; leaving certificates whole leaves the chunks unbounded.
+
+So the roll moved **inside** the certificate. A part now closes wherever it
+reaches its limit, and the index names a certificate as the list of segments it
+occupies:
+
+```
+{"id": "ax_subst_1", "part": 0, "off": 523, "len": 9633,
+ "segs": [[0, 523, 477], [1, 0, 1000], ..., [10, 0, 156]]}
+```
+
+The line format, the concatenation and the byte-for-byte equality with the single
+file are unchanged — a reader that ignores `segs` and reads `part`/`off`/`len`
+still works for the 99 % of records that fit in one part, and the manifest's
+`fragmented` says whether any record does not. Measured on `multiShiftSeq_succ`,
+where every record can be made to span several parts by asking for small ones:
+
+| `LTP_OBLIG_CHUNK` | parts | spanning records | largest part | concat == single | reassembly |
+| ---: | ---: | ---: | ---: | --- | --- |
+| 1 000 | 437 | 119 of 141 | 1 000 + 41 280 | yes | 141 of 141 records exact |
+| 20 000 | 38 | 29 of 141 | 20 000 + 25 388 | yes | 141 of 141 records exact |
+| 10 000 000 | 1 | 0 | 893 654 | yes | the part *is* the file |
+
+The overshoot is bounded and named: a part closes when the exact size (one
+`fstat`) first crosses the limit, so it can exceed it by at most **one write piece,
+which is at most `ENC_CHUNK` = 64 KiB** — 0.003 % of a 2 GiB part, and not the
+25 GB of the record-boundary design. On a 1 GB obligation stream the accounting
+costs 74.4 s → 78.1 s (**+3.8 s, 5 %**), and nothing at all on the default path
+(74.4 s against the committed emitter's 73.0 s in the same session).
 
 One failure mode showed up only because the run was killed rather than finished:
 the manifest is written by `close()`, so a clock-killed run has parts and no
 manifest, and the index was buffered, so it was lost with the process. The index
-is now line-buffered and the contract is measured, by killing a 72 s row with
-`SIGKILL` mid-walk: **562 index entries, 6 parts, every entry resolving to a
-complete certificate whose `id` matches, 0 pointing past EOF**. The only casualty
-is the certificate being written at that instant — the last part ends without a
-newline, and no index entry names it, so a consumer that iterates the index never
-sees the truncated line. A killed run still needs a manifest rebuilt from its
-parts, which is a directory listing plus 21 `stat`s.
+is line-buffered now, and the contract is measured twice by killing a 72 s row
+with `SIGKILL` mid-walk — once without fragmentation (**562 index entries, 6
+parts, every entry resolving to a complete certificate, 0 bad**) and once with
+it (**396 entries, 9 parts, 6 spanning, 0 bad**). The casualty is only the
+certificate being written: its last part ends anywhere, and no index entry names
+it, so a consumer that iterates the index never sees a truncated record.
 
-What that leaves for this row, in order: (1) the certificates, not the walk —
-tens-of-gigabytes single `infer` results are the actual cost, and a size cap per
-certificate (or an emitter that streams one) is the only thing that would make
-the row's parts uniform; (2) the drain — at ~1 rule per 400 s the last few rules are
-hours each, so a "finished" run needs either a much larger clock or a reason to
-stop; (3) `LTP_CHK_MEMO`, which is correct, cheap, and did not pay: it stays
-available and off.
+A killed run still has no manifest, so `scripts/oblig-manifest <stem>` rebuilds
+one: from the index when it survived (records, first/last ids per part, and the
+`fragmented` flag — `stat` per part plus one pass over the index), and from a
+line scan of the parts when there is no index, refusing rather than guessing when
+a part ends mid-record and the boundaries are unrecoverable. Measured on the
+killed 396-record directory it reproduces 396 records, 250 718 534 B, 9 parts,
+`fragmented: true`.
+
+What that leaves for this row, in order: (1) the drain — §13.33 measures it at
+95 % of the wall clock inside calls that move no counter in 30 s, so a
+"finished" run needs either a much larger clock or a reason to stop; (2) the
+walk's rule rate, which the memo did not move; (3) `LTP_CHK_MEMO`, correct, cheap
+and measured neutral: it stays available and off.
+
+### 13.33 Where the `nsOuterFock…singleTime` tail actually goes
+
+§13.31 found the row's cost in eleven single calls of 200–1 900 s and §13.32
+found that the row does not complete. This section asks the next question: of the
+14 204 s of active time in the 14 400 s run, what is the machine *doing*. The
+answer is not the artifact writing, and it is not the walk.
+
+**Method.** The run's own trace (`LTP_TRACE`, 1 398 samples, one every 30 s) and
+nothing else — the per-obligation trace was not enabled on that run, so each
+interval is classified by which counters moved:
+
+| class | rule | active time | share |
+| --- | --- | ---: | ---: |
+| writing | `axb` grew | 544 s | 3.8 % |
+| rule progress | `rules` or `oblig` grew | 125 s | 0.9 % |
+| **inside one call** | none of them grew | **13 535 s** | **95.3 %** |
+
+The suspend interval (28 298 s) is excluded; without excluding it, 98 % of the
+run looks like silence, which is true and useless.
+
+**The silence is calls, not stalls.** It comes in 46 stretches, and each ends
+with the counters jumping once — one returned call. The tail is a machine, not
+noise:
+
+| stretch | duration | what the return added |
+| --- | ---: | --- |
+| t=41 015…42 078 | 1 063 s | +3 rules, +1 axiom, +1 obligation |
+| t=39 960…40 881 | 921 s | +3 rules, +1 axiom, +1 obligation |
+| t=39 018…39 826 | 808 s | +3 rules, +1 axiom, +1 obligation |
+| t=38 475…38 885 | 410 s | +3 rules, +1 axiom, +1 obligation |
+| t=6 605…7 125 | 520 s | +2 rules, nothing else |
+| t=8 572…9 138 | 566 s | +2 rules, nothing else |
+
+Every step of the drain is the same shape: hundreds to a thousand seconds to
+produce **three rules and one certificate**. That is the "roughly one rule per
+400 s" of §13.32 measured directly, and it explains why the memo could not help —
+there is nothing repeated to cache, there is one expensive call.
+
+**The expensive calls are not where the rules are.** The single longest stretch,
+t=3 349…4 516 (1 167 s), ends with a burst: **+27 584 rules, +5 278 axioms,
++5 185 obligations in one 30 s sample**. So the shape of this row is a few
+deliberations whose *results* are cheap: the time is not distributed over the
+125 417 rules, it is concentrated in the tens of calls that decide what those
+rules apply to. Writing behaves the same way — 76.7 GB in 544 s is 141 MB/s, and
+there is no long writing stretch at all: every episode is 10–11 s and 2–4 GB,
+because the certificate is assembled as it is written.
+
+**What that leaves.** The row's price is ~10 calls of 400–1 200 s each, each of
+which is a single `infer` over a term whose certificate is 12–25 GB. The budget
+for the next attempt is therefore not a bigger clock (three hours bought 125 401
+rules of 125 417 and the last few cost hours) and not a memo (33.9 % hits, 5.5 kB
+replayed). It is one of two things: make one 1 000 s call cheaper — a stack
+sample every 10 s inside t=41 015…42 078 would say which recursion it is, which
+is one instrumented 17-minute run rather than a 4-hour one — or decide that a
+125 417-rule row is the finished state of this declaration and emit it from
+there, which needs the emitter to have a stopping condition other than "the walk
+returns".
