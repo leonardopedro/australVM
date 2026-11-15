@@ -1,7 +1,11 @@
--- store_projection.{mm0,mm1} — W9.3's *surviving* memory obligation, stated.
+-- store_projection.{mm0,mm1} — W9.3's *surviving* memory obligations, stated.
 --
--- W9.3 asks whether the emitted instruction is the model's instruction. For
--- `store` the strong form is **refuted** (measured 2026-11-14, and gated by
+-- The name records the obligation this file was created for (the store); it now
+-- covers both memory opcodes, load and store, because the refutation that leaves
+-- only a projection behind is the same argument in both cases.
+--
+-- W9.3 asks whether the emitted instruction is the model's instruction. For both
+-- memory ops the strong form is **refuted** (measured 2026-11-14, and gated by
 -- `scripts/mem-refines`), not merely unproved:
 --
 --   emitted (mm0/clif.mm0:58)      model (LeanRV64D/InstsEnd.lean:67365)
@@ -15,46 +19,70 @@
 --                                              (Store Data) false false false
 --                                     → RETIRE_SUCCESS | .Err e
 --
+--   emitted (mm0/clif.mm0:54)      model (LeanRV64D/InstsEnd.lean:69238)
+--   term load__i64__r_i64          def execute_LOAD (imm : BitVec 12)
+--     (a: val): op                              (rs1 : regidx)
+--     1 operand, 1 result                       (rd : regidx)
+--     address                                   (is_unsigned : Bool)
+--     width fixed in the form name              (width : Nat)
+--                                     : SailM ExecutionResult
+--                                     assert (width ≤b xlen_bytes)
+--                                     vmem_read rs1 offset width (Load Data)
+--                                              false false false
+--                                     → wX_bits rd · RETIRE_SUCCESS | .Err e
+--
 -- Different arity, different result, different address space (the model reads
--- rs1/rs2 from the register file and translates the address; the emitted form
--- takes a linear pointer). No encoding of the emitted term *is* the model's
--- function, so the obligation this file states is the projection, not the
--- identification:
+-- rs1/rs2/rd from the register file, sign-extends the immediate and translates
+-- the address; the emitted form takes a linear pointer and hands back a value).
+-- No encoding of the emitted terms *is* the model's functions, so the obligation
+-- this file states is the projection, not the identification:
 --
 --     after the register read, the immediate addition and the (never-taken for
 --     an in-bounds linear address) fault branch are projected away,
 --     execute_STORE with width = 8 describes the same state change as the
---     emitted store.i64 on an 8-byte-aligned address inside the JIT's memory.
+--     emitted store.i64 on an 8-byte-aligned address inside the JIT's memory,
+--     and execute_LOAD with width = 8 returns the value that the emitted
+--     load.i64 returns there.
 --
 -- Stated in the vocabulary below, with no ambiguity about what is claimed:
 --
 --     aligned8 a  ⇒  in_linear_space a  ⇒  store_projects s a v
+--     aligned8 a  ⇒  in_linear_space a  ⇒  load_projects s a
 --
 -- where `store_projects s a v` is intended to mean
--- `jit_store_i64 s a v = isa_store_w8 s a v`. The equality itself is *not*
--- stated here: MM0 has no built-in equality, and defining one would import a
--- theory this artifact has not earned. The relation is named; what it should
--- mean is in the sentence above, where a reviewer can disagree with it.
+-- `jit_store_i64 s a v = isa_store_w8 s a v`, and `load_projects s a` is
+-- intended to mean `jit_load_i64 s a = isa_load_w8 s a`. The equalities
+-- themselves are *not* stated here: MM0 has no built-in equality, and defining
+-- one would import a theory this artifact has not earned. The relations are
+-- named; what they should mean is in the sentence above, where a reviewer can
+-- disagree with it.
+--
+-- The toy model in `mm0/store_projection_toy.mm0` is the counterpart that *is*
+-- proved: with concrete (uninterpreted) read and write primitives, both
+-- relations reduce to a definitional identity and the theorems go through from
+-- one cited read-after-write axiom. Read that file for what a proof of this
+-- shape costs, and for what it does not cover.
 --
 -- What this file is NOT: a certificate. There is no `axiom` and no `theorem`
--- in it — the two state transformers and the relation are *uninterpreted*, so
+-- in it — the state transformers and the relations are *uninterpreted*, so
 -- nothing here says the projection holds, and `scripts/verify-invariants`
 -- refuses any `axiom` or `theorem` in this file so it cannot start claiming
--- one. The `[gap]` is the honest state: the claim is written down, cited, and
--- left unproved. Proving it needs a semantics for `jit_store_i64` (today a
--- Cranelift instruction, not a Lean definition) and a simulation argument
--- between two state types — neither exists in this repo.
+-- one. The `[gap]` is the honest state: the claims are written down, cited, and
+-- left unproved. Proving them needs a semantics for `jit_store_i64` /
+-- `jit_load_i64` (today Cranelift instructions, not Lean definitions) and a
+-- simulation argument between two state types — neither exists in this repo.
 --
--- Citations are by content: the emitted shape, the converted model declaration,
--- and the ISA model the projection has to reach. A stale digest means this
--- comment is describing files that have since changed, and the gate fails.
+-- Citations are by content: the emitted shapes, the converted model
+-- declarations, and the ISA model the projection has to reach. A stale digest
+-- means this comment is describing files that have since changed, and the gate
+-- fails.
 -- cites: mm0/clif.mm0 sha256=f69c96eadc40f05318c3d8fe7040a45ccf1955c30da53dc0a9363e5ab5fcac54
 -- cites: mm0/statements/rv64_memory.mm0 sha256=ab0e372d5288bafcc18813cd2f610e266cc04468061a5f6f7713004ddfdffa5b
 -- cites: mm0/isa.mm0 sha256=012db5170dd18054e9f7458dac0079f91516c9a5f0acd674c77203cec50859b6
 --
--- certificate: [gap] — nothing in `mm0/approved/` bears on this claim, and an
+-- certificate: [gap] — nothing in `mm0/approved/` bears on these claims, and an
 --   approval is the owner's commit, not a script's. If `mm0/approved/` ever
---   gains an entry naming this artifact, the gap line and the missing proof
+--   gains an entry naming this artifact, the gap line and the missing proofs
 --   have to go together; `scripts/verify-invariants` fails until they do.
 
 -- theory: self-declared vocabulary — the sorts and terms below are this
@@ -77,14 +105,18 @@ provable sort Prop;
 term aligned8 (a: Val): Prop;
 term in_linear_space (a: Val): Prop;
 
--- The two state transformers. `jit_store_i64` is the emitted instruction's
--- effect (8 bytes at a linear address); `isa_store_w8` is `execute_STORE` after
--- the register read, the immediate addition and the fault branch have been
--- projected away, at width = 8.
+-- The state transformers. `jit_store_i64` / `jit_load_i64` are the emitted
+-- instruction's effects (8 bytes at a linear address); `isa_store_w8` /
+-- `isa_load_w8` are `execute_STORE` / `execute_LOAD` after the register read,
+-- the immediate addition and the fault branch have been projected away, at
+-- width = 8.
 term jit_store_i64 (s: St) (a v: Val): St;
 term isa_store_w8 (s: St) (a v: Val): St;
+term jit_load_i64 (s: St) (a: Val): Val;
+term isa_load_w8 (s: St) (a: Val): Val;
 
--- The obligation's relation: "these two agree here". Uninterpreted for the
--- reason given above — naming the claim is this layer's job; deciding it is
--- the theorem's.
+-- The obligations' relations: "these two agree here". Uninterpreted for the
+-- reason given above — naming the claim is this layer's job; deciding it is the
+-- theorem's.
 term store_projects (s: St) (a v: Val): Prop;
+term load_projects (s: St) (a: Val): Prop;

@@ -1,0 +1,86 @@
+-- store_projection_toy.{mm0,mm1} — a *proved* toy model of the memory
+-- projection stated in `mm0/store_projection.mm0`.
+--
+-- WHY THIS FILE EXISTS. `store_projection.mm0` states two claims (load and
+-- store project onto the ISA model at width 8) and proves neither, because the
+-- real proof needs a semantics for `jit_store_i64`/`jit_load_i64` and a
+-- simulation between two state types. Those are not in this repo. What *can* be
+-- settled today is the shape: pick concrete operations for the two sides and
+-- check that the projection then goes through, from a named and cited memory
+-- axiom, with nothing assumed about the compiler.
+--
+-- WHAT IS PROVED HERE (4 theorems, 0 sorry):
+--
+--   toy_jit_store_visible   a store through the JIT's definition makes the
+--                           value visible at the written address
+--   toy_isa_store_visible   the same for the model's definition at width 8
+--   toy_store_projection    the two definitions agree at the written address
+--   toy_load_projection     the two load definitions return the same value
+--
+-- WHAT IS *NOT* PROVED, and it is the whole distance to W9.3: that the emitted
+-- Cranelift instruction computes `jit_store_i64`, that Sail's `vmem_write` at
+-- width 8 computes `isa_store_w8`, that an aligned address stays in the linear
+-- space, or that the fault branch is never taken there. Here `put`, `get` and
+-- `veq` are uninterpreted and the two sides are *defined to be the same term*,
+-- so the theorems say "if both sides are this operation, they agree" — which is
+-- true, cheap, and exactly as strong as it looks. The real content sits in the
+-- axioms below (`at_put`: read-after-write at the written address), and those
+-- are cited assumptions, not theorems.
+--
+-- Keeping this file separate from `store_projection.mm0` is deliberate: that
+-- artifact must contain no `axiom` and no `theorem` so it cannot quietly become
+-- a proof of something it did not prove, and `scripts/verify-invariants`
+-- enforces exactly that on it. Proofs live here, claims live there, and this
+-- file cites the claim it models by digest.
+--
+-- theory coverage: used=put,get,veq unused=none
+-- cites: mm0/store_projection.mm0 sha256=2b94039df2faccf5d4be102dfec17e2e72260271b64e6495c15249465ef86df7
+
+provable sort Prop;
+delimiter $ ( ) $;
+
+-- ── The toy memory ───────────────────────────────────────────────────────
+-- `Mem` is a state carrying memory, `Val` an address or value; both are
+-- uninterpreted, which is the point: nothing here is 64-bit, aligned or
+-- linear, so no theorem can claim more than the definitions say.
+sort Val;
+sort Mem;
+term put (m: Mem) (a v: Val): Mem;
+term get (m: Mem) (a: Val): Val;
+
+-- Value equality, as an uninterpreted predicate with its reflexivity axiom.
+-- Stating it as a `term` + `axiom` instead of importing an equality theory is
+-- what keeps this file's coverage line honest: `veq` is the only equality the
+-- proofs use, and it is assumed, not derived.
+term veq (x y: Val): Prop;
+axiom veq_refl (x: Val): $ veq x x $;
+
+-- The toy's memory semantics: a write is visible at the address written. This
+-- is the one substantive assumption, and it is cited rather than hidden.
+axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
+
+-- ── The two sides of the projection, concretely ──────────────────────────
+-- The emitted instruction's effect and the model's effect at width 8, both
+-- defined as the same write. In the real projection these are *different*
+-- definitions (Cranelift lowering vs. Sail `vmem_write`), and proving them equal
+-- is the work this toy skips by construction.
+def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
+def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
+def jit_load_i64 (m: Mem) (a: Val): Val = $ get m a $;
+def isa_load_w8 (m: Mem) (a: Val): Val = $ get m a $;
+
+-- ── What the model proves ────────────────────────────────────────────────
+-- Note that these are theorems about the *definitions*, not restatements of
+-- `at_put`: the goal is written in terms of `jit_store_i64`/`isa_store_w8` and
+-- the proofs go through only because the definitions unfold to `put`.
+theorem toy_jit_store_visible (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i64 m a v) a) v $;
+
+theorem toy_isa_store_visible (m: Mem) (a v: Val):
+  $ veq (get (isa_store_w8 m a v) a) v $;
+
+theorem toy_store_projection (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i64 m a v) a) (get (isa_store_w8 m a v) a) $;
+
+theorem toy_load_projection (m: Mem) (a: Val):
+  $ veq (jit_load_i64 m a) (isa_load_w8 m a) $;

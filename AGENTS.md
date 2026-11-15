@@ -240,15 +240,35 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   measured instead of retyped. Exit 0 = refuted (the expected state), 1 = the
   shapes now agree (re-argue the correspondence), 2 = evidence missing.
   `verify-invariants` runs it and pins the refutation as `[pass]`.
-- `mm0/store_projection.mm0` — the claim that *survives* that refutation,
-  stated and cited but not asserted: `aligned8 a ⇒ in_linear_space a ⇒
-  store_projects s a v` over uninterpreted state transformers
-  (`jit_store_i64`, `isa_store_w8`), with `-- certificate: [gap]`, three pinned
+- `scripts/mm0-comparator` — W3's held-out statements. Both modes take
+  `--approved-root DIR`, and `approve --dry-run` prints what would be approved
+  and writes nothing: the flow for an unapproved artifact (`isa`, `slot_layout`,
+  `store_projection`, `store_projection_toy`) is *approve into a scratch root,
+  `check` against it, read the statements, then let the owner commit
+  `mm0/approved/<artifact>.stmts`*. `isa`'s emitter is registered
+  (`scripts/isa-encdec`), so its approval is anchored to a current artifact; the
+  hand-written specifications have no emitter and the comparator says so.
+- `mm0/store_projection.mm0` — the claims that *survive* that refutation, for
+  both memory opcodes, stated and cited but not asserted: `aligned8 a ⇒
+  in_linear_space a ⇒ store_projects s a v` and `… ⇒ load_projects s a` over
+  uninterpreted state transformers (`jit_store_i64`/`isa_store_w8`,
+  `jit_load_i64`/`isa_load_w8`), with `-- certificate: [gap]`, three pinned
   citations and **no** `axiom`/`theorem`. `mm0-c` accepting it means "the
   obligation is well-formed", never "it holds". It declares its own vocabulary
   (`-- theory: self-declared vocabulary`), which `verify-invariants` accepts in
   place of a `used=` coverage list; membership is still a W3 `[gap]` until the
-  owner approves it.
+  owner approves it. The file is named for the obligation it was created for
+  and now covers load as well — the refutation leaving only a projection is the
+  same argument for both.
+- `mm0/store_projection_toy.mm0` + `.mm1` — the projection *proved* on a toy
+  model: `put`/`get`/`veq` uninterpreted, both sides defined as the same
+  write/read, four theorems (`toy_jit_store_visible`, `toy_isa_store_visible`,
+  `toy_store_projection`, `toy_load_projection`) discharged from one cited
+  read-after-write axiom (`at_put`) plus `veq_refl`. It proves the shape and
+  says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
+  and uses the same four transformer names, so a proof cannot drift onto a
+  neighbouring (easier) statement.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

@@ -1,0 +1,42 @@
+-- store_projection_toy.mm1 — the proof file for mm0/store_projection_toy.mm0.
+--
+-- `mm0-c` checks these proofs against the `.mm0` specification on every
+-- `verify-invariants` run, so statement and proof cannot disagree. Proof
+-- arguments are hypotheses and term arguments are inferred in proof position,
+-- which is why the proofs are one symbol each: the goal fixes `m`, `a` and `v`.
+--
+-- Read the `.mm0` header for what these four theorems do *not* cover; the short
+-- version is that both sides are defined as the same write/read, so this is the
+-- projection's shape, not the projection.
+
+provable sort Prop;
+delimiter $ ( ) $;
+
+sort Val;
+sort Mem;
+term put (m: Mem) (a v: Val): Mem;
+term get (m: Mem) (a: Val): Val;
+term veq (x y: Val): Prop;
+axiom veq_refl (x: Val): $ veq x x $;
+axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
+
+def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
+def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
+def jit_load_i64 (m: Mem) (a: Val): Val = $ get m a $;
+def isa_load_w8 (m: Mem) (a: Val): Val = $ get m a $;
+
+pub theorem toy_jit_store_visible (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i64 m a v) a) v $
+  = '(at_put);
+
+pub theorem toy_isa_store_visible (m: Mem) (a v: Val):
+  $ veq (get (isa_store_w8 m a v) a) v $
+  = '(at_put);
+
+pub theorem toy_store_projection (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i64 m a v) a) (get (isa_store_w8 m a v) a) $
+  = '(veq_refl);
+
+pub theorem toy_load_projection (m: Mem) (a: Val):
+  $ veq (jit_load_i64 m a) (isa_load_w8 m a) $
+  = '(veq_refl);

@@ -699,17 +699,18 @@ PY
             echo "  [detail] $(grep -m1 'term/def' "$_cert_tmp/proj.log" | sed 's/^ *//')"
             if grep -qE '^(axiom|theorem) ' "$_proj"; then
                 echo "  [detail] store_projection.mm0 asserts what it has not proved" >&2
-                check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" false
+                check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
             elif grep -q '^term store_projects ' "$_proj" \
+                && grep -q '^term load_projects ' "$_proj" \
                 && grep -q '^-- certificate: \[gap\]' "$_proj"; then
-                check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" true
+                check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" true
             else
                 echo "  [detail] missing the relation symbol or the [gap] line" >&2
-                check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" false
+                check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
             fi
         else
             sed -n '1,8p' "$_cert_tmp/proj.log" >&2
-            check "W9.3: the store projection is stated as vocabulary, accepted by mm0-c" false
+            check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
         fi
         # … and its citations must still describe the files they name.
         _proj_cites=$(sed -n 's/^-- cites: \([^ ]*\) sha256=\([0-9a-f]\{64\}\)$/\1 \2/p' "$_proj")
@@ -726,6 +727,36 @@ PY
         else
             echo "  [detail] stale citations:${_proj_bad:- none} of $_proj_n (expected >= 3)" >&2
             check "W9.3: the projection's citations still match their artifacts" false
+        fi
+        # … and the toy model must be a model *of this claim*: same four state
+        # transformers, and its cite of the claim still current. Otherwise the
+        # proof could drift to a different (easier) statement than the one the
+        # repository states, which is the failure mode a prover-only gate has.
+        _toy="$repo_root/mm0/store_projection_toy.mm0"
+        _toy_names_ok=true
+        for _fn in jit_store_i64 isa_store_w8 jit_load_i64 isa_load_w8; do
+            grep -q "^term $_fn " "$_proj" && grep -q "^def $_fn " "$_toy" \
+                || _toy_names_ok=false
+        done
+        _toy_pin="$(sed -n 's/^-- cites: mm0\/store_projection.mm0 sha256=\([0-9a-f]\{64\}\)$/\1/p' "$_toy")"
+        if [ "$_toy_pin" = "$(sha256sum "$_proj" | cut -d' ' -f1)" ] && $_toy_names_ok; then
+            check "W9.3: the toy model proves the stated projection, not a neighbour" true
+        else
+            echo "  [detail] toy/model mismatch: pin ${_toy_pin:-none}, names ok=$_toy_names_ok" >&2
+            check "W9.3: the toy model proves the stated projection, not a neighbour" false
+        fi
+        if mm0-rs compile "$repo_root/mm0/store_projection_toy.mm1" \
+                "$_cert_tmp/toy.mmb" >"$_cert_tmp/toy.log" 2>&1 \
+            && mm0-c "$_cert_tmp/toy.mmb" < "$_toy" >>"$_cert_tmp/toy.log" 2>&1; then
+            echo "  [detail] $(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
+            if grep -q 'sorry' "$_cert_tmp/toy.log"; then
+                check "W9.3: the toy projection's four theorems check without sorry" false
+            else
+                check "W9.3: the toy projection's four theorems check without sorry" true
+            fi
+        else
+            sed -n '1,10p' "$_cert_tmp/toy.log" >&2
+            check "W9.3: the toy projection's four theorems check without sorry" false
         fi
 
         # W6: the generated probe is a test, and it has to actually run.
