@@ -758,6 +758,53 @@ PY
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
             check "W9.3: the toy projection's six theorems check without sorry" false
         fi
+        # Negative control: the proofs must depend on the axioms they cite.
+        # A theorem that checks after its axiom has been falsified is provable
+        # from something else, which would make the file prove less than its
+        # header says — so mutate each axiom's conclusion and require `mm0-rs`
+        # to refuse, naming the theorem that used to rely on it. This is the
+        # mutation a prover-only check cannot do for itself: `mm0-c` compares
+        # statements against the artifacts, and by construction the mutated
+        # file is *not* the artifact.
+        _toy_src="$(cat "$repo_root/mm0/store_projection_toy.mm1")"
+        _mut_ok=true
+        _mut_seen=""
+        _mut_n=0
+        # "<old conclusion>|<new conclusion>|<theorem that must now fail>"
+        while IFS='|' read -r _mut_from _mut_to _mut_victim; do
+            [ -n "$_mut_from" ] || continue
+            _mut_n=$((_mut_n + 1))
+            _mut_file="$_cert_tmp/toy-mut$_mut_n.mm1"
+            _mut_text="${_toy_src/$_mut_from/$_mut_to}"
+            if [ "$_mut_text" = "$_toy_src" ]; then
+                # The mutation not applying is itself a finding: the axiom the
+                # control assumes is gone, so the control proves nothing.
+                _mut_ok=false
+                _mut_seen="$_mut_seen $_mut_victim(mutation did not apply)"
+                continue
+            fi
+            printf '%s\n' "$_mut_text" > "$_mut_file"
+            if mm0-rs compile "$_mut_file" "$_cert_tmp/toy-mut$_mut_n.mmb" \
+                    >"$_cert_tmp/toy-mut$_mut_n.log" 2>&1; then
+                _mut_ok=false
+                _mut_seen="$_mut_seen $_mut_victim(still checks)"
+            elif grep -q "$_mut_victim" "$_cert_tmp/toy-mut$_mut_n.log"; then
+                _mut_seen="$_mut_seen $_mut_victim(refused)"
+            else
+                _mut_ok=false
+                _mut_seen="$_mut_seen $_mut_victim(refused, but not at that theorem)"
+            fi
+        done <<'MUTATIONS'
+$ veq (get (put m a v) a) v $|$ veq (get (put m a v) a) (get m a) $|toy_jit_store_visible
+$ veq (get (put m a v) b) unset $|$ veq (get (put m a v) b) v $|toy_jit_store_load_other
+MUTATIONS
+        if $_mut_ok && [ "$_mut_n" -eq 2 ]; then
+            echo "  [detail] mutations refused:$(echo "$_mut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
+            check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" true
+        else
+            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 2)" >&2
+            check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" false
+        fi
 
         # W6: the generated probe is a test, and it has to actually run.
         if command -v cc >/dev/null 2>&1; then

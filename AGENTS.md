@@ -268,11 +268,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `vne a b` hypothesis) plus `veq_refl`. The stored-then-loaded-*elsewhere* pair
   (`toy_jit_store_load_other`, `toy_isa_store_load_other`) is the case where the
   store is not visible, and dropping its `vne` hypothesis makes it unprovable —
-  the side condition is load-bearing, not decoration. It proves the shape and
-  says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  the side condition is load-bearing, not decoration. It proves the shape  and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
-  neighbouring (easier) statement.
+  neighbouring (easier) statement. It also mutation-tests the file: rewriting
+  `at_put`'s conclusion to "read unchanged" and `at_put_other`'s to "the written
+  value" must make `mm0-rs` refuse at `toy_jit_store_visible` and
+  `toy_jit_store_load_other` respectively — a proof that survived its own axiom
+  being falsified would be deriving the claim from something else, and is
+  reported as a failure.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
