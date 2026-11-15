@@ -9,7 +9,7 @@
 -- check that the projection then goes through, from named and cited memory
 -- axioms, with nothing assumed about the compiler.
 --
--- WHAT IS PROVED HERE (13 theorems, 0 sorry):
+-- WHAT IS PROVED HERE (15 theorems, 0 sorry):
 --
 --   toy_init_unset                a fresh memory reads `unset` at every address
 --   toy_jit_store_visible         a store makes the value visible at the
@@ -21,42 +21,66 @@
 --   toy_isa_store_load_other      other address's content alone
 --   toy_jit_two_cells_preserved   two stores at distinct addresses both stay
 --   toy_isa_two_cells_preserved   readable: the second does not clobber the first
+--   toy_jit_refresh_keeps_other_cell   a store at an address the memory
+--   toy_isa_refresh_keeps_other_cell   already holds updates that cell in place
+--                                 and leaves the other cell readable
 --   toy_jit_third_store_drops_oldest   a third distinct store drops the earliest
 --                                 address (capacity 2, FIFO)
 --   toy_jit_fourth_store_drops_oldest  a fourth does the same to the next oldest
 --   toy_jit_recent_cells_readable the two most recent stores both survive
 --   toy_fourth_store_projection   the projection still holds on that deep memory
 --
--- THE CAPACITY IS THE POINT. The memory is **two cells**, newest first, and the
--- axioms below characterise it in the three cases a two-cell memory has:
+-- THE CAPACITY IS THE POINT. The memory is **two cells**, and the axioms below
+-- characterise it in the four cases a two-cell memory has. A write either hits
+-- an address the memory already holds, or it does not:
 --
---   a free cell     a write preserves every other address  (`at_put_other`,
---                   guarded by `notfull`, because an unguarded version would
---                   claim unbounded memory and contradict the eviction axiom)
---   full, evicting  after three distinct stores the *earliest* address reads
---                   `unset`                                (`at_drop`)
---   full, keeping   the newest store of the previous pair survives the next
---                   write, so the two latest stores are both readable
+--   refresh        the address is held, so the write replaces that cell's value
+--                  and the other cell is untouched      (`at_put_held_other`,
+--                  with `put_held` supplying "the address written is now held",
+--                  and `put_held_other` "a cell survives a write elsewhere
+--                  while one is free" — the fact that makes a refresh of an
+--                  older cell reachable at all)
+--   free cell      the address is not held and a cell is free, so nothing is
+--                  evicted                             (`at_put_other`, guarded
+--                  by `notfull`)
+--   full, evicting the address is not held and no cell is free: after three
+--                  distinct stores the *earliest* address reads `unset`
+--                                                           (`at_drop`)
+--   full, keeping  the newest store of the previous pair survives the next
+--                  write, so the two latest stores are both readable
 --                                                           (`at_keep_prev`)
 --
--- Those three are mutually consistent, and the witness is short enough to state
+-- `notfull` is deliberately **not** closed under `put`: `init_notfull` and
+-- `put_init_notfull` say a fresh memory and the state after one store have a
+-- free cell, and nothing says a further write preserves that. A general closure
+-- axiom would be *unsound here* — with two cells, a write to a fresh address
+-- must evict (`at_drop`), so "still has a free cell" cannot survive it. An
+-- earlier revision of this file carried exactly that closure axiom; it was
+-- dropped when the refresh case showed the two cannot both hold.
+--
+-- The axiom set is consistent, and the witness is short enough to state
 -- informally: let `Mem` be a list of at most two `(address, value)` pairs, let
--- `put m a v` be `(a,v) :: take 1 m`, let `get m a` be the value of the first
--- pair whose address is `a` (else `unset`), and let `notfull m` mean fewer than
--- two pairs. Then `init` is the empty list and all ten axioms hold. That is not
--- a formal consistency proof — MM0 has no model-checking entry point here — and
--- this file does not claim one.
+-- `put m a v` be `(a,v)` consed onto `m` with every pair at address `a` removed
+-- and the result truncated to two, let `get m a` be the value of the first pair
+-- whose address is `a` (else `unset`), let `held m a` mean some pair has
+-- address `a`, let `notfull m` mean fewer than two pairs, `init` the empty
+-- list, `veq` equality on `Val` and `vne` its negation. Then all thirteen
+-- axioms hold: a refresh keeps the other pair, a write elsewhere into a one-pair
+-- memory keeps it, three distinct writes leave exactly the last two (the first
+-- of the three is gone), and after them the middle one is the older of the two
+-- survivors. That is not a formal consistency proof — MM0 has no model-checking
+-- entry point here — and this file does not claim one.
 --
 -- WHAT IS *NOT* PROVED, and it is the whole distance to W9.3: that the emitted
 -- Cranelift instruction computes `jit_store_i64`, that Sail's `vmem_write` at
 -- width 8 computes `isa_store_w8`, that an aligned address stays in the linear
--- space, or that the fault branch is never taken there. Here `put`, `get` and
--- `veq` are uninterpreted and the two sides are *defined to be the same term*,
--- so the theorems say "if both sides are this operation, they agree" — which is
--- true, cheap, and exactly as strong as it looks. Nor does the toy say anything
--- about stores at *equal* addresses (a refresh), about widths other than 8, or
--- about how many cells the real lowering keeps; the last of those is the gap
--- the real obligation inherits in a different form.
+-- space, or that the fault branch is never taken there. Here `put`, `get`,
+-- `held` and `veq` are uninterpreted and the two sides are *defined to be the
+-- same term*, so the theorems say "if both sides are this operation, they
+-- agree" — which is true, cheap, and exactly as strong as it looks. Nor does
+-- the toy say anything about widths other than 8, or about how many cells the
+-- real lowering keeps; the last of those is the gap the real obligation
+-- inherits in a different form.
 --
 -- Keeping this file separate from `store_projection.mm0` is deliberate: that
 -- artifact must contain no `axiom` and no `theorem` so it cannot quietly become
@@ -64,17 +88,17 @@
 -- enforces exactly that on it. Proofs live here, claims live there, and this
 -- file cites the claim it models by digest.
 --
--- theory coverage: used=put,get,init,unset,veq,vne,notfull unused=none
+-- theory coverage: used=put,get,init,unset,veq,vne,notfull,held unused=none
 -- cites: mm0/store_projection.mm0 sha256=2b94039df2faccf5d4be102dfec17e2e72260271b64e6495c15249465ef86df7
 
 provable sort Prop;
 delimiter $ ( ) $;
 
--- ── The toy memory: two cells, newest first ──────────────────────────────
+-- ── The toy memory: two cells ────────────────────────────────────────────
 -- `Mem` is a two-cell memory, `Val` is both address and value; both are
 -- uninterpreted, so nothing here is 64-bit, aligned or linear. The cells are
--- not exposed as a constructor: `put`/`get`/`notfull` are the interface, and
--- what the two-cell capacity *means* is stated axiom by axiom rather than
+-- not exposed as a constructor: `put`/`get`/`notfull`/`held` are the interface,
+-- and what the two-cell capacity *means* is stated axiom by axiom rather than
 -- derived from a data layout.
 sort Val;
 sort Mem;
@@ -86,6 +110,11 @@ term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
 -- "At least one cell is still free", so the next write evicts nothing.
 term notfull (m: Mem): Prop;
+-- "The memory holds this address", so the next write to it is a refresh rather
+-- than an append. Without it the model cannot tell the refresh case from the
+-- eviction case: both write to an address, and only the state distinguishes
+-- them.
+term held (m: Mem) (a: Val): Prop;
 -- Address inequality, uninterpreted like `veq`; the axioms below take it as a
 -- hypothesis rather than deciding it.
 term vne (x y: Val): Prop;
@@ -100,16 +129,40 @@ axiom veq_refl (x: Val): $ veq x x $;
 axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
 axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
 
--- ── The toy memory's semantics: three cases, one axiom each ──────────────
--- Free cell: a fresh memory is empty, and a write through a free cell is
--- visible at the address written and disturbs nothing else. `notfull` is what
--- keeps this claim from contradicting `at_drop` below — an unconditional
--- "writes never disturb other addresses" would describe unbounded memory.
+-- ── The toy memory's semantics: four cases, one axiom each ───────────────
+-- Free cell: a fresh memory is empty, and the state after one store still has a
+-- free cell — and stops there. See the header for why this is *not* closed
+-- under `put`: closure would contradict `at_drop`, since in a full memory a
+-- write to a fresh address evicts.
 axiom get_init (a: Val): $ veq (get init a) unset $;
 axiom init_notfull: $ notfull init $;
-axiom put_notfull (m: Mem) (a v: Val) (k: $ notfull m $):
-  $ notfull (put m a v) $;
+axiom put_init_notfull (a v: Val): $ notfull (put init a v) $;
+
+-- Every write is visible at the address it writes, whether it refreshed a cell
+-- or took a free one.
 axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
+
+-- Refresh: the write's address is now held (so a second write there refreshes
+-- again rather than appending a duplicate cell) …
+axiom put_held (m: Mem) (a v: Val): $ held (put m a v) a $;
+-- … and while a cell is free, a write elsewhere keeps the held cell. Unguarded
+-- this would be false — a write to a fresh address in a full memory evicts the
+-- oldest cell, which may be the held one.
+axiom put_held_other (m: Mem) (a b v: Val) (h: $ vne a b $)
+  (k: $ held m b $) (f: $ notfull m $):
+  $ held (put m a v) b $;
+-- The refresh itself: the written cell takes the new value (`at_put`) and the
+-- other cell is untouched. This is the axiom that makes "a store to an address
+-- the memory already holds disturbs nothing else" a proved statement instead of
+-- an assumption hidden in the ordering of the two cells.
+axiom at_put_held_other (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (k: $ held m x $):
+  $ veq (get (put m x w) y) (get m y) $;
+
+-- Free cell, writing elsewhere: nothing is evicted, so every other address
+-- keeps its content. Guarded by `notfull`, for the same reason `put_notfull` is
+-- not an axiom: an unguarded version would claim unbounded memory and
+-- contradict `at_drop` below.
 axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $) (k: $ notfull m $):
   $ veq (get (put m a v) b) (get m b) $;
 
@@ -176,6 +229,19 @@ theorem toy_jit_two_cells_preserved (a b va vb: Val) (h: $ vne a b $):
 
 theorem toy_isa_two_cells_preserved (a b va vb: Val) (h: $ vne a b $):
   $ veq (get (isa_store_w8 (isa_store_w8 init a va) b vb) a) va $;
+
+-- Refresh: write `a`, write `b` (so both cells are taken), then write `a`
+-- again. The second value is still what a read of `b` returns — the refresh
+-- updated `a` in place instead of evicting `b`. This is the case an
+-- evict-on-every-write model would get wrong, and the one a real program hits
+-- whenever it increments a counter it has already stored.
+theorem toy_jit_refresh_keeps_other_cell (a b va vb va2: Val)
+  (h: $ vne a b $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b) vb $;
+
+theorem toy_isa_refresh_keeps_other_cell (a b va vb va2: Val)
+  (h: $ vne a b $):
+  $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) b) vb $;
 
 -- Capacity 2, oldest out first: the third distinct store drops the earliest
 -- address. This is the eviction case, and it is an axiom instance rather than a

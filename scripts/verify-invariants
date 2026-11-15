@@ -750,39 +750,54 @@ PY
             && mm0-c "$_cert_tmp/toy.mmb" < "$_toy" >>"$_cert_tmp/toy.log" 2>&1; then
             echo "  [detail] $(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
             if grep -q 'sorry' "$_cert_tmp/toy.log"; then
-                check "W9.3: the toy projection's thirteen theorems check without sorry" false
+                check "W9.3: the toy projection's fifteen theorems check without sorry" false
             else
-                check "W9.3: the toy projection's thirteen theorems check without sorry" true
+                check "W9.3: the toy projection's fifteen theorems check without sorry" true
             fi
         else
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
-            check "W9.3: the toy projection's thirteen theorems check without sorry" false
+            check "W9.3: the toy projection's fifteen theorems check without sorry" false
         fi
         # A count in prose is a claim like any other, and the one that goes stale
-        # first: add a theorem and the paragraph describing the file quietly
-        # overstates what it used to say. So the count is pinned in two places
-        # that must agree with the files — how many `theorem`s the spec declares,
-        # how many it proves, and the single `toy theorem count: N` line in the
-        # plan and in AGENTS.md. Any disagreement is a failure, because either
-        # the prose describes an older file or a proof went missing.
-        _toy_thm_spec="$(grep -c '^theorem ' "$_toy")"
-        _toy_thm_proof="$(grep -c '^pub theorem ' "$repo_root/mm0/store_projection_toy.mm1")"
-        _toy_thm_docs=""
-        for _doc in "$repo_root/PLAN_sota_kernel_verification.md" "$repo_root/AGENTS.md"; do
-            _doc_n="$(grep -i 'toy theorem count:' "$_doc" \
-                | sed 's/.*[Tt]oy theorem count: *\([0-9][0-9]*\).*/\1/' \
-                | sort -u | tr '\n' ' ')"
-            if [ "$_doc_n" != "$_toy_thm_spec " ]; then
-                _toy_thm_docs="$_toy_thm_docs $(basename "$_doc")(say ${_doc_n:-nothing})"
+        # first: add a theorem or an axiom and the paragraph describing the file
+        # quietly overstates what it used to say. So both counts are pinned in two
+        # places that must agree with the files — how many `theorem`/`axiom`
+        # declarations the spec carries, how many the proofs carry, and the single
+        # `toy theorem count: N` / `toy axiom count: N` line in the plan and in
+        # AGENTS.md. Any disagreement is a failure, because either the prose
+        # describes an older file or a proof went missing.
+        _toy_proofs="$repo_root/mm0/store_projection_toy.mm1"
+        _toy_counts=""
+        _toy_counts_bad=""
+        for _kind in theorem axiom; do
+            case "$_kind" in
+                theorem)
+                    _spec="$(grep -c '^theorem ' "$_toy")"
+                    _proof="$(grep -c '^pub theorem ' "$_toy_proofs")" ;;
+                axiom)
+                    _spec="$(grep -c '^axiom ' "$_toy")"
+                    _proof="$(grep -c '^axiom ' "$_toy_proofs")" ;;
+            esac
+            _toy_counts="$_toy_counts $_kind=$_spec"
+            if [ "$_spec" -le 0 ] || [ "$_spec" != "$_proof" ]; then
+                _toy_counts_bad="$_toy_counts_bad file/$_kind(declares $_spec, proves $_proof)"
             fi
+            for _doc in "$repo_root/PLAN_sota_kernel_verification.md" "$repo_root/AGENTS.md"; do
+                _doc_n="$(grep -i "toy $_kind count:" "$_doc" \
+                    | sed "s/.*[Tt]oy $_kind count: *\([0-9][0-9]*\).*/\1/" \
+                    | sort -u | tr '\n' ' ')"
+                if [ "$_doc_n" != "$_spec " ]; then
+                    _toy_counts_bad="$_toy_counts_bad $(basename "$_doc")/$_kind(says $(printf '%s' "${_doc_n:-nothing}" | sed 's/ *$//;s/ /+/g')|file says $_spec)"
+                fi
+            done
         done
-        if [ "$_toy_thm_spec" -gt 0 ] && [ "$_toy_thm_spec" = "$_toy_thm_proof" ] \
-                && [ -z "$_toy_thm_docs" ]; then
-            check "W9.3: the toy's theorem count agrees with the plan and AGENTS ($_toy_thm_spec)" true
+        if [ -z "$_toy_counts_bad" ]; then
+            _thm_n="$(grep -c '^theorem ' "$_toy")"
+            _ax_n="$(grep -c '^axiom ' "$_toy")"
+            check "W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS ($_thm_n theorem(s), $_ax_n axiom(s))" true
         else
-            echo "  [detail] theorem count: spec=$_toy_thm_spec proved=$_toy_thm_proof" \
-                 "docs:${_toy_thm_docs:- agree}" >&2
-            check "W9.3: the toy's theorem count agrees with the plan and AGENTS" false
+            echo "  [detail] counts:$_toy_counts disagree:$_toy_counts_bad" >&2
+            check "W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS" false
         fi
         # Negative control: the proofs must depend on the axioms they cite.
         # A theorem that checks after its axiom has been falsified is provable
@@ -826,13 +841,57 @@ $ veq (get (put m a v) b) (get m b) $|$ veq (get (put m a v) b) unset $|toy_jit_
 $ veq x z $|$ veq x x $|toy_jit_two_cells_preserved
 $ veq (get (put (put (put m x vx) y vy) z vz) x) unset $|$ veq (get (put (put (put m x vx) y vy) z vz) x) vx $|toy_jit_third_store_drops_oldest
 $ veq (get (put (put (put m x vx) y vy) z vz) y) vy $|$ veq (get (put (put (put m x vx) y vy) z vz) y) vx $|toy_jit_recent_cells_readable
+$ veq (get (put m x w) y) (get m y) $|$ veq (get (put m x w) y) unset $|toy_jit_refresh_keeps_other_cell
+$ held (put m a v) a $|$ held (put m a v) v $|toy_jit_refresh_keeps_other_cell
+$ notfull (put init a v) $|$ notfull init $|toy_jit_two_cells_preserved
 MUTATIONS
-        if $_mut_ok && [ "$_mut_n" -eq 5 ]; then
+        if $_mut_ok && [ "$_mut_n" -eq 8 ]; then
             echo "  [detail] mutations refused:$(echo "$_mut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" true
         else
-            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 5)" >&2
+            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 8)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" false
+        fi
+
+        # The axioms are consistent because a concrete model satisfies them, and
+        # that model lives in the toy's header as prose. `scripts/toy-witness`
+        # runs it instead: every axiom, universally quantified, over all memories
+        # of at most two cells and a small atom domain, plus the three candidates
+        # the toy rejected — each of which must fail there, or the guard it was
+        # given was unnecessary and the rejection was wrong. This is exhaustive
+        # over a finite domain, not a proof over an arbitrary `Val` (the file's
+        # header says so); what it buys is that the witness is executed rather
+        # than asserted, which is how `put_notfull` would have been caught.
+        _wit_rc=-1
+        if command -v rustc >/dev/null 2>&1; then
+            _wit_rc=0
+            "$repo_root/scripts/toy-witness" >"$_cert_tmp/witness.log" 2>&1 || _wit_rc=$?
+        fi
+        if [ "$_wit_rc" -eq 0 ]; then
+            echo "  [detail] $(tail -1 "$_cert_tmp/witness.log")"
+            check "W9.3: the toy's axioms hold in a concrete model (no counterexample)" true
+        elif [ "$_wit_rc" -ge 0 ] && [ "$_wit_rc" -ne 2 ]; then
+            grep -E '^\[FAIL\]' "$_cert_tmp/witness.log" >&2 \
+                || tail -5 "$_cert_tmp/witness.log" >&2
+            check "W9.3: the toy's axioms hold in a concrete model (no counterexample)" false
+        else
+            gap "W9.3: toy axioms not run against a concrete model (rustc not on PATH)"
+        fi
+        # A new axiom must be *checked*, not just declared: the names the witness
+        # proves are compared with the names the artifact carries, so adding an
+        # axiom to the `.mm0` without teaching the model about it is red.
+        if [ -s "$_cert_tmp/witness.log" ]; then
+            _ax_file="$(sed -n 's/^axiom \([a-z0-9_]*\).*/\1/p' "$_toy" | sort)"
+            _ax_wit="$(sed -n 's/^\[hold\]  *\([a-z0-9_]*\).*/\1/p' \
+                "$_cert_tmp/witness.log" | sort)"
+            _ax_n="$(printf '%s\n' "$_ax_file" | grep -c . || true)"
+            if [ "$_ax_n" -gt 0 ] && [ "$_ax_file" = "$_ax_wit" ]; then
+                check "W9.3: the witness exercises all $_ax_n axioms the toy declares" true
+            else
+                echo "  [detail] axioms: artifact=[$(echo "$_ax_file" | tr '\n' ' ')]" \
+                     "witness=[$(echo "$_ax_wit" | tr '\n' ' ')]" >&2
+                check "W9.3: the witness exercises every axiom the toy declares" false
+            fi
         fi
 
         # W6: the generated probe is a test, and it has to actually run.
@@ -920,7 +979,21 @@ check_py "W2: au2mm0 decides Flux1d's four obligations (both routes agree, hypot
 # An artifact with no approval is a [gap], never a silent pass: the point is to
 # make "nobody has looked at this statement yet" visible in the gate's output
 # rather than indistinguishable from "it was checked".
+# How many statements an artifact holds out right now, measured by the
+# comparator's own `--dry-run` — the output an owner reviews before approving.
+# Empty (not 0) when it cannot be measured here, so a caller prints `?` rather
+# than a number that would read as "nothing to approve".
+w3_measure() {
+    local stem="$1"
+    command -v python3 >/dev/null 2>&1 || return 0
+    ( cd "$repo_root" && python3 scripts/mm0-comparator approve --dry-run "$stem" 2>/dev/null ) \
+        | sed -n "s/.*would approve $stem — \([0-9][0-9]*\) statement.*/\1/p" | head -1
+}
+
 if [ -f "$repo_root/scripts/mm0-comparator" ]; then
+    _w3_line=""
+    _w3_pairs=""
+    _w3_ok=""
     for _art in "$repo_root"/mm0/*.mm0; do
         [ -e "$_art" ] || continue
         _stem="$(basename "$_art" .mm0)"
@@ -951,10 +1024,80 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
             else
                 check "W3: $_stem matches its approved statements" false
             fi
+            # Approved artifacts are counted too: the statement diff is what
+            # *enforces* their contents, but a size printed next to the one that
+            # was approved is what makes a shrunk artifact visible to a reader,
+            # and an artifact that stops producing statements is how a weakened
+            # emitter shows up first.
+            _w3_a_n="$(w3_measure "$_stem")"
+            _w3_ok="$_w3_ok $_stem(${_w3_a_n:-?} stmt)"
         else
             gap "W3: $_stem has no approved statements (run scripts/mm0-comparator approve $_stem, then commit mm0/approved/)"
+            # How much each approval would hold out is a fact the plan's §W3
+            # table states per row, and a hand-copied number drifts the moment
+            # an artifact grows a statement. So the count is measured here, from
+            # the same `--dry-run` output the owner reviews, and printed once at
+            # the end as `w3-pending:` — one entry per artifact, in the table's
+            # column order, so the table can be diffed against a command instead
+            # of trusted.
+            _w3_n="$(w3_measure "$_stem")"
+            [ -n "$_w3_n" ] || _w3_n="unmeasurable"
+            _w3_line="$_w3_line $_stem($_w3_n stmt)"
+            case "$_w3_n" in
+                ''|*[!0-9]*) ;;  # unmeasurable here: no number to compare
+                *) _w3_pairs="$_w3_pairs $_stem=$_w3_n" ;;
+            esac
         fi
     done
+    if [ -n "$_w3_line" ]; then
+        echo "w3-pending:$_w3_line"
+    fi
+    if [ -n "$_w3_ok" ]; then
+        echo "w3-approved:$_w3_ok"
+    fi
+    # … and the plan's §W3 table states the same numbers in its `stmts` column,
+    # which is where a reader gets them. Compare, don't trust: every row for an
+    # artifact still unapproved must carry the measured count, and a row left
+    # behind for an approved artifact is stale the other way (its approval is
+    # checked by the statement diff, so the row no longer has a job). A table
+    # cell is the kind of copied number that is right the day it is written.
+    _plan_file="$repo_root/PLAN_sota_kernel_verification.md"
+    _w3_plan="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $4
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            if (cell ~ /^[0-9]+$/) print path "=" cell
+        }' "$_plan_file")"
+    _w3_bad=""
+    _w3_rows=0
+    for _pair in $_w3_pairs; do
+        _w3_rows=$((_w3_rows + 1))
+        _p_stem="${_pair%%=*}"
+        _p_n="${_pair##*=}"
+        _p_row="$(printf '%s\n' "$_w3_plan" | grep -x "$_p_stem=[0-9]*" | head -1)"
+        case "$_p_row" in
+            "") _w3_bad="$_w3_bad $_p_stem(no row, file says $_p_n)" ;;
+            "$_p_stem=$_p_n") ;;
+            *) _w3_bad="$_w3_bad $_p_stem(table says ${_p_row##*=}, file says $_p_n)" ;;
+        esac
+    done
+    for _row in $_w3_plan; do
+        _r_stem="${_row%%=*}"
+        case " $_w3_pairs " in
+            *" $_r_stem="*) ;;
+            *) _w3_bad="$_w3_bad $_r_stem(row left behind for an artifact that is not pending here)" ;;
+        esac
+    done
+    if [ -n "$_w3_pairs" ] && [ -z "$_w3_bad" ]; then
+        check "W3: the plan's §W3 stmts column matches the measured counts ($_w3_rows row(s))" true
+    elif [ -z "$_w3_pairs" ]; then
+        gap "W3: the plan's §W3 stmts column not compared (no count measurable here)"
+    else
+        echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
+        check "W3: the plan's §W3 stmts column matches the measured counts" false
+    fi
     check_py "W3: comparator self-test (all three negative controls refuse)" \
         python3 "$repo_root/scripts/mm0-comparator" selftest
 else

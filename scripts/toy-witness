@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Compile and run the toy-model witness checker (scripts/toy-witness.rs).
+#
+# A separate compile step rather than a cargo crate: this is one file with no
+# dependencies, and it must be runnable from `verify-invariants` without touching
+# any build directory. rustc absent is exit 2 ("cannot check here"), the same
+# convention `scripts/mm0-comparator` uses for an unprovisioned theory, so the
+# gate reports a gap instead of a failure.
+set -uo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+
+if ! command -v rustc >/dev/null 2>&1; then
+    echo "toy-witness: rustc not on PATH — cannot build the witness checker here" >&2
+    exit 2
+fi
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+if ! rustc -O --edition 2021 -o "$tmp/toy-witness" "$here/toy-witness.rs" >"$tmp/rustc.log" 2>&1; then
+    echo "toy-witness: rustc refused the checker:" >&2
+    sed -n '1,20p' "$tmp/rustc.log" >&2
+    exit 1
+fi
+
+"$tmp/toy-witness" "$@"
