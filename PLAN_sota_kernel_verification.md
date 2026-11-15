@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 122 passed, 4 explained gap(s), 0 failed
+verify-invariants: 123 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -334,8 +334,9 @@ w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_p
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
+  [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 119 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean interpreter + W9.1)
+verify-invariants: 120 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean interpreter + W9.1)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -728,6 +729,7 @@ the artifact, so `mm0-c` checks them too.
   w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
+  [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
   ```
 
   … and then parses this table and diffs the pending line against it. The
@@ -764,6 +766,24 @@ the artifact, so `mm0-c` checks them too.
   The check is static — it proves the command *is there* and *is the one
   registered*, not that it runs; running it is what `mm0-comparator approve`/
   `check` does once an approval exists (`emitter_check`).
+
+  The **state column is checked too**, and for the same reason: "`[gap]`" is a
+  status, not an explanation. It tells a reader the gate is red without saying
+  whether anyone is working on the artifact, whether something blocks it, or
+  whether it is an owner decision waiting to be taken — and the third is what it
+  always is here, because an approval is an owner commit into `mm0/approved/`
+  and nothing in this repository may self-approve. So each row's state cell must
+  be `` `[gap]`, awaiting owner commit ``, optionally followed by `; ` and an
+  artifact-specific reason (`store_projection` uses that for "the claim itself
+  stays `[gap]`"). A cell that says `pending`, `TBD`, a bare `[gap]`, an empty
+  reason after `;`, or a *different* reason such as `blocked on X` fails with the
+  row named — the last one deliberately, since a row that is blocked for another
+  reason is still waiting on the owner and the cell would then understate what
+  the gate is showing. Measured 2026-11-15 with four drift controls on copies of
+  this table (bare `[gap]`, `pending`, `… ;` with nothing after it, and
+  `blocked on the model rebuild`): each turned `[FAIL] W3: every §W3 state cell
+  says why the row is still unapproved` with the row and the offending text, and
+  the committed table passes (4 rows).
   Measured 2026-11-15 by perturbing both at once: `1 failed`, with exactly those
   two messages. The entries are in the table's row order; the fix for a stale
   cell is to read the `w3-pending:` line, not to re-derive the count by hand. The

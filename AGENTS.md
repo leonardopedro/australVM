@@ -379,6 +379,11 @@ and is executable with the script *and* mode `python3 scripts/mm0-comparator
 emitters` reports for that stem, a cell saying `none` must be genuinely
 unregistered, and any other wording fails — the registry in `EMITTERS` is the
 single source of truth, so add an emitter there first and then update the row.
+The `state` column must say *why* the row is unapproved, not just that it is:
+`` `[gap]`, awaiting owner commit `` with any artifact-specific reason after
+`; `. `pending`, `TBD`, a bare `[gap]`, a trailing `;` with nothing after it, or
+a different reason (`blocked on X`) all fail — every unapproval here waits on the
+same thing, an owner commit into `mm0/approved/`.
 
 ## Gotchas
 

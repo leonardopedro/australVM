@@ -1242,6 +1242,59 @@ EOF
         echo "  [detail] §W3 emitter column:${_w3_emit_bad}" >&2
         check "W3: every §W3 emitter cell names a real command" false
     fi
+    # … and the state column has to say *why* the artifact is still unapproved,
+    # not merely that it is. A bare `[gap]` is a status: it tells a reader the
+    # gate is red without saying whether anyone is working on it, whether
+    # something is blocked, or whether it is an owner decision waiting to be
+    # taken. In this repository the answer is always the same — an approval is an
+    # owner commit into `mm0/approved/` and nothing here may self-approve, so the
+    # row waits on a person — and the cell must say exactly that, with any
+    # artifact-specific reason after `; `. Anything else (`pending`, `TBD`, a bare
+    # `[gap]`, `blocked on X`) is rot: it either names no reason or names one that
+    # the approval rule does not allow.
+    _w3_state_rows="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $6
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            print path "\t" cell
+        }' "$_plan_file")"
+    _w3_state_bad=""
+    _w3_state_rows_n=0
+    _w3_state_prefix='`[gap]`, awaiting owner commit'
+    while IFS="$(printf '\t')" read -r _s_stem _s_cell; do
+        [ -n "$_s_stem" ] || continue
+        _w3_state_rows_n=$((_w3_state_rows_n + 1))
+        case "$_s_cell" in
+            "$_w3_state_prefix") ;;
+            "$_w3_state_prefix;"*)
+                _s_tail="$(printf '%s' "${_s_cell:${#_w3_state_prefix}+1}" \
+                    | sed 's/^[ \t]*//;s/[ \t]*$//')"
+                [ -n "$_s_tail" ] \
+                    || _w3_state_bad="$_w3_state_bad $_s_stem(says the reason is empty: '$_s_cell')"
+                ;;
+            *)
+                _s_why="$(printf '%s' "$_s_cell" | cut -c1-48)"
+                case "$_s_cell" in
+                    '`[gap]`'*|'[gap]'*)
+                        _w3_state_bad="$_w3_state_bad $_s_stem(state names a reason the approval rule does not allow: '$_s_why')" ;;
+                    *)
+                        _w3_state_bad="$_w3_state_bad $_s_stem(state does not carry the gate's [gap] marker: '$_s_why')" ;;
+                esac
+                ;;
+        esac
+    done <<EOF
+$_w3_state_rows
+EOF
+    if [ "$_w3_state_rows_n" -eq 0 ]; then
+        gap "W3: the plan's §W3 state column not compared (no table row carries one)"
+    elif [ -z "$_w3_state_bad" ]; then
+        check "W3: every §W3 state cell says why the row is still unapproved ($_w3_state_rows_n row(s))" true
+    else
+        echo "  [detail] §W3 state column:${_w3_state_bad}" >&2
+        check "W3: every §W3 state cell says why the row is still unapproved" false
+    fi
     check_py "W3: comparator self-test (all three negative controls refuse)" \
         python3 "$repo_root/scripts/mm0-comparator" selftest
 else
