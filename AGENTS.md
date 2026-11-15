@@ -260,33 +260,43 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   owner approves it. The file is named for the obligation it was created for
   and now covers load as well — the refutation leaving only a projection is the
   same argument for both.- `mm0/store_projection_toy.mm0` + `.mm1` — the projection *proved* on a toy
-  model: a **two-cell** memory (`put`/`get`; a write takes the free cell and
-  evicts the older one), both sides defined as the same write/read, nine
-  theorems discharged from six cited axioms (`veq_refl`, `veq_trans`, `vne_sym`,
-  `get_init`, `at_put` for read-after-write, `at_put_other` for "a write at
-  another address leaves that address's content alone" under a `vne a b`
-  hypothesis) — `3 sorts, 10 term/def, 15 ax/thm`, no `sorry`. The
-  stored-then-loaded-*elsewhere* pair (`toy_jit_store_load_other`,
-  `toy_isa_store_load_other`) returns the value from before the store, and
-  `toy_jit_two_cells_preserved` / `toy_isa_two_cells_preserved` show a store at
-  `a` and then at a distinct `b` leave `a` readable — the case the second cell
-  exists for, and the one where the axioms have to compose through `veq_trans`.
-  Dropping the `vne` hypothesis makes the different-address theorems unprovable,
-  so the side condition is load-bearing, not decoration. The toy says nothing
-  about eviction after three distinct stores, and its header says so. It proves
-  the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  model: a **two-cell** memory whose capacity is characterised by one axiom per
+  case — a free cell (`at_put_other`, guarded by `notfull m`: a write leaves
+  other addresses alone), full and evicting (`at_drop`: three pairwise-distinct
+  stores and the earliest address reads `unset`), full and keeping
+  (`at_keep_prev`: the previous pair's newest survives). An *unconditional*
+  preservation axiom would describe unbounded memory and contradict `at_drop`,
+  which is why `notfull` is there rather than implied. Ten cited axioms all
+  told, thirteen theorems, `3 sorts, 11 term/def, 23 ax/thm`, no `sorry`. Both
+  sides are defined as the same write/read. The store-then-load-*elsewhere* pair
+  (`toy_jit_store_load_other`, `toy_isa_store_load_other`) returns the value
+  from before the store; `toy_jit_two_cells_preserved` shows a store at `a` then
+  a distinct `b` leave `a` readable (axioms composed through `veq_trans` with a
+  `notfull` fact from `put_notfull`); `toy_jit_third_store_drops_oldest` and
+  `toy_jit_fourth_store_drops_oldest` fire the *same* `at_drop` axiom on a fresh
+  and then a two-store memory — it is stated for an arbitrary `m` so it can fire
+  again; and `toy_jit_recent_cells_readable` says what the fourth store kept.
+  Dropping `vne a b` or `notfull m` makes the different-address theorems
+  unprovable, so both side conditions are load-bearing. The axioms are
+  consistent by an informal witness (memory = a list of at most two
+  `(address, value)` pairs, `put = cons + take 1`, `get` = first match else
+  `unset`, `notfull` = fewer than two); that witness is prose, not a formal
+  proof, and the header says so. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
-  neighbouring (easier) statement. It also mutation-tests the file in three
-  ways: rewriting `at_put`'s conclusion to "read unchanged", `at_put_other`'s
-  preserved value to `unset`, and `veq_trans`'s conclusion to reflexive must
-  make `mm0-rs` refuse at `toy_jit_store_visible`, `toy_jit_store_load_other`
-  and `toy_jit_two_cells_preserved` respectively — a proof that survived its own
+  neighbouring (easier) statement. It also mutation-tests the file five ways,
+  one per substantive axiom: rewriting `at_put`'s conclusion to "read
+  unchanged", `at_put_other`'s preserved value to `unset`, `veq_trans`'s
+  conclusion to reflexive, `at_drop`'s `unset` to the written value, and
+  `at_keep_prev`'s `vy` to `vx` must make `mm0-rs` refuse at
+  `toy_jit_store_visible`, `toy_jit_store_load_other`,
+  `toy_jit_two_cells_preserved`, `toy_jit_third_store_drops_oldest` and
+  `toy_jit_recent_cells_readable` respectively — a proof that survived its own
   axiom being falsified would be deriving the claim from something else, and is
   reported as a failure. A mutation that fails to apply is a failure too. The
-  control was itself tested by making all three no-ops (patterns that match
+  control was itself tested by making the mutations no-ops (patterns that match
   nothing, patterns that change nothing, patterns that break the file
-  elsewhere): all three scratch runs report `1 failed`, exit 1.
+  elsewhere): each scratch run reports `1 failed`, exit 1.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
