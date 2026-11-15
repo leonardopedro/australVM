@@ -3171,12 +3171,14 @@ old file, cut. Measured on `multiShiftSeq_succ` at a 200 kB limit: four parts,
 manifest lines and index entries matching, and 21 sampled index records read back
 by `seek`+`read` parse and carry the id the index promised.
 
-The bound is `limit` bytes **plus at most one certificate**: a line is atomic, so
-a part can be as large as the largest single certificate no matter what limit is
-asked for — 25 GB on the ns row, measured below. A final part that rolling
-leaves empty is removed rather than published. Unset, the emitter writes the
-historical single file exactly as before, which is why every earlier artifact in
-this document still `cmp`s.
+A final part that rolling leaves empty is removed rather than published. Unset,
+the emitter writes the historical single file exactly as before, which is why
+every earlier artifact in this document still `cmp`s.
+
+That first version rolled only at record boundaries, which made the bound the
+part's limit plus the whole certificate — 25 GB on the ns row. The sections
+below measure the fix (a part now closes mid-certificate) and the run that
+motivated both.
 
 #### The `check` memo, and the header it broke
 
