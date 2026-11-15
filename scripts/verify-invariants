@@ -750,13 +750,13 @@ PY
             && mm0-c "$_cert_tmp/toy.mmb" < "$_toy" >>"$_cert_tmp/toy.log" 2>&1; then
             echo "  [detail] $(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
             if grep -q 'sorry' "$_cert_tmp/toy.log"; then
-                check "W9.3: the toy projection's four theorems check without sorry" false
+                check "W9.3: the toy projection's six theorems check without sorry" false
             else
-                check "W9.3: the toy projection's four theorems check without sorry" true
+                check "W9.3: the toy projection's six theorems check without sorry" true
             fi
         else
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
-            check "W9.3: the toy projection's four theorems check without sorry" false
+            check "W9.3: the toy projection's six theorems check without sorry" false
         fi
 
         # W6: the generated probe is a test, and it has to actually run.

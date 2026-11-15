@@ -9,13 +9,23 @@
 -- check that the projection then goes through, from a named and cited memory
 -- axiom, with nothing assumed about the compiler.
 --
--- WHAT IS PROVED HERE (4 theorems, 0 sorry):
+-- WHAT IS PROVED HERE (6 theorems, 0 sorry):
 --
 --   toy_jit_store_visible   a store through the JIT's definition makes the
 --                           value visible at the written address
 --   toy_isa_store_visible   the same for the model's definition at width 8
 --   toy_store_projection    the two definitions agree at the written address
 --   toy_load_projection     the two load definitions return the same value
+--   toy_jit_store_load_other   a load from a *different* address after a store
+--                           reads what a single-cell memory says it should
+--   toy_isa_store_load_other   the same for the model's definition at width 8
+--
+-- The last pair is why the toy memory is one cell rather than opaque: with a
+-- single cell, "store then load somewhere else" is the case where the store is
+-- *not* visible, and it is the case a projection proof is most likely to get
+-- wrong (it is where an implementation that forgot to preserve the other
+-- bytes, or that aliased the address, would differ). Here it is stated and
+-- proved rather than left unmentioned.
 --
 -- WHAT IS *NOT* PROVED, and it is the whole distance to W9.3: that the emitted
 -- Cranelift instruction computes `jit_store_i64`, that Sail's `vmem_write` at
@@ -33,20 +43,28 @@
 -- enforces exactly that on it. Proofs live here, claims live there, and this
 -- file cites the claim it models by digest.
 --
--- theory coverage: used=put,get,veq unused=none
+-- theory coverage: used=put,get,unset,veq,vne unused=none
 -- cites: mm0/store_projection.mm0 sha256=2b94039df2faccf5d4be102dfec17e2e72260271b64e6495c15249465ef86df7
 
 provable sort Prop;
 delimiter $ ( ) $;
 
--- ── The toy memory ───────────────────────────────────────────────────────
--- `Mem` is a state carrying memory, `Val` an address or value; both are
--- uninterpreted, which is the point: nothing here is 64-bit, aligned or
--- linear, so no theorem can claim more than the definitions say.
+-- ── The toy memory: one cell ──────────────────────────────────────────────
+-- `Mem` holds at most one (address, value) pair — a single cell — and `Val` is
+-- both address and value, uninterpreted. Nothing here is 64-bit, aligned or
+-- linear, so no theorem can claim more than the definitions say; what the
+-- single cell buys is that "load from an address that was not written" has a
+-- meaning (`unset`) instead of being undecidable, which is what makes the
+-- store-then-load-different case provable at all.
 sort Val;
 sort Mem;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
+-- The empty content of a cell at an address it does not hold.
+term unset: Val;
+-- Address inequality, uninterpreted like `veq`; the axioms below take it as a
+-- hypothesis rather than deciding it.
+term vne (x y: Val): Prop;
 
 -- Value equality, as an uninterpreted predicate with its reflexivity axiom.
 -- Stating it as a `term` + `axiom` instead of importing an equality theory is
@@ -55,9 +73,13 @@ term get (m: Mem) (a: Val): Val;
 term veq (x y: Val): Prop;
 axiom veq_refl (x: Val): $ veq x x $;
 
--- The toy's memory semantics: a write is visible at the address written. This
--- is the one substantive assumption, and it is cited rather than hidden.
+-- The toy's memory semantics, in two axioms — the two cases a one-cell memory
+-- has. A write is visible at the address written; at any other address the
+-- cell that write replaced is gone, so the read is `unset` rather than
+-- whatever was there before. Both are cited assumptions, not theorems.
 axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
+axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+  $ veq (get (put m a v) b) unset $;
 
 -- ── The two sides of the projection, concretely ──────────────────────────
 -- The emitted instruction's effect and the model's effect at width 8, both
@@ -84,3 +106,13 @@ theorem toy_store_projection (m: Mem) (a v: Val):
 
 theorem toy_load_projection (m: Mem) (a: Val):
   $ veq (jit_load_i64 m a) (isa_load_w8 m a) $;
+
+-- Store, then load from an address other than the one written. The hypothesis
+-- `vne a b` is the toy's stand-in for the real claim's `aligned8`/linearity
+-- side conditions: something about the addresses must be known, and here it is
+-- the weakest thing that makes the single cell's answer determinate.
+theorem toy_jit_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+  $ veq (get (jit_store_i64 m a v) b) unset $;
+
+theorem toy_isa_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+  $ veq (get (isa_store_w8 m a v) b) unset $;

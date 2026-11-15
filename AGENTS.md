@@ -261,10 +261,14 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   and now covers load as well — the refutation leaving only a projection is the
   same argument for both.
 - `mm0/store_projection_toy.mm0` + `.mm1` — the projection *proved* on a toy
-  model: `put`/`get`/`veq` uninterpreted, both sides defined as the same
-  write/read, four theorems (`toy_jit_store_visible`, `toy_isa_store_visible`,
-  `toy_store_projection`, `toy_load_projection`) discharged from one cited
-  read-after-write axiom (`at_put`) plus `veq_refl`. It proves the shape and
+  model: a **one-cell** memory (`put`/`get` with `unset` for an address the
+  single cell does not hold), both sides defined as the same write/read, six
+  theorems discharged from two cited axioms (`at_put`, read-after-write at the
+  written address; `at_put_other`, `unset` at a different address under a
+  `vne a b` hypothesis) plus `veq_refl`. The stored-then-loaded-*elsewhere* pair
+  (`toy_jit_store_load_other`, `toy_isa_store_load_other`) is the case where the
+  store is not visible, and dropping its `vne` hypothesis makes it unprovable —
+  the side condition is load-bearing, not decoration. It proves the shape and
   says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a

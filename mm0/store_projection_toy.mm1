@@ -16,9 +16,13 @@ sort Val;
 sort Mem;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
+term unset: Val;
+term vne (x y: Val): Prop;
 term veq (x y: Val): Prop;
 axiom veq_refl (x: Val): $ veq x x $;
 axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
+axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+  $ veq (get (put m a v) b) unset $;
 
 def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
@@ -40,3 +44,13 @@ pub theorem toy_store_projection (m: Mem) (a v: Val):
 pub theorem toy_load_projection (m: Mem) (a: Val):
   $ veq (jit_load_i64 m a) (isa_load_w8 m a) $
   = '(veq_refl);
+
+-- The hypothesis `h: vne a b` is discharged by the caller and supplied to
+-- `at_put_other` as a hypothesis argument, so the proof is still one symbol.
+pub theorem toy_jit_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+  $ veq (get (jit_store_i64 m a v) b) unset $
+  = '(at_put_other (h));
+
+pub theorem toy_isa_store_load_other (m: Mem) (a b v: Val) (h: $ vne a b $):
+  $ veq (get (isa_store_w8 m a v) b) unset $
+  = '(at_put_other (h));
