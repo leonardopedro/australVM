@@ -344,7 +344,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   witness. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
-  neighbouring (easier) statement; and it checks that the witness holds exactly
+  neighbouring (easier) statement — and that pin has its own control: the gate
+  re-runs the digest comparison against a copy of the claim with `store_projects`
+  renamed and requires it to report the pin stale, so a comparison that could not
+  fail is a red gate rather than a green one; and it checks that the witness holds exactly
   the axioms the artifact declares, so a new axiom cannot slip past the model.
   It also mutation-tests the file twelve ways,
   one per substantive axiom: rewriting `at_put`'s conclusion to "read

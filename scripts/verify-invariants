@@ -739,11 +739,38 @@ PY
                 || _toy_names_ok=false
         done
         _toy_pin="$(sed -n 's/^-- cites: mm0\/store_projection.mm0 sha256=\([0-9a-f]\{64\}\)$/\1/p' "$_toy")"
-        if [ "$_toy_pin" = "$(sha256sum "$_proj" | cut -d' ' -f1)" ] && $_toy_names_ok; then
+        # One comparison, two callers: the committed claim below and the drift
+        # control after it. Extracting it is what makes the control test *this*
+        # rule rather than a paraphrase of it.
+        _toy_cite_ok() {   # $1 = the claim file to compare the toy's pin against
+            [ -n "$_toy_pin" ] || return 1
+            [ "$_toy_pin" = "$(sha256sum "$1" | cut -d' ' -f1)" ]
+        }
+        if _toy_cite_ok "$_proj" && $_toy_names_ok; then
             check "W9.3: the toy model proves the stated projection, not a neighbour" true
         else
             echo "  [detail] toy/model mismatch: pin ${_toy_pin:-none}, names ok=$_toy_names_ok" >&2
             check "W9.3: the toy model proves the stated projection, not a neighbour" false
+        fi
+        # … and the pin has to *move*, or it is decoration. The failure it exists
+        # for is specific: the claim is edited, nobody re-reads the toy, and the
+        # proof goes on certifying a statement the repository no longer makes. So
+        # the same comparison is re-run against a copy of the claim with one
+        # relation renamed — the toy is untouched in that run — and it must report
+        # the pin as stale. A control whose edit failed to apply is itself a
+        # failure: it would be comparing the pinned file with itself and passing
+        # for the wrong reason.
+        _drift_claim="$_cert_tmp/store_projection.drift.mm0"
+        sed 's/^term store_projects /term store_projects_drifted /' "$_proj" \
+            >"$_drift_claim"
+        if cmp -s "$_proj" "$_drift_claim"; then
+            echo "  [detail] the drift edit did not apply, so it controls nothing" >&2
+            check "W9.3: the toy's citation digest refuses a changed claim" false
+        elif _toy_cite_ok "$_drift_claim"; then
+            echo "  [detail] a renamed claim still matches the toy's pin" >&2
+            check "W9.3: the toy's citation digest refuses a changed claim" false
+        else
+            check "W9.3: the toy's citation digest refuses a changed claim" true
         fi
         _toy_shape=""
         if mm0-rs compile "$repo_root/mm0/store_projection_toy.mm1" \
