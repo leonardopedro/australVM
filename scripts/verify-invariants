@@ -896,7 +896,7 @@ EOF
             if mm0-rs compile "$_mut_file" "$_cert_tmp/toy-mut$_mut_n.mmb" \
                     >"$_cert_tmp/toy-mut$_mut_n.log" 2>&1; then
                 _mut_ok=false
-                _mut_seen="$_mut_seen $_mut_victim(still checks)"
+                _mut_seen="$_mut_seen $_mut_victim(still-checks)"
             elif grep -q "$_mut_victim" "$_cert_tmp/toy-mut$_mut_n.log"; then
                 _mut_seen="$_mut_seen $_mut_victim(refused)"
             else
@@ -988,6 +988,25 @@ MUTATIONS
                 echo "  [detail] lean axioms vs artifact: [$(echo "$_lean_ax" | tr '\n' ' ')]" >&2
                 check "W9.3: a Lean development proves the same axioms" false
             fi
+            # The artifact's *theorems*, not just its axioms: the Lean file proves
+            # each of the toy's 28 too, from the same axioms, so the same drift
+            # control applies in this direction. Both lists must be equal as sets
+            # (a theorem added to the artifact and not proved here is red, and so
+            # is a name here that the artifact does not declare), and the number
+            # of `theorem toy_…` declarations in the file must equal the length of
+            # the printed list — otherwise a theorem could be missing while the
+            # list, which is a literal, still claimed it.
+            _lean_thm="$(sed -n 's/^lean-witness-theorems: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
+            _thm_file="$(grep -oE '^theorem toy_[a-z0-9_]*' "$_toy" | sed 's/^theorem //' | sort)"
+            _lean_decl_n="$(grep -c '^theorem toy_' "$repo_root/mm0/toy_witness/ToyWitness.lean")"
+            if [ -n "$_lean_thm" ] && [ "$_lean_thm" = "$_thm_file" ] \
+                    && [ "$_lean_decl_n" -eq "$(printf '%s\n' "$_lean_thm" | grep -c .)" ]; then
+                check "W9.3: the Lean development proves the toy's $(printf '%s\n' "$_lean_thm" | grep -c .) theorems too" true
+            else
+                echo "  [detail] theorems: artifact=[$(echo "$_thm_file" | tr '\n' ' ')]" \
+                     "lean=[$(echo "$_lean_thm" | tr '\n' ' ')] declarations=$_lean_decl_n" >&2
+                check "W9.3: the Lean development proves the toy's theorems too" false
+            fi
             if [ ! -s "$_cert_tmp/witness.log" ]; then
                 gap "W9.3: rejected-candidate cross-check not run (rustc absent)"
             else
@@ -1003,6 +1022,67 @@ MUTATIONS
         else
             gap "W9.3: the Lean witness proofs not checked (lean not on PATH)"
         fi
+
+            # Negative control on the Lean side, the analogue of the mm0 one
+            # above: the same *model* edits that make the artifact's proofs fail
+            # must make this file fail. A file that still elaborates after
+            # `take 3` becomes `take 4` is not proving the capacity it says it
+            # is, however many theorems it prints. Attribution is by line: the
+            # mutation must apply, the file must be refused, and the first error
+            # must be *below* the mutated definition — an error on the edited
+            # line itself would mean the edit broke the syntax rather than the
+            # proof, which is a defect in the control, not evidence about the
+            # model.
+            if command -v lean >/dev/null 2>&1 \
+                    && [ -f "$repo_root/mm0/toy_witness/ToyWitness.lean" ]; then
+                _lean_src="$(cat "$repo_root/mm0/toy_witness/ToyWitness.lean")"
+                _lmut_ok=true
+                _lmut_seen=""
+                _lmut_n=0
+                while IFS='|' read -r _lmut_from _lmut_to _lmut_note; do
+                    [ -n "$_lmut_from" ] || continue
+                    _lmut_n=$((_lmut_n + 1))
+                    _lmut_file="$_cert_tmp/lean-mut$_lmut_n.lean"
+                    _lmut_text="${_lean_src/$_lmut_from/$_lmut_to}"
+                    if [ "$_lmut_text" = "$_lean_src" ]; then
+                        _lmut_ok=false
+                        _lmut_seen="$_lmut_seen $_lmut_note(edit-did-not-apply)"
+                        continue
+                    fi
+                    printf '%s\n' "$_lmut_text" >"$_lmut_file"
+                    _lmut_line="$(printf '%s\n' "$_lean_src" | grep -nF -- "$_lmut_from" \
+                        | head -1 | cut -d: -f1)"
+                    if lean "$_lmut_file" >"$_cert_tmp/lean-mut$_lmut_n.log" 2>&1; then
+                        _lmut_ok=false
+                        _lmut_seen="$_lmut_seen $_lmut_note(still-checks)"
+                        continue
+                    fi
+                    _lmut_err="$(grep -oE ':[0-9]+:[0-9]+: error' "$_cert_tmp/lean-mut$_lmut_n.log" \
+                        | head -1 | cut -d: -f2)"
+                    if [ -z "$_lmut_err" ]; then
+                        _lmut_ok=false
+                        _lmut_seen="$_lmut_seen $_lmut_note(refused-without-error-line)"
+                    elif [ "$_lmut_err" -le "$_lmut_line" ]; then
+                        _lmut_ok=false
+                        _lmut_seen="$_lmut_seen $_lmut_note(refused-at-edited-line)"
+                    else
+                        _lmut_seen="$_lmut_seen $_lmut_note(refused@$_lmut_err)"
+                    fi
+                done <<'LEANMUT'
+((a, v) :: drop a m).take 3|((a, v) :: drop a m).take 4|put-no-truncation
+if c.1 = a then drop a t else c :: drop a t|if c.1 = a then c :: drop a t else c :: drop a t|drop-keeps-written-address
+def notfullL {α : Type} (m : Mem α) : Prop := m.length < 3|def notfullL {α : Type} (m : Mem α) : Prop := m.length < 4|notfull-weakened-to-four
+⟨x.val % 2, Nat.lt_of_lt_of_le (Nat.mod_lt _ (by omega)) hn⟩|⟨x.val, x.isLt⟩|narrow4-becomes-identity
+def keep (m : Cap α) (_a _v : α) : Cap α := m|def keep (m : Cap α) (a v : α) : Cap α := put m a v|keep-order-becomes-put
+LEANMUT
+                if $_lmut_ok && [ "$_lmut_n" -eq 5 ]; then
+                    echo "  [detail] lean mutations refused:$(echo "$_lmut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
+                    check "W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)" true
+                else
+                    echo "  [detail] lean mutations:${_lmut_seen:- none applied} ($_lmut_n of 5)" >&2
+                    check "W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)" false
+                fi
+            fi
 
         # W6: the generated probe is a test, and it has to actually run.
         if command -v cc >/dev/null 2>&1; then

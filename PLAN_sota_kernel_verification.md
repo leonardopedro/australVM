@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 124 passed, 4 explained gap(s), 0 failed
+verify-invariants: 126 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -316,6 +316,7 @@ verify-invariants: 124 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
   [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
   [pass] W9.3: a Lean development proves the same 20 axioms
+  [pass] W9.3: the Lean development proves the toy's 28 theorems too
   [pass] W9.3: both witnesses reject the same candidates
   [pass] W9.3: the witness exercises all 20 axioms the toy declares
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
@@ -327,6 +328,10 @@ verify-invariants: 124 passed, 4 explained gap(s), 0 failed
            toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused),
            toy_width4_load_after_wide_store(refused),
            toy_width4_store_load_roundtrip(refused)
+  [pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
+  [detail] lean mutations refused: put-no-truncation(refused@197),
+           drop-keeps-written-address(refused@131), notfull-weakened-to-four(refused@229),
+           narrow4-becomes-identity(refused@378), keep-order-becomes-put(refused@353)
   [pass] Phase D: store_projection.mm0 declares its own vocabulary
   [gap]  W3: isa has no approved statements (owner commit)
   [gap]  W3: slot_layout has no approved statements (owner commit)
@@ -1707,18 +1712,20 @@ it pass would be certifying a memory it had not modelled. A candidate that
 that failed would print its counterexample. Both directions matter, so the run
 is a check on the guard choice, not just on the axioms.
 
-Thresholds, stated rather than implied: the check is exhaustive over a finite
-domain (4 atoms, `0` = `unset`; `--domain 5` gives the identical verdict over
-~30× the instances, so the result is not a size artifact — `--domain 6` is
-`[gap]`: it did not finish inside 240 s here) and it is *not* a proof over an arbitrary
-`Val` — an instance needing more atoms than the domain has is the same equality
-pattern renamed, which is an argument the header makes and this program does not
-establish. What it establishes is that the witness runs and that the rejected
-candidates are rejected for a reason. `verify-invariants` runs it (a `[gap]`
-where `rustc` is absent, never a silent pass) and also compares the axiom names
-it holds against the `axiom` declarations in the `.mm0`, so an axiom added to
-the artifact without teaching the model about it is a red gate — the same drift
-control the theorem count gets.
+Thresholds, stated rather than implied: the `[hold]` rows are exhaustive over a
+finite domain (4 atoms, `0` = `unset`; `--domain 5` gives the identical verdict
+over ~30× the instances, so the result is not a size artifact — `--domain 6` is
+`[gap]`: it did not finish inside 240 s here). Those rows are a check of the
+model's *code*, not a proof over an arbitrary `Val`; the arbitrary-`Val` proof is
+the Lean development above. The `[reject]` rows need no threshold at all: a
+counterexample memory embeds in every atom type with at least four atoms, and the
+`[model] model_equivariant` row checks the commutation with an injective renaming
+that the transport needs (§"Where the witness argument breaks"). So the domain
+size is an input to an enumeration, not the reach of a claim.
+`verify-invariants` runs it (a `[gap]` where `rustc` is absent, never a silent
+pass) and also compares the axiom names it holds against the `axiom` declarations
+in the `.mm0`, so an axiom added to the artifact without teaching the model about
+it is a red gate — the same drift control the theorem count gets.
 
 **The same witness, once more, in a second checker.** The Rust program is a
 *model*: it enumerates cells and reports counterexamples. A program I wrote can
@@ -1742,11 +1749,25 @@ keep a check cheap. Each rejected candidate is a theorem about its *negation*,
 exhibited at `Fin 4` (a refutation needs one domain). Two checkers disagreeing
 would be the finding; on this set they agree, and they fail differently (the
 Rust witness prints the killing memory; Lean refuses the proof).
+The file proves the toy's **28 theorems** as well as its 20 axioms, and the same
+way `store_projection_toy.mm1` does: each is a chain of axiom instances
+(`toy_jit_fifth_store_drops_next` is `at_drop` fired with a one-store memory;
+`toy_jit_repeated_refresh_never_evicts` is `at_put_held_other` twice). That is a
+stronger statement than "the axioms are consistent" — the axioms are *enough* for
+what the artifact claims, and if one were missing the theorem that needs it would
+not close. The width-4 theorems take the narrowing as a parameter with
+idempotence as its only law, because congruence is free when `veq` is equality;
+the `Narrow` section supplies a concrete lossy `narrow4` for every `Fin n`, so
+that hypothesis is not vacuous.
+
 `verify-invariants` runs `lean` on the file in the `lean` shell (a `[gap]`
-elsewhere) and requires the axiom-name list it prints to equal the `.mm0`'s, and
-requires the rejected-candidate list to agree with the Rust witness's `[reject]`
-rows, so a candidate that only one checker refuses is a red gate. The whole file
-elaborates in ~1.4 s (measured 2026-11-16): it used to be a kernel sweep over a
+elsewhere) and requires three printed lists to agree: the axiom names against the
+`.mm0`'s, the rejected candidates against the Rust witness's `[reject]` rows, and
+the theorem names against the `.mm0`'s 28 — plus the count of `theorem toy_…`
+declarations in the file against the length of that (literal) list, so a theorem
+cannot go missing while the list still claims it. A candidate that only one
+checker refuses, or a theorem only one side carries, is a red gate. The whole file
+elaborates in ~1.7 s (measured 2026-11-16): it used to be a kernel sweep over a
 finite atom set and took 44 s.
 
 **Where the witness argument breaks.** The point of having the witness is to say
@@ -1772,14 +1793,23 @@ are machine-checked rather than asserted:
   truncation; the width-4 side proves the projection's *shape* does not mention 8,
   not that `i32` truncation is this function. The real `narrow4` is uninterpreted
   at both widths.
-- The *Rust* arm is exhaustive over a finite domain (4 atoms, `0 = unset`).
-  `--domain 5` gives the identical verdict, so it is not a size artifact, but a
-  program is not a proof over an arbitrary `Val`. That is what the Lean arm is:
-  there the same axioms are theorems about an arbitrary atom type, so nothing is
-  left to the "same equality pattern renamed" argument here. What neither arm
-  establishes is that `Val` is `Fin n` — the model interprets the abstract sort,
-  and the axioms are consistent with it, which is a different claim from
-  consistency with the compiler.
+- The *Rust* arm runs over a finite atom domain (4 atoms by default, `0 = unset`),
+  and since 2026-11-16 no claim depends on that number. Its two directions are
+  separated and one of them is domain-free:
+  a **refutation** at this domain is a refutation for every atom type with at
+  least four atoms, because the counterexample memory embeds in α under an
+  injective renaming — and that transport is checked, not assumed: the
+  `[model] model_equivariant` row renames every atom by two injections (one
+  order-preserving, one not) into a strictly larger domain and requires `put`,
+  `get`, `held`, `notfull` and `keep` to commute with them, so a model that
+  compared atoms by anything but equality would be caught. The rows that
+  *assert* (the 20 axioms) are a check of the model's code against the artifact's
+  statements at one domain; coverage over an arbitrary atom type is the Lean
+  proof's job and is not claimed here. `--domain 5` still gives the identical
+  verdict on every row, which is a regression check on the enumeration rather
+  than evidence of coverage. What neither arm establishes is that `Val` is
+  `Fin n` — the model interprets the abstract sort, and the axioms are consistent
+  with it, which is a different claim from consistency with the compiler.
 
 **The toy cites the claim by digest, and the check must be able to fail.** The
 toy's header carries `-- cites: mm0/store_projection.mm0 sha256=…`, and
@@ -1894,6 +1924,26 @@ that the theorem was never using it. This is the one thing a prover cannot check
 about itself: `mm0-c` verifies statements against artifacts, and a mutated file
 is by construction not the artifact.
 
+**And the same control against the Lean model, because a proof's failure mode is
+different.** A theorem can stop depending on the *model* rather than on an axiom:
+weaken a definition and the file still elaborates, having proved something about a
+different memory. So `verify-invariants` mutates the definitions themselves and
+requires elaboration to fail — five rows, each attributed by line rather than by
+message: `take 3` → `take 4` (no eviction), `drop` keeping the written address,
+`notfull` weakened to four cells, `narrow4` becoming the identity, and `keep`
+becoming `put` (which would make the *rejected* candidate `keep_store_visible`
+true, so the refutation would be the thing that broke). Measured 2026-11-16:
+`lean mutations refused: put-no-truncation, drop-keeps-written-address,
+notfull-weakened-to-four, narrow4-becomes-identity, keep-order-becomes-put` — the
+gate appends the line each refusal was reported at, and that number moves as the
+file grows, so only the notes are quoted here. Each refusal is *below* the
+definition it edited, which is what makes it about the proof and not about the
+edit's syntax. Three control-defect directions are
+red rather than silent, all three measured on scratch copies: an edit that
+matches nothing (`edit-did-not-apply`), an edit that applies but changes nothing
+(`still-checks`), and an edit that breaks the syntax at the edited line
+(`refused-at-edited-line`).
+
 **The control itself was tested by making the mutations no-ops** (2026-11-15),
 which is the only way to know a negative control is not a rubber stamp. Three
 scratch copies of `scripts/verify-invariants` with one edit each, all run in the
@@ -1964,6 +2014,108 @@ The remaining work is exactly what it was, now with a place to put it:
 - exit criterion (when it exists): `mm0-c` accepts the refinement artifact, a
   mutated lowering that changes one emitted instruction is *refused* by it, and
   the hypothesis list is content-checked with a pinned count.
+
+
+**What the four pending approvals would cover, exactly (2026-11-16).** §W3
+records four artifacts waiting on an owner commit — `isa`, `slot_layout`,
+`store_projection`, `store_projection_toy`, counted as 193 + 23 + 11 + 70
+statements. Those counts are the *comparator's* (declarations plus the notation a
+file needs to round-trip), and a count is not a list, so this subsection records
+what each approval actually hands the gate. Measured, not remembered:
+`scripts/mm0-comparator approve --dry-run <artifact>` writes nothing, and the
+digests below come from scratch copies written with
+`--approved-root /tmp/appr`, so nothing under `mm0/approved/` was created.
+
+| artifact | stmts | composition | `closure-sha256` |
+|---|---|---|---|
+| `isa` | 193 | 5 sorts + `Prop`, 70 terms, 1 def (`in_bounds`), 65 axioms, 26 theorems = 168 declarations; + 24 numeral-notation lines (`prefix n0: $0$ prec max;` … for `n0`–`n48`) + 1 `delimiter` | `27de0884e3408cd45800b07dd118f0fb2cd977ed15e868843c626dbeb32d0aed` |
+| `slot_layout` | 23 | 3 sorts + `Prop`, 7 terms, 1 def (`in_bounds`), 7 axioms, 2 theorems = 21 declarations; + 1 numeral line + 1 `delimiter` | `2be35aa287735ea593c71ad5787b1b34dc725dcaccdece6460a26366db5e3114` |
+| `store_projection` | 11 | 2 sorts + `Prop`, 8 terms, **0 axioms, 0 theorems** | `26699dbc9a27c1c4ae87bfc55ddd140bc85c24f5d082fac8c449fd56bf7f4554` |
+| `store_projection_toy` | 70 | 2 sorts + `Prop`, 10 terms, 8 defs, 20 axioms, 28 theorems = 69 declarations; + 1 `delimiter` | `09842af8888899541cef6b58221d346616fe64310cc6b102506f512f81cedcbf` |
+
+All four are byte-identical to what `mm0-comparator approve` would write (the
+`statements-sha256` headers are `2619b5ec…`, `98dd6399…`, `5c201a80…`,
+`abed1393…`); the digest is what pins the bytes, because the canonical form
+**erases names** — a declaration appears as `term l4 (x: l0): l0;` whatever it
+was called in the source. So the names below are the source names, and the
+digest is what an owner is actually approving.
+
+**`isa` (193).** Axioms, 65: the 19 model rules `req_refl`, `req_symm`,
+`req_trans`, `radd_comm`, `radd_assoc`, `rmul_assoc`, `rmul_distrib`,
+`reg_setreg_same`, `reg_setreg_other`, `run_add_def`, `run_sub_def`,
+`run_mul_def`, `run_move_def`, `ir_add_sem`, `ir_mul_sem`, `ir_sub_sem`,
+`ieq_trans`, `beq_cong_dec`, `bounds_from_layout`; then 23 encoder axioms and 23
+decoder axioms, one pair per emitted instruction form — `enc_`/`dec_` ×
+{`int_lit`, `var`, `let`, `app`, `add`, `sub`, `return`, `if`, `while`,
+`match`, `cmp_lt`, `cmp_gt`, `cmp_lte`, `cmp_gte`, `cmp_eq`, `cmp_neq`, `and`,
+`or`, `mul`, `not`, `deref`, `string_lit`, `store`}. Theorems, 26: the 23
+`encdec_*` round trips (one per form, `theorem` not `axiom` — the pair of
+encoder/decoder laws is what proves them) plus the 3 step refinements
+`add_refines`, `mul_refines`, `sub_refines`. Terms, 70: the 23 `ins_*`
+constructors of the same form list; the 24 numerals `n0`–`n10`, `n16`–`n25`,
+`n32`, `n33`, `n48`; `radd`, `rmul`, `rneg`, `req`, `reg`, `setreg`, `neq`,
+`linear`, `typed`, `scons`, `mem`, `slots`; `run_add`, `run_sub`, `run_mul`,
+`run_move`; `ir_add`, `ir_mul`, `ir_sub`; `ienc`, `idec`, `ieq`, `beq`. One def,
+`in_bounds`.
+
+**`slot_layout` (23).** Terms: `n0`, `snil`, `scons`, `mem`, `seq`, `slots`,
+`alloc`. Def: `in_bounds`. Axioms: `mem_here`, `mem_there`, `seq_refl`,
+`seq_symm`, `seq_trans`, `mem_cong`, `slots_alloc`. Theorems: `mem_alloc`,
+`in_bounds_alloc`. Sorts: `nat`, `Slots`, `St`.
+
+**`store_projection` (11).** Terms: `aligned8`, `in_linear_space`,
+`jit_store_i64`, `isa_store_w8`, `jit_load_i64`, `isa_load_w8`,
+`store_projects`, `load_projects`. Sorts: `St`, `Val`. Nothing else — approving
+this file approves a *vocabulary*, which is why its own header says
+`-- certificate: [gap]` and why the approval does not turn the projection claim
+into a proved one.
+
+**`store_projection_toy` (70).** Terms: `init`, `unset`, `narrow4`, `put`,
+`get`, `notfull`, `held`, `vne`, `veq`, `isa_store_w8_keep`. Defs:
+`jit_store_i64`, `isa_store_w8`, `jit_load_i64`, `isa_load_w8`,
+`jit_store_i32`, `isa_store_w4`, `jit_load_i32`, `isa_load_w4`. Axioms, 20:
+`veq_refl`, `veq_trans`, `vne_sym`, `narrow4_cong`, `narrow4_idem`,
+`get_init`, `init_notfull`, `put_init_notfull`, `put2_init_notfull`, `at_put`,
+`put_held`, `put_held_other`, `at_put_held_other`, `at_put_held_keeps`,
+`at_put_held_no_new`, `at_put_other`, `at_drop`, `at_keep_prev`,
+`keep_at_put_held`, `keep_at_put_other`. Theorems, 28: `toy_init_unset`,
+`toy_jit_store_visible`, `toy_isa_store_visible`, `toy_store_projection`,
+`toy_load_projection`, `toy_jit_store_load_other`,
+`toy_isa_store_load_other`, `toy_jit_two_cells_preserved`,
+`toy_isa_two_cells_preserved`, `toy_jit_refresh_keeps_other_cell`,
+`toy_isa_refresh_keeps_other_cell`, `toy_jit_refresh_visible`,
+`toy_isa_refresh_visible`, `toy_jit_refresh_keeps_held_cells`,
+`toy_jit_refresh_no_new_held`, `toy_jit_repeated_refresh_never_evicts`,
+`toy_jit_third_store_kept`, `toy_jit_fourth_store_drops_oldest`,
+`toy_jit_fifth_store_drops_next`, `toy_jit_recent_cells_readable`,
+`toy_fourth_store_projection`, `toy_jit_store32_visible`,
+`toy_store32_projection`, `toy_load32_projection`,
+`toy_width4_load_after_wide_store`, `toy_width4_store_load_roundtrip`,
+`toy_keep_store_invisible`, `toy_keep_refresh_misses_the_write`. Sorts: `Val`,
+`Mem`.
+
+Two things this pins down that a count could not:
+
+- **What an approval buys, and what it does not.** It holds out the statements:
+  the gate then refuses any statement, closure or theory mismatch against the
+  approved copy. It does not make `store_projection`'s claim true (the file has
+  no axioms and no theorem; the claim stays `[gap]`, and the toy is the only
+  place any of this is proved), and it does not upgrade `isa`'s encoder laws to
+  facts about the compiler — they are the model's, cited as such.
+- **The counts are gate-pinned, the names are not.** `verify-invariants` prints
+  `w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt)
+  store_projection_toy(70 stmt)` every run, so a statement added to any of the
+  four moves that line and this table has to move with it; the closure digests
+  above are the rule for the *names*, since the canonical form does not keep
+  them. `scripts/check-links` will not catch a stale name in a list like this —
+  the enforcement is that a re-approval changes the digest in this table, which
+  is a diff a reviewer sees.
+
+This is also what the distributed plan's M4/D24 hangs off: it says "preserve
+existing W3 pending counts and approved statements; do not mark approval as
+implementation completion", i.e. a deployment claim that cites these artifacts is
+refused until the owner commits the four files, and citing them after approval
+still carries the `[gap]` where the plan says `[gap]`.
 
 ### W9.4 What must not happen
 

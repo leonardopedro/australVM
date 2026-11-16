@@ -358,6 +358,227 @@ theorem ax_keep_at_put_other (m : Cap α) (x y w : α) (_h : x ≠ y) :
 
 end Carrier
 
+/- ── The toy's 28 theorems, over the same carrier ───────────────────────────
+   The artifact's *theorems*, not its axioms. `store_projection_toy.mm1` proves
+   each of them from the axioms by `veq` reasoning; here the proofs are chains of
+   the same axiom instances, which makes them a checked statement that the twenty
+   axioms are enough for what the artifact claims — if one were missing, the
+   theorem that needs it would not close. Names are kept identical to the
+   artifact's so the gate can compare the two lists.
+
+   The width-4 theorems take the narrowing as a parameter with idempotence as its
+   only law: congruence needs no hypothesis here because `veq` is equality in
+   this model, which is exactly what `narrow4_cong` supplies when `veq` is
+   abstract. The `Narrow` section above exhibits a lossy `narrow4` satisfying it
+   at every `Fin n` with `n ≥ 2`, so the hypothesis is not vacuous. -/
+
+namespace Toy
+
+variable {α : Type} [DecidableEq α] [Inhabited α]
+
+/-- The emitted `store.i64`: the same `put` as the model side. In the real
+projection these are different definitions; the toy's licence is that they are
+the same term. -/
+def jit_store_i64 (m : Cap α) (a v : α) : Cap α := put m a v
+def isa_store_w8 (m : Cap α) (a v : α) : Cap α := put m a v
+def jit_load_i64 (m : Cap α) (a : α) : α := get m a
+def isa_load_w8 (m : Cap α) (a : α) : α := get m a
+
+/-- The same four one width down: the store narrows on the way in, the load on
+the way out. -/
+def jit_store_i32 (nr : α → α) (m : Cap α) (a v : α) : Cap α := put m a (nr v)
+def isa_store_w4 (nr : α → α) (m : Cap α) (a v : α) : Cap α := put m a (nr v)
+def jit_load_i32 (nr : α → α) (m : Cap α) (a : α) : α := nr (get m a)
+def isa_load_w4 (nr : α → α) (m : Cap α) (a : α) : α := nr (get m a)
+
+/-- The second width-8 store, under its own name. -/
+def isa_store_w8_keep (m : Cap α) (a v : α) : Cap α := keep m a v
+
+theorem toy_init_unset (a : α) : get (init : Cap α) a = unset α := ax_get_init a
+
+theorem toy_jit_store_visible (m : Cap α) (a v : α) :
+    get (jit_store_i64 m a v) a = v := ax_at_put m a v
+
+theorem toy_isa_store_visible (m : Cap α) (a v : α) :
+    get (isa_store_w8 m a v) a = v := ax_at_put m a v
+
+/-- Both sides are the same write, so the projection is two instances of
+`at_put`. That is the toy's by-construction licence, stated as a proof rather
+than as a comment. -/
+theorem toy_store_projection (m : Cap α) (a v : α) :
+    get (jit_store_i64 m a v) a = get (isa_store_w8 m a v) a :=
+  (ax_at_put m a v).trans (ax_at_put m a v).symm
+
+theorem toy_load_projection (m : Cap α) (a : α) :
+    jit_load_i64 m a = isa_load_w8 m a := rfl
+
+theorem toy_jit_store_load_other (m : Cap α) (a b v : α) (h : a ≠ b)
+    (k : notfull m) : get (jit_store_i64 m a v) b = get m b :=
+  ax_at_put_other m a b v h k
+
+theorem toy_isa_store_load_other (m : Cap α) (a b v : α) (h : a ≠ b)
+    (k : notfull m) : get (isa_store_w8 m a v) b = get m b :=
+  ax_at_put_other m a b v h k
+
+/-- Two distinct stores into a fresh memory: the second write finds a free cell,
+so `at_put_other` applies — with `put_init_notfull`, which is the axiom that
+exists for exactly this step. -/
+theorem toy_jit_two_cells_preserved (a b va vb : α) (h : a ≠ b) :
+    get (jit_store_i64 (jit_store_i64 init a va) b vb) a = va :=
+  (ax_at_put_other (put init a va) b a vb h.symm (ax_put_init_notfull a va)).trans
+    (ax_at_put init a va)
+
+theorem toy_isa_two_cells_preserved (a b va vb : α) (h : a ≠ b) :
+    get (isa_store_w8 (isa_store_w8 init a va) b vb) a = va :=
+  (ax_at_put_other (put init a va) b a vb h.symm (ax_put_init_notfull a va)).trans
+    (ax_at_put init a va)
+
+/-- After writing `a` and then `b`, the address `a` is still held — a write to a
+fresh address into a memory with a free cell keeps what was there, which is
+`put_held_other` itself. The refresh theorems need it to know the third write is
+a refresh at all; without it the model could not tell a refresh from an append. -/
+theorem held_after_second_store (a b va vb : α) (h : a ≠ b) :
+    held (put (put init a va) b vb) a :=
+  ax_put_held_other (put init a va) b a vb h.symm (ax_put_held init a va)
+    (ax_put_init_notfull a va)
+
+/-- A refresh keeps the other cell: after writing `a` then `b`, `a` is still held
+(that is `put_held`, a write is held at the address it wrote), so the third write
+is a refresh at a held address and `at_put_held_other` leaves `b` alone — and the
+value at `b` is whatever the second write put there. -/
+theorem toy_jit_refresh_keeps_other_cell (a b va vb va2 : α) (h : a ≠ b) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b = vb :=
+  (ax_at_put_held_other (put (put init a va) b vb) a b va2 h
+    (held_after_second_store a b va vb h)).trans
+    (ax_at_put (put init a va) b vb)
+
+theorem toy_isa_refresh_keeps_other_cell (a b va vb va2 : α) (h : a ≠ b) :
+    get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) b = vb :=
+  (ax_at_put_held_other (put (put init a va) b vb) a b va2 h
+    (held_after_second_store a b va vb h)).trans
+    (ax_at_put (put init a va) b vb)
+
+/-- The read half of the refresh case, and the asymmetry that is its content:
+**no** hypothesis, where its companion needs `a ≠ b` — what a write reads back at
+its own address does not depend on capacity or on what else is held. -/
+theorem toy_jit_refresh_visible (a b va vb va2 : α) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a = va2 :=
+  ax_at_put _ a va2
+
+theorem toy_isa_refresh_visible (a b va vb va2 : α) :
+    get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) a = va2 :=
+  ax_at_put _ a va2
+
+theorem toy_jit_refresh_keeps_held_cells (a b va vb va2 : α) (h : a ≠ b) :
+    held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b :=
+  ax_put_held_other (put (put init a va) b vb) a b va2 h
+    (ax_put_held (put init a va) b vb) (ax_put2_init_notfull a b va vb)
+
+theorem toy_jit_refresh_no_new_held (a b va vb va2 : α) (h : a ≠ b)
+    (k : held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b) :
+    held (jit_store_i64 (jit_store_i64 init a va) b vb) b :=
+  ax_at_put_held_no_new (put (put init a va) b vb) a b va2 h k
+
+/-- Repetition at one address cannot evict: the second refresh is again a refresh
+at a held address, and the memory it starts from is the first refresh's. -/
+theorem toy_jit_repeated_refresh_never_evicts (a b va vb va2 va3 : α) (h : a ≠ b) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb)
+      a va2) a va3) b = vb :=
+  (ax_at_put_held_other (put (put (put init a va) b vb) a va2) a b va3 h
+    (ax_put_held (put (put init a va) b vb) a va2)).trans
+    (toy_jit_refresh_keeps_other_cell a b va vb va2 h)
+
+/-- Depth is a parameter: with a third cell the third distinct store evicts
+nothing. -/
+theorem toy_jit_third_store_kept (a b c va vb vc : α) (hab : a ≠ b) (hac : a ≠ c) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) a = va :=
+  (ax_at_put_other (put (put init a va) b vb) c a vc hac.symm
+    (ax_put2_init_notfull a b va vb)).trans
+    (toy_jit_two_cells_preserved a b va vb hab)
+
+theorem toy_jit_fourth_store_drops_oldest (a b c d va vb vc vd : α)
+    (hab : a ≠ b) (hac : a ≠ c) (had : a ≠ d)
+    (hbc : b ≠ c) (hbd : b ≠ d) (hcd : c ≠ d) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb)
+      c vc) d vd) a = unset α :=
+  ax_at_drop init a b c d va vb vc vd hab hac had hbc hbd hcd
+
+/-- Eviction continues one store at a time: the same `at_drop` fired with a
+one-store memory, which is why the axiom is stated for an arbitrary `m`. -/
+theorem toy_jit_fifth_store_drops_next (a b c d e va vb vc vd ve : α)
+    (hbc : b ≠ c) (hbd : b ≠ d) (hbe : b ≠ e)
+    (hcd : c ≠ d) (hce : c ≠ e) (hde : d ≠ e) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64
+      (jit_store_i64 init a va) b vb) c vc) d vd) e ve) b = unset α :=
+  ax_at_drop (put init a va) b c d e vb vc vd ve hbc hbd hbe hcd hce hde
+
+theorem toy_jit_recent_cells_readable (a b c d va vb vc vd : α)
+    (hab : a ≠ b) (hac : a ≠ c) (had : a ≠ d)
+    (hbc : b ≠ c) (hbd : b ≠ d) (hcd : c ≠ d) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb)
+      c vc) d vd) b = vb :=
+  ax_at_keep_prev init a b c d va vb vc vd hab hac had hbc hbd hcd
+
+theorem toy_fourth_store_projection (a b c d va vb vc vd : α) :
+    get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb)
+      c vc) d vd) c
+    = get (isa_store_w8 (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb)
+      c vc) d vd) c := rfl
+
+theorem toy_jit_store32_visible (nr : α → α) (m : Cap α) (a v : α) :
+    get (jit_store_i32 nr m a v) a = nr v := ax_at_put m a (nr v)
+
+theorem toy_store32_projection (nr : α → α) (m : Cap α) (a v : α) :
+    get (jit_store_i32 nr m a v) a = get (isa_store_w4 nr m a v) a :=
+  (ax_at_put m a (nr v)).trans (ax_at_put m a (nr v)).symm
+
+theorem toy_load32_projection (nr : α → α) (m : Cap α) (a : α) :
+    jit_load_i32 nr m a = isa_load_w4 nr m a := rfl
+
+/-- A width-4 read of a cell written at width 8 returns the narrowed value:
+`at_put` gives the value, and the load's narrowing is applied to both sides. -/
+theorem toy_width4_load_after_wide_store (nr : α → α) (m : Cap α) (a v : α) :
+    jit_load_i32 nr (jit_store_i64 m a v) a = nr v :=
+  congrArg nr (ax_at_put m a v)
+
+/-- And the round trip: the stored value is already `nr v`, so narrowing again is
+`nr (nr v)`, which idempotence collapses — the one place a width-4 theorem needs
+a law of the narrowing beyond congruence. -/
+theorem toy_width4_store_load_roundtrip (nr : α → α)
+    (hnr : ∀ x, nr (nr x) = nr x) (m : Cap α) (a v : α) :
+    jit_load_i32 nr (jit_store_i32 nr m a v) a = nr v :=
+  (congrArg nr (ax_at_put m a (nr v))).trans (hnr v)
+
+theorem toy_keep_store_invisible (m : Cap α) (a v : α) (_k : held m a) :
+    get (isa_store_w8_keep m a v) a = get m a := rfl
+
+/-- Where the projection fails, on the same trace the refresh theorems use: this
+store reads `va`, the value from before the refresh, where the JIT side reads
+`va2`. -/
+theorem toy_keep_refresh_misses_the_write (a b va vb va2 : α) (_h : a ≠ b) :
+    get (isa_store_w8_keep (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a = va :=
+  (ax_keep_at_put_held (put (put init a va) b vb) a va2
+    (held_after_second_store a b va vb _h)).trans
+    (toy_jit_two_cells_preserved a b va vb _h)
+
+/-- The 28 names, in the order the artifact declares them. -/
+def checkedTheorems : List String :=
+  ["toy_init_unset", "toy_jit_store_visible", "toy_isa_store_visible",
+   "toy_store_projection", "toy_load_projection", "toy_jit_store_load_other",
+   "toy_isa_store_load_other", "toy_jit_two_cells_preserved",
+   "toy_isa_two_cells_preserved", "toy_jit_refresh_keeps_other_cell",
+   "toy_isa_refresh_keeps_other_cell", "toy_jit_refresh_visible",
+   "toy_isa_refresh_visible", "toy_jit_refresh_keeps_held_cells",
+   "toy_jit_refresh_no_new_held", "toy_jit_repeated_refresh_never_evicts",
+   "toy_jit_third_store_kept", "toy_jit_fourth_store_drops_oldest",
+   "toy_jit_fifth_store_drops_next", "toy_jit_recent_cells_readable",
+   "toy_fourth_store_projection", "toy_jit_store32_visible",
+   "toy_store32_projection", "toy_load32_projection",
+   "toy_width4_load_after_wide_store", "toy_width4_store_load_roundtrip",
+   "toy_keep_store_invisible", "toy_keep_refresh_misses_the_write"]
+
+end Toy
+
 /- ── `narrow4`, for every atom domain with at least two atoms ─────────────── -/
 
 section Narrow
@@ -515,5 +736,6 @@ def brokenCandidates : List String :=
     toString brokenCandidates.length ++ " rejected candidate(s) proved false")
   IO.println ("lean-witness-axioms: " ++ String.intercalate "," checkedAxioms)
   IO.println ("lean-witness-broken: " ++ String.intercalate "," brokenCandidates)
+  IO.println ("lean-witness-theorems: " ++ String.intercalate "," Toy.checkedTheorems)
 
 end ToyWitness

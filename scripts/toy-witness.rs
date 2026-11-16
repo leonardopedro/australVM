@@ -11,23 +11,40 @@
 // written as code and every axiom is checked, universally quantified, over all
 // memories of at most three cells and all atoms from a small domain.
 //
-// WHAT IT PROVES, PRECISELY. It is exhaustive over this finite domain, not a
-// proof over an arbitrary `Val`: an axiom instance that needs more atoms than
-// the domain has is the same equality pattern with atoms renamed, which is an
-// argument, not something this file establishes. What it does establish is that
-// the witness in the header is executed rather than asserted, and that the
-// candidates that were considered and rejected are rejected *for a reason* —
-// each comes with the counterexample that kills it. The rejected list includes
-// the eviction axiom this file used to carry at three stores: with a third cell
-// it is false, and a witness that let it pass would be certifying a memory it
-// had not modelled.
+// WHAT IT PROVES, PRECISELY, AND IN WHICH DIRECTION. A program cannot quantify
+// over an atom type, so this file does not try: it separates the two directions
+// and neither of them depends on how many atoms the domain has.
+//
+//   *Refutations are domain-free.* A candidate rejected here is refuted by a
+//   concrete memory over four atoms, and that same memory is a value of `Mem α`
+//   for *every* α with at least four atoms once the atoms are injected into α.
+//   The step that makes the transport valid — that the model's operations depend
+//   on an atom only through `==`, so an injective renaming fixing `unset`
+//   commutes with `put`/`get`/`held`/`notfull`/`keep` — is not assumed: the
+//   `model_equivariant` row below checks it over every memory and every atom of
+//   the domain, against a renaming into a strictly larger one. A refutation is
+//   therefore a theorem about every α ⊇ {0..3}, not about a domain.
+//
+//   *Positive claims are proved elsewhere.* The `[hold]` rows below check the
+//   model's *code* against each axiom at this domain — that the list model in
+//   this file really is the model the header describes, and that the two
+//   independently written artefacts (this one and `mm0/store_projection_toy.mm1`)
+//   agree on their counts. Coverage over an arbitrary atom type is not a claim a
+//   sweep can make at any size; it is proved, for an arbitrary `α`, in
+//   `mm0/toy_witness/ToyWitness.lean`. So the domain size is an input to an
+//   exploration, not a premise of anything: nothing here says "the axioms hold",
+//   it says "they hold here" — and "here" is exactly where a refutation is
+//   decided as well.
 //
 // Build and run through `scripts/toy-witness`, which compiles this with rustc.
 
 const UNSET: u8 = 0;
 // Four atoms by default: `at_drop` needs four *distinct addresses*, so a smaller
-// domain makes the eviction axiom vacuous rather than cheap. `--domain 5` runs
-// the same checks over ~30x the instances and reports the identical verdict.
+// domain makes the eviction axiom vacuous rather than cheap. The number is a
+// choice of *instance set*, not a premise: refutations transport to every
+// larger domain (see `model_equivariant` below), and the positive direction is
+// covered by the Lean proof for an arbitrary atom type. `--domain 5` runs the
+// same checks over ~30x the instances and reports the identical verdict.
 const ATOMS_DEFAULT: u8 = 4;
 
 /// A three-cell memory: `n` pairs, newest first. `Copy` so the checks below can
@@ -91,12 +108,7 @@ impl Mem {
         false
     }
 
-    /// `narrow4 x`: a value narrowed to four bytes. Chosen to *lose* information
-/// (`x % 2`), not as the identity, so that the idempotence axiom is checked
-/// against a real truncation rather than against a function that does nothing.
-fn narrow4(x: u8) -> u8 {
-    x % 2
-}    /// `isa_store_w8_keep m a v`: the second width-8 store, with the other
+    /// `isa_store_w8_keep m a v`: the second width-8 store, with the other
     /// refresh order — a write to a held address keeps the value the cell
     /// already has. The model is the identity, which is exactly what its two
     /// laws say: nothing readable moves, at the written address or anywhere
@@ -109,6 +121,21 @@ fn narrow4(x: u8) -> u8 {
     /// `notfull m`: fewer than three cells.
     fn notfull(self) -> bool {
         self.n < 3
+    }
+
+    /// The same memory with every atom renamed by `f`. Used by the equivariance
+    /// check below: the model's operations consult an atom only through `==` and
+    /// store it verbatim, so an injective renaming that fixes `unset` commutes
+    /// with all of them.
+    fn renamed(self, f: impl Fn(u8) -> u8) -> Mem {
+        let mut cells = [(0u8, 0u8); 3];
+        for i in 0..self.n as usize {
+            cells[i] = (f(self.cells[i].0), f(self.cells[i].1));
+        }
+        Mem {
+            n: self.n,
+            cells,
+        }
     }
 
     fn show(self) -> String {
@@ -130,6 +157,10 @@ fn narrow4(x: u8) -> u8 {
 struct Row {
     name: &'static str,
     must_hold: bool,
+    /// A property of the *model* rather than of the artifact: it has no axiom in
+    /// the `.mm0`, so it is reported and counted separately and never appears in
+    /// the `[hold]` list the gate compares against the artifact's axioms.
+    model: bool,
     instances: u64,
     counterexample: Option<String>,
 }
@@ -180,6 +211,17 @@ fn row(
     Row {
         name,
         must_hold,
+        model: false,
+        instances,
+        counterexample,
+    }
+}
+
+fn model_row(name: &'static str, instances: u64, counterexample: Option<String>) -> Row {
+    Row {
+        name,
+        must_hold: true,
+        model: true,
         instances,
         counterexample,
     }
@@ -887,18 +929,95 @@ fn main() {
         rows.push(row("narrow4_is_identity", false, n, ce));
     }
 
+    // ── Why a refutation at this domain is a refutation everywhere ──────────
+    //
+    // `atoms` is not a premise anywhere above: a `[reject]` row's counterexample
+    // is a memory over atoms `0..atoms`, and that memory embeds in every larger
+    // atom type. What the transport needs is that renaming the atoms does not
+    // change any result — i.e. that the model reads an atom only by comparing it
+    // for equality and otherwise copies it. That is a property of this code, so
+    // it is checked here rather than asserted: rename every atom by an injection
+    // into a strictly larger domain (`unset` fixed, since it is a constant and
+    // not a variable), and require `put`, `get`, `held`, `notfull` and `keep` to
+    // commute with it, over every memory and every atom of the domain.
+    {
+        // Two injections, one order-preserving and one not: a model that compared
+        // atoms by anything other than equality (parity, ordering, a hash) could
+        // survive a single monotone renaming by accident, which is the kind of
+        // control that passes for the wrong reason.
+        const EMBEDS: [[u8; 4]; 2] = [[0, 5, 6, 7], [0, 6, 5, 7]];
+        let mut ce = None;
+        let mut n = 0u64;
+        for (k, table) in EMBEDS.iter().enumerate() {
+            let embed = |s: u8| -> u8 { table[s as usize] };
+            for m in &mems {
+                let rm = m.renamed(embed);
+                n += 1;
+                if rm.n != m.n && ce.is_none() {
+                    ce = Some(format!("m={} -> renaming {k} changed the cell count", m.show()));
+                }
+                n += 1;
+                if rm.notfull() != m.notfull() && ce.is_none() {
+                    ce = Some(format!("m={} -> renaming {k} changed notfull", m.show()));
+                }
+                for &a in &atoms_v {
+                    n += 1;
+                    if rm.get(embed(a)) != embed(m.get(a)) && ce.is_none() {
+                        ce = Some(format!(
+                            "m={} a={a} -> renaming {k}: get {} , renamed get {}",
+                            m.show(),
+                            rm.get(embed(a)),
+                            embed(m.get(a))
+                        ));
+                    }
+                    n += 1;
+                    if rm.held(embed(a)) != m.held(a) && ce.is_none() {
+                        ce = Some(format!("m={} a={a} -> renaming {k} changed held", m.show()));
+                    }
+                    for &v in &atoms_v {
+                        n += 1;
+                        if rm.put(embed(a), embed(v)) != m.put(a, v).renamed(embed)
+                            && ce.is_none()
+                        {
+                            ce = Some(format!(
+                                "m={} a={a} v={v} -> renaming {k}: put {} , renamed put {}",
+                                m.show(),
+                                rm.put(embed(a), embed(v)).show(),
+                                m.put(a, v).renamed(embed).show()
+                            ));
+                        }
+                        n += 1;
+                        if rm.keep(embed(a), embed(v)) != m.keep(a, v).renamed(embed)
+                            && ce.is_none()
+                        {
+                            ce = Some(format!(
+                                "m={} a={a} v={v} -> renaming {k} changed keep",
+                                m.show()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        rows.push(model_row("model_equivariant", n, ce));
+    }
+
     // ── Report ──────────────────────────────────────────────────────────────
     let mut bad = 0usize;
     let mut held = 0usize;
     let mut rejected = 0usize;
+    let mut modelled = 0usize;
     for r in &rows {
-        let ok = if r.must_hold {
+        let ok = if r.must_hold || r.model {
             r.counterexample.is_none()
         } else {
             r.counterexample.is_some()
         };
         if ok {
-            if r.must_hold {
+            if r.model {
+                modelled += 1;
+                println!("[model]  {:<26} {:>10} instance(s)", r.name, r.instances);
+            } else if r.must_hold {
                 held += 1;
                 println!("[hold]   {:<26} {:>10} instance(s)", r.name, r.instances);
             } else {
@@ -924,14 +1043,22 @@ fn main() {
         }
     }
 
-    let axioms = rows.iter().filter(|r| r.must_hold).count();
+    let axioms = rows.iter().filter(|r| r.must_hold && !r.model).count();
     let candidates = rows.iter().filter(|r| !r.must_hold).count();
+    let _ = modelled;
     if bad > 0 {
         println!(
             "toy-witness: {held}/{axioms} axiom(s) hold, {rejected}/{candidates} rejected candidate(s) fail — {bad} wrong"
         );
         std::process::exit(1);
     }
+    // Stated plainly, because the numbers above sit next to a domain size: the
+    // `[reject]` rows are about every larger atom domain, the `[hold]` rows are
+    // about this one, and the arbitrary-domain proof is a Lean file. Printed
+    // *before* the summary line, so the line the gate quotes stays the summary.
+    println!(
+        "toy-witness: {rejected}/{candidates} refutation(s) transport to every larger atom domain (model commutes with injective renaming); the axioms are proved for an arbitrary atom type in mm0/toy_witness/ToyWitness.lean"
+    );
     println!(
         "toy-witness: {held}/{axioms} axioms hold in the witness; {rejected}/{candidates} rejected candidates fail as they must"
     );

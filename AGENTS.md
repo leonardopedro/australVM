@@ -343,9 +343,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `keep_store_visible`, and
   `narrow4_is_identity` — must each *fail*
   there with a counterexample, so the guards (and the width-4 narrowing) are
-  checked rather than assumed. It is
-  exhaustive over that finite domain, not a proof over arbitrary `Val`, and it
-  is `[gap]`, never a pass, where `rustc` is absent. The same axiom set is
+  checked rather than assumed. Its `[hold]` rows are exhaustive over that finite
+  domain — a check of the model's code, not a proof over arbitrary `Val`; its
+  `[reject]` rows are domain-free, because a counterexample memory embeds in any
+  atom type with at least that many atoms and a `[model]` row checks that the
+  operations commute with the injective renaming the embedding uses. It is
+  `[gap]`, never a pass, where `rustc` is absent. The same axiom set is
   *proved* a second time, in `mm0/toy_witness/ToyWitness.lean`: each axiom is a
   theorem about an arbitrary atom type with decidable equality (no finite
   enumeration, no atom-level threshold — `narrow4`'s two are at `Fin n` for
@@ -354,9 +357,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   candidates are theorems about their negations, exhibited at `Fin 4` (a
   refutation needs one domain), and a degenerate `veq := ⊤` model is noted as a
   consistency trap (content comes from the instance proofs).
-  `verify-invariants` runs `lean` on it in the `lean` shell and requires its
-  axiom and rejected-candidate lists to agree with the `.mm0` and the Rust
-  witness. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  It proves the toy's **28 theorems** as well as its 20 axioms, each as a chain of
+  axiom instances (a missing axiom would leave the theorem that needs it open),
+  and `verify-invariants` runs `lean` on it in the `lean` shell and requires the
+  printed axiom, theorem and rejected-candidate lists to agree with the `.mm0`
+  and the Rust witness. It also mutates five model definitions (`take 3`,
+  `drop`, `notfull`, `narrow4`, `keep`) and requires elaboration to fail, since a
+  proof's own failure mode is a definition it no longer depends on. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
   neighbouring (easier) statement — and that pin has its own control: the gate
