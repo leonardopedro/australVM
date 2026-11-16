@@ -113,7 +113,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
 - `scripts/stage-approvals` — stages the pending statement approvals under a
   scratch root (`--root`, default `$TMPDIR/australvm-approve-staging`) and prints
   the diff an owner would commit, without writing `mm0/approved/`: approval is an
-  owner commit, so the diff *is* the decision and this only shows it.
+  owner commit, so the diff *is* the decision and this only shows it. Takes a
+  stem or `mm0/<stem>.mm0`; a name that is neither exits 64 before staging
+  anything, because a comparator "refused" line is the message for a real stale
+  artifact, not for a typo.
 - `scripts/clif2mm0` — emits/checks `mm0/clif.mm0`, the CLIF *shape* model
   (W9.2): `clif_dump` (a bridge binary) measures the instruction forms the CPS
   lowering really produces, and this generator writes one declaration per form

@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 132 passed, 4 explained gap(s), 0 failed
+verify-invariants: 136 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -348,10 +348,15 @@ w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_p
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   [pass] W3: the plan's §W3 digest column matches a staging (4 row(s))
+  [detail] one altered statement: check refused it (unmodified staging: exit 0)
+  [pass] W3: one altered statement makes the comparator refuse the approved copy
+  [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
+  [pass] W9.3: the composition table's counts match the stagings (4 row(s))
+  [pass] W9.3: the composition table's closure digests match the stagings (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 123 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 127 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -744,6 +749,11 @@ the artifact, so `mm0-c` checks them too.
   w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   [pass] W3: the plan's §W3 digest column matches a staging (4 row(s))
+  [detail] one altered statement: check refused it (unmodified staging: exit 0)
+  [pass] W3: one altered statement makes the comparator refuse the approved copy
+  [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
+  [pass] W9.3: the composition table's counts match the stagings (4 row(s))
+  [pass] W9.3: the composition table's closure digests match the stagings (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
   ```
@@ -2084,6 +2094,17 @@ digests below come from scratch copies written with
 | `store_projection` | 11 | 2 sorts + `Prop`, 8 terms, **0 axioms, 0 theorems** | `26699dbc9a27c1c4ae87bfc55ddd140bc85c24f5d082fac8c449fd56bf7f4554` |
 | `store_projection_toy` | 70 | 2 sorts + `Prop`, 10 terms, 8 defs, 20 axioms, 28 theorems = 69 declarations; + 1 `delimiter` | `09842af8888899541cef6b58221d346616fe64310cc6b102506f512f81cedcbf` |
 
+The composition and `closure-sha256` columns are **counted, not read back**:
+`verify-invariants` stages each row and compares the declared `N sorts` (adding
+`Prop` back when the cell names it), `N terms`, `N defs`, `N axioms`,
+`N theorems`, the "= N declarations" sum, the numeral and `delimiter` lines, and
+the closure digest, with the file the comparator wrote —
+`[pass] W9.3: the composition table's counts match the stagings (4 row(s))` and
+`… closure digests match the stagings (4 row(s))`. Changing the toy row's
+`20 axioms` to `21` is refused as `store_projection_toy(says 21 axioms,
+staging 20)` (measured), so the cell that says what an approval *contains*
+cannot drift from the approval while its statement count stays right.
+
 All four are byte-identical to what `mm0-comparator approve` would write (the
 `statements-sha256` headers are `2619b5ec…`, `98dd6399…`, `5c201a80…`,
 `abed1393…`); the digest is what pins the bytes, because the canonical form
@@ -2168,7 +2189,12 @@ Two things this pins down that a count could not:
   `[pass] W3: the plan's §W3 digest column matches a staging (4 row(s))`. So the
   hex strings quoted here are produced by a run, not copied from the previous
   one: add or remove a statement, or let an emitter drift, and that line turns
-  red before an owner is asked to approve the changed bytes.
+  red before an owner is asked to approve the changed bytes. Two controls keep
+  the comparison honest: one statement is altered in a staged copy and
+  `mm0-comparator check` must refuse it (`statements differ from the approved
+  file`), then only the quoted digest is altered and it must refuse that too
+  (`does not hash it`) — the exact shape of a cell that has drifted from the
+  bytes it claims to pin.
 
 This is also what the distributed plan's M4/D24 hangs off: it says "preserve
 existing W3 pending counts and approved statements; do not mark approval as

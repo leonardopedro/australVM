@@ -1488,6 +1488,161 @@ EOF
         echo "  [detail] §W3 digests:${_w3_dig_bad}" >&2
         check "W3: the plan's §W3 digest column matches a staging" false
     fi
+    # … and the column's control, because "the digest is what pins the bytes" is
+    # a claim about a comparison that must actually refuse: alter one statement
+    # in a staged copy and `check` must refuse it; alter only the quoted digest
+    # and it must refuse that too, which is the shape a stale cell in this table
+    # has. Both controls are staged into scratch roots; nothing here is written.
+    _w3_ctl="$_cert_tmp/approve-control"
+    rm -rf "$_w3_ctl"
+    mkdir -p "$_w3_ctl/clean" "$_w3_ctl/stmt" "$_w3_ctl/digest"
+    if ! python3 "$repo_root/scripts/mm0-comparator" approve \
+            --approved-root "$_w3_ctl/clean" store_projection_toy \
+            >"$_w3_ctl/approve.log" 2>&1; then
+        sed -n '1,3p' "$_w3_ctl/approve.log" >&2
+        gap "W3: the digest column's control not run (the toy staging was refused)"
+    else
+        cp "$_w3_ctl/clean/store_projection_toy.stmts" "$_w3_ctl/stmt/"
+        cp "$_w3_ctl/clean/store_projection_toy.stmts" "$_w3_ctl/digest/"
+        python3 - "$_w3_ctl/stmt/store_projection_toy.stmts" <<'PYMUT'
+import sys
+p = sys.argv[1]
+lines = open(p).read().split("\n")
+for i, line in enumerate(lines):
+    if line.startswith(("axiom ", "theorem ", "def ", "term ")):
+        lines[i] = line[:-1] + "x" if line.endswith(";") else line + "x"
+        print(f"mutated line {i + 1}")
+        break
+else:
+    raise SystemExit("no statement line found to mutate")
+open(p, "w").write("\n".join(lines))
+PYMUT
+        python3 - "$_w3_ctl/digest/store_projection_toy.stmts" <<'PYMUT'
+import re
+import sys
+p = sys.argv[1]
+text = open(p).read()
+digest = re.search(r"^-- statements-sha256: ([0-9a-f]+)$", text, re.M).group(1)
+text = text.replace(digest, digest[:-1] + ("0" if digest[-1] != "0" else "1"))
+open(p, "w").write(text)
+PYMUT
+        _ctl_clean=0
+        python3 "$repo_root/scripts/mm0-comparator" check \
+            --approved-root "$_w3_ctl/clean" store_projection_toy \
+            >"$_w3_ctl/clean.log" 2>&1 || _ctl_clean=$?
+        _ctl_stmt=0
+        python3 "$repo_root/scripts/mm0-comparator" check \
+            --approved-root "$_w3_ctl/stmt" store_projection_toy \
+            >"$_w3_ctl/stmt.log" 2>&1 || _ctl_stmt=$?
+        _ctl_dig=0
+        python3 "$repo_root/scripts/mm0-comparator" check \
+            --approved-root "$_w3_ctl/digest" store_projection_toy \
+            >"$_w3_ctl/digest.log" 2>&1 || _ctl_dig=$?
+        if [ "$_ctl_clean" -eq 0 ] && [ "$_ctl_stmt" -ne 0 ] \
+                && grep -q 'statements differ from the approved file' "$_w3_ctl/stmt.log"; then
+            echo "  [detail] one altered statement: check refused it" \
+                 "(unmodified staging: exit 0)" >&2
+            check "W3: one altered statement makes the comparator refuse the approved copy" true
+        else
+            tail -3 "$_w3_ctl/stmt.log" >&2
+            echo "  [detail] clean exit=$_ctl_clean mutated exit=$_ctl_stmt" >&2
+            check "W3: one altered statement makes the comparator refuse the approved copy" false
+        fi
+        if [ "$_ctl_dig" -ne 0 ] \
+                && grep -q 'does not hash it' "$_w3_ctl/digest.log"; then
+            check "W3: a quoted statements-sha256 that does not hash the statements is refused" true
+        else
+            tail -3 "$_w3_ctl/digest.log" >&2
+            check "W3: a quoted statements-sha256 that does not hash the statements is refused" false
+        fi
+    fi
+    # … and the §W9.3 composition table, which says what each approval *is*
+    # (sorts, terms, defs, axioms, theorems, closure digest) rather than only how
+    # many statements it holds. Every one of those is countable from the staging
+    # the section quotes, so it is counted: a cell that says "65 axioms" is
+    # compared with the `axiom ` lines the comparator wrote, and "= N
+    # declarations" with their sum. Without this the composition is prose — the
+    # stmts column could match while a cell still said the toy proves 28
+    # theorems and 20 axioms of a file that now proves 27.
+    _w93_rows="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`[a-z0-9_]+`[ \t]*\|[ \t]*[0-9]+[ \t]*\|/ {
+            art = $2; n = $3; comp = $4; clo = $5
+            gsub(/[ \t`]/, "", art); gsub(/\*/, "", comp); gsub(/`/, "", comp)
+            gsub(/[ \t]/, "", n); gsub(/[ \t`]/, "", clo)
+            gsub(/[ \t]+/, " ", comp); sub(/^ /, "", comp); sub(/ $/, "", comp)
+            print art "\t" n "\t" comp "\t" clo
+        }' "$_plan_file")"
+    if ! command -v python3 >/dev/null 2>&1; then
+        gap "W9.3: the composition table not compared (no python3 here)"
+    elif [ -z "$_w93_rows" ]; then
+        gap "W9.3: the composition table not compared (no row carries a count)"
+    else
+        _w93_num() { printf '%s' "$1" | grep -oE "(^|[^0-9a-zA-Z])[0-9]+ $2" \
+            | head -1 | grep -oE '[0-9]+' || true; }
+        _w93_cnt_bad=""; _w93_clo_bad=""; _w93_n=0
+        while IFS="$(printf '\t')" read -r _c_art _c_n _c_comp _c_clo; do
+            [ -n "$_c_art" ] || continue
+            _w93_n=$((_w93_n + 1))
+            _c_file="$_cert_tmp/approvals/$_c_art.stmts"
+            if [ ! -f "$_c_file" ]; then
+                python3 "$repo_root/scripts/mm0-comparator" approve \
+                    --approved-root "$_cert_tmp/approvals" "$_c_art" \
+                    >"$_cert_tmp/approvals/$_c_art.log" 2>&1 || {
+                    _w93_cnt_bad="$_w93_cnt_bad $_c_art(staging refused)"
+                    _w93_clo_bad="$_w93_clo_bad $_c_art(not compared: staging refused)"
+                    continue
+                }
+            fi
+            _c_stmts="$(grep -cE '^(provable sort|sort|delimiter|prefix|term|def|axiom|theorem) ' "$_c_file" || true)"
+            [ "$_c_stmts" = "$_c_n" ] \
+                || _w93_cnt_bad="$_w93_cnt_bad $_c_art(stmts cell $_c_n, staging $_c_stmts)"
+            _c_sorts="$(grep -cE '^(provable )?sort ' "$_c_file" || true)"
+            _c_terms="$(grep -cE '^term ' "$_c_file" || true)"
+            _c_defs="$(grep -cE '^def ' "$_c_file" || true)"
+            _c_ax="$(grep -cE '^axiom ' "$_c_file" || true)"
+            _c_th="$(grep -cE '^theorem ' "$_c_file" || true)"
+            _c_pre="$(grep -cE '^prefix ' "$_c_file" || true)"
+            _c_del="$(grep -cE '^delimiter ' "$_c_file" || true)"
+            # "5 sorts + `Prop`" is six `sort` lines: the cell names the
+            # library's own sort separately, so the comparison adds it back.
+            _c_sorts_cmp="$_c_sorts"
+            case "$_c_comp" in
+                *Prop*) _c_sorts_cmp=$((_c_sorts - 1)) ;;
+            esac
+            for _kw in "sorts?:$_c_sorts_cmp" "terms?:$_c_terms" "defs?:$_c_defs" \
+                       "axioms?:$_c_ax" "theorems?:$_c_th" \
+                       "numerals?(-notation)?:$_c_pre" "delimiter:$_c_del"; do
+                _pat="${_kw%%:*}"; _act="${_kw##*:}"
+                _claimed="$(_w93_num "$_c_comp" "$_pat")"
+                [ -n "$_claimed" ] || continue
+                _label="$(printf '%s' "$_pat" | sed 's/(.*//; s/?$//')"
+                [ "$_claimed" = "$_act" ] \
+                    || _w93_cnt_bad="$_w93_cnt_bad $_c_art(says $_claimed $_label, staging $_act)"
+            done
+            _c_total="$((_c_sorts + _c_terms + _c_defs + _c_ax + _c_th))"
+            _claimed_total="$(_w93_num "$_c_comp" 'declarations')"
+            if [ -n "$_claimed_total" ] && [ "$_claimed_total" != "$_c_total" ]; then
+                _w93_cnt_bad="$_w93_cnt_bad $_c_art(declarations $_claimed_total, staging $_c_total)"
+            fi
+            _c_actual_clo="$(sed -n 's/^-- closure-sha256: //p' "$_c_file")"
+            [ "$_c_actual_clo" = "$_c_clo" ] \
+                || _w93_clo_bad="$_w93_clo_bad $_c_art(says '$(printf '%s' "$_c_clo" | cut -c1-12)…', staging '$(printf '%s' "$_c_actual_clo" | cut -c1-12)…')"
+        done <<EOF
+$_w93_rows
+EOF
+        if [ -z "$_w93_cnt_bad" ]; then
+            check "W9.3: the composition table's counts match the stagings ($_w93_n row(s))" true
+        else
+            echo "  [detail] §W9.3 composition:${_w93_cnt_bad}" >&2
+            check "W9.3: the composition table's counts match the stagings" false
+        fi
+        if [ -z "$_w93_clo_bad" ]; then
+            check "W9.3: the composition table's closure digests match the stagings ($_w93_n row(s))" true
+        else
+            echo "  [detail] §W9.3 closure:${_w93_clo_bad}" >&2
+            check "W9.3: the composition table's closure digests match the stagings" false
+        fi
+    fi
     # … and the emitter column has to name something real. The `isa` row claims
     # `scripts/isa-encdec check` is "registered in EMITTERS", so that command must
     # exist, be executable, and be the script+mode the comparator actually

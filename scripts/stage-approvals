@@ -17,8 +17,12 @@
 #   scripts/stage-approvals --root DIR      # where to stage (default: $TMPDIR)
 #
 # Exit status: 0 printed, 2 cannot run here (no python3 for the comparator),
-# 1 the comparator refused an artifact. Nothing in the repository is modified;
-# the staged copies live under the scratch root and are meant to be thrown away.
+# 1 the comparator refused an artifact, 64 a usage error (an unknown artifact
+# name, a bad --root). A name that is not `mm0/<stem>.mm0` is refused before
+# anything is staged: it used to reach the comparator, which answered
+# "refused <name>" — the message for a real refusal, so a typo read like a stale
+# artifact. Nothing in the repository is modified; the staged copies live under
+# the scratch root and are meant to be thrown away.
 
 set -uo pipefail
 
@@ -34,10 +38,10 @@ artifacts=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --root) shift; root="${1:-}"; [ -n "$root" ] || { echo "stage-approvals: --root needs a directory" >&2; exit 1; } ;;
+        --root) shift; root="${1:-}"; [ -n "$root" ] || { echo "stage-approvals: --root needs a directory" >&2; exit 64; } ;;
         --stat-only) stat_only=true ;;
-        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        -*) echo "stage-approvals: unknown option $1" >&2; exit 1 ;;
+        -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) echo "stage-approvals: unknown option $1" >&2; exit 64 ;;
         *) artifacts+=("$1") ;;
     esac
     shift
@@ -54,8 +58,14 @@ for _i in "${!artifacts[@]}"; do
     _a="${_a#mm0/}"
     _a="${_a%.mm0}"
     case "$_a" in
-        */*|"") echo "stage-approvals: not an artifact: '${artifacts[$_i]}' (want a stem or mm0/<stem>.mm0)" >&2; exit 1 ;;
+        */*|"") echo "stage-approvals: not an artifact: '${artifacts[$_i]}' (want a stem or mm0/<stem>.mm0)" >&2; exit 64 ;;
     esac
+    if [ ! -f "$repo_root/mm0/$_a.mm0" ]; then
+        echo "stage-approvals: no such artifact: '$_a' — mm0/$_a.mm0 does not exist." >&2
+        echo "stage-approvals: known artifacts: $(cd "$repo_root/mm0" && ls *.mm0 2>/dev/null | sed 's/\.mm0$//' | tr '\n' ' ')" >&2
+        echo "stage-approvals: nothing staged (a name the comparator would have refused is a usage error, not a refusal)" >&2
+        exit 64
+    fi
     artifacts[$_i]="$_a"
 done
 
