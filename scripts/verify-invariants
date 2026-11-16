@@ -967,8 +967,9 @@ MUTATIONS
             fi
         fi
 
-        # The same witness once more, in Lean (`mm0/toy_witness/ToyWitness.lean`):
-        # same model, independent checker, and the candidates the toy rejected are
+        # The same axioms once more, in Lean (`mm0/toy_witness/ToyWitness.lean`):
+        # same model, but there a *proof* over an arbitrary atom type rather than
+        # an enumeration over a fixed one, and the candidates the toy rejected are
         # *theorems about their negations* rather than counterexample strings
         # printed by a program I wrote. Two checkers on one model is the point —
         # they fail differently, and a wrong reading of an `if` in one does not
@@ -981,11 +982,11 @@ MUTATIONS
             _lean_br="$(sed -n 's/^lean-witness-broken: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
             if [ "$_lean_rc" -eq 0 ] && [ -n "$_lean_ax" ] && [ "$_lean_ax" = "$_ax_file" ]; then
                 echo "  [detail] $(grep -m1 '^lean-witness: ' "$_cert_tmp/leanwit.log")"
-                check "W9.3: a Lean interpreter proves the same $(printf '%s\n' "$_lean_ax" | grep -c .) axioms" true
+                check "W9.3: a Lean development proves the same $(printf '%s\n' "$_lean_ax" | grep -c .) axioms" true
             else
                 grep -E 'error' "$_cert_tmp/leanwit.log" | head -5 >&2
                 echo "  [detail] lean axioms vs artifact: [$(echo "$_lean_ax" | tr '\n' ' ')]" >&2
-                check "W9.3: a Lean interpreter proves the same axioms" false
+                check "W9.3: a Lean development proves the same axioms" false
             fi
             if [ ! -s "$_cert_tmp/witness.log" ]; then
                 gap "W9.3: rejected-candidate cross-check not run (rustc absent)"
@@ -1000,7 +1001,7 @@ MUTATIONS
                 fi
             fi
         else
-            gap "W9.3: the Lean witness check not run (lean not on PATH)"
+            gap "W9.3: the Lean witness proofs not checked (lean not on PATH)"
         fi
 
         # W6: the generated probe is a test, and it has to actually run.

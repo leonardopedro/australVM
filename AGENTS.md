@@ -346,14 +346,14 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   checked rather than assumed. It is
   exhaustive over that finite domain, not a proof over arbitrary `Val`, and it
   is `[gap]`, never a pass, where `rustc` is absent. The same axiom set is
-  stated a second time, as Lean 4 theorems, in `mm0/toy_witness/ToyWitness.lean`
-  (`decide`/`native_decide` over 1745 three-cell memories with distinct
-  addresses, and the two capacity axioms from the 209 memories of at most two
-  cells — an eight-atom sweep over the full set is ~1.6·10⁹ instances and the
-  file's comment records the cap as a reduction, not a proof; the Rust witness
-  makes no such cap): the six rejected
-  candidates are theorems about their negations, and a degenerate `veq := ⊤`
-  model is noted as a consistency trap (content comes from the instance proofs).
+  *proved* a second time, in `mm0/toy_witness/ToyWitness.lean`: each axiom is a
+  theorem about an arbitrary atom type with decidable equality (no finite
+  enumeration, no atom-level threshold — `narrow4`'s two are at `Fin n` for
+  every `n ≥ 2`), with the capacity-3 carrier in the model's type, and the
+  proofs structural on the list that models a memory. The six rejected
+  candidates are theorems about their negations, exhibited at `Fin 4` (a
+  refutation needs one domain), and a degenerate `veq := ⊤` model is noted as a
+  consistency trap (content comes from the instance proofs).
   `verify-invariants` runs `lean` on it in the `lean` shell and requires its
   axiom and rejected-candidate lists to agree with the `.mm0` and the Rust
   witness. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,

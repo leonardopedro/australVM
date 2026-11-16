@@ -315,7 +315,7 @@ verify-invariants: 124 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
   [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
   [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
-  [pass] W9.3: a Lean interpreter proves the same 20 axioms
+  [pass] W9.3: a Lean development proves the same 20 axioms
   [pass] W9.3: both witnesses reject the same candidates
   [pass] W9.3: the witness exercises all 20 axioms the toy declares
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
@@ -338,7 +338,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 121 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean interpreter + W9.1)
+verify-invariants: 121 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -1723,21 +1723,31 @@ control the theorem count gets.
 **The same witness, once more, in a second checker.** The Rust program is a
 *model*: it enumerates cells and reports counterexamples. A program I wrote can
 be wrong in the same direction as the axioms it checks, so the toy's axiom set
-is also stated as a Lean 4 interpreter, `mm0/toy_witness/ToyWitness.lean`, with
-the same `put`/`get`/`held`/`notfull`/`narrow4` and the same 20 axioms — but
-here each axiom is a theorem proved by `decide`/`native_decide` over the finite
-enumeration `allMems` (1745 three-cell memories with distinct addresses, the
-shapes `put` builds; the two capacity axioms are checked from the 209 memories of
-at most two cells, an eight-atom sweep over the full set being ~1.6·10⁹ instances
-— a documented reduction in the file, not a proof, and one the Rust witness does
-not make), and each rejected candidate is a
-theorem about its *negation*. Two checkers disagreeing would be the finding; on
-this set they agree, and they fail differently (the Rust witness prints the
-killing memory; Lean refuses the proof). `verify-invariants` runs `lean` on the
-file in the `lean` shell (a `[gap]` elsewhere) and requires the axiom-name list
-it prints to equal the `.mm0`'s, and requires the rejected-candidate list to
-agree with the Rust witness's `[reject]` rows, so a candidate that only one
-checker refuses is a red gate.
+is also written as a Lean 4 development, `mm0/toy_witness/ToyWitness.lean`, with
+the same `put`/`get`/`held`/`notfull`/`narrow4` — and there it is a proof, not a
+check: each axiom is a theorem about an **arbitrary atom type** `α` with
+decidable equality and a default atom for `unset`, so there is no atom-domain
+threshold left to state. The proofs are structural on the list that models a
+memory (induction for the `drop`/`get`/`held` lemmas, and the four-store
+eviction sequence is *computed*: after four distinct stores the list is exactly
+the three latest cells, which is where `at_drop` and `at_keep_prev` both read
+off). The capacity lives in the model's type — `Cap` is the type of lists of at
+most three cells, which is what `put` builds — rather than in an extra
+hypothesis on each axiom, which is why the statements below read exactly as they
+do in the artifact; two of them are false on a four-cell list, so putting the
+carrier in the type is also the honest place for it. `narrow4` needs numbers, so
+those two axioms are stated at `Fin n` for every `n ≥ 2`: two atoms is the
+smallest domain a narrowing to two values can inhabit, not a scale chosen to
+keep a check cheap. Each rejected candidate is a theorem about its *negation*,
+exhibited at `Fin 4` (a refutation needs one domain). Two checkers disagreeing
+would be the finding; on this set they agree, and they fail differently (the
+Rust witness prints the killing memory; Lean refuses the proof).
+`verify-invariants` runs `lean` on the file in the `lean` shell (a `[gap]`
+elsewhere) and requires the axiom-name list it prints to equal the `.mm0`'s, and
+requires the rejected-candidate list to agree with the Rust witness's `[reject]`
+rows, so a candidate that only one checker refuses is a red gate. The whole file
+elaborates in ~1.4 s (measured 2026-11-16): it used to be a kernel sweep over a
+finite atom set and took 44 s.
 
 **Where the witness argument breaks.** The point of having the witness is to say
 plainly where it stops being evidence, and the Lean file is where those limits
@@ -1762,11 +1772,14 @@ are machine-checked rather than asserted:
   truncation; the width-4 side proves the projection's *shape* does not mention 8,
   not that `i32` truncation is this function. The real `narrow4` is uninterpreted
   at both widths.
-- The check is exhaustive over a finite domain (4 atoms, `0 = unset`).
-  `--domain 5` in the Rust witness gives the identical verdict, so it is not
-  a size artifact, but it is not a proof over an arbitrary `Val` — an instance
-  needing more atoms is the same equality pattern renamed, which is an argument
-  the header makes and neither program establishes.
+- The *Rust* arm is exhaustive over a finite domain (4 atoms, `0 = unset`).
+  `--domain 5` gives the identical verdict, so it is not a size artifact, but a
+  program is not a proof over an arbitrary `Val`. That is what the Lean arm is:
+  there the same axioms are theorems about an arbitrary atom type, so nothing is
+  left to the "same equality pattern renamed" argument here. What neither arm
+  establishes is that `Val` is `Fin n` — the model interprets the abstract sort,
+  and the axioms are consistent with it, which is a different claim from
+  consistency with the compiler.
 
 **The toy cites the claim by digest, and the check must be able to fail.** The
 toy's header carries `-- cites: mm0/store_projection.mm0 sha256=…`, and

@@ -1,272 +1,474 @@
 /-
-  mm0/toy_witness/ToyWitness.lean — the toy memory's axioms, checked by Lean.
+  mm0/toy_witness/ToyWitness.lean — the toy memory's axioms, proved in Lean.
 
-  WHY A SECOND CHECKER. `scripts/toy-witness` already runs the witness from
-  `mm0/store_projection_toy.mm0`'s header as Rust and enumerates the model. This
-  file is the same witness as a *Lean* definition, with the axiom checks phrased
-  as `Bool` computations and discharged by `decide` (kernel reduction) — so the
-  verdict does not rest on trusting my reading of an `if` in another language, and
-  the negations of the axioms the toy rejected are theorems here rather than
-  printed counterexample strings. The two are deliberately independent: same
-  model, two checkers, different failure modes.
+  WHY A SECOND CHECKER. `scripts/toy-witness` checks the same axioms in Rust by
+  enumerating a finite model on a fixed atom set. This file is the same model as
+  a *Lean* definition, but it does not enumerate: each of the toy's axioms is a
+  theorem about an **arbitrary atom type** `α` with decidable equality (and a
+  default atom for `unset`), proved by induction on the list that models a
+  memory. So there is no atom-domain threshold here at all — an instance over any
+  number of atoms is an instance of the same theorem, and no `decide` over a
+  finite atom set stands in for a proof. The negations of the axioms the toy
+  rejected are also theorems here, exhibited at a concrete small domain (a
+  counterexample needs only one), rather than counterexample strings printed by a
+  program I wrote. The two checkers are deliberately independent: same model, and
+  they fail differently.
 
-  WHAT IT DOES NOT DO. It is a finite model check, not a proof over an arbitrary
-  atom type: atoms are `Fin 4` and memories are lists of at most three cells (the ones
-  with distinct addresses; the Rust witness also covers the degenerate shapes). An
-  axiom instance over more atoms than that is the same equality pattern renamed,
-  which is an argument, not something this file establishes. Where the witness
-  argument actually stops is recorded at the bottom, with the failures proved.
+  THE CARRIER IS IN THE TYPE. The artifact's `Mem` is an abstract sort; a memory
+  in this model is a list of cells, and `Cap` (a list of at most three cells,
+  which is what `put` builds) is the interpretation of that sort. Keeping the
+  capacity in the type rather than in a hypothesis on each axiom is what makes
+  the statements below read exactly as they do in `store_projection_toy.mm0` —
+  two of the axioms are *false* on lists of four cells, and saying so by
+  restricting the carrier is honest about where the model's universe ends.
+
+  WHAT IT DOES NOT DO. `narrow4` needs a numeric domain, so that section is at
+  `Fin n` for every `n ≥ 2` (narrowing to two values needs at least two atoms);
+  two is the smallest possible hypothesis there, not a scale chosen to make a
+  check cheap. The Rust witness is still what covers the degenerate memory shapes
+  and the larger atom sweep; this file is the proof, that one is the test.
 
   Run: `lean mm0/toy_witness/ToyWitness.lean` (the gate runs it in the `lean`
   shell and reports a `[gap]` elsewhere). No Mathlib, no dependencies.
 -/
 
--- The finite quantifiers below are long `List.all` chains, which the default
--- recursion depth is too shallow for; the kernel reduction itself is cheap.
-set_option maxRecDepth 200000
+-- The model's operations take their instances as section variables, so a few
+-- statements that do not mention an operation still carry them; that is the
+-- price of writing every axiom the same way, and not a warning worth chasing.
+set_option linter.unusedSectionVars false
 
 namespace ToyWitness
 
-/- ── The concrete interpreter: a list of at most three (address, value) cells ─ -/
-
-/-- Four atoms. `0` is `unset`, as in the Rust checker; a value is an atom. -/
-abbrev Atom := Fin 4
-
-/-- The whole atom universe, for the finite quantifiers below. -/
-def atoms : List Atom := List.finRange 4
+/- ── The model: cells, memories, and the carrier of at most three ──────────── -/
 
 /-- A cell: address, value. -/
-abbrev Cell := Atom × Atom
+abbrev Cell (α : Type) := α × α
 
-/-- A memory is a list of cells, newest first, of at most three of them. -/
-abbrev Mem := List Cell
+/-- A memory is a list of cells, newest first. -/
+abbrev Mem (α : Type) := List (Cell α)
 
-def unset : Atom := 0
+/-- The interpretation of the artifact's `Mem`: the memories of at most three
+cells. `put` never builds anything else, and the two axioms that would otherwise
+be false on a longer list (`at_put_held_other`, `at_put_held_keeps`) are exactly
+where a longer list breaks the truncation. -/
+def Cap (α : Type) : Type := { m : Mem α // m.length ≤ 3 }
 
-/-- `put m a v`: the new cell first, any cell already at `a` dropped, the result
-truncated to three — the header's `(a,v) :: take 2 (m minus a)`, written so that
-it also applies to a memory that is already longer than three cells. -/
-def put (m : Mem) (a v : Atom) : Mem :=
-  ((a, v) :: m.filter (fun c => c.1 ≠ a)).take 3
+/-- The `unset` atom: the domain's default. -/
+def unset (α : Type) [Inhabited α] : α := default
 
-/-- `get m a`: the value of the first cell at `a`, else `unset`. -/
-def get (m : Mem) (a : Atom) : Atom :=
-  (m.find? (fun c => c.1 = a)).map Prod.snd |>.getD unset
+/- ── List-level model, which the proofs work on ───────────────────────────── -/
 
-/-- `held m a`: some cell is at `a`. -/
-def held (m : Mem) (a : Atom) : Bool := m.any (fun c => c.1 = a)
+/-- `drop a m`: `m` with every cell at `a` removed (the `filter` in the header's
+`put`, written as a structural recursion so the inductions are on the list). -/
+def drop {α : Type} [DecidableEq α] (a : α) : Mem α → Mem α
+  | [] => []
+  | c :: t => if c.1 = a then drop a t else c :: drop a t
 
-/-- `notfull m`: fewer than three cells. -/
-def notfull (m : Mem) : Bool := m.length < 3
+/-- The header's `put`: the new cell first, any cell already at `a` dropped, the
+result truncated to three. -/
+def putL {α : Type} [DecidableEq α] (m : Mem α) (a v : α) : Mem α :=
+  ((a, v) :: drop a m).take 3
 
-/-- `narrow4 x`: narrowing to four bytes. A truncation that *loses* information
-(`x % 2`), so idempotence is not satisfied by a function that does nothing. -/
-def narrow4 (x : Atom) : Atom :=
-  ⟨x.val % 2, Nat.lt_of_lt_of_le (Nat.mod_lt _ (by decide)) (by decide)⟩
+/-- The header's `get`: the value of the first cell at `a`, else `unset`. -/
+def getL {α : Type} [DecidableEq α] [Inhabited α] (m : Mem α) (a : α) : α :=
+  match m with
+  | [] => unset α
+  | c :: t => if c.1 = a then c.2 else getL t a
 
-/-- `isa_store_w8_keep m a v`: the second width-8 store, with the *other* refresh
-order — a write to a held address keeps the value the cell already has. The model
-is the identity: nothing readable moves, which is exactly what its two laws say,
-and why a definition with this ordering cannot make a refresh visible. -/
-def keep (m : Mem) (_a _v : Atom) : Mem := m
+/-- The header's `held`: some cell is at `a`. -/
+def heldL {α : Type} (m : Mem α) (a : α) : Prop :=
+  match m with
+  | [] => False
+  | c :: t => c.1 = a ∨ heldL t a
 
-/-- Every memory the quantifiers range over: empty, one, two and three cells.
-`Mem` also admits shapes with two cells at one address, which `put` never builds;
-they stay out of `allMems` — the `put`-reachable shapes are what the axioms are
-about, and enumerating the degenerate ones multiplies the kernel's work by ~3 for
-no evidence the Rust witness does not already produce. -/
-def cellsAll : List Cell := atoms.flatMap fun a => atoms.map fun v => (a, v)
+/-- The header's `notfull`: fewer than three cells. -/
+def notfullL {α : Type} (m : Mem α) : Prop := m.length < 3
 
-/-- Distinct addresses in every cell: the shape `put` leaves behind. -/
-def distinctAddrs (m : Mem) : Bool :=
-  (m.map (·.1)).eraseDups.length == m.length
+@[simp] theorem getL_nil {α : Type} [DecidableEq α] [Inhabited α] (a : α) :
+    getL ([] : Mem α) a = unset α := rfl
 
-def mems2 : List Mem :=
-  cellsAll.flatMap fun c1 => cellsAll.map fun c2 => [c1, c2]
+@[simp] theorem getL_cons {α : Type} [DecidableEq α] [Inhabited α]
+    (c : Cell α) (t : Mem α) (a : α) :
+    getL (c :: t) a = if c.1 = a then c.2 else getL t a := rfl
 
-def allMems : List Mem :=
-  [[]] ++ cellsAll.map (fun c => [c])
-    ++ mems2.filter distinctAddrs
-    ++ (cellsAll.flatMap fun c1 => cellsAll.flatMap fun c2 =>
-         cellsAll.map fun c3 => [c1, c2, c3]).filter distinctAddrs
+@[simp] theorem heldL_nil {α : Type} (a : α) : ¬ heldL ([] : Mem α) a := fun h => h
 
-/-- The starting memories the two capacity axioms are checked from: at most two
-cells. A three-cell start is already full, so those two axioms run the same
-eviction sequence as a two-cell start one store earlier; the enumeration is
-capped here only because eight quantified atoms make each extra memory cost a
-full 4^8 sweep, and the Rust witness checks every three-cell start without the
-cap. The cap is a reduction, not a proof, and this comment is the record of it. -/
-def memsSmall : List Mem :=
-  [[]] ++ cellsAll.map (fun c => [c]) ++ mems2.filter distinctAddrs
+@[simp] theorem heldL_cons {α : Type} (c : Cell α) (t : Mem α) (a : α) :
+    heldL (c :: t) a ↔ (c.1 = a ∨ heldL t a) := Iff.rfl
 
-/-- `Bool`-valued `∀` over the atom universe. -/
-def allAtoms (p : Atom → Bool) : Bool := atoms.all p
+@[simp] theorem take3_cons {α : Type} (c : Cell α) (l : Mem α) :
+    (c :: l).take 3 = c :: l.take 2 := rfl
 
-/-- The pairwise distinctness the capacity axioms assume, over four addresses. -/
-def distinct4 (x y z w : Atom) : Bool :=
-  x ≠ y && x ≠ z && x ≠ w && y ≠ z && y ≠ w && z ≠ w
+@[simp] theorem take2_cons {α : Type} (c : Cell α) (l : Mem α) :
+    (c :: l).take 2 = c :: l.take 1 := rfl
 
-/- ── The twenty axioms, each discharged by the kernel `decide` where the
-   enumeration is small, and by `native_decide` where it is not (the memory
-   axioms, and the two capacity axioms whose eight quantified atoms make an
-   4^8-long sweep). `decide` yields an `rfl`-shaped proof term; `native_decide`
-   trusts the compiled evaluator and its proof term mentions `Lean.ofReduceBool`.
-   Which axioms use which is visible on each one. -/
+@[simp] theorem take1_cons {α : Type} (c : Cell α) (l : Mem α) :
+    (c :: l).take 1 = [c] := rfl
 
-theorem ax_veq_refl : allAtoms (fun x => x = x) = true := by decide
+theorem length_drop_le {α : Type} [DecidableEq α] (a : α) (m : Mem α) :
+    (drop a m).length ≤ m.length := by
+  induction m with
+  | nil => simp [drop]
+  | cons c t ih =>
+    by_cases hc : c.1 = a
+    · have := ih
+      simp [drop, hc]
+      omega
+    · have := ih
+      simp [drop, hc]
+      omega
 
-theorem ax_veq_trans :
-    allAtoms fun x => allAtoms fun y => allAtoms fun z =>
-      if x = y && y = z then x = z else true := by decide
+/-- Dropping a held address strictly shortens the memory: that is what makes the
+capacity-3 hypotheses below give a two-cell memory to truncate. -/
+theorem length_drop_lt_of_held {α : Type} [DecidableEq α] (a : α) (m : Mem α)
+    (h : heldL m a) : (drop a m).length < m.length := by
+  induction m with
+  | nil => simp at h
+  | cons c t ih =>
+    by_cases hc : c.1 = a
+    · have := length_drop_le a t
+      simp [drop, hc]
+      omega
+    · have ht : heldL t a := h.resolve_left hc
+      have := ih ht
+      simp [drop, hc]
+      omega
 
-theorem ax_vne_sym :
-    allAtoms fun x => allAtoms fun y => if x ≠ y then y ≠ x else true := by decide
+theorem getL_drop_of_ne {α : Type} [DecidableEq α] [Inhabited α] (a b : α)
+    (hab : a ≠ b) (m : Mem α) : getL (drop a m) b = getL m b := by
+  induction m with
+  | nil => simp [drop]
+  | cons c t ih =>
+    by_cases hc : c.1 = a
+    · have hcb : c.1 ≠ b := by rw [hc]; exact hab
+      simp only [drop, if_pos hc, getL_cons, if_neg hcb]
+      exact ih
+    · simp only [drop, if_neg hc, getL_cons]
+      by_cases hcb : c.1 = b
+      · rw [if_pos hcb, if_pos hcb]
+      · rw [if_neg hcb, if_neg hcb]
+        exact ih
 
-theorem ax_narrow4_cong :
-    allAtoms fun x => allAtoms fun y => if x = y then narrow4 x = narrow4 y else true := by
-  native_decide
+theorem heldL_drop_of_ne {α : Type} [DecidableEq α] (a b : α) (hab : a ≠ b)
+    (m : Mem α) : heldL (drop a m) b ↔ heldL m b := by
+  induction m with
+  | nil => simp [drop]
+  | cons c t ih =>
+    by_cases hc : c.1 = a
+    · have hcb : c.1 ≠ b := by rw [hc]; exact hab
+      simp only [drop, if_pos hc, heldL_cons]
+      exact ⟨fun h => Or.inr (ih.mp h), fun h => ih.mpr (h.resolve_left hcb)⟩
+    · simp only [drop, if_neg hc, heldL_cons]
+      by_cases hcb : c.1 = b
+      · simp [hcb]
+      · simp [hcb, ih]
 
-theorem ax_narrow4_idem : allAtoms (fun x => narrow4 (narrow4 x) = narrow4 x) = true := by
-  native_decide
+theorem heldL_exists {α : Type} (m : Mem α) (a : α) :
+    heldL m a ↔ ∃ c ∈ m, c.1 = a := by
+  induction m with
+  | nil => simp [heldL]
+  | cons c t ih =>
+    simp only [heldL, ih, List.mem_cons]
+    constructor
+    · rintro (h | ⟨c', hc', hc'a⟩)
+      · exact ⟨c, Or.inl rfl, h⟩
+      · exact ⟨c', Or.inr hc', hc'a⟩
+    · intro h
+      obtain ⟨c', hmem, hval⟩ := h
+      rcases hmem with hc' | hc'
+      · exact Or.inl (hc' ▸ hval)
+      · exact Or.inr ⟨c', hc', hval⟩
 
-theorem ax_get_init : allAtoms (fun a => get [] a = unset) = true := by decide
+/-- Taking a prefix cannot introduce a held address: the truncated memory holds
+only what the whole one did. -/
+theorem heldL_of_heldL_take {α : Type} (n : Nat) (m : Mem α) (b : α)
+    (h : heldL (m.take n) b) : heldL m b := by
+  obtain ⟨c, hc, hcb⟩ := (heldL_exists _ _).mp h
+  exact (heldL_exists _ _).mpr ⟨c, (List.take_sublist n m).subset hc, hcb⟩
 
-theorem ax_init_notfull : notfull [] = true := by decide
+/-- Four distinct stores, computed: the list is exactly the three latest cells,
+newest first, and the earliest address is gone. Capacity 3 is what makes the
+fourth store evict exactly one cell. This is the whole of `at_drop` and
+`at_keep_prev`, stated as a list equality so both read off it. -/
+theorem putL_four {α : Type} [DecidableEq α] (m : Mem α)
+    (x y z w vx vy vz vw : α)
+    (hxy : x ≠ y) (hxz : x ≠ z) (hxw : x ≠ w)
+    (hyz : y ≠ z) (hyw : y ≠ w) (hzw : z ≠ w) :
+    putL (putL (putL (putL m x vx) y vy) z vz) w vw = [(w, vw), (z, vz), (y, vy)] := by
+  simp [putL, drop, hxy, hxz, hxw, hyz, hyw, hzw]
 
-theorem ax_put_init_notfull :
-    allAtoms fun a => allAtoms fun v => notfull (put [] a v) = true := by decide
+/- ── The same operations on the carrier ──────────────────────────────────── -/
+
+section Carrier
+variable {α : Type} [DecidableEq α] [Inhabited α]
+
+/-- The empty memory. -/
+def init : Cap α := ⟨[], by simp⟩
+
+/-- A store: `put` on a memory of at most three cells is again one, because the
+result is a truncation to three. -/
+def put (m : Cap α) (a v : α) : Cap α := ⟨putL m.val a v, List.length_take_le 3 _⟩
+
+def get (m : Cap α) (a : α) : α := getL m.val a
+
+def held (m : Cap α) (a : α) : Prop := heldL m.val a
+
+def notfull (m : Cap α) : Prop := notfullL m.val
+
+/-- The second width-8 store, with the *other* refresh order: a write to a held
+address keeps the value the cell already has. The model is the identity —
+nothing readable moves, which is exactly what its two laws say, and why a
+definition with this ordering cannot make a refresh visible. -/
+def keep (m : Cap α) (_a _v : α) : Cap α := m
+
+/-- The carrier is where the capacity lives, so this is free. -/
+theorem cap_length (m : Cap α) : m.val.length ≤ 3 := m.2
+
+theorem cap_notfull_iff (m : Cap α) : notfull m ↔ m.val.length ≤ 2 := by
+  simp [notfull, notfullL]
+  omega
+
+/- ── The toy's axioms, over an arbitrary atom domain ──────────────────────── -/
+
+theorem ax_veq_refl (x : α) : x = x := rfl
+
+theorem ax_veq_trans {x y z : α} (h1 : x = y) (h2 : y = z) : x = z := h1.trans h2
+
+theorem ax_vne_sym {x y : α} (h : x ≠ y) : y ≠ x := fun hyx => h hyx.symm
+
+theorem ax_get_init (a : α) : get (init : Cap α) a = unset α := rfl
+
+theorem ax_init_notfull : notfull (init : Cap α) := by
+  simp [notfull, notfullL, init]
+
+theorem ax_put_init_notfull (a v : α) : notfull (put (init : Cap α) a v) := by
+  have hval : (put (init : Cap α) a v).val = [(a, v)] := rfl
+  simp only [notfull, notfullL, hval]
+  simp
 
 /-- Two stores into a fresh memory still leave a free cell: the counting step the
 third store needs, and the statement that would be false at capacity two. -/
-theorem ax_put2_init_notfull :
-    allAtoms fun a => allAtoms fun b => allAtoms fun va => allAtoms fun vb =>
-      notfull (put (put [] a va) b vb) = true := by decide
+theorem ax_put2_init_notfull (a b va vb : α) :
+    notfull (put (put (init : Cap α) a va) b vb) := by
+  have h1 : (put (init : Cap α) a va).val = [(a, va)] := rfl
+  have h2 : (put (put (init : Cap α) a va) b vb).val
+      = ((b, vb) :: drop b [(a, va)]).take 3 := by
+    rw [show (put (put (init : Cap α) a va) b vb).val
+        = putL (put (init : Cap α) a va).val b vb from rfl, h1]
+    rfl
+  have hdrop : (drop b [(a, va)]).length ≤ 1 := by
+    by_cases hb : a = b
+    · simp [drop, hb]
+    · simp [drop, hb]
+  have hlen2 : ((b, vb) :: drop b [(a, va)]).length ≤ 2 := by
+    simp only [List.length_cons]
+    omega
+  have hlen : (((b, vb) :: drop b [(a, va)]).take 3).length ≤ 2 := by
+    rw [List.take_of_length_le (by omega : ((b, vb) :: drop b [(a, va)]).length ≤ 3)]
+    exact hlen2
+  simp only [notfull, notfullL, h2]
+  omega
 
-theorem ax_at_put :
-    allMems.all fun m => allAtoms fun a => allAtoms fun v => get (put m a v) a = v := by
-  native_decide
+theorem ax_at_put (m : Cap α) (a v : α) : get (put m a v) a = v := by
+  simp [get, put, putL]
 
-theorem ax_put_held :
-    allMems.all fun m => allAtoms fun a => allAtoms fun v => held (put m a v) a = true := by
-  native_decide
+theorem ax_put_held (m : Cap α) (a v : α) : held (put m a v) a := by
+  simp [held, put, putL]
 
-theorem ax_put_held_other :
-    allMems.all fun m => allAtoms fun a => allAtoms fun b => allAtoms fun v =>
-      if a ≠ b && held m b && notfull m then held (put m a v) b else true := by
-  native_decide
+theorem ax_put_held_other (m : Cap α) (a b v : α) (h : a ≠ b) (k : held m b)
+    (f : notfull m) : held (put m a v) b := by
+  have hlen : (drop a m.val).length ≤ 2 := by
+    have := length_drop_le a m.val
+    have := (cap_notfull_iff m).mp f
+    omega
+  have hb : heldL (drop a m.val) b := (heldL_drop_of_ne a b h m.val).mpr k
+  show heldL (putL m.val a v) b
+  have hp : putL m.val a v = (a, v) :: drop a m.val := by
+    rw [show putL m.val a v = (a, v) :: (drop a m.val).take 2 from rfl,
+      List.take_of_length_le hlen]
+  rw [hp, heldL_cons]
+  exact Or.inr hb
 
-theorem ax_at_put_held_other :
-    allMems.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun w =>
-      if x ≠ y && held m x then get (put m x w) y = get m y else true := by
-  native_decide
+theorem ax_at_put_held_other (m : Cap α) (x y w : α) (h : x ≠ y) (k : held m x) :
+    get (put m x w) y = get m y := by
+  have hlen : (drop x m.val).length ≤ 2 := by
+    have := length_drop_lt_of_held x m.val k
+    have := cap_length m
+    omega
+  show getL (putL m.val x w) y = getL m.val y
+  have hp : putL m.val x w = (x, w) :: drop x m.val := by
+    rw [show putL m.val x w = (x, w) :: (drop x m.val).take 2 from rfl,
+      List.take_of_length_le hlen]
+  rw [hp, getL_cons, if_neg h, getL_drop_of_ne x y h m.val]
 
-theorem ax_at_put_held_keeps :
-    allMems.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun w =>
-      if x ≠ y && held m y && held m x then held (put m x w) y else true := by
-  native_decide
+theorem ax_at_put_held_keeps (m : Cap α) (x y w : α) (h : x ≠ y) (j : held m y)
+    (k : held m x) : held (put m x w) y := by
+  have hlen : (drop x m.val).length ≤ 2 := by
+    have := length_drop_lt_of_held x m.val k
+    have := cap_length m
+    omega
+  have hy : heldL (drop x m.val) y := (heldL_drop_of_ne x y h m.val).mpr j
+  show heldL (putL m.val x w) y
+  have hp : putL m.val x w = (x, w) :: drop x m.val := by
+    rw [show putL m.val x w = (x, w) :: (drop x m.val).take 2 from rfl,
+      List.take_of_length_le hlen]
+  rw [hp, heldL_cons]
+  exact Or.inr hy
 
-theorem ax_at_put_held_no_new :
-    allMems.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun w =>
-      if x ≠ y && held (put m x w) y then held m y else true := by
-  native_decide
+theorem ax_at_put_held_no_new (m : Cap α) (x y w : α) (h : x ≠ y)
+    (j : held (put m x w) y) : held m y := by
+  have h1 : heldL ((x, w) :: (drop x m.val).take 2) y := j
+  have h2 : heldL ((drop x m.val).take 2) y := by
+    simpa [heldL, h] using h1
+  exact (heldL_drop_of_ne x y h m.val).mp (heldL_of_heldL_take 2 (drop x m.val) y h2)
 
-theorem ax_at_put_other :
-    allMems.all fun m => allAtoms fun a => allAtoms fun b => allAtoms fun v =>
-      if a ≠ b && notfull m then get (put m a v) b = get m b else true := by
-  native_decide
+theorem ax_at_put_other (m : Cap α) (a b v : α) (h : a ≠ b) (k : notfull m) :
+    get (put m a v) b = get m b := by
+  have hlen : (drop a m.val).length ≤ 2 := by
+    have := length_drop_le a m.val
+    have := (cap_notfull_iff m).mp k
+    omega
+  show getL (putL m.val a v) b = getL m.val b
+  have hp : putL m.val a v = (a, v) :: drop a m.val := by
+    rw [show putL m.val a v = (a, v) :: (drop a m.val).take 2 from rfl,
+      List.take_of_length_le hlen]
+  rw [hp, getL_cons, if_neg h, getL_drop_of_ne a b h m.val]
 
-/-- The capacity axioms quantify over eight atoms and every memory, so the kernel
-would take far too long to reduce them; `native_decide` compiles the same
-decision procedure and checks the result. -/
-theorem ax_at_drop :
-    memsSmall.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun z =>
-      allAtoms fun w => allAtoms fun vx => allAtoms fun vy => allAtoms fun vz =>
-      allAtoms fun vw =>
-        if distinct4 x y z w then get (put (put (put (put m x vx) y vy) z vz) w vw) x = unset
-        else true := by
-  native_decide
+theorem ax_at_drop (m : Cap α) (x y z w vx vy vz vw : α)
+    (hxy : x ≠ y) (hxz : x ≠ z) (hxw : x ≠ w)
+    (hyz : y ≠ z) (hyw : y ≠ w) (hzw : z ≠ w) :
+    get (put (put (put (put m x vx) y vy) z vz) w vw) x = unset α := by
+  show getL (putL (putL (putL (putL m.val x vx) y vy) z vz) w vw) x = unset α
+  rw [putL_four m.val x y z w vx vy vz vw hxy hxz hxw hyz hyw hzw]
+  simp [getL, unset, Ne.symm hxw, Ne.symm hxz, Ne.symm hxy]
 
-theorem ax_keep_at_put_held :
-    allMems.all fun m => allAtoms fun x => allAtoms fun w =>
-      if held m x then get (keep m x w) x = get m x else true := by
-  native_decide
+theorem ax_at_keep_prev (m : Cap α) (x y z w vx vy vz vw : α)
+    (hxy : x ≠ y) (hxz : x ≠ z) (hxw : x ≠ w)
+    (hyz : y ≠ z) (hyw : y ≠ w) (hzw : z ≠ w) :
+    get (put (put (put (put m x vx) y vy) z vz) w vw) y = vy := by
+  show getL (putL (putL (putL (putL m.val x vx) y vy) z vz) w vw) y = vy
+  rw [putL_four m.val x y z w vx vy vz vw hxy hxz hxw hyz hyw hzw]
+  simp [getL, Ne.symm hyw, Ne.symm hyz]
 
-theorem ax_keep_at_put_other :
-    allMems.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun w =>
-      if x ≠ y then get (keep m x w) y = get m y else true := by
-  native_decide
+theorem ax_keep_at_put_held (m : Cap α) (x w : α) (_k : held m x) :
+    get (keep m x w) x = get m x := rfl
 
-theorem ax_at_keep_prev :
-    memsSmall.all fun m => allAtoms fun x => allAtoms fun y => allAtoms fun z =>
-      allAtoms fun w => allAtoms fun vx => allAtoms fun vy => allAtoms fun vz =>
-      allAtoms fun vw =>
-        if distinct4 x y z w then get (put (put (put (put m x vx) y vy) z vz) w vw) y = vy
-        else true := by
-  native_decide
+theorem ax_keep_at_put_other (m : Cap α) (x y w : α) (_h : x ≠ y) :
+    get (keep m x w) y = get m y := rfl
 
-/- ── Where the witness argument breaks ───────────────────────────────────────
-   Each of the four statements below is *false* in this model, and proved false
-   here. They are not hypothetical: `put_notfull` was carried by an earlier
-   revision of the toy, the two unguarded preservation axioms are what the
-   `notfull`/`held` guards exist to exclude, and "narrowing is the identity" is
-   what the width-4 theorems would be if `narrow4` did nothing. -/
+end Carrier
+
+/- ── `narrow4`, for every atom domain with at least two atoms ─────────────── -/
+
+section Narrow
+
+/-- Narrowing to four bytes: a truncation that *loses* information (`x % 2`), so
+idempotence is not satisfied by a function that does nothing. Requires only that
+the domain has two values to narrow to — the smallest possible hypothesis. -/
+def narrow4 {n : Nat} (hn : 2 ≤ n) (x : Fin n) : Fin n :=
+  ⟨x.val % 2, Nat.lt_of_lt_of_le (Nat.mod_lt _ (by omega)) hn⟩
+
+theorem ax_narrow4_cong {n : Nat} (hn : 2 ≤ n) {x y : Fin n} (h : x = y) :
+    narrow4 hn x = narrow4 hn y := by rw [h]
+
+theorem ax_narrow4_idem {n : Nat} (hn : 2 ≤ n) (x : Fin n) :
+    narrow4 hn (narrow4 hn x) = narrow4 hn x := by
+  ext
+  simp only [narrow4]
+  rw [Nat.mod_eq_of_lt (Nat.mod_lt _ (by omega))]
+
+end Narrow
+
+/- ── Where the witness argument breaks ──────────────────────────────────────
+   Each statement below is *false* in this model, and proved false here. A
+   refutation needs one atom domain, so this section fixes the smallest that
+   carries four distinct atoms; the axioms above need no fixed domain at all. -/
+
+section Broken
+
+abbrev Atom4 := Fin 4
+
+-- `notfull` and `held` are the model's predicates, so `decide` needs their
+-- decision procedures spelled out (they are `Decidable` by their definitions).
+instance instDecidableNotfull {α : Type} (m : Cap α) : Decidable (notfull m) :=
+  inferInstanceAs (Decidable (m.val.length < 3))
+
+-- `notfull` is a length bound, so `decide` can use the `Nat` decision procedure
+-- once the definition is unfolded; `held` is a recursion, so the refutations
+-- below compute it instead of deciding it.
 
 /-- An earlier revision's closure axiom: `notfull` survives any write. False the
 moment the write takes the third cell — which is exactly what a capacity-3 memory
-does, and what `at_drop` requires. Its negation is the axiom `put2_init_notfull`,
-which says where the closure does hold. -/
+does, and what `at_drop` requires. Its negation is the axiom
+`put2_init_notfull`, which says where the closure does hold. -/
 theorem put_notfull_breaks :
-    ¬ (∀ (m : Mem) (a v : Atom), notfull m = true → notfull (put m a v) = true) := by
+    ¬ (∀ (m : Cap Atom4) (a v : Atom4), notfull m → notfull (put m a v)) := by
   intro h
-  -- two cells in, three cells out
-  have : notfull (put [(0, 0), (1, 1)] 2 0) = true := h [(0, 0), (1, 1)] 2 0 (by decide)
-  exact absurd this (by decide)
+  have hm : notfull (⟨[(0, 0), (1, 1)], by decide⟩ : Cap Atom4) := by decide
+  have h3 := h ⟨[(0, 0), (1, 1)], by decide⟩ 2 0 hm
+  have hlen : (put (⟨[(0, 0), (1, 1)], by decide⟩ : Cap Atom4) 2 0).val.length = 3 := rfl
+  show False
+  have : ¬ notfull (put (⟨[(0, 0), (1, 1)], by decide⟩ : Cap Atom4) 2 0) := by
+    show ¬ ((put (⟨[(0, 0), (1, 1)], by decide⟩ : Cap Atom4) 2 0).val.length < 3)
+    omega
+  exact this h3
 
 /-- `at_put_other` without `notfull`: a write to a fresh address in a full memory
 evicts, so the other cell's content is not preserved. -/
 theorem at_put_other_unguarded_breaks :
-    ¬ (∀ (m : Mem) (a b v : Atom), a ≠ b → get (put m a v) b = get m b) := by
+    ¬ (∀ (m : Cap Atom4) (a b v : Atom4), a ≠ b → get (put m a v) b = get m b) := by
   intro h
-  -- full memory: the write at 3 evicts the oldest cell, which holds address 2
-  have : get (put [(0, 0), (1, 1), (2, 2)] 3 0) 2 = get [(0, 0), (1, 1), (2, 2)] 2 :=
-    h _ 3 2 0 (by decide)
-  exact absurd this (by decide)
+  have h3 : get (put (⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ : Cap Atom4) 3 0) 2
+      = get (⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ : Cap Atom4) 2 :=
+    h ⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ 3 2 0 (by decide)
+  exact absurd h3 (by decide)
 
 /-- `put_held_other` without `notfull`: the same write loses the held cell. -/
 theorem put_held_other_unguarded_breaks :
-    ¬ (∀ (m : Mem) (a b v : Atom), a ≠ b → held m b = true → held (put m a v) b = true) := by
+    ¬ (∀ (m : Cap Atom4) (a b v : Atom4), a ≠ b → held m b → held (put m a v) b) := by
   intro h
-  have : held (put [(0, 0), (1, 1), (2, 2)] 3 0) 2 = true :=
-    h _ 3 2 0 (by decide) (by decide)
-  exact absurd this (by decide)
+  have hk : held (⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ : Cap Atom4) 2 := by
+    simp [held, heldL]
+  have h3 : held (put (⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ : Cap Atom4) 3 0) 2 :=
+    h ⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ 3 2 0 (by decide) hk
+  have hv : (put (⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ : Cap Atom4) 3 0).val
+      = [((3 : Atom4), (0 : Atom4)), (0, 0), (1, 1)] := rfl
+  have hnot : ¬ held (put (⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ : Cap Atom4) 3 0) 2 := by
+    show ¬ heldL (put (⟨[(0, 0), (1, 1), (2, 2)], by decide⟩ : Cap Atom4) 3 0).val 2
+    rw [hv]
+    simp [heldL]
+  exact hnot h3
 
-/-- The eviction axiom the two-cell revision carried: after *three* distinct stores
-the earliest address reads `unset`. False with a third cell, which is the whole
-point of adding it — a checker that still accepted it would be modelling the old
-memory. -/
+/-- The eviction axiom the two-cell revision carried: after *three* distinct
+stores the earliest address reads `unset`. False with a third cell, which is the
+whole point of adding it — a checker that still accepted it would be modelling
+the old memory. -/
 theorem at_drop_at_two_cells_breaks :
-    ¬ (∀ (m : Mem) (x y z vx vy vz : Atom), x ≠ y → x ≠ z → y ≠ z →
-        get (put (put (put m x vx) y vy) z vz) x = unset) := by
+    ¬ (∀ (m : Cap Atom4) (x y z vx vy vz : Atom4), x ≠ y → x ≠ z → y ≠ z →
+        get (put (put (put m x vx) y vy) z vz) x = unset Atom4) := by
   intro h
-  have : get (put (put (put [] 0 1) 1 1) 2 1) 0 = unset :=
-    h [] 0 1 2 1 1 1 (by decide) (by decide) (by decide)
-  exact absurd this (by decide)
+  have h3 : get (put (put (put (init : Cap Atom4) 0 1) 1 1) 2 1) 0 = unset Atom4 :=
+    h (init : Cap Atom4) 0 1 2 1 1 1 (by decide) (by decide) (by decide)
+  exact absurd h3 (by decide)
 
-/-- "The second width-8 store is visible at the address it wrote" — the projection
-instance the other four theorems would need. False under the other refresh order,
-and false here: the store keeps the old value, which is where the projection
-breaks. -/
-theorem keep_store_visible_breaks : ¬ (∀ (m : Mem) (a v : Atom), get (keep m a v) a = v) := by
+/-- "The second width-8 store is visible at the address it wrote" — the
+projection instance the other four theorems would need. False under the other
+refresh order, and false here: the store keeps the old value, which is where the
+projection breaks. -/
+theorem keep_store_visible_breaks :
+    ¬ (∀ (m : Cap Atom4) (a v : Atom4), get (keep m a v) a = v) := by
   intro h
-  have : get (keep [] 0 1) 0 = 1 := h [] 0 1
-  exact absurd this (by decide)
+  have h3 : get (keep (init : Cap Atom4) 0 1) 0 = 1 := h (init : Cap Atom4) 0 1
+  exact absurd h3 (by decide)
 
 /-- "Narrowing to four bytes is the identity" — false, and if it held the width-4
 theorems would say nothing: a value that fits in four bytes is not every value. -/
-theorem narrow4_is_identity_breaks : ¬ (∀ x : Atom, narrow4 x = x) := by
+theorem narrow4_is_identity_breaks : ¬ (∀ x : Fin 3, narrow4 (by decide) x = x) := by
   intro h
-  have : narrow4 2 = 2 := h 2
-  exact absurd this (by decide)
+  have h3 : narrow4 (by decide : 2 ≤ 3) 2 = 2 := h 2
+  exact absurd h3 (by decide)
+
+end Broken
 
 /- ── The argument's other limit: a degenerate model of the same axioms ───────
    `veq` is uninterpreted, and the toy's axioms only demand reflexivity and
@@ -276,15 +478,20 @@ theorem narrow4_is_identity_breaks : ¬ (∀ x : Atom, narrow4 x = x) := by
    in any way. What carries the toy's content is the *instance* proofs (which
    rest on `at_put`, `at_drop`, …) and this witness, not satisfiability. -/
 
-def veqUniversal (_ _ : Atom) : Prop := True
+section Degenerate
 
-theorem veq_universal_satisfies_trans :
-    ∀ x y z : Atom, veqUniversal x y → veqUniversal y z → veqUniversal x z :=
-  fun _ _ _ _ _ => trivial
+variable {α : Type} [DecidableEq α] [Inhabited α]
 
-theorem veq_universal_satisfies_at_put :
-    ∀ (m : Mem) (a v : Atom), veqUniversal (get (put m a v) a) v :=
-  fun _ _ _ => trivial
+def veqUniversal (_ _ : α) : Prop := True
+
+theorem veq_universal_satisfies_trans (x y z : α) :
+    veqUniversal x y → veqUniversal y z → veqUniversal x z :=
+  fun _ _ => trivial
+
+theorem veq_universal_satisfies_at_put (m : Cap α) (a v : α) :
+    veqUniversal (get (put m a v) a) v := trivial
+
+end Degenerate
 
 /- ── Summary the gate reads ─────────────────────────────────────────────────
    Printed at elaboration so `verify-invariants` can compare it with the axiom
@@ -303,9 +510,10 @@ def brokenCandidates : List String :=
    "at_drop_at_two_cells", "keep_store_visible", "narrow4_is_identity"]
 
 #eval do
-  IO.println s!"lean-witness: {checkedAxioms.length} axiom(s) hold in the list model, \
-{brokenCandidates.length} rejected candidate(s) proved false"
-  IO.println s!"lean-witness-axioms: {String.intercalate "," checkedAxioms}"
-  IO.println s!"lean-witness-broken: {String.intercalate "," brokenCandidates}"
+  IO.println ("lean-witness: " ++ toString checkedAxioms.length ++
+    " axiom(s) proved for an arbitrary atom domain, " ++
+    toString brokenCandidates.length ++ " rejected candidate(s) proved false")
+  IO.println ("lean-witness-axioms: " ++ String.intercalate "," checkedAxioms)
+  IO.println ("lean-witness-broken: " ++ String.intercalate "," brokenCandidates)
 
 end ToyWitness
