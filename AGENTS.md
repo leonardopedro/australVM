@@ -263,28 +263,33 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   owner approves it. The file is named for the obligation it was created for
   and now covers load as well — the refutation leaving only a projection is the
   same argument for both.- `mm0/store_projection_toy.mm0` + `.mm1` — the projection *proved* on a toy
-  model: a **two-cell** memory whose capacity is characterised by one axiom per
+  model: a **three-cell** memory whose capacity is characterised by one axiom per
   case — a refresh (`at_put_held_other`, with `put_held`/`put_held_other`: a
   write to an address the memory already holds replaces that cell and leaves the
   other one; `at_put_held_keeps` + `at_put_held_no_new`: the *set* of held
   addresses is unchanged, which is how the toy proves "a refresh never evicts"
   without arithmetic — membership in both directions instead of a count), a free cell (`at_put_other`, guarded by `notfull m`: a write
-  leaves other addresses alone), full and evicting (`at_drop`: three
-  pairwise-distinct stores and the earliest address reads `unset`), full and
-  keeping (`at_keep_prev`: the previous pair's newest survives). Two guards are
+  leaves other addresses alone), full and evicting (`at_drop`: four
+  pairwise-distinct stores and the earliest address reads `unset` — four because
+  a three-cell memory evicts on the fourth, so the depth is in the axiom), full and
+  keeping (`at_keep_prev`: the oldest of the three survivors still reads its own
+  value). Two guards are
   load-bearing: an *unconditional* preservation axiom would describe unbounded
   memory and contradict `at_drop`, and `put_held_other` needs `notfull` because a
   write to a fresh address in a full memory evicts the oldest cell. `notfull` is
-  **not** closed under `put` — `put_init_notfull` says only that the state after
-  one store on `init` has a free cell; an earlier closure axiom (`put_notfull`)
-  was removed when the refresh case showed it cannot hold with `at_drop`.
-  Nineteen cited axioms all told, `3 sorts, 18 term/def, 46 ax/thm`, no `sorry`.
-  **Toy theorem count: 27**
+  **not** closed under `put` — `put_init_notfull` and `put2_init_notfull` say only
+  that the states after one and after two stores on `init` have a free cell, and
+  the closure stops there because the third store fills the memory; an earlier
+  closure axiom (`put_notfull`) was removed when the refresh case showed it cannot
+  hold with `at_drop`, and `put2_init_notfull` is the counting step that keeps the
+  third store's proof from needing arithmetic.
+  Twenty cited axioms all told, `3 sorts, 18 term/def, 48 ax/thm`, no `sorry`.
+  **Toy theorem count: 28**
   (keep the number on this line) — pinned: `verify-invariants` compares the
   number of `theorem`s in the `.mm0`, the number of `pub theorem`s proved in the
   `.mm1`, and this line and the matching one in the plan, so a new theorem with
-  stale prose is a red gate. **Toy axiom count: 19** — pinned the same way, from
-  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 18 term/def, 46 ax/thm**
+  stale prose is a red gate. **Toy axiom count: 20** — pinned the same way, from
+  the `axiom` declarations on both sides. **Toy shape: 3 sorts, 18 term/def, 48 ax/thm**
   (keep it on one line) — the figures `mm0-rs` prints, which is the authority
   here: `provable sort Prop` counts as a sort and a `grep '^sort '` would say 2.
   This is required at every site that quotes the shape, not just here: both
@@ -317,26 +322,36 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `toy_width4_store_load_roundtrip` — there the narrowing is in the *proof*,
   since the width-4 loads narrow on the way out and `veq` alone cannot push
   through a function without `narrow4_cong`;
-  `toy_jit_third_store_drops_oldest` and
-  `toy_jit_fourth_store_drops_oldest` fire the *same* `at_drop` axiom on a fresh
-  and then a two-store memory — it is stated for an arbitrary `m` so it can fire
-  again; and `toy_jit_recent_cells_readable` says what the fourth store kept.
+  `toy_jit_third_store_kept` reads the first of three stores back (the counting
+  step `put2_init_notfull` exists for); `toy_jit_fourth_store_drops_oldest` and
+  `toy_jit_fifth_store_drops_next` fire the *same* `at_drop` axiom on a fresh and
+  then a one-store memory — it is stated for an arbitrary `m` so it fires at any
+  depth, which is what makes the fifth store a theorem rather than a new
+  assumption; and `toy_jit_recent_cells_readable` says what the fourth store kept
+  (`at_keep_prev`, reading the oldest of the three survivors).
   Dropping `vne a b` or `notfull m` makes the different-address theorems
   unprovable, so both side conditions are load-bearing. The axioms are
   consistent by a witness that `scripts/toy-witness` **executes** (memory = a
-  list of at most two `(address, value)` pairs, `put` = cons on the list with
-  that address's pair removed and the result truncated to two, `get` = first
+  list of at most three `(address, value)` pairs, `put` = cons on the list with
+  that address's pair removed and the result truncated to three, `get` = first
   match else `unset`, `held` = the address is one of the pairs, `notfull` =
-  fewer than two): every axiom is checked over all two-cell memories on a small
-  atom domain,  and the five rejected candidates — `put_notfull`, the unguarded
-  `at_put_other`/`put_held_other`, `keep_store_visible`, and
+  fewer than three): every axiom is checked over all memories of at most three
+  cells on a four-atom domain (four, because `at_drop` needs four distinct
+  addresses and a smaller domain would make it vacuous), and the six rejected
+  candidates — `put_notfull`, the unguarded
+  `at_put_other`/`put_held_other`, `at_drop_at_two_cells`,
+  `keep_store_visible`, and
   `narrow4_is_identity` — must each *fail*
   there with a counterexample, so the guards (and the width-4 narrowing) are
   checked rather than assumed. It is
   exhaustive over that finite domain, not a proof over arbitrary `Val`, and it
   is `[gap]`, never a pass, where `rustc` is absent. The same axiom set is
   stated a second time, as Lean 4 theorems, in `mm0/toy_witness/ToyWitness.lean`
-  (`decide`/`native_decide` over 273 two-cell memories): the four rejected
+  (`decide`/`native_decide` over 1745 three-cell memories with distinct
+  addresses, and the two capacity axioms from the 209 memories of at most two
+  cells — an eight-atom sweep over the full set is ~1.6·10⁹ instances and the
+  file's comment records the cap as a reduction, not a proof; the Rust witness
+  makes no such cap): the six rejected
   candidates are theorems about their negations, and a degenerate `veq := ⊤`
   model is noted as a consistency trap (content comes from the instance proofs).
   `verify-invariants` runs `lean` on it in the `lean` shell and requires its
@@ -349,20 +364,24 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   renamed and requires it to report the pin stale, so a comparison that could not
   fail is a red gate rather than a green one; and it checks that the witness holds exactly
   the axioms the artifact declares, so a new axiom cannot slip past the model.
-  It also mutation-tests the file twelve ways,
+  It also mutation-tests the file thirteen ways,
   one per substantive axiom: rewriting `at_put`'s conclusion to "read
   unchanged", `at_put_other`'s preserved value to `unset`, `veq_trans`'s
   conclusion to reflexive, `at_drop`'s `unset` to the written value,
   `at_keep_prev`'s `vy` to `vx`, `at_put_held_other`'s preserved value to
   `unset`, `put_held`'s held *address* to the held *value*,
-  `put_init_notfull`'s one-store state to `init`, `at_put_held_keeps`'s kept
-  address to the written one, and `at_put_held_no_new`'s `held m y` to
-  `held init y` must make `mm0-rs` refuse at
+  `put_init_notfull`'s one-store state to `init`,
+  `put2_init_notfull`'s two-store state to `init`, `at_put_held_keeps`'s kept
+  address to the written one, `at_put_held_no_new`'s `held m y` to
+  `held init y`, `narrow4_cong`'s conclusion and `narrow4_idem`'s inner
+  `narrow4` must make `mm0-rs` refuse at
   `toy_jit_store_visible`, `toy_jit_store_load_other`,
-  `toy_jit_two_cells_preserved`, `toy_jit_third_store_drops_oldest`,
+  `toy_jit_two_cells_preserved`, `toy_jit_fourth_store_drops_oldest`,
   `toy_jit_recent_cells_readable`, `toy_jit_refresh_keeps_other_cell` (twice),
-  `toy_jit_two_cells_preserved`, `toy_jit_refresh_keeps_held_cells` and
-  `toy_jit_refresh_no_new_held` respectively — a proof that survived its own
+  `toy_jit_two_cells_preserved`, `toy_jit_third_store_kept`,
+  `toy_jit_refresh_keeps_held_cells`, `toy_jit_refresh_no_new_held`,
+  `toy_width4_load_after_wide_store` and `toy_width4_store_load_roundtrip`
+  respectively — a proof that survived its own
   axiom being falsified would be deriving the claim from something else, and is
   reported as a failure. A mutation that fails to apply is a failure too. The
   control was itself tested by making the mutations no-ops (patterns that match

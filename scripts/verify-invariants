@@ -907,8 +907,9 @@ EOF
 $ veq (get (put m a v) a) v $|$ veq (get (put m a v) a) (get m a) $|toy_jit_store_visible
 $ veq (get (put m a v) b) (get m b) $|$ veq (get (put m a v) b) unset $|toy_jit_store_load_other
 $ veq x z $|$ veq x x $|toy_jit_two_cells_preserved
-$ veq (get (put (put (put m x vx) y vy) z vz) x) unset $|$ veq (get (put (put (put m x vx) y vy) z vz) x) vx $|toy_jit_third_store_drops_oldest
-$ veq (get (put (put (put m x vx) y vy) z vz) y) vy $|$ veq (get (put (put (put m x vx) y vy) z vz) y) vx $|toy_jit_recent_cells_readable
+$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) x) unset $|$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) x) vx $|toy_jit_fourth_store_drops_oldest
+$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) y) vy $|$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) y) vx $|toy_jit_recent_cells_readable
+$ notfull (put (put init a va) b vb) $|$ notfull init $|toy_jit_third_store_kept
 $ veq (get (put m x w) y) (get m y) $|$ veq (get (put m x w) y) unset $|toy_jit_refresh_keeps_other_cell
 $ held (put m a v) a $|$ held (put m a v) v $|toy_jit_refresh_keeps_other_cell
 $ notfull (put init a v) $|$ notfull init $|toy_jit_two_cells_preserved
@@ -917,11 +918,11 @@ $ held m y $;|$ held init y $;|toy_jit_refresh_no_new_held
 $ veq (narrow4 x) (narrow4 y) $|$ veq (narrow4 x) x $|toy_width4_load_after_wide_store
 $ veq (narrow4 (narrow4 x)) (narrow4 x) $|$ veq (narrow4 (narrow4 x)) x $|toy_width4_store_load_roundtrip
 MUTATIONS
-        if $_mut_ok && [ "$_mut_n" -eq 12 ]; then
+        if $_mut_ok && [ "$_mut_n" -eq 13 ]; then
             echo "  [detail] mutations refused:$(echo "$_mut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" true
         else
-            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 12)" >&2
+            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 13)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" false
         fi
 

@@ -2,53 +2,59 @@
 // claims, and check every one of its axioms against it.
 //
 // WHY THIS EXISTS. The toy's header says its axioms are mutually consistent
-// because a two-cell list memory with `put` = "cons the pair, drop any pair at
-// that address, truncate to two" satisfies all of them. That argument is prose,
-// and prose is exactly how a false witness survives review: an earlier revision
-// carried `put_notfull` ("a write to a memory with a free cell leaves it with a
-// free cell"), which reads fine and is false here, because the write that takes
-// the second cell is the one that removes the free cell. So the witness is
+// because a three-cell list memory with `put` = "cons the pair, drop any pair at
+// that address, truncate to three" satisfies all of them. That argument is
+// prose, and prose is exactly how a false witness survives review: an earlier
+// revision carried `put_notfull` ("a write to a memory with a free cell leaves it
+// with a free cell"), which reads fine and is false here, because the write that
+// takes the last cell is the one that removes the free cell. So the witness is
 // written as code and every axiom is checked, universally quantified, over all
-// memories of at most two cells and all atoms from a small domain.
+// memories of at most three cells and all atoms from a small domain.
 //
 // WHAT IT PROVES, PRECISELY. It is exhaustive over this finite domain, not a
 // proof over an arbitrary `Val`: an axiom instance that needs more atoms than
 // the domain has is the same equality pattern with atoms renamed, which is an
 // argument, not something this file establishes. What it does establish is that
-// the witness in the header is executed rather than asserted, and that the three
-// axioms that were considered and rejected are rejected *for a reason* — each
-// comes with the counterexample that kills it.
+// the witness in the header is executed rather than asserted, and that the
+// candidates that were considered and rejected are rejected *for a reason* —
+// each comes with the counterexample that kills it. The rejected list includes
+// the eviction axiom this file used to carry at three stores: with a third cell
+// it is false, and a witness that let it pass would be certifying a memory it
+// had not modelled.
 //
 // Build and run through `scripts/toy-witness`, which compiles this with rustc.
 
 const UNSET: u8 = 0;
-const ATOMS_DEFAULT: u8 = 5;
+// Four atoms by default: `at_drop` needs four *distinct addresses*, so a smaller
+// domain makes the eviction axiom vacuous rather than cheap. `--domain 5` runs
+// the same checks over ~30x the instances and reports the identical verdict.
+const ATOMS_DEFAULT: u8 = 4;
 
-/// A two-cell memory: `n` pairs, newest first. `Copy` so the checks below can
+/// A three-cell memory: `n` pairs, newest first. `Copy` so the checks below can
 /// pass memories by value without allocating in the inner loops.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Mem {
     n: u8,
-    cells: [(u8, u8); 2],
+    cells: [(u8, u8); 3],
 }
 
 const INIT: Mem = Mem {
     n: 0,
-    cells: [(0, 0), (0, 0)],
+    cells: [(0, 0), (0, 0), (0, 0)],
 };
 
 impl Mem {
     /// `put m a v`: the new pair goes first, any pair already at `a` is dropped,
-    /// and the result keeps at most two cells. Dropping the old pair *before*
+    /// and the result keeps at most three cells. Dropping the old pair *before*
     /// truncating is what makes a write to a held address a refresh instead of
     /// a duplicate.
     fn put(self, a: u8, v: u8) -> Mem {
-        let mut out = [(a, v), (0, 0)];
+        let mut out = [(a, v), (0, 0), (0, 0)];
         let mut n = 1usize;
         let mut i = 0usize;
         while i < self.n as usize {
             let (b, w) = self.cells[i];
-            if b != a && n < 2 {
+            if b != a && n < 3 {
                 out[n] = (b, w);
                 n += 1;
             }
@@ -100,9 +106,9 @@ fn narrow4(x: u8) -> u8 {
         self
     }
 
-    /// `notfull m`: fewer than two cells.
+    /// `notfull m`: fewer than three cells.
     fn notfull(self) -> bool {
-        self.n < 2
+        self.n < 3
     }
 
     fn show(self) -> String {
@@ -134,21 +140,30 @@ fn all_memories(atoms: u8) -> Vec<Mem> {
         for v in 0..atoms {
             out.push(Mem {
                 n: 1,
-                cells: [(a, v), (0, 0)],
+                cells: [(a, v), (0, 0), (0, 0)],
             });
         }
     }
-    // Two-cell memories include the shapes `put` never produces (both pairs at
-    // one address). They are still values of `Mem` that the axioms quantify
-    // over, so a witness that failed on one would be a bad witness.
+    // Multi-cell memories include the shapes `put` never produces (two pairs at
+    // one address, or three pairs with a repeat). They are still values of `Mem`
+    // that the axioms quantify over, so a witness that failed on one would be a
+    // bad witness — and with three cells there are many more of them.
     for a1 in 0..atoms {
         for v1 in 0..atoms {
             for a2 in 0..atoms {
                 for v2 in 0..atoms {
                     out.push(Mem {
                         n: 2,
-                        cells: [(a1, v1), (a2, v2)],
+                        cells: [(a1, v1), (a2, v2), (0, 0)],
                     });
+                    for a3 in 0..atoms {
+                        for v3 in 0..atoms {
+                            out.push(Mem {
+                                n: 3,
+                                cells: [(a1, v1), (a2, v2), (a3, v3)],
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -191,7 +206,7 @@ fn main() {
     let mems = all_memories(atoms);
     let atoms_v: Vec<u8> = (0..atoms).collect();
     println!(
-        "toy-witness: {} atom(s) (0 = unset), {} memories (every shape of at most two cells)",
+        "toy-witness: {} atom(s) (0 = unset), {} memories (every shape of at most three cells)",
         atoms,
         mems.len()
     );
@@ -314,6 +329,33 @@ fn main() {
             }
         }
         rows.push(row("put_init_notfull", true, n, ce));
+    }
+
+    // put2_init_notfull (a b va vb): notfull (put (put init a va) b vb).
+    //
+    // The counting step the third store needs, and the statement that would be
+    // false at capacity two: it is what makes `toy_jit_third_store_kept` provable
+    // instead of the old `third_store_drops_oldest`.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for &a in &atoms_v {
+            for &b in &atoms_v {
+                for &va in &atoms_v {
+                    for &vb in &atoms_v {
+                        n += 1;
+                        let m = INIT.put(a, va).put(b, vb);
+                        if !m.notfull() && ce.is_none() {
+                            ce = Some(format!(
+                                "a={a} b={b} -> two stores left {} with no free cell",
+                                m.show()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        rows.push(row("put2_init_notfull", true, n, ce));
     }
 
     // at_put (m) (a v): get (put m a v) a = v.
@@ -512,8 +554,13 @@ fn main() {
         rows.push(row("at_put_other", true, n, ce));
     }
 
-    // at_drop (m) (x y z) (vx vy vz) (vne x y) (vne x z) (vne y z):
-    // get (put (put (put m x vx) y vy) z vz) x = unset.
+    // at_drop (m) (x y z w) (vx vy vz vw) (six vne premises):
+    // get (put (put (put (put m x vx) y vy) z vz) w vw) x = unset.
+    //
+    // Four distinct stores, because the capacity is three: with a third cell the
+    // first eviction lands one store later than it used to, and the rejected
+    // candidate at the bottom of this file is the three-store version, which must
+    // now fail.
     {
         let mut ce = None;
         let mut n = 0u64;
@@ -527,17 +574,28 @@ fn main() {
                         if z == x || z == y {
                             continue;
                         }
-                        for &vx in &atoms_v {
-                            for &vy in &atoms_v {
-                                for &vz in &atoms_v {
-                                    n += 1;
-                                    let p = m.put(x, vx).put(y, vy).put(z, vz);
-                                    if p.get(x) != UNSET && ce.is_none() {
-                                        ce = Some(format!(
-                                            "m={} x={x} y={y} z={z} -> get x={} (not unset)",
-                                            m.show(),
-                                            p.get(x)
-                                        ));
+                        for &w in &atoms_v {
+                            if w == x || w == y || w == z {
+                                continue;
+                            }
+                            for &vx in &atoms_v {
+                                for &vy in &atoms_v {
+                                    for &vz in &atoms_v {
+                                        for &vw in &atoms_v {
+                                            n += 1;
+                                            let p = m
+                                                .put(x, vx)
+                                                .put(y, vy)
+                                                .put(z, vz)
+                                                .put(w, vw);
+                                            if p.get(x) != UNSET && ce.is_none() {
+                                                ce = Some(format!(
+                                                    "m={} x={x} y={y} z={z} w={w} -> get x={} (not unset)",
+                                                    m.show(),
+                                                    p.get(x)
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -549,8 +607,8 @@ fn main() {
         rows.push(row("at_drop", true, n, ce));
     }
 
-    // at_keep_prev (m) (x y z) (vx vy vz) (vne x y) (vne x z) (vne y z):
-    // get (put (put (put m x vx) y vy) z vz) y = vy.
+    // at_keep_prev (m) (x y z w) (vx vy vz vw) (six vne premises):
+    // get (put (put (put (put m x vx) y vy) z vz) w vw) y = vy.
     {
         let mut ce = None;
         let mut n = 0u64;
@@ -564,17 +622,28 @@ fn main() {
                         if z == x || z == y {
                             continue;
                         }
-                        for &vx in &atoms_v {
-                            for &vy in &atoms_v {
-                                for &vz in &atoms_v {
-                                    n += 1;
-                                    let p = m.put(x, vx).put(y, vy).put(z, vz);
-                                    if p.get(y) != vy && ce.is_none() {
-                                        ce = Some(format!(
-                                            "m={} x={x} y={y} z={z} vy={vy} -> get y={}",
-                                            m.show(),
-                                            p.get(y)
-                                        ));
+                        for &w in &atoms_v {
+                            if w == x || w == y || w == z {
+                                continue;
+                            }
+                            for &vx in &atoms_v {
+                                for &vy in &atoms_v {
+                                    for &vz in &atoms_v {
+                                        for &vw in &atoms_v {
+                                            n += 1;
+                                            let p = m
+                                                .put(x, vx)
+                                                .put(y, vy)
+                                                .put(z, vz)
+                                                .put(w, vw);
+                                            if p.get(y) != vy && ce.is_none() {
+                                                ce = Some(format!(
+                                                    "m={} x={x} y={y} z={z} w={w} vy={vy} -> get y={}",
+                                                    m.show(),
+                                                    p.get(y)
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -734,6 +803,46 @@ fn main() {
             }
         }
         rows.push(row("put_held_other_unguarded", false, n, ce));
+    }
+
+    // The eviction axiom this file carried while the memory had two cells: after
+    // *three* distinct stores the earliest address reads `unset`. With a third
+    // cell it is false, and it has to be — that is the whole point of the third
+    // cell, and a witness that still accepted it would not be modelling the
+    // memory the `.mm0` now describes.
+    {
+        let mut ce = None;
+        let mut n = 0u64;
+        for m in &mems {
+            for &x in &atoms_v {
+                for &y in &atoms_v {
+                    if y == x {
+                        continue;
+                    }
+                    for &z in &atoms_v {
+                        if z == x || z == y {
+                            continue;
+                        }
+                        for &vx in &atoms_v {
+                            for &vy in &atoms_v {
+                                for &vz in &atoms_v {
+                                    n += 1;
+                                    let p = m.put(x, vx).put(y, vy).put(z, vz);
+                                    if p.get(x) != UNSET && ce.is_none() {
+                                        ce = Some(format!(
+                                            "m={} x={x} y={y} z={z} -> get x={} (three stores did not evict)",
+                                            m.show(),
+                                            p.get(x)
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        rows.push(row("at_drop_at_two_cells", false, n, ce));
     }
 
     // "The second width-8 store is visible at the address it wrote" — the

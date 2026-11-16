@@ -310,28 +310,29 @@ verify-invariants: 124 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy model proves the stated projection, not a neighbour
   [pass] W9.3: the toy's citation digest refuses a changed claim
   [pass] W9.3: the toy projection's theorems check without sorry
-  [detail] 3 sorts, 18 term/def, 46 ax/thm
-  [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (27 theorem(s), 19 axiom(s))
-  [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 46 ax/thm)
+  [detail] 3 sorts, 18 term/def, 48 ax/thm
+  [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (28 theorem(s), 20 axiom(s))
+  [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
   [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
-  [detail] toy-witness: 19/19 axioms hold in the witness; 5/5 rejected candidates fail as they must
-  [pass] W9.3: a Lean interpreter proves the same 17 axioms
+  [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
+  [pass] W9.3: a Lean interpreter proves the same 20 axioms
   [pass] W9.3: both witnesses reject the same candidates
-  [pass] W9.3: the witness exercises all 17 axioms the toy declares
+  [pass] W9.3: the witness exercises all 20 axioms the toy declares
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
   [detail] mutations refused: toy_jit_store_visible(refused),
            toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused),
-           toy_jit_third_store_drops_oldest(refused), toy_jit_recent_cells_readable(refused),
-           toy_jit_refresh_keeps_other_cell(refused), toy_jit_refresh_keeps_other_cell(refused),
-           toy_jit_two_cells_preserved(refused), toy_jit_refresh_keeps_held_cells(refused),
-           toy_jit_refresh_no_new_held(refused), toy_width4_load_after_wide_store(refused),
+           toy_jit_fourth_store_drops_oldest(refused), toy_jit_recent_cells_readable(refused),
+           toy_jit_third_store_kept(refused), toy_jit_refresh_keeps_other_cell(refused),
+           toy_jit_refresh_keeps_other_cell(refused), toy_jit_two_cells_preserved(refused),
+           toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused),
+           toy_width4_load_after_wide_store(refused),
            toy_width4_store_load_roundtrip(refused)
   [pass] Phase D: store_projection.mm0 declares its own vocabulary
   [gap]  W3: isa has no approved statements (owner commit)
   [gap]  W3: slot_layout has no approved statements (owner commit)
   [gap]  W3: store_projection has no approved statements (owner commit)
   [gap]  W3: store_projection_toy has no approved statements (owner commit)
-w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(68 stmt)
+w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
@@ -717,7 +718,7 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit |
   | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[gap]`, awaiting owner commit |
   | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[gap]`, awaiting owner commit; the claim itself stays `[gap]` (§W9.3) |
-  | `mm0/store_projection_toy.mm0` | the toy model's 27 theorem *statements* and its 19 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 68 | none — compile+check is the gate | `[gap]`, awaiting owner commit |
+  | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[gap]`, awaiting owner commit |
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
@@ -726,7 +727,7 @@ the artifact, so `mm0-c` checks them too.
   ```
   $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants \
       | grep -E '^w3-(pending|approved):|the plan.s §W3'
-  w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(68 stmt)
+  w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
   w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
@@ -1524,7 +1525,7 @@ projected away*. The file has no `axiom` and no theorem, cites `clif.mm0` /
 statement about well-formedness, not truth.
 
 **And the shape of it is proved, on a toy model — `mm0/store_projection_toy.mm0`
-+ `.mm1`.** The toy memory is **two cells**, and its capacity is characterised in
++ `.mm1`.** The toy memory is **three cells**, and its capacity is characterised in
 the four cases such a memory has. A write either hits an address the memory
 already holds, or it does not:
 
@@ -1532,8 +1533,8 @@ already holds, or it does not:
 |---|---|---|
 | refresh (address held) | `at_put_held_other`, `at_put_held_keeps`, `at_put_held_no_new` (+ `put_held`, `put_held_other`) | the written cell takes the new value, the other cell is untouched, and the **set of held addresses is unchanged** |
 | free cell | `at_put_other` (guarded by `notfull m`) | a write leaves every other address's content alone |
-| full, evicting | `at_drop` | after three pairwise-distinct stores the **earliest** address reads `unset` |
-| full, keeping | `at_keep_prev` | the newest store of the previous pair survives the next write |
+| full, evicting | `at_drop` | after four pairwise-distinct stores the **earliest** address reads `unset` (four, because a three-cell memory evicts on the fourth store — the depth is the parameter, so the axiom must not hide it) |
+| full, keeping | `at_keep_prev` | the oldest of the three survivors still reads the value it was given |
 
 Two guards are load-bearing rather than decorative. `at_put_other` needs
 `notfull`: an unconditional "writes never disturb other addresses" describes
@@ -1664,42 +1665,52 @@ it wrote") and **require it to fail**, so a checker that silently accepted the
 no-op model would be certifying the definition it was supposed to be testing.
 
 A witness for the axiom set is short enough to state in the header: `Mem` a list
-of at most two `(address, value)` pairs, `put m a v` the pair `(a,v)` consed
-onto `m` with any pair at `a` removed and the result truncated to two, `get` the
+of at most three `(address, value)` pairs, `put m a v` the pair `(a,v)` consed
+onto `m` with any pair at `a` removed and the result truncated to three, `get` the
 first matching pair else `unset`, `held m a` = some pair has address `a`,
-`notfull m` = fewer than two pairs, `veq` equality on `Val`. Under it a refresh
-keeps the other pair, a write elsewhere into a one-pair memory keeps it, three
-distinct writes leave exactly the last two, and after them the middle one is the
-older survivor.
+`notfull m` = fewer than three pairs, `veq` equality on `Val`. Under it a refresh
+keeps the other pairs, a write elsewhere into a non-full memory keeps them, three
+distinct writes into a fresh memory all stay readable, and the fourth evicts the
+earliest while the three survivors keep their values.
 
 **The witness is executed, not asserted.** Prose is how a false witness survives
 review, so `scripts/toy-witness` (`scripts/toy-witness.rs`, one file, no
 dependencies, compiled with `rustc`) is the same witness as code, and it checks
-every axiom — universally quantified — over all memories of at most two cells
-and all atoms of a small domain:
+every axiom — universally quantified — over all memories of at most three cells
+on four atoms (four because `at_drop` needs four distinct addresses; a smaller
+domain would make the eviction axiom vacuous rather than cheap):
 
 ```
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/toy-witness
-[hold]   at_drop                       4882500 instance(s)
+toy-witness: 4 atom(s) (0 = unset), 4369 memories (every shape of at most three cells)
+[hold]   at_drop                      26843136 instance(s)
 …
-[reject] put_notfull                       650 instance(s) — m=[(0,0)] a=1 v=0 -> put=[(1,0),(0,0)] has no free cell
-[reject] at_put_other_unguarded          65100 instance(s) — m=[(0,0),(1,1)] a=2 b=1 v=0 -> get 1 was 1 now 0
-[reject] put_held_other_unguarded        23000 instance(s) — m=[(0,0),(1,0)] a=2 b=1 v=0 -> put=[(2,0),(0,0)] no longer holds 1
-toy-witness: 19/19 axioms hold in the witness; 5/5 rejected candidates fail as they must
+[reject] put_notfull                      4368 instance(s) — m=[(0,0),(0,0)] a=1 v=0 -> put=[(1,0),(0,0),(0,0)] has no free cell
+[reject] at_put_other_unguarded         209712 instance(s) — m=[(0,0),(0,0),(1,1)] a=2 b=1 v=0 -> get 1 was 1 now 0
+[reject] put_held_other_unguarded       119232 instance(s) — m=[(0,0),(0,0),(1,0)] a=2 b=1 v=0 -> put=[(2,0),(0,0),(0,0)] no longer holds 1
+[reject] at_drop_at_two_cells          6710784 instance(s) — m=[] x=0 y=1 z=2 -> get x=1 (three stores did not evict)
+[reject] keep_store_visible              69904 instance(s) — m=[] a=0 v=1 -> keep=[] reads 0 as 0, not 1
+[reject] narrow4_is_identity                 4 instance(s) — x=2 -> narrow4 x=0
+toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
 ```
 
-The three `[reject]` rows are the check's real content: the axioms the toy
+The six `[reject]` rows are the check's real content: the axioms the toy
 *considered and dropped* must fail, and each fails with the memory that kills it.
 `put_notfull` is the closure axiom removed in the previous revision — the machine
 form of the correction above — and the two unguarded preservation axioms fail for
-the reason their guards exist. A candidate that *held* would be reported
+the reason their guards exist. `at_drop_at_two_cells` is the eviction axiom the
+two-cell revision of the toy carried: with a third cell three stores no longer
+evict, which is exactly the parameter the extension added, so a witness that let
+it pass would be certifying a memory it had not modelled. A candidate that
+*held* would be reported
 `[FAIL] … holds in the witness, so the .mm0 rejects it for no reason`; an axiom
 that failed would print its counterexample. Both directions matter, so the run
 is a check on the guard choice, not just on the axioms.
 
 Thresholds, stated rather than implied: the check is exhaustive over a finite
-domain (5 atoms, `0` = `unset`; `--domain 4|6|7` give the identical verdict, so
-the result is not a size artifact) and it is *not* a proof over an arbitrary
+domain (4 atoms, `0` = `unset`; `--domain 5` gives the identical verdict over
+~30× the instances, so the result is not a size artifact — `--domain 6` is
+`[gap]`: it did not finish inside 240 s here) and it is *not* a proof over an arbitrary
 `Val` — an instance needing more atoms than the domain has is the same equality
 pattern renamed, which is an argument the header makes and this program does not
 establish. What it establishes is that the witness runs and that the rejected
@@ -1713,9 +1724,13 @@ control the theorem count gets.
 *model*: it enumerates cells and reports counterexamples. A program I wrote can
 be wrong in the same direction as the axioms it checks, so the toy's axiom set
 is also stated as a Lean 4 interpreter, `mm0/toy_witness/ToyWitness.lean`, with
-the same `put`/`get`/`held`/`notfull`/`narrow4` and the same 17 axioms — but
+the same `put`/`get`/`held`/`notfull`/`narrow4` and the same 20 axioms — but
 here each axiom is a theorem proved by `decide`/`native_decide` over the finite
-enumeration `allMems` (273 two-cell memories), and each rejected candidate is a
+enumeration `allMems` (1745 three-cell memories with distinct addresses, the
+shapes `put` builds; the two capacity axioms are checked from the 209 memories of
+at most two cells, an eight-atom sweep over the full set being ~1.6·10⁹ instances
+— a documented reduction in the file, not a proof, and one the Rust witness does
+not make), and each rejected candidate is a
 theorem about its *negation*. Two checkers disagreeing would be the finding; on
 this set they agree, and they fail differently (the Rust witness prints the
 killing memory; Lean refuses the proof). `verify-invariants` runs `lean` on the
@@ -1731,10 +1746,11 @@ are machine-checked rather than asserted:
 - `put_notfull` is *false* in the model (proved: `put_notfull_breaks`), and so
   are `at_put_other`/`put_held_other` without their `notfull` guards
   (`at_put_other_unguarded_breaks`, `put_held_other_unguarded_breaks`) and
-  `narrow4 = identity` (`narrow4_is_identity_breaks`, at `x = 2`). These four
-  are theorems, not comments — the gate would go red if one of them stopped
-  being refutable.
-- The model has **at most two cells**; `put` is `((a,v) :: filter (·.1 ≠ a)).take 2`.
+  `narrow4 = identity` (`narrow4_is_identity_breaks`, at `x = 2`), and so is the
+  two-cell eviction axiom the toy used to carry (`at_drop_at_two_cells_breaks`:
+  three distinct stores no longer evict). These five are theorems, not comments —
+  the gate would go red if one of them stopped being refutable.
+- The model has **at most three cells**; `put` is `((a,v) :: filter (·.1 ≠ a)).take 3`.
   There is no arithmetic in it, which is why "refresh never evicts" had to be
   proved as membership in both directions (`at_put_held_keeps` /
   `at_put_held_no_new`) rather than as a count.
@@ -1747,7 +1763,7 @@ are machine-checked rather than asserted:
   not that `i32` truncation is this function. The real `narrow4` is uninterpreted
   at both widths.
 - The check is exhaustive over a finite domain (4 atoms, `0 = unset`).
-  `--domain 4|6|7` in the Rust witness gives the identical verdict, so it is not
+  `--domain 5` in the Rust witness gives the identical verdict, so it is not
   a size artifact, but it is not a proof over an arbitrary `Val` — an instance
   needing more atoms is the same equality pattern renamed, which is an argument
   the header makes and neither program establishes.
@@ -1768,17 +1784,17 @@ comparison to `return 0` in a copy of the gate: the real check still passed and
 the control went red with the second message, which is the bug it exists to
 catch; with an edited claim and an un-updated pin, both checks fail.
 
-- **Toy theorem count: 27** — pinned, not just described: `verify-invariants`
+- **Toy theorem count: 28** — pinned, not just described: `verify-invariants`
   fails if `mm0/store_projection_toy.mm0` declares a different number of
   `theorem`s, if the `.mm1` proves a different number, or if this line or the one
   in `AGENTS.md` still carries the old count. Add a theorem to the toy and both
   lines move with it, or the gate is red.
-- **Toy axiom count: 19** — pinned the same way, against the `.mm0`'s `axiom`
+- **Toy axiom count: 20** — pinned the same way, against the `.mm0`'s `axiom`
   declarations and the `.mm1`'s, so adding an axiom (as the refresh case did)
   fails the gate until both documents say so. The count is what a reader uses to
   size the trust footprint of the toy, which makes a stale one a misstatement
   rather than a typo.
-- **Toy shape: 3 sorts, 18 term/def, 46 ax/thm** — the same figures, pinned to
+- **Toy shape: 3 sorts, 18 term/def, 48 ax/thm** — the same figures, pinned to
   the *compiler's* summary line rather than to a recount here: `mm0-rs` counts
   `provable sort Prop` as a sort and a `grep '^sort '` does not, so a hand count
   would pin 2 sorts and be wrong from the start. `verify-invariants` takes the
@@ -1791,8 +1807,8 @@ catch; with an edited claim and an un-updated pin, both checks fail.
   The figure is never written into `verify-invariants` itself: a comment quoting
   it is a ninth site, and the one that historically went stale.
 
-27 theorems check under `mm0-c` with no `sorry` — `3 sorts, 18 term/def, 46 ax/thm`,
-17 of them axioms: a fresh memory reads `unset`; the JIT-side store
+28 theorems check under `mm0-c` with no `sorry` — `3 sorts, 18 term/def, 48 ax/thm`,
+20 of them axioms: a fresh memory reads `unset`; the JIT-side store
 is visible at the written address; the width-8 model side is; the two agree
 there; the two load definitions return the same value; while a cell is free a
 store leaves other addresses alone; two distinct stores into a fresh memory
@@ -1809,11 +1825,15 @@ down, a width-4 store is visible at its address (`toy_jit_store32_visible`), the
 two width-4 sides agree (`toy_store32_projection`, `toy_load32_projection`), a
 width-4 load of a width-8 cell returns the narrowed value
 (`toy_width4_load_after_wide_store`), and a width-4 store read back at width 4
-returns it too (`toy_width4_store_load_roundtrip`); a **third** distinct store drops the earliest address; a **fourth** drops
-the next oldest, which is the same `at_drop` axiom fired with the two-store
-memory as its starting point — the axiom is stated for an arbitrary `m`
-precisely so it can fire again; and what the fourth store *kept* is still
-readable (`at_keep_prev`), with the projection still holding on that four-store
+returns it too (`toy_width4_store_load_roundtrip`);
+`toy_jit_third_store_kept` reads the first of three distinct stores back — the
+counting step `put2_init_notfull` exists for; a **fourth** distinct store drops
+the earliest address; a **fifth** drops the next oldest, which is the same
+`at_drop` axiom fired with a one-store memory as its starting point — the axiom
+is stated for an arbitrary `m` precisely so it fires at any depth, which is what
+makes the fifth store a theorem and not a new assumption; and what the fourth
+store *kept* is still readable (`toy_jit_recent_cells_readable`, from
+`at_keep_prev`), with the projection still holding on that four-store
 memory. The store-then-load-elsewhere theorems need both `vne a b` and
 `notfull m`: with either dropped `mm0-rs` refuses, so the toy's stand-ins for
 the real claim's side conditions are load-bearing, not decoration. The refresh
@@ -1824,29 +1844,32 @@ an append at all.
 
 **The toy has a mutation control, so its theorems cannot be vacuous.**
 `verify-invariants` rewrites an axiom's conclusion and requires the proof of the
-theorem that used it to be refused — twelve mutations, one per substantive axiom:
+theorem that used it to be refused — thirteen mutations, one per substantive axiom:
 `at_put`'s read-after-write becomes "read unchanged" (must break
 `toy_jit_store_visible`), `at_put_other`'s preserved value becomes `unset`
 (must break `toy_jit_store_load_other`), `veq_trans`'s conclusion becomes
 reflexive (must break `toy_jit_two_cells_preserved`), `at_drop`'s `unset`
-becomes the written value (must break `toy_jit_third_store_drops_oldest`),
+becomes the written value (must break `toy_jit_fourth_store_drops_oldest`),
 `at_keep_prev`'s `vy` becomes `vx` (must break
 `toy_jit_recent_cells_readable`), `at_put_held_other`'s preserved value becomes
 `unset`, `put_held`'s "the address written is held" becomes "the *value* written
 is held" (both must break `toy_jit_refresh_keeps_other_cell`),
 `put_init_notfull` becomes `notfull init` (must break
-`toy_jit_two_cells_preserved`), `at_put_held_keeps`'s kept address becomes the
+`toy_jit_two_cells_preserved`), `put2_init_notfull`'s two-store state becomes
+`init` (must break `toy_jit_third_store_kept`), `at_put_held_keeps`'s kept address becomes the
 written one (must break `toy_jit_refresh_keeps_held_cells`), and
 `at_put_held_no_new`'s `held m y` becomes `held init y` (must break
 `toy_jit_refresh_no_new_held`), `narrow4_cong`'s narrowed right-hand side becomes
 the value itself (must break `toy_width4_load_after_wide_store`), and
 `narrow4_idem`'s collapse becomes the value itself (must break
-`toy_width4_store_load_roundtrip`). Measured 2026-11-15: `mutations refused:
-toy_jit_store_visible(refused), toy_jit_store_load_other(refused),
-toy_jit_two_cells_preserved(refused), toy_jit_third_store_drops_oldest(refused),
-toy_jit_recent_cells_readable(refused),
-toy_jit_refresh_keeps_other_cell(refused), toy_jit_refresh_keeps_other_cell(refused),
-toy_jit_two_cells_preserved(refused)`.
+`toy_width4_store_load_roundtrip`). Measured 2026-11-16, all thirteen:
+`mutations refused: toy_jit_store_visible(refused),
+toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused),
+toy_jit_fourth_store_drops_oldest(refused), toy_jit_recent_cells_readable(refused),
+toy_jit_third_store_kept(refused), toy_jit_refresh_keeps_other_cell(refused),
+toy_jit_refresh_keeps_other_cell(refused), toy_jit_two_cells_preserved(refused),
+toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused),
+toy_width4_load_after_wide_store(refused), toy_width4_store_load_roundtrip(refused)`.
 `at_put_held_other`'s parameters are named `(m) (x y w)` rather than `(m) (a b v)`
 so its conclusion line is textually distinct from `at_put_other`'s: the mutation
 control rewrites the first textual occurrence, and two axioms whose conclusion
@@ -1952,7 +1975,7 @@ The remaining work is exactly what it was, now with a place to put it:
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a two-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 27 theorems from 19 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, the third store dropping the earliest address and the fourth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all two-cell memories on a small domain, and the three rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in twelve ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a three-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 28 theorems from 20 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, three distinct stores all readable and the fourth dropping the earliest, the fifth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all three-cell memories on a four-atom domain — four because the eviction axiom needs four distinct addresses — and the six rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in thirteen ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Re-measured 2026-11-14**: 905 reads over 12 modules, **23 distinct**, 23 declared, `UNREACHABLE_OPCODES` now empty (the `sub`/`mul`/`match` producers landed). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact
