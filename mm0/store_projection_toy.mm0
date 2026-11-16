@@ -9,7 +9,7 @@
 -- check that the projection then goes through, from named and cited memory
 -- axioms, with nothing assumed about the compiler.
 --
--- WHAT IS PROVED HERE (15 theorems, 0 sorry):
+-- WHAT IS PROVED HERE (28 theorems, 0 sorry):
 --
 --   toy_init_unset                a fresh memory reads `unset` at every address
 --   toy_jit_store_visible         a store makes the value visible at the
@@ -24,14 +24,34 @@
 --   toy_jit_refresh_keeps_other_cell   a store at an address the memory
 --   toy_isa_refresh_keeps_other_cell   already holds updates that cell in place
 --                                 and leaves the other cell readable
---   toy_jit_third_store_drops_oldest   a third distinct store drops the earliest
---                                 address (capacity 2, FIFO)
---   toy_jit_fourth_store_drops_oldest  a fourth does the same to the next oldest
---   toy_jit_recent_cells_readable the two most recent stores both survive
+--   toy_jit_refresh_visible       … and the refreshed address reads the *new*
+--   toy_isa_refresh_visible       value back (no `vne` guard needed: what a
+--                                 write returns at its own address does not
+--                                 depend on the rest of the memory, while
+--                                 whether the other cell survives does)
+--   toy_jit_refresh_keeps_held_cells   … and leaves the other cell *held*
+--   toy_jit_refresh_no_new_held    … and holds no address it did not hold
+--   toy_jit_repeated_refresh_never_evicts  two refreshes at one address still
+--                                 leave the other cell's value readable
+--   toy_jit_third_store_kept      a third distinct store evicts nothing: all
+--                                 three values survive (capacity 3, FIFO)
+--   toy_jit_fourth_store_drops_oldest  the fourth drops the earliest address
+--   toy_jit_fifth_store_drops_next the fifth drops the next-earliest, so
+--                                 eviction continues one per store
+--   toy_jit_recent_cells_readable the three survivors all survive, including the
+--                                 oldest of them
 --   toy_fourth_store_projection   the projection still holds on that deep memory
+--   toy_jit_store32_visible       a width-4 store is visible at its address,
+--                                 through the narrowing the width applies
+--   toy_store32_projection        the two width-4 definitions agree there
+--   toy_load32_projection         the two width-4 loads return the same value
+--   toy_width4_load_after_wide_store    a width-4 load of a cell written at
+--                                 width 8 returns the narrowed value
+--   toy_width4_store_load_roundtrip     a width-4 store read back at width 4
+--                                 returns the same narrowed value (idempotence)
 --
--- THE CAPACITY IS THE POINT. The memory is **two cells**, and the axioms below
--- characterise it in the four cases a two-cell memory has. A write either hits
+-- THE CAPACITY IS THE POINT. The memory is **three cells**, and the axioms
+-- below characterise it in the four cases such a memory has. A write either hits
 -- an address the memory already holds, or it does not:
 --
 --   refresh        the address is held, so the write replaces that cell's value
@@ -43,33 +63,49 @@
 --   free cell      the address is not held and a cell is free, so nothing is
 --                  evicted                             (`at_put_other`, guarded
 --                  by `notfull`)
---   full, evicting the address is not held and no cell is free: after three
---                  distinct stores the *earliest* address reads `unset`
---                                                           (`at_drop`)
---   full, keeping  the newest store of the previous pair survives the next
---                  write, so the two latest stores are both readable
---                                                           (`at_keep_prev`)
+--   full, evicting the address is not held and no cell is free: after **four**
+--                  pairwise-distinct stores the *earliest* address reads
+--                  `unset`                             (`at_drop`)
+--   full, keeping  the oldest of the three survivors is still readable, so the
+--                  three latest stores are all readable   (`at_keep_prev`)
 --
--- `notfull` is deliberately **not** closed under `put`: `init_notfull` and
--- `put_init_notfull` say a fresh memory and the state after one store have a
--- free cell, and nothing says a further write preserves that. A general closure
--- axiom would be *unsound here* — with two cells, a write to a fresh address
--- must evict (`at_drop`), so "still has a free cell" cannot survive it. An
--- earlier revision of this file carried exactly that closure axiom; it was
--- dropped when the refresh case showed the two cannot both hold.
+-- `notfull` is deliberately **not** closed under `put`: `init_notfull`,
+-- `put_init_notfull` and `put2_init_notfull` count how many stores a fresh
+-- memory can absorb before a write has to evict, and nothing says a further
+-- write preserves that. A general closure axiom would be *unsound here* — with
+-- three cells, the fourth distinct write must evict (`at_drop`), so "still has
+-- a free cell" cannot survive it. An earlier revision of this file carried
+-- exactly that closure axiom; it was dropped when the refresh case showed the
+-- two cannot both hold.
 --
 -- The axiom set is consistent, and the witness is short enough to state
--- informally: let `Mem` be a list of at most two `(address, value)` pairs, let
+-- informally: let `Mem` be a list of at most three `(address, value)` pairs, let
 -- `put m a v` be `(a,v)` consed onto `m` with every pair at address `a` removed
--- and the result truncated to two, let `get m a` be the value of the first pair
--- whose address is `a` (else `unset`), let `held m a` mean some pair has
--- address `a`, let `notfull m` mean fewer than two pairs, `init` the empty
--- list, `veq` equality on `Val` and `vne` its negation. Then all thirteen
--- axioms hold: a refresh keeps the other pair, a write elsewhere into a one-pair
--- memory keeps it, three distinct writes leave exactly the last two (the first
--- of the three is gone), and after them the middle one is the older of the two
--- survivors. That is not a formal consistency proof — MM0 has no model-checking
+-- and the result truncated to three, let `get m a` be the value of the first
+-- pair whose address is `a` (else `unset`), let `held m a` mean some pair has
+-- address `a`, let `notfull m` mean fewer than three pairs, `init` the empty
+-- list, `veq` equality on `Val` and `vne` its negation. Then all twenty axioms
+-- hold: a refresh keeps the other pairs, a write elsewhere into a memory with a
+-- free cell keeps them, four distinct writes leave exactly the last three (the
+-- first of the four is gone), and the oldest of the three survivors is still
+-- readable. Three stores evict nothing — that is what the extra cell buys, and
+-- `at_drop` is stated at four stores precisely so the depth is a parameter
+-- rather than a number baked into the axiom's name. That is not a formal consistency proof — MM0 has no model-checking
 -- entry point here — and this file does not claim one.
+--
+-- A SECOND WIDTH, AND WHAT IT CAN MEAN HERE. The real claim is about width 8,
+-- so proving the same shape at another width tests that nothing in the
+-- “two sides agree” argument is specific to one width. `Val` holds no bits, so a
+-- narrower width cannot be a truncation of a stored bit pattern; it is modelled
+-- as an uninterpreted `narrow4` applied to the value, with the two laws every
+-- truncation obeys and nothing else: it is idempotent (`narrow4_idem`) and it
+-- respects value equality (`narrow4_cong`). The width-4 load definitions narrow
+-- on the way out, so the narrowing appears *in a proof* rather than only in a
+-- name: a width-4 load of a cell written at width 8 returns `narrow4 v` by
+-- congruence on `at_put`, and storing at width 4 then reading at width 4 returns
+-- the same value because narrowing twice is narrowing once. What this does not
+-- say is that `narrow4` is Cranelift's `i32` truncation or the ISA's 4-byte
+-- write: those are still uninterpreted, exactly as `put`/`get` are.
 --
 -- WHAT IS *NOT* PROVED, and it is the whole distance to W9.3: that the emitted
 -- Cranelift instruction computes `jit_store_i64`, that Sail's `vmem_write` at
@@ -94,18 +130,25 @@
 provable sort Prop;
 delimiter $ ( ) $;
 
--- ── The toy memory: two cells ────────────────────────────────────────────
--- `Mem` is a two-cell memory, `Val` is both address and value; both are
+-- ── The toy memory: three cells ──────────────────────────────────────────
+-- `Mem` is a three-cell memory, `Val` is both address and value; both are
 -- uninterpreted, so nothing here is 64-bit, aligned or linear. The cells are
 -- not exposed as a constructor: `put`/`get`/`notfull`/`held` are the interface,
--- and what the two-cell capacity *means* is stated axiom by axiom rather than
--- derived from a data layout.
+-- and what the three-cell capacity *means* is stated axiom by axiom rather than
+-- derived from a data layout. The depth is the point of the third cell: with
+-- two cells the first eviction lands on the third distinct store, with three it
+-- lands on the fourth, and a proof that reads the axioms should get both.
 sort Val;
 sort Mem;
 -- The memory handed to the program: both cells free.
 term init: Mem;
 -- The content of an empty cell.
 term unset: Val;
+-- Narrowing a value to four bytes, uninterpreted: `Val` carries no bits, so this
+-- is the *interface* of a narrower width rather than its implementation. The two
+-- axioms below are the laws a truncation has, and they are what lets the width-4
+-- theorems say something a renaming could not.
+term narrow4 (x: Val): Val;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
 -- "At least one cell is still free", so the next write evicts nothing.
@@ -129,6 +172,14 @@ axiom veq_refl (x: Val): $ veq x x $;
 axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
 axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
 
+-- The two laws of a narrowing: it is idempotent, and it takes equal values to
+-- equal values. The second is what lets a proof about `get` reach a proof about
+-- a narrowed `get` — without it the toy's equality is too weak to push anything
+-- through `narrow4`, and the width-4 theorems below would be unprovable for a
+-- reason that has nothing to do with memory.
+axiom narrow4_cong (x y: Val) (h: $ veq x y $): $ veq (narrow4 x) (narrow4 y) $;
+axiom narrow4_idem (x: Val): $ veq (narrow4 (narrow4 x)) (narrow4 x) $;
+
 -- ── The toy memory's semantics: four cases, one axiom each ───────────────
 -- Free cell: a fresh memory is empty, and the state after one store still has a
 -- free cell — and stops there. See the header for why this is *not* closed
@@ -137,6 +188,11 @@ axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
 axiom get_init (a: Val): $ veq (get init a) unset $;
 axiom init_notfull: $ notfull init $;
 axiom put_init_notfull (a v: Val): $ notfull (put init a v) $;
+-- Two stores into a fresh memory still leave a free cell — the counting step the
+-- third store needs, and the reason the capacity is three rather than two: with
+-- two cells this statement is false and `at_drop` would fire one store earlier.
+axiom put2_init_notfull (a b va vb: Val):
+  $ notfull (put (put init a va) b vb) $;
 
 -- Every write is visible at the address it writes, whether it refreshed a cell
 -- or took a free one.
@@ -159,6 +215,29 @@ axiom at_put_held_other (m: Mem) (x y w: Val) (h: $ vne x y $)
   (k: $ held m x $):
   $ veq (get (put m x w) y) (get m y) $;
 
+-- The held *set* is what a refresh leaves alone, and saying it in membership
+-- terms is how this toy proves "a refresh never evicts" without arithmetic: the
+-- written address is held afterwards (`put_held`), every other held address is
+-- still held (`at_put_held_keeps`), and nothing becomes held
+-- (`at_put_held_no_new`). Those three together say the set of held addresses —
+-- hence its size — is unchanged by a refresh, which is the property a program
+-- storing repeatedly to one address relies on.
+--
+-- `at_put_held_keeps` carries the guard `held m x` — the write must be a
+-- refresh, because a write to a *fresh* address in a full memory evicts, and
+-- `scripts/toy-witness` exhibits that memory. `at_put_held_no_new` needs no
+-- guard beyond `vne x y`: a write introduces no held address other than the one
+-- it writes, so a held address that is not the written one was already held. An
+-- earlier draft guarded it with `held m x` too, and the witness checker rejected
+-- the *guard* — the statement is true without it, so dropping it made the axiom
+-- stronger and the rejection honest.
+axiom at_put_held_keeps (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held m y $) (k: $ held m x $):
+  $ held (put m x w) y $;
+axiom at_put_held_no_new (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held (put m x w) y $):
+  $ held m y $;
+
 -- Free cell, writing elsewhere: nothing is evicted, so every other address
 -- keeps its content. Guarded by `notfull`, for the same reason `put_notfull` is
 -- not an axiom: an unguarded version would claim unbounded memory and
@@ -166,19 +245,43 @@ axiom at_put_held_other (m: Mem) (x y w: Val) (h: $ vne x y $)
 axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $) (k: $ notfull m $):
   $ veq (get (put m a v) b) (get m b) $;
 
--- Full, evicting: three consecutive stores at pairwise distinct addresses, and
--- the earliest of the three is gone — the capacity is two, oldest out first.
-axiom at_drop (m: Mem) (x y z: Val) (vx vy vz: Val)
-  (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
-  $ veq (get (put (put (put m x vx) y vy) z vz) x) unset $;
+-- Full, evicting: four consecutive stores at pairwise-distinct addresses, and
+-- the earliest of the four is gone — the capacity is three, oldest out first.
+-- Stated for four stores rather than three because that is where a three-cell
+-- memory actually evicts; the depth is what the third cell changed, so it is the
+-- one thing the axiom must not hide. It is still stated for an arbitrary `m`, so
+-- it fires at any depth a caller reaches, which is what makes the fourth and
+-- fifth store theorems below instances rather than new assumptions.
+axiom at_drop (m: Mem) (x y z w: Val) (vx vy vz vw: Val)
+  (hxy: $ vne x y $) (hxz: $ vne x z $) (hxw: $ vne x w $)
+  (hyz: $ vne y z $) (hyw: $ vne y w $) (hzw: $ vne z w $):
+  $ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) x) unset $;
 
--- Full, keeping: the same three stores, and the middle one — the newest cell of
--- the previously full pair — is still readable. Without this the model would
--- say what is evicted but not what survives, which is the half a projection
--- proof actually needs.
-axiom at_keep_prev (m: Mem) (x y z: Val) (vx vy vz: Val)
-  (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
-  $ veq (get (put (put (put m x vx) y vy) z vz) y) vy $;
+-- Full, keeping: the same four stores, and the second one — the oldest of the
+-- three survivors — is still readable. Without this the model would say what is
+-- evicted but not what survives, which is the half a projection proof needs.
+axiom at_keep_prev (m: Mem) (x y z w: Val) (vx vy vz vw: Val)
+  (hxy: $ vne x y $) (hxz: $ vne x z $) (hxw: $ vne x w $)
+  (hyz: $ vne y z $) (hyw: $ vne y w $) (hzw: $ vne z w $):
+  $ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) y) vy $;
+
+-- ── A second width-8 store, with the other refresh order ─────────────────
+-- Every projection theorem below is true by construction, because both sides
+-- are defined as the same `put`. That is the assumption this section makes
+-- visible: `isa_store_w8_keep` is a store with the *other* refresh order — when
+-- the written address is already held, the value the cell already has stays
+-- (first write wins), where `put` keeps the newest. It is an uninterpreted
+-- `term` rather than a `def`, because a different ordering is not expressible
+-- as a composition of `put`; that is part of what the assumption is.
+term isa_store_w8_keep (m: Mem) (a v: Val): Mem;
+
+-- Its two observable laws. A refresh of a held cell changes nothing readable at
+-- that address, and no other address is disturbed — a store that keeps the old
+-- value adds no cell, so unlike `put` this needs no `notfull` guard.
+axiom keep_at_put_held (m: Mem) (x w: Val) (k: $ held m x $):
+  $ veq (get (isa_store_w8_keep m x w) x) (get m x) $;
+axiom keep_at_put_other (m: Mem) (x y w: Val) (h: $ vne x y $):
+  $ veq (get (isa_store_w8_keep m x w) y) (get m y) $;
 
 -- ── The two sides of the projection, concretely ──────────────────────────
 -- The emitted instruction's effect and the model's effect at width 8, both
@@ -189,6 +292,13 @@ def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def jit_load_i64 (m: Mem) (a: Val): Val = $ get m a $;
 def isa_load_w8 (m: Mem) (a: Val): Val = $ get m a $;
+-- The same four transformers one width down. The stores narrow as they write and
+-- the loads narrow as they read, which is where a width can differ from another
+-- width at all in a world without bit patterns.
+def jit_store_i32 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def isa_store_w4 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def jit_load_i32 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
+def isa_load_w4 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
 
 -- ── What the model proves ────────────────────────────────────────────────
 -- Note that these are theorems about the *definitions*, not restatements of
@@ -243,28 +353,83 @@ theorem toy_isa_refresh_keeps_other_cell (a b va vb va2: Val)
   (h: $ vne a b $):
   $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) b) vb $;
 
--- Capacity 2, oldest out first: the third distinct store drops the earliest
--- address. This is the eviction case, and it is an axiom instance rather than a
--- chain — nothing else in the toy has to be known for it.
-theorem toy_jit_third_store_drops_oldest
-  (a b c va vb vc: Val) (hab: $ vne a b $) (hac: $ vne a c $)
-  (hbc: $ vne b c $):
-  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) a) unset $;
+-- The read half of the same case, and the one a program actually observes: after
+-- the refresh, a load at the refreshed address returns the *new* value. Without
+-- it the refresh case would say only that the write did no harm to the other
+-- cell, which an implementation that dropped every write could also satisfy.
+-- `at_put` alone gives it — a write is visible at the address it wrote — and
+-- that is the point: the refresh is a write like any other for the address it
+-- touches, and unlike one for every other address. There is **no `vne` guard
+-- here**, while its companion theorem above needs one, and that asymmetry is
+-- itself the content: which value you read back after a write does not depend on
+-- how many cells the memory holds or whether the other cell is distinct, whereas
+-- whether the *other* cell survives does.
+theorem toy_jit_refresh_visible (a b va vb va2: Val):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va2 $;
 
--- And the fourth store does it again, to the address that had become the
--- oldest: after `a`,`b`,`c`,`d` the memory holds `c` and `d`.
+theorem toy_isa_refresh_visible (a b va vb va2: Val):
+  $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) a) va2 $;
+
+-- The held-set half of the same case: the refresh leaves `b` held, and creates
+-- no address that was not held before. Those are the two directions the size of
+-- the held set could move in, which is why "the number of held addresses does
+-- not change" is proved as membership rather than counted — the toy has no
+-- arithmetic, and interval-free membership is what a real lowering would need
+-- anyway to argue that a repeated store cannot push a live cell out.
+theorem toy_jit_refresh_keeps_held_cells (a b va vb va2: Val)
+  (h: $ vne a b $):
+  $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $;
+
+theorem toy_jit_refresh_no_new_held (a b va vb va2: Val) (h: $ vne a b $)
+  (k: $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $):
+  $ held (jit_store_i64 (jit_store_i64 init a va) b vb) b $;
+
+-- And the consequence a program depends on: store `a`, store `b`, then refresh
+-- `a` twice, and `b`'s value is still what a load returns. Nothing is evicted by
+-- repetition at one address, however many times it repeats — the two-step case
+-- is the induction step, and the axiom it rests on (`at_put_held_other`) is
+-- stated for an arbitrary memory, so the step does not depend on how many
+-- refreshes came before it.
+theorem toy_jit_repeated_refresh_never_evicts (a b va vb va2 va3: Val)
+  (h: $ vne a b $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a va3) b) vb $;
+
+-- Depth is a real parameter, and this is the theorem that says so: with three
+-- cells the **third** distinct store evicts nothing, and all three values are
+-- still readable. The two-cell revision of this file proved the opposite here
+-- (`toy_jit_third_store_drops_oldest`), which is why the eviction axiom is
+-- stated at four stores: the number appears in the trace, not in the name.
+theorem toy_jit_third_store_kept
+  (a b c va vb vc: Val) (hab: $ vne a b $) (hac: $ vne a c $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) a) va $;
+
+-- Capacity 3, oldest out first: the fourth distinct store drops the earliest
+-- address. An axiom instance rather than a chain — nothing else in the toy has
+-- to be known for it — and the axiom's `m` is the empty memory here.
 theorem toy_jit_fourth_store_drops_oldest
-  (a b c d va vb vc vd: Val) (hbc: $ vne b c $) (hbd: $ vne b d $)
-  (hcd: $ vne c d $):
-  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) b) unset $;
+  (a b c d va vb vc vd: Val)
+  (hab: $ vne a b $) (hac: $ vne a c $) (had: $ vne a d $)
+  (hbc: $ vne b c $) (hbd: $ vne b d $) (hcd: $ vne c d $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) a) unset $;
+
+-- And eviction continues one store at a time: the fifth distinct store drops the
+-- second-earliest, so the memory holds `c`, `d`, `e`. No new assumption — the
+-- same `at_drop` fires with a non-empty starting memory, which is the whole
+-- reason it is stated for an arbitrary `m`.
+theorem toy_jit_fifth_store_drops_next
+  (a b c d e va vb vc vd ve: Val)
+  (hbc: $ vne b c $) (hbd: $ vne b d $) (hbe: $ vne b e $)
+  (hcd: $ vne c d $) (hce: $ vne c e $) (hde: $ vne d e $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) e ve) b) unset $;
 
 -- The other half of the capacity: what the fourth store *kept* is still
--- readable. Eviction without this would leave the model unable to say that a
--- program can read back the value it just wrote after a burst of stores.
+-- readable. The three survivors are `b`, `c`, `d`, and this reads the oldest of
+-- them, which is the one the eviction came closest to taking.
 theorem toy_jit_recent_cells_readable
-  (a b c d va vb vc vd: Val) (hbc: $ vne b c $) (hbd: $ vne b d $)
-  (hcd: $ vne c d $):
-  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c) vc $;
+  (a b c d va vb vc vd: Val)
+  (hab: $ vne a b $) (hac: $ vne a c $) (had: $ vne a d $)
+  (hbc: $ vne b c $) (hbd: $ vne b d $) (hcd: $ vne c d $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) b) vb $;
 
 -- … and the two sides still agree on that deep memory, so the capacity story
 -- does not quietly break the projection it was added to support.
@@ -273,3 +438,47 @@ theorem toy_fourth_store_projection
   $ veq
       (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c)
       (get (isa_store_w8 (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) c vc) d vd) c) $;
+
+-- ── The same projection one width down ────────────────────────────────────
+-- Nothing above mentions a width in its *proof*, and these are the theorems that
+-- say so in the artifact rather than in a comment. Note that the two width-4
+-- sides are again defined as the same term — that is the toy's licence, and it is
+-- the same licence the width-8 ones take.
+theorem toy_jit_store32_visible (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (narrow4 v) $;
+
+theorem toy_store32_projection (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (get (isa_store_w4 m a v) a) $;
+
+theorem toy_load32_projection (m: Mem) (a: Val):
+  $ veq (jit_load_i32 m a) (isa_load_w4 m a) $;
+
+-- A width-4 read of a cell written at width 8 sees the narrowed value: `at_put`
+-- gives the value, and congruence carries it through the narrowing the load
+-- applies. This is the width difference showing up in a proof.
+theorem toy_width4_load_after_wide_store (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i64 m a v) a) (narrow4 v) $;
+
+-- And a width-4 store read back at width 4 returns that same narrowed value,
+-- because narrowing twice is narrowing once: congruence on `at_put` gives
+-- `narrow4 (narrow4 v)`, and idempotence turns it into `narrow4 v`.
+theorem toy_width4_store_load_roundtrip (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i32 m a v) a) (narrow4 v) $;
+
+-- ── Where the projection fails, once the two sides differ ─────────────────
+-- The second definition read back at the address it wrote: nothing. This is
+-- `keep_at_put_held` restated against the name a reader looks for, and it is
+-- the mirror of `toy_jit_store_visible` — one store makes the new value visible
+-- at its address, the other leaves the old one there.
+theorem toy_keep_store_invisible (m: Mem) (a v: Val) (k: $ held m a $):
+  $ veq (get (isa_store_w8_keep m a v) a) (get m a) $;
+
+-- And where the projection actually fails: on the refresh trace of the case
+-- above — store `a`, store `b`, refresh `a` — the JIT side reads the new value
+-- (`toy_jit_refresh_visible` says `va2`), while this definition reads `va`: the
+-- value from *before* the refresh. The two agree on every trace where only free
+-- cells are taken, which is exactly why the assumption is easy to miss: the
+-- toy's projection theorems never exercise a differing ordering.
+theorem toy_keep_refresh_misses_the_write (a b va vb va2: Val)
+  (h: $ vne a b $):
+  $ veq (get (isa_store_w8_keep (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va $;

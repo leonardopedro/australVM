@@ -739,24 +739,53 @@ PY
                 || _toy_names_ok=false
         done
         _toy_pin="$(sed -n 's/^-- cites: mm0\/store_projection.mm0 sha256=\([0-9a-f]\{64\}\)$/\1/p' "$_toy")"
-        if [ "$_toy_pin" = "$(sha256sum "$_proj" | cut -d' ' -f1)" ] && $_toy_names_ok; then
+        # One comparison, two callers: the committed claim below and the drift
+        # control after it. Extracting it is what makes the control test *this*
+        # rule rather than a paraphrase of it.
+        _toy_cite_ok() {   # $1 = the claim file to compare the toy's pin against
+            [ -n "$_toy_pin" ] || return 1
+            [ "$_toy_pin" = "$(sha256sum "$1" | cut -d' ' -f1)" ]
+        }
+        if _toy_cite_ok "$_proj" && $_toy_names_ok; then
             check "W9.3: the toy model proves the stated projection, not a neighbour" true
         else
             echo "  [detail] toy/model mismatch: pin ${_toy_pin:-none}, names ok=$_toy_names_ok" >&2
             check "W9.3: the toy model proves the stated projection, not a neighbour" false
         fi
+        # … and the pin has to *move*, or it is decoration. The failure it exists
+        # for is specific: the claim is edited, nobody re-reads the toy, and the
+        # proof goes on certifying a statement the repository no longer makes. So
+        # the same comparison is re-run against a copy of the claim with one
+        # relation renamed — the toy is untouched in that run — and it must report
+        # the pin as stale. A control whose edit failed to apply is itself a
+        # failure: it would be comparing the pinned file with itself and passing
+        # for the wrong reason.
+        _drift_claim="$_cert_tmp/store_projection.drift.mm0"
+        sed 's/^term store_projects /term store_projects_drifted /' "$_proj" \
+            >"$_drift_claim"
+        if cmp -s "$_proj" "$_drift_claim"; then
+            echo "  [detail] the drift edit did not apply, so it controls nothing" >&2
+            check "W9.3: the toy's citation digest refuses a changed claim" false
+        elif _toy_cite_ok "$_drift_claim"; then
+            echo "  [detail] a renamed claim still matches the toy's pin" >&2
+            check "W9.3: the toy's citation digest refuses a changed claim" false
+        else
+            check "W9.3: the toy's citation digest refuses a changed claim" true
+        fi
+        _toy_shape=""
         if mm0-rs compile "$repo_root/mm0/store_projection_toy.mm1" \
                 "$_cert_tmp/toy.mmb" >"$_cert_tmp/toy.log" 2>&1 \
             && mm0-c "$_cert_tmp/toy.mmb" < "$_toy" >>"$_cert_tmp/toy.log" 2>&1; then
-            echo "  [detail] $(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
+            _toy_shape="$(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
+            echo "  [detail] $_toy_shape"
             if grep -q 'sorry' "$_cert_tmp/toy.log"; then
-                check "W9.3: the toy projection's fifteen theorems check without sorry" false
+                check "W9.3: the toy projection's theorems check without sorry" false
             else
-                check "W9.3: the toy projection's fifteen theorems check without sorry" true
+                check "W9.3: the toy projection's theorems check without sorry" true
             fi
         else
             sed -n '1,10p' "$_cert_tmp/toy.log" >&2
-            check "W9.3: the toy projection's fifteen theorems check without sorry" false
+            check "W9.3: the toy projection's theorems check without sorry" false
         fi
         # A count in prose is a claim like any other, and the one that goes stale
         # first: add a theorem or an axiom and the paragraph describing the file
@@ -799,6 +828,45 @@ PY
             echo "  [detail] counts:$_toy_counts disagree:$_toy_counts_bad" >&2
             check "W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS" false
         fi
+        # The figures the plan quotes for the toy's *shape* are pinned to the
+        # compiler's own count rather than to a recount by hand, because the two
+        # disagree in a way that is easy to miss: `mm0-rs` counts
+        # `provable sort Prop` as a sort and `grep '^sort '` does not, so a hand
+        # count pins 2 sorts and is wrong from the first line. Whatever `mm0-rs`
+        # prints is the authority — and it is pinned at *every* site that quotes
+        # it: the §3.5 transcript's `[detail]` line and its `[pass]` line, the
+        # bullet in the plan and in AGENTS, and the prose that summarises what
+        # the theorems are. One anchor is how a retired figure survives — the
+        # toy's term/def count already grew once when the width-4 definitions
+        # landed, and repairing the bullet while leaving the transcript alone
+        # keeps the gate green while the measurement line quotes an older file.
+        if [ -n "$_toy_shape" ]; then
+            _shape_bad=""
+            while IFS='|' read -r _doc _site; do
+                [ -n "$_site" ] || continue
+                case "$_doc" in
+                    PLAN) _path="$repo_root/PLAN_sota_kernel_verification.md" ;;
+                    AGENTS) _path="$repo_root/AGENTS.md" ;;
+                esac
+                grep -qF -- "$_site" "$_path" \
+                    || _shape_bad="$_shape_bad $(basename "$_path")[$(printf '%s' "$_site" | cut -c1-28)]"
+            done <<EOF
+PLAN|  [detail] $_toy_shape
+PLAN|counts ($_toy_shape)
+PLAN|Toy shape: $_toy_shape
+PLAN|\`$_toy_shape\`
+AGENTS|Toy shape: $_toy_shape
+AGENTS|\`$_toy_shape\`
+EOF
+            if [ -z "$_shape_bad" ]; then
+                check "W9.3: the toy's shape figures match what mm0-rs counts ($_toy_shape)" true
+            else
+                echo "  [detail] shape: mm0-rs says '$_toy_shape'; stale in:$_shape_bad" >&2
+                check "W9.3: the toy's shape figures match what mm0-rs counts" false
+            fi
+        else
+            gap "W9.3: the toy's shape figures not compared (no mm0-rs measurement here)"
+        fi
         # Negative control: the proofs must depend on the axioms they cite.
         # A theorem that checks after its axiom has been falsified is provable
         # from something else, which would make the file prove less than its
@@ -839,17 +907,22 @@ PY
 $ veq (get (put m a v) a) v $|$ veq (get (put m a v) a) (get m a) $|toy_jit_store_visible
 $ veq (get (put m a v) b) (get m b) $|$ veq (get (put m a v) b) unset $|toy_jit_store_load_other
 $ veq x z $|$ veq x x $|toy_jit_two_cells_preserved
-$ veq (get (put (put (put m x vx) y vy) z vz) x) unset $|$ veq (get (put (put (put m x vx) y vy) z vz) x) vx $|toy_jit_third_store_drops_oldest
-$ veq (get (put (put (put m x vx) y vy) z vz) y) vy $|$ veq (get (put (put (put m x vx) y vy) z vz) y) vx $|toy_jit_recent_cells_readable
+$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) x) unset $|$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) x) vx $|toy_jit_fourth_store_drops_oldest
+$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) y) vy $|$ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) y) vx $|toy_jit_recent_cells_readable
+$ notfull (put (put init a va) b vb) $|$ notfull init $|toy_jit_third_store_kept
 $ veq (get (put m x w) y) (get m y) $|$ veq (get (put m x w) y) unset $|toy_jit_refresh_keeps_other_cell
 $ held (put m a v) a $|$ held (put m a v) v $|toy_jit_refresh_keeps_other_cell
 $ notfull (put init a v) $|$ notfull init $|toy_jit_two_cells_preserved
+$ held (put m x w) y $;|$ held (put m x w) x $;|toy_jit_refresh_keeps_held_cells
+$ held m y $;|$ held init y $;|toy_jit_refresh_no_new_held
+$ veq (narrow4 x) (narrow4 y) $|$ veq (narrow4 x) x $|toy_width4_load_after_wide_store
+$ veq (narrow4 (narrow4 x)) (narrow4 x) $|$ veq (narrow4 (narrow4 x)) x $|toy_width4_store_load_roundtrip
 MUTATIONS
-        if $_mut_ok && [ "$_mut_n" -eq 8 ]; then
+        if $_mut_ok && [ "$_mut_n" -eq 13 ]; then
             echo "  [detail] mutations refused:$(echo "$_mut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" true
         else
-            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 8)" >&2
+            echo "  [detail] mutations:${_mut_seen:- none applied} ($_mut_n of 13)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" false
         fi
 
@@ -892,6 +965,42 @@ MUTATIONS
                      "witness=[$(echo "$_ax_wit" | tr '\n' ' ')]" >&2
                 check "W9.3: the witness exercises every axiom the toy declares" false
             fi
+        fi
+
+        # The same witness once more, in Lean (`mm0/toy_witness/ToyWitness.lean`):
+        # same model, independent checker, and the candidates the toy rejected are
+        # *theorems about their negations* rather than counterexample strings
+        # printed by a program I wrote. Two checkers on one model is the point —
+        # they fail differently, and a wrong reading of an `if` in one does not
+        # reproduce in the other.
+        if command -v lean >/dev/null 2>&1; then
+            _lean_rc=0
+            lean "$repo_root/mm0/toy_witness/ToyWitness.lean" \
+                >"$_cert_tmp/leanwit.log" 2>&1 || _lean_rc=$?
+            _lean_ax="$(sed -n 's/^lean-witness-axioms: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
+            _lean_br="$(sed -n 's/^lean-witness-broken: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
+            if [ "$_lean_rc" -eq 0 ] && [ -n "$_lean_ax" ] && [ "$_lean_ax" = "$_ax_file" ]; then
+                echo "  [detail] $(grep -m1 '^lean-witness: ' "$_cert_tmp/leanwit.log")"
+                check "W9.3: a Lean interpreter proves the same $(printf '%s\n' "$_lean_ax" | grep -c .) axioms" true
+            else
+                grep -E 'error' "$_cert_tmp/leanwit.log" | head -5 >&2
+                echo "  [detail] lean axioms vs artifact: [$(echo "$_lean_ax" | tr '\n' ' ')]" >&2
+                check "W9.3: a Lean interpreter proves the same axioms" false
+            fi
+            if [ ! -s "$_cert_tmp/witness.log" ]; then
+                gap "W9.3: rejected-candidate cross-check not run (rustc absent)"
+            else
+                _rust_br="$(sed -n 's/^\[reject\]  *\([a-z0-9_]*\).*/\1/p' "$_cert_tmp/witness.log" | sort)"
+                if [ -n "$_lean_br" ] && [ "$_lean_br" = "$_rust_br" ]; then
+                    check "W9.3: both witnesses reject the same candidates" true
+                else
+                    echo "  [detail] rejected: lean=[$(echo "$_lean_br" | tr '\n' ' ')]" \
+                         "rust=[$(echo "$_rust_br" | tr '\n' ' ')]" >&2
+                    check "W9.3: both witnesses reject the same candidates" false
+                fi
+            fi
+        else
+            gap "W9.3: the Lean witness check not run (lean not on PATH)"
         fi
 
         # W6: the generated probe is a test, and it has to actually run.
@@ -1097,6 +1206,122 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     else
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
         check "W3: the plan's §W3 stmts column matches the measured counts" false
+    fi
+    # … and the emitter column has to name something real. The `isa` row claims
+    # `scripts/isa-encdec check` is "registered in EMITTERS", so that command must
+    # exist, be executable, and be the script+mode the comparator actually
+    # registers for the stem; the three rows that say "none" must be genuinely
+    # unowned, or a reader is told nothing keeps an artifact fresh when a check
+    # would in fact run. Without this the column is prose — rename the script, or
+    # register an emitter for a stem the table says has none, and the `stmts`
+    # comparison stays green while the table misdescribes what owns the file.
+    _w3_reg="$(cd "$repo_root" && python3 scripts/mm0-comparator emitters 2>/dev/null)"
+    _w3_emit_rows="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $5
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            print path "\t" cell
+        }' "$_plan_file")"
+    _w3_emit_bad=""
+    _w3_emit_rows_n=0
+    while IFS="$(printf '\t')" read -r _e_stem _e_cell; do
+        [ -n "$_e_stem" ] || continue
+        _w3_emit_rows_n=$((_w3_emit_rows_n + 1))
+        _e_reg="$(printf '%s\n' "$_w3_reg" | awk -F'\t' -v s="$_e_stem" '$1==s{print $2" "$3}')"
+        case "$_e_cell" in
+            none*)
+                if [ -n "$_e_reg" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(says none, but EMITTERS registers '$_e_reg')"
+                fi
+                ;;
+            '`'*'`'*)
+                _e_cmd="$(printf '%s' "$_e_cell" | sed -n 's/^`\([^`]*\)`.*/\1/p')"
+                _e_script="${_e_cmd%% *}"
+                _e_mode=""
+                case "$_e_cmd" in
+                    *' '*) _e_mode="${_e_cmd#* }" ;;
+                esac
+                if [ -z "$_e_cmd" ] || [ -z "$_e_script" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(emitter cell has an empty command)"
+                elif [ ! -f "$repo_root/$_e_script" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(names '$_e_script', which does not exist)"
+                elif [ ! -x "$repo_root/$_e_script" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(names '$_e_script', which is not executable)"
+                elif [ "$_e_reg" != "$_e_script $_e_mode" ]; then
+                    _w3_emit_bad="$_w3_emit_bad $_e_stem(cell says '$_e_cmd', EMITTERS says '${_e_reg:-nothing}')"
+                fi
+                ;;
+            *)
+                _w3_emit_bad="$_w3_emit_bad $_e_stem(emitter cell names no command and does not say none: '$(printf '%s' "$_e_cell" | cut -c1-40)')"
+                ;;
+        esac
+    done <<EOF
+$_w3_emit_rows
+EOF
+    if [ -z "$_w3_reg" ]; then
+        gap "W3: the plan's §W3 emitter column not compared (the comparator printed no registry)"
+    elif [ "$_w3_emit_rows_n" -eq 0 ]; then
+        gap "W3: the plan's §W3 emitter column not compared (no table row carries one)"
+    elif [ -z "$_w3_emit_bad" ]; then
+        check "W3: every §W3 emitter cell names a real command ($_w3_emit_rows_n row(s))" true
+    else
+        echo "  [detail] §W3 emitter column:${_w3_emit_bad}" >&2
+        check "W3: every §W3 emitter cell names a real command" false
+    fi
+    # … and the state column has to say *why* the artifact is still unapproved,
+    # not merely that it is. A bare `[gap]` is a status: it tells a reader the
+    # gate is red without saying whether anyone is working on it, whether
+    # something is blocked, or whether it is an owner decision waiting to be
+    # taken. In this repository the answer is always the same — an approval is an
+    # owner commit into `mm0/approved/` and nothing here may self-approve, so the
+    # row waits on a person — and the cell must say exactly that, with any
+    # artifact-specific reason after `; `. Anything else (`pending`, `TBD`, a bare
+    # `[gap]`, `blocked on X`) is rot: it either names no reason or names one that
+    # the approval rule does not allow.
+    _w3_state_rows="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $6
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            print path "\t" cell
+        }' "$_plan_file")"
+    _w3_state_bad=""
+    _w3_state_rows_n=0
+    _w3_state_prefix='`[gap]`, awaiting owner commit'
+    while IFS="$(printf '\t')" read -r _s_stem _s_cell; do
+        [ -n "$_s_stem" ] || continue
+        _w3_state_rows_n=$((_w3_state_rows_n + 1))
+        case "$_s_cell" in
+            "$_w3_state_prefix") ;;
+            "$_w3_state_prefix;"*)
+                _s_tail="$(printf '%s' "${_s_cell:${#_w3_state_prefix}+1}" \
+                    | sed 's/^[ \t]*//;s/[ \t]*$//')"
+                [ -n "$_s_tail" ] \
+                    || _w3_state_bad="$_w3_state_bad $_s_stem(says the reason is empty: '$_s_cell')"
+                ;;
+            *)
+                _s_why="$(printf '%s' "$_s_cell" | cut -c1-48)"
+                case "$_s_cell" in
+                    '`[gap]`'*|'[gap]'*)
+                        _w3_state_bad="$_w3_state_bad $_s_stem(state names a reason the approval rule does not allow: '$_s_why')" ;;
+                    *)
+                        _w3_state_bad="$_w3_state_bad $_s_stem(state does not carry the gate's [gap] marker: '$_s_why')" ;;
+                esac
+                ;;
+        esac
+    done <<EOF
+$_w3_state_rows
+EOF
+    if [ "$_w3_state_rows_n" -eq 0 ]; then
+        gap "W3: the plan's §W3 state column not compared (no table row carries one)"
+    elif [ -z "$_w3_state_bad" ]; then
+        check "W3: every §W3 state cell says why the row is still unapproved ($_w3_state_rows_n row(s))" true
+    else
+        echo "  [detail] §W3 state column:${_w3_state_bad}" >&2
+        check "W3: every §W3 state cell says why the row is still unapproved" false
     fi
     check_py "W3: comparator self-test (all three negative controls refuse)" \
         python3 "$repo_root/scripts/mm0-comparator" selftest

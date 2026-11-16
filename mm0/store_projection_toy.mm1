@@ -21,6 +21,7 @@ sort Val;
 sort Mem;
 term init: Mem;
 term unset: Val;
+term narrow4 (x: Val): Val;
 term put (m: Mem) (a v: Val): Mem;
 term get (m: Mem) (a: Val): Val;
 term notfull (m: Mem): Prop;
@@ -30,9 +31,13 @@ term veq (x y: Val): Prop;
 axiom veq_refl (x: Val): $ veq x x $;
 axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
 axiom vne_sym (x y: Val) (h: $ vne x y $): $ vne y x $;
+axiom narrow4_cong (x y: Val) (h: $ veq x y $): $ veq (narrow4 x) (narrow4 y) $;
+axiom narrow4_idem (x: Val): $ veq (narrow4 (narrow4 x)) (narrow4 x) $;
 axiom get_init (a: Val): $ veq (get init a) unset $;
 axiom init_notfull: $ notfull init $;
 axiom put_init_notfull (a v: Val): $ notfull (put init a v) $;
+axiom put2_init_notfull (a b va vb: Val):
+  $ notfull (put (put init a va) b vb) $;
 axiom at_put (m: Mem) (a v: Val): $ veq (get (put m a v) a) v $;
 axiom put_held (m: Mem) (a v: Val): $ held (put m a v) a $;
 axiom put_held_other (m: Mem) (a b v: Val) (h: $ vne a b $)
@@ -41,19 +46,41 @@ axiom put_held_other (m: Mem) (a b v: Val) (h: $ vne a b $)
 axiom at_put_held_other (m: Mem) (x y w: Val) (h: $ vne x y $)
   (k: $ held m x $):
   $ veq (get (put m x w) y) (get m y) $;
+axiom at_put_held_keeps (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held m y $) (k: $ held m x $):
+  $ held (put m x w) y $;
+axiom at_put_held_no_new (m: Mem) (x y w: Val) (h: $ vne x y $)
+  (j: $ held (put m x w) y $):
+  $ held m y $;
 axiom at_put_other (m: Mem) (a b v: Val) (h: $ vne a b $) (k: $ notfull m $):
   $ veq (get (put m a v) b) (get m b) $;
-axiom at_drop (m: Mem) (x y z: Val) (vx vy vz: Val)
-  (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
-  $ veq (get (put (put (put m x vx) y vy) z vz) x) unset $;
-axiom at_keep_prev (m: Mem) (x y z: Val) (vx vy vz: Val)
-  (hxy: $ vne x y $) (hxz: $ vne x z $) (hyz: $ vne y z $):
-  $ veq (get (put (put (put m x vx) y vy) z vz) y) vy $;
+axiom at_drop (m: Mem) (x y z w: Val) (vx vy vz vw: Val)
+  (hxy: $ vne x y $) (hxz: $ vne x z $) (hxw: $ vne x w $)
+  (hyz: $ vne y z $) (hyw: $ vne y w $) (hzw: $ vne z w $):
+  $ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) x) unset $;
+axiom at_keep_prev (m: Mem) (x y z w: Val) (vx vy vz vw: Val)
+  (hxy: $ vne x y $) (hxz: $ vne x z $) (hxw: $ vne x w $)
+  (hyz: $ vne y z $) (hyw: $ vne y w $) (hzw: $ vne z w $):
+  $ veq (get (put (put (put (put m x vx) y vy) z vz) w vw) y) vy $;
+
+-- The second width-8 store: the other refresh order, uninterpreted (a different
+-- ordering is not a composition of `put`). Its two laws are the mirror of
+-- `at_put`/`at_put_held_other` — a refresh keeps the value the cell had — which
+-- is what makes the projection fail on the refresh trace at the end.
+term isa_store_w8_keep (m: Mem) (a v: Val): Mem;
+axiom keep_at_put_held (m: Mem) (x w: Val) (k: $ held m x $):
+  $ veq (get (isa_store_w8_keep m x w) x) (get m x) $;
+axiom keep_at_put_other (m: Mem) (x y w: Val) (h: $ vne x y $):
+  $ veq (get (isa_store_w8_keep m x w) y) (get m y) $;
 
 def jit_store_i64 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def isa_store_w8 (m: Mem) (a v: Val): Mem = $ put m a v $;
 def jit_load_i64 (m: Mem) (a: Val): Val = $ get m a $;
 def isa_load_w8 (m: Mem) (a: Val): Val = $ get m a $;
+def jit_store_i32 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def isa_store_w4 (m: Mem) (a v: Val): Mem = $ put m a (narrow4 v) $;
+def jit_load_i32 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
+def isa_load_w4 (m: Mem) (a: Val): Val = $ narrow4 (get m a) $;
 
 pub theorem toy_init_unset (a: Val):
   $ veq (get init a) unset $
@@ -120,26 +147,88 @@ pub theorem toy_isa_refresh_keeps_other_cell (a b va vb va2: Val)
          (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)))
        (at_put));
 
-pub theorem toy_jit_third_store_drops_oldest
-    (a b c va vb vc: Val) (hab: $ vne a b $) (hac: $ vne a c $)
-    (hbc: $ vne b c $):
-  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) a) unset $
-  = '(at_drop (hab) (hac) (hbc));
+-- The refresh read back at its own address: `at_put`, once. No hypothesis — a
+-- write is visible where it wrote, whatever else the memory holds — which is why
+-- the companion theorem above needs `vne` and this one does not. Together they
+-- are the whole refresh case: the new value at `a`, the old one still at `b`.
+pub theorem toy_jit_refresh_visible (a b va vb va2: Val):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va2 $
+  = '(at_put);
 
--- The same axiom, with the memory that three stores left behind: `at_drop` is
--- stated for an arbitrary starting memory, which is what lets it fire on the
--- fourth store rather than only on the third.
+pub theorem toy_isa_refresh_visible (a b va vb va2: Val):
+  $ veq (get (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) a va2) a) va2 $
+  = '(at_put);
+
+-- The held-set half of the refresh case. `at_put_held_keeps` needs the other
+-- cell to be held beforehand, which the second store establishes (`put_held`),
+-- and that `a` is still held after it — which is `put_held_other`: a write
+-- elsewhere keeps a held cell while a cell is free, and `put_init_notfull` says
+-- the one-store memory has one. `at_put_held_no_new` is the same fact backwards.
+pub theorem toy_jit_refresh_keeps_held_cells (a b va vb va2: Val)
+    (h: $ vne a b $):
+  $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $
+  = '(at_put_held_keeps (h) (put_held)
+       (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)));
+
+pub theorem toy_jit_refresh_no_new_held (a b va vb va2: Val) (h: $ vne a b $)
+    (k: $ held (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) b $):
+  $ held (jit_store_i64 (jit_store_i64 init a va) b vb) b $
+  = '(at_put_held_no_new (h) (k));
+
+-- Two refreshes, chained: each one leaves `b` alone (`at_put_held_other`, with
+-- `put_held` saying the address is held for the next one), and `at_put` says what
+-- `b` holds. The middle term of each `veq_trans` is a read of `b` from the
+-- memory the neighbouring step produced, which is why the steps compose without
+-- mentioning how many came before.
+pub theorem toy_jit_repeated_refresh_never_evicts (a b va vb va2 va3: Val)
+    (h: $ vne a b $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a va3) b) vb $
+  = '(veq_trans
+       (at_put_held_other (h) (put_held))
+       (veq_trans
+         (at_put_held_other (h)
+           (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)))
+         (at_put)));
+
+-- The third store evicts nothing, which is the extra cell doing its job: `c` is
+-- a fresh address and the two-cell memory `put (put init a va) b vb` has a free
+-- cell (`put2_init_notfull`), so `at_put_other` says the write disturbs no other
+-- address. The second step is the same rule one store down, with the
+-- one-cell `put_init_notfull`. Chain by `veq_trans`.
+pub theorem toy_jit_third_store_kept
+    (a b c va vb vc: Val) (hab: $ vne a b $) (hac: $ vne a c $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) a) va $
+  = '(veq_trans (at_put_other (vne_sym (hac)) (put2_init_notfull))
+       (veq_trans (at_put_other (vne_sym (hab)) (put_init_notfull)) (at_put)));
+
+-- The eviction axiom, fired on the empty memory: four distinct stores, the first
+-- gone.
 pub theorem toy_jit_fourth_store_drops_oldest
-    (a b c d va vb vc vd: Val) (hbc: $ vne b c $) (hbd: $ vne b d $)
-    (hcd: $ vne c d $):
-  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) b) unset $
-  = '(at_drop (hbc) (hbd) (hcd));
+    (a b c d va vb vc vd: Val)
+    (hab: $ vne a b $) (hac: $ vne a c $) (had: $ vne a d $)
+    (hbc: $ vne b c $) (hbd: $ vne b d $) (hcd: $ vne c d $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) a) unset $
+  = '(at_drop (hab) (hac) (had) (hbc) (hbd) (hcd));
 
+-- The same axiom one store later, with the memory three stores left behind: this
+-- is the instance that shows the depth is a parameter. `m` is not `init` here,
+-- which is the only difference from the theorem above.
+pub theorem toy_jit_fifth_store_drops_next
+    (a b c d e va vb vc vd ve: Val)
+    (hbc: $ vne b c $) (hbd: $ vne b d $) (hbe: $ vne b e $)
+    (hcd: $ vne c d $) (hce: $ vne c e $) (hde: $ vne d e $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) e ve) b) unset $
+  = '(at_drop (hbc) (hbd) (hbe) (hcd) (hce) (hde));
+
+-- What the eviction kept: the second of the four stores, which is now the oldest
+-- of the three survivors. This is `at_keep_prev` itself — the axiom that says
+-- what survives, as opposed to what is dropped.
 pub theorem toy_jit_recent_cells_readable
-    (a b c d va vb vc vd: Val) (hbc: $ vne b c $) (hbd: $ vne b d $)
-    (hcd: $ vne c d $):
-  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c) vc $
-  = '(at_keep_prev (hbc) (hbd) (hcd));
+    (a b c d va vb vc vd: Val)
+    (hab: $ vne a b $) (hac: $ vne a c $) (had: $ vne a d $)
+    (hbc: $ vne b c $) (hbd: $ vne b d $) (hcd: $ vne c d $):
+  $ veq (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) b) vb $
+  = '(at_keep_prev (hab) (hac) (had) (hbc) (hbd) (hcd));
 
 pub theorem toy_fourth_store_projection
     (a b c d va vb vc vd: Val):
@@ -147,3 +236,48 @@ pub theorem toy_fourth_store_projection
       (get (jit_store_i64 (jit_store_i64 (jit_store_i64 (jit_store_i64 init a va) b vb) c vc) d vd) c)
       (get (isa_store_w8 (isa_store_w8 (isa_store_w8 (isa_store_w8 init a va) b vb) c vc) d vd) c) $
   = '(veq_refl);
+
+-- Width 4, the same shape. `at_put` alone, with the definitions unfolding to the
+-- narrowing store.
+pub theorem toy_jit_store32_visible (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (narrow4 v) $
+  = '(at_put);
+
+pub theorem toy_store32_projection (m: Mem) (a v: Val):
+  $ veq (get (jit_store_i32 m a v) a) (get (isa_store_w4 m a v) a) $
+  = '(veq_refl);
+
+pub theorem toy_load32_projection (m: Mem) (a: Val):
+  $ veq (jit_load_i32 m a) (isa_load_w4 m a) $
+  = '(veq_refl);
+
+-- The width shows up here: the load narrows what it reads, so the proof has to
+-- carry `at_put` through `narrow4`, which is `narrow4_cong`.
+pub theorem toy_width4_load_after_wide_store (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i64 m a v) a) (narrow4 v) $
+  = '(narrow4_cong (at_put));
+
+-- … and twice: congruence gives `narrow4 (narrow4 v)`, idempotence collapses it.
+pub theorem toy_width4_store_load_roundtrip (m: Mem) (a v: Val):
+  $ veq (jit_load_i32 (jit_store_i32 m a v) a) (narrow4 v) $
+  = '(veq_trans (narrow4_cong (at_put)) (narrow4_idem));
+
+-- The second definition read back: its own law, against the name a reader looks
+-- for. Nothing composes — the store simply does not change this address.
+pub theorem toy_keep_store_invisible (m: Mem) (a v: Val) (k: $ held m a $):
+  $ veq (get (isa_store_w8_keep m a v) a) (get m a) $
+  = '(keep_at_put_held (k));
+
+-- Where the projection fails. The JIT trace is the refresh trace of the case
+-- above, so `toy_jit_refresh_visible` reads `va2` here while this definition
+-- reads `va`: the value from before the refresh. The two steps are the keep
+-- law (a held cell keeps its value) and the JIT side reaching the cell it wrote
+-- first (`at_put_held_other`, with `put_held` saying the third store refreshed
+-- rather than evicted).
+pub theorem toy_keep_refresh_misses_the_write (a b va vb va2: Val)
+    (h: $ vne a b $):
+  $ veq (get (isa_store_w8_keep (jit_store_i64 (jit_store_i64 init a va) b vb) a va2) a) va $
+  = '(veq_trans
+       (keep_at_put_held
+         (put_held_other (vne_sym (h)) (put_held) (put_init_notfull)))
+       (veq_trans (at_put_other (vne_sym (h)) (put_init_notfull)) (at_put)));
