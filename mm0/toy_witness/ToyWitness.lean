@@ -714,6 +714,72 @@ theorem veq_universal_satisfies_at_put (m : Cap α) (a v : α) :
 
 end Degenerate
 
+
+/- ── The trust base, printed for the gate ────────────────────────────────────
+   `#print axioms` reports what each declaration actually rests on. The point is
+   not decoration: `sorryAx` would appear here, and so would any principle a
+   later edit introduced. No axiom of the artifact appears as an axiom — each is a
+   theorem here — and the proofs are structural, so what is left is Lean's standard
+   foundation and nothing else: `propext`, `Classical.choice`, `Quot.sound`,
+   pulled in by `simp`/`omega` rather than by the statements (the `veq_*` and
+   `keep_at_put_*` proofs rest on nothing at all). The gate requires all 48 lines
+   (the toy's 28 theorems plus the 20 axiom-statement theorems) to name a subset of
+   those three, and to be 48 of them, so a `sorry` that still elaborated would be
+   red rather than quiet. This is the audit shape `hydro` uses in
+   `hydro_lean/Hydro/AxCheck.lean`, with the same allowed set. -/
+
+/- The artifact's axioms, as theorems: -/
+#print axioms ax_veq_refl
+#print axioms ax_veq_trans
+#print axioms ax_vne_sym
+#print axioms ax_get_init
+#print axioms ax_init_notfull
+#print axioms ax_put_init_notfull
+#print axioms ax_put2_init_notfull
+#print axioms ax_at_put
+#print axioms ax_put_held
+#print axioms ax_put_held_other
+#print axioms ax_at_put_held_other
+#print axioms ax_at_put_held_keeps
+#print axioms ax_at_put_held_no_new
+#print axioms ax_at_put_other
+#print axioms ax_at_drop
+#print axioms ax_at_keep_prev
+#print axioms ax_keep_at_put_held
+#print axioms ax_keep_at_put_other
+#print axioms ax_narrow4_cong
+#print axioms ax_narrow4_idem
+
+/- The artifact's theorems: -/
+#print axioms Toy.toy_init_unset
+#print axioms Toy.toy_jit_store_visible
+#print axioms Toy.toy_isa_store_visible
+#print axioms Toy.toy_store_projection
+#print axioms Toy.toy_load_projection
+#print axioms Toy.toy_jit_store_load_other
+#print axioms Toy.toy_isa_store_load_other
+#print axioms Toy.toy_jit_two_cells_preserved
+#print axioms Toy.toy_isa_two_cells_preserved
+#print axioms Toy.toy_jit_refresh_keeps_other_cell
+#print axioms Toy.toy_isa_refresh_keeps_other_cell
+#print axioms Toy.toy_jit_refresh_visible
+#print axioms Toy.toy_isa_refresh_visible
+#print axioms Toy.toy_jit_refresh_keeps_held_cells
+#print axioms Toy.toy_jit_refresh_no_new_held
+#print axioms Toy.toy_jit_repeated_refresh_never_evicts
+#print axioms Toy.toy_jit_third_store_kept
+#print axioms Toy.toy_jit_fourth_store_drops_oldest
+#print axioms Toy.toy_jit_fifth_store_drops_next
+#print axioms Toy.toy_jit_recent_cells_readable
+#print axioms Toy.toy_fourth_store_projection
+#print axioms Toy.toy_jit_store32_visible
+#print axioms Toy.toy_store32_projection
+#print axioms Toy.toy_load32_projection
+#print axioms Toy.toy_width4_load_after_wide_store
+#print axioms Toy.toy_width4_store_load_roundtrip
+#print axioms Toy.toy_keep_store_invisible
+#print axioms Toy.toy_keep_refresh_misses_the_write
+
 /- ── Summary the gate reads ─────────────────────────────────────────────────
    Printed at elaboration so `verify-invariants` can compare it with the axiom
    list in `mm0/store_projection_toy.mm0` and fail when a new axiom has no Lean

@@ -967,6 +967,39 @@ MUTATIONS
             fi
         fi
 
+        # The enumeration's own regression: the same verdicts at a larger domain.
+        # This used to be a remembered measurement ("`--domain 5` gives the
+        # identical verdict"), which is a claim about the *enumeration* rather than
+        # about the model — the model rows and all six refutations must not change
+        # verdict when the domain grows, or the instance set is what produced them.
+        # One extra domain, not a sweep: ~72 s here, and a sweep would prove
+        # nothing the Lean proof does not already cover.
+        _w5_rc=-1
+        if command -v rustc >/dev/null 2>&1; then
+            _w5_rc=0
+            "$repo_root/scripts/toy-witness" --domain 5 >"$_cert_tmp/witness-d5.log" 2>&1 \
+                || _w5_rc=$?
+        fi
+        if [ "$_w5_rc" -eq 2 ]; then
+            gap "W9.3: the domain-5 regression not run (rustc not on PATH)"
+        elif [ "$_w5_rc" -eq 0 ] && [ -s "$_cert_tmp/witness.log" ] \
+                && grep -q '20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must' \
+                    "$_cert_tmp/witness-d5.log" \
+                && [ "$(sed -n 's/^\[\(hold\|reject\|model\)\]  *\([a-z0-9_]*\).*/\1 \2/p' \
+                        "$_cert_tmp/witness-d5.log" | sort)" \
+                   = "$(sed -n 's/^\[\(hold\|reject\|model\)\]  *\([a-z0-9_]*\).*/\1 \2/p' \
+                        "$_cert_tmp/witness.log" | sort)" ]; then
+            echo "  [detail] $(head -1 "$_cert_tmp/witness-d5.log")"
+            check "W9.3: the witness's verdicts do not change when the domain grows (27 rows at 4 and 5 atoms)" true
+        else
+            diff <(sed -n 's/^\[\(hold\|reject\|model\)\]  *\([a-z0-9_]*\).*/\1 \2/p' \
+                    "$_cert_tmp/witness.log" | sort) \
+                 <(sed -n 's/^\[\(hold\|reject\|model\)\]  *\([a-z0-9_]*\).*/\1 \2/p' \
+                    "$_cert_tmp/witness-d5.log" | sort) >&2 || true
+            tail -3 "$_cert_tmp/witness-d5.log" >&2 || true
+            check "W9.3: the witness's verdicts do not change when the domain grows" false
+        fi
+
         # The same axioms once more, in Lean (`mm0/toy_witness/ToyWitness.lean`):
         # same model, but there a *proof* over an arbitrary atom type rather than
         # an enumeration over a fixed one, and the candidates the toy rejected are
@@ -1006,6 +1039,31 @@ MUTATIONS
                 echo "  [detail] theorems: artifact=[$(echo "$_thm_file" | tr '\n' ' ')]" \
                      "lean=[$(echo "$_lean_thm" | tr '\n' ' ')] declarations=$_lean_decl_n" >&2
                 check "W9.3: the Lean development proves the toy's theorems too" false
+            fi
+
+            # The *trust base*, printed: `#print axioms` for all 48 audited
+            # declarations (the toy's 28 theorems and the 20 axiom-statement
+            # theorems). Nothing here may name an axiom outside Lean's standard
+            # foundation — `sorryAx` would show up in this list, and so would any
+            # principle a later edit introduced — and all 48 must be audited, so a
+            # declaration dropped from the audit is red rather than silently
+            # unaudited. Same shape as hydro's `Hydro/AxCheck.lean`, same allowed
+            # set; the difference is that there the axioms are declared, and here
+            # every artifact axiom is a theorem.
+            _lean_audited_n="$(grep -cE "depends on axioms:|does not depend on any axioms" \
+                "$_cert_tmp/leanwit.log" || true)"
+            _lean_audit_decl_n="$(grep -c '^#print axioms ' \
+                "$repo_root/mm0/toy_witness/ToyWitness.lean" || true)"
+            _lean_axnames="$(grep -oE '\[[^]]*\]' "$_cert_tmp/leanwit.log" \
+                | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//' | grep -v '^$' \
+                | sort -u | grep -vxE 'propext|Classical.choice|Quot.sound' || true)"
+            if [ "${_lean_audited_n:-0}" -eq "${_lean_audit_decl_n:-0}" ] \
+                    && [ -n "$_lean_audit_decl_n" ] && [ -z "$_lean_axnames" ]; then
+                check "W9.3: every Lean declaration rests on Lean's standard foundation only ($_lean_audited_n audited)" true
+            else
+                echo "  [detail] trust base: audited=$_lean_audited_n of $_lean_audit_decl_n," \
+                     "outside {propext, Classical.choice, Quot.sound}: [$(echo "$_lean_axnames" | tr '\n' ' ')]" >&2
+                check "W9.3: every Lean declaration rests on Lean's standard foundation only" false
             fi
             if [ ! -s "$_cert_tmp/witness.log" ]; then
                 gap "W9.3: rejected-candidate cross-check not run (rustc absent)"

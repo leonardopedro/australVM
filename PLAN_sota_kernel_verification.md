@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 126 passed, 4 explained gap(s), 0 failed
+verify-invariants: 128 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -313,12 +313,6 @@ verify-invariants: 126 passed, 4 explained gap(s), 0 failed
   [detail] 3 sorts, 18 term/def, 48 ax/thm
   [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (28 theorem(s), 20 axiom(s))
   [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
-  [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
-  [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
-  [pass] W9.3: a Lean development proves the same 20 axioms
-  [pass] W9.3: the Lean development proves the toy's 28 theorems too
-  [pass] W9.3: both witnesses reject the same candidates
-  [pass] W9.3: the witness exercises all 20 axioms the toy declares
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
   [detail] mutations refused: toy_jit_store_visible(refused),
            toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused),
@@ -328,10 +322,19 @@ verify-invariants: 126 passed, 4 explained gap(s), 0 failed
            toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused),
            toy_width4_load_after_wide_store(refused),
            toy_width4_store_load_roundtrip(refused)
+  [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
+  [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
+  [pass] W9.3: the witness exercises all 20 axioms the toy declares
+  [detail] toy-witness: 5 atom(s) (0 = unset), 16276 memories (every shape of at most three cells)
+  [pass] W9.3: the witness's verdicts do not change when the domain grows (27 rows at 4 and 5 atoms)
+  [pass] W9.3: a Lean development proves the same 20 axioms
+  [pass] W9.3: the Lean development proves the toy's 28 theorems too
+  [pass] W9.3: every Lean declaration rests on Lean's standard foundation only (48 audited)
+  [pass] W9.3: both witnesses reject the same candidates
   [pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
   [detail] lean mutations refused: put-no-truncation(refused@197),
            drop-keeps-written-address(refused@131), notfull-weakened-to-four(refused@229),
-           narrow4-becomes-identity(refused@378), keep-order-becomes-put(refused@353)
+           narrow4-becomes-identity(refused@599), keep-order-becomes-put(refused@353)
   [pass] Phase D: store_projection.mm0 declares its own vocabulary
   [gap]  W3: isa has no approved statements (owner commit)
   [gap]  W3: slot_layout has no approved statements (owner commit)
@@ -343,7 +346,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 121 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1)
+verify-invariants: 122 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -1696,6 +1699,8 @@ toy-witness: 4 atom(s) (0 = unset), 4369 memories (every shape of at most three 
 [reject] at_drop_at_two_cells          6710784 instance(s) — m=[] x=0 y=1 z=2 -> get x=1 (three stores did not evict)
 [reject] keep_store_visible              69904 instance(s) — m=[] a=0 v=1 -> keep=[] reads 0 as 0, not 1
 [reject] narrow4_is_identity                 4 instance(s) — x=2 -> narrow4 x=0
+[model]  model_equivariant              366996 instance(s)
+toy-witness: 6/6 refutation(s) transport to every larger atom domain (model commutes with injective renaming); the axioms are proved for an arbitrary atom type in mm0/toy_witness/ToyWitness.lean
 toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
 ```
 
@@ -1713,9 +1718,10 @@ that failed would print its counterexample. Both directions matter, so the run
 is a check on the guard choice, not just on the axioms.
 
 Thresholds, stated rather than implied: the `[hold]` rows are exhaustive over a
-finite domain (4 atoms, `0` = `unset`; `--domain 5` gives the identical verdict
-over ~30× the instances, so the result is not a size artifact — `--domain 6` is
-`[gap]`: it did not finish inside 240 s here). Those rows are a check of the
+finite domain (4 atoms, `0` = `unset`; the gate re-runs the witness at
+`--domain 5` on every run and requires all 27 row verdicts to be identical — ~72 s
+of enumeration, so a size artifact would be caught rather than remembered;
+`--domain 6` is `[gap]`: it did not finish inside 240 s here). Those rows are a check of the
 model's *code*, not a proof over an arbitrary `Val`; the arbitrary-`Val` proof is
 the Lean development above. The `[reject]` rows need no threshold at all: a
 counterexample memory embeds in every atom type with at least four atoms, and the
@@ -1944,6 +1950,18 @@ matches nothing (`edit-did-not-apply`), an edit that applies but changes nothing
 (`still-checks`), and an edit that breaks the syntax at the edited line
 (`refused-at-edited-line`).
 
+**What the proofs rest on, printed rather than assumed.** The file ends with
+`#print axioms` for all 48 declarations it proves (the toy's 28 theorems and the
+20 theorems that state its axioms), the way `hydro_lean/Hydro/AxCheck.lean` audits
+its own headlines, and `verify-invariants` requires every line to name a subset of
+`propext`, `Classical.choice`, `Quot.sound` — Lean's standard foundation, pulled in
+by `simp`/`omega` — and all 48 to be audited. What the audit is *for*: `sorryAx`
+would appear in that list, so a `sorry` that still elaborated could not hide;
+`veq_*` and both `keep_at_put_*` rules report that they depend on no axioms at all.
+No axiom of the toy appears as an axiom anywhere in the development — that is the
+claim the file has been making since it stopped enumerating, and this is the
+listing that makes it checkable.
+
 **The control itself was tested by making the mutations no-ops** (2026-11-15),
 which is the only way to know a negative control is not a rubber stamp. Three
 scratch copies of `scripts/verify-invariants` with one edit each, all run in the
@@ -2116,6 +2134,32 @@ existing W3 pending counts and approved statements; do not mark approval as
 implementation completion", i.e. a deployment claim that cites these artifacts is
 refused until the owner commits the four files, and citing them after approval
 still carries the `[gap]` where the plan says `[gap]`.
+
+**Staging, so the diff is reviewable without approving anything.** The four
+files are produced by `scripts/stage-approvals`, which writes them under a
+scratch root (`--root`, default `$TMPDIR/australvm-approve-staging`) and prints
+exactly the diff an owner would be committing — against nothing for a first
+approval, against the approved copy for a re-approval:
+
+```
+$ bash scripts/stage-approvals --stat-only
+== isa
+   193 statement(s), staged at /tmp/australvm-approve-staging/isa.stmts
+   closure-sha256: 27de0884e3408cd45800b07dd118f0fb2cd977ed15e868843c626dbeb32d0aed
+   statements-sha256: 2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a
+   212 line(s) would be added (no approved copy to diff against)
+… slot_layout 35, store_projection 21, store_projection_toy 147 …
+stage-approvals: 4 staged, 0 refused; scratch root /tmp/australvm-approve-staging
+stage-approvals: mm0/approved/ was not touched — the diff above is the decision
+```
+
+Without `--stat-only` it prints the full `git diff --no-index` for each artifact
+(423 added lines across the four, measured 2026-11-16), which is what "the diff
+is the human decision" means in the comparator's own header: the names in the
+list above are gone from the file, so the only thing readable in the diff is the
+*shape* of each statement plus the digests. `mm0/approved/` is never written by
+this script, and `verify-invariants` keeps reporting the four `[gap] W3` lines,
+so staging cannot be mistaken for approval.
 
 ### W9.4 What must not happen
 

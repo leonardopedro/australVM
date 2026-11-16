@@ -944,12 +944,29 @@ fn main() {
         // Two injections, one order-preserving and one not: a model that compared
         // atoms by anything other than equality (parity, ordering, a hash) could
         // survive a single monotone renaming by accident, which is the kind of
-        // control that passes for the wrong reason.
-        const EMBEDS: [[u8; 4]; 2] = [[0, 5, 6, 7], [0, 6, 5, 7]];
+        // control that passes for the wrong reason. Both are built from the domain
+        // size rather than written out, because a fixed table is only correct for
+        // one `--domain` — the first version of this row indexed a four-entry table
+        // and panicked on `--domain 5`.
+        let base = atoms;
+        let shift = move |s: u8| -> u8 {
+            if s == UNSET {
+                UNSET
+            } else {
+                s.wrapping_add(base)
+            }
+        };
+        let swap = move |s: u8| -> u8 {
+            match s {
+                0 => 0,
+                1 => 2u8.wrapping_add(base),
+                2 => 1u8.wrapping_add(base),
+                t => t.wrapping_add(base),
+            }
+        };
         let mut ce = None;
         let mut n = 0u64;
-        for (k, table) in EMBEDS.iter().enumerate() {
-            let embed = |s: u8| -> u8 { table[s as usize] };
+        for (k, embed) in [&shift as &dyn Fn(u8) -> u8, &swap].iter().enumerate() {
             for m in &mems {
                 let rm = m.renamed(embed);
                 n += 1;

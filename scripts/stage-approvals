@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Stage the pending statement approvals *outside* the repository and print the
+# diff an owner would be committing.
+#
+# An approval is an owner commit that touches only `mm0/approved/`; nothing here
+# may write that directory, and `mm0-comparator approve` knows how to write
+# somewhere else (`--approved-root`). So the whole content of "approving" is the
+# diff, and the diff is what this prints: for each artifact, the canonical
+# `.stmts` file that would land, with its closure and statement digests, as
+# `git diff --no-index` output against nothing (a first approval) or against the
+# currently approved copy (a re-approval, where the diff is the change an owner
+# has to read).
+#
+#   scripts/stage-approvals                 # the four pending artifacts
+#   scripts/stage-approvals isa slot_layout # named artifacts
+#   scripts/stage-approvals --stat-only     # just the sizes
+#   scripts/stage-approvals --root DIR      # where to stage (default: $TMPDIR)
+#
+# Exit status: 0 printed, 2 cannot run here (no python3 for the comparator),
+# 1 the comparator refused an artifact. Nothing in the repository is modified;
+# the staged copies live under the scratch root and are meant to be thrown away.
+
+set -uo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$here/.." && pwd)"
+comparator="$here/mm0-comparator"
+
+pending=(isa slot_layout store_projection store_projection_toy)
+
+root="${TMPDIR:-/tmp}/australvm-approve-staging"
+stat_only=false
+artifacts=()
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --root) shift; root="${1:-}"; [ -n "$root" ] || { echo "stage-approvals: --root needs a directory" >&2; exit 1; } ;;
+        --stat-only) stat_only=true ;;
+        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) echo "stage-approvals: unknown option $1" >&2; exit 1 ;;
+        *) artifacts+=("$1") ;;
+    esac
+    shift
+done
+[ "${#artifacts[@]}" -gt 0 ] || artifacts=("${pending[@]}")
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "stage-approvals: python3 not on PATH — cannot run the comparator here" >&2
+    exit 2
+fi
+
+mkdir -p "$root" || exit 1
+staged=0
+failed=0
+for artifact in "${artifacts[@]}"; do
+    echo "== $artifact"
+    if ! python3 "$comparator" approve --approved-root "$root" "$artifact" >"$root/$artifact.log" 2>&1; then
+        sed -n '1,5p' "$root/$artifact.log" >&2
+        echo "stage-approvals: the comparator refused $artifact" >&2
+        failed=$((failed + 1))
+        continue
+    fi
+    staged=$((staged + 1))
+    file="$root/$artifact.stmts"
+    stmts="$(grep -cE '^(provable sort|sort|delimiter|prefix|term|def|axiom|theorem) ' "$file" || true)"
+    echo "   $stmts statement(s), staged at $file"
+    sed -n 's/^-- \(closure-sha256\|statements-sha256\): /   \1: /p' "$file"
+
+    if [ "$stat_only" = true ]; then
+        approved="$repo_root/mm0/approved/$artifact.stmts"
+        if [ -f "$approved" ]; then
+            git diff --no-index --stat -- "$approved" "$file" 2>&1 | tail -1
+        else
+            echo "   $(grep -c . "$file") line(s) would be added (no approved copy to diff against)"
+        fi
+        continue
+    fi
+
+    approved="$repo_root/mm0/approved/$artifact.stmts"
+    if [ -f "$approved" ]; then
+        git --no-pager diff --no-index --no-color -- "$approved" "$file" || true
+    else
+        git --no-pager diff --no-index --no-color -- /dev/null "$file" || true
+    fi
+done
+
+echo
+echo "stage-approvals: $staged staged, $failed refused; scratch root $root"
+echo "stage-approvals: mm0/approved/ was not touched — the diff above is the decision"
+[ "$failed" -eq 0 ] || exit 1
