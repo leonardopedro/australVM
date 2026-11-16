@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 130 passed, 4 explained gap(s), 0 failed
+verify-invariants: 132 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -312,6 +312,9 @@ verify-invariants: 130 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy projection's theorems check without sorry
   [detail] 3 sorts, 18 term/def, 48 ax/thm
   [pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
+  [detail] injected sorry at line 808: lean accepted the file (exit 0), the scan refused it
+  [pass] W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts
+  [pass] W9.3: the no-sorry scan does not count banned words inside comments
   [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (28 theorem(s), 20 axiom(s))
   [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
@@ -1980,10 +1983,17 @@ stops using. That is why `verify-invariants` *also* scans the file's code for
 `sorry`, `admit`, `native_decide` and `ofReduceBool` after stripping comments:
 the scan needs the real thing (Lean block comments nest, so it is a small lexer,
 not a `sed` one-liner) and the audit needs the scan, since `#print axioms` of a
-theorem says nothing about the lemmas it never names. Both directions were
-measured: the real file scans clean, and a scratch file with `by sorry` and
-`by native_decide` produces two hits and a nested `/- /- -/ -/` comment produces
-none.
+theorem says nothing about the lemmas it never names. The gate therefore carries
+both directions itself: it appends `theorem scan_control_injected : True := by
+sorry` to a scratch copy, requires exactly one hit at the injected line, and —
+the point of the control — first requires `lean` to **accept** that copy with
+exit 0, so the scan is shown to catch what elaboration does not. The reverse
+control appends the same four words inside a line comment and a nested block
+comment, requires zero hits, and requires that copy to elaborate too, so a
+scanner that flagged comments fails rather than quietly passing. Both checks are
+load-bearing by construction: with the scanner stubbed out the injection control
+reports `[FAIL]`, and with a scanner that returns a hit unconditionally the
+comment control does too (both measured).
 
 **The control itself was tested by making the mutations no-ops** (2026-11-15),
 which is the only way to know a negative control is not a rubber stamp. Three
@@ -2151,6 +2161,14 @@ Two things this pins down that a count could not:
   them. `scripts/check-links` will not catch a stale name in a list like this —
   the enforcement is that a re-approval changes the digest in this table, which
   is a diff a reviewer sees.
+- **Both digest columns are re-derived, not trusted.** The `closure-sha256` cell
+  above and §W3's `statements-sha256` cell are the same four stagings: the gate
+  stages each §W3 row into its own scratch directory, reads the digest back out
+  of the file the comparator wrote, and compares — which is the line
+  `[pass] W3: the plan's §W3 digest column matches a staging (4 row(s))`. So the
+  hex strings quoted here are produced by a run, not copied from the previous
+  one: add or remove a statement, or let an emitter drift, and that line turns
+  red before an owner is asked to approve the changed bytes.
 
 This is also what the distributed plan's M4/D24 hangs off: it says "preserve
 existing W3 pending counts and approved statements; do not mark approval as
@@ -2183,6 +2201,55 @@ list above are gone from the file, so the only thing readable in the diff is the
 *shape* of each statement plus the digests. `mm0/approved/` is never written by
 this script, and `verify-invariants` keeps reporting the four `[gap] W3` lines,
 so staging cannot be mistaken for approval.
+
+**What the `store_projection_toy` approval must contain.** Written down because
+"approve the toy" is otherwise a judgement about a file nobody can read: the
+staged artifact is 70 canonical statements with every name erased, so a copy
+that differs by one axiom's position is a different axiom set with the same
+count. The commitment is one file, `mm0/approved/store_projection_toy.stmts`,
+and its content is exactly what
+
+```
+$ bash scripts/stage-approvals store_projection_toy --root /tmp/approve-toy
+== store_projection_toy
+   70 statement(s), staged at /tmp/approve-toy/store_projection_toy.stmts
+   closure-sha256: 09842af8888899541cef6b58221d346616fe64310cc6b102506f512f81cedcbf
+   statements-sha256: abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e
+   147 line(s) would be added (no approved copy to diff against)
+```
+
+writes — 148 lines, header `-- mm0-comparator v1 — approved statements for
+store_projection_toy`, the two digests above, then the 70 statements. The
+digests are the whole check: `abed1393…` is §W3's seventh cell and the value the
+gate re-derives on every run, so a copy that is not byte-identical to this
+staging fails `scripts/mm0-comparator check` or the digest comparison, whichever
+it reaches first. `isa`, `slot_layout` and `store_projection` follow the same
+shape with the digests in the table above.
+
+What the commit has to be, and what changes with it:
+
+- **The commit touches `mm0/approved/store_projection_toy.stmts` and nothing
+  else** — `git show --stat HEAD` must list one path. Copying the staged file in
+  is the approval; regenerating it inside the commit would make the diff the
+  emitter's opinion rather than the owner's decision.
+- **The row leaves §W3.** The gate's `stmts`, digest, emitter and state checks
+  all read that table as the *pending* list, and the state cell requires every
+  row to say `` `[gap]`, awaiting owner commit `` — an approved row cannot say
+  that, so it is deleted rather than reworded. `w3-pending:` loses
+  `store_projection_toy(70 stmt)`, the four `row(s)` counts become three, the
+  `w3-approved:` report gains `store_projection_toy(70 stmt)`, and the four
+  `[gap] W3: … has no approved statements` lines in §3.5 become three.
+- **§W9.3's composition table moves with it**, keeping `09842af8…` and
+  `abed1393…` as the record of what was approved; the counts stay gate-pinned
+  through the `w3-approved:` line once the row is gone.
+- **Nothing about the claim changes.** The approval holds out the toy's 70
+  statements, so the gate now refuses a statement, closure or theory mismatch
+  against that copy. It does not make `store_projection`'s projection claim
+  proved (that file still has no axioms and no theorems), it does not touch
+  `isa`, and it does not turn the toy's 28 theorems into statements about the
+  JIT — they are about a three-cell model whose 20 axioms `scripts/toy-witness`
+  executes over a five-atom domain and `mm0/toy_witness/ToyWitness.lean` proves
+  over an arbitrary atom type.
 
 ### W9.4 What must not happen
 

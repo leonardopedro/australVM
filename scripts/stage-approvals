@@ -12,7 +12,7 @@
 # has to read).
 #
 #   scripts/stage-approvals                 # the four pending artifacts
-#   scripts/stage-approvals isa slot_layout # named artifacts
+#   scripts/stage-approvals isa slot_layout # named artifacts (stem or path)
 #   scripts/stage-approvals --stat-only     # just the sizes
 #   scripts/stage-approvals --root DIR      # where to stage (default: $TMPDIR)
 #
@@ -43,6 +43,21 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 [ "${#artifacts[@]}" -gt 0 ] || artifacts=("${pending[@]}")
+
+# Accept a path as well as a stem (`mm0/isa.mm0` and `isa` are the same
+# artifact): the comparator keys on the stem, and a mistyped path used to reach
+# it as a relative path under the scratch root and fail with `No such file or
+# directory` — a refusal that reads like a stale artifact rather than a typo.
+for _i in "${!artifacts[@]}"; do
+    _a="${artifacts[$_i]}"
+    _a="${_a#./}"
+    _a="${_a#mm0/}"
+    _a="${_a%.mm0}"
+    case "$_a" in
+        */*|"") echo "stage-approvals: not an artifact: '${artifacts[$_i]}' (want a stem or mm0/<stem>.mm0)" >&2; exit 1 ;;
+    esac
+    artifacts[$_i]="$_a"
+done
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "stage-approvals: python3 not on PATH — cannot run the comparator here" >&2

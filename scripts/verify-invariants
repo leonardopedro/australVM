@@ -1075,10 +1075,12 @@ MUTATIONS
             # paragraph (which names `sorryAx` to explain itself) would trip it;
             # Lean block comments nest, so this is a small lexer rather than a
             # `sed` one-liner, and a missing interpreter is a gap rather than a
-            # pass.
-            _lean_code=""
-            if command -v python3 >/dev/null 2>&1; then
-                _lean_code="$(python3 - "$repo_root/mm0/toy_witness/ToyWitness.lean" <<'PYSTRIP'
+            # pass. Newlines inside comments are kept so a hit's line number is
+            # the file's, which makes `refused@N` readable in the detail.
+            _lean_scan() {
+                # $1 = file; prints "<line>:<code line>" for banned tokens in code
+                python3 - "$1" <<'PYSTRIP' \
+                    | grep -nE '\b(sorry|admit|native_decide|ofReduceBool)\b' || true
 import sys
 src = open(sys.argv[1]).read()
 out = []
@@ -1094,6 +1096,8 @@ while i < len(src):
         i += 2
         continue
     if depth:
+        if src[i] == "\n":
+            out.append("\n")
         i += 1
         continue
     if src.startswith("--", i):
@@ -1104,18 +1108,57 @@ while i < len(src):
     i += 1
 sys.stdout.write("".join(out))
 PYSTRIP
-)"
-            fi
-            if [ -z "$_lean_code" ]; then
+            }
+            if ! command -v python3 >/dev/null 2>&1; then
                 gap "W9.3: the Lean file's code not scanned for sorry/native_decide (no python3 here)"
             else
-                _lean_banned="$(printf '%s\n' "$_lean_code" \
-                    | grep -nE '\b(sorry|admit|native_decide|ofReduceBool)\b' || true)"
+                _lean_banned="$(_lean_scan "$repo_root/mm0/toy_witness/ToyWitness.lean")"
                 if [ -z "$_lean_banned" ]; then
                     check "W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool" true
                 else
                     printf '%s\n' "$_lean_banned" | head -5 >&2
                     check "W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool" false
+                fi
+
+                # Mutation controls, both directions. A scan that never fires is
+                # indistinguishable from a clean file, so a `sorry` is injected
+                # into a scratch copy — and Lean is asked to accept that copy, to
+                # show the textual scan is load-bearing rather than a second way
+                # of saying what elaboration already said. The reverse control
+                # injects the same words inside comments only: any hit there is a
+                # false positive and fails too.
+                _lean_ctrl="$_cert_tmp/lean-scan-control"
+                mkdir -p "$_lean_ctrl"
+                _lean_lines="$(grep -c '' "$repo_root/mm0/toy_witness/ToyWitness.lean")"
+                { cat "$repo_root/mm0/toy_witness/ToyWitness.lean"
+                  printf 'theorem scan_control_injected : True := by sorry\n'
+                } >"$_lean_ctrl/injected.lean"
+                { cat "$repo_root/mm0/toy_witness/ToyWitness.lean"
+                  printf -- '-- sorry admit native_decide ofReduceBool\n'
+                  printf -- '/- sorry /- admit -/ native_decide ofReduceBool -/\n'
+                } >"$_lean_ctrl/commented.lean"
+                _inj_hits="$(_lean_scan "$_lean_ctrl/injected.lean")"
+                _com_hits="$(_lean_scan "$_lean_ctrl/commented.lean")"
+                _inj_rc=0
+                lean "$_lean_ctrl/injected.lean" >"$_lean_ctrl/injected.log" 2>&1 || _inj_rc=$?
+                _com_rc=0
+                lean "$_lean_ctrl/commented.lean" >"$_lean_ctrl/commented.log" 2>&1 || _com_rc=$?
+                _inj_line="$((_lean_lines + 1))"
+                if [ "$_inj_rc" -eq 0 ] && [ "$(printf '%s\n' "$_inj_hits" | grep -c '^[0-9]*:')" -eq 1 ] \
+                        && printf '%s\n' "$_inj_hits" | grep -q "^${_inj_line}:.*scan_control_injected"; then
+                    echo "  [detail] injected sorry at line $_inj_line: lean accepted the file (exit 0)," \
+                         "the scan refused it" >&2
+                    check "W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts" true
+                else
+                    echo "  [detail] lean exit=$_inj_rc, hits=[$(printf '%s' "$_inj_hits" | tr '\n' ';')]" \
+                         "expected one hit at line $_inj_line" >&2
+                    check "W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts" false
+                fi
+                if [ "$_com_rc" -eq 0 ] && [ -z "$_com_hits" ]; then
+                    check "W9.3: the no-sorry scan does not count banned words inside comments" true
+                else
+                    echo "  [detail] lean exit=$_com_rc, hits=[$(printf '%s' "$_com_hits" | tr '\n' ';')]" >&2
+                    check "W9.3: the no-sorry scan does not count banned words inside comments" false
                 fi
             fi
             if [ ! -s "$_cert_tmp/witness.log" ]; then
