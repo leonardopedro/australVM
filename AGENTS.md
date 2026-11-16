@@ -116,7 +116,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   owner commit, so the diff *is* the decision and this only shows it. Takes a
   stem or `mm0/<stem>.mm0`; a name that is neither exits 64 before staging
   anything, because a comparator "refused" line is the message for a real stale
-  artifact, not for a typo.
+  artifact, not for a typo. An artifact whose staged copy is byte-identical to
+  its approved copy is refused as "nothing to approve" (exit 1) rather than
+  printing an empty diff; `--approved-root` (default `mm0/approved`, read-only)
+  names the copies to diff against. `verify-invariants` pins the 64, the clean
+  four-artifact staging, and the no-op refusal as three `[pass] W3` lines.
 - `scripts/clif2mm0` — emits/checks `mm0/clif.mm0`, the CLIF *shape* model
   (W9.2): `clif_dump` (a bridge binary) measures the instruction forms the CPS
   lowering really produces, and this generator writes one declaration per form

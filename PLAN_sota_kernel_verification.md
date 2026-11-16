@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 136 passed, 4 explained gap(s), 0 failed
+verify-invariants: 140 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -351,12 +351,17 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [detail] one altered statement: check refused it (unmodified staging: exit 0)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W9.3: the composition table's counts match the stagings (4 row(s))
-  [pass] W9.3: the composition table's closure digests match the stagings (4 row(s))
+  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
+  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
+  [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
+  [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
+  [pass] W3: stage-approvals answers an unknown artifact name with exit 64
+  [pass] W3: stage-approvals stages the 4 pending artifacts (exit 0)
+  [pass] W3: stage-approvals refuses an artifact that equals its approved copy
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 127 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 131 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -752,10 +757,15 @@ the artifact, so `mm0-c` checks them too.
   [detail] one altered statement: check refused it (unmodified staging: exit 0)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W9.3: the composition table's counts match the stagings (4 row(s))
-  [pass] W9.3: the composition table's closure digests match the stagings (4 row(s))
+  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
+  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
+  [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
+  [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
+  [pass] W3: stage-approvals answers an unknown artifact name with exit 64
+  [pass] W3: stage-approvals stages the 4 pending artifacts (exit 0)
+  [pass] W3: stage-approvals refuses an artifact that equals its approved copy
   ```
 
   The `statements-sha256` column is checked the same way, because a quoted digest
@@ -2095,15 +2105,38 @@ digests below come from scratch copies written with
 | `store_projection_toy` | 70 | 2 sorts + `Prop`, 10 terms, 8 defs, 20 axioms, 28 theorems = 69 declarations; + 1 `delimiter` | `09842af8888899541cef6b58221d346616fe64310cc6b102506f512f81cedcbf` |
 
 The composition and `closure-sha256` columns are **counted, not read back**:
-`verify-invariants` stages each row and compares the declared `N sorts` (adding
-`Prop` back when the cell names it), `N terms`, `N defs`, `N axioms`,
-`N theorems`, the "= N declarations" sum, the numeral and `delimiter` lines, and
-the closure digest, with the file the comparator wrote —
-`[pass] W9.3: the composition table's counts match the stagings (4 row(s))` and
-`… closure digests match the stagings (4 row(s))`. Changing the toy row's
-`20 axioms` to `21` is refused as `store_projection_toy(says 21 axioms,
-staging 20)` (measured), so the cell that says what an approval *contains*
-cannot drift from the approval while its statement count stays right.
+`verify-invariants` compares the declared `N sorts` (adding `Prop` back when the
+cell names it), `N terms`, `N defs`, `N axioms`, `N theorems`, the "= N
+declarations" sum (which counts every `sort` line, `Prop` included: 6 + 70 + 1 +
+65 + 26 = 168 for `isa`), the numeral and `delimiter` lines, and the closure
+digest, with the file a run wrote —
+`[pass] W9.3: the composition table's counts match the files it records (4
+row(s), 0 from mm0/approved/)` and `… closure digests match the files it
+records (4 row(s), 0 from mm0/approved/)`. The breakdown is not decoration: a
+row is **counted from `mm0/approved/<stem>.stmts`** once that file exists,
+because the row is a record of an approval and the approval is those bytes; a
+row still pending is counted from a fresh staging. `0 from mm0/approved/` today
+is the four approvals being un-made, and it moves on its own when one lands. If
+the staged copy and the approved copy differ — an artifact edited after its
+approval — the row reports `staged bytes differ from the approved copy` instead
+of describing whichever copy was read, so a drift cannot keep the counts green.
+
+Changing the toy row's `20 axioms` to `21` is refused as
+`store_projection_toy(says 21 axioms, staging 20)` (measured), so the cell that
+says what an approval *contains* cannot drift from the approval while its
+statement count stays right. And the approved path is exercised, not assumed:
+the gate copies the toy staging, deletes its first `axiom` line, and counts the
+result *as an approval* through the same function the rows use — it must come
+back `store_projection_toy(says 20 axioms, approved 19)` and fail, which is
+`[pass] W9.3: an approved copy that drops an axiom fails the composition counts`.
+The root the rows read is `mm0/approved/` unless `AUSTRALVM_APPROVED_ROOT` names
+another directory — the same override the comparator's `--approved-root`
+provides, and the one measurement above used: with that variable set to a
+scratch root holding a `slot_layout` approval whose first axiom was deleted, the
+gate printed `(4 row(s), 4 from mm0/approved/)`,
+`slot_layout(staged bytes differ from the approved copy)
+slot_layout(says 7 axioms, approved 6)` and one `[FAIL]` (measured, 2026-11-16).
+The variable grants nothing: it moves which directory is *read*.
 
 All four are byte-identical to what `mm0-comparator approve` would write (the
 `statements-sha256` headers are `2619b5ec…`, `98dd6399…`, `5c201a80…`,
@@ -2206,7 +2239,8 @@ still carries the `[gap]` where the plan says `[gap]`.
 files are produced by `scripts/stage-approvals`, which writes them under a
 scratch root (`--root`, default `$TMPDIR/australvm-approve-staging`) and prints
 exactly the diff an owner would be committing — against nothing for a first
-approval, against the approved copy for a re-approval:
+approval, against the approved copy for a re-approval (`--approved-root`,
+default `mm0/approved`, read-only and never written):
 
 ```
 $ bash scripts/stage-approvals --stat-only
@@ -2227,6 +2261,26 @@ list above are gone from the file, so the only thing readable in the diff is the
 *shape* of each statement plus the digests. `mm0/approved/` is never written by
 this script, and `verify-invariants` keeps reporting the four `[gap] W3` lines,
 so staging cannot be mistaken for approval.
+
+**Its own exit codes are gated, because a staging run that "worked" is not
+self-evident.** Three cases decide whether a person reading the output is being
+told the truth: a name that is not `mm0/<stem>.mm0` must be a usage error
+(**64**) rather than the comparator's `refused <name>` line — that line is the
+message for a genuinely stale artifact, so a typo used to read like one — the
+pending artifacts must actually stage (**0**, four `== <artifact>` headings,
+`4 staged, 0 refused`), and an artifact whose staged copy is byte-identical to
+its approved copy must be **refused as nothing to approve** rather than printing
+an empty diff under a heading, which reads like an approval of nothing. Measured
+2026-11-16: `nope` → 64, `--bogus` → 64, no arguments → 0 with four headings,
+`store_projection_toy` against an approved-root copy of itself → 1 with
+`nothing to approve: byte-identical to …`. The gate pins all three as
+`[pass] W3: stage-approvals answers an unknown artifact name with exit 64`,
+`… stages the 4 pending artifacts (exit 0)` and `… refuses an artifact that
+equals its approved copy`, so the script cannot quietly lose its usage error or
+start calling a no-op a success. The pending list the middle line counts is the
+script's own `pending=`, so when an approval lands and its row leaves §W3, that
+check goes red until the array shrinks with it — the intended prompt, not a
+false alarm.
 
 **What the `store_projection_toy` approval must contain.** Written down because
 "approve the toy" is otherwise a judgement about a file nobody can read: the
@@ -2264,7 +2318,11 @@ What the commit has to be, and what changes with it:
   that, so it is deleted rather than reworded. `w3-pending:` loses
   `store_projection_toy(70 stmt)`, the four `row(s)` counts become three, the
   `w3-approved:` report gains `store_projection_toy(70 stmt)`, and the four
-  `[gap] W3: … has no approved statements` lines in §3.5 become three.
+  `[gap] W3: … has no approved statements` lines in §3.5 become three — and the
+  name leaves `pending=` in `scripts/stage-approvals`, because the gate runs the
+  script and its `[pass] W3: stage-approvals stages the 4 pending artifacts`
+  line counts whatever that array says; a stale entry there turns into a
+  "nothing to approve" refusal, which is the check telling you to shrink it.
 - **§W9.3's composition table moves with it**, keeping `09842af8…` and
   `abed1393…` as the record of what was approved; the counts stay gate-pinned
   through the `w3-approved:` line once the row is gone.

@@ -15,14 +15,20 @@
 #   scripts/stage-approvals isa slot_layout # named artifacts (stem or path)
 #   scripts/stage-approvals --stat-only     # just the sizes
 #   scripts/stage-approvals --root DIR      # where to stage (default: $TMPDIR)
+#   scripts/stage-approvals --approved-root DIR
+#                                           # approved copies to diff against
+#                                           # (default: mm0/approved, read-only)
 #
 # Exit status: 0 printed, 2 cannot run here (no python3 for the comparator),
-# 1 the comparator refused an artifact, 64 a usage error (an unknown artifact
-# name, a bad --root). A name that is not `mm0/<stem>.mm0` is refused before
-# anything is staged: it used to reach the comparator, which answered
-# "refused <name>" — the message for a real refusal, so a typo read like a stale
-# artifact. Nothing in the repository is modified; the staged copies live under
-# the scratch root and are meant to be thrown away.
+# 1 the comparator refused an artifact or an artifact has nothing to approve,
+# 64 a usage error (an unknown artifact name, a bad --root). A name that is not
+# `mm0/<stem>.mm0` is refused before anything is staged: it used to reach the
+# comparator, which answered "refused <name>" — the message for a real refusal,
+# so a typo read like a stale artifact. An artifact whose staged copy is
+# byte-identical to the approved one is "nothing to approve": the diff would be
+# empty, and an empty diff printed under a `== <artifact>` heading reads like a
+# successful approval of nothing. Nothing in the repository is modified; the
+# staged copies live under the scratch root and are meant to be thrown away.
 
 set -uo pipefail
 
@@ -33,14 +39,16 @@ comparator="$here/mm0-comparator"
 pending=(isa slot_layout store_projection store_projection_toy)
 
 root="${TMPDIR:-/tmp}/australvm-approve-staging"
+approved_root="$repo_root/mm0/approved"
 stat_only=false
 artifacts=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --root) shift; root="${1:-}"; [ -n "$root" ] || { echo "stage-approvals: --root needs a directory" >&2; exit 64; } ;;
+        --approved-root) shift; approved_root="${1:-}"; [ -n "$approved_root" ] || { echo "stage-approvals: --approved-root needs a directory" >&2; exit 64; } ;;
         --stat-only) stat_only=true ;;
-        -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "stage-approvals: unknown option $1" >&2; exit 64 ;;
         *) artifacts+=("$1") ;;
     esac
@@ -77,6 +85,7 @@ fi
 mkdir -p "$root" || exit 1
 staged=0
 failed=0
+unchanged=0
 for artifact in "${artifacts[@]}"; do
     echo "== $artifact"
     if ! python3 "$comparator" approve --approved-root "$root" "$artifact" >"$root/$artifact.log" 2>&1; then
@@ -85,14 +94,19 @@ for artifact in "${artifacts[@]}"; do
         failed=$((failed + 1))
         continue
     fi
-    staged=$((staged + 1))
     file="$root/$artifact.stmts"
+    approved="$approved_root/$artifact.stmts"
+    if [ -f "$approved" ] && cmp -s "$approved" "$file"; then
+        unchanged=$((unchanged + 1))
+        echo "   nothing to approve: byte-identical to $approved"
+        continue
+    fi
+    staged=$((staged + 1))
     stmts="$(grep -cE '^(provable sort|sort|delimiter|prefix|term|def|axiom|theorem) ' "$file" || true)"
     echo "   $stmts statement(s), staged at $file"
     sed -n 's/^-- \(closure-sha256\|statements-sha256\): /   \1: /p' "$file"
 
     if [ "$stat_only" = true ]; then
-        approved="$repo_root/mm0/approved/$artifact.stmts"
         if [ -f "$approved" ]; then
             git diff --no-index --stat -- "$approved" "$file" 2>&1 | tail -1
         else
@@ -101,7 +115,6 @@ for artifact in "${artifacts[@]}"; do
         continue
     fi
 
-    approved="$repo_root/mm0/approved/$artifact.stmts"
     if [ -f "$approved" ]; then
         git --no-pager diff --no-index --no-color -- "$approved" "$file" || true
     else
@@ -110,6 +123,10 @@ for artifact in "${artifacts[@]}"; do
 done
 
 echo
-echo "stage-approvals: $staged staged, $failed refused; scratch root $root"
-echo "stage-approvals: mm0/approved/ was not touched — the diff above is the decision"
-[ "$failed" -eq 0 ] || exit 1
+echo "stage-approvals: $staged staged, $failed refused, $unchanged nothing to approve; scratch root $root"
+echo "stage-approvals: $approved_root was not touched — the diff above is the decision"
+if [ "$failed" -eq 0 ] && [ "$unchanged" -eq 0 ]; then
+    exit 0
+fi
+[ "$unchanged" -eq 0 ] || echo "stage-approvals: an unchanged artifact is already approved as it stands; run again after changing it" >&2
+exit 1
