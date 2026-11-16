@@ -52,6 +52,14 @@ the comment at `test/JitTest.ml:11`. See also `../unfer/docs/CHECKLIST_EVIDENCE.
 
 A high-performance, secure runtime for Austral (extended with Tail Call Optimization) based on **Cranelift JIT** and **AWS Cedar**, inspired by the **Theseus OS** architecture.
 
+The proposed [distributed security development plan](PLAN_distributed_security.md)
+covers australVM and unfer together, with a [source review](docs/DISTRIBUTED_SECURITY_REVIEW.md)
+and small implementation tasks inspired by Hydro and Hydro Lean.
+
+The [umbrella production plan](PLAN_umbrella_production.md) adds a focused
+[interop review](docs/UMBRELLA_PRODUCTION_REVIEW.md) and
+[debugging/test matrix](docs/umbrella/TEST_MATRIX.md) for the Rust/cap-std compiler path.
+
 ## 🚀 Current Status: Phase 11 (Policy-Driven OS VM)
 The project has successfully integrated a multi-tier security model combining compile-time linear type checks with JIT-time Cedar policy enforcement.
 

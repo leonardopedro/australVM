@@ -1,5 +1,10 @@
 # umbrella
 
+Production work is planned in the [debugging and test plan](../PLAN_umbrella_production.md),
+with a [source review](../docs/UMBRELLA_PRODUCTION_REVIEW.md) and
+[acceptance matrix](../docs/umbrella/TEST_MATRIX.md). The current implementation
+is the prototype described below. Its `cap-std` integration is incomplete.
+
 PLAN_valen §5 **P3** — an australVM-as-a-service host that lives inside
 australVM as a plain subfolder (`australVM/umbrella`; integrated out of
 its old submodule form on 2026-10-18) and
@@ -33,7 +38,7 @@ cargo run --release -- \
     --manifest module.toml \
     modules/Demo.aum
 
-# denied path: exits 1 before execution; stderr names UK-4001
+# denied target-call path: exits 1; stderr names UK-4001
 cargo run --release -- modules/Demo.aum
 ```
 
@@ -54,7 +59,8 @@ overridable via `AUSTRAL_BIN`); `--cratedir <dir>` crate to build
   the bridge's baked rs_* table; it is found only because this project
   built a cdylib and dlopened it.
 - **denied** — without the manifest the compile fails with `UK-4001`
-  and the process exits 1; no foreign code runs. The gate is checked
+  and the process exits 1 before the selected target call. Cargo build scripts
+  and library initializers can already have executed during build/load. The gate is checked
   against the manifest's grants, so `rs_*` sits on the kernel boundary
   exactly like `uk_*`/`uz_*`.
 
