@@ -1065,6 +1065,59 @@ MUTATIONS
                      "outside {propext, Classical.choice, Quot.sound}: [$(echo "$_lean_axnames" | tr '\n' ' ')]" >&2
                 check "W9.3: every Lean declaration rests on Lean's standard foundation only" false
             fi
+
+            # A textual rule the kernel audit cannot cover: `#print axioms` only
+            # reports on the 48 declarations named in the audit, so a `sorry` in a
+            # lemma nobody prints — dead code, a helper that a later edit stops
+            # using — would elaborate and be invisible. So the *code* is scanned
+            # too, after stripping comments, for `sorry`, `admit`, `native_decide`
+            # and `ofReduceBool`. Comments have to be stripped or the audit's own
+            # paragraph (which names `sorryAx` to explain itself) would trip it;
+            # Lean block comments nest, so this is a small lexer rather than a
+            # `sed` one-liner, and a missing interpreter is a gap rather than a
+            # pass.
+            _lean_code=""
+            if command -v python3 >/dev/null 2>&1; then
+                _lean_code="$(python3 - "$repo_root/mm0/toy_witness/ToyWitness.lean" <<'PYSTRIP'
+import sys
+src = open(sys.argv[1]).read()
+out = []
+i = 0
+depth = 0
+while i < len(src):
+    if src.startswith("/-", i):
+        depth += 1
+        i += 2
+        continue
+    if depth and src.startswith("-/", i):
+        depth -= 1
+        i += 2
+        continue
+    if depth:
+        i += 1
+        continue
+    if src.startswith("--", i):
+        nl = src.find("\n", i)
+        i = len(src) if nl < 0 else nl
+        continue
+    out.append(src[i])
+    i += 1
+sys.stdout.write("".join(out))
+PYSTRIP
+)"
+            fi
+            if [ -z "$_lean_code" ]; then
+                gap "W9.3: the Lean file's code not scanned for sorry/native_decide (no python3 here)"
+            else
+                _lean_banned="$(printf '%s\n' "$_lean_code" \
+                    | grep -nE '\b(sorry|admit|native_decide|ofReduceBool)\b' || true)"
+                if [ -z "$_lean_banned" ]; then
+                    check "W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool" true
+                else
+                    printf '%s\n' "$_lean_banned" | head -5 >&2
+                    check "W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool" false
+                fi
+            fi
             if [ ! -s "$_cert_tmp/witness.log" ]; then
                 gap "W9.3: rejected-candidate cross-check not run (rustc absent)"
             else
@@ -1345,6 +1398,52 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     else
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
         check "W3: the plan's §W3 stmts column matches the measured counts" false
+    fi
+    # … and the `statements-sha256` column. Staging is what produces that digest,
+    # so a quoted one is either compared with a staging or it is a copied hex
+    # string nobody can check — the exact kind of cell this table's `stmts`
+    # column already taught us to measure. The staging goes to the gate's own
+    # scratch directory, never `mm0/approved/`, because approval is an owner
+    # commit and a check that writes it would be approving on its own.
+    _w3_dig_rows="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $7
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            gsub(/`/, "", cell)
+            if (cell ~ /^[0-9a-f]+$/) print path "\t" cell
+        }' "$_plan_file")"
+    _w3_dig_bad=""
+    _w3_dig_n=0
+    mkdir -p "$_cert_tmp/approvals"
+    while IFS="$(printf '\t')" read -r _g_stem _g_cell; do
+        [ -n "$_g_stem" ] || continue
+        _w3_dig_n=$((_w3_dig_n + 1))
+        rm -f "$_cert_tmp/approvals/$_g_stem.stmts"
+        python3 "$repo_root/scripts/mm0-comparator" approve \
+            --approved-root "$_cert_tmp/approvals" "$_g_stem" \
+            >"$_cert_tmp/approvals/$_g_stem.log" 2>&1 || {
+            _w3_dig_bad="$_w3_dig_bad $_g_stem(staging refused)"
+            continue
+        }
+        _g_actual="$(sed -n 's/^-- statements-sha256: //p' \
+            "$_cert_tmp/approvals/$_g_stem.stmts" 2>/dev/null)"
+        if [ "$_g_actual" != "$_g_cell" ]; then
+            _w3_dig_bad="$_w3_dig_bad $_g_stem(table says '$(printf '%s' "$_g_cell" | cut -c1-12)…', staging gives '$(printf '%s' "$_g_actual" | cut -c1-12)…')"
+        fi
+    done <<EOF
+$_w3_dig_rows
+EOF
+    if ! command -v python3 >/dev/null 2>&1; then
+        gap "W3: the §W3 statements-sha256 column not compared (no python3 here)"
+    elif [ "$_w3_dig_n" -eq 0 ]; then
+        gap "W3: the §W3 statements-sha256 column not compared (no table row quotes one)"
+    elif [ -z "$_w3_dig_bad" ]; then
+        check "W3: the plan's §W3 digest column matches a staging ($_w3_dig_n row(s))" true
+    else
+        echo "  [detail] §W3 digests:${_w3_dig_bad}" >&2
+        check "W3: the plan's §W3 digest column matches a staging" false
     fi
     # … and the emitter column has to name something real. The `isa` row claims
     # `scripts/isa-encdec check` is "registered in EMITTERS", so that command must

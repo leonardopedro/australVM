@@ -293,11 +293,11 @@ currently indefensible:
    weakened definition is reproduced faithfully by regeneration, so the drift gate
    cannot see it. This is exactly the hole `comparator` was built to close.
 
-### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-15)
+### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-16)
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 128 passed, 4 explained gap(s), 0 failed
+verify-invariants: 130 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -311,6 +311,7 @@ verify-invariants: 128 passed, 4 explained gap(s), 0 failed
   [pass] W9.3: the toy's citation digest refuses a changed claim
   [pass] W9.3: the toy projection's theorems check without sorry
   [detail] 3 sorts, 18 term/def, 48 ax/thm
+  [pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
   [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (28 theorem(s), 20 axiom(s))
   [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
   [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
@@ -343,10 +344,11 @@ verify-invariants: 128 passed, 4 explained gap(s), 0 failed
 w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
+  [pass] W3: the plan's §W3 digest column matches a staging (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 122 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1)
+verify-invariants: 123 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -721,12 +723,12 @@ the artifact, so `mm0-c` checks them too.
   shrinking count rather than a single unhelpful "W3 open": the four rows below
   are the four `[gap] W3: <artifact> has no approved statements` lines in §3.5.
 
-  | artifact | what the approval holds out | stmts | emitter that owns it | state |
-  |---|---|---|---|---|
-  | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit |
-  | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[gap]`, awaiting owner commit |
-  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[gap]`, awaiting owner commit; the claim itself stays `[gap]` (§W9.3) |
-  | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[gap]`, awaiting owner commit |
+  | artifact | what the approval holds out | stmts | emitter that owns it | state | statements-sha256 |
+  |---|---|---|---|---|---|
+  | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | `2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a` |
+  | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[gap]`, awaiting owner commit | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
+  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[gap]`, awaiting owner commit; the claim itself stays `[gap]` (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
+  | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[gap]`, awaiting owner commit | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
@@ -738,9 +740,19 @@ the artifact, so `mm0-c` checks them too.
   w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
   w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
+  [pass] W3: the plan's §W3 digest column matches a staging (4 row(s))
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
   ```
+
+  The `statements-sha256` column is checked the same way, because a quoted digest
+  is either compared with the staging that produces it or it is a copied hex
+  string nobody can verify. The gate stages each row into its own scratch
+  directory — `mm0/approved/` is never written, since approval is an owner
+  commit — reads the digest back from the header the comparator wrote, and
+  compares. That also exercises the staging path on every run, which is the one
+  thing a script that must not write the real directory cannot otherwise
+  demonstrate.
 
   … and then parses this table and diffs the pending line against it. The
   approved line is a report, not an enforcement: an approved artifact is held by
@@ -1961,6 +1973,17 @@ would appear in that list, so a `sorry` that still elaborated could not hide;
 No axiom of the toy appears as an axiom anywhere in the development — that is the
 claim the file has been making since it stopped enumerating, and this is the
 listing that makes it checkable.
+
+The audit covers the 48 declarations it names, and nothing else, so it cannot see
+a `sorry` in a lemma that nothing prints — dead code, or a helper a later edit
+stops using. That is why `verify-invariants` *also* scans the file's code for
+`sorry`, `admit`, `native_decide` and `ofReduceBool` after stripping comments:
+the scan needs the real thing (Lean block comments nest, so it is a small lexer,
+not a `sed` one-liner) and the audit needs the scan, since `#print axioms` of a
+theorem says nothing about the lemmas it never names. Both directions were
+measured: the real file scans clean, and a scratch file with `by sorry` and
+`by native_decide` produces two hits and a nested `/- /- -/ -/` comment produces
+none.
 
 **The control itself was tested by making the mutations no-ops** (2026-11-15),
 which is the only way to know a negative control is not a rubber stamp. Three

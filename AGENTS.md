@@ -110,6 +110,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `mm0/approved/<artifact>.stmts` plus a dependency-closure and theory hash;
   an artifact without an approval is reported as a `[gap]` by
   `verify-invariants`, never a silent pass.
+- `scripts/stage-approvals` — stages the pending statement approvals under a
+  scratch root (`--root`, default `$TMPDIR/australvm-approve-staging`) and prints
+  the diff an owner would commit, without writing `mm0/approved/`: approval is an
+  owner commit, so the diff *is* the decision and this only shows it.
 - `scripts/clif2mm0` — emits/checks `mm0/clif.mm0`, the CLIF *shape* model
   (W9.2): `clif_dump` (a bridge binary) measures the instruction forms the CPS
   lowering really produces, and this generator writes one declaration per form
@@ -363,7 +367,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   printed axiom, theorem and rejected-candidate lists to agree with the `.mm0`
   and the Rust witness. It also mutates five model definitions (`take 3`,
   `drop`, `notfull`, `narrow4`, `keep`) and requires elaboration to fail, since a
-  proof's own failure mode is a definition it no longer depends on. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
+  proof's own failure mode is a definition it no longer depends on, audits
+  `#print axioms` for all 48 declarations (nothing outside
+  `propext`/`Classical.choice`/`Quot.sound`), and scans the comment-stripped code
+  for `sorry`/`admit`/`native_decide`/`ofReduceBool` — the audit cannot see a
+  `sorry` in a declaration it does not name. It proves the shape and says so in its header; it does not connect Cranelift or Sail to `put`/`get`,
   and `verify-invariants` pins that it cites the *current* `store_projection.mm0`
   and uses the same four transformer names, so a proof cannot drift onto a
   neighbouring (easier) statement — and that pin has its own control: the gate
