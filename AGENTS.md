@@ -440,7 +440,14 @@ row's *state* selects: today's staging for a pending row, `mm0/approved/<stem>.s
 for an approved one. A cell that disagrees fails `verify-invariants` with the row
 named, as does half an approval (a committed copy whose row still says pending —
 `flip this row's state cell` — or an approved row whose copy is missing or holds
-a different number of statements), so edit the table only by reading that line. The table's `emitter that owns it` column is checked too: a cell
+a different number of statements), so edit the table only by reading that line.
+A pending row also has to *re-derive* on every run — its artifact must stage,
+because the row is the owner's next decision and a stale `.mm1` or a broken
+generator should read as a finding about the artifact, not as "not measurable
+here" — and the failure quotes the comparator's own line. `check` and `approve`
+both default to `AUSTRALVM_APPROVED_ROOT` when it is set (the flag still wins),
+so the comparator and the table cannot be pointed at different roots.
+The table's `emitter that owns it` column is checked too: a cell
 naming a command (`` `scripts/isa-encdec check` ``) must name a file that exists
 and is executable with the script *and* mode `python3 scripts/mm0-comparator
 emitters` reports for that stem, a cell saying `none` must be genuinely
@@ -459,7 +466,10 @@ counts and the staging set are derived from the two states, and
 an approved row the emitter cell is re-run, not just read: the gate approves the
 row again into a scratch root and requires the result to be byte-identical to
 the committed copy, which is what keeps `emitter that owns it` true after the
-`stmts`/digest columns start reading a fixed file.
+`stmts`/digest columns start reading a fixed file. That check carries its own
+negative control: the same code, given a registry with `isa` retired, must report
+the retirement for the row that names the emitter, and report nothing with the
+real registry over an identical staging.
 
 ## Gotchas
 

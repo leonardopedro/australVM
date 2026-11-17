@@ -31,7 +31,8 @@ Usage:
     scripts/mm0-comparator selftest                   # the three negative controls
     scripts/mm0-comparator emitters                   # the EMITTERS registry, one row per stem
 
-Both modes take `--approved-root DIR` (default `mm0/approved`). That flag is
+Both modes take `--approved-root DIR` (default `$AUSTRALVM_APPROVED_ROOT`,
+else `mm0/approved`). That flag is
 how an artifact nobody has approved yet gets its flow exercised end to end
 without the repository pretending it was approved — approve into a scratch
 root, check against it, read the statements, and only then let the owner
@@ -47,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -301,6 +303,16 @@ def approved_path(stem: str, approved_root: Path) -> Path:
     return approved_root / f"{stem}.stmts"
 
 
+def shown(path: Path) -> str:
+    """A path as a message should spell it: repo-relative when it is inside the
+    repository, absolute otherwise. `--approved-root` may name a scratch directory
+    outside it (that is what the flag is for), and `relative_to` raises there."""
+    try:
+        return path.resolve().relative_to(AVM).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def read_approved(path: Path) -> tuple[dict, list[str]]:
     meta: dict[str, str] = {}
     body: list[str] = []
@@ -387,7 +399,7 @@ def check_one(stem: str, artifact_root: Path, approved_root: Path,
     path = approved_path(stem, approved_root)
     if not path.exists():
         raise Unverifiable(
-            f"{stem}: no approved statements ({path.relative_to(AVM)} absent) — "
+            f"{stem}: no approved statements ({shown(path)} absent) — "
             f"run `scripts/mm0-comparator approve {stem}` and commit the file")
     emitter_check(stem, artifact_root)
     meta, want = read_approved(path)
@@ -631,9 +643,15 @@ def main(argv: list[str]) -> int:
         # flow for an artifact nobody has approved yet is *produce it, check it
         # against that root, review the statements, and only then let the owner
         # commit it* — so the end-to-end test needs a root that is not the real
-        # one. `verify-invariants` never passes this flag.
-        s.add_argument("--approved-root", default=str(APPROVED),
-                       help="directory holding <artifact>.stmts (default mm0/approved)")
+        # one. `AUSTRALVM_APPROVED_ROOT` moves the *default* for both modes, so a
+        # reader who overrides the root once runs `approve` and `check` against
+        # the same directory instead of an approval staged in one place and
+        # checked against another; the flag still wins over it when both are given.
+        s.add_argument("--approved-root",
+                       default=os.environ.get("AUSTRALVM_APPROVED_ROOT")
+                       or str(APPROVED),
+                       help="directory holding <artifact>.stmts "
+                            "(default $AUSTRALVM_APPROVED_ROOT or mm0/approved)")
     sub.choices["approve"].add_argument(
         "--dry-run", action="store_true",
         help="print the statements that would be approved, write nothing")

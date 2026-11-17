@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 146 passed, 4 explained gap(s), 0 failed
+verify-invariants: 148 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -347,6 +347,7 @@ verify-invariants: 146 passed, 4 explained gap(s), 0 failed
 w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
   [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
@@ -365,7 +366,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 137 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 139 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -760,6 +761,7 @@ the artifact, so `mm0-c` checks them too.
   w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
   w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
   [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
   [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
@@ -772,6 +774,7 @@ the artifact, so `mm0-c` checks them too.
   [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
+  [pass] W3: an approved §W3 row whose emitter left the registry is refused
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
@@ -809,6 +812,23 @@ the artifact, so `mm0-c` checks them too.
   its count was compared with a staging and the gate said nothing about the copy
   the owner had just committed.
 
+  A **pending row's artifact must also re-derive now**, before anybody tries to
+  approve it. The `stmts` check above can only compare a number it managed to
+  measure, so an artifact the comparator cannot stage — a stale `.mm1` its emitter
+  refuses, a generator that broke, a registry entry that went away — used to come
+  out as "no pending artifact of that name is measurable here", which reads like a
+  missing tool rather than a finding about the artifact, and the owner met the
+  refusal only at approval time. Every §W3 pending row must now have produced its
+  `w3-pending:` number (`[pass] W3: every pending §W3 row's artifact re-derives
+  into a staging (4 row(s))`), and the failure names the rows plus the comparator's
+  own first line. Measured 2026-11-17 by appending a blank line to `mm0/isa.mm1`
+  (which makes it stale against the encoder) and restoring it afterwards: `[FAIL]
+  W3: every pending §W3 row's artifact re-derives into a staging` with
+  `§W3 pending re-derivation: isa did not stage; what the comparator said:
+  isa([gap] scripts/isa-encdec check failed for isa: isa-encdec: FAIL …isa.mm1 is
+  s…)`, and the `stmts` row message switching to `isa(row gives 193 statements, but
+  its artifact does not re-derive here — see the re-derivation check)`.
+
   The **emitter column is checked the same way**, because a column saying which
   command owns an artifact is a claim like `stmts` is. `mm0-comparator emitters`
   prints the registry the comparator actually uses (`<stem>\t<script>\t<mode>`,
@@ -840,6 +860,17 @@ the artifact, so `mm0-c` checks them too.
   ones)`. Byte-identical rather than count-equal, because the claim is that this
   command *owns this file*, and a re-derived approval that merely matches in size
   is a different file with the same shape.
+
+  That check has its own negative control, so it is not a claim that has never
+  fired: the same code is handed a registry with `isa` retired — what unregistering
+  its emitter produces — and the row that names `` `scripts/isa-encdec check` ``,
+  and must report `isa(the row says 'scripts/isa-encdec check', the registry says
+  'nothing' for it)`; with the real registry over an identical copy it must report
+  nothing, which is the half that proves it is not always complaining. It is
+  `[pass] W3: an approved §W3 row whose emitter left the registry is refused`, and
+  it needs no approval to exist: the copy it reproduces is a fresh staging, so the
+  control runs on today's table. The registry is passed in rather than read from
+  the path, so the retirement is simulated without editing the repository.
 
   The **state column is checked too**, and for the same reason: "`[gap]`" is a
   status, not an explanation. It tells a reader the gate is red without saying
@@ -2193,7 +2224,13 @@ scratch root holding a `slot_layout` approval whose first axiom was deleted, the
 gate printed `(4 row(s), 4 from mm0/approved/)`,
 `slot_layout(staged bytes differ from the approved copy)
 slot_layout(says 7 axioms, approved 6)` and one `[FAIL]` (measured, 2026-11-16).
-The variable grants nothing: it moves which directory is *read*.
+The variable grants
+nothing: it moves which directory is *read*, and it is also the comparator's
+default for `approve` *and* `check` (the flag wins when both are given), so a
+reader who names a root once does not approve into one directory and check
+against another. That matters because the two have to agree: an override holding
+only the artifact under test made every other approved artifact look pending
+until `check` was brought onto the same root.
 
 All four are byte-identical to what `mm0-comparator approve` would write (the
 `statements-sha256` headers are `2619b5ec…`, `98dd6399…`, `5c201a80…`,
@@ -2367,7 +2404,15 @@ exists`. Together those are what make an approval one edit: flip the state cell,
 and the staging set, the counts it prints and the gate's three lines move with
 it. Measured 2026-11-17 by flipping `isa` to approved against a scratch root:
 `(4 row(s), 1 approved)`, `stages exactly §W3's 3 pending row(s)`, summary `3
-staged, 0 refused, 0 nothing to approve, 1 already approved`, 137 passed.
+staged, 0 refused, 0 nothing to approve, 1 already approved`, 140 passed and one
+fewer explained gap — because the comparator's `check` and this table now read the
+same root (`AUSTRALVM_APPROVED_ROOT` moves the default for both, and the gate
+passes `--approved-root` to `check` too), so the approved row is reported as
+`[pass] W3: isa matches its approved statements` instead of a second gap. A
+scratch root is then a *complete* view of "approved" for that run, which is what
+makes the two sides comparable at all: an override that held only `isa.stmts`
+would make every other approved artifact look pending, and did, before `check`
+was brought onto the same root.
 
 **What the `store_projection_toy` approval must contain.** Written down because
 "approve the toy" is otherwise a judgement about a file nobody can read: the

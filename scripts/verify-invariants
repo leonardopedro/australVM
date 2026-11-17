@@ -1328,16 +1328,43 @@ check_py "W2: au2mm0 decides Flux1d's four obligations (both routes agree, hypot
 # Empty (not 0) when it cannot be measured here, so a caller prints `?` rather
 # than a number that would read as "nothing to approve".
 w3_measure() {
-    local stem="$1"
+    local stem="$1" out n
     command -v python3 >/dev/null 2>&1 || return 0
-    ( cd "$repo_root" && python3 scripts/mm0-comparator approve --dry-run "$stem" 2>/dev/null ) \
-        | sed -n "s/.*would approve $stem — \([0-9][0-9]*\) statement.*/\1/p" | head -1
+    out="$( cd "$repo_root" && python3 scripts/mm0-comparator approve --dry-run "$stem" 2>&1 )"
+    n="$(printf '%s\n' "$out" \
+        | sed -n "s/.*would approve $stem — \([0-9][0-9]*\) statement.*/\1/p" | head -1)"
+    if [ -z "$n" ]; then
+        # *Why* an artifact does not re-derive is the difference between "the tool
+        # is missing here" and "its emitter refuses", and only the second is a
+        # finding about the artifact. Keep the first line the comparator printed
+        # so the check below can quote it instead of reporting a bare absence.
+        # A file, not a variable: the caller reads this through a command
+        # substitution, so anything assigned here would die with the subshell.
+        printf '%s\n' "$stem($(printf '%s\n' "$out" \
+            | grep -v '^mm0-comparator: would approve' | sed -n '1p' | cut -c1-110))" \
+            >>"$_w3_why_file"
+    fi
+    printf '%s' "$n"
 }
+
+_plan_file="${AUSTRALVM_PLAN:-$repo_root/PLAN_sota_kernel_verification.md}"
+# The approved copies the per-artifact lines and the table's approved rows are
+# compared with. Overridable only so the controls can point at a scratch copy — it
+# is the same `--approved-root` the comparator already takes, and it grants
+# nothing: it moves which directory is read, not which artifact is approved. Both
+# sides read it, including the `check` below, so an override cannot make the
+# comparator answer about one root while the table is judged against another.
+_appr_root="${AUSTRALVM_APPROVED_ROOT:-$repo_root/mm0/approved}"
 
 if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     _w3_line=""
     _w3_pairs=""
     _w3_ok=""
+    # `_cert_tmp` is deleted once the W6 certificate probes are done with it, so
+    # the directory is recreated for the reasons collected below.
+    _w3_why_file="$_cert_tmp/w3-unmeasurable.log"
+    mkdir -p "$_cert_tmp"
+    : >"$_w3_why_file"
     for _art in "$repo_root"/mm0/*.mm0; do
         [ -e "$_art" ] || continue
         _stem="$(basename "$_art" .mm0)"
@@ -1350,14 +1377,14 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
                 && grep -q '^-- proves: 0 theorems$' "$_art"; then
             continue
         fi
-        if [ -f "$repo_root/mm0/approved/$_stem.stmts" ]; then
+        if [ -f "$_appr_root/$_stem.stmts" ]; then
             # Exit 2 is "cannot verify here" (a pinned theory file such as
             # set.mm0 is untracked toolchain state), which is a gap by the same
             # convention as a missing interpreter — not a refusal.
             _rc=0
             if command -v python3 >/dev/null 2>&1; then
-                python3 "$repo_root/scripts/mm0-comparator" check "$_stem" \
-                    || _rc=$?
+                python3 "$repo_root/scripts/mm0-comparator" check \
+                    --approved-root "$_appr_root" "$_stem" || _rc=$?
             else
                 _rc=2
             fi
@@ -1405,12 +1432,6 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     # behind for an approved artifact is stale the other way (its approval is
     # checked by the statement diff, so the row no longer has a job). A table
     # cell is the kind of copied number that is right the day it is written.
-    _plan_file="${AUSTRALVM_PLAN:-$repo_root/PLAN_sota_kernel_verification.md}"
-    # The approved copies the table's approved rows are compared with. Overridable
-    # only so the control below can point at a scratch copy — it is the same
-    # `--approved-root` the comparator already takes, and it grants nothing: it
-    # moves which directory is read, not which artifact is approved.
-    _appr_root="${AUSTRALVM_APPROVED_ROOT:-$repo_root/mm0/approved}"
     # Every §W3 row's artifact and its *state* cell. The state cell is what says
     # whether an artifact is approved yet, so it decides which file the row's
     # numbers must come from, and it is the one edit an approval needs: commit the
@@ -1467,7 +1488,7 @@ EOF
                 fi
                 meas="$(printf '%s\n' "$_w3_pairs" | tr ' ' '\n' | grep -x "$stem=[0-9]*" | head -1)"
                 if [ -z "$meas" ]; then
-                    printf '%s' "$stem(row gives $n statements, but no pending artifact of that name is measurable here)"
+                    printf '%s' "$stem(row gives $n statements, but its artifact does not re-derive here — see the re-derivation check)"
                 elif [ "${meas##*=}" != "$n" ]; then
                     printf '%s' "$stem(table says $n, file says ${meas##*=})"
                 fi
@@ -1507,6 +1528,30 @@ EOF
     else
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
         check "W3: the plan's §W3 stmts column matches what each artifact holds" false
+    fi
+    # A pending row is the owner's next decision, so its artifact has to re-derive
+    # *now*. The `stmts` check above can only compare a number it measured, so an
+    # artifact the comparator cannot stage — a stale `.mm1` its emitter refuses, a
+    # generator that broke, a registry entry that went away — used to surface as
+    # "no pending artifact of that name is measurable here", which reads like a
+    # missing tool rather than something wrong with the artifact, and the owner met
+    # the refusal only when they tried to approve it. Every §W3 pending row must
+    # therefore have produced its `w3-pending:` number, and the comparator's reason
+    # is quoted when it did not.
+    _w3_rederive_bad=""
+    _w3_rederive_n=0
+    for _p_stem in $_w3_tab_pending; do
+        _w3_rederive_n=$((_w3_rederive_n + 1))
+        printf '%s\n' "$_w3_pairs" | tr ' ' '\n' | grep -qx "$_p_stem=[0-9]*" \
+            || _w3_rederive_bad="$_w3_rederive_bad $_p_stem"
+    done
+    if ! command -v python3 >/dev/null 2>&1; then
+        gap "W3: pending rows not re-derived (no python3 for the comparator)"
+    elif [ -z "$_w3_rederive_bad" ]; then
+        check "W3: every pending §W3 row's artifact re-derives into a staging ($_w3_rederive_n row(s))" true
+    else
+        echo "  [detail] §W3 pending re-derivation:${_w3_rederive_bad} did not stage; what the comparator said: $(tr '\n' ' ' <"$_w3_why_file" | cut -c1-300)" >&2
+        check "W3: every pending §W3 row's artifact re-derives into a staging" false
     fi
     # Both halves of that check are exercised, because the approved half only runs
     # once an approval exists and the stale-state half only runs when someone has
@@ -1930,27 +1975,56 @@ EOF
     # (`emitter_check`: a `none` row regenerates from the artifact itself) — and the
     # result must be byte-identical to the committed copy. That is what says the
     # command in the row still owns the statements the gate is enforcing.
+    # The cell this table carries for one artifact, as the emitter column read it.
+    _w3_cell_of() {
+        printf '%s\n' "$_w3_emit_rows" | awk -F'\t' -v s="$1" '$1==s{print $2; exit}'
+    }
+    # Why one approved row's emitter does not own its copy, or nothing when it does.
+    # Two things are asked: the row's cell still names the command the registry holds
+    # for that artifact — a retired emitter would otherwise only stop `approve` from
+    # *running* anything, leaving it regenerating from the artifact and comparing
+    # equal — and approving the artifact again reproduces the committed copy byte
+    # for byte. The registry is the caller's `_w3_reg`, so the control below can
+    # hand it a retired one without touching the repository.
+    _w3_emit_reason() {  # stem, cell, approved root, scratch root
+        local _r_stem="$1" _r_cell="$2" _r_appr="$3" _r_scratch="$4" _r_cmd _r_reg
+        case "$_r_cell" in
+            '`'*'`'*)
+                _r_cmd="$(printf '%s' "$_r_cell" | sed -n 's/^`\([^`]*\)`.*/\1/p')"
+                _r_reg="$(printf '%s\n' "$_w3_reg" | awk -F'\t' -v s="$_r_stem" '$1==s{print $2" "$3}')"
+                if [ "$_r_cmd" != "$_r_reg" ]; then
+                    printf '%s' "$_r_stem(the row says '$_r_cmd', the registry says '${_r_reg:-nothing}' for it)"
+                    return 0
+                fi
+                ;;
+        esac
+        if [ ! -f "$_r_appr/$_r_stem.stmts" ]; then
+            printf '%s' "$_r_stem(no approved copy for its emitter to reproduce)"
+            return 0
+        fi
+        mkdir -p "$_r_scratch"
+        if ! ( cd "$repo_root" && python3 scripts/mm0-comparator approve \
+                --approved-root "$_r_scratch" "$_r_stem" ) \
+                >"$_r_scratch/$_r_stem.log" 2>&1; then
+            printf '%s' "$_r_stem(its emitter no longer produces it: $(sed -n '1p' "$_r_scratch/$_r_stem.log" | cut -c1-80))"
+            return 0
+        fi
+        cmp -s "$_r_appr/$_r_stem.stmts" "$_r_scratch/$_r_stem.stmts" \
+            || printf '%s' "$_r_stem(the emitter produces today's statements, $_r_appr/$_r_stem.stmts holds the approved ones)"
+    }
     _w3_appr_emit_bad=""
     _w3_appr_emit_n=0
     if [ -n "$_w3_tab_appr" ]; then
         if command -v python3 >/dev/null 2>&1; then
             _w3_emit_tmp="$_cert_tmp/w3-emitter"
-            mkdir -p "$_w3_emit_tmp"
             for _a_stem in $_w3_tab_appr; do
                 _w3_appr_emit_n=$((_w3_appr_emit_n + 1))
-                if [ ! -f "$_appr_root/$_a_stem.stmts" ]; then
-                    _w3_appr_emit_bad="$_w3_appr_emit_bad $_a_stem(no approved copy for its emitter to reproduce)"
-                    continue
-                fi
-                if ! ( cd "$repo_root" && python3 scripts/mm0-comparator approve \
-                        --approved-root "$_w3_emit_tmp" "$_a_stem" ) \
-                        >"$_w3_emit_tmp/$_a_stem.log" 2>&1; then
-                    _w3_appr_emit_bad="$_w3_appr_emit_bad $_a_stem(its emitter no longer produces it: $(sed -n '1p' "$_w3_emit_tmp/$_a_stem.log" | cut -c1-80))"
-                    continue
-                fi
-                if ! cmp -s "$_appr_root/$_a_stem.stmts" "$_w3_emit_tmp/$_a_stem.stmts"; then
-                    _w3_appr_emit_bad="$_w3_appr_emit_bad $_a_stem(the emitter produces today's statements, $_appr_root/$_a_stem.stmts holds the approved ones)"
-                fi
+                # Only a real reason is appended: the accumulation always adds a
+                # space, so a row that reproduces its copy would otherwise read as
+                # a failure with no message at all.
+                _w3_r="$(_w3_emit_reason "$_a_stem" "$(_w3_cell_of "$_a_stem")" \
+                    "$_appr_root" "$_w3_emit_tmp")"
+                [ -z "$_w3_r" ] || _w3_appr_emit_bad="$_w3_appr_emit_bad $_w3_r"
             done
         fi
     fi
@@ -1961,6 +2035,33 @@ EOF
     else
         echo "  [detail] §W3 approved emitters:${_w3_appr_emit_bad}" >&2
         check "W3: every approved §W3 row's emitter still produces its approved copy" false
+    fi
+    # … with the negative control that makes that line more than a claim: the same
+    # function, handed a registry with `isa` retired — what unregistering its emitter
+    # produces — and the row that names `` `scripts/isa-encdec check` ``, must report
+    # the retirement for that row, while the real registry over an identical copy must
+    # report nothing. The copy is a fresh staging of `isa`, so the registry is the only
+    # difference between the two runs and the positive half proves the function is not
+    # just always complaining.
+    _w3_emit_ctl="$_cert_tmp/w3-emitter-ctl"
+    if command -v python3 >/dev/null 2>&1 \
+            && ( cd "$repo_root" && python3 scripts/mm0-comparator approve \
+                    --approved-root "$_w3_emit_ctl" isa ) >"$_w3_emit_ctl.log" 2>&1; then
+        _w3_ctl_cell="$(_w3_cell_of isa)"
+        _w3_ctl_held="$(_w3_emit_reason isa "$_w3_ctl_cell" "$_w3_emit_ctl" "$_w3_emit_ctl/fresh")"
+        _w3_reg_keep="$_w3_reg"
+        _w3_reg="$(printf '%s\n' "$_w3_reg" | awk -F'\t' '$1!="isa"')"
+        _w3_ctl_retired="$(_w3_emit_reason isa "$_w3_ctl_cell" "$_w3_emit_ctl" "$_w3_emit_ctl/retired")"
+        _w3_reg="$_w3_reg_keep"
+        if [ -z "$_w3_ctl_held" ] && printf '%s' "$_w3_ctl_retired" | grep -q 'registry says' \
+                && printf '%s' "$_w3_ctl_retired" | grep -q '^isa('; then
+            check "W3: an approved §W3 row whose emitter left the registry is refused" true
+        else
+            echo "  [detail] retired-emitter control: registered='${_w3_ctl_held:-held}', retired='${_w3_ctl_retired:-held}'" >&2
+            check "W3: an approved §W3 row whose emitter left the registry is refused" false
+        fi
+    else
+        gap "W3: the retired-emitter control not run (isa did not stage here)"
     fi
     # … and the state column has to say *why* the artifact is still unapproved,
     # not merely that it is. A bare `[gap]` is a status: it tells a reader the
