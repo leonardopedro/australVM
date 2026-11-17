@@ -3446,3 +3446,119 @@ next to the walk, and the memo of §13.32 could not help because there is nothin
 repeated to cache. A cheaper certificate — sharing instead of expanding, or a
 binary node table with indices — would cut the 4 715 s run at its dominant cost,
 which is bytes, not decisions.
+
+### 13.35 Sharing the certificate, stopping the walk, and which sample shares are time
+
+§13.34 closed with the lever it had found — "a cheaper certificate, sharing instead
+of expanding, or a binary node table with indices" — and with three costs read off
+stack samples (escaping 4.5 %, export-table lookup 15.2 %, `json.dumps` inside the
+encoder 18.2 %). This section builds that certificate, adds the stopping condition
+§13.33 asked for, and re-measures the costs against controls rather than samples.
+One sample share survives as a time share, one does not, and the section ends on a
+ceiling that is no longer time.
+
+**1. A certificate that references instead of repeating.** The expanded stream has
+no references because JSON has none: `tree_json` walks the DAG and writes each node
+once per *path*, which is why one `tsubst` certificate is 12–25 GB (§13.32). The
+shared form gives each certificate a node table and points into it by row index.
+Everything is behind `LTP_OBLIG_SHARE=1`, so the default artifact is untouched:
+
+- one table per certificate, in post-order, so a row's children are already numbered;
+- interned by the *stripped* expression id, so the DAG's sharing survives into the
+  table (a `dict` from id to index, plus an `array('i')` for the rows);
+- only the ids the certificate actually touched are reset between certificates,
+  not the whole map;
+- record key order `id, kind, lhs, rhs, n, b, x, r`, with `n` holding the indices;
+- `scripts/oblig-expand` turns a shared stream back into expanded records.
+
+One case is refused instead of mangled: a `lam` whose `type` is absent would have to
+refer to the term that contains it, and a table cannot contain itself.
+
+**Measured.** On `abs_re_inner_pairVec_le` (BookProof.Toolbox.ChapterFockPairPerturbation):
+
+| | unexpanded (default) | shared | |
+| --- | ---: | ---: | ---: |
+| obligation stream | 1 012 915 095 B | 294 407 782 B | 29.1 % |
+| wall clock | 72.7 s | 41.9 s | 57.6 % |
+| `.mm0` | 1 041 771 375 B | 1 041 771 375 B | byte-identical |
+| `.mm1` | 1 075 343 397 B | 1 075 343 397 B | byte-identical |
+
+On the ns row at the 44 700-rule budget (9 230 axioms, 357 obligations):
+
+| | unexpanded (default) | shared | |
+| --- | ---: | ---: | ---: |
+| obligation stream | 9 299 651 546 B | 3 508 283 563 B | 37.7 % |
+| wall clock | 657.1 s | 336.4 s | 51.2 % |
+| axiom spool | 3 544 713 174 B | 3 544 713 174 B | byte-identical |
+
+The spool being identical is the point: sharing changes the *check record* and
+nothing else — same rules, same assumptions, same theory. The saving is larger on
+the small row (3.4×) than on the ns row (2.7×) because a `tsubst` certificate
+repeats the same substitution at every path and a table collapses exactly that
+repetition, while the ns row's stream also carries deep, irregular terms that share
+less.
+
+**Verified by decoding, not by trusting the writer.** `scripts/oblig-expand` reads a
+shared stream and writes expanded records; on the FockPair run its output `cmp`s
+equal to the unexpanded stream, and the `.mm0`/`.mm1` above are byte-identical in
+both modes, so the triple round-trips exactly — nothing is lost, only referenced.
+Expansion read 294 407 782 B and wrote 1 012 915 095 B in 37.3 s.
+
+**2. A stopping condition, and what the stopped artifact is a prefix of.** With
+`LTP_STOP_RULES` and `LTP_STOP_EMIT=1`, a budget stop writes `<stem>_stopped.mm0`
+(header, payload constants, the full axiom spool, then the goal stated and not
+derived) and `<stem>_stopped.json`, whose `header_bytes` is the byte offset where the
+spool begins. The header's counts are state-dependent, so the claim is about the
+payload — everything after the header — not about the whole file.
+
+The test is against the walk continuing past the stop. Same declaration, same flags,
+no budget: the continued run reached 566 obligations and an 84 222 056 725 B spool
+before it died (§ below). The stopped theory at 125 417 rules (24 393 axioms,
+563 obligations, 76 568 956 912 B, `header_bytes` 6 145) is byte-identical to that
+spool for its whole **72 682 473 339 B**, and the first differing byte is payload byte
+72 682 473 340 — the first byte after the spool, where the stopped theory appends its
+goal statement (3 886 477 428 B). So the stopped artifact *is* the spool of the same
+walk, byte for byte, with the goal written on top of it. The same check passed at
+44 700 rules (3 544 713 174 B), which is where the earlier "not a prefix" reports came
+from a comparison loop, not from the bytes.
+
+The stopped run's own numbers: 125 417 rules, 24 393 axioms, 563 obligations,
+76 568 956 912 B of theory, and 66 786 861 380 B of certificate stream in 32 parts,
+whose index lengths sum to exactly the files' bytes — 563 records, no overlapping
+segment, so a stopped run reads like any other (§13.32).
+
+**3. Which sample shares were time.** §13.34's shares are where the sampler *caught*
+the walk, and a short frame is caught often without costing much. Three-way A/B on
+the ns row at the 44 700-rule budget, one process each, same `nix develop`:
+
+| run | real | user | sys |
+| --- | ---: | ---: | ---: |
+| default | 11m22.98s | 8m53.11s | 2m28.42s |
+| `LTP_ENC_FASTESC=1` (single-regex escape) | 11m27.40s | 8m58.78s | 2m26.86s |
+| `LTP_EXPRS_CACHE=4000000` (20× the export cache) | 11m26.31s | 8m55.20s | 2m29.40s |
+
+Flat within 5 s of ~682 s CPU. So the per-chunk escaping of §13.34's 4.5 % costs
+nothing measurable, and a deeper export cache changes nothing — because misses are
+0.05 % of lookups (450 792 `json.loads` against 977 900 280 lookups at this budget).
+Neither row of that table is a time share, and the A/B is the measurement that says so.
+
+**The lookup itself is not free, and there the samples were right.**
+`LTP_PROBE_LOOKUP=1` times `LazyExprs.__getitem__` directly: **977 900 280 calls,
+147.9 s inside, 16.4 %** of a 900.2 s run. The timer's own cost is 0.166 µs per call
+(measured: 0.207 µs wrapped against 0.042 µs bare over 2 000 000 calls), so it added
+~162 s and the walk itself would have taken ~738 s — the lookup is ~20 % of it. That
+is 151 ns per call, 21 877 calls per rule, and §13.34's 15.2 % sample share was
+indeed a time share. It is also the cost that sharing addresses: a table row is
+looked up once per certificate, not once per path.
+
+**What stopped the continued run was memory, not the clock.** Between 5 494 MiB peak
+RSS and the 10 GiB address-space cap, in its 74th minute, three obligations past the
+125 417-rule state, the walk raised `MemoryError` in `out.write` of a *short* string
+piece — the axiom line's own header text, not a term. So the address space was
+already spent when the last small allocation failed: §13.30 streamed the axiom's three
+term texts precisely to avoid holding them, and what remains is the fragmentation of
+repeatedly materialising multi-GB texts. With sharing the row now reaches and passes
+its finished rule state in ~62 min; the next obstacle to a *complete* artifact is
+10 GiB of address space, which is a question about the host, not the declaration
+(untested: this host is 30 GB shared with a Waydroid session, and the previous
+two-at-once attempt at these runs was killed outright).
