@@ -3384,3 +3384,65 @@ is one instrumented 17-minute run rather than a 4-hour one — or decide that a
 125 417-rule row is the finished state of this declaration and emit it from
 there, which needs the emitter to have a stopping condition other than "the walk
 returns".
+
+### 13.34 The 1 000 s call is certificate emission, not a recursion in the checker
+
+§13.33 left one question open: which recursion is the machine inside during a
+stretch of hundreds of seconds that produces one `infer`. This section answers
+it with stacks rather than counters.
+
+**Method.** `LTP_STACK=1` dumps the worker thread's stack (`sys._current_frames`,
+100 frames) into `<trace>.stack` at every trace sample, so each dump is the same
+30 s cadence as the trace and can be matched to its `rules` count. One run of the
+ns row: `timeout 4 800`, 462 dumps over t=0…4 715.9 s, rules 42 046 → 125 392.
+
+Two limits stated up front. The run did **not** reproduce a 1 000 s window: its
+longest stretch with no new rule is 113 s (t=918…1 031), because the dumps cost
+wall time and the row's pacing is sensitive to that. And 135 dumps (29.2 %) hit
+the 100-frame window, so any recursion deeper than 100 frames is visible only as
+"still going". Neither limit hides the answer, because the answer is not deep.
+
+**Where the samples are.** 361 dumps (78.1 %) have `infer` on the stack. Of
+those, **346 — 95.8 % — are inside `emit_obligation`**, the certificate writer
+that `infer`'s `tsubst` branch calls; only 15 dumps catch `infer` checking
+anything. Grouped by top frame:
+
+| top of the dump | dumps | share |
+| --- | ---: | ---: |
+| the obligation sink's file `write` | 144 | 31.2 % |
+| `json` encoder (`iterencode`/`encode`) | 84 | 18.2 % |
+| export-table lookup (`ex.exprs[eid]`) | 70 | 15.2 % |
+| `EncBuf._flush`/`append` | 54 | 11.7 % |
+| `tree_json` walking the node tree | 35 | 7.6 % |
+| `sha256` update (`_Hasher.write`) | 24 | 5.2 % |
+| `json.dumps` escaping one chunk | 21 | 4.5 % |
+| `strip` | 16 | 3.5 % |
+| term re-encode (`_enc`/`_enc_tokens`) | 4 | 0.9 % |
+| other | 10 | 2.2 % |
+
+The recursion is the one the top frames hide. Inside `emit_obligation`,
+`tree_json` re-walks the expression DAG node by node — median 51 `tree_json`
+frames per dump, max 95 — and every node costs one `ex.exprs[eid]` lookup, one
+`json.dumps` per string piece, and writes that reach the sink. That is what the
+first four rows are: the certificate's bytes being produced, not type terms being
+compared.
+
+**Why the certificate is that big.** `tree_json` has no memo, deliberately: JSON
+has no references, so a shared subtree must be written once per path
+(§13.32 — one `tsubst` certificate is 12–25 GB). The walk is therefore not
+revisiting work it could cache; the artifact's *size* is the expanded DAG, and
+the walk is one visit per expanded node.
+
+**This corrects §13.33's writing share.** §13.33 counted 544 s of writing (3.8 %)
+from the axiom spool growing. Certificate emission is charged to "inside one
+call" instead, because `emit_obligation` is called *from* `infer`: the run is
+writing 200 GB of obligation stream for 95.8 % of the samples it spends inside a
+type inference. The 95.3 % "inside one call" bucket is not a recursion in the
+checker, it is the certificate walk and the sink.
+
+**What that leaves.** The lever the stacks point at is the certificate, not the
+inference: the two `digest` keys (`_Hasher`, 5.2 % + 0.9 % re-encode) are cheap
+next to the walk, and the memo of §13.32 could not help because there is nothing
+repeated to cache. A cheaper certificate — sharing instead of expanding, or a
+binary node table with indices — would cut the 4 715 s run at its dominant cost,
+which is bytes, not decisions.
