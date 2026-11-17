@@ -60,6 +60,18 @@ The [umbrella production plan](PLAN_umbrella_production.md) adds a focused
 [interop review](docs/UMBRELLA_PRODUCTION_REVIEW.md) and
 [debugging/test matrix](docs/umbrella/TEST_MATRIX.md) for the Rust/cap-std compiler path.
 
+The [GPU kernel implementation plan](PLAN_gpu_kernels.md) extends the existing
+GPU/WhyML federation work into an Austral-authored kernel backend. Its
+[source review](docs/GPU_KERNEL_REVIEW.md) and proposed
+[v1 contract](docs/gpu/KERNEL_V1.md) specify a restricted typed subset targeting
+WGSL/wgpu first, with MLIR as a later backend. These are planning artifacts;
+kernel compilation and hardware acceptance remain pending.
+
+The [compositional MM0 plan](PLAN_proof_chain.md) makes higher-level proofs
+reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_CHAIN.md)
+for CPU, GPU and NPU representations. It follows Hydro's typed-IR/semantic-transfer
+pattern while recording actual compiler, instruction and opaque-device proof gaps.
+
 ## 🚀 Current Status: Phase 11 (Policy-Driven OS VM)
 The project has successfully integrated a multi-tier security model combining compile-time linear type checks with JIT-time Cedar policy enforcement.
 

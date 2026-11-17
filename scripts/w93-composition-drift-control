@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# w93-composition-drift-control — does the *whole gate* fail when a §W9.3
+# composition row's cell disagrees with the file that row describes?
+#
+# The §W9.3 composition table says what each approval *is* (`2 sorts`, `10
+# terms`, `8 defs`, `20 axioms`, `28 theorems`, the declaration sum, the closure
+# digest). `verify-invariants` counts all of that from the staged — or approved —
+# file, and its own control deletes an axiom from a scratch approval to show the
+# counts can refuse. That control says the counting function decides correctly;
+# it does not say the gate's output changes. So this script performs the
+# experiment end to end, the way `w3-emitter-drift-control` does for §W3's
+# emitter cell:
+#
+#   1. copy the plan and rewrite the toy row's composition cell from `20 axioms`
+#      to `21 axioms` — one cell, and *not* the `70` stmts cell, which stays
+#      right. A row can therefore be wrong about what an approval contains while
+#      its statement count still matches, which is exactly the drift the
+#      composition column exists to catch;
+#   2. run `scripts/verify-invariants` against that copy through `AUSTRALVM_PLAN`
+#      and require exit 1;
+#   3. require the run to carry `[FAIL] W9.3: the composition table's counts
+#      match the files it records` and the `[detail]` line naming
+#      `store_projection_toy(says 21 axioms, staging 20)` — a gate that failed
+#      for some unrelated reason must not count as this control holding;
+#   4. require the same run to still report the lines that do not read that cell:
+#      the closure digests, the approval control, and §W3's stmts and emitter
+#      checks. The perturbation must be isolated to one cell, so the fail is the
+#      table's claim and not a broken tree.
+#
+# The repository is never edited — the perturbed plan lives in a scratch directory
+# and `mm0/approved/` is only read. Nothing here can approve an artifact.
+#
+# Usage: scripts/w93-composition-drift-control   (run under `nix develop`: the
+#                                                gate needs python3)
+# Exit: 0 the control holds, 1 it does not, 2 could not run.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLAN="$ROOT/PLAN_sota_kernel_verification.md"
+GATE="$ROOT/scripts/verify-invariants"
+ART=store_projection_toy
+
+say()  { printf '%s\n' "$*"; }
+fail() { printf 'w93-composition-drift-control: FAIL %s\n' "$*" >&2; }
+
+command -v python3 >/dev/null 2>&1 || {
+    say "w93-composition-drift-control: [gap] python3 not on PATH — run this under 'nix develop'"
+    exit 2
+}
+[ -f "$PLAN" ] || { fail "no plan at $PLAN"; exit 2; }
+[ -f "$GATE" ] || { fail "no gate at $GATE"; exit 2; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT INT TERM
+perturbed="$work/PLAN.md"
+
+# ── 1. the perturbation: one cell, one row ─────────────────────────────────
+python3 - "$PLAN" "$perturbed" "$ART" <<'PY' || exit 2
+import pathlib, sys
+src, dst, art = (pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3])
+rows = src.read_text().splitlines(keepends=True)
+hits = 0
+prefix = f"| `{art}` | 70 |"
+for i, line in enumerate(rows):
+    if not line.lstrip().startswith(prefix):
+        continue
+    cells = line.split("|")
+    # | artifact | stmts | composition | closure-sha256 |
+    if " 20 axioms" not in cells[3]:
+        raise SystemExit(f"no ' 20 axioms' in the composition cell of {art}")
+    cells[3] = cells[3].replace(" 20 axioms", " 21 axioms")
+    rows[i] = "|".join(cells)
+    hits += 1
+if hits != 1:
+    raise SystemExit(f"expected one `{art}` composition row, found {hits}")
+dst.write_text("".join(rows))
+PY
+grep -qF "| \`$ART\` | 70 |" "$perturbed" || { fail "the copy no longer carries the 70 stmts cell"; exit 2; }
+grep -qF "21 axioms" "$perturbed" || { fail "the copy does not carry the drifted cell"; exit 2; }
+say "perturbed: $ART's composition cell now says \`21 axioms\` (stmts cell left at 70)"
+
+# ── 2. the whole gate, pointed at the copy ─────────────────────────────────
+rc=0
+( cd "$ROOT" && AUSTRALVM_PLAN="$perturbed" bash scripts/verify-invariants ) \
+    >"$work/gate.log" 2>&1 || rc=$?
+say "gate:      exit $rc"
+tail -1 "$work/gate.log"
+
+if [ "$rc" -eq 0 ]; then
+    fail "the gate accepted a composition row that miscounts its file"
+    exit 1
+fi
+
+# ── 3. it failed for the right reason ──────────────────────────────────────
+line='[FAIL] W9.3: the composition table'"'"'s counts match the files it records'
+if ! grep -qF "$line" "$work/gate.log"; then
+    fail "no '$line' in the run"
+    exit 1
+fi
+detail="$ART(says 21 axioms, staging 20)"
+if ! grep -F '§W9.3 composition:' "$work/gate.log" | grep -qF "$detail"; then
+    grep -F '§W9.3 composition:' "$work/gate.log" | sed 's/^/  /' >&2
+    fail "the detail does not name $ART with both counts"
+    exit 1
+fi
+say "detail:    $detail"
+
+# ── 4. everything else still passes ────────────────────────────────────────
+missing=""
+while IFS= read -r want; do
+    grep -qF "$want" "$work/gate.log" || missing="$missing
+  $want"
+done <<'WANT'
+[pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
+[pass] W9.3: an approved copy that drops an axiom fails the composition counts
+[pass] W3: the plan's §W3 stmts column matches what each artifact holds
+[pass] W3: every §W3 emitter cell names a real command
+WANT
+if [ -n "$missing" ]; then
+    fail "the perturbation took other lines with it:$missing"
+    exit 1
+fi
+say "control:   holds — one drifted count, the composition [FAIL], every independent §W3/§W9.3 line unchanged"
+exit 0

@@ -116,11 +116,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   owner commit, so the diff *is* the decision and this only shows it. Takes a
   stem or `mm0/<stem>.mm0`; a name that is neither exits 64 before staging
   anything, because a comparator "refused" line is the message for a real stale
-  artifact, not for a typo. An artifact whose staged copy is byte-identical to
-  its approved copy is refused as "nothing to approve" (exit 1) rather than
-  printing an empty diff; `--approved-root` (default `mm0/approved`, read-only)
-  names the copies to diff against. `verify-invariants` pins the 64, the clean
-  four-artifact staging, and the no-op refusal as three `[pass] W3` lines.
+  artifact, not for a typo. Naming an artifact that is *already approved* is
+  refused (exit 1) before anything is staged — the diff would be a re-approval
+  and reads exactly like a first one — so re-approval is opt-in with
+  `--reapprove`; the no-argument run never needs the flag, since it derives its
+  artifacts from the approved root. An artifact whose staged copy is
+  byte-identical to its approved copy is refused as "nothing to approve" (exit
+  1) rather than printing an empty diff; `--approved-root` (default
+  `mm0/approved`, read-only) names the copies to diff against. With no argument it stages every artifact in
+  `artifacts_all=` that has **no** copy under `--approved-root`, so approval
+  state is not listed here a second time: an approval is one edit — the
+  artifact's `state` cell in the plan's §W3 table — and this script follows it.
+  `verify-invariants` pins the 64, the named-approved refusal, the no-op
+  refusal, the artifact list against §W3's rows, the staged set against §W3's
+  pending rows, and the skip an approved copy produces, as `[pass] W3` lines.
 - `scripts/clif2mm0` — emits/checks `mm0/clif.mm0`, the CLIF *shape* model
   (W9.2): `clif_dump` (a bridge binary) measures the instruction forms the CPS
   lowering really produces, and this generator writes one declaration per form
@@ -409,6 +418,37 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   control was itself tested by making the mutations no-ops (patterns that match
   nothing, patterns that change nothing, patterns that break the file
   elsewhere): each scratch run reports `1 failed`, exit 1.
+- `scripts/w3-emitter-drift-control` — the §W3 negative control that goes through
+  the gate itself: it rewrites `isa`'s emitter cell in a copy of the plan to name
+  a command `EMITTERS` does not hold for that row and requires
+  `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: every §W3
+  emitter cell names a real command`, the row named in the detail, and every §W3
+  line that does not read that row still passing. One full gate run.
+- `scripts/w93-composition-drift-control` — the same negative control for the
+  §W9.3 composition table: it rewrites `store_projection_toy`'s `20 axioms` cell
+  to `21` in a copy of the plan (the `70` stmts cell untouched, so only the
+  composition column can fire) and requires the gate to exit 1 with
+  `[FAIL] W9.3: the composition table's counts match the files it records`, the
+  detail `store_projection_toy(says 21 axioms, staging 20)`, and the closure,
+  approval-control and §W3 lines unchanged. One full gate run. The gate also
+  re-reads the four cells and requires a literal comparison for every counted
+  word they name (`… every field word a composition cell names has a literal
+  comparison (8 word(s))`), so a field added to a cell cannot go uncounted.
+- `scripts/w93-closure-drift-control` — the §W9.3 negative control for the
+  `closure-sha256` column, which the count drift cannot exercise: it flips the
+  first hex digit of `store_projection_toy`'s digest cell in a copy of the plan
+  (every count cell untouched) and requires the gate to exit 1 with `[FAIL]
+  W9.3: the composition table's closure digests match the files it records`, the
+  detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
+  line and the approval control still passing. One full gate run.
+- `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
+  stale `.mm1`, and the three whole-gate drift controls — §W3's emitter cell and
+  §W9.3's composition count and closure-digest cells): artifact, perturbation,
+  the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
+  a `gate_line` the script no longer emits, an `expected_message` skeleton whose
+  literal chunks (`…` marks the interpolated parts) are no longer in the script, or
+  a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
+  exited non-zero; `-` means the probe is exercised in-gate, not by a gate run).
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
@@ -426,20 +466,41 @@ Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines
 The gate prints two measured-size lines: `w3-pending:` (what each unapproved
 artifact would hold out) and `w3-approved:` (what each approved one holds now, so
 a shrunk artifact is visible even though its statement diff is the enforcement).
-The plan's §W3 `stmts` column is checked against the pending numbers on every run
-— a cell that disagrees, or a row left behind for an already-approved artifact,
-fails `verify-invariants` with the row named, so edit the table only by reading
-that line. The table's `emitter that owns it` column is checked too: a cell
+The plan's §W3 `stmts` column is checked on every run against the numbers the
+row's *state* selects: today's staging for a pending row, `mm0/approved/<stem>.stmts`
+for an approved one. A cell that disagrees fails `verify-invariants` with the row
+named, as does half an approval (a committed copy whose row still says pending —
+`flip this row's state cell` — or an approved row whose copy is missing or holds
+a different number of statements), so edit the table only by reading that line.
+A pending row also has to *re-derive* on every run — its artifact must stage,
+because the row is the owner's next decision and a stale `.mm1` or a broken
+generator should read as a finding about the artifact, not as "not measurable
+here" — and the failure quotes the comparator's own line. `check` and `approve`
+both default to `AUSTRALVM_APPROVED_ROOT` when it is set (the flag still wins),
+so the comparator and the table cannot be pointed at different roots.
+The table's `emitter that owns it` column is checked too: a cell
 naming a command (`` `scripts/isa-encdec check` ``) must name a file that exists
 and is executable with the script *and* mode `python3 scripts/mm0-comparator
 emitters` reports for that stem, a cell saying `none` must be genuinely
 unregistered, and any other wording fails — the registry in `EMITTERS` is the
 single source of truth, so add an emitter there first and then update the row.
-The `state` column must say *why* the row is unapproved, not just that it is:
-`` `[gap]`, awaiting owner commit `` with any artifact-specific reason after
-`; `. `pending`, `TBD`, a bare `[gap]`, a trailing `;` with nothing after it, or
-a different reason (`blocked on X`) all fail — every unapproval here waits on the
-same thing, an owner commit into `mm0/approved/`.
+The `state` column is the approval record, so it has exactly two shapes:
+`` `[gap]`, awaiting owner commit `` for a pending row and
+`` `[pass]`, approved in `mm0/approved/` `` for an approved one, each optionally
+followed by `; ` and an artifact-specific reason. `pending`, `TBD`, a bare
+`[gap]` or `[pass]`, an approved cell that does not name `mm0/approved/`, a
+trailing `;` with nothing after it, or a different reason (`blocked on X`) all
+fail — every unapproval here waits on the same thing, an owner commit into
+`mm0/approved/`. Flipping that one cell *is* the approval: the row stays, the
+counts and the staging set are derived from the two states, and
+`scripts/stage-approvals` stops staging the artifact once its copy exists. For
+an approved row the emitter cell is re-run, not just read: the gate approves the
+row again into a scratch root and requires the result to be byte-identical to
+the committed copy, which is what keeps `emitter that owns it` true after the
+`stmts`/digest columns start reading a fixed file. That check carries its own
+negative control: the same code, given a registry with `isa` retired, must report
+the retirement for the row that names the emitter, and report nothing with the
+real registry over an identical staging.
 
 ## Gotchas
 

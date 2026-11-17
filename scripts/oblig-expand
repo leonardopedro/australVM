@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Expand a shared obligation stream back to the expanded certificate form.
+
+With `LTP_OBLIG_SHARE=1` a certificate's three terms are written as one node
+table (`"n": [["app", 0, 1], ...]`) and each term is an index into it, so a
+subterm reached by two paths is stored once (docs/lean4mm0.md §13.35, and
+docs/obligation-stream.md for the reader's view). This tool reads that stream
+and writes the historical record — `b`, `x`, `r` as trees, keys sorted — so a
+shared stream can be checked against an expanded one byte for byte:
+
+    scripts/oblig-expand out/foo_typing_obligations.part-000.jsonl \
+        > expanded.jsonl
+    cmp expanded.jsonl out-unshared/foo_typing_obligations.part-000.jsonl
+
+It also answers the question a consumer has without a second writer: what does
+this certificate look like expanded.
+
+Expansion is the point, so the output is as large as the shared input's terms
+unrolled: this is a verification and inspection tool, not a converter to run
+over a 25 GB certificate. Subtrees are memoised per record, so a DAG is
+unrolled once per distinct index rather than once per path.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+def _leaf(tag: str, key: str, val) -> str:
+    return f'{{"{key}": {json.dumps(val)}}}'
+
+
+def expand_nodes(nodes: list) -> list[str]:
+    """The expanded JSON text of every node, in index order."""
+    out: list[str] = []
+    for ent in nodes:
+        op = ent[0]
+        if op in ("bvar", "sort", "nat", "str"):
+            key = {"bvar": "bvar", "sort": "sort", "nat": "nat", "str": "str"}[op]
+            out.append(_leaf(op, key, ent[1]))
+        elif op == "const":
+            out.append(_leaf(op, "const", ent[1]))
+        elif op == "app":
+            out.append(f'{{"app": [{out[ent[1]]}, {out[ent[2]]}]}}')
+        elif op == "pi":
+            out.append(f'{{"pi": [{out[ent[1]]}, {out[ent[2]]}]}}')
+        elif op == "lam":
+            out.append(f'{{"lam": [{out[ent[1]]}, {out[ent[2]]}]}}')
+        elif op == "tsubst":
+            out.append(f'{{"tsubst": [{out[ent[1]]}, {out[ent[2]]}]}}')
+        elif op == "proj":
+            out.append(f'{{"proj": [{out[ent[1]]}, '
+                       f'{{"nat": {json.dumps(ent[2])}}}]}}')
+        elif op == "let":
+            # `tree_json` writes a `let` as the application it means.
+            out.append(f'{{"app": [{{"lam": [{out[ent[1]]}, {out[ent[2]]}]}}, '
+                       f'{out[ent[3]]}]}}')
+        else:
+            raise SystemExit(f"oblig-expand: unknown node tag {op!r}")
+    return out
+
+
+def expand_record(line: str) -> str:
+    rec = json.loads(line)
+    if "n" not in rec:
+        return line if line.endswith("\n") else line + "\n"
+    nodes = expand_nodes(rec["n"])
+    full = {
+        "id": rec["id"],
+        "kind": rec["kind"],
+        "lhs": rec["lhs"],
+        "rhs": rec["rhs"],
+        "b": json.loads(nodes[rec["b"]]),
+        "x": json.loads(nodes[rec["x"]]),
+        "r": json.loads(nodes[rec["r"]]),
+    }
+    return json.dumps(full, sort_keys=True) + "\n"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print(__doc__.strip().split("\n\n")[0], file=sys.stderr)
+        print("usage: oblig-expand <stream.jsonl> [more.jsonl ...]",
+              file=sys.stderr)
+        return 2
+    out = sys.stdout
+    for name in argv[1:]:
+        path = Path(name)
+        if not path.exists():
+            print(f"oblig-expand: no such file {path}", file=sys.stderr)
+            return 1
+        with path.open("r") as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                out.write(expand_record(line))
+    out.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

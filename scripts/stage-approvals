@@ -18,8 +18,11 @@
 #   scripts/stage-approvals --approved-root DIR
 #                                           # approved copies to diff against
 #                                           # (default: mm0/approved, read-only)
+#   scripts/stage-approvals --reapprove     # stage a diff against an approved
+#                                           # copy for an artifact named by hand
 #
 # Exit status: 0 printed, 2 cannot run here (no python3 for the comparator),
+<<<<<<< HEAD
 # 1 the comparator refused an artifact or an artifact has nothing to approve,
 # 64 a usage error (an unknown artifact name, a bad --root). A name that is not
 # `mm0/<stem>.mm0` is refused before anything is staged: it used to reach the
@@ -29,6 +32,23 @@
 # empty, and an empty diff printed under a `== <artifact>` heading reads like a
 # successful approval of nothing. Nothing in the repository is modified; the
 # staged copies live under the scratch root and are meant to be thrown away.
+=======
+# 1 the comparator refused an artifact, an artifact has nothing to approve, or a
+# named artifact is already approved, 64 a usage error (an unknown artifact name,
+# a bad --root). A name that is not `mm0/<stem>.mm0` is refused before anything
+# is staged: it used to reach the comparator, which answered "refused <name>" —
+# the message for a real refusal, so a typo read like a stale artifact. An
+# artifact whose staged copy is byte-identical to the approved one is "nothing to
+# approve": the diff would be empty, and an empty diff printed under a
+# `== <artifact>` heading reads like a successful approval of nothing. Naming an
+# artifact that is *already approved* is refused for the same reason one step
+# earlier — the diff would be a re-approval, and an owner who half-remembered the
+# state would read it as a first approval — so re-approval is deliberately
+# opt-in (`--reapprove`). The no-argument form never needs the flag: it derives
+# its artifacts from the approved root and so never reaches that case. Nothing in
+# the repository is modified; the staged copies live under the scratch root and
+# are meant to be thrown away.
+>>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
 #
 # Which artifact is pending is not a list to keep in step by hand: an artifact
 # with a copy under `--approved-root` is approved, and the no-argument run stages
@@ -50,6 +70,7 @@ artifacts_all=(isa slot_layout store_projection store_projection_toy)
 root="${TMPDIR:-/tmp}/australvm-approve-staging"
 approved_root="$repo_root/mm0/approved"
 stat_only=false
+reapprove=false
 artifacts=()
 
 while [ "$#" -gt 0 ]; do
@@ -57,7 +78,12 @@ while [ "$#" -gt 0 ]; do
         --root) shift; root="${1:-}"; [ -n "$root" ] || { echo "stage-approvals: --root needs a directory" >&2; exit 64; } ;;
         --approved-root) shift; approved_root="${1:-}"; [ -n "$approved_root" ] || { echo "stage-approvals: --approved-root needs a directory" >&2; exit 64; } ;;
         --stat-only) stat_only=true ;;
+<<<<<<< HEAD
         -h|--help) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+=======
+        --reapprove) reapprove=true ;;
+        -h|--help) sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+>>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
         -*) echo "stage-approvals: unknown option $1" >&2; exit 64 ;;
         *) artifacts+=("$1") ;;
     esac
@@ -112,6 +138,13 @@ fi
 mkdir -p "$root" || exit 1
 for artifact in "${artifacts[@]}"; do
     echo "== $artifact"
+    approved="$approved_root/$artifact.stmts"
+    if [ -f "$approved" ] && [ "$reapprove" != true ]; then
+        echo "   already approved: $approved exists" >&2
+        echo "stage-approvals: $artifact is approved — pass --reapprove to stage a re-approval diff" >&2
+        failed=$((failed + 1))
+        continue
+    fi
     if ! python3 "$comparator" approve --approved-root "$root" "$artifact" >"$root/$artifact.log" 2>&1; then
         sed -n '1,5p' "$root/$artifact.log" >&2
         echo "stage-approvals: the comparator refused $artifact" >&2
@@ -119,7 +152,10 @@ for artifact in "${artifacts[@]}"; do
         continue
     fi
     file="$root/$artifact.stmts"
+<<<<<<< HEAD
     approved="$approved_root/$artifact.stmts"
+=======
+>>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
     [ ! -f "$approved" ] || already=$((already + 1))
     if [ -f "$approved" ] && cmp -s "$approved" "$file"; then
         unchanged=$((unchanged + 1))

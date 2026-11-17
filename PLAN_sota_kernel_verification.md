@@ -293,11 +293,11 @@ currently indefensible:
    weakened definition is reproduced faithfully by regeneration, so the drift gate
    cannot see it. This is exactly the hole `comparator` was built to close.
 
-### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-16)
+### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-17)
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 140 passed, 4 explained gap(s), 0 failed
+verify-invariants: 150 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -340,14 +340,17 @@ verify-invariants: 140 passed, 4 explained gap(s), 0 failed
            drop-keeps-written-address(refused@131), notfull-weakened-to-four(refused@229),
            narrow4-becomes-identity(refused@599), keep-order-becomes-put(refused@353)
   [pass] Phase D: store_projection.mm0 declares its own vocabulary
-  [gap]  W3: isa has no approved statements (owner commit)
-  [gap]  W3: slot_layout has no approved statements (owner commit)
-  [gap]  W3: store_projection has no approved statements (owner commit)
-  [gap]  W3: store_projection_toy has no approved statements (owner commit)
+  [gap]  W3: isa has no approved statements (run scripts/mm0-comparator approve isa, then commit mm0/approved/)
+  [gap]  W3: slot_layout has no approved statements (run scripts/mm0-comparator approve slot_layout, then commit mm0/approved/)
+  [gap]  W3: store_projection has no approved statements (run scripts/mm0-comparator approve store_projection, then commit mm0/approved/)
+  [gap]  W3: store_projection_toy has no approved statements (run scripts/mm0-comparator approve store_projection_toy, then commit mm0/approved/)
 w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
-  [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
-  [pass] W3: the plan's §W3 digest column matches a staging (4 row(s))
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
+  [pass] W3: an approved §W3 row passes when the approved copy holds what it says
+  [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
+  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
   [detail] one altered statement: check refused it (unmodified staging: exit 0)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
@@ -356,12 +359,14 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
   [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
-  [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
-  [pass] W3: stage-approvals stages the 4 pending artifacts (exit 0)
+  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
+  [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
+  [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 131 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 141 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -735,6 +740,9 @@ the artifact, so `mm0-c` checks them too.
   `[gap]` line in `verify-invariants`, so a partially-approved set shows up as a
   shrinking count rather than a single unhelpful "W3 open": the four rows below
   are the four `[gap] W3: <artifact> has no approved statements` lines in §3.5.
+  The `state` cell is the record of the decision, so approving is one edit — flip
+  that cell to `` `[pass]`, approved in `mm0/approved/` `` — and the gate reads
+  the rest off the two states (see the state-column paragraph below).
 
   | artifact | what the approval holds out | stmts | emitter that owns it | state | statements-sha256 |
   |---|---|---|---|---|---|
@@ -752,8 +760,11 @@ the artifact, so `mm0-c` checks them too.
       | grep -E '^w3-(pending|approved):|the plan.s §W3'
   w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
   w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
-  [pass] W3: the plan's §W3 stmts column matches the measured counts (4 row(s))
-  [pass] W3: the plan's §W3 digest column matches a staging (4 row(s))
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
+  [pass] W3: an approved §W3 row passes when the approved copy holds what it says
+  [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
+  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
   [detail] one altered statement: check refused it (unmodified staging: exit 0)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
@@ -762,9 +773,15 @@ the artifact, so `mm0-c` checks them too.
   [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
   [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
-  [pass] W3: every §W3 state cell says why the row is still unapproved (4 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
+  [pass] W3: an approved §W3 row whose emitter left the registry is refused
+  [pass] W3: the recorded probe evidence still names live gate lines (5 row(s))
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
-  [pass] W3: stage-approvals stages the 4 pending artifacts (exit 0)
+  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
+  [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
+  [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
+  [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
   ```
 
@@ -788,10 +805,34 @@ the artifact, so `mm0-c` checks them too.
   zero — a zero would read as "this artifact no longer says anything", which is a
   finding of its own and must not be spelled the same way as an unavailable tool. Disagreement fails the gate in
   both directions, naming the row: a cell that no longer matches the file
-  (`isa(table says 192, file says 193)`) and a row left behind for an artifact
-  that is *not* pending here (`flux1d_certificate(row left behind for an artifact
-  that is not pending here)`) — the second is what happens after an approval
-  lands and the row is forgotten, and its count would then be checking nothing.
+  (`isa(table says 192, file says 193)`) and half an approval — a pending row
+  whose approved copy is already committed (`isa(says unapproved, but …/isa.stmts
+  exists — flip this row's state cell)`) or an approved row with no copy to check
+  it against (`isa(says approved, but …/isa.stmts does not exist)`). The second
+  direction is what an approval used to leave behind: the row stayed pending, so
+  its count was compared with a staging and the gate said nothing about the copy
+  the owner had just committed.
+
+  A **pending row's artifact must also re-derive now**, before anybody tries to
+  approve it. The `stmts` check above can only compare a number it managed to
+  measure, so an artifact the comparator cannot stage — a stale `.mm1` its emitter
+  refuses, a generator that broke, a registry entry that went away — used to come
+  out as "no pending artifact of that name is measurable here", which reads like a
+  missing tool rather than a finding about the artifact, and the owner met the
+  refusal only at approval time. Every §W3 pending row must now have produced its
+  `w3-pending:` number (`[pass] W3: every pending §W3 row's artifact re-derives
+  into a staging (4 row(s))`), and the failure names the rows plus the comparator's
+  own first line. Measured 2026-11-17 by appending a blank line to `mm0/isa.mm1`
+  (which makes it stale against the encoder) and restoring it afterwards: `[FAIL]
+  W3: every pending §W3 row's artifact re-derives into a staging` with
+  `§W3 pending re-derivation: isa(emitter: scripts/isa-encdec check) did not
+  stage; what the comparator said: isa([gap] scripts/isa-encdec check failed for
+  isa: isa-encdec: FAIL …isa.mm1 is s…)`, and the `stmts` row message switching to
+  `isa(row gives 193 statements, but its artifact does not re-derive here — see the
+  re-derivation check)`. The failure names the row's own emitter because that is
+  what an owner follows next, and it is the table's `emitter that owns it` cell
+  that says which command refused the `.mm1` — not something to work out from the
+  artifact's name.
 
   The **emitter column is checked the same way**, because a column saying which
   command owns an artifact is a claim like `stmts` is. `mm0-comparator emitters`
@@ -808,27 +849,131 @@ the artifact, so `mm0-c` checks them too.
   `none`, a real-but-unregistered `scripts/toy-witness` on `store_projection`, and
   a free-form cell): each one turned `[FAIL] W3: every §W3 emitter cell names a
   real command` with the row named, and the committed table passes (4 rows).
-  The check is static — it proves the command *is there* and *is the one
-  registered*, not that it runs; running it is what `mm0-comparator approve`/
-  `check` does once an approval exists (`emitter_check`).
+  For a *pending* row that check is static: it proves the command *is there* and
+  *is the one registered*, not that it runs, because running it is what
+  `mm0-comparator approve`/`check` does when an approval exists
+  (`emitter_check`). An *approved* row is the case where the static form is not
+  enough: its `stmts` and digest columns read a committed file, so they keep
+  passing after the emitter is retired or its output changes, and nothing would
+  re-derive that file. So the gate approves each approved row again into a
+  scratch root — one more `approve`, which runs the row's emitter, or the
+  artifact itself for a `none` row — and requires the result to be byte-identical
+  to the committed copy: `[pass] W3: every approved §W3 row's emitter still
+  produces its approved copy (1 row(s))` with `isa` approved, and with a copy
+  holding one statement fewer
+  `isa(the emitter produces today's statements, …/isa.stmts holds the approved
+  ones)`. Byte-identical rather than count-equal, because the claim is that this
+  command *owns this file*, and a re-derived approval that merely matches in size
+  is a different file with the same shape.
+
+  That check has its own negative control, so it is not a claim that has never
+  fired: the same code is handed a registry with `isa` retired — what unregistering
+  its emitter produces — and the row that names `` `scripts/isa-encdec check` ``,
+  and must report `isa(the row says 'scripts/isa-encdec check', the registry says
+  'nothing' for it)`; with the real registry over an identical copy it must report
+  nothing, which is the half that proves it is not always complaining. It is
+  `[pass] W3: an approved §W3 row whose emitter left the registry is refused`, and
+  it needs no approval to exist: the copy it reproduces is a fresh staging, so the
+  control runs on today's table. The registry is passed in rather than read from
+  the path, so the retirement is simulated without editing the repository.
+
+  That control checks what the function *returns*; whether the gate's output
+  changes is a different claim, so it is measured end to end too, the way
+  `scripts/obj-drift-control` measures W5. `scripts/w3-emitter-drift-control`
+  copies this table, rewrites `isa`'s emitter cell to name
+  `` `scripts/toy-witness check` `` — an executable command the registry does not
+  hold for `isa`, which is what a retirement leaving the cell behind looks like
+  from the table's side — and runs `scripts/verify-invariants` against the copy
+  through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1, `verify-invariants: 138
+  passed, 6 explained gap(s), 2 failed`, `[FAIL] W3: every §W3 emitter cell names
+  a real command` with `isa(cell says 'scripts/toy-witness check', EMITTERS says
+  'scripts/isa-encdec check')`, and every §W3 line that does not read that row
+  still passing. Two failures, not one, because the in-gate control re-reads the
+  same cell — the gate saying the same thing twice, which is why the script's list
+  of unchanged lines omits it rather than pretending otherwise.
+
+  Both measured probes are recorded as data, not only as prose:
+  [`docs/data/w3/probes.tsv`](docs/data/w3/probes.tsv) carries one row per
+  perturbation (artifact, what was done, the check that fired, the message it
+  produced, the date), and the gate re-reads the file on every run — each
+  `gate_line` must still be text `scripts/verify-invariants` emits, each artifact
+  must still be a §W3 row, a row without a measurement date is refused, and each
+  `expected_message` is checked as a *skeleton*: it carries `…` wherever the gate
+  interpolates a stem, a command or a count (or assembles the sentence from
+  pieces), and every literal chunk between the ellipses, four characters or
+  longer, must still appear verbatim in the script. That last part is what keeps
+  a recorded message from describing output the gate can no longer produce; the
+  ellipses are not shorthand for "roughly this". Two further columns record what a
+  gate run ended with where the probe *was* a run — `gate_exit` and `gate_total`,
+  `-` where the probe is exercised in-gate instead — and both are re-read for
+  shape: a numeric exit must be non-zero (a perturbation that exits 0 caught
+  nothing) and the total must read `<n> passed, <n> explained gap(s), <n> failed`,
+  while a `-` in one column with a number in the other is refused because nobody
+  could reproduce it. That is `[pass] W3: the recorded probe evidence still names
+  live gate lines (5 row(s))`. A total is the gate as it stood on the row's date,
+  not today's: the gate grows, so an older row keeps the smaller total it
+  measured (`stale-mm1`'s `128 passed` predates the §W9.3 controls) while its
+  exit status and its message remain the claims the check re-reads. The perturbations are deliberately not re-run (appending to
+  `mm0/isa.mm1` or editing `EMITTERS` is a measurement, not a routine check), but
+  a citation that no longer exists is caught. Measured 2026-11-17 by renaming one
+  recorded `gate_line`: `[FAIL] W3: the recorded probe evidence still names live
+  gate lines` with `§W3 probe evidence: stale-mm1(gate line 'W3: every pending row
+  re-derives' is not in the gate)`. The exit/total half was measured the same day by
+  setting the drift row's recorded exit to 0, which the run refused with
+  `drift-whole-gate(records exit 0, so the perturbation caught nothing)`. The
+  message half was measured by accident, and
+  kept: the first recorded form of the stale-`.mm1` message spanned a `)` the gate
+  builds from two pieces, so the run refused it with `stale-mm1(expected message
+  chunk ') did not stage; what the comparator said: ' is not in the gate)` and
+  `139 passed, 6 explained gap(s), 1 failed` — which is the check working, and the
+  reason the recorded row now marks that boundary with `…` rather than quoting a
+  sentence no single line of the script contains.
 
   The **state column is checked too**, and for the same reason: "`[gap]`" is a
   status, not an explanation. It tells a reader the gate is red without saying
   whether anyone is working on the artifact, whether something blocks it, or
   whether it is an owner decision waiting to be taken — and the third is what it
   always is here, because an approval is an owner commit into `mm0/approved/`
-  and nothing in this repository may self-approve. So each row's state cell must
-  be `` `[gap]`, awaiting owner commit ``, optionally followed by `; ` and an
-  artifact-specific reason (`store_projection` uses that for "the claim itself
-  stays `[gap]`"). A cell that says `pending`, `TBD`, a bare `[gap]`, an empty
-  reason after `;`, or a *different* reason such as `blocked on X` fails with the
-  row named — the last one deliberately, since a row that is blocked for another
-  reason is still waiting on the owner and the cell would then understate what
-  the gate is showing. Measured 2026-11-15 with four drift controls on copies of
-  this table (bare `[gap]`, `pending`, `… ;` with nothing after it, and
-  `blocked on the model rebuild`): each turned `[FAIL] W3: every §W3 state cell
-  says why the row is still unapproved` with the row and the offending text, and
-  the committed table passes (4 rows).
+  and nothing in this repository may self-approve. So each row's state cell has
+  exactly two shapes, and it is also the *record* of the decision:
+
+  | cell | means |
+  |---|---|
+  | `` `[gap]`, awaiting owner commit `` | still pending; the row's numbers are checked against today's artifact |
+  | `` `[pass]`, approved in `mm0/approved/` `` | approved; the row's numbers are checked against `mm0/approved/<stem>.stmts` |
+
+  Both may be followed by `; ` and an artifact-specific reason
+  (`store_projection` uses that for "the claim itself stays `[gap]`"). A cell
+  that says `pending`, `TBD`, a bare `[gap]`, an empty reason after `;`, or a
+  *different* reason such as `blocked on X` fails with the row named — the last
+  one deliberately, since a row that is blocked for another reason is still
+  waiting on the owner and the cell would then understate what the gate is
+  showing. A cell that says approved without naming `mm0/approved/` fails too.
+  Measured 2026-11-15 with four drift controls on copies of this table (bare
+  `[gap]`, `pending`, `… ;` with nothing after it, and `blocked on the model
+  rebuild`): each turned `[FAIL] W3: every §W3 state cell says whether the row is
+  approved or still waiting on the owner` with the row and the offending text,
+  and the committed table passes (4 rows).
+
+  **An approval is one edit, and the gate derives the rest.** Because the state
+  cell says which file the row's numbers must match, approving an artifact is
+  committing `mm0/approved/<stem>.stmts` and flipping that cell — not deleting
+  the row. Everything downstream is then read off the two states: the `stmts`
+  and digest columns are compared with the approved copy for approved rows and
+  with a fresh staging for pending ones (the pass lines report the split:
+  `(4 row(s), 0 approved)` today), the `w3-pending:` line shortens and
+  `w3-approved:` grows without anyone editing a second list, and
+  `scripts/stage-approvals` stops staging the artifact because its approved
+  copy now exists. Half an approval is refused rather than half-made: a pending
+  row whose approved copy *does* exist fails with `… exists — flip this row's
+  state cell`, and an approved row with no copy, or one whose copy holds a
+  different number of statements, fails naming the copy. Measured 2026-11-17 on
+  copies: `isa`'s cell flipped to approved against a scratch approved root →
+  `(4 row(s), 1 approved)`, `w3-pending:` down to three, the digest check still
+  green, `3 staged, … 1 already approved`; an approved cell with the copy
+  removed → `isa(says approved, but …/isa.stmts does not exist)`; an approved
+  copy holding one statement fewer → `isa(table says 193 statements, the
+  approved copy holds 192)`.
   Measured 2026-11-15 by perturbing both at once: `1 failed`, with exactly those
   two messages. The entries are in the table's row order; the fix for a stale
   cell is to read the `w3-pending:` line, not to re-derive the count by hand. The
@@ -2124,7 +2269,58 @@ of describing whichever copy was read, so a drift cannot keep the counts green.
 Changing the toy row's `20 axioms` to `21` is refused as
 `store_projection_toy(says 21 axioms, staging 20)` (measured), so the cell that
 says what an approval *contains* cannot drift from the approval while its
-statement count stays right. And the approved path is exercised, not assumed:
+statement count stays right.
+
+That measurement is in-gate, so the whole gate is measured too, the way §W3's
+emitter cell is: `scripts/w93-composition-drift-control` copies this plan,
+rewrites the toy row's composition cell from `20 axioms` to `21 axioms` — leaving
+the `70` stmts cell alone, which is the point, since the stmts check stays green
+and only the composition column can catch it — and runs `verify-invariants`
+against the copy through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1,
+`verify-invariants: 140 passed, 6 explained gap(s), 1 failed`, detail
+`store_projection_toy(says 21 axioms, staging 20)`, `[FAIL] W9.3: the composition
+table's counts match the files it records`, and the closure digests, the
+approval control, and §W3's stmts and emitter checks all still passing — one
+drifted count, one failure, nothing else moved. The run is recorded as the fourth
+`docs/data/w3/probes.tsv` row. Its `expected_message` skeleton,
+`…(says … axioms, … …)`, pins the field word to the message frame: each field is
+compared by its own literal (`$art(says $claimed axioms, $src $ax)`), not by
+`(says $claimed $label, …)` with the word read from a loop variable, so the
+chunks the gate re-checks (`(says `, ` axioms, `) are adjacent to each other in
+the statement that prints them rather than merely somewhere in the script. The
+source word (`staging` or `approved`) stays interpolated, and is therefore
+vocabulary rather than adjacency: a row is counted from whichever of the two
+files applies, so making the word literal would need one format per field *and*
+file — fourteen hand-written strings — because any single format used for both
+files carries the variable again, and that duplication would be a second copy of
+the field mapping sitting under the first. What can be literal without that
+duplication is checked instead: `[pass] W9.3: every field word a composition cell
+names has a literal comparison (8 word(s))` re-reads the four cells, extracts
+every counted word (`2 sorts`, `20 axioms`, `1 def`, `24 numeral-notation lines`,
+backticks stripped, `def` mapped to `defs` and `numeral…` to `numerals`), and
+refuses a word no per-field literal compares — so a field added to a cell cannot
+go uncounted. Measured the same day by spelling `axioms` as `axiom` in its
+comparison: `[detail] §W9.3 fields: axioms(no literal comparison)` and
+`139 passed, 6 explained gap(s), 2 failed`.
+
+That the closure column is its own claim, not a by-product of the counts, is
+measured the same way: `scripts/w93-closure-drift-control` copies this plan and
+flips the first hex digit of the toy row's `closure-sha256` cell, leaving every
+count cell — `70` included — alone. Measured 2026-11-17: exit 1,
+`verify-invariants: 140 passed, 6 explained gap(s), 1 failed`, `[FAIL] W9.3: the
+composition table's closure digests match the files it records`, detail
+`store_projection_toy(says '19842af88888…', staging '09842af88888…')` — the
+row's digest against the one the file hashes to, twelve characters each — while
+the counts line, the approval control, and §W3's stmts and emitter checks still
+pass. So a row can be right about what an approval *contains* and wrong about
+which bytes it contains, and only this column catches that; the run is recorded
+as the fifth `docs/data/w3/probes.tsv` row. Its skeleton is vocabulary-level for
+the same reason the composition row's source word is: the file word in
+`says '<row>' <src> '<file>'` is the variable `$_c_src` (`staging` or
+`approved`), so `staging` is checked as a word the script contains rather than
+text adjacent to the digests — the frame `(says '` and the fact that both
+counts are printed are checked, the adjacency is not.
+And the approved path is exercised, not assumed:
 the gate copies the toy staging, deletes its first `axiom` line, and counts the
 result *as an approval* through the same function the rows use — it must come
 back `store_projection_toy(says 20 axioms, approved 19)` and fail, which is
@@ -2136,7 +2332,13 @@ scratch root holding a `slot_layout` approval whose first axiom was deleted, the
 gate printed `(4 row(s), 4 from mm0/approved/)`,
 `slot_layout(staged bytes differ from the approved copy)
 slot_layout(says 7 axioms, approved 6)` and one `[FAIL]` (measured, 2026-11-16).
-The variable grants nothing: it moves which directory is *read*.
+The variable grants
+nothing: it moves which directory is *read*, and it is also the comparator's
+default for `approve` *and* `check` (the flag wins when both are given), so a
+reader who names a root once does not approve into one directory and check
+against another. That matters because the two have to agree: an override holding
+only the artifact under test made every other approved artifact look pending
+until `check` was brought onto the same root.
 
 All four are byte-identical to what `mm0-comparator approve` would write (the
 `statements-sha256` headers are `2619b5ec…`, `98dd6399…`, `5c201a80…`,
@@ -2219,7 +2421,9 @@ Two things this pins down that a count could not:
   above and §W3's `statements-sha256` cell are the same four stagings: the gate
   stages each §W3 row into its own scratch directory, reads the digest back out
   of the file the comparator wrote, and compares — which is the line
-  `[pass] W3: the plan's §W3 digest column matches a staging (4 row(s))`. So the
+  `[pass] W3: the plan's §W3 digest column matches the file it describes (4
+  row(s), 0 approved)` — the trailing count is the approved/pending split, and an
+  approved row is read from `mm0/approved/<stem>.stmts` instead of a staging. So the
   hex strings quoted here are produced by a run, not copied from the previous
   one: add or remove a statement, or let an emitter drift, and that line turns
   red before an owner is asked to approve the changed bytes. Two controls keep
@@ -2250,7 +2454,7 @@ $ bash scripts/stage-approvals --stat-only
    statements-sha256: 2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a
    212 line(s) would be added (no approved copy to diff against)
 … slot_layout 35, store_projection 21, store_projection_toy 147 …
-stage-approvals: 4 staged, 0 refused; scratch root /tmp/australvm-approve-staging
+stage-approvals: 4 staged, 0 refused, 0 nothing to approve, 0 already approved; scratch root /tmp/australvm-approve-staging
 stage-approvals: mm0/approved/ was not touched — the diff above is the decision
 ```
 
@@ -2267,20 +2471,56 @@ self-evident.** Three cases decide whether a person reading the output is being
 told the truth: a name that is not `mm0/<stem>.mm0` must be a usage error
 (**64**) rather than the comparator's `refused <name>` line — that line is the
 message for a genuinely stale artifact, so a typo used to read like one — the
-pending artifacts must actually stage (**0**, four `== <artifact>` headings,
-`4 staged, 0 refused`), and an artifact whose staged copy is byte-identical to
-its approved copy must be **refused as nothing to approve** rather than printing
-an empty diff under a heading, which reads like an approval of nothing. Measured
-2026-11-16: `nope` → 64, `--bogus` → 64, no arguments → 0 with four headings,
-`store_projection_toy` against an approved-root copy of itself → 1 with
-`nothing to approve: byte-identical to …`. The gate pins all three as
-`[pass] W3: stage-approvals answers an unknown artifact name with exit 64`,
-`… stages the 4 pending artifacts (exit 0)` and `… refuses an artifact that
-equals its approved copy`, so the script cannot quietly lose its usage error or
-start calling a no-op a success. The pending list the middle line counts is the
-script's own `pending=`, so when an approval lands and its row leaves §W3, that
-check goes red until the array shrinks with it — the intended prompt, not a
-false alarm.
+rows §W3 calls pending must actually stage (**0**, four `== <artifact>` headings,
+`4 staged, 0 refused, 0 nothing to approve, 0 already approved`), an artifact
+whose staged copy is byte-identical to its approved copy must be **refused as
+nothing to approve** rather than printing an empty diff under a heading, which
+reads like an approval of nothing, and an artifact *named by hand* that is
+already approved must be **refused before anything is staged** (1): the diff it
+would print is a re-approval, and an owner who half-remembered the state would
+read that as a first approval. Re-approval is therefore opt-in with
+`--reapprove` — the no-argument form never needs the flag, since it derives its
+artifacts from the approved root and so never reaches that case. Measured
+2026-11-16 and 2026-11-17: `nope` → 64, `--bogus` → 64, no arguments → 0 with
+four headings, `store_projection_toy` named against an approved-root copy of
+itself → 1 with `store_projection_toy is approved — pass --reapprove to stage a
+re-approval diff` and no staging line, the same artifact with `--reapprove` and
+an identical copy → 1 with `nothing to approve: byte-identical to …`. The gate
+pins all four as `[pass] W3: stage-approvals answers an unknown artifact name
+with exit 64`, `… stages exactly §W3's 4 pending row(s) (exit 0)`, `… refuses a
+named artifact that is already approved` and `… refuses an artifact that equals
+its approved copy`, so the script cannot quietly lose its usage error, stage a
+re-approval under a heading that reads like a first one, or start calling a no-op
+a success. The named-approved control deliberately hands the script a copy that
+is *not* byte-identical, so its refusal cannot be the byte-identity check in
+disguise.
+
+**The pending set is derived, not listed twice.** `scripts/stage-approvals` has
+`artifacts_all=(isa slot_layout store_projection store_projection_toy)` and no
+`pending=` array: the no-argument run stages an artifact only when
+`--approved-root` holds no `<stem>.stmts` for it, so a committed approval is
+enough to stop staging it. The gate holds the derivation to §W3 from both sides
+— `[pass] W3: stage-approvals' artifact list is the §W3 table's rows (4
+name(s))` (an artifact named in one and not the other is reported with which
+side is missing it) and `… stages exactly §W3's 4 pending row(s) (exit 0)`
+(every pending row must produce a `== <artifact>` heading, an approved row must
+not, and the summary must report that count with `0 refused`). A third control
+runs the no-argument form against a scratch approved root holding one artifact
+and requires the others to stage with `1 already approved;` in the summary —
+`[pass] W3: stage-approvals stops staging an artifact once its approved copy
+exists`. Together those are what make an approval one edit: flip the state cell,
+and the staging set, the counts it prints and the gate's three lines move with
+it. Measured 2026-11-17 by flipping `isa` to approved against a scratch root:
+`(4 row(s), 1 approved)`, `stages exactly §W3's 3 pending row(s)`, summary `3
+staged, 0 refused, 0 nothing to approve, 1 already approved`, 140 passed and one
+fewer explained gap — because the comparator's `check` and this table now read the
+same root (`AUSTRALVM_APPROVED_ROOT` moves the default for both, and the gate
+passes `--approved-root` to `check` too), so the approved row is reported as
+`[pass] W3: isa matches its approved statements` instead of a second gap. A
+scratch root is then a *complete* view of "approved" for that run, which is what
+makes the two sides comparable at all: an override that held only `isa.stmts`
+would make every other approved artifact look pending, and did, before `check`
+was brought onto the same root.
 
 **What the `store_projection_toy` approval must contain.** Written down because
 "approve the toy" is otherwise a judgement about a file nobody can read: the
@@ -2312,17 +2552,18 @@ What the commit has to be, and what changes with it:
   else** — `git show --stat HEAD` must list one path. Copying the staged file in
   is the approval; regenerating it inside the commit would make the diff the
   emitter's opinion rather than the owner's decision.
-- **The row leaves §W3.** The gate's `stmts`, digest, emitter and state checks
-  all read that table as the *pending* list, and the state cell requires every
-  row to say `` `[gap]`, awaiting owner commit `` — an approved row cannot say
-  that, so it is deleted rather than reworded. `w3-pending:` loses
-  `store_projection_toy(70 stmt)`, the four `row(s)` counts become three, the
-  `w3-approved:` report gains `store_projection_toy(70 stmt)`, and the four
-  `[gap] W3: … has no approved statements` lines in §3.5 become three — and the
-  name leaves `pending=` in `scripts/stage-approvals`, because the gate runs the
-  script and its `[pass] W3: stage-approvals stages the 4 pending artifacts`
-  line counts whatever that array says; a stale entry there turns into a
-  "nothing to approve" refusal, which is the check telling you to shrink it.
+- **The row stays; its state cell flips.** Change
+  `` `[gap]`, awaiting owner commit `` to `` `[pass]`, approved in `mm0/approved/` ``
+  in §W3. That one edit is the whole of it: the `stmts` and digest cells are then
+  compared with `mm0/approved/store_projection_toy.stmts` (they already hold those
+  numbers), `w3-pending:` loses `store_projection_toy(70 stmt)`, the
+  `w3-approved:` report gains it, the four `[gap] W3: … has no approved
+  statements` lines in §3.5 become three, and the `row(s)` counts go on saying
+  four with `1 approved`. `scripts/stage-approvals` stops staging it on its own,
+  and no list anywhere else has to shrink — if one is left un-flipped (the copy
+  committed, the cell still `[gap]`) the gate names the row and says `flip this
+  row's state cell`; if the cell says approved and the copy is missing or holds a
+  different number of statements, it names the copy.
 - **§W9.3's composition table moves with it**, keeping `09842af8…` and
   `abed1393…` as the record of what was approved; the counts stay gate-pinned
   through the `w3-approved:` line once the row is gone.
