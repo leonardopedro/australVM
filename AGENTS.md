@@ -418,6 +418,37 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   control was itself tested by making the mutations no-ops (patterns that match
   nothing, patterns that change nothing, patterns that break the file
   elsewhere): each scratch run reports `1 failed`, exit 1.
+- `scripts/w3-emitter-drift-control` — the §W3 negative control that goes through
+  the gate itself: it rewrites `isa`'s emitter cell in a copy of the plan to name
+  a command `EMITTERS` does not hold for that row and requires
+  `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: every §W3
+  emitter cell names a real command`, the row named in the detail, and every §W3
+  line that does not read that row still passing. One full gate run.
+- `scripts/w93-composition-drift-control` — the same negative control for the
+  §W9.3 composition table: it rewrites `store_projection_toy`'s `20 axioms` cell
+  to `21` in a copy of the plan (the `70` stmts cell untouched, so only the
+  composition column can fire) and requires the gate to exit 1 with
+  `[FAIL] W9.3: the composition table's counts match the files it records`, the
+  detail `store_projection_toy(says 21 axioms, staging 20)`, and the closure,
+  approval-control and §W3 lines unchanged. One full gate run. The gate also
+  re-reads the four cells and requires a literal comparison for every counted
+  word they name (`… every field word a composition cell names has a literal
+  comparison (8 word(s))`), so a field added to a cell cannot go uncounted.
+- `scripts/w93-closure-drift-control` — the §W9.3 negative control for the
+  `closure-sha256` column, which the count drift cannot exercise: it flips the
+  first hex digit of `store_projection_toy`'s digest cell in a copy of the plan
+  (every count cell untouched) and requires the gate to exit 1 with `[FAIL]
+  W9.3: the composition table's closure digests match the files it records`, the
+  detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
+  line and the approval control still passing. One full gate run.
+- `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
+  stale `.mm1`, and the three whole-gate drift controls — §W3's emitter cell and
+  §W9.3's composition count and closure-digest cells): artifact, perturbation,
+  the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
+  a `gate_line` the script no longer emits, an `expected_message` skeleton whose
+  literal chunks (`…` marks the interpolated parts) are no longer in the script, or
+  a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
+  exited non-zero; `-` means the probe is exercised in-gate, not by a gate run).
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
@@ -440,7 +471,14 @@ row's *state* selects: today's staging for a pending row, `mm0/approved/<stem>.s
 for an approved one. A cell that disagrees fails `verify-invariants` with the row
 named, as does half an approval (a committed copy whose row still says pending —
 `flip this row's state cell` — or an approved row whose copy is missing or holds
-a different number of statements), so edit the table only by reading that line. The table's `emitter that owns it` column is checked too: a cell
+a different number of statements), so edit the table only by reading that line.
+A pending row also has to *re-derive* on every run — its artifact must stage,
+because the row is the owner's next decision and a stale `.mm1` or a broken
+generator should read as a finding about the artifact, not as "not measurable
+here" — and the failure quotes the comparator's own line. `check` and `approve`
+both default to `AUSTRALVM_APPROVED_ROOT` when it is set (the flag still wins),
+so the comparator and the table cannot be pointed at different roots.
+The table's `emitter that owns it` column is checked too: a cell
 naming a command (`` `scripts/isa-encdec check` ``) must name a file that exists
 and is executable with the script *and* mode `python3 scripts/mm0-comparator
 emitters` reports for that stem, a cell saying `none` must be genuinely
@@ -459,7 +497,10 @@ counts and the staging set are derived from the two states, and
 an approved row the emitter cell is re-run, not just read: the gate approves the
 row again into a scratch root and requires the result to be byte-identical to
 the committed copy, which is what keeps `emitter that owns it` true after the
-`stmts`/digest columns start reading a fixed file.
+`stmts`/digest columns start reading a fixed file. That check carries its own
+negative control: the same code, given a registry with `isa` retired, must report
+the retirement for the row that names the emitter, and report nothing with the
+real registry over an identical staging.
 
 ## Gotchas
 

@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# w93-closure-drift-control — does the *whole gate* fail when a §W9.3
+# composition row's `closure-sha256` cell disagrees with the file it describes?
+#
+# `w93-composition-drift-control` covers the count cells: it drifts `20 axioms`
+# to `21` and the gate's count line fires. The closure column is a different
+# claim — that the row names the *dependency closure* of the file, not how much
+# is in it — and it is read by a different comparison in `verify-invariants`
+# (`W9.3: the composition table's closure digests match the files it records`).
+# A count drift cannot exercise it: the counts can all be right while the digest
+# is last week's, which is precisely the drift the column exists to catch. So
+# this script performs that experiment end to end:
+#
+#   1. copy the plan and rewrite the toy row's `closure-sha256` cell, first hex
+#      character flipped, leaving every count cell (including `70`) untouched.
+#      One cell, one row: the row is still *right about what the approval
+#      contains* and wrong about *which bytes it contains*;
+#   2. run `scripts/verify-invariants` against that copy through `AUSTRALVM_PLAN`
+#      and require exit 1;
+#   3. require the run to carry `[FAIL] W9.3: the composition table's closure
+#      digests match the files it records` and the `[detail] §W9.3 closure:` line
+#      naming the artifact with both twelve-character prefixes — the drifted one
+#      the row says, the real one the file hashes to. A gate that failed for some
+#      unrelated reason must not count as this control holding;
+#   4. require the same run to still report the lines that do not read that cell:
+#      the composition *counts*, the approval control, and §W3's stmts and
+#      emitter checks. The perturbation must be isolated to the digest column, so
+#      the fail is that column's claim and not a broken tree.
+#
+# The repository is never edited — the perturbed plan lives in a scratch
+# directory and `mm0/approved/` is only read. Nothing here can approve an
+# artifact.
+#
+# Usage: scripts/w93-closure-drift-control   (run under `nix develop`: the gate
+#                                            needs python3)
+# Exit: 0 the control holds, 1 it does not, 2 could not run.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLAN="$ROOT/PLAN_sota_kernel_verification.md"
+GATE="$ROOT/scripts/verify-invariants"
+ART=store_projection_toy
+
+say()  { printf '%s\n' "$*"; }
+fail() { printf 'w93-closure-drift-control: FAIL %s\n' "$*" >&2; }
+
+command -v python3 >/dev/null 2>&1 || {
+    say "w93-closure-drift-control: [gap] python3 not on PATH — run this under 'nix develop'"
+    exit 2
+}
+[ -f "$PLAN" ] || { fail "no plan at $PLAN"; exit 2; }
+[ -f "$GATE" ] || { fail "no gate at $GATE"; exit 2; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT INT TERM
+perturbed="$work/PLAN.md"
+prefixes="$work/prefixes"
+
+# ── 1. the perturbation: one cell, one row ─────────────────────────────────
+python3 - "$PLAN" "$perturbed" "$ART" "$prefixes" <<'PY' || exit 2
+import pathlib, sys
+src, dst, art, pref = (pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]),
+                       sys.argv[3], pathlib.Path(sys.argv[4]))
+rows = src.read_text().splitlines(keepends=True)
+hits = 0
+row_prefix = f"| `{art}` | 70 |"
+for i, line in enumerate(rows):
+    if not line.lstrip().startswith(row_prefix):
+        continue
+    cells = line.split("|")
+    # | artifact | stmts | composition | closure-sha256 |
+    real = cells[4].strip().strip("`")
+    if len(real) != 64 or any(c not in "0123456789abcdef" for c in real):
+        raise SystemExit(f"the closure cell of {art} is not a sha256: {real!r}")
+    drifted = ("1" if real[0] != "1" else "2") + real[1:]
+    cells[4] = cells[4].replace(real, drifted)
+    rows[i] = "|".join(cells)
+    pref.write_text(f"{drifted[:12]} {real[:12]}\n")
+    hits += 1
+if hits != 1:
+    raise SystemExit(f"expected one `{art}` row with a 70 stmts cell, found {hits}")
+dst.write_text("".join(rows))
+PY
+read -r new12 old12 <"$prefixes" || { fail "the perturbation recorded no prefixes"; exit 2; }
+[ -n "$new12" ] && [ -n "$old12" ] && [ "$new12" != "$old12" ] \
+    || { fail "the drifted cell did not differ from the real digest"; exit 2; }
+grep -qF "| \`$ART\` | 70 |" "$perturbed" || { fail "the copy no longer carries the 70 stmts cell"; exit 2; }
+grep -qF "$new12" "$perturbed" || { fail "the copy does not carry the drifted digest"; exit 2; }
+say "perturbed: $ART's closure cell now says \`$new12…\` (counts left alone)"
+
+# ── 2. the whole gate, pointed at the copy ─────────────────────────────────
+rc=0
+( cd "$ROOT" && AUSTRALVM_PLAN="$perturbed" bash scripts/verify-invariants ) \
+    >"$work/gate.log" 2>&1 || rc=$?
+say "gate:      exit $rc"
+tail -1 "$work/gate.log"
+
+if [ "$rc" -eq 0 ]; then
+    fail "the gate accepted a composition row whose closure digest is not the file's"
+    exit 1
+fi
+
+# ── 3. it failed for the right reason ──────────────────────────────────────
+line='[FAIL] W9.3: the composition table'"'"'s closure digests match the files it records'
+if ! grep -qF "$line" "$work/gate.log"; then
+    fail "no '$line' in the run"
+    exit 1
+fi
+detail="$ART(says '$new12…', staging '$old12…')"
+if ! grep -F '[detail] §W9.3 closure:' "$work/gate.log" | grep -qF "$detail"; then
+    grep -F '[detail] §W9.3 closure:' "$work/gate.log" | sed 's/^/  /' >&2
+    fail "the detail does not name $ART with both digest prefixes"
+    exit 1
+fi
+say "detail:    $detail"
+
+# ── 4. everything else still passes ────────────────────────────────────────
+missing=""
+while IFS= read -r want; do
+    grep -qF "$want" "$work/gate.log" || missing="$missing
+  $want"
+done <<'WANT'
+[pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
+[pass] W9.3: an approved copy that drops an axiom fails the composition counts
+[pass] W3: the plan's §W3 stmts column matches what each artifact holds
+[pass] W3: every §W3 emitter cell names a real command
+WANT
+if [ -n "$missing" ]; then
+    fail "the perturbation took other lines with it:$missing"
+    exit 1
+fi
+say "control:   holds — one drifted digest, the closure [FAIL], every count and §W3 line unchanged"
+exit 0
