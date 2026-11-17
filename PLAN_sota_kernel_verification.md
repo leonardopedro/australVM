@@ -775,7 +775,7 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
-  [pass] W3: the recorded probe evidence still names live gate lines (4 row(s))
+  [pass] W3: the recorded probe evidence still names live gate lines (5 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
@@ -2285,7 +2285,26 @@ loop variable (`says $claimed $label, $src $act`), so ` axioms ` and ` staging `
 exist in the script but not adjacent in any line that prints them. The check
 still refuses a renamed check line; it cannot yet prove those words sit in the
 message rather than in a comment, and that limitation is stated rather than
-waved at. And the approved path is exercised, not assumed:
+waved at.
+
+That the closure column is its own claim, not a by-product of the counts, is
+measured the same way: `scripts/w93-closure-drift-control` copies this plan and
+flips the first hex digit of the toy row's `closure-sha256` cell, leaving every
+count cell — `70` included — alone. Measured 2026-11-17: exit 1,
+`verify-invariants: 139 passed, 6 explained gap(s), 1 failed`, `[FAIL] W9.3: the
+composition table's closure digests match the files it records`, detail
+`store_projection_toy(says '19842af88888…', staging '09842af88888…')` — the
+row's digest against the one the file hashes to, twelve characters each — while
+the counts line, the approval control, and §W3's stmts and emitter checks still
+pass. So a row can be right about what an approval *contains* and wrong about
+which bytes it contains, and only this column catches that; the run is recorded
+as the fifth `docs/data/w3/probes.tsv` row. Its skeleton is vocabulary-level for
+the same reason the composition row's is: the source word in
+`says '<row>' <src> '<file>'` is the variable `$_c_src` (`staging` or
+`approved`), so `staging` is checked as a word the script contains rather than
+text adjacent to the digests — the frame `(says '` and the fact that both
+counts are printed are checked, the adjacency is not.
+And the approved path is exercised, not assumed:
 the gate copies the toy staging, deletes its first `axiom` line, and counts the
 result *as an approval* through the same function the rows use — it must come
 back `store_projection_toy(says 20 axioms, approved 19)` and fail, which is

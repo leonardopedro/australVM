@@ -1,7 +1,10 @@
 # `docs/data/w3` — the §W3 probe evidence
 
-Two §W3 checks are only worth what their failures are worth, and both were
-measured by perturbing the tree and reading the message. Those measurements are
+A check is only worth what its failure is worth, so the §W3 checks below — and
+the §W9.3 composition checks that read the same evidence — were measured by
+perturbing the tree and reading the message; a row's `artifact` is always a §W3
+row, which is the tree it perturbs, while its `gate_line` may be a §W9.3 check
+that reads that artifact's evidence. Those measurements are
 recorded here as rows rather than prose, so `scripts/verify-invariants` can
 re-read them: a row whose `gate_line` no longer names a check the script emits,
 or whose `artifact` is no longer a §W3 row, fails

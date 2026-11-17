@@ -431,10 +431,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `[FAIL] W9.3: the composition table's counts match the files it records`, the
   detail `store_projection_toy(says 21 axioms, staging 20)`, and the closure,
   approval-control and §W3 lines unchanged. One full gate run.
+- `scripts/w93-closure-drift-control` — the §W9.3 negative control for the
+  `closure-sha256` column, which the count drift cannot exercise: it flips the
+  first hex digit of `store_projection_toy`'s digest cell in a copy of the plan
+  (every count cell untouched) and requires the gate to exit 1 with `[FAIL]
+  W9.3: the composition table's closure digests match the files it records`, the
+  detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
+  line and the approval control still passing. One full gate run.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
-  stale `.mm1`, and the two whole-gate drift controls, one of them §W9.3's
-  composition table): artifact, perturbation, the check that fired, its message,
-  the date, and the exit status and total of the gate run. Never edited by the gate; re-read every run, which fails when a row cites
+  stale `.mm1`, and the three whole-gate drift controls — §W3's emitter cell and
+  §W9.3's composition count and closure-digest cells): artifact, perturbation,
+  the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
   a `gate_line` the script no longer emits, an `expected_message` skeleton whose
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
   a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
