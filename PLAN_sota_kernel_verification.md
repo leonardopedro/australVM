@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 144 passed, 4 explained gap(s), 0 failed
+verify-invariants: 146 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -365,7 +365,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 135 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 137 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -771,11 +771,13 @@ the artifact, so `mm0-c` checks them too.
   [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
   [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
   [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
+  [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
   ```
 
@@ -799,10 +801,13 @@ the artifact, so `mm0-c` checks them too.
   zero — a zero would read as "this artifact no longer says anything", which is a
   finding of its own and must not be spelled the same way as an unavailable tool. Disagreement fails the gate in
   both directions, naming the row: a cell that no longer matches the file
-  (`isa(table says 192, file says 193)`) and a row left behind for an artifact
-  that is *not* pending here (`flux1d_certificate(row left behind for an artifact
-  that is not pending here)`) — the second is what happens after an approval
-  lands and the row is forgotten, and its count would then be checking nothing.
+  (`isa(table says 192, file says 193)`) and half an approval — a pending row
+  whose approved copy is already committed (`isa(says unapproved, but …/isa.stmts
+  exists — flip this row's state cell)`) or an approved row with no copy to check
+  it against (`isa(says approved, but …/isa.stmts does not exist)`). The second
+  direction is what an approval used to leave behind: the row stayed pending, so
+  its count was compared with a staging and the gate said nothing about the copy
+  the owner had just committed.
 
   The **emitter column is checked the same way**, because a column saying which
   command owns an artifact is a claim like `stmts` is. `mm0-comparator emitters`
@@ -819,9 +824,22 @@ the artifact, so `mm0-c` checks them too.
   `none`, a real-but-unregistered `scripts/toy-witness` on `store_projection`, and
   a free-form cell): each one turned `[FAIL] W3: every §W3 emitter cell names a
   real command` with the row named, and the committed table passes (4 rows).
-  The check is static — it proves the command *is there* and *is the one
-  registered*, not that it runs; running it is what `mm0-comparator approve`/
-  `check` does once an approval exists (`emitter_check`).
+  For a *pending* row that check is static: it proves the command *is there* and
+  *is the one registered*, not that it runs, because running it is what
+  `mm0-comparator approve`/`check` does when an approval exists
+  (`emitter_check`). An *approved* row is the case where the static form is not
+  enough: its `stmts` and digest columns read a committed file, so they keep
+  passing after the emitter is retired or its output changes, and nothing would
+  re-derive that file. So the gate approves each approved row again into a
+  scratch root — one more `approve`, which runs the row's emitter, or the
+  artifact itself for a `none` row — and requires the result to be byte-identical
+  to the committed copy: `[pass] W3: every approved §W3 row's emitter still
+  produces its approved copy (1 row(s))` with `isa` approved, and with a copy
+  holding one statement fewer
+  `isa(the emitter produces today's statements, …/isa.stmts holds the approved
+  ones)`. Byte-identical rather than count-equal, because the claim is that this
+  command *owns this file*, and a re-derived approval that merely matches in size
+  is a different file with the same shape.
 
   The **state column is checked too**, and for the same reason: "`[gap]`" is a
   status, not an explanation. It tells a reader the gate is red without saying
@@ -2309,16 +2327,28 @@ told the truth: a name that is not `mm0/<stem>.mm0` must be a usage error
 (**64**) rather than the comparator's `refused <name>` line — that line is the
 message for a genuinely stale artifact, so a typo used to read like one — the
 rows §W3 calls pending must actually stage (**0**, four `== <artifact>` headings,
-`4 staged, 0 refused, 0 nothing to approve, 0 already approved`), and an artifact whose staged copy is byte-identical to
-its approved copy must be **refused as nothing to approve** rather than printing
-an empty diff under a heading, which reads like an approval of nothing. Measured
-2026-11-16: `nope` → 64, `--bogus` → 64, no arguments → 0 with four headings,
-`store_projection_toy` against an approved-root copy of itself → 1 with
-`nothing to approve: byte-identical to …`. The gate pins all three as
-`[pass] W3: stage-approvals answers an unknown artifact name with exit 64`,
-`… stages exactly §W3's 4 pending row(s) (exit 0)` and `… refuses an artifact
-that equals its approved copy`, so the script cannot quietly lose its usage
-error or start calling a no-op a success.
+`4 staged, 0 refused, 0 nothing to approve, 0 already approved`), an artifact
+whose staged copy is byte-identical to its approved copy must be **refused as
+nothing to approve** rather than printing an empty diff under a heading, which
+reads like an approval of nothing, and an artifact *named by hand* that is
+already approved must be **refused before anything is staged** (1): the diff it
+would print is a re-approval, and an owner who half-remembered the state would
+read that as a first approval. Re-approval is therefore opt-in with
+`--reapprove` — the no-argument form never needs the flag, since it derives its
+artifacts from the approved root and so never reaches that case. Measured
+2026-11-16 and 2026-11-17: `nope` → 64, `--bogus` → 64, no arguments → 0 with
+four headings, `store_projection_toy` named against an approved-root copy of
+itself → 1 with `store_projection_toy is approved — pass --reapprove to stage a
+re-approval diff` and no staging line, the same artifact with `--reapprove` and
+an identical copy → 1 with `nothing to approve: byte-identical to …`. The gate
+pins all four as `[pass] W3: stage-approvals answers an unknown artifact name
+with exit 64`, `… stages exactly §W3's 4 pending row(s) (exit 0)`, `… refuses a
+named artifact that is already approved` and `… refuses an artifact that equals
+its approved copy`, so the script cannot quietly lose its usage error, stage a
+re-approval under a heading that reads like a first one, or start calling a no-op
+a success. The named-approved control deliberately hands the script a copy that
+is *not* byte-identical, so its refusal cannot be the byte-identity check in
+disguise.
 
 **The pending set is derived, not listed twice.** `scripts/stage-approvals` has
 `artifacts_all=(isa slot_layout store_projection store_projection_toy)` and no
@@ -2337,7 +2367,7 @@ exists`. Together those are what make an approval one edit: flip the state cell,
 and the staging set, the counts it prints and the gate's three lines move with
 it. Measured 2026-11-17 by flipping `isa` to approved against a scratch root:
 `(4 row(s), 1 approved)`, `stages exactly §W3's 3 pending row(s)`, summary `3
-staged, 0 refused, 0 nothing to approve, 1 already approved`, 135 passed.
+staged, 0 refused, 0 nothing to approve, 1 already approved`, 137 passed.
 
 **What the `store_projection_toy` approval must contain.** Written down because
 "approve the toy" is otherwise a judgement about a file nobody can read: the

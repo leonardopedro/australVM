@@ -116,16 +116,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   owner commit, so the diff *is* the decision and this only shows it. Takes a
   stem or `mm0/<stem>.mm0`; a name that is neither exits 64 before staging
   anything, because a comparator "refused" line is the message for a real stale
-  artifact, not for a typo. An artifact whose staged copy is byte-identical to
-  its approved copy is refused as "nothing to approve" (exit 1) rather than
-  printing an empty diff; `--approved-root` (default `mm0/approved`, read-only)
-  names the copies to diff against. With no argument it stages every artifact in
+  artifact, not for a typo. Naming an artifact that is *already approved* is
+  refused (exit 1) before anything is staged — the diff would be a re-approval
+  and reads exactly like a first one — so re-approval is opt-in with
+  `--reapprove`; the no-argument run never needs the flag, since it derives its
+  artifacts from the approved root. An artifact whose staged copy is
+  byte-identical to its approved copy is refused as "nothing to approve" (exit
+  1) rather than printing an empty diff; `--approved-root` (default
+  `mm0/approved`, read-only) names the copies to diff against. With no argument it stages every artifact in
   `artifacts_all=` that has **no** copy under `--approved-root`, so approval
   state is not listed here a second time: an approval is one edit — the
   artifact's `state` cell in the plan's §W3 table — and this script follows it.
-  `verify-invariants` pins the 64, the no-op refusal, the artifact list against
-  §W3's rows, the staged set against §W3's pending rows, and the skip an
-  approved copy produces, as six `[pass] W3` lines.
+  `verify-invariants` pins the 64, the named-approved refusal, the no-op
+  refusal, the artifact list against §W3's rows, the staged set against §W3's
+  pending rows, and the skip an approved copy produces, as `[pass] W3` lines.
 - `scripts/clif2mm0` — emits/checks `mm0/clif.mm0`, the CLIF *shape* model
   (W9.2): `clif_dump` (a bridge binary) measures the instruction forms the CPS
   lowering really produces, and this generator writes one declaration per form
@@ -451,7 +455,11 @@ trailing `;` with nothing after it, or a different reason (`blocked on X`) all
 fail — every unapproval here waits on the same thing, an owner commit into
 `mm0/approved/`. Flipping that one cell *is* the approval: the row stays, the
 counts and the staging set are derived from the two states, and
-`scripts/stage-approvals` stops staging the artifact once its copy exists.
+`scripts/stage-approvals` stops staging the artifact once its copy exists. For
+an approved row the emitter cell is re-run, not just read: the gate approves the
+row again into a scratch root and requires the result to be byte-identical to
+the committed copy, which is what keeps `emitter that owns it` true after the
+`stmts`/digest columns start reading a fixed file.
 
 ## Gotchas
 

@@ -1922,6 +1922,46 @@ EOF
         echo "  [detail] §W3 emitter column:${_w3_emit_bad}" >&2
         check "W3: every §W3 emitter cell names a real command" false
     fi
+    # … and for an *approved* row the emitter cell is not merely a description. The
+    # `stmts` and digest columns read the copy an owner committed, so on their own
+    # they would keep passing after the emitter was retired or its output changed:
+    # the approved file is a fixed artifact and nothing would re-derive it. So each
+    # approved row is approved again into a scratch root — which runs its emitter
+    # (`emitter_check`: a `none` row regenerates from the artifact itself) — and the
+    # result must be byte-identical to the committed copy. That is what says the
+    # command in the row still owns the statements the gate is enforcing.
+    _w3_appr_emit_bad=""
+    _w3_appr_emit_n=0
+    if [ -n "$_w3_tab_appr" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            _w3_emit_tmp="$_cert_tmp/w3-emitter"
+            mkdir -p "$_w3_emit_tmp"
+            for _a_stem in $_w3_tab_appr; do
+                _w3_appr_emit_n=$((_w3_appr_emit_n + 1))
+                if [ ! -f "$_appr_root/$_a_stem.stmts" ]; then
+                    _w3_appr_emit_bad="$_w3_appr_emit_bad $_a_stem(no approved copy for its emitter to reproduce)"
+                    continue
+                fi
+                if ! ( cd "$repo_root" && python3 scripts/mm0-comparator approve \
+                        --approved-root "$_w3_emit_tmp" "$_a_stem" ) \
+                        >"$_w3_emit_tmp/$_a_stem.log" 2>&1; then
+                    _w3_appr_emit_bad="$_w3_appr_emit_bad $_a_stem(its emitter no longer produces it: $(sed -n '1p' "$_w3_emit_tmp/$_a_stem.log" | cut -c1-80))"
+                    continue
+                fi
+                if ! cmp -s "$_appr_root/$_a_stem.stmts" "$_w3_emit_tmp/$_a_stem.stmts"; then
+                    _w3_appr_emit_bad="$_w3_appr_emit_bad $_a_stem(the emitter produces today's statements, $_appr_root/$_a_stem.stmts holds the approved ones)"
+                fi
+            done
+        fi
+    fi
+    if [ -n "$_w3_tab_appr" ] && ! command -v python3 >/dev/null 2>&1; then
+        gap "W3: an approved §W3 row's emitter not re-run (no python3 for the comparator)"
+    elif [ -z "$_w3_appr_emit_bad" ]; then
+        check "W3: every approved §W3 row's emitter still produces its approved copy ($_w3_appr_emit_n row(s))" true
+    else
+        echo "  [detail] §W3 approved emitters:${_w3_appr_emit_bad}" >&2
+        check "W3: every approved §W3 row's emitter still produces its approved copy" false
+    fi
     # … and the state column has to say *why* the artifact is still unapproved,
     # not merely that it is. A bare `[gap]` is a status: it tells a reader the
     # gate is red without saying whether anyone is working on it, whether
@@ -2094,10 +2134,34 @@ EOF
         else
             gap "W3: the derived-pending control not run (no $_sa_first staging to copy)"
         fi
+        # … and naming an approved artifact by hand is refused before anything is
+        # staged, however its bytes compare: what would print is a re-approval,
+        # and an owner who half-remembered the state would read it as a first
+        # approval. The copy here is deliberately *not* byte-identical, so the
+        # refusal cannot be the byte-identity check in disguise.
+        mkdir -p "$_sa/appr2"
+        if [ -n "$_sa_first" ] && cp "$_sa/all/$_sa_first.stmts" "$_sa/appr2/" 2>/dev/null \
+                && sed -i '1s/$/ /' "$_sa/appr2/$_sa_first.stmts"; then
+            _sa_appr_named=0
+            bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only \
+                --root "$_sa/appr-named" --approved-root "$_sa/appr2" \
+                >"$_sa/appr-named.log" 2>&1 || _sa_appr_named=$?
+            if [ "$_sa_appr_named" -eq 1 ] \
+                    && grep -q "is approved — pass --reapprove" "$_sa/appr-named.log" \
+                    && ! grep -q 'statement(s), staged at' "$_sa/appr-named.log"; then
+                check "W3: stage-approvals refuses a named artifact that is already approved" true
+            else
+                tail -3 "$_sa/appr-named.log" >&2
+                echo "  [detail] named approved: exit=$_sa_appr_named (want 1), staged=$(grep -c 'statement(s), staged at' "$_sa/appr-named.log" || true)" >&2
+                check "W3: stage-approvals refuses a named artifact that is already approved" false
+            fi
+        else
+            gap "W3: the named-approved control not run (no $_sa_first staging to copy)"
+        fi
         mkdir -p "$_sa/appr"
         if cp "$_sa/all/$_sa_first.stmts" "$_sa/appr/" 2>/dev/null; then
             _sa_noop=0
-            bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only \
+            bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only --reapprove \
                 --root "$_sa/noop" --approved-root "$_sa/appr" \
                 >"$_sa/noop.log" 2>&1 || _sa_noop=$?
             if [ "$_sa_noop" -eq 1 ] && grep -q 'nothing to approve' "$_sa/noop.log"; then
