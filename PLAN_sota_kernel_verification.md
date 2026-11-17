@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 148 passed, 4 explained gap(s), 0 failed
+verify-invariants: 149 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -366,7 +366,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 139 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 140 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -775,6 +775,7 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
+  [pass] W3: the recorded probe evidence still names live gate lines (2 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
@@ -824,10 +825,14 @@ the artifact, so `mm0-c` checks them too.
   own first line. Measured 2026-11-17 by appending a blank line to `mm0/isa.mm1`
   (which makes it stale against the encoder) and restoring it afterwards: `[FAIL]
   W3: every pending §W3 row's artifact re-derives into a staging` with
-  `§W3 pending re-derivation: isa did not stage; what the comparator said:
-  isa([gap] scripts/isa-encdec check failed for isa: isa-encdec: FAIL …isa.mm1 is
-  s…)`, and the `stmts` row message switching to `isa(row gives 193 statements, but
-  its artifact does not re-derive here — see the re-derivation check)`.
+  `§W3 pending re-derivation: isa(emitter: scripts/isa-encdec check) did not
+  stage; what the comparator said: isa([gap] scripts/isa-encdec check failed for
+  isa: isa-encdec: FAIL …isa.mm1 is s…)`, and the `stmts` row message switching to
+  `isa(row gives 193 statements, but its artifact does not re-derive here — see the
+  re-derivation check)`. The failure names the row's own emitter because that is
+  what an owner follows next, and it is the table's `emitter that owns it` cell
+  that says which command refused the `.mm1` — not something to work out from the
+  artifact's name.
 
   The **emitter column is checked the same way**, because a column saying which
   command owns an artifact is a claim like `stmts` is. `mm0-comparator emitters`
@@ -871,6 +876,35 @@ the artifact, so `mm0-c` checks them too.
   it needs no approval to exist: the copy it reproduces is a fresh staging, so the
   control runs on today's table. The registry is passed in rather than read from
   the path, so the retirement is simulated without editing the repository.
+
+  That control checks what the function *returns*; whether the gate's output
+  changes is a different claim, so it is measured end to end too, the way
+  `scripts/obj-drift-control` measures W5. `scripts/w3-emitter-drift-control`
+  copies this table, rewrites `isa`'s emitter cell to name
+  `` `scripts/toy-witness check` `` — an executable command the registry does not
+  hold for `isa`, which is what a retirement leaving the cell behind looks like
+  from the table's side — and runs `scripts/verify-invariants` against the copy
+  through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1, `verify-invariants: 137
+  passed, 6 explained gap(s), 2 failed`, `[FAIL] W3: every §W3 emitter cell names
+  a real command` with `isa(cell says 'scripts/toy-witness check', EMITTERS says
+  'scripts/isa-encdec check')`, and every §W3 line that does not read that row
+  still passing. Two failures, not one, because the in-gate control re-reads the
+  same cell — the gate saying the same thing twice, which is why the script's list
+  of unchanged lines omits it rather than pretending otherwise.
+
+  Both measured probes are recorded as data, not only as prose:
+  [`docs/data/w3/probes.tsv`](docs/data/w3/probes.tsv) carries one row per
+  perturbation (artifact, what was done, the check that fired, the message it
+  produced, the date), and the gate re-reads the file on every run — each
+  `gate_line` must still be text `scripts/verify-invariants` emits, each artifact
+  must still be a §W3 row, and a row without a measurement date is refused. That
+  is `[pass] W3: the recorded probe evidence still names live gate lines (2
+  row(s))`. The perturbations are deliberately not re-run (appending to
+  `mm0/isa.mm1` or editing `EMITTERS` is a measurement, not a routine check), but
+  a citation that no longer exists is caught. Measured 2026-11-17 by renaming one
+  recorded `gate_line`: `[FAIL] W3: the recorded probe evidence still names live
+  gate lines` with `§W3 probe evidence: stale-mm1(gate line 'W3: every pending row
+  re-derives' is not in the gate)`.
 
   The **state column is checked too**, and for the same reason: "`[gap]`" is a
   status, not an explanation. It tells a reader the gate is red without saying

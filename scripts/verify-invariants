@@ -1538,12 +1538,33 @@ EOF
     # the refusal only when they tried to approve it. Every §W3 pending row must
     # therefore have produced its `w3-pending:` number, and the comparator's reason
     # is quoted when it did not.
+    # The row's own emitter cell is what an owner follows when a pending artifact
+    # does not stage, so the failure names it: `isa` alone leaves the reader to work
+    # out which command refused the `.mm1`, and the answer is in the table.
+    _w3_row_cell() {  # stem -> the `emitter that owns it` cell, verbatim
+        awk -F'|' -v s="$1" '
+            /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+                path = $2; cell = $5
+                gsub(/^[ \t]+|[ \t]+$/, "", path)
+                gsub(/^[ \t]+|[ \t]+$/, "", cell)
+                sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+                if (path == s) { print cell; exit }
+            }' "$_plan_file"
+    }
+    # Just the command of that cell (`none — hand-written spec` stays as it is,
+    # since there is no command to quote).
+    _w3_producer() {
+        local _pc _cmd
+        _pc="$(_w3_row_cell "$1")"
+        _cmd="$(printf '%s' "$_pc" | sed -n 's/^`\([^`]*\)`.*/\1/p')"
+        printf '%s' "${_cmd:-$_pc}"
+    }
     _w3_rederive_bad=""
     _w3_rederive_n=0
     for _p_stem in $_w3_tab_pending; do
         _w3_rederive_n=$((_w3_rederive_n + 1))
         printf '%s\n' "$_w3_pairs" | tr ' ' '\n' | grep -qx "$_p_stem=[0-9]*" \
-            || _w3_rederive_bad="$_w3_rederive_bad $_p_stem"
+            || _w3_rederive_bad="$_w3_rederive_bad $_p_stem(emitter: $(_w3_producer "$_p_stem"))"
     done
     if ! command -v python3 >/dev/null 2>&1; then
         gap "W3: pending rows not re-derived (no python3 for the comparator)"
@@ -2062,6 +2083,38 @@ EOF
         fi
     else
         gap "W3: the retired-emitter control not run (isa did not stage here)"
+    fi
+    # The two probes behind those lines are also recorded as data, so a reader can
+    # re-read the message each perturbation produces without performing it twice.
+    # Evidence citing a check that no longer exists is worse than none, so the rows
+    # are re-read on every run: each `gate_line` must still be text this script
+    # emits, and each artifact must still be a §W3 row. The perturbations themselves
+    # are deliberately not re-run — appending to `mm0/isa.mm1` or editing `EMITTERS`
+    # is a measurement, not a routine check.
+    _w3_probe_file="$repo_root/docs/data/w3/probes.tsv"
+    _w3_probe_bad=""
+    _w3_probe_n=0
+    if [ -f "$_w3_probe_file" ]; then
+        while IFS="$(printf '\t')" read -r _p_name _p_art _p_pert _p_line _p_expect _p_date; do
+            case "$_p_name" in ''|probe) continue ;; esac
+            _w3_probe_n=$((_w3_probe_n + 1))
+            case " $_w3_tab_pending $_w3_tab_appr " in
+                *" $_p_art "*) ;;
+                *) _w3_probe_bad="$_w3_probe_bad $_p_name(artifact '$_p_art' is not a §W3 row)" ;;
+            esac
+            grep -qF "$_p_line" "$repo_root/scripts/verify-invariants" \
+                || _w3_probe_bad="$_w3_probe_bad $_p_name(gate line '$_p_line' is not in the gate)"
+            [ -n "$_p_date" ] \
+                || _w3_probe_bad="$_w3_probe_bad $_p_name(no measurement date)"
+        done <"$_w3_probe_file"
+    fi
+    if [ ! -f "$_w3_probe_file" ]; then
+        gap "W3: recorded probe evidence not re-read (docs/data/w3/probes.tsv is absent)"
+    elif [ -z "$_w3_probe_bad" ]; then
+        check "W3: the recorded probe evidence still names live gate lines ($_w3_probe_n row(s))" true
+    else
+        echo "  [detail] §W3 probe evidence:${_w3_probe_bad}" >&2
+        check "W3: the recorded probe evidence still names live gate lines" false
     fi
     # … and the state column has to say *why* the artifact is still unapproved,
     # not merely that it is. A bare `[gap]` is a status: it tells a reader the

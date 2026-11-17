@@ -418,6 +418,16 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   control was itself tested by making the mutations no-ops (patterns that match
   nothing, patterns that change nothing, patterns that break the file
   elsewhere): each scratch run reports `1 failed`, exit 1.
+- `scripts/w3-emitter-drift-control` — the §W3 negative control that goes through
+  the gate itself: it rewrites `isa`'s emitter cell in a copy of the plan to name
+  a command `EMITTERS` does not hold for that row and requires
+  `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: every §W3
+  emitter cell names a real command`, the row named in the detail, and every §W3
+  line that does not read that row still passing. One full gate run.
+- `docs/data/w3/probes.tsv` — the measured §W3 probe evidence (retired emitter,
+  stale `.mm1`): artifact, perturbation, the check that fired, its message, the
+  date. Never edited by the gate; re-read every run, which fails when a row cites
+  a `gate_line` the script no longer emits.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
