@@ -1,3 +1,3 @@
 probe	artifact	perturbation	gate_line	expected_message	measured
-retired-emitter	isa	`isa` taken out of `EMITTERS` while the approved row is re-derived; the real registry reproduces nothing	W3: every approved §W3 row's emitter still produces its approved copy	isa(the row says 'scripts/isa-encdec check', the registry says 'nothing' for it)	2026-11-17
-stale-mm1	isa	a blank line appended to `mm0/isa.mm1`, which makes it stale against `scripts/isa-encdec`	W3: every pending §W3 row's artifact re-derives into a staging	isa(emitter: scripts/isa-encdec check) did not stage	2026-11-17
+retired-emitter	isa	`isa` taken out of `EMITTERS` while the approved row is re-derived; the real registry reproduces nothing	W3: every approved §W3 row's emitter still produces its approved copy	…(the row says '…', the registry says '…' for it)	2026-11-17
+stale-mm1	isa	a blank line appended to `mm0/isa.mm1`, which makes it stale against `scripts/isa-encdec`	W3: every pending §W3 row's artifact re-derives into a staging	…(emitter: … did not stage; what the comparator said: …	2026-11-17

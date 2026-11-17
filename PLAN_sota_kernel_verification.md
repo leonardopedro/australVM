@@ -897,14 +897,25 @@ the artifact, so `mm0-c` checks them too.
   perturbation (artifact, what was done, the check that fired, the message it
   produced, the date), and the gate re-reads the file on every run — each
   `gate_line` must still be text `scripts/verify-invariants` emits, each artifact
-  must still be a §W3 row, and a row without a measurement date is refused. That
-  is `[pass] W3: the recorded probe evidence still names live gate lines (2
-  row(s))`. The perturbations are deliberately not re-run (appending to
+  must still be a §W3 row, a row without a measurement date is refused, and each
+  `expected_message` is checked as a *skeleton*: it carries `…` wherever the gate
+  interpolates a stem, a command or a count (or assembles the sentence from
+  pieces), and every literal chunk between the ellipses, four characters or
+  longer, must still appear verbatim in the script. That last part is what keeps
+  a recorded message from describing output the gate can no longer produce; the
+  ellipses are not shorthand for "roughly this". That is `[pass] W3: the recorded
+  probe evidence still names live gate lines (2 row(s))`. The perturbations are deliberately not re-run (appending to
   `mm0/isa.mm1` or editing `EMITTERS` is a measurement, not a routine check), but
   a citation that no longer exists is caught. Measured 2026-11-17 by renaming one
   recorded `gate_line`: `[FAIL] W3: the recorded probe evidence still names live
   gate lines` with `§W3 probe evidence: stale-mm1(gate line 'W3: every pending row
-  re-derives' is not in the gate)`.
+  re-derives' is not in the gate)`. The message half was measured by accident, and
+  kept: the first recorded form of the stale-`.mm1` message spanned a `)` the gate
+  builds from two pieces, so the run refused it with `stale-mm1(expected message
+  chunk ') did not stage; what the comparator said: ' is not in the gate)` and
+  `139 passed, 6 explained gap(s), 1 failed` — which is the check working, and the
+  reason the recorded row now marks that boundary with `…` rather than quoting a
+  sentence no single line of the script contains.
 
   The **state column is checked too**, and for the same reason: "`[gap]`" is a
   status, not an explanation. It tells a reader the gate is red without saying

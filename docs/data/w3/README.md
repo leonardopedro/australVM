@@ -11,6 +11,15 @@ or whose `artifact` is no longer a §W3 row, fails
 |---|---|
 | [`probes.tsv`](probes.tsv) | One row per measured perturbation: the artifact, what was done to it, the check that fired, the message it produced, and the date. The perturbations are *not* re-run by the gate — appending to `mm0/isa.mm1` or editing `EMITTERS` is a measurement, not a routine check — but a citation that has gone stale is caught on every run. |
 
+`expected_message` is written as the literal skeleton of the message, with `…`
+wherever the gate interpolates something (an artifact stem, a command, a count) or
+assembles the sentence from pieces: every literal chunk between the ellipses,
+four characters or longer, must still appear verbatim in
+`scripts/verify-invariants`. That is what makes the message checkable at all —
+variable parts differ per artifact — and it is what catches a reworded check
+before the recorded measurement starts describing output the gate can no longer
+produce.
+
 Reproducing a row means performing its perturbation (`probe` names the shape)
 and re-running `scripts/verify-invariants`, after which the message in
 `expected_message` should appear. The in-gate controls

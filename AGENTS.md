@@ -427,7 +427,8 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
 - `docs/data/w3/probes.tsv` — the measured §W3 probe evidence (retired emitter,
   stale `.mm1`): artifact, perturbation, the check that fired, its message, the
   date. Never edited by the gate; re-read every run, which fails when a row cites
-  a `gate_line` the script no longer emits.
+  a `gate_line` the script no longer emits or an `expected_message` skeleton whose
+  literal chunks (`…` marks the interpolated parts) are no longer in the script.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

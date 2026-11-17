@@ -2106,6 +2106,27 @@ EOF
                 || _w3_probe_bad="$_w3_probe_bad $_p_name(gate line '$_p_line' is not in the gate)"
             [ -n "$_p_date" ] \
                 || _w3_probe_bad="$_w3_probe_bad $_p_name(no measurement date)"
+            # … and the recorded message must still be one this script can produce.
+            # It is written with `…` wherever the gate interpolates a stem, a command
+            # or a count, and every literal chunk between the ellipses must still
+            # appear in the source: nothing else can check a message whose variable
+            # parts differ per artifact, and a renamed or reworded message is exactly
+            # what makes a recorded measurement misleading. Chunks under four
+            # characters are ignored, so the check cannot be satisfied by `the`.
+            _p_chunks="$(printf '%s' "$_p_expect" | sed 's/…/\n/g' | awk 'length($0) >= 4')"
+            _p_chunk_bad=""
+            if [ -z "$_p_chunks" ]; then
+                _p_chunk_bad="$_p_name(expected message has no literal text to check)"
+            else
+                while IFS= read -r _p_chunk; do
+                    grep -qF "$_p_chunk" "$repo_root/scripts/verify-invariants" && continue
+                    _p_chunk_bad="$_p_name(expected message chunk '$(printf '%s' "$_p_chunk" | cut -c1-60)' is not in the gate)"
+                    break
+                done <<EOF
+$_p_chunks
+EOF
+            fi
+            [ -z "$_p_chunk_bad" ] || _w3_probe_bad="$_w3_probe_bad $_p_chunk_bad"
         done <"$_w3_probe_file"
     fi
     if [ ! -f "$_w3_probe_file" ]; then
