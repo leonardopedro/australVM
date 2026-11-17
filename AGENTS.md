@@ -119,8 +119,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   artifact, not for a typo. An artifact whose staged copy is byte-identical to
   its approved copy is refused as "nothing to approve" (exit 1) rather than
   printing an empty diff; `--approved-root` (default `mm0/approved`, read-only)
-  names the copies to diff against. `verify-invariants` pins the 64, the clean
-  four-artifact staging, and the no-op refusal as three `[pass] W3` lines.
+  names the copies to diff against. With no argument it stages every artifact in
+  `artifacts_all=` that has **no** copy under `--approved-root`, so approval
+  state is not listed here a second time: an approval is one edit — the
+  artifact's `state` cell in the plan's §W3 table — and this script follows it.
+  `verify-invariants` pins the 64, the no-op refusal, the artifact list against
+  §W3's rows, the staged set against §W3's pending rows, and the skip an
+  approved copy produces, as six `[pass] W3` lines.
 - `scripts/clif2mm0` — emits/checks `mm0/clif.mm0`, the CLIF *shape* model
   (W9.2): `clif_dump` (a bridge binary) measures the instruction forms the CPS
   lowering really produces, and this generator writes one declaration per form
@@ -426,20 +431,27 @@ Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines
 The gate prints two measured-size lines: `w3-pending:` (what each unapproved
 artifact would hold out) and `w3-approved:` (what each approved one holds now, so
 a shrunk artifact is visible even though its statement diff is the enforcement).
-The plan's §W3 `stmts` column is checked against the pending numbers on every run
-— a cell that disagrees, or a row left behind for an already-approved artifact,
-fails `verify-invariants` with the row named, so edit the table only by reading
-that line. The table's `emitter that owns it` column is checked too: a cell
+The plan's §W3 `stmts` column is checked on every run against the numbers the
+row's *state* selects: today's staging for a pending row, `mm0/approved/<stem>.stmts`
+for an approved one. A cell that disagrees fails `verify-invariants` with the row
+named, as does half an approval (a committed copy whose row still says pending —
+`flip this row's state cell` — or an approved row whose copy is missing or holds
+a different number of statements), so edit the table only by reading that line. The table's `emitter that owns it` column is checked too: a cell
 naming a command (`` `scripts/isa-encdec check` ``) must name a file that exists
 and is executable with the script *and* mode `python3 scripts/mm0-comparator
 emitters` reports for that stem, a cell saying `none` must be genuinely
 unregistered, and any other wording fails — the registry in `EMITTERS` is the
 single source of truth, so add an emitter there first and then update the row.
-The `state` column must say *why* the row is unapproved, not just that it is:
-`` `[gap]`, awaiting owner commit `` with any artifact-specific reason after
-`; `. `pending`, `TBD`, a bare `[gap]`, a trailing `;` with nothing after it, or
-a different reason (`blocked on X`) all fail — every unapproval here waits on the
-same thing, an owner commit into `mm0/approved/`.
+The `state` column is the approval record, so it has exactly two shapes:
+`` `[gap]`, awaiting owner commit `` for a pending row and
+`` `[pass]`, approved in `mm0/approved/` `` for an approved one, each optionally
+followed by `; ` and an artifact-specific reason. `pending`, `TBD`, a bare
+`[gap]` or `[pass]`, an approved cell that does not name `mm0/approved/`, a
+trailing `;` with nothing after it, or a different reason (`blocked on X`) all
+fail — every unapproval here waits on the same thing, an owner commit into
+`mm0/approved/`. Flipping that one cell *is* the approval: the row stays, the
+counts and the staging set are derived from the two states, and
+`scripts/stage-approvals` stops staging the artifact once its copy exists.
 
 ## Gotchas
 
