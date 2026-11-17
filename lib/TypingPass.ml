@@ -610,6 +610,25 @@ let rec is_buffer_protocol_type (ty: ty): bool =
   | Address inner | Pointer inner -> is_buffer_protocol_type inner
   | _ -> false
 
+(* U04: the baseline extern-rust transport is host-native 64-bit words in and
+   one Int64 out (the JIT declares every argument and result as I64 and the
+   caller reads the result as `fn() -> i64`). Being part of the buffer
+   protocol is not the same as being transportable: a Float64 is a word of
+   the right width but travels in a vector register, and a narrower integer
+   arrives as a truncated word that the native side must narrow itself. Until
+   U11 adds tested marshal/unmarshal adapters, only i64 and byte-buffer
+   addresses/pointers may cross, and only an i64 may come back. *)
+let is_transport_word_parameter (ty: ty): bool =
+  match ty with
+  | Integer (_, Width64) -> true
+  | Address _ | Pointer _ -> true
+  | _ -> false
+
+let is_transport_i64_result (ty: ty): bool =
+  match ty with
+  | Integer (_, Width64) -> true
+  | _ -> false
+
 (* Validate a Rust_Ownership pragma against the signature of the foreign
    import it annotates, and return the pragma unchanged (to ride along on the
    typed declaration for introspection; Monomorphize drops it). All failure
@@ -630,9 +649,13 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
     Errors.rust_ownership_annotation ~annotation:ret;
   List.iter (fun (ValueParameter (_, ty)) ->
       if not (is_buffer_protocol_type ty) then
-        Errors.rust_ownership_shape ~ty) params;
+        Errors.rust_ownership_shape ~ty;
+      if not (is_transport_word_parameter ty) then
+        Errors.rust_interop_transport ~ty) params;
   if not (is_buffer_protocol_type rt) then
-    Errors.rust_ownership_shape ~ty:rt
+    Errors.rust_ownership_shape ~ty:rt;
+  if not (is_transport_i64_result rt) then
+    Errors.rust_interop_transport ~ty:rt
 
 let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (decl: linked_definition): typed_decl =
   with_frame "Augment declaration"

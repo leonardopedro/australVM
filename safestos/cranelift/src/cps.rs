@@ -85,6 +85,12 @@ fn emit_trapping_arith<M: Module>(
 pub struct CpsModule {
     pub name_map: HashMap<String, FuncId>,
     pub module_name: String,
+    /// The signature each function *declares* in the CPS header: parameter
+    /// count and return-type byte. The CLIF signature is always
+    /// `(i64*) -> i64` (the transport is 64-bit words), so this is the only
+    /// place the declared type survives; entry admission compares against it
+    /// before a caller invokes the pointer.
+    pub signatures: HashMap<String, (u32, u8)>,
 }
 
 pub struct CpsReader<'a> {
@@ -1055,6 +1061,7 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
 
     let func_count = reader.read_u32()?;
     let mut name_map = HashMap::new();
+    let mut signatures = HashMap::new();
     let import_map = HashMap::new();
 
     let mut func_headers = Vec::new();
@@ -1065,7 +1072,7 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
         for _ in 0..param_count {
             params.push(reader.read_string()?);
         }
-        let _ret_type = reader.read_u8()?;
+        let ret_type = reader.read_u8()?;
         let body_len = reader.read_u32()?;
         let body_data = reader.read_bytes(body_len as usize)?;
 
@@ -1089,6 +1096,7 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
             .map_err(|e| format!("Declare {}: {:?}", symbol, e))?;
 
         name_map.insert(name.clone(), func_id);
+        signatures.insert(name.clone(), (param_count, ret_type));
         func_headers.push((name, param_count, params, body_data, func_id, sig));
     }
 
@@ -1148,6 +1156,7 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
     Ok(CpsModule {
         name_map,
         module_name,
+        signatures,
     })
 }
 

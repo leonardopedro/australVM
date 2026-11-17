@@ -12,6 +12,7 @@ fn cps_debug(msg: &str) {
 
 #[cfg(feature = "arctic-auth")]
 pub mod arctic_auth;
+pub mod adapters;
 pub mod auth;
 pub mod capstd_mod;
 pub mod capture;
@@ -1133,6 +1134,131 @@ fn compile_to_function_named_impl(
 #[no_mangle]
 pub extern "C" fn compile_to_function(ir_ptr: *const u8, ir_len: usize) -> *const c_void {
     compile_to_function_named(ir_ptr, ir_len, std::ptr::null(), 0)
+}
+
+/// The return-type byte the CPS header declares for `I64` (see
+/// `CpsGen.serialize_function_def`).
+const CPS_RET_I64: u8 = 0x01;
+
+fn cps_ret_name(byte: u8) -> &'static str {
+    match byte {
+        0x00 => "Unit",
+        0x01 => "Int64",
+        0x02 => "Bool",
+        0x03 => "Int32",
+        0x04 => "String",
+        0x05 => "Float64",
+        _ => "unknown",
+    }
+}
+
+/// U04: the strict entry path.
+///
+/// The transport this bridge offers a caller is **host-native 64-bit words
+/// in, one i64 out** (`execute_function` casts to `fn() -> i64`). Everything
+/// else in the CPS header is metadata, so the strict path admits an entry
+/// only when it can call it correctly:
+///
+/// 1. the host must be 64-bit (the transport is words, not a portable ABI);
+/// 2. `name` must be explicit and non-empty — the `run`/`main`/first-function
+///    fallback of [`compile_to_function`] is *not* used here;
+/// 3. the function must be exported by the module;
+/// 4. its declared parameter count must equal `expected_params` (the number
+///    of arguments the caller will pass);
+/// 5. its declared return type must be `Int64`.
+///
+/// Any refusal returns null with the reason on the last-error channel, so no
+/// pointer ever reaches the caller to invoke. The legacy named path keeps its
+/// documented behavior.
+#[no_mangle]
+pub extern "C" fn compile_entry_i64(
+    ir_ptr: *const u8,
+    ir_len: usize,
+    name_ptr: *const u8,
+    name_len: usize,
+    expected_params: u32,
+) -> *const c_void {
+    compile_guarded("compile-entry", || {
+        compile_entry_i64_impl(ir_ptr, ir_len, name_ptr, name_len, expected_params)
+    })
+}
+
+fn compile_entry_i64_impl(
+    ir_ptr: *const u8,
+    ir_len: usize,
+    name_ptr: *const u8,
+    name_len: usize,
+    expected_params: u32,
+) -> *const c_void {
+    cranelift_clear_error();
+
+    if std::mem::size_of::<usize>() != 8 {
+        set_last_error(
+            "strict entry refuses this host: the CPS transport is 64-bit words \
+             in and one i64 out, and a 32-bit host cannot carry it",
+        );
+        return std::ptr::null();
+    }
+
+    let name = if name_ptr.is_null() || name_len == 0 {
+        ""
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+        match std::str::from_utf8(slice) {
+            Ok(s) => s.trim_end_matches('\0'),
+            Err(_) => {
+                set_last_error("Invalid UTF-8 in function name");
+                return std::ptr::null();
+            }
+        }
+    };
+    if name.is_empty() {
+        set_last_error(
+            "strict entry requires an explicit exported name; \
+             refusing to fall back to `run`/`main`/the first function",
+        );
+        return std::ptr::null();
+    }
+
+    // Compile and resolve the exact name; a missing function already reports
+    // the available names on the last-error channel.
+    let ptr = compile_to_function_named_impl(ir_ptr, ir_len, name_ptr, name_len);
+    if ptr.is_null() {
+        return ptr;
+    }
+
+    let declared = CURRENT_MODULE.with(|m| {
+        m.borrow()
+            .as_ref()
+            .and_then(|module| module.signatures.get(name).copied())
+    });
+    let (params, ret) = match declared {
+        Some(sig) => sig,
+        None => {
+            set_last_error(&format!(
+                "entry '{name}' was compiled but declares no signature in the CPS header"
+            ));
+            return std::ptr::null();
+        }
+    };
+    if params != expected_params {
+        set_last_error(&format!(
+            "entry '{name}' declares {params} parameter(s) but this caller passes \
+             {expected_params}; refusing to invoke it"
+        ));
+        return std::ptr::null();
+    }
+    if ret != CPS_RET_I64 {
+        set_last_error(&format!(
+            "entry '{name}' declares return type {}; the strict path only admits \
+             Int64 because its result is read as one i64",
+            cps_ret_name(ret)
+        ));
+        return std::ptr::null();
+    }
+
+    cps_debug(&format!("strict entry '{name}' admitted (0x{ret:02x} return)"));
+    ptr
 }
 
 #[no_mangle]

@@ -292,6 +292,19 @@ let rust_ownership_shape ~ty =
     Text " is not part of the buffer protocol that may cross an extern rust boundary. Parameters and return values of `rs_*` imports must be scalar values (integers, floats, booleans) or addresses/pointers, because those are the shapes the Rust side's ABI speaks."
   ]
 
+let rust_interop_transport ~ty =
+  austral_raise DeclarationError [
+    Text "The type ";
+    Type ty;
+    Text " cannot cross the extern rust boundary under the baseline transport: the JIT passes host-native 64-bit words in and reads one Int64 out, so an ";
+    Code "rs_";
+    Text " parameter must be ";
+    Code "Int64";
+    Text " or a byte-buffer address/pointer, and the result must be ";
+    Code "Int64";
+    Text ". Floats travel in vector registers, and narrower integers would arrive as truncated words, so both need a typed adapter with tested marshal and range checking rather than a guessed word."
+  ]
+
 let fun_pointer_named_args () =
   austral_raise TypeError [
     Text "You can't call a function pointer with a named argument list, because function pointers don't preserve parameter names, so we wouldn't know how to assign arguments to parameters."

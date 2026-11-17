@@ -553,3 +553,172 @@ kernel = ["uk_version"]
         "uk_evolve should be denied when not in grants"
     );
 }
+
+// ── U04: strict entry admission (compile_entry_i64) ─────────────────
+// The strict path admits an entry only when the transport can call it:
+// 64-bit host, explicit non-empty name, exported function, declared arity
+// equal to the caller's, and an Int64 return. Every refusal must return
+// null so no pointer reaches the caller — a non-null pointer here *is* the
+// invocation permission.
+
+/// Like [`cps_v1_named`] but declares `params` parameters and a return-type
+/// byte, so an entry's declared signature can be made to disagree with the
+/// caller's contract.
+fn cps_v1_sig(fname: &str, params: u32, ret: u8, body_data: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    write_u32(&mut buf, 0x43505331); // magic v1
+    write_u32(&mut buf, 1); // func_count
+    write_str(&mut buf, fname);
+    write_u32(&mut buf, params);
+    for i in 0..params {
+        write_str(&mut buf, &format!("p{i}"));
+    }
+    buf.push(ret);
+    write_u32(&mut buf, body_data.len() as u32);
+    buf.extend_from_slice(body_data);
+    buf
+}
+
+fn checked(cps: &[u8], name: &str, expected_params: u32) -> *const std::ffi::c_void {
+    let _lock = COMPILE_LOCK.lock().unwrap();
+    austral_cranelift_bridge::auth::set_allow_all();
+    austral_cranelift_bridge::compile_entry_i64(
+        cps.as_ptr(),
+        cps.len(),
+        name.as_ptr(),
+        name.len(),
+        expected_params,
+    )
+}
+
+fn last_error() -> String {
+    let err = austral_cranelift_bridge::cranelift_last_error();
+    if err.is_null() {
+        String::new()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(err) }
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+/// Boundary values of the advertised transport, each compiled and executed
+/// through the strict path. Independent of the refusal cases: these must
+/// actually run and return the exact bit pattern.
+#[test]
+fn strict_entry_returns_every_i64_boundary_value() {
+    for (i, value) in [
+        0i64,
+        1,
+        -1,
+        i64::MIN,
+        i64::MIN + 1,
+        i64::MAX,
+        i64::MAX - 1,
+        i64::MIN / 2,
+        -(1 << 32),
+        (1 << 32) - 1,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let name = format!("boundary_{i}");
+        let cps = cps_v1_sig(&name, 0, 0x01, &body_return_const(value));
+        let ptr = checked(&cps, &name, 0);
+        assert!(!ptr.is_null(), "value {value}: {}", last_error());
+        assert_eq!(execute(ptr), value, "value {value} must round-trip");
+    }
+}
+
+/// The legitimate case: declared arity matches the caller and the return is
+/// Int64, so the pointer is handed back and executes.
+#[test]
+fn strict_entry_admits_a_matching_signature() {
+    let cps = cps_v1_sig("strict_ok", 0, 0x01, &body_return_const(7));
+    let ptr = checked(&cps, "strict_ok", 0);
+    assert!(!ptr.is_null(), "{}", last_error());
+    assert_eq!(execute(ptr), 7);
+}
+
+#[test]
+fn strict_entry_refuses_an_empty_name() {
+    let cps = cps_v1_sig("strict_empty", 0, 0x01, &body_return_const(1));
+    let ptr = checked(&cps, "", 0);
+    assert!(ptr.is_null(), "an unnamed entry must not be invocable");
+    assert!(
+        last_error().contains("explicit exported name"),
+        "{}",
+        last_error()
+    );
+}
+
+/// The control for every mutable fixture: the module itself is executable,
+/// so a refusal below is the signature gate and not a broken buffer.
+#[test]
+fn strict_entry_refuses_a_missing_name() {
+    let cps = cps_v1_sig("strict_present", 0, 0x01, &body_return_const(3));
+    let ptr = checked(&cps, "strict_absent", 0);
+    assert!(ptr.is_null());
+    assert!(
+        last_error().contains("strict_absent") && last_error().contains("strict_present"),
+        "the diagnostic must name the missing entry and the available one: {}",
+        last_error()
+    );
+}
+
+#[test]
+fn strict_entry_refuses_a_wrong_arity() {
+    let cps = cps_v1_sig("strict_arity", 1, 0x01, &body_return_const(9));
+    let ptr = checked(&cps, "strict_arity", 0);
+    assert!(ptr.is_null(), "a 1-parameter entry must not be called as ()");
+    assert!(
+        last_error().contains("declares 1 parameter") && last_error().contains("passes 0"),
+        "{}",
+        last_error()
+    );
+
+    // Control: the same buffer through the legacy path compiles and runs, so
+    // the refusal above was the declared signature, not the fixture.
+    let _lock = COMPILE_LOCK.lock().unwrap();
+    austral_cranelift_bridge::auth::set_allow_all();
+    let legacy = austral_cranelift_bridge::compile_to_function_named(
+        cps.as_ptr(),
+        cps.len(),
+        "strict_arity".as_ptr(),
+        "strict_arity".len(),
+    );
+    assert!(!legacy.is_null(), "{}", last_error());
+}
+
+#[test]
+fn strict_entry_refuses_a_non_i64_return() {
+    for (byte, named) in [
+        (0x00u8, "Unit"),
+        (0x02, "Bool"),
+        (0x03, "Int32"),
+        (0x04, "String"),
+        (0x05, "Float64"),
+    ] {
+        let name = format!("strict_ret_{byte:02x}");
+        let cps = cps_v1_sig(&name, 0, byte, &body_return_const(1));
+        let ptr = checked(&cps, &name, 0);
+        assert!(ptr.is_null(), "return {named} must not be admitted");
+        assert!(
+            last_error().contains(named),
+            "the diagnostic must name {named}: {}",
+            last_error()
+        );
+    }
+}
+
+/// A caller expecting one argument cannot be handed a 0-parameter entry.
+#[test]
+fn strict_entry_refuses_when_the_caller_expects_arguments() {
+    let cps = cps_v1_sig("strict_caller_args", 0, 0x01, &body_return_const(1));
+    assert!(checked(&cps, "strict_caller_args", 2).is_null());
+    assert!(
+        last_error().contains("passes 2"),
+        "{}",
+        last_error()
+    );
+}
