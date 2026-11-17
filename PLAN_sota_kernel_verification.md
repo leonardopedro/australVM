@@ -775,7 +775,7 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
-  [pass] W3: the recorded probe evidence still names live gate lines (2 row(s))
+  [pass] W3: the recorded probe evidence still names live gate lines (3 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
@@ -884,7 +884,7 @@ the artifact, so `mm0-c` checks them too.
   `` `scripts/toy-witness check` `` — an executable command the registry does not
   hold for `isa`, which is what a retirement leaving the cell behind looks like
   from the table's side — and runs `scripts/verify-invariants` against the copy
-  through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1, `verify-invariants: 137
+  through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1, `verify-invariants: 138
   passed, 6 explained gap(s), 2 failed`, `[FAIL] W3: every §W3 emitter cell names
   a real command` with `isa(cell says 'scripts/toy-witness check', EMITTERS says
   'scripts/isa-encdec check')`, and every §W3 line that does not read that row
@@ -903,13 +903,22 @@ the artifact, so `mm0-c` checks them too.
   pieces), and every literal chunk between the ellipses, four characters or
   longer, must still appear verbatim in the script. That last part is what keeps
   a recorded message from describing output the gate can no longer produce; the
-  ellipses are not shorthand for "roughly this". That is `[pass] W3: the recorded
-  probe evidence still names live gate lines (2 row(s))`. The perturbations are deliberately not re-run (appending to
+  ellipses are not shorthand for "roughly this". Two further columns record what a
+  gate run ended with where the probe *was* a run — `gate_exit` and `gate_total`,
+  `-` where the probe is exercised in-gate instead — and both are re-read for
+  shape: a numeric exit must be non-zero (a perturbation that exits 0 caught
+  nothing) and the total must read `<n> passed, <n> explained gap(s), <n> failed`,
+  while a `-` in one column with a number in the other is refused because nobody
+  could reproduce it. That is `[pass] W3: the recorded probe evidence still names
+  live gate lines (3 row(s))`. The perturbations are deliberately not re-run (appending to
   `mm0/isa.mm1` or editing `EMITTERS` is a measurement, not a routine check), but
   a citation that no longer exists is caught. Measured 2026-11-17 by renaming one
   recorded `gate_line`: `[FAIL] W3: the recorded probe evidence still names live
   gate lines` with `§W3 probe evidence: stale-mm1(gate line 'W3: every pending row
-  re-derives' is not in the gate)`. The message half was measured by accident, and
+  re-derives' is not in the gate)`. The exit/total half was measured the same day by
+  setting the drift row's recorded exit to 0, which the run refused with
+  `drift-whole-gate(records exit 0, so the perturbation caught nothing)`. The
+  message half was measured by accident, and
   kept: the first recorded form of the stale-`.mm1` message spanned a `)` the gate
   builds from two pieces, so the run refused it with `stale-mm1(expected message
   chunk ') did not stage; what the comparator said: ' is not in the gate)` and

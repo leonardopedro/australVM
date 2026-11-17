@@ -2095,7 +2095,8 @@ EOF
     _w3_probe_bad=""
     _w3_probe_n=0
     if [ -f "$_w3_probe_file" ]; then
-        while IFS="$(printf '\t')" read -r _p_name _p_art _p_pert _p_line _p_expect _p_date; do
+        while IFS="$(printf '\t')" read -r _p_name _p_art _p_pert _p_line _p_expect \
+                _p_date _p_exit _p_total; do
             case "$_p_name" in ''|probe) continue ;; esac
             _w3_probe_n=$((_w3_probe_n + 1))
             case " $_w3_tab_pending $_w3_tab_appr " in
@@ -2127,6 +2128,29 @@ $_p_chunks
 EOF
             fi
             [ -z "$_p_chunk_bad" ] || _w3_probe_bad="$_w3_probe_bad $_p_chunk_bad"
+            # The exit status and the total a gate run ended with are recorded where
+            # the perturbation *was* a gate run, and `-` where the probe is exercised
+            # in-gate instead. Both are re-read for shape — a refusal exits non-zero,
+            # and a total is `<n> passed, <n> explained gap(s), <n> failed` — because
+            # a row claiming exit 0 for a perturbation would be evidence of nothing
+            # being caught, and a `-` in one column with a number in the other is a
+            # row nobody can reproduce.
+            case "$_p_exit" in
+                -)
+                    [ "$_p_total" = "-" ] \
+                        || _w3_probe_bad="$_w3_probe_bad $_p_name(records a total without an exit status)"
+                    ;;
+                ''|*[!0-9]*)
+                    _w3_probe_bad="$_w3_probe_bad $_p_name(gate exit '$_p_exit' is not a number or -)"
+                    ;;
+                *)
+                    [ "$_p_exit" -ne 0 ] \
+                        || _w3_probe_bad="$_w3_probe_bad $_p_name(records exit 0, so the perturbation caught nothing)"
+                    printf '%s' "$_p_total" \
+                        | grep -qE '^[0-9]+ passed, [0-9]+ explained gap\(s\), [0-9]+ failed$' \
+                        || _w3_probe_bad="$_w3_probe_bad $_p_name(total '$_p_total' is not a gate summary)"
+                    ;;
+            esac
         done <"$_w3_probe_file"
     fi
     if [ ! -f "$_w3_probe_file" ]; then
