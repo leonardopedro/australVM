@@ -456,6 +456,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
   a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
   exited non-zero; `-` means the probe is exercised in-gate, not by a gate run).
+- `scripts/check-census` — the counter behind the plan's "which checks have no
+  measured failure" paragraph, so those numbers are re-measured, not trusted:
+  it censuses every `check "…"` in `scripts/verify-invariants` as statements,
+  distinct texts (a trailing count parenthetical dropped — it reports a number,
+  not a different claim), the texts the plan's census table names, the texts a
+  `docs/data/w3/probes.tsv` row records, and the residue with neither. It exits
+  1 when the plan no longer quotes the measured counts, so a table that grows
+  without the paragraph moving is caught here. Kept out of `verify-invariants`
+  because it reads the plan's prose rather than an artifact.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

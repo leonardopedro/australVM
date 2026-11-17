@@ -930,14 +930,16 @@ the artifact, so `mm0-c` checks them too.
   sentence no single line of the script contains.
 
   **Which checks have no measured failure.** Every other check in the gate was
-  counted against the evidence: of 201 `check` statements (116 distinct texts
-  once a `($var)` count suffix is dropped), six have a measured perturbed-tree
-  run (`probes.tsv`) and 24 are themselves in-gate controls — they perturb a
-  scratch copy and pass only when the perturbation is refused, so their failing
-  mode is exercised on every run. The remaining 84 have neither, and 54 of those
-  are not mentioned anywhere else in this plan. The table is that set (51 rows:
-  three checks have their name assembled per artifact, so the counted spellings
-  are one row each), with the judgement of what stands in the way. `class` is one of: **copy** — a control of
+  counted against the evidence, and the counter is `scripts/check-census` — the
+  numbers below are its output on this tree, not a hand count. Of 201 `check`
+  statements, 116 distinct texts remain once a trailing count parenthetical
+  (`($n name(s))`, `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is
+  dropped: it reports a number, not a different claim. Of those 116, 48 are the
+  rows of the table below and six have a measured perturbed-tree run
+  (`probes.tsv`) — 54 covered — leaving 62 with neither. The table carries the
+  judgement of what stands in the way for the checks it lists; it does not cover
+  all 62, and that unwalked residue, not a property of the checks, is the rest of
+  this gap. `class` is one of: **copy** — a control of
   the `probes.tsv` shape is possible (copy the data, drift one claim, point an
   override at the copy) and is simply not written yet; **tool** — the check only
   runs when an external tool is present (`mm0-c`, Lean, `why3`/`z3`, `cc`), so its

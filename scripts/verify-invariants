@@ -1438,15 +1438,6 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     # behind for an approved artifact is stale the other way (its approval is
     # checked by the statement diff, so the row no longer has a job). A table
     # cell is the kind of copied number that is right the day it is written.
-<<<<<<< HEAD
-    _plan_file="${AUSTRALVM_PLAN:-$repo_root/PLAN_sota_kernel_verification.md}"
-    # The approved copies the table's approved rows are compared with. Overridable
-    # only so the control below can point at a scratch copy — it is the same
-    # `--approved-root` the comparator already takes, and it grants nothing: it
-    # moves which directory is read, not which artifact is approved.
-    _appr_root="${AUSTRALVM_APPROVED_ROOT:-$repo_root/mm0/approved}"
-=======
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
     # Every §W3 row's artifact and its *state* cell. The state cell is what says
     # whether an artifact is approved yet, so it decides which file the row's
     # numbers must come from, and it is the one edit an approval needs: commit the
@@ -1503,11 +1494,7 @@ EOF
                 fi
                 meas="$(printf '%s\n' "$_w3_pairs" | tr ' ' '\n' | grep -x "$stem=[0-9]*" | head -1)"
                 if [ -z "$meas" ]; then
-<<<<<<< HEAD
-                    printf '%s' "$stem(row gives $n statements, but no pending artifact of that name is measurable here)"
-=======
                     printf '%s' "$stem(row gives $n statements, but its artifact does not re-derive here — see the re-derivation check)"
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
                 elif [ "${meas##*=}" != "$n" ]; then
                     printf '%s' "$stem(table says $n, file says ${meas##*=})"
                 fi
@@ -1548,8 +1535,6 @@ EOF
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
         check "W3: the plan's §W3 stmts column matches what each artifact holds" false
     fi
-<<<<<<< HEAD
-=======
     # A pending row is the owner's next decision, so its artifact has to re-derive
     # *now*. The `stmts` check above can only compare a number it measured, so an
     # artifact the comparator cannot stage — a stale `.mm1` its emitter refuses, a
@@ -1595,7 +1580,6 @@ EOF
         echo "  [detail] §W3 pending re-derivation:${_w3_rederive_bad} did not stage; what the comparator said: $(tr '\n' ' ' <"$_w3_why_file" | cut -c1-300)" >&2
         check "W3: every pending §W3 row's artifact re-derives into a staging" false
     fi
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
     # Both halves of that check are exercised, because the approved half only runs
     # once an approval exists and the stale-state half only runs when someone has
     # an approved copy the table does not know about. With a scratch approved copy
@@ -2406,8 +2390,6 @@ EOF
             fi
         else
             gap "W3: the derived-pending control not run (no $_sa_first staging to copy)"
-<<<<<<< HEAD
-=======
         fi
         # … and naming an approved artifact by hand is refused before anything is
         # staged, however its bytes compare: what would print is a re-approval,
@@ -2432,16 +2414,11 @@ EOF
             fi
         else
             gap "W3: the named-approved control not run (no $_sa_first staging to copy)"
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
         fi
         mkdir -p "$_sa/appr"
         if cp "$_sa/all/$_sa_first.stmts" "$_sa/appr/" 2>/dev/null; then
             _sa_noop=0
-<<<<<<< HEAD
-            bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only \
-=======
             bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only --reapprove \
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
                 --root "$_sa/noop" --approved-root "$_sa/appr" \
                 >"$_sa/noop.log" 2>&1 || _sa_noop=$?
             if [ "$_sa_noop" -eq 1 ] && grep -q 'nothing to approve' "$_sa/noop.log"; then
