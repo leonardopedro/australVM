@@ -1,0 +1,877 @@
+#!/usr/bin/env python3
+"""test-umbrella — the umbrella lane harness (PLAN_umbrella_production.md U00).
+
+The runner is deliberately dumb about what a case means: a case either passes
+its own stated oracle, fails it, or reports a gap because a prerequisite this
+environment lacks. A child exiting 0 is never taken as a pass by itself; the
+cases check the marker/oracle the child was supposed to produce.
+
+Usage:
+  scripts/test-umbrella --lane cli --case HAR01 --strict --json
+  scripts/test-umbrella --all --json
+  scripts/test-umbrella --list
+
+Exit: 0 all selected cases passed (gaps only allowed without --strict),
+      1 a case failed or --strict saw a required gap, 2 usage/inventory error.
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+import time
+import traceback
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "umbrella", "tests"))
+
+from support import harness  # noqa: E402
+
+LANES = (
+    "cli",
+    "build",
+    "abi",
+    "capability",
+    "e2e",
+    "robustness",
+    "package",
+    "isolated",
+    "oracle",
+)
+
+# Pinned required-case inventory: a lane may not quietly lose a case the plan
+# (or the acceptance matrix) depends on. Every id here must exist, be marked
+# required, and live in the named lane.
+REQUIRED_CASES = {
+    "cli": ("HAR01", "HAR03"),
+    "build": (
+        "BLD08",
+        "SUITE_TIER1",
+        "SUITE_CAPSTD",
+        "SUITE_STATIC_SEAM",
+        "SUITE_RSCRATE",
+        "SUITE_ADAPTERS",
+        "SUITE_UMBRELLA_CLI",
+        "SUITE_UMBRELLA_ENTRY",
+        "SUITE_UMBRELLA_CARGO",
+    ),
+    "capability": ("HAR02",),
+}
+
+DEMO_DIR = os.path.join(ROOT, "examples", "modules", "rust_kv")
+BRIDGE_DIR = os.path.join(ROOT, "safestos", "cranelift")
+RSCRATE_DIR = os.path.join(ROOT, "umbrella", "modules", "rscrate")
+
+# The baseline suites U00 measured, wired in as cases so a regression cannot
+# disappear from the lane. The counts are the baseline's own `test result`
+# figures: a suite that silently loses a test is a red case, not a smaller pass.
+# Each entry's last field says whether the run uses `--release` (reusing the
+# tree's existing release artifacts). The plan's commands differ only in
+# profile, not in features or in what the tests assert.
+SUITES = {
+    "SUITE_TIER1": (
+        os.path.join(BRIDGE_DIR, "Cargo.toml"),
+        ["--features", "test-stubs", "--test", "tier1_extern_rust"],
+        6,
+        True,
+    ),
+    # 4, not 5: `capstd_stub_returns_error` is `#[cfg(not(feature = "capstd"))]`,
+    # so the capstd-enabled run executes the other four.
+    "SUITE_CAPSTD": (
+        os.path.join(BRIDGE_DIR, "Cargo.toml"),
+        ["--features", "test-stubs,capstd", "--test", "capstd_tests"],
+        4,
+        True,
+    ),
+    "SUITE_STATIC_SEAM": (
+        os.path.join(BRIDGE_DIR, "Cargo.toml"),
+        ["--features", "test-stubs", "--test", "static_seam"],
+        3,
+        True,
+    ),
+    "SUITE_RSCRATE": (os.path.join(RSCRATE_DIR, "Cargo.toml"), [], 2, True),
+    # U11 scalar codec: the versioned word encoding that decides how Int32,
+    # Bool and Float64 travel. Pure Rust, no JIT.
+    "SUITE_ADAPTERS": (
+        os.path.join(BRIDGE_DIR, "Cargo.toml"),
+        ["--lib", "adapters"],
+        9,
+        True,
+    ),
+    # U03/U04 regression pins. The CLI suite is the parser plus the binary's
+    # exit contracts; the entry suite is the strict entry admission seen from
+    # the umbrella side (a scripted front-end hands it hand-built CPS, so a
+    # refused entry must never produce the `RESULT` invocation marker).
+    # `False` = debug profile. These two suites assert exit codes, messages and
+    # the absence of an invocation marker; no assertion depends on optimization,
+    # and a release build of the umbrella's test binaries is a second full
+    # artifact set that the lane does not need.
+    "SUITE_UMBRELLA_CLI": (
+        os.path.join(ROOT, "umbrella", "Cargo.toml"),
+        ["--test", "cli"],
+        6,
+        False,
+    ),
+    "SUITE_UMBRELLA_ENTRY": (
+        os.path.join(ROOT, "umbrella", "Cargo.toml"),
+        ["--test", "entry"],
+        4,
+        False,
+    ),
+    # U05 bullet 3: a real Cargo stream from the fixture workspace (proc-macro
+    # `.so`, transitive `.rlib`, two cdylibs, custom target dir).
+    "SUITE_UMBRELLA_CARGO": (
+        os.path.join(ROOT, "umbrella", "Cargo.toml"),
+        ["--test", "cargo_select"],
+        5,
+        False,
+    ),
+}
+
+# `finished in <t>s` is cargo's per-target test runtime; the `Finished` line is
+# the build/link time. They are reported separately so a 500 s link is not
+# presented as test time (or the reverse).
+RESULT_LINE = re.compile(
+    r"^test result: (\w+)\. (\d+) passed; (\d+) failed.*?finished in ([\d.]+)s", re.M
+)
+BUILD_LINE = re.compile(r"^\s*Finished `([^`]+)` profile .* in ([\d.]+)s", re.M)
+
+
+class Ctx(object):
+    def __init__(self, repo_root, scratch, env, timeout, seed):
+        self.repo_root = repo_root
+        self.scratch = scratch
+        self.env = env
+        self.timeout = timeout
+        self.seed = seed
+        self.support = os.path.join(repo_root, "umbrella", "tests", "support")
+
+
+def _child(ctx, args, timeout=None):
+    children = os.path.join(ctx.scratch, "children")
+    os.makedirs(children, exist_ok=True)
+    argv = [sys.executable, os.path.realpath(__file__)] + list(args)
+    argv += ["--scratch-root", children]
+    return harness.run_capture(
+        argv, timeout=timeout or ctx.timeout, env=ctx.env, cwd=ctx.repo_root
+    )
+
+
+def _events(record):
+    events = []
+    for line in record["stdout"].splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            raise harness.CaseFailure(
+                "child emitted a non-JSON line on stdout: %r" % line[:200]
+            )
+    return events
+
+
+def _one(events, kind):
+    found = [e for e in events if e.get("event") == kind]
+    if len(found) != 1:
+        raise harness.CaseFailure(
+            "expected exactly one %r event, saw %d" % (kind, len(found))
+        )
+    return found[0]
+
+
+def _case_events(events):
+    return [e for e in events if e.get("event") == "case"]
+
+
+def _trunc(text, limit=2000):
+    if text is None:
+        return ""
+    return text if len(text) <= limit else text[:limit] + "…<truncated>"
+
+
+def case_selftest_pass(ctx):
+    """A fake tool must observe exactly the argv and environment we passed,
+    and must leave the marker that proves the operation happened."""
+    record = os.path.join(ctx.scratch, "fake-record.json")
+    marker = os.path.join(ctx.scratch, "marker.txt")
+    tool = os.path.join(ctx.support, "fake_tool.py")
+    tool_args = [
+        "--record",
+        record,
+        "--marker",
+        marker,
+        "--marker-text",
+        "ran",
+        "value with space",
+        "--flag=1",
+    ]
+    env = dict(ctx.env)
+    env["UMBRELLA_TEST_SENTINEL"] = "u00-pass"
+    rec = harness.run_capture(
+        [sys.executable, tool] + tool_args, timeout=ctx.timeout, env=env, cwd=ctx.scratch
+    )
+    if rec["timed_out"]:
+        raise harness.CaseFailure("fake tool timed out after %.0fs" % ctx.timeout)
+    if rec["returncode"] != 0:
+        raise harness.CaseFailure(
+            "fake tool exited %s: %s" % (rec["returncode"], _trunc(rec["stderr"]))
+        )
+    data = harness.read_json(record)
+    if data.get("argv") != tool_args:
+        raise harness.CaseFailure(
+            "child argv was not preserved verbatim: %r" % (data.get("argv"),)
+        )
+    if data.get("env", {}).get("UMBRELLA_TEST_SENTINEL") != "u00-pass":
+        raise harness.CaseFailure("child did not observe the harness environment")
+    if not os.path.exists(marker):
+        raise harness.CaseFailure("fake tool exited 0 but wrote no marker at %s" % marker)
+    with open(marker, "r", encoding="utf-8") as fh:
+        if fh.read() != "ran":
+            raise harness.CaseFailure("marker content is not what the tool was told to write")
+    return {"argv": data["argv"], "env_sentinel": "u00-pass", "marker": marker}
+
+
+def case_selftest_fail(ctx):
+    """Negative fixture: a child that prints PASS and exits 0 without doing
+    the work. The oracle is the marker, so this case must be reported failing —
+    if it ever passes, the harness has an unconditional PASS."""
+    marker = os.path.join(ctx.scratch, "should-exist.txt")
+    tool = os.path.join(ctx.support, "fake_tool.py")
+    rec = harness.run_capture(
+        [sys.executable, tool, "--print", "PASS\n"],
+        timeout=ctx.timeout,
+        env=ctx.env,
+        cwd=ctx.scratch,
+    )
+    if rec["returncode"] != 0 or "PASS" not in rec["stdout"]:
+        raise harness.CaseFailure("negative fixture setup broke: %r" % (rec,))
+    if not os.path.exists(marker):
+        raise harness.CaseFailure(
+            "child exited 0 and printed PASS but wrote no marker at %s; "
+            "a printed PASS is not evidence the operation happened" % marker
+        )
+    return {"marker": marker}
+
+
+def case_selftest_gap(ctx):
+    """Fixture: a required prerequisite is absent. Not a pass, not a fail."""
+    raise harness.Gap(
+        "SELFTEST_GAP: required fake tool 'u00-absent-tool' is not installed "
+        "(install it, or skip non-strict)"
+    )
+
+
+def case_har01(ctx):
+    # 1. exactly the requested cases execute, in registry order.
+    rec = _child(ctx, ["--case", "SELFTEST_PASS", "--case", "SELFTEST_GAP", "--json"])
+    if rec["timed_out"]:
+        raise harness.CaseFailure("runner self-invocation timed out")
+    if rec["returncode"] != 0:
+        raise harness.CaseFailure(
+            "gap-only non-strict run must exit 0, got %s: %s"
+            % (rec["returncode"], _trunc(rec["stderr"]))
+        )
+    events = _events(rec)
+    ran = [e["case"] for e in _case_events(events)]
+    if ran != ["SELFTEST_PASS", "SELFTEST_GAP"]:
+        raise harness.CaseFailure(
+            "requested exactly [SELFTEST_PASS, SELFTEST_GAP]; ran %r" % (ran,)
+        )
+    setup = _one(events, "setup")
+    if not isinstance(setup.get("setup_ns"), int) or setup["setup_ns"] <= 0:
+        raise harness.CaseFailure("setup event carries no measured setup time")
+    identity = setup.get("identity") or {}
+    for key in ("git", "lockfiles", "toolchain", "native", "bridge", "umbrella"):
+        if key not in identity:
+            raise harness.CaseFailure("identity record lacks %r" % key)
+    summary = _one(events, "summary")
+    if (summary.get("selected"), summary.get("pass"), summary.get("gap")) != (2, 1, 1):
+        raise harness.CaseFailure("summary miscounts the run: %r" % (summary,))
+
+    # 2. zero/unknown selection is a usage error, not an empty PASS.
+    usage = [
+        (["--json"], "no cases selected"),
+        (["--case", "NO_SUCH_CASE", "--json"], "unknown case"),
+        (["--lane", "no-such-lane", "--json"], "unknown lane"),
+        (["--lane", "abi", "--json"], "selected no cases"),
+    ]
+    for args, needle in usage:
+        bad = _child(ctx, args)
+        if bad["returncode"] != 2:
+            raise harness.CaseFailure(
+                "%r must exit 2, got %s" % (args, bad["returncode"])
+            )
+        if needle not in (bad["stdout"] + bad["stderr"]):
+            raise harness.CaseFailure(
+                "%r error does not say %r: %s"
+                % (args, needle, _trunc(bad["stderr"]))
+            )
+
+    # 3. a failing child cannot be reported as a passing case.
+    bad = _child(ctx, ["--case", "SELFTEST_FAIL", "--json"])
+    if bad["returncode"] != 1:
+        raise harness.CaseFailure(
+            "a failing case must make the run exit 1, got %s" % bad["returncode"]
+        )
+    bad_events = _events(bad)
+    bad_cases = _case_events(bad_events)
+    if [c["status"] for c in bad_cases] != ["fail"]:
+        raise harness.CaseFailure("SELFTEST_FAIL was not reported failing")
+    if _one(bad_events, "summary").get("pass") != 0:
+        raise harness.CaseFailure("a failing run reported a passing case")
+    return {
+        "requested": ran,
+        "usage_errors": [args for args, _ in usage],
+        "negative_fixture_status": bad_cases[0]["status"],
+    }
+
+
+def case_har03(ctx):
+    loose = _child(ctx, ["--case", "SELFTEST_GAP", "--json"])
+    strict = _child(ctx, ["--case", "SELFTEST_GAP", "--strict", "--json"])
+    if loose["returncode"] != 0:
+        raise harness.CaseFailure(
+            "non-strict gap run must exit 0, got %s" % loose["returncode"]
+        )
+    if strict["returncode"] != 1:
+        raise harness.CaseFailure(
+            "--strict with a required gap must exit 1, got %s" % strict["returncode"]
+        )
+    loose_events, strict_events = _events(loose), _events(strict)
+    loose_cases = _case_events(loose_events)
+    strict_cases = _case_events(strict_events)
+    if [c["status"] for c in loose_cases] != ["gap"]:
+        raise harness.CaseFailure("absent tool was not reported as a gap")
+    if [c["status"] for c in strict_cases] != ["gap"]:
+        raise harness.CaseFailure("--strict changed the gap into a pass or fail")
+    if not loose_cases[0]["detail"]:
+        raise harness.CaseFailure("gap has no explanation")
+    if loose_cases[0]["detail"] != strict_cases[0]["detail"]:
+        raise harness.CaseFailure("gap explanation differs between loose and strict runs")
+    loose_sum = _one(loose_events, "summary")
+    strict_sum = _one(strict_events, "summary")
+    if (loose_sum["pass"], loose_sum["gap"], loose_sum["exit"]) != (0, 1, 0):
+        raise harness.CaseFailure("non-strict gap summary is wrong: %r" % (loose_sum,))
+    if (strict_sum["required_gap"], strict_sum["exit"]) != (1, 1):
+        raise harness.CaseFailure("strict required-gap summary is wrong: %r" % (strict_sum,))
+    return {"gap_detail": loose_cases[0]["detail"], "loose_exit": 0, "strict_exit": 1}
+
+
+def _success_claims(text):
+    """Lines that assert a capability result (U01/HAR02).
+
+    A demo may report what it checked, but `PASS`/`ALL TESTS PASSED` claims are
+    only legitimate when the operation they name really ran. The oracle is
+    deliberately textual because the defect being guarded against is printed
+    prose standing in for work.
+    """
+    claims = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if "ALL TESTS PASSED" in stripped or stripped.startswith("PASS") \
+                or ": PASS" in stripped:
+            claims.append(stripped)
+    return claims
+
+
+def case_har02(ctx):
+    demo = os.path.join(DEMO_DIR, "run_demo.sh")
+    rec = harness.run_capture(
+        ["bash", demo], timeout=ctx.timeout, env=ctx.env, cwd=DEMO_DIR
+    )
+    if rec["timed_out"]:
+        raise harness.CaseFailure("the rust_kv demo timed out")
+    out = rec["stdout"] + rec["stderr"]
+
+    # 1. The current demo must not claim success, and must name what is missing.
+    if rec["returncode"] != 3:
+        raise harness.CaseFailure(
+            "an unimplemented demo must exit 3, got %s: %s"
+            % (rec["returncode"], _trunc(out))
+        )
+    claims = _success_claims(out)
+    if claims:
+        raise harness.CaseFailure(
+            "demo claims success without a capability operation: %r" % (claims,)
+        )
+    for needle in ("UNSUPPORTED", "capability execution", "U22"):
+        if needle not in out:
+            raise harness.CaseFailure(
+                "demo does not report %r; output was: %s" % (needle, _trunc(out))
+            )
+    if "references only" not in out or "not run them" not in out:
+        raise harness.CaseFailure(
+            "existing unit tests are not marked as unexecuted references: %s"
+            % _trunc(out)
+        )
+
+    # 2. The same oracle must reject the previously printed transcript, so the
+    # check above is not a comparison that cannot fail.
+    printed = os.path.join(DEMO_DIR, "fixtures", "printed_success.txt")
+    with open(printed, "r", encoding="utf-8") as handle:
+        printed_text = handle.read()
+    if not _success_claims(printed_text):
+        raise harness.CaseFailure(
+            "oracle accepts the printed-success fixture (%s)" % printed
+        )
+
+    # 3. Mutation guard: replace the uncovered stage with `echo PASS`. The demo
+    # must then claim success, and the oracle must catch that claim; a mutation
+    # that changes nothing (or does not apply) fails the case.
+    mutant_dir = os.path.join(ctx.scratch, "rust_kv-mutant")
+    shutil.copytree(DEMO_DIR, mutant_dir)
+    mutant = os.path.join(mutant_dir, "run_demo.sh")
+    with open(mutant, "r", encoding="utf-8") as handle:
+        source = handle.read()
+    body = re.compile(
+        r"uncovered_capability_execution\(\) \{.*?\n\}\n", re.DOTALL
+    )
+    mutated, applied = body.subn(
+        "uncovered_capability_execution() {\n"
+        '    say "PASS: capability execution"\n'
+        "    return 0\n"
+        "}\n",
+        source,
+    )
+    if applied != 1:
+        raise harness.CaseFailure(
+            "mutation did not apply: expected exactly one "
+            "uncovered_capability_execution definition, substituted %d" % applied
+        )
+    with open(mutant, "w", encoding="utf-8") as handle:
+        handle.write(mutated)
+    mrec = harness.run_capture(
+        ["bash", mutant], timeout=ctx.timeout, env=ctx.env, cwd=mutant_dir
+    )
+    mout = mrec["stdout"] + mrec["stderr"]
+    mclaims = _success_claims(mout)
+    if not mclaims:
+        raise harness.CaseFailure(
+            "mutating the uncovered stage to `echo PASS` produced no success "
+            "claim (exit %s), so the guard is not testing what it claims: %s"
+            % (mrec["returncode"], _trunc(mout))
+        )
+    return {
+        "demo_exit": rec["returncode"],
+        "uncovered_named": "capability execution",
+        "printed_fixture_claims": _success_claims(printed_text),
+        "mutant_exit": mrec["returncode"],
+        "mutant_claims_rejected": mclaims,
+    }
+
+
+def _suite_case(ctx, case_id):
+    manifest, args, want_passed, want_release = SUITES[case_id]
+    if not os.path.isfile(manifest):
+        raise harness.CaseFailure("suite manifest is missing: %s" % manifest)
+    stages = {
+        e["stage"]: e for e in harness.probe_prerequisites(ctx.repo_root, ctx.env)
+    }
+    needed = ("cargo", "rustc", "linker")
+    missing = [s for s in needed if stages[s]["status"] != "ok"]
+    if missing:
+        raise harness.Gap(
+            "%s needs %s; missing: %s"
+            % (case_id, ", ".join(needed), ", ".join(missing))
+        )
+    # The bridge links a cdylib + staticlib + test binaries over the candle
+    # dependency graph; letting cargo use every core OOM-killed this host
+    # (15 GB, measured), so the job count is bounded and overridable.
+    jobs = os.environ.get("UMBRELLA_CARGO_JOBS", "2")
+    argv = [stages["cargo"]["path"], "test", "-j", jobs]
+    if want_release:
+        argv.append("--release")
+    argv += ["--locked", "--offline", "--manifest-path", manifest] + list(args)
+    rec = harness.run_capture(argv, timeout=ctx.timeout, env=ctx.env, cwd=ctx.repo_root)
+    out = rec["stdout"] + rec["stderr"]
+    if rec["timed_out"]:
+        raise harness.CaseFailure(
+            "%s exceeded its %ss timeout" % (case_id, ctx.timeout)
+        )
+    if rec["returncode"] != 0:
+        raise harness.CaseFailure(
+            "%s exited %s: %s" % (case_id, rec["returncode"], _trunc(out))
+        )
+    results = RESULT_LINE.findall(out)
+    if not results:
+        raise harness.CaseFailure(
+            "%s produced no cargo `test result` line: %s" % (case_id, _trunc(out))
+        )
+    bad = [r for r in results if r[0] != "ok" or r[2] != "0"]
+    if bad:
+        raise harness.CaseFailure("%s reports a failing result line: %r" % (case_id, bad))
+    total = sum(int(r[1]) for r in results)
+    if total != want_passed:
+        raise harness.CaseFailure(
+            "%s ran %d tests, pinned %d: update the baseline count and "
+            "docs/umbrella/EXECUTION.md together" % (case_id, total, want_passed)
+        )
+    build = BUILD_LINE.search(out)
+    test_seconds = round(sum(float(r[3]) for r in results), 3)
+    build_seconds = round(float(build.group(2)), 1) if build else None
+    summary = (
+        "build %s, tests %.2fs, %d passed"
+        % ("%s s" % build_seconds if build_seconds is not None else "time unknown",
+           test_seconds, total)
+    )
+    return {
+        "manifest": manifest,
+        "argv": argv[1:],
+        "result_lines": results,
+        "passed": total,
+        "profile": build.group(1) if build else None,
+        "build_seconds": build_seconds,
+        "test_seconds": test_seconds,
+        "summary": summary,
+    }
+
+
+def _suite_fn(case_id):
+    def run(ctx):
+        return _suite_case(ctx, case_id)
+
+    run.__name__ = "case_%s" % case_id.lower()
+    return run
+
+
+def case_bld08(ctx):
+    real = harness.probe_prerequisites(ctx.repo_root, ctx.env)
+    stages = [e["stage"] for e in real]
+    if sorted(stages) != sorted(harness.PREREQ_STAGES):
+        raise harness.CaseFailure(
+            "prerequisite report must name each stage once, got %r" % (stages,)
+        )
+    empty = harness.probe_prerequisites(
+        os.path.join(ctx.scratch, "no-such-root"),
+        {"PATH": "", "HOME": ctx.scratch},
+    )
+    for entry in empty:
+        if entry["status"] != "missing":
+            raise harness.CaseFailure(
+                "controlled-empty environment reported %r as present" % entry["stage"]
+            )
+        if entry["stage"] not in entry["detail"]:
+            raise harness.CaseFailure(
+                "%r is missing but its detail does not name the stage: %r"
+                % (entry["stage"], entry["detail"])
+            )
+        if not entry.get("remedy"):
+            raise harness.CaseFailure("%r missing with no remedy" % entry["stage"])
+    report = os.path.join(ctx.scratch, "prerequisites.json")
+    harness.write_json(report, {"real": real, "controlled_missing": empty})
+    missing = [e["stage"] for e in real if e["status"] != "ok"]
+    if missing:
+        raise harness.Gap(
+            "prerequisite stages missing: %s (details in %s)"
+            % (", ".join(missing), report)
+        )
+    return {"prerequisites": real}
+
+
+CASES = [
+    {
+        "id": "HAR01",
+        "lane": "cli",
+        "required": True,
+        "fixture": False,
+        "what": "exactly the requested cases run; empty/unknown selection exits 2; a failing child is a failure",
+        "fn": case_har01,
+    },
+    {
+        "id": "HAR03",
+        "lane": "cli",
+        "required": True,
+        "fixture": False,
+        "what": "an absent required tool is an explained gap; --strict makes a required gap exit 1",
+        "fn": case_har03,
+    },
+    {
+        "id": "HAR02",
+        "lane": "capability",
+        "required": True,
+        "fixture": False,
+        "what": "an unimplemented capability demo cannot print PASS; the printed-success fixture and an `echo PASS` mutation are rejected",
+        "fn": case_har02,
+    },
+    {
+        "id": "BLD08",
+        "lane": "build",
+        "required": True,
+        "fixture": False,
+        "what": "a missing prerequisite names its stage and remedy",
+        "fn": case_bld08,
+    },
+    *[
+        {
+            "id": suite_id,
+            "lane": "build",
+            "required": True,
+            "fixture": False,
+            "timeout": 1800.0,
+            "what": "baseline suite %s runs with --locked --offline and keeps its pinned test count"
+            % suite_id,
+            "fn": _suite_fn(suite_id),
+        }
+        for suite_id in sorted(SUITES)
+    ],
+    {
+        "id": "SELFTEST_PASS",
+        "lane": "cli",
+        "required": False,
+        "fixture": True,
+        "what": "fixture: fake tool records exact argv/environment and writes its marker",
+        "fn": case_selftest_pass,
+    },
+    {
+        "id": "SELFTEST_FAIL",
+        "lane": "cli",
+        "required": False,
+        "fixture": True,
+        "what": "fixture: a child printing PASS without doing the work must be reported failing",
+        "fn": case_selftest_fail,
+    },
+    {
+        "id": "SELFTEST_GAP",
+        "lane": "cli",
+        "required": True,
+        "fixture": True,
+        "what": "fixture: a required tool is absent, so strict must fail the lane",
+        "fn": case_selftest_gap,
+    },
+]
+
+BY_ID = {case["id"]: case for case in CASES}
+
+
+def _validate_inventory(parser):
+    for lane, ids in REQUIRED_CASES.items():
+        if lane not in LANES:
+            parser.error("inventory: required lane %r is not a known lane" % lane)
+        for cid in ids:
+            case = BY_ID.get(cid)
+            if case is None:
+                parser.error("inventory: required case %r is missing" % cid)
+            if case["lane"] != lane:
+                parser.error(
+                    "inventory: required case %r is pinned to lane %r but lives in %r"
+                    % (cid, lane, case["lane"])
+                )
+            if not case["required"]:
+                parser.error("inventory: case %r is pinned required but is not" % cid)
+
+
+def _select(args, parser):
+    if args.all and (args.lane or args.case):
+        parser.error("--all cannot be combined with --lane/--case")
+    if args.all:
+        return [c for c in CASES if not c["fixture"]]
+    if not args.lane and not args.case:
+        parser.error("no cases selected: pass --lane, --case or --all")
+    for lane in args.lane:
+        if lane not in LANES:
+            parser.error("unknown lane %r" % lane)
+    for cid in args.case:
+        if cid not in BY_ID:
+            parser.error("unknown case %r" % cid)
+    if args.case:
+        selected = [
+            c
+            for c in CASES
+            if c["id"] in args.case and (not args.lane or c["lane"] in args.lane)
+        ]
+    else:
+        selected = [
+            c for c in CASES if c["lane"] in args.lane and not c["fixture"]
+        ]
+    if not selected:
+        parser.error(
+            "selection is empty: %s selected no cases"
+            % (
+                "--case " + ",".join(args.case)
+                if args.case
+                else "--lane " + ",".join(args.lane)
+            )
+        )
+    return selected
+
+
+def _build_parser():
+    p = argparse.ArgumentParser(
+        prog="test-umbrella",
+        allow_abbrev=False,
+        description="umbrella lanes: run exactly the cases selected, with evidence",
+    )
+    p.add_argument("--lane", action="append", default=[], metavar="LANE")
+    p.add_argument("--case", action="append", default=[], metavar="ID")
+    p.add_argument("--all", action="store_true", help="every non-fixture case")
+    p.add_argument("--strict", action="store_true", help="a required gap fails")
+    p.add_argument("--json", action="store_true", help="NDJSON events on stdout")
+    p.add_argument("--list", action="store_true", help="print the case inventory")
+    p.add_argument("--keep", action="store_true", help="keep the run directory")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--timeout", type=float, default=120.0, metavar="SECONDS")
+    p.add_argument("--scratch-root", default=None, metavar="DIR")
+    return p
+
+
+def main(argv=None):
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    _validate_inventory(parser)
+
+    if args.list:
+        for case in CASES:
+            if case["fixture"]:
+                kind = "fixture/req" if case["required"] else "fixture"
+            else:
+                kind = "required" if case["required"] else "optional"
+            print(            "%-10s %-14s %-11s %s" % (case["lane"], case["id"], kind, case["what"]))
+        return 0
+
+    selected = _select(args, parser)
+    started = time.monotonic_ns()
+    run_dir = tempfile.mkdtemp(prefix="test-umbrella-", dir=args.scratch_root)
+    env = dict(os.environ)
+
+    identity = harness.record_identity(ROOT)
+    setup_ns = time.monotonic_ns() - started
+    harness.write_json(os.path.join(run_dir, "identity.json"), identity)
+
+    def emit(event):
+        if args.json:
+            sys.stdout.write(json.dumps(event, sort_keys=True) + "\n")
+            sys.stdout.flush()
+
+    def say(line):
+        stream = sys.stderr if args.json else sys.stdout
+        stream.write(line + "\n")
+        stream.flush()
+
+    setup = {
+        "event": "setup",
+        "run_dir": run_dir,
+        "setup_ns": setup_ns,
+        "seed": args.seed,
+        "strict": args.strict,
+        "timeout": args.timeout,
+        "identity": identity,
+    }
+    emit(setup)
+    say(
+        "test-umbrella: %d case(s), identity %s%s"
+        % (
+            len(selected),
+            (identity.get("git", {}).get("rev") or "unknown")[:12],
+            "" if args.seed == 0 else " seed=%d" % args.seed,
+        )
+    )
+
+    results = []
+    for case in selected:
+        case_dir = os.path.join(run_dir, "cases", case["id"])
+        os.makedirs(case_dir, exist_ok=True)
+        ctx = Ctx(
+            ROOT, case_dir, env, case.get("timeout") or args.timeout, args.seed
+        )
+        begin = time.monotonic_ns()
+        status, detail, evidence = "pass", "", None
+        try:
+            evidence = case["fn"](ctx) or None
+            detail = ""
+        except harness.Gap as exc:
+            status, detail = "gap", str(exc)
+        except harness.CaseFailure as exc:
+            status, detail = "fail", str(exc)
+        except Exception:
+            status, detail = "fail", traceback.format_exc(limit=4)
+        duration = time.monotonic_ns() - begin
+        if status == "pass" and isinstance(evidence, dict):
+            detail = evidence.get("summary") or ""
+        record = {
+            "case": case["id"],
+            "lane": case["lane"],
+            "required": case["required"],
+            "fixture": case["fixture"],
+            "status": status,
+            "detail": detail,
+            "duration_ns": duration,
+            "seed": args.seed,
+            "evidence": evidence,
+        }
+        evidence_path = os.path.join(case_dir, "evidence.json")
+        harness.write_json(evidence_path, record)
+        result = {
+            "event": "case",
+            "case": case["id"],
+            "lane": case["lane"],
+            "status": status,
+            "required": case["required"],
+            "detail": detail,
+            "duration_ns": duration,
+            "evidence_path": evidence_path,
+        }
+        emit(result)
+        results.append(result)
+        say(
+            "[%s] %-14s %7.1fms%s"
+            % (
+                status,
+                case["id"],
+                duration / 1e6,
+                "" if not detail else "  " + _trunc(detail, 400),
+            )
+        )
+
+    passed = [r for r in results if r["status"] == "pass"]
+    failed = [r for r in results if r["status"] == "fail"]
+    gaps = [r for r in results if r["status"] == "gap"]
+    required_gaps = [r for r in gaps if r["required"]]
+    exit_code = 1 if failed or (args.strict and required_gaps) else 0
+    total_ns = time.monotonic_ns() - started
+    summary = {
+        "event": "summary",
+        "selected": len(results),
+        "pass": len(passed),
+        "fail": len(failed),
+        "gap": len(gaps),
+        "required_gap": len(required_gaps),
+        "setup_ns": setup_ns,
+        "total_ns": total_ns,
+        "exit": exit_code,
+        "run_dir": run_dir,
+        "seed": args.seed,
+    }
+    harness.write_json(os.path.join(run_dir, "summary.json"), summary)
+    emit(summary)
+    say(
+        "test-umbrella: %d selected, %d pass, %d fail, %d gap (%d required), "
+        "setup %.1fms, cases %.1fms, exit %d"
+        % (
+            len(results),
+            len(passed),
+            len(failed),
+            len(gaps),
+            len(required_gaps),
+            setup_ns / 1e6,
+            (total_ns - setup_ns) / 1e6,
+            exit_code,
+        )
+    )
+    if exit_code == 0 and not gaps and not args.keep:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        say(
+            "test-umbrella: evidence cleaned (all selected cases passed; "
+            "use --keep to retain %s)" % run_dir
+        )
+    else:
+        say("test-umbrella: evidence retained at %s" % run_dir)
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

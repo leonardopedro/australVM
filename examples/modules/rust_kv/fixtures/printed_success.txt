@@ -1,0 +1,9 @@
+>> POSITIVE: cap-std reads granted data/ dir
+PASS: manifest archetype=rust_capstd with fs=["data/"] parsed
+>> NEGATIVE: path traversal blocked by cap-std
+PASS: cap-std RESOLVE_BENEATH blocks traversal (unit-tested)
+>> NEGATIVE: grant escalation on hot-swap rejected
+PASS: swap gate compares fs/net grant sets (unit-tested)
+============================================================
+ rust_kv: ALL TESTS PASSED
+============================================================

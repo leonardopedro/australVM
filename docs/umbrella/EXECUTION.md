@@ -1,0 +1,343 @@
+# Umbrella production execution record
+
+Ledger for [`PLAN_umbrella_production.md`](../../PLAN_umbrella_production.md),
+with the acceptance rows in
+[`TEST_MATRIX.md`](TEST_MATRIX.md). Baseline findings are kept separate from
+post-fix results: nothing here is marked passed because a test file exists, and
+a blocker found in a *different* task's area is recorded as a gap rather than
+repaired while executing U00.
+
+Status vocabulary is the plan's §8 set: `pending`, `reproducing`,
+`implemented with gaps`, `passed within stated profile`,
+`experimental/unsupported`.
+
+## U00 — harness and honest baseline
+
+### What U00 added
+
+| Path | Purpose |
+|---|---|
+| `scripts/test-umbrella` | lane runner: selection, per-case timeouts, unique scratch dirs, per-case evidence, setup-vs-case timing, required-gap accounting, NDJSON mode |
+| `umbrella/tests/support/harness.py` | identity record (lock hashes, features, toolchain, target, native linker), prerequisite probe with stage identity, child-process capture |
+| `umbrella/tests/support/fake_tool.py` | stand-in tool that records verbatim argv + `UMBRELLA_TEST_*` environment and writes an invocation marker |
+| `umbrella/tests/support/__init__.py` | package marker |
+
+The runner is stdlib-only Python 3 (uses `tomllib` when available, degrades to
+an identity record without the features table on older interpreters). AGENTS.md
+notes `python3` is absent from a bare NixOS shell, so invoke it the way the other
+scripts are invoked:
+
+```bash
+nix-shell -p python3 --run "python3 scripts/test-umbrella --lane cli --strict --json"
+```
+
+### Runner contract
+
+```
+scripts/test-umbrella (--lane LANE | --case ID | --all) [--strict] [--json]
+                       [--seed N] [--timeout SECONDS] [--scratch-root DIR]
+                       [--keep] [--list]
+```
+
+- **Selection is explicit and exact**: only the selected cases run, in registry
+  order. `--all` cannot be combined with `--lane`/`--case`. A run with no
+  selector, an unknown lane, an unknown case, or a selection that resolves to
+  zero cases exits **2** — an empty selection is an error, never an empty PASS.
+- **Lanes**: `cli`, `build`, `abi`, `capability`, `e2e`, `robustness`,
+  `package`, `isolated`, `oracle`. Lanes with no cases yet select zero and
+  therefore also exit 2, which is how a missing lane suite stays visible.
+- **Fixtures** (`SELFTEST_*`) exist to test the harness and run only when named
+  with `--case`; lane and `--all` runs never include them.
+- **Required inventory** is pinned in `REQUIRED_CASES`: a pinned case that is
+  missing, in the wrong lane, or no longer marked required is an inventory
+  error (exit 2), not a silent skip.
+- **Verdicts**: `pass` (the case's own oracle held), `fail` (it did not),
+  `gap` (a prerequisite this environment lacks). A child exiting 0 is never a
+  pass by itself; cases check the marker/oracle the child was meant to produce.
+- **Exit**: 0 all selected cases passed (gaps tolerated without `--strict`);
+  1 any case failed, or `--strict` saw a required gap; 2 usage/inventory error.
+- **Evidence**: one directory per run (`--scratch-root`, default `$TMPDIR`),
+  containing `identity.json`, `summary.json`, and `cases/<ID>/evidence.json`.
+  Passing runs clean it unless `--keep` is given; failures and gaps are always
+  retained and the path is printed. In `--json` mode stdout carries only NDJSON
+  events (`setup`, `case`, `summary`) and human diagnostics go to stderr.
+- **Timing**: `setup_ns` (identity capture, before any case) is reported
+  separately from per-case `duration_ns` and from `total_ns`.
+
+### Case inventory
+
+| Lane | Case | Kind | Oracle |
+|---|---|---|---|
+| cli | HAR01 | required | exactly the requested case IDs run; zero/unknown selection exits 2; a failing child is reported failing and exits 1 |
+| cli | HAR03 | required | an absent required tool is an explained gap (exit 0 non-strict); `--strict` makes a required gap exit 1 |
+| build | BLD08 | required | every prerequisite stage is reported individually; in a controlled-empty environment all are missing and each detail names its own stage plus a remedy |
+| cli | SELFTEST_PASS | fixture | fake tool observes verbatim argv and the harness environment, and writes its marker |
+| cli | SELFTEST_FAIL | fixture | a child that prints PASS and exits 0 without writing the marker must be reported `fail` |
+| cli | SELFTEST_GAP | fixture, required | a required tool is absent, so `--strict` must fail the lane |
+
+### Environment identity (U00 baseline, measured 2026-11-17)
+
+Captured by `harness.record_identity` in the `setup` event; this is the identity
+the baseline results below belong to, not a claim about future runs.
+
+| Item | Value |
+|---|---|
+| git rev | `7f094b5a2457146a113926515295f837abce2d46` (+ uncommitted U00 files) |
+| umbrella | `umbrella 0.1.0`, manifest sha256 `86ff19e46d50f7e9ef3e3e745af3d6e29fa40f9bad717be2acb70b88a4fd55c0` (U02 added the `serde` derive; U00 identity was `fdb950bf…`) |
+| umbrella → bridge dep | path dependency, default features, no extra features |
+| bridge | `austral_cranelift_bridge 0.1.0`; features `arctic-auth`, `capstd`, `cedar`, `ecmascript`, `federation`, `sandbox`, `test-stubs`, `tidepool`, `tier1-rs`, `unfer-kernel`, `zenodo-store`; default `cedar`, `unfer-kernel`, `tier1-rs` |
+| lock: bridge | `safestos/cranelift/Cargo.lock` sha256 `30997b79c88dd0b3e195914fffbb0c3e3ec23ca8debdafaebdc392d8735f5f19` (refreshed 2026-11-17; the U00 baseline ran against the stale `1dc20a6a…` lock, see below) |
+| lock: umbrella | `umbrella/Cargo.lock` sha256 `01095f2a8e585d0211fc0ecbf4e7e215af4d4114b3472d8a02d1b6132d61eed5` (refreshed by resolution only for U02: a `serde` edge from umbrella plus the same stale `sha2` edges the bridge lock carried; no version changed) |
+| lock: rscrate | `umbrella/modules/rscrate/Cargo.lock` sha256 `463162dfcffe747b3f3d92cab434748a144638e9d282d68dd72353c7158cfebf` |
+| toolchain | cargo 1.99.0, rustc 1.99.0, python 3.12.13, host `dune` 3.22.0; the front-end was built through `nix develop "git+file://$PWD#ocaml" -c make bridge` per AGENTS.md |
+| target | `x86_64-unknown-linux-gnu` |
+| native linker | `/usr/bin/cc` → `x86_64-linux-gnu`; `GNU ld (GNU Binutils for Deepin) 2.41` |
+
+### Existing-suite inventory (actual assertions)
+
+These are what the named suites assert, so "the file exists" is never the
+evidence. None of them was modified.
+
+| Suite | Tests | What they assert |
+|---|---|---|
+| `umbrella/modules/rscrate` (`cargo test`) | 2 | `au_vector` exercises the crate's vector helper; `empty_is_zero` checks the empty-input checksum path. Passed 2/2. |
+| `safestos/cranelift/tests/tier1_extern_rust.rs` | 6 | `rs_*` namespace registration; granted vs. denied manifest execution of the reference checksum/`rs_version`; a `uk_*` grant does **not** grant `rs_*`; no manifest denies; `modhost` authorizes `rs_*`. |
+| `safestos/cranelift/tests/capstd_tests.rs` | 4 run | manifest parses the cap-std archetype; fs/net grants default empty; hotswap refuses fs-grant escalation; cap-std blocks traversal. The file defines five `#[test]`s, but `capstd_stub_returns_error` is `#[cfg(not(feature = "capstd"))]`, so the capstd-enabled run executes the other four. |
+| `safestos/cranelift/tests/static_seam.rs` | 3 | static seam resolves, executes and is still gated; the C-ABI registrar reaches the registry; late registration is refused. |
+
+### Baseline results
+
+| Command | Exit | Result / gap |
+|---|---|---|
+| `python3 scripts/test-umbrella --lane cli --strict --json` | 0 | HAR01 pass (≈0.69 s), HAR03 pass (≈0.47 s); setup ≈0.19 s. Evidence cleaned on pass. |
+| `python3 scripts/test-umbrella --lane build --strict --json` | 1 → 0 | At U00, BLD08 was a **gap**: `frontend` missing — no stock `austral` binary at `<repo>/austral`. After `make bridge` built it (below), `--case BLD08` passes (238 ms) and `--lane build --strict` exits 0. The controlled-empty control still reports all five stages missing, each naming its stage and remedy. |
+| `cd umbrella/modules/rscrate && cargo test --locked --offline` | 0 | 2 passed, 0 failed. |
+| `bash examples/modules/rust_kv/run_demo.sh` | 3 | Honest after U01: capability execution unimplemented, uncovered path named. Before U01 it printed `PASS`/`ALL TESTS PASSED` and exited 0 without performing any capability operation. |
+| bridge `--test tier1_extern_rust --features test-stubs` (`--locked`) | 101 → 0 | At U00 it was blocked before compiling: the committed lock was stale against `Cargo.toml` (`sha2` promoted to a direct dependency; a dropped `unfer_protocol` entry). After the lock refresh below: 6 passed, 0 failed. |
+| bridge `--test static_seam --features test-stubs` (`--locked --offline`) | 101 → 0 | Same stale-lock blocker at U00; after the refresh, 3 passed, 0 failed. |
+| bridge `--test capstd_tests --features test-stubs,capstd` (`--locked --offline`) | 101 → 0 | Same stale-lock blocker at U00; after the refresh, 4 passed, 0 failed (see the `cfg(not(capstd))` note above). |
+| `test-programs/runner.py 019-extern-rust` | 0 | After the front-end build: 6/6 programs pass (`002-missing-ownership` … `007-ownership-linear-shape`), `All tests passed`. It was recorded as a gap at U00 because the front-end and a fresh bridge were missing, not attempted-and-passed. |
+| umbrella demo (`cargo run -- --manifest module.toml modules/Demo.aum`) | not run | Needs the stock `austral` front-end at `<repo>/austral`; not run so the baseline does not imply it was. |
+
+The bridge release `.so` was stale (dated Sep 29, older than its sources) and
+the front-end binary was absent, so U00 recorded both rather than rebuilding
+them. The build task that needed them then ran
+`nix develop "git+file://$PWD#ocaml" -c make bridge CARGO_FLAGS="--offline -j 2"`:
+it rebuilt the release bridge (`libaustral_cranelift_bridge.so` 16:15:21), ran
+`dune build lib/ bin/`, and copied `_build/default/bin/austral.exe` to
+`./austral` (16:15:28, `austral 0.2.0`). `make bridge` was used rather than
+`make all` because the `.so` was older than the bridge sources (AGENTS.md
+`check-bridge-fresh`); the target rebuilds the bridge and then the front-end,
+which is the same artifact `make all` would produce. The binary needs
+`LD_LIBRARY_PATH=safestos/cranelift/target/release` (as the Makefile's own
+targets set); the umbrella driver prepends it automatically when the layout is
+in-tree.
+
+The lockfile diagnosis was taken on a backup/restore basis: `cargo metadata
+--offline` was allowed to rewrite a copy, the diff (`+sha2`, `-unfer_protocol`)
+inspected, and the tracked lockfile restored byte-identically.
+
+The lock was then refreshed for real, and only by resolution: `cargo metadata
+--offline` rewrote it with exactly that two-line diff (a `sha2` edge added to
+the bridge package, a stale `unfer_protocol` edge removed from `unfer_ffi`) and
+no version changed. The local crate cache was missing crates the resolution
+needs (`arrayvec 0.5.2`, via the `pretty` test dependency), so `cargo fetch`
+populated the cache; after that `cargo metadata --locked --offline` exits 0, and
+every suite above runs under `--locked --offline`. `Cargo.toml` was not
+touched, no feature was weakened and no dependency was removed to make the
+build pass.
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U00 harness + baseline | HAR01, HAR03 | implemented with gaps | git `7f094b5a2457`; python 3.12.13; stdlib-only runner; bridge `0.1.0` identity recorded but not rebuilt | `python3 scripts/test-umbrella --lane cli --strict --json` — exits 0; harness self-cases HAR01/HAR03 pass, evidence cleaned on pass | exactly-selected execution, empty/unknown selection exit 2, failing child → fail/exit 1 (HAR01); explained gap + strict exit 1 (HAR03) | evidence for passing runs is cleaned by default (`--keep` retains it); `--seed` is recorded but no randomized semantics yet (U24); lanes that currently have no cases (abi, robustness, package, isolated, oracle) exit 2; cli carries HAR01/HAR03, build carries BLD08 + the SUITE_* cases, capability carries HAR02 |
+| U00 prerequisite reporting | BLD08 | implemented with gaps | x86_64-unknown-linux-gnu; cc/ld present; cargo/rustc 1.99.0; bridge `.so` present; front-end absent | `python3 scripts/test-umbrella --lane build --strict --json` — exits 1 with a `frontend` gap; `prerequisites.json` names every stage | five stages reported once each; controlled-empty env reports all missing, each detail naming its stage and remedy (BLD08); real env gap names `frontend` | version *mismatch* detection (not just absence) is U25; the front-end still has to be built for BLD08 to pass |
+| Baseline: existing suites | SUITE_TIER1, SUITE_CAPSTD, SUITE_STATIC_SEAM, SUITE_RSCRATE (lane `build`) | implemented git `7f094b5a2457`; cargo/rustc 1.99.0; refreshed bridge lock `30997b79…`; release profile reused | `python3 scripts/test-umbrella --case SUITE_TIER1 --case SUITE_CAPSTD --case SUITE_STATIC_SEAM --case SUITE_RSCRATE --strict --json` — exits 0, 4 selected / 4 pass / 0 fail / 0 gap (CAPSTD 497 s, STATIC_SEAM 510 s: those feature sets relink the bridge; RSCRATE 0.2 s, TIER1 149 s); each case runs `cargo test --locked --offline --release` on its own manifest/features | each case requires exit 0, at least one `test result: ok.` line, zero failed, and the baseline's pinned passing count (6/4/3/2); a suite that loses a test or reports a failure is a red case, not a smaller pass | the cases reuse the release profile (the plan's commands differ only there); the first run after a bridge edit relinks, so cases carry a 30-minute timeout and cargo is bounded to 2 jobs (`UMBRELLA_CARGO_JOBS`) — unbounded linking OOM-killed this 15 GB host; each passing case now reports build setup and test runtime separately (`build 0.0 s, tests 0.00s, 2 passed`), parsed from cargo's `Finished \`release\` profile … in <t>s` and the suite's `test result: … finished in <t>s` lines; the front-end is built, so BLD08 and `019-extern-rust` are no longer gaps |
+
+Both U00 blockers are now cleared. The bridge lock is refreshed (digest above)
+and all four baseline suites run and pass under `--locked --offline` as the
+`SUITE_*` lane cases. The stock front-end is built (above), so BLD08 passes and
+`test-programs/runner.py 019-extern-rust` runs and passes 6/6. The umbrella
+demo itself (`cargo run -- --manifest …`) was still not run: it links the
+default-feature bridge and is not needed to establish BLD08 or 019.
+
+The `SUITE_*` cases keep the baseline honest in a second way: each pins the
+passing count it measured (6 / 4 / 3 / 2), so a suite that silently loses a test
+fails the lane instead of passing smaller. Measured negative control: changing
+`SUITE_RSCRATE`'s pin to 3 makes that case `fail` and the run exit 1
+(`ran 2 tests, pinned 3`), and the runner was restored byte-identically
+(sha256 re-checked).
+
+## U01 — remove false capability demo success
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `examples/modules/rust_kv/run_demo.sh` | no longer prints `PASS`/`ALL TESTS PASSED`; checks the manifest declarations it actually inspects, reports the capability stage as `UNSUPPORTED`, names the uncovered path, and exits 3. The optional `modhost` build was removed rather than kept as a stand-in for a capability operation. |
+| `examples/modules/rust_kv/fixtures/printed_success.txt` | the previous transcript, kept as the fixture the guard must reject |
+| `examples/modules/rust_kv/README.md` | what the demo reports, which existing unit tests it merely references, the guard, and what U22 replaces it with |
+| `scripts/test-umbrella` | `HAR02` case, lane `capability`, pinned in `REQUIRED_CASES` |
+
+`HAR02` has three parts, and each can fail independently: the real demo must
+exit 3 with no success claim and must name the uncovered path (with the unit
+tests marked as unexecuted references); the printed-success fixture must be
+rejected by the same textual oracle; and a mutated copy of the script whose
+`uncovered_capability_execution` function is replaced by
+`echo "PASS: capability execution"` must be caught. If the mutation applies but
+produces no success claim the case fails, so the guard cannot pass vacuously;
+if the mutation does not apply at all, the case fails too.
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U01 demo honesty | HAR02 | implemented with gaps | git `7f094b5a2457`; `bash` 5.x; no Rust implementation in `examples/modules/rust_kv`, so no new dependency or feature was needed | `bash examples/modules/rust_kv/run_demo.sh` — exits 3, prints `UNSUPPORTED: capability execution is not implemented` and the uncovered path; `python3 scripts/test-umbrella --lane capability --strict --json` — exits 0, HAR02 passes in ≈16 ms | demo exit is 3 with zero `PASS`/`ALL TESTS PASSED` lines (HAR02); the printed-success fixture and a temporary `echo PASS` regression both make the case fail/exit 1 (measured, script restored byte-identically by sha256) | the capability path is still unimplemented: the demo has no success path until U22 supplies the real pipeline; `capstd_tests.rs` still needs its feature enabled and stronger isolation (U19–U22) |
+
+## U02 — strict profiles and policy preflight
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `umbrella/src/project.rs` | **new**: versioned (`schema: 1`) project document — profile, module, build permission, load permission, call grants. Every struct is `deny_unknown_fields`, so a misspelled `allowedd` is a named diagnostic rather than a silent default. Validation names unsupported schema versions, an empty module, `build.allowed` without a crate, `load.allowed` without a provider, and a grant whose symbol is not `rs_`/`uk_`/`uz_`. |
+| `umbrella/src/policy.rs` | **new**: three separate decisions (build / load / call) computed before any stage, a `report()` that prints each state with its reason plus the scope sentence, `run_stages` which invokes only authorized stages in order (and never calls after a failed or denied earlier stage), and `dlopen` (moved out of `main.rs` so the test maps the fixture through the same code). |
+| `umbrella/src/lib.rs` | **new**: exposes `project` and `policy` so the tests do not need the whole pipeline (and therefore the front-end). |
+| `umbrella/src/main.rs` | `--project <json>`: load, validate and preflight before cargo, dlopen or the front-end. Build-denied projects use a declared prebuilt provider instead of compiling; load-denied projects never dlopen; a call-denied project still runs the authorized build/load, prints the scope line, and exits 2 before invoking the entry. Modules may come from the project when no positional source is given. |
+| `umbrella/Cargo.toml` / `Cargo.lock` | `serde` derive added (already in the lock through the bridge); the lock changed by resolution only, see the identity table. |
+| `umbrella/tests/policy.rs`, `umbrella/tests/fixtures/stageprobe/` | the U02 oracles below, with a real build script and a real `.init_array` library initializer writing one line each to `stages.log`; the fixture's target dir lives in the test's scratch dir. |
+
+The three permissions are deliberately not derived from one another. A project
+may authorize a build without authorizing a call (BLD06's "call grants do not
+claim containment"): the run then builds, loads and finally reports
+`call=denied … a denied call does not mean the build or library initializer was
+contained`. A project authorizing neither build nor load is refused in
+`preflight`, before a `Preflight` value exists for `run_stages` to act on
+(AUT01). `untrusted-native` is recognized by name and refused as U26's work, so
+the default untrusted profile cannot be selected by accident.
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U02 schema + preflight | AUT01, BLD06 | implemented | git `7f094b5a2457`; cargo/rustc 1.99.0; umbrella manifest `86ff19e4…`, lock `01095f2a…`; bridge lock `30997b79…` | `cd umbrella && cargo test --offline --lib --test policy` — 5 schema tests + 6 policy tests, 0 failed; `cargo check --offline --bin umbrella` exits 0 (the driver wiring compiles) | an unknown field is named with its section (`build.allowedd`); schema 2, a malformed grant and a missing `build.crate` are each refused by name; a build/load-denied project is refused at preflight and writes no marker; a call-denied run leaves `build`+`load` markers and the report says those stages ran | the project's call grants are preflight-declared only; the authoritative UK-4001 gate is still the bridge manifest (`--manifest`), and wiring project grants into the Cedar engine is U09/U18's seam. Feature *availability* is checked for the profiles this build implements; comparing grants against the bridge's compiled symbol table is U25. There is no `scripts/test-umbrella` case for this suite yet — the cargo integration test is the oracle, and the runner's lane inventory stays U00's |
+| U02 stage ordering | BLD06, RUN06 | implemented | same; fixture `stageprobe` builds with the host cargo offline, target dir in scratch | `cargo test --offline --test policy` — `authorized_stages_run_in_order_and_leave_markers` maps the cdylib with `policy::dlopen` and reads `stages.log` = `build\nload\ncall\n` (the first `build` is the test's own pre-build, needed to have a cdylib for the load closure) | the build script's marker and the library initializer's marker are separate lines, and a denied call still leaves the two earlier lines; a denied project leaves an empty log | RUN06's *isolated worker* and its deadline are U23's: the process here is the umbrella itself, so a blocking initializer is bounded only by the caller's timeout. The fixture proves ordering and authorization, not worker isolation |
+
+## U03 — CLI grammar, diagnostics and exit contracts
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `umbrella/src/cli.rs` | **new**: exact option matching over `OsString` args. `--name`/`--name=value` only (no prefix match), `--` ends options, a value is never taken from a token in option position, `--expect -7` is the one documented negative value, paths stay `PathBuf` with no UTF-8 round trip, repeating a single-valued option is an error, `--help`/`--version` win anywhere before `--`. `USAGE` is one constant. |
+| `umbrella/src/main.rs` | parsing replaced by `cli::parse` + `with_defaults` (checkout-relative front-end/crate defaults). Usage errors print the diagnostic and usage to stderr and exit **2** before any stage; operational failures exit **1**. `--json` emits one typed event per stdout line (`{"event":"done","result":n}` / `{"event":"error","message":…}`) with all human text on stderr; human mode still prints `RESULT <n>`. |
+| `umbrella/tests/cli.rs` | **new**: real-binary tests; a fake `cargo` and a recording `--austral` prove malformed invocations spawn nothing. |
+
+The measured UR12 defects map one-to-one: `--help`/`--version` now exit 0; `--manifest-garbage` is an unknown option, not `--manifest`; `--entry --expect 7` is a missing value for `--entry`; `--entry=` is refused; `-x` is not a module path (use `--`). A new rule makes `--project` and `--manifest` mutually exclusive, since they are different policy sources; the legacy `--manifest module.toml --entry compute modules/Demo.aum` form still parses and is covered by `the_legacy_demo_invocation_is_not_a_usage_error`.
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U03 grammar + exits | CLI01, CLI02, CLI03, CLI05 | implemented | git `7f094b5a2457`; cargo/rustc 1.99.0; umbrella manifest `86ff19e4…` (unchanged by U03) | `cd umbrella && cargo test --offline --lib --test cli` — 12 cli parser tests + 6 binary tests, 0 failed | help/version exit 0 with no stage marker; unknown/prefix option, missing/empty value, malformed i64, duplicate option and `-x` exit 2 with the flag named and no `cargo` marker; `--k=v` equals separated form; legacy demo parses and its later failure is exit 1 | exit-2 coverage is parser-level plus binary-level for the measured defects; there is no `scripts/test-umbrella` case for this suite yet. The `-` (single dash) token is treated as a path, not stdin |
+| U03 OS paths + JSON | CLI04, CLI06 | implemented | same; fixture `stageprobe` cdylib for the load-only project | `cargo test --offline --test cli` — `a_non_utf8_path_reaches_the_front_end_unchanged` reads the recording front-end's NUL-separated argv and finds the exact non-UTF-8 bytes; `json_mode_prints_one_typed_event_and_diagnostics_on_stderr` gets exactly one `error` event with a non-empty stderr | a path that is not valid UTF-8 survives parse and reaches the tool byte-for-byte; JSON stdout carries no `RESULT` and no human text, and a usage error writes no protocol at all | JSON mode currently covers the run's start and end events (done/error), not a per-stage stream; U15 owns runtime-refusal event detail. Paths in *diagnostics* are printed lossily (`display()`), which is a message concern, not an argument one |
+
+## U04 — strict entry admission (bounded patch)
+
+This patch implements U04 in two halves: the compiler rejects interop
+signatures the baseline transport cannot carry, and an entry may only be
+invoked when the bridge can call it correctly.
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `safestos/cranelift/src/cps.rs` | `CpsModule` keeps each function's **declared** signature (parameter count and return-type byte) from the CPS header, which used to be read and discarded. The CLIF signature is always `(i64*) -> i64`, so this is the only place the declared types survive. |
+| `safestos/cranelift/src/lib.rs` | **new** `compile_entry_i64(ir, len, name, name_len, expected_params)`: refuses a non-64-bit host (the documented transport is host-native 64-bit words in, one i64 out), an empty name (no `run`/`main`/first-function fallback), a missing export, a declared parameter count different from the caller's, and any return type other than `Int64` — naming the type found. Every refusal returns null with the reason on the last-error channel, so the caller never receives a pointer to miscall. The legacy named/unnamed APIs are unchanged. |
+| `umbrella/src/main.rs` | the run's compile step uses `compile_entry_i64(..., 0)`: `execute_function` invokes the pointer as `fn() -> i64`, so the caller's contract is zero parameters and an Int64 result, and a module declaring anything else is refused instead of run. |
+| `lib/TypingPass.ml` | the strict extern-rust interop (every `rs_*` import, which already requires `Rust_Ownership`) now also enforces the baseline transport: parameters must be `Int64` or a byte-buffer address/pointer, and the result must be `Int64`. `Int32`/`Bool`/`Float64`/`SingleFloat` pass the older buffer-protocol shape check but are refused here — a float travels in a vector register, and a narrower integer arrives as a truncated word. Aggregates keep their existing `rust_ownership_shape` message. |
+| `lib/TypeErrors.ml` | new `rust_interop_transport` declaration error naming the type and why the word transport cannot carry it. |
+| `test-programs/suites/019-extern-rust/008-transport-narrow-parameter` | `rs_narrow(width: Int32): Int64` — compile fails with the transport error (golden `austral-stderr.txt`). |
+| `test-programs/suites/019-extern-rust/009-transport-float-result` | `rs_gain(scale: Int64): Float64` — compile fails with the transport error (golden `austral-stderr.txt`). |
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U04 strict entry (this patch) | ABI01, ABI02, BLD05 | implemented (bridge + umbrella) | git `7f094b5a2457`; cargo/rustc 1.99.0; bridge crate `safestos/cranelift`; umbrella manifest `86ff19e4…` | `cd safestos/cranelift && cargo test --release --locked --offline -j 2` — `strict_entry_*` (7 tests: 10 i64 boundary values, matching signature, empty name, missing name, wrong arity + legacy control, five non-i64 return bytes, caller-arg mismatch); `cd umbrella && cargo test --offline --test entry` — 4 tests with a scripted front-end emitting hand-built CPS | boundary values round-trip exactly; a 1-parameter or non-i64-returning `compute` yields a null pointer, the diagnostic names the declared parameter count/return type, and stdout has no `RESULT` (the invocation marker); the same 1-parameter buffer compiles through the legacy named path, so the refusal is the signature gate, not the fixture; umbrella's live demo still runs | `compile_entry_i64` admits only `Int64` returns (Unit/Bool/I32/String/F64 are refused by name); the compiler-side strict type rejection (`lib/TypingPass.ml`, U04 step 1) is **not** implemented yet, so a module can still *emit* a non-writable parameter type — the bridge refuses to *invoke* it, which is the half that matters here. Parameter types are not in the CPS header (only names), so the bridge cannot check them; the compiler half enforces the baseline on the declarations instead (row below). The 32-bit-host refusal is not exercised on this host (aarch64/x86_64) |
+| U04 strict interop, compiler side | ABI01, ABI02, UR02 | implemented | git `7f094b5a2457`; dune 3.23.1 / OCaml 5.4.1 via `nix develop "git+file://$PWD#ocaml"`; front-end `./austral` rebuilt by `make all` | `nix develop … -c python3 test-programs/runner.py 019` → 8/8 PASS (six pre-existing ownership fixtures plus 008 and 009); positive control: a module declaring `rs_checksum(buf: Address[Nat8], len: Int64): Int64` compiles with exit 0; `make test` → 19 suites OK | a narrower-than-64-bit parameter and a float result are refused at typechecking with the type named, before any CPS or invocation; a byte-buffer address plus i64 length (the kernel/checksum shape) still compiles, so the check is not "reject everything" | the check covers the strict `rs_*` interop tier only: legacy C imports (`putchar(Int32)`, `Span[Nat8]` for `puts`, libm's `Float64` in `examples/haversine`) keep their documented behaviour, because rejecting those today would break existing examples rather than fix a strict profile. `examples/haversine` is still an unchecked float-register call and is the fixture U11 must replace. Parameter types are erased before CPS, so this is a compile-time refusal only — the bridge cannot re-check them later. |
+
+## U05 — exact Cargo artifact selection (bounded patch)
+
+This patch completes U05: the build stream is read as a set of identities, the
+artifact umbrella loads must be the one the crate directory declares, a fixture
+workspace pins the real stream shapes that make that necessary, and everything
+that varies the build is stated on the command line and recorded.
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `umbrella/src/cargo.rs` | **new.** `wanted_from_metadata` reads `cargo metadata --no-deps` and requires exactly one package at the crate directory with exactly one `cdylib` target — otherwise it refuses, naming what it found. `select_shared_artifact` scans the build stream, matches only `compiler-artifact` payloads whose `package_id` names that package and whose `target.name` is that target, and requires exactly one shared-library filename. Zero matches, several matches, a match with no shared filename, and an unparseable stream line are all refusals that name the evidence; a dependency's cdylib or a proc-macro `.so` can no longer win by appearing first. |
+| `umbrella/src/main.rs` | `cargo_build` asks for the identity first (`cargo metadata`, logged as ``cargo will build package `…`, target `…`, profile `…` ``), builds with the explicit argv, then selects with that identity. It also logs each applicable `.cargo/config{,.toml}` and every set build-affecting variable, and refuses `RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER`. |
+| `umbrella/src/cargo.rs` (bullet 2) | `BuildRequest` (crate dir, package, target dir, `Profile::{Dev,Release}`, features, locked, offline) and `build_args`, which keeps every value one `OsString` (a feature list containing a space stays one argument; no shell). `build_environment` records `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_TARGET`, `CARGO_BUILD_RUSTFLAGS`, `RUSTC` and refuses wrappers; `cargo_config_files` lists merged configs from the crate dir upwards. `wanted_from_metadata_for` selects a workspace member by `--cargo-package`. |
+| `umbrella/src/cli.rs` | new options with the U03 grammar: `--cargo-package <name>`, `--target-dir <dir>`, `--profile dev|release` (default `release`, the old behaviour), repeatable `--features <list>`, and the flags `--locked` / `--offline`; duplicates, empty values, unknown profiles and `--flag=value` on a flag are usage errors (exit 2). |
+| `umbrella/src/lib.rs` | `pub mod cargo;` so the selector is unit-testable without spawning cargo. |
+| `umbrella/tests/fixtures/cargo-workspace/` | **new** fixture workspace: `fixture-macros` (proc-macro), `fixture-shared` (transitive lib), `fixture-alpha` and `fixture-beta` (cdylibs depending on the lib, alpha also on the macro). No external dependencies, so `cargo build --offline` works. |
+| `umbrella/tests/cargo_select.rs` | **new** 4 tests over the *real* stream: preconditions (proc-macro `.so`, transitive `.rlib`, both cdylibs present), per-identity selection into a custom `--target-dir`, a mixed package-id/target pair matching nothing, and the transitive library refused as not shared. |
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U05 exact artifact | BLD01, BLD02, BLD03 | implemented (bullets 1–3) | git `7f094b5a2457`; cargo 1.99.0; `umbrella/Cargo.toml` `86ff19e4…` | `cd umbrella && cargo test --offline --lib` → 27 passed, 9 of them `cargo::tests`; live path: `./target/debug/umbrella --manifest module.toml modules/Demo.aum` prints `cargo will build package `rscrate`, target `rscrate``, builds, loads and prints `RESULT -1781872834555808882` (unchanged from before this patch) | a stream containing a proc-macro `.so`, a dependency cdylib and the wanted cdylib selects the wanted one; absent target, two libraries for one target, a non-shared artifact and a malformed line each refuse with the evidence named; `cargo metadata` identity refuses a package with no cdylib or two cdylibs; **measured**: this cargo's path-dependency id is `path+file:///…/rscrate#0.1.0` with **no package name in it**, so matching extracts nothing from the id — the id from `cargo metadata` is compared verbatim, and a fixture pins that name-less shape | cargo config files and `RUSTFLAGS`/`CARGO_BUILD_TARGET`/`RUSTC` are **recorded, not restricted**: the log names every applicable `.cargo/config{,.toml}` and every set build-affecting variable, but only compiler wrappers are refused. A config that changes the linker or target still influences the build. `modhost`/manifest refusal of a foreign-native artifact is U10's descriptor work, not this selector. |
+| U05 fixture workspace | BLD01, BLD03, PKG07 | implemented | git `7f094b5a2457`; cargo 1.99.0; `umbrella/tests/fixtures/cargo-workspace` (workspace: `fixture-macros` proc-macro, `fixture-shared` lib, `fixture-alpha`/`fixture-beta` cdylibs, no external deps) | `cd umbrella && cargo test --offline --test cargo_select` → 4 passed; harness: `scripts/test-umbrella --case SUITE_UMBRELLA_CARGO` → 1 pass, exit 0 (pinned at 4 tests) | preconditions assert the real stream carries a proc-macro `.so`, a transitive `.rlib` with no shared artifact, and both `libfixture_{alpha,beta}.so` — otherwise the selection tests would pass for the wrong reason; each cdylib is selected from its own package id into the custom `--target-dir`, a package id mixed with the other package's target matches nothing, and the transitive library is refused as “no shared-library filename” | the fixture runs `cargo build --offline` into a scratch target dir on every test run, so it is a build-shape pin, not an ABI check; it does not try to `dlopen` the fixture cdylibs or execute them |
+| U05 explicit build inputs | BLD01, BLD02, BLD04, BLD09 | implemented | git `7f094b5a2457`; cargo 1.99.0 | `cd umbrella && cargo test --offline` — lib 34 (7 new: argv shape, feature boundaries, explicit fields, wrapper refusal + recording, package-by-name identity; plus 4 new CLI grammar tests); `cargo test --test cargo_select` — `explicit_package_profile_and_policy_reach_the_real_build` builds the fixture workspace with `--package fixture-beta --target-dir <scratch> --locked --offline` and dev profile | the real build's stream contains `fixture_beta` and **not** `fixture_alpha` (so `--package` really scopes it), the selected artifact is `<scratch>/debug/libfixture_beta.so` (so profile and target dir really reached cargo), and the identity came from `--cargo-package`; wrapper refusal is unit-tested for both wrapper variables with the variable and value named | `RUSTFLAGS`, `CARGO_BUILD_TARGET`, `RUSTC` and cargo config files are recorded in the log but not refused, so a config that rewrites the linker/target can still change the artifact. `--profile` maps only `dev`/`release` (custom profile names are not accepted). Feature *declarations* are passed but not cross-checked against the built features (bullet 2's "requested features match evidence" is not measured yet). |
+
+## Harness pins for the U03/U04 suites
+
+`scripts/test-umbrella` now wires the two umbrella test suites into the `build`
+lane as required cases, so neither can silently shrink:
+
+| Case | Suite | Pinned `test result` total |
+|---|---|---|
+| `SUITE_UMBRELLA_CLI` | `cargo test --test cli` (U03 grammar, exit contracts, JSON, non-UTF-8 path) | 6 |
+| `SUITE_UMBRELLA_ENTRY` | `cargo test --test entry` (U04 strict entry from the umbrella side) | 4 |
+| `SUITE_UMBRELLA_CARGO` | `cargo test --test cargo_select` (U05 selection and explicit build options over a real fixture-workspace stream) | 5 |
+| `SUITE_ADAPTERS` | `cargo test --lib adapters --release` (U11 scalar word encoding) | 9 |
+
+`SUITES` entries now carry a fourth field saying whether the run uses
+`--release`. The bridge suites keep `--release` (they reuse existing release
+artifacts); the umbrella suites run the debug profile, because their assertions
+are exit codes, messages and the absence of the `RESULT` marker — nothing they
+check depends on optimization, and a release build of those test binaries is a
+second full artifact set. The pinned totals are the counts `cargo test` prints,
+so a new test that is not recorded here fails `SUITE_UMBRELLA_CLI`/`_ENTRY` with
+the measured and pinned numbers named.
+
+Evidence: `nix develop "git+file://$PWD#ocaml" -c python3 scripts/test-umbrella
+--case SUITE_UMBRELLA_CLI --case SUITE_UMBRELLA_ENTRY` → `2 selected, 2 pass,
+0 fail, 0 gap`, exit 0; `--case SUITE_UMBRELLA_CARGO` → `1 pass`, exit 0 (first run also builds the umbrella debug test binaries;
+a dependency's `mathhook-core` build script takes ~7 min of CPU once).
+
+## U11 — versioned scalar adapters (bounded start)
+
+U11 depends on U10, which does not exist yet, so this patch is the part that
+can stand alone: the **definition** of how Int32, Bool and Float64 become
+words and back, versioned and tested against independently compiled Rust
+calls. The compiler still refuses those signatures, because the native call
+they would produce is exactly the guess U04 banned.
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `safestos/cranelift/src/adapters.rs` | **new.** `SCALAR_ABI_VERSION = 1`, `ScalarType::{Unit,Bool,I32,U32,I64,U64,F32,F64}`, `ScalarValue`, `encode`/`decode`, checked `narrow_i64`, and `AdapterError` that names the type and the offending word. Integers are extended on the way out (sign for I32, zero for U32) and **checked** on the way in; `Bool` is a tag and only 0/1 are valid; floats are **bit-preserving** (`to_bits`/`from_bits`, never an `as i64` cast) so `-0.0`, infinities and NaN payloads survive; `Unit` has no word at all. |
+| `safestos/cranelift/src/lib.rs` | `pub mod adapters;` |
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U11 scalar codec | ABI04, ABI05 | implemented (definition + tests only) | git `7f094b5a2457`; rustc/cargo 1.99.0; bridge crate `safestos/cranelift` | `cd safestos/cranelift && cargo test --offline --lib adapters` → 9 passed; harness case `SUITE_ADAPTERS` pins those 9 | each scalar roundtrips through `encode`/`decode` **and** agrees with a direct call to a rustc-compiled `extern "C"` function (`i32*3`, `!bool`, `f64/2`, `mixed(i32,f64)->f64`); `-0.0` encodes as `0x8000…`, a NaN payload survives bit-for-bit and is explicitly asserted **not** equal to `x as i64`; bool tag 2, Int32 with garbage in the upper half, Nat32 with a bit above 31, Float32 with high bits and Unit-with-a-word are all refused with the type named; `narrow_i64` refuses out-of-range values instead of truncating | **not wired to any call path**: `lib/TypingPass.ml` still rejects Int32/Bool/Float64 at `rs_*` imports, and the bridge's entry path still admits only Int64, because a direct native call to a float-register ABI is the bug. Re-admission needs U10's versioned descriptor plus a generated wrapper that uses these adapters (U11 step 1's "generated adapter" half). No CPS opcode, `Cps_codec`, `ISA_REGISTRY` or corpus change is involved, so U11 step 3 is vacuously satisfied here. F32 arithmetic is only tested through the bit roundtrip, not a native `f32` call. The adapter is not exposed across the C ABI yet. |

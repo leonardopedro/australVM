@@ -1,0 +1,16 @@
+-- U04: the baseline extern-rust transport is host-native 64-bit words in and
+-- one Int64 out. A narrower integer arrives as a truncated word that the
+-- native side would have to narrow itself, so it is rejected here until a
+-- tested marshal adapter exists.
+pragma Unsafe_Module;
+
+module body Test is
+    pragma Foreign_Import(External_Name => "rs_narrow");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_narrow(width: Int32): Int64 is
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

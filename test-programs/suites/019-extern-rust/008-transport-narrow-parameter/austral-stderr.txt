@@ -1,0 +1,26 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The type " },
+    { "type": "type", "content": "Int32" },
+    {
+      "type": "text",
+      "content": " cannot cross the extern rust boundary under the baseline transport: the JIT passes host-native 64-bit words in and reads one Int64 out, so an "
+    },
+    { "type": "code", "content": "rs_" },
+    { "type": "text", "content": " parameter must be " },
+    { "type": "code", "content": "Int64" },
+    {
+      "type": "text",
+      "content": " or a byte-buffer address/pointer, and the result must be "
+    },
+    { "type": "code", "content": "Int64" },
+    {
+      "type": "text",
+      "content": ". Floats travel in vector registers, and narrower integers would arrive as truncated words, so both need a typed adapter with tested marshal and range checking rather than a guessed word."
+    }
+  ],
+  "span": null,
+  "context": null
+}

@@ -1,0 +1,13 @@
+[package]
+name = "stageprobe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# U02 stage-ordering fixture: a build script and a library initializer, each
+# appending one line to `$STAGEPROBE_DIR/stages.log`. The test asserts the
+# file's contents (and its absence when a stage is denied), so "the build ran"
+# is a marker a denied project cannot produce.
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"

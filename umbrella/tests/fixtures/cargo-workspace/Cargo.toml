@@ -1,0 +1,7 @@
+# A small workspace whose *shape* is the U05 hazard: a proc-macro (also a
+# `.so`), a transitive library (no shared artifact), and two cdylib targets
+# that could be confused for each other. It has no external dependencies, so
+# `cargo build --offline` works anywhere.
+[workspace]
+resolver = "2"
+members = ["alpha", "beta", "shared", "macros"]
