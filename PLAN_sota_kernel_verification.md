@@ -2279,13 +2279,15 @@ against the copy through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1,
 table's counts match the files it records`, and the closure digests, the
 approval control, and §W3's stmts and emitter checks all still passing — one
 drifted count, one failure, nothing else moved. The run is recorded as the fourth
-`docs/data/w3/probes.tsv` row, and it is the one row whose `expected_message`
-chunks are vocabulary rather than a sentence: the message is assembled from a
-loop variable (`says $claimed $label, $src $act`), so ` axioms ` and ` staging `
-exist in the script but not adjacent in any line that prints them. The check
-still refuses a renamed check line; it cannot yet prove those words sit in the
-message rather than in a comment, and that limitation is stated rather than
-waved at.
+`docs/data/w3/probes.tsv` row. Its `expected_message` skeleton,
+`…(says … axioms, … …)`, pins the field word to the message frame: each field is
+compared by its own literal (`$art(says $claimed axioms, $src $ax)`), not by
+`(says $claimed $label, …)` with the word read from a loop variable, so the
+chunks the gate re-checks (`(says `, ` axioms, `) are adjacent to each other in
+the statement that prints them rather than merely somewhere in the script. The
+source word (`staging` or `approved`) is still interpolated — a row is counted
+from whichever of the two files applies — so that one word remains vocabulary,
+not adjacency, and the limitation is narrowed to exactly it.
 
 That the closure column is its own claim, not a by-product of the counts, is
 measured the same way: `scripts/w93-closure-drift-control` copies this plan and

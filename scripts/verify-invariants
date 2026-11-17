@@ -1803,7 +1803,7 @@ PYMUT
         # fragments; the empty string means the row describes the file.
         _w93_row_bad() {  # artifact, stmts cell, composition cell, file, source word
             local art="$1" n="$2" comp="$3" file="$4" src="$5"
-            local bad="" stmts sorts terms defs ax th pre del dsum act claimed label pat
+            local bad="" stmts sorts terms defs ax th pre del dsum claimed
             stmts="$(grep -cE '^(provable sort|sort|delimiter|prefix|term|def|axiom|theorem) ' "$file" || true)"
             [ "$stmts" = "$n" ] || bad="$bad $art(stmts cell $n, $src $stmts)"
             set -- $(_w93_fields "$file")
@@ -1816,16 +1816,34 @@ PYMUT
             case "$comp" in
                 *Prop*) sorts=$((sorts - 1)) ;;
             esac
-            for _kw in "sorts?:$sorts" "terms?:$terms" "defs?:$defs" \
-                       "axioms?:$ax" "theorems?:$th" \
-                       "numerals?(-notation)?:$pre" "delimiter:$del"; do
-                pat="${_kw%%:*}"; act="${_kw##*:}"
-                claimed="$(_w93_num "$comp" "$pat")"
-                [ -n "$claimed" ] || continue
-                label="$(printf '%s' "$pat" | sed 's/(.*//; s/?$//')"
-                [ "$claimed" = "$act" ] \
-                    || bad="$bad $art(says $claimed $label, $src $act)"
-            done
+            # Each field is its own literal rather than `(says %s %s, %s %s)`
+            # with the field's name read from a loop variable: written this way
+            # the emitted message's field word sits inside one contiguous string
+            # in this file, so a recorded probe skeleton can require it next to
+            # the `says` frame instead of merely somewhere in the script. The
+            # source word (`staging` / `approved`) is still interpolated, because
+            # a row can legitimately be counted from either file.
+            claimed="$(_w93_num "$comp" 'sorts?')"
+            [ -z "$claimed" ] || [ "$claimed" = "$sorts" ] \
+                || bad="$bad $art(says $claimed sorts, $src $sorts)"
+            claimed="$(_w93_num "$comp" 'terms?')"
+            [ -z "$claimed" ] || [ "$claimed" = "$terms" ] \
+                || bad="$bad $art(says $claimed terms, $src $terms)"
+            claimed="$(_w93_num "$comp" 'defs?')"
+            [ -z "$claimed" ] || [ "$claimed" = "$defs" ] \
+                || bad="$bad $art(says $claimed defs, $src $defs)"
+            claimed="$(_w93_num "$comp" 'axioms?')"
+            [ -z "$claimed" ] || [ "$claimed" = "$ax" ] \
+                || bad="$bad $art(says $claimed axioms, $src $ax)"
+            claimed="$(_w93_num "$comp" 'theorems?')"
+            [ -z "$claimed" ] || [ "$claimed" = "$th" ] \
+                || bad="$bad $art(says $claimed theorems, $src $th)"
+            claimed="$(_w93_num "$comp" 'numerals?(-notation)?')"
+            [ -z "$claimed" ] || [ "$claimed" = "$pre" ] \
+                || bad="$bad $art(says $claimed numerals, $src $pre)"
+            claimed="$(_w93_num "$comp" 'delimiter')"
+            [ -z "$claimed" ] || [ "$claimed" = "$del" ] \
+                || bad="$bad $art(says $claimed delimiter, $src $del)"
             claimed="$(_w93_num "$comp" 'declarations')"
             if [ -n "$claimed" ] && [ "$claimed" != "$dsum" ]; then
                 bad="$bad $art(declarations $claimed, $src $dsum)"
