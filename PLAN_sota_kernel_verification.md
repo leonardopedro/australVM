@@ -775,7 +775,7 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
-  [pass] W3: the recorded probe evidence still names live gate lines (3 row(s))
+  [pass] W3: the recorded probe evidence still names live gate lines (4 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
@@ -910,7 +910,7 @@ the artifact, so `mm0-c` checks them too.
   nothing) and the total must read `<n> passed, <n> explained gap(s), <n> failed`,
   while a `-` in one column with a number in the other is refused because nobody
   could reproduce it. That is `[pass] W3: the recorded probe evidence still names
-  live gate lines (3 row(s))`. The perturbations are deliberately not re-run (appending to
+  live gate lines (4 row(s))`. The perturbations are deliberately not re-run (appending to
   `mm0/isa.mm1` or editing `EMITTERS` is a measurement, not a routine check), but
   a citation that no longer exists is caught. Measured 2026-11-17 by renaming one
   recorded `gate_line`: `[FAIL] W3: the recorded probe evidence still names live
@@ -2266,7 +2266,26 @@ of describing whichever copy was read, so a drift cannot keep the counts green.
 Changing the toy row's `20 axioms` to `21` is refused as
 `store_projection_toy(says 21 axioms, staging 20)` (measured), so the cell that
 says what an approval *contains* cannot drift from the approval while its
-statement count stays right. And the approved path is exercised, not assumed:
+statement count stays right.
+
+That measurement is in-gate, so the whole gate is measured too, the way §W3's
+emitter cell is: `scripts/w93-composition-drift-control` copies this plan,
+rewrites the toy row's composition cell from `20 axioms` to `21 axioms` — leaving
+the `70` stmts cell alone, which is the point, since the stmts check stays green
+and only the composition column can catch it — and runs `verify-invariants`
+against the copy through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1,
+`verify-invariants: 139 passed, 6 explained gap(s), 1 failed`, detail
+`store_projection_toy(says 21 axioms, staging 20)`, `[FAIL] W9.3: the composition
+table's counts match the files it records`, and the closure digests, the
+approval control, and §W3's stmts and emitter checks all still passing — one
+drifted count, one failure, nothing else moved. The run is recorded as the fourth
+`docs/data/w3/probes.tsv` row, and it is the one row whose `expected_message`
+chunks are vocabulary rather than a sentence: the message is assembled from a
+loop variable (`says $claimed $label, $src $act`), so ` axioms ` and ` staging `
+exist in the script but not adjacent in any line that prints them. The check
+still refuses a renamed check line; it cannot yet prove those words sit in the
+message rather than in a comment, and that limitation is stated rather than
+waved at. And the approved path is exercised, not assumed:
 the gate copies the toy staging, deletes its first `axiom` line, and counts the
 result *as an approval* through the same function the rows use — it must come
 back `store_projection_toy(says 20 axioms, approved 19)` and fail, which is

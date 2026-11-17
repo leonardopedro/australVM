@@ -424,9 +424,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: every §W3
   emitter cell names a real command`, the row named in the detail, and every §W3
   line that does not read that row still passing. One full gate run.
-- `docs/data/w3/probes.tsv` — the measured §W3 probe evidence (retired emitter,
-  stale `.mm1`): artifact, perturbation, the check that fired, its message, the
-  date. Never edited by the gate; re-read every run, which fails when a row cites
+- `scripts/w93-composition-drift-control` — the same negative control for the
+  §W9.3 composition table: it rewrites `store_projection_toy`'s `20 axioms` cell
+  to `21` in a copy of the plan (the `70` stmts cell untouched, so only the
+  composition column can fire) and requires the gate to exit 1 with
+  `[FAIL] W9.3: the composition table's counts match the files it records`, the
+  detail `store_projection_toy(says 21 axioms, staging 20)`, and the closure,
+  approval-control and §W3 lines unchanged. One full gate run.
+- `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
+  stale `.mm1`, and the two whole-gate drift controls, one of them §W9.3's
+  composition table): artifact, perturbation, the check that fired, its message,
+  the date, and the exit status and total of the gate run. Never edited by the gate; re-read every run, which fails when a row cites
   a `gate_line` the script no longer emits, an `expected_message` skeleton whose
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
   a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
