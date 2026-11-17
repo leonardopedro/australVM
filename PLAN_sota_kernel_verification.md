@@ -775,7 +775,7 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
-  [pass] W3: the recorded probe evidence still names live gate lines (5 row(s))
+  [pass] W3: the recorded probe evidence still names live gate lines (6 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
@@ -928,6 +928,83 @@ the artifact, so `mm0-c` checks them too.
   `139 passed, 6 explained gap(s), 1 failed` — which is the check working, and the
   reason the recorded row now marks that boundary with `…` rather than quoting a
   sentence no single line of the script contains.
+
+  **Which checks have no measured failure.** Every other check in the gate was
+  counted against the evidence: of 201 `check` statements (116 distinct texts
+  once a `($var)` count suffix is dropped), six have a measured perturbed-tree
+  run (`probes.tsv`) and 24 are themselves in-gate controls — they perturb a
+  scratch copy and pass only when the perturbation is refused, so their failing
+  mode is exercised on every run. The remaining 84 have neither, and 54 of those
+  are not mentioned anywhere else in this plan. The table is that set (51 rows:
+  three checks have their name assembled per artifact, so the counted spellings
+  are one row each), with the judgement of what stands in the way. `class` is one of: **copy** — a control of
+  the `probes.tsv` shape is possible (copy the data, drift one claim, point an
+  override at the copy) and is simply not written yet; **tool** — the check only
+  runs when an external tool is present (`mm0-c`, Lean, `why3`/`z3`, `cc`), so its
+  observed failure mode so far is a missing tool, not a drifted claim; **none** —
+  the check asserts a fact about the implementation (a file exists, a source line
+  says something, a name is computed per artifact), so there is no data file to
+  copy and drift, and testing it means editing the repository, which no control
+  here does. A `none` row is not a failure of evidence: it is a check whose
+  subject is the tree itself. Two checks a keyword scan put in this set were
+excluded after reading them — `W8: the allocation-monotonicity proof depends on
+its direction` rewrites `slot_layout.mm1` into a scratch file and requires the
+refusal, and `logos mm0: …` owns its anchor (a tampered certificate must be
+rejected) — because both already perturb a scratch copy on every run.
+
+  | check | class | what stands in the way |
+  |---|---|---|
+  | `$_cert_claim` | none | the name is computed per certificate claim; the check repeats per claim |
+  | `$name` (Phase D loop) | none | the name is computed per generated document |
+  | `H12: notes implemented dir has the four categories` | none | a directory layout; nothing to drift |
+  | `H8: austral_cps default archetype declared` | none | greps a source file |
+  | `H8: ecmascript archetype runtime branch present` | none | greps a source file |
+  | `H8: manifest parser reads the archetype key` | none | greps a source file |
+  | `H8: tidepool (Haskell effects) backend module exists` | none | a file's existence |
+  | `H8: cap-std Rust backend module exists` | none | a file's existence |
+  | `L10 Cycle B: liquid_measure tenant registered in Vm_plugin.boot` | none | greps a source file |
+  | `L10 Cycle B: liquid_measure is a distinct tenant from liquid` | none | compares two source strings |
+  | `L10 Cycle B: LiquidMeasure is the extracted module, listed in dune` | none | greps a build file |
+  | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
+  | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |
+  | `Liquid golden vc-fold-premises.mlw proves in full under z3` | tool | needs `why3` + `z3` |
+  | `Liquid subset extraction matches its pinned golden` | copy | the golden is data; no control drifts it |
+  | `Liquid subset library extracts with the existing driver` | tool | needs the extraction driver |
+  | `Phase D: lean2mm0 emitter present` | none | a script's existence |
+  | `Phase D: generated certificate artifacts present` | none | files' existence |
+  | `Phase D: gap_certificate pins its trust split` | copy | the certificate's trust split is data |
+  | `Phase D: layout_certificate pins its trust split` | copy | same |
+  | `Phase D: $name declares its own vocabulary (no imported theory)` | copy | the document is parsed; a copy could import a theory |
+  | `Phase D: $name only claims rules its theory declares` | copy | same |
+  | `Phase D: $name states its measured coverage` | copy | the coverage cell is data |
+  | `Phase D: $name states its theory coverage` | copy | same |
+  | `S21: ZENODO_SYMBOLS (uz_*) registered separately` | none | greps the symbol registry |
+  | `S28: AuthorizationEngine trait present` | none | greps a source file |
+  | `S29: UNFER_SYMBOLS table present` | none | greps a source file |
+  | `S29: UNFER_SYMBOLS registers into the Cranelift JIT` | none | greps a source file |
+  | `S29: per-module CPS compile consumes the same census` | tool | needs a build |
+  | `S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt` | none | runs the repository's own test |
+  | `S30: cadabra2-cli subprocess, not a dependency` | none | an architectural claim about source |
+  | `W3: $_stem matches its approved statements` | copy | per approved row; would need `AUSTRALVM_APPROVED_ROOT` pointed at a drifted copy |
+  | `W3: stage-approvals stages exactly §W3's pending rows (exit 0)` | copy | the pending set is data; a row that cannot stage would fire it |
+  | `W6: generated C probe compiles and passes at tolerance 1e-8` | tool | needs `cc` |
+  | `W8: hypotheses are cited, pinned, and the unchecked count matches its pin` | copy | the count pin is data; `isa-hypotheses` is the comparator |
+  | `W8: mm0/slot_layout.mm0 + .mm1 accepted, in_bounds_alloc proved` | tool | needs `mm0-rs` + `mm0-c` |
+  | `W9: mm0/clif.mm0 + .mm1 accepted by mm0-rs + mm0-c` | tool | needs the mm0 toolchain |
+  | `W9: the CLIF model still claims no theorem` | copy | reads the committed file; `AUSTRALVM_CLIF` is not wired to this one yet |
+  | `W9.3: clif_step is vocabulary — declared, stated, never axiomatized` | copy | cheap now: add an `axiom` line to an `AUSTRALVM_CLIF` copy |
+  | `W9.3: the refinement's citations still match their artifacts` | copy | cheap now: drift one `-- cites:` digest in an `AUSTRALVM_CLIF` copy |
+  | `W9.3: a Lean development proves the same axioms` | tool | needs Lean |
+  | `W9.3: the Lean development proves the toy's theorems too` | tool | needs Lean |
+  | `W9.3: the witness exercises every axiom the toy declares` | copy | the witness table is data; dropping a row would fire it |
+  | `logos mm0: … corpus verifies` | tool | needs the `unfer/logos` pipeline |
+  | `memsafe: theory, emitter, both fixtures, ledgers and certificates present` | none | files' existence |
+  | `memsafe: certificate + ledger emitter present and executable` | none | a file's mode |
+  | `memsafe: fixtures exercise every automaton edge` | copy | the fixture is data; dropping an edge would fire it |
+  | `memsafe: $stem pins its trust split` | none | the name is computed per artifact |
+  | `service-isolation: pins, theory and both certificate halves present` | none | files' existence |
+  | `service-isolation: emitter present and executable` | none | a file's mode |
+  | `service-isolation: trust split is structural-only` | none | parses a header's claim |
 
   The **state column is checked too**, and for the same reason: "`[gap]`" is a
   status, not an explanation. It tells a reader the gate is red without saying
@@ -2320,6 +2397,24 @@ the same reason the composition row's source word is: the file word in
 `approved`), so `staging` is checked as a word the script contains rather than
 text adjacent to the digests — the frame `(says '` and the fact that both
 counts are printed are checked, the adjacency is not.
+
+The refinement's certification state is measured the same way, because it is the
+claim a reader would most like to believe: `W9.3: certification state matches
+mm0/approved/` reads `mm0/clif.mm0`'s `-- certificate:` line and requires it to
+say `[gap]` while no `mm0/approved/isa.stmts` exists, and to name the approval
+once one does. `scripts/w93-certification-drift-control` copies `clif.mm0`,
+rewrites that one line to claim `mm0/approved/isa.stmts` — which does not exist —
+leaves the vocabulary, citations and forms alone, and runs the gate with
+`AUSTRALVM_CLIF` pointing at the copy (the override moves the three checks that
+read that file; the corpus re-derivation still compares generated bytes with the
+committed path). Measured 2026-11-17: exit 1,
+`verify-invariants: 140 passed, 6 explained gap(s), 1 failed`, `[FAIL] W9.3:
+certification state matches mm0/approved/`, detail `no isa approval, yet
+clif.mm0 does not say [gap]`, with the `clif_step` vocabulary and the five pinned
+citations still passing — one uncertified claim, one failure. Recorded as the
+sixth `docs/data/w3/probes.tsv` row. The approved branch — an approval exists, so
+a `[gap]` line is the drift — is not measured yet, and this paragraph says so
+rather than implying both directions are covered.
 And the approved path is exercised, not assumed:
 the gate copies the toy staging, deletes its first `axiom` line, and counts the
 result *as an approval* through the same function the rows use — it must come

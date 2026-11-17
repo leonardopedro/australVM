@@ -441,10 +441,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   W9.3: the composition table's closure digests match the files it records`, the
   detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
   line and the approval control still passing. One full gate run.
+- `scripts/w93-certification-drift-control` — the §W9.3 control for the
+  refinement's certificate line: it copies `mm0/clif.mm0`, rewrites
+  `-- certificate: [gap]` to claim `mm0/approved/isa.stmts` (which does not
+  exist), and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
+  with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
+  `no isa approval, yet clif.mm0 does not say [gap]`, and the `clif_step`
+  vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
-  stale `.mm1`, and the three whole-gate drift controls — §W3's emitter cell and
-  §W9.3's composition count and closure-digest cells): artifact, perturbation,
-  the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
+  stale `.mm1`, and the four whole-gate drift controls — §W3's emitter cell,
+  §W9.3's composition count and closure-digest cells, and the refinement's
+  certificate line): artifact, perturbation, the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
   a `gate_line` the script no longer emits, an `expected_message` skeleton whose
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
   a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
