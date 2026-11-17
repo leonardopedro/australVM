@@ -1822,7 +1822,11 @@ PYMUT
             # in this file, so a recorded probe skeleton can require it next to
             # the `says` frame instead of merely somewhere in the script. The
             # source word (`staging` / `approved`) is still interpolated, because
-            # a row can legitimately be counted from either file.
+            # a row can legitimately be counted from either file: a literal would
+            # need one format per field *and* file (fourteen hand-written
+            # strings), since a single format used for both necessarily carries
+            # the variable again. The check below covers the field words, which is
+            # the half that can be literal without that duplication.
             claimed="$(_w93_num "$comp" 'sorts?')"
             [ -z "$claimed" ] || [ "$claimed" = "$sorts" ] \
                 || bad="$bad $art(says $claimed sorts, $src $sorts)"
@@ -1894,6 +1898,36 @@ EOF
         else
             echo "  [detail] §W9.3 closure:${_w93_clo_bad}" >&2
             check "W9.3: the composition table's closure digests match the files it records" false
+        fi
+        # The per-field comparisons above are unrolled, so a *new* field added to
+        # a cell would go unchecked — the cell would name it and nothing would
+        # count it. Every counted word a cell names must therefore still have its
+        # own literal here. The words come from the cells (`2 sorts`, `1 def`,
+        # `24 numeral-notation lines`, backticks stripped first), mapped to the
+        # spellings this script compares (`def` -> `defs`, `numeral…` ->
+        # `numerals`). A cell that starts naming an uncounted word fails here,
+        # which is the signal to add the comparison or stop claiming the word.
+        _w93_word_bad=""; _w93_word_n=0
+        _w93_words="$(printf '%s\n' "$_w93_rows" | cut -f3 \
+            | tr -d '`' \
+            | grep -oE '[0-9]+ [a-z][a-z-]*' | awk '{print $2}' \
+            | sed -E 's/^numeral.*/numerals/; s/^def$/defs/' | sort -u)"
+        while IFS= read -r _w93_word; do
+            [ -n "$_w93_word" ] || continue
+            _w93_word_n=$((_w93_word_n + 1))
+            # `(says $claimed axioms, …)` for the counted fields and
+            # `(declarations $claimed, …)` for the sum; both are literal here.
+            grep -qF "(says \$claimed $_w93_word," "$repo_root/scripts/verify-invariants" \
+                || grep -qF "($_w93_word \$claimed," "$repo_root/scripts/verify-invariants" \
+                || _w93_word_bad="$_w93_word_bad $_w93_word(no literal comparison)"
+        done <<EOF
+$_w93_words
+EOF
+        if [ -z "$_w93_word_bad" ]; then
+            check "W9.3: every field word a composition cell names has a literal comparison ($_w93_word_n word(s))" true
+        else
+            echo "  [detail] §W9.3 fields:${_w93_word_bad}" >&2
+            check "W9.3: every field word a composition cell names has a literal comparison" false
         fi
         # Control: an approved copy is preferred exactly when one exists, so a
         # mutated approval has to fail the counts — otherwise "counted from

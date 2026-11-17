@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 149 passed, 4 explained gap(s), 0 failed
+verify-invariants: 150 passed, 4 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
@@ -366,7 +366,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 140 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 141 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -910,7 +910,10 @@ the artifact, so `mm0-c` checks them too.
   nothing) and the total must read `<n> passed, <n> explained gap(s), <n> failed`,
   while a `-` in one column with a number in the other is refused because nobody
   could reproduce it. That is `[pass] W3: the recorded probe evidence still names
-  live gate lines (4 row(s))`. The perturbations are deliberately not re-run (appending to
+  live gate lines (5 row(s))`. A total is the gate as it stood on the row's date,
+  not today's: the gate grows, so an older row keeps the smaller total it
+  measured (`stale-mm1`'s `128 passed` predates the §W9.3 controls) while its
+  exit status and its message remain the claims the check re-reads. The perturbations are deliberately not re-run (appending to
   `mm0/isa.mm1` or editing `EMITTERS` is a measurement, not a routine check), but
   a citation that no longer exists is caught. Measured 2026-11-17 by renaming one
   recorded `gate_line`: `[FAIL] W3: the recorded probe evidence still names live
@@ -2274,7 +2277,7 @@ rewrites the toy row's composition cell from `20 axioms` to `21 axioms` — leav
 the `70` stmts cell alone, which is the point, since the stmts check stays green
 and only the composition column can catch it — and runs `verify-invariants`
 against the copy through `AUSTRALVM_PLAN`. Measured 2026-11-17: exit 1,
-`verify-invariants: 139 passed, 6 explained gap(s), 1 failed`, detail
+`verify-invariants: 140 passed, 6 explained gap(s), 1 failed`, detail
 `store_projection_toy(says 21 axioms, staging 20)`, `[FAIL] W9.3: the composition
 table's counts match the files it records`, and the closure digests, the
 approval control, and §W3's stmts and emitter checks all still passing — one
@@ -2285,15 +2288,26 @@ compared by its own literal (`$art(says $claimed axioms, $src $ax)`), not by
 `(says $claimed $label, …)` with the word read from a loop variable, so the
 chunks the gate re-checks (`(says `, ` axioms, `) are adjacent to each other in
 the statement that prints them rather than merely somewhere in the script. The
-source word (`staging` or `approved`) is still interpolated — a row is counted
-from whichever of the two files applies — so that one word remains vocabulary,
-not adjacency, and the limitation is narrowed to exactly it.
+source word (`staging` or `approved`) stays interpolated, and is therefore
+vocabulary rather than adjacency: a row is counted from whichever of the two
+files applies, so making the word literal would need one format per field *and*
+file — fourteen hand-written strings — because any single format used for both
+files carries the variable again, and that duplication would be a second copy of
+the field mapping sitting under the first. What can be literal without that
+duplication is checked instead: `[pass] W9.3: every field word a composition cell
+names has a literal comparison (8 word(s))` re-reads the four cells, extracts
+every counted word (`2 sorts`, `20 axioms`, `1 def`, `24 numeral-notation lines`,
+backticks stripped, `def` mapped to `defs` and `numeral…` to `numerals`), and
+refuses a word no per-field literal compares — so a field added to a cell cannot
+go uncounted. Measured the same day by spelling `axioms` as `axiom` in its
+comparison: `[detail] §W9.3 fields: axioms(no literal comparison)` and
+`139 passed, 6 explained gap(s), 2 failed`.
 
 That the closure column is its own claim, not a by-product of the counts, is
 measured the same way: `scripts/w93-closure-drift-control` copies this plan and
 flips the first hex digit of the toy row's `closure-sha256` cell, leaving every
 count cell — `70` included — alone. Measured 2026-11-17: exit 1,
-`verify-invariants: 139 passed, 6 explained gap(s), 1 failed`, `[FAIL] W9.3: the
+`verify-invariants: 140 passed, 6 explained gap(s), 1 failed`, `[FAIL] W9.3: the
 composition table's closure digests match the files it records`, detail
 `store_projection_toy(says '19842af88888…', staging '09842af88888…')` — the
 row's digest against the one the file hashes to, twelve characters each — while
@@ -2301,7 +2315,7 @@ the counts line, the approval control, and §W3's stmts and emitter checks still
 pass. So a row can be right about what an approval *contains* and wrong about
 which bytes it contains, and only this column catches that; the run is recorded
 as the fifth `docs/data/w3/probes.tsv` row. Its skeleton is vocabulary-level for
-the same reason the composition row's is: the source word in
+the same reason the composition row's source word is: the file word in
 `says '<row>' <src> '<file>'` is the variable `$_c_src` (`staging` or
 `approved`), so `staging` is checked as a word the script contains rather than
 text adjacent to the digests — the frame `(says '` and the fact that both

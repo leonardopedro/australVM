@@ -430,7 +430,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   composition column can fire) and requires the gate to exit 1 with
   `[FAIL] W9.3: the composition table's counts match the files it records`, the
   detail `store_projection_toy(says 21 axioms, staging 20)`, and the closure,
-  approval-control and §W3 lines unchanged. One full gate run.
+  approval-control and §W3 lines unchanged. One full gate run. The gate also
+  re-reads the four cells and requires a literal comparison for every counted
+  word they name (`… every field word a composition cell names has a literal
+  comparison (8 word(s))`), so a field added to a cell cannot go uncounted.
 - `scripts/w93-closure-drift-control` — the §W9.3 negative control for the
   `closure-sha256` column, which the count drift cannot exercise: it flips the
   first hex digit of `store_projection_toy`'s digest cell in a copy of the plan
