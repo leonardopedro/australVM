@@ -1405,7 +1405,75 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     # behind for an approved artifact is stale the other way (its approval is
     # checked by the statement diff, so the row no longer has a job). A table
     # cell is the kind of copied number that is right the day it is written.
-    _plan_file="$repo_root/PLAN_sota_kernel_verification.md"
+    _plan_file="${AUSTRALVM_PLAN:-$repo_root/PLAN_sota_kernel_verification.md}"
+    # The approved copies the table's approved rows are compared with. Overridable
+    # only so the control below can point at a scratch copy — it is the same
+    # `--approved-root` the comparator already takes, and it grants nothing: it
+    # moves which directory is read, not which artifact is approved.
+    _appr_root="${AUSTRALVM_APPROVED_ROOT:-$repo_root/mm0/approved}"
+    # Every §W3 row's artifact and its *state* cell. The state cell is what says
+    # whether an artifact is approved yet, so it decides which file the row's
+    # numbers must come from, and it is the one edit an approval needs: commit the
+    # bytes into `mm0/approved/` and flip this cell (`[gap]`, awaiting owner
+    # commit → `[pass]`, approved in `mm0/approved/`). Everything downstream —
+    # the counts, the digest, and what `scripts/stage-approvals` stages — is then
+    # derived from that one edit and checked here, instead of being a second list
+    # somebody has to remember to shorten.
+    _w3_tab="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; state = $6
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", state)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            print path "\t" state
+        }' "$_plan_file")"
+    # The two shapes a state cell may have. They live in variables because a case
+    # pattern written inline is a *glob*: `[gap]` there is a bracket expression
+    # matching one of g/a/p, so the literal text has to be quoted by expansion.
+    _w3_state_prefix='`[gap]`, awaiting owner commit'
+    _w3_state_appr='`[pass]`, approved in `mm0/approved/`'
+    _w3_tab_pending=""; _w3_tab_appr=""
+    while IFS="$(printf '\t')" read -r _t_stem _t_state; do
+        [ -n "$_t_stem" ] || continue
+        case "$_t_state" in
+            "$_w3_state_prefix"*) _w3_tab_pending="$_w3_tab_pending $_t_stem" ;;
+            "$_w3_state_appr"*) _w3_tab_appr="$_w3_tab_appr $_t_stem" ;;
+        esac
+    done <<EOF
+$_w3_tab
+EOF
+    # What one row gets wrong about the file it describes, or nothing. A pending
+    # row must match the artifact as it reads today; an approved row must match
+    # the owner's copy under `_appr_root`; and a pending row for an artifact that
+    # already has an approved copy is a state cell left behind — the edit the
+    # approval was supposed to be, reported instead of half-made.
+    _w3_row_bad() {  # stem, stmts cell
+        local stem="$1" n="$2" meas act
+        case " $_w3_tab_appr " in
+            *" $stem "*)
+                if [ ! -f "$_appr_root/$stem.stmts" ]; then
+                    printf '%s' "$stem(says approved, but $_appr_root/$stem.stmts does not exist)"
+                    return 0
+                fi
+                act="$(grep -cE '^(provable sort|sort|delimiter|prefix|term|def|axiom|theorem) ' \
+                    "$_appr_root/$stem.stmts" || true)"
+                [ "$act" = "$n" ] \
+                    || printf '%s' "$stem(table says $n statements, the approved copy holds $act)"
+                ;;
+            *)
+                if [ -f "$_appr_root/$stem.stmts" ]; then
+                    printf '%s' "$stem(says unapproved, but $_appr_root/$stem.stmts exists — flip this row's state cell)"
+                    return 0
+                fi
+                meas="$(printf '%s\n' "$_w3_pairs" | tr ' ' '\n' | grep -x "$stem=[0-9]*" | head -1)"
+                if [ -z "$meas" ]; then
+                    printf '%s' "$stem(row gives $n statements, but no pending artifact of that name is measurable here)"
+                elif [ "${meas##*=}" != "$n" ]; then
+                    printf '%s' "$stem(table says $n, file says ${meas##*=})"
+                fi
+                ;;
+        esac
+    }
     _w3_plan="$(awk -F'|' '
         /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
             path = $2; cell = $4
@@ -1416,31 +1484,82 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
         }' "$_plan_file")"
     _w3_bad=""
     _w3_rows=0
-    for _pair in $_w3_pairs; do
-        _w3_rows=$((_w3_rows + 1))
-        _p_stem="${_pair%%=*}"
-        _p_n="${_pair##*=}"
-        _p_row="$(printf '%s\n' "$_w3_plan" | grep -x "$_p_stem=[0-9]*" | head -1)"
-        case "$_p_row" in
-            "") _w3_bad="$_w3_bad $_p_stem(no row, file says $_p_n)" ;;
-            "$_p_stem=$_p_n") ;;
-            *) _w3_bad="$_w3_bad $_p_stem(table says ${_p_row##*=}, file says $_p_n)" ;;
-        esac
-    done
+    _w3_appr_rows=0
     for _row in $_w3_plan; do
-        _r_stem="${_row%%=*}"
-        case " $_w3_pairs " in
-            *" $_r_stem="*) ;;
-            *) _w3_bad="$_w3_bad $_r_stem(row left behind for an artifact that is not pending here)" ;;
+        _p_stem="${_row%%=*}"
+        _w3_rows=$((_w3_rows + 1))
+        _w3_bad="$_w3_bad$(_w3_row_bad "$_p_stem" "${_row##*=}")"
+        case " $_w3_tab_appr " in
+            *" $_p_stem "*) _w3_appr_rows=$((_w3_appr_rows + 1)) ;;
         esac
     done
-    if [ -n "$_w3_pairs" ] && [ -z "$_w3_bad" ]; then
-        check "W3: the plan's §W3 stmts column matches the measured counts ($_w3_rows row(s))" true
-    elif [ -z "$_w3_pairs" ]; then
-        gap "W3: the plan's §W3 stmts column not compared (no count measurable here)"
+    # … and the other direction: an artifact still pending here must have a row,
+    # so an approval cannot be "recorded" by dropping the row instead.
+    for _pair in $_w3_pairs; do
+        _q_stem="${_pair%%=*}"
+        printf '%s\n' "$_w3_plan" | grep -qx "$_q_stem=[0-9]*" \
+            || _w3_bad="$_w3_bad $_q_stem(no §W3 row, file says ${_pair##*=})"
+    done
+    if [ "$_w3_rows" -gt 0 ] && [ -z "$_w3_bad" ]; then
+        check "W3: the plan's §W3 stmts column matches what each artifact holds ($_w3_rows row(s), $_w3_appr_rows approved)" true
+    elif [ "$_w3_rows" -eq 0 ]; then
+        gap "W3: the plan's §W3 stmts column not compared (no table row carries a count)"
     else
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
-        check "W3: the plan's §W3 stmts column matches the measured counts" false
+        check "W3: the plan's §W3 stmts column matches what each artifact holds" false
+    fi
+    # Both halves of that check are exercised, because the approved half only runs
+    # once an approval exists and the stale-state half only runs when someone has
+    # an approved copy the table does not know about. With a scratch approved copy
+    # in place the approved row must pass, with the copy deleted it must name the
+    # missing file, and the same artifact back in its pending state must be told
+    # to flip the cell. The scratch copy is a staging; `mm0/approved/` is never
+    # read into it or written.
+    _w3r_ctl="$_cert_tmp/w3-row-control"
+    _w3r_stem="slot_layout"
+    _w3r_row="$(printf '%s\n' "$_w3_plan" | grep -x "$_w3r_stem=[0-9]*" | head -1)"
+    if ! command -v python3 >/dev/null 2>&1; then
+        gap "W3: the §W3 row check's approved-row control not run (no python3 here)"
+    elif [ -z "$_w3r_row" ]; then
+        gap "W3: the §W3 row check's approved-row control not run (no $_w3r_stem row carries a count)"
+    else
+        rm -rf "$_w3r_ctl"; mkdir -p "$_w3r_ctl"
+        _w3r_staged="$_cert_tmp/approvals/$_w3r_stem.stmts"
+        if [ ! -f "$_w3r_staged" ]; then
+            python3 "$repo_root/scripts/mm0-comparator" approve \
+                --approved-root "$_cert_tmp/approvals" "$_w3r_stem" \
+                >"$_w3r_ctl/approve.log" 2>&1 || _w3r_staged=""
+        fi
+        if [ -z "$_w3r_staged" ]; then
+            sed -n '1,3p' "$_w3r_ctl/approve.log" >&2
+            gap "W3: the §W3 row check's approved-row control not run (the staging was refused)"
+        else
+            cp "$_w3r_staged" "$_w3r_ctl/$_w3r_stem.stmts"
+            _w3r_saved_appr="$_w3_tab_appr"
+            _w3r_saved_root="$_appr_root"
+            _w3_tab_appr="$_w3_tab_appr $_w3r_stem"
+            _appr_root="$_w3r_ctl"
+            _w3r_ok="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
+            rm -f "$_w3r_ctl/$_w3r_stem.stmts"
+            _w3r_missing="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
+            _w3_tab_appr="$_w3r_saved_appr"
+            cp "$_w3r_staged" "$_w3r_ctl/$_w3r_stem.stmts"
+            _w3r_stale="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
+            _appr_root="$_w3r_saved_root"
+            if [ -z "$_w3r_ok" ]; then
+                check "W3: an approved §W3 row passes when the approved copy holds what it says" true
+            else
+                echo "  [detail] approved-row probe:$_w3r_ok" >&2
+                check "W3: an approved §W3 row passes when the approved copy holds what it says" false
+            fi
+            if printf '%s' "$_w3r_missing" | grep -q 'does not exist' \
+                    && printf '%s' "$_w3r_stale" | grep -q 'flip this row'; then
+                check "W3: a §W3 row that disagrees with mm0/approved/ is refused" true
+            else
+                echo "  [detail] missing-approval probe:'$_w3r_missing' stale-state probe:'$_w3r_stale'" >&2
+                check "W3: a §W3 row that disagrees with mm0/approved/ is refused" false
+            fi
+        fi
     fi
     # … and the `statements-sha256` column. Staging is what produces that digest,
     # so a quoted one is either compared with a staging or it is a copied hex
@@ -1459,21 +1578,37 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
         }' "$_plan_file")"
     _w3_dig_bad=""
     _w3_dig_n=0
+    _w3_dig_appr_n=0
     mkdir -p "$_cert_tmp/approvals"
     while IFS="$(printf '\t')" read -r _g_stem _g_cell; do
         [ -n "$_g_stem" ] || continue
         _w3_dig_n=$((_w3_dig_n + 1))
-        rm -f "$_cert_tmp/approvals/$_g_stem.stmts"
-        python3 "$repo_root/scripts/mm0-comparator" approve \
-            --approved-root "$_cert_tmp/approvals" "$_g_stem" \
-            >"$_cert_tmp/approvals/$_g_stem.log" 2>&1 || {
-            _w3_dig_bad="$_w3_dig_bad $_g_stem(staging refused)"
-            continue
-        }
-        _g_actual="$(sed -n 's/^-- statements-sha256: //p' \
-            "$_cert_tmp/approvals/$_g_stem.stmts" 2>/dev/null)"
+        # An approved row quotes the digest of the bytes an owner committed, so
+        # that is the file it is compared with; a pending row quotes a staging.
+        case " $_w3_tab_appr " in
+            *" $_g_stem "*)
+                _w3_dig_appr_n=$((_w3_dig_appr_n + 1))
+                _g_actual="$(sed -n 's/^-- statements-sha256: //p' \
+                    "$_appr_root/$_g_stem.stmts" 2>/dev/null)"
+                if [ -z "$_g_actual" ]; then
+                    _w3_dig_bad="$_w3_dig_bad $_g_stem(approved row, but no approved copy to read)"
+                    continue
+                fi
+                ;;
+            *)
+                rm -f "$_cert_tmp/approvals/$_g_stem.stmts"
+                python3 "$repo_root/scripts/mm0-comparator" approve \
+                    --approved-root "$_cert_tmp/approvals" "$_g_stem" \
+                    >"$_cert_tmp/approvals/$_g_stem.log" 2>&1 || {
+                    _w3_dig_bad="$_w3_dig_bad $_g_stem(staging refused)"
+                    continue
+                }
+                _g_actual="$(sed -n 's/^-- statements-sha256: //p' \
+                    "$_cert_tmp/approvals/$_g_stem.stmts" 2>/dev/null)"
+                ;;
+        esac
         if [ "$_g_actual" != "$_g_cell" ]; then
-            _w3_dig_bad="$_w3_dig_bad $_g_stem(table says '$(printf '%s' "$_g_cell" | cut -c1-12)…', staging gives '$(printf '%s' "$_g_actual" | cut -c1-12)…')"
+            _w3_dig_bad="$_w3_dig_bad $_g_stem(table says '$(printf '%s' "$_g_cell" | cut -c1-12)…', the file says '$(printf '%s' "$_g_actual" | cut -c1-12)…')"
         fi
     done <<EOF
 $_w3_dig_rows
@@ -1483,10 +1618,10 @@ EOF
     elif [ "$_w3_dig_n" -eq 0 ]; then
         gap "W3: the §W3 statements-sha256 column not compared (no table row quotes one)"
     elif [ -z "$_w3_dig_bad" ]; then
-        check "W3: the plan's §W3 digest column matches a staging ($_w3_dig_n row(s))" true
+        check "W3: the plan's §W3 digest column matches the file it describes ($_w3_dig_n row(s), $_w3_dig_appr_n approved)" true
     else
         echo "  [detail] §W3 digests:${_w3_dig_bad}" >&2
-        check "W3: the plan's §W3 digest column matches a staging" false
+        check "W3: the plan's §W3 digest column matches the file it describes" false
     fi
     # … and the column's control, because "the digest is what pins the bytes" is
     # a claim about a comparison that must actually refuse: alter one statement
@@ -1570,7 +1705,6 @@ PYMUT
     # from a staging that merely hashes the same today. The root is overridable
     # so the control below can point at a mutated approval; it is the same
     # `--approved-root` the comparator already takes, and it grants nothing.
-    _appr_root="${AUSTRALVM_APPROVED_ROOT:-$repo_root/mm0/approved}"
     _w93_rows="$(awk -F'|' '
         /^[ \t]*\|[ \t]*`[a-z0-9_]+`[ \t]*\|[ \t]*[0-9]+[ \t]*\|/ {
             art = $2; n = $3; comp = $4; clo = $5
@@ -1808,13 +1942,12 @@ EOF
         }' "$_plan_file")"
     _w3_state_bad=""
     _w3_state_rows_n=0
-    _w3_state_prefix='`[gap]`, awaiting owner commit'
     while IFS="$(printf '\t')" read -r _s_stem _s_cell; do
         [ -n "$_s_stem" ] || continue
         _w3_state_rows_n=$((_w3_state_rows_n + 1))
         case "$_s_cell" in
-            "$_w3_state_prefix") ;;
-            "$_w3_state_prefix;"*)
+            "$_w3_state_prefix"|"$_w3_state_appr") ;;
+            "$_w3_state_prefix;"*|"$_w3_state_appr;"*)
                 _s_tail="$(printf '%s' "${_s_cell:${#_w3_state_prefix}+1}" \
                     | sed 's/^[ \t]*//;s/[ \t]*$//')"
                 [ -n "$_s_tail" ] \
@@ -1822,11 +1955,14 @@ EOF
                 ;;
             *)
                 _s_why="$(printf '%s' "$_s_cell" | cut -c1-48)"
+                _s_loose_gap='`[gap]`'; _s_bare_gap='[gap]'; _s_loose_pass='`[pass]`'
                 case "$_s_cell" in
-                    '`[gap]`'*|'[gap]'*)
+                    "$_s_loose_gap"*|"$_s_bare_gap"*)
                         _w3_state_bad="$_w3_state_bad $_s_stem(state names a reason the approval rule does not allow: '$_s_why')" ;;
+                    "$_s_loose_pass"*)
+                        _w3_state_bad="$_w3_state_bad $_s_stem(says approved without naming mm0/approved/: '$_s_why')" ;;
                     *)
-                        _w3_state_bad="$_w3_state_bad $_s_stem(state does not carry the gate's [gap] marker: '$_s_why')" ;;
+                        _w3_state_bad="$_w3_state_bad $_s_stem(state carries neither the gate's [gap] nor its [pass] marker: '$_s_why')" ;;
                 esac
                 ;;
         esac
@@ -1836,10 +1972,10 @@ EOF
     if [ "$_w3_state_rows_n" -eq 0 ]; then
         gap "W3: the plan's §W3 state column not compared (no table row carries one)"
     elif [ -z "$_w3_state_bad" ]; then
-        check "W3: every §W3 state cell says why the row is still unapproved ($_w3_state_rows_n row(s))" true
+        check "W3: every §W3 state cell says whether the row is approved or still waiting on the owner ($_w3_state_rows_n row(s))" true
     else
         echo "  [detail] §W3 state column:${_w3_state_bad}" >&2
-        check "W3: every §W3 state cell says why the row is still unapproved" false
+        check "W3: every §W3 state cell says whether the row is approved or still waiting on the owner" false
     fi
     # … and the staging script's own contract, because it is the only way an
     # owner gets a diff to approve. A name that is not an artifact must be a
@@ -1867,28 +2003,101 @@ EOF
             echo "  [detail] unknown name: exit=$_sa_unknown (want 64)" >&2
             check "W3: stage-approvals answers an unknown artifact name with exit 64" false
         fi
-        _sa_pending="$(sed -n 's/^pending=(\(.*\))$/\1/p' "$repo_root/scripts/stage-approvals")"
+        # Which artifact is pending is not a list in the script: the no-argument
+        # run stages an artifact only when `--approved-root` has no copy of it, so
+        # the headings must be exactly §W3's pending rows and never one of its
+        # approved ones. That is what makes an approval one edit — the row's state
+        # cell — with this check deriving the rest instead of a second array
+        # somebody has to shorten by hand.
+        _sa_pending="${_w3_tab_pending# }"
         _sa_pending_n="$(printf '%s' "$_sa_pending" | wc -w)"
+        _sa_names="$(sed -n 's/^artifacts_all=(\(.*\))$/\1/p' "$repo_root/scripts/stage-approvals")"
+        _sa_rows_n="$(printf '%s ' "$_w3_tab_pending" "$_w3_tab_appr" | wc -w)"
+        _sa_names_bad=""
+        for _sa_name in $_sa_names; do
+            case " $_w3_tab_pending $_w3_tab_appr " in
+                *" $_sa_name "*) ;;
+                *) _sa_names_bad="$_sa_names_bad $_sa_name(not a §W3 row)" ;;
+            esac
+        done
+        for _sa_name in $_w3_tab_pending $_w3_tab_appr; do
+            case " $_sa_names " in
+                *" $_sa_name "*) ;;
+                *) _sa_names_bad="$_sa_names_bad $_sa_name(the §W3 row is not in the script's artifact list)" ;;
+            esac
+        done
+        if [ "$_sa_rows_n" -gt 0 ] && [ -z "$_sa_names_bad" ]; then
+            check "W3: stage-approvals' artifact list is the §W3 table's rows ($_sa_rows_n name(s))" true
+        elif [ "$_sa_rows_n" -eq 0 ]; then
+            gap "W3: stage-approvals' artifact list not compared (no §W3 row carries a state)"
+        else
+            echo "  [detail] artifact lists:${_sa_names_bad}" >&2
+            check "W3: stage-approvals' artifact list is the §W3 table's rows" false
+        fi
+        # The script is pointed at the same approved root the table's rows were
+        # read from, so the two sides of this comparison are always looking at
+        # the same notion of "approved" — including under the override.
         _sa_all=0
-        bash "$repo_root/scripts/stage-approvals" --stat-only --root "$_sa/all" \
+        bash "$repo_root/scripts/stage-approvals" --stat-only \
+            --root "$_sa/all" --approved-root "$_appr_root" \
             >"$_sa/all.log" 2>&1 || _sa_all=$?
         _sa_missing=""
         for _sa_name in $_sa_pending; do
             grep -q "^== $_sa_name\$" "$_sa/all.log" || _sa_missing="$_sa_missing $_sa_name"
         done
-        if [ "$_sa_pending_n" -gt 0 ] && [ "$_sa_all" -eq 0 ] && [ -z "$_sa_missing" ] \
-                && grep -q "^stage-approvals: $_sa_pending_n staged, 0 refused, 0 nothing to approve" "$_sa/all.log"; then
-            check "W3: stage-approvals stages the $_sa_pending_n pending artifacts (exit 0)" true
+        for _sa_name in $_w3_tab_appr; do
+            grep -q "^== $_sa_name\$" "$_sa/all.log" && _sa_missing="$_sa_missing $_sa_name(staged, but §W3 says approved)"
+        done
+        _sa_ok=false
+        if [ "$_sa_all" -eq 0 ] && [ -z "$_sa_missing" ]; then
+            if [ "$_sa_pending_n" -gt 0 ]; then
+                grep -q "^stage-approvals: $_sa_pending_n staged, 0 refused, 0 nothing to approve" "$_sa/all.log" \
+                    && _sa_ok=true
+            else
+                grep -q 'nothing pending' "$_sa/all.log" && _sa_ok=true
+            fi
+        fi
+        if [ "$_sa_ok" = true ]; then
+            check "W3: stage-approvals stages exactly §W3's $_sa_pending_n pending row(s) (exit 0)" true
         else
             tail -3 "$_sa/all.log" >&2
-            echo "  [detail] pending stage: exit=$_sa_all, headings missing:${_sa_missing:- none}" >&2
-            echo "  [detail] if an approval landed, its row has left §W3 — update \`pending=\` here" >&2
-            check "W3: stage-approvals stages the pending artifacts (exit 0)" false
+            echo "  [detail] pending stage: exit=$_sa_all, headings wrong:${_sa_missing:- none}" >&2
+            check "W3: stage-approvals stages exactly §W3's pending rows (exit 0)" false
+        fi
+        # The derivation itself: with a scratch approved root holding one of the
+        # pending artifacts, the no-argument run must stage the others and report
+        # the one as approved. That is the mechanism that lets an approval be a
+        # single row edit instead of a row edit plus an array edit.
+        _sa_first="${_sa_pending%% *}"
+        mkdir -p "$_sa/appr1"
+        if [ -n "$_sa_first" ] && cp "$_sa/all/$_sa_first.stmts" "$_sa/appr1/" 2>/dev/null; then
+            _sa_one=0
+            bash "$repo_root/scripts/stage-approvals" --stat-only \
+                --root "$_sa/one" --approved-root "$_sa/appr1" \
+                >"$_sa/one.log" 2>&1 || _sa_one=$?
+            # How many headings are correct depends on what appr1 holds: every
+            # artifact of the script's list without a copy there.
+            _sa_want=0
+            for _sa_name in $_sa_names; do
+                [ -f "$_sa/appr1/$_sa_name.stmts" ] || _sa_want=$((_sa_want + 1))
+            done
+            if [ "$_sa_one" -eq 0 ] \
+                    && ! grep -q "^== $_sa_first\$" "$_sa/one.log" \
+                    && [ "$(grep -c '^== ' "$_sa/one.log" || true)" -eq "$_sa_want" ] \
+                    && grep -q ', 1 already approved;' "$_sa/one.log"; then
+                check "W3: stage-approvals stops staging an artifact once its approved copy exists" true
+            else
+                tail -3 "$_sa/one.log" >&2
+                echo "  [detail] derived pending: exit=$_sa_one, headings $(grep -c '^== ' "$_sa/one.log" || true) (want $_sa_want)" >&2
+                check "W3: stage-approvals stops staging an artifact once its approved copy exists" false
+            fi
+        else
+            gap "W3: the derived-pending control not run (no $_sa_first staging to copy)"
         fi
         mkdir -p "$_sa/appr"
-        if cp "$_sa/all/store_projection_toy.stmts" "$_sa/appr/" 2>/dev/null; then
+        if cp "$_sa/all/$_sa_first.stmts" "$_sa/appr/" 2>/dev/null; then
             _sa_noop=0
-            bash "$repo_root/scripts/stage-approvals" store_projection_toy --stat-only \
+            bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only \
                 --root "$_sa/noop" --approved-root "$_sa/appr" \
                 >"$_sa/noop.log" 2>&1 || _sa_noop=$?
             if [ "$_sa_noop" -eq 1 ] && grep -q 'nothing to approve' "$_sa/noop.log"; then
@@ -1899,7 +2108,7 @@ EOF
                 check "W3: stage-approvals refuses an artifact that equals its approved copy" false
             fi
         else
-            gap "W3: the no-op staging control not run (no toy staging to copy)"
+            gap "W3: the no-op staging control not run (no $_sa_first staging to copy)"
         fi
     fi
     check_py "W3: comparator self-test (all three negative controls refuse)" \
