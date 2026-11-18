@@ -22,7 +22,9 @@
 # speed-up available — a case *is* one full gate run — and it is bounded by the
 # cores: this host has two.
 #
-# Measured 2026-11-18, all 13 cases holding, same tree, same `nix develop`:
+# Measured 2026-11-18 with the 13 cases that existed then (the last `copy` row's
+# `w3-approved-row` came after, so it adds one more gate run), same tree, same
+# `nix develop`:
 #   -j 1  58m59s   (~272 s/case)
 #   -j 2  42m39s   (~373 s/case: two gate runs contend, so the second core is
 #                   worth 1.38x, not 2x — a gate run is not itself parallel)
@@ -252,10 +254,34 @@ case_cert-approved() {
     expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g"
 }
 
+# The last `copy` row: `W3: $_stem matches its approved statements`. Its failing
+# branch needs an approval the artifact disagrees with, and an approval is the
+# owner's commit — so the whole approved root is a scratch copy of
+# `mm0/approved/` with one axiom's text changed and its digest left alone, which
+# is exactly a statement weakened after the fact. `mm0/approved/` is only read:
+# nothing here approves anything, and the tree's approvals stay as they are.
+# `quasi_rh_7_8` is the smallest approved artifact (one axiom), so the drift is
+# visible in a single line.
+case_w3-approved-row() {
+    rm -rf "$cw/approved"
+    cp -R "$ROOT/mm0/approved" "$cw/approved" || exit 2
+    python3 - "$cw/approved/quasi_rh_7_8.stmts" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+drifted = text.replace("(cfv s czeta) cc0", "(cfv s czeta) cc1", 1)
+if drifted == text:
+    raise SystemExit("the approved axiom's text did not move")
+p.write_text(drifted)
+PY
+    gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+    expect_fail "W3: quasi_rh_7_8 matches its approved statements" "$cw/g"
+}
+
 CASES="phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage
 phase-d-imported-theory phase-d-self-vocabulary phase-d-measured-coverage
 isa-hypothesis-pin clif-vocabulary clif-citations witness-axiom memsafe-edge
-liquid-golden cert-approved"
+liquid-golden cert-approved w3-approved-row"
 
 # One case, in its own scratch dir and temporary root. Runs in a subshell: the
 # report lands in `$work/<case>/report` and the status in `$work/<case>/status`,

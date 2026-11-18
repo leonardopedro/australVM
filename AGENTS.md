@@ -457,9 +457,9 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   lines that read the same cell red (digest column, approved-row emitter check,
   staging count) and nothing else, and the shape check plus the emitter column
   still green. One full gate run.
-- `scripts/w3-drift-controls` — one case for each of the twelve checks the
+- `scripts/w3-drift-controls` — one case for each of the thirteen checks the
   census classified `copy`, plus the certification run with an approval present
-  (`<case>`, `--list`, `all`, `-j N`); 13 cases: Phase D's two
+  (`<case>`, `--list`, `all`, `-j N`); 14 cases: Phase D's two
   trust splits and its four coverage/vocabulary claims, the W8 hypothesis pin,
   the `clif_step` vocabulary and pinned citations, the witness's axiom table, the
   memsafe edge census, the Liquid golden, and the refinement's certificate with an
@@ -470,9 +470,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   expected `[FAIL]` line. One full gate run per case; logs kept under
   `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
   speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
-  repository only read), and measured 2026-11-18 the 13 cases take 58m59s at
-  `-j 1` and 42m39s at `-j 2` — 16m20s (28%) off, 1.38x and not the 2x the two
-  cores suggest, because a gate run does not itself parallelise.
+  repository only read), and measured 2026-11-18 the 13 cases that existed
+  then take 58m59s at `-j 1` and 42m39s at `-j 2` — 16m20s (28%) off, 1.38x and
+  not the 2x the two cores suggest, because a gate run does not itself
+  parallelise. The last `copy` row, `W3: $_stem matches its approved
+  statements`, is `w3-approved-row`: it copies the whole approved root into
+  scratch and weakens one approved axiom there, so the check runs without the
+  tree holding any new approval.
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
   read-only `*-drift-control` scripts the same way, then `obj-drift-control`
   alone (it edits the tree and rebuilds), and `make test` depends on it. The two
