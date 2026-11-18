@@ -3562,3 +3562,70 @@ its finished rule state in ~62 min; the next obstacle to a *complete* artifact i
 10 GiB of address space, which is a question about the host, not the declaration
 (untested: this host is 30 GB shared with a Waydroid session, and the previous
 two-at-once attempt at these runs was killed outright).
+
+### 13.36 A complete theory for the ns row, and what actually bounded it
+
+§13.35 ended on a ceiling that was "a question about the host": the walk reached 566
+obligations and then raised `MemoryError` under a 10 GiB address-space cap. That
+question has an answer, and the answer came with the thing the section could not
+produce — a complete `.mm0`/`.mm1` for the row.
+
+**1. The completing run.** One change of substance from §13.35's attempt: the cap
+(`ulimit -v 12582912`, 12 GiB) — plus the export cache bounded at 20 000 records, a
+knob §13.35's A/B had shown flat. Nothing else moved: `LTP_OBLIG_SHARE=1`,
+`LTP_OBLIG_CHUNK=2147483648`, the same export and declaration, one process.
+
+| | |
+| --- | ---: |
+| wall clock | 5 172.8 s (86.2 min) |
+| rules | 125 469 |
+| assumptions | 24 419 (354 constant types, 580 substitution) |
+| obligation stream | 580 records, 90 676 132 250 B, 43 parts |
+| `.mm0` | 102 543 367 789 B (payload starts at byte 6 100) |
+| `.mm1` | 102 547 674 107 B (+4 306 318 B of proof) |
+| peak RSS / VmSize sampled | 5 756 / 5 779 MiB |
+
+The artifact is checked as far as an artifact can be without a checker that can hold
+it: the 580 index records' segments tile all 43 parts with no gap or overlap, every
+record's `len` equals its segments' sum, the parts' bytes equal the manifest's
+`bytes`, and both files end at `$;` — the `.mm0` after the goal's statement, the
+`.mm1` after `ax_subst_579`. No `mm0-c` run: 102 GB of text is not something this
+host can verify, so the claim here is structural consistency and a clean census, not
+acceptance by the root of trust.
+
+**2. The stop, restated against a complete theory.** §13.35 verified the stopped
+theory against a run that later *died*, which left open whether the full walk keeps
+the same bytes to the end. It does. The stop was re-emitted at the same rule budget
+(`LTP_STOP_RULES=125417`, `LTP_STOP_EMIT=1`, 3 708.3 s) and its whole axiom spool
+compared with the complete `.mm0`'s payload:
+
+- stopped theory 76 568 956 912 B, header 6 145 B, payload 76 568 950 767 B;
+- `cmp -i 6100:6145 -n 76568950767` over the two payloads: **equal for
+  72 682 473 339 B**, first difference at payload byte 72 682 473 340 — the first
+  byte of the stop's 3 886 477 428 B goal statement, exactly where the stopped file
+  stops being a theory fragment and becomes a statement;
+- the re-emitted stopped theory is byte-for-byte the same size as the earlier one,
+  with the same census (125 417 rules, 24 393 axioms, 563 obligations).
+
+So the two artifacts agree on the entire 72.68 GB the stop claims, and the stop's
+own trailing goal is the only thing the complete file does not have there. The
+earlier claim was about a walk that had been continued 11.5 GB past the stop; this
+one is about the walk that finished.
+
+**3. What bounded it, and a hypothesis that did not survive.** §13.35 said the
+`MemoryError` was "the fragmentation of repeatedly materialising multi-GB texts".
+That was wrong in an instructive way. Sampled every 30 s, VmSize in the completing
+run never exceeded 5 779 MiB and tracked RSS to within 23 MiB — there is no
+address-space leak and no growing fragmentation. But the 10 GiB cap failed at the
+same obligation (566) under *both* cache settings, 200 000 and 20 000 records, so the
+export cache was not what decided the outcome either; and 12 GiB of cap carried the
+same walk to completion. The bounding quantity is therefore a *short-lived* multi-GB
+allocation, large enough that 10.2 GiB of address space could not hold it and small
+enough that 12.3 GiB could, and too brief to be caught by a 30 s sample: the peaks in
+both tables are lower bounds, not peaks. That is the honest reading of the
+measurement, and it is why the fix is a cap and not a change of algorithm.
+
+What this leaves for a reader who wants the row verified rather than emitted: a
+checker that streams (the theory is 102 GB of text and the proof is 4 MB on top of
+it), and a host with more room than this one — 30 GB shared with a Waydroid session
+whose swap was already full, which is why the cap was the only dial available.
