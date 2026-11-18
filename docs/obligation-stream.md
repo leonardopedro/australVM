@@ -34,7 +34,9 @@ With it set, the same bytes are cut into parts, and two small files describe the
 byte** the single file — the parts are not a new encoding.
 
 The line format is the same in every case: one object, sorted keys, with `b`
-(binders), `id` (the obligation's axiom name), `kind`, `lhs`, `r`, `rhs`, `x`.
+(binders), `id` (the obligation's axiom name), `kind`, `lhs`, `r`, `rhs`, `x` —
+unless the stream was recorded shared (`LTP_OBLIG_SHARE=1`), which drops `lhs` and
+`rhs` and numbers the terms instead: see "The shared form" below.
 
 ## Which files a consumer needs
 
@@ -144,3 +146,45 @@ the index: it never names a record whose bytes are not all on disk.
   byte. It is a valid stream, not a truncated record: everything indexed is whole.
 * The axiom spool (`<stem>_axioms.tmp`) is the other large file and has no index;
   it is concatenated into `.mm0`/`.mm1` only by a run that finishes.
+
+## The shared form (`LTP_OBLIG_SHARE=1`)
+
+The default line embeds each term twice: once as a tree (`b`, `r`, `x`) and once as
+the MM0 text of the statement (`lhs`, `rhs`). A shared line drops the texts and
+numbers the trees, so a subterm reached by two paths is stored once:
+
+```json
+{"id": "ax_subst_7", "kind": "substitution",
+ "n": [["bvar", 0], ["const", "Foo.bar"], ["app", 0, 1], ...],
+ "b": 2, "x": 1, "r": 5}
+```
+
+* `n` is the node table, in **post-order**: every entry refers only to smaller
+  indices. Tags: `bvar`, `const`, `sort`, `nat`, `str`, `app`, `pi`, `lam`,
+  `tsubst`, `proj`, `let`. A `let` stands for the application it means, exactly as
+  the expanded writer puts it.
+* `b`, `x`, `r` are indices into it.
+* **There is no `lhs` and no `rhs`.** They are not information the record lacks:
+  `lhs` is `(tsubst b x)` and `rhs` is node `r`. On FockPair the two texts were
+  96.5 % of the stream (199.7 MB + 84.4 MB of 294.4 MB), so dropping them takes a
+  294 MB stream to 10 MB, and the ns row's 90.7 GB to about 3.2 GB.
+
+Rendering those texts back needs one thing the table cannot carry: how the encoder
+*spelled* names, since a constant becomes `(tentity t_sym7)` by first appearance in
+encoding order. The emitter therefore writes a small sidecar beside the stream:
+
+```json
+{"index_style": "succ", "levels": {"0": "t_lev0"}, "symbols": {"Foo.bar": "t_sym7"}}
+```
+
+`scripts/oblig-expand` reads the sidecar automatically (same stem as the stream),
+and expands a shared stream back to the expanded line format — a check that the
+shared form loses nothing:
+
+```bash
+scripts/oblig-expand out/foo_typing_obligations.jsonl > expanded.jsonl
+cmp expanded.jsonl out-unshared/foo_typing_obligations.jsonl
+```
+
+One `*_naming.json` describes the whole run, so a consumer that only wants `b`, `x`
+and `r` never needs it at all.

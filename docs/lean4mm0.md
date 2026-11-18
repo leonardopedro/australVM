@@ -3785,3 +3785,79 @@ What is left of the lookup is the encoder's structural repeat: it expands a shar
 node once per path because the artifact has no references in it. The only way to
 remove the rest is to stop expanding — which the shared certificate already does for
 the node table, and which `lhs`/`rhs` could do too if the stream format changed.
+
+### 13.39 The byte-identity claim as a gate
+
+Every rewrite since §13.30 ends with the same sentence — "the artifacts do not
+move" — and every proof of it was a hand-run `cmp` against a copy, described in prose
+and unrepeatable outside the machine that ran it. `scripts/check-lean-typing-proof`
+turns that into a check:
+
+- it runs the emitter on the FockPair export in its three modes — **expanded**
+  (default), **shared** (`LTP_OBLIG_SHARE=1`) and **stopped**
+  (`LTP_STOP_RULES=120000 LTP_STOP_EMIT=1`, which exits 3 by design) — into a
+  scratch directory, one mode at a time;
+- it compares every artifact it produced with a recorded size and sha256 in
+  `scripts/lean-typing-proof.golden.tsv` (11 artifacts: `.mm0`, `.mm1` and the
+  obligation stream per mode, plus the stopped theory, its spool and the two spooled
+  texts) and fails on a missing, extra or moved artifact;
+- `--record` (or `make check-typing-proof RECORD=1`) writes the golden file. A
+  recorded value is not a truth about the format: it is a promise that the bytes did
+  not change, and re-recording belongs in the same commit as the change that moved
+  them, so the golden diff says what moved.
+
+`_stopped.json` is excluded from the comparison because it records elapsed time; it
+is the one artifact in the set that cannot be byte-stable.
+
+The gate runs in ~2 min. On one point it is honest rather than useful: the export is
+corpus and `mm0/exports/` is gitignored, so a checkout without the corpus cannot run
+it. It prints an explained gap and exits 0 — it never reports a pass it did not
+make — and the CI step that calls it exists so that any tree which does have the
+corpus (a developer's, a corpus job's) enforces the guarantee on every run. A
+corpus-less pull request is therefore *not* covered; covering it needs a small
+committed export fixture, which does not exist yet.
+
+### 13.40 The shared stream without its texts: 96.5 % of the stream was `lhs`/`rhs`
+
+§13.35 built the shared certificate and left the statement texts in it, and §13.38
+ended by naming the remaining cost: "`lhs`/`rhs` could reference the table too if the
+stream format changed". Measured before changing anything, those two keys on FockPair
+are **199 673 205 B + 84 357 010 B of a 294 407 782 B stream (96.5 %)** — the node
+table is 3.5 % of the format that was built to avoid repetition. On the ns row, whose
+shared stream is 90 676 132 250 B, that is the difference between 90.7 GB and ~3.2 GB.
+
+**1. What a shared record carries now.** Nothing is lost, because `lhs` was never a
+third term: the record's `lhs` is `(tsubst b x)` and its `rhs` is the encoding of node
+`r`. So the line drops both and keeps `id`, `kind`, `n`, `b`, `x`, `r`.
+
+**2. Why a sidecar, not the table.** Rendering the text back is the encoder read
+backwards, and the table cannot carry one part of it: a constant becomes
+`(tentity t_sym7)` where `7` is its first appearance *in encoding order*, and a
+universe `(tsort t_lev2)` likewise. So the emitter writes `*_naming.json` once per
+run — `symbols`, `levels`, and whether indices are `tsucc` towers or flat — and
+`scripts/oblig-expand` reads it beside the stream. A consumer that only wants `b`,
+`x`, `r` never opens it.
+
+**3. Is it lossless?** `oblig-expand` is the check, and it is the same check §13.35
+used: expand the shared stream and compare with the expanded one.
+
+| FockPair | bytes |
+| --- | ---: |
+| expanded stream (default mode) | 1 012 915 095 |
+| shared stream, §13.35 form | 294 407 782 |
+| shared stream, now | **10 349 935** |
+| `oblig-expand` of it, `cmp` against the expanded stream | identical |
+| `.mm0` shared vs expanded | identical |
+
+The renderer mirrors `_enc_tokens` shape for shape, including the two places where
+the format loses something on purpose: a `λ` is `(tabs body)` with no domain, and a
+`let` is the application it means. The naming file is 16 063 B.
+
+**4. What this is not.** The default artifact is untouched — this is the
+`LTP_OBLIG_SHARE=1` format, and the expanded stream, the `.mm0` and the `.mm1` are
+byte-identical to what §13.38 produced (the byte-identity gate of §13.39 compares
+all three modes and records the new shared size deliberately). The ns row was not
+re-run in shared mode for this section: its projection (~3.2 GB instead of 90.7 GB)
+follows from the same 96.5 % measured on FockPair and from the record format, which
+has no other difference, and §13.39's goldens are the guard against that changing
+quietly.
