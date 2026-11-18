@@ -137,6 +137,23 @@ class TestProgramFailure(Test):
         self.expected_program_stderr = expected_program_stderr
 
 
+class TestLoaderPath(Test):
+    """
+    A case with no source: it checks the runner's own loader setup.
+
+    The suite's other cases all prove something about Austral code; this one
+    proves that `./austral` starts because the runner put the bridge on the
+    loader's path, not because whoever invoked the runner had exported
+    `LD_LIBRARY_PATH`.
+    """
+
+    note: str
+
+    def __init__(self, name: str, suite_name: str, directory: str, note: str):
+        super().__init__(name, suite_name, directory, cli=None)
+        self.note = note
+
+
 class TestResult(object):
     """
     Base class of test results.
@@ -277,6 +294,18 @@ def collect_tests() -> list[Test]:
                 test_dir, "program-stderr.txt"
             )
             cli: str | None = _get_file_contents(test_dir, "cli.txt")
+            loader_note: str | None = _get_file_contents(test_dir, "loader-path.txt")
+            if loader_note is not None:
+                # Not a program: the runner checks its own environment.
+                tests.append(
+                    TestLoaderPath(
+                        name=test_name,
+                        suite_name=suite_name,
+                        directory=test_dir,
+                        note=loader_note,
+                    )
+                )
+                continue
             if (expected_error is not None) and (expected_output is not None):
                 raise ValueError(
                     "Can't have both `austral-stderr.txt` and `program-stdout.txt` in the same test."
@@ -366,6 +395,8 @@ def run_test_inner(test: Test, replace_stderr: bool) -> TestResult:
         return _run_failure_test(test, replace_stderr)
     elif isinstance(test, TestProgramFailure):
         return _run_program_failure_test(test)
+    elif isinstance(test, TestLoaderPath):
+        return _run_loader_path_test(test)
     else:
         raise ValueError("Unknown test type.")
 
@@ -655,6 +686,67 @@ def _run_program_failure_test(test: TestProgramFailure) -> TestResult:
             reason="Program did not produce stderr, but we expected stderr",
             outputs=[
                 ("EXPECTED STDERR", expected_stderr),
+            ],
+        )
+
+    return TestPass(test=test)
+
+
+BRIDGE_LIBRARY = "libaustral_cranelift_bridge.so"
+
+
+def _run_loader_path_test(test: TestLoaderPath) -> TestResult:
+    """
+    Two runs of the compiler, and the pair is the oracle:
+
+    * in the runner's own environment `./austral` must start, and
+    * with `LD_LIBRARY_PATH` removed it must fail at the *loader*, naming the
+      bridge.
+
+    The second run is what makes the first mean something. If the runner ever
+    stops exporting the path, the first run reports this same loader error; if
+    the loader ever stops needing it (an rpath appears, the library gets
+    installed), the second run starts and this case says it can no longer
+    distinguish the runner's contribution from the environment's.
+    """
+    compile_cmd: list[str] = ["./austral", "--version"]
+
+    def run(env: dict[str, str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            compile_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+        )
+
+    owned: subprocess.CompletedProcess = run(dict(os.environ))
+    if owned.returncode != 0:
+        return TestFail(
+            test=test,
+            austral_cmd=compile_cmd,
+            cc_cmd=None,
+            reason="the compiler does not start in the runner's own environment; "
+            "the runner is expected to put the bridge on the loader's path",
+            outputs=[
+                ("AUSTRAL STDOUT", owned.stdout.decode("utf-8")),
+                ("AUSTRAL STDERR", owned.stderr.decode("utf-8")),
+                ("LD_LIBRARY_PATH", os.environ.get("LD_LIBRARY_PATH", "<unset>")),
+            ],
+        )
+
+    stripped_env: dict[str, str] = dict(os.environ)
+    stripped_env.pop("LD_LIBRARY_PATH", None)
+    stripped: subprocess.CompletedProcess = run(stripped_env)
+    stripped_stderr: str = stripped.stderr.decode("utf-8")
+    if stripped.returncode == 0 or BRIDGE_LIBRARY not in stripped_stderr:
+        return TestFail(
+            test=test,
+            austral_cmd=compile_cmd,
+            cc_cmd=None,
+            reason="the compiler starts without LD_LIBRARY_PATH and without "
+            f"naming {BRIDGE_LIBRARY}, so this case cannot tell the runner's "
+            "path from the environment's (the loader no longer needs it)",
+            outputs=[
+                ("AUSTRAL STDOUT", stripped.stdout.decode("utf-8")),
+                ("AUSTRAL STDERR", stripped_stderr),
+                ("EXPECTED IN STDERR", BRIDGE_LIBRARY),
             ],
         )
 
