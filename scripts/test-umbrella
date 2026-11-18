@@ -59,6 +59,7 @@ REQUIRED_CASES = {
         "SUITE_UMBRELLA_CARGO",
         "SUITE_SCALAR_ABI",
         "SUITE_UMBRELLA_INTERFACE",
+        "SUITE_UMBRELLA_SCALARS",
         "SUITE_PROCESS",
     ),
     "capability": ("HAR02",),
@@ -123,6 +124,16 @@ SUITES = {
         os.path.join(ROOT, "umbrella", "Cargo.toml"),
         ["--test", "interface"],
         6,
+        False,
+    ),
+    # U11 (ABI04/ABI05): the generated wrapper's values. The two tests build a
+    # `cdylib` from the declared targets plus the rendered wrappers, load it, and
+    # compare every result to a direct Rust call by bits; the second test is the
+    # negative control (a float cast through an i64 loses `-0.0`).
+    "SUITE_UMBRELLA_SCALARS": (
+        os.path.join(ROOT, "umbrella", "Cargo.toml"),
+        ["--test", "scalar_roundtrip"],
+        2,
         False,
     ),
     # U03/U04 regression pins. The CLI suite is the parser plus the binary's

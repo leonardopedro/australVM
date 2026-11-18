@@ -523,6 +523,35 @@ ABI, so the module stopped compiling (the gate reported `cps-corpus: [gap]
 examples/ffi compiled no function`). Adapter mediation is now scoped to `rs_*`
 imports — the Rust-interop contract — and the gap disappeared.
 
+### U11.2 — the wrapper's *values*, measured against direct Rust calls
+
+`umbrella/tests/scalar_roundtrip.rs` turns the descriptor into a running pair: it
+writes a Rust library that exports the five declared targets (`#[export_name]`,
+because the wrapper declares the same names in `extern "C"`), appends the wrapper
+`render_wrapper` generates for each descriptor (one module per wrapper — the
+generator writes a file per adapter, and each starts with the same `use`),
+compiles the lot into a `cdylib`, loads it with the platform loader, and calls
+both sides: the target as Rust declares it (`f64`, `i64`, `bool`) and the
+wrapper with `u64` words built by the bridge's own `encode`.
+
+Every result is compared **by bits**, and the cases are chosen so a plausible
+wrong encoder fails: `-0.0` (a numeric cast drops the sign), `rs_sub` called with
+both orders (a commuted pair returns a different value), `0.0/0.0` and
+`1.0/0.0` (NaN and infinity survive the word), `rs_narrow(-7)` (a negative
+`Int32` sign-extends), and `rs_toggle(true)` (a `Bool` word is 0 or 1). NaN is
+compared to the direct call's bits rather than a constant, because the payload is
+the implementation's and the claim is only that the word carries it.
+
+The second test is the failure oracle: a wrapper whose result leaves through
+`result as i64 as f64` still compiles and still returns `-10.0` for
+`rs_scale(-2.5, 4)`, and loses only the sign of zero — so the bit assertion is
+what has to catch it, and the test pins that the mutation really does return
+`+0.0` (otherwise the control has stopped discriminating).
+
+**Measured.** `scripts/test-umbrella --case SUITE_UMBRELLA_SCALARS --case
+SUITE_UMBRELLA_INTERFACE` → 2/2 pass (2 and 6 tests); the harness counts are
+pinned in the same `SUITES` table.
+
 **Limit.** The compiler emits the descriptor; umbrella does not yet consume it
 during a build to generate and compile the wrapper. That is the next wiring step,
-and what the golden makes safe to do.
+and what the golden and this roundtrip make safe to do.
