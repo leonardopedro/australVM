@@ -18,6 +18,23 @@ from concurrent.futures import ProcessPoolExecutor, Future
 # The `test-programs/` directory.
 DIR: str = "test-programs/"
 
+# `./austral` links the cranelift bridge as a shared library. Callers used to
+# have to export `LD_LIBRARY_PATH` themselves; without it every fixture died at
+# the loader with `libaustral_cranelift_bridge.so: cannot open shared object
+# file`, which says nothing about the fixture. The runner now finds the bridge
+# itself: both the tree root and the bridge's release directory, ahead of
+# whatever the caller already had (a caller's entry stays usable, it just does
+# not have to carry ours).
+_ROOT: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_BRIDGE_DIRS: list[str] = [
+    _ROOT,
+    os.path.join(_ROOT, "safestos", "cranelift", "target", "release"),
+]
+os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
+    _BRIDGE_DIRS
+    + ([os.environ["LD_LIBRARY_PATH"]] if os.environ.get("LD_LIBRARY_PATH") else [])
+)
+
 
 #
 # Error Reporting
