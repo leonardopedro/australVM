@@ -1,0 +1,23 @@
+-- gpu_plan.mm1 — proofs for mm0/proof_chain/gpu_plan.mm0 (PC06).
+--
+-- Assembled after `relation.mm1` by `scripts/pc06-obligations`. Both theorems
+-- are one application of PC03's `compose_bound`; the second is the same
+-- application at `u256`, which is what makes the plan bound a parameter of
+-- the shared theorem rather than a per-artifact restatement.
+
+term plan_size: u32;
+term plan_index (gid: u32): u32;
+term u256: u32;
+
+def edge_plan_flat (i j: u32): Prop = $ ueq i j $;
+def edge_plan_slot (j t: u32): Prop = $ ueq j t $;
+
+pub theorem plan_write_bound (n i j t: u32)
+    (h1: $ edge_plan_flat i j $) (h2: $ edge_plan_slot j t $)
+    (hb: $ ule i n $): $ ule t n $
+  = '(compose_bound (h1) (h2) (hb));
+
+pub theorem plan_write_bound_256 (i j t: u32)
+    (h1: $ edge_plan_flat i j $) (h2: $ edge_plan_slot j t $)
+    (hb: $ ule i u256 $): $ ule t u256 $
+  = '(compose_bound (h1) (h2) (hb));

@@ -1,0 +1,10 @@
+module JobsDemo is
+    """
+    Run one job through `stdlib/gpu/Jobs` and return the sum of the result
+    bytes, or a negative status. The deployment bundle and adapter are selected
+    outside the module (`AVM_GPU_BUNDLE`, `adapter_index = -1`).
+    """
+    function compute(): Int64;
+
+    function main(): ExitCode;
+end module.

@@ -1,0 +1,48 @@
+-- G14: an Austral host module using the manifest-gated GPU service.
+--
+-- The service exports are ordinary `rs_*` foreign symbols: the JIT's
+-- `check_call_permission` gates them through `module.toml`, exactly like
+-- `uk_*` and `uz_*`. The deployment selects the bundle with `AVM_GPU_BUNDLE`,
+-- so no path or byte-buffer layout crosses this ABI.
+--
+-- `compute` returns the service's checksum for the deployment bundle, or the
+-- negative status code. A missing grant fails at JIT compile time, before
+-- `rs_gpu_open` runs.
+
+pragma Unsafe_Module;
+
+module body GpuService is
+    pragma Foreign_Import(External_Name => "rs_gpu_open");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_gpu_open(
+        require_hardware: Int64,
+        adapter_index: Int64
+    ): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_run");
+    pragma Rust_Ownership(Params => "borrowed, borrowed, borrowed", Return => "owned");
+    function rs_gpu_run(handle: Int64, n: Int64, seed: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_close");
+    pragma Rust_Ownership(Params => "borrowed", Return => "owned");
+    function rs_gpu_close(handle: Int64): Int64 is end;
+
+    function compute(): Int64 is
+        let handle: Int64 := rs_gpu_open(1, -1);
+        if handle > 0 then
+            let sum: Int64 := rs_gpu_run(handle, 8, 0);
+            let closed: Int64 := rs_gpu_close(handle);
+            if closed = 0 then
+                return sum;
+            else
+                return closed;
+            end if;
+        else
+            return handle;
+        end if;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

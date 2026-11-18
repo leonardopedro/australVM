@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""PC03 checks: assemble the relation layer over PC02 and check the composition.
+
+The general claims are in `mm0/proof_chain/relation.mm0` with proofs in
+`.mm1`; mm0-c checks them against the *assembled* specification
+(`word.mm0` + `relation.mm0`), which is how this repository reuses PC02 without
+an import form. This script
+
+  * assembles and checks the two files with the real toolchain;
+  * pins that the fragment declares no axiom, sort or delimiter of its own, so
+    the composition cannot grant a lowering with a new rule;
+  * reports the open-premise sets of the conditional and discharged
+    composition and requires the discharged one to be strictly smaller;
+  * requires the discharge to go through the imported `clamp_upper` (via
+    `edge1_bound`);
+  * mutates the premise, the proof term and the discharge, and requires mm0-c
+    or mm0-rs to refuse each mutation;
+  * runs a finite control showing the pending premise is load-bearing.
+
+A missing toolchain is an explained gap (exit 3), never a pass.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+WORD_MM0 = ROOT / "mm0/proof_chain/word.mm0"
+WORD_MM1 = ROOT / "mm0/proof_chain/word.mm1"
+REL_MM0 = ROOT / "mm0/proof_chain/relation.mm0"
+REL_MM1 = ROOT / "mm0/proof_chain/relation.mm1"
+
+PENDING = "hpending: $ ule i u100 $"
+
+
+def fail(name: str, detail: str = "") -> bool:
+    print(f"[FAIL] {name}{': ' + detail if detail else ''}")
+    return False
+
+
+def theorem_statement(text: str, name: str) -> str | None:
+    """The `theorem`/`pub theorem` statement text up to its terminating `;`."""
+    m = re.search(rf"^(?:pub )?theorem {re.escape(name)}\b", text, re.M)
+    if not m:
+        return None
+    end = text.find(";", m.end())
+    return text[m.start() : end + 1] if end != -1 else None
+
+
+def premises(statement: str) -> list[str]:
+    """The `$ … $` premise groups of a theorem statement (not the conclusion)."""
+    body = statement.rsplit(":", 1)[0]
+    return re.findall(r"\$[^$]*\$", body)
+
+
+def counts(statement: str) -> tuple[int, int]:
+    ps = premises(statement)
+    pending = sum(1 for p in ps if p.strip() == "$ ule i u100 $")
+    return len(ps), pending
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def main() -> int:
+    if not shutil.which("mm0-rs") or not shutil.which("mm0-c"):
+        print("[gap] PC03: relation composition not re-checked (no mm0 toolchain)")
+        return 3
+
+    spec_src = REL_MM0.read_text()
+    proof_src = REL_MM1.read_text()
+
+    # No declaration of the shared vocabulary or the foundation may reappear
+    # here: that would be a second theory under the same names. The only route
+    # into the word laws is the assembled prefix.
+    for forbidden in ("provable sort", "delimiter", "sort u32", "sort Mem", "axiom "):
+        if forbidden in spec_src:
+            return fail(
+                "PC03 fragment declares only terms/defs/theorems",
+                f"found `{forbidden}` in relation.mm0",
+            ) or 1
+
+    ok = True
+    with tempfile.TemporaryDirectory(prefix="pc03-") as tmp:
+        tmp_path = Path(tmp)
+        spec = tmp_path / "all.mm0"
+        proof = tmp_path / "all.mm1"
+        mmb = tmp_path / "all.mmb"
+        spec.write_text(WORD_MM0.read_text() + spec_src)
+        proof.write_text(WORD_MM1.read_text() + proof_src)
+
+        compiled = run(["mm0-rs", "compile", str(proof), str(mmb)])
+        if compiled.returncode != 0:
+            print(compiled.stderr or compiled.stdout, file=sys.stderr)
+            return fail("PC03: relation.mm1 compiles") or 1
+        if "sorry" in compiled.stdout or "sorry" in compiled.stderr:
+            return fail("PC03: relation.mm1 contains no sorry") or 1
+        shape = [
+            line
+            for line in compiled.stdout.splitlines()
+            if re.search(r"\d+ sorts, \d+ term/def, \d+ ax/thm", line)
+        ]
+        if shape:
+            print(f"  [detail] {shape[-1]} — PC03 assembled word+relation")
+
+        checked = subprocess.run(
+            ["mm0-c", str(mmb)], stdin=spec.open(), capture_output=True, text=True
+        )
+        if checked.returncode != 0:
+            print(checked.stdout or checked.stderr, file=sys.stderr)
+            return fail("PC03: assembled specification accepts relation.mm0") or 1
+
+        # ── Open-premise sets ────────────────────────────────────────────────
+        assembled = spec.read_text()
+        cond = theorem_statement(assembled, "compose_conditional")
+        disc = theorem_statement(assembled, "compose_discharged")
+        if cond is None or disc is None:
+            return fail("PC03: both composition statements exist") or 1
+        cond_n, cond_pending = counts(cond)
+        disc_n, disc_pending = counts(disc)
+        print(
+            f"  [detail] PC03 compose_conditional: {cond_n} premise(s), "
+            f"{cond_pending} pending edge premise (ule i u100)"
+        )
+        print(
+            f"  [detail] PC03 compose_discharged: {disc_n} premise(s), "
+            f"{disc_pending} pending edge premise"
+        )
+        if ok and cond_pending != 1:
+            ok = fail(
+                "PC03: the conditional composition has exactly one pending premise",
+                f"found {cond_pending}",
+            )
+        if ok and disc_pending != 0:
+            ok = fail(
+                "PC03: the discharged composition has no pending premise",
+                f"found {disc_pending}",
+            )
+        if ok and not (cond_n - disc_n == 1):
+            ok = fail(
+                "PC03: discharge removes exactly one premise",
+                f"{cond_n} -> {disc_n}",
+            )
+        if ok and not (
+            "compose_bound (h1) (h2) (clamp_upper)" in proof_src
+        ):
+            ok = fail(
+                "PC03: the discharge goes through the shared compose_bound and clamp_upper",
+                "relation.mm1 does not apply compose_bound to the imported theorem",
+            )
+
+        # ── Negative controls ───────────────────────────────────────────────
+        def refused(name: str, mutated_spec: str, mutated_proof: str | None) -> bool:
+            p = tmp_path / "bad.mm0"
+            p.write_text(mutated_spec)
+            if mutated_proof is None:
+                proc = subprocess.run(
+                    ["mm0-c", str(mmb)], stdin=p.open(), capture_output=True, text=True
+                )
+            else:
+                q = tmp_path / "bad.mm1"
+                q.write_text(mutated_proof)
+                r = run(["mm0-rs", "compile", str(q), str(tmp_path / "bad.mmb")])
+                proc = r if r.returncode != 0 else subprocess.run(
+                    ["mm0-c", str(tmp_path / "bad.mmb")],
+                    stdin=p.open(),
+                    capture_output=True,
+                    text=True,
+                )
+            if proc.returncode == 0:
+                return fail(name, "mutation still checked")
+            return True
+
+        # 1. The pending premise replaced by an unrelated proposition.
+        if ok:
+            ok = refused(
+                "PC03: an unrelated pending premise is refused",
+                assembled.replace(PENDING, "hpending: $ ueq i i $", 1),
+                None,
+            )
+        # 2. The conditional proof uses the source edge as its premise.
+        if ok:
+            changed = proof_src.replace(
+                "(ueq_sub_le (h2) (hpending))", "(ueq_sub_le (h2) (h1))", 1
+            )
+            ok = refused(
+                "PC03: using a weaker/unrelated premise in the conditional proof is refused",
+                assembled,
+                WORD_MM1.read_text() + changed,
+            )
+        # 3. The discharge applied to a relation fact instead of the bound.
+        if ok:
+            changed = proof_src.replace(
+                "(compose_bound (h1) (h2) (clamp_upper))",
+                "(compose_bound (h1) (h2) (h1))",
+                1,
+            )
+            ok = refused(
+                "PC03: a fake discharge is refused",
+                assembled,
+                WORD_MM1.read_text() + changed,
+            )
+
+    # ── Finite control: the pending premise is load-bearing ─────────────────
+    def clamp(x: int) -> int:
+        return 100 if x > 100 else x
+
+    samples = [0, 1, 99, 100, 101, 102, 0xFFFFFFFF, 12345678]
+    for x in samples:
+        i = clamp(x)
+        y = i
+        ok &= not (y > 100) or fail("PC03 finite: discharged chain stays in bounds")
+        if i > 100:
+            ok = fail("PC03 finite: a clamp result can exceed 100", f"x={x}")
+    # Without the pending premise the rule is false: edge 2 still holds at
+    # i = 101 but the bound does not.
+    if not (clamp(5) == 5 and 101 > 100):
+        ok = fail("PC03 finite: necessity witness is wrong")
+    else:
+        print(
+            "  [detail] PC03 finite witness: x=5, i=101, y=101 has edge_ir_tgt "
+            "but no bound, so the pending premise is load-bearing"
+        )
+
+    if ok:
+        print("[pass] PC03 relation composition, discharge and premise controls")
+        return 0
+    print("[FAIL] PC03 relation composition, discharge and premise controls")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

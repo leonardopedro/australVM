@@ -1,0 +1,13 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    { "type": "text", "content": "Expected a value of type " },
+    { "type": "type", "content": "CompletedResult" },
+    { "type": "text", "content": ", but got a value of type " },
+    { "type": "type", "content": "InFlightJob" },
+    { "type": "text", "content": "." }
+  ],
+  "span": null,
+  "context": null
+}

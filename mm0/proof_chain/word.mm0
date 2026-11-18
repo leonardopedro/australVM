@@ -1,0 +1,114 @@
+-- word.mm0 — PC02's shared word and map-memory semantics.
+--
+-- layer: PC02 semantics
+-- status: theory — the word/order/map foundation is declared here; the clamp
+--   result bounds and the map read-after-write laws are theorems in
+--   `mm0/proof_chain/word.mm1`.
+--
+-- WHAT THIS FILE IS. The GPU proof chain needs one semantic domain that the
+-- source clamp, the KernelIR and the shader model can all be interpreted in.
+-- This file provides that domain for the admitted fragment: a 32-bit word
+-- carrier, its total order, and a one-buffer map memory. It is deliberately
+-- smaller than a full u32 library: no overflow, no bit operations and no
+-- width arithmetic are claimed here. Those belong to the passes that emit and
+-- check them, and a missing library is kept open rather than hidden by an
+-- application axiom (PLAN_proof_chain.md PC02).
+--
+-- THE WORD CARRIER. `u32` is an abstract total order with a least element
+-- `uzero`, meet and join. The finite control `scripts/pc02-controls` interprets
+-- it over the actual 32-bit unsigned values and checks that meet/join agree
+-- with min/max at the admitted boundary points. The general proof below is
+-- parametric in every carrier satisfying these laws, so a changed numeric
+-- model must change the interpretation, not just the theorem name.
+--
+-- WHY MEET/JOIN RATHER THAN `if`. `Pointwise.clamp` is
+--     if x > 100 then 100 else x
+-- over Nat32. On a total order its denotation is `min x 100`, which is
+-- `umeet x u100` below. Defining the denotation this way makes the comparison
+-- direction visible in the definition: the reversed comparison is
+-- `max x 100` (the finite control's counterexample), not another name for the
+-- same function. The order laws are the only trusted word facts used by the
+-- clamp proof.
+--
+-- THE MAP MEMORY. `Mem` is the admitted map plan: one value per 32-bit index,
+-- no capacity arithmetic and no aliasing construction. `mput` writes one cell;
+-- `mget_put_same` defines a write's own cell and `mget_put_other` defines its
+-- frame under the explicit `uindep` side condition. The guard and the launch
+-- bound are PC05/PC06 obligations; this file does not assume them.
+
+provable sort Prop;
+delimiter $ ( ) $;
+
+-- ── Word carrier and order ──────────────────────────────────────────────
+sort u32;
+
+term ule (x y: u32): Prop;
+term ueq (x y: u32): Prop;
+
+axiom ule_refl (x: u32): $ ule x x $;
+axiom ueq_refl (x: u32): $ ueq x x $;
+axiom ueq_symm (x y: u32): $ ueq x y $ > $ ueq y x $;
+axiom ueq_trans (x y z: u32): $ ueq x y $ > $ ueq y z $ > $ ueq x z $;
+
+-- Equality rewrites the left argument of `ule`. The clamp proof needs the
+-- orientation `x = y, x <= z  ⊢  y <= z`; the reverse is `ueq_symm`.
+axiom ueq_sub_le (x y z: u32): $ ueq x y $ > $ ule x z $ > $ ule y z $;
+
+term umeet (x y: u32): u32;
+term ujoin (x y: u32): u32;
+
+axiom umeet_lb_l (x y: u32): $ ule (umeet x y) x $;
+axiom umeet_lb_r (x y: u32): $ ule (umeet x y) y $;
+axiom umeet_greatest (x y z: u32): $ ule z x $ > $ ule z y $ > $ ule z (umeet x y) $;
+
+axiom ujoin_ub_l (x y: u32): $ ule x (ujoin x y) $;
+axiom ujoin_ub_r (x y: u32): $ ule y (ujoin x y) $;
+axiom ujoin_lub (x y z: u32): $ ule x z $ > $ ule y z $ > $ ule (ujoin x y) z $;
+
+-- The two constants the admitted clamp mentions. `u100` is the source
+-- literal 100; `uzero` is the least word, which is also the lower bound the
+-- source function is required to preserve.
+term uzero: u32;
+term u100: u32;
+axiom uzero_le (x: u32): $ ule uzero x $;
+
+-- ── Source clamp denotation ─────────────────────────────────────────────
+-- The source function `Pointwise.clamp` takes one Nat32 and returns 100 for
+-- x > 100, otherwise x. Over a total order that is the meet with 100.
+def source_clamp (x: u32): u32 = $ umeet x u100 $;
+
+-- PC02's first source property, over every word in the carrier. The upper
+-- bound is the meet's right lower bound; the lower bound is the meet's
+-- greatest-lower-bound law applied to `uzero`, which is below both arguments.
+theorem clamp_upper (x: u32): $ ule (source_clamp x) u100 $;
+theorem clamp_lower (x: u32): $ ule uzero (source_clamp x) $;
+
+-- ── Map memory ──────────────────────────────────────────────────────────
+sort Mem;
+term mget (m: Mem) (i: u32): u32;
+term mput (m: Mem) (i: u32) (v: u32): Mem;
+
+-- `uindep i j` is the model's distinct-index side condition. It is a
+-- predicate, not arithmetic: this layer does not need to decide it, and PC05
+-- supplies the actual index relation.
+term uindep (i j: u32): Prop;
+
+axiom mget_put_same (m: Mem) (i: u32) (v: u32):
+  $ ueq (mget (mput m i v) i) v $;
+axiom mget_put_other (m: Mem) (i j: u32) (v: u32):
+  $ uindep i j $ > $ ueq (mget (mput m i v) j) (mget m j) $;
+
+-- A write is visible at its own index, and invisible at an independent one.
+-- These are the two map laws every admitted lowering consumes; the toy
+-- capacity model in `mm0/store_projection_toy.mm0` is a different memory and
+-- is not silently identified with this one.
+theorem map_read_after_write (m: Mem) (i: u32) (v: u32):
+  $ ueq (mget (mput m i v) i) v $;
+theorem map_write_frame (m: Mem) (i j: u32) (v: u32) (h: $ uindep i j $):
+  $ ueq (mget (mput m i v) j) (mget m j) $;
+
+-- A two-step frame: a write at `i`, then a read at an independent `j`, still
+-- sees the pre-write value. This is the shape the source→IR→shader chain
+-- composes, stated here so PC03 can use it without restating the frame law.
+theorem map_write_then_read (m: Mem) (i j: u32) (v: u32) (h: $ uindep i j $):
+  $ ueq (mget (mput m i v) j) (mget m j) $;

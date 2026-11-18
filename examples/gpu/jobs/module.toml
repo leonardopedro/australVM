@@ -1,0 +1,20 @@
+# G15: the normal manifest gate for the v2 job/buffer surface.
+#
+# These are ordinary `rs_*` extern symbols: the bridge's
+# `check_call_permission` compares each JIT call against this list before the
+# symbol is resolved. The linear `Jobs` wrappers call only the entries below
+# (`open`/`close` are v1 symbols); removing one must fail with UK-4001 before
+# the corresponding operation runs.
+[module]
+name = "GpuJobs"
+
+[grants]
+kernel = [
+    "rs_gpu_open",
+    "rs_gpu_close",
+    "rs_gpu_buffer_new",
+    "rs_gpu_buffer_free",
+    "rs_gpu_submit",
+    "rs_gpu_poll",
+    "rs_gpu_result",
+]

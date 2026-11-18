@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""G12: bounded GPU gate with explicit source / optional / required modes.
+
+The modes are deliberately not one "verified" value:
+
+  source    frontend subset, C/IR differential corpus and Naga validation of
+            the generated shader. Needs no GPU and no `device` build.
+  optional  source lane plus a device probe. A missing adapter or a software
+            adapter is printed as `[gap]` and exits 0; it never becomes a
+            hardware pass.
+  required  source lane plus a physical adapter probe and the full hardware
+            corpus/control run (`scripts/gpu-hardware-check`). Every gap is
+            converted into exit 1; there is no skip or fallback. Adding
+            `--require-proof` also makes a missing Why3 engine or an unproved
+            G13 obligation fatal.
+
+Every run prints separate result fields:
+
+  source=pass|fail
+  shader-validation=pass|fail|not-run
+  device-kind=not-probed|unavailable|physical|software
+  execution=not-run|pass|fail
+  proof=pass|fail|gap (Why3 memory-plan obligations; MM0 stays a separate gap)
+
+Usage:
+  scripts/check-gpu source
+  scripts/check-gpu optional
+  scripts/check-gpu required
+
+Options:
+  --compiler PATH   Austral compiler (default `_build/default/bin/austral.exe`)
+  --checker PATH    `avm-gpu` binary; required mode needs `--features device`
+  --require-proof   treat a missing Why3 engine or unproved obligation as
+                    failure (the required proof profile)
+
+Exit codes: 0 pass/gap as the mode allows, 1 gate failure, 2 usage.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "examples/gpu/pointwise"
+SOURCE_CHECK = ROOT / "scripts/gpu-source-check"
+HARDWARE_CHECK = ROOT / "scripts/gpu-hardware-check"
+DEFAULT_COMPILER = ROOT / "_build/default/bin/austral.exe"
+DEFAULT_CHECKER = ROOT / "safestos/gpu/target/debug/avm-gpu"
+
+
+def env_with_bridge(checker: Path) -> dict:
+    env = os.environ.copy()
+    bridge = ROOT / "safestos/cranelift/target/release"
+    env["LD_LIBRARY_PATH"] = f"{ROOT}:{bridge}:" + env.get("LD_LIBRARY_PATH", "")
+    env["AUSTRAL_GPU_CHECKER"] = str(checker)
+    return env
+
+
+def run(cmd: list[str], env: dict, timeout: int = 900):
+    return subprocess.run(
+        cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout
+    )
+
+
+def field(name: str, value: str) -> None:
+    print(f"{name}={value}")
+
+
+def source_lane(compiler: Path, checker: Path) -> tuple[bool, bool]:
+    """Runs the C/IR corpus and then validates one freshly emitted shader."""
+    env = env_with_bridge(checker)
+    proc = run(
+        [
+            sys.executable,
+            str(SOURCE_CHECK),
+            "--compiler",
+            str(compiler),
+            "--checker",
+            str(checker),
+        ],
+        env,
+    )
+    for line in (proc.stdout + proc.stderr).splitlines():
+        if line.startswith(("[pass]", "[fail]", "[gap]")):
+            print(line)
+    if proc.returncode != 0:
+        print("[fail] GPU source lane failed; see gpu-source-check output above")
+        return False, False
+    print("[pass] GPU source lane: C/IR corpus and mutation controls")
+
+    with tempfile.TemporaryDirectory(prefix="avm-check-gpu-") as td:
+        bundle = Path(td) / "identity.avkg"
+        compile_proc = run(
+            [
+                str(compiler),
+                "compile",
+                f"{FIXTURE/'Pointwise.aui'},{FIXTURE/'Pointwise.aum'}",
+                "--target-type=wgsl",
+                "--entrypoint=Pointwise:identity",
+                f"--output={bundle}",
+            ],
+            env,
+        )
+        if compile_proc.returncode != 0:
+            print(
+                "[fail] shader validation could not compile the fixture: "
+                f"{(compile_proc.stdout + compile_proc.stderr).strip()[:400]}"
+            )
+            return True, False
+        validate_proc = run([str(checker), "validate", str(bundle)], env)
+        if validate_proc.returncode != 0:
+            print(
+                "[fail] shader validation refused the emitted WGSL: "
+                f"{(validate_proc.stdout + validate_proc.stderr).strip()[:400]}"
+            )
+            return True, False
+        result = json.loads(validate_proc.stdout)
+        print(
+            "[pass] shader validation (Naga): "
+            f"entry {result['entry']}, wgsl {result['wgsl_sha256'][:12]}…"
+        )
+    return True, True
+
+
+def proof_lane(compiler: Path, checker: Path, required: bool) -> tuple[str, str]:
+    """Runs G13's Why3 side on a fresh identity bundle.
+
+    MM0 stays a separate `[gap]`: PC06's residual obligations
+    (`docs/proof/GPU_PLAN.md`) are not discharged for the artifact, and
+    `scripts/gpu-obligations` never turns Why3 into an MM0 pass. `required` here means the proof profile, not the hardware profile.
+    """
+    env = env_with_bridge(checker)
+    with tempfile.TemporaryDirectory(prefix="avm-gpu-proof-") as td:
+        bundle = Path(td) / "identity.avkg"
+        compile_proc = run(
+            [
+                str(compiler),
+                "compile",
+                f"{FIXTURE/'Pointwise.aui'},{FIXTURE/'Pointwise.aum'}",
+                "--target-type=wgsl",
+                "--entrypoint=Pointwise:identity",
+                f"--output={bundle}",
+            ],
+            env,
+        )
+        if compile_proc.returncode != 0:
+            return "fail", (
+                "could not compile the obligation fixture: "
+                f"{(compile_proc.stdout + compile_proc.stderr).strip()[:400]}"
+            )
+        cmd = [sys.executable, str(ROOT / "scripts/gpu-obligations"),
+               "check", str(bundle)]
+        if required:
+            cmd.append("--require-proof")
+        proc = run(cmd, env)
+        text = proc.stdout + proc.stderr
+        for line in text.splitlines():
+            if line.startswith(("[pass] Why3", "[gap] Why3", "[fail] Why3",
+                                "[pass] emitted", "[pass] Why3 memory")):
+                print(line)
+        if proc.returncode == 0 and "[pass] Why3" in text:
+            return "pass", "Why3 memory-plan goals valid"
+        if proc.returncode == 0:
+            detail = "Why3 unavailable or inconclusive"
+            for line in text.splitlines():
+                if line.startswith("[gap] Why3"):
+                    detail = line.split(":", 1)[-1].strip()
+            return "gap", detail
+        return "fail", text.strip()[-600:]
+
+
+def probe_device(checker: Path, required: bool) -> tuple[str, dict | None]:
+    """Returns (device-kind, payload); device-kind is unavailable/software/physical."""
+    proc = run([str(checker), "probe"], env_with_bridge(checker))
+    text = proc.stdout.strip()
+    try:
+        payload = json.loads(text) if text else None
+    except json.JSONDecodeError:
+        payload = None
+    if proc.returncode == 77:
+        print(f"[gap] device probe: {payload.get('message', text) if payload else text}")
+        return "unavailable", payload
+    if proc.returncode != 0:
+        print(f"[fail] device probe failed: {text or proc.stderr.strip()}")
+        return "unavailable", payload
+    if payload is None or "device" not in payload:
+        print(f"[fail] device probe returned unexpected output: {text[:400]}")
+        return "unavailable", payload
+    kind = payload.get("device_kind", "unknown")
+    if kind == "physical":
+        device = payload["device"]
+        print(
+            "[info] device: "
+            f"{device['name']} ({device['backend']}, {device['device_type']}, "
+            f"vendor {device['vendor']})"
+        )
+        return "physical", payload
+    print(
+        f"[gap] adapter is {kind}, not a physical GPU; it cannot satisfy required mode"
+    )
+    return "software" if kind == "software" else kind, payload
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("mode", choices=["source", "optional", "required"])
+    ap.add_argument("--compiler", default=str(DEFAULT_COMPILER))
+    ap.add_argument("--checker", default=str(DEFAULT_CHECKER))
+    ap.add_argument("--require-proof", action="store_true")
+    args = ap.parse_args()
+
+    compiler = Path(args.compiler)
+    checker = Path(args.checker)
+    print(f"[info] mode: {args.mode}")
+    if not compiler.exists():
+        print(f"[fail] compiler not built: {compiler}")
+        field("source", "fail")
+        return 1
+    if not checker.exists():
+        print(f"[fail] checker not built: {checker}")
+        field("source", "fail")
+        return 1
+
+    source_ok, shader_ok = source_lane(compiler, checker)
+    field("source", "pass" if source_ok else "fail")
+    field("shader-validation", "pass" if shader_ok else "fail")
+    if not source_ok or not shader_ok:
+        field("device-kind", "not-probed")
+        field("execution", "not-run")
+        field("proof", "gap (source lane failed before proof emission)")
+        return 1
+
+    proof_status, proof_detail = proof_lane(
+        compiler, checker, required=args.require_proof
+    )
+    field("proof", f"{proof_status} ({proof_detail})")
+    if proof_status == "fail":
+        field("device-kind", "not-probed")
+        field("execution", "not-run")
+        print("[fail] GPU proof lane failed; see the obligation output above")
+        return 1
+    if proof_status == "gap" and args.require_proof:
+        field("device-kind", "not-probed")
+        field("execution", "not-run")
+        print("[fail] GPU proof-required profile: Why3 did not discharge the obligations")
+        return 1
+
+    if args.mode == "source":
+        field("device-kind", "not-probed")
+        field("execution", "not-run")
+        print("[pass] GPU source mode complete (no hardware claim)")
+        return 0
+
+    kind, _ = probe_device(checker, required=args.mode == "required")
+    field("device-kind", kind)
+
+    if args.mode == "optional":
+        field("execution", "not-run")
+        if kind == "physical":
+            print("[pass] GPU optional mode: source lane + physical adapter probe")
+        else:
+            print("[gap] GPU optional mode: source lane passed, hardware not executed")
+        return 0
+
+    # required
+    if kind != "physical":
+        field("execution", "fail")
+        print("[fail] GPU required mode: a physical adapter is required; no skip")
+        return 1
+
+    proc = run(
+        [
+            sys.executable,
+            str(HARDWARE_CHECK),
+            "--compiler",
+            str(compiler),
+            "--checker",
+            str(checker),
+        ],
+        env_with_bridge(checker),
+    )
+    for line in (proc.stdout + proc.stderr).splitlines():
+        if line.startswith(("[pass]", "[fail]", "[gap]", "[info]")):
+            print(line)
+    if proc.returncode == 77:
+        print("[fail] GPU required mode: hardware corpus reported a gap")
+        field("execution", "fail")
+        return 1
+    if proc.returncode != 0:
+        print("[fail] GPU required mode: hardware corpus/control failure")
+        field("execution", "fail")
+        return 1
+    field("execution", "pass")
+    print("[pass] GPU required mode: source lane + physical-device corpus")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,30 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "buffer" },
+    { "type": "text", "content": " has already been consumed." }
+  ],
+  "span": {
+    "filename": "test-programs/suites/024-gpu-jobs/001-use-after-submit/Test.aum",
+    "startp": { "line": 28, "column": 24 },
+    "end": { "line": 28, "column": 75 }
+  },
+  "context": [
+    [
+      26,
+      "                        -- `buffer` was moved into submit; this is the"
+    ],
+    [
+      27,
+      "                        -- use-after-submit the linear type must reject."
+    ],
+    [
+      28,
+      "                        let status: Int64 := free_buffer(&context, buffer);"
+    ],
+    [ 29, "                        let closed: Int64 := close(context);" ],
+    [ 30, "                        return ExitSuccess();" ]
+  ]
+}

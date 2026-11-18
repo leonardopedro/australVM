@@ -1,0 +1,15 @@
+[package]
+name = "avm-gpu-service-provider"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The provider is deliberately thin: the ABI lives in the GPU crate, and the
+# `service` feature adds the `rs_gpu_*` exports. `device` is optional; without
+# it a required-hardware request returns the unavailable status instead of
+# evaluating the reference kernel.
+avm-gpu = { path = "../../../../safestos/gpu", features = ["service", "device"] }

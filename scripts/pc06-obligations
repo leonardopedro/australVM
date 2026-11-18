@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""PC06: apply the PC03 composition to G13's memory plan.
+
+The composition (`compose_bound`) is PC03's shared theorem. This script
+
+  * assembles `word.mm0` + `relation.mm0` + `gpu_plan.mm0` and checks the
+    proofs with mm0-rs/mm0-c;
+  * requires the shared theorem to be applied by the clamp artifact and by the
+    GPU plan, and the plan bound to be a parameter (`n` vs `u256`), not a
+    restated claim;
+  * refuses a forged `-- proves:` record and an artifact that declares an
+    `axiom`;
+  * prints the plan's residual obligations with their evidence class, and
+    cross-checks them with `docs/proof/GPU_PLAN.md` and the G13 generator's own
+    obligation numbering.
+
+`--plan PATH` additionally reads an emitted `gpu_memory.mm0` and requires it to
+be statements-only with the same five obligation slots. Without it the residual
+table is still printed, but no bundle artifact is claimed to match.
+
+Exit 3 (gap) when the MM0 toolchain is absent: the composition is not reported
+as checked. Nothing here discharges `gpu_memory.mm0`; that artifact stays
+`[gap]` until its residual premises are proved.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+CHAIN = ["word", "relation", "gpu_plan"]
+FRAGMENT = ROOT / "mm0/proof_chain/gpu_plan.mm0"
+GEN = ROOT / "lib/gpu/Gpu_obligations.ml"
+DOC = ROOT / "docs/proof/GPU_PLAN.md"
+
+# G13's memory-plan obligations, in the generator's own numbering. The
+# composition consumes O2 as `plan_write_bound`'s `hb`; the rest stay residual.
+RESIDUALS = [
+    ("O1", "generated flat index is representable",
+     "Why3 goal index_representable (separate route, not MM0)"),
+    ("O2", "guard implies the element/index bound",
+     "Why3 goal guard_implies_bound; consumed as plan_write_bound's hb"),
+    ("O3", "active distinct invocations write distinct indices",
+     "Why3 goal distinct_active_writes + runtime distinct invocation ids"),
+    ("O4", "every input binding has extent n",
+     "runtime premise recorded in the manifest (trusted at bind time)"),
+    ("O5", "the fresh output does not alias an input",
+     "runtime allocation premise (trusted; no alias construction in v1)"),
+]
+
+
+def fail(name: str, detail: str = "") -> bool:
+    print(f"[FAIL] {name}{': ' + detail if detail else ''}")
+    return False
+
+
+def theorem_statement(text: str, name: str) -> str | None:
+    m = re.search(rf"^(?:pub )?theorem {re.escape(name)}\b", text, re.M)
+    if not m:
+        return None
+    end = text.find(";", m.end())
+    return text[m.start() : end + 1] if end != -1 else None
+
+
+def premises(statement: str) -> list[str]:
+    body = statement.rsplit(":", 1)[0]
+    return re.findall(r"\$[^$]*\$", body)
+
+
+def normalize(statement: str) -> str:
+    return re.sub(r"\s+", " ", statement).strip()
+
+
+def run(cmd: list[str], stdin=None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, stdin=stdin, capture_output=True, text=True)
+
+
+def plan_checks(plan: Path) -> bool:
+    """The emitted G13 artifact: statements only, five slots, no forged proof."""
+    ok = True
+    text = plan.read_text()
+    declarations = re.findall(r"^(theorem|axiom)\s+(\w+)", text, re.M)
+    proves = re.findall(r"^-- proves:\s*(\d+)\s+theorems?$", text, re.M)
+    if not proves:
+        return fail("PC06 plan: the artifact records its theorem count")
+    claimed = int(proves[0])
+    if claimed != len(declarations):
+        ok = fail(
+            "PC06 plan: the theorem count matches the declarations",
+            f"claims {claimed}, declares {len(declarations)}",
+        )
+    if declarations and not ok:
+        return False
+    slots = {int(n) for n in re.findall(r"^-- obligation (\d+):", text, re.M)}
+    if slots != {1, 2, 3, 4, 5}:
+        ok = fail(
+            "PC06 plan: the artifact carries G13's five obligation slots",
+            f"found {sorted(slots)}",
+        )
+    if "certificate: [gap]" not in text:
+        ok = fail("PC06 plan: the artifact is marked [gap], not a certificate")
+    print(f"  [detail] PC06 plan artifact: {len(declarations)} theorem(s), "
+          f"{len(slots)} obligation slot(s)")
+    return ok
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--plan", default=None,
+                    help="an emitted gpu_memory.mm0 to check against the table")
+    args = ap.parse_args()
+
+    if not (shutil.which("mm0-rs") and shutil.which("mm0-c")):
+        print("[gap] PC06: GPU plan composition not re-checked (no mm0 toolchain)")
+        return 3
+
+    fragment = FRAGMENT.read_text()
+    if re.search(r"^\s*axiom\b", fragment, re.M):
+        return fail("PC06 fragment adds no axiom") or 1
+
+    ok = True
+    with tempfile.TemporaryDirectory(prefix="pc06-") as tmp:
+        tmp_path = Path(tmp)
+        spec = tmp_path / "all.mm0"
+        proof = tmp_path / "all.mm1"
+        spec.write_text("".join((ROOT / f"mm0/proof_chain/{n}.mm0").read_text()
+                               for n in CHAIN))
+        proof.write_text("".join((ROOT / f"mm0/proof_chain/{n}.mm1").read_text()
+                                for n in CHAIN))
+        mmb = tmp_path / "all.mmb"
+        compiled = run(["mm0-rs", "compile", str(proof), str(mmb)])
+        if compiled.returncode != 0:
+            print(compiled.stderr or compiled.stdout, file=sys.stderr)
+            return fail("PC06: the plan fragment compiles") or 1
+        if "sorry" in compiled.stdout or "sorry" in compiled.stderr:
+            return fail("PC06: the plan proofs contain no sorry") or 1
+        shape = [l for l in compiled.stdout.splitlines()
+                 if re.search(r"\d+ sorts, \d+ term/def, \d+ ax/thm", l)]
+        if shape:
+            print(f"  [detail] {shape[-1]} — PC06 assembled word+relation+gpu_plan")
+        checked = run(["mm0-c", str(mmb)], stdin=spec.open())
+        if checked.returncode != 0:
+            print(checked.stdout or checked.stderr, file=sys.stderr)
+            return fail("PC06: the assembled specification accepts gpu_plan.mm0") or 1
+
+        assembled = spec.read_text()
+        proofs = proof.read_text()
+
+        # ── Reuse of the shared algorithm theorem ───────────────────────────
+        uses = {
+            "compose_discharged": "compose_bound (h1) (h2) (clamp_upper)",
+            "plan_write_bound": "compose_bound (h1) (h2) (hb)",
+            "plan_write_bound_256": "compose_bound (h1) (h2) (hb)",
+        }
+        for theorem, application in uses.items():
+            if application not in proofs:
+                ok = fail(
+                    "PC06: the shared compose_bound is reused",
+                    f"{theorem} does not apply {application!r}",
+                )
+
+        generic = theorem_statement(assembled, "plan_write_bound")
+        concrete = theorem_statement(assembled, "plan_write_bound_256")
+        if generic is None or concrete is None:
+            ok = fail("PC06: both plan bound statements exist")
+        else:
+            generic_shape = (
+                [normalize(p) for p in premises(generic)],
+                normalize(generic.rsplit(":", 1)[1]),
+            )
+            concrete_shape = (
+                [normalize(p).replace("u256", "n") for p in premises(concrete)],
+                normalize(concrete.rsplit(":", 1)[1]).replace("u256", "n"),
+            )
+            if concrete_shape != generic_shape:
+                ok = fail(
+                    "PC06: the second artifact is the same statement at a new bound",
+                    f"{concrete_shape} is not {generic_shape}",
+                )
+            else:
+                print("  [detail] PC06 reuse: compose_bound at the clamp clause, the "
+                      "plan (n) and the plan at u256")
+
+        # ── Refusal controls ────────────────────────────────────────────────
+        def refused(name: str, mutated_spec: str) -> bool:
+            p = tmp_path / "bad.mm0"
+            p.write_text(mutated_spec)
+            proc = run(["mm0-c", str(mmb)], stdin=p.open())
+            return True if proc.returncode != 0 else fail(name, "mutation still checked")
+
+        if ok:
+            ok = refused(
+                "PC06: a changed compose_bound conclusion is refused",
+                assembled.replace("$ ule y b $;", "$ ule b y $;", 1),
+            )
+        if ok:
+            ok = refused(
+                "PC06: a missing bound binder is refused",
+                assembled.replace("(hb: $ ule i n $)", "", 1),
+            )
+        if ok:
+            ok = refused(
+                "PC06: a hidden stronger precondition is refused",
+                assembled.replace("(hb: $ ule i n $)", "(hb: $ ule i uzero $)", 1),
+            )
+
+    # ── Residual obligations ────────────────────────────────────────────────
+    doc = DOC.read_text() if DOC.exists() else ""
+    documented = set(re.findall(r"^\|\s*(O\d)\s*\|", doc, re.M))
+    if documented != {r[0] for r in RESIDUALS}:
+        ok = fail(
+            "PC06: the residual table matches docs/proof/GPU_PLAN.md",
+            f"documented {sorted(documented)}",
+        )
+    generator = GEN.read_text()
+    for number, _, _ in RESIDUALS:
+        if f'"-- obligation {number[1:]}: ' not in generator:
+            ok = fail(
+                "PC06: each residual has a G13 obligation slot",
+                f"lib/gpu/Gpu_obligations.ml has no obligation {number[1:]}",
+            )
+    print("  [detail] PC06 residual obligations (not discharged by MM0):")
+    for number, claim, evidence in RESIDUALS:
+        print(f"    {number}: {claim} [{evidence}]")
+
+    # The checker's own record control (a parser self-test in the generator's
+    # format, not evidence about a bundle): a statements-only artifact with the
+    # five slots passes, and the same file claiming a theorem it does not
+    # declare is refused.
+    import contextlib, io
+    with tempfile.TemporaryDirectory(prefix="pc06-record-") as tmp:
+        good = Path(tmp) / "good.mm0"
+        body = (
+            "provable sort Prop;\ndelimiter $ ( ) $;\n"
+            "-- certificate: [gap]\n"
+            + "".join(f"-- obligation {n}: slot\n" for n in range(1, 6))
+        )
+        good.write_text("-- proves: 0 theorems\n" + body)
+        with contextlib.redirect_stdout(io.StringIO()):
+            good_ok = plan_checks(good)
+        forged = Path(tmp) / "forged.mm0"
+        forged.write_text("-- proves: 1 theorems\n" + body)
+        with contextlib.redirect_stdout(io.StringIO()):
+            forged_ok = plan_checks(forged)
+        if not good_ok:
+            ok = fail("PC06: a statements-only artifact passes the plan checks")
+        elif forged_ok:
+            ok = fail("PC06: a forged proves record is refused")
+        else:
+            print("  [detail] PC06 plan-record control: statements-only passes, "
+                  "`-- proves: 1 theorems` is refused")
+
+    if args.plan:
+        ok &= plan_checks(Path(args.plan))
+
+    if ok:
+        print("[pass] PC06 composition applied to the GPU plan; residuals stated")
+        return 0
+    print("[FAIL] PC06 composition applied to the GPU plan; residuals stated")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

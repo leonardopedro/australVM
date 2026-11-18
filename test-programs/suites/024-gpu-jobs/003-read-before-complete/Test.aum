@@ -1,0 +1,21 @@
+-- G15: `read` takes a `CompletedResult`, not an in-flight job: reading a
+-- receipt that does not exist yet is a type error, not a runtime check.
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+import Jobs (
+    read,
+    InFlightJob,
+    ReadOutcome
+);
+
+module body Test is
+    function premature(job: InFlightJob, address: Address[Nat8]): Int64 is
+        case read(job, address, 64) of
+            when Read(buffer: OwnedBuffer, status: Int64) do
+                return status;
+        end case;
+    end;
+end module body.

@@ -1,0 +1,21 @@
+-- clamp_source.mm0 — PC04 source→KernelIR reflection (generated).
+--
+-- reflect: entry=clamp param=x:0 comparison=GreaterThan literal=100 branch=100 operator=umeet
+-- source_sha256=0e0b705fbfdd408a0922df48a2467e3d0e3548c98a125218614b64e11fa4819c
+-- ir_sha256=8c41eeead591550b7a1d83eae2fa667d5558d4bf6c1e9177f379ef2c9ca5bce9
+-- typed AST: MIf (MComparison (GreaterThan, MParamVar (x), MIntConstant 100),
+--            MReturn (MIntConstant 100), MReturn (MParamVar x))
+-- KernelIR:  If (Compare (GreaterThan, Param 0, U32 100), Return (U32 100), Return (Param 0))
+--
+-- trusted-edge: the typed-AST and KernelIR nodes above name the two
+--   semantic objects; mapping them to `source_clamp`/`ir_clamp` is
+--   recorded here, not proved. The bound below is proved from PC02's
+--   order laws. A reversed source condition changes `operator` and the
+--   bound proof no longer checks.
+--
+-- This fragment is assembled after `mm0/proof_chain/word.mm0`.
+def ir_clamp (x: u32): u32 = $ umeet x u100 $;
+theorem ir_clamp_matches_source (x: u32):
+  $ ueq (ir_clamp x) (source_clamp x) $;
+theorem ir_inherits_source_bound (x: u32):
+  $ ule (ir_clamp x) u100 $;

@@ -1,0 +1,161 @@
+"""
+Linear buffer/job wrappers over the manifest-gated GPU service (G15).
+
+The `rs_gpu_*` v2 exports are ordinary foreign symbols, gated by the module
+manifest exactly like the v1 service. This module is the Austral half of the
+ownership protocol; the runtime half (`safestos/gpu/src/service.rs`) checks
+the same rules for forged `Int64` calls.
+
+Every state is a linear record with a private constructor:
+
+  Context          -- one open service context; `close` consumes it
+  OwnedBuffer      -- storage owned by one Context
+  InFlightJob      -- submitted; no completion observed yet
+  PendingJob       -- a job that may still be polled
+  CompletedResult  -- a matched completion whose buffer is still retained
+  CancelledJob     -- cancellation acknowledged; buffer retained until release
+
+`submit` consumes the `OwnedBuffer`; `poll` consumes the `InFlightJob` and
+returns either the same job as `PendingJob` or a completed/cancelled receipt.
+There is no clone operation, so a second receipt for the same job cannot be
+written: the token it would need no longer exists.
+
+`complete` is not a state transition this module performs. A job becomes
+`CompletedResult` only after the runtime publishes a terminal event (or a test
+mock publishes one); `poll` merely observes it. The buffer is not released
+until `read`/`free_buffer` consumes its linear token, and the runtime refuses
+`close`/`free` while a job still owns it.
+"""
+
+import Austral.Memory (
+    Address
+);
+
+module Jobs is
+    type Context: Linear;
+    type OwnedBuffer: Linear;
+    type InFlightJob: Linear;
+    type PendingJob: Linear;
+    type CompletedResult: Linear;
+    type CancelledJob: Linear;
+
+    union OpenResult: Linear is
+        case Opened is
+            context: Context;
+        case Refused is
+            status: Int64;
+    end;
+
+    union NewBuffer: Linear is
+        case Allocated is
+            buffer: OwnedBuffer;
+        case BufferRefused is
+            status: Int64;
+    end;
+
+    union SubmitOutcome: Linear is
+        case Submitted is
+            job: InFlightJob;
+        case SubmitRefused is
+            buffer: OwnedBuffer;
+            status: Int64;
+    end;
+
+    union PollOutcome: Linear is
+        case Pending is
+            job: PendingJob;
+        case Complete is
+            result: CompletedResult;
+        case Cancelled is
+            job: CancelledJob;
+        case Failed is
+            buffer: OwnedBuffer;
+            status: Int64;
+    end;
+
+    union CancelOutcome: Linear is
+        case CancellationRequested is
+            job: PendingJob;
+        case CancelRefused is
+            buffer: OwnedBuffer;
+            status: Int64;
+    end;
+
+    """
+    Consume a completed receipt: copy `cap` result bytes to `address` and hand
+    the retained buffer back. `status` is the byte count (non-negative) or a
+    negative refusal. The buffer is returned on both paths, so a failed read
+    cannot leak it.
+    """
+    union ReadOutcome: Linear is
+        case Read is
+            buffer: OwnedBuffer;
+            status: Int64;
+    end;
+
+    function open(require_hardware: Int64, adapter_index: Int64): OpenResult;
+
+    """
+    Close a context. Returns 0, or a negative status; a live pending job
+    refuses the close (`-7`) rather than freeing memory the worker may touch.
+    """
+    function close(context: Context): Int64;
+
+    generic [R: Region]
+    function new_buffer(context: &[Context, R], elements: Int64): NewBuffer;
+
+    """Payload size in bytes (elements * 4)."""
+    generic [R: Region]
+    function buffer_length(buffer: &[OwnedBuffer, R]): Int64;
+
+    generic [R: Region]
+    function write_buffer(
+        context: &[Context, R],
+        buffer: &[OwnedBuffer, R],
+        offset_bytes: Int64,
+        address: Address[Nat8],
+        length: Int64
+    ): Int64;
+
+    generic [R: Region]
+    function read_buffer(
+        context: &[Context, R],
+        buffer: &[OwnedBuffer, R],
+        offset_bytes: Int64,
+        address: Address[Nat8],
+        cap: Int64
+    ): Int64;
+
+    generic [R: Region]
+    function free_buffer(ctx: &[Context, R], buffer: OwnedBuffer): Int64;
+
+    """
+    Submit one job against `buffer`. The buffer is consumed: writing to it
+    while the job is live is a runtime `BUSY`, and using the Austral value is a
+    compile-time linearity error.
+    """
+    generic [R: Region]
+    function submit(
+        ctx: &[Context, R],
+        buffer: OwnedBuffer,
+        n: Int64,
+        seed: Int64
+    ): SubmitOutcome;
+
+    function poll(job: InFlightJob): PollOutcome;
+
+    function poll_pending(job: PendingJob): PollOutcome;
+
+    """`mode` is 0 (cancel-wait) or 1 (cancel-device-work)."""
+    function cancel(job: InFlightJob, mode: Int64): CancelOutcome;
+
+    function cancel_pending(job: PendingJob, mode: Int64): CancelOutcome;
+
+    function release(job: CancelledJob): OwnedBuffer;
+
+    function read(
+        result: CompletedResult,
+        address: Address[Nat8],
+        cap: Int64
+    ): ReadOutcome;
+end module.

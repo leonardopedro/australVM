@@ -1,0 +1,13 @@
+-- clamp_source.mm1 — proofs for clamp_source.mm0 (PC04).
+--
+-- Both definitions unfold to the reflected operator, so the value
+-- witness is reflexivity and the bound is PC02's meet lower bound. Under
+-- a reversed source condition (`ujoin`) neither proof unifies: the bound
+-- is tied to the actual comparison in the fixture, not to a digest.
+def ir_clamp (x: u32): u32 = $ umeet x u100 $;
+pub theorem ir_clamp_matches_source (x: u32):
+  $ ueq (ir_clamp x) (source_clamp x) $
+  = '(ueq_refl);
+pub theorem ir_inherits_source_bound (x: u32):
+  $ ule (ir_clamp x) u100 $
+  = '(umeet_lb_r);

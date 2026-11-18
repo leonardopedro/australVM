@@ -1,0 +1,163 @@
+# G12: bounded GPU gates.
+#
+# CPU-only CI never presents as GPU coverage. `gpu-source` builds the compiler
+# and the default (CPU-only) checker, then runs `scripts/check-gpu source`:
+# frontend subset, C/IR differential corpus, and Naga validation of the
+# generated WGSL. It prints source=/shader-validation=/device-kind=/execution=/
+# proof= separately, so a green run cannot be read as hardware evidence.
+#
+# `gpu-required` is deliberately *not* triggered by pull requests or pushes.
+# It runs only on an explicitly configured self-hosted GPU runner, builds the
+# checker with `--features device`, and runs `scripts/check-gpu required`, where
+# a missing/software adapter is a failure (no skip, no fallback). The same job
+# builds the JIT host and runs `scripts/gpu-service-jit`, so G14's module ->
+# manifest -> service launch and its UK-4001 denial are exercised, not only the
+# Rust ABI.
+name: GPU gates
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  gpu-source:
+    name: source lane (CPU-only; no hardware claim)
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
+
+      # The compiler links the cranelift bridge, whose Cargo.toml path-depends
+      # on sibling unfer and dynamic-arctic checkouts (same layout as
+      # build-and-test.yml; actions/checkout refuses paths outside the
+      # workspace, so plain git).
+      - name: Checkout unfer as sibling
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - name: Checkout dynamic-arctic as sibling
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
+
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
+
+      - name: make bridge (build bridge + compiler)
+        run: nix develop -c bash -c 'make bridge'
+
+      # The default checker build is CPU-only: Naga, strict parsing, reference
+      # evaluation. wgpu is not part of this job by design.
+      - name: build CPU-only checker + crate tests
+        run: |
+          nix develop -c bash -c '
+            set -o pipefail
+            cargo test --locked --manifest-path safestos/gpu/Cargo.toml
+            # G14 service ABI: CPU-only; handles/statuses/refusals, no device.
+            cargo test --locked --features service --manifest-path safestos/gpu/Cargo.toml
+          '
+
+      - name: GPU source gate
+        run: |
+          nix develop -c bash -c '
+            set -o pipefail
+            export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release
+            python3 scripts/check-gpu source | tee "$RUNNER_TEMP/gpu-source.log"
+            # The gate fields are the acceptance: source and Naga validation
+            # pass, and no hardware/execution claim is produced.
+            grep -q "^source=pass$" "$RUNNER_TEMP/gpu-source.log"
+            grep -q "^shader-validation=pass$" "$RUNNER_TEMP/gpu-source.log"
+            grep -q "^device-kind=not-probed$" "$RUNNER_TEMP/gpu-source.log"
+            grep -q "^execution=not-run$" "$RUNNER_TEMP/gpu-source.log"
+            if grep -q "^execution=pass$" "$RUNNER_TEMP/gpu-source.log"; then
+              echo "::error::CPU source mode claimed hardware execution" >&2
+              exit 1
+            fi
+          '
+
+      - name: Austral GPU-service host module type-checks
+        run: |
+          nix develop -c bash -c '
+            set -o pipefail
+            export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release
+            _build/default/bin/austral.exe compile umbrella/modules/GpuService.aum \
+              --target-type=tc
+          '
+
+      # G13 proof profile. This is a separate evidence route from the source
+      # lane and from any device run: Why3 must discharge the eight memory-plan
+      # goals, and the MM0 gap is printed beside it. The default devshell carries
+      # why3/alt-ergo; a missing prover is a failure, never a skip.
+      - name: Why3 memory-plan obligations (proof-required)
+        run: |
+          nix develop -c bash -c '
+            set -euo pipefail
+            export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release
+            export AUSTRAL_GPU_CHECKER=$PWD/safestos/gpu/target/debug/avm-gpu
+            bundle="$RUNNER_TEMP/g13.avkg"
+            _build/default/bin/austral.exe compile \
+              examples/gpu/pointwise/Pointwise.aui,examples/gpu/pointwise/Pointwise.aum \
+              --target-type=wgsl --entrypoint=Pointwise:identity --output="$bundle"
+            python3 scripts/gpu-obligations check "$bundle" --require-proof
+          '
+
+  # Runs only on a runner labelled `gpu` with a real physical adapter, and only
+  # when a human or a scheduled workflow dispatches it. There is no
+  # `ubuntu-latest` fallback: that would turn "no GPU" into a skipped step.
+  gpu-required:
+    name: required hardware corpus (self-hosted GPU)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 60
+    steps:
+      - name: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
+
+      - name: Checkout unfer as sibling
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - name: Checkout dynamic-arctic as sibling
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
+
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
+
+      - name: make bridge (build bridge + compiler)
+        run: nix develop -c bash -c 'make bridge'
+
+      - name: build device checker
+        run: |
+          nix develop -c bash -c '
+            set -o pipefail
+            cargo test --locked --features "device service" --manifest-path safestos/gpu/Cargo.toml
+            cargo build --locked --features "device service" --manifest-path safestos/gpu/Cargo.toml
+          '
+
+      - name: build JIT host
+        run: |
+          nix develop -c bash -c '
+            set -o pipefail
+            cargo build --release --locked --manifest-path umbrella/Cargo.toml
+          '
+
+      # G14's JIT path: the Austral module calls the manifest-gated rs_gpu_*
+      # service, which opens the bundle from AVM_GPU_BUNDLE and runs one
+      # physical request. The runner must make a Vulkan loader/ICD visible to
+      # the Nix-linked umbrella (set AVM_GPU_JIT_LD_LIBRARY_PATH); a missing
+      # adapter is a failure, not a skip. The same script also checks that the
+      # same module is refused with UK-4001 when the manifest is omitted.
+      - name: G14 JIT service launch
+        run: |
+          nix develop -c bash -c '
+            set -euo pipefail
+            scripts/gpu-service-jit
+          '
+
+      - name: GPU required gate
+        run: |
+          nix develop -c bash -c '
+            set -o pipefail
+            export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release
+            python3 scripts/check-gpu required | tee "$RUNNER_TEMP/gpu-required.log"
+            grep -q "^source=pass$" "$RUNNER_TEMP/gpu-required.log"
+            grep -q "^shader-validation=pass$" "$RUNNER_TEMP/gpu-required.log"
+            grep -q "^device-kind=physical$" "$RUNNER_TEMP/gpu-required.log"
+            grep -q "^execution=pass$" "$RUNNER_TEMP/gpu-required.log"
+          '

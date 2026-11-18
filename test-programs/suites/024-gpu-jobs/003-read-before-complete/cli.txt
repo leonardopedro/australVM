@@ -1,0 +1,1 @@
+./austral compile stdlib/gpu/Jobs.aui,stdlib/gpu/Jobs.aum $DIR/Test.aum --target-type=tc --error-format=json

@@ -1,0 +1,13 @@
+-- G15: returning without consuming an `OwnedBuffer` is a leak the linear
+-- type rejects; the runtime would also retain the allocation.
+pragma Unsafe_Module;
+
+import Jobs (
+    OwnedBuffer
+);
+
+module body Test is
+    function leaked(buffer: OwnedBuffer): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

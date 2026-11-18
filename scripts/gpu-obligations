@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Emit and check the G13 memory-plan obligations for one GPU bundle.
+
+The emitter reads the *published* `kernel.json`/`kernel.wgsl` pair, recomputes
+the KernelIR and shader digests, and refuses a bundle whose memory plan is not
+the admitted v1 identity wrapper. It writes four files:
+
+    gpu_memory.mlw      Why3 goals (the arithmetic/index obligations)
+    gpu_memory.mm0      MM0 statements, explicitly `certificate: [gap]`
+    gpu_memory.mm1      empty proof companion, with the reason
+    manifest.json       bundle/source/plan digests and runtime premises
+
+Why3 and MM0 are deliberately separate results. A Why3 pass is evidence for
+the arithmetic goals; it does **not** discharge an MM0-required claim. The MM0
+statements stay a gap until this artifact's residual obligations
+(`docs/proof/GPU_PLAN.md`) are discharged against it, so this script never
+prints an unqualified `proved`.
+
+Usage:
+  scripts/gpu-obligations emit BUNDLE OUTDIR
+  scripts/gpu-obligations check BUNDLE [--require-proof] [--out DIR]
+
+Options:
+  --require-proof   missing Why3/Alt-Ergo, or an unproved goal, is exit 1
+                    (optional mode reports `[gap]` and exits 0 instead)
+  --out DIR         keep the emitted files here instead of a temp directory
+  --why3 PATH       override the Why3 executable (or set WHY3_CLI)
+  --prover NAME     Why3 prover name (default `alt-ergo`)
+
+Exit codes: 0 pass/gap as the mode allows, 1 a failed obligation or a required
+proof gap, 2 usage or an invalid bundle.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_EMITTER = ROOT / "_build/default/bin/gpu_obligations.exe"
+
+
+def emitter() -> str:
+    override = os.environ.get("AUSTRAL_GPU_OBLIGATIONS")
+    if override:
+        return override
+    if DEFAULT_EMITTER.exists():
+        return str(DEFAULT_EMITTER)
+    found = shutil.which("gpu_obligations")
+    if found:
+        return found
+    raise SystemExit(
+        "gpu-obligations: no emitter; build `dune build bin/gpu_obligations.exe` "
+        "or set AUSTRAL_GPU_OBLIGATIONS"
+    )
+
+
+def run(cmd: list[str], env: dict | None = None, timeout: int = 300):
+    return subprocess.run(
+        cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout
+    )
+
+
+def emit(bundle: str, out: Path) -> None:
+    proc = run([emitter(), "emit", bundle, str(out)])
+    if proc.returncode != 0:
+        print(
+            f"[fail] bundle refused: "
+            f"{(proc.stdout + proc.stderr).strip()[:600]}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+
+def update_manifest(out: Path, why3: dict, mm0: dict) -> None:
+    path = out / "manifest.json"
+    data = json.loads(path.read_text())
+    data["why3"] = why3
+    data["mm0"] = mm0
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def find_why3(override: str | None) -> str | None:
+    candidate = override or os.environ.get("WHY3_CLI") or "why3"
+    return shutil.which(candidate) if os.path.sep not in candidate else (
+        candidate if os.access(candidate, os.X_OK) else None
+    )
+
+
+def why3_env() -> tuple[dict, tempfile.TemporaryDirectory | None]:
+    """Why3 needs a prover mapping; never write the user's ~/.why3.conf."""
+    env = os.environ.copy()
+    if env.get("WHY3CONFIG"):
+        return env, None
+    tmp = tempfile.TemporaryDirectory(prefix="avm-why3-")
+    env["WHY3CONFIG"] = str(Path(tmp.name) / "why3.conf")
+    return env, tmp
+
+
+def prove(mlw: Path, why3: str | None, prover: str) -> tuple[str, str]:
+    if why3 is None:
+        return "gap", "why3 not found (set WHY3_CLI or put why3 on PATH)"
+    env, tmp = why3_env()
+    try:
+        # `why3 config detect` records the absolute prover paths in the
+        # temporary config, so this never depends on a stale home config. An
+        # explicitly supplied WHY3CONFIG is the user's file and is not edited.
+        if tmp is not None:
+            run([why3, "config", "detect"], env)
+        proc = run([why3, "prove", "-P", prover, str(mlw)], env)
+        output = (proc.stdout + proc.stderr).strip()
+        valid = output.count("Prover result is: Valid")
+        goals = output.count("Goal ")
+        if proc.returncode == 0 and valid > 0 and valid == goals:
+            return "pass", f"{valid} goal(s) valid with {prover}"
+        if proc.returncode == 1:
+            return "fail", output[-1200:]
+        detail = output[-1200:] or "why3 returned no result"
+        if "No prover" in detail or "not found" in detail:
+            return "gap", detail
+        return "fail", detail
+    finally:
+        if tmp is not None:
+            tmp.cleanup()
+
+
+def mm0_check(out: Path) -> tuple[str, str]:
+    """Re-run the MM0 files only when the toolchain is present; never claim it."""
+    mm0_rs = shutil.which("mm0-rs")
+    mm0_c = shutil.which("mm0-c")
+    if mm0_rs is None or mm0_c is None:
+        return "gap", "mm0-rs/mm0-c not on PATH"
+    proof_lines = (out / "gpu_memory.mm1").read_text().splitlines()
+    if not any(line.startswith(("theorem ", "axiom ")) for line in proof_lines):
+        return "gap", (
+            "statements only (no theorem/axiom in gpu_memory.mm1); "
+            "the PC06 residual obligations are not discharged for this artifact"
+        )
+    mmb = out / "gpu_memory.mmb"
+    comp = run([mm0_rs, "compile", str(out / "gpu_memory.mm1"), str(mmb)])
+    if comp.returncode != 0:
+        return "fail", (comp.stdout + comp.stderr).strip()[-800:]
+    with open(out / "gpu_memory.mm0", "rb") as spec:
+        check = subprocess.run(
+            [mm0_c, str(mmb)], stdin=spec, cwd=ROOT, capture_output=True, text=True
+        )
+    if check.returncode != 0:
+        return "fail", (check.stdout + check.stderr).strip()[-800:]
+    return "gap", (
+        "MM0 files check, but they contain statements only; "
+        "no theorem is claimed until the PC06 residuals are discharged"
+    )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    e = sub.add_parser("emit")
+    e.add_argument("bundle")
+    e.add_argument("outdir")
+    c = sub.add_parser("check")
+    c.add_argument("bundle")
+    c.add_argument("--require-proof", action="store_true")
+    c.add_argument("--out")
+    c.add_argument("--why3", default=None)
+    c.add_argument("--prover", default="alt-ergo")
+    args = ap.parse_args()
+
+    if args.cmd == "emit":
+        out = Path(args.outdir)
+        if out.exists():
+            print(f"[fail] refusing to reuse existing output {out}", file=sys.stderr)
+            return 2
+        emit(args.bundle, out)
+        print(f"[pass] emitted obligations to {out}")
+        return 0
+
+    bundle = Path(args.bundle)
+    if not bundle.is_dir():
+        print(f"[fail] no bundle directory {bundle}", file=sys.stderr)
+        return 2
+    if args.out:
+        out = Path(args.out)
+        if out.exists():
+            print(f"[fail] refusing to reuse existing output {out}", file=sys.stderr)
+            return 2
+        tmp = None
+    else:
+        tmp = tempfile.TemporaryDirectory(prefix="avm-gpu-obligations-")
+        out = Path(tmp.name) / "obligations"
+
+    emit(str(bundle), out)
+    manifest = json.loads((out / "manifest.json").read_text())
+    print(
+        "[info] bundle "
+        f"{manifest['bundle_sha256'][:12]}… ir {manifest['ir_sha256'][:12]}… "
+        f"plan {manifest['plan_sha256'][:12]}…"
+    )
+
+    why3 = find_why3(args.why3)
+    why3_status, why3_detail = prove(out / "gpu_memory.mlw", why3, args.prover)
+    mm0_status, mm0_detail = mm0_check(out)
+    update_manifest(out, {"status": why3_status, "prover": args.prover,
+                          "detail": why3_detail},
+                    {"status": mm0_status, "certificate": "[gap]",
+                     "detail": mm0_detail})
+
+    if why3_status == "pass":
+        print(f"[pass] Why3 memory-plan obligations: {why3_detail}")
+    elif why3_status == "gap":
+        print(f"[gap] Why3 memory-plan obligations: {why3_detail}")
+    else:
+        print(f"[fail] Why3 memory-plan obligations:\n{why3_detail}")
+    print(f"[{mm0_status}] MM0 certificate: {mm0_detail}")
+
+    if why3_status == "fail" or mm0_status == "fail":
+        return 1
+    if args.require_proof and why3_status != "pass":
+        print("[fail] proof-required mode: Why3 did not discharge the obligations")
+        return 1
+    if tmp is not None:
+        tmp.cleanup()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

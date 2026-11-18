@@ -1,0 +1,48 @@
+-- gpu_plan.mm0 — PC06's application of the PC03 composition to G13's memory
+-- plan.
+--
+-- layer: PC06 obligation discharge
+-- status: theory fragment — assembled after `word.mm0` and `relation.mm0` by
+--   `scripts/pc06-obligations`.
+--
+-- WHAT IS AND IS NOT CLAIMED. The plan's admitted edges are index maps
+-- (flattening and the slot store); both preserve the index, so `compose_bound`
+-- transports *any* bound along them. What the composition does **not** supply
+-- is the plan's guard/extent premise
+--
+--     guard_holds i len  ⇒  i < n        (G13 obligation 2)
+--
+-- and the launch bound / distinct-invocation / fresh-output facts. Those stay
+-- explicit hypotheses and are listed as residual obligations in
+-- `docs/proof/GPU_PLAN.md`. No declaration here is an axiom, and none of the
+-- theorems below is a certificate for `gpu_memory.mm0`: that artifact remains
+-- `[gap]` until its residual premises are discharged.
+--
+-- The plan size is abstract: `plan_size` is the bundle's `n`, and `u256` is a
+-- second concrete literal used to show the same proof at a new bound (it
+-- carries no order laws of its own).
+
+-- ── Plan vocabulary ──────────────────────────────────────────────────────
+term plan_size: u32;
+term plan_index (gid: u32): u32;
+term u256: u32;
+
+-- ── Plan edges ───────────────────────────────────────────────────────────
+-- Edge 1: the flattening preserves the invocation's index.
+-- Edge 2: the slot store writes that index unchanged.
+def edge_plan_flat (i j: u32): Prop = $ ueq i j $;
+def edge_plan_slot (j t: u32): Prop = $ ueq j t $;
+
+-- ── Composed write bound ─────────────────────────────────────────────────
+-- `hb` is exactly the plan's guard/extent obligation: the composition is
+-- conditional on it, and PC06 reports it as residual rather than assuming it.
+theorem plan_write_bound (n i j t: u32)
+    (h1: $ edge_plan_flat i j $) (h2: $ edge_plan_slot j t $)
+    (hb: $ ule i n $): $ ule t n $;
+
+-- The same artifact with a new concrete launch bound. The proof is the same
+-- `compose_bound` application, so the bound is a parameter of the shared
+-- theorem and not a restated claim.
+theorem plan_write_bound_256 (i j t: u32)
+    (h1: $ edge_plan_flat i j $) (h2: $ edge_plan_slot j t $)
+    (hb: $ ule i u256 $): $ ule t u256 $;

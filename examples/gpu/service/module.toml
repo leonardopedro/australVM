@@ -1,0 +1,15 @@
+# G14: the normal manifest gate for the GPU service.
+#
+# These are ordinary `rs_*` extern symbols. The bridge's
+# `check_call_permission` compares each JIT call against this list before the
+# symbol is resolved; there is no privileged `au_*` route. Removing a grant must
+# fail with UK-4001 before the corresponding operation runs.
+[module]
+name = "GpuService"
+
+[grants]
+kernel = [
+    "rs_gpu_open",
+    "rs_gpu_run",
+    "rs_gpu_close",
+]

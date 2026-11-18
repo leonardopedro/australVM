@@ -1,0 +1,73 @@
+-- word.mm1 — proofs for mm0/proof_chain/word.mm0 (PC02).
+--
+-- `mm0-rs compile mm0/proof_chain/word.mm1 out.mmb` then
+-- `mm0-c out.mmb < mm0/proof_chain/word.mm0` re-checks these proofs against
+-- the specification. The file keeps the `.mm0` declaration order: mm0-c
+-- matches declarations positionally, so a reordering is an unrelated unify
+-- failure elsewhere.
+--
+-- The clamp proofs are one application each because the denotation is a meet:
+-- `umeet_lb_r` is the upper bound and `umeet_greatest` (with `uzero_le` for
+-- both arguments) is the lower bound. A changed order law or a changed
+-- definition of `source_clamp` no longer unifies with these terms.
+
+provable sort Prop;
+delimiter $ ( ) $;
+
+sort u32;
+
+term ule (x y: u32): Prop;
+term ueq (x y: u32): Prop;
+
+axiom ule_refl (x: u32): $ ule x x $;
+axiom ueq_refl (x: u32): $ ueq x x $;
+axiom ueq_symm (x y: u32): $ ueq x y $ > $ ueq y x $;
+axiom ueq_trans (x y z: u32): $ ueq x y $ > $ ueq y z $ > $ ueq x z $;
+
+axiom ueq_sub_le (x y z: u32): $ ueq x y $ > $ ule x z $ > $ ule y z $;
+
+term umeet (x y: u32): u32;
+term ujoin (x y: u32): u32;
+
+axiom umeet_lb_l (x y: u32): $ ule (umeet x y) x $;
+axiom umeet_lb_r (x y: u32): $ ule (umeet x y) y $;
+axiom umeet_greatest (x y z: u32): $ ule z x $ > $ ule z y $ > $ ule z (umeet x y) $;
+
+axiom ujoin_ub_l (x y: u32): $ ule x (ujoin x y) $;
+axiom ujoin_ub_r (x y: u32): $ ule y (ujoin x y) $;
+axiom ujoin_lub (x y z: u32): $ ule x z $ > $ ule y z $ > $ ule (ujoin x y) z $;
+
+term uzero: u32;
+term u100: u32;
+axiom uzero_le (x: u32): $ ule uzero x $;
+
+def source_clamp (x: u32): u32 = $ umeet x u100 $;
+
+pub theorem clamp_upper (x: u32): $ ule (source_clamp x) u100 $
+  = '(umeet_lb_r);
+
+pub theorem clamp_lower (x: u32): $ ule uzero (source_clamp x) $
+  = '(umeet_greatest (uzero_le) (uzero_le));
+
+sort Mem;
+term mget (m: Mem) (i: u32): u32;
+term mput (m: Mem) (i: u32) (v: u32): Mem;
+term uindep (i j: u32): Prop;
+
+axiom mget_put_same (m: Mem) (i: u32) (v: u32):
+  $ ueq (mget (mput m i v) i) v $;
+axiom mget_put_other (m: Mem) (i j: u32) (v: u32):
+  $ uindep i j $ > $ ueq (mget (mput m i v) j) (mget m j) $;
+
+pub theorem map_read_after_write (m: Mem) (i: u32) (v: u32):
+  $ ueq (mget (mput m i v) i) v $
+  = '(mget_put_same);
+
+pub theorem map_write_frame (m: Mem) (i j: u32) (v: u32) (h: $ uindep i j $):
+  $ ueq (mget (mput m i v) j) (mget m j) $
+  = '(mget_put_other (h));
+
+pub theorem map_write_then_read (m: Mem) (i j: u32) (v: u32)
+    (h: $ uindep i j $):
+  $ ueq (mget (mput m i v) j) (mget m j) $
+  = '(mget_put_other (h));

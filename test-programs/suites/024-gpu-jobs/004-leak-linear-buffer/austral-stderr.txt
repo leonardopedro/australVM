@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "buffer" },
+    {
+      "type": "text",
+      "content": " is not consumed by the time of the return statement. Did you forget to call a destructor, or destructure the contents?"
+    }
+  ],
+  "span": {
+    "filename": "test-programs/suites/024-gpu-jobs/004-leak-linear-buffer/Test.aum",
+    "startp": { "line": 11, "column": 8 },
+    "end": { "line": 11, "column": 29 }
+  },
+  "context": [
+    [ 9, "module body Test is" ],
+    [ 10, "    function leaked(buffer: OwnedBuffer): ExitCode is" ],
+    [ 11, "        return ExitSuccess();" ],
+    [ 12, "    end;" ],
+    [ 13, "end module body." ]
+  ]
+}

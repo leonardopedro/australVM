@@ -1,0 +1,39 @@
+-- G15: `submit` consumes the buffer, so a later `free_buffer` has no token.
+-- This fixture is only checked for its diagnostic; it never runs.
+pragma Unsafe_Module;
+
+import Jobs (
+    open,
+    new_buffer,
+    submit,
+    free_buffer,
+    close,
+    OpenResult,
+    NewBuffer,
+    SubmitOutcome,
+    Context,
+    OwnedBuffer,
+    InFlightJob
+);
+
+module body Test is
+    function main(): ExitCode is
+        case open(0, -1) of
+            when Opened(context: Context) do
+                case new_buffer(&context, 8) of
+                    when Allocated(buffer: OwnedBuffer) do
+                        let outcome: SubmitOutcome := submit(&context, buffer, 8, 0);
+                        -- `buffer` was moved into submit; this is the
+                        -- use-after-submit the linear type must reject.
+                        let status: Int64 := free_buffer(&context, buffer);
+                        let closed: Int64 := close(context);
+                        return ExitSuccess();
+                    when BufferRefused(status: Int64) do
+                        let closed: Int64 := close(context);
+                        return ExitSuccess();
+                end case;
+            when Refused(status: Int64) do
+                return ExitSuccess();
+        end case;
+    end;
+end module body.

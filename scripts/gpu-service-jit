@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# G14: launch the committed GpuService module through the manifest-gated JIT.
+#
+# This is the JIT half of the G14 evidence, distinct from the Rust service
+# tests: the module is compiled by Austral, each rs_gpu_* call is authorized by
+# the manifest, the service opens the deployment bundle from AVM_GPU_BUNDLE,
+# runs one physical request, and the JIT compares the returned checksum.
+#
+# The bundle is built here from the same Pointwise source used by G10/G11/G13.
+# No reference fallback is permitted: the module asks for require_hardware=1,
+# and a missing adapter is a failure (exit 1), not a skipped check. A
+# self-hosted runner may point AVM_GPU_JIT_LD_LIBRARY_PATH at a Vulkan loader /
+# ICD directory. Do not add /usr/lib or /lib by default: this script also runs
+# the Nix-linked compiler, and a host glibc on LD_LIBRARY_PATH shadows the Nix
+# glibc it was linked against (GLIBC_2.42 not found). A system-linked umbrella
+# needs no extra directory; a Nix-linked one needs the loader/Mesa paths set by
+# the runner.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+austral="$repo_root/austral"
+umbrella="$repo_root/umbrella/target/release/umbrella"
+provider="$repo_root/examples/gpu/service/provider"
+module="$repo_root/umbrella/modules/GpuService.aum"
+bundle_manifest="$repo_root/examples/gpu/service/module.toml"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/avm-g14-jit.XXXXXX")"
+bundle="$tmp/add.avkg"
+manifest="$tmp/module.toml"
+
+cleanup() {
+    rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+fail() {
+    echo "[FAIL] G14 JIT service launch: $*" >&2
+    exit 1
+}
+
+[ -x "$austral" ] || fail "missing $austral (run make bridge)"
+[ -x "$umbrella" ] || fail "missing $umbrella (build umbrella with cargo)"
+[ -f "$module" ] || fail "missing $module"
+[ -f "$bundle_manifest" ] || fail "missing $bundle_manifest"
+
+# The compiler needs the GPU bundle checker to publish WGSL. Prefer an explicit
+# path, then the release/debug checker built by the GPU lane.
+if [ -z "${AUSTRAL_GPU_CHECKER:-}" ]; then
+    for candidate in \
+        "$repo_root/safestos/gpu/target/release/avm-gpu" \
+        "$repo_root/safestos/gpu/target/debug/avm-gpu"; do
+        if [ -x "$candidate" ]; then
+            export AUSTRAL_GPU_CHECKER="$candidate"
+            break
+        fi
+    done
+fi
+[ -n "${AUSTRAL_GPU_CHECKER:-}" ] || fail "no AUSTRAL_GPU_CHECKER and no avm-gpu build found"
+
+# The compiler and the JIT host are different processes but share this
+# environment; keep the bridge paths for both.
+export LD_LIBRARY_PATH="$repo_root:$repo_root/safestos/cranelift/target/release${AVM_GPU_JIT_LD_LIBRARY_PATH:+:$AVM_GPU_JIT_LD_LIBRARY_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# The bundle must be the real Pointwise add kernel, not a hand-written fixture.
+"$austral" compile \
+    "$repo_root/examples/gpu/pointwise/Pointwise.aui,$repo_root/examples/gpu/pointwise/Pointwise.aum" \
+    --target-type=wgsl --entrypoint=Pointwise:add --output="$bundle" \
+    >"$tmp/compile.log" 2>&1 || {
+    cat "$tmp/compile.log" >&2
+    fail "could not build the Pointwise add bundle"
+}
+
+cp "$bundle_manifest" "$manifest"
+
+# AVM_GPU_BUNDLE selects the path; the module never supplies one. The provider
+# is built from the committed crate, with its target directory kept in tmp so
+# this check does not leave build products in the source tree.
+if ! AVM_GPU_BUNDLE="$bundle" \
+    "$umbrella" --austral "$austral" \
+        --cratedir "$provider" \
+        --target-dir "$tmp/target" \
+        --cargo-package avm-gpu-service-provider \
+        --profile release --offline \
+        --manifest "$manifest" --entry compute --expect 56 \
+        "$module" >"$tmp/run.log" 2>&1; then
+    cat "$tmp/run.log" >&2
+    fail "module run failed (loader/Vulkan or service refusal; see log)"
+fi
+
+if ! grep -q '^RESULT 56$' "$tmp/run.log"; then
+    cat "$tmp/run.log" >&2
+    fail "expected RESULT 56 from the physical add launch"
+fi
+if ! grep -q 'umbrella: matches --expect 56' "$tmp/run.log"; then
+    cat "$tmp/run.log" >&2
+    fail "the JIT did not confirm the expected checksum"
+fi
+
+# The grant-denial half is deliberately separate: remove the manifest and the
+# JIT must refuse before rs_gpu_open runs. This is a negative control for the
+# same module and bundle, not a replacement for the physical launch.
+if AVM_GPU_BUNDLE="$bundle" \
+    "$umbrella" --austral "$austral" \
+        --cratedir "$provider" \
+        --target-dir "$tmp/target" \
+        --cargo-package avm-gpu-service-provider \
+        --profile release --offline \
+        --entry compute --expect 56 \
+        "$module" >"$tmp/deny.log" 2>&1; then
+    cat "$tmp/deny.log" >&2
+    fail "the module ran without a manifest grant"
+fi
+if ! grep -q "is not granted 'rs_gpu_open'" "$tmp/deny.log"; then
+    cat "$tmp/deny.log" >&2
+    fail "missing grant did not fail at rs_gpu_open"
+fi
+
+echo "[pass] G14 JIT service launch: physical RESULT 56 and UK-4001 denial"

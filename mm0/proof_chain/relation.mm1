@@ -1,0 +1,54 @@
+-- relation.mm1 — proofs for mm0/proof_chain/relation.mm0 (PC03).
+--
+-- Assembled after `word.mm1` by `scripts/pc03-compose`; declaration order is
+-- the assembled specification's order, because mm0-c matches positionally.
+--
+-- `transfer_through_eq` is one application of the order's equality-rewrite
+-- law (which rewrites the left argument of `ule`, so the edges are oriented
+-- left-to-right); the identity and edge instances are applications of that
+-- lemma. `compose_bound` is PC06's shared algorithm theorem, and the
+-- discharged composition is that theorem at `b := u100` with `clamp_upper` as
+-- the source bound. A changed edge definition or a changed bound no longer
+-- unifies.
+
+def edge_src_ir (x i: u32): Prop = $ ueq (source_clamp x) i $;
+def edge_ir_tgt (i y: u32): Prop = $ ueq i y $;
+def observes (x y: u32): Prop = $ ueq x y $;
+term step3 (x i y x1 i1 y1: u32): Prop;
+
+pub theorem transfer_through_eq (b p q: u32)
+    (hb: $ ule p b $) (h: $ ueq p q $): $ ule q b $
+  = '(ueq_sub_le (h) (hb));
+
+pub theorem compose_bound (b x i y: u32)
+    (h1: $ ueq x i $) (h2: $ ueq i y $) (hb: $ ule x b $):
+  $ ule y b $
+  = '(ueq_sub_le (h2) (ueq_sub_le (h1) (hb)));
+
+pub theorem identity_transfer (p q: u32)
+    (h: $ ueq p q $) (hb: $ ule p u100 $): $ ule q u100 $
+  = '(transfer_through_eq (hb) (h));
+
+pub theorem edge1_bound (x i: u32) (h: $ edge_src_ir x i $): $ ule i u100 $
+  = '(ueq_sub_le (h) (clamp_upper));
+
+pub theorem compose_conditional (x i y: u32)
+    (h1: $ edge_src_ir x i $) (h2: $ edge_ir_tgt i y $)
+    (hpending: $ ule i u100 $): $ ule y u100 $
+  = '(ueq_sub_le (h2) (hpending));
+
+pub theorem compose_discharged (x i y: u32)
+    (h1: $ edge_src_ir x i $) (h2: $ edge_ir_tgt i y $):
+  $ ule y u100 $
+  = '(compose_bound (h1) (h2) (clamp_upper));
+
+pub theorem step_transfer (x i y x1 i1 y1: u32)
+    (hs: $ step3 x i y x1 i1 y1 $)
+    (h1: $ edge_src_ir x1 i1 $) (h2: $ edge_ir_tgt i1 y1 $):
+  $ ule y1 u100 $
+  = '(compose_discharged (h1) (h2));
+
+pub theorem observes_chain (x i y: u32)
+    (h1: $ edge_src_ir x i $) (h2: $ edge_ir_tgt i y $):
+  $ observes (source_clamp x) y $
+  = '(ueq_trans (h1) (h2));

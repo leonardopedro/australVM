@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""G12: baseline latency/throughput for one generated WGSL kernel.
+
+The measured host is `avm-gpu run` — the direct Rust host that consumes the
+same generated WGSL — not a simulated CPU evaluation. Phases are reported
+separately:
+
+  compile        Austral source -> bundle (one-time, per artifact)
+  validate       strict load + digest + Naga validation + wrapper audit
+  prepare        adapter request, device and pipeline creation (per run)
+  upload         buffer creation and `write_buffer` calls
+  submit         command submission wall time
+  readback       map/poll/copy wall time
+  process        total wall time of the `avm-gpu run` invocation
+
+`execution` throughput uses elements / (submit + readback); `end_to_end`
+throughput uses elements / process wall time so process startup is not hidden.
+No speedup target is asserted: this records a baseline, not a regression gate.
+
+Usage:
+  scripts/gpu-benchmark [--entry Pointwise:add] [--size 1024] [--repeats 5]
+                        [--compiler PATH] [--checker PATH]
+"""
+
+import argparse
+import json
+import os
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "examples/gpu/pointwise"
+DEFAULT_COMPILER = ROOT / "_build/default/bin/austral.exe"
+DEFAULT_CHECKER = ROOT / "safestos/gpu/target/debug/avm-gpu"
+
+
+def env_with_bridge(checker: Path) -> dict:
+    env = os.environ.copy()
+    bridge = ROOT / "safestos/cranelift/target/release"
+    env["LD_LIBRARY_PATH"] = f"{ROOT}:{bridge}:" + env.get("LD_LIBRARY_PATH", "")
+    env["AUSTRAL_GPU_CHECKER"] = str(checker)
+    return env
+
+
+def run_timed(cmd: list[str], env: dict) -> tuple[subprocess.CompletedProcess, float]:
+    start = time.perf_counter()
+    proc = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
+    return proc, (time.perf_counter() - start) * 1000.0
+
+
+def inputs_for(arity: int, n: int) -> dict:
+    state = 0x9E3779B9
+    arrays = []
+    for _ in range(arity):
+        values = []
+        for _ in range(n):
+            state = (state * 1664525 + 1013904223) & 0xFFFFFFFF
+            values.append(state)
+        arrays.append(values)
+    return {"inputs": arrays}
+
+
+def medians(rows: list[dict]) -> dict:
+    return {key: statistics.median(row[key] for row in rows) for key in rows[0]}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--entry", default="Pointwise:add")
+    ap.add_argument("--size", type=int, default=1024)
+    ap.add_argument("--repeats", type=int, default=5)
+    ap.add_argument("--compiler", default=str(DEFAULT_COMPILER))
+    ap.add_argument("--checker", default=str(DEFAULT_CHECKER))
+    ap.add_argument("--adapter", default=None)
+    ap.add_argument("--adapter-index", type=int, default=None)
+    args = ap.parse_args()
+    if args.size < 0 or args.repeats < 1:
+        print("[fail] --size must be >= 0 and --repeats >= 1")
+        return 2
+
+    compiler = Path(args.compiler)
+    checker = Path(args.checker)
+    if not compiler.exists() or not checker.exists():
+        print(f"[fail] missing compiler or checker: {compiler}, {checker}")
+        return 1
+    env = env_with_bridge(checker)
+    adapter_flags: list[str] = []
+    if args.adapter is not None and args.adapter_index is not None:
+        print("[fail] --adapter and --adapter-index are exclusive")
+        return 2
+    if args.adapter is not None:
+        adapter_flags = ["--adapter", args.adapter]
+    elif args.adapter_index is not None:
+        adapter_flags = ["--adapter-index", str(args.adapter_index)]
+
+    with tempfile.TemporaryDirectory(prefix="avm-gpu-bench-") as td:
+        tmp = Path(td)
+        bundle = tmp / "kernel.avkg"
+        inputs = tmp / "inputs.json"
+
+        compile_proc, compile_ms = run_timed(
+            [
+                str(compiler),
+                "compile",
+                f"{FIXTURE/'Pointwise.aui'},{FIXTURE/'Pointwise.aum'}",
+                "--target-type=wgsl",
+                f"--entrypoint={args.entry}",
+                f"--output={bundle}",
+            ],
+            env,
+        )
+        if compile_proc.returncode != 0:
+            print(f"[fail] compile: {(compile_proc.stdout + compile_proc.stderr).strip()[:500]}")
+            return 1
+        arity = json.loads((bundle / "kernel.json").read_text())["input_arity"]
+        inputs.write_text(json.dumps(inputs_for(arity, args.size)))
+
+        validate_proc, validate_ms = run_timed(
+            [str(checker), "validate", str(bundle)], env
+        )
+        if validate_proc.returncode != 0:
+            print(f"[fail] validate: {validate_proc.stdout.strip()[:500]}")
+            return 1
+        metadata = json.loads(validate_proc.stdout)
+
+        reference_proc, reference_ms = run_timed(
+            [str(checker), "reference", str(bundle), "--inputs", str(inputs)], env
+        )
+        if reference_proc.returncode != 0:
+            print(f"[fail] reference: {reference_proc.stdout.strip()[:500]}")
+            return 1
+
+        rows = []
+        last_payload = None
+        for _ in range(args.repeats):
+            proc, process_ms = run_timed(
+                [
+                    str(checker),
+                    "run",
+                    str(bundle),
+                    "--inputs",
+                    str(inputs),
+                    "--require-hardware",
+                    *adapter_flags,
+                ],
+                env,
+            )
+            if proc.returncode == 77:
+                print("[gap] no physical adapter; benchmark not run")
+                return 77
+            if proc.returncode != 0:
+                print(f"[fail] run: {proc.stdout.strip()[:500]}")
+                return 1
+            payload = json.loads(proc.stdout)
+            last_payload = payload
+            timing = payload["timing_ms"]
+            rows.append(
+                {
+                    "prepare": timing["prepare"],
+                    "upload": timing["upload"],
+                    "submit": timing["submit"],
+                    "readback": timing["readback"],
+                    "process": process_ms,
+                }
+            )
+        assert last_payload is not None
+        device = last_payload["device"]
+        elements = last_payload["elements"]
+
+    med = medians(rows)
+    execution_ms = med["submit"] + med["readback"]
+    n = elements
+    print(
+        f"[info] device: {device['name']} ({device['backend']}, {device['device_type']})"
+    )
+    print(f"[info] entry: {metadata['entry']}, elements: {n}, repeats: {args.repeats}")
+    print(f"[info] bundle ir_sha256: {metadata['ir_sha256']}")
+    print(f"compile_ms={compile_ms:.2f}")
+    print(f"validate_ms={validate_ms:.2f}")
+    print(f"reference_ms={reference_ms:.2f}")
+    print(f"prepare_ms={med['prepare']:.2f}")
+    print(f"upload_ms={med['upload']:.2f}")
+    print(f"submit_ms={med['submit']:.2f}")
+    print(f"readback_ms={med['readback']:.2f}")
+    print(f"process_ms={med['process']:.2f}")
+    print(f"execution_ms={execution_ms:.2f}")
+    if execution_ms > 0:
+        print(f"execution_elements_per_s={n / (execution_ms / 1000.0):.0f}")
+    if med["process"] > 0:
+        print(f"end_to_end_elements_per_s={n / (med['process'] / 1000.0):.0f}")
+    print(
+        "[pass] GPU benchmark recorded (baseline only; no speedup threshold, "
+        "no CPU recomputation presented as GPU output)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

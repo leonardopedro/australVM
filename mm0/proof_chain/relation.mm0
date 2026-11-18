@@ -1,0 +1,98 @@
+-- relation.mm0 — PC03's relation, composition and premise-discharge layer.
+--
+-- layer: PC03 composition
+-- status: theory fragment — `scripts/pc03-compose` assembles it after
+--   `word.mm0` and the matching proofs after `word.mm1`.
+--
+-- WHY A FRAGMENT. MM0 has no import form: a specification is one file. PC03
+-- therefore reuses PC02 by assembly — the word carrier, `source_clamp` and the
+-- imported theorem `clamp_upper` come from `word.mm0`, and the assembled
+-- specification is what `mm0-c` checks. The gate additionally requires the
+-- shared prefix to be byte-identical with `word.mm0`, so the two files cannot
+-- drift into different word theories under the same names.
+--
+-- NO AXIOMS. Every declaration below is a term, a definition or a theorem.
+-- The edge relations are *definitions* (an edge is the value correspondence it
+-- claims), not uninterpreted symbols with a premise-free rule, so a changed
+-- lowering has to change the equation and re-check rather than being granted.
+
+-- ── Edges ───────────────────────────────────────────────────────────────
+-- Edge 1 (source → admitted IR): the IR word is the source clamp's result.
+-- Edge 2 (IR → target): the target observes the IR word unchanged. These are
+-- the two admitted edges of the clamp chain; a different edge is a different
+-- definition, never a new name for the same one.
+def edge_src_ir (x i: u32): Prop = $ ueq (source_clamp x) i $;
+def edge_ir_tgt (i y: u32): Prop = $ ueq i y $;
+
+-- The observation relation: the target word observes the source word when the
+-- two are equal. It is a definition for the same reason as the edges.
+def observes (x y: u32): Prop = $ ueq x y $;
+
+-- One step of a trace: the three states before and after. This is vocabulary
+-- an emitter fills in; nothing here assumes a step preserves the bound. The
+-- step-indexed theorem below consumes the *successor* edge facts explicitly,
+-- which is what makes a trace a chain of checked edges rather than one rule.
+term step3 (x i y x1 i1 y1: u32): Prop;
+
+-- ── Parameter instantiation ─────────────────────────────────────────────
+-- The rewrite lemma is stated at an arbitrary bound `b`. `u100` below is an
+-- instantiation of `b`, not a second assumption, and `transfer_through_eq`
+-- itself is the order law applied once.
+--
+-- `compose_bound` is PC06's shared algorithm theorem: the composition of two
+-- equality edges transports any bound `b`, not just the clamp's `u100`. The
+-- clamp discharge below and the GPU memory-plan instantiation in
+-- `mm0/proof_chain/gpu_plan.mm0` are two independent uses of it.
+theorem transfer_through_eq (b p q: u32)
+    (hb: $ ule p b $) (h: $ ueq p q $): $ ule q b $;
+
+theorem compose_bound (b x i y: u32)
+    (h1: $ ueq x i $) (h2: $ ueq i y $) (hb: $ ule x b $):
+  $ ule y b $;
+
+-- Identity edge: the identity correspondence is `ueq`, and the same rewrite
+-- lemma at `b := u100` recovers the bound. Identity is not a separate rule.
+theorem identity_transfer (p q: u32)
+    (h: $ ueq p q $) (hb: $ ule p u100 $): $ ule q u100 $;
+
+-- ── Edge 1 transports the imported source theorem ───────────────────────
+-- `clamp_upper` is PC02's theorem, unchanged: this is the one imported
+-- source property the conditional composition below starts from.
+theorem edge1_bound (x i: u32) (h: $ edge_src_ir x i $): $ ule i u100 $;
+
+-- ── Conditional composition ─────────────────────────────────────────────
+-- Two edges plus the one *pending* premise: that the IR edge preserves the
+-- bound. The pending premise is exactly what `edge1_bound` owes, so it is a
+-- hypothesis here and `h1` names the edge that will discharge it; the
+-- conclusion follows from `h2` and the premise alone, which is why `h1` is
+-- not consumed. Until `edge1_bound` is applied this is the honest end of the
+-- chain, and the statement cannot be used without the premise.
+theorem compose_conditional (x i y: u32)
+    (h1: $ edge_src_ir x i $) (h2: $ edge_ir_tgt i y $)
+    (hpending: $ ule i u100 $): $ ule y u100 $;
+
+-- ── Discharged composition ──────────────────────────────────────────────
+-- The same two edges, with that exact premise derived from the imported
+-- theorem. The open-premise set is strictly smaller: `hpending` is gone.
+-- The proof is `compose_bound` applied once; the GPU plan below instantiates
+-- the same theorem at another bound, which is PC06's reuse claim.
+theorem compose_discharged (x i y: u32)
+    (h1: $ edge_src_ir x i $) (h2: $ edge_ir_tgt i y $):
+  $ ule y u100 $;
+
+-- ── Step-indexed transfer ───────────────────────────────────────────────
+-- The successor states are related by the same two edges, so the bound holds
+-- after the step. The step relation is indexed but not assumed to be
+-- bound-preserving: the preservation is the successor edge facts, checked for
+-- every step that claims them.
+theorem step_transfer (x i y x1 i1 y1: u32)
+    (hs: $ step3 x i y x1 i1 y1 $)
+    (h1: $ edge_src_ir x1 i1 $) (h2: $ edge_ir_tgt i1 y1 $):
+  $ ule y1 u100 $;
+
+-- ── Observation through the chain ───────────────────────────────────────
+-- What the target observes after both edges: the source clamp's result, made
+-- explicit so the composition's subject is a value, not just a bound.
+theorem observes_chain (x i y: u32)
+    (h1: $ edge_src_ir x i $) (h2: $ edge_ir_tgt i y $):
+  $ observes (source_clamp x) y $;

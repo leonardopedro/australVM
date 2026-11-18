@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""PC02 finite controls: interpret the MM0 word/map theory on actual words.
+
+This is a control, not the general proof. The general claim is
+`mm0/proof_chain/word.mm0` checked by mm0-c over the whole carrier; this script
+can only find a bad interpretation, a changed comparison direction, or a broken
+map law at the sampled words.
+"""
+
+from __future__ import annotations
+
+import random
+import sys
+
+MASK = 0xFFFFFFFF
+U100 = 100
+UZERO = 0
+
+
+def meet(x: int, y: int) -> int:
+    return min(x, y)
+
+
+def join(x: int, y: int) -> int:
+    return max(x, y)
+
+
+def source_clamp(x: int) -> int:
+    """`if x > 100 then 100 else x` over unsigned 32-bit values."""
+    return U100 if x > U100 else x
+
+
+def reversed_clamp(x: int) -> int:
+    """The wrong comparison: `if x < 100 then 100 else x`."""
+    return U100 if x < U100 else x
+
+
+def signed_value(x: int) -> int:
+    return x - (1 << 32) if x >= (1 << 31) else x
+
+
+def signed_clamp(x: int) -> int:
+    """A signed reading of the same source condition."""
+    return U100 if signed_value(x) > U100 else x
+
+
+def check(cond: bool, name: str, detail: str = "") -> bool:
+    """Silent on success: the samples are 10k words, not 80k log lines."""
+    if cond:
+        return True
+    print(f"[FAIL] {name}{': ' + detail if detail else ''}")
+    return False
+
+
+def main() -> int:
+    ok = True
+    samples = {
+        0,
+        1,
+        2,
+        99,
+        100,
+        101,
+        (1 << 31) - 1,
+        1 << 31,
+        (1 << 32) - 2,
+        MASK,
+    }
+    rng = random.Random(20261118)
+    samples.update(rng.getrandbits(32) for _ in range(10_000))
+    samples = sorted(samples)
+
+    # The order and its two lattice operations.
+    for x in samples:
+        ok &= check(meet(x, x) == x, f"meet idempotent at {x}")
+        ok &= check(join(x, x) == x, f"join idempotent at {x}")
+        ok &= check(meet(x, U100) <= x, f"meet lower bound at {x}")
+        ok &= check(meet(x, U100) <= U100, f"meet upper argument at {x}")
+        ok &= check(join(x, U100) >= x, f"join lower argument at {x}")
+    print(f"[detail] lattice laws checked at {len(samples)} words")
+
+    # The clamp denotation and both source bounds.
+    for x in samples:
+        c = source_clamp(x)
+        ok &= check(c == meet(x, U100), f"clamp denotation at {x}")
+        ok &= check(c <= U100, f"clamp upper bound at {x}")
+        ok &= check(c >= UZERO, f"clamp lower bound at {x}")
+    print(f"[detail] clamp bounds checked at {len(samples)} words")
+
+    # A changed comparison direction must fail the upper bound, or the control
+    # is not measuring the direction at all.
+    bad = reversed_clamp(101)
+    ok &= check(bad > U100, "reversed comparison violates clamp upper bound", f"101 -> {bad}")
+
+    # A signed reading of the same bit pattern is a different numeric model.
+    signed_bad = signed_clamp(MASK)
+    ok &= check(
+        signed_bad > U100,
+        "signed reading of 0xFFFFFFFF violates clamp upper bound",
+        f"0xFFFFFFFF -> {signed_bad}",
+    )
+
+    # Map memory: one value per unsigned index.
+    mem = {}
+    i, j = 7, 9
+    mem2 = dict(mem)
+    mem2[i] = 42
+    ok &= check(mem2.get(i) == 42, "map read after write at the same index")
+    ok &= check(i != j, "map frame indices are independent")
+    ok &= check(mem2.get(j) == mem.get(j), "map write frame at an independent index")
+    mem3 = dict(mem2)
+    mem3[j] = 43
+    ok &= check(mem3.get(i) == 42, "map frame preserves the earlier write")
+    ok &= check(mem3.get(j) == 43, "map second write is visible")
+    for a in range(8):
+        for b in range(8):
+            m = {}
+            m[a] = a + 100
+            if a != b:
+                ok &= check(m.get(b) is None, f"map frame {a} != {b}")
+
+    if ok:
+        print("[pass] PC02 finite interpretation controls")
+        return 0
+    print("[FAIL] PC02 finite interpretation controls")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

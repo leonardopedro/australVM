@@ -1,0 +1,409 @@
+-- G15: the linear Austral half of the GPU job/buffer protocol.
+--
+-- The runtime checks the same rules for forged `Int64` identities; this module
+-- makes the rules unrepresentable in Austral. Every opaque type is a linear
+-- record whose constructor is private to this body, and the only functions
+-- that produce one are the `rs_gpu_*` calls below. There is no clone: the
+-- token a second receipt would need has already been consumed.
+--
+-- Status codes are mirrored from `safestos/gpu/src/service.rs`; they are
+-- handled here rather than re-exported, so module code cannot compare
+-- `Int64`s to fabricate a state transition.
+
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+
+module body Jobs is
+    pragma Foreign_Import(External_Name => "rs_gpu_open");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_gpu_open(require_hardware: Int64, adapter_index: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_close");
+    pragma Rust_Ownership(Params => "borrowed", Return => "owned");
+    function rs_gpu_close(handle: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_buffer_new");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_gpu_buffer_new(context: Int64, elements: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_buffer_write");
+    pragma Rust_Ownership(
+        Params => "borrowed, borrowed, borrowed, borrowed, borrowed",
+        Return => "owned"
+    );
+    function rs_gpu_buffer_write(
+        context: Int64,
+        buffer: Int64,
+        offset_bytes: Int64,
+        ptr: Address[Nat8],
+        len: Int64
+    ): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_buffer_read");
+    pragma Rust_Ownership(
+        Params => "borrowed, borrowed, borrowed, borrowed, borrowed",
+        Return => "owned"
+    );
+    function rs_gpu_buffer_read(
+        context: Int64,
+        buffer: Int64,
+        offset_bytes: Int64,
+        ptr: Address[Nat8],
+        cap: Int64
+    ): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_buffer_free");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_gpu_buffer_free(context: Int64, buffer: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_submit");
+    pragma Rust_Ownership(
+        Params => "borrowed, borrowed, borrowed, borrowed",
+        Return => "owned"
+    );
+    function rs_gpu_submit(context: Int64, output: Int64, n: Int64, seed: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_poll");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_gpu_poll(context: Int64, job: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_result");
+    pragma Rust_Ownership(
+        Params => "borrowed, borrowed, borrowed, borrowed",
+        Return => "owned"
+    );
+    function rs_gpu_result(
+        context: Int64,
+        job: Int64,
+        out_ptr: Address[Nat8],
+        cap: Int64
+    ): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "rs_gpu_cancel");
+    pragma Rust_Ownership(
+        Params => "borrowed, borrowed, borrowed",
+        Return => "owned"
+    );
+    function rs_gpu_cancel(context: Int64, job: Int64, mode: Int64): Int64 is end;
+
+    constant PENDING: Int64 := 0;
+    constant COMPLETE: Int64 := 1;
+    constant CANCELLED: Int64 := 2;
+    constant ELEMENT_BYTES: Int64 := 4;
+
+    record Context: Linear is
+        handle: Int64;
+    end;
+
+    record OwnedBuffer: Linear is
+        context: Int64;
+        handle: Int64;
+        bytes: Int64;
+    end;
+
+    record InFlightJob: Linear is
+        context: Int64;
+        handle: Int64;
+        buffer: Int64;
+        bytes: Int64;
+    end;
+
+    record PendingJob: Linear is
+        context: Int64;
+        handle: Int64;
+        buffer: Int64;
+        bytes: Int64;
+    end;
+
+    record CompletedResult: Linear is
+        context: Int64;
+        handle: Int64;
+        buffer: Int64;
+        bytes: Int64;
+    end;
+
+    record CancelledJob: Linear is
+        context: Int64;
+        handle: Int64;
+        buffer: Int64;
+        bytes: Int64;
+    end;
+
+    function open(require_hardware: Int64, adapter_index: Int64): OpenResult is
+        let handle: Int64 := rs_gpu_open(require_hardware, adapter_index);
+        if handle > 0 then
+            return Opened(context => Context(handle => handle));
+        else
+            return Refused(status => handle);
+        end if;
+    end;
+
+    function close(context: Context): Int64 is
+        let { handle: Int64 } := context;
+        return rs_gpu_close(handle);
+    end;
+
+    generic [R: Region]
+    function new_buffer(context: &[Context, R], elements: Int64): NewBuffer is
+        let handle: Int64 := rs_gpu_buffer_new(context->handle, elements);
+        if handle > 0 then
+            return Allocated(
+                buffer => OwnedBuffer(
+                    context => context->handle,
+                    handle => handle,
+                    bytes => elements * ELEMENT_BYTES
+                )
+            );
+        else
+            return BufferRefused(status => handle);
+        end if;
+    end;
+
+    generic [R: Region]
+    function buffer_length(buffer: &[OwnedBuffer, R]): Int64 is
+        return buffer->bytes;
+    end;
+
+    generic [R: Region]
+    function write_buffer(
+        context: &[Context, R],
+        buffer: &[OwnedBuffer, R],
+        offset_bytes: Int64,
+        address: Address[Nat8],
+        length: Int64
+    ): Int64 is
+        return rs_gpu_buffer_write(
+            context->handle,
+            buffer->handle,
+            offset_bytes,
+            address,
+            length
+        );
+    end;
+
+    generic [R: Region]
+    function read_buffer(
+        context: &[Context, R],
+        buffer: &[OwnedBuffer, R],
+        offset_bytes: Int64,
+        address: Address[Nat8],
+        cap: Int64
+    ): Int64 is
+        return rs_gpu_buffer_read(
+            context->handle,
+            buffer->handle,
+            offset_bytes,
+            address,
+            cap
+        );
+    end;
+
+    generic [R: Region]
+    function free_buffer(ctx: &[Context, R], buffer: OwnedBuffer): Int64 is
+        let {
+            context: Int64,
+            handle: Int64,
+            bytes: Int64
+        } := buffer;
+        -- The record's copy of the context number must be the one the caller
+        -- still holds; a buffer cannot be released through another context.
+        if ctx->handle /= context then
+            return -3;
+        end if;
+        return rs_gpu_buffer_free(ctx->handle, handle);
+    end;
+
+    generic [R: Region]
+    function submit(
+        ctx: &[Context, R],
+        buffer: OwnedBuffer,
+        n: Int64,
+        seed: Int64
+    ): SubmitOutcome is
+        let {
+            context: Int64,
+            handle: Int64,
+            bytes: Int64
+        } := buffer;
+        if ctx->handle /= context then
+            return SubmitRefused(
+                buffer => OwnedBuffer(
+                    context => context,
+                    handle => handle,
+                    bytes => bytes
+                ),
+                status => -3
+            );
+        end if;
+        let job: Int64 := rs_gpu_submit(ctx->handle, handle, n, seed);
+        if job > 0 then
+            return Submitted(
+                job => InFlightJob(
+                    context => ctx->handle,
+                    handle => job,
+                    buffer => handle,
+                    bytes => bytes
+                )
+            );
+        else
+            return SubmitRefused(
+                buffer => OwnedBuffer(
+                    context => context,
+                    handle => handle,
+                    bytes => bytes
+                ),
+                status => job
+            );
+        end if;
+    end;
+
+    function poll(job: InFlightJob): PollOutcome is
+        let {
+            context: Int64,
+            handle: Int64,
+            buffer: Int64,
+            bytes: Int64
+        } := job;
+        let status: Int64 := rs_gpu_poll(context, handle);
+        if status = PENDING then
+            return Pending(
+                job => PendingJob(
+                    context => context,
+                    handle => handle,
+                    buffer => buffer,
+                    bytes => bytes
+                )
+            );
+        else if status = COMPLETE then
+            return Complete(
+                result => CompletedResult(
+                    context => context,
+                    handle => handle,
+                    buffer => buffer,
+                    bytes => bytes
+                )
+            );
+        else if status = CANCELLED then
+            return Cancelled(
+                job => CancelledJob(
+                    context => context,
+                    handle => handle,
+                    buffer => buffer,
+                    bytes => bytes
+                )
+            );
+        else
+            return Failed(
+                buffer => OwnedBuffer(
+                    context => context,
+                    handle => buffer,
+                    bytes => bytes
+                ),
+                status => status
+            );
+        end if;
+    end;
+
+    function poll_pending(job: PendingJob): PollOutcome is
+        let {
+            context: Int64,
+            handle: Int64,
+            buffer: Int64,
+            bytes: Int64
+        } := job;
+        return poll(
+            InFlightJob(
+                context => context,
+                handle => handle,
+                buffer => buffer,
+                bytes => bytes
+            )
+        );
+    end;
+
+    function cancel(job: InFlightJob, mode: Int64): CancelOutcome is
+        let {
+            context: Int64,
+            handle: Int64,
+            buffer: Int64,
+            bytes: Int64
+        } := job;
+        let status: Int64 := rs_gpu_cancel(context, handle, mode);
+        if status = 0 then
+            return CancellationRequested(
+                job => PendingJob(
+                    context => context,
+                    handle => handle,
+                    buffer => buffer,
+                    bytes => bytes
+                )
+            );
+        else
+            return CancelRefused(
+                buffer => OwnedBuffer(
+                    context => context,
+                    handle => buffer,
+                    bytes => bytes
+                ),
+                status => status
+            );
+        end if;
+    end;
+
+    function cancel_pending(job: PendingJob, mode: Int64): CancelOutcome is
+        let {
+            context: Int64,
+            handle: Int64,
+            buffer: Int64,
+            bytes: Int64
+        } := job;
+        return cancel(
+            InFlightJob(
+                context => context,
+                handle => handle,
+                buffer => buffer,
+                bytes => bytes
+            ),
+            mode
+        );
+    end;
+
+    function release(job: CancelledJob): OwnedBuffer is
+        let {
+            context: Int64,
+            handle: Int64,
+            buffer: Int64,
+            bytes: Int64
+        } := job;
+        return OwnedBuffer(
+            context => context,
+            handle => buffer,
+            bytes => bytes
+        );
+    end;
+
+    function read(
+        result: CompletedResult,
+        address: Address[Nat8],
+        cap: Int64
+    ): ReadOutcome is
+        let {
+            context: Int64,
+            handle: Int64,
+            buffer: Int64,
+            bytes: Int64
+        } := result;
+        let status: Int64 := rs_gpu_result(context, handle, address, cap);
+        return Read(
+            buffer => OwnedBuffer(
+                context => context,
+                handle => buffer,
+                bytes => bytes
+            ),
+            status => status
+        );
+    end;
+end module body.
