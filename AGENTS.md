@@ -144,6 +144,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   and no `theorem`: `verify-invariants` fails if either appears, and also fails
   the `[gap]` line once `mm0/approved/isa.stmts` exists (the owner's approval
   is what turns a stated obligation into a cited one).
+- `scripts/check-lean-typing-proof` — the emitter's byte-identity gate: FockPair
+  in its three modes (expanded, shared, stopped) compared by size and sha256 with
+  `scripts/lean-typing-proof.golden.tsv`, so "the artifacts do not move" is a
+  check instead of a hand-run `cmp`. Needs the gitignored corpus under
+  `mm0/exports/` and reports an explained gap without it. Re-record an intended
+  byte change deliberately, in the same commit: `make check-typing-proof RECORD=1`.
 - `scripts/check-todo-ledger` — code files (`*.rs`/`*.sh`/`*.py`/`*.toml`)
   carry no `TODO`/`FIXME`/`HACK`/`XXX` marker unless the file is reviewed in
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a

@@ -82,6 +82,17 @@ jobs:
       - name: test the stdlib
         run: nix develop -c bash -c './standard/test_bin'
 
+      # §13.39: every emitter rewrite since §13.30 is justified by "the artifacts
+      # do not move", and each proof of that was a hand-run `cmp`. This gate is
+      # the same claim as a check: FockPair in its three modes, compared by size
+      # and sha256 with scripts/lean-typing-proof.golden.tsv. The export it needs
+      # is corpus and `mm0/exports/` is gitignored, so this checkout has none and
+      # the gate reports an explained gap and exits 0 — it never reports a pass.
+      # Where the corpus is restored (a developer tree, the corpus jobs) the same
+      # command fails on any byte drift.
+      - name: emitter byte-identity (lean-typing-proof)
+        run: nix develop -c bash -c 'python3 scripts/check-lean-typing-proof'
+
       - name: upload compiler binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # actions/upload-artifact@v4
         with:

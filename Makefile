@@ -135,6 +135,18 @@ READ_ONLY_CONTROLS = scripts/w3-emitter-drift-control \
                      scripts/w93-certification-drift-control \
                      scripts/w3-approval-state-drift-control
 
+# ── Emitter byte-identity gate (docs/lean4mm0.md §13.39) ─────────────────────
+# Every rewrite since §13.30 is justified by "the artifacts do not move", and
+# each was proved once, by hand, with `cmp`. This gate is that proof as a check:
+# FockPair in its three modes, sizes and sha256 against
+# `scripts/lean-typing-proof.golden.tsv`. It needs the corpus, and `mm0/exports/`
+# is gitignored, so a corpus-less checkout gets an explained gap and exit 0 —
+# never a silent pass. Re-record deliberately after an intended byte change:
+# `make check-typing-proof RECORD=1`.
+.PHONY: check-typing-proof
+check-typing-proof:
+	@python3 scripts/check-lean-typing-proof $(if $(RECORD),--record,)
+
 .PHONY: drift-controls
 drift-controls: | check-bridge-fresh
 	@echo "--- drift controls: one full gate run each, $(DRIFT_JOBS) at a time"
