@@ -897,7 +897,9 @@ the artifact, so `mm0-c` checks them too.
   perturbation (artifact, what was done, the check that fired, the message it
   produced, the date), and the gate re-reads the file on every run — each
   `gate_line` must still be text `scripts/verify-invariants` emits, each artifact
-  must still be a §W3 row, a row without a measurement date is refused, and each
+  must still be a §W3 row or a committed `mm0/` artifact (or the Liquid golden) —
+  the twelve `copy`-row controls name the file they moved — a row without a
+  measurement date is refused, and each
   `expected_message` is checked as a *skeleton*: it carries `…` wherever the gate
   interpolates a stem, a command or a count (or assembles the sentence from
   pieces), and every literal chunk between the ellipses, four characters or
@@ -929,16 +931,43 @@ the artifact, so `mm0-c` checks them too.
   reason the recorded row now marks that boundary with `…` rather than quoting a
   sentence no single line of the script contains.
 
+  **The twelve former `copy` rows, and the one that stays.**
+  `scripts/w3-drift-controls` is those twelve controls under one entry point
+  (`<case>`, `--list`, or `all`). Each case builds a scratch copy, drifts one
+  claim in it, runs the whole gate with the read-only override that points at the
+  copy, and requires exit 1 with the expected `[FAIL]` line — and, where a second
+  check reads the same copy, the `[pass]` lines that must not move. Two overrides
+  were added for this, both read-only relocations rather than grants:
+  `AUSTRALVM_MM0_DIR` (the model directory the Phase D, W8 pin, witness and
+  memsafe checks read) and `AUSTRALVM_LIQUID_GOLDEN` (the extracted OCaml the
+  subset check diffs). Measured 2026-11-18: all twelve hold — eleven at `140
+  passed, 7 explained gap(s), 1 failed`, `isa-hypothesis-pin` at `139 passed, 7
+  explained gap(s), 1 failed`, and `witness-axiom` at `137 passed, 8 explained
+  gap(s), 3 failed`, the extra two being the count checks that read the same
+  appended axiom. Each case's whole gate log is kept under
+  `$W3_DRIFT_LOGS` (default `/tmp/w3-drift-controls/<case>.log`); that log is
+  where the recorded totals come from. `make drift-controls` runs
+  `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
+  `make test` depends on it — the Makefile states the cost, because every control
+  is a full gate run (~4.5 min). The one `copy` row left is not a control anyone
+  forgot: `W3: $_stem matches its approved statements` has no branch to exercise
+  until an artifact is approved, and approving is the owner's commit.
+
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
   below are its output on this tree, not a hand count. Of 202 `check` statements,
   117 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 8 of those 117 have a measured perturbed-tree
+  number, not a different claim. 21 of those 117 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
-  neither: no check in the gate is unread now, and the gap is the 13 `copy` rows —
-  controls that are possible and not written — not a count of unwalked checks.
+  neither: no check in the gate is unread now, and the gap is the 1 `copy` row —
+  `W3: $_stem matches its approved statements`, which compares an *approved*
+  artifact with its record and so cannot be reached while no artifact is
+  approved; reaching it needs an approval, and only the owner may commit one.
+  Every other `copy` row has a case in `scripts/w3-drift-controls` (twelve
+  perturbed-tree runs, one per row, `make drift-controls`), which is why the
+  `copy` column now holds one row and not thirteen.
   `class` is one of five. **control** — the check already perturbs a scratch copy
   (or stages into a scratch root) on every run and requires the refusal, so its
   red path is observed without a second experiment. **derived** — the check
@@ -947,7 +976,8 @@ the artifact, so `mm0-c` checks them too.
   drifted claim on either side turns it red by construction. **copy** — a control
   of the `probes.tsv` shape is possible (copy the data, drift one claim, point an
   override at the copy) and is not written yet; this is the one class that is a
-  real gap. **tool** — the check only runs when an external tool is present
+  real gap, and it now holds one row: each of the twelve former members is a case
+  of `scripts/w3-drift-controls`, one `probes.tsv` row apiece. **tool** — the check only runs when an external tool is present
   (`mm0-c`, Lean, `why3`/`z3`, `cc`), so its observed failure mode so far is a
   missing tool, not a drifted claim. **none** — the check asserts a fact about the
   implementation (a file exists, a source line says something, a scan finds no
@@ -975,16 +1005,16 @@ the artifact, so `mm0-c` checks them too.
   | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
   | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |
   | `Liquid golden vc-fold-premises.mlw proves in full under z3` | tool | needs `why3` + `z3` |
-  | `Liquid subset extraction matches its pinned golden` | copy | the golden is data; no control drifts it |
+  | `Liquid subset extraction matches its pinned golden` | control | `scripts/w3-drift-controls liquid-golden` appends a line to an `AUSTRALVM_LIQUID_GOLDEN` copy and the diff refuses it |
   | `Liquid subset library extracts with the existing driver` | tool | needs the extraction driver |
   | `Phase D: lean2mm0 emitter present` | none | a script's existence |
   | `Phase D: generated certificate artifacts present` | none | files' existence |
-  | `Phase D: gap_certificate pins its trust split` | copy | the certificate's trust split is data |
-  | `Phase D: layout_certificate pins its trust split` | copy | same |
-  | `Phase D: $name declares its own vocabulary (no imported theory)` | copy | the document is parsed; a copy could import a theory |
-  | `Phase D: $name only claims rules its theory declares` | copy | same |
-  | `Phase D: $name states its measured coverage` | copy | the coverage cell is data |
-  | `Phase D: $name states its theory coverage` | copy | same |
+  | `Phase D: gap_certificate pins its trust split` | control | `phase-d-trust-split-gap` rewrites the split to `structural=8` in an `AUSTRALVM_MM0_DIR` copy |
+  | `Phase D: layout_certificate pins its trust split` | control | `phase-d-trust-split-layout` widens the same line to `structural=4` |
+  | `Phase D: $name declares its own vocabulary (no imported theory)` | control | its negation is the same drift as the coverage row below — `phase-d-self-vocabulary` deletes the marker and the artifact falls through to the refusal |
+  | `Phase D: $name only claims rules its theory declares` | control | `phase-d-imported-theory` adds a `used=` name the theory never declares |
+  | `Phase D: $name states its measured coverage` | control | `phase-d-measured-coverage` makes `-- clif-forms:` disagree with the forms the file declares |
+  | `Phase D: $name states its theory coverage` | control | `phase-d-theory-coverage` deletes the coverage line, `phase-d-self-vocabulary` deletes the self-declared marker |
   | `S21: ZENODO_SYMBOLS (uz_*) registered separately` | none | greps the symbol registry |
   | `S28: AuthorizationEngine trait present` | none | greps a source file |
   | `S29: UNFER_SYMBOLS table present` | none | greps a source file |
@@ -993,21 +1023,21 @@ the artifact, so `mm0-c` checks them too.
   | `S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt` | none | runs the repository's own test |
   | `S30: cadabra2-cli subprocess, not a dependency` | none | an architectural claim about source |
   | `U11: the CPS lowering's adapter descriptors match the golden` | derived | re-emits the descriptors from the fixture and diffs them with `test-programs/adapters/adapters.golden` |
-  | `W3: $_stem matches its approved statements` | copy | per approved row; would need `AUSTRALVM_APPROVED_ROOT` pointed at a drifted copy |
+  | `W3: $_stem matches its approved statements` | copy | per approved row, so it needs an approval to exist; `mm0/approved/` holds none and a control may not create one — the owner's first approval makes it measurable |
   | `W3: stage-approvals stages exactly §W3's pending rows` | control | the staging runs against a scratch root every run; the row is its refusal path |
   | `W6: generated C probe compiles and passes at tolerance 1e-8` | tool | needs `cc` |
-  | `W8: hypotheses are cited, pinned, and the unchecked count matches its pin` | copy | the count pin is data; `isa-hypotheses` is the comparator |
+  | `W8: hypotheses are cited, pinned, and the unchecked count matches its pin` | control | `isa-hypothesis-pin` rewrites `-- unchecked-citations:` to 1 in an `AUSTRALVM_MM0_DIR` copy |
   | `W8: mm0/slot_layout.mm0 + .mm1 accepted, in_bounds_alloc proved` | tool | needs `mm0-rs` + `mm0-c` |
   | `W9: mm0/clif.mm0 + .mm1 accepted by mm0-rs + mm0-c` | tool | needs the mm0 toolchain |
-  | `W9.3: clif_step is vocabulary — declared, stated, never axiomatized` | copy | cheap now: add an `axiom` line to an `AUSTRALVM_CLIF` copy |
-  | `W9.3: the refinement's citations still match their artifacts` | copy | cheap now: drift one `-- cites:` digest in an `AUSTRALVM_CLIF` copy |
+  | `W9.3: clif_step is vocabulary — declared, stated, never axiomatized` | control | `clif-vocabulary` prepends an `axiom` line to an `AUSTRALVM_CLIF` copy |
+  | `W9.3: the refinement's citations still match their artifacts` | control | `clif-citations` flips one `-- cites:` digest in an `AUSTRALVM_CLIF` copy |
   | `W9.3: a Lean development proves the same axioms` | tool | needs Lean |
   | `W9.3: the Lean development proves the toy's theorems too` | tool | needs Lean |
-  | `W9.3: the witness exercises every axiom the toy declares` | copy | the witness table is data; dropping a row would fire it |
+  | `W9.3: the witness exercises every axiom the toy declares` | control | `witness-axiom` appends an axiom to a toy copy that the witness does not hold; the two count checks read the same file and fire with it, which its log shows |
   | `logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)` | tool | needs the `unfer/logos` pipeline; the check owns its own tampered-certificate anchor |
   | `memsafe: theory, emitter, both fixtures, ledgers and certificates present` | none | files' existence |
   | `memsafe: certificate + ledger emitter present and executable` | none | a file's mode |
-  | `memsafe: fixtures exercise every automaton edge` | copy | the fixture is data; dropping an edge would fire it |
+  | `memsafe: fixtures exercise every automaton edge` | control | `memsafe-edge` drops `t_acq` from both `-- transitions exercised:` lines in an `AUSTRALVM_MM0_DIR` copy |
   | `memsafe: $stem pins its trust split` | none | the name is computed per artifact |
   | `service-isolation: pins, theory and both certificate halves present` | none | files' existence |
   | `service-isolation: emitter present and executable` | none | a file's mode |
@@ -2491,9 +2521,23 @@ generated bytes with the committed path). Measured 2026-11-17: exit 1,
 certification state matches mm0/approved/`, detail `no isa approval, yet
 clif.mm0 does not say [gap]`, with the `clif_step` vocabulary and the five pinned
 citations still passing — one uncertified claim, one failure. Recorded as the
-`certification-claim` row of `docs/data/w3/probes.tsv`. The approved branch — an approval exists, so
-a `[gap]` line is the drift — is not measured yet, and this paragraph says so
-rather than implying both directions are covered. The model's other self-claim is
+`certification-claim` row of `docs/data/w3/probes.tsv`.
+
+The approved branch — an approval exists, so a `[gap]` line is the drift — is
+measured too, and it took moving one path: the check asked
+`$repo_root/mm0/approved/isa.stmts` directly, which no override could reach, so it
+now asks `$_appr_root/isa.stmts` — the directory `AUSTRALVM_APPROVED_ROOT` already
+names for the §W3 rows — and `scripts/w3-drift-controls cert-approved` creates a
+scratch approval and runs the gate against it. Measured 2026-11-18: exit 1,
+`verify-invariants: 124 passed, 17 explained gap(s), 7 failed`, `[FAIL] W9.3:
+certification state matches mm0/approved/`, detail `…/approved/isa.stmts exists —
+clif.mm0 must cite it, not a gap`. Seven failures, not one, and the row says why:
+a scratch approval is inconsistent with the rest of the tree *by construction* —
+it is not the approved bytes, so the §W3 stmts column, the pending re-derivation,
+the composition counts and closure digests, the toy's axiom count and the staging
+count all move with it. A consistent approval is the owner's commit; the control's
+claim is only that the certificate line stops saying `[gap]` when an approval
+exists, and that is what it asserts. The model's other self-claim is
 driftable the same way, and measured: a copy of `mm0/clif.mm0` whose `-- proves:
 0 theorems` line says `1`, run with `AUSTRALVM_CLIF` at the copy, turns
 `[FAIL] W9: the CLIF model still claims no theorem` and nothing else —

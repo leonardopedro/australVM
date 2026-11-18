@@ -109,8 +109,25 @@ BRIDGE_SRC = safestos/cranelift/target/release/libaustral_cranelift_bridge.so
 BRIDGE_DIR = $(HOME)/.local/lib
 HOST_LOADER = /lib64/ld-linux-x86-64.so.2
 
+# The whole-gate drift controls. Each one builds a scratch copy, drifts exactly
+# one claim in it, runs `scripts/verify-invariants` against that copy and
+# requires the gate to refuse the drift — so each control costs one full gate
+# run (~4.5 min), and this is the long half of `make test`. They are here as a
+# target of their own so they can be run alone (`make drift-controls`) without
+# rebuilding the compiler, and so their cost is visible rather than hidden
+# inside the test target. `scripts/w3-drift-controls all` covers the checks the
+# census classified `copy`; the `*-drift-control` scripts cover the rest.
+.PHONY: drift-controls
+drift-controls: | check-bridge-fresh
+	@echo "--- drift controls: one full gate run each, ~4.5 min per case"
+	@bash scripts/w3-drift-controls all
+	@for c in scripts/*-drift-control; do \
+	  echo "--- $$c"; \
+	  bash "$$c" || exit 1; \
+	done
+
 .PHONY: test
-test: $(BIN) | check-bridge-fresh
+test: $(BIN) drift-controls | check-bridge-fresh
 	@mkdir -p $(BRIDGE_DIR)
 	@cp -f $(BRIDGE_SRC) $(BRIDGE_DIR)/
 	@LD_LIBRARY_PATH=$(BRIDGE_DIR) dune build @runtest

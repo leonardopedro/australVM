@@ -457,10 +457,24 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   lines that read the same cell red (digest column, approved-row emitter check,
   staging count) and nothing else, and the shape check plus the emitter column
   still green. One full gate run.
+- `scripts/w3-drift-controls` — the twelve controls for the checks the census
+  classified `copy`, one case each (`<case>`, `--list`, `all`): Phase D's two
+  trust splits and its four coverage/vocabulary claims, the W8 hypothesis pin,
+  the `clif_step` vocabulary and pinned citations, the witness's axiom table, the
+  memsafe edge census, the Liquid golden, and the refinement's certificate with an
+  approval present. Each builds a scratch copy, drifts one claim in it, runs the
+  whole gate with the read-only override that points at the copy
+  (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
+  `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
+  expected `[FAIL]` line. One full gate run per case; logs kept under
+  `$W3_DRIFT_LOGS`. `make drift-controls` runs it plus every `*-drift-control`
+  script, and `make test` depends on it. It never writes `mm0/approved/` — the
+  approval a case needs lives in a scratch root — so no control can approve.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
-  stale `.mm1`, and the six whole-gate drift controls — §W3's emitter cell, its
-  state cell, §W9.3's composition count and closure-digest cells, the
-  refinement's certificate line and the model's `proves: 0 theorems` pin):
+  stale `.mm1`, §W3's emitter and state cells, §W9.3's composition count and
+  closure-digest cells, the refinement's certificate line in both directions, the
+  model's `proves: 0 theorems` pin, and one row per `scripts/w3-drift-controls`
+  case):
   artifact, perturbation, the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
   a `gate_line` the script no longer emits, an `expected_message` skeleton whose
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
