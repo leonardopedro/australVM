@@ -323,19 +323,15 @@ fn a_wrapper_that_casts_the_float_through_i64_loses_negative_zero() {
 /// `<target>__adapter`; the build must generate, compile and load the wrappers,
 /// and the JIT must resolve the mediated calls and execute the entry.
 ///
-/// `compute` returns 0 unless both mediated results are right, so a wrapper
-/// that decoded a parameter wrongly cannot produce the expected `7`.
-///
-/// Float64 is not in this module: the CPS IR carries a 64-bit *integer* literal
-/// and no float value (`CpsGen.FloatLit`), so a Float64 parameter reaches the
-/// wrapper as an integer word. Measured while writing this test: a
-/// `rs_scale_bits(2.5, 4)` module returned 12 — the bits of
-/// `4 * f64::from_bits(3)`, because the literal had been rounded to `3`. The
-/// Float64 encoding is therefore verified at the C ABI (the first test), and the
-/// JIT cannot carry it until the CPS format has a float value.
+/// `compute` returns 0 unless every mediated result is right, and the Float64
+/// leg is checked end to end: `rs_scale(2.5, 4)` returns a float, `rs_bits`
+/// reads that float's word, and the entry returns it. 10.0's IEEE bits are
+/// 0x4024000000000000 — the value a float literal written as a rounded integer
+/// cannot produce (that bug returned exactly 12), so this one number covers the
+/// literal encoding, the `F64` parameter decode and the `F64` result encode.
 #[test]
 fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
-    const EXPECTED: i64 = 7;
+    const EXPECTED: i64 = 0x4024_0000_0000_0000;
 
     let front_end = Path::new(env!("CARGO_MANIFEST_DIR")).join("../austral");
     assert!(
@@ -363,7 +359,11 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
         "#[no_mangle]\n\
          pub extern \"C\" fn rs_narrow(width: i32) -> i64 { width as i64 }\n\
          #[no_mangle]\n\
-         pub extern \"C\" fn rs_toggle(on: bool) -> bool { !on }\n",
+         pub extern \"C\" fn rs_toggle(on: bool) -> bool { !on }\n\
+         #[no_mangle]\n\
+         pub extern \"C\" fn rs_scale(factor: f64, value: i64) -> f64 { factor * value as f64 }\n\
+         #[no_mangle]\n\
+         pub extern \"C\" fn rs_bits(value: f64) -> i64 { value.to_bits() as i64 }\n",
     )
     .expect("crate source");
 
@@ -374,7 +374,7 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
         "[module]\n\
          name = \"AdapterLive\"\n\n\
          [grants]\n\
-         kernel = [\"rs_narrow__adapter\", \"rs_toggle__adapter\"]\n",
+         kernel = [\"rs_narrow__adapter\", \"rs_toggle__adapter\", \"rs_scale__adapter\", \"rs_bits__adapter\"]\n",
     )
     .expect("manifest");
 
@@ -408,10 +408,10 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
     // The wrappers were generated from the emitted descriptors, not found by
     // accident: the driver names every one it built and loaded.
     assert!(
-        stderr.contains("built and loaded 2 adapter wrapper(s)"),
+        stderr.contains("built and loaded 4 adapter wrapper(s)"),
         "the build must generate and load the wrappers; stderr:\n{stderr}"
     );
-    for symbol in ["rs_narrow__adapter", "rs_toggle__adapter"] {
+    for symbol in ["rs_narrow__adapter", "rs_toggle__adapter", "rs_scale__adapter", "rs_bits__adapter"] {
         assert!(stderr.contains(symbol), "stderr must name {symbol}:\n{stderr}");
     }
 

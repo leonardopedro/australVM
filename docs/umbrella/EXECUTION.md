@@ -577,14 +577,14 @@ run reports exactly that and still returns its documented `RESULT`.
 `umbrella: the module needs no scalar adapters` then
 `RESULT -1781872834555808882`.
 
-### U11.4 — the live JIT path, and what it cannot carry yet
+### U11.4 — the live JIT path, and the float word
 
 `scalar_roundtrip.rs`'s third test drives the real `umbrella` binary over
-`modules/AdapterLive.aum`, whose two externs are `Int32` and `Bool` — both
-non-word-native, so both go through `<target>__adapter`. The test builds the
-target crate, grants the two adapter symbols in a manifest, and asserts the
-`RESULT`, the `built and loaded 2 adapter wrapper(s)` line naming each symbol,
-and that a wrong `--expect` fails (`compute` returns `0` unless every mediated
+`modules/AdapterLive.aum`, whose four externs are `Int32`, `Bool` and two
+`Float64` signatures — none word-native, so all go through `<target>__adapter`.
+The test builds the target crate, grants the four adapter symbols in a manifest,
+and asserts the `RESULT`, the `built and loaded 4 adapter wrapper(s)` line naming
+each symbol, and that a wrong `--expect` fails (`compute` returns `0` unless every mediated
 result is right, so the wrong-expectation run is the oracle that `RESULT` is
 really the entry's). It needs the dune-built `austral` front-end at the repo
 root and **fails** with that instruction when it is absent, rather than skipping.
@@ -593,19 +593,26 @@ root and **fails** with that instruction when it is absent, rather than skipping
 `scripts/test-umbrella --case SUITE_UMBRELLA_SCALARS` → pass, 3 tests (pin
 raised 2 → 3).
 
-**What it exposed: `Float64` cannot cross the live path.** A first version of
-the module also called `rs_scale_bits(2.5, 4)` and returned the bits of the
-product. It returned `12`. That is not a wrapper bug: the CPS binary carries one
-64-bit *integer* literal and no float value, so `CpsGen.FloatLit` rounds a float
-constant to an `Int64` (deliberately, documented there), and the adapter — which
-correctly decodes its `u64` parameter as an `f64` — read `f64::from_bits(3)`;
-`4 * that` is a denormal whose bits are `12`. So `Int32`, `Bool` and the word
-classes travel end to end, `Float64`/`Float32` do not, and the adapter's float
-encoding is verified at the C ABI level (the first test) instead of through the
-JIT. Making it travel needs a float value in the CPS format, which is a format
-change and therefore its own step; the module documents the gap where it was
-found rather than being given a float-shaped hole.
+**What it exposed, and the fix: `Float64` crossed as a rounded integer.** A first
+version of the module also called `rs_scale_bits(2.5, 4)` and returned the bits
+of the product. It returned `12`. That was not a wrapper bug: the CPS binary
+carries one 64-bit literal and no float type, so `CpsGen.FloatLit` wrote
+`Int64.of_float (Float.round f)` — `2.5` became the word `3` — and the adapter,
+which correctly decodes its `u64` parameter as an `f64`, read
+`f64::from_bits(3)`; `4 * that` is a denormal whose bits are exactly `12`.
 
-**Limit.** The build now generates, compiles and loads the wrappers, but the
-`Float64`/`Float32` half of the adapter vocabulary remains C-ABI-only until CPS
-has a float value (above).
+The word a float needs in a one-word value model is its IEEE-754 bit pattern, so
+`FloatLit` now writes `Int64.bits_of_float f`. Every `f64` has bits (NaN and
+infinity included), which is why the out-of-range compile error that rounding
+required is gone with it. The JIT needed no change: every import is declared
+`(i64, …) -> i64` and every value is one word, so a float parameter was always
+passed verbatim — only the literal was lying about the value. `AdapterLive.aum`
+now takes a `Float64` parameter *and* returns one (`rs_scale` then `rs_bits`),
+and the expected `0x4024000000000000` covers the literal, the `F64` parameter
+decode and the `F64` result encode in one number that the old encoding could not
+produce.
+
+**Still not carried:** `Float32` (the compiler's float constants are all
+`MonoDoubleFloat`, so a `F32` adapter would be handed an f64 bit pattern) and
+float *arithmetic* — the JIT's `add`/`sub`/`mul` are integer operations, so a
+computed `Float64` still needs a foreign call to do its math.
