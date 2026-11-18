@@ -4,9 +4,11 @@
 #   nix-shell -p python3 --run 'python3 scripts/check-census'
 #
 # The plan's "which checks have no measured failure" paragraph quotes four
-# numbers: the statements, the distinct texts, the ones a table row or a probe
-# row covers, and the ones neither covers. This script is where those numbers
-# come from, so the paragraph can be re-measured instead of trusted.
+# numbers: the statements, the distinct texts, the ones a probe row measures, and
+# the ones no row covers at all. This script is where those numbers come from, so
+# the paragraph can be re-measured instead of trusted. It also prints the class
+# totals (`control` / `derived` / `copy` / `tool` / `none`) the table assigns, so
+# "the gap is the copy rows" is a count and not a claim.
 #
 # Reading the counts:
 #   statements  every `check "…"` in scripts/verify-invariants, one per line of
@@ -23,8 +25,10 @@
 #              per-artifact name, so rows and matches differ by a few.
 #   probes      rows of docs/data/w3/probes.tsv, matched by the check text the
 #              row records (column 4).
-#   neither     distinct texts with no table row and no probe row. These are the
-#              gap the plan's paragraph is about.
+#   neither     distinct texts with no table row and no probe row — the part of
+#              the table no reader has classified. The paragraph says this is 0.
+#   by class    how the table's `class` column divides the classified texts.
+#              `control` and `derived` are evidence already; `copy` is the gap.
 #
 # Exit status: 0 measured, 1 the plan's numbers and the tree disagree, 2 python3
 # missing (the wrapper above supplies it).
@@ -38,7 +42,7 @@ command -v python3 >/dev/null 2>&1 || {
     exit 2
 }
 
-exec python3 - "$repo_root" <<'PY'
+exec python3 - "$repo_root" "$@" <<'PY'
 import pathlib, re, sys
 
 root = pathlib.Path(sys.argv[1])
@@ -73,7 +77,14 @@ def strip_counts(t):
 
 
 distinct = sorted({strip_counts(t) for t in texts})
-rows = {m for m in re.findall(r'^  \| `([^`]*)` \| (?:copy|tool|none) \|', plan, re.M)}
+distinct_texts = set(distinct)
+rows = {m for m in re.findall(
+    r'^  \| `([^`]*)` \| (?:control|copy|derived|tool|none) \|', plan, re.M)}
+classes = {}
+for name, cls in re.findall(
+        r'^  \| `([^`]*)` \| (control|copy|derived|tool|none) \|', plan, re.M):
+    if name in distinct_texts:
+        classes[cls] = classes.get(cls, 0) + 1
 probe_texts = {strip_counts(line.split('\t')[3]) for line in probes}
 
 in_table = rows & set(distinct)
@@ -87,6 +98,8 @@ print(f"table rows  {len(rows)} ({len(in_table)} matched a distinct text exactly
 print(f"probe rows  {len(probes)} ({len(in_probes)} matched)")
 print(f"covered     {len(covered)}")
 print(f"neither     {len(neither)}")
+print("by class    " + ", ".join(f"{k} {classes.get(k, 0)}"
+                               for k in ("control", "derived", "copy", "tool", "none")))
 
 if "-v" in sys.argv or "--list-neither" in sys.argv:
     for t in neither:
@@ -97,7 +110,9 @@ if "-v" in sys.argv or "--list-neither" in sys.argv:
 want = [
     f"{len(texts)} `check` statements",
     f"{len(distinct)} distinct texts",
-    f"{len(distinct) - len(covered)} with neither",
+    f"{len(probes)} of those {len(distinct)} have",
+    f"{len(neither)} distinct texts with neither",
+    f"the {classes.get('copy', 0)} `copy` rows",
 ]
 missing = [w for w in want if w not in plan_flat]
 if missing:

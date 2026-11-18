@@ -448,10 +448,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
   `no isa approval, yet clif.mm0 does not say [gap]`, and the `clif_step`
   vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
+- `scripts/w3-approval-state-drift-control` — the §W3 control for the state
+  cell: it rewrites `isa`'s cell in a copy of the plan to `` `[pass]`, approved in
+  `mm0/approved/` `` with no `mm0/approved/isa.stmts` behind it, and requires
+  `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: the
+  plan's §W3 stmts column matches what each artifact holds`, the detail
+  `isa(says approved, but …/isa.stmts does not exist)`, exactly the three other
+  lines that read the same cell red (digest column, approved-row emitter check,
+  staging count) and nothing else, and the shape check plus the emitter column
+  still green. One full gate run.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
-  stale `.mm1`, and the four whole-gate drift controls — §W3's emitter cell,
-  §W9.3's composition count and closure-digest cells, and the refinement's
-  certificate line): artifact, perturbation, the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
+  stale `.mm1`, and the six whole-gate drift controls — §W3's emitter cell, its
+  state cell, §W9.3's composition count and closure-digest cells, the
+  refinement's certificate line and the model's `proves: 0 theorems` pin):
+  artifact, perturbation, the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
   a `gate_line` the script no longer emits, an `expected_message` skeleton whose
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
   a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
@@ -461,9 +471,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   it censuses every `check "…"` in `scripts/verify-invariants` as statements,
   distinct texts (a trailing count parenthetical dropped — it reports a number,
   not a different claim), the texts the plan's census table names, the texts a
-  `docs/data/w3/probes.tsv` row records, and the residue with neither. It exits
-  1 when the plan no longer quotes the measured counts, so a table that grows
-  without the paragraph moving is caught here. Kept out of `verify-invariants`
+  `docs/data/w3/probes.tsv` row records, the residue with neither, and the
+  `class` totals (`control` / `derived` / `copy` / `tool` / `none`). It exits 1
+  when the plan no longer quotes the measured counts — including the `copy`
+  count, which is the gap — so a table that grows without the paragraph moving
+  is caught here. Kept out of `verify-invariants`
   because it reads the plan's prose rather than an artifact.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
