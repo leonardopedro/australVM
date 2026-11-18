@@ -1,0 +1,2842 @@
+#!/usr/bin/env python3
+"""Prototype: emit an MM0 *proof* that a BookProof theorem's proof term has its type.
+
+This is the translation the corpus does not do yet: `lean2mm0-stmts` records a
+declaration as an axiom, this emits a derivation in the typing judgment of
+`docs/cic_typing.mm0` (`tty ctx term type`), then has mm0-rs and mm0-c judge it.
+
+What is derived, and what is assumed, are both counted and printed:
+
+  derived   every `tabs` (ty_abs) and every `tapp` (ty_app) of the spine, plus
+            context weakening and the substitution-conversion premises that are
+            discharged by `tdefeq_refl`.
+  assumed   the *type* of each leaf (a Mathlib constant, or the body when it is
+            not decomposed) and one `tdefeq (tsubst B x) r` per application,
+            because this prototype has no definitional-equality checker: that
+            is the deltanet's job (`tdefeq_iso` in the theory).
+
+Usage: lean-typing-proof <export.ndjson> <decl-name-substring> <out-dir> [--spine]
+
+Without `--spine` the body's typing is one axiom (the smallest artifact that
+closes the statement). With `--spine` the body's applications are derived with
+ty_var/ty_abs/ty_app, and the substitutions `ty_app` premise needs become the
+counted obligations a deltanet has to discharge.
+"""
+from __future__ import annotations
+
+import importlib.machinery
+import array
+import atexit
+import hashlib
+import importlib.util
+import io
+import json
+import os
+import re
+import shutil
+import sys
+import time
+import traceback
+from pathlib import Path
+
+# The parser is shared with the statement translator, not copied: this tool
+# reads the same export format and must agree with it byte for byte.
+AVM = Path(__file__).resolve().parent.parent
+LEAN2MM0 = AVM / "scripts" / "lean2mm0"
+loader = importlib.machinery.SourceFileLoader("lean2mm0", str(LEAN2MM0))
+spec = importlib.util.spec_from_loader("lean2mm0", loader)
+l2m = importlib.util.module_from_spec(spec)
+sys.modules["lean2mm0"] = l2m
+loader.exec_module(l2m)
+
+# The export table's cache bound is measurable: `LazyExprs.__getitem__` re-seeks
+# and re-parses its record on a miss, and a certificate walk would rather hit
+# (§13.35 measures what the misses cost). The default is the table's own 200 000.
+_EXPRS_CACHE = int(os.environ.get("LTP_EXPRS_CACHE", "0") or 0)
+if _EXPRS_CACHE:
+    l2m.LazyExprs.CACHE_MAX = _EXPRS_CACHE
+
+# `LTP_PROBE_LOOKUP=1` times `LazyExprs.__getitem__` itself (§13.35). Samples say
+# how often the walk is *at* the lookup; only a timer says what it costs, and the
+# two need not agree — a `dict.get` hit is short enough to be sampled often and
+# cheap enough not to matter.
+if os.environ.get("LTP_PROBE_LOOKUP", "0") == "1":
+    _probe = {"t": 0.0, "n": 0, "miss": 0}
+    _lazy_get = l2m.LazyExprs.__getitem__
+
+    def _timed_get(self, eid):
+        t0 = time.perf_counter()
+        rec = _lazy_get(self, eid)
+        _probe["t"] += time.perf_counter() - t0
+        _probe["n"] += 1
+        return rec
+
+    l2m.LazyExprs.__getitem__ = _timed_get
+
+    # A miss is the `json.loads` on a record the cache no longer holds, so it is
+    # counted where it happens rather than inferred from the cache's contents.
+    _lazy_loads = json.loads
+    _probe["loads"] = 0
+
+    def _count_loads(*a, **kw):
+        _probe["loads"] += 1
+        return _lazy_loads(*a, **kw)
+
+    l2m.json.loads = _count_loads
+
+    def _probe_report():
+        el = max(1e-9, time.monotonic() - _PROC_T0)
+        print(f"[probe] LazyExprs.__getitem__: {_probe['n']} calls, "
+              f"{_probe['t']:.1f} s inside ({100 * _probe['t'] / el:.1f} % of a "
+              f"{el:.1f} s run)", file=sys.stderr, flush=True)
+        print(f"[probe] json.loads calls: {_probe['loads']}",
+              file=sys.stderr, flush=True)
+
+    atexit.register(_probe_report)
+
+# ── payload constants ────────────────────────────────────────────────────
+# This toolchain rejects numeral literals inside `$…$`, so every nat payload
+# (a universe id, a symbol id, a de Bruijn index) is a declared constant.
+NATS: list[str] = []
+
+
+def nat_name(tag: str) -> str:
+    name = "t_" + "".join(c if c.isalnum() else "_" for c in tag)
+    if name not in NATS:
+        NATS.append(name)
+    return name
+
+
+SYMS: dict[str, str] = {}
+
+
+# Tokens are appended to a term's encoding one at a time, and one term on
+# `nsOuterFock…singleTime` is 67.5 M tokens: kept as individual Python strings
+# that is ~57 B of object header and pointer apiece, ~3.8 GB for text worth a
+# few hundred MB, and the process died joining it (§13.30). Coalescing every
+# ~64 KiB of tokens into one chunk leaves memory at the size of the text, and
+# the chunk boundaries never reach the bytes written.
+ENC_CHUNK = 64 << 10
+
+# Process start on the same clock the stopping conditions use, so a stopped run
+# can report how long it took without threading a timestamp through the walk.
+_PROC_T0 = time.monotonic()
+
+
+class _Hasher:
+    """A sha256 over text that arrives in chunks (see `Enc.digest`).
+
+    Two distinct expression ids can encode to the same term text, and the
+    substitution memo must not then make two axioms where one was — keying it
+    by id produced 143 axioms for 141 texts on `multiShiftSeq_succ`. Hashing the
+    text keeps the equality the strings had without holding them.
+    """
+
+    __slots__ = ("h", "held")
+
+    def __init__(self):
+        self.h = hashlib.sha256()
+        self.held = ""
+
+    def write(self, s: str) -> None:
+        if self.held:
+            s = self.held + s
+            self.held = ""
+        if s and "\ud800" <= s[-1] <= "\udbff":
+            self.held, s = s[-1], s[:-1]
+        if s:
+            self.h.update(s.encode())
+
+    def digest(self) -> bytes:
+        if self.held:
+            self.h.update(self.held.encode())
+            self.held = ""
+        return self.h.digest()
+
+
+# Characters `json.dumps` escapes inside a string: the quote, the backslash, and
+# the C0 controls. `ensure_ascii` also escapes everything above U+007F, which is
+# why the fast path below requires `isascii`.
+_ESC_RE = re.compile(r'["\\\x00-\x1f]')
+# `LTP_ENC_FASTESC=1` measures what per-chunk `json.dumps` escaping costs (§13.35:
+# §13.34 found 4.5 % of the walk's samples at the top of `json.dumps`). A chunk
+# with nothing to escape is written between quotes; anything else still goes
+# through `json.dumps`, so the bytes are the same either way.
+_FASTESC = os.environ.get("LTP_ENC_FASTESC", "0") == "1"
+
+
+def _esc(s: str) -> str:
+    """`json.dumps(s)` without the quotes — the escaping, not the wrapping."""
+    if _FASTESC and s.isascii() and not _ESC_RE.search(s):
+        return s
+    return json.dumps(s)[1:-1]
+
+
+class _JsonStr:
+    """`_json_write_str` for text that arrives in chunks and never as a whole.
+
+    Escaping is per character, so chunks can be escaped separately as long as a
+    surrogate pair is not split across two of them: a trailing high surrogate is
+    held back and escaped with the chunk that completes it.
+    """
+
+    __slots__ = ("out", "held")
+
+    def __init__(self, out):
+        self.out = out
+        self.held = ""
+        out.write('"')
+
+    def write(self, s: str) -> None:
+        if self.held:
+            s = self.held + s
+            self.held = ""
+        if s and "\ud800" <= s[-1] <= "\udbff":
+            self.held, s = s[-1], s[:-1]
+        if s:
+            self.out.write(_esc(s))
+
+    def close(self) -> None:
+        if self.held:
+            self.out.write(json.dumps(self.held)[1:-1])
+            self.held = ""
+        self.out.write('"')
+
+
+# A `str` piece reaches the sink in one `write`, and a text stream encodes the
+# whole argument before returning: on the largest obligation the λ's domain is
+# 2.2 GB, so the string and its encoding were alive together and the second of
+# them is what raised `MemoryError` at 10 GiB (§13.36). Writing a piece in
+# windows bounds that to one window; 8 MiB is 0.08 % of the cap, and the window
+# boundaries never reach the bytes written.
+_WRITE_WINDOW = 8 << 20
+
+
+def _write_str(out, s: str) -> int:
+    """Write `s` in bounded windows, returning its length in characters."""
+    n = len(s)
+    if n <= _WRITE_WINDOW:
+        out.write(s)
+        return n
+    i = 0
+    while i < n:
+        j = min(i + _WRITE_WINDOW, n)
+        # A window may not split a surrogate pair: the escapings that receive
+        # these windows hold only a trailing *high* surrogate back.
+        if j < n and "\udc00" <= s[j] <= "\udfff":
+            j -= 1
+        out.write(s[i:j])
+        i = j
+    return n
+
+
+def _put_piece(out, enc, piece) -> int:
+    """Write one statement piece to `out`, returning its size in bytes.
+
+    A piece is plain text, `("enc", eid)` for an encoded term, or
+    `("tsubst", b, x)` for the deferred substitution both the axiom line and
+    the certificate's `lhs` spell out.
+    """
+    if isinstance(piece, str):
+        return _write_str(out, piece)
+    n = 0
+    if piece[0] == "enc":
+        return enc.write(piece[1], out)
+    if piece[0] == "tsubst":
+        out.write("(tsubst ")
+        n = 9 + enc.write(piece[1], out)
+        out.write(" ")
+        n += 1 + enc.write(piece[2], out)
+        out.write(")")
+        return n + 1
+    raise SystemExit(f"unknown piece {piece[0]!r}")
+
+
+def _put_json(out, enc, piece) -> None:
+    """`_json_write_str` of a piece, streaming an encoded term through it."""
+    if isinstance(piece, str):
+        _json_write_str(out, piece)
+        return
+    w = _JsonStr(out)
+    _put_piece(w, enc, piece)
+    w.close()
+
+
+def _piece_str(enc, piece) -> str:
+    """A piece as a string, for the in-process path that retains its records."""
+    if isinstance(piece, str):
+        return piece
+    buf = io.StringIO()
+    _put_piece(buf, enc, piece)
+    return buf.getvalue()
+
+
+class _Head:
+    """A buffer that stops an encoding once `n` characters are in hand."""
+
+    class _Done(Exception):
+        pass
+
+    __slots__ = ("n", "parts", "chars", "tokens")
+
+    def __init__(self, n: int):
+        self.n = n
+        self.parts: list[str] = []
+        self.chars = 0
+        self.tokens = 0
+
+    def append(self, t: str) -> None:
+        t = t[: self.n - self.chars]
+        self.parts.append(t)
+        self.chars += len(t)
+        self.tokens += 1
+        if self.chars >= self.n:
+            raise _Head._Done
+
+
+class EncBuf:
+    """A term encoding under construction, held as a few large chunks.
+
+    With a `sink` the chunks are written out as they fill instead of being
+    kept, so a term whose text is gigabytes can be materialised on disk
+    without ever existing in memory (see `Enc.spool`).
+    """
+
+    __slots__ = ("chunks", "pend", "pend_chars", "tokens", "sink", "bytes")
+
+    def __init__(self, sink=None):
+        self.chunks: list[str] = []
+        self.pend: list[str] = []
+        self.pend_chars = 0
+        self.tokens = 0
+        self.sink = sink
+        self.bytes = 0
+
+    def _flush(self) -> None:
+        if not self.pend:
+            return
+        s = "".join(self.pend)
+        self.pend.clear()
+        self.pend_chars = 0
+        if self.sink is None:
+            self.chunks.append(s)
+        else:
+            self.sink.write(s)
+            self.bytes += len(s)
+
+    def append(self, t: str) -> None:
+        self.pend.append(t)
+        self.pend_chars += len(t)
+        self.tokens += 1
+        if self.pend_chars >= ENC_CHUNK:
+            self._flush()
+
+    def take(self) -> str:
+        self._flush()
+        return "".join(self.chunks)
+
+
+class Enc:
+    def __init__(self, ex, succ_idx: bool = False):
+        self.ex = ex
+        self.levels: dict[int, str] = {}
+        # `cic_typing.mm0` names variables by *term* (`tvar (tsucc tzero)`), so
+        # weakening is the theory's `tsucc`; the statement corpus writes flat
+        # index constants instead (its artifacts have no weakening steps). The
+        # typing derivation needs the first form, the corpus the second.
+        self.succ_idx = succ_idx
+        # The export is a DAG and `enc` re-expands it: a term mentioned twice
+        # was encoded twice, and the derivation walks the same terms again on
+        # every rule it shares them between. Memoised by id, bounded by the
+        # total size of the cached strings.
+        self._memo: dict[int, str] = {}
+        self._memo_bytes = 0
+        self._digest: dict[int, bytes] = {}
+
+    def sort(self, e) -> str:
+        # A universe is a *term*: its exported level id becomes one constant, so
+        # two distinct universes never collide (a single `tsort` would make
+        # `Sort u` and `Sort v` equal and let a wrong derivation check).
+        key = str(e["sort"])
+        if key not in self.levels:
+            self.levels[key] = nat_name(f"lev{len(self.levels)}")
+        return f"(tsort {self.levels[key]})"
+
+    def sym(self, name: str) -> str:
+        if name not in SYMS:
+            SYMS[name] = nat_name(f"sym{len(SYMS)}")
+        return f"(tentity {SYMS[name]})"
+
+    def enc(self, eid: int) -> str:
+        s = self._memo.get(eid)
+        if s is not None:
+            return s
+        buf = EncBuf()
+        self._enc(eid, buf)
+        s = buf.take()
+        if self._memo_bytes < ENC_MEMO_BYTES:
+            self._memo[eid] = s
+            self._memo_bytes += len(s)
+        return s
+
+    def write(self, eid: int, sink) -> int:
+        """Append `eid`'s encoding to `sink`, returning its size in bytes.
+
+        The term never becomes a string: this is what an artifact line made of
+        several term texts needs, since on `nsOuterFock…singleTime` one of them
+        is 2.2 GB (§13.30).
+        """
+        buf = EncBuf(sink)
+        self._enc(eid, buf)
+        buf._flush()
+        return buf.bytes
+
+    def digest(self, eid: int) -> bytes:
+        """sha256 of `eid`'s encoding, computed without materialising it."""
+        d = self._digest.get(eid)
+        if d is not None:
+            return d
+        h = _Hasher()
+        buf = EncBuf(h)
+        self._enc(eid, buf)
+        buf._flush()
+        d = h.digest()
+        # One 32-byte digest per expression seen: the memo is a convenience (a
+        # miss recomputes), so it is simply dropped when it gets large.
+        if len(self._digest) > 200_000:
+            self._digest.clear()
+        self._digest[eid] = d
+        return d
+
+    def head(self, eid: int, n: int) -> str:
+        """The first `n` characters of `eid`'s encoding, and no more."""
+        buf = _Head(n)
+        try:
+            self._enc(eid, buf)
+        except _Head._Done:
+            pass
+        return "".join(buf.parts)
+
+    def spool(self, eid: int, path: Path) -> int:
+        """Write `eid`'s encoding to `path`, never holding it as one string.
+
+        `enc` returns the whole text, which on `nsOuterFock…singleTime` is
+        1.94 GB for the type and 1.94 GB again for the value; both stayed
+        resident for the whole run, and the statement f-string then copied
+        them twice more (§13.30). The bytes are the same ones `enc` produces.
+        """
+        with path.open("w") as fh:
+            buf = EncBuf(fh)
+            self._enc(eid, buf)
+            buf._flush()
+            return buf.bytes
+
+    def _enc(self, eid: int, out: EncBuf) -> None:
+        """Append `eid`'s encoding to `out`, token by token, in emit order.
+
+        Appending instead of returning a string is what keeps the encoder's
+        memory proportional to *one* term rather than to its recursion depth.
+        The `return f"(tapp {self.enc(fn)} {self.enc(arg)})"` this replaces held
+        one finished string alive at every level of the spine, so a term with
+        53 MB of text cost twenty of them at once (~1.1 GB measured on
+        `nsOuterFock…singleTime`); the token sequence, and therefore every
+        byte written, is identical.
+        """
+        s = self._memo.get(eid)
+        if s is not None:
+            out.append(s)
+            return
+        mark = out.tokens
+        self._enc_tokens(eid, out)
+        # Cache the *small* encodings only. Those are the ones a derivation
+        # reuses (types, constants, short spines), and a handful of tokens joins
+        # cheaply; a multi-megabyte term is deliberately left streamed, because
+        # materialising it at an inner level is the cost this change removes.
+        # Without this the encoder would recompute shared subtrees from scratch
+        # (measured: 12 min and climbing on a row that takes 200 s with it).
+        if out.tokens - mark <= 64 and self._memo_bytes < ENC_MEMO_BYTES:
+            # Encode it a second time, into a buffer of its own: a few tokens
+            # copy for nothing, and the parent's tokens stay where they are
+            # instead of being spliced out of a half-built chunk list.
+            small = EncBuf()
+            self._enc_tokens(eid, small)
+            s = small.take()
+            self._memo[eid] = s
+            self._memo_bytes += len(s)
+
+    def _enc_tokens(self, eid: int, out: EncBuf) -> None:
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            k = e["bvar"]
+            if not self.succ_idx:
+                out.append(f"(tvar {nat_name('idx' + str(k))})")
+                return
+            idx = "tzero"
+            for _ in range(k):
+                idx = f"(tsucc {idx})"
+            out.append(f"(tvar {idx})")
+            return
+        if "sort" in e:
+            out.append(self.sort(e))
+            return
+        if "const" in e:
+            out.append(self.sym(self.ex.name(e["const"]["name"])))
+            return
+        if "mdata" in e:
+            self._enc(e["mdata"]["expr"], out)
+            return
+        if "app" in e:
+            out.append("(tapp ")
+            self._enc(e["app"]["fn"], out)
+            out.append(" ")
+            self._enc(e["app"]["arg"], out)
+            out.append(")")
+            return
+        if "forallE" in e:
+            out.append("(tpi ")
+            self._enc(e["forallE"]["type"], out)
+            out.append(" ")
+            self._enc(e["forallE"]["body"], out)
+            out.append(")")
+            return
+        if "lam" in e:
+            out.append("(tabs ")
+            self._enc(e["lam"]["body"], out)
+            out.append(")")
+            return
+        if "letE" in e:  # let x : T := v in b   ≡   (λx:T. b) v
+            le = e["letE"]
+            out.append("(tapp (tabs ")
+            self._enc(le["body"], out)
+            out.append(") ")
+            self._enc(le["value"], out)
+            out.append(")")
+            return
+        if "proj" in e:
+            st = e["proj"]
+            idx = "tzero"
+            for _ in range(st.get("idx", 0)):
+                idx = f"(tsucc {idx})"
+            out.append("(tproj ")
+            self._enc(st["struct"], out)
+            out.append(f" {idx})")
+            return
+        if "natVal" in e:
+            # A numeral as a *term*: one opaque constant per distinct numeral, so
+            # `0` and `1` stay distinct without pretending the theory has Nat
+            # computation (it does not; that is the deltanet's arithmetic).
+            out.append(self.sym(f"nat{e['natVal']}"))
+            return
+        if "strVal" in e:
+            # Same treatment for a string literal: opaque, distinct per content.
+            out.append(self.sym(f"str{e['strVal']}"))
+            return
+        if "sym" in e:  # a synthetic constant this emitter invented (see `Nat`)
+            out.append(self.sym(e["sym"]))
+            return
+        if "tsubst" in e:  # a *deferred* substitution (see Deriver.defer_subst)
+            t = e["tsubst"]
+            out.append("(tsubst ")
+            self._enc(t["b"], out)
+            out.append(" ")
+            self._enc(t["x"], out)
+            out.append(")")
+            return
+        raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
+
+
+def peak_mb() -> int:
+    """Peak resident set of this process, in MB (Linux `ru_maxrss` is KB)."""
+    import resource
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024
+
+
+# Cap on the de Bruijn rewrite memos. Both are pure functions of their key,
+# so dropping one only costs recomputation; at ~200 B/entry this bounds them
+# at a couple of hundred megabytes while a declaration's derivation touches
+# far fewer distinct (expression, shift) pairs than that.
+MEMO_MAX = 1_000_000
+
+# Total size of the strings `Enc` caches; past it new encodings are simply not
+# cached (they are recomputed, never wrong).
+ENC_MEMO_BYTES = 64 << 20
+
+# Total size of the proof strings the `check` result memo holds. Proofs are
+# nested text, so this is a real budget: the same cap as the encoding memo would
+# hold few of a term's derivations, and 512 MB is measured against a 10 GiB cap
+# (§13.32) — past it new results are simply not cached.
+CHK_MEMO_BYTES = 512 << 20
+
+# The rule sequences kept beside those proofs: 8 B per cell, so 4 M cells is
+# 32 MB. Past the budget a call is simply not memoised (it is recomputed).
+CHK_RULE_CELLS = 4 << 20
+
+
+def _step_add(hist: dict[str, int], order: list[str], name: str,
+              n: int = 1) -> None:
+    """Count `n` applications of `name`, remembering first-appearance order.
+
+    A `list[str]` of rule names was one pointer per application — 1.8 M of them
+    at the 10 GiB point — for a header summary (§13.27).
+    """
+    if name in hist:
+        hist[name] += n
+    else:
+        hist[name] = n
+        order.append(name)
+
+
+def _step_summary(order: list[str], hist: dict[str, int]) -> str:
+    return ", ".join(f"{r} ×{hist[r]}" for r in order)
+
+
+def _json_write_str(out, s: str) -> None:
+    """Write `json.dumps(s)` without materialising it (§13.28).
+
+    The two large fields of a certificate record are MM0 terms (hundreds of MB
+    at the top of the corpus), and `json.dumps` would hold a second copy of each
+    to hand to the sink. Chunks are escaped separately and their quotes dropped,
+    which is the same bytes because JSON escaping is per character; a chunk edge
+    is moved off a high surrogate so a pair is never split.
+    """
+    chunk = 1 << 16
+    if len(s) <= chunk:
+        out.write(json.dumps(s))
+        return
+    out.write('"')
+    i, n = 0, len(s)
+    while i < n:
+        j = i + chunk
+        if j >= n:
+            j = n
+        elif "\ud800" <= s[j - 1] <= "\udbff":
+            j += 1
+        out.write(_esc(s[i:j]))
+        i = j
+    out.write('"')
+
+
+# Two gigabytes per part: large enough that a row with a few obligations is one
+# file, small enough that a 124 GB stream is 62 of them rather than one file no
+# reader can open (§13.32).
+OBLIG_PART_BYTES = 2 * 1024 ** 3
+
+
+class ObligationSink:
+    """The certificate stream: one JSON object per line, rolled into parts.
+
+    The obligation file is the largest artifact this emitter writes — 124 GB on
+    `nsOuterFock…singleTime` (§13.31) — and it is written streaming already:
+    each certificate goes out as it is created, so the *writer* never holds one.
+    The reader is the side that cannot cope: a 124 GB `.jsonl` is not openable,
+    greppable, or transferable in one piece, and every consumer that wants
+    obligation 17 000 has to scan 90 GB of text to find it.
+
+    So a part is bounded. `limit` bytes into a part the sink closes it and opens
+    the next, always on a line boundary, and the concatenation of the parts is
+    byte for byte the single file this used to write — the line format, the
+    `sort_keys` ordering and the separators are untouched. Next to the parts go
+    two small files: a manifest (parts, sizes, line counts, first/last id) and
+    an index (one line per obligation: id, part, byte offset, byte length), so
+    a consumer can jump to one certificate without reading the other 123 GB.
+
+    `limit=0` keeps the historical single-file artifact exactly, with no
+    manifest and no index.
+    """
+
+    def __init__(self, stem: Path, limit: int = 0) -> None:
+        self.stem = Path(stem)
+        self.limit = limit
+        self.lines = 0
+        self.bytes = 0
+        self.parts: list[dict] = []
+        self._index_fh = None
+        self._fh = None
+        self._part = -1
+        self._part_bytes = 0          # bytes in the open part, counted on write
+        self._part_records = 0        # records that *ended* in the open part
+        self._first_id: str | None = None
+        self._last_id: str | None = None
+        self._rec_id: str | None = None
+        self._rec_bytes = 0
+        self._since = 0               # characters written since the last fstat
+        self._segs: list[list[int]] = []
+        self._fragmented = False
+        self._open()
+
+    def _part_path(self, n: int) -> Path:
+        if self.limit:
+            return Path(f"{self.stem}_obligations.part-{n:03d}.jsonl")
+        return Path(f"{self.stem}_obligations.jsonl")
+
+    def _open(self) -> None:
+        self._part += 1
+        self._fh = self._part_path(self._part).open("w")
+        self._part_bytes = 0
+        self._part_records = 0
+        self._first_id = None
+        self._last_id = None
+        if self.limit and self._index_fh is None:
+            # Line buffered, so a kill leaves an index whose every entry names a
+            # *complete* certificate. On the ns row the emitter is stopped by
+            # its clock (§13.32) and the manifest, which can only be written at
+            # a clean `close`, never appears; a durable index is then the only
+            # way to locate a certificate without scanning 200 GB.
+            self._index_fh = Path(
+                f"{self.stem}_obligations.index.jsonl").open("w", buffering=1)
+
+    def begin(self, ax: str) -> None:
+        """Start one certificate: its id is all the index needs from it.
+
+        With `limit=0` there is no index and no roll, so this must stay free:
+        the single-file path is the historical artifact and pays for nothing
+        (§13.32 measures the counting paths against it).
+
+        The size is taken with `fstat` here, once per certificate, because a
+        record's offsets must be exact and a roll can land anywhere inside it.
+        """
+        if not self.limit:
+            return
+        self._fh.flush()
+        self._part_bytes = os.fstat(self._fh.fileno()).st_size
+        self._since = 0
+        self._rec_id = ax
+        self._rec_bytes = 0
+        self._segs = [[self._part, self._part_bytes, 0]]
+
+    def write(self, s: str) -> None:
+        """Write a piece of the open certificate, rolling the part if full.
+
+        Bytes, not characters: the parts are bounded in bytes and a certificate
+        text is not guaranteed ASCII. `str.isascii()` is a scan with no
+        allocation, so the common case costs one pass over the piece and no
+        encoding; anything else is measured exactly by encoding it.
+
+        The roll happens *inside* a certificate, which is what makes the parts
+        uniform: a part used to close only on a record boundary and was therefore
+        `limit` plus one certificate — 25 GB on the ns row (§13.32). Rolling
+        here keeps every part at `limit` plus at most the piece being written (a
+        few characters to `ENC_CHUNK` bytes), and the certificate is indexed as
+        the list of segments it occupies, so a reader still gets one record.
+        """
+        if not self.limit:
+            self._fh.write(s)
+            return
+        self._fh.write(s)
+        # `len` is characters, and a character is at most four bytes, so this is
+        # a lower bound on what has been written. It is enough to decide when to
+        # pay for an exact size: `fstat` then measures the part, and a part goes
+        # over the limit by at most the one piece written since that check (a
+        # piece is bounded by `ENC_CHUNK`).
+        self._since += len(s)
+        if self._part_bytes + self._since >= self.limit:
+            self._fh.flush()
+            self._part_bytes = os.fstat(self._fh.fileno()).st_size
+            self._since = 0
+            if self._part_bytes >= self.limit:
+                self._roll_mid()
+
+    def _roll_mid(self) -> None:
+        """Close the full part and continue the certificate in the next one."""
+        self._fragmented = True
+        self._segs[-1][2] = self._part_bytes - self._segs[-1][1]
+        self._fh.close()
+        self.parts.append({
+            "path": self._part_path(self._part).name,
+            "bytes": self._part_bytes,
+            "records": self._part_records,
+            "first_id": self._first_id,
+            "last_id": self._last_id,
+        })
+        self._open()
+        self._segs.append([self._part, 0, 0])
+        self._since = 0
+
+    def end_line(self) -> None:
+        """Finish a certificate: verify its bytes, index it, close a full part.
+
+        The byte count is kept on write rather than taken from one `fstat` per
+        certificate, because a roll can now happen mid-certificate. `fstat` is
+        still called here — once per certificate, 24 391 times on the largest row
+        — but only to check the count against the file, so a counting bug fails
+        loudly instead of writing an index that points at nothing.
+        """
+        if not self.limit:
+            self.lines += 1
+            return
+        self._fh.flush()
+        end = os.fstat(self._fh.fileno()).st_size
+        self._part_bytes = end
+        self._since = 0
+        segs = self._segs
+        segs[-1][2] = end - segs[-1][1]
+        n = sum(seg[2] for seg in segs)
+        self._rec_bytes = n
+        self._part_records += 1
+        self.lines += 1
+        self.bytes += n
+        if self._rec_id is not None:
+            if self._first_id is None:
+                self._first_id = self._rec_id
+            self._last_id = self._rec_id
+            if self._index_fh is not None:
+                first = segs[0]
+                self._index_fh.write(
+                    f'{{"id": {json.dumps(self._rec_id)}, '
+                    f'"part": {first[0]}, "off": {first[1]}, "len": {n}'
+                    + ("" if len(segs) == 1 else
+                       ', "segs": ' + json.dumps(segs))
+                    + "}\n")
+        self._rec_id = None
+        self._segs = []
+        if self.limit and self._part_bytes >= self.limit:
+            self._roll()
+
+    def _roll(self) -> None:
+        self._fh.close()
+        self.parts.append({
+            "path": self._part_path(self._part).name,
+            "bytes": self._part_bytes,
+            "records": self._part_records,
+            "first_id": self._first_id,
+            "last_id": self._last_id,
+        })
+        self._open()
+
+    def close(self) -> None:
+        if self._fh is None:
+            return
+        self._fh.close()
+        self._fh = None
+        if self.limit and self._part_bytes == 0:
+            # Rolling closes a part the moment it is full, so the last part can
+            # be empty. An empty artifact is not a part: remove it.
+            self._part_path(self._part).unlink(missing_ok=True)
+        else:
+            self.parts.append({
+                "path": self._part_path(self._part).name,
+                "bytes": self._part_bytes,
+                "records": self._part_records,
+                "first_id": self._first_id,
+                "last_id": self._last_id,
+            })
+        if self._index_fh is not None:
+            self._index_fh.close()
+            self._index_fh = None
+        if self.limit:
+            Path(f"{self.stem}_obligations.manifest.json").write_text(
+                json.dumps({
+                    "format": "lean-typing-proof/obligations",
+                    "records": self.lines,
+                    "bytes": self.bytes,
+                    "part_bytes_limit": self.limit,
+                    "fragmented": self._fragmented,
+                    "parts": self.parts,
+                }, indent=1) + "\n")
+
+
+_OBTRACE = None
+
+
+def _ob_trace(idx: int, gap: float, took: float, nbytes: int, label: str) -> None:
+    """One line per axiom: what the last assumption cost, and how big it was.
+
+    The 10-second trace shows rules per sample, which is the *derivation*'s
+    clock; on a term whose assumptions are gigabytes the assumption write is
+    the whole sample, and a per-obligation line says by how much. `gap` is the
+    time since the previous assumption was finished (the term walk in between),
+    `took` the write itself.
+    """
+    global _OBTRACE
+    fh = _OBTRACE
+    if fh is None:
+        path = os.environ.get("LTP_OBTRACE")
+        if not path:
+            return
+        fh = _OBTRACE = open(path, "a", buffering=1)
+    fh.write(f"{idx}\t{round(gap, 3)}\t{round(took, 3)}\t{nbytes}\t{label}\n")
+
+
+def census(ex, enc, d) -> None:
+    """Print the live derivation's byte split, only when `LTP_CENSUS` is set.
+
+    Late binding on purpose: it is called from a `finally`, so on a
+    `MemoryError` it must stay allocation-light (the walk is iterative and the
+    numbers are shallow sizes). It is what separates the emitter's own
+    containers from the export's parse table, which is the part no memo would
+    ever show.
+    """
+    if not os.environ.get("LTP_CENSUS"):
+        return
+    try:
+        def walk(table) -> int:
+            # `ex.exprs` is a `LazyExprs` (an id array plus a bounded cache),
+            # not a dict, so the id array is charged too: it is 8 B per
+            # expression of the whole chapter's closure.
+            if hasattr(table, "_cache"):
+                total = sys.getsizeof(table._off)
+                recs = list(table._cache.values())
+            else:
+                total = sys.getsizeof(table)
+                recs = list(table.values())
+            for rec in recs:
+                total += sys.getsizeof(rec)
+                for v in rec.values():
+                    total += sys.getsizeof(v)
+                    if isinstance(v, dict):
+                        for w in v.values():
+                            total += sys.getsizeof(w)
+            return total
+
+        rows = [
+            ("export parse table", walk(ex.exprs)),
+            ("synthetic nodes", walk(ex.exprs.extra)),
+            ("encoding memo", enc._memo_bytes),
+        ]
+        if d is not None:
+            rows += [
+                ("context memo", d._ctx_memo_bytes),
+                ("context entries", len(d._ctx_memo)),
+                ("check result memo", d._chk_memo_bytes),
+                ("check results kept", len(d._chk_memo)),
+                ("obligation list", sum(map(len, list(d.oblig)))),
+                ("lift memo", sys.getsizeof(d._lift_memo)),
+                ("subst memo", sys.getsizeof(d._subst_memo)),
+                ("const axioms", sum(sys.getsizeof(k) + sys.getsizeof(v)
+                                    for k, v in list(d.const_ax.items()))),
+                ("beta axioms", sum(sys.getsizeof(k) + sys.getsizeof(v)
+                                   for k, v in list(d.beta_ax.items()))),
+                ("leaf axioms", sum(map(sys.getsizeof, d.leaf_ax))),
+                ("largest proof", d._proof_bytes),
+            ]
+        print("[census] live emitter, MB", file=sys.stderr, flush=True)
+        for name, n in rows:
+            print(f"[census]   {n / 1e6:10.1f}  {name}", file=sys.stderr, flush=True)
+        if d is not None:
+            print(f"[census]   {d._ctx_calls:10d}  context lookups "
+                  f"({d._ctx_hits} hits, {d._ctx_scan} entries scanned)",
+                  file=sys.stderr, flush=True)
+        print(f"[census]   {peak_mb():10d}  peak RSS (MB)", file=sys.stderr, flush=True)
+    except Exception as exc:  # a census must never hide the real failure
+        print(f"[census] failed: {type(exc).__name__}: {exc}", file=sys.stderr,
+              flush=True)
+
+
+def stats(msg: str) -> None:
+    """Stage-level memory report, only when `LTP_STATS` is set.
+
+    Emission of a large declaration allocates in several distinct places (the
+    proof string, the axiom list, the obligation trees, the file text), and
+    which one dominates decides what to change. Guessing at that was wrong
+    twice, so it is measured.
+    """
+    if os.environ.get("LTP_STATS"):
+        print(f"[stats] {msg}: peak {peak_mb()} MB", file=sys.stderr, flush=True)
+
+
+# ── growth trace (`LTP_TRACE`) ─────────────────────────────────────────────
+#
+# "It hit 10 GiB at 8 889 s" does not say what grew. Two things answer it: the
+# emitter's accumulators (the export's lazy table, the encoding memo, the rule
+# and axiom lists, the two rewrite memos, the obligation list) say *which* one
+# is unbounded, and the `_check` recursion stack says which subterm the emitter
+# was standing in while the growth happened. Sampled by a daemon thread so the
+# numbers are the emitter's own, not a guess from `/proc`.
+
+
+def _label(ex, eid: int) -> str:
+    """A short human key for one expression: its constant, or kind."""
+    e = ex.exprs.get(eid) or {}
+    if "const" in e:
+        return ex.name(e["const"]["name"])
+    if "app" in e:
+        head, _ = spine(ex, eid)
+        he = ex.exprs.get(head) or {}
+        if "const" in he:
+            return "app·" + ex.name(he["const"]["name"])
+        return "app·" + (next(iter(he)) if he else "?")
+    return next(iter(e)) if e else "?"
+
+
+def start_trace(ex, enc, deriver_fn, period: float = 10.0) -> None:
+    """Sample the emitter's own state to `$LTP_TRACE` (TSV), every `period` s."""
+    path = os.environ.get("LTP_TRACE")
+    if not path:
+        return
+    import threading
+
+    stop = threading.Event()
+
+    def rss_mb() -> int:
+        try:
+            with open("/proc/self/statm") as fh:
+                return int(fh.read().split()[1]) * 4096 >> 20
+        except OSError:
+            return -1
+
+    def trim() -> None:
+        """Return free arenas to the OS, so RSS separates live from retired.
+
+        The emitter builds and drops very large proof strings; if the bytes
+        RSS holds are freed ones the allocator kept, RSS would keep climbing
+        after the derivation stopped growing, and no accumulator would explain
+        it. `malloc_trim` answers that without changing the program's data.
+        """
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except OSError:
+            pass
+
+    def acc_bytes(d) -> int:
+        """One level deep over every Deriver attribute: containers + items.
+
+        Total live bytes the derivation itself holds, so the columns that
+        count *entries* can be checked against the RSS they are supposed to
+        explain.
+        """
+        if d is None:
+            return 0
+        total = 0
+        # `list(...)` is one C-level pass holding the GIL: the derivation adds
+        # attributes from the main thread, and a Python-level loop over the
+        # live view raises `dictionary changed size during iteration`.
+        for v in list(d.__dict__.values()):
+            total += sys.getsizeof(v)
+            if isinstance(v, dict):
+                # Same reason as above: the two rewrite memos are live.
+                for k, item in list(v.items()):
+                    total += sys.getsizeof(k) + sys.getsizeof(item)
+            elif isinstance(v, (list, tuple, set, frozenset)):
+                for item in v:
+                    total += sys.getsizeof(item)
+        return total
+
+    def _tree_nodes(d) -> int:
+        """Structural nodes retained in `oblig_tree` (the certificate payload).
+
+        Counted iteratively: a term's tree is deep enough that recursion would
+        hit the interpreter's limit, and this runs in a sampler thread.
+        """
+        n = 0
+        stack = [d.oblig_tree]
+        while stack:
+            v = stack.pop()
+            if isinstance(v, dict):
+                n += 1
+                stack.extend(v.values())
+            elif isinstance(v, list):
+                stack.extend(v)
+        return n
+
+    def mall_mb() -> tuple:
+        """(in-use, free-in-arena, mmapped) MB straight from glibc.
+
+        `tracemalloc` covers objects Python allocated; this covers the other
+        half of RSS: bytes the allocator holds but no live object owns (free
+        blocks in an arena that `malloc_trim` cannot return), and large blocks
+        the allocator mapped. `free` large next to a flat RSS is fragmentation,
+        not a leak, and the difference matters because only one of the two is
+        fixed by changing the representation.
+        """
+        try:
+            import ctypes
+
+            # `mallinfo2` returns an 80-byte struct *by value*: ctypes needs
+            # the struct as `restype` (a by-ref call passed the pointer as the
+            # hidden sret argument and segfaulted the process).
+            class MI(ctypes.Structure):
+                _fields_ = [(f, ctypes.c_size_t) for f in (
+                    "arena", "ordblks", "smblks", "hblks", "hblkhd", "usmblks",
+                    "fsmblks", "uordblks", "fordblks", "keepcost")]
+
+            libc = ctypes.CDLL("libc.so.6")
+            libc.mallinfo2.restype = MI
+            libc.mallinfo2.argtypes = []
+            mi = libc.mallinfo2()
+            return (round(mi.uordblks / 1e6), round(mi.fordblks / 1e6),
+                    round(mi.hblkhd / 1e6))
+        except (OSError, AttributeError):
+            return (0, 0, 0)
+
+    def _traced_mb() -> tuple:
+        """(current, peak) Python-allocated MB, or (0, 0) with the tracer off."""
+        if not snap_at:
+            return (0, 0)
+        import tracemalloc
+
+        cur, peak = tracemalloc.get_traced_memory()
+        return (round(cur / 1048576, 1), round(peak / 1048576, 1))
+
+    def body() -> None:
+        try:
+            sample()
+        except Exception as exc:  # a dead sampler must say so, not go quiet
+            with open(path + ".err", "w") as fh:
+                fh.write(f"trace stopped: {type(exc).__name__}: {exc}\n")
+
+    # `tracemalloc` answers the question the hand-listed accumulators cannot:
+    # of the RSS, how much is Python objects at all? A traced total that tracks
+    # RSS means the bytes are in the object graph (and a snapshot names the
+    # line); a traced total far below RSS means they are C-level buffers or
+    # allocator retention, where no accumulator will ever show them.
+    snap_at = float(os.environ.get("LTP_TRACE_SNAP", "0") or 0)
+    if snap_at:
+        import tracemalloc
+
+        tracemalloc.start(5)
+
+    def snap(fh) -> None:
+        import tracemalloc
+
+        stats = tracemalloc.take_snapshot().statistics("lineno")[:12]
+        with open(path + ".mem", "w") as mfh:
+            mfh.write(f"tracemalloc snapshot at t={round(time.time() - t0, 1)} s\n")
+            for s in stats:
+                mfh.write(f"{s.size / 1e6:9.1f} MB  {s.count:9d}  {s.traceback}\n")
+                fh.write(f"# mem: {s.size / 1e6:.1f} MB {s.count} {s.traceback}\n")
+
+    t0 = time.time()
+    state = {"snapped": False}
+    fh = open(path, "a", buffering=1)
+
+    def sample() -> None:
+        # `rules`/`oblig`/`msubst` are *counts*: they say how many steps
+        # ran, not how many bytes they cost. `axb`/`rulb` are the byte
+        # totals of the axiom and rule lists, so which list holds the RSS
+        # is measured rather than inferred from its length; `axmax` is the
+        # longest single axiom, because one huge `tdefeq` can dwarf the
+        # rest of the list.
+        # `exprs` is the export's index size, not a growth signal: the
+        # lazy table reports every expression in the file from the first
+        # sample. What grows is `extra` (nodes the derivation synthesises
+        # for `lift`/`subst0`), which `exb` sizes, plus `liftb`/`substb`,
+        # the shallow bytes of the two memo values.
+        fh.write("t\trss_mb\tpeak_mb\texprs\tmemo_by\tmemo_n\trules"
+                 "\taxioms\toblig\tlift\tmsubst\tdepth\tstack"
+                 "\taxb\trulb\toblb\taxmax\textra\texb\tliftb\tsubstb"                     "\taccb\trss_trim\tproofb\ttraced_mb\ttpeak_mb"
+                     "\tuord_mb\tfree_mb\tmmap_mb\tobnodes\tctxby\tctxn"
+                     "\tctxcall\tctxhit\tctxscan\tchkcall\tchkhit\tchkby\n")
+        if snap_at:
+            fh.write(f"# tracemalloc on, snapshot at t>={snap_at} s\n")
+        while not stop.is_set():
+            d = deriver_fn()
+            st = list(d._stack[-8:]) if d is not None else []
+            trim()
+            try:
+                fh.write("\t".join(str(x) for x in (
+                    round(time.time() - t0, 1), rss_mb(), peak_mb(),
+                    len(ex.exprs), enc._memo_bytes, len(enc._memo),
+                    d.rule_count if d else 0, d.ax_count if d else 0,
+                    len(d.oblig) if d else 0, len(d._lift_memo) if d else 0,
+                    len(d._subst_memo) if d else 0, len(d._stack) if d else 0,
+                    ">".join(f"{eid}:{_label(ex, eid)}" for eid in st),
+                    d.ax_bytes if d else 0,
+                    sum(len(k) * v for k, v in d.rule_hist.items()) if d else 0,
+                    sum(map(len, list(d.oblig))) if d else 0,
+                    d.ax_max if d else 0,
+                    len(ex.exprs.extra),
+                    sum(map(sys.getsizeof, list(ex.exprs.extra.values()))),
+                    sum(map(sys.getsizeof, list(d._lift_memo.values()))) if d else 0,
+                    sum(map(sys.getsizeof, list(d._subst_memo.values()))) if d else 0,
+                    acc_bytes(d), rss_mb(),
+                    int(d.__dict__.get("_proof_bytes", 0)) if d else 0,
+                    *_traced_mb(), *mall_mb(),
+                    _tree_nodes(d) if d else 0,
+                    d._ctx_memo_bytes if d else 0,
+                    len(d._ctx_memo) if d else 0,
+                    d._ctx_calls if d else 0, d._ctx_hits if d else 0,
+                    d._ctx_scan if d else 0,
+                    d._chk_calls if d else 0, d._chk_hits if d else 0,
+                    d._chk_memo_bytes if d else 0,
+                )) + "\n")
+            except Exception:  # one bad sample must not end the trace
+                fh.write(f"# sample error at t={round(time.time() - t0, 1)}: "
+                         f"{traceback.format_exc().replace(chr(10), ' | ')}\n")
+            # `LTP_STACK=<n>`: every n-th sample also dumps the live Python
+            # stack to `$LTP_TRACE.stack`. It runs here, on the daemon thread,
+            # because a watchdog that dumps from a signal arrived in the middle
+            # of the first write and ceased to exist with it (§13.31).
+            stack_every = int(os.environ.get("LTP_STACK", "0") or 0)
+            if stack_every:
+                state["ticks"] = state.get("ticks", 0) + 1
+                if state["ticks"] % stack_every == 0:
+                    import faulthandler
+                    with open(str(path) + ".stack", "a") as sfh:
+                        sfh.write(f"--- t={round(time.time() - t0, 1)} ---\n")
+                        faulthandler.dump_traceback(file=sfh)
+            ts = time.time() - t0
+            if snap_at and not state["snapped"] and ts >= snap_at:
+                state["snapped"] = True
+                try:
+                    snap(fh)
+                except Exception:
+                    fh.write("# snapshot failed: "
+                             f"{traceback.format_exc().replace(chr(10), ' | ')}\n")
+            stop.wait(period)
+
+    threading.Thread(target=body, name="ltp-trace", daemon=True).start()
+
+
+def _nat_lit(n: int) -> str:
+    out = "tzero"
+    for _ in range(n):
+        out = f"(tsucc {out})"
+    return out
+
+
+def _put(fh, piece) -> None:
+    """Write a statement piece: a str, or a spool file copied through.
+
+    A `Path` piece is text already on disk because it was too large to keep in
+    memory; `copyfileobj` streams it into the artifact a megabyte at a time.
+    """
+    if isinstance(piece, Path):
+        with piece.open("r") as sp:
+            shutil.copyfileobj(sp, fh, 1 << 20)
+    else:
+        fh.write(piece)
+
+
+def _spool_head(path: Path, n: int) -> str:
+    with path.open("r") as fh:
+        return fh.read(n)
+
+
+def _spool_eq(path: Path, s: str) -> bool:
+    """Whether `path`'s text is exactly `s`, without holding the file too."""
+    i = 0
+    with path.open("r") as fh:
+        while True:
+            block = fh.read(1 << 20)
+            if not block:
+                return i == len(s)
+            if s[i:i + len(block)] != block:
+                return False
+            i += len(block)
+
+
+def spine(ex, eid):
+    """(head_eid, [arg_eids]) for an application; (eid, []) otherwise."""
+    args: list[int] = []
+    cur = eid
+    while "app" in ex.exprs.get(cur, {}):
+        args.append(ex.exprs[cur]["app"]["arg"])
+        cur = ex.exprs[cur]["app"]["fn"]
+    args.reverse()
+    return cur, args
+
+
+def main() -> int:
+    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+    spine = "--spine" in sys.argv
+    defer = "--defer-subst" in sys.argv
+    export_path, want, out_dir = Path(argv[0]), argv[1], Path(argv[2])
+    t0 = time.time()
+    # Lazily: one declaration reaches a few thousand expressions of a chapter's
+    # millions, and materialising the rest cost more memory than the whole
+    # derivation (measured: 3.8 GB to parse `ChapterH1`, 6 798 expressions used).
+    ex = l2m.Export(export_path, lazy=True)
+    stats("export indexed")
+    # The typing derivation writes variables as the theory names them (succ
+    # chains); the statement-only artifact keeps the corpus' flat index form.
+    enc = Enc(ex, succ_idx=spine)
+    target = next(
+        (nm for nm, (_k, rec, _i) in ex.decls.items() if want in nm and "value" in rec), None
+    )
+    if target is None:
+        raise SystemExit(f"no declaration with a value matching {want!r}")
+    kind, rec, _ = ex.decls[target]
+
+    # The theorem's statement: `tty tnil value type`. Its two term texts are
+    # spooled rather than materialised: at 1.94 GB each (§13.30) they were the
+    # whole memory budget before the derivation began, and the statement
+    # string that embedded them copied both a second time.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = out_dir / f"{target.split('.')[-1]}_typing"
+    ty_path = Path(str(stem) + "_type.tmp")
+    val_path = Path(str(stem) + "_value.tmp")
+    ty_bytes = enc.spool(rec["type"], ty_path)
+    stats(f"type spooled ({ty_bytes} B)")
+    val_bytes = enc.spool(rec["value"], val_path)
+    stats(f"value spooled ({val_bytes} B)")
+
+    lines: list[str] = []
+    # Rules are counted, not retained: one pointer per applied rule was 1.8 M
+    # at the 10 GiB point, and the only reader is the header summary (§13.27).
+    steps_hist: dict[str, int] = {}
+    steps_order: list[str] = []
+    axioms: list[str] = []
+
+    # Context: peel the theorem's Π spine one binder at a time. Every binder
+    # the value abstracts over is one `ty_abs`, whose premise is the typing of
+    # the body in the extended context.
+    binders: list[str] = []
+    binder_ty_eids: list[int] = []
+    cur = rec["type"]
+    while "forallE" in ex.exprs[cur]:
+        bte = ex.exprs[cur]["forallE"]["type"]
+        binder_ty_eids.append(bte)
+        binders.append(enc.enc(bte))
+        cur = ex.exprs[cur]["forallE"]["body"]
+    body_ty = enc.enc(cur)
+
+# A value may abstract over more binders than its type's Π spine shows: the
+    # extra λs sit under a type that unfolds to a Π, and `Deriver.check` pays a
+    # conversion for each. The count is reported, not enforced (an enforced
+    # equality refused `not_uniformly_better`, whose type's tail is a reducible
+    # abbreviation).
+    n_lam = count_lam(ex, rec["value"])
+    n_pi = len(binders)
+
+    # The obligation file is opened *before* the derivation, and the deriver
+    # writes each obligation into it as it is created: retaining them instead
+    # cost 24.5 kB per obligation and reached 10 GiB on `adjoint_aeval` (§13.25).
+    # A run that is killed by its budget now leaves a partial `.jsonl` — a
+    # truncated last line is the caller's cue to discard it — where before it
+    # left no file at all. `LTP_OBLIG_CHUNK=<bytes>` rolls it into bounded parts
+    # with a manifest and an index (§13.32); unset keeps the single file.
+    oblig_sink = ObligationSink(
+        stem, limit=int(os.environ.get("LTP_OBLIG_CHUNK", "0") or 0))
+    # The assumptions are streamed the same way: §13.27 measures 444 MB of
+    # axiom text at 116 874 obligations, and every byte of it is in the artifact
+    # anyway. The spool is concatenated into both `.mm0` and `.mm1` afterwards
+    # (the header that precedes it is only known once the derivation is done),
+    # so the artifact is byte-identical to the retained version.
+    ax_path = Path(str(stem) + "_axioms.tmp")
+    ax_fh = ax_path.open("w") if spine else None
+
+    # The context string is the Deriver's own (`ctx_str`): an entry is written
+    # in the scope outside its own binder, so at position `pos` it must be
+    # shifted by `pos + 1`. The Π-type text keeps the unshifted domains — those
+    # are read in the scope *outside* their binder, which is exactly theirs.
+    d_pre = Deriver(ex, enc, export_path, defer_subst=defer,
+                    oblig_sink=oblig_sink, axiom_sink=ax_fh)
+    # The trace starts before the derivation, so the sampler can attribute growth
+    # to the subterm the deriver is inside (the box keeps the reference so the
+    # thread does not need to know which branch of `main` built the deriver).
+    box: dict = {"d": d_pre}
+    start_trace(ex, enc, lambda: box["d"])
+    ctxs = ["tnil"]
+    for a in binders:
+        ctxs.append(f"(tcons {a} {ctxs[-1]})")
+    ctx = ctxs[-1]
+
+    # The value is a term in the *local context* the type's Π spine introduces
+    # (Lean exports `theorem foo (x : α) : P x := proof` with `proof` referring
+    # to x by fvar, not by a λ), so what gets derived is the open judgment
+    # `tty ctx value body_type` — no `ty_abs` for the binders, and no peeling of
+    # λs the value may or may not have. A value that *does* carry a λ spine is
+    # typed by `ty_abs` inside the derivation, against the Π it is checked at.
+    body_eid = rec["value"]
+    # A value that carries the type's whole λ spine can be closed (`tty tnil
+    # value type`, one `ty_abs` per binder); one that does not is a term in the
+    # local context, and only the open judgment `tty ctx value body_type` is
+    # statable. Which holds is a property of the export, so it is measured, not
+    # assumed.
+    closed = n_lam == len(binders)
+    if closed:
+        for _ in range(len(binders)):
+            body_eid = ex.exprs[body_eid]["lam"]["body"]
+    # A closed value is stated by its own text, so the stripped body is only
+    # needed when it is the statement's term or an assumed typing's term.
+    body = None if (closed and spine) else enc.enc(body_eid)
+    inner_ctx = ctxs[-1]
+
+    if spine:
+        d = d_pre
+        try:
+            base_proof = d.check(body_eid, cur, list(reversed(binder_ty_eids)))
+        except StopWalk as stop:
+            # The budget was reached inside the walk (§13.34). Nothing here is a
+            # partial artifact: the theory needs a proof of the goal, and the
+            # goal's proof is what the walk was still building. What *is*
+            # complete is the stream — every certificate written so far is whole
+            # and indexed — so it is closed properly (manifest included), the
+            # state of the walk is written down, and the exit says so.
+            if os.environ.get("LTP_STOP_EMIT", "0") != "1":
+                return stop_walk(stop, d, ex, enc, oblig_sink, ax_fh, stem)
+            # The statement the finished run would prove, from what the run has:
+            # a closed value is its own spooled text against the declared type (the
+            # derivation checks the two are equal before it finishes, so this is
+            # the same statement), an open one is the body in the Π's context.
+            if closed:
+                return stop_walk_emit(
+                    stop, d, oblig_sink, ax_fh, ax_path, stem, target, kind,
+                    closed, binders, n_lam, "tnil", val_path, ty_path)
+            return stop_walk_emit(
+                stop, d, oblig_sink, ax_fh, ax_path, stem, target, kind,
+                closed, binders, n_lam, inner_ctx, body, body_ty)
+        except MemoryError:
+            census(ex, enc, d)
+            raise
+        ax_total = d.ax_count
+        for r in d.rule_order:
+            _step_add(steps_hist, steps_order, r, d.rule_hist[r])
+        const_axioms, subst_obligations = len(d.const_ax), len(d.beta_ax)
+        d_oblig = d.oblig_tree
+    else:
+        axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
+        _step_add(steps_hist, steps_order, "assume body typing")
+        base_proof = "ax_body"
+        const_axioms, subst_obligations = 0, 0
+        ax_total = len(axioms)
+        d_oblig: list[dict] = []
+
+    oblig_sink.close()
+    if ax_fh is not None:
+        ax_fh.close()
+
+    proof = base_proof
+    goal_ctx, goal_term, goal_ty = inner_ctx, body, body_ty
+    if spine:
+        stats(f"derivation ({sum(steps_hist.values())} rules, "
+              f"proof {len(base_proof)} B, {ax_total} axioms)")
+        # The result memo's own accounting goes to stderr: it is about the walk,
+        # not about an artifact byte, and a report line would change the console
+        # every consumer of this row already diffs.
+        if d._chk_calls:
+            print(f"[chk-memo] {d._chk_calls} lookups, {d._chk_hits} hits "
+                  f"({100.0 * d._chk_hits / d._chk_calls:.1f} %), "
+                  f"{d._chk_saved} B of proofs replayed, "
+                  f"{len(d._chk_memo)} kept in {d._chk_memo_bytes} B",
+                  file=sys.stderr, flush=True)
+    if closed:
+        # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
+        # term is a single expression (MM0 nests proofs in argument position
+        # exactly like terms).
+        ty = body_ty
+        for k in range(len(binders) - 1, -1, -1):
+            proof = f"(ty_abs {proof})"
+            _step_add(steps_hist, steps_order, "ty_abs")
+            ty = f"(tpi {binders[k]} {ty})"
+        if spine:
+            # The wrapping is only valid if it reproduces the declared type,
+            # which is on disk: comparing it there costs nothing.
+            if not _spool_eq(ty_path, ty):
+                raise SystemExit(
+                    "derived type is not the declared type:\n"
+                    f"  derived  {ty[:200]}\n  declared {_spool_head(ty_path, 200)}"
+                )
+        goal_ctx, goal_term, goal_ty = "tnil", val_path, ty_path
+
+    head = [
+        "-- Generated by emit-typing-proof.py (prototype) — DO NOT EDIT.",
+        f"-- Source export : {export_path.name}",
+        f"-- Declaration   : {target} [{kind}]",
+        "-- Judgment      : " + ("closed" if closed else "open, in the type's context")
+        + f" ({len(binders)} binders)",
+        f"-- Value λs      : {n_lam} (typed inside the derivation, not around it)",
+        f"-- Rules applied : {sum(steps_hist.values())}"
+        f" ({_step_summary(steps_order, steps_hist)})",
+        f"-- Assumptions   : {ax_total} ({const_axioms} constant types, "
+        f"{subst_obligations} substitution obligations)"
+    ]
+    nat_decls = [f"term {n}: nat;" for n in NATS]
+    # Everything before the assumptions, in the order and with the separators the
+    # one-shot `"\n".join(out)` produced. The assumptions themselves come next,
+    # out of the spool (or the local list when there is no spool), and the
+    # derivation last.
+    out = []
+    out += head
+    out += ["", "-- ── payload constants (numerals are not accepted inside `$…$`) ──"]
+    out += nat_decls
+    out += ["", "-- ── assumptions ──"]
+    pre = "\n".join(out) + "\n"
+    # The name is sanitised: MM0's lexer rejects Lean's trailing prime
+    # (`thm_add_le'` was a parse error, so the artifact never reached the proof
+    # at all and the run was counted as a failure of the derivation).
+    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
+                                 for c in target.split(".")[-1])
+    # The statement is written in pieces rather than built: its term texts are
+    # gigabytes (§13.30), and the f-string that used to hold it kept a second
+    # copy for the `.mm0` tail and a third for the `.mm1` one.
+    thm_head = f"theorem {thm_name}: $ tty {goal_ctx} "
+    # `.mm0` carries the statement, `.mm1` the statement plus its proof: MM0
+    # mode has no proofs, and mm0-rs compiles the `.mm1`. mm0-c then re-checks
+    # the binary against the `.mm0` text (handing it the `.mm1` fails with
+    # "expecting a theorem": the statement is followed by `=`, which a
+    # statement-only reader will not accept).
+    #
+    # The proof theorem must be `pub`: a private theorem's proof commands are
+    # dropped from the `.mmb`, so mm0-c reaches the declaration with the command
+    # stream already at End and refuses it (measured on a 4-axiom mini theory).
+    tail0 = "\n-- ── the derivation ──\n"
+    tail1 = "\n-- ── the derivation ──\npub "
+    # Written in pieces: the prefix, the spooled assumptions copied through
+    # (`shutil.copyfileobj`, so their bytes are never in this process twice),
+    # then the tail. Concatenated in memory this is 444 MB of axiom text on
+    # `adjoint_aeval`, before it is even a string.
+    for suffix, tail in ((".mm0", tail0), (".mm1", tail1)):
+        with stem.with_suffix(suffix).open("w") as fh:
+            fh.write(pre)
+            if ax_fh is not None:
+                with ax_path.open("r") as spool:
+                    shutil.copyfileobj(spool, fh, 1 << 20)
+            else:
+                fh.write("".join(a + "\n" for a in axioms))
+            fh.write(tail)
+            fh.write(thm_head)
+            _put(fh, goal_term)
+            fh.write(" ")
+            _put(fh, goal_ty)
+            fh.write(" $")
+            fh.write(";\n" if suffix == ".mm0" else f" =\n  '{proof};\n")
+    if ax_fh is not None:
+        ax_path.unlink()
+    ty_path.unlink()
+    val_path.unlink()
+    stats(f"artifacts written ({stem.with_suffix('.mm1').stat().st_size >> 20} MB)")
+    # The conversion obligations, structurally: the interface the external
+    # deltanet check consumes (`scripts/lean-net-cert`). Written even when empty
+    # so a caller never has to distinguish "no file" from "no obligations".
+    # Normally empty: the sink wrote every obligation as it was created. This
+    # stays for the in-process path, which passes no sink (`Deriver(...)` tests).
+    if d_oblig:
+        Path(str(stem) + "_obligations.jsonl").write_text(
+            "".join(json.dumps(o, sort_keys=True) + "\n" for o in d_oblig)
+        )
+    print(f"target   : {target}")
+    print(f"binders  : {len(binders)}")
+    print(f"rules    : {' · '.join(f'{r} ×{steps_hist[r]}' for r in steps_order)}")
+    print(f"axioms   : {ax_total} ({const_axioms} constant types, {subst_obligations} substitution)")
+    mode = "spine derivation" if spine else "body typing assumed"
+    if defer:
+        mode += ", substitution deferred"
+    print(f"mode     : {mode}")
+    print(f"nats     : {len(NATS)} · symbols: {len(SYMS)}")
+    print(f"wrote    : {stem}.mm0 ({stem.with_suffix('.mm0').stat().st_size} B) in {time.time()-t0:.1f} s")
+    census(ex, enc, d if spine else None)
+    return 0
+
+
+# ── the spine derivation (`--spine`) ─────────────────────────────────────
+
+
+class Unfoldable(Exception):
+    """A type that is a Π only after unfolding a definition (no per-node types)."""
+
+
+class StopWalk(Exception):
+    """A stopping condition was reached (`LTP_STOP_RULES` / `LTP_STOP_AT`).
+
+    Raised from `add_rule`, so it lands at a rule boundary: a run stops within
+    one call of its budget, never inside a certificate that is half written. The
+    streams are whole at that point, which is what makes a stopped run still
+    consumable — see `stop_walk` and §13.34.
+    """
+
+
+def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
+                   target: str, kind: str, closed: bool, binders: list[str],
+                   n_lam: int, goal_ctx: str, value, ty) -> int:
+    """A stopped run's `.mm0`: the theory as far as the walk got (§13.35).
+
+    `LTP_STOP_EMIT=1` asks for the artifact anyway, and the honest one is the
+    statement-only theory: the assumptions the run has reached, the payload
+    constants they use, and the goal's statement. MM0 mode has no proofs, so a
+    `.mm0` without a derivation is a well-formed theory — it simply does not say
+    the goal is proved, and the header says so in its first line.
+
+    Its assumption payload is the same spool the finished artifact copies
+    through, so everything after the header is byte-identical to the first
+    `ax_bytes` bytes of the finished artifact's payload — which is what
+    `LTP_STOP_EMIT` verifies with `cmp -n` in the runner below.
+
+    No `.mm1` is written: proof mode without a proof is not a theory, it is a
+    syntax error waiting for a reader.
+    """
+    oblig_sink.close()
+    if ax_fh is not None:
+        ax_fh.close()
+    axioms = d.axioms
+    head = [
+        "-- Generated by emit-typing-proof.py (prototype) — DO NOT EDIT.",
+        f"-- Declaration   : {target} [{kind}]",
+        "-- State         : STOPPED, the goal's proof was not reached "
+        f"({stop})",
+        "-- Judgment      : " + ("closed" if closed else "open, in the type's context")
+        + f" ({len(binders)} binders)",
+        f"-- Value λs      : {n_lam}",
+        f"-- Rules applied : {d.rule_count}"
+        f" ({_step_summary(d.rule_order, d.rule_hist)})",
+        f"-- Assumptions   : {d.ax_count} ({len(d.const_ax)} constant types, "
+        f"{len(d.beta_ax)} substitution obligations)",
+        "-- This file states the goal without deriving it: no `.mm1` accompanies "
+        "it.",
+    ]
+    out = list(head)
+    out += ["", "-- ── payload constants (numerals are not accepted inside `$…$`) ──"]
+    out += [f"term {n}: nat;" for n in NATS]
+    out += ["", "-- ── assumptions ──"]
+    path = Path(str(stem) + "_stopped.mm0")
+    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
+                                 for c in target.split(".")[-1])
+    # Bytes, not characters: the box-drawing rules in the prologue are three
+    # bytes each, and this number is the offset a verifier seeks to.
+    header = "\n".join(out) + "\n"
+    with path.open("w") as fh:
+        fh.write(header)
+        if ax_fh is not None:
+            with ax_path.open("r") as spool:
+                shutil.copyfileobj(spool, fh, 1 << 20)
+        else:
+            fh.write("".join(a + "\n" for a in axioms))
+        fh.write("\n-- ── the goal, stated and not derived ──\n")
+        fh.write(f"theorem {thm_name}: $ tty {goal_ctx} ")
+        _put(fh, value)
+        fh.write(" ")
+        _put(fh, ty)
+        fh.write(" $;\n")
+    state = {
+        "stopped": str(stop),
+        "rules": d.rule_count,
+        "axioms": d.ax_count,
+        "obligations": oblig_sink.lines,
+        "stopped_theory": str(path.name),
+        "stopped_theory_bytes": path.stat().st_size,
+        "header_bytes": len(header.encode()),
+        "elapsed_s": round(time.monotonic() - _PROC_T0, 1),
+    }
+    sp = Path(str(stem) + "_stopped.json")
+    sp.write_text(json.dumps(state, indent=1) + "\n")
+    print(f"[stopped] {stop}: {d.rule_count} rules, {d.ax_count} axioms, "
+          f"statement-only theory {path} ({state['stopped_theory_bytes']} B)",
+          file=sys.stderr, flush=True)
+    return 3
+
+
+def stop_walk(stop: StopWalk, d, ex, enc, oblig_sink, ax_fh, stem) -> int:
+    """End a run at its budget: close the streams, record the state, exit 3.
+
+    The theory file needs a proof of the goal and the goal is what the walk was
+    still building, so nothing is written to `.mm0`/`.mm1` — that is not a
+    compromise, it is the difference between an artifact and a fragment. What
+    *is* complete is the obligation stream and the axiom spool, and they are
+    closed the way a clean run closes them (index, manifest), so a stopped run
+    is read by the same consumer as any other (§13.32).
+    """
+    oblig_sink.close()
+    if ax_fh is not None:
+        ax_fh.close()
+    census(ex, enc, d)
+    # The bytes come from the parts themselves: on the single-file path the sink
+    # never counts them (that path pays for nothing, §13.32), and a state record
+    # that says 0 B about a 60 GB stream would be worse than no record.
+    root = Path(str(stem)).parent
+    ob_bytes = sum(os.path.getsize(root / p["path"])
+                   for p in oblig_sink.parts)
+    state = {
+        "stopped": str(stop),
+        "rules": d.rule_count,
+        "axioms": d.ax_count,
+        "obligations": oblig_sink.lines,
+        "obligation_bytes": ob_bytes,
+        "parts": len(oblig_sink.parts),
+        "fragmented": oblig_sink._fragmented,
+        "elapsed_s": round(time.monotonic() - _PROC_T0, 1),
+        "note": "the walk did not finish, so no .mm0/.mm1 was written: the "
+                "theory needs a proof of the goal and this run did not reach it",
+    }
+    path = Path(str(stem) + "_stopped.json")
+    path.write_text(json.dumps(state, indent=1) + "\n")
+    print(f"[stopped] {stop}: {d.rule_count} rules, {d.ax_count} axioms, "
+          f"{oblig_sink.lines} obligations in {len(oblig_sink.parts)} part(s) "
+          f"({ob_bytes} B); state written to {path}",
+          file=sys.stderr, flush=True)
+    return 3
+
+
+class Deriver:
+    """Build the derivation of a term's typing, bottom-up.
+
+    Every case of the λΠ fragment maps to one rule of `docs/cic_typing.mm0`:
+    `ty_var0`/`ty_varS` for a variable (one `ty_varS` per context entry between
+    it and the head), `ty_abs` for a lambda, `ty_app` for an application. The
+    types of the constants a proof term applies are not derivable here — they
+    are Mathlib's declarations — so each distinct (context, constant) pair is
+    one axiom, counted and named in the artifact.
+
+    `ty_app` concludes at `r` from the premise `tdefeq (tsubst b x) r`: the
+    substitution is a *term* of the theory, not something MM0 rewrites, so each
+    application contributes exactly one substitution obligation. Those
+    obligations are the workload the deltanet has to discharge (`tdefeq_iso`
+    over a `valid_iso` witness); they are emitted as axioms, counted, and
+    reported rather than hidden.
+    """
+
+    def __init__(self, ex, enc, path: Path, defer_subst: bool = False,
+                 oblig_sink=None, axiom_sink=None):
+        self.ex = ex
+        self.enc = enc
+        self.path = path
+        # Deferred substitution: conclude `ty_app` at `(tsubst b x)` itself, so
+        # the premise is `tdefeq_refl` and the redex is left for one normalisation
+        # obligation at the boundary. Fewer obligations, each one bigger.
+        self.defer_subst = defer_subst
+        self._ind_types: dict[str, int] | None = None
+        self.next_id = max(ex.exprs) + 1
+        self.base_id = self.next_id
+        # The artifact text is *streamed* too: `axiom_sink` is an open file and
+        # each `axiom …;` line is written as it is built, so the deriver holds
+        # none of them (§13.27: 444 MB of axiom text at 116 874 obligations).
+        # With no sink the old accumulate-and-return list stays, for the
+        # in-process callers and the non-spine path.
+        self.axiom_sink = axiom_sink
+        self.axioms: list[str] = []
+        self.ax_count = 0
+        self.ax_bytes = 0
+        self.ax_max = 0
+        # Largest proof string returned so far (bytes); see `_check`.
+        self._proof_bytes = 0
+        self.const_ax: dict[tuple[str, str], str] = {}
+        self.beta_ax: dict[tuple[bytes, bytes], str] = {}
+        self.field_ax: dict[tuple[str, int], str] = {}
+        self._ind_decls: dict[str, dict] | None = None
+        self.oblig: list[str] = []
+        # The certificate payload is *streamed*: `oblig_sink` is an open file
+        # and each obligation is written and dropped as it is created, so the
+        # deriver retains none of them. Measured cost of retention: the trees
+        # reached 10 GiB at ~24.5 kB per obligation (§13.25). When no sink is
+        # given (in-process callers) the old accumulate-and-write path stays.
+        self.oblig_sink = oblig_sink
+        self.oblig_tree: list[dict] = []
+        self.leaf_ax: list[str] = []
+        # Rules are counted, not retained: `rules` was one pointer per
+        # application (1.8 M at the 10 GiB point) for a header summary. The
+        # order of first appearance is kept because the summary lists it that way.
+        self.rule_hist: dict[str, int] = {}
+        self.rule_order: list[str] = []
+        self.rule_count = 0
+        # Memos for the two structural rewrites. A term is a DAG, and both
+        # rebuild it node by node: without the memo `lift` synthesised 7.9 M
+        # nodes (692 MB of live dicts, 6 GB peak RSS) for one declaration.
+        self._lift_memo: dict[tuple[int, int, int], int] = {}
+        self._subst_memo: dict[tuple[int, int, int], int] = {}
+        # Active `_check` frames, innermost last: the growth trace samples this.
+        self._stack: list[int] = []
+        # Context text is built by nesting `tcons` around every entry, so one
+        # call copies the whole context and the same context is asked for at
+        # every leaf beneath it. Keyed by the environment itself, which is a
+        # tuple of expression ids and therefore already immutable; the value is
+        # the identical string the rebuild produced, so no byte of an artifact
+        # depends on whether a lookup hit.
+        self._ax_epoch = time.time()
+        self._ctx_memo: dict[tuple[int, ...], str] = {}
+        self._ctx_memo_bytes = 0
+        # What the memo actually bought (`LTP_TRACE` columns `ctxcall`,
+        # `ctxhit`, `ctxscan`): the key is the environment itself, so every
+        # lookup hashes and copies one entry per binder, which is the same
+        # order as the text it avoids building. Whether that is a win is a
+        # measurement, not an argument — on `dense` it is 648 144 hits for 163
+        # contexts and takes the row from 5 916 s to 307 s, on `nsOuterFock` it
+        # is 7 451 hits and the run is neutral to within a second (§13.31).
+        self._ctx_calls = 0
+        self._ctx_hits = 0
+        self._ctx_scan = 0
+        # Result memo for `check` (§13.32). A term is shared, and the same
+        # subterm is checked at the same type in the same context many times;
+        # an identical derivation under the identical key produces the identical
+        # proof string. Only *axiom-free* results are stored: a call that emitted
+        # an axiom or an obligation can never be skipped, because the axiom names
+        # are allocated in call order and the artifact text depends on them. The
+        # rules a call applied are part of that text too — the `.mm0` header
+        # carries the rule summary, and its first-appearance order is the walk's
+        # order — so each entry keeps the exact sequence of rule names it applied
+        # and a hit replays it. That is what makes a hit byte-neutral (measured:
+        # without the replay the header said `ty_var ×71` where the artifact
+        # needed `×8974`).
+        self._chk_memo: dict[tuple[int, int, tuple[int, ...], bool],
+                             tuple[str, tuple[str, ...]]] = {}
+        self._chk_rec: list[str] | None = None
+        self._chk_memo_bytes = 0
+        self._chk_rule_cells = 0
+        self._chk_on = os.environ.get("LTP_CHK_MEMO", "0") == "1"
+        # A stopping condition (§13.34): a rule budget, a clock, or both. Checked
+        # in `add_rule`, which is the only place the walk passes through often
+        # enough to be interruptible — and the walk is where a 4-hour row spends
+        # its time. A clock check costs a `monotonic` call, so it runs once every
+        # 4 096 rules instead of once per rule.
+        # A certificate may be written as a *shared* term DAG instead of an
+        # expanded tree (§13.35). The artifact is an expansion today: `tree_json`
+        # has no memo on purpose, so a subterm reached by two paths is written
+        # twice, and one `tsubst` certificate reaches 25 GB. Sharing numbers the
+        # nodes in post-order and writes each one once, which is what makes the
+        # record's bytes proportional to the term rather than to its unrolling.
+        self._share = os.environ.get("LTP_OBLIG_SHARE", "0") == "1"
+        self._sh_idx = array.array("i", [-1]) * 1024
+        self._sh_touched: list[int] = []
+        self._sh_n = 0
+        self._stop_rules = int(os.environ.get("LTP_STOP_RULES", "0") or 0)
+        _stop_at = float(os.environ.get("LTP_STOP_AT", "0") or 0)
+        self._stop_at = (time.monotonic() + _stop_at) if _stop_at else 0.0
+        self._ticks = 0
+        self._chk_calls = 0
+        self._chk_hits = 0
+        self._chk_saved = 0
+
+    def add_axiom(self, *chunks) -> None:
+        """Hand one artifact assumption to the sink, or retain it.
+
+        The assumption arrives as one or more pieces that are written in order and
+        then a newline, exactly as `"\n".join(out)` would have, so a streamed
+        artifact is byte-identical to a retained one. It takes pieces because on
+        the largest obligations the `axiom` line *is* three term texts (`b`, `x`
+        and the reduct) and joining them into a fourth string is the copy that
+        failed at 10 GiB (`docs/lean4mm0.md` §13.28).
+        """
+        t_enter = time.time()
+        gap = t_enter - self._ax_epoch
+        sink = self.axiom_sink
+        if sink is None:
+            text = "".join(_piece_str(self.enc, c) for c in chunks)
+            self.axioms.append(text)
+            n = len(text)
+        else:
+            n = 0
+            for piece in chunks:
+                n += _put_piece(sink, self.enc, piece)
+            sink.write("\n")
+        self.ax_count += 1
+        self.ax_bytes += n
+        if n > self.ax_max:
+            self.ax_max = n
+        self._ax_epoch = time.time()
+        if os.environ.get("LTP_OBTRACE"):
+            top = self._stack[-1] if self._stack else -1
+            _ob_trace(self.ax_count, gap, self._ax_epoch - t_enter, n,
+                      _label(self.ex, top) if top >= 0 else "-")
+
+    def add_rule(self, name: str) -> None:
+        """Count one applied rule (§13.27: the list was 1.8 M pointers).
+
+        `_chk_rec` is non-`None` only while a `check` call is being recorded for
+        the result memo, and then it takes the name too: the sequence, not the
+        counts, because the header lists rules in first-appearance order.
+        """
+        self.rule_count += 1
+        if name in self.rule_hist:
+            self.rule_hist[name] += 1
+        else:
+            self.rule_hist[name] = 1
+            self.rule_order.append(name)
+        if self._stop_rules and self.rule_count >= self._stop_rules:
+            raise StopWalk(f"rule budget {self._stop_rules}")
+        if self._stop_at and not (self.rule_count & 4095) \
+                and time.monotonic() >= self._stop_at:
+            raise StopWalk(f"clock {os.environ.get('LTP_STOP_AT')} s")
+        rec = self._chk_rec
+        if rec is not None:
+            rec.append(name)
+
+    def emit_obligation(self, ax: str, lhs, rhs,
+                        b: int, x: int, r: int) -> None:
+        """Hand one substitution certificate to the sink, or retain it.
+
+        The bytes are the same either way — `sort_keys=True` ordering, default
+        separators, one object per line — so a streamed `.jsonl` is identical to
+        what the accumulate path writes at the end. What differs is the shape of
+        the work: `json.dumps` of the record builds one string for the whole
+        obligation, and on the two largest obligations in the corpus that string
+        did not fit beside the tree it encoded (`docs/lean4mm0.md` §13.28). The
+        sunk path therefore walks the expression graph and writes each node as it
+        reaches it — no dict tree, no record string — so what one obligation
+        costs is its recursion depth rather than its size.
+        """
+        sink = self.oblig_sink
+        if sink is None:
+            memo: dict = {}
+            self.oblig_tree.append({
+                "id": ax,
+                "kind": "substitution",
+                "lhs": _piece_str(self.enc, lhs),
+                "rhs": _piece_str(self.enc, rhs),
+                "b": self.to_tree(b, memo=memo),
+                "x": self.to_tree(x, memo=memo),
+                "r": self.to_tree(r, memo=memo),
+            })
+            return
+        # Key order of `sort_keys=True`: b, id, kind, lhs, r, rhs, x.
+        sink.begin(ax)
+        if self._share:
+            self.emit_obligation_shared(ax, lhs, rhs, b, x, r)
+            sink.end_line()
+            return
+        sink.write('{"b": ')
+        self.tree_json(b, sink)
+        sink.write(', "id": ')
+        _json_write_str(sink, ax)
+        sink.write(', "kind": "substitution", "lhs": ')
+        _put_json(sink, self.enc, lhs)
+        sink.write(', "r": ')
+        self.tree_json(r, sink)
+        sink.write(', "rhs": ')
+        _put_json(sink, self.enc, rhs)
+        sink.write(', "x": ')
+        self.tree_json(x, sink)
+        sink.write("}\n")
+        sink.end_line()
+
+    def emit_obligation_shared(self, ax: str, lhs, rhs,
+                               b: int, x: int, r: int) -> None:
+        """The certificate with its terms as one shared node table (§13.35).
+
+        The expanded record writes `b`, `x` and `r` as three trees, so a subterm
+        reached by two paths is written once per path and the largest
+        certificate in the corpus is 25 GB of mostly repeated nodes. Here the
+        three terms share one table: a node appears once, and every term is an
+        index into it. The bytes are then proportional to the term's node count,
+        not to its unrolling.
+
+        The table comes first because a node's index is allocated when its
+        subtree is finished (post-order), so every entry refers only to smaller
+        indices and the walk stays one pass with no placeholder rewriting. The
+        record's key order is fixed by this file, not by `sort_keys`:
+        `id`, `kind`, `lhs`, `rhs`, `n`, `b`, `x`, `r`.
+        """
+        sink = self.oblig_sink
+        sink.write('{"id": ')
+        _json_write_str(sink, ax)
+        sink.write(', "kind": "substitution", "lhs": ')
+        _put_json(sink, self.enc, lhs)
+        sink.write(', "rhs": ')
+        _put_json(sink, self.enc, rhs)
+        sink.write(', "n": [')
+        self._sh_reset()
+        ib = self.tree_share(b, sink)
+        ix = self.tree_share(x, sink)
+        ir = self.tree_share(r, sink)
+        sink.write(f'], "b": {ib}, "x": {ix}, "r": {ir}}}\n')
+
+    def _sh_reset(self) -> None:
+        """Clear this record's numbering.
+
+        Only the ids it touched are cleared, so a certificate that visits a
+        million nodes does not pay for an array of the export's 4.5 M ids. The
+        array grows on demand because synthesised nodes (`mk`) are numbered
+        above the export's own ids.
+        """
+        idx = self._sh_idx
+        for eid in self._sh_touched:
+            idx[eid] = -1
+        self._sh_touched.clear()
+        self._sh_n = 0
+
+    def tree_share(self, eid: int, out) -> int:
+        """Write `eid`'s node into the shared table and return its index.
+
+        A node is identified by its expression id, which is the DAG's own
+        sharing: the same id under two paths is the same subterm and is written
+        once. `strip` is applied first, exactly as `tree_json` does, so the key
+        is the id whose node is actually written.
+
+        Entries are `[op, ...]` with child indices in the positions `tree_json`
+        puts them, and leaves carry the same `json.dumps` value, so a reader can
+        rebuild the expanded node from the table without a second source of
+        truth (`scripts/oblig-expand` does exactly that).
+        """
+        eid = self.strip(eid)
+        idx = self._sh_idx
+        if eid >= len(idx):
+            grow = max(eid + 1 - len(idx), 1 << 16)
+            idx.extend(array.array("i", [-1]) * grow)
+        got = idx[eid]
+        if got >= 0:
+            return got
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            ent = '["bvar", ' + json.dumps(e["bvar"]) + "]"
+        elif "const" in e:
+            ent = '["const", ' + json.dumps(self.ex.name(e["const"]["name"])) + "]"
+        elif "sort" in e:
+            ent = '["sort", ' + json.dumps(e["sort"]) + "]"
+        elif "natVal" in e:
+            ent = '["nat", ' + json.dumps(e["natVal"]) + "]"
+        elif "strVal" in e:
+            ent = '["str", ' + json.dumps(e["strVal"]) + "]"
+        elif "sym" in e:
+            ent = '["const", ' + json.dumps(e["sym"]) + "]"
+        elif "app" in e:
+            a = self.tree_share(e["app"]["fn"], out)
+            c = self.tree_share(e["app"]["arg"], out)
+            ent = f'["app", {a}, {c}]'
+        elif "forallE" in e:
+            a = self.tree_share(e["forallE"]["type"], out)
+            c = self.tree_share(e["forallE"]["body"], out)
+            ent = f'["pi", {a}, {c}]'
+        elif "lam" in e:
+            if "type" not in e["lam"]:
+                # `tree_json` would pass this eid to itself here; sharing would
+                # have to write a node that contains itself, which the format
+                # does not have. No export in the corpus has one (the expanded
+                # writer would have recursed forever), so this is a refusal, not
+                # a fallback.
+                raise SystemExit(
+                    f"tree_share: lam {eid} has no type, so its node would "
+                    "contain itself")
+            a = self.tree_share(e["lam"]["type"], out)
+            c = self.tree_share(e["lam"]["body"], out)
+            ent = f'["lam", {a}, {c}]'
+        elif "tsubst" in e:
+            a = self.tree_share(e["tsubst"]["b"], out)
+            c = self.tree_share(e["tsubst"]["x"], out)
+            ent = f'["tsubst", {a}, {c}]'
+        elif "proj" in e:
+            st = e["proj"]
+            a = self.tree_share(st["struct"], out)
+            ent = f'["proj", {a}, {json.dumps(st.get("idx", 0))}]'
+        elif "letE" in e:
+            le = e["letE"]
+            a = self.tree_share(le["type"], out)
+            c = self.tree_share(le["body"], out)
+            v = self.tree_share(le["value"], out)
+            ent = f'["let", {a}, {c}, {v}]'
+        else:
+            raise SystemExit(f"tree_share: unhandled expression {sorted(e.keys())}")
+        i = self._sh_n
+        self._sh_n = i + 1
+        idx[eid] = i
+        self._sh_touched.append(eid)
+        if i:
+            out.write(", ")
+        out.write(ent)
+        return i
+
+    def tree_json(self, eid: int, out) -> None:
+        """`to_tree`'s node for `eid`, written as JSON instead of built.
+
+        Same cases, same order, same bytes as `json.dumps(to_tree(eid))`; the
+        difference is that no intermediate dict or string is ever materialised,
+        so the peak is the recursion stack, not the subtree. `to_tree`'s memo has
+        no counterpart here and none is wanted: JSON has no references, so a
+        shared subtree is written out once per path either way, and a memo would
+        only re-introduce the retained dicts.
+        """
+        eid = self.strip(eid)
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            # `bvar`/`natVal`/`idx` are ints in some exports and decimal strings
+            # in others (Lean writes big numerals as strings), so all three go
+            # through `json.dumps` rather than a format — same bytes either way.
+            out.write('{"bvar": ' + json.dumps(e["bvar"]) + "}")
+        elif "const" in e:
+            out.write('{"const": ')
+            _json_write_str(out, self.ex.name(e["const"]["name"]))
+            out.write("}")
+        elif "sort" in e:
+            out.write('{"sort": ' + json.dumps(e["sort"]) + "}")
+        elif "natVal" in e:
+            out.write('{"nat": ' + json.dumps(e["natVal"]) + "}")
+        elif "strVal" in e:
+            out.write('{"str": ')
+            _json_write_str(out, e["strVal"])
+            out.write("}")
+        elif "sym" in e:
+            out.write('{"const": ')
+            _json_write_str(out, e["sym"])
+            out.write("}")
+        elif "app" in e:
+            out.write('{"app": [')
+            self.tree_json(e["app"]["fn"], out)
+            out.write(", ")
+            self.tree_json(e["app"]["arg"], out)
+            out.write("]}")
+        elif "forallE" in e:
+            out.write('{"pi": [')
+            self.tree_json(e["forallE"]["type"], out)
+            out.write(", ")
+            self.tree_json(e["forallE"]["body"], out)
+            out.write("]}")
+        elif "lam" in e:
+            out.write('{"lam": [')
+            self.tree_json(e["lam"].get("type", eid), out)
+            out.write(", ")
+            self.tree_json(e["lam"]["body"], out)
+            out.write("]}")
+        elif "tsubst" in e:
+            out.write('{"tsubst": [')
+            self.tree_json(e["tsubst"]["b"], out)
+            out.write(", ")
+            self.tree_json(e["tsubst"]["x"], out)
+            out.write("]}")
+        elif "proj" in e:
+            st = e["proj"]
+            out.write('{"proj": [')
+            self.tree_json(st["struct"], out)
+            out.write(', {"nat": ' + json.dumps(st.get("idx", 0)) + "}]}")
+        elif "letE" in e:
+            le = e["letE"]
+            out.write('{"app": [{"lam": [')
+            self.tree_json(le["type"], out)
+            out.write(", ")
+            self.tree_json(le["body"], out)
+            out.write("]}, ")
+            self.tree_json(le["value"], out)
+            out.write("]}")
+        else:
+            raise SystemExit(f"tree_json: unhandled expression {sorted(e.keys())}")
+
+    # ── export manipulation ──────────────────────────────────────────────
+    def mk(self, d: dict) -> int:
+        i = self.next_id
+        self.next_id += 1
+        self.ex.exprs[i] = d
+        return i
+
+    def ind_decl(self, nm: str) -> dict | None:
+        """The inductive record for `nm`, from the export's `inductive` blocks.
+
+        `Export.decls` cannot serve this: the format's inductive record has no
+        top-level `"name"`, so the kind-indexed registration loop skips it and
+        only the *constructors* and *recursors* it lists are registered
+        separately (`ex.ctors`/`ex.recs`). A projection needs the record itself —
+        its single type and its constructor's binder spine — so one pass over the
+        export when first asked for, keyed by qualified name.
+        """
+        if self._ind_decls is None:
+            self._ind_decls = {}
+            import json
+
+            # Streamed, not `read_text()`: the export is hundreds of megabytes
+            # and the inductive blocks are a handful of its lines.
+            with self.path.open("rb") as fh:
+                for line in fh:
+                    if b'"inductive"' not in line:
+                        continue
+                    ind = json.loads(line)["inductive"]
+                    for t in ind.get("types", []):
+                        self._ind_decls[self.ex.name(t["name"])] = ind
+        return self._ind_decls.get(nm)
+
+    def ind_type(self, nm: str) -> int | None:
+        """The type of an inductive constant.
+
+        `Export` keeps inductives for their constructors and recursors but drops
+        the type of the inductive itself, which is exactly what a *type* applied
+        as a term needs (`Exists`, `Set`, ...). One pass over the export when it
+        is first asked for, keyed by the same flattened names.
+        """
+        if self._ind_types is None:
+            self._ind_types = {}
+            import json
+
+            with self.path.open("rb") as fh:
+                for line in fh:
+                    if b'"inductive"' not in line:
+                        continue
+                    d = json.loads(line)
+                    for t in d["inductive"].get("types", []):
+                        if "type" in t:
+                            self._ind_types[self.ex.name(t["name"])] = t["type"]
+                    # Recursors (`Eq.rec`, `Nat.rec`, ...) and constructors are
+                    # not decls in `Export.decls`, and a proof term applies
+                    # both. The record keys are `recs` and `ctors`.
+                    for r in (d["inductive"].get("recs", [])
+                              + d["inductive"].get("ctors", [])):
+                        if "type" in r:
+                            self._ind_types[self.ex.name(r["name"])] = r["type"]
+        return self._ind_types.get(nm)
+
+    def to_tree(self, eid: int, depth: int = 0, memo: dict | None = None) -> dict:
+        """A substitution-obligation side as a plain tree, for the certificate checker.
+
+        `scripts/lean-net-cert` has to hand `uk_austral_defeq` two fragments and
+        compare the answer with what the derivation claimed, so it needs the
+        terms structurally, not as MM0 strings. Constants keep their Lean names
+        (not the emitter's `t_symN`), because that is what a reader can check
+        against the export.
+
+        `memo` collapses the DAG: the export is a shared-term graph, so one
+        subtree is reached through many paths and was rebuilt once per path
+        (`docs/lean4mm0.md` §13.25 measures 3.0 structural dicts per stored
+        node). The memo is the caller's, not the deriver's, on purpose — one dict
+        per obligation, released as soon as that obligation is written out. A
+        deriver-wide cache would trade the duplicate dicts for an equally large
+        retained one.
+        """
+        if memo is None:
+            memo = {}
+        eid = self.strip(eid)
+        hit = memo.get(eid)
+        if hit is not None:
+            return hit
+        node = self._tree_build(eid, depth, memo)
+        memo[eid] = node
+        return node
+
+    def _tree_build(self, eid: int, depth: int, memo: dict) -> dict:
+        """The cases of `to_tree`; `to_tree` memoises their result on `eid`."""
+        if depth > 4096:
+            raise SystemExit("to_tree: expression too deep (cycle?)")
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            return {"bvar": e["bvar"]}
+        if "const" in e:
+            return {"const": self.ex.name(e["const"]["name"])}
+        if "sort" in e:
+            return {"sort": e["sort"]}
+        if "natVal" in e:
+            return {"nat": e["natVal"]}
+        if "strVal" in e:
+            return {"str": e["strVal"]}
+        if "sym" in e:
+            return {"const": e["sym"]}
+        if "app" in e:
+            return {"app": [self.to_tree(e["app"]["fn"], depth + 1, memo),
+                            self.to_tree(e["app"]["arg"], depth + 1, memo)]}
+        if "forallE" in e:
+            return {"pi": [self.to_tree(e["forallE"]["type"], depth + 1, memo),
+                            self.to_tree(e["forallE"]["body"], depth + 1, memo)]}
+        if "lam" in e:
+            return {"lam": [self.to_tree(e["lam"].get("type", eid), depth + 1, memo),
+                            self.to_tree(e["lam"]["body"], depth + 1, memo)]}
+        if "tsubst" in e:
+            return {"tsubst": [self.to_tree(e["tsubst"]["b"], depth + 1, memo),
+                               self.to_tree(e["tsubst"]["x"], depth + 1, memo)]}
+        if "proj" in e:
+            st = e["proj"]
+            return {"proj": [self.to_tree(st["struct"], depth + 1, memo),
+                             {"nat": st.get("idx", 0)}]}
+        if "letE" in e:
+            le = e["letE"]
+            return {"app": [{"lam": [self.to_tree(le["type"], depth + 1, memo),
+                                      self.to_tree(le["body"], depth + 1, memo)]},
+                             self.to_tree(le["value"], depth + 1, memo)]}
+        if "mdata" in e:
+            return self.to_tree(e["mdata"]["expr"], depth + 1, memo)
+        raise SystemExit(f"to_tree: unhandled expression {sorted(e.keys())}")
+
+    def strip(self, eid: int) -> int:
+        while "mdata" in self.ex.exprs[eid]:
+            eid = self.ex.exprs[eid]["mdata"]["expr"]
+        return eid
+
+    def lift(self, eid: int, delta: int, cutoff: int = 0) -> int:
+        """Every `bvar` at or above `cutoff` shifted up by `delta`.
+
+        Memoised on `(eid, delta, cutoff)`: the result is a pure function of
+        those, so one node per key, however many times the parent mentions it.
+        """
+        key = (eid, delta, cutoff)
+        got = self._lift_memo.get(key)
+        if got is not None:
+            return got
+        out = self._lift(eid, delta, cutoff)
+        if len(self._lift_memo) > MEMO_MAX:
+            self._lift_memo.clear()
+        self._lift_memo[key] = out
+        return out
+
+    def _lift(self, eid: int, delta: int, cutoff: int = 0) -> int:
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            return eid if e["bvar"] < cutoff else self.mk({"bvar": e["bvar"] + delta})
+        if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
+                or "strVal" in e or "sym" in e):
+            return eid
+        if "tsubst" in e:
+            return self.mk({"tsubst": {
+                "b": self.lift(e["tsubst"]["b"], delta, cutoff),
+                "x": self.lift(e["tsubst"]["x"], delta, cutoff)}})
+        if "mdata" in e:
+            return self.mk({"mdata": {"expr": self.lift(e["mdata"]["expr"], delta, cutoff)}})
+        if "app" in e:
+            return self.mk({"app": {"fn": self.lift(e["app"]["fn"], delta, cutoff),
+                                    "arg": self.lift(e["app"]["arg"], delta, cutoff)}})
+        if "letE" in e:
+            d = dict(e["letE"])
+            d["type"] = self.lift(d["type"], delta, cutoff)
+            d["value"] = self.lift(d["value"], delta, cutoff)
+            d["body"] = self.lift(d["body"], delta, cutoff + 1)
+            return self.mk({"letE": d})
+        for k in ("forallE", "lam"):
+            if k in e:
+                d = dict(e[k])
+                d["type"] = self.lift(d["type"], delta, cutoff)
+                d["body"] = self.lift(d["body"], delta, cutoff + 1)
+                return self.mk({k: d})
+        raise SystemExit(f"lift: unhandled expression {sorted(e.keys())}")
+
+    def subst0(self, eid: int, arg: int, depth: int = 0) -> int:
+        """`eid[bvar depth := arg]`, with de Bruijn bookkeeping.
+
+        Removing the binder at `depth` moves every index above it down by one,
+        and inserting `arg` under a binder means lifting it first — the same two
+        steps Lean's `instantiate` is built from. Getting this wrong shows up as
+        a unification failure inside `ty_app`, not as a wrong type.
+
+        Memoised on `(eid, arg, depth)` for the same reason as `lift`.
+        """
+        key = (eid, arg, depth)
+        got = self._subst_memo.get(key)
+        if got is not None:
+            return got
+        out = self._subst0(eid, arg, depth)
+        if len(self._subst_memo) > MEMO_MAX:
+            self._subst_memo.clear()
+        self._subst_memo[key] = out
+        return out
+
+    def _subst0(self, eid: int, arg: int, depth: int = 0) -> int:
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            k = e["bvar"]
+            if k == depth:
+                return arg
+            return eid if k < depth else self.mk({"bvar": k - 1})
+        if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
+                or "strVal" in e or "sym" in e):
+            return eid
+        if "tsubst" in e:
+            return self.mk({"tsubst": {
+                "b": self.subst0(e["tsubst"]["b"], arg, depth),
+                "x": self.subst0(e["tsubst"]["x"], arg, depth)}})
+        if "mdata" in e:
+            return self.mk({"mdata": {"expr": self.subst0(e["mdata"]["expr"], arg, depth)}})
+        if "app" in e:
+            return self.mk({"app": {"fn": self.subst0(e["app"]["fn"], arg, depth),
+                                    "arg": self.subst0(e["app"]["arg"], arg, depth)}})
+        if "letE" in e:
+            d = dict(e["letE"])
+            d["type"] = self.subst0(d["type"], arg, depth)
+            d["value"] = self.subst0(d["value"], arg, depth)
+            d["body"] = self.subst0(d["body"], self.lift(arg, 1), depth + 1)
+            return self.mk({"letE": d})
+        for k in ("forallE", "lam"):
+            if k in e:
+                d = dict(e[k])
+                d["type"] = self.subst0(d["type"], arg, depth)
+                d["body"] = self.subst0(d["body"], self.lift(arg, 1), depth + 1)
+                return self.mk({k: d})
+        raise SystemExit(f"subst0: unhandled expression {sorted(e.keys())}")
+
+    # ── contexts ─────────────────────────────────────────────────────────
+    def max_free(self, eid: int, depth: int = 0) -> int:
+        """The largest de Bruijn index that is *free* in `eid` (-1 if closed).
+
+        Two types offered to a conversion must both be well scoped in the same
+        context, so their free-depth must agree. When it does not, the emitter
+        has built one of them in the wrong context — a bug that otherwise
+        surfaces as an MM0 unification failure megabytes into the artifact
+        (measured: a 3.7 MB derivation claiming `tvar 4` converts to `tvar 5`).
+        """
+        e = self.ex.exprs[self.strip(eid)]
+        if "bvar" in e:
+            return -1 if e["bvar"] < depth else e["bvar"] - depth
+        if "app" in e:
+            return max(
+                self.max_free(e["app"]["fn"], depth),
+                self.max_free(e["app"]["arg"], depth),
+            )
+        if "forallE" in e:
+            return max(
+                self.max_free(e["forallE"]["type"], depth),
+                self.max_free(e["forallE"]["body"], depth + 1),
+            )
+        if "lam" in e:
+            return self.max_free(e["lam"]["body"], depth + 1)
+        if "letE" in e:
+            return max(
+                self.max_free(e["letE"]["type"], depth),
+                self.max_free(e["letE"]["value"], depth),
+                self.max_free(e["letE"]["body"], depth + 1),
+            )
+        if "tsubst" in e:
+            return max(
+                self.max_free(e["tsubst"]["b"], depth + 1),
+                self.max_free(e["tsubst"]["x"], depth),
+            )
+        return -1
+
+    def ctx_str(self, env: list[int]) -> str:
+        """`env[0]` is the innermost binder, which is what `tvar tzero` names.
+
+        An entry's type is written in the scope *outside* its own binder, so
+        placing entry `i` at context position `i` means shifting its free
+        variables up by `i + 1`: they referred to the entries outside it, which
+        now sit after it. Without that shift a type met in one context is
+        silently reused in a deeper one with the wrong indices — the mismatch
+        only appears much later, as an MM0 unification failure against a
+        correctly scoped type (`tvar 1` where `tvar 4` belonged).
+        """
+        key = tuple(env)
+        self._ctx_calls += 1
+        self._ctx_scan += len(env)
+        got = self._ctx_memo.get(key)
+        if got is not None:
+            self._ctx_hits += 1
+            return got
+        out = "tnil"
+        for t in reversed(env):
+            out = f"(tcons {self.enc.enc(self.strip(t))} {out})"
+        self._ctx_memo[key] = out
+        self._ctx_memo_bytes += len(out)
+        return out
+
+    # ── the rules ────────────────────────────────────────────────────────
+    def var_proof(self, k: int) -> str:
+        p = "ty_var0"
+        for _ in range(k):
+            p = f"(ty_varS {p})"
+        return p
+
+    def field_type(self, type_name: str, idx: int, args: list[int] | None = None):
+        """The field type a projection reads, taken from the constructor type.
+
+        `Π params. Π fields. S params`: peeling `numParams + idx` binders leaves
+        the field's domain under the parameter binders, so it must be
+        instantiated at the structure's own arguments before it can type
+        anything in the current scope. Substituting innermost-first (`bvar 0` is
+        the last parameter) is what `ty_app`'s substitution does, and `subst0`
+        shifts the remaining indices down as each binder goes away.
+
+        Returns None when the declaration does not determine the field — a
+        recursive or multi-constructor inductive, or a structure type reached as
+        a bare variable, where no arguments are available to instantiate with.
+        """
+        ind = self.ind_decl(type_name)
+        if not ind:
+            return None
+        types = ind.get("types") or []
+        ctors = ind.get("ctors") or []
+        if len(types) != 1 or len(ctors) != 1 or types[0].get("isRec"):
+            return None
+        ctor = ctors[0]
+        nparams = ctor.get("numParams") or 0
+        if nparams:
+            if args is None or len(args) < nparams:
+                return None
+        if idx >= ctor.get("numFields", 0):
+            return None
+        cur = self.strip(ctor["type"])
+        for _ in range(nparams + idx):
+            e = self.ex.exprs.get(cur, {})
+            if "forallE" not in e:
+                return None
+            cur = self.strip(e["forallE"]["body"])
+        e = self.ex.exprs.get(cur, {})
+        if "forallE" not in e:
+            return None
+        fld = self.strip(e["forallE"]["type"])
+        for a in reversed(args[:nparams] if nparams else []):
+            fld = self.subst0(fld, a)
+        return self.strip(fld)
+
+    def infer(self, eid: int, env: list[int], tail: bool = False):
+        """(type_eid, mm1 proof term) for a term whose type can be inferred.
+
+        `tail` marks a term whose inferred type *is* the goal, which is the only
+        place a deferred substitution can be left unreduced: a deferred type has
+        no Π structure, so anything applied to it would have to be converted
+        back to its reduct first, paying the obligation anyway.
+        """
+        ex, enc = self.ex, self.enc
+        eid = self.strip(eid)
+        e = ex.exprs[eid]
+        if "proj" in e:
+            # A projection's type is a field of the structure, so the structure
+            # must be typed first (`ty_proj` takes that proof as its premise) and
+            # the field relation must be named. Both come from the declaration,
+            # not from the use site.
+            st = e["proj"]
+            sty, sproof = self.infer(st["struct"], env, tail=False)
+            # The structure's type carries the arguments a parameterised field
+            # must be instantiated at: `S a0 a1` gives [a0, a1] for `S p0 p1`.
+            _, sargs = spine(self.ex, self.strip(sty))
+            fld = self.field_type(self.ex.name(st["typeName"]), st["idx"], sargs)
+            if fld is None:
+                raise Unfoldable(eid)
+            key = (enc.digest(sty), st["idx"])
+            if key not in self.field_ax:
+                ax = f"ax_field_{len(self.field_ax)}"
+                self.add_axiom(
+                    f"-- field {st['idx']} of {self.ex.name(st['typeName'])}: "
+                    "taken from the constructor type\n",
+                    f"axiom {ax}: $ tfield ", ("enc", sty), " ",
+                    f"{_nat_lit(st['idx'])} ", ("enc", fld), " $;",
+                )
+                self.field_ax[key] = ax
+            self.add_rule("ty_proj")
+            return fld, f"(ty_proj {sproof} {self.field_ax[key]})"
+        if "bvar" in e:
+            k = e["bvar"]
+            if k >= len(env):
+                raise SystemExit(f"infer: bvar {k} is not bound by the {len(env)} context entries")
+            self.add_rule("ty_var")
+            # `ty_varS` repeats the entry's type verbatim, and the context is
+            # spine-relative (`ty_abs` forces `tcons`'s head to be the Π's
+            # domain), so the type a variable is *declared* with is what it is
+            # *used* at — no shift, by the theory's own design.
+            return env[k], self.var_proof(k)
+        if "const" in e:
+            nm = ex.name(e["const"]["name"])
+            decl = ex.decls.get(nm)
+            raw_ty = decl[1]["type"] if decl is not None and "type" in decl[1] else None
+            if raw_ty is None:
+                raw_ty = self.ind_type(nm)
+            if raw_ty is None:
+                raise SystemExit(f"infer: no exported type for constant {nm}")
+            ty = self.strip(raw_ty)
+            ctx = self.ctx_str(env)
+            key = (ctx, enc.digest(eid))
+            if key not in self.const_ax:
+                ax = f"ax_const_{len(self.const_ax)}"
+                self.add_axiom(
+                    f"-- {nm}\naxiom {ax}: $ tty {ctx} ", ("enc", eid), " ",
+                    ("enc", ty), " $;",
+                )
+                self.const_ax[key] = ax
+            self.add_rule("const type")
+            return ty, self.const_ax[key]
+        if "natVal" in e:
+            # A numeral's type is `Nat`, which is opaque here: the numeral is a
+            # constant-like leaf, one axiom, the same shape as Mathlib's.
+            ctx = self.ctx_str(env)
+            key = (ctx, enc.digest(eid))
+            if key not in self.const_ax:
+                ax = f"ax_const_{len(self.const_ax)}"
+                self.add_axiom(
+                    f"-- Nat literal {e['natVal']}\n"
+                    f"axiom {ax}: $ tty {ctx} ", ("enc", eid),
+                    f" {enc.sym('Nat')} $;",
+                )
+                self.const_ax[key] = ax
+            self.add_rule("const type")
+            return self.mk({"sym": "Nat"}), self.const_ax[key]
+        if "strVal" in e:
+            # A string literal: like a numeral, an opaque leaf whose type is the
+            # opaque `String` symbol.
+            ctx = self.ctx_str(env)
+            key = (ctx, enc.digest(eid))
+            if key not in self.const_ax:
+                ax = f"ax_const_{len(self.const_ax)}"
+                self.add_axiom(
+                    f"-- String literal {e['strVal']!r}\n"
+                    f"axiom {ax}: $ tty {ctx} ", ("enc", eid),
+                    f" {enc.sym('String')} $;",
+                )
+                self.const_ax[key] = ax
+            self.add_rule("const type")
+            return self.mk({"sym": "String"}), self.const_ax[key]
+        if "lam" in e:
+            # A λ in an *inference* position: the export carries its domain, so
+            # it is typed exactly like a λ under an unfolded Π (`lam_type`),
+            # and the Π it builds is what further rules see.
+            return self.lam_type(eid, env)
+        if "letE" in e:
+            le = e["letE"]
+            # The export carries the binding's declared type, which is the λ's
+            # domain; without it `lam_type` had nothing to decompose and the
+            # declaration died on a KeyError rather than on a proof obligation.
+            eid = self.mk({"app": {"fn": self.mk({"lam": {"type": le["type"],
+                                                       "body": le["body"]}}),
+                                    "arg": le["value"]}})
+            return self.infer(eid, env)
+        if "app" in e:
+            fty, fproof = self.infer(e["app"]["fn"], env, tail=False)
+            fte = ex.exprs[self.strip(fty)]
+            if "forallE" not in fte:
+                # The function's type is a Π only after unfolding a definition
+                # (`foo a b` where `foo` is reducible) or is named by reference
+                # to a context entry. Following either reference and converting
+                # with `ty_deq` was tried and measured (docs §13.7): it never
+                # fires, because the reference is resolved on the *type* while
+                # the mismatch MM0 reports is on the context head, which no rule
+                # can convert. So this stays the counted leaf it was.
+                raise Unfoldable(self.strip(fty))
+            dom = fte["forallE"]["type"]
+            aproof = self.check(e["app"]["arg"], dom, env, tail=False)
+            x = self.strip(e["app"]["arg"])
+            b = self.strip(fte["forallE"]["body"])
+            if self.defer_subst and tail:
+                # No reduct computed: the result type *is* the unreduced
+                # substitution, and `tdefeq_refl` discharges the premise.
+                self.add_rule("ty_app (deferred)")
+                return (
+                    self.mk({"tsubst": {"b": b, "x": x}}),
+                    f"(ty_app {fproof} {aproof} (tdefeq_refl))",
+                )
+            res = self.subst0(b, x)
+            # Keyed by the digest of the texts, which are gigabytes and are
+            # streamed straight to the sink below (§13.30); hashing keeps the
+            # text-equality dedup that keying by id would lose.
+            key = (enc.digest(b), enc.digest(x))
+            if key not in self.beta_ax:
+                ax = f"ax_subst_{len(self.beta_ax)}"
+                # Three term texts, streamed: on the largest obligation here
+                # the joined line is 2.2 GB, so holding `b`, `x` and the
+                # reduct as strings was a third of the memory budget.
+                rr = self.strip(res)
+                self.add_axiom(
+                    f"-- (λ", ("enc", dom), f". _) applied to {enc.head(x, 80)}\n",
+                    f"axiom {ax}: $ tdefeq (tsubst ",
+                    ("enc", b), " ", ("enc", x), ") ", ("enc", rr), " $;",
+                )
+                self.beta_ax[key] = ax
+                self.oblig.append(ax)
+                self.emit_obligation(ax, ("tsubst", b, x), ("enc", rr), b, x, rr)
+            self.add_rule("ty_app")
+            return res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"
+        if "forallE" in e or "sort" in e:
+            # A Π-type or a sort reached in an *inference* position (as a λ's
+            # body, or as the function of an application). `_check` already
+            # treats the same node as a counted assumption — `ty_pi` would need
+            # the universe of the Π, and levels are not stratified here — and
+            # `check` turns this into that same leaf, so the declaration keeps
+            # a derivation with one more named assumption instead of dying.
+            raise Unfoldable(eid)
+        raise SystemExit(f"infer: unhandled expression {sorted(e.keys())}")
+
+    def lam_type(self, eid: int, env: list[int]):
+        """(Π type eid, proof) for a λ spine whose innermost body is inferable.
+
+        Each level's domain comes from the export and is pushed onto the context
+        for that level only, so nested scopes stay correct; the innermost body
+        is inferred, which is what lets a λ under an unfolded expected type be
+        derived at all (there is no Π there to decompose).
+        """
+        le = self.ex.exprs[self.strip(eid)]["lam"]
+        dom = self.strip(le["type"])
+        body = self.strip(le["body"])
+        if self.max_free(dom) >= len(env):
+            raise SystemExit(
+                f"scoping bug: a λ's domain is out of scope ({len(env)} entries, "
+                f"domain depth {self.max_free(dom)})\n"
+                f"  λ node  [{eid} {sorted(self.ex.exprs[self.strip(eid)])}]"
+                f"{' synthetic' if eid >= self.base_id else ''}\n"
+                f"  domain  {self.enc.enc(dom)[:300]}"
+            )
+        if "lam" in self.ex.exprs[body]:
+            bty, inner = self.lam_type(body, [dom] + env)
+        else:
+            bty, inner = self.infer(body, [dom] + env, tail=True)
+        self.add_rule("ty_abs")
+        return self.mk({"forallE": {"type": dom, "body": bty}}), f"(ty_abs {inner})"
+
+    def assume_leaf(self, eid: int, expected: int, env: list[int]) -> str:
+        """One assumption for a subtree, at the type the context demands.
+
+        The smallest honest retreat from a rule the fragment cannot apply: the
+        subtree's typing is asserted, named, and counted, and the artifact says
+        which class of unfolding forced it.
+        """
+        ctx = self.ctx_str(env)
+        ax = f"ax_leaf_{len(self.leaf_ax)}"
+        self.add_axiom(
+            "-- applied through a definitional unfolding (no rule in the fragment)\n",
+            f"axiom {ax}: $ tty {ctx} ", ("enc", eid), " ",
+            ("enc", expected), " $;",
+        )
+        self.leaf_ax.append(ax)
+        self.oblig.append(ax)
+        self.add_rule("assumed (unfolded Π)")
+        return ax
+
+    def check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
+        """`_check`, memoised per (term, expected type, context) when it can be.
+
+        The memo only ever holds a result whose computation emitted no axiom and
+        no obligation, so replaying it is indistinguishable from recomputing it
+        in the artifacts: the returned string is the same, the axiom table is the
+        same, the obligation stream is the same, and the rule sequence it applied
+        is replayed by `_apply_rules`. It is `_check`'s own output that is cached,
+        after the `Unfoldable` fallback, so an assumed leaf is cached only if the
+        leaf axiom was emitted by an earlier identical call — which cannot happen
+        (that call emitted an axiom), so assumed leaves are simply not cached.
+
+        Off by default: it is byte-neutral (§13.32 `cmp`s all three artifacts),
+        but on both rows measured — `abs_re_inner_pairVec_le` and
+        `nsOuterFock…singleTime` — it neither sped the walk up nor slowed it
+        measurably, so it stays opt-in until a row shows it paying.
+        `LTP_CHK_MEMO=1` turns it on.
+        """
+        if self._stop_at:
+            # A clock budget also has to be visible *inside* one long call, or a
+            # run that entered a 1 000 s `infer` would overrun its budget by that
+            # call (§13.34). Counted rather than timed per call: the mask makes
+            # this an increment and a test, and 1 024 calls is well under a
+            # second even when each is small.
+            self._ticks += 1
+            if not (self._ticks & 1023) and time.monotonic() >= self._stop_at:
+                raise StopWalk(f"clock {os.environ.get('LTP_STOP_AT')} s")
+        if not self._chk_on:
+            return self._check_or_assume(eid, expected, env, tail)
+        key = (self.strip(eid), self.strip(expected), tuple(env), tail)
+        self._chk_calls += 1
+        prev = self._chk_rec
+        got = self._chk_memo.get(key)
+        if got is not None:
+            out, seq = got
+            self._chk_hits += 1
+            self._chk_saved += len(out)
+            if seq:
+                self._apply_rules(seq, prev)
+            return out
+        ax0, ob0 = self.ax_count, len(self.oblig)
+        mine: list[str] = []
+        self._chk_rec = mine
+        try:
+            out = self._check_or_assume(eid, expected, env, tail)
+        finally:
+            self._chk_rec = prev
+        if prev is not None:
+            prev.extend(mine)
+        # `len(self.oblig)` rather than `ax_count` alone: a leaf or conversion
+        # appends one entry there per axiom it emits, and `add_axiom` is the
+        # only writer of both counters. Both are checked because an axiom that
+        # is written to the sink has still been named.
+        if self.ax_count == ax0 and len(self.oblig) == ob0:
+            if (len(self._chk_memo) < MEMO_MAX
+                    and self._chk_memo_bytes < CHK_MEMO_BYTES
+                    and self._chk_rule_cells + len(mine) <= CHK_RULE_CELLS):
+                self._chk_memo[key] = (out, tuple(mine))
+                self._chk_memo_bytes += len(out)
+                self._chk_rule_cells += len(mine)
+        return out
+
+    def _check_or_assume(self, eid: int, expected: int, env: list[int],
+                         tail: bool) -> str:
+        try:
+            return self._check(eid, expected, env, tail=tail)
+        except Unfoldable:
+            return self.assume_leaf(self.strip(eid), self.strip(expected), env)
+
+    def _apply_rules(self, seq: tuple[str, ...], rec: list[str] | None) -> None:
+        """Replay a memoised call's rule applications, in its own order.
+
+        The same three things `add_rule` does, once per name: the count, the
+        first-appearance order the header prints, and the enclosing call's own
+        recorder. Replayed in sequence, so a hit leaves the counters where the
+        recomputation would have left them, byte for byte.
+        """
+        hist, order = self.rule_hist, self.rule_order
+        for name in seq:
+            self.rule_count += 1
+            if name in hist:
+                hist[name] += 1
+            else:
+                hist[name] = 1
+                order.append(name)
+            if rec is not None:
+                rec.append(name)
+
+    def _check(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
+        # The stack is the trace's only view of where in the term the emitter is.
+        # It costs one list op per visited node, which is why it is a plain list.
+        st = self._stack
+        st.append(eid)
+        try:
+            out = self._chk(eid, expected, env, tail)
+        finally:
+            st.pop()
+        # A proof term is one nested string, and every rule copies its children
+        # into the parent's text. So the live proof's *size* — not its node
+        # count — is what the RSS has to pay for, and at a concatenation it is
+        # paid twice (child + the copy being built). Kept as a plain int: the
+        # trace thread reads it, the derivation never does.
+        n = len(out)
+        if n > self._proof_bytes:
+            self._proof_bytes = n
+        return out
+
+    def _chk(self, eid: int, expected: int, env: list[int], tail: bool = True) -> str:
+        """A proof term for `tty ctx eid expected`, in the given context."""
+        ex, enc = self.ex, self.enc
+        eid, expected = self.strip(eid), self.strip(expected)
+        e = ex.exprs[eid]
+        # A Π-type or a sort used *as a term* (an implicit type argument) has
+        # no rule in this fragment: `ty_pi` would need the universe of the Π,
+        # and universe levels are not stratified here (theory scope). It becomes
+        # an assumption, counted, instead of an unstated shortcut.
+        if "forallE" in e or "sort" in e:
+            ctx = self.ctx_str(env)
+            ax = f"ax_type_{self.ax_count}"
+            self.add_axiom(
+                "-- a type used as a term (Π/sort): no rule in the fragment\n",
+                f"axiom {ax}: $ tty {ctx} ", ("enc", eid), " ",
+                ("enc", expected), " $;",
+            )
+            self.oblig.append(ax)
+            self.add_rule("type-as-term (assumed)")
+            return ax
+        if "lam" in e:
+            fe = ex.exprs[expected]
+            if "forallE" not in fe:
+                # The expected type is a Π only after unfolding (`Set.Image f`,
+                # an abbreviation, a reducible def). The λ still carries its
+                # domain, so infer the body and pay one conversion from the type
+                # this rule builds to the type the context expects.
+                dom = e["lam"].get("type")
+                if dom is None:
+                    raise SystemExit(
+                        "check: a lambda against a non-Π type, and the export "
+                        "carries no domain for the lambda"
+                    )
+                # A curried λ spine, one binder at a time: each λ's domain is
+                # in scope of the binders outside it and of nothing else, so it
+                # must be pushed onto the context exactly when its binder is.
+                # Collecting the domains first and pushing them together shifts
+                # every index (measured: `tvar 4` where `tvar 1` belonged).
+                got, inner = self.lam_type(eid, env)
+                ax = self.deq_ax(self.strip(got), expected)
+                # `lam_type` already wrapped this λ in its own `ty_abs`, so
+                # adding one here abstracted a second time: the premise then sat
+                # one context entry deeper than the term's own scope (measured:
+                # a 2-λ term with 3 `ty_abs`, refused as an extra context entry).
+                return f"(ty_deq {inner} {ax})"
+            inner = self.check(e["lam"]["body"], fe["forallE"]["body"],
+                               [fe["forallE"]["type"]] + env, tail=tail)
+            self.add_rule("ty_abs")
+            return f"(ty_abs {inner})"
+        ty, p = self.infer(eid, env, tail=tail)
+        # Digests, not texts: both sides can encode to gigabytes here, and a
+        # comparison by `enc.enc` materialised each of them in full (§13.36).
+        if enc.digest(self.strip(ty)) == enc.digest(expected):
+            return p
+        ax = self.deq_ax(self.strip(ty), expected)
+        return f"(ty_deq {p} {ax})"
+
+    def deq_ax(self, got: int, want: int) -> str:
+        """A conversion between two type forms, labelled by why it is needed.
+
+        Two `Sort`s are the one case the fragment cannot even *state*: universe
+        levels are opaque symbols here (`t_lev0`, `t_lev9` by first sight), so a
+        level-varying pair is never the same term and the theory has no level
+        algebra to relate them. Collapsing them silently would be asserting
+        `Type : Type`; naming the class keeps the gap countable, the same way
+        the unfolded-Π leaves are.
+        """
+        ex, enc = self.ex, self.enc
+        kinds = (ex.exprs.get(got, {}), ex.exprs.get(want, {}))
+        both_sorts = all("sort" in k for k in kinds)
+        tag = "lev" if both_sorts else "deq"
+        ax = f"ax_{tag}_{len(self.oblig)}"
+        self.add_axiom(
+            ("-- conversion between universe levels (not stratified in this "
+             "theory)\n" if both_sorts else
+             f"-- conversion: inferred {enc.head(got, 80)} vs expected "
+             f"{enc.head(want, 80)}\n"),
+            f"axiom {ax}: $ tdefeq ", ("enc", got), " ", ("enc", want), " $;",
+        )
+        self.oblig.append(ax)
+        self.add_rule("ty_deq (universe level)" if both_sorts else "ty_deq")
+        return ax
+
+
+def count_lam(ex, eid) -> int:
+    n = 0
+    while "lam" in ex.exprs.get(eid, {}):
+        n += 1
+        eid = ex.exprs[eid]["lam"]["body"]
+    return n
+
+
+def lam_body(ex, eid) -> int:
+    while "lam" in ex.exprs.get(eid, {}):
+        eid = ex.exprs[eid]["lam"]["body"]
+    return eid
+
+
+if __name__ == "__main__":
+    sys.exit(main())
