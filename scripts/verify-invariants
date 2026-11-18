@@ -1458,15 +1458,6 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
     # behind for an approved artifact is stale the other way (its approval is
     # checked by the statement diff, so the row no longer has a job). A table
     # cell is the kind of copied number that is right the day it is written.
-<<<<<<< HEAD
-    _plan_file="${AUSTRALVM_PLAN:-$repo_root/PLAN_sota_kernel_verification.md}"
-    # The approved copies the table's approved rows are compared with. Overridable
-    # only so the control below can point at a scratch copy — it is the same
-    # `--approved-root` the comparator already takes, and it grants nothing: it
-    # moves which directory is read, not which artifact is approved.
-    _appr_root="${AUSTRALVM_APPROVED_ROOT:-$repo_root/mm0/approved}"
-=======
->>>>>>> 5800ef7aebf24df998f9f9060dfd6f982d590a4f
     # Every §W3 row's artifact and its *state* cell. The state cell is what says
     # whether an artifact is approved yet, so it decides which file the row's
     # numbers must come from, and it is the one edit an approval needs: commit the
