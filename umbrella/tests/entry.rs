@@ -51,7 +51,9 @@ fn octal(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("\\{b:03o}")).collect()
 }
 
-/// A front-end that writes `buffer` to the path in `--emit-cps=…` and exits 0.
+/// A front-end that writes `buffer` to the path in `--emit-cps=…`, writes the
+/// empty `--emit-adapters` document (a module with no scalar crossing is a real
+/// state, not a missing file) and exits 0.
 fn fake_front_end(dir: &Path, buffer: &[u8]) -> PathBuf {
     let path = dir.join("fake-austral");
     executable(
@@ -59,10 +61,14 @@ fn fake_front_end(dir: &Path, buffer: &[u8]) -> PathBuf {
         &format!(
             "#!/bin/sh\n\
              for a in \"$@\"; do\n\
-               case \"$a\" in --emit-cps=*) out=\"${{a#--emit-cps=}}\" ;; esac\n\
+               case \"$a\" in\n\
+                 --emit-cps=*) out=\"${{a#--emit-cps=}}\" ;;\n\
+                 --emit-adapters=*) adapters=\"${{a#--emit-adapters=}}\" ;;\n\
+               esac\n\
              done\n\
-             [ -n \"$out\" ] || exit 9\n\
+             [ -n \"$out\" ] && [ -n \"$adapters\" ] || exit 9\n\
              printf '%b' '{}' > \"$out\"\n\
+             : > \"$adapters\"\n\
              exit 0\n",
             octal(buffer)
         ),
