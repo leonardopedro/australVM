@@ -1,0 +1,16 @@
+; GPU backend library: typed KernelIR, subset pass, bundle metadata.
+; It depends only on austral_core and pure support libraries — never on
+; Compiler/CliEngine — so the dependency graph stays acyclic.
+(library
+ (name austral_gpu)
+ (public_name austral.austral_gpu)
+ (synopsis "Typed KernelIR and WGSL bundle emission for Austral GPU kernels")
+ (libraries austral_core yojson digestif zarith)
+ (wrapped false)
+ (flags :standard -w -39-50)
+ (modules
+  Gpu_ir
+  Gpu_bundle
+  Gpu_intrinsics
+  Gpu_subset
+  Gpu_wgsl))

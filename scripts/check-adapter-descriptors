@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# check-adapter-descriptors — re-emit U11's adapter descriptors from the
+# compiler's CPS path and diff them against the pinned golden.
+#
+# The golden is `test-programs/adapters/adapters.golden`, produced by compiling
+# `test-programs/adapters/rs_scalars.aum` with `--emit-adapters`. The file is
+# the contract between the compiler (which decides *which* calls need a
+# wrapper and what their scalars are) and `umbrella/src/interface.rs` (which
+# turns the text into a generated wrapper), so it is compared byte for byte:
+# a reordered field, a dropped descriptor or a newly-adapter'd word-native
+# signature all fail here.
+#
+# Exits 0 on an exact match, 1 on a diff, 2 when it cannot measure (no compiler
+# binary, no fixture, compilation failed) — a gap is never reported as a pass.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FIXTURE="$ROOT/test-programs/adapters/rs_scalars.aum"
+GOLDEN="$ROOT/test-programs/adapters/adapters.golden"
+AUSTRAL="${AUSTRAL:-$ROOT/austral}"
+
+for path in "$FIXTURE" "$GOLDEN" "$AUSTRAL"; do
+    if [ ! -e "$path" ]; then
+        echo "check-adapter-descriptors: [gap] missing $path" >&2
+        exit 2
+    fi
+done
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+if ! LD_LIBRARY_PATH="$ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+     "$AUSTRAL" compile "$FIXTURE" \
+     --entrypoint=Adapters:main --use-cps-jit --allow-all --target-type=c \
+     --emit-cps="$tmp/mod.cps" --emit-adapters="$tmp/adapters.golden" \
+     --output="$tmp/mod.c" > "$tmp/compile.log" 2>&1; then
+    echo "check-adapter-descriptors: [gap] the fixture did not compile" >&2
+    tail -5 "$tmp/compile.log" >&2
+    exit 2
+fi
+
+if diff -u "$GOLDEN" "$tmp/adapters.golden"; then
+    echo "check-adapter-descriptors: [pass] $(grep -c '^symbol ' "$GOLDEN") descriptor(s) match the golden"
+    exit 0
+fi
+
+echo "check-adapter-descriptors: FAIL the emitted descriptors differ from the golden" >&2
+echo "  regenerate only if the change is intended: copy the emitted file over" \
+     "test-programs/adapters/adapters.golden and review the diff" >&2
+exit 1

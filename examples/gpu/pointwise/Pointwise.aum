@@ -1,0 +1,33 @@
+module body Pointwise is
+    function add(x: Nat32, y: Nat32): Nat32 is
+        return modularAdd(x, y);
+    end;
+
+    function identity(x: Nat32): Nat32 is
+        return x;
+    end;
+
+    function clamp(x: Nat32): Nat32 is
+        if x > 100 then
+            return 100;
+        else
+            return x;
+        end if;
+    end;
+
+    function difference(x: Nat32, y: Nat32): Nat32 is
+        return modularSubtract(x, y);
+    end;
+
+    function mask(x: Nat32, y: Nat32): Nat32 is
+        return bitwiseAnd(bitwiseOr(x, y), bitwiseNot(y));
+    end;
+
+    function twice(x: Nat32): Nat32 is
+        return modularAdd(x, x);
+    end;
+
+    function polynomial(x: Nat32, y: Nat32): Nat32 is
+        return modularMultiply(twice(x), y);
+    end;
+end module body.

@@ -1,0 +1,6 @@
+schema 1
+abi scalar 1
+symbol rs_scale__adapter
+target rs_scale
+params Int32,Float64
+returns Float64

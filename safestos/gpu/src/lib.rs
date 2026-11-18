@@ -1,0 +1,14 @@
+//! Independent checker and reference evaluator for Austral GPU bundles.
+//!
+//! The default feature set is CPU-only: strict bundle parsing, canonical IR
+//! digest reproduction, Naga validation of the emitted WGSL, and evaluation of
+//! the validated KernelIR. `device` is reserved for wgpu dispatch (G09/G10).
+
+pub mod artifact;
+pub mod reference;
+pub mod schema;
+pub mod validate;
+pub mod wrapper;
+
+pub use artifact::{load_bundle, LoadedBundle};
+pub use schema::KernelBundle;
