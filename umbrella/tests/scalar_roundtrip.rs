@@ -317,3 +317,110 @@ fn a_wrapper_that_casts_the_float_through_i64_loses_negative_zero() {
         "the honest wrapper returns the sign bit, so this mutation must differ"
     );
 }
+
+/// The live path, through the real binary: an Austral module whose three
+/// `rs_*` calls are all non-word-native, so the front-end names
+/// `<target>__adapter`; the build must generate, compile and load the wrappers,
+/// and the JIT must resolve the mediated calls and execute the entry.
+///
+/// `compute` returns 0 unless both mediated results are right, so a wrapper
+/// that decoded a parameter wrongly cannot produce the expected `7`.
+///
+/// Float64 is not in this module: the CPS IR carries a 64-bit *integer* literal
+/// and no float value (`CpsGen.FloatLit`), so a Float64 parameter reaches the
+/// wrapper as an integer word. Measured while writing this test: a
+/// `rs_scale_bits(2.5, 4)` module returned 12 — the bits of
+/// `4 * f64::from_bits(3)`, because the literal had been rounded to `3`. The
+/// Float64 encoding is therefore verified at the C ABI (the first test), and the
+/// JIT cannot carry it until the CPS format has a float value.
+#[test]
+fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
+    const EXPECTED: i64 = 7;
+
+    let front_end = Path::new(env!("CARGO_MANIFEST_DIR")).join("../austral");
+    assert!(
+        front_end.exists(),
+        "the live adapter test needs the dune-built front-end at {}; \
+         build it with `nix develop \"git+file://$PWD#ocaml\" -c make all`",
+        front_end.display()
+    );
+
+    // A crate that knows nothing about australVM: plain `rs_*` exports.
+    let crate_dir = scratch("live-crate");
+    std::fs::create_dir_all(crate_dir.join("src")).expect("crate dir");
+    std::fs::write(
+        crate_dir.join("Cargo.toml"),
+        "[package]\n\
+         name = \"adapter_live\"\n\
+         version = \"0.1.0\"\n\
+         edition = \"2021\"\n\n\
+         [lib]\n\
+         crate-type = [\"cdylib\"]\n",
+    )
+    .expect("crate manifest");
+    std::fs::write(
+        crate_dir.join("src/lib.rs"),
+        "#[no_mangle]\n\
+         pub extern \"C\" fn rs_narrow(width: i32) -> i64 { width as i64 }\n\
+         #[no_mangle]\n\
+         pub extern \"C\" fn rs_toggle(on: bool) -> bool { !on }\n",
+    )
+    .expect("crate source");
+
+    // The gate sees the symbol the CPS names, which is the adapter's.
+    let manifest = scratch("live-manifest").join("module.toml");
+    std::fs::write(
+        &manifest,
+        "[module]\n\
+         name = \"AdapterLive\"\n\n\
+         [grants]\n\
+         kernel = [\"rs_narrow__adapter\", \"rs_toggle__adapter\"]\n",
+    )
+    .expect("manifest");
+
+    let module = Path::new(env!("CARGO_MANIFEST_DIR")).join("modules/AdapterLive.aum");
+    let run = |expect: i64| {
+        Command::new(env!("CARGO_BIN_EXE_umbrella"))
+            .arg("--austral")
+            .arg(&front_end)
+            .arg("--cratedir")
+            .arg(&crate_dir)
+            .arg("--manifest")
+            .arg(&manifest)
+            .arg("--entry")
+            .arg("compute")
+            .arg("--offline")
+            .arg("--expect")
+            .arg(expect.to_string())
+            .arg(&module)
+            .output()
+            .expect("run umbrella")
+    };
+
+    let out = run(EXPECTED);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "umbrella failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(stdout.trim(), format!("RESULT {EXPECTED}"), "{stderr}");
+    // The wrappers were generated from the emitted descriptors, not found by
+    // accident: the driver names every one it built and loaded.
+    assert!(
+        stderr.contains("built and loaded 2 adapter wrapper(s)"),
+        "the build must generate and load the wrappers; stderr:\n{stderr}"
+    );
+    for symbol in ["rs_narrow__adapter", "rs_toggle__adapter"] {
+        assert!(stderr.contains(symbol), "stderr must name {symbol}:\n{stderr}");
+    }
+
+    // The oracle: the same module with a wrong expectation must fail, so
+    // "RESULT 0" from a broken mediated call cannot pass as agreement.
+    let out = run(0);
+    assert!(
+        !out.status.success(),
+        "a wrong --expect must fail; stdout:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

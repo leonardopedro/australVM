@@ -126,14 +126,18 @@ SUITES = {
         7,
         False,
     ),
-    # U11 (ABI04/ABI05): the generated wrapper's values. The two tests build a
+    # U11 (ABI04/ABI05): the generated wrapper's values. Two tests build a
     # `cdylib` from the declared targets plus the rendered wrappers, load it, and
-    # compare every result to a direct Rust call by bits; the second test is the
-    # negative control (a float cast through an i64 loses `-0.0`).
+    # compare every result to a direct Rust call by bits; the second is the
+    # negative control (a float cast through an i64 loses `-0.0`). The third
+    # drives the real umbrella binary over `modules/AdapterLive.aum`, so the
+    # wrappers are generated, compiled and loaded on the live JIT path and an
+    # Austral entry executes through them; it needs the dune-built `austral`
+    # front-end at the repo root and fails (never skips) without it.
     "SUITE_UMBRELLA_SCALARS": (
         os.path.join(ROOT, "umbrella", "Cargo.toml"),
         ["--test", "scalar_roundtrip"],
-        2,
+        3,
         False,
     ),
     # U03/U04 regression pins. The CLI suite is the parser plus the binary's

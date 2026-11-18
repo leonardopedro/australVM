@@ -552,6 +552,60 @@ what has to catch it, and the test pins that the mutation really does return
 SUITE_UMBRELLA_INTERFACE` → 2/2 pass (2 and 6 tests); the harness counts are
 pinned in the same `SUITES` table.
 
-**Limit.** The compiler emits the descriptor; umbrella does not yet consume it
-during a build to generate and compile the wrapper. That is the next wiring step,
-and what the golden and this roundtrip make safe to do.
+### U11.3 — the build consumes the descriptor
+
+`umbrella` no longer asks a second time what the compiler already knows. The
+front-end is invoked with `--emit-adapters=<tmpfile>`, and
+`Adapter::parse_descriptors` reads the whole document: blocks are blank-line
+separated, `#` lines are comments, a duplicate symbol is refused, and a
+document with no adapters is a real state — the module needs none. The parse is
+the same code the golden test uses, so the emitter's output has exactly one
+reader in the tree.
+
+Stage 3.5 then does the work the descriptor names: `build_adapters` renders one
+wrapper per adapter with `render_wrapper`, writes them into a scratch crate,
+links it against the bridge **rlib** found beside the umbrella executable, and
+`dlopen`s the result (`RTLD_NOW|RTLD_GLOBAL`) *after* the module's own cdylib,
+so the targets are already resolvable when the wrapper's relocations are
+processed. An empty descriptor prints `the module needs no scalar adapters`, so
+the no-adapter case is stated rather than silently skipped — `Demo.aum`'s live
+run reports exactly that and still returns its documented `RESULT`.
+
+**Measured.** `cargo test --offline --test interface` → 7 passed (new
+`a_document_with_a_repeated_symbol_is_refused`; pin raised 6 → 7);
+`./target/debug/umbrella --manifest module.toml modules/Demo.aum` →
+`umbrella: the module needs no scalar adapters` then
+`RESULT -1781872834555808882`.
+
+### U11.4 — the live JIT path, and what it cannot carry yet
+
+`scalar_roundtrip.rs`'s third test drives the real `umbrella` binary over
+`modules/AdapterLive.aum`, whose two externs are `Int32` and `Bool` — both
+non-word-native, so both go through `<target>__adapter`. The test builds the
+target crate, grants the two adapter symbols in a manifest, and asserts the
+`RESULT`, the `built and loaded 2 adapter wrapper(s)` line naming each symbol,
+and that a wrong `--expect` fails (`compute` returns `0` unless every mediated
+result is right, so the wrong-expectation run is the oracle that `RESULT` is
+really the entry's). It needs the dune-built `austral` front-end at the repo
+root and **fails** with that instruction when it is absent, rather than skipping.
+
+**Measured.** `cargo test --offline --test scalar_roundtrip` → 3 passed;
+`scripts/test-umbrella --case SUITE_UMBRELLA_SCALARS` → pass, 3 tests (pin
+raised 2 → 3).
+
+**What it exposed: `Float64` cannot cross the live path.** A first version of
+the module also called `rs_scale_bits(2.5, 4)` and returned the bits of the
+product. It returned `12`. That is not a wrapper bug: the CPS binary carries one
+64-bit *integer* literal and no float value, so `CpsGen.FloatLit` rounds a float
+constant to an `Int64` (deliberately, documented there), and the adapter — which
+correctly decodes its `u64` parameter as an `f64` — read `f64::from_bits(3)`;
+`4 * that` is a denormal whose bits are `12`. So `Int32`, `Bool` and the word
+classes travel end to end, `Float64`/`Float32` do not, and the adapter's float
+encoding is verified at the C ABI level (the first test) instead of through the
+JIT. Making it travel needs a float value in the CPS format, which is a format
+change and therefore its own step; the module documents the gap where it was
+found rather than being given a float-shaped hole.
+
+**Limit.** The build now generates, compiles and loads the wrappers, but the
+`Float64`/`Float32` half of the adapter vocabulary remains C-ABI-only until CPS
+has a float value (above).

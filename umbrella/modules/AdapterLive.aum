@@ -1,0 +1,44 @@
+-- umbrella/modules/AdapterLive.aum — U11's live path.
+--
+-- Both externs here have a signature the scalar encoding cannot pass as a raw
+-- word (Int32, Bool), so the CPS lowering names `<target>__adapter` and the
+-- build must generate, compile and load the wrapper before the JIT can resolve
+-- the call. `compute` checks each mediated result and returns one of them, so a
+-- wrong value is a wrong RESULT rather than a passing run.
+--
+-- Float64 is deliberately absent: the CPS binary carries one 64-bit *integer*
+-- literal and no float value (see `CpsGen.FloatLit`), so a Float64 parameter
+-- reaches the wrapper as an integer word and decodes as an unrelated float.
+-- The adapter's Float64 encoding is checked at the C ABI instead
+-- (`tests/scalar_roundtrip.rs`), not through the JIT.
+pragma Unsafe_Module;
+
+module body AdapterLive is
+    pragma Foreign_Import(External_Name => "rs_narrow");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_narrow(width: Int32): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_toggle");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_toggle(on: Bool): Bool is
+    end;
+
+    function compute(): Int64 is
+        let width: Int32 := 7;
+        let narrowed: Int64 := rs_narrow(width);
+        if narrowed = 7 then
+            if rs_toggle(false) then
+                return narrowed;
+            else
+                return 0;
+            end if;
+        else
+            return 0;
+        end if;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.
