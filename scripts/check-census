@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Census the gate's `check` statements against the evidence recorded for them.
+#
+#   nix-shell -p python3 --run 'python3 scripts/check-census'
+#
+# The plan's "which checks have no measured failure" paragraph quotes four
+# numbers: the statements, the distinct texts, the ones a table row or a probe
+# row covers, and the ones neither covers. This script is where those numbers
+# come from, so the paragraph can be re-measured instead of trusted.
+#
+# Reading the counts:
+#   statements  every `check "…"` in scripts/verify-invariants, one per line of
+#              output the gate can print.
+#   distinct    the same texts with a trailing count parenthetical dropped —
+#              `($n name(s))`, `($_w3_rows row(s), $_w3_appr_rows approved)`,
+#              `(9 structural / 0 grounded)` — because one check reporting a
+#              count and the check that names it are the same claim to a reader.
+#              A parenthetical is stripped only when it is the last thing in the
+#              text and reports a number or a variable; `(checked)` and
+#              `(fail-closed)` are part of the name and stay.
+#   table       the plan's census table rows, matched against the distinct texts
+#              by exact name. A row may name a check whose text interpolates a
+#              per-artifact name, so rows and matches differ by a few.
+#   probes      rows of docs/data/w3/probes.tsv, matched by the check text the
+#              row records (column 4).
+#   neither     distinct texts with no table row and no probe row. These are the
+#              gap the plan's paragraph is about.
+#
+# Exit status: 0 measured, 1 the plan's numbers and the tree disagree, 2 python3
+# missing (the wrapper above supplies it).
+set -uo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$here/.." && pwd)"
+
+command -v python3 >/dev/null 2>&1 || {
+    echo "check-census: needs python3 (nix-shell -p python3 --run 'python3 scripts/check-census')" >&2
+    exit 2
+}
+
+exec python3 - "$repo_root" <<'PY'
+import pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1])
+gate = (root / "scripts/verify-invariants").read_text()
+plan = (root / "PLAN_sota_kernel_verification.md").read_text()
+# The paragraph is wrapped, so a quoted count may straddle a line break.
+plan_flat = re.sub(r"\s+", " ", plan)
+probes = (root / "docs/data/w3/probes.tsv").read_text().strip().splitlines()[1:]
+
+texts = re.findall(r'^[ \t]*check "((?:[^"\\]|\\.)*)"', gate, re.M)
+
+
+def strip_counts(t):
+    """Drop a trailing parenthetical that reports a count or a variable."""
+    changed = True
+    while changed and t.endswith(')'):
+        changed = False
+        depth = 0
+        for i in range(len(t) - 1, -1, -1):
+            if t[i] == ')':
+                depth += 1
+            elif t[i] == '(':
+                depth -= 1
+                if depth == 0:
+                    grp = t[i:]
+                    if '$' in grp or re.search(r'\d', grp) or 'row(s)' in grp or 'name(s)' in grp:
+                        if i > 0 and t[i - 1] == ' ':
+                            t = t[:i - 1]
+                            changed = True
+                    break
+    return t
+
+
+distinct = sorted({strip_counts(t) for t in texts})
+rows = {m for m in re.findall(r'^  \| `([^`]*)` \| (?:copy|tool|none) \|', plan, re.M)}
+probe_texts = {strip_counts(line.split('\t')[3]) for line in probes}
+
+in_table = rows & set(distinct)
+in_probes = probe_texts & set(distinct)
+covered = in_table | in_probes
+neither = sorted(set(distinct) - covered)
+
+print(f"statements  {len(texts)}")
+print(f"distinct    {len(distinct)}")
+print(f"table rows  {len(rows)} ({len(in_table)} matched a distinct text exactly)")
+print(f"probe rows  {len(probes)} ({len(in_probes)} matched)")
+print(f"covered     {len(covered)}")
+print(f"neither     {len(neither)}")
+
+if "-v" in sys.argv or "--list-neither" in sys.argv:
+    for t in neither:
+        print(f"  {t}")
+
+# The plan quotes the four counts; a mismatch means one side moved without the
+# other, which is what this script exists to catch.
+want = [
+    f"{len(texts)} `check` statements",
+    f"{len(distinct)} distinct texts",
+    f"{len(distinct) - len(covered)} with neither",
+]
+missing = [w for w in want if w not in plan_flat]
+if missing:
+    print("check-census: the plan does not quote the measured census" + (f" ({'; '.join(missing)})" if missing else "") , file=sys.stderr)
+    sys.exit(1)
+PY
