@@ -60,16 +60,20 @@ cargo test --locked --manifest-path safestos/gpu/Cargo.toml --features device
 
 ## Limitations
 
-- No task above claims GPU execution except where an adapter record exists; none
-  does in this baseline.
-- `nvidia-smi` output is inventory evidence only. G09/G10 enumerate a Vulkan
-  **Intel UHD Graphics 630** (integrated) adapter and do not see the GTX 1060,
-  so adapter evidence and OS inventory disagree; the wgpu record is the one
-  that counts. G10's dispatch/readback record is against that adapter.
-- G10 execution is reproducible with:
+- No task above claims GPU execution except where a dispatch and readback
+  record exists (G10, G11). G09 alone is adapter discovery, never execution.
+- `nvidia-smi` output is inventory evidence only. wgpu's default
+  `request_adapter` enumerates the Vulkan **Intel UHD Graphics 630**
+  (integrated) adapter first, so the recorded G09–G11 records are Intel/Vulkan.
+  `avm-gpu probe --list` also sees the GTX 1060 (Vulkan, discrete) and a
+  GL copy of it; `--adapter`/`--adapter-index` select explicitly, and a dispatch
+  on `--adapter-index 1` (GTX 1060) produced `[0,3,5]` for `add`. The wgpu
+  record is the one that counts, not the OS inventory.
+- G10/G11 execution is reproducible with:
   `AUSTRAL_GPU_CHECKER=$PWD/safestos/gpu/target/debug/avm-gpu _build/default/bin/austral.exe compile examples/gpu/pointwise/Pointwise.aui,examples/gpu/pointwise/Pointwise.aum --target-type=wgsl --entrypoint=Pointwise:add --output=/tmp/g10.avkg`
-  then `avm-gpu run /tmp/g10.avkg --inputs <file> --require-hardware` and
-  `avm-gpu reference` on the same input. Outputs agree; the JSON records the
-  actual backend/device, dispatch count and separate submit/readback timings.
+  then `avm-gpu run /tmp/g10.avkg --inputs <file> --require-hardware [--adapter-index N]`
+  and `avm-gpu reference` on the same input. Outputs agree; the JSON records
+  the actual backend/device, dispatch count and separate prepare/upload/
+  submit/readback timings.
 - wgpu/Naga device support is optional (`--features device`) and is not part of
   the default compiler build.

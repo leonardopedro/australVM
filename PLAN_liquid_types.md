@@ -818,6 +818,11 @@ is a deliberate release artifact that goes stale whenever the bridge changes
 
       25 index-type tests + the erasure test; 13 dune suites green.
 
+The L9 record above is about the TRL surface, its helper tests and CPS erasure.
+The [Bend 2 review and follow-on tasks](#10-bend-2-and-the-next-liquid-index-layer)
+identify the additional work needed for checked dependent contracts across
+Austral calls, branches and device boundaries.
+
 ### L10 — cycles A/B
 
 - [x] `emit_theory`: total Austral → Why3 `function`/`predicate` theory fed
@@ -1258,3 +1263,164 @@ already quotiented by logos:**
 4. Conv semantics (Eq. 5, dilation δ = max N-gram order) need a granularity
    analogue once `subderiv`/`sentence` keys replace ordered N-grams; zero-init
    conv keeps the identity at start (paper §4.1) — preserve that.
+
+## 10. Bend 2 and the next Liquid index layer
+
+**Proposed, 2026-11-18. L11a–L11e are pending.** The goal is to check useful
+shape and resource contracts at calls and branch boundaries using the existing
+Total Refinement Logic (TRL). The first example is a checked range split that
+can later supply premises for a GPU map or two independently scheduled shards.
+The core Austral linearity checker continues to require each linear resource to
+be consumed along each checked control-flow path.
+
+### What transfers from BendTT
+
+BendTT checks dependent functions, pairs and equality bidirectionally. An
+expected type guides checking a term or match. Matching a variable refines each
+branch by substituting its constructor pattern into the expected type.
+Explicit equality witnesses justify rewrites when conversion alone cannot
+establish equality. Bend distinguishes erased uses, at-most-once live uses and
+reusable data. Its structural descent check governs live recursive calls.
+The ordinary TypeScript checker and the Lean `--verdict` kernel are different
+checking paths. The verdict checks the elaborated BendTT book, with opaque
+operations interpreted by their checked models. The source elaboration and
+native runtime remain separate correspondence obligations.
+[Theory and rules](https://github.com/bendlang/bend/blob/9c586f094f4fc88bef440dc8b4d77a2f92c257cc/bend2/docs/BendTT/main.typ),
+[Lean kernel and theorem statements](https://github.com/bendlang/bend/blob/9c586f094f4fc88bef440dc8b4d77a2f92c257cc/bend2/bendtt.lean),
+[verdict elaboration](https://github.com/bendlang/bend/blob/9c586f094f4fc88bef440dc8b4d77a2f92c257cc/bend2/safe.ts).
+
+BendTT permits `Type : Type` and uses a live/dead discipline where type-level
+conversion can diverge. Its bounded checker can therefore refuse a valid book
+when it runs out of steps. TRL should keep a small total index fragment with
+predictable conversion and explicit refusal for unsupported or over-budget
+terms. Reserve checked equality evidence for arithmetic and hypotheses that
+conversion cannot establish. Carry runtime ownership and ghost index evidence
+in separate judgments. In particular, a ghost may refer to an immutable
+length snapshot without becoming a second runtime use of the buffer or a
+source of permission to inspect it after a move.
+[Conversion and live checking in BendTT](https://github.com/bendlang/bend/blob/9c586f094f4fc88bef440dc8b4d77a2f92c257cc/bend2/docs/BendTT/main.typ).
+
+### Current AustralVM evidence
+
+`LiquidParse` parses indexed TRL annotations, including arithmetic syntax.
+`LiquidTypes.ty_wf` admits nonnegative literals and explicit `Nat` variables
+as index terms. `ty_equal` compares the type head and rendered index terms
+syntactically. The current call-site VC and Why3 pipeline handles selected
+formula obligations. `FType` is printed as a type annotation by `why3_of_formula`.
+There is no dedicated source obligation connecting such an annotation to the
+actual element type, length or ownership of a runtime buffer. The CPS erasure
+test checks the executable bytes of its fixture. It does not exercise a
+negative call-site case where a checked program must refuse incompatible
+lengths. These points define the next acceptance boundary.
+[Liquid spec](docs/LIQUID.md#221-index-carrying-types-l9),
+[index representation](lib/liquid/LiquidTypes.ml),
+[contract checking](lib/liquid/LiquidCheck.ml),
+[index tests](test/LiquidIndexTypesTest.ml).
+
+### L11a — Audit admissibility over the reachable typed closure
+
+Add source-level checks before extending index conversion. Use resolved source
+IDs and explicitly handle each relevant typed constructor. Audit calls through
+ordinary helpers, constants, known methods and imports. Reject unknown callees,
+`@embed`, unmediated effects, unsupported statements and cycles in the index
+closure. The current cycle check walks a module graph, while loop and foreign
+checks inspect the contracted body. Exercise an unannotated helper with a loop
+or foreign call and a forbidden expression nested under an argument. Keep
+standard primitives on a small typed allowlist. Compare the existing GPU subset
+walk for coverage ideas with its own policy kept distinct.
+
+**Accept** a pure acyclic helper used as an index function. Refuse a forbidden
+transitive callee with its typed call path and source location. Keep the
+legacy positive TRL and ordinary Austral tests green. Check unsupported
+annotations before they could feed solver assumptions or generate WhyML.
+[Compiler passes](lib/liquid/TotalityCheck.ml), [GPU subset](lib/gpu/Gpu_subset.ml).
+
+### L11b — Elaborate and convert a small sorted index language
+
+Add a typed representation for natural length/offset expressions with resolved
+binders and explicit family arity/kinds. Keep source element types such as
+`Nat8` distinct from other widths even when their index arithmetic maps to the
+same Why3 sort. Start with literals, immutable natural inputs, addition and
+explicit closed definitions from L11a. Implement bidirectional checking with
+expected family/sort information and a deterministic reducer with bounded depth,
+steps and result size. Distinguish convertible, different and unknown. Use
+syntax-directed rules for conversion such as `n + 0` to `n`. Leave symbolic
+arithmetic beyond the rules to explicit equality obligations. Keep natural
+subtraction, modular arithmetic and checked machine arithmetic distinct. A
+machine length or byte offset needs a separate checked conversion and width
+obligation. Store diagnostics separately from canonical term identity.
+
+**Accept** a source fixture where `n + 0` converts to `n`. Require checked
+evidence for valid equalities beyond conversion, such as `m + n = n + m` in
+the initial fragment. Refuse `n + 1` where `n` is required, an ill-sorted
+index, a wrong element width, and an unbound index. Include a fixture with
+shadowed names to verify that resolution uses the right binder. A
+budget-exhausted comparison produces unknown and fails a required check.
+Preserve ordinary compilation.
+
+### L11c — Check indexed contracts at calls and in branches
+
+Use the existing pragma surface for the pilot. Give one audited range or
+span wrapper a measured length and offset. Typecheck the annotated value
+against its actual representation and lower the index proposition to a
+specified measure equality and bounds obligation. Instantiate result and
+argument indices on calls using capture-avoiding substitution. Pattern-match a
+checked split result so a successful branch can use the two lengths, common
+origin and disjoint ranges. Derive these facts from the constructor/checker
+contract. Snapshot immutable input measurements before the split and retain
+only the ghost facts that remain valid after transfer. Runtime views, DMA
+completion or remote receipts need trusted or checked admission at their own
+boundary. Missing, stale or solver-unknown facts cannot justify the split.
+
+**Accept** a source caller consuming the two owned halves on all successful
+paths. Refuse an incorrect total length, overlap, use of branch-local evidence
+elsewhere, and duplicate live use of a moved resource. A negative input or
+overflow at a runtime boundary is a typed refusal. Verify actual call-site VCs
+and the existing erasure test plus the pilot's semantic IR and executable code
+with/without proof-only annotations. Exclude proof metadata from byte comparison.
+
+### L11d — Keep held-out laws and explicit proof results
+
+Stage a single reviewed split law, such as extent conservation plus disjoint
+writes under the guarded split precondition. Bind its statement to the
+elaborated model, function and numeric profile. Check the implementation
+obligations through Why3 with the existing supported toolchain. For the MM0
+profile, connect the exact statement and residual premises to a real MM0 proof
+application through the proof-chain interface. A trusted foreign contract, a
+Why3 verdict, an independently checked MM0 proof and a statement comparator
+result have separate statuses. Keep held-out statement changes under the
+existing owner workflow. This pilot needs no change to the existing W3 counts.
+
+**Accept** a replayable derivation with the exact assumptions visible. Make an
+implementation-only mutation preserve the held-out statement and cause proof
+failure. Missing prover, stale artifact, substituted statement and a claimed
+proof with an open required premise each refuse the strict profile.
+[Proof-chain contract](docs/PROOF_CHAIN.md), [executor tasks](PLAN_proof_chain.md).
+
+### L11e — Evaluate structural recursion for measures after the split pilot
+
+Compare a definition by the existing structural `fold` with the same measure
+written by direct descent over one immutable inductive argument. If the extra
+form removes meaningful boilerplate, propose a separately admitted fragment:
+one recursive argument that is a proper constructor subterm in every recursive
+call, no mutual or higher-order recursion in the first version and no effects.
+Keep the termination proof independent of conversion and preserve the existing
+L3 restriction for other definitions. An inability to prove a decrease leaves
+the proposed definition outside the fragment. Termination alone supplies no
+parallel work balance or time bound.
+
+**Accept** one list or range-tree measure with a correspondence to the existing
+fold and a checker result that survives erasure. Reject self calls on the original
+input and rebuilt or unproven smaller inputs. Report proof/checking cost before
+widening the admitted fragment.
+
+### Provenance and license
+
+Bend is a design reference for these proposals. The inspected Bend 2 checkout
+is `9c586f094f4fc88bef440dc8b4d77a2f92c257cc`, whose root license is Apache-2.0.
+Treat any other revision, dependency or generated runtime as a separate license
+check. If a future experiment materially uses AGPL-covered code, put the covered
+experiment in a separately identified AGPL component, retain its notices and
+review the obligations for that integration before distribution or network use.
+These tasks use original Austral fixtures and implementation, with Bend sources
+cited for the ideas. [License at the inspected Bend revision](https://github.com/bendlang/bend/blob/9c586f094f4fc88bef440dc8b4d77a2f92c257cc/LICENSE).
