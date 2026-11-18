@@ -630,8 +630,35 @@ straight into an argument) and `rs_f32_bits(rs_f32_scale(2.5, 1))` =
 `0x40200000` (a literal in a Float32 local, then the parameter decode and the
 result encode), both inside the module, before the Float64 leg returns.
 
-**Still not carried:** float *arithmetic* — the JIT's `add`/`sub`/`mul` are
-integer operations, so a computed float still needs a foreign call to do its
-math, at either width. Only literals and mediated calls carry a float; a
-Float32 that goes through a slot or a record field is still one opaque word, so
-nothing in the JIT checks the width for you.
+**`Float64` arithmetic now lowers to bridge primitives.** The JIT's
+`add`/`sub`/`mul` are integer operations and `trapping_arith_op` had already
+turned `trappingSubtract`/`trappingMultiply` into the integer `Sub`/`Mul`
+opcodes — on a float word that is arithmetic on two IEEE bit patterns, and the
+multiply traps as integer overflow for perfectly ordinary values. `Compiler_cps`
+now intercepts the four `TrappingArithmetic(Float64)` calls *before* that
+fallback (the call node carries its result type, `MonoDoubleFloat`) and emits an
+`App` to `au_f64_add`/`au_f64_subtract`/`au_f64_multiply`/`au_f64_divide`, the
+same shape Int64 `+`/`/` already had. The four take and return the f64 bits in
+the one-word model, are registered by `register_float_symbols` on every builder
+(`cranelift_init`, the hotswap builder, `compile_cps_binary`), and are grant-free
+because `au_` symbols are (`check_call_permission`). Divide aborts on `rhs ==
+0.0` with `Division by zero in trappingDivide (Float64)`, mirroring
+`BuiltInModules.ml`'s Int64/Float64 `TrappingArithmetic`; otherwise it is IEEE.
+No opcode, `Cps_codec`, `ISA_REGISTRY` or census change is involved, so U11 step
+3 stays satisfied. `AdapterLive.aum` now computes
+`((rs_scale(2.5, 4) + 2.5) - 0.5) * 2.0 / 4.0` and returns it only when its bits
+are `6.0` = `0x4018000000000000`, so a wrong operand order, a widened literal or
+an op still on the integer path is a different number; `test/JitTest.ml` pins
+each op separately (`f64_add`/`f64_subtract`/`f64_multiply`/`f64_divide`, 14
+cases in the suite).
+
+**Still not carried:** float arithmetic at **width 32** — `float_arith_symbol`
+matches `MonoDoubleFloat` only (`au_f64_*` are f64-only), so a Float32 `+` still
+reaches the integer path, where `trappingSubtract`/`trappingMultiply` become
+`Sub`/`Mul` on the f32 bits and `trappingAdd`/`trappingDivide` call the Int64
+implementations. Float **comparisons** are unchanged for both widths:
+`MComparison` lowers to the integer `CmpLt`/`CmpGt`/… on the bit words, which
+orders positive floats correctly and negative ones backwards, and never treats
+NaN specially. Only literals, mediated calls and Float64 arithmetic carry a
+float; a Float32 that goes through a slot or a record field is still one opaque
+word, so nothing in the JIT checks the width for you.

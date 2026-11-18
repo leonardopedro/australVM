@@ -324,11 +324,14 @@ fn a_wrapper_that_casts_the_float_through_i64_loses_negative_zero() {
 /// and the JIT must resolve the mediated calls and execute the entry.
 ///
 /// `compute` returns 0 unless every mediated result is right, and the Float64
-/// leg is checked end to end: `rs_scale(2.5, 4)` returns a float, `rs_bits`
-/// reads that float's word, and the entry returns it. 10.0's IEEE bits are
-/// 0x4024000000000000 — the value a float literal written as a rounded integer
-/// cannot produce (that bug returned exactly 12), so this one number covers the
-/// literal encoding, the `F64` parameter decode and the `F64` result encode.
+/// leg is checked end to end: `rs_scale(2.5, 4)` returns 10.0, the module does
+/// `(scaled + 2.5 - 0.5) * 2.0 / 4.0` on it, and `rs_bits` reads that float's
+/// word, which the entry returns. The arithmetic is CPS-lowered to the bridge's
+/// `au_f64_*` primitives, so 6.0's IEEE bits — 0x4018000000000000 — also prove
+/// the four operators did not land on the integer `Sub`/`Mul` opcodes (which
+/// would compute on the bit patterns, and trap on the multiply). The first bug
+/// in this path returned exactly 12, so this one number covers the literal
+/// encoding, the `F64` parameter decode, the arithmetic and the result encode.
 ///
 /// The Float32 legs must return 0x3FC00000 (1.5 written straight into an
 /// argument) and 0x40200000 (2.5 held in a Float32 local, then scaled) before
@@ -337,7 +340,7 @@ fn a_wrapper_that_casts_the_float_through_i64_loses_negative_zero() {
 /// set and the wrapper's `F32` decode refuses the word, which aborts instead.
 #[test]
 fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
-    const EXPECTED: i64 = 0x4024_0000_0000_0000;
+    const EXPECTED: i64 = 0x4018_0000_0000_0000;
 
     let front_end = Path::new(env!("CARGO_MANIFEST_DIR")).join("../austral");
     assert!(

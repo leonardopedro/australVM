@@ -12,11 +12,14 @@
 -- bits zero-extended (the ABI's `F32` decode refuses a word with bits above
 -- bit 31, which is what keeps the two widths distinguishable).
 --
--- Float64: `rs_scale` takes a float and returns one, `rs_bits` reads the
--- returned float and hands back the word, and `compute` returns that.
--- 2.5 * 4 = 10.0 is 0x4024000000000000 = 4621819117588971520, so a literal that
--- is rounded on the way in, or a result that is not carried as bits, shows up as
--- a different number.
+-- Float64: `rs_scale` takes a float and returns one, and the CPS-lowered
+-- arithmetic on the result is the bridge's f64 primitives (`au_f64_*`), not the
+-- integer `Sub`/`Mul` opcodes — those would compute on the bit patterns and the
+-- multiply would trap as integer overflow. 2.5 * 4 = 10.0, then
+-- ((10.0 + 2.5) - 0.5) * 2.0 / 4.0 = 6.0 = 0x4018000000000000 = 4618441417868443648,
+-- so a literal that is rounded on the way in, an arithmetic op that lands on the
+-- integer path, or a result that is not carried as bits shows up as a different
+-- number.
 --
 -- Float32: `rs_f32_bits(1.5)` checks a literal written straight into an argument
 -- position (0x3FC00000 = 1069547520), and `rs_f32_scale(2.5, 1)` then
@@ -69,7 +72,13 @@ module body AdapterLive is
                 if literal_bits = 1069547520 then
                     if scaled32_bits = 1075838976 then
                         let scaled: Float64 := rs_scale(2.5, 4);
-                        return rs_bits(scaled);
+                        let arithmetic: Float64 := (((scaled + 2.5) - 0.5) * 2.0) / 4.0;
+                        let bits: Int64 := rs_bits(arithmetic);
+                        if bits = 4618441417868443648 then
+                            return bits;
+                        else
+                            return 0;
+                        end if;
                     else
                         return 0;
                     end if;

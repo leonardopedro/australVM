@@ -267,6 +267,30 @@ let trapping_arith_op (q: qident): [ `Sub | `Mul ] option =
   else if ends_with name "trappingMultiply" then Some `Mul
   else None
 
+(* Float arithmetic must not reach the integer opcodes below: `Sub`/`Mul` on an
+   f64 word would subtract/multiply two IEEE bit patterns as integers (and trap
+   on "overflow" for perfectly ordinary sums), and the `trapping*` symbols the
+   fallback emits are the Int64 implementations. The mono AST's method-call node
+   carries the call's result type, which is `MonoDoubleFloat` exactly for the
+   Float64 instance of TrappingArithmetic, so the four operations are routed to
+   the bridge's float primitives instead. They take and return the f64 bits in
+   one word, like every other value on this transport.
+
+   This covers Float64 only. Float32 arithmetic still has no lowering of its
+   own — a narrowed f32 word would have to be widened, operated on and narrowed
+   again — so `MonoSingleFloat` keeps falling through to the integer path rather
+   than silently computing on f32 bits as if they were f64. *)
+let float_arith_symbol (q: qident) (ty: mono_ty): string option =
+  match ty with
+  | MonoDoubleFloat ->
+      let name = qident_to_string q in
+      if ends_with name "trappingAdd" then Some "au_f64_add"
+      else if ends_with name "trappingSubtract" then Some "au_f64_subtract"
+      else if ends_with name "trappingMultiply" then Some "au_f64_multiply"
+      else if ends_with name "trappingDivide" then Some "au_f64_divide"
+      else None
+  | _ -> None
+
 (* A float literal has no width in the mono AST (`Mtast.MFloatConstant` is a
    string), so it crosses as f64 bits by default. Where the destination's
    declared type is `Float32` the word has to be the f32 bits instead: the
@@ -320,7 +344,7 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MTemporary (id, _) -> Var (ident_string id)
   | Mt.MGenericFunVar (id, _) -> Var ("monomorph_" ^ show_mono_id id)
   | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ show_decl_id id)
-  | Mt.MConcreteFuncall (decl_id, q, args, _) ->
+  | Mt.MConcreteFuncall (decl_id, q, args, ty) ->
       let name = qident_to_string q in
       let is_exit_success = 
         ends_with name ":ExitSuccess" || 
@@ -340,10 +364,14 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
            name (build_cps_function uses `ident_string name`) into a flat JIT
            function table, so the call must use the unqualified name too. The
            qualified debug name ("UnferKernel::wrapModel") would not resolve. *)
-        (match trapping_arith_op q, args with
-         | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
-         | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
-         | _ -> App (ident_string (original_name q), List.map convert_expr args))
+        (match float_arith_symbol q ty, args with
+         | Some symbol, [a; b] ->
+             App (symbol, [convert_expr a; convert_expr b])
+         | _ ->
+           (match trapping_arith_op q, args with
+            | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
+            | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
+            | _ -> App (ident_string (original_name q), List.map convert_expr args)))
   | Mt.MGenericFuncall (id, args, _) ->
       let args =
         match Hashtbl.find_opt monomorph_params id with
@@ -352,11 +380,15 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
         | _ -> List.map convert_expr args
       in
       App ("monomorph_" ^ show_mono_id id, args)
-  | Mt.MConcreteMethodCall (_, q, args, _) ->
-      (match trapping_arith_op q, args with
-       | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
-       | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
-       | _ -> App (qident_to_string q, List.map convert_expr args))
+  | Mt.MConcreteMethodCall (_, q, args, ty) ->
+      (match float_arith_symbol q ty, args with
+       | Some symbol, [a; b] ->
+           App (symbol, [convert_expr a; convert_expr b])
+       | _ ->
+         (match trapping_arith_op q, args with
+          | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
+          | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
+          | _ -> App (qident_to_string q, List.map convert_expr args)))
   | Mt.MGenericMethodCall (_, id, args, _) ->
       App ("method_" ^ show_mono_id id, List.map convert_expr args)
   | Mt.MFptrCall (id, args, _) ->

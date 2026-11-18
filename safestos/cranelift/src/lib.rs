@@ -229,6 +229,55 @@ pub extern "C" fn au_trapping_divide(lhs: i64, rhs: i64) -> i64 {
     }
 }
 
+// The `Float64` instance of `TrappingArithmetic`. CPS-lowered `+ - * /` on
+// Float64 call these by name (`Compiler_cps.float_arith_symbol`): the integer
+// intrinsics above would add the IEEE bit patterns as integers. Values are the
+// f64 bits in a 64-bit word, in and out, which is the only float transport this
+// JIT has. Semantics mirror `BuiltInModules.ml`'s `instance
+// TrappingArithmetic(Float64)`: IEEE arithmetic for `+ - *`, and a division by
+// zero aborts, exactly as the native compiler's `if (rhs == 0.0) abort` does.
+fn f64_div_checked(lhs: u64, rhs: u64) -> Option<u64> {
+    let rhs = f64::from_bits(rhs);
+    if rhs == 0.0 {
+        None
+    } else {
+        Some((f64::from_bits(lhs) / rhs).to_bits())
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_add(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) + f64::from_bits(rhs)).to_bits()
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_subtract(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) - f64::from_bits(rhs)).to_bits()
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_multiply(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) * f64::from_bits(rhs)).to_bits()
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_divide(lhs: u64, rhs: u64) -> u64 {
+    match f64_div_checked(lhs, rhs) {
+        Some(v) => v,
+        None => trapping_abort("Division by zero in trappingDivide (Float64)"),
+    }
+}
+
+/// Register the `au_f64_*` float primitives on a JIT builder. Every builder
+/// that can host CPS code needs them: `austral`'s initial one and its hotswap
+/// one in this file, and the module host's in `module.rs`.
+pub(crate) fn register_float_symbols(builder: &mut JITBuilder) {
+    builder.symbol("au_f64_add", au_f64_add as *const u8);
+    builder.symbol("au_f64_subtract", au_f64_subtract as *const u8);
+    builder.symbol("au_f64_multiply", au_f64_multiply as *const u8);
+    builder.symbol("au_f64_divide", au_f64_divide as *const u8);
+}
+
 /// Register the `Austral.Pervasive::trapping*` arithmetic intrinsics on a
 /// JIT builder (both the initial and the hotswap builders must carry them).
 fn register_trapping_symbols(builder: &mut JITBuilder) {
@@ -328,6 +377,7 @@ pub extern "C" fn cranelift_init() -> i64 {
             // these by name, and a module using arithmetic cannot finalize
             // without them.
             register_trapping_symbols(&mut builder);
+            register_float_symbols(&mut builder);
 
             // Register unfer kernel symbols (uk_*) for JIT-compiled modules.
             // Access is gated by the manifest auth engine — uk_ is NOT in the
@@ -1310,6 +1360,7 @@ fn cranelift_swap_binary_impl(ir_ptr: *const u8, ir_len: usize) -> *const c_void
         builder.symbol("__record_new", au_exit as *const u8);
         builder.symbol("__slot_get", au_exit as *const u8);
         register_trapping_symbols(&mut builder);
+        register_float_symbols(&mut builder);
         #[cfg(feature = "unfer-kernel")]
         register_unfer_symbols(&mut builder);
         #[cfg(feature = "zenodo-store")]

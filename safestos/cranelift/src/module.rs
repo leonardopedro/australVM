@@ -872,6 +872,7 @@ fn compile_cps_binary(data: &[u8]) -> Result<HashMap<String, usize>, String> {
     builder.symbol("__union_new", au_exit as *const u8);
     builder.symbol("__record_new", au_exit as *const u8);
     builder.symbol("__slot_get", au_exit as *const u8);
+    crate::register_float_symbols(&mut builder);
 
     #[cfg(feature = "unfer-kernel")]
     {

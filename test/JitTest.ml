@@ -187,6 +187,35 @@ let test_rs_granted_executes_checksum _ =
   let got = CamlCompiler_rust_bridge.execute_function_2 ptr buf 3L in
   assert_equal ~printer:Int64.to_string (-1781872834555808882L) got
 
+(* Float64 arithmetic, end to end through the bridge's f64 primitives.
+
+   The CPS front-end lowers `+ - * /` on Float64 to `au_f64_*` calls
+   (`Compiler_cps.float_arith_symbol`) rather than to the `Add`/`Sub`/`Mul`
+   opcodes: those operate on the 64-bit word, which for a float is its IEEE
+   bit pattern, so `1.5 + 2.5` as integers is 1.5+2.5's bits added — a
+   different number — and `2.5 * 4.0` traps as integer overflow.
+
+   These tests pin the *words*, not the floats: the value built here is the
+   f64 bits (`FloatLit` serializes as `Int64.bits_of_float`, one word), so a
+   returning primitive that forgot `.to_bits()` shows up as an integer. *)
+(* Expected words are the f64 bit patterns written out: 4.0 = 0x4010_0000_0000_0000,
+   1.5 = 0x3FF8…, 10.0 = 0x4024…, 3.0 = 0x4008…; an integer 4 would show up as
+   0x4 and fail. *)
+let compile_f64 fname op args expected_bits =
+  compile_and_execute fname (Return (App (op, args))) expected_bits
+
+let test_f64_add _ =
+  compile_f64 "run_f64_add" "au_f64_add" [FloatLit 1.5; FloatLit 2.5] 0x4010000000000000L
+
+let test_f64_subtract _ =
+  compile_f64 "run_f64_sub" "au_f64_subtract" [FloatLit 4.0; FloatLit 2.5] 0x3FF8000000000000L
+
+let test_f64_multiply _ =
+  compile_f64 "run_f64_mul" "au_f64_multiply" [FloatLit 2.5; FloatLit 4.0] 0x4024000000000000L
+
+let test_f64_divide _ =
+  compile_f64 "run_f64_div" "au_f64_divide" [FloatLit 12.0; FloatLit 4.0] 0x4008000000000000L
+
 (* ── suite ──────────────────────────────────────────────────────── *)
 
 let suite =
@@ -202,6 +231,11 @@ let suite =
     "rs_denied_without_manifest" >:: test_rs_denied_without_manifest;
     "rs_denied_by_uk_only_grant" >:: test_rs_denied_by_uk_only_grant;
     "rs_granted_executes_checksum" >:: test_rs_granted_executes_checksum;
+    (* Float64 arithmetic: the bridge's f64 primitives, not integer ops. *)
+    "f64_add_1_5_2_5" >:: test_f64_add;
+    "f64_subtract_4_0_2_5" >:: test_f64_subtract;
+    "f64_multiply_2_5_4_0" >:: test_f64_multiply;
+    "f64_divide_12_0_4_0" >:: test_f64_divide;
   ]
 
 let _ = run_test_tt_main suite
