@@ -956,10 +956,14 @@ the artifact, so `mm0-c` checks them too.
   second core buys 1.38x rather than 2x because a single gate run is itself
   mostly serial, and every case still holds under `-j 2` (the same 13 `holds`
   as at `-j 1`), which is the check that the cases really are independent:
-  own scratch tree, own `TMPDIR`, repository read-only. `make drift-controls`
-  therefore runs at `DRIFT_JOBS` (default `nproc`) and keeps
+  own scratch tree, own `TMPDIR`, repository read-only. The five read-only
+  `*-drift-control` scripts measure the same way — 22m44s serial against 17m22s
+  at `-P 2`, all five holding — so the two parallel halves together go from
+  **1h21m43s to 1h00m01s**, 21m42s or 27% of the wall clock. `make
+  drift-controls` therefore runs at `DRIFT_JOBS` (default `nproc`) and keeps
   `scripts/obj-drift-control` — the one control that edits the tree and
-  rebuilds the compiler — last and serial. The one `copy` row left is not a
+  rebuilds the compiler — last and serial; that one is unchanged and excluded
+  from the totals above. The one `copy` row left is not a
   control anyone
   forgot: `W3: $_stem matches its approved statements` has no branch to exercise
   until an artifact is approved, and approving is the owner's commit.

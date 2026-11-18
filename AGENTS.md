@@ -475,7 +475,9 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   cores suggest, because a gate run does not itself parallelise.
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
   read-only `*-drift-control` scripts the same way, then `obj-drift-control`
-  alone (it edits the tree and rebuilds), and `make test` depends on it. It never
+  alone (it edits the tree and rebuilds), and `make test` depends on it. The two
+  parallel halves together measure 1h21m43s serial against 1h00m01s at two jobs
+  (2026-11-18; the second half alone 22m44s → 17m22s). It never
   writes `mm0/approved/` — the approval a case needs lives in a scratch root — so
   no control can approve.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
