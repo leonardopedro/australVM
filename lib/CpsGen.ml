@@ -85,6 +85,10 @@ type cps_expr =
   | IntLit of int64
   | BoolLit of bool
   | FloatLit of float
+  (* A Float32 value in the one-word model: its f32 bits, zero-extended. The
+     scalar ABI's `F32` decode refuses a word with anything above bit 31, so a
+     narrowed literal cannot be confused with an f64 one. *)
+  | FloatLit32 of float
   | StringLit of string
   | Var of string
   | App of string * cps_expr list
@@ -129,6 +133,7 @@ let rec string_of_expr = function
   | IntLit n -> Int64.to_string n
   | BoolLit b -> string_of_bool b
   | FloatLit f -> string_of_float f
+  | FloatLit32 f -> string_of_float f ^ "f32"
   | StringLit s -> "\"" ^ s ^ "\""
   | Var name -> name
   | App (f, args) -> f ^ "(" ^ String.concat ", " (List.map string_of_expr args) ^ ")"
@@ -182,6 +187,13 @@ let rec serialize_cps_expr w expr =
          error that rounding required is gone with it. *)
       write_op w Cps_codec.Int_lit;
       write_i64 w (Int64.bits_of_float f)
+  | FloatLit32 f ->
+      (* Same literal opcode, width carried in the *value*: `Int32.bits_of_float`
+         keeps 0.0 and -0.0 apart (0x0000_0000 / 0x8000_0000) exactly as the f64
+         form does, and `of_int32` would sign-extend bit 31 into the upper half,
+         so the word is masked to 32 bits. *)
+      write_op w Cps_codec.Int_lit;
+      write_i64 w (Int64.logand 0xFFFF_FFFFL (Int64.of_int32 (Int32.bits_of_float f)))
   | StringLit s ->
       (* 0x21 = string/byte constant. The JIT embeds the bytes in memory and
          yields a Span pointer (heap {data, size}); see cps.rs. *)

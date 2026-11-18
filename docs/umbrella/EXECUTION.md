@@ -580,14 +580,15 @@ run reports exactly that and still returns its documented `RESULT`.
 ### U11.4 — the live JIT path, and the float word
 
 `scalar_roundtrip.rs`'s third test drives the real `umbrella` binary over
-`modules/AdapterLive.aum`, whose four externs are `Int32`, `Bool` and two
-`Float64` signatures — none word-native, so all go through `<target>__adapter`.
-The test builds the target crate, grants the four adapter symbols in a manifest,
-and asserts the `RESULT`, the `built and loaded 4 adapter wrapper(s)` line naming
-each symbol, and that a wrong `--expect` fails (`compute` returns `0` unless every mediated
-result is right, so the wrong-expectation run is the oracle that `RESULT` is
-really the entry's). It needs the dune-built `austral` front-end at the repo
-root and **fails** with that instruction when it is absent, rather than skipping.
+`modules/AdapterLive.aum`, whose six externs are `Int32`, `Bool`, two `Float64`
+and two `Float32` signatures — none word-native, so all go through
+`<target>__adapter`. The test builds the target crate, grants the six adapter
+symbols in a manifest, and asserts the `RESULT`, the `built and loaded 6 adapter
+wrapper(s)` line naming each symbol, and that a wrong `--expect` fails (`compute`
+returns `0` unless every mediated result is right, so the wrong-expectation run
+is the oracle that `RESULT` is really the entry's). It needs the dune-built
+`austral` front-end at the repo root and **fails** with that instruction when it
+is absent, rather than skipping.
 
 **Measured.** `cargo test --offline --test scalar_roundtrip` → 3 passed;
 `scripts/test-umbrella --case SUITE_UMBRELLA_SCALARS` → pass, 3 tests (pin
@@ -612,7 +613,25 @@ and the expected `0x4024000000000000` covers the literal, the `F64` parameter
 decode and the `F64` result encode in one number that the old encoding could not
 produce.
 
-**Still not carried:** `Float32` (the compiler's float constants are all
-`MonoDoubleFloat`, so a `F32` adapter would be handed an f64 bit pattern) and
-float *arithmetic* — the JIT's `add`/`sub`/`mul` are integer operations, so a
-computed `Float64` still needs a foreign call to do its math.
+**`Float32` needed the literal narrowed, not a new opcode.** A Float32 word is
+the f32 bits zero-extended (the ABI's `F32` decode refuses a word with bits above
+bit 31), but `Mtast.MFloatConstant` is a string with no width and the typechecker
+wraps a narrower literal in a cast, so every literal reached the CPS as an f64
+bit pattern and the wrapper aborted with `0x3ff8000000000000 is not a valid
+Float32 word`. `CpsGen.FloatLit32` writes `Int32.bits_of_float` under the same
+`Int_lit` opcode (masked to 32 bits, since `Int64.of_int32` sign-extends), and
+`Compiler_cps` emits it where the destination's declared type is
+`MonoSingleFloat`: a call argument (the callee's parameter table), a local
+(`MLet`/`MLetTmp` record their types), and a `return` (the enclosing function's
+return type). The literal is looked for through casts, and only a literal is
+narrowed — a Float32 returned by a foreign call is already the target's word.
+`AdapterLive.aum` checks `rs_f32_bits(1.5)` = `0x3FC00000` (a literal written
+straight into an argument) and `rs_f32_bits(rs_f32_scale(2.5, 1))` =
+`0x40200000` (a literal in a Float32 local, then the parameter decode and the
+result encode), both inside the module, before the Float64 leg returns.
+
+**Still not carried:** float *arithmetic* — the JIT's `add`/`sub`/`mul` are
+integer operations, so a computed float still needs a foreign call to do its
+math, at either width. Only literals and mediated calls carry a float; a
+Float32 that goes through a slot or a record field is still one opaque word, so
+nothing in the JIT checks the width for you.

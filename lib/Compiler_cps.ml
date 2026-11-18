@@ -267,6 +267,34 @@ let trapping_arith_op (q: qident): [ `Sub | `Mul ] option =
   else if ends_with name "trappingMultiply" then Some `Mul
   else None
 
+(* A float literal has no width in the mono AST (`Mtast.MFloatConstant` is a
+   string), so it crosses as f64 bits by default. Where the destination's
+   declared type is `Float32` the word has to be the f32 bits instead: the
+   scalar ABI's `F32` decode refuses a word with anything above bit 31, and the
+   JIT has no float arithmetic that could narrow the value later. Only a
+   *literal* is narrowed — a Float32 that came back from a foreign call is
+   already the target's f32 word.
+
+   Three places know the destination's type, so three tables are filled before
+   conversion: a callee's parameters (a literal written straight into an
+   argument position), a local's declared type (from `MLet`), and the enclosing
+   function's return type. *)
+let function_params : (decl_id, mono_ty list) Hashtbl.t = Hashtbl.create 32
+
+let monomorph_params : (mono_id, mono_ty list) Hashtbl.t = Hashtbl.create 32
+
+let local_types : (string, mono_ty) Hashtbl.t = Hashtbl.create 32
+
+let current_return_type : mono_ty ref = ref MonoUnit
+
+let param_types (params: Mt.mvalue_parameter list): mono_ty list =
+  List.map (function Mtast.MValueParameter (_, ty) -> ty) params
+
+let local_type (q: qident): mono_ty =
+  match Hashtbl.find_opt local_types (ident_string (original_name q)) with
+  | Some ty -> ty
+  | None -> MonoUnit
+
 let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   match expr with
   | Mt.MNilConstant -> IntLit 0L
@@ -302,10 +330,10 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       if is_exit_success then
         App ("au_exit", [IntLit 0L])
       else if Hashtbl.mem foreign_functions decl_id then
-        App (Hashtbl.find foreign_functions decl_id, List.map convert_expr args)
+        App (Hashtbl.find foreign_functions decl_id, narrow_args_for decl_id args)
       else if Hashtbl.mem foreign_functions_by_name (ident_string (original_name q)) then
         App (Hashtbl.find foreign_functions_by_name (ident_string (original_name q)),
-             List.map convert_expr args)
+             narrow_args_for decl_id args)
       else
         (* Non-foreign call, possibly cross-module (e.g. a module calling
            UnferKernel::wrapModel). Functions are emitted under their *unqualified*
@@ -317,7 +345,13 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
          | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
          | _ -> App (ident_string (original_name q), List.map convert_expr args))
   | Mt.MGenericFuncall (id, args, _) ->
-      App ("monomorph_" ^ show_mono_id id, List.map convert_expr args)
+      let args =
+        match Hashtbl.find_opt monomorph_params id with
+        | Some tys when List.length tys = List.length args ->
+            List.map2 narrow_float_literal tys args
+        | _ -> List.map convert_expr args
+      in
+      App ("monomorph_" ^ show_mono_id id, args)
   | Mt.MConcreteMethodCall (_, q, args, _) ->
       (match trapping_arith_op q, args with
        | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
@@ -405,6 +439,30 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MArrayIndex (arr, idx, _) -> App ("__array_index", [convert_expr arr; convert_expr idx])
   | Mt.MSpanIndex (span, idx, _) -> App ("__span_index", [convert_expr span; convert_expr idx])
 
+(* A literal written straight into an argument position is converted against
+   the callee's declared parameter type, not the literal's default width. *)
+and narrow_args_for (decl_id: decl_id) (args: Mt.mexpr list): CpsGen.cps_expr list =
+  match Hashtbl.find_opt function_params decl_id with
+  | Some tys when List.length tys = List.length args ->
+      List.map2 narrow_float_literal tys args
+  | _ -> List.map convert_expr args
+
+(* The typechecker wraps a float literal in a cast when the declared type is
+   narrower than the literal's default f64 (and the CPS back end lowers both
+   casts as no-ops — there is one float width on the wire), so the literal is
+   looked for through casts. *)
+and float_literal (expr: Mt.mexpr): float option =
+  match expr with
+  | Mt.MFloatConstant s ->
+      Some (try float_of_string s with _ -> 0.0)
+  | Mt.MCast (e, _) | Mt.MTypecast (e, _) -> float_literal e
+  | _ -> None
+
+and narrow_float_literal (ty: mono_ty) (expr: Mt.mexpr): CpsGen.cps_expr =
+  match ty, float_literal expr with
+  | MonoSingleFloat, Some f -> FloatLit32 f
+  | _ -> convert_expr expr
+
 (******************************************************************************)
 (* MAST → CPS STATEMENT CONVERSION *)
 (******************************************************************************)
@@ -414,6 +472,7 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
   | Mt.MSkip -> Skip
   | Mt.MLet (id, ty, body) ->
       let var_name = ident_string id in
+      Hashtbl.replace local_types var_name ty;
       let init = zero_value (mono_ty_to_cps_type ty) in
       Let (var_name, init, convert_stmt body)
   | Mt.MDestructure (bindings, expr, body) ->
@@ -437,7 +496,7 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       Block (tmp_let, combined)
   | Mt.MAssign (dest, src) ->
       let dest_expr = convert_expr dest in
-      let src_expr = convert_expr src in
+      let src_expr = narrow_float_literal (get_expr_type dest) src in
       (* The pointer-like test must come *first*: `MAssign` is the store form
          (`*r = v`, typed as a write reference, see TypingPass), and its target
          is often a plain `Var`, which the second branch would otherwise rebind
@@ -456,9 +515,9 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       (* Use the unqualified name: MLet declares the local under `ident_string id`,
          but the qualified debug name (e.g. "T1::x") would assign a *different*
          JIT variable, leaving the declared one at its zero-init. *)
-      Assign (ident_string (original_name q), convert_expr src)
+      Assign (ident_string (original_name q), narrow_float_literal (local_type q) src)
   | Mt.MInitialAssign (q, src) ->
-      Assign (ident_string (original_name q), convert_expr src)
+      Assign (ident_string (original_name q), narrow_float_literal (local_type q) src)
   | Mt.MIf (cond, then_stmt, else_stmt) ->
       If (convert_expr cond, convert_stmt then_stmt, convert_stmt else_stmt)
   | Mt.MCase (expr, whens, _) ->
@@ -519,11 +578,16 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
   | Mt.MDiscarding expr ->
       Discard (convert_expr expr)
   | Mt.MReturn expr ->
-      Return (convert_expr expr)
-  | Mt.MLetTmp (id, _, expr) ->
-      Let (ident_string id, convert_expr expr, Skip)
+      Return (narrow_float_literal !current_return_type expr)
+  | Mt.MLetTmp (id, ty, expr) ->
+      Hashtbl.replace local_types (ident_string id) ty;
+      Let (ident_string id, narrow_float_literal ty expr, Skip)
   | Mt.MAssignTmp (id, expr) ->
-      Assign (ident_string id, convert_expr expr)
+      let ty = match Hashtbl.find_opt local_types (ident_string id) with
+        | Some ty -> ty
+        | None -> MonoUnit
+      in
+      Assign (ident_string id, narrow_float_literal ty expr)
 
 and zero_value (ty: CpsGen.cps_type): CpsGen.cps_expr =
   match ty with
@@ -544,6 +608,8 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
       let func_name = ident_string name in
       let param_names = List.map (fun (Mtast.MValueParameter (id, _)) -> ident_string id) params in
       let return_type = mono_ty_to_cps_type ret_ty in
+      current_return_type := ret_ty;
+      Hashtbl.reset local_types;
       let body_stmt = convert_stmt body in
       Some {
         name = func_name;
@@ -555,6 +621,8 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
       let func_name = "monomorph_" ^ show_mono_id id in
       let param_names = List.map (fun (Mtast.MValueParameter (pid, _)) -> ident_string pid) params in
       let return_type = mono_ty_to_cps_type ret_ty in
+      current_return_type := ret_ty;
+      Hashtbl.reset local_types;
       let body_stmt = convert_stmt body in
       Some {
         name = func_name;
@@ -566,6 +634,8 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
       let func_name = "method_" ^ show_mono_id id in
       let param_names = List.map (fun (Mtast.MValueParameter (pid, _)) -> ident_string pid) params in
       let return_type = mono_ty_to_cps_type ret_ty in
+      current_return_type := ret_ty;
+      Hashtbl.reset local_types;
       let body_stmt = convert_stmt body in
       Some {
         name = func_name;
@@ -576,11 +646,13 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
   | Mt.MConstant (_, name, ty, expr) ->
       let const_name = ident_string name in
       let return_type = mono_ty_to_cps_type ty in
+      current_return_type := ty;
+      Hashtbl.reset local_types;
       Some {
         name = const_name;
         params = [];
         return_type = return_type;
-        body = Return (convert_expr expr)
+        body = Return (narrow_float_literal ty expr)
       }
   | _ -> None
 
@@ -595,7 +667,12 @@ let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list 
       List.iter (function
         | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
         | Mt.MUnionMonomorph (id, cases) -> Hashtbl.replace union_layouts id cases
+        | Mt.MFunction (id, _, params, _, _) ->
+            Hashtbl.replace function_params id (param_types params)
+        | Mt.MFunctionMonomorph (id, params, _, _) ->
+            Hashtbl.replace monomorph_params id (param_types params)
         | Mt.MForeignFunction (id, name, params, rt, ext_name) ->
+            Hashtbl.replace function_params id (param_types params);
             let ext_name =
               if is_rust_import ext_name && foreign_needs_adapter params rt then begin
                 let symbol = adapter_symbol ext_name in

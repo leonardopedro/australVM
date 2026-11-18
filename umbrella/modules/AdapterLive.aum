@@ -1,17 +1,29 @@
 -- umbrella/modules/AdapterLive.aum — U11's live path.
 --
 -- Every extern here has a signature the scalar encoding cannot pass as a raw
--- word (Int32, Bool, Float64), so the CPS lowering names `<target>__adapter`
--- and the build must generate, compile and load the wrapper before the JIT can
--- resolve the call. `compute` checks each mediated result and returns one of
--- them, so a wrong value is a wrong RESULT rather than a passing run.
+-- word (Int32, Bool, Float32, Float64), so the CPS lowering names
+-- `<target>__adapter` and the build must generate, compile and load the wrapper
+-- before the JIT can resolve the call. `compute` checks each mediated result and
+-- returns one of them, so a wrong value is a wrong RESULT rather than a passing
+-- run.
 --
--- A Float64 crosses as its IEEE-754 bits in the single-word CPS value model:
--- `rs_scale` takes a float and returns one, `rs_bits` reads the returned float
--- and hands back the word, and `compute` returns that. 2.5 * 4 = 10.0 is
--- 0x4024000000000000 = 4621819117588971520, so a literal that is rounded on the
--- way in, or a result that is not carried as bits, shows up as a different
--- number.
+-- Floats cross as their IEEE-754 bits in the single-word CPS value model, at
+-- their own width: a Float64 word is the f64 bits, a Float32 word is the f32
+-- bits zero-extended (the ABI's `F32` decode refuses a word with bits above
+-- bit 31, which is what keeps the two widths distinguishable).
+--
+-- Float64: `rs_scale` takes a float and returns one, `rs_bits` reads the
+-- returned float and hands back the word, and `compute` returns that.
+-- 2.5 * 4 = 10.0 is 0x4024000000000000 = 4621819117588971520, so a literal that
+-- is rounded on the way in, or a result that is not carried as bits, shows up as
+-- a different number.
+--
+-- Float32: `rs_f32_bits(1.5)` checks a literal written straight into an argument
+-- position (0x3FC00000 = 1069547520), and `rs_f32_scale(2.5, 1)` then
+-- `rs_f32_bits` checks a literal held in a Float32 local (0x40200000 =
+-- 1075838976) plus the parameter decode and the result encode. An f64 literal
+-- in either place would arrive with bits above 31 set and the wrapper would
+-- refuse it, so neither number can be produced by an unnarrowed word.
 pragma Unsafe_Module;
 
 module body AdapterLive is
@@ -35,13 +47,35 @@ module body AdapterLive is
     function rs_bits(value: Float64): Int64 is
     end;
 
+    pragma Foreign_Import(External_Name => "rs_f32_scale");
+    pragma Rust_Ownership(Params => "owned, owned", Return => "owned");
+    function rs_f32_scale(factor: Float32, value: Int64): Float32 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_f32_bits");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_f32_bits(value: Float32): Int64 is
+    end;
+
     function compute(): Int64 is
         let width: Int32 := 7;
         let narrowed: Int64 := rs_narrow(width);
+        let literal_bits: Int64 := rs_f32_bits(1.5);
+        let factor: Float32 := 2.5;
+        let scaled32: Float32 := rs_f32_scale(factor, 1);
+        let scaled32_bits: Int64 := rs_f32_bits(scaled32);
         if narrowed = 7 then
             if rs_toggle(false) then
-                let scaled: Float64 := rs_scale(2.5, 4);
-                return rs_bits(scaled);
+                if literal_bits = 1069547520 then
+                    if scaled32_bits = 1075838976 then
+                        let scaled: Float64 := rs_scale(2.5, 4);
+                        return rs_bits(scaled);
+                    else
+                        return 0;
+                    end if;
+                else
+                    return 0;
+                end if;
             else
                 return 0;
             end if;
