@@ -54,16 +54,22 @@ cargo test --locked --manifest-path safestos/gpu/Cargo.toml --features device
 | G07 | implemented | `safestos/gpu/` | `cargo test --manifest-path safestos/gpu/Cargo.toml` (12 tests); `avm-gpu validate`/`reference` on `scripts/gpu-source-check` bundles | device feature lands in G09; no GPU execution claimed |
 | G08 | implemented | `examples/gpu/pointwise/`, `corpus.tsv`, `scripts/gpu-source-check`, `test-programs/suites/022-gpu/` | `python3 scripts/gpu-source-check` → `[pass] G08 source/C/IR agree: 156 cases over 14 entries (seed 20261118)`; three semantic mutations detected and a `while` refused; `python3 test-programs/runner.py 022-gpu` PASS | fixed-seed corpus is bounded, not exhaustive; the helper-elision control is a source-level mutation, while the checker's helper audit is covered by the crate tests |
 | G09 | implemented | `safestos/gpu/src/device.rs`, optional `wgpu =29.0.4` | `cargo test --features device` (13 tests); `cargo run --features device -- probe`; `avm-gpu probe` → `{"backend":"Vulkan","name":"Intel(R) UHD Graphics 630 (CFL GT2)","device_type":"integrated-gpu"}`, exit 0; `probe --require-hardware` exit 0 | adapter evidence is from wgpu enumeration, not `nvidia-smi`; no kernel has been dispatched yet |
-| G10–G23 | pending | — | — | ordered extensions; no GPU execution claimed |
+| G10 | implemented | `safestos/gpu/src/run.rs`, CLI `run` | `cargo test --features device` (17 tests, 4 preflight); `avm-gpu run /tmp/g10.avkg --inputs … --require-hardware` on the Intel UHD 630/Vulkan: `add` = `[0,3,5]`, `difference` = `[4294967294,3,4294967294]`, N=1024 equal to `reference`, N=0 dispatch 0; both bit-exact with `avm-gpu reference` | `submit` timing includes first-use pipeline creation (150 ms); no async service or throughput claim |
+| G11 | implemented | `scripts/gpu-hardware-check` | `scripts/gpu-hardware-check` → device agrees with **C and IR** at sizes 0,1,63,64,65,127,128,129,1024 (22,414 elements over 14 entries); `add` at N=1,048,576 agrees with IR; guard/index/binding/profile mutations refused pre-submission; swapped-subtract and reversed-comparison source mutations disagree on device; unequal/arity/malformed/oversized inputs refused; Intel UHD 630/Vulkan, ~52 s | oversized **dispatch** (rather than oversized input) is exercised by `run::tests::preflight_refuses_limits_before_buffers` with injected adapter limits, not by the hardware script |
+| G12–G23 | pending | — | — | ordered extensions; CI wiring and release documentation open |
 
 ## Limitations
 
 - No task above claims GPU execution except where an adapter record exists; none
   does in this baseline.
-- `nvidia-smi` output is inventory evidence only. G09's probe currently
-  enumerates a Vulkan **Intel UHD Graphics 630** (integrated) adapter and does
-  not see the GTX 1060, so adapter evidence and OS inventory disagree; the
-  wgpu record is the one that counts. No dispatch/readback record exists, so
-  G10's execution acceptance remains open.
+- `nvidia-smi` output is inventory evidence only. G09/G10 enumerate a Vulkan
+  **Intel UHD Graphics 630** (integrated) adapter and do not see the GTX 1060,
+  so adapter evidence and OS inventory disagree; the wgpu record is the one
+  that counts. G10's dispatch/readback record is against that adapter.
+- G10 execution is reproducible with:
+  `AUSTRAL_GPU_CHECKER=$PWD/safestos/gpu/target/debug/avm-gpu _build/default/bin/austral.exe compile examples/gpu/pointwise/Pointwise.aui,examples/gpu/pointwise/Pointwise.aum --target-type=wgsl --entrypoint=Pointwise:add --output=/tmp/g10.avkg`
+  then `avm-gpu run /tmp/g10.avkg --inputs <file> --require-hardware` and
+  `avm-gpu reference` on the same input. Outputs agree; the JSON records the
+  actual backend/device, dispatch count and separate submit/readback timings.
 - wgpu/Naga device support is optional (`--features device`) and is not part of
   the default compiler build.

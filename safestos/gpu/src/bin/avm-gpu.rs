@@ -10,7 +10,7 @@ use std::path::Path;
 
 fn usage() -> i32 {
     eprintln!(
-        "usage:\n  avm-gpu validate BUNDLE\n  avm-gpu reference BUNDLE --inputs FILE\n  avm-gpu probe [--require-hardware]\n  avm-gpu run BUNDLE --inputs FILE [--require-hardware]"
+        "usage:\n  avm-gpu validate BUNDLE\n  avm-gpu reference BUNDLE --inputs FILE\n  avm-gpu probe [--require-hardware] [--list] [--adapter NAME | --adapter-index N]\n  avm-gpu run BUNDLE --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]"
     );
     2
 }
@@ -129,9 +129,23 @@ fn reference_command(dir: &str, inputs_path: &str) -> i32 {
 }
 
 #[cfg(feature = "device")]
-fn probe_command(require_hardware: bool) -> i32 {
+fn probe_command(
+    require_hardware: bool,
+    name: Option<String>,
+    index: Option<usize>,
+    list: bool,
+) -> i32 {
     use avm_gpu::device::{self, ProbeError};
-    match device::probe() {
+    let selection = &device::Selection { name, index };
+    if list {
+        let adapters = device::enumerate();
+        ok_json(serde_json::json!({
+            "status": "ok",
+            "adapters": adapters.iter().map(device::to_json).collect::<Vec<_>>(),
+        }));
+        return 0;
+    }
+    match device::probe(selection) {
         Ok(evidence) => {
             ok_json(serde_json::json!({
                 "status": "ok",
@@ -173,7 +187,12 @@ fn probe_command(require_hardware: bool) -> i32 {
 }
 
 #[cfg(not(feature = "device"))]
-fn probe_command(require_hardware: bool) -> i32 {
+fn probe_command(
+    require_hardware: bool,
+    _name: Option<String>,
+    _index: Option<usize>,
+    _list: bool,
+) -> i32 {
     if require_hardware {
         fail("no physical adapter is available to this build (feature `device`, G09)")
     } else {
@@ -186,16 +205,197 @@ fn probe_command(require_hardware: bool) -> i32 {
     }
 }
 
+#[cfg(feature = "device")]
+fn run_command(
+    dir: &str,
+    inputs_path: &str,
+    require_hardware: bool,
+    name: Option<String>,
+    index: Option<usize>,
+) -> i32 {
+    use avm_gpu::run::{run, RunFailure};
+    let selection = avm_gpu::device::Selection { name, index };
+    let loaded = match load(dir) {
+        Ok(l) => l,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_bundle(&loaded) {
+        return fail(&e);
+    }
+    let inputs = match read_inputs(inputs_path) {
+        Ok(i) => i,
+        Err(e) => return fail(&e),
+    };
+    match run(&loaded, &inputs, require_hardware, &selection) {
+        Ok(result) => {
+            let device = avm_gpu::device::to_json(&result.adapter);
+            ok_json(serde_json::json!({
+                "status": "ok",
+                "backend": "wgpu",
+                "numeric_profile": schema::NUMERIC_PROFILE,
+                "entry": loaded.bundle.entry,
+                "input_arity": loaded.bundle.input_arity,
+                "ir_sha256": loaded.bundle.ir_sha256,
+                "wgsl_sha256": loaded.bundle.wgsl_sha256,
+                "device": device,
+                "dispatch_count": result.dispatch_count,
+                "elements": result.preflight.n,
+                "timing_ms": {
+                    "submit": result.submit_ms,
+                    "readback": result.readback_ms,
+                },
+                "output": result.output,
+            }));
+            0
+        }
+        Err(RunFailure::Unavailable(message)) => {
+            if require_hardware {
+                fail(&format!("no physical adapter is available: {message}"))
+            } else {
+                ok_json(serde_json::json!({
+                    "status": "gap",
+                    "device_kind": "unavailable",
+                    "message": message,
+                }));
+                77
+            }
+        }
+        Err(RunFailure::Refused(message)) => fail(&message),
+    }
+}
+
+#[cfg(not(feature = "device"))]
+fn run_command(
+    _dir: &str,
+    _inputs_path: &str,
+    require_hardware: bool,
+    _name: Option<String>,
+    _index: Option<usize>,
+) -> i32 {
+    if require_hardware {
+        fail("device execution is not built into this crate (feature `device`, G10)")
+    } else {
+        ok_json(serde_json::json!({
+            "status": "gap",
+            "device_kind": "unavailable",
+            "message": "device execution is not built into this crate (feature `device`, G10)",
+        }));
+        77
+    }
+}
+
+/// Parses the flags shared by `probe` and `run`. Returns
+/// `(require_hardware, adapter_name, adapter_index, list)`. `--inputs` is
+/// accepted here so `run` can reuse the parser; its value is skipped.
+type DeviceFlags = (bool, Option<String>, Option<usize>, bool);
+
+fn parse_device_flags(args: &[String]) -> Result<DeviceFlags, String> {
+    let mut require = false;
+    let mut list = false;
+    let mut name: Option<String> = None;
+    let mut index: Option<usize> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--require-hardware" => require = true,
+            "--list" => list = true,
+            "--inputs" => {
+                if args.get(i + 1).is_none() {
+                    return Err("--inputs needs a value".to_string());
+                }
+                i += 1;
+            }
+            "--adapter" => {
+                i += 1;
+                let value = args.get(i).ok_or("--adapter needs a value")?;
+                if index.is_some() {
+                    return Err("--adapter and --adapter-index are exclusive".to_string());
+                }
+                if value.trim().is_empty() {
+                    return Err("adapter name selector is empty".to_string());
+                }
+                name = Some(value.clone());
+            }
+            "--adapter-index" => {
+                i += 1;
+                let raw = args.get(i).ok_or("--adapter-index needs a value")?;
+                if name.is_some() {
+                    return Err("--adapter and --adapter-index are exclusive".to_string());
+                }
+                index = Some(
+                    raw.parse::<usize>()
+                        .map_err(|_| format!("--adapter-index {raw:?} is not an index"))?,
+                );
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option {other:?}")),
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok((require, name, index, list))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = match args.as_slice() {
-        [cmd] if cmd == "probe" => probe_command(false),
-        [cmd, flag] if cmd == "probe" && flag == "--require-hardware" => probe_command(true),
-        _ => match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-            ["validate", dir] => validate_command(dir),
-            ["reference", dir, "--inputs", inputs] => reference_command(dir, inputs),
-            _ => usage(),
-        },
+    let device_subcommand = matches!(args.first().map(String::as_str), Some("probe" | "run"));
+    let (require, adapter_name, adapter_index, list) = if device_subcommand {
+        match parse_device_flags(&args[1..]) {
+            Ok(flags) => flags,
+            Err(message) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({ "status": "error", "message": message })
+                );
+                std::process::exit(2);
+            }
+        }
+    } else {
+        (false, None, None, false)
+    };
+    let code = match args.first().map(String::as_str) {
+        Some("validate") if args.len() == 2 => validate_command(&args[1]),
+        Some("reference") if args.len() == 4 && args[2] == "--inputs" => {
+            reference_command(&args[1], &args[3])
+        }
+        Some("probe") => {
+            if list && require {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"status": "error", "message": "--list and --require-hardware are exclusive"})
+                );
+                2
+            } else {
+                probe_command(require, adapter_name, adapter_index, list)
+            }
+        }
+        Some("run") => {
+            let mut positional = Vec::new();
+            let mut i = 1;
+            let mut inputs = None;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--inputs" | "--adapter" | "--adapter-index" => {
+                        if args[i].as_str() == "--inputs" {
+                            inputs = args.get(i + 1).cloned();
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    flag if flag.starts_with("--") => {}
+                    other => positional.push(other.to_string()),
+                }
+                i += 1;
+            }
+            match (positional.as_slice(), inputs) {
+                ([dir], Some(inputs)) => {
+                    run_command(dir, &inputs, require, adapter_name, adapter_index)
+                }
+                _ => usage(),
+            }
+        }
+        _ => usage(),
     };
     std::process::exit(code);
 }
+
+

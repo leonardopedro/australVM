@@ -16,6 +16,8 @@ pub struct AdapterEvidence {
     pub physical: bool,
     pub max_workgroup_size_x: u32,
     pub max_buffer_size: u64,
+    pub max_storage_buffer_binding_size: u64,
+    pub max_compute_workgroups_per_dimension: u32,
 }
 
 #[derive(Debug)]
@@ -37,20 +39,43 @@ fn classify(device_type: DeviceType) -> (String, bool) {
     }
 }
 
-pub fn probe() -> Result<AdapterEvidence, ProbeError> {
+/// An explicit, validated adapter choice. The empty selection is wgpu's own
+/// default (`request_adapter`); a name or index makes the choice deliberate
+/// instead of depending on backend enumeration order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    /// Case-insensitive substring of the adapter name.
+    pub name: Option<String>,
+    /// Position in `enumerate_adapters`, as printed by `probe --list`.
+    pub index: Option<usize>,
+}
+
+impl Selection {
+    pub fn is_default(&self) -> bool {
+        self.name.is_none() && self.index.is_none()
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(name) = &self.name {
+            if name.trim().is_empty() {
+                return Err("adapter name selector is empty".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+fn instance() -> Instance {
     let mut desc = InstanceDescriptor::new_without_display_handle();
     desc.backends = Backends::VULKAN | Backends::GL | Backends::METAL | Backends::DX12;
-    let instance = Instance::new(desc);
-    let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
-        power_preference: PowerPreference::None,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-    }))
-    .map_err(|e| ProbeError::Unavailable(format!("no adapter: {e}")))?;
+    Instance::new(desc)
+}
+
+fn evidence_for(adapter: &wgpu::Adapter) -> AdapterEvidence {
     let info = adapter.get_info();
     let limits = adapter.limits();
     let (device_type, physical) = classify(info.device_type);
-    let evidence = AdapterEvidence {
+    AdapterEvidence {
         backend: format!("{:?}", info.backend),
         name: info.name,
         vendor: info.vendor,
@@ -59,8 +84,113 @@ pub fn probe() -> Result<AdapterEvidence, ProbeError> {
         physical,
         max_workgroup_size_x: limits.max_compute_workgroup_size_x,
         max_buffer_size: limits.max_buffer_size,
+        max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
+        max_compute_workgroups_per_dimension: limits.max_compute_workgroups_per_dimension,
+    }
+}
+
+/// All adapters the instance can see, in the order `--adapter-index` refers to.
+pub fn enumerate() -> Vec<AdapterEvidence> {
+    let instance = instance();
+    pollster::block_on(instance.enumerate_adapters(instance_backends()))
+        .iter()
+        .map(evidence_for)
+        .collect()
+}
+
+fn instance_backends() -> Backends {
+    Backends::VULKAN | Backends::GL | Backends::METAL | Backends::DX12
+}
+
+/// Enumerate and return an adapter plus its classified evidence. `probe` and
+/// the runner both go through this, so they cannot disagree about the adapter.
+pub(crate) fn request(
+    selection: &Selection,
+) -> Result<(wgpu::Adapter, AdapterEvidence), ProbeError> {
+    selection.validate().map_err(ProbeError::Failed)?;
+    let instance = instance();
+    if selection.is_default() {
+        let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::None,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .map_err(|e| ProbeError::Unavailable(format!("no adapter: {e}")))?;
+        let evidence = evidence_for(&adapter);
+        return Ok((adapter, evidence));
+    }
+
+    let adapters = pollster::block_on(instance.enumerate_adapters(instance_backends()));
+    if adapters.is_empty() {
+        return Err(ProbeError::Unavailable("no adapter: enumeration returned none".to_string()));
+    }
+    let all = adapters
+        .iter()
+        .map(evidence_for)
+        .collect::<Vec<_>>();
+    let chosen = match (&selection.name, selection.index) {
+        (Some(name), index) => {
+            let needle = name.to_ascii_lowercase();
+            let matches = all
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.name.to_ascii_lowercase().contains(&needle))
+                .collect::<Vec<_>>();
+            let (i, evidence) = match matches.as_slice() {
+                [(i, e)] => (*i, *e),
+                [] => {
+                    return Err(ProbeError::Failed(format!(
+                        "no adapter matches {name:?}; available: {}",
+                        describe(&all)
+                    )))
+                }
+                many => {
+                    return Err(ProbeError::Failed(format!(
+                        "adapter selector {name:?} is ambiguous ({} matches: {}); use --adapter-index",
+                        many.len(),
+                        describe(&all)
+                    )))
+                }
+            };
+            if let Some(index) = index {
+                if index != i {
+                    return Err(ProbeError::Failed(format!(
+                        "adapter selector {name:?} is adapter {i}, not index {index}"
+                    )));
+                }
+            }
+            evidence
+        }
+        (None, Some(index)) => match all.get(index) {
+            Some(evidence) => evidence,
+            None => {
+                return Err(ProbeError::Failed(format!(
+                    "adapter index {index} is out of range for {} adapter(s): {}",
+                    all.len(),
+                    describe(&all)
+                )))
+            }
+        },
+        (None, None) => unreachable!("the default selection returned above"),
     };
-    if physical {
+    let position = all
+        .iter()
+        .position(|e| e.name == chosen.name && e.backend == chosen.backend)
+        .expect("enumerated evidence belongs to an enumerated adapter");
+    Ok((adapters[position].clone(), chosen.clone()))
+}
+
+fn describe(all: &[AdapterEvidence]) -> String {
+    all.iter()
+        .enumerate()
+        .map(|(i, e)| format!("{i}: {} ({}, {})", e.name, e.backend, e.device_type))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+pub fn probe(selection: &Selection) -> Result<AdapterEvidence, ProbeError> {
+    let (_adapter, evidence) = request(selection)?;
+    if evidence.physical {
         Ok(evidence)
     } else {
         Err(ProbeError::NotPhysical(evidence))
@@ -90,5 +220,60 @@ pub fn to_json(e: &AdapterEvidence) -> serde_json::Value {
         "device_type": e.device_type,
         "max_compute_workgroup_size_x": e.max_workgroup_size_x,
         "max_buffer_size": e.max_buffer_size,
+        "max_storage_buffer_binding_size": e.max_storage_buffer_binding_size,
+        "max_compute_workgroups_per_dimension": e.max_compute_workgroups_per_dimension,
     })
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn empty_name_is_refused_and_default_is_explicit() {
+        assert!(Selection::default().is_default());
+        assert!(Selection {
+            name: Some(" ".to_string()),
+            index: None
+        }
+        .validate()
+        .is_err());
+        assert!(Selection {
+            name: Some("nvidia".to_string()),
+            index: None
+        }
+        .validate()
+        .is_ok());
+        assert!(!Selection {
+            name: None,
+            index: Some(0)
+        }
+        .is_default());
+    }
+
+    #[test]
+    fn describe_numbers_each_adapter() {
+        let all = vec![
+            evidence("Intel", "Vulkan"),
+            evidence("NVIDIA GeForce GTX 1060", "Vulkan"),
+        ];
+        let text = describe(&all);
+        assert!(text.starts_with("0: Intel (Vulkan"));
+        assert!(text.contains("1: NVIDIA GeForce GTX 1060 (Vulkan"));
+    }
+
+    fn evidence(name: &str, backend: &str) -> AdapterEvidence {
+        AdapterEvidence {
+            backend: backend.to_string(),
+            name: name.to_string(),
+            vendor: 0,
+            device: 0,
+            device_type: "integrated-gpu".to_string(),
+            physical: true,
+            max_workgroup_size_x: 64,
+            max_buffer_size: 1 << 20,
+            max_storage_buffer_binding_size: 1 << 20,
+            max_compute_workgroups_per_dimension: 1024,
+        }
+    }
 }
