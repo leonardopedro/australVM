@@ -1,0 +1,486 @@
+#!/usr/bin/env python3
+"""G11: hardware corpus and mutation controls for the GPU backend.
+
+The source corpus in `examples/gpu/pointwise` is compiled three ways for the
+array sizes 0,1,63,64,65,127,128,129,1024:
+
+  * the ordinary C backend runs the same functions over the same vectors,
+  * the generated WGSL bundle runs on the recorded device
+    (`avm-gpu run --require-hardware`), and
+  * the validated KernelIR is evaluated by `avm-gpu reference`.
+
+The C and IR oracles must agree with the device, element for element. The
+release maximum (1048576) is a separate bounded stress case for `add`.
+
+Structural controls mutate a scratch bundle and must be refused before
+submission (digests are recomputed so the intended check, not a stale hash,
+is what fires):
+
+  * guard removed from the wrapper,
+  * output write index replaced with a colliding constant,
+  * binding order changed in `requirements`,
+  * numeric profile changed.
+
+Semantic controls mutate a scratch source copy, compile it, and run it: the
+device result must disagree with the unmutated expected vector.
+
+Exit 0 = all required-hardware checks passed. Exit 77 = no adapter or the
+`device` feature is absent (a gap, never a pass). Exit 1 = a control did not
+fire or the corpus disagreed.
+
+Usage:
+  scripts/gpu-hardware-check [--compiler PATH] [--checker PATH]
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "examples/gpu/pointwise"
+MAX = 1048576
+SIZES = [0, 1, 63, 64, 65, 127, 128, 129, 1024]
+U32 = 0xFFFFFFFF
+SEED = 20261118
+
+ENTRIES = {
+    "identity": 1,
+    "clamp": 1,
+    "invert": 1,
+    "twice": 1,
+    "addConstant": 1,
+    "minimum": 2,
+    "difference": 2,
+    "add": 2,
+    "multiply": 2,
+    "bitAnd": 2,
+    "bitOr": 2,
+    "bitXor": 2,
+    "mask": 2,
+    "polynomial": 2,
+}
+
+
+def lcg(state):
+    return (state * 1664525 + 1013904223) & U32
+
+
+def env():
+    e = dict(os.environ)
+    bridge = ROOT / "safestos/cranelift/target/release"
+    e["LD_LIBRARY_PATH"] = f"{ROOT}:{bridge}:" + e.get("LD_LIBRARY_PATH", "")
+    return e
+
+
+def run(cmd, e=None, timeout=180):
+    return subprocess.run(
+        [str(c) for c in cmd],
+        env=e or env(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def make_vectors(n, state):
+    """Deterministic (x,y) vectors for all entries, one shared stream."""
+    out = {}
+    for name, arity in ENTRIES.items():
+        xs = []
+        ys = []
+        for _ in range(n):
+            state = lcg(state)
+            xs.append(state)
+            if arity == 2:
+                state = lcg(state)
+                ys.append(state)
+        out[name] = (xs, ys) if arity == 2 else (xs,)
+    return out, state
+
+
+def driver_source(vectors, n):
+    lines = ["import Pointwise ("]
+    names = list(ENTRIES)
+    lines += [f"    {name}," for name in names]
+    lines[-1] = lines[-1].rstrip(",") + "\n);\n"
+    lines += ["", "module body GpuArrayDriver is", "    function main(): ExitCode is"]
+    for name, arity in ENTRIES.items():
+        args = vectors[name]
+        for i in range(n):
+            call = f"{name}({args[0][i]}" + (f", {args[1][i]}" if arity == 2 else "") + ")"
+            lines.append(f"        printLn({call});")
+    lines += ["        return ExitSuccess();", "    end;", "end module body.", ""]
+    return "\n".join(lines)
+
+
+def compile_c(compiler, tmp, vectors, n):
+    driver = tmp / "GpuArrayDriver.aum"
+    driver.write_text(driver_source(vectors, n))
+    exe = tmp / "driver"
+    proc = run(
+        [
+            compiler,
+            "compile",
+            f"{FIXTURE/'Pointwise.aui'},{FIXTURE/'Pointwise.aum'}",
+            driver,
+            "--target-type=exe",
+            "--entrypoint=GpuArrayDriver:main",
+            f"--output={exe}",
+        ]
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"C driver did not compile (N={n}):\n{proc.stderr or proc.stdout}")
+    out = run([exe])
+    if out.returncode != 0:
+        raise RuntimeError(f"C driver failed (N={n}, exit {out.returncode}):\n{out.stderr}")
+    values = [int(v) for v in out.stdout.split()]
+    expected = len(ENTRIES) * n
+    if len(values) != expected:
+        raise RuntimeError(f"C driver printed {len(values)} values, expected {expected} at N={n}")
+    slices = {}
+    at = 0
+    for name in ENTRIES:
+        slices[name] = values[at : at + n]
+        at += n
+    return slices
+
+
+def compile_bundle(compiler, checker, tmp, entry):
+    bundle = tmp / f"{entry}.avkg"
+    shutil.rmtree(bundle, ignore_errors=True)
+    e = env()
+    e["AUSTRAL_GPU_CHECKER"] = str(checker)
+    proc = run(
+        [
+            compiler,
+            "compile",
+            f"{FIXTURE/'Pointwise.aui'},{FIXTURE/'Pointwise.aum'}",
+            "--target-type=wgsl",
+            f"--entrypoint=Pointwise:{entry}",
+            f"--output={bundle}",
+        ],
+        e,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"GPU compile failed for {entry}:\n{proc.stderr or proc.stdout}")
+    return bundle
+
+
+def write_inputs(tmp, vectors, name, n, suffix=""):
+    inp = tmp / f"{name}-{n}{suffix}.inputs.json"
+    inp.write_text(json.dumps({"inputs": vectors[name]}))
+    return inp
+
+
+def gpu_output(checker, bundle, inp, require=True, timeout=180):
+    cmd = [checker, "run", bundle, "--inputs", inp]
+    if require:
+        cmd.append("--require-hardware")
+    proc = run(cmd, timeout=timeout)
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"run produced no JSON (exit {proc.returncode}):\n{proc.stderr}")
+    if proc.returncode != 0 or payload.get("status") != "ok":
+        raise RuntimeError(f"run failed: {payload.get('message', proc.stderr)}")
+    return payload
+
+
+def ref_output(checker, bundle, inp):
+    proc = run([checker, "reference", bundle, "--inputs", inp])
+    if proc.returncode != 0:
+        raise RuntimeError(f"reference failed:\n{proc.stderr}")
+    return json.loads(proc.stdout)["output"]
+
+
+def sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def fresh_copy(bundle, tmp, name):
+    dest = tmp / name
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(bundle, dest)
+    return dest
+
+
+def rehash_wgsl(bundle):
+    meta = json.loads((bundle / "kernel.json").read_text())
+    meta["wgsl_sha256"] = sha256(bundle / "kernel.wgsl")
+    (bundle / "kernel.json").write_text(json.dumps(meta))
+
+
+def validate(checker, bundle):
+    return run([checker, "validate", bundle])
+
+
+def structural_controls(checker, add_bundle, tmp, failures):
+    controls = [
+        (
+            "guard removed",
+            "wgsl",
+            "    if (i >= arrayLength(&input0)) { return; }\n",
+            "    if (false) { return; }\n",
+            "bounds guard",
+        ),
+        (
+            "colliding output index",
+            "wgsl",
+            "    output0[i] = scalar_entry(input0[i], input1[i]);\n",
+            "    output0[0] = scalar_entry(input0[i], input1[i]);\n",
+            "output",
+        ),
+    ]
+    for label, kind, old, new, needle in controls:
+        bundle = fresh_copy(add_bundle, tmp, "ctl-" + label.replace(" ", "-"))
+        wgsl = (bundle / "kernel.wgsl").read_text()
+        if old not in wgsl:
+            failures.append(f"structural control {label}: mutation pattern absent")
+            continue
+        mutated = wgsl.replace(old, new, 1)
+        if mutated == wgsl:
+            failures.append(f"structural control {label}: mutation changed nothing")
+            continue
+        (bundle / "kernel.wgsl").write_text(mutated)
+        rehash_wgsl(bundle)
+        proc = validate(checker, bundle)
+        text = proc.stdout + proc.stderr
+        if proc.returncode == 0:
+            failures.append(f"structural control {label}: validate accepted the bundle")
+        elif needle not in text:
+            failures.append(f"structural control {label}: refused for the wrong reason: {text.strip()}")
+        else:
+            print(f"[pass] G11 structural control refused before submission: {label}")
+
+    meta_controls = [
+        (
+            "binding order changed",
+            lambda m: m["requirements"]["bindings"][0].__setitem__("binding", 1),
+            "binding 0 is not group 0 binding 0",
+        ),
+        (
+            "numeric profile changed",
+            lambda m: m.__setitem__("numeric_profile", "f32"),
+            "numeric_profile",
+        ),
+    ]
+    for label, mutate, needle in meta_controls:
+        bundle = fresh_copy(add_bundle, tmp, "ctl-" + label.replace(" ", "-"))
+        meta = json.loads((bundle / "kernel.json").read_text())
+        before = json.dumps(meta, sort_keys=True)
+        mutate(meta)
+        if json.dumps(meta, sort_keys=True) == before:
+            failures.append(f"structural control {label}: mutation changed nothing")
+            continue
+        (bundle / "kernel.json").write_text(json.dumps(meta))
+        proc = validate(checker, bundle)
+        text = proc.stdout + proc.stderr
+        if proc.returncode == 0:
+            failures.append(f"structural control {label}: validate accepted the bundle")
+        elif needle not in text:
+            failures.append(f"structural control {label}: refused for the wrong reason: {text.strip()}")
+        else:
+            print(f"[pass] G11 structural control refused before submission: {label}")
+
+
+def semantic_controls(compiler, checker, tmp, add_bundle, failures):
+    controls = [
+        ("subtraction operands swapped", "difference", "modularSubtract(x, y)", "modularSubtract(y, x)"),
+        ("comparison reversed", "minimum", "if x < y then", "if x > y then"),
+    ]
+    n = 65
+    vectors, _ = make_vectors(n, 4242)
+    for label, entry, old, new in controls:
+        aum = (FIXTURE / "Pointwise.aum").read_text()
+        if old not in aum:
+            failures.append(f"semantic control {label}: mutation pattern absent")
+            continue
+        mutated = aum.replace(old, new, 1)
+        if mutated == aum:
+            failures.append(f"semantic control {label}: mutation changed nothing")
+            continue
+        mut = tmp / ("mut-" + entry)
+        mut.mkdir()
+        me = tmp / "mut-src"
+        me.mkdir(exist_ok=True)
+        (me / "Pointwise.aui").write_text((FIXTURE / "Pointwise.aui").read_text())
+        (me / "Pointwise.aum").write_text(mutated)
+        bundle = mut / f"{entry}.avkg"
+        e = env()
+        e["AUSTRAL_GPU_CHECKER"] = str(checker)
+        proc = run(
+            [
+                compiler,
+                "compile",
+                f"{me/'Pointwise.aui'},{me/'Pointwise.aum'}",
+                "--target-type=wgsl",
+                f"--entrypoint=Pointwise:{entry}",
+                f"--output={bundle}",
+            ],
+            e,
+        )
+        if proc.returncode != 0:
+            failures.append(f"semantic control {label}: mutated source did not compile: {proc.stderr}")
+            continue
+        inp = write_inputs(tmp, vectors, entry, n, "-mut")
+        try:
+            got = gpu_output(checker, bundle, inp)["output"]
+            baseline = gpu_output(checker, add_bundle if entry == "add" else tmp / f"{entry}.avkg", inp)["output"]
+        except RuntimeError as exc:
+            failures.append(f"semantic control {label}: {exc}")
+            continue
+        diff = [i for i, (a, b) in enumerate(zip(got, baseline)) if a != b]
+        if not diff:
+            failures.append(f"semantic control {label}: device result did not change")
+        else:
+            print(f"[pass] G11 semantic control detected on device: {label} ({len(diff)} of {n} elements)")
+
+
+def preflight_controls(checker, add_bundle, identity_bundle, tmp, failures):
+    cases = [
+        ("unequal lengths", add_bundle, {"inputs": [[1, 2], [3]]}, "unequal"),
+        ("wrong arity", add_bundle, {"inputs": [[1, 2]]}, "input arity"),
+    ]
+    for label, bundle, payload, needle in cases:
+        inp = tmp / f"pre-{label.replace(' ', '-')}.json"
+        inp.write_text(json.dumps(payload))
+        proc = run([checker, "run", bundle, "--inputs", inp, "--require-hardware"])
+        text = proc.stdout + proc.stderr
+        if proc.returncode == 0:
+            failures.append(f"preflight control {label}: run accepted the request")
+        elif needle not in text:
+            failures.append(f"preflight control {label}: wrong refusal: {text.strip()}")
+        else:
+            print(f"[pass] G11 preflight control refused before submission: {label}")
+
+    malformed = tmp / "pre-malformed.json"
+    malformed.write_text('{"inputs":[[1,2]')
+    proc = run([checker, "run", add_bundle, "--inputs", malformed, "--require-hardware"])
+    text = proc.stdout + proc.stderr
+    if proc.returncode == 0:
+        failures.append("preflight control malformed JSON: run accepted the request")
+    elif "strict" not in text:
+        failures.append(f"preflight control malformed JSON: wrong refusal: {text.strip()}")
+    else:
+        print("[pass] G11 preflight control refused before submission: malformed JSON")
+
+    over = tmp / "pre-over.json"
+    over.write_text(json.dumps({"inputs": [[0] * (MAX + 1)]}))
+    proc = run([checker, "run", identity_bundle, "--inputs", over, "--require-hardware"], timeout=300)
+    text = proc.stdout + proc.stderr
+    if proc.returncode == 0:
+        failures.append("preflight control oversized input: run accepted the request")
+    elif "release limit" not in text:
+        failures.append(f"preflight control oversized input: wrong refusal: {text.strip()}")
+    else:
+        print("[pass] G11 preflight control refused before submission: oversized input")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--compiler", default=str(ROOT / "_build/default/bin/austral.exe"))
+    ap.add_argument("--checker", default=str(ROOT / "safestos/gpu/target/debug/avm-gpu"))
+    args = ap.parse_args()
+
+    compiler = Path(args.compiler)
+    checker = Path(args.checker)
+    for path, what in ((compiler, "compiler"), (checker, "checker")):
+        if not path.exists():
+            print(f"[fail] G11 {what} not built: {path}")
+            return 1
+
+    probe = run([checker, "probe"])
+    if probe.returncode == 77:
+        print(
+            "[gap] G11 no adapter or `device` feature; hardware corpus not run "
+            "(build with `cargo build --features device` in safestos/gpu)"
+        )
+        return 77
+    if probe.returncode != 0:
+        print(f"[fail] G11 probe failed: {probe.stdout.strip()} {probe.stderr.strip()}")
+        return 1
+    payload = json.loads(probe.stdout)
+    if payload.get("device_kind") != "physical":
+        print(f"[gap] G11 adapter is not physical: {payload.get('device_kind')}")
+        return 77
+    device = payload["device"]
+    print(
+        f"[info] G11 device: {device['backend']} {device['name']} "
+        f"({device['device_type']}, vendor {device['vendor']})"
+    )
+
+    failures = []
+    with tempfile.TemporaryDirectory(prefix="avm-g11-") as td:
+        tmp = Path(td)
+        try:
+            bundles = {name: compile_bundle(compiler, checker, tmp, name) for name in ENTRIES}
+        except RuntimeError as exc:
+            print(f"[fail] G11 {exc}")
+            return 1
+
+        checked = 0
+        state = SEED
+        for n in SIZES:
+            vectors, state = make_vectors(n, state)
+            try:
+                cvals = compile_c(compiler, tmp, vectors, n)
+            except RuntimeError as exc:
+                failures.append(str(exc))
+                continue
+            for name in ENTRIES:
+                inp = write_inputs(tmp, vectors, name, n)
+                try:
+                    got = gpu_output(checker, bundles[name], inp)["output"]
+                    ref = ref_output(checker, bundles[name], inp)
+                except RuntimeError as exc:
+                    failures.append(str(exc))
+                    continue
+                if got != ref:
+                    failures.append(f"N={n} {name}: device disagrees with reference")
+                    continue
+                if got != cvals[name]:
+                    failures.append(f"N={n} {name}: device disagrees with C")
+                    continue
+                checked += len(got)
+        if not failures:
+            print(
+                f"[pass] G11 device agrees with C and IR at sizes {SIZES} "
+                f"({checked} elements over {len(ENTRIES)} entries)"
+            )
+
+        # Bounded stress at the release maximum: device vs IR for `add`.
+        try:
+            n = MAX
+            vectors, _ = make_vectors(n, 99)
+            inp = write_inputs(tmp, vectors, "add", n)
+            got = gpu_output(checker, bundles["add"], inp, timeout=300)["output"]
+            ref = ref_output(checker, bundles["add"], inp)
+            if got != ref:
+                failures.append(f"N={MAX} add: device disagrees with reference")
+            elif len(got) != n:
+                failures.append(f"N={MAX} add: expected {n} elements, got {len(got)}")
+            else:
+                print(f"[pass] G11 release-maximum stress add N={MAX} agrees with IR")
+        except RuntimeError as exc:
+            failures.append(f"max stress: {exc}")
+
+        structural_controls(checker, bundles["add"], tmp, failures)
+        semantic_controls(compiler, checker, tmp, bundles["add"], failures)
+        preflight_controls(checker, bundles["add"], bundles["identity"], tmp, failures)
+
+    if failures:
+        for f in failures:
+            print(f"[fail] G11 {f}")
+        return 1
+    print(f"[pass] G11 required-hardware corpus and all controls on {device['name']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
