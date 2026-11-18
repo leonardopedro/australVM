@@ -1,0 +1,31 @@
+-- U11 golden fixture: every foreign signature here needs the generated adapter
+-- wrapper, so compiling it with --emit-adapters must produce exactly
+-- `adapters.golden`. The two word-native shapes below must produce nothing:
+-- they keep their declared symbol and call the native function directly.
+pragma Unsafe_Module;
+
+module body Adapters is
+    pragma Foreign_Import(External_Name => "rs_scale");
+    pragma Rust_Ownership(Params => "owned, owned", Return => "owned");
+    function rs_scale(factor: Float64, value: Int64): Float64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_narrow");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_narrow(width: Int32): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_toggle");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_toggle(on: Bool): Bool is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_word_native");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_word_native(x: Int64): Int64 is
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

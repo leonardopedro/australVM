@@ -12,6 +12,9 @@ val empty_compiler : compiler
 
 val compiler_code : compiler -> string
 
+(** The environment after the builtins and any compiled modules. *)
+val cenv : compiler -> Env.env
+
 type module_source =
   | TwoFileModuleSource of {
       int_filename: string;
@@ -24,6 +27,24 @@ type module_source =
       body_code: string
     }
 
+(** A module that passed the ordinary checked frontend (parse/combine, return
+    check, desugaring, extraction, typing, plugins, linearity, body extraction
+    and monomorphization). Used by non-C backends so they consume the same
+    checked program as the C/CPS paths. *)
+type prepared_module = {
+  prepared_env : Env.env;
+  prepared_name : module_name;
+  prepared_typed : Stages.Tast.typed_module;
+  prepared_mono : Stages.Mtast.mono_module;
+}
+
+(** Run the shared checked-frontend stages once. [after_typing] runs between
+    linearity checking and body extraction (opt-in passes only). *)
+val prepare_module :
+  ?after_typing:(Stages.Tast.typed_module -> unit) ->
+  Env.env -> module_source ->
+  Env.env * prepared_module
+
 val compile_mod : compiler -> module_source -> compiler
 
 val compile_multiple : compiler -> module_source list -> compiler
@@ -35,6 +56,10 @@ val post_compile : compiler -> compiler
 val use_cps_jit : bool ref
 val jit_server_mode : bool ref
 val emit_cps_path : string option ref
+
+(** U11: where to write the canonical adapter descriptors the CPS lowering
+    requires, in the form `umbrella/src/interface.rs` parses. *)
+val emit_adapters_path : string option ref
 
 (** avm-pkg: run the package totality pass on every compiled module. *)
 val pkg_totality : bool ref

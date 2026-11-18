@@ -306,6 +306,9 @@ lane as required cases, so neither can silently shrink:
 | `SUITE_UMBRELLA_ENTRY` | `cargo test --test entry` (U04 strict entry from the umbrella side) | 4 |
 | `SUITE_UMBRELLA_CARGO` | `cargo test --test cargo_select` (U05 selection and explicit build options over a real fixture-workspace stream) | 5 |
 | `SUITE_ADAPTERS` | `cargo test --lib adapters --release` (U11 scalar word encoding) | 9 |
+| `SUITE_SCALAR_ABI` | `cargo test --test scalar_abi --release` (U11 scalar encoding across the C ABI) | 6 |
+| `SUITE_UMBRELLA_INTERFACE` | `cargo test --test interface` (U10 descriptor + generated wrapper typecheck) | 5 |
+| `SUITE_PROCESS` | `cargo test --lib process::tests` (U06 bounded child runner) | 6 |
 
 `SUITES` entries now carry a fourth field saying whether the run uses
 `--release`. The bridge suites keep `--release` (they reuse existing release
@@ -321,6 +324,28 @@ Evidence: `nix develop "git+file://$PWD#ocaml" -c python3 scripts/test-umbrella
 0 fail, 0 gap`, exit 0; `--case SUITE_UMBRELLA_CARGO` → `1 pass`, exit 0 (first run also builds the umbrella debug test binaries;
 a dependency's `mathhook-core` build script takes ~7 min of CPU once).
 
+## U10 — versioned adapter descriptor and generated wrapper (bounded start)
+
+U10 depends on U07/U08, which do not exist, so this patch is the part that
+stands on its own: the descriptor schema, its canonical text form, and a
+wrapper generator whose output is actually compiled. Admission side-effects
+(provider digests, modhost checks) are not in this slice.
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `umbrella/src/interface.rs` | **new.** `DESCRIPTOR_SCHEMA = 1`, `ADAPTER_ABI_VERSION = 1`, `Scalar` (the eight scalar classes), `Adapter { schema, abi_version, symbol, target, params, returns }`, `validate`, canonical `descriptor_text`/`parse_descriptor`, and `render_wrapper`, which emits a `#[no_mangle] extern "C" fn <symbol>(word0: u64, …) -> u64` that decodes each argument with the bridge adapters, calls the native function with its real typed signature, and encodes the result. Unsupported types (`Span`, records, references) are refused with guidance; `Unit` in either position is refused because it has no word. |
+| `umbrella/src/lib.rs` | `pub mod interface;` |
+| `umbrella/tests/fixtures/adapters/rs_scale.{descriptor,wrapper.rs}` | golden descriptor and wrapper, regenerable with `UPDATE_GOLDEN=1`. |
+| `umbrella/tests/interface.rs` | **new** 5 tests: the descriptor's encoding version equals the bridge's, the golden descriptor roundtrips byte-identically, the generated wrapper **typechecks with `rustc` against the bridge rlib**, a wrapper whose call drops an argument **must fail** to compile (the control), and a mismatched encoding version cannot render. |
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U10 descriptor + generator | ABI03, API03 | started (schema + generator + typecheck) | git `7f094b5a2457`; rustc 1.99.0; umbrella `86ff19e4…` | `cd umbrella && cargo test --offline --test interface` → 5 passed (the typecheck runs `rustc --emit=metadata` against the bridge rlib); `cargo test --offline --lib interface` → 7 passed; harness case `SUITE_UMBRELLA_INTERFACE` pins the 5 | the descriptor text is canonical and roundtrips byte-identically; the generated wrapper is compiled by rustc, not merely compared as text; the deliberately broken wrapper (one argument instead of two) is rejected with E0061, so the typecheck can fail; an `abi_version` of 99 is refused with the version named; `Span` is refused with "only scalars cross a descriptor … need a buffer or a versioned layout" | no compiler emission (CPS/`--emit-cps` does not carry a descriptor), no provider digest, no `modhost` admission check, no generation of Austral declarations, and no runtime wiring: the wrapper exists as generated source plus goldens. Lifetimes, variadics, aggregates and non-scalar returns are refused rather than supported. The typecheck depends on `umbrella/target/debug` artifacts, so it is a build-shape check in the dev profile only. |
+
 ## U11 — versioned scalar adapters (bounded start)
 
 U11 depends on U10, which does not exist yet, so this patch is the part that
@@ -334,10 +359,199 @@ they would produce is exactly the guess U04 banned.
 | Path | Change |
 |---|---|
 | `safestos/cranelift/src/adapters.rs` | **new.** `SCALAR_ABI_VERSION = 1`, `ScalarType::{Unit,Bool,I32,U32,I64,U64,F32,F64}`, `ScalarValue`, `encode`/`decode`, checked `narrow_i64`, and `AdapterError` that names the type and the offending word. Integers are extended on the way out (sign for I32, zero for U32) and **checked** on the way in; `Bool` is a tag and only 0/1 are valid; floats are **bit-preserving** (`to_bits`/`from_bits`, never an `as i64` cast) so `-0.0`, infinities and NaN payloads survive; `Unit` has no word at all. |
+| `safestos/cranelift/src/adapters.rs` (C ABI) | `au_scalar_abi_version`, `au_scalar_encode`, `au_scalar_decode`, `au_scalar_type_tag` — the encoding across the bridge's C surface: numeric type tags 0–7, bit-pattern payloads, refusals via the last-error channel that never write their output pointer. Generated wrappers may call these instead of linking Rust enums. |
 | `safestos/cranelift/src/lib.rs` | `pub mod adapters;` |
+| `safestos/cranelift/tests/scalar_abi.rs` | **new** 6 tests of the exported surface: version, tag roundtrip, integer extension rules, bool tags, float bit patterns and garbage refusal, Unit and null-output refusal. |
 
 ### Ledger
 
 | Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
 |---|---|---|---|---|---|---|
-| U11 scalar codec | ABI04, ABI05 | implemented (definition + tests only) | git `7f094b5a2457`; rustc/cargo 1.99.0; bridge crate `safestos/cranelift` | `cd safestos/cranelift && cargo test --offline --lib adapters` → 9 passed; harness case `SUITE_ADAPTERS` pins those 9 | each scalar roundtrips through `encode`/`decode` **and** agrees with a direct call to a rustc-compiled `extern "C"` function (`i32*3`, `!bool`, `f64/2`, `mixed(i32,f64)->f64`); `-0.0` encodes as `0x8000…`, a NaN payload survives bit-for-bit and is explicitly asserted **not** equal to `x as i64`; bool tag 2, Int32 with garbage in the upper half, Nat32 with a bit above 31, Float32 with high bits and Unit-with-a-word are all refused with the type named; `narrow_i64` refuses out-of-range values instead of truncating | **not wired to any call path**: `lib/TypingPass.ml` still rejects Int32/Bool/Float64 at `rs_*` imports, and the bridge's entry path still admits only Int64, because a direct native call to a float-register ABI is the bug. Re-admission needs U10's versioned descriptor plus a generated wrapper that uses these adapters (U11 step 1's "generated adapter" half). No CPS opcode, `Cps_codec`, `ISA_REGISTRY` or corpus change is involved, so U11 step 3 is vacuously satisfied here. F32 arithmetic is only tested through the bit roundtrip, not a native `f32` call. The adapter is not exposed across the C ABI yet. |
+| U11 scalar codec | ABI04, ABI05 | implemented (definition + tests only) | git `7f094b5a2457`; rustc/cargo 1.99.0; bridge crate `safestos/cranelift` | `cd safestos/cranelift && cargo test --offline --lib adapters` → 9 passed; `cargo test --offline --test scalar_abi` → 6 passed; harness cases `SUITE_ADAPTERS` (9) and `SUITE_SCALAR_ABI` (6) pin both | each scalar roundtrips through `encode`/`decode` **and** agrees with a direct call to a rustc-compiled `extern "C"` function (`i32*3`, `!bool`, `f64/2`, `mixed(i32,f64)->f64`); `-0.0` encodes as `0x8000…`, a NaN payload survives bit-for-bit and is explicitly asserted **not** equal to `x as i64`; bool tag 2, Int32 with garbage in the upper half, Nat32 with a bit above 31, Float32 with high bits and Unit-with-a-word are all refused with the type named; `narrow_i64` refuses out-of-range values instead of truncating | **not wired to any call path**: `lib/TypingPass.ml` still rejects Int32/Bool/Float64 at `rs_*` imports, and the bridge's entry path still admits only Int64, because a direct native call to a float-register ABI is the bug. Re-admission needs U10's versioned descriptor plus a generated wrapper that uses these adapters (U11 step 1's "generated adapter" half). No CPS opcode, `Cps_codec`, `ISA_REGISTRY` or corpus change is involved, so U11 step 3 is vacuously satisfied here. F32 arithmetic is only tested through the bit roundtrip, not a native `f32` call. The adapter is exposed across the C ABI (`au_scalar_*`) but the compiler and entry admission still do not use it. |
+
+## U06 — bounded child processes (bounded start)
+
+This patch is bullet 2's execution half and the deadline the plan asks for; the
+private staging directory (bullet 1) is not in this slice.
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `umbrella/src/process.rs` | **new.** `run(Command, Duration) -> Outcome { exit, stdout, stderr, timed_out }`: the child is spawned in its own process group (`process_group(0)`), stdout and stderr are drained by two reader threads so a noisy child cannot deadlock a pipe, `try_wait` is polled against the deadline, and on expiry the **group** is killed (`kill(-pgid, SIGKILL)`) and the leader reaped. `Exit::Code` and `Exit::Signal` are distinct outcomes; spawn and I/O failures are separate `ChildError` variants. |
+| `umbrella/src/main.rs` | the front-end call goes through `process::run` with `FRONT_END_DEADLINE` (300 s); a timeout reports "exceeded its deadline and was killed with its process group" and the captured streams, and a non-zero/signal exit is reported with its `Exit` value. |
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U06 bounded child | RUN01, RUN03, BLD07 | started (deadline + group + reaping) | git `d2225612`; umbrella `86ff19e4…` | `cd umbrella && cargo test --offline --lib process` → 6 passed; harness case `SUITE_PROCESS` pins those 6; live demo still prints `RESULT -1781872834555808882` | a child writing 1 MiB to each stream is captured in full (no deadlock, nothing truncated); a hanging child is killed at the deadline with `Signal(SIGKILL)` and the call returns in well under 10 s; a helper that spawns a `sleep 60` grandchild leaves **no live grandchild** after the group kill (checked via `/proc/<pid>/stat`: gone or a zombie); exit 3 and `SIGABRT` are different outcomes; a missing program is `ChildError::Spawn` not a fake exit | no private per-build staging directory yet (bullet 1), no deadline on `cargo build`/`cargo metadata` (a build is legitimately slow), no environment allowlist policy in this module, and no readiness-event protocol — the tests use a bounded wait on `/proc`, not sleeps. `verify-invariants` still shows the W9.3 Lean/MM0 failures noted earlier, untouched here. |
+
+## W9.3 gate run in the lean shell — blocked, results recorded
+
+Attempted exactly as documented:
+
+```bash
+nix develop "git+file://$PWD#lean" -c python3 --version && \
+nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants
+```
+
+**The shell does not build on this host (2026-11-17).** Nix fails while
+realising `lean4export-4.30.0`'s pinned source:
+
+```
+error: hash mismatch in fixed-output derivation '…-source.drv':
+         specified: sha256-LysjGOikBaaOdZdwxA+RwzfnQweTaU3kpFuWc6LxmXc=
+            got:    sha256-kg0XW1HTJplBHznI4FM9KxSZIuQ/5P0IILp3FjDRXJA=
+error: Cannot build '…-lean4export-4.30.0.drv'  (1 dependency failed)
+error: Cannot build '…-nix-shell-env.drv'
+```
+
+So no shell command runs: there is no `lean` 4.30.0, no `lean4export`, and no
+`mm0` from the flake. Fixing it means re-pinning the exporter's source hash in
+`flake.nix` — an owner decision about the proof toolchain, not a test fix, so it
+is recorded here instead of changed.
+
+**Bare-shell fallback (what this host can measure).** `lean` resolves to host
+elan **4.33.1**, `lean4export` is absent, `mm0-c`/`mm0-rs` are absent.
+`bash scripts/verify-invariants` gives **112 passed, 17 explained gaps, 8
+failed**. Nineteen W9.3 checks pass, including the toy model's counts (28
+theorems / 20 axioms), the citation digests, the witness agreement and the
+mutation controls. The 8 failures are:
+
+| W9.3 check | Why it fails here |
+|---|---|
+| load/store are refuted as the model's `execute_LOAD`/`execute_STORE` | needs the pinned `$RISCV_MEMORY_MODEL` (flake lean shell, Sail build) |
+| the memory projection is stated as vocabulary, accepted by `mm0-c` | `mm0-c` absent |
+| the toy projection's theorems check without `sorry` | `mm0-rs` absent |
+| the toy's proofs depend on its axioms (mutating one refuses them) | `mm0-rs` absent |
+| a Lean development proves the same axioms | `ToyWitness.lean:628:70: error: failed to synthesize` — elaboration under host Lean **4.33.1**, not the pinned 4.30.0 |
+| every Lean declaration rests on Lean's standard foundation only | axiom audit reports `[(0 (1 0) 1) ]` outside `{propext, Classical.choice, Quot.sound}` under 4.33.1 |
+| the no-sorry scan refuses an injected `sorry` that Lean itself accepts | depends on the Lean run above |
+| the no-sorry scan does not count banned words inside comments | depends on the Lean run above |
+
+**Conclusion recorded:** the W9.3 proof-of-record results are **not** produced by
+this host. The 8 failures are consistent with the missing pinned toolchain
+(4.30.0 + `lean4export`, `mm0-c`, `mm0-rs`, Sail model) rather than with the
+artifacts, and the earlier W1/W9 failures were separately traced to a stale
+root `libaustral_cranelift_bridge.so` (July) and fixed. W9.3 must be re-run in
+CI or after the `lean4export` pin is refreshed; nothing here claims it passes.
+
+## U11 admission — scalar imports now call the generated adapter
+
+The U04 transport restriction is replaced by adapter-mediated admission.
+
+| Path | Change |
+|---|---|
+| `lib/TypingPass.ml` | `is_transport_word_parameter` / `is_transport_i64_result` and the `rust_interop_transport` rejection are gone: `Bool`, `Int32`/`U32`, `F32`/`F64` parameters and results are admitted. The buffer-protocol shape check (`rust_ownership_shape`) still refuses aggregates. |
+| `lib/Compiler_cps.ml` | `foreign_needs_adapter` decides per `MForeignFunction` signature: if every parameter is `Int64`/`Nat64`/address/pointer and the result is `Int64`/`Nat64`, the call keeps the declared external symbol (unchanged word-native path); otherwise the lowered symbol is `<ext_name>__adapter`. Hence a float-register or narrow-integer call can only ever name the wrapper. |
+
+**Evidence (measured, emitted CPS).** A module declaring and calling
+`rs_narrow(width: Int32): Int64` compiles and emits CPS containing exactly
+`rs_narrow__adapter` (no `rs_narrow`):
+
+```
+$ ./austral compile M.aum --entrypoint=M:main --use-cps-jit --allow-all \
+      --target-type=c --emit-cps=M.cps --output=M.c
+CPS JIT: Generated 1 functions (126 bytes)
+panicked: can't resolve symbol rs_narrow__adapter
+$ strings M.cps | grep -o 'rs_narrow[a-z_]*' | sort -u
+rs_narrow__adapter
+```
+
+That is the fail-closed admission contract: the module typechecks, and it
+**cannot** be loaded unless the generated wrapper is present, because the raw
+symbol is never requested. With `umbrella/tests/fixtures/adapters/rs_scale`'s
+wrapper compiled in, the same shape executes through `au_scalar_*`.
+
+**Test-suite fallout (recorded honestly).** The two U04 fixtures
+`019-extern-rust/008-transport-narrow-parameter` and `009-transport-float-result`
+asserted the *rejection* this patch removes; with scalars admitted they compiled
+and linked against a nonexistent `rs_narrow`, so they were deleted rather than
+kept as unconditional passes. `test-programs/runner.py 019` is now **6/6 PASS**
+(002–007). The runner has no per-fixture C stub support, so a success fixture
+for a foreign symbol is not expressible there; the admission evidence above is a
+compiler-level check, and an executing adapter fixture belongs with the U10/U11
+integration work.
+
+**Checks run:** `nix develop "git+file://$PWD#ocaml" -c make all` exit 0;
+`LD_LIBRARY_PATH=$PWD:$PWD/safestos/cranelift/target/release python3
+test-programs/runner.py 019` 6/6 PASS (the runner execs `./austral`, so the
+bridge `.so` must be on the loader path; without it every fixture fails on the
+loader, which is an environment fault and not a compiler result).
+
+`make test` first failed two cases and both were fixed at the cause, in the
+tree rather than in the assertions: `GpuWgslTest`/`GpuFrontendTest`/
+`GpuSubsetTest` read `examples/gpu/pointwise/*` by repository-relative path,
+which dune never stages — the stanza now lists them in `(deps …)` and the tests
+resolve them through `TestUtil.fixture`, which walks up to the staged copy; and
+`CliEngine:5` still expected the pre-GPU target sentence `One of \`exe\`, \`tc\`,
+\`c\``, while the help — correctly — advertises the shipped `wgsl` as well, so
+the expectation was updated to the parser's real vocabulary. `make test` now
+exits 0.
+
+## U11 — the CPS lowering emits the adapter descriptor (*pinned golden*)
+
+The descriptor is now produced by the compiler, not typed by hand: the CPS
+lowering knows exactly which foreign calls need a wrapper and what their
+scalars are, so it is the only side that can state the contract.
+
+| Path | Change |
+|---|---|
+| `lib/Compiler_cps.ml` | while lowering, each `rs_*` signature that is not word-native is recorded (`required_adapters`) and mapped to `<ext_name>__adapter`. `adapter_descriptors_text` renders them in the canonical form of `umbrella/src/interface.rs`: header comment, then one block per adapter (`schema 1`, `abi scalar 1`, `symbol`, `target`, `params A,B`, `returns R`), **sorted by symbol**, blocks separated by a blank line. `write_adapter_descriptors` writes it. A signature the schema cannot express (e.g. a buffer parameter beside a scalar result) is an error, never a guessed layout. |
+| `lib/Compiler.ml`, `lib/CliParser.ml{,i}`, `lib/CliEngine.ml` | new `--emit-adapters=<path>`; refused with `--target-type=wgsl` like `--emit-cps`, and listed in the compile help. |
+| `test-programs/adapters/rs_scalars.aum` | golden fixture: `rs_scale(Float64, Int64) -> Float64`, `rs_narrow(Int32) -> Int64`, `rs_toggle(Bool) -> Bool`, plus `rs_word_native(Int64) -> Int64` which must produce **no** descriptor. |
+| `test-programs/adapters/adapters.golden` | the pinned text. |
+| `scripts/check-adapter-descriptors` | re-emits and diffs byte for byte; exit 0 exact match, 1 diff, 2 cannot measure (no compiler binary / fixture / compile failure). Wired into `scripts/verify-invariants` as `U11: the CPS lowering's adapter descriptors match the golden`, with 2 reported as a gap. |
+| `umbrella/tests/interface.rs` | `the_compilers_emitted_descriptors_parse_here` reads the same golden and parses every block with `Adapter::parse_descriptor`, asserting the symbol order, `<target>__adapter` naming, schema/abi versions and `rs_scale`'s `(F64, I64) -> F64`. The golden is therefore pinned from both languages: the compiler must keep emitting it, and the generator must keep being able to read it. |
+
+**Measured.** `./scripts/check-adapter-descriptors` → `[pass] 3 descriptor(s)` on
+two consecutive runs (byte-stable). `cargo test --offline --test interface` →
+**6 passed** (pin raised from 5 in `scripts/test-umbrella`).
+`verify-invariants` → **113 passed, 17 explained gaps, 8 failed**; the 8 are the
+known W9.3 toolchain failures (no `mm0-c`/`mm0-rs`, host Lean 4.33.1, no Sail
+model), unchanged by this patch. The gate's file had arrived from an upstream
+merge carrying conflict markers (`<<<<<<< HEAD` around the W3 `_plan_file`/
+`_appr_root` declarations, which are already defined above that block); the
+stale hunk was dropped and the script parses again — same 113/17/8 figures
+before and after that repair.
+
+**Regression found and fixed while measuring.** The first version redirected
+*every* non-word-native foreign import to `__adapter`, which broke
+`examples/ffi`'s C import `putchar(Int32)`: no generated wrapper exists for a C
+ABI, so the module stopped compiling (the gate reported `cps-corpus: [gap]
+examples/ffi compiled no function`). Adapter mediation is now scoped to `rs_*`
+imports — the Rust-interop contract — and the gap disappeared.
+
+### U11.2 — the wrapper's *values*, measured against direct Rust calls
+
+`umbrella/tests/scalar_roundtrip.rs` turns the descriptor into a running pair: it
+writes a Rust library that exports the five declared targets (`#[export_name]`,
+because the wrapper declares the same names in `extern "C"`), appends the wrapper
+`render_wrapper` generates for each descriptor (one module per wrapper — the
+generator writes a file per adapter, and each starts with the same `use`),
+compiles the lot into a `cdylib`, loads it with the platform loader, and calls
+both sides: the target as Rust declares it (`f64`, `i64`, `bool`) and the
+wrapper with `u64` words built by the bridge's own `encode`.
+
+Every result is compared **by bits**, and the cases are chosen so a plausible
+wrong encoder fails: `-0.0` (a numeric cast drops the sign), `rs_sub` called with
+both orders (a commuted pair returns a different value), `0.0/0.0` and
+`1.0/0.0` (NaN and infinity survive the word), `rs_narrow(-7)` (a negative
+`Int32` sign-extends), and `rs_toggle(true)` (a `Bool` word is 0 or 1). NaN is
+compared to the direct call's bits rather than a constant, because the payload is
+the implementation's and the claim is only that the word carries it.
+
+The second test is the failure oracle: a wrapper whose result leaves through
+`result as i64 as f64` still compiles and still returns `-10.0` for
+`rs_scale(-2.5, 4)`, and loses only the sign of zero — so the bit assertion is
+what has to catch it, and the test pins that the mutation really does return
+`+0.0` (otherwise the control has stopped discriminating).
+
+**Measured.** `scripts/test-umbrella --case SUITE_UMBRELLA_SCALARS --case
+SUITE_UMBRELLA_INTERFACE` → 2/2 pass (2 and 6 tests); the harness counts are
+pinned in the same `SUITES` table.
+
+**Limit.** The compiler emits the descriptor; umbrella does not yet consume it
+during a build to generate and compile the wrapper. That is the next wiring step,
+and what the golden and this roundtrip make safe to do.

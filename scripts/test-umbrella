@@ -57,6 +57,10 @@ REQUIRED_CASES = {
         "SUITE_UMBRELLA_CLI",
         "SUITE_UMBRELLA_ENTRY",
         "SUITE_UMBRELLA_CARGO",
+        "SUITE_SCALAR_ABI",
+        "SUITE_UMBRELLA_INTERFACE",
+        "SUITE_UMBRELLA_SCALARS",
+        "SUITE_PROCESS",
     ),
     "capability": ("HAR02",),
 }
@@ -100,6 +104,37 @@ SUITES = {
         ["--lib", "adapters"],
         9,
         True,
+    ),
+    # U06's bounded child runner: deadline, process group, reaped children.
+    "SUITE_PROCESS": (
+        os.path.join(ROOT, "umbrella", "Cargo.toml"),
+        ["--lib", "process::tests"],
+        6,
+        False,
+    ),
+    # U11's exported C surface for generated wrappers/non-Rust callers.
+    "SUITE_SCALAR_ABI": (
+        os.path.join(BRIDGE_DIR, "Cargo.toml"),
+        ["--test", "scalar_abi"],
+        6,
+        True,
+    ),
+    # U10's descriptor + generated-wrapper typecheck (needs the debug rlib).
+    "SUITE_UMBRELLA_INTERFACE": (
+        os.path.join(ROOT, "umbrella", "Cargo.toml"),
+        ["--test", "interface"],
+        6,
+        False,
+    ),
+    # U11 (ABI04/ABI05): the generated wrapper's values. The two tests build a
+    # `cdylib` from the declared targets plus the rendered wrappers, load it, and
+    # compare every result to a direct Rust call by bits; the second test is the
+    # negative control (a float cast through an i64 loses `-0.0`).
+    "SUITE_UMBRELLA_SCALARS": (
+        os.path.join(ROOT, "umbrella", "Cargo.toml"),
+        ["--test", "scalar_roundtrip"],
+        2,
+        False,
     ),
     # U03/U04 regression pins. The CLI suite is the parser plus the binary's
     # exit contracts; the entry suite is the strict entry admission seen from

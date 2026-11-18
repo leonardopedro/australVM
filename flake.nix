@@ -47,6 +47,7 @@
           ocamlPackages.sexplib
           ocamlPackages.ppx_sexp_conv
           ocamlPackages.zarith
+          ocamlPackages.digestif
 
           # Why3 verification engine (docs/LIQUID.md §2.3).
           #
@@ -338,6 +339,7 @@
             ocamlPackages.sexplib
             ocamlPackages.ppx_sexp_conv
             ocamlPackages.zarith
+            ocamlPackages.digestif
           ];
         };
 

@@ -47,6 +47,9 @@ open HtmlError
 let use_cps_jit = ref false
 let jit_server_mode = ref false
 let emit_cps_path = ref (None: string option)
+(* U11: the adapter descriptors the CPS lowering requires, in the canonical
+   text form `umbrella/src/interface.rs` parses. *)
+let emit_adapters_path = ref (None: string option)
 (* avm-pkg (PLAN_avm_pkg.md): package-module totality gate + derivation
    JSON export. Both are opt-in per invocation — `--pkg-totality` and
    `--emit-derivations <path>` — so ordinary compilation is untouched. *)
@@ -135,55 +138,95 @@ let parse_and_combine (env: env) (source: module_source): (env * module_name * C
          let combined: Combined.combined_module = body_as_combined env cb in
          (env, name, combined, None, body_file_id))
 
+(** A module that passed the ordinary frontend: its environment, name, typed
+    AST and monomorphic AST. Backends that need the checked program (the GPU
+    target) consume this instead of re-running the stages or reaching into the
+    C/CPS pipelines. The C, CPS and hot-swap paths keep using the same stages
+    through {!prepare_module}, so the checks are shared rather than copied. *)
+type prepared_module = {
+  prepared_env: env;
+  prepared_name: module_name;
+  prepared_typed: typed_module;
+  prepared_mono: mono_module;
+}
+
+(** Run the parse/combine, return check, desugaring, extraction, typing,
+    plugin, linearity and body-extraction stages once and return the checked
+    module. [after_typing] runs between linearity checking and body extraction
+    for opt-in passes (`--pkg-totality`, derivations). It does not compile or
+    execute anything. *)
+let prepare_module ?(after_typing = fun (_: typed_module) -> ())
+    (env: env) (source: module_source)
+    : env * prepared_module =
+  let (env, name, combined, int_file_id, body_file_id) = parse_and_combine env source in
+  adorn_error_with_module_name name
+    (fun _ ->
+      let _ = check_ends_in_return combined in
+      let combined: SmallCombined.combined_module = DesugaringPass.desugar combined in
+      let (env, linked): (env * linked_module) = extract env combined int_file_id body_file_id in
+      let typed: typed_module = augment_module env linked in
+      (* S36 WhyML plugin seam: every registered compiler pass runs on the
+         typed module after typing and before codegen. A VerdictReject
+         aborts compilation — the machine-verified authorization gate
+         (Why3-extracted) refuses modules whose uk_* imports are not
+         granted. *)
+      (match Compiler_plugin.run_on_typed typed with
+       | Compiler_plugin.VerdictReject msg ->
+          (* `austral_raise` never returns — it raises the Austral_error. *)
+          austral_raise TypeError [ErrorText.Text msg]
+       | Compiler_plugin.VerdictOk -> ());
+      (* memsafe: a ledger is per module, so the checker starts from an
+         empty one and the export replaces this module's entry. *)
+      (match !emit_linearity_ledger_path with
+       | Some _ -> LinearityLedger.clear (); LinearityLedger.set_enabled true
+       | None -> ());
+      let _ = check_module_linearity typed in
+      (match !emit_linearity_ledger_path with
+       | Some path ->
+          LinearityLedger.write_json ~path ~name:(mod_name_string name);
+          LinearityLedger.set_enabled false
+       | None -> ());
+      after_typing typed;
+      let env: env = extract_bodies env typed in
+      let (env, mono): (env * mono_module) = monomorphize env typed in
+      (env, { prepared_env = env;
+              prepared_name = name;
+              prepared_typed = typed;
+              prepared_mono = mono }))
+
 let rec compile_mod (c: compiler) (source: module_source): compiler =
   with_frame "Compile module"
     (fun _ ->
       let env: env = cenv c in
-      let (env, name, combined, int_file_id, body_file_id) = parse_and_combine env source in
-      adorn_error_with_module_name name
-        (fun _ ->
-          let _ = check_ends_in_return combined in
-          let combined: SmallCombined.combined_module = DesugaringPass.desugar combined in
-          let (env, linked): (env * linked_module) = extract env combined int_file_id body_file_id in
-          let typed: typed_module = augment_module env linked in
-          (* S36 WhyML plugin seam: every registered compiler pass runs on the
-             typed module after typing and before codegen. A VerdictReject
-             aborts compilation — the machine-verified authorization gate
-             (Why3-extracted) refuses modules whose uk_* imports are not
-             granted. *)
-          (match Compiler_plugin.run_on_typed typed with
-           | Compiler_plugin.VerdictReject msg ->
-              (* `austral_raise` never returns — it raises the Austral_error. *)
-              austral_raise TypeError [ErrorText.Text msg]
-           | Compiler_plugin.VerdictOk -> ());
-          (* memsafe: a ledger is per module, so the checker starts from an
-             empty one and the export replaces this module's entry. *)
-          (match !emit_linearity_ledger_path with
-           | Some _ -> LinearityLedger.clear (); LinearityLedger.set_enabled true
-           | None -> ());
-          let _ = check_module_linearity typed in
-          (match !emit_linearity_ledger_path with
-           | Some path ->
-              LinearityLedger.write_json ~path ~name:(mod_name_string name);
-              LinearityLedger.set_enabled false
-           | None -> ());
-          (* avm-pkg spec task 2.1: when compiling package modules, run
-             the totality pass (rejects unbounded constructs — see
-             lib/Totality.ml) and export the module's derivations to the
-             plan JSON `avm-pkg` consumes (see lib/DerivAst.ml). *)
-          if !pkg_totality then
-            Totality.check_module typed;
-          (match !emit_derivations_path with
-           | Some path ->               DerivAst.write_json path (DerivAst.module_derivations ~totality:!pkg_totality typed)
-           | None ->
-              ());
-          let env: env = extract_bodies env typed in
-          let (env, mono): (env * mono_module) = monomorphize env typed in
-          
+      (* avm-pkg spec task 2.1: when compiling package modules, run
+         the totality pass (rejects unbounded constructs — see
+         lib/Totality.ml) and export the module's derivations to the
+         plan JSON `avm-pkg` consumes (see lib/DerivAst.ml). *)
+      let after_typing (typed: typed_module) =
+        if !pkg_totality then
+          Totality.check_module typed;
+        (match !emit_derivations_path with
+         | Some path ->
+            DerivAst.write_json path
+              (DerivAst.module_derivations ~totality:!pkg_totality typed)
+         | None -> ())
+      in
+      let (env, prepared) = prepare_module ~after_typing env source in
+      let mono: mono_module = prepared.prepared_mono in
+      (fun () ->
           (* Phase 7: CPS JIT Integration Path *)
           if !use_cps_jit then begin
             try
               let (funcs, module_name) = Compiler_cps.compile_module_cps mono in
+              (match !emit_adapters_path with
+               | Some path ->
+                  (match Compiler_cps.write_adapter_descriptors path with
+                   | Ok () ->
+                      Printf.eprintf "CPS JIT: Emitted adapter descriptors to %s\n%!" path
+                   | Error msg ->
+                      Printf.eprintf "CPS JIT: adapter descriptor error: %s\n%!" msg;
+                      exit 1)
+               | None -> ());
               (if Sys.getenv_opt "CPS_DEBUG" <> None then
                  Compiler_cps.debug_print_cps_functions funcs);
               if List.length funcs > 0 then begin
@@ -242,7 +285,7 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
             let unit_code: string = render_unit unit in
             let code: string = (compiler_code c) ^ "\n" ^ unit_code in
             Compiler (env, code)
-          end))
+          end) ())
 
 let rec compile_multiple c modules =
   match modules with

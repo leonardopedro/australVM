@@ -70,8 +70,10 @@ let test_compile_help_lists_shipped_flags_and_real_targets _ =
         with Not_found -> false)
   in
   (* The real target vocabulary, not the parser-rejected `bin`. *)
+  (* `wgsl` is shipped (the GPU backend's target), so the expected sentence is
+     the parser's whole vocabulary, not the pre-GPU three. *)
   assert_bool "help must advertise `exe` as the default target"
-    (contains "One of `exe`, `tc`, `c`. Default is `exe`.");
+    (contains "One of `exe`, `tc`, `c`, `wgsl`. Default is `exe`.");
   assert_bool "help must not advertise the parser-rejected `bin` value"
     (not (contains "`bin`"));
   (* Every shipped flag is discoverable. *)

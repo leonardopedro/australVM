@@ -1,0 +1,17 @@
+module Pointwise is
+    function add(x: Nat32, y: Nat32): Nat32;
+    function identity(x: Nat32): Nat32;
+    function clamp(x: Nat32): Nat32;
+    function difference(x: Nat32, y: Nat32): Nat32;
+    function mask(x: Nat32, y: Nat32): Nat32;
+    function twice(x: Nat32): Nat32;
+    function polynomial(x: Nat32, y: Nat32): Nat32;
+    function minimum(x: Nat32, y: Nat32): Nat32;
+    function bitAnd(x: Nat32, y: Nat32): Nat32;
+    function bitOr(x: Nat32, y: Nat32): Nat32;
+    function bitXor(x: Nat32, y: Nat32): Nat32;
+    function invert(x: Nat32): Nat32;
+    function multiply(x: Nat32, y: Nat32): Nat32;
+    function constantValue(): Nat32;
+    function addConstant(x: Nat32): Nat32;
+end module.

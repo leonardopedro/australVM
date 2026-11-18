@@ -66,6 +66,127 @@ let foreign_functions = Hashtbl.create 16
    "uk_version") instead of a qualified Austral name the JIT cannot resolve. *)
 let foreign_functions_by_name = Hashtbl.create 16
 
+(* U11 wiring: is this foreign signature carried by plain host words on both
+   sides? Everything else (Bool, floats, integers narrower than 64 bits) is
+   marshalled by the generated adapter wrapper, so the call must name the
+   adapter symbol, not the native function. Word-native means: every
+   parameter is an Int64/Nat64/byte buffer address or pointer, and the result
+   is an Int64/Nat64. Direct word calls keep their existing symbol. *)
+let is_word_native (ty: mono_ty): bool =
+  match ty with
+  | MonoInteger (_, Width64) -> true
+  | MonoAddress _ | MonoPointer _ | MonoSpan _ | MonoSpanMut _ -> true
+  | _ -> false
+
+(* Adapter mediation is the Rust-interop contract (`rs_*` imports, the ones
+   with a `Rust_Ownership` pragma). Legacy C imports keep their declared symbol:
+   their ABI is C's, and there is no generated wrapper to route to. *)
+let is_rust_import (name: string): bool =
+  String.length name >= 3 && String.sub name 0 3 = "rs_"
+
+let foreign_needs_adapter (params: Mt.mvalue_parameter list) (rt: mono_ty): bool =
+  not (
+    List.for_all (function Mt.MValueParameter (_, ty) -> is_word_native ty) params
+    && is_word_native rt)
+
+let adapter_symbol (name: string): string = name ^ "__adapter"
+
+(* U11: the adapters this module's calls require, keyed by the symbol the CPS
+   names. Recorded while lowering, emitted as canonical descriptor text that
+   `umbrella/src/interface.rs` parses to generate the wrapper. *)
+type adapter_requirement = {
+  ar_symbol: string;
+  ar_target: string;
+  ar_params: mono_ty list;
+  ar_result: mono_ty;
+}
+
+let required_adapters : (string, adapter_requirement) Hashtbl.t = Hashtbl.create 8
+
+(* The descriptor schema's vocabulary: Unit, Bool, Int32, Nat32, Int64, Nat64,
+   Float32, Float64. Anything else cannot be described yet, and is an error at
+   emission rather than a silently guessed layout. *)
+let adapter_scalar_name (ty: mono_ty): string option =
+  match ty with
+  | MonoBoolean -> Some "Bool"
+  | MonoInteger (Signed, Width32) -> Some "Int32"
+  | MonoInteger (Unsigned, Width32) -> Some "Nat32"
+  | MonoInteger (Signed, Width64) -> Some "Int64"
+  | MonoInteger (Unsigned, Width64) -> Some "Nat64"
+  | MonoSingleFloat -> Some "Float32"
+  | MonoDoubleFloat -> Some "Float64"
+  | _ -> None
+
+let mono_ty_show (ty: mono_ty): string = MonoType.show_mono_ty ty
+
+(* Canonical text: fixed field order, one fact per line, descriptors sorted by
+   symbol, blocks separated by a blank line. Regenerating is byte-identical. *)
+let adapter_descriptors_text (): (string, string) result =
+  let items =
+    Hashtbl.fold (fun _ req acc -> req :: acc) required_adapters []
+    |> List.sort (fun a b -> String.compare a.ar_symbol b.ar_symbol)
+  in
+  let unrepresentable =
+    List.find_map
+      (fun req ->
+        match List.find_map (fun ty ->
+            match adapter_scalar_name ty with
+            | Some _ -> None
+            | None -> Some ty) req.ar_params with
+        | Some ty -> Some (req.ar_symbol, ty)
+        | None ->
+          (match adapter_scalar_name req.ar_result with
+           | Some _ -> None
+           | None -> Some (req.ar_symbol, req.ar_result)))
+      items
+  in
+  match unrepresentable with
+  | Some (symbol, ty) ->
+     Error (Printf.sprintf
+              "adapter for %s cannot be described: parameter or result type %s \
+               is not a scalar (Unit, Bool, Int32, Nat32, Int64, Nat64, Float32, \
+               Float64); a buffer parameter next to a scalar result needs a \
+               versioned layout that does not exist yet"
+              symbol (mono_ty_show ty))
+  | None ->
+     let buf = Buffer.create 256 in
+     Buffer.add_string buf
+       "# U11 adapter descriptors, emitted by the compiler's CPS lowering.\n";
+     Buffer.add_string buf
+       "# Canonical form: fixed field order, one fact per line, descriptors\n";
+     Buffer.add_string buf
+       "# sorted by symbol. `umbrella/src/interface.rs` parses this text.\n";
+     List.iter
+       (fun req ->
+         let name ty =
+           match adapter_scalar_name ty with
+           | Some n -> n
+           | None -> assert false
+         in
+         Buffer.add_string buf "\n";
+         Buffer.add_string buf "schema 1\n";
+         Buffer.add_string buf "abi scalar 1\n";
+         Buffer.add_string buf (Printf.sprintf "symbol %s\n" req.ar_symbol);
+         Buffer.add_string buf (Printf.sprintf "target %s\n" req.ar_target);
+         Buffer.add_string buf
+           (Printf.sprintf "params %s\n"
+              (String.concat "," (List.map name req.ar_params)));
+         Buffer.add_string buf
+           (Printf.sprintf "returns %s\n" (name req.ar_result)))
+       items;
+     Ok (Buffer.contents buf)
+
+let write_adapter_descriptors (path: string): (unit, string) result =
+  match adapter_descriptors_text () with
+  | Error e -> Error e
+  | Ok text ->
+     (try
+        let oc = open_out path in
+        output_string oc text;
+        close_out oc;
+        Ok ()
+      with Sys_error e -> Error e)
+
 let is_foreign_function id =
   Hashtbl.mem foreign_functions id
 
@@ -474,7 +595,19 @@ let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list 
       List.iter (function
         | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
         | Mt.MUnionMonomorph (id, cases) -> Hashtbl.replace union_layouts id cases
-        | Mt.MForeignFunction (id, name, _, _, ext_name) ->
+        | Mt.MForeignFunction (id, name, params, rt, ext_name) ->
+            let ext_name =
+              if is_rust_import ext_name && foreign_needs_adapter params rt then begin
+                let symbol = adapter_symbol ext_name in
+                Hashtbl.replace required_adapters symbol
+                  { ar_symbol = symbol;
+                    ar_target = ext_name;
+                    ar_params =
+                      List.map (function Mt.MValueParameter (_, ty) -> ty) params;
+                    ar_result = rt };
+                symbol
+              end else ext_name
+            in
             Hashtbl.replace foreign_functions id ext_name;
             Hashtbl.replace foreign_functions_by_name (ident_string name) ext_name
         | Mt.MRecord (_, _, _) -> () (* FIXME: handle global records if needed *)

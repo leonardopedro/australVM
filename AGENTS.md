@@ -445,14 +445,56 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   W9.3: the composition table's closure digests match the files it records`, the
   detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
   line and the approval control still passing. One full gate run.
+- `scripts/w93-certification-drift-control` — the §W9.3 control for the
+  refinement's certificate line: it copies `mm0/clif.mm0`, rewrites
+  `-- certificate: [gap]` to claim `mm0/approved/isa.stmts` (which does not
+  exist), and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
+  with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
+  `no isa approval, yet clif.mm0 does not say [gap]`, and the `clif_step`
+  vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
+- `scripts/w3-approval-state-drift-control` — the §W3 control for the state
+  cell: it rewrites `isa`'s cell in a copy of the plan to `` `[pass]`, approved in
+  `mm0/approved/` `` with no `mm0/approved/isa.stmts` behind it, and requires
+  `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: the
+  plan's §W3 stmts column matches what each artifact holds`, the detail
+  `isa(says approved, but …/isa.stmts does not exist)`, exactly the three other
+  lines that read the same cell red (digest column, approved-row emitter check,
+  staging count) and nothing else, and the shape check plus the emitter column
+  still green. One full gate run.
+- `scripts/w3-drift-controls` — the twelve controls for the checks the census
+  classified `copy`, one case each (`<case>`, `--list`, `all`): Phase D's two
+  trust splits and its four coverage/vocabulary claims, the W8 hypothesis pin,
+  the `clif_step` vocabulary and pinned citations, the witness's axiom table, the
+  memsafe edge census, the Liquid golden, and the refinement's certificate with an
+  approval present. Each builds a scratch copy, drifts one claim in it, runs the
+  whole gate with the read-only override that points at the copy
+  (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
+  `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
+  expected `[FAIL]` line. One full gate run per case; logs kept under
+  `$W3_DRIFT_LOGS`. `make drift-controls` runs it plus every `*-drift-control`
+  script, and `make test` depends on it. It never writes `mm0/approved/` — the
+  approval a case needs lives in a scratch root — so no control can approve.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
-  stale `.mm1`, and the three whole-gate drift controls — §W3's emitter cell and
-  §W9.3's composition count and closure-digest cells): artifact, perturbation,
-  the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
+  stale `.mm1`, §W3's emitter and state cells, §W9.3's composition count and
+  closure-digest cells, the refinement's certificate line in both directions, the
+  model's `proves: 0 theorems` pin, and one row per `scripts/w3-drift-controls`
+  case):
+  artifact, perturbation, the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
   a `gate_line` the script no longer emits, an `expected_message` skeleton whose
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
   a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
   exited non-zero; `-` means the probe is exercised in-gate, not by a gate run).
+- `scripts/check-census` — the counter behind the plan's "which checks have no
+  measured failure" paragraph, so those numbers are re-measured, not trusted:
+  it censuses every `check "…"` in `scripts/verify-invariants` as statements,
+  distinct texts (a trailing count parenthetical dropped — it reports a number,
+  not a different claim), the texts the plan's census table names, the texts a
+  `docs/data/w3/probes.tsv` row records, the residue with neither, and the
+  `class` totals (`control` / `derived` / `copy` / `tool` / `none`). It exits 1
+  when the plan no longer quotes the measured counts — including the `copy`
+  count, which is the gap — so a table that grows without the paragraph moving
+  is caught here. Kept out of `verify-invariants`
+  because it reads the plan's prose rather than an artifact.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in

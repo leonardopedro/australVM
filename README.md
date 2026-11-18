@@ -60,12 +60,11 @@ The [umbrella production plan](PLAN_umbrella_production.md) adds a focused
 [interop review](docs/UMBRELLA_PRODUCTION_REVIEW.md) and
 [debugging/test matrix](docs/umbrella/TEST_MATRIX.md) for the Rust/cap-std compiler path.
 
-The [GPU kernel implementation plan](PLAN_gpu_kernels.md) extends the existing
-GPU/WhyML federation work into an Austral-authored kernel backend. Its
-[source review](docs/GPU_KERNEL_REVIEW.md) and proposed
-[v1 contract](docs/gpu/KERNEL_V1.md) specify a restricted typed subset targeting
-WGSL/wgpu first, with MLIR as a later backend. These are planning artifacts;
-kernel compilation and hardware acceptance remain pending.
+The compiler emits validated WGSL bundles for a restricted subset of
+Austral-authored kernels. The [execution record](docs/gpu/EXECUTION.md)
+documents source/C/IR checks and a Vulkan adapter probe. Device dispatch and
+readback are pending in the [GPU plan](PLAN_gpu_kernels.md), which also covers
+the later MLIR backend.
 
 The [compositional MM0 plan](PLAN_proof_chain.md) makes higher-level proofs
 reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_CHAIN.md)

@@ -25,11 +25,14 @@ counted obligations a deltanet has to discharge.
 from __future__ import annotations
 
 import importlib.machinery
+import array
+import atexit
 import hashlib
 import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -45,6 +48,51 @@ spec = importlib.util.spec_from_loader("lean2mm0", loader)
 l2m = importlib.util.module_from_spec(spec)
 sys.modules["lean2mm0"] = l2m
 loader.exec_module(l2m)
+
+# The export table's cache bound is measurable: `LazyExprs.__getitem__` re-seeks
+# and re-parses its record on a miss, and a certificate walk would rather hit
+# (§13.35 measures what the misses cost). The default is the table's own 200 000.
+_EXPRS_CACHE = int(os.environ.get("LTP_EXPRS_CACHE", "0") or 0)
+if _EXPRS_CACHE:
+    l2m.LazyExprs.CACHE_MAX = _EXPRS_CACHE
+
+# `LTP_PROBE_LOOKUP=1` times `LazyExprs.__getitem__` itself (§13.35). Samples say
+# how often the walk is *at* the lookup; only a timer says what it costs, and the
+# two need not agree — a `dict.get` hit is short enough to be sampled often and
+# cheap enough not to matter.
+if os.environ.get("LTP_PROBE_LOOKUP", "0") == "1":
+    _probe = {"t": 0.0, "n": 0, "miss": 0}
+    _lazy_get = l2m.LazyExprs.__getitem__
+
+    def _timed_get(self, eid):
+        t0 = time.perf_counter()
+        rec = _lazy_get(self, eid)
+        _probe["t"] += time.perf_counter() - t0
+        _probe["n"] += 1
+        return rec
+
+    l2m.LazyExprs.__getitem__ = _timed_get
+
+    # A miss is the `json.loads` on a record the cache no longer holds, so it is
+    # counted where it happens rather than inferred from the cache's contents.
+    _lazy_loads = json.loads
+    _probe["loads"] = 0
+
+    def _count_loads(*a, **kw):
+        _probe["loads"] += 1
+        return _lazy_loads(*a, **kw)
+
+    l2m.json.loads = _count_loads
+
+    def _probe_report():
+        el = max(1e-9, time.monotonic() - _PROC_T0)
+        print(f"[probe] LazyExprs.__getitem__: {_probe['n']} calls, "
+              f"{_probe['t']:.1f} s inside ({100 * _probe['t'] / el:.1f} % of a "
+              f"{el:.1f} s run)", file=sys.stderr, flush=True)
+        print(f"[probe] json.loads calls: {_probe['loads']}",
+              file=sys.stderr, flush=True)
+
+    atexit.register(_probe_report)
 
 # ── payload constants ────────────────────────────────────────────────────
 # This toolchain rejects numeral literals inside `$…$`, so every nat payload
@@ -106,6 +154,24 @@ class _Hasher:
         return self.h.digest()
 
 
+# Characters `json.dumps` escapes inside a string: the quote, the backslash, and
+# the C0 controls. `ensure_ascii` also escapes everything above U+007F, which is
+# why the fast path below requires `isascii`.
+_ESC_RE = re.compile(r'["\\\x00-\x1f]')
+# `LTP_ENC_FASTESC=1` measures what per-chunk `json.dumps` escaping costs (§13.35:
+# §13.34 found 4.5 % of the walk's samples at the top of `json.dumps`). A chunk
+# with nothing to escape is written between quotes; anything else still goes
+# through `json.dumps`, so the bytes are the same either way.
+_FASTESC = os.environ.get("LTP_ENC_FASTESC", "0") == "1"
+
+
+def _esc(s: str) -> str:
+    """`json.dumps(s)` without the quotes — the escaping, not the wrapping."""
+    if _FASTESC and s.isascii() and not _ESC_RE.search(s):
+        return s
+    return json.dumps(s)[1:-1]
+
+
 class _JsonStr:
     """`_json_write_str` for text that arrives in chunks and never as a whole.
 
@@ -128,13 +194,40 @@ class _JsonStr:
         if s and "\ud800" <= s[-1] <= "\udbff":
             self.held, s = s[-1], s[:-1]
         if s:
-            self.out.write(json.dumps(s)[1:-1])
+            self.out.write(_esc(s))
 
     def close(self) -> None:
         if self.held:
             self.out.write(json.dumps(self.held)[1:-1])
             self.held = ""
         self.out.write('"')
+
+
+# A `str` piece reaches the sink in one `write`, and a text stream encodes the
+# whole argument before returning: on the largest obligation the λ's domain is
+# 2.2 GB, so the string and its encoding were alive together and the second of
+# them is what raised `MemoryError` at 10 GiB (§13.36). Writing a piece in
+# windows bounds that to one window; 8 MiB is 0.08 % of the cap, and the window
+# boundaries never reach the bytes written.
+_WRITE_WINDOW = 8 << 20
+
+
+def _write_str(out, s: str) -> int:
+    """Write `s` in bounded windows, returning its length in characters."""
+    n = len(s)
+    if n <= _WRITE_WINDOW:
+        out.write(s)
+        return n
+    i = 0
+    while i < n:
+        j = min(i + _WRITE_WINDOW, n)
+        # A window may not split a surrogate pair: the escapings that receive
+        # these windows hold only a trailing *high* surrogate back.
+        if j < n and "\udc00" <= s[j] <= "\udfff":
+            j -= 1
+        out.write(s[i:j])
+        i = j
+    return n
 
 
 def _put_piece(out, enc, piece) -> int:
@@ -145,8 +238,7 @@ def _put_piece(out, enc, piece) -> int:
     the certificate's `lhs` spell out.
     """
     if isinstance(piece, str):
-        out.write(piece)
-        return len(piece)
+        return _write_str(out, piece)
     n = 0
     if piece[0] == "enc":
         return enc.write(piece[1], out)
@@ -519,7 +611,7 @@ def _json_write_str(out, s: str) -> None:
             j = n
         elif "\ud800" <= s[j - 1] <= "\udbff":
             j += 1
-        out.write(json.dumps(s[i:j])[1:-1])
+        out.write(_esc(s[i:j]))
         i = j
     out.write('"')
 
@@ -1263,7 +1355,19 @@ def main() -> int:
             # complete is the stream — every certificate written so far is whole
             # and indexed — so it is closed properly (manifest included), the
             # state of the walk is written down, and the exit says so.
-            return stop_walk(stop, d, ex, enc, oblig_sink, ax_fh, stem)
+            if os.environ.get("LTP_STOP_EMIT", "0") != "1":
+                return stop_walk(stop, d, ex, enc, oblig_sink, ax_fh, stem)
+            # The statement the finished run would prove, from what the run has:
+            # a closed value is its own spooled text against the declared type (the
+            # derivation checks the two are equal before it finishes, so this is
+            # the same statement), an open one is the body in the Π's context.
+            if closed:
+                return stop_walk_emit(
+                    stop, d, oblig_sink, ax_fh, ax_path, stem, target, kind,
+                    closed, binders, n_lam, "tnil", val_path, ty_path)
+            return stop_walk_emit(
+                stop, d, oblig_sink, ax_fh, ax_path, stem, target, kind,
+                closed, binders, n_lam, inner_ctx, body, body_ty)
         except MemoryError:
             census(ex, enc, d)
             raise
@@ -1424,6 +1528,85 @@ class StopWalk(Exception):
     """
 
 
+def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
+                   target: str, kind: str, closed: bool, binders: list[str],
+                   n_lam: int, goal_ctx: str, value, ty) -> int:
+    """A stopped run's `.mm0`: the theory as far as the walk got (§13.35).
+
+    `LTP_STOP_EMIT=1` asks for the artifact anyway, and the honest one is the
+    statement-only theory: the assumptions the run has reached, the payload
+    constants they use, and the goal's statement. MM0 mode has no proofs, so a
+    `.mm0` without a derivation is a well-formed theory — it simply does not say
+    the goal is proved, and the header says so in its first line.
+
+    Its assumption payload is the same spool the finished artifact copies
+    through, so everything after the header is byte-identical to the first
+    `ax_bytes` bytes of the finished artifact's payload — which is what
+    `LTP_STOP_EMIT` verifies with `cmp -n` in the runner below.
+
+    No `.mm1` is written: proof mode without a proof is not a theory, it is a
+    syntax error waiting for a reader.
+    """
+    oblig_sink.close()
+    if ax_fh is not None:
+        ax_fh.close()
+    axioms = d.axioms
+    head = [
+        "-- Generated by emit-typing-proof.py (prototype) — DO NOT EDIT.",
+        f"-- Declaration   : {target} [{kind}]",
+        "-- State         : STOPPED, the goal's proof was not reached "
+        f"({stop})",
+        "-- Judgment      : " + ("closed" if closed else "open, in the type's context")
+        + f" ({len(binders)} binders)",
+        f"-- Value λs      : {n_lam}",
+        f"-- Rules applied : {d.rule_count}"
+        f" ({_step_summary(d.rule_order, d.rule_hist)})",
+        f"-- Assumptions   : {d.ax_count} ({len(d.const_ax)} constant types, "
+        f"{len(d.beta_ax)} substitution obligations)",
+        "-- This file states the goal without deriving it: no `.mm1` accompanies "
+        "it.",
+    ]
+    out = list(head)
+    out += ["", "-- ── payload constants (numerals are not accepted inside `$…$`) ──"]
+    out += [f"term {n}: nat;" for n in NATS]
+    out += ["", "-- ── assumptions ──"]
+    path = Path(str(stem) + "_stopped.mm0")
+    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
+                                 for c in target.split(".")[-1])
+    # Bytes, not characters: the box-drawing rules in the prologue are three
+    # bytes each, and this number is the offset a verifier seeks to.
+    header = "\n".join(out) + "\n"
+    with path.open("w") as fh:
+        fh.write(header)
+        if ax_fh is not None:
+            with ax_path.open("r") as spool:
+                shutil.copyfileobj(spool, fh, 1 << 20)
+        else:
+            fh.write("".join(a + "\n" for a in axioms))
+        fh.write("\n-- ── the goal, stated and not derived ──\n")
+        fh.write(f"theorem {thm_name}: $ tty {goal_ctx} ")
+        _put(fh, value)
+        fh.write(" ")
+        _put(fh, ty)
+        fh.write(" $;\n")
+    state = {
+        "stopped": str(stop),
+        "rules": d.rule_count,
+        "axioms": d.ax_count,
+        "obligations": oblig_sink.lines,
+        "stopped_theory": str(path.name),
+        "stopped_theory_bytes": path.stat().st_size,
+        "header_bytes": len(header.encode()),
+        "elapsed_s": round(time.monotonic() - _PROC_T0, 1),
+    }
+    sp = Path(str(stem) + "_stopped.json")
+    sp.write_text(json.dumps(state, indent=1) + "\n")
+    print(f"[stopped] {stop}: {d.rule_count} rules, {d.ax_count} axioms, "
+          f"statement-only theory {path} ({state['stopped_theory_bytes']} B)",
+          file=sys.stderr, flush=True)
+    return 3
+
+
 def stop_walk(stop: StopWalk, d, ex, enc, oblig_sink, ax_fh, stem) -> int:
     """End a run at its budget: close the streams, record the state, exit 3.
 
@@ -1575,6 +1758,16 @@ class Deriver:
         # enough to be interruptible — and the walk is where a 4-hour row spends
         # its time. A clock check costs a `monotonic` call, so it runs once every
         # 4 096 rules instead of once per rule.
+        # A certificate may be written as a *shared* term DAG instead of an
+        # expanded tree (§13.35). The artifact is an expansion today: `tree_json`
+        # has no memo on purpose, so a subterm reached by two paths is written
+        # twice, and one `tsubst` certificate reaches 25 GB. Sharing numbers the
+        # nodes in post-order and writes each one once, which is what makes the
+        # record's bytes proportional to the term rather than to its unrolling.
+        self._share = os.environ.get("LTP_OBLIG_SHARE", "0") == "1"
+        self._sh_idx = array.array("i", [-1]) * 1024
+        self._sh_touched: list[int] = []
+        self._sh_n = 0
         self._stop_rules = int(os.environ.get("LTP_STOP_RULES", "0") or 0)
         _stop_at = float(os.environ.get("LTP_STOP_AT", "0") or 0)
         self._stop_at = (time.monotonic() + _stop_at) if _stop_at else 0.0
@@ -1666,6 +1859,10 @@ class Deriver:
             return
         # Key order of `sort_keys=True`: b, id, kind, lhs, r, rhs, x.
         sink.begin(ax)
+        if self._share:
+            self.emit_obligation_shared(ax, lhs, rhs, b, x, r)
+            sink.end_line()
+            return
         sink.write('{"b": ')
         self.tree_json(b, sink)
         sink.write(', "id": ')
@@ -1680,6 +1877,131 @@ class Deriver:
         self.tree_json(x, sink)
         sink.write("}\n")
         sink.end_line()
+
+    def emit_obligation_shared(self, ax: str, lhs, rhs,
+                               b: int, x: int, r: int) -> None:
+        """The certificate with its terms as one shared node table (§13.35).
+
+        The expanded record writes `b`, `x` and `r` as three trees, so a subterm
+        reached by two paths is written once per path and the largest
+        certificate in the corpus is 25 GB of mostly repeated nodes. Here the
+        three terms share one table: a node appears once, and every term is an
+        index into it. The bytes are then proportional to the term's node count,
+        not to its unrolling.
+
+        The table comes first because a node's index is allocated when its
+        subtree is finished (post-order), so every entry refers only to smaller
+        indices and the walk stays one pass with no placeholder rewriting. The
+        record's key order is fixed by this file, not by `sort_keys`:
+        `id`, `kind`, `lhs`, `rhs`, `n`, `b`, `x`, `r`.
+        """
+        sink = self.oblig_sink
+        sink.write('{"id": ')
+        _json_write_str(sink, ax)
+        sink.write(', "kind": "substitution", "lhs": ')
+        _put_json(sink, self.enc, lhs)
+        sink.write(', "rhs": ')
+        _put_json(sink, self.enc, rhs)
+        sink.write(', "n": [')
+        self._sh_reset()
+        ib = self.tree_share(b, sink)
+        ix = self.tree_share(x, sink)
+        ir = self.tree_share(r, sink)
+        sink.write(f'], "b": {ib}, "x": {ix}, "r": {ir}}}\n')
+
+    def _sh_reset(self) -> None:
+        """Clear this record's numbering.
+
+        Only the ids it touched are cleared, so a certificate that visits a
+        million nodes does not pay for an array of the export's 4.5 M ids. The
+        array grows on demand because synthesised nodes (`mk`) are numbered
+        above the export's own ids.
+        """
+        idx = self._sh_idx
+        for eid in self._sh_touched:
+            idx[eid] = -1
+        self._sh_touched.clear()
+        self._sh_n = 0
+
+    def tree_share(self, eid: int, out) -> int:
+        """Write `eid`'s node into the shared table and return its index.
+
+        A node is identified by its expression id, which is the DAG's own
+        sharing: the same id under two paths is the same subterm and is written
+        once. `strip` is applied first, exactly as `tree_json` does, so the key
+        is the id whose node is actually written.
+
+        Entries are `[op, ...]` with child indices in the positions `tree_json`
+        puts them, and leaves carry the same `json.dumps` value, so a reader can
+        rebuild the expanded node from the table without a second source of
+        truth (`scripts/oblig-expand` does exactly that).
+        """
+        eid = self.strip(eid)
+        idx = self._sh_idx
+        if eid >= len(idx):
+            grow = max(eid + 1 - len(idx), 1 << 16)
+            idx.extend(array.array("i", [-1]) * grow)
+        got = idx[eid]
+        if got >= 0:
+            return got
+        e = self.ex.exprs[eid]
+        if "bvar" in e:
+            ent = '["bvar", ' + json.dumps(e["bvar"]) + "]"
+        elif "const" in e:
+            ent = '["const", ' + json.dumps(self.ex.name(e["const"]["name"])) + "]"
+        elif "sort" in e:
+            ent = '["sort", ' + json.dumps(e["sort"]) + "]"
+        elif "natVal" in e:
+            ent = '["nat", ' + json.dumps(e["natVal"]) + "]"
+        elif "strVal" in e:
+            ent = '["str", ' + json.dumps(e["strVal"]) + "]"
+        elif "sym" in e:
+            ent = '["const", ' + json.dumps(e["sym"]) + "]"
+        elif "app" in e:
+            a = self.tree_share(e["app"]["fn"], out)
+            c = self.tree_share(e["app"]["arg"], out)
+            ent = f'["app", {a}, {c}]'
+        elif "forallE" in e:
+            a = self.tree_share(e["forallE"]["type"], out)
+            c = self.tree_share(e["forallE"]["body"], out)
+            ent = f'["pi", {a}, {c}]'
+        elif "lam" in e:
+            if "type" not in e["lam"]:
+                # `tree_json` would pass this eid to itself here; sharing would
+                # have to write a node that contains itself, which the format
+                # does not have. No export in the corpus has one (the expanded
+                # writer would have recursed forever), so this is a refusal, not
+                # a fallback.
+                raise SystemExit(
+                    f"tree_share: lam {eid} has no type, so its node would "
+                    "contain itself")
+            a = self.tree_share(e["lam"]["type"], out)
+            c = self.tree_share(e["lam"]["body"], out)
+            ent = f'["lam", {a}, {c}]'
+        elif "tsubst" in e:
+            a = self.tree_share(e["tsubst"]["b"], out)
+            c = self.tree_share(e["tsubst"]["x"], out)
+            ent = f'["tsubst", {a}, {c}]'
+        elif "proj" in e:
+            st = e["proj"]
+            a = self.tree_share(st["struct"], out)
+            ent = f'["proj", {a}, {json.dumps(st.get("idx", 0))}]'
+        elif "letE" in e:
+            le = e["letE"]
+            a = self.tree_share(le["type"], out)
+            c = self.tree_share(le["body"], out)
+            v = self.tree_share(le["value"], out)
+            ent = f'["let", {a}, {c}, {v}]'
+        else:
+            raise SystemExit(f"tree_share: unhandled expression {sorted(e.keys())}")
+        i = self._sh_n
+        self._sh_n = i + 1
+        idx[eid] = i
+        self._sh_touched.append(eid)
+        if i:
+            out.write(", ")
+        out.write(ent)
+        return i
 
     def tree_json(self, eid: int, out) -> None:
         """`to_tree`'s node for `eid`, written as JSON instead of built.
@@ -2125,7 +2447,7 @@ class Deriver:
             fld = self.field_type(self.ex.name(st["typeName"]), st["idx"], sargs)
             if fld is None:
                 raise Unfoldable(eid)
-            key = (enc.enc(sty), st["idx"])
+            key = (enc.digest(sty), st["idx"])
             if key not in self.field_ax:
                 ax = f"ax_field_{len(self.field_ax)}"
                 self.add_axiom(
@@ -2157,7 +2479,7 @@ class Deriver:
                 raise SystemExit(f"infer: no exported type for constant {nm}")
             ty = self.strip(raw_ty)
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2171,7 +2493,7 @@ class Deriver:
             # A numeral's type is `Nat`, which is opaque here: the numeral is a
             # constant-like leaf, one axiom, the same shape as Mathlib's.
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2186,7 +2508,7 @@ class Deriver:
             # A string literal: like a numeral, an opaque leaf whose type is the
             # opaque `String` symbol.
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2247,7 +2569,7 @@ class Deriver:
                 # reduct as strings was a third of the memory budget.
                 rr = self.strip(res)
                 self.add_axiom(
-                    f"-- (λ{self.enc.enc(dom)}. _) applied to {enc.head(x, 80)}\n",
+                    f"-- (λ", ("enc", dom), f". _) applied to {enc.head(x, 80)}\n",
                     f"axiom {ax}: $ tdefeq (tsubst ",
                     ("enc", b), " ", ("enc", x), ") ", ("enc", rr), " $;",
                 )
@@ -2468,7 +2790,9 @@ class Deriver:
             self.add_rule("ty_abs")
             return f"(ty_abs {inner})"
         ty, p = self.infer(eid, env, tail=tail)
-        if enc.enc(self.strip(ty)) == enc.enc(expected):
+        # Digests, not texts: both sides can encode to gigabytes here, and a
+        # comparison by `enc.enc` materialised each of them in full (§13.36).
+        if enc.digest(self.strip(ty)) == enc.digest(expected):
             return p
         ax = self.deq_ax(self.strip(ty), expected)
         return f"(ty_deq {p} {ax})"

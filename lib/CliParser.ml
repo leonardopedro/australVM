@@ -64,9 +64,18 @@ module Errors = struct
       Code "exe";
       Text ", ";
       Code "tc";
-      Text ", and ";
+      Text ", ";
       Code "c";
+      Text ", and ";
+      Code "wgsl";
       Text "."
+    ]
+
+  let no_entrypoint_wrong_gpu_target () =
+    austral_raise CliError [
+      Code "--no-entrypoint";
+      Text " is incompatible with `--target-type=wgsl`: the GPU target compiles ";
+      Text "one selected entry function and cannot publish a bundle without it."
     ]
 
   let invalid_bool_flag_value (name: string) (value: string) =
@@ -107,6 +116,9 @@ type target =
   | TypeCheck
   | Executable of { bin_path: string; entrypoint: entrypoint; }
   | CStandalone of { output_path: string; entrypoint: entrypoint option; }
+  (** Compile the checked GPU subset to a WGSL bundle directory.
+      `--output` is the bundle directory (`kernel.json` + `kernel.wgsl`). *)
+  | WgslBundle of { output_dir: string; entrypoint: entrypoint; }
 [@@deriving eq]
 
 type error_reporting_mode =
@@ -127,6 +139,7 @@ type cmd =
       allow_all: bool;
       auth_manifest: string option;
       emit_cps_path: string option;
+      emit_adapters_path: string option;
       pkg_totality: bool;
       emit_derivations: string option;
       (** Export the linearity ledger — the checker's linear-resource and
@@ -197,6 +210,16 @@ let parse_c_target (arglist: arglist): (arglist * target) =
       | None ->
          Errors.missing_entrypoint ())
 
+let parse_wgsl_target (arglist: arglist): (arglist * target) =
+  match pop_value_flag arglist "entrypoint" with
+  | Some (arglist, entrypoint) ->
+     let (arglist, output_dir) = get_output arglist in
+     (arglist, WgslBundle { output_dir; entrypoint = parse_entrypoint entrypoint })
+  | None ->
+     (match pop_bool_flag arglist "no-entrypoint" with
+      | Some _ -> Errors.no_entrypoint_wrong_gpu_target ()
+      | None -> Errors.missing_entrypoint ())
+
 let parse_target_type (arglist: arglist): (arglist * target) =
   match pop_value_flag arglist "target-type" with
   | Some (arglist, target_value) ->
@@ -208,6 +231,9 @@ let parse_target_type (arglist: arglist): (arglist * target) =
       | "c" ->
          (* Build a standaloine C file. *)
          parse_c_target arglist
+      | "wgsl" ->
+         (* Build a WGSL bundle directory. *)
+         parse_wgsl_target arglist
       | "tc" ->
          (* Typecheck. *)
          (arglist, TypeCheck)
@@ -271,6 +297,13 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
     | Some (arglist, path) -> (Some path, arglist)
     | None -> (None, arglist)
   in
+  (* Parse --emit-adapters=<path> flag (U11: write the canonical adapter
+     descriptors for the foreign calls that need a generated wrapper) *)
+  let (emit_adapters_path, arglist) =
+    match pop_value_flag arglist "emit-adapters" with
+    | Some (arglist, path) -> (Some path, arglist)
+    | None -> (None, arglist)
+  in
   (* Parse --pkg-totality flag (avm-pkg: run the package totality pass,
      which rejects unbounded constructs in package modules). Accepts both
      the bare boolean form (`--pkg-totality`, preset => true) and the value
@@ -313,7 +346,7 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; pkg_totality = pkg_totality; emit_derivations = emit_derivations; emit_linearity_ledger = emit_linearity_ledger; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; emit_adapters_path = emit_adapters_path; pkg_totality = pkg_totality; emit_derivations = emit_derivations; emit_linearity_ledger = emit_linearity_ledger; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

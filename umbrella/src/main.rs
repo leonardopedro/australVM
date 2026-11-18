@@ -185,6 +185,10 @@ fn cargo_build(cli: &cli::Cli, crate_dir: &PathBuf) -> Result<PathBuf, String> {
 //    the module docs; it lives in the library so the stage test can map a
 //    fixture library through exactly the code the driver uses.
 
+/// How long the front-end may run before its process group is killed. Generous
+/// on purpose: this bounds a hang, it does not police a slow machine.
+const FRONT_END_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// 3. Stock front-end as a subprocess: exactly the invocation modhost's
 ///    spawn_jit_server uses, minus the JIT-server transport, plus
 ///    --emit-cps so we get the CPS binary on disk. No umbrella-specific
@@ -215,16 +219,26 @@ fn front_end(austral: &PathBuf, modules: &[PathBuf], cps_out: &PathBuf) -> Resul
     cmd.arg("--use-cps-jit")
         .arg("--allow-all")
         .arg("--target-type=tc")
-        .arg(format!("--emit-cps={}", cps_out.display()));
-    let out = cmd
-        .output()
-        .map_err(|e| format!("spawn {austral:?}: {e}"))?;
-    if !out.status.success() {
+        .arg(format!("--emit-cps={}", cps_out.display())); // U06: bounded child. A compiler that hangs must not hang umbrella, and a
+                                                           // deadline is only meaningful if the whole process group is killed — the
+                                                           // front-end spawns helpers of its own.
+    let outcome = umbrella::process::run(cmd, FRONT_END_DEADLINE)
+        .map_err(|e| format!("run {austral:?}: {e}"))?;
+    if outcome.timed_out {
         return Err(format!(
-            "austral front-end failed: {}\nstdout:\n{}\nstderr:\n{}",
-            out.status,
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
+            "austral front-end exceeded its {:?} deadline and was killed \
+             with its process group\nstdout:\n{}\nstderr:\n{}",
+            FRONT_END_DEADLINE,
+            String::from_utf8_lossy(&outcome.stdout),
+            String::from_utf8_lossy(&outcome.stderr)
+        ));
+    }
+    if outcome.exit != umbrella::process::Exit::Code(0) {
+        return Err(format!(
+            "austral front-end failed: {:?}\nstdout:\n{}\nstderr:\n{}",
+            outcome.exit,
+            String::from_utf8_lossy(&outcome.stdout),
+            String::from_utf8_lossy(&outcome.stderr)
         ));
     }
     std::fs::read(cps_out).map_err(|e| format!("read {}: {e}", cps_out.display()))

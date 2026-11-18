@@ -3446,3 +3446,268 @@ next to the walk, and the memo of §13.32 could not help because there is nothin
 repeated to cache. A cheaper certificate — sharing instead of expanding, or a
 binary node table with indices — would cut the 4 715 s run at its dominant cost,
 which is bytes, not decisions.
+
+### 13.35 Sharing the certificate, stopping the walk, and which sample shares are time
+
+§13.34 closed with the lever it had found — "a cheaper certificate, sharing instead
+of expanding, or a binary node table with indices" — and with three costs read off
+stack samples (escaping 4.5 %, export-table lookup 15.2 %, `json.dumps` inside the
+encoder 18.2 %). This section builds that certificate, adds the stopping condition
+§13.33 asked for, and re-measures the costs against controls rather than samples.
+One sample share survives as a time share, one does not, and the section ends on a
+ceiling that is no longer time.
+
+**1. A certificate that references instead of repeating.** The expanded stream has
+no references because JSON has none: `tree_json` walks the DAG and writes each node
+once per *path*, which is why one `tsubst` certificate is 12–25 GB (§13.32). The
+shared form gives each certificate a node table and points into it by row index.
+Everything is behind `LTP_OBLIG_SHARE=1`, so the default artifact is untouched:
+
+- one table per certificate, in post-order, so a row's children are already numbered;
+- interned by the *stripped* expression id, so the DAG's sharing survives into the
+  table (a `dict` from id to index, plus an `array('i')` for the rows);
+- only the ids the certificate actually touched are reset between certificates,
+  not the whole map;
+- record key order `id, kind, lhs, rhs, n, b, x, r`, with `n` holding the indices;
+- `scripts/oblig-expand` turns a shared stream back into expanded records.
+
+One case is refused instead of mangled: a `lam` whose `type` is absent would have to
+refer to the term that contains it, and a table cannot contain itself.
+
+**Measured.** On `abs_re_inner_pairVec_le` (BookProof.Toolbox.ChapterFockPairPerturbation):
+
+| | unexpanded (default) | shared | |
+| --- | ---: | ---: | ---: |
+| obligation stream | 1 012 915 095 B | 294 407 782 B | 29.1 % |
+| wall clock | 72.7 s | 41.9 s | 57.6 % |
+| `.mm0` | 1 041 771 375 B | 1 041 771 375 B | byte-identical |
+| `.mm1` | 1 075 343 397 B | 1 075 343 397 B | byte-identical |
+
+On the ns row at the 44 700-rule budget (9 230 axioms, 357 obligations):
+
+| | unexpanded (default) | shared | |
+| --- | ---: | ---: | ---: |
+| obligation stream | 9 299 651 546 B | 3 508 283 563 B | 37.7 % |
+| wall clock | 657.1 s | 336.4 s | 51.2 % |
+| axiom spool | 3 544 713 174 B | 3 544 713 174 B | byte-identical |
+
+The spool being identical is the point: sharing changes the *check record* and
+nothing else — same rules, same assumptions, same theory. The saving is larger on
+the small row (3.4×) than on the ns row (2.7×) because a `tsubst` certificate
+repeats the same substitution at every path and a table collapses exactly that
+repetition, while the ns row's stream also carries deep, irregular terms that share
+less.
+
+**Verified by decoding, not by trusting the writer.** `scripts/oblig-expand` reads a
+shared stream and writes expanded records; on the FockPair run its output `cmp`s
+equal to the unexpanded stream, and the `.mm0`/`.mm1` above are byte-identical in
+both modes, so the triple round-trips exactly — nothing is lost, only referenced.
+Expansion read 294 407 782 B and wrote 1 012 915 095 B in 37.3 s.
+
+**2. A stopping condition, and what the stopped artifact is a prefix of.** With
+`LTP_STOP_RULES` and `LTP_STOP_EMIT=1`, a budget stop writes `<stem>_stopped.mm0`
+(header, payload constants, the full axiom spool, then the goal stated and not
+derived) and `<stem>_stopped.json`, whose `header_bytes` is the byte offset where the
+spool begins. The header's counts are state-dependent, so the claim is about the
+payload — everything after the header — not about the whole file.
+
+The test is against the walk continuing past the stop. Same declaration, same flags,
+no budget: the continued run reached 566 obligations and an 84 222 056 725 B spool
+before it died (§ below). The stopped theory at 125 417 rules (24 393 axioms,
+563 obligations, 76 568 956 912 B, `header_bytes` 6 145) is byte-identical to that
+spool for its whole **72 682 473 339 B**, and the first differing byte is payload byte
+72 682 473 340 — the first byte after the spool, where the stopped theory appends its
+goal statement (3 886 477 428 B). So the stopped artifact *is* the spool of the same
+walk, byte for byte, with the goal written on top of it. The same check passed at
+44 700 rules (3 544 713 174 B), which is where the earlier "not a prefix" reports came
+from a comparison loop, not from the bytes.
+
+The stopped run's own numbers: 125 417 rules, 24 393 axioms, 563 obligations,
+76 568 956 912 B of theory, and 66 786 861 380 B of certificate stream in 32 parts,
+whose index lengths sum to exactly the files' bytes — 563 records, no overlapping
+segment, so a stopped run reads like any other (§13.32).
+
+**3. Which sample shares were time.** §13.34's shares are where the sampler *caught*
+the walk, and a short frame is caught often without costing much. Three-way A/B on
+the ns row at the 44 700-rule budget, one process each, same `nix develop`:
+
+| run | real | user | sys |
+| --- | ---: | ---: | ---: |
+| default | 11m22.98s | 8m53.11s | 2m28.42s |
+| `LTP_ENC_FASTESC=1` (single-regex escape) | 11m27.40s | 8m58.78s | 2m26.86s |
+| `LTP_EXPRS_CACHE=4000000` (20× the export cache) | 11m26.31s | 8m55.20s | 2m29.40s |
+
+Flat within 5 s of ~682 s CPU. So the per-chunk escaping of §13.34's 4.5 % costs
+nothing measurable, and a deeper export cache changes nothing — because misses are
+0.05 % of lookups (450 792 `json.loads` against 977 900 280 lookups at this budget).
+Neither row of that table is a time share, and the A/B is the measurement that says so.
+
+**The lookup itself is not free, and there the samples were right.**
+`LTP_PROBE_LOOKUP=1` times `LazyExprs.__getitem__` directly: **977 900 280 calls,
+147.9 s inside, 16.4 %** of a 900.2 s run. The timer's own cost is 0.166 µs per call
+(measured: 0.207 µs wrapped against 0.042 µs bare over 2 000 000 calls), so it added
+~162 s and the walk itself would have taken ~738 s — the lookup is ~20 % of it. That
+is 151 ns per call, 21 877 calls per rule, and §13.34's 15.2 % sample share was
+indeed a time share. It is also the cost that sharing addresses: a table row is
+looked up once per certificate, not once per path.
+
+**What stopped the continued run was memory, not the clock.** Between 5 494 MiB peak
+RSS and the 10 GiB address-space cap, in its 74th minute, three obligations past the
+125 417-rule state, the walk raised `MemoryError` in `out.write` of a *short* string
+piece — the axiom line's own header text, not a term. So the address space was
+already spent when the last small allocation failed: §13.30 streamed the axiom's three
+term texts precisely to avoid holding them, and what remains is the fragmentation of
+repeatedly materialising multi-GB texts. With sharing the row now reaches and passes
+its finished rule state in ~62 min; the next obstacle to a *complete* artifact is
+10 GiB of address space, which is a question about the host, not the declaration
+(untested: this host is 30 GB shared with a Waydroid session, and the previous
+two-at-once attempt at these runs was killed outright).
+
+### 13.36 A complete theory for the ns row, and what actually bounded it
+
+§13.35 ended on a ceiling that was "a question about the host": the walk reached 566
+obligations and then raised `MemoryError` under a 10 GiB address-space cap. That
+question has an answer, and the answer came with the thing the section could not
+produce — a complete `.mm0`/`.mm1` for the row.
+
+**1. The completing run.** One change of substance from §13.35's attempt: the cap
+(`ulimit -v 12582912`, 12 GiB) — plus the export cache bounded at 20 000 records, a
+knob §13.35's A/B had shown flat. Nothing else moved: `LTP_OBLIG_SHARE=1`,
+`LTP_OBLIG_CHUNK=2147483648`, the same export and declaration, one process.
+
+| | |
+| --- | ---: |
+| wall clock | 5 172.8 s (86.2 min) |
+| rules | 125 469 |
+| assumptions | 24 419 (354 constant types, 580 substitution) |
+| obligation stream | 580 records, 90 676 132 250 B, 43 parts |
+| `.mm0` | 102 543 367 789 B (payload starts at byte 6 100) |
+| `.mm1` | 102 547 674 107 B (+4 306 318 B of proof) |
+| peak RSS / VmSize sampled | 5 756 / 5 779 MiB |
+
+The artifact is checked as far as an artifact can be without a checker that can hold
+it: the 580 index records' segments tile all 43 parts with no gap or overlap, every
+record's `len` equals its segments' sum, the parts' bytes equal the manifest's
+`bytes`, and both files end at `$;` — the `.mm0` after the goal's statement, the
+`.mm1` after `ax_subst_579`. No `mm0-c` run: 102 GB of text is not something this
+host can verify, so the claim here is structural consistency and a clean census, not
+acceptance by the root of trust.
+
+**2. The stop, restated against a complete theory.** §13.35 verified the stopped
+theory against a run that later *died*, which left open whether the full walk keeps
+the same bytes to the end. It does. The stop was re-emitted at the same rule budget
+(`LTP_STOP_RULES=125417`, `LTP_STOP_EMIT=1`, 3 708.3 s) and its whole axiom spool
+compared with the complete `.mm0`'s payload:
+
+- stopped theory 76 568 956 912 B, header 6 145 B, payload 76 568 950 767 B;
+- `cmp -i 6100:6145 -n 76568950767` over the two payloads: **equal for
+  72 682 473 339 B**, first difference at payload byte 72 682 473 340 — the first
+  byte of the stop's 3 886 477 428 B goal statement, exactly where the stopped file
+  stops being a theory fragment and becomes a statement;
+- the re-emitted stopped theory is byte-for-byte the same size as the earlier one,
+  with the same census (125 417 rules, 24 393 axioms, 563 obligations).
+
+So the two artifacts agree on the entire 72.68 GB the stop claims, and the stop's
+own trailing goal is the only thing the complete file does not have there. The
+earlier claim was about a walk that had been continued 11.5 GB past the stop; this
+one is about the walk that finished.
+
+**3. What bounded it, and a hypothesis that did not survive.** §13.35 said the
+`MemoryError` was "the fragmentation of repeatedly materialising multi-GB texts".
+That was wrong in an instructive way. Sampled every 30 s, VmSize in the completing
+run never exceeded 5 779 MiB and tracked RSS to within 23 MiB — there is no
+address-space leak and no growing fragmentation. But the 10 GiB cap failed at the
+same obligation (566) under *both* cache settings, 200 000 and 20 000 records, so the
+export cache was not what decided the outcome either; and 12 GiB of cap carried the
+same walk to completion. The bounding quantity is therefore a *short-lived* multi-GB
+allocation, large enough that 10.2 GiB of address space could not hold it and small
+enough that 12.3 GiB could, and too brief to be caught by a 30 s sample: the peaks in
+both tables are lower bounds, not peaks. That is the honest reading of the
+measurement, and it is why the fix is a cap and not a change of algorithm.
+
+What this leaves for a reader who wants the row verified rather than emitted: a
+checker that streams (the theory is 102 GB of text and the proof is 4 MB on top of
+it), and a host with more room than this one — 30 GB shared with a Waydroid session
+whose swap was already full, which is why the cap was the only dial available. §13.37
+revises both halves of this: the allocation is a write, not a cap, and the row fits
+inside 10 GiB once it is streamed.
+
+### 13.37 The allocation that bounded the walk, and the row inside 10 GiB
+
+§13.36 concluded that a short-lived multi-GB allocation set the cap, and that "the
+fix is a cap and not a change of algorithm". The allocation is now located, and the
+conclusion was premature: the row runs inside the original 10 GiB, and the artifacts
+do not move a byte.
+
+**1. Sampling at 1 s instead of 30 s.** §13.36's peaks were lower bounds because the
+sampler only looked every 30 s. Sampling every second changes what can be seen: the
+same failing walk shows VmSize climbing to **7 490 MiB** (RSS 6 583 MiB) before dying,
+so the peak was never the ~5.8 GB of the sampled record, and the difference between
+"died at 10 GiB" and "passed at 12 GiB" was a real few-GB allocation rather than an
+invisible one.
+
+**2. What was allocating it.** The traceback was always the same and always ended in
+a `str`: `MemoryError` at `out.write(piece)` in `_put_piece`, called from `add_axiom`.
+A sink is a text stream, and a text stream encodes its whole argument before it
+returns, so writing a piece of *N* bytes needs *2N* bytes: on the largest obligation
+the piece is the λ's domain — 2.2 GB of text, spelled out in the substitution axiom's
+comment — and both copies were alive at once. Two places fed that:
+
+- the comment line `f"-- (λ{self.enc.enc(dom)}. _) …"` built the domain as a string
+  and then wrote it, instead of passing it as a piece the encoder streams;
+- `_put_piece` handed a `str` piece to `out.write` whole, whatever its size.
+
+The fix is the one this file already uses everywhere else: stream, or write in
+bounded windows. `_put_piece` now writes a string piece through `_write_str`, which
+slices at 8 MiB (adjusting by one character so a window never splits a surrogate
+pair), and the substitution comment passes `("enc", dom)` as its own piece. Nothing
+else changed — no markup, no ordering, no naming.
+
+A second change landed in the same attempt and is worth separating, because the two
+were not applied together: the axiom memos had been keyed by *text*
+(`(ctx, enc.enc(eid))` in the three constant leaves, `(enc.enc(sty), st["idx"])` for
+fields, and `enc.enc(...) == enc.enc(...)` in `check`) — each a full materialisation,
+and for `const_ax` a multi-GB string retained in a dict key. They are keyed by
+`enc.digest` now, which streams through a 64 KiB-chunked hash, exactly as `beta_ax`
+has been since §13.30. This one is **not** what unblocked the run: with the digest
+keys in place and nothing else, the walk still died at obligation 566 under 10 GiB
+with the 7 490 MiB peak above. It is a real removal of work (FockPair: 74.04 s →
+67.60 s default, 41.77 s → 35.49 s shared, artifacts identical) but the binding
+allocation was the write.
+
+**3. The retry, under the cap that used to fail.** Same command, same knobs, one
+process, `ulimit -v 10485760` — 10 GiB, the value that produced `MemoryError` on both
+earlier attempts — with 1 s sampling:
+
+| | |
+| --- | ---: |
+| wall clock | 5 648.7 s (94.1 min) |
+| exit | 0 |
+| `.mm0` | 102 543 367 789 B |
+| `.mm1` | 102 547 674 107 B |
+| obligation stream | 580 records, 90 676 132 250 B, 43 parts |
+| peak VmSize / RSS sampled | 6 749 / 5 187 MiB |
+
+So the peak is now a measured 6.7 GB against a 10 GiB cap, with about 3.6 GB of
+headroom, and the earlier requirement of "somewhere in (10.2, 12.3) GiB" is gone.
+The census is the one §13.36 reported (125 469 rules, the same seven-line rule
+summary, 24 419 assumptions, 277 nats, 261 symbols).
+
+**4. Byte-neutrality, at three scales.** A change that only removes copies should
+not be able to move a byte, and it did not:
+
+- FockPair, default mode: `.mm0` 1 041 771 375 B and `.mm1` 1 075 343 397 B and the
+  1 012 915 095 B expanded stream, each `cmp`-identical to the script at HEAD;
+- FockPair, `LTP_OBLIG_SHARE=1`: the same two files and the 294 407 782 B shared
+  stream, identical;
+- the ns row: both 102 GB artifacts `cmp`-identical to the ones §13.36 produced under
+  the 12 GiB cap (105 s and 81 s of reads), all 43 stream parts identical, the index
+  identical, and the manifest's `records`/`bytes`/`parts` unchanged.
+
+The row took 9.2 % longer than the 12 GiB run (5 648.7 s vs 5 172.8 s). Both numbers
+are single runs on a shared host, so this is reported as observed and not attributed:
+the extra encoding passes the digest keys cost are per constant and per field, and
+the write path is shorter, not longer.
+
+What is left of §13.36's "ceiling" is nothing but the artifact: a complete theory for
+the row that a streaming checker has yet to read.

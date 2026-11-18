@@ -28,6 +28,8 @@
 //! these adapters) is what makes the allowance safe; until then
 //! `lib/TypingPass.ml` keeps rejecting those signatures.
 
+use crate::set_last_error;
+
 /// Version of the scalar encoding defined below. Bump it when any rule in
 /// this file changes, because a compiler-side allowance names a version.
 pub const SCALAR_ABI_VERSION: u32 = 1;
@@ -243,6 +245,142 @@ pub fn narrow_i64(value: i64, ty: ScalarType) -> Result<ScalarValue, AdapterErro
             expected: other,
             got: ScalarType::I64,
         }),
+    }
+}
+
+// ── C ABI ────────────────────────────────────────────────────────────────────
+//
+// Generated wrappers are written by umbrella and compiled by rustc, but the
+// bridge's own callers (and that generator's fixtures) need the same encoding
+// without linking Rust `Result`/`enum` types. These three functions are the
+// whole surface: a version, an encode and a decode, over a small numeric type
+// tag. Values travel as bit patterns, so a Float64 payload is its `to_bits`
+// word — never a numeric cast.
+
+const ABI_OK: i32 = 0;
+const ABI_REFUSED: i32 = 1;
+
+fn scalar_type_from_tag(tag: u32) -> Option<ScalarType> {
+    Some(match tag {
+        0 => ScalarType::Unit,
+        1 => ScalarType::Bool,
+        2 => ScalarType::I32,
+        3 => ScalarType::U32,
+        4 => ScalarType::I64,
+        5 => ScalarType::U64,
+        6 => ScalarType::F32,
+        7 => ScalarType::F64,
+        _ => return None,
+    })
+}
+
+fn scalar_type_tag(ty: ScalarType) -> u32 {
+    match ty {
+        ScalarType::Unit => 0,
+        ScalarType::Bool => 1,
+        ScalarType::I32 => 2,
+        ScalarType::U32 => 3,
+        ScalarType::I64 => 4,
+        ScalarType::U64 => 5,
+        ScalarType::F32 => 6,
+        ScalarType::F64 => 7,
+    }
+}
+
+/// The scalar encoding version a wrapper was generated for.
+#[no_mangle]
+pub extern "C" fn au_scalar_abi_version() -> u32 {
+    SCALAR_ABI_VERSION
+}
+
+/// Encode a logical value as its transport word.
+///
+/// `payload` is the value's bits: the integer for `Bool` (0/1), `I32`/`I64`
+/// (`u32`/`u64` bit patterns), `F32`/`F64` (`to_bits`), and nothing for
+/// `Unit`. Returns 0 on success, 1 on refusal (reason on the last-error
+/// channel), and writes the word to `out` only on success.
+#[no_mangle]
+pub extern "C" fn au_scalar_encode(ty: u32, payload: u64, out: *mut u64) -> i32 {
+    if out.is_null() {
+        set_last_error("au_scalar_encode: null output pointer");
+        return ABI_REFUSED;
+    }
+    let Some(kind) = scalar_type_from_tag(ty) else {
+        set_last_error(&format!("au_scalar_encode: unknown scalar type tag {ty}"));
+        return ABI_REFUSED;
+    };
+    let value = match kind {
+        ScalarType::Unit => ScalarValue::Unit,
+        ScalarType::Bool => match payload {
+            0 => ScalarValue::Bool(false),
+            1 => ScalarValue::Bool(true),
+            other => {
+                set_last_error(&format!(
+                    "au_scalar_encode: a boolean payload must be 0 or 1, got {other}"
+                ));
+                return ABI_REFUSED;
+            }
+        },
+        ScalarType::I32 => ScalarValue::I32(payload as u32 as i32),
+        ScalarType::U32 => ScalarValue::U32(payload as u32),
+        ScalarType::I64 => ScalarValue::I64(payload as i64),
+        ScalarType::U64 => ScalarValue::U64(payload),
+        ScalarType::F32 => ScalarValue::F32(f32::from_bits(payload as u32)),
+        ScalarType::F64 => ScalarValue::F64(f64::from_bits(payload)),
+    };
+    match encode(kind, value) {
+        Ok(word) => {
+            unsafe { *out = word };
+            ABI_OK
+        }
+        Err(e) => {
+            set_last_error(&format!("au_scalar_encode: {e}"));
+            ABI_REFUSED
+        }
+    }
+}
+
+/// Decode a transport word into a logical value: the tag is returned in `out`
+/// (in the same numeric encoding as `ty`), the value's bits in `word`.
+#[no_mangle]
+pub extern "C" fn au_scalar_decode(ty: u32, word: u64, out: *mut u64) -> i32 {
+    if out.is_null() {
+        set_last_error("au_scalar_decode: null output pointer");
+        return ABI_REFUSED;
+    }
+    let Some(kind) = scalar_type_from_tag(ty) else {
+        set_last_error(&format!("au_scalar_decode: unknown scalar type tag {ty}"));
+        return ABI_REFUSED;
+    };
+    match decode(kind, word) {
+        Ok(value) => {
+            let payload = match value {
+                ScalarValue::Unit => 0,
+                ScalarValue::Bool(b) => u64::from(b),
+                ScalarValue::I32(v) => v as u32 as u64,
+                ScalarValue::U32(v) => u64::from(v),
+                ScalarValue::I64(v) => v as u64,
+                ScalarValue::U64(v) => v,
+                ScalarValue::F32(v) => u64::from(v.to_bits()),
+                ScalarValue::F64(v) => v.to_bits(),
+            };
+            unsafe { *out = payload };
+            ABI_OK
+        }
+        Err(e) => {
+            set_last_error(&format!("au_scalar_decode: {e}"));
+            ABI_REFUSED
+        }
+    }
+}
+
+/// The numeric tag for a scalar type, exposed for generators that must write
+/// it into a descriptor without duplicating the numbering.
+#[no_mangle]
+pub extern "C" fn au_scalar_type_tag(ty: u32) -> i32 {
+    match scalar_type_from_tag(ty) {
+        Some(kind) => scalar_type_tag(kind) as i32,
+        None => -1,
     }
 }
 

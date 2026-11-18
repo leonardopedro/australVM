@@ -203,6 +203,33 @@ class _JsonStr:
         self.out.write('"')
 
 
+# A `str` piece reaches the sink in one `write`, and a text stream encodes the
+# whole argument before returning: on the largest obligation the λ's domain is
+# 2.2 GB, so the string and its encoding were alive together and the second of
+# them is what raised `MemoryError` at 10 GiB (§13.36). Writing a piece in
+# windows bounds that to one window; 8 MiB is 0.08 % of the cap, and the window
+# boundaries never reach the bytes written.
+_WRITE_WINDOW = 8 << 20
+
+
+def _write_str(out, s: str) -> int:
+    """Write `s` in bounded windows, returning its length in characters."""
+    n = len(s)
+    if n <= _WRITE_WINDOW:
+        out.write(s)
+        return n
+    i = 0
+    while i < n:
+        j = min(i + _WRITE_WINDOW, n)
+        # A window may not split a surrogate pair: the escapings that receive
+        # these windows hold only a trailing *high* surrogate back.
+        if j < n and "\udc00" <= s[j] <= "\udfff":
+            j -= 1
+        out.write(s[i:j])
+        i = j
+    return n
+
+
 def _put_piece(out, enc, piece) -> int:
     """Write one statement piece to `out`, returning its size in bytes.
 
@@ -211,8 +238,7 @@ def _put_piece(out, enc, piece) -> int:
     the certificate's `lhs` spell out.
     """
     if isinstance(piece, str):
-        out.write(piece)
-        return len(piece)
+        return _write_str(out, piece)
     n = 0
     if piece[0] == "enc":
         return enc.write(piece[1], out)
@@ -310,9 +336,27 @@ class EncBuf:
         return "".join(self.chunks)
 
 
+# One top-level encode (`write`, `digest`, `head`, `enc`) expands a shared
+# subtree once per *path*: a 2.2 GB text is 67.5 M tokens over a few million
+# distinct nodes, so the same record is asked for again and again — §13.35 timed
+# 977.9 M lookups, 20 % of that walk, and a profile of the shared walk on
+# FockPair credits `_enc_tokens` with 20.6 M of its 32.3 M. Keeping the records
+# for the duration of one encode, and dropping them after it, bounds that to one
+# certificate's node set instead of the export's size. A front that outlives the
+# encode was measured and rejected: a miss then pays a third lookup and shared
+# mode came out 2 s slower (§13.38).
+REC_CACHE_MAX = 1 << 21
+
+
 class Enc:
     def __init__(self, ex, succ_idx: bool = False):
         self.ex = ex
+        self.exprs = ex.exprs
+        # Records resolved by the encode in progress: `_top` installs this for
+        # the outermost encode and drops it on the way out, so a nested `_enc`
+        # (a `mdata` wrapper, a synthesised `tsubst`) shares the cache of the
+        # encode that started it.
+        self._rec: dict[int, dict] | None = None
         self.levels: dict[int, str] = {}
         # `cic_typing.mm0` names variables by *term* (`tvar (tsucc tzero)`), so
         # weakening is the theory's `tsucc`; the statement corpus writes flat
@@ -353,6 +397,17 @@ class Enc:
             self._memo_bytes += len(s)
         return s
 
+    def _top(self, eid: int, buf) -> None:
+        """Encode one term, owning the record cache for exactly that encode."""
+        outer = self._rec is None
+        if outer:
+            self._rec = {}
+        try:
+            self._enc(eid, buf)
+        finally:
+            if outer:
+                self._rec = None
+
     def write(self, eid: int, sink) -> int:
         """Append `eid`'s encoding to `sink`, returning its size in bytes.
 
@@ -361,7 +416,7 @@ class Enc:
         is 2.2 GB (§13.30).
         """
         buf = EncBuf(sink)
-        self._enc(eid, buf)
+        self._top(eid, buf)
         buf._flush()
         return buf.bytes
 
@@ -372,7 +427,7 @@ class Enc:
             return d
         h = _Hasher()
         buf = EncBuf(h)
-        self._enc(eid, buf)
+        self._top(eid, buf)
         buf._flush()
         d = h.digest()
         # One 32-byte digest per expression seen: the memo is a convenience (a
@@ -386,7 +441,7 @@ class Enc:
         """The first `n` characters of `eid`'s encoding, and no more."""
         buf = _Head(n)
         try:
-            self._enc(eid, buf)
+            self._top(eid, buf)
         except _Head._Done:
             pass
         return "".join(buf.parts)
@@ -401,7 +456,7 @@ class Enc:
         """
         with path.open("w") as fh:
             buf = EncBuf(fh)
-            self._enc(eid, buf)
+            self._top(eid, buf)
             buf._flush()
             return buf.bytes
 
@@ -439,7 +494,19 @@ class Enc:
             self._memo_bytes += len(s)
 
     def _enc_tokens(self, eid: int, out: EncBuf) -> None:
-        e = self.ex.exprs[eid]
+        # The record, carried for the duration of the encode: a shared subtree
+        # is expanded once per path, and asking the export table for it every
+        # time is what §13.35's probe timed at 20 % of the walk.
+        rec = self._rec
+        if rec is None:
+            e = self.exprs[eid]
+        else:
+            e = rec.get(eid)
+            if e is None:
+                e = self.exprs[eid]
+                if len(rec) >= REC_CACHE_MAX:
+                    rec.clear()
+                rec[eid] = e
         if "bvar" in e:
             k = e["bvar"]
             if not self.succ_idx:
@@ -1644,6 +1711,9 @@ class Deriver:
                  oblig_sink=None, axiom_sink=None):
         self.ex = ex
         self.enc = enc
+        # The export table, reached through the encoder so both walks ask one
+        # object for a record.
+        self.exprs = enc.exprs
         self.path = path
         # Deferred substitution: conclude `ty_app` at `(tsubst b x)` itself, so
         # the premise is `tdefeq_refl` and the redex is left for one normalisation
@@ -1910,72 +1980,91 @@ class Deriver:
         rebuild the expanded node from the table without a second source of
         truth (`scripts/oblig-expand` does exactly that).
         """
-        eid = self.strip(eid)
+        exprs = self.exprs
+        name = self.ex.name
         idx = self._sh_idx
-        if eid >= len(idx):
-            grow = max(eid + 1 - len(idx), 1 << 16)
-            idx.extend(array.array("i", [-1]) * grow)
-        got = idx[eid]
-        if got >= 0:
-            return got
-        e = self.ex.exprs[eid]
-        if "bvar" in e:
-            ent = '["bvar", ' + json.dumps(e["bvar"]) + "]"
-        elif "const" in e:
-            ent = '["const", ' + json.dumps(self.ex.name(e["const"]["name"])) + "]"
-        elif "sort" in e:
-            ent = '["sort", ' + json.dumps(e["sort"]) + "]"
-        elif "natVal" in e:
-            ent = '["nat", ' + json.dumps(e["natVal"]) + "]"
-        elif "strVal" in e:
-            ent = '["str", ' + json.dumps(e["strVal"]) + "]"
-        elif "sym" in e:
-            ent = '["const", ' + json.dumps(e["sym"]) + "]"
-        elif "app" in e:
-            a = self.tree_share(e["app"]["fn"], out)
-            c = self.tree_share(e["app"]["arg"], out)
-            ent = f'["app", {a}, {c}]'
-        elif "forallE" in e:
-            a = self.tree_share(e["forallE"]["type"], out)
-            c = self.tree_share(e["forallE"]["body"], out)
-            ent = f'["pi", {a}, {c}]'
-        elif "lam" in e:
-            if "type" not in e["lam"]:
-                # `tree_json` would pass this eid to itself here; sharing would
-                # have to write a node that contains itself, which the format
-                # does not have. No export in the corpus has one (the expanded
-                # writer would have recursed forever), so this is a refusal, not
-                # a fallback.
+        write = out.write
+
+        def node(eid: int) -> int:
+            """One node, from one lookup.
+
+            `strip` and the writer both need the record, and asking the export
+            table for it twice was half of the lookups §13.35 timed: the record
+            the walk strips to is the record it writes, so it is fetched once
+            and carried here. `exprs`, `name` and `write` are bound outside so
+            the recursion pays neither attribute chains nor a method call per
+            edge.
+            """
+            e = exprs[eid]
+            while "mdata" in e:
+                eid = e["mdata"]["expr"]
+                e = exprs[eid]
+            if eid >= len(idx):
+                grow = max(eid + 1 - len(idx), 1 << 16)
+                idx.extend(array.array("i", [-1]) * grow)
+            got = idx[eid]
+            if got >= 0:
+                return got
+            if "bvar" in e:
+                ent = '["bvar", ' + json.dumps(e["bvar"]) + "]"
+            elif "const" in e:
+                ent = '["const", ' + json.dumps(name(e["const"]["name"])) + "]"
+            elif "sort" in e:
+                ent = '["sort", ' + json.dumps(e["sort"]) + "]"
+            elif "natVal" in e:
+                ent = '["nat", ' + json.dumps(e["natVal"]) + "]"
+            elif "strVal" in e:
+                ent = '["str", ' + json.dumps(e["strVal"]) + "]"
+            elif "sym" in e:
+                ent = '["const", ' + json.dumps(e["sym"]) + "]"
+            elif "app" in e:
+                a = node(e["app"]["fn"])
+                c = node(e["app"]["arg"])
+                ent = f'["app", {a}, {c}]'
+            elif "forallE" in e:
+                a = node(e["forallE"]["type"])
+                c = node(e["forallE"]["body"])
+                ent = f'["pi", {a}, {c}]'
+            elif "lam" in e:
+                if "type" not in e["lam"]:
+                    # `tree_json` would pass this eid to itself here; sharing
+                    # would have to write a node that contains itself, which the
+                    # format does not have. No export in the corpus has one (the
+                    # expanded writer would have recursed forever), so this is a
+                    # refusal, not a fallback.
+                    raise SystemExit(
+                        f"tree_share: lam {eid} has no type, so its node would "
+                        "contain itself")
+                a = node(e["lam"]["type"])
+                c = node(e["lam"]["body"])
+                ent = f'["lam", {a}, {c}]'
+            elif "tsubst" in e:
+                a = node(e["tsubst"]["b"])
+                c = node(e["tsubst"]["x"])
+                ent = f'["tsubst", {a}, {c}]'
+            elif "proj" in e:
+                st = e["proj"]
+                a = node(st["struct"])
+                ent = f'["proj", {a}, {json.dumps(st.get("idx", 0))}]'
+            elif "letE" in e:
+                le = e["letE"]
+                a = node(le["type"])
+                c = node(le["body"])
+                v = node(le["value"])
+                ent = f'["let", {a}, {c}, {v}]'
+            else:
                 raise SystemExit(
-                    f"tree_share: lam {eid} has no type, so its node would "
-                    "contain itself")
-            a = self.tree_share(e["lam"]["type"], out)
-            c = self.tree_share(e["lam"]["body"], out)
-            ent = f'["lam", {a}, {c}]'
-        elif "tsubst" in e:
-            a = self.tree_share(e["tsubst"]["b"], out)
-            c = self.tree_share(e["tsubst"]["x"], out)
-            ent = f'["tsubst", {a}, {c}]'
-        elif "proj" in e:
-            st = e["proj"]
-            a = self.tree_share(st["struct"], out)
-            ent = f'["proj", {a}, {json.dumps(st.get("idx", 0))}]'
-        elif "letE" in e:
-            le = e["letE"]
-            a = self.tree_share(le["type"], out)
-            c = self.tree_share(le["body"], out)
-            v = self.tree_share(le["value"], out)
-            ent = f'["let", {a}, {c}, {v}]'
-        else:
-            raise SystemExit(f"tree_share: unhandled expression {sorted(e.keys())}")
-        i = self._sh_n
-        self._sh_n = i + 1
-        idx[eid] = i
-        self._sh_touched.append(eid)
-        if i:
-            out.write(", ")
-        out.write(ent)
-        return i
+                    f"tree_share: unhandled expression {sorted(e.keys())}")
+            i = self._sh_n
+            self._sh_n = i + 1
+            idx[eid] = i
+            self._sh_touched.append(eid)
+            if i:
+                write(", ")
+            write(ent)
+            return i
+
+        return node(eid)
 
     def tree_json(self, eid: int, out) -> None:
         """`to_tree`'s node for `eid`, written as JSON instead of built.
@@ -1988,7 +2077,7 @@ class Deriver:
         only re-introduce the retained dicts.
         """
         eid = self.strip(eid)
-        e = self.ex.exprs[eid]
+        e = self.exprs[eid]
         if "bvar" in e:
             # `bvar`/`natVal`/`idx` are ints in some exports and decimal strings
             # in others (Lean writes big numerals as strings), so all three go
@@ -2143,7 +2232,7 @@ class Deriver:
         """The cases of `to_tree`; `to_tree` memoises their result on `eid`."""
         if depth > 4096:
             raise SystemExit("to_tree: expression too deep (cycle?)")
-        e = self.ex.exprs[eid]
+        e = self.exprs[eid]
         if "bvar" in e:
             return {"bvar": e["bvar"]}
         if "const" in e:
@@ -2182,8 +2271,13 @@ class Deriver:
         raise SystemExit(f"to_tree: unhandled expression {sorted(e.keys())}")
 
     def strip(self, eid: int) -> int:
-        while "mdata" in self.ex.exprs[eid]:
-            eid = self.ex.exprs[eid]["mdata"]["expr"]
+        # One record, carried through the chain: the two-lookup-per-level form
+        # this replaces asked the table for a node it had just read.
+        exprs = self.exprs
+        e = exprs[eid]
+        while "mdata" in e:
+            eid = e["mdata"]["expr"]
+            e = exprs[eid]
         return eid
 
     def lift(self, eid: int, delta: int, cutoff: int = 0) -> int:
@@ -2203,7 +2297,7 @@ class Deriver:
         return out
 
     def _lift(self, eid: int, delta: int, cutoff: int = 0) -> int:
-        e = self.ex.exprs[eid]
+        e = self.exprs[eid]
         if "bvar" in e:
             return eid if e["bvar"] < cutoff else self.mk({"bvar": e["bvar"] + delta})
         if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
@@ -2253,7 +2347,7 @@ class Deriver:
         return out
 
     def _subst0(self, eid: int, arg: int, depth: int = 0) -> int:
-        e = self.ex.exprs[eid]
+        e = self.exprs[eid]
         if "bvar" in e:
             k = e["bvar"]
             if k == depth:
@@ -2295,7 +2389,7 @@ class Deriver:
         surfaces as an MM0 unification failure megabytes into the artifact
         (measured: a 3.7 MB derivation claiming `tvar 4` converts to `tvar 5`).
         """
-        e = self.ex.exprs[self.strip(eid)]
+        e = self.exprs[self.strip(eid)]
         if "bvar" in e:
             return -1 if e["bvar"] < depth else e["bvar"] - depth
         if "app" in e:
@@ -2421,7 +2515,7 @@ class Deriver:
             fld = self.field_type(self.ex.name(st["typeName"]), st["idx"], sargs)
             if fld is None:
                 raise Unfoldable(eid)
-            key = (enc.enc(sty), st["idx"])
+            key = (enc.digest(sty), st["idx"])
             if key not in self.field_ax:
                 ax = f"ax_field_{len(self.field_ax)}"
                 self.add_axiom(
@@ -2453,7 +2547,7 @@ class Deriver:
                 raise SystemExit(f"infer: no exported type for constant {nm}")
             ty = self.strip(raw_ty)
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2467,7 +2561,7 @@ class Deriver:
             # A numeral's type is `Nat`, which is opaque here: the numeral is a
             # constant-like leaf, one axiom, the same shape as Mathlib's.
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2482,7 +2576,7 @@ class Deriver:
             # A string literal: like a numeral, an opaque leaf whose type is the
             # opaque `String` symbol.
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2543,7 +2637,7 @@ class Deriver:
                 # reduct as strings was a third of the memory budget.
                 rr = self.strip(res)
                 self.add_axiom(
-                    f"-- (λ{self.enc.enc(dom)}. _) applied to {enc.head(x, 80)}\n",
+                    f"-- (λ", ("enc", dom), f". _) applied to {enc.head(x, 80)}\n",
                     f"axiom {ax}: $ tdefeq (tsubst ",
                     ("enc", b), " ", ("enc", x), ") ", ("enc", rr), " $;",
                 )
@@ -2570,7 +2664,7 @@ class Deriver:
         is inferred, which is what lets a λ under an unfolded expected type be
         derived at all (there is no Π there to decompose).
         """
-        le = self.ex.exprs[self.strip(eid)]["lam"]
+        le = self.exprs[self.strip(eid)]["lam"]
         dom = self.strip(le["type"])
         body = self.strip(le["body"])
         if self.max_free(dom) >= len(env):
@@ -2581,7 +2675,7 @@ class Deriver:
                 f"{' synthetic' if eid >= self.base_id else ''}\n"
                 f"  domain  {self.enc.enc(dom)[:300]}"
             )
-        if "lam" in self.ex.exprs[body]:
+        if "lam" in self.exprs[body]:
             bty, inner = self.lam_type(body, [dom] + env)
         else:
             bty, inner = self.infer(body, [dom] + env, tail=True)
@@ -2764,7 +2858,9 @@ class Deriver:
             self.add_rule("ty_abs")
             return f"(ty_abs {inner})"
         ty, p = self.infer(eid, env, tail=tail)
-        if enc.enc(self.strip(ty)) == enc.enc(expected):
+        # Digests, not texts: both sides can encode to gigabytes here, and a
+        # comparison by `enc.enc` materialised each of them in full (§13.36).
+        if enc.digest(self.strip(ty)) == enc.digest(expected):
             return p
         ax = self.deq_ax(self.strip(ty), expected)
         return f"(ty_deq {p} {ax})"

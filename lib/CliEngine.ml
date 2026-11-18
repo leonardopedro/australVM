@@ -80,11 +80,32 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; pkg_totality; emit_derivations; emit_linearity_ledger } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_adapters_path; pkg_totality; emit_derivations; emit_linearity_ledger } ->
      validate_jit_server_target jit_server target;
+     (match target with
+      | WgslBundle _ ->
+         (* The GPU target is not a JIT/hot-swap target and has no package or
+            proof side exports in v1. Refuse the combination before compilation
+            instead of ignoring the flag. *)
+         if use_cps_jit || jit_server then
+           err "--target-type=wgsl is incompatible with --use-cps-jit/--jit-server: \
+                the GPU target does not lower through CLIF.";
+         if emit_cps_path <> None then
+           err "--target-type=wgsl is incompatible with --emit-cps.";
+         if emit_adapters_path <> None then
+           err "--target-type=wgsl is incompatible with --emit-adapters.";
+         if pkg_totality || emit_derivations <> None then
+           err "--target-type=wgsl is incompatible with package/totality exports.";
+         if emit_linearity_ledger <> None then
+           err "--target-type=wgsl is incompatible with --emit-linearity-ledger.";
+         if allow_all || auth_manifest <> None then
+           err "--target-type=wgsl does not use the JIT authorization engine; \
+                --allow-all/--auth-manifest are JIT options."
+      | _ -> ());
      Compiler.use_cps_jit := use_cps_jit;
      Compiler.jit_server_mode := jit_server;
      Compiler.emit_cps_path := emit_cps_path;
+     Compiler.emit_adapters_path := emit_adapters_path;
      Compiler.pkg_totality := pkg_totality;
      Compiler.emit_derivations_path := emit_derivations;
      Compiler.emit_linearity_ledger_path := emit_linearity_ledger;
@@ -127,7 +148,7 @@ and compile_help_lines (): string list =
     "";
     "Options:";
     "    --help          Print this text.";
-    "    --target-type   One of `exe`, `tc`, `c`. Default is `exe`.";
+    "    --target-type   One of `exe`, `tc`, `c`, `wgsl`. Default is `exe`.";
     "    --output        Path to the output file.";
     "    --entrypoint    The name of the entrypoint function, in the";
     "                    format `<module name>:<function name>`.";
@@ -142,6 +163,7 @@ and compile_help_lines (): string list =
     "    --auth-manifest=<path>  Load a module.toml grant set into the JIT";
     "                    authorization engine.";
     "    --emit-cps      Save CPS binary IR to the given path.";
+    "    --emit-adapters Write the adapter descriptors the CPS lowering requires.";
     "    --pkg-totality[=true|false]  Package modules only: run the totality";
     "                    pass, which rejects while loops, recursion, foreign/embed";
     "                    I/O, and other constructs whose termination cannot be";
@@ -272,6 +294,8 @@ and exec_target (mods: module_source list) (target: target): unit =
      exec_compile_to_bin mods bin_path entrypoint
   | CStandalone { output_path; entrypoint; } ->
      exec_compile_to_c mods output_path entrypoint
+  | WgslBundle { output_dir; entrypoint; } ->
+     exec_compile_to_wgsl mods output_dir entrypoint
 
 (* Handle one JIT-server command line. Never raises: a command whose
    handling throws (e.g. a swap of a nonexistent module) is reported as
@@ -367,3 +391,174 @@ and exec_compile_to_c (mods: module_source list) (output_path: string) (entrypoi
   in
   (* Write the output to the given file. *)
   write_string_to_file output_path (compiler_code compiler)
+
+(* -------------------------------------------------------------------------- *)
+(* GPU / WGSL target (PLAN_gpu_kernels.md G05, G07)                            *)
+(* -------------------------------------------------------------------------- *)
+
+and gpu_checker_path (): string option =
+  match Sys.getenv_opt "AUSTRAL_GPU_CHECKER" with
+  | Some path when String.trim path <> "" -> Some path
+  | _ ->
+     let rec search = function
+       | [] -> None
+       | dir :: rest ->
+          let candidate = Filename.concat dir "avm-gpu" in
+          if Sys.file_exists candidate then Some candidate else search rest
+     in
+     search (String.split_on_char ':' (try Sys.getenv "PATH" with Not_found -> ""))
+
+(* Run the checker with an argument vector and a bounded wait. No shell
+   interpolation: paths are passed as argv entries. Returns (exit, output). *)
+and run_gpu_checker (checker: string) (args: string list): (int * string) =
+  let out_path = Filename.temp_file "avm-gpu-out-" ".json"
+  and err_path = Filename.temp_file "avm-gpu-err-" ".log" in
+  let cleanup () =
+    (try Sys.remove out_path with Sys_error _ -> ());
+    (try Sys.remove err_path with Sys_error _ -> ())
+  in
+  Fun.protect ~finally:cleanup (fun () ->
+    let fd_out = Unix.openfile out_path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600
+    and fd_err = Unix.openfile err_path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
+    let argv = Array.of_list (checker :: args) in
+    let pid = Unix.create_process checker argv Unix.stdin fd_out fd_err in
+    Unix.close fd_out;
+    Unix.close fd_err;
+    let deadline = Unix.gettimeofday () +. 30.0 in
+    let rec wait () =
+      let (done_pid, status) = Unix.waitpid [Unix.WNOHANG] pid in
+      if done_pid <> 0 then status
+      else if Unix.gettimeofday () > deadline then begin
+        (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+        let _ = Unix.waitpid [] pid in
+        err "avm-gpu checker timed out after 30s"
+      end else begin
+        Unix.sleepf 0.02;
+        wait ()
+      end
+    in
+    let status = wait () in
+    let read path =
+      let ic = open_in_bin path in
+      let n = in_channel_length ic in
+      let s = really_input_string ic n in
+      close_in ic;
+      s
+    in
+    let output = read out_path ^ read err_path in
+    let code =
+      match status with
+      | Unix.WEXITED c -> c
+      | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> 1
+    in
+    (code, output))
+
+and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
+    (entrypoint: entrypoint): unit =
+  let (Entrypoint (entry_module, entry_name)) = entrypoint in
+  if Sys.file_exists output_dir then
+    err (Printf.sprintf
+           "Refusing to publish GPU bundle: destination %s already exists. \
+            Remove it or choose a new --output path." output_dir);
+  (* Run the shared checked frontend for each supplied module, in order. The
+     GPU target captures the selected module; every module is still checked
+     exactly once through the ordinary stages. *)
+  let compiler = Compiler.empty_compiler in
+  let prepared_selected = ref None in
+  let _ =
+    List.fold_left
+      (fun (env: Env.env) (source: module_source) ->
+        let (env, prepared) = Compiler.prepare_module env source in
+        if Identifier.mod_name_string prepared.Compiler.prepared_name
+           = Identifier.mod_name_string entry_module then
+          prepared_selected := Some prepared;
+        env)
+      (Compiler.cenv compiler) mods
+  in
+  let prepared =
+    match !prepared_selected with
+    | Some p -> p
+    | None ->
+       err (Printf.sprintf
+              "Entry module %s is not among the supplied sources."
+              (Identifier.mod_name_string entry_module))
+  in
+  let kernel =
+    try
+      Gpu_subset.build ~entry:(Identifier.ident_string entry_name)
+        prepared.Compiler.prepared_env prepared.Compiler.prepared_mono
+    with Gpu_subset.Refused msg ->
+      err ("GPU subset refused the module: " ^ msg)
+  in
+  let wgsl = Gpu_wgsl.render kernel in
+  if String.trim wgsl = "" then
+    err "Internal error: the WGSL renderer produced an empty shader.";
+  let sources =
+    List.map
+      (fun (source: module_source) ->
+        match source with
+        | TwoFileModuleSource { int_filename; int_code; body_filename; body_code } ->
+           [ Gpu_bundle.digest_source ~path:int_filename int_code;
+             Gpu_bundle.digest_source ~path:body_filename body_code ]
+        | BodyModuleSource { body_filename; body_code } ->
+           [ Gpu_bundle.digest_source ~path:body_filename body_code ])
+      mods
+    |> List.concat
+  in
+  let evidence =
+    { (Gpu_bundle.default_evidence ()) with Gpu_bundle.shader_validation = "checked" }
+  in
+  let bundle = Gpu_bundle.make ~evidence ~wgsl ~sources kernel in
+  let staging =
+    Printf.sprintf "%s.staging-%d" output_dir (Unix.getpid ())
+  in
+  if Sys.file_exists staging then
+    err (Printf.sprintf "Refusing to reuse an existing staging directory %s." staging);
+  let published = ref false in
+  Fun.protect
+    ~finally:(fun () ->
+      if not !published then begin
+        (try Sys.remove (Filename.concat staging "kernel.json") with Sys_error _ -> ());
+        (try Sys.remove (Filename.concat staging "kernel.wgsl") with Sys_error _ -> ());
+        (try Unix.rmdir staging with Unix.Unix_error _ -> ())
+      end)
+    (fun () ->
+      Unix.mkdir staging 0o755;
+      write_string_to_file (Filename.concat staging "kernel.json")
+        (Gpu_bundle.render_kernel_json bundle);
+      write_string_to_file (Filename.concat staging "kernel.wgsl") wgsl;
+      let checker =
+        match gpu_checker_path () with
+        | Some path -> path
+        | None ->
+           err
+             "The GPU checker is required to publish a bundle, but no \
+              AUSTRAL_GPU_CHECKER path and no avm-gpu on PATH were found. \
+              Build/install safestos/gpu (cargo build --release \
+              --manifest-path safestos/gpu/Cargo.toml --bin avm-gpu) and set \
+              AUSTRAL_GPU_CHECKER, or put avm-gpu on PATH."
+      in
+      let (code, output) = run_gpu_checker checker ["validate"; staging] in
+      if code <> 0 then
+        err (Printf.sprintf
+               "The GPU checker refused the staged bundle (exit %d):\n%s"
+               code output);
+      (* The checker's structured response must agree with what we staged. *)
+      (try
+         let json = Yojson.Safe.from_string output in
+         let open Yojson.Safe.Util in
+         let schema = json |> member "schema" |> to_string in
+         if schema <> Gpu_bundle.schema then
+           err (Printf.sprintf "Checker schema %s does not match %s"
+                  schema Gpu_bundle.schema);
+         let ir = json |> member "ir_sha256" |> to_string
+         and wgsl_sha = json |> member "wgsl_sha256" |> to_string in
+         if ir <> bundle.Gpu_bundle.ir_sha256 then
+           err "Checker IR digest does not match the staged KernelIR.";
+         if wgsl_sha <> bundle.Gpu_bundle.wgsl_sha256 then
+           err "Checker WGSL digest does not match the staged shader."
+       with Yojson.Json_error msg ->
+         err ("The GPU checker returned malformed JSON: " ^ msg));
+      Unix.rename staging output_dir;
+      published := true;
+      Printf.eprintf "GPU bundle published to %s\n%!" output_dir)
