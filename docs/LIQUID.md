@@ -177,6 +177,12 @@ the wrong obligation, which is the dangerous kind:
 Unary minus stays a prefix at the tighter level, so `-a + b` and `a - b` are
 both unambiguous without a whitespace convention.
 
+This extends the syntax. The current `ty_wf` helper still admits only
+nonnegative literals and explicitly `Nat` variables as indices. The existing
+erasure test compares CPS bytes for its fixture. Checking indexed annotations
+against an actual buffer length at a call site is proposed under L11 in the
+[Liquid plan](../PLAN_liquid_types.md#10-bend-2-and-the-next-liquid-index-layer).
+
 There are **no quantifiers** in v1 (`forall`/`exists` are MUST NOT).
 `fun-name` **MUST** resolve to a measure (§4.3) or a total-fragment function
 (§4.2); the totality gate (stage L3) enforces this.

@@ -1,7 +1,9 @@
 # Austral-authored GPU kernels: implementation plan
 
-**Status: proposed, 2026-11-17. G00–G23 are pending. No GPU backend is
-implemented by this planning change.**
+**Status, 2026-11-18.** G00–G09 are recorded as implemented. The compiler emits
+validated WGSL bundles, and the device runner has a recorded Vulkan adapter
+probe. Start with G10 for dispatch and readback. G11–G23 remain pending,
+including the optional MLIR backend. See the [execution record](docs/gpu/EXECUTION.md).
 
 Read [the research review](docs/GPU_KERNEL_REVIEW.md), then the proposed
 [v1 contract](docs/gpu/KERNEL_V1.md). The original programme is
@@ -791,23 +793,18 @@ with the distributed plan and a separate numerical partitioning contract.
 
 ## 6. Evidence record and next-task prompt
 
-Create the detailed execution log in G00. Its compact task table should contain:
-
-| Task | Status | Source/contract identity | Commands and evidence | Gaps/next action |
-|---|---|---|---|---|
-| G00 | pending | — | Baseline not executed | Record current checkout/toolchain |
-
-All other task cards start pending. A task's implementation can be committed
-with recorded gaps, but the milestone requiring those gaps to close stays open.
-Never overwrite the original GPU plan's historical measurements with current
-assumptions. New proof statement approvals remain governed by the existing
-owner-comparison workflow; this plan does not approve them.
+Update the [execution record](docs/gpu/EXECUTION.md) after each task. Record the
+task and status, source or contract identity, commands and evidence, and any
+remaining gaps. A milestone remains open until its required evidence exists.
+Preserve the recorded historical measurements and follow the existing
+owner-comparison workflow for proof statement approvals.
 
 Suggested prompt for the cheap executor:
 
 > Read AGENTS.md, PLAN_gpu_kernels.md, docs/GPU_KERNEL_REVIEW.md and the relevant
 > part of docs/gpu/KERNEL_V1.md. Inspect git status and the execution record.
-> Implement the first pending task in M0–M2 whose dependencies are satisfied.
+> Start at G10 if it is still pending. Use the execution record to pick up the
+> first pending task in M0–M2 whose dependencies are satisfied.
 > Keep the patch limited to the card, run its meaningful positive and refusal
 > tests, and update the evidence record with exact commands and limitations.
 > Continue with the next eligible task. If a tool/hardware prerequisite is absent,

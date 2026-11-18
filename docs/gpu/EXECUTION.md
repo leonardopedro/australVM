@@ -58,8 +58,8 @@ cargo test --locked --manifest-path safestos/gpu/Cargo.toml --features device
 
 ## Limitations
 
-- No task above claims GPU execution except where an adapter record exists; none
-  does in this baseline.
+- G09 records adapter discovery. A hardware execution claim also requires a
+  dispatch and readback record for a generated shader.
 - `nvidia-smi` output is inventory evidence only. G09's probe currently
   enumerates a Vulkan **Intel UHD Graphics 630** (integrated) adapter and does
   not see the GTX 1060, so adapter evidence and OS inventory disagree; the
