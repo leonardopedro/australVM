@@ -1,0 +1,4 @@
+[
+  { "uid": { "type": "ExecCap", "id": "exec" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "NetworkCap", "id": "net" }, "attrs": {}, "parents": [] }
+]
