@@ -3628,4 +3628,86 @@ measurement, and it is why the fix is a cap and not a change of algorithm.
 What this leaves for a reader who wants the row verified rather than emitted: a
 checker that streams (the theory is 102 GB of text and the proof is 4 MB on top of
 it), and a host with more room than this one — 30 GB shared with a Waydroid session
-whose swap was already full, which is why the cap was the only dial available.
+whose swap was already full, which is why the cap was the only dial available. §13.37
+revises both halves of this: the allocation is a write, not a cap, and the row fits
+inside 10 GiB once it is streamed.
+
+### 13.37 The allocation that bounded the walk, and the row inside 10 GiB
+
+§13.36 concluded that a short-lived multi-GB allocation set the cap, and that "the
+fix is a cap and not a change of algorithm". The allocation is now located, and the
+conclusion was premature: the row runs inside the original 10 GiB, and the artifacts
+do not move a byte.
+
+**1. Sampling at 1 s instead of 30 s.** §13.36's peaks were lower bounds because the
+sampler only looked every 30 s. Sampling every second changes what can be seen: the
+same failing walk shows VmSize climbing to **7 490 MiB** (RSS 6 583 MiB) before dying,
+so the peak was never the ~5.8 GB of the sampled record, and the difference between
+"died at 10 GiB" and "passed at 12 GiB" was a real few-GB allocation rather than an
+invisible one.
+
+**2. What was allocating it.** The traceback was always the same and always ended in
+a `str`: `MemoryError` at `out.write(piece)` in `_put_piece`, called from `add_axiom`.
+A sink is a text stream, and a text stream encodes its whole argument before it
+returns, so writing a piece of *N* bytes needs *2N* bytes: on the largest obligation
+the piece is the λ's domain — 2.2 GB of text, spelled out in the substitution axiom's
+comment — and both copies were alive at once. Two places fed that:
+
+- the comment line `f"-- (λ{self.enc.enc(dom)}. _) …"` built the domain as a string
+  and then wrote it, instead of passing it as a piece the encoder streams;
+- `_put_piece` handed a `str` piece to `out.write` whole, whatever its size.
+
+The fix is the one this file already uses everywhere else: stream, or write in
+bounded windows. `_put_piece` now writes a string piece through `_write_str`, which
+slices at 8 MiB (adjusting by one character so a window never splits a surrogate
+pair), and the substitution comment passes `("enc", dom)` as its own piece. Nothing
+else changed — no markup, no ordering, no naming.
+
+A second change landed in the same attempt and is worth separating, because the two
+were not applied together: the axiom memos had been keyed by *text*
+(`(ctx, enc.enc(eid))` in the three constant leaves, `(enc.enc(sty), st["idx"])` for
+fields, and `enc.enc(...) == enc.enc(...)` in `check`) — each a full materialisation,
+and for `const_ax` a multi-GB string retained in a dict key. They are keyed by
+`enc.digest` now, which streams through a 64 KiB-chunked hash, exactly as `beta_ax`
+has been since §13.30. This one is **not** what unblocked the run: with the digest
+keys in place and nothing else, the walk still died at obligation 566 under 10 GiB
+with the 7 490 MiB peak above. It is a real removal of work (FockPair: 74.04 s →
+67.60 s default, 41.77 s → 35.49 s shared, artifacts identical) but the binding
+allocation was the write.
+
+**3. The retry, under the cap that used to fail.** Same command, same knobs, one
+process, `ulimit -v 10485760` — 10 GiB, the value that produced `MemoryError` on both
+earlier attempts — with 1 s sampling:
+
+| | |
+| --- | ---: |
+| wall clock | 5 648.7 s (94.1 min) |
+| exit | 0 |
+| `.mm0` | 102 543 367 789 B |
+| `.mm1` | 102 547 674 107 B |
+| obligation stream | 580 records, 90 676 132 250 B, 43 parts |
+| peak VmSize / RSS sampled | 6 749 / 5 187 MiB |
+
+So the peak is now a measured 6.7 GB against a 10 GiB cap, with about 3.6 GB of
+headroom, and the earlier requirement of "somewhere in (10.2, 12.3) GiB" is gone.
+The census is the one §13.36 reported (125 469 rules, the same seven-line rule
+summary, 24 419 assumptions, 277 nats, 261 symbols).
+
+**4. Byte-neutrality, at three scales.** A change that only removes copies should
+not be able to move a byte, and it did not:
+
+- FockPair, default mode: `.mm0` 1 041 771 375 B and `.mm1` 1 075 343 397 B and the
+  1 012 915 095 B expanded stream, each `cmp`-identical to the script at HEAD;
+- FockPair, `LTP_OBLIG_SHARE=1`: the same two files and the 294 407 782 B shared
+  stream, identical;
+- the ns row: both 102 GB artifacts `cmp`-identical to the ones §13.36 produced under
+  the 12 GiB cap (105 s and 81 s of reads), all 43 stream parts identical, the index
+  identical, and the manifest's `records`/`bytes`/`parts` unchanged.
+
+The row took 9.2 % longer than the 12 GiB run (5 648.7 s vs 5 172.8 s). Both numbers
+are single runs on a shared host, so this is reported as observed and not attributed:
+the extra encoding passes the digest keys cost are per constant and per field, and
+the write path is shorter, not longer.
+
+What is left of §13.36's "ceiling" is nothing but the artifact: a complete theory for
+the row that a streaming checker has yet to read.

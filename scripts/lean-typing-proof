@@ -203,6 +203,33 @@ class _JsonStr:
         self.out.write('"')
 
 
+# A `str` piece reaches the sink in one `write`, and a text stream encodes the
+# whole argument before returning: on the largest obligation the λ's domain is
+# 2.2 GB, so the string and its encoding were alive together and the second of
+# them is what raised `MemoryError` at 10 GiB (§13.36). Writing a piece in
+# windows bounds that to one window; 8 MiB is 0.08 % of the cap, and the window
+# boundaries never reach the bytes written.
+_WRITE_WINDOW = 8 << 20
+
+
+def _write_str(out, s: str) -> int:
+    """Write `s` in bounded windows, returning its length in characters."""
+    n = len(s)
+    if n <= _WRITE_WINDOW:
+        out.write(s)
+        return n
+    i = 0
+    while i < n:
+        j = min(i + _WRITE_WINDOW, n)
+        # A window may not split a surrogate pair: the escapings that receive
+        # these windows hold only a trailing *high* surrogate back.
+        if j < n and "\udc00" <= s[j] <= "\udfff":
+            j -= 1
+        out.write(s[i:j])
+        i = j
+    return n
+
+
 def _put_piece(out, enc, piece) -> int:
     """Write one statement piece to `out`, returning its size in bytes.
 
@@ -211,8 +238,7 @@ def _put_piece(out, enc, piece) -> int:
     the certificate's `lhs` spell out.
     """
     if isinstance(piece, str):
-        out.write(piece)
-        return len(piece)
+        return _write_str(out, piece)
     n = 0
     if piece[0] == "enc":
         return enc.write(piece[1], out)
@@ -2421,7 +2447,7 @@ class Deriver:
             fld = self.field_type(self.ex.name(st["typeName"]), st["idx"], sargs)
             if fld is None:
                 raise Unfoldable(eid)
-            key = (enc.enc(sty), st["idx"])
+            key = (enc.digest(sty), st["idx"])
             if key not in self.field_ax:
                 ax = f"ax_field_{len(self.field_ax)}"
                 self.add_axiom(
@@ -2453,7 +2479,7 @@ class Deriver:
                 raise SystemExit(f"infer: no exported type for constant {nm}")
             ty = self.strip(raw_ty)
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2467,7 +2493,7 @@ class Deriver:
             # A numeral's type is `Nat`, which is opaque here: the numeral is a
             # constant-like leaf, one axiom, the same shape as Mathlib's.
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2482,7 +2508,7 @@ class Deriver:
             # A string literal: like a numeral, an opaque leaf whose type is the
             # opaque `String` symbol.
             ctx = self.ctx_str(env)
-            key = (ctx, enc.enc(eid))
+            key = (ctx, enc.digest(eid))
             if key not in self.const_ax:
                 ax = f"ax_const_{len(self.const_ax)}"
                 self.add_axiom(
@@ -2543,7 +2569,7 @@ class Deriver:
                 # reduct as strings was a third of the memory budget.
                 rr = self.strip(res)
                 self.add_axiom(
-                    f"-- (λ{self.enc.enc(dom)}. _) applied to {enc.head(x, 80)}\n",
+                    f"-- (λ", ("enc", dom), f". _) applied to {enc.head(x, 80)}\n",
                     f"axiom {ax}: $ tdefeq (tsubst ",
                     ("enc", b), " ", ("enc", x), ") ", ("enc", rr), " $;",
                 )
@@ -2764,7 +2790,9 @@ class Deriver:
             self.add_rule("ty_abs")
             return f"(ty_abs {inner})"
         ty, p = self.infer(eid, env, tail=tail)
-        if enc.enc(self.strip(ty)) == enc.enc(expected):
+        # Digests, not texts: both sides can encode to gigabytes here, and a
+        # comparison by `enc.enc` materialised each of them in full (§13.36).
+        if enc.digest(self.strip(ty)) == enc.digest(expected):
             return p
         ax = self.deq_ax(self.strip(ty), expected)
         return f"(ty_deq {p} {ax})"
