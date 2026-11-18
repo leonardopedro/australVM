@@ -949,7 +949,18 @@ the artifact, so `mm0-c` checks them too.
   where the recorded totals come from. `make drift-controls` runs
   `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
   `make test` depends on it — the Makefile states the cost, because every control
-  is a full gate run (~4.5 min). The one `copy` row left is not a control anyone
+  is a full gate run. A case cannot be made cheaper (the case *is* the gate
+  run), so `-j N` runs independent ones at once: measured 2026-11-18 on this
+  two-core host, the 13 cases take **58m59s** at `-j 1` (~272 s each) against
+  **42m39s** at `-j 2` (~373 s each) — 16m20s, 28%, off the wall clock. The
+  second core buys 1.38x rather than 2x because a single gate run is itself
+  mostly serial, and every case still holds under `-j 2` (the same 13 `holds`
+  as at `-j 1`), which is the check that the cases really are independent:
+  own scratch tree, own `TMPDIR`, repository read-only. `make drift-controls`
+  therefore runs at `DRIFT_JOBS` (default `nproc`) and keeps
+  `scripts/obj-drift-control` — the one control that edits the tree and
+  rebuilds the compiler — last and serial. The one `copy` row left is not a
+  control anyone
   forgot: `W3: $_stem matches its approved statements` has no branch to exercise
   until an artifact is approved, and approving is the owner's commit.
 

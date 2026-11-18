@@ -16,13 +16,28 @@
 # extracted OCaml the subset check diffs. `AUSTRALVM_CLIF`, `AUSTRALVM_PLAN` and
 # `AUSTRALVM_APPROVED_ROOT` are the ones the gate already had.
 #
+# The cases are independent: each has its own scratch tree, its own `TMPDIR`
+# (the gate's scratch roots come from `mktemp -d`) and reads the repository
+# without writing it, so `-j N` runs N gate runs at once. That is the only
+# speed-up available — a case *is* one full gate run — and it is bounded by the
+# cores: this host has two.
+#
+# Measured 2026-11-18, all 13 cases holding, same tree, same `nix develop`:
+#   -j 1  58m59s   (~272 s/case)
+#   -j 2  42m39s   (~373 s/case: two gate runs contend, so the second core is
+#                   worth 1.38x, not 2x — a gate run is not itself parallel)
+# i.e. 16m20s (28%) off the sequential wall clock, which is what `make
+# drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
+#
 # `w3-approved-row` is the one copy check with no case: its subject is an
 # *approved* §W3 row, and no artifact is approved in this tree, so the branch
 # cannot be reached without an owner commit. That is stated rather than faked —
 # a control that wrote `mm0/approved/` would be self-approval.
 #
-# Usage: scripts/w3-drift-controls [case|all]   (under `nix develop`: the gate
-#                                              needs python3, mm0-rs, why3 …)
+# Usage: scripts/w3-drift-controls [-j N] [case|all]   (default -j 1, or
+#          $W3_DRIFT_JOBS; `make drift-controls` passes -j $(nproc))
+#        scripts/w3-drift-controls --list
+#        (under `nix develop`: the gate needs python3, mm0-rs, why3 …)
 # Exit: 0 every case run held, 1 one did not, 2 could not run.
 set -uo pipefail
 
@@ -45,7 +60,11 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$W3_DRIFT_LOGS"
 
+JOBS="${W3_DRIFT_JOBS:-1}"
+
 # ── helpers ────────────────────────────────────────────────────────────────
+# `$cw` is the case's own scratch dir and `TMPDIR` its own temporary root, so a
+# case never sees another case's files or the gate's `mktemp -d` results.
 gate_run() {   # log, then VAR=value … for the gate's environment
     local log="$1"; shift
     local rc=0
@@ -76,49 +95,49 @@ mm0_copy() {  # destination — always a fresh copy, so cases cannot stack drift
 
 # ── the cases: one drifted claim each ──────────────────────────────────────
 case_phase-d-trust-split-gap() {
-    mm0_copy "$work/mm0"
+    mm0_copy "$cw/mm0"
     sed -i 's/structural=9 grounded=0 certificates=9/structural=8 grounded=0 certificates=9/' \
-        "$work/mm0/gap_certificate.mm0"
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$work/g" &&
-    expect_pass "Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)" "$work/g"
+        "$cw/mm0/gap_certificate.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)" "$cw/g"
 }
 
 case_phase-d-trust-split-layout() {
-    mm0_copy "$work/mm0"
+    mm0_copy "$cw/mm0"
     sed -i 's/structural=3 grounded=5 certificates=8/structural=4 grounded=5 certificates=8/' \
-        "$work/mm0/layout_certificate.mm0"
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)" "$work/g" &&
-    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$work/g"
+        "$cw/mm0/layout_certificate.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g"
 }
 
 case_phase-d-theory-coverage() {
-    mm0_copy "$work/mm0"
-    sed -i '/^-- theory coverage: /d' "$work/mm0/slot_layout.mm0"
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "Phase D: slot_layout.mm0 states its theory coverage" "$work/g"
+    mm0_copy "$cw/mm0"
+    sed -i '/^-- theory coverage: /d' "$cw/mm0/slot_layout.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: slot_layout.mm0 states its theory coverage" "$cw/g"
 }
 
 case_phase-d-imported-theory() {
-    mm0_copy "$work/mm0"
+    mm0_copy "$cw/mm0"
     sed -i 's/^-- theory coverage: used=\([^ ]*\)/-- theory coverage: used=\1,tnope_not_declared/' \
-        "$work/mm0/slot_layout.mm0"
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "Phase D: slot_layout.mm0 only claims rules its theory declares" "$work/g" &&
-    expect_detail "claims used rules the theory does not declare:" "$work/g" "tnope_not_declared"
+        "$cw/mm0/slot_layout.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: slot_layout.mm0 only claims rules its theory declares" "$cw/g" &&
+    expect_detail "claims used rules the theory does not declare:" "$cw/g" "tnope_not_declared"
 }
 
 case_phase-d-self-vocabulary() {
-    mm0_copy "$work/mm0"
-    sed -i '/^-- theory: self-declared vocabulary/d' "$work/mm0/store_projection.mm0"
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "Phase D: store_projection.mm0 states its theory coverage" "$work/g"
+    mm0_copy "$cw/mm0"
+    sed -i '/^-- theory: self-declared vocabulary/d' "$cw/mm0/store_projection.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: store_projection.mm0 states its theory coverage" "$cw/g"
 }
 
 case_phase-d-measured-coverage() {
-    mm0_copy "$work/mm0"
-    python3 - "$work/mm0/clif.mm0" <<'PY'
+    mm0_copy "$cw/mm0"
+    python3 - "$cw/mm0/clif.mm0" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 lines = p.read_text().splitlines(keepends=True)
@@ -132,13 +151,13 @@ if hits != 1:
     raise SystemExit(f"expected one `-- clif-forms:` line, found {hits}")
 p.write_text("".join(lines))
 PY
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "Phase D: clif.mm0 states its measured coverage" "$work/g"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: clif.mm0 states its measured coverage" "$cw/g"
 }
 
 case_isa-hypothesis-pin() {
-    mm0_copy "$work/mm0"
-    python3 - "$work/mm0/isa.mm0" <<'PY'
+    mm0_copy "$cw/mm0"
+    python3 - "$cw/mm0/isa.mm0" <<'PY'
 import pathlib, re, sys
 p = pathlib.Path(sys.argv[1])
 text = p.read_text()
@@ -147,20 +166,20 @@ if not m:
     raise SystemExit("no `-- unchecked-citations:` line")
 p.write_text(text[:m.start(1)] + str(int(m.group(1)) + 1) + text[m.end(1):])
 PY
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" "$work/g"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" "$cw/g"
 }
 
 case_clif-vocabulary() {
-    printf '%s\n' 'axiom clif_step_is_proved: $ clif_step s o $;' > "$work/clif.mm0"
-    cat "$ROOT/mm0/clif.mm0" >> "$work/clif.mm0"
-    gate_run "$work/g" AUSTRALVM_CLIF="$work/clif.mm0" || true
-    expect_fail "W9.3: clif_step is vocabulary — declared, stated, never axiomatized" "$work/g" &&
-    expect_pass "W9.3: certification state matches mm0/approved/" "$work/g"
+    printf '%s\n' 'axiom clif_step_is_proved: $ clif_step s o $;' > "$cw/clif.mm0"
+    cat "$ROOT/mm0/clif.mm0" >> "$cw/clif.mm0"
+    gate_run "$cw/g" AUSTRALVM_CLIF="$cw/clif.mm0" || true
+    expect_fail "W9.3: clif_step is vocabulary — declared, stated, never axiomatized" "$cw/g" &&
+    expect_pass "W9.3: certification state matches mm0/approved/" "$cw/g"
 }
 
 case_clif-citations() {
-    python3 - "$ROOT/mm0/clif.mm0" "$work/clif.mm0" <<'PY'
+    python3 - "$ROOT/mm0/clif.mm0" "$cw/clif.mm0" <<'PY'
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text()
 new, n = re.subn(r"(-- cites: \S+ sha256=)([0-9a-f])",
@@ -169,25 +188,25 @@ if n != 1:
     raise SystemExit("no `-- cites:` digest to flip")
 pathlib.Path(sys.argv[2]).write_text(new)
 PY
-    gate_run "$work/g" AUSTRALVM_CLIF="$work/clif.mm0" || true
-    expect_fail "W9.3: the refinement's citations still match their artifacts" "$work/g" &&
-    expect_pass "W9.3: certification state matches mm0/approved/" "$work/g"
+    gate_run "$cw/g" AUSTRALVM_CLIF="$cw/clif.mm0" || true
+    expect_fail "W9.3: the refinement's citations still match their artifacts" "$cw/g" &&
+    expect_pass "W9.3: certification state matches mm0/approved/" "$cw/g"
 }
 
 case_witness-axiom() {
-    mm0_copy "$work/mm0"
-    printf '\naxiom toy_not_held: $ notfull $;\n' >> "$work/mm0/store_projection_toy.mm0"
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
+    mm0_copy "$cw/mm0"
+    printf '\naxiom toy_not_held: $ notfull $;\n' >> "$cw/mm0/store_projection_toy.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     # One axiom the witness does not hold turns this red (the pass branch quotes
     # the axiom count, the fail branch does not). The count checks read the same
     # file, so they move with it and are left to fire, not hidden: the log shows
     # the witness's axiom list missing `toy_not_held` beside the count drift.
-    expect_fail "W9.3: the witness exercises every axiom the toy declares" "$work/g"
+    expect_fail "W9.3: the witness exercises every axiom the toy declares" "$cw/g"
 }
 
 case_memsafe-edge() {
-    mm0_copy "$work/mm0"
-    python3 - "$work/mm0" <<'PY'
+    mm0_copy "$cw/mm0"
+    python3 - "$cw/mm0" <<'PY'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
 hits = 0
@@ -202,17 +221,17 @@ for p in root.glob("linearity_certificate*.mm0"):
 if hits != 2:
     raise SystemExit(f"expected both fixtures to list t_acq, edited {hits}")
 PY
-    gate_run "$work/g" AUSTRALVM_MM0_DIR="$work/mm0" || true
-    expect_fail "memsafe: fixtures exercise every automaton edge" "$work/g" &&
-    expect_detail "neither fixture reaches:" "$work/g" "t_acq"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "memsafe: fixtures exercise every automaton edge" "$cw/g" &&
+    expect_detail "neither fixture reaches:" "$cw/g" "t_acq"
 }
 
 case_liquid-golden() {
-    cp "$ROOT/lib/liquid/LiquidMeasure.ml" "$work/LiquidMeasure.ml"
-    printf '\n(* drifted by scripts/w3-drift-controls *)\n' >> "$work/LiquidMeasure.ml"
-    gate_run "$work/g" AUSTRALVM_LIQUID_GOLDEN="$work/LiquidMeasure.ml" || true
-    expect_fail "Liquid subset extraction matches its pinned golden" "$work/g" &&
-    expect_pass "Liquid subset library extracts with the existing driver" "$work/g"
+    cp "$ROOT/lib/liquid/LiquidMeasure.ml" "$cw/LiquidMeasure.ml"
+    printf '\n(* drifted by scripts/w3-drift-controls *)\n' >> "$cw/LiquidMeasure.ml"
+    gate_run "$cw/g" AUSTRALVM_LIQUID_GOLDEN="$cw/LiquidMeasure.ml" || true
+    expect_fail "Liquid subset extraction matches its pinned golden" "$cw/g" &&
+    expect_pass "Liquid subset library extracts with the existing driver" "$cw/g"
 }
 
 # The certificate's *approved* branch: an approval exists, so a `[gap]` line is
@@ -220,17 +239,17 @@ case_liquid-golden() {
 # so the approval here lives in a scratch root the gate is pointed at, which is
 # the same read-only relocation `AUSTRALVM_APPROVED_ROOT` already provides.
 case_cert-approved() {
-    mkdir -p "$work/approved"
-    printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$work/approved/isa.stmts"
-    gate_run "$work/g" AUSTRALVM_APPROVED_ROOT="$work/approved" || true
-    expect_fail "W9.3: certification state matches mm0/approved/" "$work/g" &&
-    expect_detail "isa.stmts exists" "$work/g" "clif.mm0 must cite it, not a gap" &&
+    mkdir -p "$cw/approved"
+    printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$cw/approved/isa.stmts"
+    gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+    expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
+    expect_detail "isa.stmts exists" "$cw/g" "clif.mm0 must cite it, not a gap" &&
     # The approval is inconsistent with everything else *by construction* — a
     # consistent one is the owner's commit, not something a control may create —
     # so six comparisons that read the approved copy also move. They are
     # consequences of the same drift, and the row for this case says so.
-    expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$work/g" &&
-    expect_fail "W9.3: the composition table's counts match the files it records" "$work/g"
+    expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
+    expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g"
 }
 
 CASES="phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage
@@ -238,35 +257,83 @@ phase-d-imported-theory phase-d-self-vocabulary phase-d-measured-coverage
 isa-hypothesis-pin clif-vocabulary clif-citations witness-axiom memsafe-edge
 liquid-golden cert-approved"
 
+# One case, in its own scratch dir and temporary root. Runs in a subshell: the
+# report lands in `$work/<case>/report` and the status in `$work/<case>/status`,
+# so concurrent cases cannot interleave their output.
 run_case() {
-    CASE="$1"
-    if ! declare -F "case_$CASE" >/dev/null; then
-        fail "no case named '$CASE' (known: $(printf '%s' $CASES | tr '\n' ' '))"
-        return 2
-    fi
-    say ""
-    say "== $CASE"
+    local c="$1"
+    CASE="$c"
+    cw="$work/$c"
+    mkdir -p "$cw/tmp"
+    export TMPDIR="$cw/tmp"
+    SECONDS=0
     local rc=0
-    "case_$CASE" || rc=$?
-    if [ "$rc" -eq 0 ]; then say "  holds"; else fail "$CASE: the control did not hold"; fi
+    if ! declare -F "case_$c" >/dev/null; then
+        fail "no case named '$c' (known: $(printf '%s' $CASES | tr '\n' ' '))"
+        rc=2
+    else
+        "case_$c" || rc=$?
+    fi
+    printf '%s %s\n' "$rc" "$SECONDS" >"$cw/status"
+}
+
+report_case() {  # print a finished case's report, return its status
+    local c="$1" cw="$work/$1" rc=1 secs=0
+    [ -f "$cw/status" ] && read -r rc secs <"$cw/status"
+    say ""
+    say "== $c (${secs}s)"
+    cat "$cw/report" 2>/dev/null
+    if [ "$rc" -eq 0 ]; then say "  holds"; else fail "$c: the control did not hold"; fi
     return "$rc"
 }
 
+# Run every requested case, at most $JOBS gate runs at a time, then report them
+# in declaration order so the transcript does not depend on completion order.
+run_all() {  # case names on stdin
+    local -a want=() running=0
+    while IFS= read -r c; do [ -n "$c" ] && want+=("$c"); done
+    local -a order=()
+    for c in "${want[@]}"; do
+        mkdir -p "$work/$c"        # the redirect below needs it before the subshell runs
+        ( run_case "$c" ) >"$work/$c/report" 2>&1 &
+        order+=("$c")
+        running=$((running + 1))
+        if [ "$running" -ge "$JOBS" ]; then wait; running=0; fi
+    done
+    wait
+    local status=0
+    for c in "${order[@]}"; do report_case "$c" || status=1; done
+    return "$status"
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -j|--jobs) JOBS="${2:-1}"; shift 2 ;;
+        -j*) JOBS="${1#-j}"; shift ;;
+        *) break ;;
+    esac
+done
+case "$JOBS" in ''|*[!0-9]*|0) fail "-j takes a positive number, got '$JOBS'"; exit 2 ;; esac
+
 what="${1:-all}"
 status=0
+if [ "$what" = --list ]; then
+    printf '%s\n' $CASES
+    exit 0
+fi
 if [ "$what" = all ]; then
-    for c in $CASES; do
-        run_case "$c" || status=1
-    done
+    SECONDS=0
+    printf '%s\n' $CASES | run_all || status=1
     say ""
     if [ "$status" -eq 0 ]; then
-        say "w3-drift-controls: $(printf '%s' $CASES | wc -w) case(s) held"
+        say "w3-drift-controls: $(printf '%s\n' $CASES | wc -l) case(s) held in $((SECONDS / 60))m$((SECONDS % 60))s with -j $JOBS"
     else
         say "w3-drift-controls: at least one case did not hold" >&2
     fi
-elif [ "$what" = --list ]; then
-    printf '%s\n' $CASES
+elif declare -F "case_$what" >/dev/null; then
+    printf '%s\n' "$what" | run_all || status=1
 else
-    run_case "$what" || status=1
+    fail "no case named '$what' (known: $(printf '%s\n' $CASES | tr '\n' ' '))"
+    status=2
 fi
 exit "$status"
