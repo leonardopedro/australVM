@@ -31,6 +31,8 @@ pub mod runner;
 pub use cell_builder::{
     build_cell, parse_avce, AvceDoc, AvceFn, AvceReloc, BuildCell, CellError, CellView, SymDef,
 };
-pub use linker::{link, link_with, LinkedImage, Provider};
-pub use loader::{load, render_image, run_image, LoadError, LoadedImage};
+pub use linker::{link, link_cells, link_with, LinkedCells, LinkedImage, Provider};
+pub use loader::{
+    load, load_with, render_image, run_image, LoadError, LoadedImage, LoadedProvider,
+};
 pub use runner::{Isolation, Runner, RunnerError, Sandbox};

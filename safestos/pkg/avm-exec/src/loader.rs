@@ -28,7 +28,7 @@
 //! call gate above is what makes a forbidden call impossible to reach.
 
 use crate::cell_builder::{CellError, CellView};
-use crate::linker::{link_with, LinkedImage};
+use crate::linker::{link_cells, LinkedImage, Provider};
 use crate::runner::{Runner, RunnerError, Sandbox};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -79,6 +79,14 @@ impl From<std::io::Error> for LoadError {
     }
 }
 
+/// A provider cell in a multi-cell image: its own relocated text and the
+/// base it was linked for.
+#[derive(Debug)]
+pub struct LoadedProvider {
+    pub base: u64,
+    pub image: LinkedImage,
+}
+
 /// A cell that passed the call gate and has been relocated.
 #[derive(Debug)]
 pub struct LoadedImage {
@@ -88,23 +96,17 @@ pub struct LoadedImage {
     pub image: LinkedImage,
     pub base: u64,
     pub drv_hash: [u8; 32],
+    /// Provider cells, in the order given, each relocated against the same
+    /// symbol table and gated by its own capability table.
+    pub providers: Vec<LoadedProvider>,
     /// The cell's own capability table, kept so the run step judges with the
     /// same table the load step did — never a second copy read from disk.
     pub capability_table: serde_json::Value,
 }
 
-/// Gate a cell's declared calls, then relocate it.
-///
-/// `externs` is the runtime symbol table the image is linked against — for
-/// a kernel-calling cell, the addresses the JIT registered its `uk_*`
-/// symbols at. An import with no reloc is still a call and is still gated.
-pub fn load(
-    cell_bytes: &[u8],
-    policy_src: &str,
-    base: u64,
-    externs: &BTreeMap<String, u64>,
-) -> Result<LoadedImage, LoadError> {
-    let view = CellView::parse(cell_bytes)?;
+/// Gate one cell's `Execute` and each declared call against its own table.
+/// Returns the sorted, de-duplicated call list.
+fn gate(view: &CellView<'_>, policy_src: &str) -> Result<Vec<String>, LoadError> {
     let sandbox =
         Sandbox::new(view.capability_table.clone(), policy_src).map_err(LoadError::Cedar)?;
 
@@ -123,13 +125,67 @@ pub fn load(
             return Err(LoadError::Denied(action));
         }
     }
+    Ok(calls)
+}
 
-    let image = link_with(&view, base, &[], externs)?;
+/// Gate a cell's declared calls, then relocate it.
+///
+/// `externs` is the runtime symbol table the image is linked against — for
+/// a kernel-calling cell, the addresses the JIT registered its `uk_*`
+/// symbols at. An import with no reloc is still a call and is still gated.
+pub fn load(
+    cell_bytes: &[u8],
+    policy_src: &str,
+    base: u64,
+    externs: &BTreeMap<String, u64>,
+) -> Result<LoadedImage, LoadError> {
+    load_with(cell_bytes, &[], policy_src, base, externs)
+}
+
+/// [`load`] for a multi-cell image: `providers` are `(cell bytes, base)`
+/// pairs, already mapped-at-their-real-addresses in the executor's process.
+///
+/// Each provider is gated by *its own* capability table — a provider runs in
+/// the same process, so its calls are as reachable as the owner's — and its
+/// text is relocated against the shared table (a provider may call the owner
+/// or the runtime). All addresses are assigned by the caller; nothing here
+/// allocates or maps, so the executor can reproduce the layout exactly from
+/// the rendered image.
+pub fn load_with(
+    cell_bytes: &[u8],
+    providers: &[(&[u8], u64)],
+    policy_src: &str,
+    base: u64,
+    externs: &BTreeMap<String, u64>,
+) -> Result<LoadedImage, LoadError> {
+    let view = CellView::parse(cell_bytes)?;
+    let calls = gate(&view, policy_src)?;
+
+    let mut provider_views = Vec::with_capacity(providers.len());
+    for (bytes, provider_base) in providers {
+        let pview = CellView::parse(bytes)?;
+        gate(&pview, policy_src)?;
+        provider_views.push((pview, *provider_base));
+    }
+    let refs: Vec<Provider<'_, '_>> = provider_views
+        .iter()
+        .map(|(v, b)| Provider { view: v, base: *b })
+        .collect();
+
+    let linked = link_cells(&view, base, &refs, externs)?;
+    let loaded_providers = linked
+        .providers
+        .into_iter()
+        .zip(providers.iter().map(|(_, b)| *b))
+        .map(|(image, base)| LoadedProvider { base, image })
+        .collect();
+
     Ok(LoadedImage {
         calls,
-        image,
+        image: linked.owner,
         base,
         drv_hash: view.drv_hash,
+        providers: loaded_providers,
         capability_table: view.capability_table.clone(),
     })
 }
@@ -150,12 +206,23 @@ pub fn render_image(loaded: &LoadedImage) -> Vec<u8> {
         .iter()
         .map(|(k, v)| (k, format!("{v:#x}")))
         .collect();
+    let providers: Vec<serde_json::Value> = loaded
+        .providers
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "base": format!("{:#x}", p.base),
+                "text": hex(&p.image.text),
+            })
+        })
+        .collect();
     let doc = serde_json::json!({
         "drv_hash": hex(&loaded.drv_hash),
         "base": format!("{:#x}", loaded.base),
         "text": hex(&loaded.image.text),
         "symbols": symbols,
         "calls": loaded.calls,
+        "providers": providers,
     });
     let mut out = serde_json::to_vec_pretty(&doc).expect("image JSON is serializable");
     out.push(b'\n');
@@ -310,6 +377,89 @@ mod tests {
             }
             other => panic!("want a link error, got {other:?}"),
         }
+    }
+
+    /// A provider cell supplies an import the owner's own text calls, and
+    /// both images reach the executor through `cell.json`.
+    #[test]
+    fn a_provider_cell_resolves_an_import_and_is_rendered() {
+        let owner = cell(
+            &["give"],
+            vec![AvceReloc {
+                offset: 1,
+                addend: 0,
+                kind: "Abs8".into(),
+                symbol: "give".into(),
+            }],
+        );
+        // Provider: `mov eax, 7; ret` under the imported name.
+        let provider_doc = AvceDoc {
+            arch: "x86_64".into(),
+            functions: vec![AvceFn {
+                name: "give".into(),
+                body: vec![0xB8, 0x07, 0x00, 0x00, 0x00, 0xC3],
+                relocs: vec![],
+            }],
+            imports: vec![],
+        };
+        let provider = build_cell(&BuildCell {
+            drv_hash: [0x22u8; 32],
+            capability_table: &serde_json::json!([]),
+            avce: &provider_doc,
+            signing_seed: &[7u8; 32],
+        })
+        .unwrap();
+
+        let loaded = load_with(
+            &owner,
+            &[(&provider, 0x2000)],
+            "permit(principal, action, resource);",
+            0x1000,
+            &externs(&[]),
+        )
+        .expect("the provider defines the import");
+        assert_eq!(&loaded.image.text[1..9], &0x2000u64.to_le_bytes());
+        assert_eq!(loaded.providers.len(), 1);
+        assert_eq!(loaded.providers[0].base, 0x2000);
+        assert_eq!(loaded.providers[0].image.text.len(), 6);
+
+        let doc = String::from_utf8(render_image(&loaded)).unwrap();
+        assert!(doc.contains("\"providers\""), "{doc}");
+        assert!(doc.contains("\"base\": \"0x2000\""), "{doc}");
+        // The provider's own text is in the document, not just its symbols.
+        assert!(doc.contains("b807000000c3"), "{doc}");
+
+        // Without the provider the same load is a hard link error.
+        let err = load(
+            &owner,
+            "permit(principal, action, resource);",
+            0x1000,
+            &externs(&[]),
+        )
+        .expect_err("give is unresolved without its provider");
+        assert!(err.to_string().contains("give"), "{err}");
+    }
+
+    /// A provider is gated by its own table and call list: it runs in the
+    /// same process, so a denied call there is refused by name too.
+    #[test]
+    fn a_provider_call_is_gated_by_its_own_table() {
+        let owner = cell(&[], vec![]);
+        let provider = cell(&["uk_net_connect"], vec![]);
+        let policy = "permit(principal, action, resource);\n\
+                      forbid(principal, action == Action::\"Call:uk_net_connect\", resource);";
+        let err = load_with(
+            &owner,
+            &[(&provider, 0x2000)],
+            policy,
+            0x1000,
+            &externs(&[]),
+        )
+        .expect_err("the provider's call must be refused");
+        assert_eq!(
+            err.to_string(),
+            "EPERM: capability denied for action \"Call:uk_net_connect\""
+        );
     }
 
     /// The image reaches the executor through the runner: staged file, cwd

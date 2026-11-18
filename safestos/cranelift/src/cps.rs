@@ -548,9 +548,10 @@ fn emit_expr<M: Module>(
         // 0x16 / 0x17: boolean And / Or. `And`/`Or` in the source lower to these
         // opcodes (lib/CpsGen.ml), and their operands are already 0/1 i64 — the
         // comparisons above widen with `uextend`. Implemented as a bitwise
-        // `band`/`bor` on those, which is the truth table for 0/1 inputs and
-        // matches the `bnot` at 0x19 (a 0/1 complement) the serializer emits in
-        // the same style. Without these two arms any module that conjoins two
+        // `band`/`bor` on those, which is the truth table for 0/1 inputs. 0x19
+        // is the 0/1 complement the serializer emits for `not`, so it is a
+        // `bxor` with 1: a bitwise `bnot` would turn 1 into -2, a truthy value.
+        // Without these two arms any module that conjoins two
         // conditions — including every kernel `main` that checks its own
         // obligations — was rejected as "Unknown opcode: 0x16".
         0x16 => {
@@ -633,7 +634,8 @@ fn emit_expr<M: Module>(
                 caller_name,
                 module_name,
             )?;
-            Ok(mgr.builder.ins().bnot(a))
+            let one = mgr.builder.ins().iconst(types::I64, 1);
+            Ok(mgr.builder.ins().bxor(a, one))
         }
         0x20 => {
             let ptr = emit_expr(

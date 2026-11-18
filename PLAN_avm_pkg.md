@@ -201,6 +201,7 @@ LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release ./austral compile \
 Reproduce every number:
 
 ```sh
+./examples/nix-pkg/run.sh          # Nix→AustralVM pairs: verify, package, execute
 cd safestos/pkg
 cargo test --workspace                                            # 137 passed / 6 ignored
 AVM_HOT_DIR=/dev/shm CARGO_NET_OFFLINE=true \
@@ -512,9 +513,11 @@ no `unsafe`, so the loader never jumps into the cell's machine code itself —
 the executor is the caller's program (a JIT, an emulator, a test harness),
 and the property the loader enforces is that a forbidden call cannot be
 reached, not that the executor is trustworthy. Multi-cell images are
-therefore only half-wired here: `linker::link` still takes provider cells
-(task 3.3, tested), while the loader links against the runtime table
-because that is what a `.avm` cell's imports actually are.
+and provider linking is part of the loader now: `load_with` takes
+`--provider` cells, gates each by its own table, and `linker::link_cells`
+relocates the whole image (§4.17). What remains the caller's job is the
+mapping and the call — the executor that does that in this repo is
+`examples/nix-pkg/exec-image.rs`.
 
 Measured on this host, 2026-11-18, against the real bootstrap cell built in
 §4.13 (4 functions, 1 import, 76 relocations):
@@ -574,6 +577,78 @@ LD_LIBRARY_PATH=$PWD ./safestos/pkg/target/release/avm-pkg load /tmp/hello.avm \
 # {"calls":["au_alloc"],"symbols":5,"text_bytes":4311,…}      (exit 0)
 ```
 
+**4.16 Joint test with the Nix→AustralVM verifier (2026-11-18).**
+`examples/nix-pkg/` is the end-to-end test of this engine against
+`dnx-verify` (`../dnx/crates/dnx-verify`), the tool that reduces a Nix
+expression and an AustralVM fragment to DeltaNets and compares their
+canonical kernel UNF digests. Fourteen translation pairs are authored
+independently on each side: arithmetic, application (direct and curried),
+booleans (`<`, `not`, `and`), float, `let` (single and multiple bindings),
+negative arithmetic, a version computation, and one **declared mismatch**
+(`1 + 2 * 3` against the left-to-right `((1 + 2) * 3)`, 7 vs 9) that the
+manifest requires to differ and that is never packaged. `run.sh`
+1. requires every expectation to be met (`13 equivalent, 1 different`),
+2. requires a one-literal mutation to be reported **different** (exit 1,
+   not the exit-2 "could not compare" path),
+3. writes a derivation per package whose `sources` field is the *verified*
+   Nix net digest,
+4. builds each module into a signed cell with `build --plan --for`, and
+   hydrates every cell back out byte-identically, and
+5. **executes** each cell through `avm-pkg load --exec`: the call gate, the
+   relocation and the sandboxed runner, with `examples/nix-pkg/exec-image.rs`
+   (a caller-supplied executor compiled by the script) mapping the image and
+   calling `main`. All thirteen cells return their Nix value (20, 42, 1,
+   3.75, 42, 212, 6, 42, 7, 0, 1, 3, −2). Float64 is an IEEE-754 bit pattern
+   in the same 64-bit word every CPS value uses: `CpsGen` writes
+   `Int64.bits_of_float` (exact, not rounded), and `Compiler_cps` lowers
+   Float64 `+ - * /` to the `au_fadd`/`au_fsub`/`au_fmul`/`au_fdiv` runtime
+   helpers, which bitcast, compute in `f64` and bitcast back. The bridge test
+   `float_helpers_bitcast_and_compute` pins the helpers. The execution step
+   carries its own negative control (`examples/nix-pkg/linker-control.sh`):
+   it requires the Cedar `Execute` denial to refuse the cell, then reverts
+   `link_with`'s rel32 fix, rebuilds `avm-pkg`, and requires `load --exec` to
+   stop returning 42 before restoring the source and rebuilding. CI runs it
+   after `run.sh`, so the job cannot stay green on a broken linker or a gate
+   wired to nothing.
+
+The derivation identity is the engine's own: `avm-pkg drv-hash` / `build`
+compute it from the plan's name/version/source fields (e.g. `apply` →
+`753c4701…c3f774c5`), and the recorded closure is what makes the stored build
+an L0 hit later. Writing the execution half found three engine defects, all
+fixed at the cause: `link_with` subtracted the rel32 field size in addition
+to Cranelift's `-4` addend, so every intra-cell call jumped four bytes past
+its target (`apply`, `nested`, `version` segfaulted); and opcode `0x19`
+(`not`) used a bitwise `bnot`, returning `-2` for `not true` — now `bxor 1`,
+pinned by `not_opcode_complements_zero_and_one`. A third surfaced when the
+float cell was executed: literals were rounded into the integer literal
+opcode and Float64 `+` called the integer helper; both are fixed as above.
+Remaining limits: the
+verifier's fragment is closed terms over `Int64`/`F64`/`Bool`, so an
+attribute-set derivation cannot be compared this way; the kernel translator
+accepts `let x: T = e;` while this compiler requires `:=`, so the modules use
+`:=` for both; and the kernel translator's statement grammar has no `if`,
+so conditionals are absent from the set. Details are in
+`examples/nix-pkg/README.md`; CI runs the script in the `nix-pkg` job.
+
+**4.17 Multi-cell images with provider cells (2026-11-18).** A cell's import
+no longer has to resolve to a runtime stub: `avm-pkg load <owner> --provider
+<cell>` links the owner against a provider cell's exported symbols, gated by
+the provider's own capability table (it runs in the same process, so its
+calls are judged too). `linker::link_cells` builds one symbol table for the
+whole image and applies every cell's relocations — owner *and* providers —
+at each cell's base, which is what makes a provider that calls the owner or
+the runtime work; `link_with` remains the owner-only entry point. Bases are
+assigned deterministically by the CLI (owner base + 0x01000000, +0x02000000,
+…), recorded per provider in `cell.json`, and the executor maps each provider
+text there after checking it is page-aligned and does not overlap the owner
+or the stub page. `examples/nix-pkg/multi-cell.sh` is the end-to-end check:
+`MathLib` exports `double`, `DoubleApp` imports it, the owner cell alone fails
+with `unresolved symbol "double"`, and with `--provider mathlib.avm`
+`double(42)` runs in the provider's image and returns 84. The provider and
+owner are compiled separately because one CPS emission carries one module's
+functions — that separation is what puts the callee in another cell. CI runs
+the script after the linker control.
+
 ## §5 Not covered — next steps in order
 
 1. ~~**Totality pass (spec task 2.1)**~~ **DONE** (flat `lib/Totality.ml`,
@@ -621,9 +696,9 @@ LD_LIBRARY_PATH=$PWD ./safestos/pkg/target/release/avm-pkg load /tmp/hello.avm \
    cell's own table, and refuses with `EPERM` naming the symbol before any
    relocation or process (§4.14). The linked image runs through the runner
    via a caller-named `--exec` program, because this crate carries no
-   `unsafe` and therefore never jumps into cell text itself; provider-cell
-   linking stays `linker::link`'s tested path (task 3.3) rather than being
-   half-wired into the loader.
+   `unsafe` and therefore never jumps into cell text itself. Provider-cell
+   linking is wired into the loader (`load_with`, `linker::link_cells`,
+   §4.17) and exercised by `examples/nix-pkg/multi-cell.sh`.
 8. ~~**Nix comparison (5.3)**~~ **DONE** — 1,000-node warm evaluation
    4.33 ms vs Nix's 36.68 ms (8.5×), ten rebuilds 1.77 MB vs 10.49 MB
    (83.1 % less); method and caveats in §4.12, rows in §3.
@@ -631,7 +706,9 @@ LD_LIBRARY_PATH=$PWD ./safestos/pkg/target/release/avm-pkg load /tmp/hello.avm \
 ## §6 CI
 
 No separate workflow was added (the spec adds none), but the existing
-`build-and-test.yml` carries an `avm-pkg` job — added after cross-project
+`build-and-test.yml` carries a `nix-pkg` job that runs
+`examples/nix-pkg/run.sh` against a bridge build (verify → package →
+round-trip → execute; §4.16) and an `avm-pkg` job — added after cross-project
 review round 4 found the engine's unit tests green and run by nobody. It
 runs `cargo test --workspace` (137 passed / 6 ignored, 7 binaries) and,
 since 2026-11-18, the two §3 hot-store rows as a smoke:

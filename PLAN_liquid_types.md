@@ -1266,7 +1266,7 @@ already quotiented by logos:**
 
 ## 10. Bend 2 and the next Liquid index layer
 
-**Proposed, 2026-11-18. L11a–L11e are pending.** The goal is to check useful
+**Proposed, 2026-11-18. L11a–L11c landed 2026-11-18; L11d–L11e are pending.** The goal is to check useful
 shape and resource contracts at calls and branch boundaries using the existing
 Total Refinement Logic (TRL). The first example is a checked range split that
 can later supply premises for a GPU map or two independently scheduled shards.
@@ -1335,6 +1335,79 @@ legacy positive TRL and ordinary Austral tests green. Check unsupported
 annotations before they could feed solver assumptions or generate WhyML.
 [Compiler passes](lib/liquid/TotalityCheck.ml), [GPU subset](lib/gpu/Gpu_subset.ml).
 
+**Landed 2026-11-18** as `lib/liquid/LiquidIndexClosure.ml`, wired into
+`LiquidCheck.check` *before* `dump`/`LiquidWhy3.verify`, so a contract that
+applies an inadmissible symbol is refused before any `.mlw` exists.
+
+What it actually checks, and why the shape is a closed allowlist rather than
+a set of bans: the walk enumerates `tstmt` and `texpr` and refuses every
+constructor it does not admit, so an AST constructor added later fails here
+until someone decides what an index definition may do with it. Admitted are
+`skip`/`let`/`let tmp`/`:rest`/`if`/`case`/blocks/`return`/discarded results,
+with at most one initialization per local, and expressions over literals,
+parameters, locals, temporaries, casts, comparisons, connectives,
+`if`-expressions, `sizeof`, this module's constants (initializers walked too),
+this module's functions, and the `trappingAdd`/`trappingSubtract`/
+`trappingMultiply` primitives. `trappingDivide` is excluded on purpose: it
+traps on a zero divisor, and a partial operation is not a term.
+
+L11c widened the admitted set by exactly the reads a record parameter is
+wrapped in — an immutable borrow, its deref, and a slot projection — because
+`length(w) = w.len` type-checks as those three nodes and refusing them made
+every record measure inadmissible, i.e. the range wrapper L11c is about could
+not state its own length. Mutation, foreign calls, pointer access and mutable
+borrows stay refused, so a read in the fragment is a read of a value nothing in
+the fragment can change.
+
+Three findings from building it, each now pinned by a test:
+
+- **The typed AST *does* carry spans.** L4 recorded "`Stages.Tast` carries no
+  spans" and that is true of declarations and pragmas, not of statements: a
+  `Tast` statement carries the parser's `Span.t`, so L11a reports
+  `file:line:column` of the enclosing statement rather than a goal hash. The
+  L11a acceptance asks for source location, and it is available.
+- **Arguments must be walked before the call.** The plan asks for a forbidden
+  expression *nested under an argument*; reporting the outer call would name
+the wrong function. `test/LiquidIndexClosureTest.ml`'s `nested-embed`
+fixture calls `tag(peek(n))` and requires the message to blame `peek`.
+- **A call to another module cannot be audited from this seam**, so it is
+  refused rather than assumed pure (the `imported-callee` fixture uses
+  `printLn`). §4.3's default measures are the one exception: they are
+  symbols with a Why3 declaration and no source body, and
+  `LiquidInfer.is_measure` is consulted rather than a second list.
+
+`LiquidTypes.declared_type_names` moved to `LiquidTypes` so the parser's
+answer to "is this a type name" and the audit's answer cannot drift.
+
+Tested by `test/LiquidIndexClosureTest.ml` (8 cases, drives `austral.exe` at
+`--target-type=tc` so the test reads the diagnostic a user sees) and, end to end,
+by `test-programs/suites/023-liquid-index-closure` (an accepted pure helper, a
+`while` in a transitive helper, and an `@embed` under an argument). The suite is
+the user-facing half: it pins the JSON diagnostic and, for the accepted case,
+compiles, links and runs the module.
+
+Two findings from the e2e fixtures, both fixed here rather than worked around:
+
+- **A location that is wrong is worse than none.** The desugarer wraps the body
+  of `let x: T := e;` in a `TBlock` carrying `Span.empty_span`, and the walk was
+  letting that empty span replace the enclosing `let`'s real one, so an offence
+  inside a `let` printed `at :0:0`. The walk now only replaces a location with
+  a *real* span (`span_is_real`/`with_loc`), which reports the nearest enclosing
+  statement the parser actually observed.
+- **The call path starts at the contract owner's callees.** A contract on `run`
+  whose callee `outer` reaches `spin` reports `outer -> spin`, not `run -> outer
+  -> spin`: `run` is already named on the `contract:` line, so repeating it would
+  be noise. The fixtures keep that shape deliberately.
+
+`scripts/l11a-ordering-drift-control` makes the gate's ordering pin falsifiable:
+it inserts `dump m;` above the audit in a scratch copy and requires
+`verify-invariants` (via `AUSTRALVM_LIQUID_CHECK`) to exit 1 with exactly
+`[FAIL] L11a: the liquid pass runs the index-closure audit before emitting`
+while the other two L11a pins still pass; it also requires the unmutated copy to
+pass all three, so a control that failed for an unrelated reason cannot read as
+success. Writing it found a weak pin (it compared against the *last* `dump m;`,
+so an extra early dump still passed); the pin now compares against the first.
+
 ### L11b — Elaborate and convert a small sorted index language
 
 Add a typed representation for natural length/offset expressions with resolved
@@ -1358,6 +1431,71 @@ shadowed names to verify that resolution uses the right binder. A
 budget-exhausted comparison produces unknown and fails a required check.
 Preserve ordinary compilation.
 
+**Landed 2026-11-18** as `lib/liquid/LiquidIndex.ml` (pure; no compiler
+caller yet — L11c is the consumer) with `test/LiquidIndexTest.ml`'s 35
+assertions, one per acceptance row plus the structural claims.
+
+The representation and the rules it licenses:
+
+- **Resolved binders, not names.** `env` is a list of frames and `bind`
+  allocates a fresh id; `lookup` takes the innermost frame. Canonical identity
+  renders ids (`v0`), so shadowing is a real difference (the fixture checks
+  outer `n` and an inner `n` are different terms and *not* convertible), and
+  rewriting a variable is not: two formulas that spell the binder differently,
+  at different spans, canonicalize to the same string.
+- **Widths are source, sorts are target.** Every term carries an optional
+  element width (`Nat8`…`Nat64`); operands of different widths are refused
+  (`wrong element width`), and `check ~expected` unifies a width-polymorphic
+  literal with the expectation. `why3_sort` answers `int` for all four, and the
+  test pins that asymmetry: the distinction exists so two obligations differ,
+  not so the emitter learns four sorts.
+- **Families have explicit arity and kinds.** `Span [KElem; KNat; KNat]`,
+  `Vector`/`Array`/`Buffer` `[KElem; KNat]`; `family_of_ty` refuses an unknown
+  head, a wrong arity, a type in a nat position, and a non-element type in an
+  element position, naming the position.
+- **Conversion is a closed set of syntax-directed rules**: `n + 0`, `0 + n`,
+  literal addition with a right-spine reassociation (`(n + 1) + 2` ≡ `n + 3`),
+  `n - 0`, saturated literal subtraction, `n mod 1`, literal `mod`. Nothing
+  else — commutativity is `Different`, and the caller must ask for a
+  `goal_of …` obligation and supply `~checked` evidence for it (the evidence is
+  the goal's own canonical text, so a law for one instance cannot discharge
+  another).
+- **Three verdicts, and only one authorises anything.** `Convertible`,
+  `Different`, `Unknown`; `require_convertible` refuses both of the latter, so
+  an exhausted budget can never read as agreement.
+- **Budgets** on depth, steps, inlining and result size; each raise names the
+  exhausted resource in the `Unknown` reason.
+- **Machine arithmetic is a different constructor.** Natural subtraction,
+  `mod`, and checked `Machine` terms never convert into each other; a machine
+  add that overflows does not fold (the JIT traps), and `machine_of` discharges
+  the width bound only for a literal that fits it, returning the obligation
+  (`n + 1 ≤ 65535`) otherwise.
+
+Not covered here, by design: no compiler path consults the layer yet, so
+"preserve ordinary compilation" holds trivially and is checked by the existing
+`dune runtest`/`test-programs` runs; instantiating indices at calls, and
+relating an index to a real representation, are L11c's.
+
+`scripts/l11b-conversion-drift-control` makes the suite's *refusals*
+falsifiable, the way the L11a control does for the ordering pin. It rewrites
+`convert`'s one decision line twice and requires the real suite to notice each
+way: `if true then Convertible` (a rule table that accepts every pair) must
+FAIL the four refusal cases — `m + n` vs `n + m`, `n + 1` where `n` is required,
+the two binders named `n`, natural subtraction read as addition — while the
+acceptances still pass; `if false then Convertible` (a rule table that accepts
+nothing) must FAIL the four acceptance cases — `n + 0`, the right-spine fold,
+inlining, saturated subtraction — while the refusals still pass. Two contrasts
+in one run are the point: a mutation that broke *both* directions would be a
+broken build, not evidence about the rules. Because `LiquidTypes` depends on
+`Stages` from `austral_core`, the module cannot be compiled separately from the
+library (two same-named modules in one link), so the file is mutated in place
+and restored by a trap; the control re-hashes the restored file and re-runs the
+suite on it, so the failure that actually matters — leaving a loosened
+`convert` behind — is reported rather than assumed away. Its own failure mode
+was tested by making both mutations no-ops: `the mutation did not apply (true)`,
+`(false)`, `FAILED`, exit 1. Needs `dune`, so it runs under
+`nix develop "git+file://$PWD#ocaml"`.
+
 ### L11c — Check indexed contracts at calls and in branches
 
 Use the existing pragma surface for the pilot. Give one audited range or
@@ -1378,6 +1516,79 @@ elsewhere, and duplicate live use of a moved resource. A negative input or
 overflow at a runtime boundary is a typed refusal. Verify actual call-site VCs
 and the existing erasure test plus the pilot's semantic IR and executable code
 with/without proof-only annotations. Exclude proof metadata from byte comparison.
+
+**Landed 2026-11-18** as `lib/liquid/LiquidSplitPilot.ml`, wired into
+`LiquidCheck.check` next to L11a (so a refused split never reaches a `.mlw`),
+with `test/LiquidSplitPilotTest.ml`, `test-programs/suites/024-liquid-split`
+and a new case in `test/LiquidErasureTest.ml`.
+
+The pilot is **opt-in by shape**, and the shape is ordinary Austral:
+
+- a record with exactly the slots `base`, `off`, `len`;
+- `length(w)` and `offset(w)` whose bodies are literally `return w.len;` /
+  `return w.off;` — a contract over a measure that is *not* the field would be
+  a refinement of something the program does not have, so the pilot refuses to
+  reason about it;
+- `split(w, k)` returning a union with a two-span case.
+
+A module without all three is untouched (`check_module` returns `None`).
+
+**The facts come from the implementation, not from a convention.** The pilot
+verifies `split`'s body field by field: `left.off = offset(w)`,
+`left.len = k`, `right.off = offset(w) + k`, `right.len = length(w) - k`, and
+both halves sharing `base`. An overlap (`right.off = offset(w)+k+1`) or a lost
+byte (`right.len = length(w)`) is refused *at the definition*, and the
+contiguity/conservation laws are consequences of those four rules rather than
+separate checks — two extra conversions the first version ran could never fire
+once the rules held, and dead checks read as coverage.
+
+**Call sites** instantiate the callee's `Requires` with the actuals
+(capture-avoiding: v1 has no quantifiers, so substitution cannot capture) and
+discharge each conjunct by conversion in the L11b language, literal
+arithmetic, or a fact the caller already assumes. Anything else is refused:
+the pilot has no prover, and "unknown" must not justify a split. A negative
+extent is a typed refusal at the boundary; an oversized literal is refused by
+the parser's range rule it already had.
+
+**Branches** get the halves' facts inside the two-span case: `left.len = k`,
+`right.len = length(w) - k`, `left.off = offset(w)`, `right.off =
+offset(w) + k`, and disjointness (`left.off + left.len <= right.off`) — the
+last only after the pilot checks that both sides rewrite to the same term, so
+it is derived rather than asserted. Facts are scoped and are keyed by the
+*binders measured at the call*, not by the variable: moving `w` into `split`
+does not invalidate them, which is what "snapshot the measurements before the
+transfer" means here. A goal that only a popped branch fact would discharge is
+refused with that fact named, because "unprovable" and "branch-local" are
+different mistakes. Using a moved value twice is the linear type checker's
+refusal, and the pass does not duplicate it.
+
+**Erasure** is checked, not assumed: the same pilot module compiled with and
+without the `Liquid_Requires` that drive the checks produces byte-identical CPS
+(`l11c_pilot_facts_are_erased`).
+
+Three findings from building it, each now fixed and pinned:
+
+- **A measure over a record was inadmissible under L11a.** `length(w) = w.len`
+type-checks as a read borrow, a deref and a slot projection, and L11a refused
+all three, so no wrapper's length could be a term. The closure audit now admits
+read borrows, derefs and projections (mutation, foreign calls and pointers stay
+refused); the L11c premise was unreachable without it.
+- **Catching every refusal made the pass vacuously green.** The first version
+treated any failure in a non-`split` function as "outside the fragment", so a
+caller whose precondition could not be proved was silently *skipped* instead
+of refused. `Outside` (skip) and `Refuse` (report) are now distinct
+constructors, and only the former is swallowed.
+- **Rewriting facts in both directions does not terminate usefully.** With
+`v18 = v15` and `v20 = v15 + v16` both available, each step could undo the
+previous one until the fuel ran out — and the answer depended on the fuel.
+Rewriting now only replaces a fact's *left* binder, which is well founded.
+
+Not covered, by design: there is no arithmetic beyond conversion and fact
+rewriting (so `k + (length(w) - k) = length(w)` is *not* discharged); no
+solver (a symbolic obligation is a refusal); the pilot is one wrapper and one
+shape, not a general refinement type system; and functions whose bodies fall
+outside the fragment are skipped rather than checked — an under-claim, stated
+as one.
 
 ### L11d — Keep held-out laws and explicit proof results
 

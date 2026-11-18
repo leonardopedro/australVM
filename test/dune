@@ -55,6 +55,32 @@
  (modules LiquidIndexTypesTest)
  (libraries austral_liquid ounit2 zarith test_util))
 
+; L11b: the sorted index language, in isolation: elaboration, family kinds, the
+; bounded normalizer and the three conversion answers. No compiler binary: this
+; layer is pure, and keeping the test off `austral.exe` is what lets a budget
+; or a shadowing case be stated precisely.
+(tests
+ (names LiquidIndexTest)
+ (modules LiquidIndexTest)
+ (libraries austral_liquid ounit2 zarith))
+
+; L11c: the range-wrapper pilot (call-site preconditions and branch facts).
+; Drives `austral.exe` at `--target-type=tc` for the same reason the L11a
+; suite does: the acceptance is stated in terms of the diagnostic a user sees.
+(tests
+ (names LiquidSplitPilotTest)
+ (modules LiquidSplitPilotTest)
+ (libraries ounit2 unix test_util)
+ (deps ../bin/austral.exe))
+
+; L11a: the index-closure admissibility audit (WF3). Drives `austral.exe` at
+; `--target-type=tc`, because the claim is about the diagnostic a user sees.
+(tests
+ (names LiquidIndexClosureTest)
+ (modules LiquidIndexClosureTest)
+ (libraries ounit2 unix test_util)
+ (deps ../bin/austral.exe))
+
 ; L9 erasure: compiles two variants of the same module and compares the emitted
 ; CPS bytes. Needs the compiler binary and the JIT bridge, so it links the
 ; bridge library and stages `austral` alongside the test executable.

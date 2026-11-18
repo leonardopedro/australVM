@@ -16,7 +16,6 @@
    0x07: Return(value)
 *)
 
-open Error
 open Stages.Mtast
 open MonoType
 open Identifier
@@ -172,22 +171,17 @@ let rec serialize_cps_expr w expr =
       write_op w Cps_codec.Int_lit;
       write_i64 w (if b then 1L else 0L)
   | FloatLit f ->
-      (* The CPS binary has one 64-bit literal opcode and no float type, so a
-         float has to go through `Int64`. `Int64.of_float` *truncates* toward
-         zero (0.5 -> 0) and *raises* `Invalid_argument` outside the Int64
-         range. Both were invisible: `Compiler.ml`'s `with exn -> ... falling
-         back to C` turned the exception into a silent loss of JITting for the
-         whole module, and the truncation quietly changed the program's
-         constants. Rounding is explicit now, and an unrepresentable constant is
-         a compile error rather than a surprise. *)
+      (* The CPS binary has one 64-bit literal opcode and no float type. A
+         Float64 value is carried in that word as its IEEE-754 bit pattern —
+         the same one-word convention every other value in this JIT uses — so
+         the literal is `Int64.bits_of_float f`: exact, including fractions,
+         negatives, infinities and NaN. Rounding to an integer here used to
+         change the program's constants silently (`1.5` and `2.25` both became
+         `2`), which is the bug this encoding removes. Arithmetic on those bits
+         is the `au_fadd`/`au_fsub`/`au_fmul`/`au_fdiv` helpers (`cps.rs`'s
+         call sites), not integer arithmetic. *)
       write_op w Cps_codec.Int_lit;
-      if Float.is_nan f || Float.is_integer f = false && Float.abs f >= 9.2233720368547758e18
-      then
-        err
-          (Printf.sprintf
-             "float constant %h has no 64-bit integer representation; the CPS \
-              binary format cannot encode it" f)
-      else write_i64 w (Int64.of_float (Float.round f))
+      write_i64 w (Int64.bits_of_float f)
   | StringLit s ->
       (* 0x21 = string/byte constant. The JIT embeds the bytes in memory and
          yields a Span pointer (heap {data, size}); see cps.rs. *)

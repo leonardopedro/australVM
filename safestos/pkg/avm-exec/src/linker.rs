@@ -81,7 +81,12 @@ fn apply_one(text: &mut [u8], site_base: u64, r: &AvceReloc, target: u64) -> Res
             let site = site_base
                 .checked_add(r.offset)
                 .ok_or_else(|| CellError::Link("site address overflow".into()))?;
-            let rel = (target as i128 + i128::from(r.addend)) - (site as i128 + 4);
+            // Cranelift's `MachReloc` addend already carries the -4 for a
+            // rel32 field (measured on a `cps2cell` cell: `X86CallPCRel4`,
+            // addend -4). So this is the ELF rule `S + A - P`: adding the
+            // field size again double-counts it and puts every internal
+            // call four bytes past its target.
+            let rel = (target as i128 + i128::from(r.addend)) - site as i128;
             let rel = i32::try_from(rel).map_err(|_| {
                 CellError::Link(format!(
                     "PC-relative distance {rel} from {site:#x} to {target:#x} out of i32 range \
@@ -115,6 +120,15 @@ fn check_kind(kind: &str) -> Result<(), CellError> {
     }
 }
 
+/// A multi-cell image: the owner's text plus one patched text per provider,
+/// all relocated against the same symbol table.
+pub struct LinkedCells {
+    pub owner: LinkedImage,
+    /// Provider texts in the order the providers were given, each as if
+    /// mapped at its own base.
+    pub providers: Vec<LinkedImage>,
+}
+
 /// Relocate `owner`'s text as if mapped at `owner_base`, resolving
 /// undefined symbols against `providers` (already mapped at their real
 /// addresses). Returns the patched text and all known symbol addresses.
@@ -140,18 +154,34 @@ pub fn link_with<'a, 'v>(
     providers: &[Provider<'a, 'v>],
     externs: &BTreeMap<String, u64>,
 ) -> Result<LinkedImage, CellError> {
-    // Working copy: real code only (page padding excluded), never the
-    // resident mapping itself.
-    let code_len = owner.code_len();
-    if code_len > owner.text.len() {
+    let cells = link_cells(owner, owner_base, providers, externs)?;
+    Ok(cells.owner)
+}
+
+/// Refuse layout and relocation-kind problems in `view` before any symbol
+/// is resolved, so a format-level problem reports as itself even when the
+/// symbol table is also incomplete.
+fn validate(view: &CellView<'_>) -> Result<(), CellError> {
+    if view.code_len() > view.text.len() {
         return Err(CellError::Link("symdefs run past the text".into()));
     }
-    let mut text = owner.text[..code_len].to_vec();
-
-    for r in &owner.relocs {
+    for r in &view.relocs {
         check_kind(&r.kind)?;
     }
+    Ok(())
+}
 
+/// The shared symbol table: owner definitions first (duplicates there are an
+/// error), then each provider's definitions, then the runtime table. Provider
+/// definitions never overwrite an earlier one — a provider cannot shadow the
+/// owner, and the first provider wins between providers, matching [`link`]'s
+/// documented precedence.
+fn symbol_table<'a, 'v>(
+    owner: &CellView<'a>,
+    owner_base: u64,
+    providers: &[Provider<'a, 'v>],
+    externs: &BTreeMap<String, u64>,
+) -> Result<BTreeMap<String, u64>, CellError> {
     let mut symbols: BTreeMap<String, u64> = BTreeMap::new();
     for s in &owner.symdefs {
         if symbols
@@ -163,41 +193,89 @@ pub fn link_with<'a, 'v>(
     }
     for p in providers {
         for s in &p.view.symdefs {
-            // Providers only *supply* symbols the owner does not define;
-            // shadowing silently would mask a real conflict.
             if !symbols.contains_key(&s.name) {
                 symbols.insert(s.name.clone(), p.base + s.offset);
             }
         }
     }
-
     for (name, addr) in externs {
         if !symbols.contains_key(name) {
             symbols.insert(name.clone(), *addr);
         }
     }
+    Ok(symbols)
+}
 
-    for r in &owner.relocs {
+/// Copy one cell's code and apply its relocations against `symbols`.
+fn patch_text(
+    view: &CellView<'_>,
+    base: u64,
+    symbols: &BTreeMap<String, u64>,
+    provider_symbols: usize,
+    externs_len: usize,
+) -> Result<Vec<u8>, CellError> {
+    // Working copy: real code only (page padding excluded), never the
+    // resident mapping itself.
+    let mut text = view.text[..view.code_len()].to_vec();
+    for r in &view.relocs {
         let target = *symbols.get(&r.symbol).ok_or_else(|| {
             CellError::Link(format!(
                 "unresolved symbol {:?} (owner defines {} symbol(s), providers supply {}, \
                  the runtime table has {})",
                 r.symbol,
-                owner.symdefs.len(),
-                providers
-                    .iter()
-                    .map(|p| p.view.symdefs.len())
-                    .sum::<usize>(),
-                externs.len(),
+                view.symdefs.len(),
+                provider_symbols,
+                externs_len,
             ))
         })?;
-        apply_one(&mut text, owner_base, r, target)?;
+        apply_one(&mut text, base, r, target)?;
+    }
+    Ok(text)
+}
+
+/// Relocate a whole image: the owner *and* every provider cell, each at its
+/// own base, against one shared symbol table.
+///
+/// A provider is not just a symbol donor here — its own relocations are
+/// applied too, so a provider that calls another cell's function or the
+/// runtime runs from its patched copy. This is the difference from
+/// [`link_with`], which patches only the owner and leaves provider text
+/// untouched.
+pub fn link_cells<'a, 'v>(
+    owner: &CellView<'a>,
+    owner_base: u64,
+    providers: &[Provider<'a, 'v>],
+    externs: &BTreeMap<String, u64>,
+) -> Result<LinkedCells, CellError> {
+    validate(owner)?;
+    for p in providers {
+        validate(p.view)?;
+    }
+
+    let symbols = symbol_table(owner, owner_base, providers, externs)?;
+    let provider_symbols = providers
+        .iter()
+        .map(|p| p.view.symdefs.len())
+        .sum::<usize>();
+    let owner_image = LinkedImage {
+        text: patch_text(owner, owner_base, &symbols, provider_symbols, externs.len())?,
+        symbols: symbols.clone(),
+    };
+    let mut provider_images = Vec::with_capacity(providers.len());
+    for p in providers {
+        provider_images.push(LinkedImage {
+            text: patch_text(p.view, p.base, &symbols, provider_symbols, externs.len())?,
+            symbols: symbols.clone(),
+        });
     }
 
     // Every import must have resolved too — an import with no reloc is
     // fine (nothing to patch), but a defined-but-unpatched import name in
     // the symbol table is expected: runtime primitives resolve at load.
-    Ok(LinkedImage { text, symbols })
+    Ok(LinkedCells {
+        owner: owner_image,
+        providers: provider_images,
+    })
 }
 
 #[cfg(test)]
@@ -241,7 +319,9 @@ mod tests {
                 body: vec![0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3],
                 relocs: vec![crate::cell_builder::AvceReloc {
                     offset: 1,
-                    addend: 0,
+                    // Cranelift's convention for a rel32 call site; the
+                    // linker must not add the field size a second time.
+                    addend: -4,
                     kind: "X86CallPCRel4".into(),
                     symbol: "give_seven".into(),
                 }],
@@ -362,6 +442,90 @@ mod tests {
         let view = CellView::parse(&cell).unwrap();
         let err = link(&view, 0x1000, &[]).unwrap_err();
         assert!(err.to_string().contains("GOT"), "GOT refused loudly: {err}");
+    }
+
+    /// A provider's *own* relocations must be applied too, against the same
+    /// table: here provider -> owner and owner -> provider, so neither side
+    /// can be right unless the table is shared and both texts patched.
+    #[test]
+    fn multi_cell_link_relocates_providers_against_the_shared_table() {
+        // Owner: helper (6 bytes) + start, whose (function-relative) call
+        // at offset 1 targets the provider's call_helper.
+        let owner_avce = AvceDoc {
+            arch: "x86_64".into(),
+            functions: vec![
+                AvceFn {
+                    name: "helper".into(),
+                    body: vec![0xB8, 0x09, 0x00, 0x00, 0x00, 0xC3],
+                    relocs: vec![],
+                },
+                AvceFn {
+                    name: "start".into(),
+                    body: vec![0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3],
+                    relocs: vec![crate::cell_builder::AvceReloc {
+                        offset: 1,
+                        addend: -4,
+                        kind: "X86CallPCRel4".into(),
+                        symbol: "call_helper".into(),
+                    }],
+                },
+            ],
+            imports: vec!["call_helper".into()],
+        };
+        // Provider: call_helper, whose call at its own offset 1 targets the
+        // owner's helper. Its text must be patched for that to work.
+        let provider_avce = AvceDoc {
+            arch: "x86_64".into(),
+            functions: vec![AvceFn {
+                name: "call_helper".into(),
+                body: vec![0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3],
+                relocs: vec![crate::cell_builder::AvceReloc {
+                    offset: 1,
+                    addend: -4,
+                    kind: "X86CallPCRel4".into(),
+                    symbol: "helper".into(),
+                }],
+            }],
+            imports: vec!["helper".into()],
+        };
+        let owner = make_cell(&owner_avce);
+        let provider = make_cell(&provider_avce);
+        let ov = CellView::parse(&owner).unwrap();
+        let pv = CellView::parse(&provider).unwrap();
+        let owner_base = 0x1000_0000u64;
+        let provider_base = 0x1000_1000u64;
+
+        let cells = link_cells(
+            &ov,
+            owner_base,
+            &[Provider {
+                view: &pv,
+                base: provider_base,
+            }],
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        // Owner's call lands on the provider's call_helper (offset 0).
+        let owner_rel = i32::from_le_bytes(cells.owner.text[7..11].try_into().unwrap());
+        assert_eq!(
+            owner_rel as i128,
+            provider_base as i128 - 4 - (owner_base as i128 + 7)
+        );
+        // Provider's call lands on the owner's helper (offset 0) — this is
+        // the assertion `link_with` cannot make, because it does not patch
+        // provider text at all.
+        assert_eq!(cells.providers.len(), 1);
+        let provider_rel = i32::from_le_bytes(cells.providers[0].text[1..5].try_into().unwrap());
+        assert_eq!(
+            provider_rel as i128,
+            owner_base as i128 - 4 - (provider_base as i128 + 1)
+        );
+        assert_eq!(
+            *cells.providers[0].symbols.get("helper").unwrap(),
+            owner_base,
+            "the table is shared, so a provider sees the owner's symbols"
+        );
     }
 
     #[test]

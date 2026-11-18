@@ -53,8 +53,10 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 #   AUSTRALVM_MM0_DIR      the model directory the Phase D, W8 hypothesis-pin,
 #                          W9.3 witness and memsafe edge checks read
 #   AUSTRALVM_LIQUID_GOLDEN the extracted OCaml the Liquid subset check diffs
+#   AUSTRALVM_LIQUID_CHECK  the Liquid pass source the L11a ordering pin reads
 _mm0="${AUSTRALVM_MM0_DIR:-$repo_root/mm0}"
 _liquid_golden="${AUSTRALVM_LIQUID_GOLDEN:-$repo_root/lib/liquid/LiquidMeasure.ml}"
+_liquid_check="${AUSTRALVM_LIQUID_CHECK:-$repo_root/lib/liquid/LiquidCheck.ml}"
 # The approved copies the per-artifact lines and the table's approved rows are
 # compared with. Overridable only so the controls can point at a scratch copy — it
 # is the same `--approved-root` the comparator already takes, and it grants
@@ -2870,6 +2872,62 @@ check "L10 Cycle B: liquid_measure is a distinct tenant from liquid" \
 
 check "L10 Cycle B: LiquidMeasure is the extracted module, listed in dune" \
     grep -q 'LiquidMeasure' "$repo_root/lib/liquid/dune"
+
+# --- L11a: the index-closure audit is wired into the pass, ahead of emission ---
+#
+# The audit's own behaviour is pinned by test/LiquidIndexClosureTest.ml. What
+# nothing else would notice is the *ordering*: WF3 has to run before the `.mlw`
+# is dumped and before Why3 is asked, or an inadmissible index function could
+# feed the solver assumptions about code the fragment never admitted. So the
+# check is that the guard exists in `LiquidCheck.check`, that the module is in
+# the library, and that the audit call sits above `dump m`.
+check "L11a: LiquidIndexClosure is a module of austral_liquid" \
+    grep -q 'LiquidIndexClosure' "$repo_root/lib/liquid/dune"
+
+check "L11a: the liquid pass runs the index-closure audit before emitting" \
+    bash -c "awk '/^let check .*typed_module/ { f=1 } f && /LiquidIndexClosure.audit_module/ { a=NR } f && /^  dump m;/ && !d { d=NR } END { exit !(a && d && a < d) }' '$_liquid_check'"
+
+check "L11a: the index-closure audit has its own test suite" \
+    grep -q 'names LiquidIndexClosureTest' "$repo_root/test/dune"
+
+# --- L11b: the sorted index language -------------------------------------------------
+#
+# L11b is a library layer plus its own test: it elaborates and converts index
+# expressions but nothing in the compiler consults it yet (L11c is the
+# consumer). Pinning that honestly means pinning what exists — the module, the
+# suite, and the fact that the suite is *pure* (no `austral.exe` dependency),
+# since a test that started driving the compiler would be measuring something
+# else.
+check "L11b: LiquidIndex is a module of austral_liquid" \
+    grep -q 'LiquidIndex' "$repo_root/lib/liquid/dune"
+
+check "L11b: the sorted index language has its own test suite" \
+    grep -q 'names LiquidIndexTest' "$repo_root/test/dune"
+
+check "L11b: the sorted index test does not drive the compiler" \
+    bash -c "! awk '/^ \\(names LiquidIndexTest\\)/ { c=3 } c>0 { print; c-- }' '$repo_root/test/dune' | grep -q 'austral.exe'"
+
+# --- L11c: the range-wrapper pilot --------------------------------------------------
+#
+# The pilot is opt-in by shape (a `base`/`off`/`len` record, grounded measures, a
+# `split`), so what the gate can check is that it exists, that it is wired ahead of
+# emission like L11a, and that both its suites are registered. Its *behaviour* is
+# pinned by the two suites: the compiler-driving one for diagnostics, the
+# end-to-end one for a program that actually runs.
+check "L11c: LiquidSplitPilot is a module of austral_liquid" \
+    grep -q 'LiquidSplitPilot' "$repo_root/lib/liquid/dune"
+
+check "L11c: the split pilot runs before the .mlw is emitted" \
+    bash -c "awk '/^let check .*typed_module/ { f=1 } f && /LiquidSplitPilot.check_module/ { a=NR } f && /^  dump m;/ && !d { d=NR } END { exit !(a && d && a < d) }' '$_liquid_check'"
+
+check "L11c: the split pilot has its own test suite" \
+    grep -q 'names LiquidSplitPilotTest' "$repo_root/test/dune"
+
+check "L11c: the split pilot has an end-to-end suite" \
+    test -d "$repo_root/test-programs/suites/024-liquid-split"
+
+check "L11c: the split pilot's facts are checked to erase" \
+    grep -q 'l11c_pilot_facts_are_erased' "$repo_root/test/LiquidErasureTest.ml"
 
 # --- H12: agent notes (four implemented categories, one per non-trivial PR) ---
 check "H12: notes implemented dir has the four categories" \

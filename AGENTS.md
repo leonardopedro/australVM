@@ -422,6 +422,24 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   control was itself tested by making the mutations no-ops (patterns that match
   nothing, patterns that change nothing, patterns that break the file
   elsewhere): each scratch run reports `1 failed`, exit 1.
+- `scripts/l11a-ordering-drift-control` — the L11a negative control: it inserts
+  `dump m;` above the index-closure audit in a scratch copy of
+  `lib/liquid/LiquidCheck.ml` and requires the gate (reading that copy through
+  `AUSTRALVM_LIQUID_CHECK`) to exit 1 with exactly `[FAIL] L11a: the liquid pass
+  runs the index-closure audit before emitting`, the other two L11a pins still
+  passing; the unmutated copy must pass all three first. Writing it exposed a
+  weak pin, which now compares against the *first* `dump m;`.
+- `scripts/l11b-conversion-drift-control` — the L11b negative control: it
+  rewrites `LiquidIndex.ml`'s single `convert` decision line twice in place
+  (restored by a trap, re-hashed, suite re-run) and requires the real suite to
+  fail in opposite directions — `if true then Convertible` trips the four
+  refusal cases while the acceptances still pass, `if false then Convertible`
+  trips the four acceptance cases while the refusals still pass. It mutates in
+  place because `LiquidTypes` needs `Stages` from `austral_core`, so a separate
+  link of the module is not possible; the restore is asserted, not assumed. It
+  needs `dune`, so run it under `nix develop "git+file://$PWD#ocaml"`. Its own
+  control: making both mutations no-ops reports `the mutation did not apply`
+  and exits 1.
 - `scripts/w3-emitter-drift-control` — the §W3 negative control that goes through
   the gate itself: it rewrites `isa`'s emitter cell in a copy of the plan to name
   a command `EMITTERS` does not hold for that row and requires

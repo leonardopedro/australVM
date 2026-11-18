@@ -185,7 +185,9 @@ against an actual buffer length at a call site is proposed under L11 in the
 
 There are **no quantifiers** in v1 (`forall`/`exists` are MUST NOT).
 `fun-name` **MUST** resolve to a measure (§4.3) or a total-fragment function
-(§4.2); the totality gate (stage L3) enforces this.
+(§4.2). Stage L3 checks that for functions which carry a contract themselves;
+stage L11a checks it for every function a contract *applies*, by walking that
+function's reachable typed closure (`lib/liquid/LiquidIndexClosure.ml`).
 
 ### 2.3 Well-formedness (WF)
 
@@ -193,8 +195,37 @@ There are **no quantifiers** in v1 (`forall`/`exists` are MUST NOT).
   declaration, the `result` variable, or a module-level constant of total
   fragment type.
 - **WF2** — sorts check (§2.1); `result` has the declaration's return sort.
-- **WF3** — every function symbol applied is total-fragment-admissible (T1–T4
-  checked at its definition site).
+- **WF3** — every function symbol applied is total-fragment-admissible. T1–T4
+  are checked at the symbol's definition site (L3); L11a additionally walks the
+  symbol's transitive closure, so an *unannotated* helper cannot smuggle a
+  loop, a borrow, an `@embed`, a foreign call, a recursive call or an import
+  into an index expression. L11a's admitted fragment is narrower than T1–T4 by
+  design: single-initialization locals, no re-assignment, and a closed allowlist
+  of standard primitives (`trappingAdd`, `trappingSubtract`,
+  `trappingMultiply` — `trappingDivide` is excluded because it traps on a zero
+  divisor and the fragment has no partial operations). A refusal names the
+  rule, the typed call path, and the offending statement's source location.
+
+Index expressions themselves are elaborated by the sorted index language of
+`lib/liquid/LiquidIndex.ml` (L11b): names resolve to binder ids (so shadowing
+cannot collapse two binders), every term carries its source element width even
+though all four widths lower to one Why3 sort, and conversion is limited to a
+closed set of syntax-directed rules (`n + 0`, literal addition, `n - 0`,
+saturated subtraction, `n mod 1`). Anything beyond them — commutativity, for
+instance — is reported as *different* rather than proved, and must be carried
+as an explicit equality obligation with checked evidence; a comparison whose
+budget runs out is *unknown* and never counts as agreement.
+
+For one pilot wrapper (`PLAN_liquid_types.md` L11c) those indices are checked at
+*call sites and branches*, not only inside a declaration. A module declares a
+range record (`base`/`off`/`len`), grounded measures that read those slots, and
+a `split`; the checker verifies the split's own body (`left.off = offset(w)`,
+`left.len = k`, `right.off = offset(w) + k`, `right.len = length(w) - k`, a
+common base), then requires every caller to prove the callee's `Requires` by
+conversion, literal arithmetic or a fact it already assumes, and hands the
+two-span branch the halves' lengths, origins and disjointness. An obligation
+the facts do not settle is refused rather than deferred, because the pilot has
+no prover: an unknown never justifies a split.
 - **WF4** — formulas in `Liquid_Ensures` are over the post-state value only
   via `result` and the parameters (no hidden state; v1 has no state
   refinements).

@@ -30,4 +30,4 @@
  (wrapped false)
  (flags :standard -w -39-50)
  (modules LiquidTypes LiquidParse LiquidConstraints LiquidInfer LiquidWhy3
-          TotalityCheck LiquidCheck LiquidMeasure LiquidSubset))
+          TotalityCheck LiquidIndexClosure LiquidIndex LiquidSplitPilot LiquidCheck LiquidMeasure LiquidSubset))

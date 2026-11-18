@@ -83,7 +83,7 @@ COMMANDS (implemented over the real subsystems):
                                denied for action Execute` and no tool
                                process ever existed.
   load <cell.avm> --policy <cedar.txt> [--base <hex>]
-       [--resolve SYM=HEX]... [--exec <program>]
+       [--provider <cell.avm>]... [--resolve SYM=HEX]... [--exec <program>]
                                gate the cell's own calls: `Execute`, then one
                                `Call:<symbol>` request per import it
                                declares, judged against the cell's *own*
@@ -96,6 +96,12 @@ COMMANDS (implemented over the real subsystems):
                                granted namespaces). --resolve supplies the
                                runtime symbol table the image links against
                                (the JIT's registered `uk_*` addresses).
+                               --provider adds a cell whose exported symbols
+                               the image may call; repeat for more. Providers
+                               are gated by their own capability tables and
+                               their text is relocated too, then each is
+                               mapped at base + 0x01000000, +0x02000000, …
+                               by the executor.
   push <manifest-hex> --remote URL  upload only the chunks the cache lacks,
                                then the manifest
   pull <manifest-hex> --remote URL [-o FILE]
@@ -247,6 +253,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--policy",
     "--base",
     "--resolve",
+    "--provider",
     "--exec",
     "--remote",
     "--hot-limit",
@@ -812,8 +819,40 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
         }
     }
 
+    // Provider cells: their exported symbols resolve the owner's imports, and
+    // their own text is relocated against the same table. Bases are assigned
+    // deterministically so the executor can map each image at the address it
+    // was linked for: one 16 MiB slot per provider above the owner.
+    const PROVIDER_STRIDE: u64 = 0x0100_0000;
+    let mut provider_paths: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--provider" {
+            provider_paths.push(
+                args.get(i + 1)
+                    .ok_or_else(|| "--provider needs a `.avm` cell path".to_string())?,
+            );
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    let mut providers: Vec<(Vec<u8>, u64)> = Vec::with_capacity(provider_paths.len());
+    for (n, path) in provider_paths.iter().enumerate() {
+        let bytes = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+        let pbase = base
+            .checked_add((n as u64 + 1).saturating_mul(PROVIDER_STRIDE))
+            .ok_or_else(|| format!("provider base for {path} overflows"))?;
+        providers.push((bytes, pbase));
+    }
+
     let bytes = std::fs::read(input).map_err(|e| format!("read {input}: {e}"))?;
-    let loaded = avm_exec::load(&bytes, &policy, base, &externs).map_err(|e| e.to_string())?;
+    let refs: Vec<(&[u8], u64)> = providers
+        .iter()
+        .map(|(b, base)| (b.as_slice(), *base))
+        .collect();
+    let loaded =
+        avm_exec::load_with(&bytes, &refs, &policy, base, &externs).map_err(|e| e.to_string())?;
     let drv = hex(&loaded.drv_hash);
     let exec = flag(args, "--exec");
     let mut report = serde_json::json!({
@@ -823,6 +862,11 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
         "calls": loaded.calls,
         "symbols": loaded.image.symbols.len(),
         "text_bytes": loaded.image.text.len(),
+        "providers": provider_paths
+            .iter()
+            .zip(loaded.providers.iter())
+            .map(|(p, loaded)| serde_json::json!({ "path": p, "base": format!("{:#x}", loaded.base) }))
+            .collect::<Vec<_>>(),
         "spawned": exec.is_some(),
     });
 
