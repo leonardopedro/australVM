@@ -3,24 +3,35 @@
 //! Two tiers, both of which can only ever *skip work*, never change a
 //! result (evaluation stays referentially transparent):
 //!
+//! * **L0 — closure-guarded name lookup (freshness-carrying)**: a store
+//!   manifest may record, beside `drv_hash`, the *input-closure digest* of
+//!   the derivation subtree it built. This tier computes the plan-side
+//!   closure for a node and, when the store's record matches, adopts the
+//!   recorded id **without descending into dependencies**. Adopting by
+//!   name alone would be unsound (edit a source, keep the name, and warm
+//!   evaluation would return a different id than cold evaluation); the
+//!   closure is the guard, and `closure(a) == closure(b) ⇒ id(a) == id(b)`
+//!   is what makes adoption referentially transparent.
 //! * **L1 — session memo**: name -> id within one process; a second warm
 //!   evaluation of the same target does no hashing at all.
 //! * **L2 — store presence (id-keyed)**: after a node's id is known, ask
 //!   the cold CAS whether a built cell for that exact content-derived id
 //!   already exists. Reported as a `store_hits` entry: an executor skips
 //!   the *build*, never the derivation of the id.
+//! * **L3 — remote presence**: a remote binary cache's id set (spec §3.3).
 //!
-//! **Why L2 is id-keyed and does not adopt stored ids** (the obvious
-//! "look up by name and skip the subtree" shape is unsound): adopting an
-//! id under a name means adopting whatever inputs the store happened to
-//! build. If the plan's sources or dependencies changed while the name
-//! stayed put, warm evaluation would return a *different target id than
-//! cold evaluation* — a referential-transparency violation that would
-//! poison every downstream derivation. A content-derived id carries its
-//! own freshness proof, so the check is `contains_id(id)` after
-//! computation. The literal traversal-skip from the plan text needs a
-//! freshness-carrying manifest (record the input closure beside
-//! `drv_hash`) and is recorded as deferred in PLAN_avm_pkg.md.
+//! **Why L2 is id-keyed and L0 is closure-guarded** (the obvious "look up
+//! by name and skip the subtree" shape is unsound): adopting an id under a
+//! name means adopting whatever inputs the store happened to build. If the
+//! plan's sources or dependencies changed while the name stayed put, warm
+//! evaluation would return a *different target id than cold evaluation* —
+//! a referential-transparency violation that would poison every downstream
+//! derivation. L0 fixes that with a recorded closure: a stale entry cannot
+//! match, and a matching entry is provably the same id. The closure is
+//! still computed by walking the subtree (one hash per node), so what L0
+//! skips is the dependency-id chain plus per-node memo/store bookkeeping,
+//! not the plan walk itself; a true traversal skip would need ids carried
+//! in the plan (a lock file).
 //!
 //! Cost note: skipping *hashing* was never where the seconds go — hashing
 //! 5,000 nodes is milliseconds (measured in
@@ -40,6 +51,21 @@ pub trait Presence: Send + Sync {
     fn contains_id(&self, id: &DerivationId) -> bool;
 }
 
+/// "The store recorded a finished build under this name, together with the
+/// input closure it was built from." A lookup may only be adopted when the
+/// caller's plan-side closure equals `closure`; the manifest format carries
+/// that pair (see `avm_cas::Manifest::closure`).
+///
+/// An index that returns a stale pair is harmless: a stale closure cannot
+/// match, so the node falls back to hashing. The trust boundary is the
+/// same as [`Presence`] — a local store is not adversarial; a hostile one
+/// could lie about both fields, which is why nothing here replaces the
+/// content-derived id in reports that matter.
+pub trait ClosureIndex: Send + Sync {
+    /// `(derivation id, input-closure digest)` recorded for `name`.
+    fn lookup(&self, name: &str) -> Option<(DerivationId, DerivationId)>;
+}
+
 /// What one evaluation did (and, crucially, what it did *not* do).
 #[derive(Debug, Clone)]
 pub struct EvalReport {
@@ -54,6 +80,9 @@ pub struct EvalReport {
     /// Nodes whose built cell already exists in the store (L2): a future
     /// executor skips these builds.
     pub store_hits: Vec<String>,
+    /// Nodes answered by the closure-guarded name tier (L0): their subtree
+    /// was adopted from a store build whose recorded closure matched.
+    pub closure_hits: Vec<String>,
     /// Nodes the *remote* binary cache already holds pre-built (L3): an
     /// executor hydrates these instead of building them (spec §3.3).
     pub remote_hits: Vec<String>,
@@ -65,6 +94,7 @@ pub struct MemoTable {
     l1: DashMap<String, DerivationId>,
     presence: Option<Arc<dyn Presence>>,
     remote: Option<Arc<dyn Presence>>,
+    closures: Option<Arc<dyn ClosureIndex>>,
 }
 
 impl MemoTable {
@@ -73,6 +103,7 @@ impl MemoTable {
             l1: DashMap::new(),
             presence,
             remote: None,
+            closures: None,
         }
     }
 
@@ -87,7 +118,16 @@ impl MemoTable {
             l1: DashMap::new(),
             presence,
             remote,
+            closures: None,
         }
+    }
+
+    /// L0 variant: enable the closure-guarded name tier. L0 is consulted
+    /// before dependencies are resolved; a hit adopts the stored id and
+    /// returns without descending.
+    pub fn with_closure_index(mut self, closures: Arc<dyn ClosureIndex>) -> Self {
+        self.closures = Some(closures);
+        self
     }
 
     /// Evaluate `target` with memoized short-circuits. `target: None`
@@ -100,6 +140,7 @@ impl MemoTable {
             visited: Vec::new(),
             session_hits: Vec::new(),
             store_hits: Vec::new(),
+            closure_hits: Vec::new(),
             remote_hits: Vec::new(),
         };
         let roots: Vec<String> = match target {
@@ -141,6 +182,29 @@ impl MemoTable {
                 self.check_store(name, &id, report);
             }
             return Ok(id);
+        }
+        // L0: closure-guarded name lookup. The plan-side closure covers the
+        // *whole* subtree (local fields of every node plus every edge), so
+        // equality with the stored record proves the stored id is this
+        // plan's id. A stale or foreign record simply does not match.
+        if let Some(closures) = &self.closures {
+            // Lookup first: with no store record for this name there is
+            // nothing to guard, so the closure is not computed at all.
+            if let Some((stored_id, stored_closure)) = closures.lookup(name) {
+                let plan_closure = plan.closure_digest(name)?;
+                if stored_closure == plan_closure {
+                    self.l1.insert(name.to_string(), stored_id);
+                    if report
+                        .resolved
+                        .insert(name.to_string(), stored_id)
+                        .is_none()
+                    {
+                        report.closure_hits.push(name.to_string());
+                        report.order.push(name.to_string());
+                    }
+                    return Ok(stored_id);
+                }
+            }
         }
         if stack.iter().any(|n| n == name) {
             let start = stack.iter().position(|n| n == name).unwrap_or(0);
@@ -223,6 +287,128 @@ mod tests {
         fn contains_id(&self, id: &DerivationId) -> bool {
             self.0.contains(id)
         }
+    }
+
+    struct ClosureSet(std::collections::HashMap<String, (DerivationId, DerivationId)>);
+    impl ClosureIndex for ClosureSet {
+        fn lookup(&self, name: &str) -> Option<(DerivationId, DerivationId)> {
+            self.0.get(name).copied()
+        }
+    }
+
+    /// The whole point of §4.2's freshness guard: a store build whose
+    /// recorded closure matches the plan's subtree is adopted under its
+    /// name, and the subtree is never hashed.
+    #[test]
+    fn closure_guarded_lookup_adopts_a_matching_subtree() {
+        let plan = plan3();
+        let cold = MemoTable::new(None).evaluate(&plan, Some("app")).unwrap();
+
+        let mut records = std::collections::HashMap::new();
+        records.insert(
+            "app".to_string(),
+            (cold.resolved["app"], plan.closure_digest("app").unwrap()),
+        );
+        let memo = MemoTable::new(None).with_closure_index(Arc::new(ClosureSet(records)));
+        let warm = memo.evaluate(&plan, Some("app")).unwrap();
+        assert_eq!(warm.closure_hits, vec!["app"], "adopted at the root");
+        assert!(
+            warm.visited.is_empty(),
+            "adoption must not hash the subtree: {:?}",
+            warm.visited
+        );
+        assert_eq!(
+            warm.target_id, cold.target_id,
+            "adoption may not change the result"
+        );
+        assert_eq!(warm.order, vec!["app"], "no descendant was resolved");
+    }
+
+    /// `plan3` with a chosen base version and root sources, so a test can
+    /// express "same names, changed inputs" without re-inserting names.
+    fn plan3_with(base_version: &str, app_sources: &[&str]) -> Plan {
+        let mut p = Plan::new();
+        let mut base = leaf("base");
+        base.version = base_version.into();
+        p.insert(base).unwrap();
+        p.insert(node("mid", &["base"])).unwrap();
+        let mut app = node("app", &["mid"]);
+        app.sources = app_sources.iter().map(|s| s.to_string()).collect();
+        p.insert(app).unwrap();
+        p
+    }
+
+    /// A record that is merely *stale* cannot be adopted: any change to a
+    /// source, an env pair, a version, or a dependency moves the closure.
+    #[test]
+    fn stale_closures_are_never_adopted() {
+        let plan = plan3_with("1", &[]);
+        let cold = MemoTable::new(None).evaluate(&plan, Some("app")).unwrap();
+        let record = (cold.resolved["app"], plan.closure_digest("app").unwrap());
+
+        // Same DAG, one source patched on the root.
+        let patched = plan3_with("1", &["cc"]);
+        assert_ne!(
+            patched.closure_digest("app").unwrap(),
+            record.1,
+            "a source patch must move the closure"
+        );
+        let memo = MemoTable::new(None).with_closure_index(Arc::new(ClosureSet(
+            std::iter::once(("app".to_string(), record)).collect(),
+        )));
+        let stale = memo.evaluate(&patched, Some("app")).unwrap();
+        assert!(stale.closure_hits.is_empty(), "stale record was adopted");
+        assert_eq!(stale.visited, vec!["base", "mid", "app"]);
+        let fresh_cold = MemoTable::new(None)
+            .evaluate(&patched, Some("app"))
+            .unwrap();
+        assert_eq!(stale.target_id, fresh_cold.target_id);
+        assert_ne!(stale.target_id, cold.target_id, "the patch changes the id");
+
+        // A dependency change is caught the same way (the closure is over
+        // the whole subtree, not just the node's own fields).
+        let deep = plan3_with("2", &[]);
+        let memo = MemoTable::new(None).with_closure_index(Arc::new(ClosureSet(
+            std::iter::once(("app".to_string(), record)).collect(),
+        )));
+        let deep_eval = memo.evaluate(&deep, Some("app")).unwrap();
+        assert!(
+            deep_eval.closure_hits.is_empty(),
+            "a dependency change must move the closure"
+        );
+    }
+
+    /// The tier is name-keyed: a matching closure recorded under another
+    /// name must not be adopted for this one.
+    #[test]
+    fn closure_records_are_name_keyed() {
+        let plan = plan3();
+        let cold = MemoTable::new(None).evaluate(&plan, Some("app")).unwrap();
+        let records = std::iter::once((
+            "other".to_string(),
+            (cold.resolved["app"], plan.closure_digest("app").unwrap()),
+        ))
+        .collect();
+        let memo = MemoTable::new(None).with_closure_index(Arc::new(ClosureSet(records)));
+        let warm = memo.evaluate(&plan, Some("app")).unwrap();
+        assert!(warm.closure_hits.is_empty());
+        assert_eq!(warm.visited, vec!["base", "mid", "app"]);
+        assert_eq!(warm.target_id, cold.target_id);
+    }
+
+    /// A cyclic plan is still refused when the L0 tier is enabled: the
+    /// guard's own walk detects the cycle instead of recursing forever.
+    #[test]
+    fn closure_tier_still_detects_cycles() {
+        let mut p = Plan::new();
+        p.insert(node("a", &["b"])).unwrap();
+        p.insert(node("b", &["a"])).unwrap();
+        let memo = MemoTable::new(None)
+            .with_closure_index(Arc::new(ClosureSet(std::collections::HashMap::new())));
+        assert!(matches!(
+            memo.evaluate(&p, Some("a")),
+            Err(EvalError::Cycle(_))
+        ));
     }
 
     #[test]

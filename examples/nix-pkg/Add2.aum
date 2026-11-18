@@ -1,0 +1,9 @@
+module body Add2 is
+    function add(x: Int64, y: Int64): Int64 is
+        return (x + y);
+    end;
+
+    function main(): Int64 is
+        return add(3, 4);
+    end;
+end module body.

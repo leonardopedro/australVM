@@ -293,31 +293,33 @@ currently indefensible:
    weakened definition is reproduced faithfully by regeneration, so the drift gate
    cannot see it. This is exactly the hole `comparator` was built to close.
 
-### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-17)
+### §3.5 After W9.1/W9.2, the opcode producers and the L11 pins (measured 2026-11-18)
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 150 passed, 4 explained gap(s), 0 failed
-  [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
+verify-invariants: 146 passed, 8 explained gap(s), 0 failed
+  [pass] W9: mm0/clif.mm0 + .mm1 accepted by mm0-rs + mm0-c
+  [pass] W9: the CLIF model still claims no theorem
+  [pass] W9.3: clif_step is vocabulary — declared, stated, never axiomatized
+  [pass] W9.3: the refinement's citations still match their artifacts (5 pinned)
+  [pass] W9.3: certification state matches mm0/approved/
+  [detail] clif2mm0: OK — 20 form(s), 854 instruction(s) over the corpus, 0 theorems
+  [pass] W9: mm0/clif.mm0 is what the corpus lowering measures
+  [pass] W9: a form the lowering does not emit is refused
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
-  [pass] W9: mm0/clif.mm0 is what the corpus lowering measures
-  [detail] clif2mm0: 20 form(s), 853 instruction(s), 0 theorems
-  [pass] W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE
+  [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] REFUTED as stated: load store
+  [pass] W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE
+  [detail] 3 sorts, 8 term/def, 0 ax/thm
   [pass] W9.3: the memory projection is stated as vocabulary, accepted by mm0-c
   [pass] W9.3: the projection's citations still match their artifacts (3 pinned)
   [pass] W9.3: the toy model proves the stated projection, not a neighbour
   [pass] W9.3: the toy's citation digest refuses a changed claim
-  [pass] W9.3: the toy projection's theorems check without sorry
   [detail] 3 sorts, 18 term/def, 48 ax/thm
-  [pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
-  [detail] injected sorry at line 808: lean accepted the file (exit 0), the scan refused it
-  [pass] W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts
-  [pass] W9.3: the no-sorry scan does not count banned words inside comments
+  [pass] W9.3: the toy projection's theorems check without sorry
   [pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (28 theorem(s), 20 axiom(s))
   [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
-  [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
   [detail] mutations refused: toy_jit_store_visible(refused),
            toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused),
            toy_jit_fourth_store_drops_oldest(refused), toy_jit_recent_cells_readable(refused),
@@ -326,20 +328,31 @@ verify-invariants: 150 passed, 4 explained gap(s), 0 failed
            toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused),
            toy_width4_load_after_wide_store(refused),
            toy_width4_store_load_roundtrip(refused)
-  [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
+  [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
   [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
+  [pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
   [pass] W9.3: the witness exercises all 20 axioms the toy declares
   [detail] toy-witness: 5 atom(s) (0 = unset), 16276 memories (every shape of at most three cells)
   [pass] W9.3: the witness's verdicts do not change when the domain grows (27 rows at 4 and 5 atoms)
+  [detail] lean-witness: 20 axiom(s) proved for an arbitrary atom domain, 6 rejected candidate(s) proved false
   [pass] W9.3: a Lean development proves the same 20 axioms
   [pass] W9.3: the Lean development proves the toy's 28 theorems too
   [pass] W9.3: every Lean declaration rests on Lean's standard foundation only (48 audited)
+  [pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
+  [detail] injected sorry at line 808: lean accepted the file (exit 0), the scan refused it
+  [pass] W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts
+  [pass] W9.3: the no-sorry scan does not count banned words inside comments
   [pass] W9.3: both witnesses reject the same candidates
-  [pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
   [detail] lean mutations refused: put-no-truncation(refused@197),
            drop-keeps-written-address(refused@131), notfull-weakened-to-four(refused@229),
            narrow4-becomes-identity(refused@599), keep-order-becomes-put(refused@353)
-  [pass] Phase D: store_projection.mm0 declares its own vocabulary
+  [pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
+  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
+  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
+  [pass] W9.3: every field word a composition cell names has a literal comparison (8 word(s))
+  [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
+  [pass] W9.3: an approved copy that drops an axiom fails the composition counts
+  [pass] Phase D: store_projection.mm0 declares its own vocabulary (no imported theory)
   [gap]  W3: isa has no approved statements (run scripts/mm0-comparator approve isa, then commit mm0/approved/)
   [gap]  W3: slot_layout has no approved statements (run scripts/mm0-comparator approve slot_layout, then commit mm0/approved/)
   [gap]  W3: store_projection has no approved statements (run scripts/mm0-comparator approve store_projection, then commit mm0/approved/)
@@ -351,32 +364,63 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
   [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
-  [detail] one altered statement: check refused it (unmodified staging: exit 0)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
-  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
-  [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
-  [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
+  [pass] W3: an approved §W3 row whose emitter left the registry is refused
+  [pass] W3: the recorded probe evidence still names live gate lines (21 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
   [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
+  [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
+  [pass] W3: comparator self-test (all three negative controls refuse)
+
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 141 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
-
-$ ./scripts/isa-census --corpus | head -1
-isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
+verify-invariants: 145 passed, 9 explained gap(s), 0 failed
+  # + W9.1 (no lean shell) and the Lean halves of W9.3 are explained gaps here;
+  # python3 comes from the OCaml shell, so the scripts run.
+$ bash scripts/isa-census --corpus | head -1
+isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
   result: covered — every opcode used is declared in the decoder and in the artifact
-
 $ grep '^-- code:' mm0/flux1d_certificate.mm0
 -- code: cps=5dfcdfe8…d26d1 obj=ad3340b6…f0224 target=host
   # re-emitted; the statements are byte-identical, only this line moved
-$ make test                                                  # exit 0
+$ make test                    # stops in drift-controls under .#ocaml, see below
+--- drift controls: one full gate run each, ~4.5 min per case
+  gate: verify-invariants: 145 passed, 9 explained gap(s), 0 failed (exit 0)
+w3-drift-controls: FAIL liquid-golden: Liquid subset extraction matches its pinned golden did not fail
+$ nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls cert-approved
+  gate: verify-invariants: 128 passed, 19 explained gap(s), 7 failed (exit 1)
+  holds                                                      # exit 0, run alone
 ```
+
+The two gate numbers are the same 154 checks: the `lean` shell closes one gap the
+`ocaml` shell cannot (W9.1) and the rest stay explained. The block previously
+recorded `150 passed, 4 explained gap(s)`; the four §W3 approvals are still the
+owner's pending decision, and the other four of today's gaps are W5's object
+digest (not comparable in this shell) and the three Liquid golden checks (no
+prover reachable here) — reported as explained gaps, never as passes. Of the
+figures quoted, only `clif2mm0` moved for a reason worth naming: 853 → 854
+instructions, `bnot` leaving the model when opcode `0x19` became `bxor 1`. The
+`w3-pending`/`w3-approved` sizes and the certificate's `-- code:` line are
+unchanged, which is the intended relation: a lowering change the CLIF layer
+measures moves only the artifact that measures it.
+
+`make test` is not green in `.#ocaml` on this host, and the reason is the shell,
+not this measurement: `drift-controls` runs first and its `liquid-golden` case
+requires the pinned-golden check to turn red, but under `.#ocaml` that check is
+an explained `[gap]` (no why3 extraction), so the mutation has nothing to trip —
+the `default` shell that carries the provers cannot be built on this aarch64
+host (`alt-ergo`, see AGENTS.md). The `cert-approved` case *did* hold when run
+alone (a transient `SIGTERM` in the batch run, `exit 143`, was not reproducible).
+Everything after `drift-controls` in `make test` — `dune build @runtest` and the
+test-program runner — is therefore **not covered by this re-measurement**; the
+suites were run directly for the L11 work (`dune runtest`, 161 tests) and for the
+bridge (`cargo test --workspace`).
 
 The three `[FAIL]`s this work produced before those two re-emits were the
 expected ones — the certificate pinned the CPS and object digests of the *old*
@@ -892,12 +936,14 @@ the artifact, so `mm0-c` checks them too.
   same cell — the gate saying the same thing twice, which is why the script's list
   of unchanged lines omits it rather than pretending otherwise.
 
-  Both measured probes are recorded as data, not only as prose:
+  Every measured perturbation is recorded as data, not only as prose:
   [`docs/data/w3/probes.tsv`](docs/data/w3/probes.tsv) carries one row per
   perturbation (artifact, what was done, the check that fired, the message it
   produced, the date), and the gate re-reads the file on every run — each
   `gate_line` must still be text `scripts/verify-invariants` emits, each artifact
-  must still be a §W3 row, a row without a measurement date is refused, and each
+  must still be a §W3 row or a committed `mm0/` artifact (or the Liquid golden) —
+  the twelve `copy`-row controls name the file they moved — a row without a
+  measurement date is refused, and each
   `expected_message` is checked as a *skeleton*: it carries `…` wherever the gate
   interpolates a stem, a command or a count (or assembles the sentence from
   pieces), and every literal chunk between the ellipses, four characters or
@@ -910,7 +956,7 @@ the artifact, so `mm0-c` checks them too.
   nothing) and the total must read `<n> passed, <n> explained gap(s), <n> failed`,
   while a `-` in one column with a number in the other is refused because nobody
   could reproduce it. That is `[pass] W3: the recorded probe evidence still names
-  live gate lines (5 row(s))`. A total is the gate as it stood on the row's date,
+  live gate lines (8 row(s))`. A total is the gate as it stood on the row's date,
   not today's: the gate grows, so an older row keeps the smaller total it
   measured (`stale-mm1`'s `128 passed` predates the §W9.3 controls) while its
   exit status and its message remain the claims the check re-reads. The perturbations are deliberately not re-run (appending to
@@ -929,30 +975,63 @@ the artifact, so `mm0-c` checks them too.
   reason the recorded row now marks that boundary with `…` rather than quoting a
   sentence no single line of the script contains.
 
-  **Which checks have no measured failure.** Every other check in the gate was
-  counted against the evidence, and the counter is `scripts/check-census` — the
-  numbers below are its output on this tree, not a hand count. Of 201 `check`
-  statements, 116 distinct texts remain once a trailing count parenthetical
-  (`($n name(s))`, `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is
-  dropped: it reports a number, not a different claim. Of those 116, 48 are the
-  rows of the table below and six have a measured perturbed-tree run
-  (`probes.tsv`) — 54 covered — leaving 62 with neither. The table carries the
-  judgement of what stands in the way for the checks it lists; it does not cover
-  all 62, and that unwalked residue, not a property of the checks, is the rest of
-  this gap. `class` is one of: **copy** — a control of
-  the `probes.tsv` shape is possible (copy the data, drift one claim, point an
-  override at the copy) and is simply not written yet; **tool** — the check only
-  runs when an external tool is present (`mm0-c`, Lean, `why3`/`z3`, `cc`), so its
-  observed failure mode so far is a missing tool, not a drifted claim; **none** —
-  the check asserts a fact about the implementation (a file exists, a source line
-  says something, a name is computed per artifact), so there is no data file to
-  copy and drift, and testing it means editing the repository, which no control
-  here does. A `none` row is not a failure of evidence: it is a check whose
-  subject is the tree itself. Two checks a keyword scan put in this set were
-excluded after reading them — `W8: the allocation-monotonicity proof depends on
-its direction` rewrites `slot_layout.mm1` into a scratch file and requires the
-refusal, and `logos mm0: …` owns its anchor (a tampered certificate must be
-rejected) — because both already perturb a scratch copy on every run.
+  **The twelve former `copy` rows, and the one that stays.**
+  `scripts/w3-drift-controls` is those twelve controls under one entry point
+  (`<case>`, `--list`, or `all`). Each case builds a scratch copy, drifts one
+  claim in it, runs the whole gate with the read-only override that points at the
+  copy, and requires exit 1 with the expected `[FAIL]` line — and, where a second
+  check reads the same copy, the `[pass]` lines that must not move. Two overrides
+  were added for this, both read-only relocations rather than grants:
+  `AUSTRALVM_MM0_DIR` (the model directory the Phase D, W8 pin, witness and
+  memsafe checks read) and `AUSTRALVM_LIQUID_GOLDEN` (the extracted OCaml the
+  subset check diffs). Measured 2026-11-18: all twelve hold — eleven at `140
+  passed, 7 explained gap(s), 1 failed`, `isa-hypothesis-pin` at `139 passed, 7
+  explained gap(s), 1 failed`, and `witness-axiom` at `137 passed, 8 explained
+  gap(s), 3 failed`, the extra two being the count checks that read the same
+  appended axiom. Each case's whole gate log is kept under
+  `$W3_DRIFT_LOGS` (default `/tmp/w3-drift-controls/<case>.log`); that log is
+  where the recorded totals come from. `make drift-controls` runs
+  `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
+  `make test` depends on it — the Makefile states the cost, because every control
+  is a full gate run (~4.5 min). The one `copy` row left is not a control anyone
+  forgot: `W3: $_stem matches its approved statements` has no branch to exercise
+  until an artifact is approved, and approving is the owner's commit.
+
+  **Which checks have no measured failure.** Every check in the gate was counted
+  against the evidence, and the counter is `scripts/check-census` — the numbers
+  below are its output on this tree, not a hand count. Of 202 `check` statements,
+  117 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
+  number, not a different claim. 21 of those 117 have a measured perturbed-tree
+  run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
+  row in the table below, so `scripts/check-census` reports 0 distinct texts with
+  neither: no check in the gate is unread now, and the gap is the 1 `copy` row —
+  `W3: $_stem matches its approved statements`, which compares an *approved*
+  artifact with its record and so cannot be reached while no artifact is
+  approved; reaching it needs an approval, and only the owner may commit one.
+  Every other `copy` row has a case in `scripts/w3-drift-controls` (twelve
+  perturbed-tree runs, one per row, `make drift-controls`), which is why the
+  `copy` column now holds one row and not thirteen.
+  `class` is one of five. **control** — the check already perturbs a scratch copy
+  (or stages into a scratch root) on every run and requires the refusal, so its
+  red path is observed without a second experiment. **derived** — the check
+  recomputes a claim from the tree (a digest, a byte identity, a count, a name
+  list, a regenerated table) and compares it with a recorded cell or pin, so a
+  drifted claim on either side turns it red by construction. **copy** — a control
+  of the `probes.tsv` shape is possible (copy the data, drift one claim, point an
+  override at the copy) and is not written yet; this is the one class that is a
+  real gap, and it now holds one row: each of the twelve former members is a case
+  of `scripts/w3-drift-controls`, one `probes.tsv` row apiece. **tool** — the check only runs when an external tool is present
+  (`mm0-c`, Lean, `why3`/`z3`, `cc`), so its observed failure mode so far is a
+  missing tool, not a drifted claim. **none** — the check asserts a fact about the
+  implementation (a file exists, a source line says something, a scan finds no
+  banned word, a name is computed per artifact), so there is no second side to
+  compare and testing it means editing the repository, which no control here does.
+  A `control`, `derived` or `none` row is not a failure of evidence: the first two
+  are evidence already, and the third's subject is the tree itself. A check that
+  already perturbs a scratch copy every run is therefore listed as `control`
+  rather than `none` — that is what reading the body decides, and it is why the
+  table cannot be produced by a keyword scan.
 
   | check | class | what stands in the way |
   |---|---|---|
@@ -970,16 +1049,16 @@ rejected) — because both already perturb a scratch copy on every run.
   | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
   | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |
   | `Liquid golden vc-fold-premises.mlw proves in full under z3` | tool | needs `why3` + `z3` |
-  | `Liquid subset extraction matches its pinned golden` | copy | the golden is data; no control drifts it |
+  | `Liquid subset extraction matches its pinned golden` | control | `scripts/w3-drift-controls liquid-golden` appends a line to an `AUSTRALVM_LIQUID_GOLDEN` copy and the diff refuses it |
   | `Liquid subset library extracts with the existing driver` | tool | needs the extraction driver |
   | `Phase D: lean2mm0 emitter present` | none | a script's existence |
   | `Phase D: generated certificate artifacts present` | none | files' existence |
-  | `Phase D: gap_certificate pins its trust split` | copy | the certificate's trust split is data |
-  | `Phase D: layout_certificate pins its trust split` | copy | same |
-  | `Phase D: $name declares its own vocabulary (no imported theory)` | copy | the document is parsed; a copy could import a theory |
-  | `Phase D: $name only claims rules its theory declares` | copy | same |
-  | `Phase D: $name states its measured coverage` | copy | the coverage cell is data |
-  | `Phase D: $name states its theory coverage` | copy | same |
+  | `Phase D: gap_certificate pins its trust split` | control | `phase-d-trust-split-gap` rewrites the split to `structural=8` in an `AUSTRALVM_MM0_DIR` copy |
+  | `Phase D: layout_certificate pins its trust split` | control | `phase-d-trust-split-layout` widens the same line to `structural=4` |
+  | `Phase D: $name declares its own vocabulary (no imported theory)` | control | its negation is the same drift as the coverage row below — `phase-d-self-vocabulary` deletes the marker and the artifact falls through to the refusal |
+  | `Phase D: $name only claims rules its theory declares` | control | `phase-d-imported-theory` adds a `used=` name the theory never declares |
+  | `Phase D: $name states its measured coverage` | control | `phase-d-measured-coverage` makes `-- clif-forms:` disagree with the forms the file declares |
+  | `Phase D: $name states its theory coverage` | control | `phase-d-theory-coverage` deletes the coverage line, `phase-d-self-vocabulary` deletes the self-declared marker |
   | `S21: ZENODO_SYMBOLS (uz_*) registered separately` | none | greps the symbol registry |
   | `S28: AuthorizationEngine trait present` | none | greps a source file |
   | `S29: UNFER_SYMBOLS table present` | none | greps a source file |
@@ -987,26 +1066,85 @@ rejected) — because both already perturb a scratch copy on every run.
   | `S29: per-module CPS compile consumes the same census` | tool | needs a build |
   | `S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt` | none | runs the repository's own test |
   | `S30: cadabra2-cli subprocess, not a dependency` | none | an architectural claim about source |
-  | `W3: $_stem matches its approved statements` | copy | per approved row; would need `AUSTRALVM_APPROVED_ROOT` pointed at a drifted copy |
-  | `W3: stage-approvals stages exactly §W3's pending rows (exit 0)` | copy | the pending set is data; a row that cannot stage would fire it |
+  | `U11: the CPS lowering's adapter descriptors match the golden` | derived | re-emits the descriptors from the fixture and diffs them with `test-programs/adapters/adapters.golden` |
+  | `W3: $_stem matches its approved statements` | copy | per approved row, so it needs an approval to exist; `mm0/approved/` holds none and a control may not create one — the owner's first approval makes it measurable |
+  | `W3: stage-approvals stages exactly §W3's pending rows` | control | the staging runs against a scratch root every run; the row is its refusal path |
   | `W6: generated C probe compiles and passes at tolerance 1e-8` | tool | needs `cc` |
-  | `W8: hypotheses are cited, pinned, and the unchecked count matches its pin` | copy | the count pin is data; `isa-hypotheses` is the comparator |
+  | `W8: hypotheses are cited, pinned, and the unchecked count matches its pin` | control | `isa-hypothesis-pin` rewrites `-- unchecked-citations:` to 1 in an `AUSTRALVM_MM0_DIR` copy |
   | `W8: mm0/slot_layout.mm0 + .mm1 accepted, in_bounds_alloc proved` | tool | needs `mm0-rs` + `mm0-c` |
   | `W9: mm0/clif.mm0 + .mm1 accepted by mm0-rs + mm0-c` | tool | needs the mm0 toolchain |
-  | `W9: the CLIF model still claims no theorem` | copy | reads the committed file; `AUSTRALVM_CLIF` is not wired to this one yet |
-  | `W9.3: clif_step is vocabulary — declared, stated, never axiomatized` | copy | cheap now: add an `axiom` line to an `AUSTRALVM_CLIF` copy |
-  | `W9.3: the refinement's citations still match their artifacts` | copy | cheap now: drift one `-- cites:` digest in an `AUSTRALVM_CLIF` copy |
+  | `W9.3: clif_step is vocabulary — declared, stated, never axiomatized` | control | `clif-vocabulary` prepends an `axiom` line to an `AUSTRALVM_CLIF` copy |
+  | `W9.3: the refinement's citations still match their artifacts` | control | `clif-citations` flips one `-- cites:` digest in an `AUSTRALVM_CLIF` copy |
   | `W9.3: a Lean development proves the same axioms` | tool | needs Lean |
   | `W9.3: the Lean development proves the toy's theorems too` | tool | needs Lean |
-  | `W9.3: the witness exercises every axiom the toy declares` | copy | the witness table is data; dropping a row would fire it |
-  | `logos mm0: … corpus verifies` | tool | needs the `unfer/logos` pipeline |
+  | `W9.3: the witness exercises every axiom the toy declares` | control | `witness-axiom` appends an axiom to a toy copy that the witness does not hold; the two count checks read the same file and fire with it, which its log shows |
+  | `logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)` | tool | needs the `unfer/logos` pipeline; the check owns its own tampered-certificate anchor |
   | `memsafe: theory, emitter, both fixtures, ledgers and certificates present` | none | files' existence |
   | `memsafe: certificate + ledger emitter present and executable` | none | a file's mode |
-  | `memsafe: fixtures exercise every automaton edge` | copy | the fixture is data; dropping an edge would fire it |
+  | `memsafe: fixtures exercise every automaton edge` | control | `memsafe-edge` drops `t_acq` from both `-- transitions exercised:` lines in an `AUSTRALVM_MM0_DIR` copy |
   | `memsafe: $stem pins its trust split` | none | the name is computed per artifact |
   | `service-isolation: pins, theory and both certificate halves present` | none | files' existence |
   | `service-isolation: emitter present and executable` | none | a file's mode |
   | `service-isolation: trust split is structural-only` | none | parses a header's claim |
+  | `$name` | none | the check helper's own argument; every name it prints is generated |
+  | `S28: DenyAll is the default (fail-closed)` | none | greps `auth.rs` for the struct; no second side to compare |
+  | `S28: check() refuses without an installed engine` | none | greps `auth.rs`; no second side to compare |
+  | `W1: Flux1d compiles through the CPS JIT and its four obligations hold at the example state` | tool | needs the built `austral` binary and `libaustral_cranelift_bridge.so`; runs the example end to end |
+  | `W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it` | derived | re-emits the certificate, the `.mm1` and the probe, and compares the bytes with the committed three |
+  | `W2: docs/kernel_alg.mm0 accepted by mm0-rs + mm0-c` | tool | needs `mm0-rs` + `mm0-c` |
+  | `W3: a quoted statements-sha256 that does not hash the statements is refused` | control | drifts the digest in a scratch staging and requires the refusal |
+  | `W3: a §W3 row that disagrees with mm0/approved/ is refused` | control | runs the row function against a scratch approved root, missing copy then stale cell |
+  | `W3: an approved §W3 row passes when the approved copy holds what it says` | control | the positive branch of the same scratch-approval probe |
+  | `W3: an approved §W3 row whose emitter left the registry is refused` | control | drops `isa` from a scratch registry and requires the refusal |
+  | `W3: every §W3 state cell says whether the row is approved or still waiting on the owner` | none | validates the plan's cells against the two allowed shapes; the red path is a plan edit |
+  | `W3: one altered statement makes the comparator refuse the approved copy` | control | alters one statement in a scratch staging |
+  | `W3: stage-approvals answers an unknown artifact name with exit 64` | control | runs `stage-approvals` with an unknown name against a scratch root |
+  | `W3: stage-approvals refuses a named artifact that is already approved` | control | names an artifact that a scratch approved root already holds |
+  | `W3: stage-approvals refuses an artifact that equals its approved copy` | control | stages a copy byte-identical to the one in a scratch approved root |
+  | `W3: stage-approvals stages exactly §W3's $_sa_pending_n pending row(s)` | control | stages every pending row into a scratch root and counts the headings |
+  | `W3: stage-approvals stops staging an artifact once its approved copy exists` | control | stages into a scratch root that already holds one approved copy; that heading must be absent |
+  | `W3: stage-approvals' artifact list is the §W3 table's rows` | derived | compares the script's artifact list with the §W3 rows it is generated from |
+  | `W3: the plan's §W3 digest column matches the file it describes` | derived | recomputes each quoted digest from the file or approved copy the row names |
+  | `W3: the recorded probe evidence still names live gate lines` | derived | re-reads `probes.tsv` and checks each row against the gate it cites |
+  | `W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes` | derived | recomputes the CPS digest through the bridge and compares the recorded one; also mutates a CPS copy |
+  | `W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object` | derived | recomputes the object digest through the bridge |
+  | `W6: no certificate claims a float path is proved` | none | scans the committed artifacts for the claim; testing it means editing one |
+  | `W7: a certificate with a flipped coefficient is refused` | control | flips one coefficient in a scratch certificate and requires the refusal |
+  | `W8: a table entry moved off its byte breaks its proof` | control | moves an `enc_add` entry to another byte in a scratch `.mm1` |
+  | `W8: an unchecked citation cannot be re-labelled as checked` | control | rewrites the unchecked-citation count in a scratch model |
+  | `W8: an uncited or stale hypothesis is refused` | control | zeroes one cited digest in a scratch model |
+  | `W8: encdec table and its proofs are current` | derived | regenerates the table from the encoder and compares it with the committed one |
+  | `W8: isa-census refuses a model opcode the decoder rejects` | control | appends a bogus opcode to a scratch model |
+  | `W8: mm0/isa.mm0 + isa.mm1 accepted by mm0-rs + mm0-c, no sorry` | tool | needs `mm0-rs` + `mm0-c` |
+  | `W8: scripts/isa-census covers the emitted opcodes` | tool | needs the built `isa_census` binary and an emitted CPS file |
+  | `W8: the allocation-monotonicity proof depends on its direction` | control | drops the symmetry argument in a scratch `.mm1` and requires the failure |
+  | `W8: the corpus census covers every opcode the examples emit` | tool | needs the built `isa-census --corpus` path |
+  | `W9.1: the pinned RV64 model converts and mm0-c accepts it` | tool | needs `RISCV_MODEL`, `lean` and `lean4export` |
+  | `W9.3: a Lean development proves the same $(printf '%s\n' ` | tool | needs Lean; the axiom list is then compared with the `.mm0` |
+  | `W9.3: an approved copy that drops an axiom fails the composition counts` | control | drops one axiom from a scratch approval and requires the count to move |
+  | `W9.3: both witnesses reject the same candidates` | tool | needs `rustc` and Lean; compares the two rejection lists |
+  | `W9.3: every Lean declaration rests on Lean's standard foundation only` | tool | needs Lean and its `#print axioms` output |
+  | `W9.3: every field word a composition cell names has a literal comparison` | derived | reads the field words the composition cells name and finds each comparison in the gate |
+  | `W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE` | tool | needs `nix` and `scripts/mem-refines` |
+  | `W9.3: the Lean development proves the toy's $(printf '%s\n' ` | tool | needs Lean; the theorem list is then compared with the `.mm0` |
+  | `W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool` | none | scans the Lean source for banned words; the scan's own red path is the two controls below |
+  | `W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)` | control | mutates five definitions in scratch copies and requires each proof to fail |
+  | `W9.3: the memory projection is stated as vocabulary, accepted by mm0-c` | tool | needs `mm0-rs` + `mm0-c` |
+  | `W9.3: the no-sorry scan does not count banned words inside comments` | control | puts a banned word inside a comment in a scratch file and requires no hit |
+  | `W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts` | control | injects a `sorry` Lean accepts into a scratch copy and requires the scan to refuse it |
+  | `W9.3: the projection's citations still match their artifacts` | derived | recomputes each pinned citation digest |
+  | `W9.3: the toy model proves the stated projection, not a neighbour` | derived | compares the toy's pin with the projection's digest |
+  | `W9.3: the toy projection's theorems check without sorry` | tool | needs `mm0-rs` + `mm0-c` |
+  | `W9.3: the toy's axioms hold in a concrete model (no counterexample)` | tool | needs `rustc` for `scripts/toy-witness` |
+  | `W9.3: the toy's citation digest refuses a changed claim` | control | drifts the claim in a scratch copy and requires the pin to read stale |
+  | `W9.3: the toy's proofs depend on its axioms (mutating one refuses them)` | control | mutates thirteen axioms in scratch copies and requires each proof to fail |
+  | `W9.3: the toy's shape figures match what mm0-rs counts` | derived | compares the plan's and AGENTS' shape figures with what mm0-rs counts |
+  | `W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS` | derived | compares each document's theorem and axiom counts with the file's |
+  | `W9.3: the witness exercises all $_ax_n axioms the toy declares` | derived | compares the file's axiom names with the witness's `[hold]` lines |
+  | `W9.3: the witness's verdicts do not change when the domain grows` | derived | runs the witness at 4 and 5 atoms and compares the verdicts |
+  | `W9: a form the lowering does not emit is refused` | control | appends a form the lowering does not emit to a scratch model and requires the refusal |
+  | `W9: mm0/clif.mm0 is what the corpus lowering measures` | derived | regenerates the model from `clif_dump` and compares it with the committed file |
+  | `memsafe: $ledger_stem in sync with its fixture and the checker` | derived | recomputes each ledger from its fixture and compares it with the checker's |
 
   The **state column is checked too**, and for the same reason: "`[gap]`" is a
   status, not an explanation. It tells a reader the gate is red without saying
@@ -1032,7 +1170,19 @@ rejected) — because both already perturb a scratch copy on every run.
   `[gap]`, `pending`, `… ;` with nothing after it, and `blocked on the model
   rebuild`): each turned `[FAIL] W3: every §W3 state cell says whether the row is
   approved or still waiting on the owner` with the row and the offending text,
-  and the committed table passes (4 rows).
+  and the committed table passes (4 rows). That measures the cell's *shape*; that
+  the state it names reaches the files is a second claim, and it is measured end
+  to end by `scripts/w3-approval-state-drift-control`: it copies this table,
+  rewrites `isa`'s cell to `` `[pass]`, approved in `mm0/approved/` `` with no
+  `mm0/approved/isa.stmts` behind it, and runs the gate against the copy through
+  `AUSTRALVM_PLAN`. Measured 2026-11-18: exit 1, `verify-invariants: 137 passed,
+  7 explained gap(s), 4 failed`, `[FAIL] W3: the plan's §W3 stmts column matches
+  what each artifact holds` with `[detail] §W3 table vs measured: isa(says
+  approved, but …/isa.stmts does not exist)`, and exactly the three other lines
+  that read the same cell — the digest column, the approved-row emitter check and
+  the staging count — following it, while the shape check and the emitter column
+  still pass. Recorded as the `approval-claim` row of
+  `docs/data/w3/probes.tsv`.
 
   **An approval is one edit, and the gate derives the rest.** Because the state
   cell says which file the row's numbers must match, approving an artifact is
@@ -1698,16 +1848,22 @@ argument list and the type tuple in the name:
 term iadd__i64_i64__r_i64 (a b: val): op;   -- 58 use(s), 2 operand(s), 1 result(s)
 ```
 
-Measured after the `sub`/`mul`/`match` producers landed: **20 forms, 853
-instructions over 12 modules** (`i64`/`i8` only; `iconst`, `iadd`, `isub`,
-`imul`, `band`, `bor`, `bnot`, `icmp`, `uextend`, `load`, `store`, `call` at four
-arities, `brif`, `jump`, `return` — the exact list is in `mm0/clif.mm0`). The
+Measured after the `sub`/`mul`/`match` producers landed: **20 forms, 854
+instructions over 12 modules** (`i64`/`i8` only; `iconst` at both widths, `iadd`,
+`band`, `bor`, `bxor`, `icmp`, `uextend`, `load`, `store`, `call` at four
+arities, `brif`, `jump`, `return`, and the trapping pair `ssub_overflow`/
+`smul_overflow` — the exact list is in `mm0/clif.mm0`). The
 count is lower than the 23 opcodes on purpose: the CLIF layer is coarser (`call`
 covers `app`; `load`/`store` are the memory path) and the mapping between the two
 layers is W9.3's job, not a name match. The two additions over the first
 measurement (18 forms) are the arithmetic instructions, and they appear because
 the CPS layer started emitting them — the corpus grew by a `*` in
-`examples/control-flow`, not by new forms in Cranelift.
+`examples/control-flow`, not by new forms in Cranelift. The count then moved
+853 → 854 on 2026-11-18 when `not` (opcode 0x19) stopped being a bitwise `bnot`
+and became `bxor a, 1`: a `bnot` turns 1 into -2, which is truthy, so `not true`
+was returning -2. The form named `bnot` left the model, `bxor` entered it, and
+the extra `iconst 1` each of the corpus's `not`s now emits is the instruction
+count's +1.
 
 **Corpus coverage is now complete and still pinned.** The corpus grew on
 2026-11-14 from 9 to 12 modules: `examples/control-flow` exists only to drive the
@@ -2407,16 +2563,36 @@ say `[gap]` while no `mm0/approved/isa.stmts` exists, and to name the approval
 once one does. `scripts/w93-certification-drift-control` copies `clif.mm0`,
 rewrites that one line to claim `mm0/approved/isa.stmts` — which does not exist —
 leaves the vocabulary, citations and forms alone, and runs the gate with
-`AUSTRALVM_CLIF` pointing at the copy (the override moves the three checks that
-read that file; the corpus re-derivation still compares generated bytes with the
-committed path). Measured 2026-11-17: exit 1,
+`AUSTRALVM_CLIF` pointing at the copy (the override moves the four checks that
+read that file — the `proves: 0 theorems` pin, the vocabulary, the pinned
+citations and the certificate line; the corpus re-derivation still compares
+generated bytes with the committed path). Measured 2026-11-17: exit 1,
 `verify-invariants: 140 passed, 6 explained gap(s), 1 failed`, `[FAIL] W9.3:
 certification state matches mm0/approved/`, detail `no isa approval, yet
 clif.mm0 does not say [gap]`, with the `clif_step` vocabulary and the five pinned
 citations still passing — one uncertified claim, one failure. Recorded as the
-sixth `docs/data/w3/probes.tsv` row. The approved branch — an approval exists, so
-a `[gap]` line is the drift — is not measured yet, and this paragraph says so
-rather than implying both directions are covered.
+`certification-claim` row of `docs/data/w3/probes.tsv`.
+
+The approved branch — an approval exists, so a `[gap]` line is the drift — is
+measured too, and it took moving one path: the check asked
+`$repo_root/mm0/approved/isa.stmts` directly, which no override could reach, so it
+now asks `$_appr_root/isa.stmts` — the directory `AUSTRALVM_APPROVED_ROOT` already
+names for the §W3 rows — and `scripts/w3-drift-controls cert-approved` creates a
+scratch approval and runs the gate against it. Measured 2026-11-18: exit 1,
+`verify-invariants: 124 passed, 17 explained gap(s), 7 failed`, `[FAIL] W9.3:
+certification state matches mm0/approved/`, detail `…/approved/isa.stmts exists —
+clif.mm0 must cite it, not a gap`. Seven failures, not one, and the row says why:
+a scratch approval is inconsistent with the rest of the tree *by construction* —
+it is not the approved bytes, so the §W3 stmts column, the pending re-derivation,
+the composition counts and closure digests, the toy's axiom count and the staging
+count all move with it. A consistent approval is the owner's commit; the control's
+claim is only that the certificate line stops saying `[gap]` when an approval
+exists, and that is what it asserts. The model's other self-claim is
+driftable the same way, and measured: a copy of `mm0/clif.mm0` whose `-- proves:
+0 theorems` line says `1`, run with `AUSTRALVM_CLIF` at the copy, turns
+`[FAIL] W9: the CLIF model still claims no theorem` and nothing else —
+`verify-invariants: 140 passed, 7 explained gap(s), 1 failed`, 2026-11-18, the
+`proves-line-drift` row of `docs/data/w3/probes.tsv`.
 And the approved path is exercised, not assumed:
 the gate copies the toy staging, deletes its first `axiom` line, and counts the
 result *as an approval* through the same function the rows use — it must come
@@ -2696,7 +2872,7 @@ What the commit has to be, and what changes with it:
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 853 instructions**, re-measured after the arithmetic lowering; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a three-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 28 theorems from 20 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, three distinct stores all readable and the fourth dropping the earliest, the fifth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all three-cell memories on a four-atom domain — four because the eviction axiom needs four distinct addresses — and the six rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in thirteen ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 854 instructions**, re-measured after the arithmetic lowering and again after the `not` fix; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a three-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 28 theorems from 20 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, three distinct stores all readable and the fourth dropping the earliest, the fifth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all three-cell memories on a four-atom domain — four because the eviction axiom needs four distinct addresses — and the six rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in thirteen ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Re-measured 2026-11-14**: 905 reads over 12 modules, **23 distinct**, 23 declared, `UNREACHABLE_OPCODES` now empty (the `sub`/`mul`/`match` producers landed). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact

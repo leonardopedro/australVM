@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "WF3 (§2.3): `spin` uses `while`; only `fold` over lists and structural `match` iterate in the Total Austral Subset\n  contract: on `run` (Liquid_Requires, characters 0..8 of the pragma string)\n  typed call path: outer -> spin\n  at test-programs/suites/023-liquid-index-closure/002-refuse-loop-in-helper/Test.aum:22:8"
+    }
+  ],
+  "span": null,
+  "context": null
+}

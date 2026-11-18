@@ -82,6 +82,17 @@ jobs:
       - name: test the stdlib
         run: nix develop -c bash -c './standard/test_bin'
 
+      # §13.39: every emitter rewrite since §13.30 is justified by "the artifacts
+      # do not move", and each proof of that was a hand-run `cmp`. This gate is
+      # the same claim as a check: FockPair in its three modes, compared by size
+      # and sha256 with scripts/lean-typing-proof.golden.tsv. The export it needs
+      # is corpus and `mm0/exports/` is gitignored, so this checkout has none and
+      # the gate reports an explained gap and exits 0 — it never reports a pass.
+      # Where the corpus is restored (a developer tree, the corpus jobs) the same
+      # command fails on any byte drift.
+      - name: emitter byte-identity (lean-typing-proof)
+        run: nix develop -c bash -c 'python3 scripts/check-lean-typing-proof'
+
       - name: upload compiler binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # actions/upload-artifact@v4
         with:
@@ -232,6 +243,88 @@ jobs:
           restore-keys: |
             avm-pkg-${{ runner.os }}-
 
-      - name: Run avm-pkg tests (108 passed / 5 ignored, 6 binaries, measured 2026-10-18)
+      - name: Run avm-pkg tests (130 passed / 6 ignored, 7 binaries, measured 2026-11-18)
         run: cargo test --workspace
         working-directory: safestos/pkg
+
+      # The two §3 hot-store rows as a smoke, on a release binary because a
+      # debug build's per-call overhead would measure the wrong thing: a
+      # resident acquire must stay under 1 µs and a 50 MiB evicted fault-in
+      # under 15 ms. `--require` exits non-zero on a regressed row and
+      # attaches the measured report, so a failure is a number rather than a
+      # vague timeout. Local reference: 30 ns and 6.5 ms (2026-11-18).
+      - name: Hot-store latency smoke (acquire < 1 µs, 50 MiB fault-in < 15 ms)
+        run: |
+          cargo build --release -p avm-cli
+          ./target/release/avm-pkg hot-bench --require
+        working-directory: safestos/pkg
+
+  # ── Nix → AustralVM translations end to end (examples/nix-pkg) ─────
+  # The pairs are verified by dnx-verify (../dnx), packaged by avm-pkg, and
+  # then executed through `avm-pkg load --exec`. That needs three siblings:
+  # unfer and dynamic-arctic because the bridge path-depends on them (the
+  # same clones `build-and-test-linux` makes), and dnx because dnx-verify
+  # path-depends on `../../../unfer/logos`. The job builds the compiler and
+  # bridge inside the flake (`austral` has no rpath and must run under the
+  # devshell), builds the two Rust binaries with the host toolchain, and
+  # runs the script inside the devshell (it compiles the executor with
+  # `rustc` and sets LD_LIBRARY_PATH itself).
+  nix-pkg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout australVM
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # actions/checkout@v4
+
+      # Plain git, not actions/checkout: the paths are outside
+      # $GITHUB_WORKSPACE, which actions/checkout refuses.
+      - name: Checkout unfer, dynamic-arctic and dnx as siblings
+        run: |
+          git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+          git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
+          git clone --depth 1 --branch main https://github.com/leonardopedro/dnx.git ../dnx
+
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
+
+      - name: nix cache
+        uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6  # nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
+
+      # Builds the bridge .so and cps2cell, then the `austral` binary
+      # against them (the script needs both).
+      - name: make bridge (compiler + JIT bridge + cps2cell)
+        run: nix develop -c bash -c 'make bridge'
+
+      - name: Install Rust toolchain (dnx-verify + avm-pkg)
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Build dnx-verify
+        run: cargo build --release -p dnx-verify
+        working-directory: ../dnx
+
+      - name: Build avm-pkg
+        run: cargo build --release -p avm-cli
+        working-directory: safestos/pkg
+
+      # The pairs must all meet their expectations (13 equivalent, the
+      # declared-mismatch control different), every cell must round-trip,
+      # and all thirteen cells must return their Nix value — Float64
+      # included, as an IEEE-754 bit pattern in the CPS one-word ABI.
+      - name: Verify, package and execute the translation pairs
+        run: nix develop -c bash ./examples/nix-pkg/run.sh
+
+      # The execution step above is only meaningful if a broken linker fails
+      # it. This control reverts the rel32 fix, rebuilds avm-pkg, and requires
+      # the cell to stop returning 42; it also requires the Cedar Execute gate
+      # to refuse a denied cell. It restores the source and rebuilds afterwards.
+      - name: Negative control (broken linker, dead gate)
+        run: bash ./examples/nix-pkg/linker-control.sh
+
+      # Provider-cell linking: the owner cell imports `double`, so it must not
+      # link alone; with --provider it resolves into the second image and runs.
+      - name: Multi-cell image with a provider cell
+        run: nix develop -c bash ./examples/nix-pkg/multi-cell.sh

@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# L11a ordering negative control.
+#
+# The gate's L11a pin says "the liquid pass runs the index-closure audit before
+# emitting". A pin that can only ever print [pass] is not a check, so this
+# script moves `dump m;` above the audit in a *scratch copy* of the pass and
+# requires the gate to fail with exactly that line, while the other two L11a
+# pins (the module is in the library, the test suite is registered) keep passing.
+#
+# Why a scratch copy and not an in-place edit: the ordering claim is about the
+# source text, and `AUSTRALVM_LIQUID_CHECK` exists for exactly this — a
+# read-only relocation of the file the pin reads. Nothing in the tree is
+# touched, so an interrupted control cannot leave a mutated pass behind.
+#
+# Two runs, because either alone is weak:
+#
+#   1. the unmutated copy must produce all three [pass] lines — otherwise a
+#      control that "failed" for an unrelated reason (a hook the gate ignores,
+#      a moved file) would look like a successful control;
+#   2. the mutated copy must exit non-zero with the FAIL line, and the other two
+#      L11a lines must still pass — so the failure is attributable to the
+#      ordering and not to the copy being unreadable.
+#
+# Usage (python3 is not on PATH in a bare NixOS shell):
+#
+#   nix-shell -p python3 --run "bash scripts/l11a-ordering-drift-control"
+
+set -u
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+source_file="$repo_root/lib/liquid/LiquidCheck.ml"
+target_line="the liquid pass runs the index-closure audit before emitting"
+expected_fail="[FAIL] L11a: $target_line"
+
+if [ ! -f "$source_file" ]; then
+    echo "l11a-ordering-drift-control: missing $source_file" >&2
+    exit 1
+fi
+
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/avm-l11a-ordering.XXXXXX")"
+trap 'rm -rf "$scratch"' EXIT
+
+clean_copy="$scratch/LiquidCheck.clean.ml"
+mutated_copy="$scratch/LiquidCheck.mutated.ml"
+
+cp "$source_file" "$clean_copy"
+
+# Insert an early `dump m;` immediately after the pass's header, which is a
+# semantics-preserving-for-acceptance edit (a rejected module would now also
+# get its `.mlw` written) and exactly the mistake the pin exists to catch.
+awk '
+    { print }
+    /^let check \(m : typed_module\)/ && !inserted {
+        print "  dump m;"
+        inserted = 1
+    }
+    END { exit !inserted }
+' "$clean_copy" > "$mutated_copy"
+if [ $? -ne 0 ]; then
+    echo "l11a-ordering-drift-control: could not find the pass header in $source_file" >&2
+    exit 1
+fi
+
+before="$(grep -c '^  dump m;' "$clean_copy")"
+after="$(grep -c '^  dump m;' "$mutated_copy")"
+if [ "$after" -ne $((before + 1)) ]; then
+    echo "l11a-ordering-drift-control: the mutation did not apply (dump m; count $before -> $after)" >&2
+    exit 1
+fi
+
+run_gate() {
+    AUSTRALVM_LIQUID_CHECK="$1" bash "$repo_root/scripts/verify-invariants" 2>&1
+}
+
+baseline="$(run_gate "$clean_copy")"
+baseline_status=$?
+mutated="$(run_gate "$mutated_copy")"
+mutated_status=$?
+
+status=0
+
+for line in \
+    "[pass] L11a: LiquidIndexClosure is a module of austral_liquid" \
+    "[pass] L11a: $target_line" \
+    "[pass] L11a: the index-closure audit has its own test suite"
+do
+    if ! grep -Fq "$line" <<<"$baseline"; then
+        echo "control: the unmutated copy did not produce '$line'" >&2
+        status=1
+    fi
+done
+if [ "$baseline_status" -ne 0 ]; then
+    echo "control: the gate failed on the unmutated copy (exit $baseline_status)" >&2
+    status=1
+fi
+
+if ! grep -Fq "$expected_fail" <<<"$mutated"; then
+    echo "control: the mutated copy did not fail the L11a ordering pin" >&2
+    echo "--- gate output (tail) ---" >&2
+    tail -n 20 <<<"$mutated" >&2
+    status=1
+fi
+if [ "$mutated_status" -eq 0 ]; then
+    echo "control: the gate exited 0 on the mutated copy" >&2
+    status=1
+fi
+for line in \
+    "[pass] L11a: LiquidIndexClosure is a module of austral_liquid" \
+    "[pass] L11a: the index-closure audit has its own test suite"
+do
+    if ! grep -Fq "$line" <<<"$mutated"; then
+        echo "control: the mutation also broke an unrelated pin: '$line'" >&2
+        status=1
+    fi
+done
+
+if [ "$status" -ne 0 ]; then
+    echo "l11a-ordering-drift-control: FAILED" >&2
+    exit 1
+fi
+
+echo "baseline: [pass] L11a: $target_line (exit 0)"
+echo "mutated:  $expected_fail (exit $mutated_status)"
+echo "l11a-ordering-drift-control: OK"

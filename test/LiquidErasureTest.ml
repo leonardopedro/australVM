@@ -137,9 +137,74 @@ let test_refinements_and_indices_are_erased () =
         first_diff 0))
     (a = b)
 
+(* L11c: the pilot's checks are proof-only. The same module, once with the
+   `Liquid_Requires` that drive the call-site and branch checks and once
+   without, must compile to the same CPS: the facts the checker reasons about
+   are metadata, and nothing it derives may reach codegen. *)
+let pilot_source ~pragmas =
+  Printf.sprintf {|
+module body Probe is
+    record Window: Free is
+        base: Int64;
+        off: Int64;
+        len: Int64;
+    end;
+
+    union Halves: Free is
+        case Both is
+            left: Window;
+            right: Window;
+        case NoHalf;
+    end;
+
+    function length(w: Window): Int64 is
+        return w.len;
+    end;
+
+    function offset(w: Window): Int64 is
+        return w.off;
+    end;
+
+    %s
+    function split(w: Window, k: Int64): Halves is
+        let l: Window := Window(base => w.base, off => offset(w), len => k);
+        let r: Window := Window(base => w.base, off => offset(w) + k, len => length(w) - k);
+        return Both(left => l, right => r);
+    end;
+
+    function main(): ExitCode is
+        let w: Window := Window(base => 0, off => 10, len => 8);
+        case split(w, 3) of
+            when Both(left: Window, right: Window) do
+                printLn(length(left) + length(right));
+            when NoHalf do
+                printLn(0);
+        end case;
+        return ExitSuccess();
+    end;
+end module body.
+|}
+    pragmas
+
+let test_pilot_facts_are_erased () =
+  let work = workdir () in
+  (try Unix.mkdir work 0o755 with _ -> ());
+  let plain = compile_to_cps ~work "pilot_plain" (pilot_source ~pragmas:"") in
+  let checked =
+    compile_to_cps ~work "pilot_checked"
+      (pilot_source
+         ~pragmas:"pragma Liquid_Requires(Contract => \"0 <= k && k <= length(w)\");")
+  in
+  assert_bool
+    (Printf.sprintf
+       "the pilot's annotations changed codegen: %d vs %d CPS bytes"
+       (String.length plain) (String.length checked))
+    (plain = checked)
+
 let suite =
   "LiquidErasureTest" >::: [
     "refinements_and_indices_are_erased" >:: (fun _ -> test_refinements_and_indices_are_erased ());
+    "l11c_pilot_facts_are_erased" >:: (fun _ -> test_pilot_facts_are_erased ());
   ]
 
 let () = run_test_tt_main suite

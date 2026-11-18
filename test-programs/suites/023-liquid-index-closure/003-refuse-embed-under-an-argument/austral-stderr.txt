@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "WF3 (§2.3): `peek` uses `@embed(\"$1\")`, whose effect is unmediated by the fragment\n  contract: on `run` (Liquid_Requires, characters 0..8 of the pragma string)\n  typed call path: outer -> peek\n  at test-programs/suites/023-liquid-index-closure/003-refuse-embed-under-an-argument/Test.aum:25:8"
+    }
+  ],
+  "span": null,
+  "context": null
+}

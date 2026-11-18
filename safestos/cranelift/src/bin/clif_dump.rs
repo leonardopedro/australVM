@@ -154,7 +154,11 @@ impl Module for MeasuringModule {
             .define_function_bytes(id, alignment, bytes, relocs)
     }
 
-    fn define_data(&mut self, id: DataId, data: &cranelift_module::DataDescription) -> ModuleResult<()> {
+    fn define_data(
+        &mut self,
+        id: DataId,
+        data: &cranelift_module::DataDescription,
+    ) -> ModuleResult<()> {
         self.inner.define_data(id, data)
     }
 }

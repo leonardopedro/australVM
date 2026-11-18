@@ -5,9 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# PLAN_avm_pkg.md Sprint 4 (skeleton) — the `avm-pkg` command line. Only
-# subcommands whose backing subsystems exist are wired; the rest are named
-# in PLAN_avm_pkg.md as pending rather than stubbed to fake coverage.
+# PLAN_avm_pkg.md Sprint 4 — the `avm-pkg` command line. Every spec
+# subcommand is wired to its backing subsystem (avm-cas, avm-eval,
+# avm-exec, and avm-cas::remote); a command that cannot run honestly
+# fails loudly rather than faking coverage.
 
 [[bin]]
 name = "avm-pkg"
@@ -16,8 +17,10 @@ path = "src/main.rs"
 [dependencies]
 avm-cas = { path = "../avm-cas" }
 avm-eval = { path = "../avm-eval" }
+avm-exec = { path = "../avm-exec" }
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+ed25519-dalek.workspace = true

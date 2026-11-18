@@ -1,0 +1,19 @@
+{
+  "pairs": [
+    { "name": "arith",      "nix": "arith.nix",      "austral": "Arith.aum" },
+    { "name": "apply",      "nix": "apply.nix",      "austral": "Apply.aum" },
+    { "name": "bool",       "nix": "bool.nix",       "austral": "BoolCheck.aum" },
+    { "name": "float",      "nix": "float.nix",      "austral": "FloatSum.aum" },
+    { "name": "let",        "nix": "let.nix",        "austral": "LetExpr.aum" },
+    { "name": "version",    "nix": "version.nix",    "austral": "Version.aum" },
+    { "name": "sub",        "nix": "sub.nix",        "austral": "Sub.aum" },
+    { "name": "mul",        "nix": "mul.nix",        "austral": "Mul.aum" },
+    { "name": "nested",     "nix": "nested.nix",     "austral": "Add2.aum" },
+    { "name": "not",        "nix": "not.nix",        "austral": "Not.aum" },
+    { "name": "and",        "nix": "and.nix",        "austral": "And.aum" },
+    { "name": "multilet",   "nix": "multilet.nix",   "austral": "MultiLet.aum" },
+    { "name": "neg",        "nix": "neg.nix",        "austral": "Neg.aum" },
+    { "name": "precedence", "nix": "precedence.nix", "austral": "Precedence.aum",
+      "expect": "different" }
+  ]
+}

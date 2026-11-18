@@ -32,6 +32,76 @@ def _leaf(tag: str, key: str, val) -> str:
     return f'{{"{key}": {json.dumps(val)}}}'
 
 
+def _tower(n: int) -> str:
+    out = "tzero"
+    for _ in range(n):
+        out = f"(tsucc {out})"
+    return out
+
+
+def render(nodes: list, naming: dict) -> list[str]:
+    """The MM0 text of every node in the table, in index order.
+
+    This is the emitter's encoder read backwards: a shared record carries no
+    `lhs`/`rhs` strings, because on FockPair those were 96.5 % of the stream
+    (199.7 MB + 84.4 MB of 294.4 MB) and both are already in the table — `lhs`
+    is `(tsubst b x)` and `rhs` is node `r`. What a reader cannot derive from
+    the table alone is how the encoder *spelled* names: a constant becomes
+    `(tentity t_sym7)` by first appearance in encoding order, and a universe
+    `(tsort t_lev2)`. Those maps arrive with the stream
+    (`*_naming.json`, §13.40).
+
+    Every shape here mirrors `Enc._enc_tokens`, including the ones that lose
+    information on purpose: a `λ` renders as `(tabs body)` with no domain, and a
+    `let` renders as the application it means.
+    """
+    syms = naming["symbols"]
+    levs = naming["levels"]
+    succ = naming.get("index_style") == "succ"
+
+    def sym(name: str) -> str:
+        token = syms.get(name)
+        if token is None:
+            raise SystemExit(
+                f"oblig-expand: {name!r} is not in the naming file — was the "
+                "stream recorded before naming was written beside it?")
+        return f"(tentity {token})"
+
+    out: list[str] = []
+    for ent in nodes:
+        op = ent[0]
+        if op == "bvar":
+            out.append(f"(tvar {_tower(ent[1]) if succ else 't_idx' + str(ent[1])})")
+        elif op == "sort":
+            token = levs.get(str(ent[1]))
+            if token is None:
+                raise SystemExit(f"oblig-expand: level {ent[1]!r} not in naming")
+            out.append(f"(tsort {token})")
+        elif op == "const":
+            out.append(sym(ent[1]))
+        elif op == "sym":
+            out.append(sym(ent[1]))
+        elif op == "nat":
+            out.append(sym(f"nat{ent[1]}"))
+        elif op == "str":
+            out.append(sym(f"str{ent[1]}"))
+        elif op == "app":
+            out.append(f"(tapp {out[ent[1]]} {out[ent[2]]})")
+        elif op == "pi":
+            out.append(f"(tpi {out[ent[1]]} {out[ent[2]]})")
+        elif op == "lam":
+            out.append(f"(tabs {out[ent[2]]})")
+        elif op == "tsubst":
+            out.append(f"(tsubst {out[ent[1]]} {out[ent[2]]})")
+        elif op == "proj":
+            out.append(f"(tproj {out[ent[1]]} {_tower(ent[2])})")
+        elif op == "let":
+            out.append(f"(tapp (tabs {out[ent[2]]}) {out[ent[3]]})")
+        else:
+            raise SystemExit(f"oblig-expand: unknown node tag {op!r}")
+    return out
+
+
 def expand_nodes(nodes: list) -> list[str]:
     """The expanded JSON text of every node, in index order."""
     out: list[str] = []
@@ -62,21 +132,45 @@ def expand_nodes(nodes: list) -> list[str]:
     return out
 
 
-def expand_record(line: str) -> str:
+def expand_record(line: str, naming: dict | None) -> str:
     rec = json.loads(line)
     if "n" not in rec:
         return line if line.endswith("\n") else line + "\n"
     nodes = expand_nodes(rec["n"])
+    if "lhs" in rec:
+        lhs, rhs = rec["lhs"], rec["rhs"]
+    else:
+        # A stream recorded after §13.40: the statement is the substitution the
+        # record already indexes, and the right side is node `r`.
+        if naming is None:
+            raise SystemExit(
+                "oblig-expand: this stream has no lhs/rhs, so it needs the "
+                "naming file written beside it (*_naming.json)")
+        text = render(rec["n"], naming)
+        lhs = f"(tsubst {text[rec['b']]} {text[rec['x']]})"
+        rhs = text[rec["r"]]
     full = {
         "id": rec["id"],
         "kind": rec["kind"],
-        "lhs": rec["lhs"],
-        "rhs": rec["rhs"],
+        "lhs": lhs,
+        "rhs": rhs,
         "b": json.loads(nodes[rec["b"]]),
         "x": json.loads(nodes[rec["x"]]),
         "r": json.loads(nodes[rec["r"]]),
     }
     return json.dumps(full, sort_keys=True) + "\n"
+
+
+def load_naming(stream: Path) -> dict | None:
+    """The naming beside a stream part, if the emitter wrote one."""
+    name = stream.name
+    cut = name.find("_obligations")
+    stem = name[:cut] if cut > 0 else stream.stem
+    for cand in (stream.parent / f"{stem}_naming.json",
+                 Path(f"{stem}_naming.json")):
+        if cand.is_file():
+            return json.loads(cand.read_text())
+    return None
 
 
 def main(argv: list[str]) -> int:
@@ -91,12 +185,13 @@ def main(argv: list[str]) -> int:
         if not path.exists():
             print(f"oblig-expand: no such file {path}", file=sys.stderr)
             return 1
+        naming = load_naming(path)
         with path.open("r") as fh:
             for line in fh:
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                out.write(expand_record(line))
+                out.write(expand_record(line, naming))
     out.flush()
     return 0
 

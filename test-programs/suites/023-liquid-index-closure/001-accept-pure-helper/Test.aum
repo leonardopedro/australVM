@@ -1,0 +1,22 @@
+module body Test is
+    """
+    WF3 (L11a): the contract calls `step`, an unannotated pure helper. The
+    audit walks `step`'s closure, finds only `trappingAdd`, and accepts. The
+    program is then compiled and run, so the acceptance is about a module that
+    exists rather than about a message that is merely absent.
+    """
+    pragma Liquid_Requires(Contract => "step(n) >= n");
+    pragma Liquid_Ensures(Contract => "result >= n");
+    function step(n: Int64): Int64 is
+        return n + 1;
+    end;
+
+    function atLeastStep(n: Int64): Int64 is
+        return n;
+    end;
+
+    function main(): ExitCode is
+        printLn(atLeastStep(step(2)));
+        return ExitSuccess();
+    end;
+end module body.

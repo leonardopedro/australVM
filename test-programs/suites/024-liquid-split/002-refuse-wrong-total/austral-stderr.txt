@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "L11c: `split` builds `r.len` as `v0`, but the checked split requires `(- v0 v2)`; the halves would not partition the input"
+    }
+  ],
+  "span": null,
+  "context": null
+}

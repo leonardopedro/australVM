@@ -43,17 +43,9 @@ let rejection (decl : string) (sp : LiquidTypes.span) (msg : string) : string =
     makes the syntax mean what it looks like, and it is scope-sensitive for the
     same reason WF1 is. *)
 
-let declared_type_names (m : typed_module) : string list =
-  let (TypedModule (_, decls)) = m in
-  List.concat_map
-    (fun d ->
-      match d with
-      (* The two forms a user-declared type can take: a record or a union. Both
-         bind a type name, which is all the parser needs. *)
-      | TRecord (_, _, name, _, _, _, _) -> [ Identifier.ident_string name ]
-      | TUnion (_, _, name, _, _, _, _) -> [ Identifier.ident_string name ]
-      | _ -> [])
-    decls
+(* Defined in `LiquidTypes` so the L11a closure audit can resolve type
+   arguments through the same function instead of a second copy. *)
+let declared_type_names = LiquidTypes.declared_type_names
 
 let parse_or_reject ~(is_known_type : string -> bool) (decl : string)
     (kind : LiquidTypes.contract_kind) (src : string)
@@ -278,6 +270,20 @@ let check (m : typed_module) : Compiler_plugin.verdict =
      were still caught, which is why the existing single-function test passed.
      The comment here claimed to be "deliberately permissive" while the docstring
      above promised the opposite; the docstring was the intent. *)
+  (* L11a (WF3) runs before anything is emitted: an index function whose
+     closure is not total must not reach a `.mlw`, or the solver would be fed
+     assumptions about code the fragment never admitted. *)
+  (* L11c's pilot: for the module that declares the audited range wrapper, it
+     checks call-site preconditions and the facts a checked split hands its
+     branch. Inert — and therefore harmless — for every other module. Runs
+     next to L11a, before anything is emitted, for the same reason: nothing
+     the fragment did not admit should reach a `.mlw`. *)
+  match LiquidSplitPilot.check_module m with
+  | Some msg -> Compiler_plugin.VerdictReject msg
+  | None ->
+  match LiquidIndexClosure.audit_module m with
+  | Some msg -> Compiler_plugin.VerdictReject msg
+  | None ->
   dump m;
   (* L5: hand the module to the Why3 driver when asked. Off unless
      AUSTRAL_LIQUID_VERIFY is set, so the default build needs no prover. *)

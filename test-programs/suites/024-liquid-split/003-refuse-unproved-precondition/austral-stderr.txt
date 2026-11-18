@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "L11c: `use` cannot discharge `split's precondition `((0 <= k) && (k <= length(w)))`` (`v16` vs `v14`); the pilot has no prover, and an unknown obligation does not justify the claim"
+    }
+  ],
+  "span": null,
+  "context": null
+}

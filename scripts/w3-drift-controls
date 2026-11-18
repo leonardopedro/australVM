@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+# w3-drift-controls — one perturbation per check that the plan's census lists as
+# `copy`: a claim whose data can be drifted in a scratch copy, with the control
+# not written yet. Each case below is that control.
+#
+# Every case has the same shape as `scripts/w3-emitter-drift-control`: build a
+# scratch copy, drift exactly one claim in it, run the whole gate with the
+# read-only override that points at the copy, and require exit 1 with the
+# expected `[FAIL]` line — plus, where another check reads the same copy, the
+# `[pass]` lines that must not move. Nothing is written into the repository and
+# `mm0/approved/` is only ever read, so no case here can approve anything.
+#
+# Two of the overrides are read-only relocations: `AUSTRALVM_MM0_DIR` names the
+# model directory (Phase D trust splits and coverage, the W8 hypothesis pin, the
+# W9.3 witness and the memsafe edge census), `AUSTRALVM_LIQUID_GOLDEN` names the
+# extracted OCaml the subset check diffs. `AUSTRALVM_CLIF`, `AUSTRALVM_PLAN` and
+# `AUSTRALVM_APPROVED_ROOT` are the ones the gate already had.
+#
+# The cases are independent: each has its own scratch tree, its own `TMPDIR`
+# (the gate's scratch roots come from `mktemp -d`) and reads the repository
+# without writing it, so `-j N` runs N gate runs at once. That is the only
+# speed-up available — a case *is* one full gate run — and it is bounded by the
+# cores: this host has two.
+#
+# Measured 2026-11-18, all 14 cases, same tree, same `nix develop`:
+#   -j 1  62m43s   (~269 s/case)
+#   -j 2  44m9s    (~379 s/case: two gate runs contend, so the second core is
+#                   worth 1.42x, not 2x — a gate run is not itself parallel)
+# i.e. 18m34s (30%) off the sequential wall clock, which is what `make
+# drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
+#
+# `w3-approved-row` is the one copy check with no case: its subject is an
+# *approved* §W3 row, and no artifact is approved in this tree, so the branch
+# cannot be reached without an owner commit. That is stated rather than faked —
+# a control that wrote `mm0/approved/` would be self-approval.
+#
+# Usage: scripts/w3-drift-controls [-j N] [case|all]   (default -j 1, or
+#          $W3_DRIFT_JOBS; `make drift-controls` passes -j $(nproc))
+#        scripts/w3-drift-controls --list
+#        (under `nix develop`: the gate needs python3, mm0-rs, why3 …)
+# Exit: 0 every case run held, 1 one did not, 2 could not run.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GATE="$ROOT/scripts/verify-invariants"
+
+say()  { printf '%s\n' "$*"; }
+fail() { printf 'w3-drift-controls: FAIL %s\n' "$*" >&2; }
+
+command -v python3 >/dev/null 2>&1 || {
+    say "w3-drift-controls: [gap] python3 not on PATH — run this under 'nix develop'"
+    exit 2
+}
+[ -f "$GATE" ] || { fail "no gate at $GATE"; exit 2; }
+
+# Each case keeps its whole gate log under $W3_DRIFT_LOGS: the recorded numbers
+# in the plan's probe table are read out of these, so they must outlive the run.
+W3_DRIFT_LOGS="${W3_DRIFT_LOGS:-/tmp/w3-drift-controls}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT INT TERM
+mkdir -p "$W3_DRIFT_LOGS"
+
+JOBS="${W3_DRIFT_JOBS:-1}"
+
+# ── helpers ────────────────────────────────────────────────────────────────
+# `$cw` is the case's own scratch dir and `TMPDIR` its own temporary root, so a
+# case never sees another case's files or the gate's `mktemp -d` results.
+gate_run() {   # log, then VAR=value … for the gate's environment
+    local log="$1"; shift
+    local rc=0
+    ( cd "$ROOT" && env "$@" bash scripts/verify-invariants ) >"$log" 2>&1 || rc=$?
+    cp "$log" "$W3_DRIFT_LOGS/$CASE.log"
+    say "  gate: $(tail -1 "$log") (exit $rc)"
+    return "$rc"
+}
+expect_fail() {  # log, check text
+    grep -qF "[FAIL] $1" "$2" || { fail "$CASE: $1 did not fail"; return 1; }
+    say "  [FAIL] $1"
+}
+expect_pass() {  # log, check text
+    grep -qF "[pass] $1" "$2" || { fail "$CASE: $1 did not stay green"; return 1; }
+}
+expect_detail() {  # log, anchor, substring
+    grep -F "$1" "$2" | grep -qF "$3" || {
+        grep -F "$1" "$2" | sed 's/^/    /' >&2
+        fail "$CASE: the detail does not say '$3'"
+        return 1
+    }
+    say "  detail: $3"
+}
+mm0_copy() {  # destination — always a fresh copy, so cases cannot stack drifts
+    rm -rf "$1"
+    cp -R "$ROOT/mm0" "$1" || exit 2
+}
+
+# ── the cases: one drifted claim each ──────────────────────────────────────
+case_phase-d-trust-split-gap() {
+    mm0_copy "$cw/mm0"
+    sed -i 's/structural=9 grounded=0 certificates=9/structural=8 grounded=0 certificates=9/' \
+        "$cw/mm0/gap_certificate.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)" "$cw/g"
+}
+
+case_phase-d-trust-split-layout() {
+    mm0_copy "$cw/mm0"
+    sed -i 's/structural=3 grounded=5 certificates=8/structural=4 grounded=5 certificates=8/' \
+        "$cw/mm0/layout_certificate.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g"
+}
+
+case_phase-d-theory-coverage() {
+    mm0_copy "$cw/mm0"
+    sed -i '/^-- theory coverage: /d' "$cw/mm0/slot_layout.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: slot_layout.mm0 states its theory coverage" "$cw/g"
+}
+
+case_phase-d-imported-theory() {
+    mm0_copy "$cw/mm0"
+    sed -i 's/^-- theory coverage: used=\([^ ]*\)/-- theory coverage: used=\1,tnope_not_declared/' \
+        "$cw/mm0/slot_layout.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: slot_layout.mm0 only claims rules its theory declares" "$cw/g" &&
+    expect_detail "claims used rules the theory does not declare:" "$cw/g" "tnope_not_declared"
+}
+
+case_phase-d-self-vocabulary() {
+    mm0_copy "$cw/mm0"
+    sed -i '/^-- theory: self-declared vocabulary/d' "$cw/mm0/store_projection.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: store_projection.mm0 states its theory coverage" "$cw/g"
+}
+
+case_phase-d-measured-coverage() {
+    mm0_copy "$cw/mm0"
+    python3 - "$cw/mm0/clif.mm0" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+lines = p.read_text().splitlines(keepends=True)
+hits = 0
+for i, line in enumerate(lines):
+    if line.startswith("-- clif-forms: "):
+        n = int(line.split(": ")[1].strip())
+        lines[i] = f"-- clif-forms: {n + 1}\n"
+        hits += 1
+if hits != 1:
+    raise SystemExit(f"expected one `-- clif-forms:` line, found {hits}")
+p.write_text("".join(lines))
+PY
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "Phase D: clif.mm0 states its measured coverage" "$cw/g"
+}
+
+case_isa-hypothesis-pin() {
+    mm0_copy "$cw/mm0"
+    python3 - "$cw/mm0/isa.mm0" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+m = re.search(r"^-- unchecked-citations: (\d+)$", text, re.M)
+if not m:
+    raise SystemExit("no `-- unchecked-citations:` line")
+p.write_text(text[:m.start(1)] + str(int(m.group(1)) + 1) + text[m.end(1):])
+PY
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" "$cw/g"
+}
+
+case_clif-vocabulary() {
+    printf '%s\n' 'axiom clif_step_is_proved: $ clif_step s o $;' > "$cw/clif.mm0"
+    cat "$ROOT/mm0/clif.mm0" >> "$cw/clif.mm0"
+    gate_run "$cw/g" AUSTRALVM_CLIF="$cw/clif.mm0" || true
+    expect_fail "W9.3: clif_step is vocabulary — declared, stated, never axiomatized" "$cw/g" &&
+    expect_pass "W9.3: certification state matches mm0/approved/" "$cw/g"
+}
+
+case_clif-citations() {
+    python3 - "$ROOT/mm0/clif.mm0" "$cw/clif.mm0" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+new, n = re.subn(r"(-- cites: \S+ sha256=)([0-9a-f])",
+                 lambda m: m.group(1) + ("0" if m.group(2) != "0" else "1"), text, count=1)
+if n != 1:
+    raise SystemExit("no `-- cites:` digest to flip")
+pathlib.Path(sys.argv[2]).write_text(new)
+PY
+    gate_run "$cw/g" AUSTRALVM_CLIF="$cw/clif.mm0" || true
+    expect_fail "W9.3: the refinement's citations still match their artifacts" "$cw/g" &&
+    expect_pass "W9.3: certification state matches mm0/approved/" "$cw/g"
+}
+
+case_witness-axiom() {
+    mm0_copy "$cw/mm0"
+    printf '\naxiom toy_not_held: $ notfull $;\n' >> "$cw/mm0/store_projection_toy.mm0"
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    # One axiom the witness does not hold turns this red (the pass branch quotes
+    # the axiom count, the fail branch does not). The count checks read the same
+    # file, so they move with it and are left to fire, not hidden: the log shows
+    # the witness's axiom list missing `toy_not_held` beside the count drift.
+    expect_fail "W9.3: the witness exercises every axiom the toy declares" "$cw/g"
+}
+
+case_memsafe-edge() {
+    mm0_copy "$cw/mm0"
+    python3 - "$cw/mm0" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+hits = 0
+for p in root.glob("linearity_certificate*.mm0"):
+    lines = p.read_text().splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith("-- transitions exercised: ") and "t_acq" in line:
+            lines[i] = line.replace("t_acq,", "", 1)
+            hits += 1
+            break
+    p.write_text("".join(lines))
+if hits != 2:
+    raise SystemExit(f"expected both fixtures to list t_acq, edited {hits}")
+PY
+    gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
+    expect_fail "memsafe: fixtures exercise every automaton edge" "$cw/g" &&
+    expect_detail "neither fixture reaches:" "$cw/g" "t_acq"
+}
+
+case_liquid-golden() {
+    cp "$ROOT/lib/liquid/LiquidMeasure.ml" "$cw/LiquidMeasure.ml"
+    printf '\n(* drifted by scripts/w3-drift-controls *)\n' >> "$cw/LiquidMeasure.ml"
+    gate_run "$cw/g" AUSTRALVM_LIQUID_GOLDEN="$cw/LiquidMeasure.ml" || true
+    expect_fail "Liquid subset extraction matches its pinned golden" "$cw/g" &&
+    expect_pass "Liquid subset library extracts with the existing driver" "$cw/g"
+}
+
+# The certificate's *approved* branch: an approval exists, so a `[gap]` line is
+# the drift. It needs an approval to exist, and only the owner may commit one —
+# so the approval here lives in a scratch root the gate is pointed at, which is
+# the same read-only relocation `AUSTRALVM_APPROVED_ROOT` already provides.
+case_cert-approved() {
+    mkdir -p "$cw/approved"
+    printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$cw/approved/isa.stmts"
+    gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+    expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
+    expect_detail "isa.stmts exists" "$cw/g" "clif.mm0 must cite it, not a gap" &&
+    # The approval is inconsistent with everything else *by construction* — a
+    # consistent one is the owner's commit, not something a control may create —
+    # so six comparisons that read the approved copy also move. They are
+    # consequences of the same drift, and the row for this case says so.
+    expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
+    expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g"
+}
+
+# The last `copy` row: `W3: $_stem matches its approved statements`. Its failing
+# branch needs an approval the artifact disagrees with, and an approval is the
+# owner's commit — so the whole approved root is a scratch copy of
+# `mm0/approved/` with one axiom's text changed and its digest left alone, which
+# is exactly a statement weakened after the fact. `mm0/approved/` is only read:
+# nothing here approves anything, and the tree's approvals stay as they are.
+# `quasi_rh_7_8` is the smallest approved artifact (one axiom), so the drift is
+# visible in a single line.
+case_w3-approved-row() {
+    rm -rf "$cw/approved"
+    cp -R "$ROOT/mm0/approved" "$cw/approved" || exit 2
+    python3 - "$cw/approved/quasi_rh_7_8.stmts" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+drifted = text.replace("(cfv s czeta) cc0", "(cfv s czeta) cc1", 1)
+if drifted == text:
+    raise SystemExit("the approved axiom's text did not move")
+p.write_text(drifted)
+PY
+    gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+    expect_fail "W3: quasi_rh_7_8 matches its approved statements" "$cw/g"
+}
+
+CASES="phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage
+phase-d-imported-theory phase-d-self-vocabulary phase-d-measured-coverage
+isa-hypothesis-pin clif-vocabulary clif-citations witness-axiom memsafe-edge
+liquid-golden cert-approved w3-approved-row"
+
+# One case, in its own scratch dir and temporary root. Runs in a subshell: the
+# report lands in `$work/<case>/report` and the status in `$work/<case>/status`,
+# so concurrent cases cannot interleave their output.
+run_case() {
+    local c="$1"
+    CASE="$c"
+    cw="$work/$c"
+    mkdir -p "$cw/tmp"
+    export TMPDIR="$cw/tmp"
+    SECONDS=0
+    local rc=0
+    if ! declare -F "case_$c" >/dev/null; then
+        fail "no case named '$c' (known: $(printf '%s' $CASES | tr '\n' ' '))"
+        rc=2
+    else
+        "case_$c" || rc=$?
+    fi
+    printf '%s %s\n' "$rc" "$SECONDS" >"$cw/status"
+}
+
+report_case() {  # print a finished case's report, return its status
+    local c="$1" cw="$work/$1" rc=1 secs=0
+    [ -f "$cw/status" ] && read -r rc secs <"$cw/status"
+    say ""
+    say "== $c (${secs}s)"
+    cat "$cw/report" 2>/dev/null
+    if [ "$rc" -eq 0 ]; then say "  holds"; else fail "$c: the control did not hold"; fi
+    return "$rc"
+}
+
+# Run every requested case, at most $JOBS gate runs at a time, then report them
+# in declaration order so the transcript does not depend on completion order.
+run_all() {  # case names on stdin
+    local -a want=() running=0
+    while IFS= read -r c; do [ -n "$c" ] && want+=("$c"); done
+    local -a order=()
+    for c in "${want[@]}"; do
+        mkdir -p "$work/$c"        # the redirect below needs it before the subshell runs
+        ( run_case "$c" ) >"$work/$c/report" 2>&1 &
+        order+=("$c")
+        running=$((running + 1))
+        if [ "$running" -ge "$JOBS" ]; then wait; running=0; fi
+    done
+    wait
+    local status=0
+    for c in "${order[@]}"; do report_case "$c" || status=1; done
+    return "$status"
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -j|--jobs) JOBS="${2:-1}"; shift 2 ;;
+        -j*) JOBS="${1#-j}"; shift ;;
+        *) break ;;
+    esac
+done
+case "$JOBS" in ''|*[!0-9]*|0) fail "-j takes a positive number, got '$JOBS'"; exit 2 ;; esac
+
+what="${1:-all}"
+status=0
+if [ "$what" = --list ]; then
+    printf '%s\n' $CASES
+    exit 0
+fi
+if [ "$what" = all ]; then
+    SECONDS=0
+    printf '%s\n' $CASES | run_all || status=1
+    say ""
+    if [ "$status" -eq 0 ]; then
+        say "w3-drift-controls: $(printf '%s\n' $CASES | wc -l) case(s) held in $((SECONDS / 60))m$((SECONDS % 60))s with -j $JOBS"
+    else
+        say "w3-drift-controls: at least one case did not hold" >&2
+    fi
+elif declare -F "case_$what" >/dev/null; then
+    printf '%s\n' "$what" | run_all || status=1
+else
+    fail "no case named '$what' (known: $(printf '%s\n' $CASES | tr '\n' ' '))"
+    status=2
+fi
+exit "$status"

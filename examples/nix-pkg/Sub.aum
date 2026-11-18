@@ -1,0 +1,5 @@
+module body Sub is
+    function main(): Int64 is
+        return (10 - 4);
+    end;
+end module body.

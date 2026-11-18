@@ -1,0 +1,9 @@
+module body Version is
+    function version_code(major: Int64, minor: Int64): Int64 is
+        return ((major * 100) + minor);
+    end;
+
+    function main(): Int64 is
+        return version_code(2, 12);
+    end;
+end module body.

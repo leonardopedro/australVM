@@ -1,0 +1,5 @@
+module body BoolCheck is
+    function main(): Bool is
+        return (1 < 2);
+    end;
+end module body.

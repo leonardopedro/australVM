@@ -561,3 +561,21 @@ let rec undeclared_sorts (f : formula) : string list =
              acc args
      in
      ty_undeclared (undeclared_sorts_term [] e) t
+(** The record and union names a typed module declares.
+
+    The parser needs this to tell a type argument from an index argument
+    (`Vector[T, n]` vs `Vector[n]` are the same token stream up to the comma),
+    and L11a's index-closure audit needs the same answer, so it lives here
+    rather than in either caller: two copies of "what is a declared type" would
+    drift, and a parser that disagrees with the contract checker about scope is
+    the kind of defect that shows up as a silently accepted typo. *)
+let declared_type_names (m : Stages.Tast.typed_module) : string list =
+  let Stages.Tast.TypedModule (_, decls) = m in
+  List.concat_map
+    (fun d ->
+      match d with
+      | Stages.Tast.TRecord (_, _, name, _, _, _, _)
+      | Stages.Tast.TUnion (_, _, name, _, _, _, _) ->
+         [ Identifier.ident_string name ]
+      | _ -> [])
+    decls

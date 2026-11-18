@@ -5,7 +5,7 @@
 -- measured-by: scripts/clif2mm0 --write, from
 --   safestos/cranelift/target/release/clif_dump over scripts/cps-corpus
 -- clif-forms: 20
--- clif-instructions: 853
+-- clif-instructions: 854
 -- clif-types: i64,i8
 -- proves: 0 theorems
 --
@@ -39,16 +39,16 @@ term ty_i8: ty;
 -- Measured instruction forms, sorted; the comment is the count in the
 -- corpus measurement. A constructor's argument list is the operand list.
 term band__i64_i64__r_i64 (a b: val): op;   -- 12 use(s), 2 operand(s), 1 result(s)
-term bnot__i64__r_i64 (a: val): op;   -- 1 use(s), 1 operand(s), 1 result(s)
 term bor__i64_i64__r_i64 (a b: val): op;   -- 1 use(s), 2 operand(s), 1 result(s)
 term brif__i8__r_none (a: val): op;   -- 37 use(s), 1 operand(s), 0 result(s)
+term bxor__i64_i64__r_i64 (a b: val): op;   -- 1 use(s), 2 operand(s), 1 result(s)
 term call__i64__r_i64 (a: val): op;   -- 35 use(s), 1 operand(s), 1 result(s)
 term call__i64_i64__r_i64 (a b: val): op;   -- 63 use(s), 2 operand(s), 1 result(s)
 term call__i64_i64_i64__r_i64 (a b c: val): op;   -- 3 use(s), 3 operand(s), 1 result(s)
 term call__none__r_i64: op;   -- 1 use(s), 0 operand(s), 1 result(s)
 term iadd__i64_i64__r_i64 (a b: val): op;   -- 60 use(s), 2 operand(s), 1 result(s)
 term icmp__i64_i64__r_i8 (a b: val): op;   -- 37 use(s), 2 operand(s), 1 result(s)
-term iconst__none__r_i64: op;   -- 304 use(s), 0 operand(s), 1 result(s)
+term iconst__none__r_i64: op;   -- 305 use(s), 0 operand(s), 1 result(s)
 term iconst__none__r_i8: op;   -- 13 use(s), 0 operand(s), 1 result(s)
 term jump__none__r_none: op;   -- 38 use(s), 0 operand(s), 0 result(s)
 term load__i64__r_i64 (a: val): op;   -- 113 use(s), 1 operand(s), 1 result(s)

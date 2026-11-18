@@ -21,8 +21,12 @@ serde.workspace = true
 # Manifest::to_json (CLI `stat` view); kept out of the identity encoding,
 # which is hand-rolled canonical binary.
 serde_json.workspace = true
-tempfile.workspace = true
 # Sprint 5.1 — remote.rs: async chunk/manifest sync against an S3/REST
 # binary cache (loopback-mock tested; no egress on this machine).
 reqwest.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+# Test fixtures only: library code no longer touches the filesystem for
+# hydration (hot_store assembles anonymous mappings).
+tempfile.workspace = true

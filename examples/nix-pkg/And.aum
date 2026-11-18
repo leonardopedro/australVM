@@ -1,0 +1,5 @@
+module body And is
+    function main(): Bool is
+        return ((1 < 2) and (2 < 3));
+    end;
+end module body.

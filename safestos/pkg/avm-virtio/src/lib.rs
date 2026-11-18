@@ -18,8 +18,9 @@
 //!   the wire records for `GET_SHARED_MEMORY_REGIONS` replies and
 //!   `SHMEM_MAP`/`SHMEM_UNMAP` backend requests. The registry never maps
 //!   anything itself: the mmap belongs to the VMM/backend process, which
-//!   keeps PLAN_avm_pkg §6.3's "exactly one `unsafe` (the CAS hot store)"
-//!   invariant intact.
+//!   keeps PLAN_avm_pkg §6.3's "no `unsafe` in `pkg/`" invariant intact
+//!   (the CAS hot store itself now hydrates through memmap2's safe
+//!   anonymous-mapping API).
 
 pub mod ring;
 pub mod shmem;

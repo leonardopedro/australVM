@@ -1,0 +1,5 @@
+module body Precedence is
+    function main(): Int64 is
+        return ((1 + 2) * 3);
+    end;
+end module body.

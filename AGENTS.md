@@ -144,6 +144,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   and no `theorem`: `verify-invariants` fails if either appears, and also fails
   the `[gap]` line once `mm0/approved/isa.stmts` exists (the owner's approval
   is what turns a stated obligation into a cited one).
+- `scripts/check-lean-typing-proof` — the emitter's byte-identity gate: FockPair
+  in its three modes (expanded, shared, stopped) compared by size and sha256 with
+  `scripts/lean-typing-proof.golden.tsv`, so "the artifacts do not move" is a
+  check instead of a hand-run `cmp`. Needs the gitignored corpus under
+  `mm0/exports/` and reports an explained gap without it. Re-record an intended
+  byte change deliberately, in the same commit: `make check-typing-proof RECORD=1`.
 - `scripts/check-todo-ledger` — code files (`*.rs`/`*.sh`/`*.py`/`*.toml`)
   carry no `TODO`/`FIXME`/`HACK`/`XXX` marker unless the file is reviewed in
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
@@ -247,13 +253,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   diff: **15 opcodes map to a converted declaration, 8 are structural, 0 are
   uncovered**. The table is closed (an `isa.rs` opcode with no entry fails it),
   and "mapped" is checked against the artifact, so a missing declaration reads
-  `NOT IN ARTIFACT`, not as covered. `check` re-converts and diffs both stems.
+  `NOT IN ARTIFACT`, not as covered.  `check` re-converts and diffs both stems.
+  `make w9` runs this `check` together with `scripts/mem-refines` and asserts
+  each one's acceptance line (`check: 2 stem(s) match`, `0 not covered`,
+  `REFUTED as stated`), so a regressed converter or a lowering that grew the
+  model's signature fails a command instead of reading as a `[gap]`.
   Runs under `nix develop "git+file://$PWD#lean"`: that shell carries lean,
   lean4export, `mm0`, python3 and **both** model paths (`$RISCV_MODEL`,
   `$RISCV_MEMORY_MODEL`) on purpose, so entering it may trigger the one-time
   28-minute Sail build. `.github/workflows/w9-isa-model.yml` runs `check`
   weekly, because a PR should not wait for that build.
-- `scripts/mem-refines` — refutes the tempting shortcut "the JIT's memory op
+-  `scripts/mem-refines` (see `make w9`) — refutes the tempting shortcut "the JIT's memory op
   lowers to the model's `execute_LOAD`/`execute_STORE`", for **both** opcodes.
   It reads the *committed* artifacts (`mm0/clif.mm0`'s `load__i64__r_i64`: 1
   operand, 1 result; `store__*`: 2 operands, 0 results) and the *pinned*
@@ -418,6 +428,24 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   control was itself tested by making the mutations no-ops (patterns that match
   nothing, patterns that change nothing, patterns that break the file
   elsewhere): each scratch run reports `1 failed`, exit 1.
+- `scripts/l11a-ordering-drift-control` — the L11a negative control: it inserts
+  `dump m;` above the index-closure audit in a scratch copy of
+  `lib/liquid/LiquidCheck.ml` and requires the gate (reading that copy through
+  `AUSTRALVM_LIQUID_CHECK`) to exit 1 with exactly `[FAIL] L11a: the liquid pass
+  runs the index-closure audit before emitting`, the other two L11a pins still
+  passing; the unmutated copy must pass all three first. Writing it exposed a
+  weak pin, which now compares against the *first* `dump m;`.
+- `scripts/l11b-conversion-drift-control` — the L11b negative control: it
+  rewrites `LiquidIndex.ml`'s single `convert` decision line twice in place
+  (restored by a trap, re-hashed, suite re-run) and requires the real suite to
+  fail in opposite directions — `if true then Convertible` trips the four
+  refusal cases while the acceptances still pass, `if false then Convertible`
+  trips the four acceptance cases while the refusals still pass. It mutates in
+  place because `LiquidTypes` needs `Stages` from `austral_core`, so a separate
+  link of the module is not possible; the restore is asserted, not assumed. It
+  needs `dune`, so run it under `nix develop "git+file://$PWD#ocaml"`. Its own
+  control: making both mutations no-ops reports `the mutation did not apply`
+  and exits 1.
 - `scripts/w3-emitter-drift-control` — the §W3 negative control that goes through
   the gate itself: it rewrites `isa`'s emitter cell in a copy of the plan to name
   a command `EMITTERS` does not hold for that row and requires
@@ -448,10 +476,48 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
   `no isa approval, yet clif.mm0 does not say [gap]`, and the `clif_step`
   vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
+- `scripts/w3-approval-state-drift-control` — the §W3 control for the state
+  cell: it rewrites `isa`'s cell in a copy of the plan to `` `[pass]`, approved in
+  `mm0/approved/` `` with no `mm0/approved/isa.stmts` behind it, and requires
+  `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: the
+  plan's §W3 stmts column matches what each artifact holds`, the detail
+  `isa(says approved, but …/isa.stmts does not exist)`, exactly the three other
+  lines that read the same cell red (digest column, approved-row emitter check,
+  staging count) and nothing else, and the shape check plus the emitter column
+  still green. One full gate run.
+- `scripts/w3-drift-controls` — one case for each of the thirteen checks the
+  census classified `copy`, plus the certification run with an approval present
+  (`<case>`, `--list`, `all`, `-j N`); 14 cases: Phase D's two
+  trust splits and its four coverage/vocabulary claims, the W8 hypothesis pin,
+  the `clif_step` vocabulary and pinned citations, the witness's axiom table, the
+  memsafe edge census, the Liquid golden, and the refinement's certificate with an
+  approval present. Each builds a scratch copy, drifts one claim in it, runs the
+  whole gate with the read-only override that points at the copy
+  (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
+  `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
+  expected `[FAIL]` line. One full gate run per case; logs kept under
+  `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
+  speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
+  repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
+  `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
+  cores suggest, because a gate run does not itself parallelise. The last
+  `copy` row, `W3: $_stem matches its approved statements`, is
+  `w3-approved-row`: it copies the whole approved root into scratch and weakens
+  one approved axiom there, so the check runs without the tree holding any new
+  approval.
+  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
+  read-only `*-drift-control` scripts the same way, then `obj-drift-control`
+  alone (it edits the tree and rebuilds), and `make test` depends on it. The two
+  parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
+  (2026-11-18; the second half alone 22m44s → 17m22s). It never
+  writes `mm0/approved/` — the approval a case needs lives in a scratch root — so
+  no control can approve.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
-  stale `.mm1`, and the four whole-gate drift controls — §W3's emitter cell,
-  §W9.3's composition count and closure-digest cells, and the refinement's
-  certificate line): artifact, perturbation, the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
+  stale `.mm1`, §W3's emitter and state cells, §W9.3's composition count and
+  closure-digest cells, the refinement's certificate line in both directions, the
+  model's `proves: 0 theorems` pin, and one row per `scripts/w3-drift-controls`
+  case):
+  artifact, perturbation, the check that fired, its message, Never edited by the gate; re-read every run, which fails when a row cites
   a `gate_line` the script no longer emits, an `expected_message` skeleton whose
   literal chunks (`…` marks the interpolated parts) are no longer in the script, or
   a `gate_exit`/`gate_total` pair of the wrong shape (a recorded run must have
@@ -461,16 +527,19 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   it censuses every `check "…"` in `scripts/verify-invariants` as statements,
   distinct texts (a trailing count parenthetical dropped — it reports a number,
   not a different claim), the texts the plan's census table names, the texts a
-  `docs/data/w3/probes.tsv` row records, and the residue with neither. It exits
-  1 when the plan no longer quotes the measured counts, so a table that grows
-  without the paragraph moving is caught here. Kept out of `verify-invariants`
+  `docs/data/w3/probes.tsv` row records, the residue with neither, and the
+  `class` totals (`control` / `derived` / `copy` / `tool` / `none`). It exits 1
+  when the plan no longer quotes the measured counts — including the `copy`
+  count, which is the gap — so a table that grows without the paragraph moving
+  is caught here. Kept out of `verify-invariants`
   because it reads the plan's prose rather than an artifact.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is restored. It rebuilds the compiler twice, so it is not in
   `verify-invariants`; run it under `nix develop` (needs `dune`).
 - Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
-  `make bridge`, all guarded by `check-bridge-fresh`), `run-examples.sh`,
+  `make bridge`, all guarded by `check-bridge-fresh`; `make w9` for the two
+  lean-shell checks below), `run-examples.sh`,
   `test-programs/runner.py`, `demo_module/run_demo.sh`.
 
 ```bash

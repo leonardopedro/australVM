@@ -232,6 +232,15 @@ fn trapping_divide_resolves_and_executes() {
 
 /// Body that returns `a <opcode> b`, the shape the CPS emitter writes for a
 /// two-operand arithmetic expression.
+fn body_not(opcode: u8, a: i64) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(0x07); // tail/return context
+    body.push(opcode);
+    body.push(0x01); // iconst a
+    write_i64(&mut body, a);
+    body
+}
+
 fn body_binop(opcode: u8, a: i64, b: i64) -> Vec<u8> {
     let mut body = Vec::new();
     body.push(0x07); // tail/return context
@@ -251,6 +260,31 @@ fn sub_opcode_computes_the_difference() {
     // must be the negated result, or `a - b` was lowered as `b - a`.
     let cps = cps_v1_named("op_sub_swapped", &body_binop(0x06, 2, 44));
     assert_eq!(execute(compile(&cps)), -42);
+}
+
+#[test]
+fn float_helpers_bitcast_and_compute() {
+    // Float64 travels as its IEEE bit pattern in the CPS one-word ABI
+    // (`CpsGen`'s literal encoding), so these helpers must bitcast, compute in
+    // f64 and bitcast back. A rounding literal or an integer add at the call
+    // site is exactly what these assertions rule out.
+    let bits = |f: f64| f.to_bits() as i64;
+    let f = |b: i64| f64::from_bits(b as u64);
+    assert_eq!(f(austral_cranelift_bridge::au_fadd(bits(1.5), bits(2.25))), 3.75);
+    assert_eq!(f(austral_cranelift_bridge::au_fsub(bits(1.5), bits(2.25))), -0.75);
+    assert_eq!(f(austral_cranelift_bridge::au_fmul(bits(1.5), bits(2.25))), 1.5 * 2.25);
+    assert_eq!(f(austral_cranelift_bridge::au_fdiv(bits(1.5), bits(2.25))), 1.5 / 2.25);
+    // Negative constants are bit patterns too, not sign-magnitude integers.
+    assert_eq!(f(austral_cranelift_bridge::au_fadd(bits(-0.5), bits(0.25))), -0.25);
+}
+
+#[test]
+fn not_opcode_complements_zero_and_one() {
+    // 0x19 is the compiler's `not` on a 0/1 Bool. A bitwise complement would
+    // return -2 for `not 1`, so this pins the 0/1 contract rather than the
+    // instruction the JIT happens to emit.
+    assert_eq!(execute(compile(&cps_v1_named("op_not_true", &body_not(0x19, 1)))), 0);
+    assert_eq!(execute(compile(&cps_v1_named("op_not_false", &body_not(0x19, 0)))), 1);
 }
 
 #[test]

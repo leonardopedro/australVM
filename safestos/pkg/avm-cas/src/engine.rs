@@ -24,7 +24,8 @@ use crate::compression;
 use crate::{Blake3Digest, CasError};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -32,7 +33,12 @@ use std::sync::Mutex;
 pub type Digest = Blake3Digest;
 
 const MANIFEST_MAGIC: [u8; 4] = *b"AVMM";
-const MANIFEST_FORMAT: u16 = 1;
+/// Current manifest format. Format 2 adds the optional `closure` field
+/// (the freshness-carrying input-closure digest, PLAN_avm_pkg.md §4.2).
+/// Format-1 files remain readable and keep their byte-identical identity
+/// encoding: a `Manifest` remembers the format it was read as.
+const MANIFEST_FORMAT: u16 = 2;
+const MANIFEST_FORMAT_V1: u16 = 1;
 const INDEX_MAGIC: [u8; 4] = *b"AVMI";
 const INDEX_FORMAT: u16 = 1;
 
@@ -76,8 +82,19 @@ pub struct Manifest {
     pub chunks: Vec<Digest>,
     /// Derivation input hash, when the cell came from `avm-eval`.
     pub drv_hash: Option<Digest>,
+    /// Input-closure digest of the derivation subtree that produced this
+    /// cell (see `avm_eval::calculate_closure_digest`). Together with
+    /// `drv_hash` this lets a warm evaluation adopt this build under its
+    /// name without recomputing the subtree's id chain — the name-keyed
+    /// lookup is guarded by an exact closure match. Format-1 manifests
+    /// have no such record and therefore never serve as L0 hits.
+    pub closure: Option<Digest>,
     pub pubkey: Option<[u8; 32]>,
     pub signature: Option<[u8; 64]>,
+    /// Encoding format this manifest was read as (or should be written as).
+    /// New manifests are format 2; a decoded format-1 file keeps encoding
+    /// as format 1 so its identity digest still matches its filename.
+    format: u16,
 }
 
 impl Manifest {
@@ -88,16 +105,23 @@ impl Manifest {
             total_size: 0,
             chunks: Vec::new(),
             drv_hash: None,
+            closure: None,
             pubkey: None,
             signature: None,
+            format: MANIFEST_FORMAT,
         }
+    }
+
+    /// True for a manifest read from a format-1 file (no closure record).
+    pub fn is_legacy_format(&self) -> bool {
+        self.format == MANIFEST_FORMAT_V1
     }
 
     /// Canonical *unsigned* encoding — the signed and hashed message.
     fn encode_unsigned(&self) -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(&MANIFEST_MAGIC);
-        b.extend_from_slice(&MANIFEST_FORMAT.to_le_bytes());
+        b.extend_from_slice(&self.format.to_le_bytes());
         for s in [&self.name, &self.version] {
             b.extend_from_slice(&(s.len() as u32).to_le_bytes());
             b.extend_from_slice(s.as_bytes());
@@ -108,6 +132,15 @@ impl Manifest {
             Some(h) => {
                 b.push(1);
                 b.extend_from_slice(h);
+            }
+        }
+        if self.format >= 2 {
+            match &self.closure {
+                None => b.push(0),
+                Some(h) => {
+                    b.push(1);
+                    b.extend_from_slice(h);
+                }
             }
         }
         b.extend_from_slice(&(self.chunks.len() as u32).to_le_bytes());
@@ -163,7 +196,7 @@ impl Manifest {
             return Err(CasError::Corrupt("manifest magic mismatch".into()));
         }
         let format = r.u16()?;
-        if format != MANIFEST_FORMAT {
+        if format != MANIFEST_FORMAT && format != MANIFEST_FORMAT_V1 {
             return Err(CasError::Corrupt(format!(
                 "manifest format {format} unsupported"
             )));
@@ -175,6 +208,15 @@ impl Manifest {
             0 => None,
             1 => Some(r.array32()?),
             _ => return Err(CasError::Corrupt("drv_hash presence byte invalid".into())),
+        };
+        let closure = if format >= 2 {
+            match r.u8()? {
+                0 => None,
+                1 => Some(r.array32()?),
+                _ => return Err(CasError::Corrupt("closure presence byte invalid".into())),
+            }
+        } else {
+            None
         };
         let n = r.u32()? as usize;
         if n > 1 << 24 {
@@ -203,8 +245,10 @@ impl Manifest {
             total_size,
             chunks,
             drv_hash,
+            closure,
             pubkey,
             signature,
+            format,
         })
     }
 
@@ -216,6 +260,7 @@ impl Manifest {
             "total_size": self.total_size,
             "chunks": self.chunks.len(),
             "drv_hash": self.drv_hash.map(|h| hex(&h)),
+            "closure": self.closure.map(|h| hex(&h)),
             "identity": hex(&self.identity_digest()),
             "signed": self.signature.is_some(),
             "pubkey": self.pubkey.map(|k| hex(&k)),
@@ -419,42 +464,79 @@ impl ChunkStore {
 
     /// Read one chunk (decompressed) by digest.
     pub fn get_chunk(&self, hash: &Digest) -> Result<Vec<u8>, CasError> {
-        let entry = {
+        let mut out = None;
+        self.for_each_chunk(std::slice::from_ref(hash), |_, raw| {
+            out = Some(raw.to_vec());
+            Ok(())
+        })?;
+        Ok(out.expect("the callback ran once"))
+    }
+
+    /// Read and verify several chunks in the given order, handing each one
+    /// to `f` as soon as it is decoded. Each packfile is opened at most
+    /// once and each chunk costs one positional read of its framed record —
+    /// the shape a bulk hydration pass needs (per-chunk `open`/`seek`/three
+    /// reads spends milliseconds of syscall time on a 50 MiB cell), without
+    /// retaining the whole cell in memory (which would cost a page fault
+    /// per freshly allocated page).
+    pub fn for_each_chunk<F>(&self, hashes: &[Digest], mut f: F) -> Result<(), CasError>
+    where
+        F: FnMut(usize, &[u8]) -> Result<(), CasError>,
+    {
+        let entries: Vec<ChunkEntry> = {
             let map = self.state.lock().unwrap();
-            map.get(hash)
-                .copied()
-                .ok_or_else(|| CasError::NotFound(hex(hash)))?
+            let mut out = Vec::with_capacity(hashes.len());
+            for h in hashes {
+                out.push(
+                    map.get(h)
+                        .copied()
+                        .ok_or_else(|| CasError::NotFound(hex(h)))?,
+                );
+            }
+            out
         };
-        let mut f = File::open(self.pack_path(entry.pack_id))?;
-        f.seek(SeekFrom::Start(entry.offset))?;
-        let mut framed = [0u8; 4];
-        f.read_exact(&mut framed)?;
-        let comp_len = u32::from_le_bytes(framed);
-        if comp_len != entry.comp_len {
-            return Err(CasError::Corrupt(
-                "pack framing disagrees with index".into(),
-            ));
+        let mut packs: HashMap<u32, File> = HashMap::new();
+        for (i, (hash, entry)) in hashes.iter().zip(&entries).enumerate() {
+            if !packs.contains_key(&entry.pack_id) {
+                packs.insert(entry.pack_id, File::open(self.pack_path(entry.pack_id))?);
+            }
+            let fh = packs.get_mut(&entry.pack_id).expect("just inserted");
+            let mut framed = vec![0u8; 5 + entry.comp_len as usize];
+            fh.read_exact_at(&mut framed, entry.offset)?;
+            let comp_len = u32::from_le_bytes(framed[..4].try_into().unwrap());
+            if comp_len != entry.comp_len {
+                return Err(CasError::Corrupt(
+                    "pack framing disagrees with index".into(),
+                ));
+            }
+            if framed[4] != entry.codec {
+                return Err(CasError::Corrupt("pack codec disagrees with index".into()));
+            }
+            let raw = compression::decompress(entry.codec, &framed[5..])?;
+            if raw.len() != entry.raw_len as usize {
+                return Err(CasError::Corrupt(
+                    "decompressed size disagrees with index".into(),
+                ));
+            }
+            let actual = *blake3::hash(&raw).as_bytes();
+            if actual != *hash {
+                return Err(CasError::Corrupt(
+                    "chunk plaintext does not match its digest".into(),
+                ));
+            }
+            f(i, &raw)?;
         }
-        let mut codec = [0u8; 1];
-        f.read_exact(&mut codec)?;
-        if codec[0] != entry.codec {
-            return Err(CasError::Corrupt("pack codec disagrees with index".into()));
-        }
-        let mut comp = vec![0u8; entry.comp_len as usize];
-        f.read_exact(&mut comp)?;
-        let raw = compression::decompress(entry.codec, &comp)?;
-        if raw.len() != entry.raw_len as usize {
-            return Err(CasError::Corrupt(
-                "decompressed size disagrees with index".into(),
-            ));
-        }
-        let actual = *blake3::hash(&raw).as_bytes();
-        if actual != *hash {
-            return Err(CasError::Corrupt(
-                "chunk plaintext does not match its digest".into(),
-            ));
-        }
-        Ok(raw)
+        Ok(())
+    }
+
+    /// Convenience collector over [`Self::for_each_chunk`] (order preserved).
+    pub fn get_chunks(&self, hashes: &[Digest]) -> Result<Vec<Vec<u8>>, CasError> {
+        let mut out = Vec::with_capacity(hashes.len());
+        self.for_each_chunk(hashes, |_, raw| {
+            out.push(raw.to_vec());
+            Ok(())
+        })?;
+        Ok(out)
     }
 
     /// Ingest a whole buffer as a new cell: chunk, dedup, append, and
@@ -466,6 +548,21 @@ impl ChunkStore {
         version: &str,
         data: &[u8],
         drv_hash: Option<Digest>,
+    ) -> Result<Manifest, CasError> {
+        self.put_buffer_with_closure(name, version, data, drv_hash, None)
+    }
+
+    /// [`Self::put_buffer`] plus the freshness-carrying input-closure
+    /// digest. A builder that knows its derivation subtree records it here
+    /// so a later warm evaluation can adopt this build by name; the field
+    /// is part of the manifest identity (format 2).
+    pub fn put_buffer_with_closure(
+        &self,
+        name: &str,
+        version: &str,
+        data: &[u8],
+        drv_hash: Option<Digest>,
+        closure: Option<Digest>,
     ) -> Result<Manifest, CasError> {
         let chunks = chunk_payload(data, &self.chunker)?;
 
@@ -535,6 +632,7 @@ impl ChunkStore {
         manifest.total_size = data.len() as u64;
         manifest.chunks = chunks.iter().map(|c| c.hash).collect();
         manifest.drv_hash = drv_hash;
+        manifest.closure = closure;
         self.put_manifest(&manifest)?;
         Ok(manifest)
     }
@@ -1017,6 +1115,84 @@ mod tests {
         // A second gc is a no-op.
         let again = store.gc().unwrap();
         assert_eq!(again.dead_chunks, 0);
+    }
+
+    /// Format 2 carries the freshness closure, and the closure is part of
+    /// the identity: a build recorded with a closure is a *different* cell
+    /// address than the same bytes without one, so adoption can never be
+    /// driven by an unguarded record.
+    #[test]
+    fn closure_is_recorded_and_covered_by_identity() {
+        let dir = tmpdir();
+        let store = ChunkStore::open(dir.path().join("store")).unwrap();
+        let data = filler(512 * 1024, 11);
+        let drv = [1u8; 32];
+        let closure = [2u8; 32];
+        let m = store
+            .put_buffer_with_closure("app", "1", &data, Some(drv), Some(closure))
+            .unwrap();
+        assert_eq!(m.closure, Some(closure));
+        assert_eq!(m.drv_hash, Some(drv));
+        assert!(!m.is_legacy_format());
+
+        let without = store
+            .put_buffer_with_closure("app", "1", &data, Some(drv), None)
+            .unwrap();
+        assert_ne!(
+            m.identity_digest(),
+            without.identity_digest(),
+            "recording a closure must move the manifest identity"
+        );
+
+        // Persist + reload: the record survives the canonical encoding.
+        let id = store.put_manifest(&m).unwrap();
+        let back = store.get_manifest(&id).unwrap();
+        assert_eq!(back.closure, Some(closure));
+        assert_eq!(back.drv_hash, Some(drv));
+        assert_eq!(back.to_bytes(), m.to_bytes());
+        assert!(back
+            .to_json()
+            .contains(&format!("\"closure\":\"{}\"", hex(&closure))));
+    }
+
+    /// A manifest written by a format-1 build (no closure field) must still
+    /// decode, and its identity must still be the BLAKE3 of its own bytes —
+    /// otherwise every manifest already in a store would read as corrupt.
+    #[test]
+    fn legacy_format_1_manifest_reads_with_a_stable_identity() {
+        let dir = tmpdir();
+        let store = ChunkStore::open(dir.path().join("store")).unwrap();
+        let m = Manifest::new("old", "0.0.1");
+
+        // Format-1 unsigned body: no closure presence byte.
+        let mut unsigned = Vec::new();
+        unsigned.extend_from_slice(&MANIFEST_MAGIC);
+        unsigned.extend_from_slice(&MANIFEST_FORMAT_V1.to_le_bytes());
+        for s in [&m.name, &m.version] {
+            unsigned.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            unsigned.extend_from_slice(s.as_bytes());
+        }
+        unsigned.extend_from_slice(&m.total_size.to_le_bytes());
+        unsigned.push(0); // drv_hash absent
+        unsigned.extend_from_slice(&0u32.to_le_bytes()); // no chunks
+        let id = *blake3::hash(&unsigned).as_bytes();
+
+        let mut file = unsigned.clone();
+        file.push(0); // pubkey absent
+        file.push(0); // signature absent
+        fs::write(
+            dir.path()
+                .join("store/manifests")
+                .join(format!("{}.mfx", hex(&id))),
+            &file,
+        )
+        .unwrap();
+
+        let back = store.get_manifest(&id).unwrap();
+        assert!(back.is_legacy_format());
+        assert_eq!(back.closure, None, "a v1 file cannot claim a closure");
+        assert_eq!(back.identity_digest(), id);
+        assert_eq!(back.to_bytes(), file, "v1 re-encodes byte-identically");
     }
 
     #[test]

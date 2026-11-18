@@ -297,6 +297,35 @@ pub(crate) fn register_float_symbols(builder: &mut JITBuilder) {
     builder.symbol("au_f64_to_f32", au_f64_to_f32 as *const u8);
 }
 
+/// Float64 arithmetic over the CPS one-word representation (remote naming).
+fn float_bits(lhs: i64, rhs: i64) -> (f64, f64) {
+    (f64::from_bits(lhs as u64), f64::from_bits(rhs as u64))
+}
+
+#[no_mangle]
+pub extern "C" fn au_fadd(lhs: i64, rhs: i64) -> i64 {
+    let (a, b) = float_bits(lhs, rhs);
+    (a + b).to_bits() as i64
+}
+
+#[no_mangle]
+pub extern "C" fn au_fsub(lhs: i64, rhs: i64) -> i64 {
+    let (a, b) = float_bits(lhs, rhs);
+    (a - b).to_bits() as i64
+}
+
+#[no_mangle]
+pub extern "C" fn au_fmul(lhs: i64, rhs: i64) -> i64 {
+    let (a, b) = float_bits(lhs, rhs);
+    (a * b).to_bits() as i64
+}
+
+#[no_mangle]
+pub extern "C" fn au_fdiv(lhs: i64, rhs: i64) -> i64 {
+    let (a, b) = float_bits(lhs, rhs);
+    (a / b).to_bits() as i64
+}
+
 /// Register the `Austral.Pervasive::trapping*` arithmetic intrinsics on a
 /// JIT builder (both the initial and the hotswap builders must carry them).
 fn register_trapping_symbols(builder: &mut JITBuilder) {
@@ -316,6 +345,12 @@ fn register_trapping_symbols(builder: &mut JITBuilder) {
         "Austral.Pervasive::trappingDivide",
         au_trapping_divide as *const u8,
     );
+    // `au_` names are free in `check_call_permission` and are what
+    // `Compiler_cps.float_arith_helper` emits for Float64 operands.
+    builder.symbol("au_fadd", au_fadd as *const u8);
+    builder.symbol("au_fsub", au_fsub as *const u8);
+    builder.symbol("au_fmul", au_fmul as *const u8);
+    builder.symbol("au_fdiv", au_fdiv as *const u8);
 }
 
 #[no_mangle]
