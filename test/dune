@@ -167,4 +167,6 @@
  (libraries austral_lib austral_gpu austral_rust_bridge ounit2 yojson unix str digestif test_util)
  (deps
   ../examples/gpu/pointwise/Pointwise.aui
-  ../examples/gpu/pointwise/Pointwise.aum))
+  ../examples/gpu/pointwise/Pointwise.aum
+  ../mm0/proof_chain/clamp_source.mm0
+  ../mm0/proof_chain/clamp_source.mm1))
