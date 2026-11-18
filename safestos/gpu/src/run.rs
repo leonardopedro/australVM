@@ -97,6 +97,10 @@ mod device_path {
         pub output: Vec<u32>,
         pub preflight: Preflight,
         pub dispatch_count: u32,
+        /// Adapter request, device creation and pipeline creation.
+        pub prepare_ms: f64,
+        /// Input buffer creation and `write_buffer` calls.
+        pub upload_ms: f64,
         pub submit_ms: f64,
         pub readback_ms: f64,
     }
@@ -116,6 +120,36 @@ mod device_path {
         inputs: &[Vec<u32>],
         require_hardware: bool,
         selection: &device::Selection,
+    ) -> Result<DeviceOutput, RunFailure> {
+        run_inner(loaded, inputs, require_hardware, selection, None)
+    }
+
+    /// Like [`run`], but the readback is also handed to `on_ready` from the
+    /// queue's submitted-work-done callback. That callback is a runtime event,
+    /// not a step after `run` returns: a caller that publishes a job's
+    /// completion here is publishing it when the GPU says the submitted work
+    /// and its staging copy are done.
+    pub fn run_with_completion<F>(
+        loaded: &crate::LoadedBundle,
+        inputs: &[Vec<u32>],
+        require_hardware: bool,
+        selection: &device::Selection,
+        on_ready: F,
+    ) -> Result<DeviceOutput, RunFailure>
+    where
+        F: FnOnce(&[u32]) + Send + 'static,
+    {
+        run_inner(loaded, inputs, require_hardware, selection, Some(Box::new(on_ready)))
+    }
+
+    type CompletionHook = Box<dyn FnOnce(&[u32]) + Send>;
+
+    fn run_inner(
+        loaded: &crate::LoadedBundle,
+        inputs: &[Vec<u32>],
+        require_hardware: bool,
+        selection: &device::Selection,
+        on_ready: Option<CompletionHook>,
     ) -> Result<DeviceOutput, RunFailure> {
         let bundle = &loaded.bundle;
         let (adapter, evidence) = match device::request(selection) {
@@ -145,16 +179,26 @@ mod device_path {
         };
         let plan = preflight(bundle, inputs, &limits).map_err(RunFailure::Refused)?;
 
-        let (_device, _queue, output, dispatch_count, submit_ms, readback_ms) =
-            execute(loaded, inputs, &plan, &adapter, &evidence)?;
+        let timing = execute(loaded, inputs, &plan, &adapter, &evidence, on_ready)?;
         Ok(DeviceOutput {
             adapter: evidence,
-            output,
+            output: timing.output,
             preflight: plan,
-            dispatch_count,
-            submit_ms,
-            readback_ms,
+            dispatch_count: timing.dispatch_count,
+            prepare_ms: timing.prepare_ms,
+            upload_ms: timing.upload_ms,
+            submit_ms: timing.submit_ms,
+            readback_ms: timing.readback_ms,
         })
+    }
+
+    struct Timing {
+        output: Vec<u32>,
+        dispatch_count: u32,
+        prepare_ms: f64,
+        upload_ms: f64,
+        submit_ms: f64,
+        readback_ms: f64,
     }
 
     fn execute(
@@ -163,7 +207,9 @@ mod device_path {
         plan: &Preflight,
         adapter: &wgpu::Adapter,
         _evidence: &AdapterEvidence,
-    ) -> Result<(wgpu::Device, wgpu::Queue, Vec<u32>, u32, f64, f64), RunFailure> {
+        on_ready: Option<CompletionHook>,
+    ) -> Result<Timing, RunFailure> {
+        let prepare_start = Instant::now();
         let device_desc = wgpu::DeviceDescriptor {
             label: Some("avm-gpu run"),
             required_features: wgpu::Features::empty(),
@@ -199,9 +245,18 @@ mod device_path {
             )));
         }
 
+        let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
         if plan.groups == 0 {
-            return Ok((device, queue, Vec::new(), 0, 0.0, 0.0));
+            return Ok(Timing {
+                output: Vec::new(),
+                dispatch_count: 0,
+                prepare_ms,
+                upload_ms: 0.0,
+                submit_ms: 0.0,
+                readback_ms: 0.0,
+            });
         }
+        let upload_start = Instant::now();
 
         let size = plan.bytes;
         let usage = wgpu::BufferUsages::STORAGE
@@ -232,6 +287,7 @@ mod device_path {
             input_buffers.push(buffer);
         }
 
+        let upload_ms = upload_start.elapsed().as_secs_f64() * 1000.0;
         let layout = pipeline.get_bind_group_layout(0);
         let mut entries = Vec::new();
         for (i, buffer) in input_buffers.iter().enumerate() {
@@ -272,6 +328,40 @@ mod device_path {
         staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
+
+        // The readback and the completion hook run inside the queue's
+        // submitted-work-done callback, which wgpu invokes after the mapping
+        // callbacks of the same submission. `done` carries the result back to
+        // this thread; the poll below is what lets the callback run.
+        let (done, completed) = mpsc::channel::<Result<Vec<u32>, String>>();
+        let callback_staging = staging.clone();
+        let callback_size = size;
+        queue.on_submitted_work_done(move || {
+            let mapped = match receiver.try_recv() {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(format!("buffer mapping failed: {e}")),
+                Err(_) => Err("map callback did not arrive before completion".to_string()),
+            };
+            let result = mapped.map(|()| {
+                let words = {
+                    let view = callback_staging.slice(..).get_mapped_range();
+                    let mut bytes = vec![0u8; callback_size as usize];
+                    bytes.copy_from_slice(&view);
+                    drop(view);
+                    bytes
+                        .chunks_exact(4)
+                        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect::<Vec<u32>>()
+                };
+                if let Some(hook) = on_ready {
+                    hook(&words);
+                }
+                callback_staging.unmap();
+                words
+            });
+            let _ = done.send(result);
+        });
+
         match device.poll(wgpu::PollType::Wait {
             submission_index: Some(submission),
             timeout: Some(Duration::from_secs(30)),
@@ -291,43 +381,30 @@ mod device_path {
         if let Some(message) = lost.0.lock().unwrap().take() {
             return Err(RunFailure::Refused(message));
         }
-        match receiver.recv_timeout(Duration::from_secs(30)) {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                return Err(RunFailure::Refused(format!("buffer mapping failed: {e}")))
-            }
+        let output = match completed.recv_timeout(Duration::from_secs(30)) {
+            Ok(Ok(words)) => words,
+            Ok(Err(message)) => return Err(RunFailure::Refused(message)),
             Err(e) => {
                 return Err(RunFailure::Refused(format!(
-                    "map callback did not arrive: {e}"
+                    "work-done callback did not arrive: {e}"
                 )))
             }
-        }
-        let output = {
-            let view = staging.slice(..).get_mapped_range();
-            let mut bytes = vec![0u8; size as usize];
-            bytes.copy_from_slice(&view);
-            drop(view);
-            bytes
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect::<Vec<u32>>()
         };
-        staging.unmap();
         let readback_ms = readback_start.elapsed().as_secs_f64() * 1000.0;
-        Ok((
-            device,
-            queue,
+        Ok(Timing {
             output,
-            plan.groups,
+            dispatch_count: plan.groups,
+            prepare_ms,
+            upload_ms,
             submit_ms,
             readback_ms,
-        ))
+        })
     }
 
 }
 
 #[cfg(feature = "device")]
-pub use device_path::{run, DeviceOutput, RunFailure};
+pub use device_path::{run, run_with_completion, DeviceOutput, RunFailure};
 
 #[cfg(test)]
 mod tests {

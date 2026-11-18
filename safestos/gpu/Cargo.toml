@@ -8,6 +8,10 @@ license = "Apache-2.0"
 [lib]
 name = "avm_gpu"
 path = "src/lib.rs"
+# G14: the same library is also a cdylib so a deployment can load the
+# manifest-gated `rs_gpu_*` adapter without a second crate. The default build
+# still has no device dependency.
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "avm-gpu"
@@ -28,3 +32,7 @@ default = []
 # Device support (G09/G10) is deliberately optional: the default crate only
 # parses, validates and evaluates.
 device = ["dep:wgpu", "dep:pollster"]
+# G14: the manifest-gated `rs_gpu_*` service exports. It deliberately does not
+# imply `device`: a CPU-only deployment can load the service and refuse a
+# `require_hardware` request instead of silently using the reference path.
+service = []

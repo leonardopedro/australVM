@@ -1,6 +1,14 @@
 # Compositional proof-producing compilation in MM0
 
-**Status: proposed, 2026-11-17. PC00–PC15 are pending.** This is an extension of
+**Status: proposed, 2026-11-17. PC02 has its foundational word/map subset and
+clamp bounds (`mm0/proof_chain/word.mm0`, `docs/proof/SEMANTICS.md`); PC03 has
+the edge/composition layer and the conditional→discharged premise step
+(`mm0/proof_chain/relation.mm0`, `docs/proof/COMPOSITION.md`); PC06 applies
+that composition to G13's memory plan and states its residuals
+(`mm0/proof_chain/gpu_plan.mm0`, `docs/proof/GPU_PLAN.md`); PC04 reflects the
+real clamp body and its KernelIR into a proved bound
+(`mm0/proof_chain/clamp_source.mm0`, `docs/proof/SOURCE_IR.md`); PC00, PC01,
+PC05 and PC07–PC15 are pending.** This is an extension of
 [PLAN_gpu_kernels.md](PLAN_gpu_kernels.md) for the owner's requested proof reuse
 across Austral, intermediate representations, and CPU/GPU/NPU instructions.
 The [design contract](docs/PROOF_CHAIN.md) specifies the semantics, obligation
@@ -158,6 +166,10 @@ subject refuse. A hash-only link cannot report semantic preservation.
 
 ### PC02 — Establish the minimal shared MM0 semantics
 
+**Status:** partial. The word/order carrier, map memory and clamp bounds are
+implemented in `mm0/proof_chain/word.{mm0,mm1}` with finite controls in
+`scripts/pc02-controls`; the source reflection edge remains PC04 work.
+
 **Depends:** PC01; coordinate with G02/G04 for actual KernelIR constructors.
 **Files:** new `docs/proof/SEMANTICS.md`, small `mm0/proof_chain/` foundational
 theories and their `.mm1` proofs; independent interpretation/witness tests.
@@ -182,6 +194,12 @@ application property as an axiom.
 
 ### PC03 — Prove generic transfer, composition and premise substitution
 
+**Status:** partial. Edges, observation, identity, the two-edge composition,
+parameter instantiation and the conditional→discharged premise step are in
+`mm0/proof_chain/relation.mm0` with proofs in `.mm1`, checked assembled over
+`word.mm0` by `scripts/pc03-compose`. The trace is a chain of step lemmas with
+successor edge facts as premises; there is no trace induction principle yet.
+
 **Depends:** PC02. **Files:** common MM0 relation/trace theory and proofs;
 small proof-composition emitter/fixtures.
 
@@ -204,6 +222,13 @@ unrelated proposition, changing its binder or duplicating a fake discharge fails
 There is no new axiom that grants the desired lowering as its own premise-free rule.
 
 ### PC04 — Bind one real Austral source property to KernelIR
+
+**Status:** partial. The direct clamp case is reflected from the checked typed
+AST and the actual KernelIR (`lib/gpu/Gpu_proof_interface.ml`, `bin/gpu_proof`)
+and the committed fragment proves the reflected bound
+(`mm0/proof_chain/clamp_source.mm0`, `docs/proof/SOURCE_IR.md`). The
+AST/IR→MM0 mapping is a recorded trusted edge; helper reflection and the
+reporting cut are not implemented.
 
 **Depends:** PC03 and G04. **Files:** new `lib/gpu/Gpu_proof_interface.*`;
 small source/IR reflection emitter; `examples/gpu/` proof fixture.
@@ -247,6 +272,13 @@ and change buffer roles in scratch copies with recomputed hashes: semantic
 checks fail even though byte provenance has been made internally consistent.
 
 ### PC06 — Implement exact obligation discharge and reusable proof caching
+
+**Status:** partial. `compose_bound` is the shared algorithm theorem, applied by
+the clamp clause and by G13's plan at two launch bounds
+(`mm0/proof_chain/gpu_plan.mm0`, `docs/proof/GPU_PLAN.md`);
+`scripts/pc06-obligations` checks the assembly, the reuse, the residual table
+and forged records. The plan's arithmetic/runtime premises stay residual, and
+the obligation cache and alpha-renaming matrix are not implemented.
 
 **Depends:** PC03,PC05. **Files:** obligation linker/checker, tiny cache, negative
 fixtures; shared theory imports and bound proof references.

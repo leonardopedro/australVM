@@ -268,14 +268,33 @@ pub extern "C" fn au_f64_divide(lhs: u64, rhs: u64) -> u64 {
     }
 }
 
-/// Register the `au_f64_*` float primitives on a JIT builder. Every builder
-/// that can host CPS code needs them: `austral`'s initial one and its hotswap
-/// one in this file, and the module host's in `module.rs`.
+/// Widen a Float32 word to an f64 word. A Float32 word is the f32 bits
+/// zero-extended (the adapter ABI refuses a word with bits above 31), so the
+/// low 32 bits are decoded and the upper half is ignored rather than trusted.
+#[no_mangle]
+pub extern "C" fn au_f32_to_f64(bits: u64) -> u64 {
+    f64::to_bits(f32::from_bits((bits & 0xffff_ffff) as u32) as f64)
+}
+
+/// Narrow an f64 word to a Float32 word: f32 bits zero-extended, the ABI's
+/// `F32` decode shape. The cast rounds to nearest-even, like C.
+#[no_mangle]
+pub extern "C" fn au_f64_to_f32(bits: u64) -> u64 {
+    (f64::from_bits(bits) as f32).to_bits() as u64
+}
+
+/// Register the `au_f64_*` float primitives and the two width conversions on a
+/// JIT builder. Every builder that can host CPS code needs them: `austral`'s
+/// initial one and its hotswap one in this file, and the module host's in
+/// `module.rs`. The Float32 lowering is a chain over these: widen, `au_f64_*`,
+/// narrow.
 pub(crate) fn register_float_symbols(builder: &mut JITBuilder) {
     builder.symbol("au_f64_add", au_f64_add as *const u8);
     builder.symbol("au_f64_subtract", au_f64_subtract as *const u8);
     builder.symbol("au_f64_multiply", au_f64_multiply as *const u8);
     builder.symbol("au_f64_divide", au_f64_divide as *const u8);
+    builder.symbol("au_f32_to_f64", au_f32_to_f64 as *const u8);
+    builder.symbol("au_f64_to_f32", au_f64_to_f32 as *const u8);
 }
 
 /// Register the `Austral.Pervasive::trapping*` arithmetic intrinsics on a

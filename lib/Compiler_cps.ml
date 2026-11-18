@@ -276,20 +276,34 @@ let trapping_arith_op (q: qident): [ `Sub | `Mul ] option =
    the bridge's float primitives instead. They take and return the f64 bits in
    one word, like every other value on this transport.
 
-   This covers Float64 only. Float32 arithmetic still has no lowering of its
-   own — a narrowed f32 word would have to be widened, operated on and narrowed
-   again — so `MonoSingleFloat` keeps falling through to the integer path rather
-   than silently computing on f32 bits as if they were f64. *)
-let float_arith_symbol (q: qident) (ty: mono_ty): string option =
-  match ty with
-  | MonoDoubleFloat ->
-      let name = qident_to_string q in
-      if ends_with name "trappingAdd" then Some "au_f64_add"
-      else if ends_with name "trappingSubtract" then Some "au_f64_subtract"
-      else if ends_with name "trappingMultiply" then Some "au_f64_multiply"
-      else if ends_with name "trappingDivide" then Some "au_f64_divide"
-      else None
-  | _ -> None
+   Both widths are routed: a Float32 word is narrowed, so it is widened to f64
+   (`au_f32_to_f64`), operated on, and narrowed again (`au_f64_to_f32`) — see
+   `float_arith_call` below. *)
+let float_arith_op (q: qident): string option =
+  let name = qident_to_string q in
+  if ends_with name "trappingAdd" then Some "add"
+  else if ends_with name "trappingSubtract" then Some "subtract"
+  else if ends_with name "trappingMultiply" then Some "multiply"
+  else if ends_with name "trappingDivide" then Some "divide"
+  else None
+
+(* The Float32 form of the same call: a Float32 word is the f32 bits
+   zero-extended (the adapter ABI refuses a word with bits above 31), and the
+   bridge has no f32 arithmetic, so both operands are widened to f64, the f64
+   primitive runs, and the result is narrowed back to f32 bits. Each step is a
+   grant-free `au_` symbol, so the JIT sees one ordinary call chain. *)
+let float_arith_call (q: qident) (ty: mono_ty) (a: CpsGen.cps_expr)
+    (b: CpsGen.cps_expr): CpsGen.cps_expr option =
+  match float_arith_op q with
+  | None -> None
+  | Some op -> (
+      match ty with
+      | MonoDoubleFloat -> Some (App ("au_f64_" ^ op, [a; b]))
+      | MonoSingleFloat ->
+          let widen e = App ("au_f32_to_f64", [e]) in
+          Some
+            (App ("au_f64_to_f32", [App ("au_f64_" ^ op, [widen a; widen b])]))
+      | _ -> None)
 
 (* A float literal has no width in the mono AST (`Mtast.MFloatConstant` is a
    string), so it crosses as f64 bits by default. Where the destination's
@@ -364,14 +378,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
            name (build_cps_function uses `ident_string name`) into a flat JIT
            function table, so the call must use the unqualified name too. The
            qualified debug name ("UnferKernel::wrapModel") would not resolve. *)
-        (match float_arith_symbol q ty, args with
-         | Some symbol, [a; b] ->
-             App (symbol, [convert_expr a; convert_expr b])
-         | _ ->
-           (match trapping_arith_op q, args with
-            | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
-            | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
-            | _ -> App (ident_string (original_name q), List.map convert_expr args)))
+        (match args with
+         | [a; b] ->
+             let ca = convert_expr a and cb = convert_expr b in
+             (match float_arith_call q ty ca cb with
+              | Some e -> e
+              | None ->
+                (match trapping_arith_op q with
+                 | Some `Sub -> Sub (ca, cb)
+                 | Some `Mul -> Mul (ca, cb)
+                 | None -> App (ident_string (original_name q), [ca; cb])))
+         | _ -> App (ident_string (original_name q), List.map convert_expr args))
   | Mt.MGenericFuncall (id, args, _) ->
       let args =
         match Hashtbl.find_opt monomorph_params id with
@@ -381,14 +398,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       in
       App ("monomorph_" ^ show_mono_id id, args)
   | Mt.MConcreteMethodCall (_, q, args, ty) ->
-      (match float_arith_symbol q ty, args with
-       | Some symbol, [a; b] ->
-           App (symbol, [convert_expr a; convert_expr b])
-       | _ ->
-         (match trapping_arith_op q, args with
-          | Some `Sub, [a; b] -> Sub (convert_expr a, convert_expr b)
-          | Some `Mul, [a; b] -> Mul (convert_expr a, convert_expr b)
-          | _ -> App (qident_to_string q, List.map convert_expr args)))
+      (match args with
+       | [a; b] ->
+           let ca = convert_expr a and cb = convert_expr b in
+           (match float_arith_call q ty ca cb with
+            | Some e -> e
+            | None ->
+              (match trapping_arith_op q with
+               | Some `Sub -> Sub (ca, cb)
+               | Some `Mul -> Mul (ca, cb)
+               | None -> App (qident_to_string q, [ca; cb])))
+       | _ -> App (qident_to_string q, List.map convert_expr args))
   | Mt.MGenericMethodCall (_, id, args, _) ->
       App ("method_" ^ show_mono_id id, List.map convert_expr args)
   | Mt.MFptrCall (id, args, _) ->

@@ -216,6 +216,28 @@ let test_f64_multiply _ =
 let test_f64_divide _ =
   compile_f64 "run_f64_div" "au_f64_divide" [FloatLit 12.0; FloatLit 4.0] 0x4008000000000000L
 
+(* Float32: the front-end emits the widen/operate/narrow chain, so the test
+   builds the same three symbols by hand — a missing `au_f32_to_f64` or
+   `au_f64_to_f32` registration fails here as an unresolved symbol rather than
+   only in the live lane. The expected words are the f32 bits zero-extended. *)
+let compile_f32 fname op args expected_bits =
+  let widen e = App ("au_f32_to_f64", [e]) in
+  compile_and_execute fname
+    (Return (App ("au_f64_to_f32", [App (op, List.map widen args)])))
+    expected_bits
+
+let test_f32_add _ =
+  compile_f32 "run_f32_add" "au_f64_add" [FloatLit32 1.5; FloatLit32 2.5] 0x40800000L
+
+let test_f32_subtract _ =
+  compile_f32 "run_f32_sub" "au_f64_subtract" [FloatLit32 4.0; FloatLit32 2.5] 0x3FC00000L
+
+let test_f32_multiply _ =
+  compile_f32 "run_f32_mul" "au_f64_multiply" [FloatLit32 2.5; FloatLit32 4.0] 0x41200000L
+
+let test_f32_divide _ =
+  compile_f32 "run_f32_div" "au_f64_divide" [FloatLit32 12.0; FloatLit32 4.0] 0x40400000L
+
 (* ── suite ──────────────────────────────────────────────────────── *)
 
 let suite =
@@ -236,6 +258,11 @@ let suite =
     "f64_subtract_4_0_2_5" >:: test_f64_subtract;
     "f64_multiply_2_5_4_0" >:: test_f64_multiply;
     "f64_divide_12_0_4_0" >:: test_f64_divide;
+    (* Float32 arithmetic: widen, the same f64 primitive, narrow. *)
+    "f32_add_1_5_2_5" >:: test_f32_add;
+    "f32_subtract_4_0_2_5" >:: test_f32_subtract;
+    "f32_multiply_2_5_4_0" >:: test_f32_multiply;
+    "f32_divide_12_0_4_0" >:: test_f32_divide;
   ]
 
 let _ = run_test_tt_main suite

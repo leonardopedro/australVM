@@ -652,11 +652,22 @@ an op still on the integer path is a different number; `test/JitTest.ml` pins
 each op separately (`f64_add`/`f64_subtract`/`f64_multiply`/`f64_divide`, 14
 cases in the suite).
 
-**Still not carried:** float arithmetic at **width 32** — `float_arith_symbol`
-matches `MonoDoubleFloat` only (`au_f64_*` are f64-only), so a Float32 `+` still
-reaches the integer path, where `trappingSubtract`/`trappingMultiply` become
-`Sub`/`Mul` on the f32 bits and `trappingAdd`/`trappingDivide` call the Int64
-implementations. Float **comparisons** are unchanged for both widths:
+**Float32 arithmetic is the same op, widened.** The bridge keeps no f32
+primitives: a Float32 word is narrowed (f32 bits zero-extended), so the lowering
+emits `au_f32_to_f64` on both operands, the matching `au_f64_*` op, then
+`au_f64_to_f32` — three ordinary grant-free `au_` calls in one expression, the
+shape `App` already nests elsewhere. The widen masks to the low 32 bits instead
+of trusting the upper half, and the narrow rounds to nearest-even like C, so a
+stray high bit cannot be read as part of the value and the result is the word
+the adapter ABI expects. `AdapterLive.aum` now computes
+`(((2.5 + 1.5) * 4.0) - 2.0) / 2.0` in the Float32 leg and accepts only
+`7.0` = `0x40E00000`, so computing on the f32 words as integers or skipping the
+narrow is a different number; `test/JitTest.ml` builds the same chain by hand in
+four `f32_*` cases (18 in the suite), so an unregistered conversion is an
+unresolved symbol there rather than only a failure in the live lane.
+
+**Still not carried:**
+Float **comparisons** are unchanged for both widths:
 `MComparison` lowers to the integer `CmpLt`/`CmpGt`/… on the bit words, which
 orders positive floats correctly and negative ones backwards, and never treats
 NaN specially. Only literals, mediated calls and Float64 arithmetic carry a

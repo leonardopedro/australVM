@@ -568,6 +568,17 @@ adapters are still trusted code, not an OS sandbox.
 
 ### G15 — Connect linear jobs to actual asynchronous completion
 
+**Design:** `docs/gpu/G15_DESIGN.md` (additive v2 ABI, linear state machine,
+completion/quarantine rules). Implemented for the mock lifecycle: v2 symbols in
+`safestos/gpu/src/service.rs`, linear wrappers in `stdlib/gpu/Jobs.{aui,aum}`,
+nine mock tests plus one two-context physical test in
+`safestos/gpu/tests/service.rs`, and four compile-time fixtures in
+`test-programs/suites/024-gpu-jobs/`. On the device path completion is
+published from wgpu's `Queue::on_submitted_work_done` callback
+(`crate::run::run_with_completion`), and `rs_gpu_close` joins the context's
+workers so device teardown cannot overlap the thread that published the
+completion.
+
 **Depends:** G14. **Size:** medium, split state machine/wrappers/device tests.
 **Files:** new `stdlib/gpu/Jobs.{aui,aum}`; adapter-owned job state;
 compile-time and runtime fixtures.

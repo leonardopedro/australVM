@@ -165,6 +165,51 @@ fn add_bundle_round_trips_through_the_device() {
     }
 }
 
+/// The service publishes a job's completion from this hook, so it must fire
+/// with the same readback the blocking path returns — and it is the queue's
+/// submitted-work-done event, not a post-return step.
+#[test]
+fn completion_hook_receives_the_readback_from_the_work_done_event() {
+    let scratch = Scratch::new("hook");
+    write_bundle(&scratch.0);
+    let loaded = avm_gpu::load_bundle(&scratch.0).expect("bundle loads");
+    validate::validate_bundle(&loaded).expect("bundle validates");
+
+    let inputs = vec![vec![1, 2, 3, 4], vec![10, 20, 30, 40]];
+    let selection = avm_gpu::device::Selection::default();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    match avm_gpu::run::run_with_completion(
+        &loaded,
+        &inputs,
+        true,
+        &selection,
+        move |words| {
+            let _ = sender.send(words.to_vec());
+        },
+    ) {
+        Ok(result) => {
+            let published = receiver
+                .try_recv()
+                .expect("the work-done hook fired before run returned");
+            assert_eq!(published, result.output);
+            assert_eq!(published, vec![11, 22, 33, 44]);
+            assert!(receiver.try_recv().is_err(), "the hook fires once");
+            println!(
+                "[pass] G15 completion hook: {} ({})",
+                result.adapter.name, result.adapter.backend
+            );
+        }
+        Err(RunFailure::Unavailable(message)) => {
+            if std::env::var_os("AVM_GPU_ALLOW_NO_DEVICE").is_some() {
+                eprintln!("[gap] G15 completion hook not run: {message}");
+            } else {
+                panic!("no physical adapter: {message}");
+            }
+        }
+        Err(RunFailure::Refused(message)) => panic!("device refused the bundle: {message}"),
+    }
+}
+
 #[test]
 fn explicit_adapter_selection_refuses_bad_selectors() {
     let mut selection = avm_gpu::device::Selection {

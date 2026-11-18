@@ -12,3 +12,15 @@
  (name test_hotswap)
  (modules test_hotswap)
  (libraries austral_lib austral_core austral_caml austral_cps_gen austral_rust_bridge))
+
+(executable
+ (name gpu_obligations)
+ (modules gpu_obligations)
+ (libraries austral_gpu unix))
+
+; PC04: source → KernelIR reflection. Needs the checked frontend, so it lives
+; beside the compiler rather than in austral_gpu (which austral_lib depends on).
+(executable
+ (name gpu_proof)
+ (modules gpu_proof)
+ (libraries austral_lib austral_gpu unix digestif))

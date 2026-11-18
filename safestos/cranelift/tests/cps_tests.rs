@@ -75,6 +75,26 @@ fn body_call_import_2args(name: &str, a: i64, b: i64) -> Vec<u8> {
     body
 }
 
+/// Body that constructs a union in *tail* position: `0x07` then an App of
+/// `__union_new` with `2 + fields.len()` arguments `(size, tag, field…)`.
+/// This is the shape the Austral lowering emits for `return Case(…)`.
+fn body_tail_union(size: i64, tag: i64, fields: &[i64]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(0x07); // tail/return context
+    body.push(0x04); // App
+    write_str(&mut body, "__union_new");
+    write_u32(&mut body, 2 + fields.len() as u32);
+    body.push(0x01);
+    write_i64(&mut body, size);
+    body.push(0x01);
+    write_i64(&mut body, tag);
+    for field in fields {
+        body.push(0x01);
+        write_i64(&mut body, *field);
+    }
+    body
+}
+
 /// Malformed inputs
 fn cps_truncated() -> Vec<u8> {
     vec![0x43, 0x50, 0x53]
@@ -721,4 +741,32 @@ fn strict_entry_refuses_when_the_caller_expects_arguments() {
         "{}",
         last_error()
     );
+}
+
+/// A union constructed in tail position is lowered inline, not as an import.
+///
+/// The Austral lowering emits `return Case(…)` as `0x07` followed by an App of
+/// `__union_new`. The tail-call path used to fall through to `declare_import`,
+/// so a module returning a one-field union and then a two-field union declared
+/// `__union_new` twice with different arities and failed to compile. This test
+/// compiles those two shapes in one thread (the engine is process-global, so
+/// the declarations persist) and reads the fields back to prove the allocation
+/// layout as well.
+#[test]
+fn tail_position_union_constructions_of_different_arity_compile() {
+    let empty = cps_v1_named("tail_union_zero_fields", &body_tail_union(16, 0, &[]));
+    let no_fields = compile(&empty);
+
+    let two = cps_v1_named("tail_union_two_fields", &body_tail_union(24, 1, &[7, 9]));
+    let with_fields = compile(&two);
+
+    // `__union_new` returns a pointer: tag at offset 0, fields from offset 8.
+    let read = |ptr: *const std::ffi::c_void, slot: isize| -> i64 {
+        let base = execute(ptr) as *const i64;
+        unsafe { *base.offset(slot) }
+    };
+    assert_eq!(read(no_fields, 0), 0, "tag of the zero-field case");
+    assert_eq!(read(with_fields, 0), 1, "tag of the two-field case");
+    assert_eq!(read(with_fields, 1), 7, "first field");
+    assert_eq!(read(with_fields, 2), 9, "second field");
 }

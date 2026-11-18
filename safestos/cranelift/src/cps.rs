@@ -771,6 +771,40 @@ fn emit_stmt_list<M: Module>(
                         mgr.builder.ins().return_(&[ptr]);
                         mgr.terminated = true;
                         return Ok(());
+                    } else if func_name == "__union_new" {
+                        // A union constructed in *tail position* (`return Case(…)`)
+                        // reaches this path, not `emit_expr`. Lower it the same
+                        // way: allocate, store the tag at 0 and the fields from
+                        // offset 8. Without this arm it was treated as an
+                        // external import whose arity is the number of fields,
+                        // so two different cases produced two incompatible
+                        // declarations of `__union_new`.
+                        let size_val = args[0];
+                        let tag_val = args[1];
+                        let alloc_fid = jit
+                            .declare_function("au_alloc", cranelift_module::Linkage::Import, &{
+                                let mut sig = jit.make_signature();
+                                sig.params.push(AbiParam::new(types::I64));
+                                sig.returns.push(AbiParam::new(types::I64));
+                                sig
+                            })
+                            .map_err(|e| format!("Failed to declare au_alloc: {}", e))?;
+                        let alloc_fref = jit.declare_func_in_func(alloc_fid, mgr.builder.func);
+                        let call = mgr.builder.ins().call(alloc_fref, &[size_val]);
+                        let ptr = mgr.builder.inst_results(call)[0];
+                        mgr.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+                        for (i, field_val) in args.iter().enumerate().skip(2) {
+                            let offset = (i - 1) * 8;
+                            mgr.builder.ins().store(
+                                MemFlags::new(),
+                                *field_val,
+                                ptr,
+                                offset as i32,
+                            );
+                        }
+                        mgr.builder.ins().return_(&[ptr]);
+                        mgr.terminated = true;
+                        return Ok(());
                     }
 
                     let func_ref = if let Some(&fid) = name_map.get(&func_name) {

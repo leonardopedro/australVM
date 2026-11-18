@@ -10,6 +10,8 @@ pub mod device;
 pub mod reference;
 pub mod run;
 pub mod schema;
+#[cfg(feature = "service")]
+pub mod service;
 pub mod validate;
 pub mod wrapper;
 

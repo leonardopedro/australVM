@@ -241,6 +241,8 @@ fn run_command(
                 "dispatch_count": result.dispatch_count,
                 "elements": result.preflight.n,
                 "timing_ms": {
+                    "prepare": result.prepare_ms,
+                    "upload": result.upload_ms,
                     "submit": result.submit_ms,
                     "readback": result.readback_ms,
                 },
@@ -287,13 +289,14 @@ fn run_command(
 /// Parses the flags shared by `probe` and `run`. Returns
 /// `(require_hardware, adapter_name, adapter_index, list)`. `--inputs` is
 /// accepted here so `run` can reuse the parser; its value is skipped.
-type DeviceFlags = (bool, Option<String>, Option<usize>, bool);
+type DeviceFlags = (bool, Option<String>, Option<usize>, bool, Vec<String>);
 
 fn parse_device_flags(args: &[String]) -> Result<DeviceFlags, String> {
     let mut require = false;
     let mut list = false;
     let mut name: Option<String> = None;
     let mut index: Option<usize> = None;
+    let mut positional = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -328,17 +331,17 @@ fn parse_device_flags(args: &[String]) -> Result<DeviceFlags, String> {
                 );
             }
             other if other.starts_with("--") => return Err(format!("unknown option {other:?}")),
-            _ => {}
+            other => positional.push(other.to_string()),
         }
         i += 1;
     }
-    Ok((require, name, index, list))
+    Ok((require, name, index, list, positional))
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let device_subcommand = matches!(args.first().map(String::as_str), Some("probe" | "run"));
-    let (require, adapter_name, adapter_index, list) = if device_subcommand {
+    let (require, adapter_name, adapter_index, list, extra_positional) = if device_subcommand {
         match parse_device_flags(&args[1..]) {
             Ok(flags) => flags,
             Err(message) => {
@@ -350,7 +353,7 @@ fn main() {
             }
         }
     } else {
-        (false, None, None, false)
+        (false, None, None, false, Vec::new())
     };
     let code = match args.first().map(String::as_str) {
         Some("validate") if args.len() == 2 => validate_command(&args[1]),
@@ -358,7 +361,9 @@ fn main() {
             reference_command(&args[1], &args[3])
         }
         Some("probe") => {
-            if list && require {
+            if !extra_positional.is_empty() {
+                usage()
+            } else if list && require {
                 eprintln!(
                     "{}",
                     serde_json::json!({"status": "error", "message": "--list and --require-hardware are exclusive"})

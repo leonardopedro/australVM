@@ -62,9 +62,24 @@ The [umbrella production plan](PLAN_umbrella_production.md) adds a focused
 
 The compiler emits validated WGSL bundles for a restricted subset of
 Austral-authored kernels. The [execution record](docs/gpu/EXECUTION.md)
-documents source/C/IR checks and a Vulkan adapter probe. Device dispatch and
-readback are pending in the [GPU plan](PLAN_gpu_kernels.md), which also covers
-the later MLIR backend.
+documents source/C/IR checks, device dispatch/readback and the measured
+hardware corpus; [authoring and release evidence](examples/gpu/pointwise/README.md)
+covers installation, the admitted subset, diagnostics and the M2 not-covered
+claims. `scripts/check-gpu` has separate `source`/`optional`/`required` modes,
+and CPU CI never presents as GPU coverage. The [memory-plan obligation spec](docs/gpu/OBLIGATIONS.md)
+records the Why3 index/bounds goals for the actual bundle and keeps the MM0
+certificate as a separate gap until the shared proof chain exists. PC02's
+[word and map semantics](docs/proof/SEMANTICS.md) prove the clamp bounds over
+the modeled carrier, PC03's [composition layer](docs/proof/COMPOSITION.md)
+proves identity/two-edge transfer and premise discharge, PC06
+[applies it to the memory plan](docs/proof/GPU_PLAN.md) while keeping the
+plan's residual obligations explicit, and PC04
+[reflects the real clamp body and KernelIR](docs/proof/SOURCE_IR.md) into a
+proved bound with a recorded trusted edge; the WGSL reflection remains open. The
+[GPU service adapter](examples/gpu/service/README.md) exposes a versioned,
+manifest-gated `rs_gpu_*` contract; its linear-job and asynchronous pieces are
+designed in [G15](docs/gpu/G15_DESIGN.md) and remain unimplemented. The
+[GPU plan](PLAN_gpu_kernels.md) carries the remaining optional tasks.
 
 The [compositional MM0 plan](PLAN_proof_chain.md) makes higher-level proofs
 reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_CHAIN.md)
