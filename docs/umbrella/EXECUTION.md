@@ -475,12 +475,20 @@ compiler-level check, and an executing adapter fixture belongs with the U10/U11
 integration work.
 
 **Checks run:** `nix develop "git+file://$PWD#ocaml" -c make all` exit 0;
-`python3 test-programs/runner.py 019` 6/6 PASS; `make test` reaches the suites
-but fails two cases — `GpuWgslTest` (5 errors) and `CliEngine:5
-compile_help_lists_shipped_flags_and_real_targets` — in files belonging to the
-unrelated GPU/flake work in this dirty tree (`lib/gpu/`, `test/Gpu*Test.ml`,
-`flake.nix`), not to this patch; neither was verified against a stashed tree, so
-they are reported as observed failures, not as environmental gaps.
+`LD_LIBRARY_PATH=$PWD:$PWD/safestos/cranelift/target/release python3
+test-programs/runner.py 019` 6/6 PASS (the runner execs `./austral`, so the
+bridge `.so` must be on the loader path; without it every fixture fails on the
+loader, which is an environment fault and not a compiler result).
+
+`make test` first failed two cases and both were fixed at the cause, in the
+tree rather than in the assertions: `GpuWgslTest`/`GpuFrontendTest`/
+`GpuSubsetTest` read `examples/gpu/pointwise/*` by repository-relative path,
+which dune never stages — the stanza now lists them in `(deps …)` and the tests
+resolve them through `TestUtil.fixture`, which walks up to the staged copy; and
+`CliEngine:5` still expected the pre-GPU target sentence `One of \`exe\`, \`tc\`,
+\`c\``, while the help — correctly — advertises the shipped `wgsl` as well, so
+the expectation was updated to the parser's real vocabulary. `make test` now
+exits 0.
 
 ## U11 — the CPS lowering emits the adapter descriptor (*pinned golden*)
 
@@ -502,7 +510,11 @@ two consecutive runs (byte-stable). `cargo test --offline --test interface` →
 **6 passed** (pin raised from 5 in `scripts/test-umbrella`).
 `verify-invariants` → **113 passed, 17 explained gaps, 8 failed**; the 8 are the
 known W9.3 toolchain failures (no `mm0-c`/`mm0-rs`, host Lean 4.33.1, no Sail
-model), unchanged by this patch.
+model), unchanged by this patch. The gate's file had arrived from an upstream
+merge carrying conflict markers (`<<<<<<< HEAD` around the W3 `_plan_file`/
+`_appr_root` declarations, which are already defined above that block); the
+stale hunk was dropped and the script parses again — same 113/17/8 figures
+before and after that repair.
 
 **Regression found and fixed while measuring.** The first version redirected
 *every* non-word-native foreign import to `__adapter`, which broke

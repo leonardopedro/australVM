@@ -28,8 +28,8 @@ let prepare_module ~name aui_source aum_source =
 
 let pointwise () =
   prepare_module ~name:"Pointwise"
-    (read_file "examples/gpu/pointwise/Pointwise.aui")
-    (read_file "examples/gpu/pointwise/Pointwise.aum")
+    (read_file (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aui"))
+    (read_file (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aum"))
 
 let kernel entry =
   let (env, mono) = pointwise () in

@@ -20,10 +20,10 @@ let prepared () =
   let env = Compiler.cenv Compiler.empty_compiler in
   let source =
     Compiler.TwoFileModuleSource
-      { int_filename = "examples/gpu/pointwise/Pointwise.aui";
-        int_code = read_file "examples/gpu/pointwise/Pointwise.aui";
-        body_filename = "examples/gpu/pointwise/Pointwise.aum";
-        body_code = read_file "examples/gpu/pointwise/Pointwise.aum" }
+      { int_filename = (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aui");
+        int_code = read_file (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aui");
+        body_filename = (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aum");
+        body_code = read_file (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aum") }
   in
   let (_, p) = Compiler.prepare_module env source in
   (p.Compiler.prepared_env, p.Compiler.prepared_mono)

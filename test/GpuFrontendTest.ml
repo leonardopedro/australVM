@@ -46,8 +46,8 @@ let param_types params =
     params
 
 let test_pointwise_signature _ =
-  let (_, prepared) = prepare "examples/gpu/pointwise/Pointwise.aui"
-      "examples/gpu/pointwise/Pointwise.aum" in
+  let (_, prepared) = prepare (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aui")
+      (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aum") in
   match find_function "add" prepared.Compiler.prepared_mono with
   | None -> assert_failure "entry `add` not found in the monomorphic module"
   | Some (params, rt, _body) ->
@@ -65,8 +65,8 @@ let test_pointwise_signature _ =
 (* The resolved arithmetic method is observable: its identity resolves to the
    canonical Pervasive module, not a textual name in user source. *)
 let test_resolved_arithmetic _ =
-  let (_, prepared) = prepare "examples/gpu/pointwise/Pointwise.aui"
-      "examples/gpu/pointwise/Pointwise.aum" in
+  let (_, prepared) = prepare (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aui")
+      (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aum") in
   match find_function "add" prepared.Compiler.prepared_mono with
   | None -> assert_failure "entry `add` not found"
   | Some (_, _, body) ->
@@ -117,8 +117,8 @@ let test_resolved_arithmetic _ =
 
 let test_prepare_does_not_run_jit _ =
   Hashtbl.clear Compiler.jit_functions;
-  let _ = prepare "examples/gpu/pointwise/Pointwise.aui"
-      "examples/gpu/pointwise/Pointwise.aum" in
+  let _ = prepare (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aui")
+      (TestUtil.fixture "examples/gpu/pointwise/Pointwise.aum") in
   assert_equal 0 (Hashtbl.length Compiler.jit_functions)
 
 let test_malformed_fixture_fails _ =
