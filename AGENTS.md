@@ -247,13 +247,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   diff: **15 opcodes map to a converted declaration, 8 are structural, 0 are
   uncovered**. The table is closed (an `isa.rs` opcode with no entry fails it),
   and "mapped" is checked against the artifact, so a missing declaration reads
-  `NOT IN ARTIFACT`, not as covered. `check` re-converts and diffs both stems.
+  `NOT IN ARTIFACT`, not as covered.  `check` re-converts and diffs both stems.
+  `make w9` runs this `check` together with `scripts/mem-refines` and asserts
+  each one's acceptance line (`check: 2 stem(s) match`, `0 not covered`,
+  `REFUTED as stated`), so a regressed converter or a lowering that grew the
+  model's signature fails a command instead of reading as a `[gap]`.
   Runs under `nix develop "git+file://$PWD#lean"`: that shell carries lean,
   lean4export, `mm0`, python3 and **both** model paths (`$RISCV_MODEL`,
   `$RISCV_MEMORY_MODEL`) on purpose, so entering it may trigger the one-time
   28-minute Sail build. `.github/workflows/w9-isa-model.yml` runs `check`
   weekly, because a PR should not wait for that build.
-- `scripts/mem-refines` — refutes the tempting shortcut "the JIT's memory op
+-  `scripts/mem-refines` (see `make w9`) — refutes the tempting shortcut "the JIT's memory op
   lowers to the model's `execute_LOAD`/`execute_STORE`", for **both** opcodes.
   It reads the *committed* artifacts (`mm0/clif.mm0`'s `load__i64__r_i64`: 1
   operand, 1 result; `store__*`: 2 operands, 0 results) and the *pinned*
@@ -454,7 +458,8 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   is restored. It rebuilds the compiler twice, so it is not in
   `verify-invariants`; run it under `nix develop` (needs `dune`).
 - Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
-  `make bridge`, all guarded by `check-bridge-fresh`), `run-examples.sh`,
+  `make bridge`, all guarded by `check-bridge-fresh`; `make w9` for the two
+  lean-shell checks below), `run-examples.sh`,
   `test-programs/runner.py`, `demo_module/run_demo.sh`.
 
 ```bash

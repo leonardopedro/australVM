@@ -4,9 +4,10 @@
 //!
 //! Deliberately **no mmap and no `unsafe`**: the region's *mapping* is the
 //! VMM backend's job (it receives the file and offsets); this side only
-//! owns the backing file and the bookkeeping. That preserves PLAN_avm_pkg
-//! §6.3's invariant (the only `unsafe`/`mmap` in `pkg/` is avm-cas's hot
-//! store) while still making every wire byte testable here.
+//! owns the backing file and the bookkeeping. PLAN_avm_pkg §6.3 asks for no
+//! `unsafe` in `pkg/` (and there is none: even avm-cas's hot store uses
+//! memmap2's safe anonymous-mapping API), while every wire byte stays
+//! testable here.
 
 use crate::vhost::{CodecError, SharedMemoryRegion, ShmemMapMsg, MAP_R, MAP_W};
 use std::path::{Path, PathBuf};

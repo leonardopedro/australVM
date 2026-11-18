@@ -126,6 +126,20 @@ pub fn link<'a, 'v>(
     owner_base: u64,
     providers: &[Provider<'a, 'v>],
 ) -> Result<LinkedImage, CellError> {
+    link_with(owner, owner_base, providers, &BTreeMap::new())
+}
+
+/// [`link`] plus a runtime symbol table: `externs` maps a name to the
+/// absolute address a runtime registered it at (the JIT's `uk_*`/`uz_*`
+/// set, for instance). Resolution order is owner definitions, then
+/// providers, then externs — a local definition always wins, and an
+/// unresolved name is still a hard error rather than a silent zero.
+pub fn link_with<'a, 'v>(
+    owner: &CellView<'a>,
+    owner_base: u64,
+    providers: &[Provider<'a, 'v>],
+    externs: &BTreeMap<String, u64>,
+) -> Result<LinkedImage, CellError> {
     // Working copy: real code only (page padding excluded), never the
     // resident mapping itself.
     let code_len = owner.code_len();
@@ -157,16 +171,24 @@ pub fn link<'a, 'v>(
         }
     }
 
+    for (name, addr) in externs {
+        if !symbols.contains_key(name) {
+            symbols.insert(name.clone(), *addr);
+        }
+    }
+
     for r in &owner.relocs {
         let target = *symbols.get(&r.symbol).ok_or_else(|| {
             CellError::Link(format!(
-                "unresolved symbol {:?} (owner defines {} symbol(s), providers supply {})",
+                "unresolved symbol {:?} (owner defines {} symbol(s), providers supply {}, \
+                 the runtime table has {})",
                 r.symbol,
                 owner.symdefs.len(),
                 providers
                     .iter()
                     .map(|p| p.view.symdefs.len())
                     .sum::<usize>(),
+                externs.len(),
             ))
         })?;
         apply_one(&mut text, owner_base, r, target)?;

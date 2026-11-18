@@ -5,7 +5,7 @@
 //! plus a dependency-first (topological) evaluation order. All iteration is
 //! over `BTreeMap`s, so reports and orders are byte-stable across runs.
 
-use crate::hash::{calculate_derivation_hash, DerivationId};
+use crate::hash::{calculate_closure_digest, calculate_derivation_hash, DerivationId};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One pure package derivation.
@@ -144,6 +144,49 @@ impl Plan {
         Ok(ResolvedGraph { ids, order })
     }
 
+    /// Freshness guard for the memo's name-keyed tier: the input-closure
+    /// digest of `name`'s whole dependency subtree, computed from the plan
+    /// alone (no store consult). Cycle detection mirrors [`Self::resolve`],
+    /// so a malformed plan fails here too instead of recursing forever.
+    pub fn closure_digest(&self, name: &str) -> Result<DerivationId, EvalError> {
+        let mut memo: BTreeMap<String, DerivationId> = BTreeMap::new();
+        let mut stack: Vec<String> = Vec::new();
+        let mut on_stack: BTreeSet<String> = BTreeSet::new();
+        self.closure_node(name, &mut memo, &mut stack, &mut on_stack)
+    }
+
+    fn closure_node(
+        &self,
+        name: &str,
+        memo: &mut BTreeMap<String, DerivationId>,
+        stack: &mut Vec<String>,
+        on_stack: &mut BTreeSet<String>,
+    ) -> Result<DerivationId, EvalError> {
+        if let Some(c) = memo.get(name) {
+            return Ok(*c);
+        }
+        let drv = self
+            .derivations
+            .get(name)
+            .ok_or_else(|| EvalError::Unknown(name.to_string()))?;
+        if !on_stack.insert(name.to_string()) {
+            let start = stack.iter().position(|n| n == name).unwrap_or(0);
+            let mut loop_names: Vec<String> = stack[start..].to_vec();
+            loop_names.push(name.to_string());
+            return Err(EvalError::Cycle(loop_names));
+        }
+        stack.push(name.to_string());
+        let mut dep_closures = Vec::with_capacity(drv.dependencies.len());
+        for dep in &drv.dependencies {
+            dep_closures.push((dep.clone(), self.closure_node(dep, memo, stack, on_stack)?));
+        }
+        stack.pop();
+        on_stack.remove(name);
+        let closure = calculate_closure_digest(drv, &dep_closures);
+        memo.insert(name.to_string(), closure);
+        Ok(closure)
+    }
+
     fn resolve_node(
         &self,
         name: &str,
@@ -260,6 +303,67 @@ mod tests {
         let mut p = Plan::new();
         p.insert(leaf("a")).unwrap();
         assert!(matches!(p.insert(leaf("a")), Err(EvalError::Duplicate(_))));
+    }
+
+    /// The closure guard follows the resolved DAG: declaration order is
+    /// irrelevant, while any structural change in the subtree moves it.
+    #[test]
+    fn closure_is_order_independent_and_subtree_sensitive() {
+        let mut p1 = Plan::new();
+        p1.insert(leaf("x")).unwrap();
+        p1.insert(leaf("y")).unwrap();
+        p1.insert(node("root", &["x", "y"])).unwrap();
+
+        let mut p2 = Plan::new();
+        p2.insert(node("root", &["y", "x"])).unwrap();
+        p2.insert(leaf("y")).unwrap();
+        p2.insert(leaf("x")).unwrap();
+        assert_eq!(
+            p1.closure_digest("root").unwrap(),
+            p2.closure_digest("root").unwrap(),
+            "dependency declaration order must not move the closure"
+        );
+        assert_eq!(
+            p1.resolve(Some("root")).unwrap().ids["root"],
+            p2.resolve(Some("root")).unwrap().ids["root"]
+        );
+
+        // Changing a leaf changes every ancestor's closure and id.
+        let mut p3 = Plan::new();
+        p3.insert(leaf("x")).unwrap();
+        let mut y2 = leaf("y");
+        y2.version = "2".into();
+        p3.insert(y2).unwrap();
+        p3.insert(node("root", &["x", "y"])).unwrap();
+        assert_ne!(
+            p1.closure_digest("root").unwrap(),
+            p3.closure_digest("root").unwrap()
+        );
+        assert_ne!(
+            p1.closure_digest("y").unwrap(),
+            p3.closure_digest("y").unwrap()
+        );
+        assert_eq!(
+            p1.closure_digest("x").unwrap(),
+            p3.closure_digest("x").unwrap(),
+            "an untouched sibling keeps its closure"
+        );
+        assert_ne!(
+            p1.resolve(Some("root")).unwrap().ids["root"],
+            p3.resolve(Some("root")).unwrap().ids["root"]
+        );
+    }
+
+    #[test]
+    fn closure_digest_detects_cycles() {
+        let mut p = Plan::new();
+        p.insert(node("a", &["b"])).unwrap();
+        p.insert(node("b", &["a"])).unwrap();
+        assert!(matches!(p.closure_digest("a"), Err(EvalError::Cycle(_))));
+        assert!(matches!(
+            p.closure_digest("ghost"),
+            Err(EvalError::Unknown(_))
+        ));
     }
 
     /// The totality record round-trips: explicit `proven` is proof,

@@ -17,14 +17,13 @@ or a `Cons` tail is a generic constructor with no type evidence, and the
 type checker rejects it as ambiguous (the field's expected type does not
 flow into the argument).
 
-Honest limitation, recorded in PLAN_avm_pkg.md: `sources` are empty in
-these seed recipes. Source tarballs become hex store digests only when
-they are ingested with `avm-pkg put`, and this workspace has no tarball
-payloads to hash; a recipe that named an unhashed digest would claim an
-input the store cannot resolve. The recipes therefore pin the *dependency
-graph* and builder symbols — the part verifiable without payloads — and
-the demo end-to-end ingests a real source cell to exercise the sourced
-path.
+`sources` are real store identities now, not placeholders: each tarball
+was ingested with `avm-pkg put <tarball> --name <pkg> --version <ver>`
+(the exact commands and upstream sha256 are in PLAN_avm_pkg.md §3), and
+the hex below is the manifest identity that `put` printed. The digest is
+name+version+content, so re-ingesting with the same name and version
+reproduces it exactly; a recipe that named an unhashed digest would claim
+an input the store cannot resolve.
 """
 import Derivation (Derivation, List, Nil, Cons, Pair);
 
@@ -32,7 +31,9 @@ module body Bootstrap is
     constant bootstrap_seed: Derivation := Derivation(
         name => "bootstrap_seed",
         version => "0.1.0",
-        sources => Nil(): List[Span[Nat8, Static]],
+        sources => Cons(
+            head => "55b85fce17d9b0d76ae48223b675992d53532b13fa34996b4405854d4de4da11",
+            tail => Nil(): List[Span[Nat8, Static]]),
         dependencies => Nil(): List[Span[Nat8, Static]],
         env_vars => Cons(
             head => Pair(first => "CC", second => "tcc"),
@@ -43,7 +44,9 @@ module body Bootstrap is
     constant musl: Derivation := Derivation(
         name => "musl",
         version => "1.2.5",
-        sources => Nil(): List[Span[Nat8, Static]],
+        sources => Cons(
+            head => "40532f989c4eccb3c44f4df0867cae42ae91bdc38080190c5d2f359fb7bfcad3",
+            tail => Nil(): List[Span[Nat8, Static]]),
         dependencies => Cons(
             head => "bootstrap_seed",
             tail => Nil(): List[Span[Nat8, Static]]),
@@ -54,7 +57,9 @@ module body Bootstrap is
     constant busybox: Derivation := Derivation(
         name => "busybox",
         version => "1.36.1",
-        sources => Nil(): List[Span[Nat8, Static]],
+        sources => Cons(
+            head => "bf28e1882b072bac253ee187714e7b28e5418d0cd8034fbdb0e524546ef9876d",
+            tail => Nil(): List[Span[Nat8, Static]]),
         dependencies => Cons(
             head => "musl",
             tail => Cons(
@@ -67,7 +72,9 @@ module body Bootstrap is
     constant hello: Derivation := Derivation(
         name => "hello",
         version => "2.12",
-        sources => Nil(): List[Span[Nat8, Static]],
+        sources => Cons(
+            head => "3321eda48dc89bab861af0e5f3d4a6c314f73ea0a1a0f578917d2047319904f1",
+            tail => Nil(): List[Span[Nat8, Static]]),
         dependencies => Cons(
             head => "musl",
             tail => Nil(): List[Span[Nat8, Static]]),

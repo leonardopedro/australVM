@@ -11,8 +11,8 @@ publish.workspace = true
 #   cell_builder.rs AVCE -> `.avm` cell serialize/verify, spec §3.4 / task 3.2
 #   linker.rs       relocation against cells mapped by the hot store,
 #                   task 3.3
-# Zero `unsafe` (spec §6.3: in pkg/, unsafe exists only in avm-cas's
-# hot_store mmap call).
+# Zero `unsafe` (spec §6.3: pkg/ has no unsafe at all — hot_store's
+# hydration goes through memmap2's safe anonymous-mapping API).
 
 [dependencies]
 avm-cas = { path = "../avm-cas" }

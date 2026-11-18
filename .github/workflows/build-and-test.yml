@@ -232,6 +232,18 @@ jobs:
           restore-keys: |
             avm-pkg-${{ runner.os }}-
 
-      - name: Run avm-pkg tests (108 passed / 5 ignored, 6 binaries, measured 2026-10-18)
+      - name: Run avm-pkg tests (130 passed / 6 ignored, 7 binaries, measured 2026-11-18)
         run: cargo test --workspace
+        working-directory: safestos/pkg
+
+      # The two §3 hot-store rows as a smoke, on a release binary because a
+      # debug build's per-call overhead would measure the wrong thing: a
+      # resident acquire must stay under 1 µs and a 50 MiB evicted fault-in
+      # under 15 ms. `--require` exits non-zero on a regressed row and
+      # attaches the measured report, so a failure is a number rather than a
+      # vague timeout. Local reference: 30 ns and 6.5 ms (2026-11-18).
+      - name: Hot-store latency smoke (acquire < 1 µs, 50 MiB fault-in < 15 ms)
+        run: |
+          cargo build --release -p avm-cli
+          ./target/release/avm-pkg hot-bench --require
         working-directory: safestos/pkg

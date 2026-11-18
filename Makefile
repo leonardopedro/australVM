@@ -136,6 +136,33 @@ test: $(BIN) | check-bridge-fresh
 	  exit 1; \
 	fi
 
+# ── W9: the external ISA model (lean shell) ─────────────────────────
+# W9.1 re-converts the two pinned RV64 models and W9.3 refutes the
+# "the JIT's memory op lowers to execute_LOAD/execute_STORE" shortcut. Both
+# need one PATH carrying lean, lean4export, mm0 and python3 with the model
+# trees on it, i.e. the flake's `lean` shell — and *entering* that shell builds
+# the derivations, the Sail one taking ~28 min cold (store-cached afterwards).
+# That cost is why `scripts/verify-invariants` reports both as `[gap]` when it
+# runs anywhere else, and why this target exists: the gap says "not checked
+# here", which is only honest if some entry point does check it.
+#
+# The acceptance lines are asserted, not just the exit codes: a converter that
+# silently stops emitting an opcode (`0 not covered`), or a lowering that grows
+# the model's signature so the refutation no longer holds (`REFUTED as
+# stated`), has to fail here instead of reading as a documented gap.
+.PHONY: w9
+w9:
+	nix develop "git+file://$(CURDIR)#lean" -c bash -c '\
+	  set -o pipefail; \
+	  scripts/rv64-model-mm0 check 2>&1 | tee /tmp/w9-rv64.log; \
+	  grep -q "check: 2 stem(s) match" /tmp/w9-rv64.log \
+	    || { echo "w9: expected both stems (ALU + memory) to be checked" >&2; exit 1; }; \
+	  grep -q "0 not covered" /tmp/w9-rv64.log \
+	    || { echo "w9: ISA_REGISTRY coverage regressed (an opcode is not covered)" >&2; exit 1; }; \
+	  scripts/mem-refines 2>&1 | tee /tmp/w9-mem.log; \
+	  grep -q "REFUTED as stated" /tmp/w9-mem.log \
+	    || { echo "w9: load/store now agree with the model — re-argue the correspondence" >&2; exit 1; }'
+
 .PHONY: loader
 loader:
 	@echo "bridge:  $(BRIDGE_SRC)"

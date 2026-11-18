@@ -144,3 +144,45 @@ Still open: `/tmp/pv-backup-pre-{scrub,rewrite}.git` (1.5 G — they hold pre-re
 history of `verifiedUniqueAliases`; delete or move to external storage),
 `journalctl --vacuum` (needs root), and all of phase 2 — `nix-collect-garbage -d`
 also needs root — plus 85 G of exports still held for `ok` modules (phase 3).
+
+## Status 2026-11-18 (the tail of phase 2, and one 33 G item this plan missed)
+
+`/` is at **126 G free, 188 G used of 331 G (60 %)**. The plan's own targets are
+where it left them (`mm0/` is 2.4 G now, `mm0/statements` 695 M), so what moved
+the needle this round was neither of the phases above:
+
+1. **Podman storage: 33 G → 3.0 M.** `~/.local/share/containers` held 14 tagged
+   images, 9 dangling ones and 161 stale buildah working containers. Each was
+   checked rebuildable before removal: the ten `verifiedUniqueAliases` images
+   (`paypal-auth-vm:*` ×8, `paypal-forwarder`, `tlsproxytest`) come from that
+   repo's `Dockerfile.{alibaba,forwarder,relay}` and its
+   `build-alibaba-docker.sh` / `build-tls-proxy-image.sh`; `chkbuilder` is the
+   same crate's `cargo build --release` plus `add-determinism`; and
+   `openshell-edge-verify:bookworm` is one `debian:bookworm-slim` + apt/systemd
+   step visible in `podman history`. `debian:bookworm-slim` and `fedora:44` are
+   upstream pulls. `podman system df` now reports no images, containers or
+   volumes.
+2. **Crate registry: 2.6 G** (`~/.cargo/registry/{cache,src}`) and **189 M** of
+   `~/.opam/repo`. Both are pure download caches; every rustup/elan toolchain was
+   kept, each being pinned by a project.
+3. **`mm0/exports`: 1.1 G deleted — and phase 3 item 10 implemented, not just
+   done once.** `make w9` regenerated both NDJSON files byte-for-byte on the next
+   run (exit 0, `23 opcodes: 15 mapped … 0 not covered`), which is exactly why
+   deleting them by hand is not a fix. `scripts/rv64-model-mm0 check` now prunes
+   its own scratch after the artifacts are proven current (`pruned 1070 MiB of
+   NDJSON scratch (re-exported next run)`), so `mm0/exports/` ends a gate run at
+   4 K instead of 1.1 G; `KEEP_EXPORTS=1` keeps the files when a conversion is
+   being debugged. The 91 G corpus path is the same behaviour this plan asked
+   for — purge per successful conversion — now enforced by the script rather
+   than by memory.
+
+Still open, and root-gated as before: `/nix/store` (56 G; it grew because the
+`lean` shell outputs — the Sail model derivation — now live there, and
+`nix-collect-garbage -d` needs root), `journalctl --vacuum`, and eight empty
+root-owned `/var/tmp/buildah*` directories (124 K total, not worth the sudo).
+The remaining reclaimable data is the rebuild-cost half of phase 2 and was
+declined this round: other projects' `target/` directories (~34 G, listed in the
+`~/Projects` survey: `unfer` 9.5, `dnx` 7.7, `graft` 5.5,
+`velysterm/crates/mathed_android` 5.7, `verifiedUniqueAliases` 3.5, rest < 1.5
+each) and this tree's `safestos/{pkg,cranelift}/target` (5.4 + 4.2 G, the latter
+holding the `.so` the OCaml side links, so it needs `make bridge` afterwards).

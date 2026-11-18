@@ -46,22 +46,19 @@ jobs:
           primary-key: nix-isa-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-isa-${{ runner.os }}-${{ runner.arch }}-,nix-isa-
 
-      # Disk: the two NDJSON exports are ~1.1 GB and `mm0/exports/` is
-      # gitignored, so they land in the workspace, not the checkout diff.
+      # Disk: the two NDJSON exports peak at ~1.1 GB and `mm0/exports/` is
+      # gitignored, so they land in the workspace, not the checkout diff;
+      # `check` prunes them before exiting, so only the peak needs the room.
       - name: free disk
         run: df -h /
 
-      - name: convert the pinned models and diff the committed statements
-        run: |
-          nix develop "git+file://$PWD#lean" -c bash -c '
-            set -o pipefail
-            scripts/rv64-model-mm0 check 2>&1 | tee /tmp/rv64.log
-            # The coverage line is the W9.1 acceptance limb; a named-but-absent
-            # declaration would already fail `check`, so this guards the
-            # opposite drift: a converter that silently stops emitting something.
-            grep -q "0 not covered" /tmp/rv64.log || {
-              echo "::error::ISA_REGISTRY coverage regressed" >&2; exit 1; }
-            grep -q "check: 2 stem(s) match" /tmp/rv64.log || {
-              echo "::error::expected both stems (ALU + memory) to be checked" >&2
-              exit 1; }
-          '
+      # `make w9` is the single enforcement point for both W9 checks: it enters
+      # the lean shell (which is what *builds* the pinned model derivations),
+      # re-converts the committed statements, and runs the load/store
+      # refutation — asserting each acceptance line, so coverage that regresses
+      # or a lowering that starts matching the model's signature fails here
+      # rather than being carried forward as a documented gap. Running the same
+      # target locally is what turns `scripts/verify-invariants`' W9.1/W9.3
+      # `[gap]` lines into findings rather than an unexplained silence.
+      - name: build the pinned models and run both W9 checks
+        run: make w9

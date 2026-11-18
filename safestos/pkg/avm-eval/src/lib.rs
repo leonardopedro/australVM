@@ -14,5 +14,5 @@ pub mod hash;
 pub mod memo;
 
 pub use graph::{Derivation, EvalError, Plan, ResolvedGraph};
-pub use hash::{calculate_derivation_hash, DerivationId};
-pub use memo::{EvalReport, MemoTable, Presence};
+pub use hash::{calculate_closure_digest, calculate_derivation_hash, DerivationId};
+pub use memo::{ClosureIndex, EvalReport, MemoTable, Presence};

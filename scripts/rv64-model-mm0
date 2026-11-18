@@ -58,7 +58,9 @@
 #                       `deref`/`store` are reported NOT COVERED, not silently
 #                       fine.
 #   OUT                 artifact directory (default mm0/statements)
-#   KEEP_EXPORT         where the NDJSON lives (default mm0/exports, gitignored)
+#   KEEP_EXPORT         where the NDJSON lives (default mm0/exports, gitignored;
+#                       `check` deletes it once the artifacts are proven current)
+#   KEEP_EXPORTS=1      keep that NDJSON after `check` (debugging a conversion)
 #
 # Exit: 0 converted + accepted + diff printed; 1 any failure; 2 tooling absent.
 set -uo pipefail
@@ -313,6 +315,23 @@ if [[ $MODE == check ]]; then
     done
     ((drift == 0)) || die "regenerate with scripts/rv64-model-mm0"
     info "check: $(ls "$WORK"/*/*.mm0 | wc -l) stem(s) match a fresh conversion"
+    # The NDJSON is scratch, not an artifact: it is gitignored, and the next run
+    # re-exports it to the same path (which is why `check` stays byte-stable).
+    # `check` is what the gate, `make w9` and CI run, so pruning here is what
+    # keeps ~1.1 GB of exports from surviving every conversion. `KEEP_EXPORTS=1`
+    # keeps them when a conversion needs debugging.
+    if [[ ${KEEP_EXPORTS:-0} != 1 ]]; then
+        freed=0
+        for stem in riscv_instructions rv64_memory; do
+            f=$EXPORT_DIR/$stem.ndjson
+            if [[ -f $f ]]; then
+                freed=$((freed + $(wc -c < "$f")))
+                rm -f "$f"
+            fi
+        done
+        ((freed > 0)) && info \
+            "pruned $((freed / 1048576)) MiB of NDJSON scratch (re-exported next run)"
+    fi
     exit 0
 fi
 

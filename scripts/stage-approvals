@@ -22,17 +22,6 @@
 #                                           # copy for an artifact named by hand
 #
 # Exit status: 0 printed, 2 cannot run here (no python3 for the comparator),
-<<<<<<< HEAD
-# 1 the comparator refused an artifact or an artifact has nothing to approve,
-# 64 a usage error (an unknown artifact name, a bad --root). A name that is not
-# `mm0/<stem>.mm0` is refused before anything is staged: it used to reach the
-# comparator, which answered "refused <name>" — the message for a real refusal,
-# so a typo read like a stale artifact. An artifact whose staged copy is
-# byte-identical to the approved one is "nothing to approve": the diff would be
-# empty, and an empty diff printed under a `== <artifact>` heading reads like a
-# successful approval of nothing. Nothing in the repository is modified; the
-# staged copies live under the scratch root and are meant to be thrown away.
-=======
 # 1 the comparator refused an artifact, an artifact has nothing to approve, or a
 # named artifact is already approved, 64 a usage error (an unknown artifact name,
 # a bad --root). A name that is not `mm0/<stem>.mm0` is refused before anything
@@ -48,7 +37,6 @@
 # its artifacts from the approved root and so never reaches that case. Nothing in
 # the repository is modified; the staged copies live under the scratch root and
 # are meant to be thrown away.
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
 #
 # Which artifact is pending is not a list to keep in step by hand: an artifact
 # with a copy under `--approved-root` is approved, and the no-argument run stages
@@ -78,12 +66,8 @@ while [ "$#" -gt 0 ]; do
         --root) shift; root="${1:-}"; [ -n "$root" ] || { echo "stage-approvals: --root needs a directory" >&2; exit 64; } ;;
         --approved-root) shift; approved_root="${1:-}"; [ -n "$approved_root" ] || { echo "stage-approvals: --approved-root needs a directory" >&2; exit 64; } ;;
         --stat-only) stat_only=true ;;
-<<<<<<< HEAD
-        -h|--help) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-=======
         --reapprove) reapprove=true ;;
         -h|--help) sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
         -*) echo "stage-approvals: unknown option $1" >&2; exit 64 ;;
         *) artifacts+=("$1") ;;
     esac
@@ -152,10 +136,6 @@ for artifact in "${artifacts[@]}"; do
         continue
     fi
     file="$root/$artifact.stmts"
-<<<<<<< HEAD
-    approved="$approved_root/$artifact.stmts"
-=======
->>>>>>> 94917369791c622dd8aa73d9e8007fd79ee0b76f
     [ ! -f "$approved" ] || already=$((already + 1))
     if [ -f "$approved" ] && cmp -s "$approved" "$file"; then
         unchanged=$((unchanged + 1))

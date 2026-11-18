@@ -273,7 +273,12 @@
             owner = "leanprover";
             repo = "lean4export";
             rev = "a3e35a584f59b390667db7269cd37fca8575e4bf"; # tag v4.30.0
-            hash = "sha256-LysjGOikBaaOdZdwxA+RwzfnQweTaU3kpFuWc6LxmXc=";
+            # Re-pinned 2026-11-18: the previous hash no longer matched the
+            # tree GitHub serves for this rev. Checked before updating — the
+            # tag still resolves to the same commit, a fresh `git archive` of
+            # it is byte-identical to the tarball, and its `lean-toolchain`
+            # still says v4.30.0, so this is a stale pin, not new content.
+            hash = "sha256-kg0XW1HTJplBHznI4FM9KxSZIuQ/5P0IILp3FjDRXJA=";
           };
           nativeBuildInputs = [ pkgs.lean4 ];
           # `lake` reads `lean-toolchain` and, under elan, would insist on

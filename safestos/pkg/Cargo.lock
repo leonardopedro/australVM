@@ -84,6 +84,8 @@ version = "0.1.0"
 dependencies = [
  "avm-cas",
  "avm-eval",
+ "avm-exec",
+ "ed25519-dalek",
  "serde",
  "serde_json",
  "tempfile",

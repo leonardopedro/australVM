@@ -218,11 +218,12 @@ impl Remote {
         Ok(())
     }
 
-    /// Fetch a manifest, verify its content identity equals the id that
-    /// was asked for, then persist it locally — which re-verifies that
-    /// every referenced chunk is already present (fail-closed: chunks
-    /// first, manifest second).
-    pub async fn pull_manifest(&self, store: &ChunkStore, id: &Digest) -> Result<(), CasError> {
+    /// Fetch a manifest and verify its content identity equals the id that
+    /// was asked for, *without* persisting it. A pull needs the chunk list
+    /// before it can fetch anything, and `put_manifest` is fail-closed
+    /// (chunks first, manifest second), so the two steps have to be
+    /// separable on the client side.
+    pub async fn fetch_manifest(&self, id: &Digest) -> Result<Manifest, CasError> {
         let url = self.manifest_url(id);
         let resp = self
             .client
@@ -249,6 +250,15 @@ impl Remote {
                 hex(&m.identity_digest())
             )));
         }
+        Ok(m)
+    }
+
+    /// Fetch a manifest, verify its content identity equals the id that
+    /// was asked for, then persist it locally — which re-verifies that
+    /// every referenced chunk is already present (fail-closed: chunks
+    /// first, manifest second).
+    pub async fn pull_manifest(&self, store: &ChunkStore, id: &Digest) -> Result<(), CasError> {
+        let m = self.fetch_manifest(id).await?;
         store.put_manifest(&m)?;
         Ok(())
     }
@@ -597,6 +607,16 @@ mod tests {
         assert_eq!(n, m.chunks.len());
         remote.push_manifest(&src, &id).await.unwrap();
         assert!(remote.has_manifest(&id).await.unwrap());
+
+        // `fetch_manifest` returns the verified document but persists
+        // nothing: a pull learns the chunk list from it first.
+        let (_df, probe) = store();
+        let fetched = remote.fetch_manifest(&id).await.unwrap();
+        assert_eq!(fetched.to_bytes(), m.to_bytes());
+        assert!(
+            probe.get_manifest(&id).is_err(),
+            "fetch must not touch the local store"
+        );
 
         // Fresh store: manifest WITHOUT chunks must refuse (fail-closed).
         let (_db, dst) = store();
