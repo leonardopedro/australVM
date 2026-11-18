@@ -128,23 +128,72 @@ fn reference_command(dir: &str, inputs_path: &str) -> i32 {
     }
 }
 
+#[cfg(feature = "device")]
+fn probe_command(require_hardware: bool) -> i32 {
+    use avm_gpu::device::{self, ProbeError};
+    match device::probe() {
+        Ok(evidence) => {
+            ok_json(serde_json::json!({
+                "status": "ok",
+                "device_kind": "physical",
+                "device": device::to_json(&evidence),
+            }));
+            0
+        }
+        Err(ProbeError::Unavailable(message)) => {
+            if require_hardware {
+                fail(&format!("no physical adapter is available: {message}"))
+            } else {
+                ok_json(serde_json::json!({
+                    "status": "gap",
+                    "device_kind": "unavailable",
+                    "message": message,
+                }));
+                77
+            }
+        }
+        Err(ProbeError::NotPhysical(evidence)) => {
+            if require_hardware {
+                fail(&format!(
+                    "adapter is {}, not a physical GPU",
+                    evidence.device_type
+                ))
+            } else {
+                ok_json(serde_json::json!({
+                    "status": "ok",
+                    "device_kind": "software",
+                    "note": "a software adapter cannot satisfy --require-hardware",
+                    "device": device::to_json(&evidence),
+                }));
+                0
+            }
+        }
+        Err(ProbeError::Failed(message)) => fail(&message),
+    }
+}
+
+#[cfg(not(feature = "device"))]
+fn probe_command(require_hardware: bool) -> i32 {
+    if require_hardware {
+        fail("no physical adapter is available to this build (feature `device`, G09)")
+    } else {
+        ok_json(serde_json::json!({
+            "status": "gap",
+            "device_kind": "unavailable",
+            "message": "device support is not built into this crate (feature `device`, G09)"
+        }));
+        77
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.as_slice() {
-        [cmd] if cmd == "probe" => {
-            ok_json(serde_json::json!({
-                "status": "gap",
-                "device_kind": "unavailable",
-                "message": "device support is not built into this crate (feature `device`, G09)"
-            }));
-            77
-        }
+        [cmd] if cmd == "probe" => probe_command(false),
+        [cmd, flag] if cmd == "probe" && flag == "--require-hardware" => probe_command(true),
         _ => match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
             ["validate", dir] => validate_command(dir),
             ["reference", dir, "--inputs", inputs] => reference_command(dir, inputs),
-            ["probe", "--require-hardware"] => {
-                fail("no physical adapter is available to this build (feature `device`, G09)")
-            }
             _ => usage(),
         },
     };

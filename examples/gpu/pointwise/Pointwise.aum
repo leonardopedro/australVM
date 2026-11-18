@@ -30,4 +30,40 @@ module body Pointwise is
     function polynomial(x: Nat32, y: Nat32): Nat32 is
         return modularMultiply(twice(x), y);
     end;
+
+    function minimum(x: Nat32, y: Nat32): Nat32 is
+        if x < y then
+            return x;
+        else
+            return y;
+        end if;
+    end;
+
+    function bitAnd(x: Nat32, y: Nat32): Nat32 is
+        return bitwiseAnd(x, y);
+    end;
+
+    function bitOr(x: Nat32, y: Nat32): Nat32 is
+        return bitwiseOr(x, y);
+    end;
+
+    function bitXor(x: Nat32, y: Nat32): Nat32 is
+        return bitwiseXor(x, y);
+    end;
+
+    function invert(x: Nat32): Nat32 is
+        return bitwiseNot(x);
+    end;
+
+    function multiply(x: Nat32, y: Nat32): Nat32 is
+        return modularMultiply(x, y);
+    end;
+
+    function constantValue(): Nat32 is
+        return 2147483648;
+    end;
+
+    function addConstant(x: Nat32): Nat32 is
+        return modularAdd(x, constantValue());
+    end;
 end module body.

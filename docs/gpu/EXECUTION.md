@@ -49,17 +49,21 @@ cargo test --locked --manifest-path safestos/gpu/Cargo.toml --features device
 | G02 | implemented | `lib/gpu/Gpu_ir.ml`, `Gpu_bundle.ml` | `dune exec test/GpuIrTest.exe` | SHA-256 is Digestif; Rust reproduction is G07 |
 | G03 | implemented | `lib/gpu/Gpu_subset.ml` | `dune exec test/GpuSubsetTest.exe` | corpus grows in G08 |
 | G04 | implemented | `lib/gpu/Gpu_intrinsics.ml` | `dune exec test/GpuSubsetTest.exe`, `GpuFrontendTest.exe` | intrinsic identity is resolved from the compiled canonical Pervasive module |
-| G05 | implemented | `lib/CliParser.ml`, `lib/CliEngine.ml`, `Compiler.ml` | `dune exec test/GpuCliTest.exe` | publication requires the G07 checker |
+| G05 | implemented | `lib/CliParser.ml`, `lib/CliEngine.ml`, `Compiler.ml` | `dune exec test/GpuCliTest.exe` (3 tests); `scripts/gpu-source-check` publishes and validates real bundles | publication requires the G07 checker, which is now wired through `AUSTRAL_GPU_CHECKER` |
 | G06 | implemented | `lib/gpu/Gpu_wgsl.ml` | `dune exec test/GpuWgslTest.exe` | goldens check rendering only |
-| G07 | implemented | `safestos/gpu/` | `cargo test --locked --manifest-path safestos/gpu/Cargo.toml` | device feature lands in G09 |
-| G08 | implemented | `examples/gpu/pointwise/`, `scripts/gpu-source-check` | `scripts/gpu-source-check` | fixed-seed corpus is bounded, not exhaustive |
-| G09–G23 | pending | — | — | ordered extensions; hardware evidence not claimed |
+| G07 | implemented | `safestos/gpu/` | `cargo test --manifest-path safestos/gpu/Cargo.toml` (12 tests); `avm-gpu validate`/`reference` on `scripts/gpu-source-check` bundles | device feature lands in G09; no GPU execution claimed |
+| G08 | implemented | `examples/gpu/pointwise/`, `corpus.tsv`, `scripts/gpu-source-check`, `test-programs/suites/022-gpu/` | `python3 scripts/gpu-source-check` → `[pass] G08 source/C/IR agree: 156 cases over 14 entries (seed 20261118)`; three semantic mutations detected and a `while` refused; `python3 test-programs/runner.py 022-gpu` PASS | fixed-seed corpus is bounded, not exhaustive; the helper-elision control is a source-level mutation, while the checker's helper audit is covered by the crate tests |
+| G09 | implemented | `safestos/gpu/src/device.rs`, optional `wgpu =29.0.4` | `cargo test --features device` (13 tests); `cargo run --features device -- probe`; `avm-gpu probe` → `{"backend":"Vulkan","name":"Intel(R) UHD Graphics 630 (CFL GT2)","device_type":"integrated-gpu"}`, exit 0; `probe --require-hardware` exit 0 | adapter evidence is from wgpu enumeration, not `nvidia-smi`; no kernel has been dispatched yet |
+| G10–G23 | pending | — | — | ordered extensions; no GPU execution claimed |
 
 ## Limitations
 
 - No task above claims GPU execution except where an adapter record exists; none
   does in this baseline.
-- `nvidia-smi` output is inventory evidence only. Physical-adapter execution
-  claims require `avm-gpu probe --require-hardware` and a dispatch record (G09+).
+- `nvidia-smi` output is inventory evidence only. G09's probe currently
+  enumerates a Vulkan **Intel UHD Graphics 630** (integrated) adapter and does
+  not see the GTX 1060, so adapter evidence and OS inventory disagree; the
+  wgpu record is the one that counts. No dispatch/readback record exists, so
+  G10's execution acceptance remains open.
 - wgpu/Naga device support is optional (`--features device`) and is not part of
   the default compiler build.

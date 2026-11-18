@@ -126,12 +126,14 @@
   GpuFrontendTest
   GpuIrTest
   GpuSubsetTest
-  GpuWgslTest)
+  GpuWgslTest
+  GpuCliTest)
  (modules
   GpuFrontendTest
   GpuIrTest
   GpuSubsetTest
-  GpuWgslTest)
+  GpuWgslTest
+  GpuCliTest)
  (libraries austral_lib austral_gpu austral_rust_bridge ounit2 yojson test_util)
  (deps
   ../examples/gpu/pointwise/Pointwise.aui

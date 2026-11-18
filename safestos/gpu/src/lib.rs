@@ -5,10 +5,15 @@
 //! the validated KernelIR. `device` is reserved for wgpu dispatch (G09/G10).
 
 pub mod artifact;
+#[cfg(feature = "device")]
+pub mod device;
 pub mod reference;
 pub mod schema;
 pub mod validate;
 pub mod wrapper;
+
+#[cfg(test)]
+mod tests;
 
 pub use artifact::{load_bundle, LoadedBundle};
 pub use schema::KernelBundle;

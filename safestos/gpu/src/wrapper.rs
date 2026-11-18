@@ -41,12 +41,11 @@ fn is_comparison(op: BinaryOperator) -> bool {
     )
 }
 
-/// Is this expression exactly `global_invocation_id.x` (possibly through one
-/// immutable local binding)?
+/// Is this expression exactly `global_invocation_id.x`? A `var` holding a
+/// derived index is a `LocalVariable` and must not pass: provenance is the
+/// expression itself, not a name that happens to be bound.
 fn is_invocation_x(f: &Function, h: Handle<Expression>) -> bool {
     match f.expressions[h] {
-        Expression::LocalVariable(_) => true,
-        Expression::Load { pointer } => is_invocation_x(f, pointer),
         Expression::Access { base, index } => match f.expressions[base] {
             Expression::FunctionArgument(0) => matches!(f.expressions[index], Expression::Literal(_)),
             _ => false,
@@ -286,7 +285,7 @@ pub fn audit(module: &Module, input_arity: u32) -> Result<(), String> {
     a.record_reads(&ep.function);
     a.walk_block(&ep.function, &ep.function.body)?;
 
-    let (guard_local, guard_input) = a
+    let (_guard_local, guard_input) = a
         .guard
         .ok_or_else(|| "no dominating bounds guard over the first input".to_string())?;
     if let Some(expected) = inputs.first() {
@@ -307,7 +306,6 @@ pub fn audit(module: &Module, input_arity: u32) -> Result<(), String> {
     if !is_invocation_x(&ep.function, store_index) {
         return Err("output index is not the invocation index used by the guard".to_string());
     }
-    let _ = guard_local;
     for (g, l) in &a.reads {
         if !a.inputs.contains(g) {
             return Err("a read targets a non-input storage binding".to_string());
