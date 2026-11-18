@@ -144,6 +144,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   and no `theorem`: `verify-invariants` fails if either appears, and also fails
   the `[gap]` line once `mm0/approved/isa.stmts` exists (the owner's approval
   is what turns a stated obligation into a cited one).
+- `scripts/check-lean-typing-proof` — the emitter's byte-identity gate: FockPair
+  in its three modes (expanded, shared, stopped) compared by size and sha256 with
+  `scripts/lean-typing-proof.golden.tsv`, so "the artifacts do not move" is a
+  check instead of a hand-run `cmp`. Needs the gitignored corpus under
+  `mm0/exports/` and reports an explained gap without it. Re-record an intended
+  byte change deliberately, in the same commit: `make check-typing-proof RECORD=1`.
 - `scripts/check-todo-ledger` — code files (`*.rs`/`*.sh`/`*.py`/`*.toml`)
   carry no `TODO`/`FIXME`/`HACK`/`XXX` marker unless the file is reviewed in
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
@@ -479,8 +485,9 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   lines that read the same cell red (digest column, approved-row emitter check,
   staging count) and nothing else, and the shape check plus the emitter column
   still green. One full gate run.
-- `scripts/w3-drift-controls` — the twelve controls for the checks the census
-  classified `copy`, one case each (`<case>`, `--list`, `all`): Phase D's two
+- `scripts/w3-drift-controls` — one case for each of the thirteen checks the
+  census classified `copy`, plus the certification run with an approval present
+  (`<case>`, `--list`, `all`, `-j N`); 14 cases: Phase D's two
   trust splits and its four coverage/vocabulary claims, the W8 hypothesis pin,
   the `clif_step` vocabulary and pinned citations, the witness's axiom table, the
   memsafe edge census, the Liquid golden, and the refinement's certificate with an
@@ -489,9 +496,22 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
   `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
   expected `[FAIL]` line. One full gate run per case; logs kept under
-  `$W3_DRIFT_LOGS`. `make drift-controls` runs it plus every `*-drift-control`
-  script, and `make test` depends on it. It never writes `mm0/approved/` — the
-  approval a case needs lives in a scratch root — so no control can approve.
+  `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
+  speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
+  repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
+  `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
+  cores suggest, because a gate run does not itself parallelise. The last
+  `copy` row, `W3: $_stem matches its approved statements`, is
+  `w3-approved-row`: it copies the whole approved root into scratch and weakens
+  one approved axiom there, so the check runs without the tree holding any new
+  approval.
+  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
+  read-only `*-drift-control` scripts the same way, then `obj-drift-control`
+  alone (it edits the tree and rebuilds), and `make test` depends on it. The two
+  parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
+  (2026-11-18; the second half alone 22m44s → 17m22s). It never
+  writes `mm0/approved/` — the approval a case needs lives in a scratch root — so
+  no control can approve.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,
   stale `.mm1`, §W3's emitter and state cells, §W9.3's composition count and
   closure-digest cells, the refinement's certificate line in both directions, the

@@ -112,19 +112,49 @@ HOST_LOADER = /lib64/ld-linux-x86-64.so.2
 # The whole-gate drift controls. Each one builds a scratch copy, drifts exactly
 # one claim in it, runs `scripts/verify-invariants` against that copy and
 # requires the gate to refuse the drift — so each control costs one full gate
-# run (~4.5 min), and this is the long half of `make test`. They are here as a
-# target of their own so they can be run alone (`make drift-controls`) without
+# run (~4.5 min here), and this is the long half of `make test`. They are here as
+# a target of their own so they can be run alone (`make drift-controls`) without
 # rebuilding the compiler, and so their cost is visible rather than hidden
 # inside the test target. `scripts/w3-drift-controls all` covers the checks the
 # census classified `copy`; the `*-drift-control` scripts cover the rest.
+#
+# Both halves run `DRIFT_JOBS` gate runs at a time (default: one per core).
+# Concurrency is sound because the controls are independent: each writes only
+# its own scratch copy, takes its own `TMPDIR` for the gate's `mktemp -d` roots,
+# and reads the repository without writing it. The exception is
+# `obj-drift-control`, which edits the tree and rebuilds the compiler, so it
+# stays last and serial. Measured 2026-11-18 on a two-core host, everything
+# holding either way: the 14 `w3-drift-controls` cases take 62m43s at -j 1 and
+# 44m9s at -j 2, the five read-only controls 22m44s serial and 17m22s at -P 2 —
+# 1h25m27s against 1h01m31s for the two halves, 23m56s (28%) off. Each core is
+# worth ~1.4x, not 2x, because a gate run is itself mostly serial.
+DRIFT_JOBS ?= $(shell nproc 2>/dev/null || echo 1)
+READ_ONLY_CONTROLS = scripts/w3-emitter-drift-control \
+                     scripts/w93-composition-drift-control \
+                     scripts/w93-closure-drift-control \
+                     scripts/w93-certification-drift-control \
+                     scripts/w3-approval-state-drift-control
+
+# ── Emitter byte-identity gate (docs/lean4mm0.md §13.39) ─────────────────────
+# Every rewrite since §13.30 is justified by "the artifacts do not move", and
+# each was proved once, by hand, with `cmp`. This gate is that proof as a check:
+# FockPair in its three modes, sizes and sha256 against
+# `scripts/lean-typing-proof.golden.tsv`. It needs the corpus, and `mm0/exports/`
+# is gitignored, so a corpus-less checkout gets an explained gap and exit 0 —
+# never a silent pass. Re-record deliberately after an intended byte change:
+# `make check-typing-proof RECORD=1`.
+.PHONY: check-typing-proof
+check-typing-proof:
+	@python3 scripts/check-lean-typing-proof $(if $(RECORD),--record,)
+
 .PHONY: drift-controls
 drift-controls: | check-bridge-fresh
-	@echo "--- drift controls: one full gate run each, ~4.5 min per case"
-	@bash scripts/w3-drift-controls all
-	@for c in scripts/*-drift-control; do \
-	  echo "--- $$c"; \
-	  bash "$$c" || exit 1; \
-	done
+	@echo "--- drift controls: one full gate run each, $(DRIFT_JOBS) at a time"
+	@bash scripts/w3-drift-controls -j $(DRIFT_JOBS) all
+	@printf '%s\n' $(READ_ONLY_CONTROLS) \
+	  | xargs -P $(DRIFT_JOBS) -I{} bash -c 'echo "--- {}"; bash {}'
+	@echo "--- scripts/obj-drift-control (edits the tree, rebuilds: serial)"
+	@bash scripts/obj-drift-control
 
 .PHONY: test
 test: $(BIN) drift-controls | check-bridge-fresh

@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Byte-identity gate for `scripts/lean-typing-proof` (§13.39).
+
+The emitter's compiler-side rewrites are all justified by one property: the
+artifacts do not move. Every section from §13.30 on claims it and proves it with
+a `cmp` against a copy — by hand, once, in prose. This gate makes the claim a
+check instead: it runs the emitter on one export in its three modes (expanded,
+shared, stopped) and compares every artifact's size and sha256 with the recorded
+values.
+
+    scripts/check-lean-typing-proof            # compare
+    scripts/check-lean-typing-proof --record    # re-record after an intended change
+
+A recorded value is not a truth about the format — it is a promise that the
+bytes did not change since someone looked. When a change *should* move them
+(a new record key, a different escaping), re-record deliberately, in the same
+commit, so the diff of the golden file says what moved.
+
+The export is corpus, and `mm0/exports/` is gitignored, so a checkout without
+the corpus cannot run this: it prints an explained gap and exits 0 rather than
+failing on something it cannot see (§13.39 says why that gap is real).
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+EMITTER = ROOT / "scripts" / "lean-typing-proof"
+GOLDEN = ROOT / "scripts" / "lean-typing-proof.golden.tsv"
+
+EXPORT = ROOT / "mm0" / "exports" / "BookProof.Toolbox.ChapterFockPairPerturbation.ndjson"
+TARGET = "abs_re_inner_pairVec_le"
+
+# The stopping budget is small on purpose: it only has to reach the emit path
+# and put axioms in the spool, and CI pays for every rule.
+STOP_RULES = 120_000
+
+# The stopped run reports its state as an outcome, not a failure (`stop_walk`):
+# the theory is what the finished run would prove, and this one did not finish.
+EXIT_OK = {"default": {0}, "shared": {0}, "stop": {3, 0}}
+
+# `_stopped.json` records the elapsed time, so it can never be byte-stable; it is
+# compared as a presence check instead.
+UNSTABLE = ("_stopped.json",)
+
+
+def scratch_root() -> str:
+    """Where to put the artifacts: an explicit directory, else the big state
+    tree, else whatever the platform calls temporary."""
+    for cand in (os.environ.get("LTP_SMOKE_DIR"),
+                 str(Path.home() / ".local/state/australVM-lean")):
+        if cand and Path(cand).is_dir() and os.access(cand, os.W_OK):
+            return cand
+    return tempfile.gettempdir()
+
+
+def modes() -> list[tuple[str, dict[str, str]]]:
+    return [
+        ("default", {}),
+        ("shared", {"LTP_OBLIG_SHARE": "1"}),
+        ("stop", {"LTP_STOP_RULES": str(STOP_RULES), "LTP_STOP_EMIT": "1"}),
+    ]
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 22), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def run_mode(name: str, env: dict[str, str], out: Path) -> dict[str, tuple[int, str]]:
+    """Run one mode; return `artifact basename -> (bytes, sha256)`."""
+    out.mkdir(parents=True, exist_ok=True)
+    e = dict(os.environ)
+    for k in ("LTP_OBLIG_SHARE", "LTP_STOP_RULES", "LTP_STOP_AT", "LTP_STOP_EMIT",
+              "LTP_PROBE_LOOKUP", "LTP_TRACE", "LTP_OBTRACE", "LTP_ENC_FASTESC",
+              "LTP_CHK_MEMO", "LTP_EXPRS_CACHE"):
+        e.pop(k, None)
+    e.update(env)
+    cmd = [sys.executable, str(EMITTER), str(EXPORT), TARGET, str(out), "--spine"]
+    print(f"[run] {name}: {' '.join(cmd[1:])}", flush=True)
+    rc = subprocess.call(cmd, env=e)
+    if rc not in EXIT_OK[name]:
+        raise SystemExit(f"check-lean-typing-proof: mode {name} exited {rc}")
+    got: dict[str, tuple[int, str]] = {}
+    for p in sorted(out.iterdir()):
+        if not p.is_file() or p.name.endswith(UNSTABLE) or p.name == "run.log":
+            continue
+        got[p.name] = (p.stat().st_size, sha256(p))
+    return got
+
+
+def main(argv: list[str]) -> int:
+    record = "--record" in argv[1:]
+    if not EXPORT.is_file():
+        print(f"check-lean-typing-proof: [gap] {EXPORT.relative_to(ROOT)} is not "
+              "present, and mm0/exports/ is gitignored, so the byte-identity gate "
+              "cannot run on a corpus-less checkout — skipping, not passing")
+        return 0
+    if not GOLDEN.is_file() and not record:
+        print(f"check-lean-typing-proof: {GOLDEN.relative_to(ROOT)} is missing "
+              "(record it with --record)")
+        return 1
+    want: dict[str, tuple[int, str]] = {}
+    if GOLDEN.is_file():
+        for line in GOLDEN.read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            key, size, digest = line.split("\t")
+            want[key] = (int(size), digest)
+
+    got: dict[str, tuple[int, str]] = {}
+    for name, env in modes():
+        work = Path(tempfile.mkdtemp(prefix=f"ltp-smoke-{name}-",
+                                     dir=scratch_root()))
+        try:
+            for art, (size, digest) in run_mode(name, env, work).items():
+                got[f"{name}/{art}"] = (size, digest)
+        finally:
+            # One mode at a time: a shared-mode run is 2.4 GB and the default
+            # one 3.1 GB, which is more than a small /tmp holds together.
+            shutil.rmtree(work, ignore_errors=True)
+
+    if record:
+        lines = ["# generator: scripts/check-lean-typing-proof --record",
+                 "# mode/artifact\tbytes\tsha256"]
+        lines += [f"{k}\t{v[0]}\t{v[1]}" for k, v in sorted(got.items())]
+        GOLDEN.write_text("\n".join(lines) + "\n")
+        print(f"check-lean-typing-proof: recorded {len(got)} artifact(s) in "
+              f"{GOLDEN.relative_to(ROOT)}")
+        return 0
+
+    bad = 0
+    for key in sorted(set(want) | set(got)):
+        if key not in got:
+            print(f"[missing] {key}: recorded but not produced")
+            bad += 1
+        elif key not in want:
+            print(f"[new]     {key}: {got[key][0]} B, not in the golden file")
+            bad += 1
+        elif got[key] != want[key]:
+            w, g = want[key], got[key]
+            how = ("size" if w[0] != g[0] else "bytes")
+            print(f"[differ]  {key}: {how} — recorded {w[0]} B {w[1][:16]}, "
+                  f"got {g[0]} B {g[1][:16]}")
+            bad += 1
+    if bad:
+        print(f"check-lean-typing-proof: {bad} artifact(s) moved; if the change "
+              "was meant to move them, re-record with --record in the same commit")
+        return 1
+    print(f"check-lean-typing-proof: OK — {len(got)} artifact(s) across "
+          f"{len(modes())} modes match {GOLDEN.name}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
