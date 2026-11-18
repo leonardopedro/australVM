@@ -3711,3 +3711,77 @@ the write path is shorter, not longer.
 
 What is left of §13.36's "ceiling" is nothing but the artifact: a complete theory for
 the row that a streaming checker has yet to read.
+
+### 13.38 Carrying the record: 68 % of the lookups, 6.7 % of a prefix
+
+§13.35 timed the export table's lookup at 147.9 s of a 738 s walk (20 %) and §13.36
+left it as a candidate costing "16.4 %". This section asks where those lookups come
+from, tries the obvious answer, measures that it is the wrong one, and finds the one
+that holds.
+
+**1. Which caller is the 20 %.** A profile of the shared walk on FockPair splits its
+32.3 M lookups cleanly: `_enc_tokens` 20.6 M (64 %), `strip` 6.6 M (20 %), `infer`
+1.9 M, `_chk` 1.0 M, the shared certificate walk's own fetch 0.93 M (3 %). So
+carrying a record through the walk reaches 3 % of the cost; the encoder is where the
+repeats live, and it repeats them for a structural reason: a shared subtree is
+expanded once per *path*, so a 2.2 GB text of 67.5 M tokens is a few million distinct
+nodes asked for again and again.
+
+**2. The answer that did not hold.** A front table — one `dict` of resolved records
+shared by the encoder, the stripper and the walk for the whole run — makes a hit one
+`dict` lookup instead of a method call and two `dict.get`s, and it does cut the
+counts: 32.8 M → 4.0 M with the probe on, and it looked like a 15 % win (44.3 s →
+37.6 s). The probe was doing the convincing: its wrapper costs ~0.25 µs per call, so
+a change that removes calls also removes the instrument's overhead. Without the
+probe: default 68.8 s → 67.7 s, shared **36.2 s → 38.3 s** — slower, because a miss
+now pays a third lookup before reaching the table. A cache that outlives the encode
+holds the whole export's working set and buys nothing for it.
+
+**3. The answer that holds.** The repeats are *within* one encode, so the cache is too:
+`_top` installs a record dict for the outermost `write`/`digest`/`head`, every nested
+`_enc` shares it, and it is dropped when the encode ends (`REC_CACHE_MAX`, 2 M
+records, cleared if exceeded). Alongside it, two callers stop asking twice for what
+they already hold: `strip` carries the record through an `mdata` chain instead of
+re-reading it per level, and `tree_share`'s walker resolves a node once and writes it
+from that record.
+
+Measured, back to back, on the ns row's 20 000-rule prefix with the probe on:
+
+| | HEAD | now |
+| --- | ---: | ---: |
+| `LazyExprs.__getitem__` calls | 55 350 083 | 17 428 417 (−68.5 %) |
+| time inside the lookups | 8.6 s (8.9 %) | 2.7 s (3.3 %) |
+| wall clock, probe on | 95.9 s | 81.3 s |
+| wall clock, probe off | 82.6 s | 77.0 s (−6.7 %) |
+
+FockPair, probe off: default 71.5 s → 69.3 s (−3.1 %), shared 36.7 s → 36.4 s
+(−0.7 %). The shared mode gains least there because its certificates are small enough
+that the encoder's repeats are few; the row whose walk the probe costed is the one
+that gains.
+
+**4. Byte-neutrality and the full row.** Nothing here changes what is written, and
+the artifacts say so: on the 20 000-rule prefix the 1 943 238 865 B type text, the
+1 943 238 432 B value text, the 79 156 920 B axiom spool and the 67 713 619 B
+obligation stream are all `cmp`-identical; only `_stopped.json`, which carries the
+elapsed time, differs. On FockPair both modes are identical in `.mm0`, `.mm1` and the
+stream. And the whole row, under the same 10 GiB cap, one process:
+
+| | §13.37 | now |
+| --- | ---: | ---: |
+| exit | 0 | 0 |
+| `.mm0` | 102 543 367 789 B | same, `cmp`-identical |
+| `.mm1` | 102 547 674 107 B | same, `cmp`-identical |
+| obligations | 580 | 580 |
+| wall clock | 5 648.7 s | 5 395.9 s |
+| peak VmSize sampled (5 s) | 6 749 MiB | 6 068 MiB |
+
+The wall clock is **not** claimed as a speedup: single runs on this host scatter by
+±5 % (§13.37's 12 GiB run was 5 172.8 s on the same code as the 5 648.7 s one), and
+the 4.5 % here is smaller than that. What the run does show is that the change holds
+at scale — byte-identical artifacts, and a peak 680 MiB lower, which is what a
+per-encode record cache should do if it is doing anything at all.
+
+What is left of the lookup is the encoder's structural repeat: it expands a shared
+node once per path because the artifact has no references in it. The only way to
+remove the rest is to stop expanding — which the shared certificate already does for
+the node table, and which `lhs`/`rhs` could do too if the stream format changed.
