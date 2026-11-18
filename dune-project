@@ -18,6 +18,7 @@
   (ounit2 (= 2.2.7))
   (menhir (= 20220210))
   (zarith (= 1.12))
+  (digestif (>= 1.0.0))
   (yojson (= 2.1.0))))
 
 (generate_opam_files)

@@ -119,3 +119,17 @@
  (names TotalityTest DerivAstTest)
  (modules TotalityTest DerivAstTest)
  (libraries austral_core ounit2 test_util))
+
+; GPU backend tests (PLAN_gpu_kernels.md G01-G06).
+(tests
+ (names
+  GpuFrontendTest
+  GpuIrTest
+  GpuSubsetTest
+  GpuWgslTest)
+ (modules
+  GpuFrontendTest
+  GpuIrTest
+  GpuSubsetTest
+  GpuWgslTest)
+ (libraries austral_lib austral_gpu austral_rust_bridge ounit2 yojson))

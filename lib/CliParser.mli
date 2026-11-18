@@ -29,6 +29,8 @@ type target =
   (** Compile to C, generate an executable. *)
   | CStandalone of { output_path: string; entrypoint: entrypoint option; }
   (** Compile to a standalone C file. *)
+  | WgslBundle of { output_dir: string; entrypoint: entrypoint; }
+  (** Compile the admitted GPU subset to a WGSL bundle directory. *)
 [@@deriving eq]
 
 type error_reporting_mode =
@@ -53,6 +55,9 @@ type cmd =
       allow_all: bool;
       auth_manifest: string option;
       emit_cps_path: string option;
+      (** U11: write the canonical adapter descriptors for the foreign calls
+          whose signature needs a generated wrapper. *)
+      emit_adapters_path: string option;
       (** Run the package totality pass (avm-pkg: rejects unbounded
           constructs in package modules). *)
       pkg_totality: bool;
