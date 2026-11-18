@@ -1,0 +1,45 @@
+module body Test is
+    record Window: Free is
+        base: Int64;
+        off: Int64;
+        len: Int64;
+    end;
+
+    union Halves: Free is
+        case Both is
+            left: Window;
+            right: Window;
+        case NoHalf;
+    end;
+
+    function length(w: Window): Int64 is
+        return w.len;
+    end;
+
+    function offset(w: Window): Int64 is
+        return w.off;
+    end;
+
+    pragma Liquid_Requires(Contract => "0 <= k && k <= length(w)");
+    function split(w: Window, k: Int64): Halves is
+        let l: Window := Window(base => w.base, off => offset(w), len => k);
+        let r: Window := Window(base => w.base, off => offset(w) + k, len => length(w));
+        return Both(left => l, right => r);
+    end;
+
+    pragma Liquid_Requires(Contract => "offset(left) + length(left) <= offset(right)");
+    function adjacent(left: Window, right: Window): Int64 is
+        return length(left) + length(right);
+    end;
+
+    function main(): ExitCode is
+        let w: Window := Window(base => 0, off => 10, len => 8);
+        case split(w, 3) of
+            when Both(left: Window, right: Window) do
+                printLn(adjacent(left, right));
+            when NoHalf do
+                printLn(0);
+        end case;
+        return ExitSuccess();
+    end;
+end module body.

@@ -1,0 +1,6 @@
+module body LetExpr is
+    function main(): Int64 is
+        let base: Int64 := 40;
+        return (base + 2);
+    end;
+end module body.

@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# L11b conversion negative control.
+#
+# `test/LiquidIndexTest.ml` asserts both directions of the conversion rules: what
+# must be accepted (`n + 0` converts to `n`, the right-spine fold, a closed
+# definition after inlining, saturated natural subtraction) and what must be
+# refused (`n + 1` where `n` is required, `m + n` against `n + m`, two binders
+# both named `n`, natural subtraction read as addition). A suite whose refusals
+# were never load-bearing would look exactly like a passing suite if `convert`
+# answered `Convertible` to every pair, so this control weakens that one rule
+# and requires the suite to notice — twice, because "the rules can fail" has two
+# halves:
+#
+#   permissive  `convert` answers Convertible to every pair  -> the *refusal*
+#               cases must FAIL, while the acceptance cases still pass;
+#   austere     `convert` answers Different to every pair    -> the *acceptance*
+#               cases must FAIL, while the refusals still pass.
+#
+# The two runs share one test file and differ only in the rule, so a suite that
+# failed for both mutations on the same case would be measuring something other
+# than the rule. Nothing is compiled against a copy of the module: `LiquidTypes`
+# depends on `Stages` from `austral_core`, and linking that library *and* a
+# standalone `LiquidIndex` would put two modules of the same name in one link.
+# So the file is mutated in place and restored by a trap, the pattern
+# `scripts/obj-drift-control` uses — with the original hash re-checked after the
+# restore, and the suite re-run on the restored tree, because the one failure
+# mode that matters here is leaving a loosened `convert` behind.
+#
+# `dune` is only reachable inside the flake's OCaml shell (the host has none):
+#
+#   nix develop "git+file://$PWD#ocaml" -c bash scripts/l11b-conversion-drift-control
+
+set -u
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+impl="$repo_root/lib/liquid/LiquidIndex.ml"
+suite=(dune exec test/LiquidIndexTest.exe)
+
+# The rule under mutation: the only place `convert` decides that two normalized
+# terms are convertible. Mutating this line cannot affect elaboration, width
+# obligations or `require`'s evidence lookup, which is what lets the two runs
+# disagree on exactly the conversion cases.
+original_rule='     if canonical na = canonical nb then Convertible'
+
+if [ ! -f "$impl" ]; then
+    echo "l11b-conversion-drift-control: missing $impl" >&2
+    exit 1
+fi
+if [ "$(grep -c -x -F "$original_rule" "$impl")" -ne 1 ]; then
+    echo "l11b-conversion-drift-control: expected exactly one conversion rule in $impl:" >&2
+    echo "    $original_rule" >&2
+    exit 1
+fi
+
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/avm-l11b-conversion.XXXXXX")"
+backup="$scratch/LiquidIndex.ml.orig"
+cp "$impl" "$backup"
+original_sha="$(sha256sum "$backup" | cut -d' ' -f1)"
+
+restore() {
+    cp "$backup" "$impl"
+}
+trap 'restore; rm -rf "$scratch"' EXIT INT TERM
+
+# $1 is the replacement condition; the line must land exactly once.
+loosen() {
+    local condition="$1"
+    local rewritten="$scratch/LiquidIndex.$condition.ml"
+    sed "s|^${original_rule}\$|     if $condition then Convertible|" "$backup" > "$rewritten"
+    if [ "$(grep -c "^     if $condition then Convertible\$" "$rewritten")" -ne 1 ]; then
+        echo "l11b-conversion-drift-control: the mutation did not apply ($condition)" >&2
+        return 1
+    fi
+    if cmp -s "$rewritten" "$backup"; then
+        echo "l11b-conversion-drift-control: the mutation changed nothing ($condition)" >&2
+        return 1
+    fi
+    cp "$rewritten" "$impl"
+}
+
+run_suite() {
+    ( cd "$repo_root" && "${suite[@]}" 2>&1 )
+}
+
+status=0
+
+# 1. The unmutated rule passes. Without this, a suite that was already failing
+#    would make both mutated runs look like successful controls.
+baseline="$(run_suite)"
+baseline_status=$?
+if [ "$baseline_status" -ne 0 ]; then
+    echo "control: the suite failed on the unmutated rules (exit $baseline_status)" >&2
+    tail -n 5 <<<"$baseline" >&2
+    status=1
+fi
+if ! grep -q -x "OK" <<<"$baseline"; then
+    echo "control: the unmutated suite did not report OK" >&2
+    status=1
+fi
+if grep -q "^  FAIL " <<<"$baseline"; then
+    echo "control: the unmutated suite reported failures" >&2
+    status=1
+fi
+
+# 2. A permissive rule must be caught by the refusals, not by the acceptances.
+if loosen true; then
+    permissive="$(run_suite)"
+    permissive_status=$?
+    if [ "$permissive_status" -eq 0 ]; then
+        echo "control: a rule that accepts every pair passed the suite" >&2
+        status=1
+    fi
+    for line in \
+        "  FAIL m + n must not convert to n + m" \
+        "  FAIL n + 1 must not satisfy a requirement for n" \
+        "  FAIL shadowing must not collapse binders" \
+        "  FAIL natural subtraction is not addition"
+    do
+        if ! grep -Fq "$line" <<<"$permissive"; then
+            echo "control: 'always Convertible' did not trip '$line'" >&2
+            status=1
+        fi
+    done
+    if grep -Fq "  FAIL n + 0 converts to n" <<<"$permissive"; then
+        echo "control: 'always Convertible' broke an acceptance case it should not touch" >&2
+        status=1
+    fi
+else
+    status=1
+fi
+
+# 3. A rule that refuses everything must be caught by the acceptances.
+if loosen false; then
+    austere="$(run_suite)"
+    austere_status=$?
+    if [ "$austere_status" -eq 0 ]; then
+        echo "control: a rule that refuses every pair passed the suite" >&2
+        status=1
+    fi
+    for line in \
+        "  FAIL n + 0 converts to n" \
+        "  FAIL (n + 1) + 2 converts to n + 3" \
+        "  FAIL inlining" \
+        "  FAIL natural subtraction saturates at zero"
+    do
+        if ! grep -Fq "$line" <<<"$austere"; then
+            echo "control: 'always Different' did not trip '$line'" >&2
+            status=1
+        fi
+    done
+    if grep -Fq "  FAIL m + n must not convert to n + m" <<<"$austere"; then
+        echo "control: 'always Different' broke a refusal case it should not touch" >&2
+        status=1
+    fi
+else
+    status=1
+fi
+
+# 4. The tree comes back, and the suite agrees it did. `cmp` is the assertion;
+#    the re-run is what proves `_build` was rebuilt from the restored file rather
+#    than left holding the last mutation.
+restore
+if [ "$(sha256sum "$impl" | cut -d' ' -f1)" != "$original_sha" ]; then
+    echo "control: the restore did not reproduce the original file" >&2
+    status=1
+fi
+restored="$(run_suite)"
+restored_status=$?
+if [ "$restored_status" -ne 0 ] || ! grep -q -x "OK" <<<"$restored"; then
+    echo "control: the suite does not pass after the restore (exit $restored_status)" >&2
+    status=1
+fi
+
+if [ "$status" -ne 0 ]; then
+    echo "l11b-conversion-drift-control: FAILED" >&2
+    exit 1
+fi
+
+count_failures() {
+    grep -c "^  FAIL " <<<"$1" || true
+}
+echo "baseline:   OK (exit 0)"
+echo "permissive: $(count_failures "$permissive") refusal case(s) failed (exit $permissive_status)"
+echo "austere:    $(count_failures "$austere") acceptance case(s) failed (exit $austere_status)"
+echo "restored:   OK (exit $restored_status), sha256 unchanged"
+echo "l11b-conversion-drift-control: OK"

@@ -1,0 +1,6 @@
+module body Arith is
+    function main(): Int64 is
+        let x: Int64 := 2;
+        return ((x + 3) * 4);
+    end;
+end module body.

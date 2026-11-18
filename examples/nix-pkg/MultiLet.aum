@@ -1,0 +1,7 @@
+module body MultiLet is
+    function main(): Int64 is
+        let a: Int64 := 1;
+        let b: Int64 := 2;
+        return (a + b);
+    end;
+end module body.

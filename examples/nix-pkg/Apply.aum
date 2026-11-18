@@ -1,0 +1,9 @@
+module body Apply is
+    function add(x: Int64): Int64 is
+        return (x + 1);
+    end;
+
+    function main(): Int64 is
+        return add(41);
+    end;
+end module body.

@@ -1,0 +1,33 @@
+module body Test is
+    """
+    WF3 (L11a): `spin` is unannotated, so the totality gate (L3) never looked
+    at it; the closure audit does, and the `while` it contains is not a term.
+    The annotated entry point is `run`, but the path names the two definitions
+    the audit actually crossed (`outer -> spin`), because "where is the loop"
+    is the question and `run` is not the answer.
+    """
+    pragma Liquid_Requires(Contract => "outer(n) >= 0");
+
+    function run(n: Int64): Int64 is
+        return outer(n);
+    end;
+
+    function outer(n: Int64): Int64 is
+        return spin(n);
+    end;
+
+    function spin(n: Int64): Int64 is
+        var i: Int64 := 0;
+        var total: Int64 := 0;
+        while i < n do
+            total := total + i;
+            i := i + 1;
+        end while;
+        return total;
+    end;
+
+    function main(): ExitCode is
+        printLn(run(3));
+        return ExitSuccess();
+    end;
+end module body.

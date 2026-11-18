@@ -1,0 +1,7 @@
+module body MathLib is
+    -- The provider cell: compiled on its own, so `double` is an exported
+    -- symbol in its own image and not inlined into its caller.
+    function double(x: Int64): Int64 is
+        return (x * 2);
+    end;
+end module body.

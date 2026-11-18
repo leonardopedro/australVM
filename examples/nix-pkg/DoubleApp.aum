@@ -1,0 +1,9 @@
+import MathLib (double);
+
+module body DoubleApp is
+    -- The owner cell: `double` is not defined here, so the cell carries one
+    -- import and one relocation that only a provider cell can resolve.
+    function main(): Int64 is
+        return double(42);
+    end;
+end module body.

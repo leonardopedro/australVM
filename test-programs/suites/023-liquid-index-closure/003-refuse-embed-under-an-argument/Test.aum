@@ -1,0 +1,33 @@
+pragma Unsafe_Module;
+
+module body Test is
+    """
+    WF3 (L11a): the forbidden operation is in an argument of an *allowed*
+    callee. The audit elaborates arguments first, so the refusal names `peek`
+    (and its `@embed`), not `tag` — naming the outer call would send the user
+    to a definition that is fine.
+    """
+    pragma Liquid_Requires(Contract => "outer(n) >= 0");
+
+    function run(n: Int64): Int64 is
+        return outer(n);
+    end;
+
+    function outer(n: Int64): Int64 is
+        return tag(peek(n));
+    end;
+
+    function tag(n: Int64): Int64 is
+        return n;
+    end;
+
+    function peek(n: Int64): Int64 is
+        let m: Int64 := @embed(Int64, "$1", n);
+        return m;
+    end;
+
+    function main(): ExitCode is
+        printLn(run(1));
+        return ExitSuccess();
+    end;
+end module body.
