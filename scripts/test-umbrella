@@ -123,7 +123,7 @@ SUITES = {
     "SUITE_UMBRELLA_INTERFACE": (
         os.path.join(ROOT, "umbrella", "Cargo.toml"),
         ["--test", "interface"],
-        6,
+        7,
         False,
     ),
     # U11 (ABI04/ABI05): the generated wrapper's values. The two tests build a

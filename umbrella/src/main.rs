@@ -28,7 +28,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use austral_cranelift_bridge::{auth, compile_entry_i64, cranelift_last_error, execute_function};
-use umbrella::{cargo, cli, policy, project};
+use umbrella::{cargo, cli, interface, policy, project};
 
 /// U03's JSON event mode: stdout carries one typed event per line and human
 /// diagnostics stay on stderr. Set once, before any stage.
@@ -193,7 +193,12 @@ const FRONT_END_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3
 ///    spawn_jit_server uses, minus the JIT-server transport, plus
 ///    --emit-cps so we get the CPS binary on disk. No umbrella-specific
 ///    code exists (or may exist) on the australVM side.
-fn front_end(austral: &PathBuf, modules: &[PathBuf], cps_out: &PathBuf) -> Result<Vec<u8>, String> {
+fn front_end(
+    austral: &PathBuf,
+    modules: &[PathBuf],
+    cps_out: &PathBuf,
+    adapters_out: &PathBuf,
+) -> Result<(Vec<u8>, Vec<interface::Adapter>), String> {
     let mut cmd = Command::new(austral);
     // The dune-built front-end links libaustral_cranelift_bridge.so
     // dynamically; Makefile targets and the nix dev shell carry it via
@@ -219,7 +224,12 @@ fn front_end(austral: &PathBuf, modules: &[PathBuf], cps_out: &PathBuf) -> Resul
     cmd.arg("--use-cps-jit")
         .arg("--allow-all")
         .arg("--target-type=tc")
-        .arg(format!("--emit-cps={}", cps_out.display())); // U06: bounded child. A compiler that hangs must not hang umbrella, and a
+        .arg(format!("--emit-cps={}", cps_out.display()))
+        // U11: the CPS lowering names every `rs_*` call that needs a scalar
+        // adapter, and this document is how the build learns which wrappers to
+        // generate. An unrepresentable signature fails the front-end here, so
+        // no guessed layout can reach the JIT.
+        .arg(format!("--emit-adapters={}", adapters_out.display())); // U06: bounded child. A compiler that hangs must not hang umbrella, and a
                                                            // deadline is only meaningful if the whole process group is killed — the
                                                            // front-end spawns helpers of its own.
     let outcome = umbrella::process::run(cmd, FRONT_END_DEADLINE)
@@ -241,7 +251,88 @@ fn front_end(austral: &PathBuf, modules: &[PathBuf], cps_out: &PathBuf) -> Resul
             String::from_utf8_lossy(&outcome.stderr)
         ));
     }
-    std::fs::read(cps_out).map_err(|e| format!("read {}: {e}", cps_out.display()))
+    let cps = std::fs::read(cps_out).map_err(|e| format!("read {}: {e}", cps_out.display()))?;
+    let text = std::fs::read_to_string(adapters_out)
+        .map_err(|e| format!("read {}: {e}", adapters_out.display()))?;
+    let adapters = interface::Adapter::parse_descriptors(&text)
+        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+    Ok((cps, adapters))
+}
+
+/// The bridge rlib the generated wrapper compiles against. The wrapper calls
+/// the same `encode`/`decode` the JIT's scalar ABI implements, so it is linked
+/// rather than reimplemented; umbrella already links that crate, so its
+/// artifact is next to this executable.
+fn bridge_rlib() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let profile = exe
+        .parent()
+        .ok_or_else(|| "the umbrella executable has no directory".to_string())?;
+    let mut found: Vec<PathBuf> = Vec::new();
+    for dir in [profile.join("deps"), profile.to_path_buf()] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+            let is_rlib = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("libaustral_cranelift_bridge") && n.ends_with(".rlib"))
+                .unwrap_or(false);
+            if is_rlib {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found.pop().ok_or_else(|| {
+        format!(
+            "no bridge rlib under {}; generate the wrappers from a cargo build of umbrella",
+            profile.display()
+        )
+    })
+}
+
+/// 3.5. Generate the wrappers the front-end asked for and load them where the
+///      JIT can resolve them. Each adapter becomes one module (the generator
+///      writes a file per adapter and each starts with the same `use`), all in
+///      one crate; the targets are already global because the crate's cdylib
+///      was dlopen'd in step 2, so `RTLD_NOW` can bind them.
+fn build_adapters(adapters: &[interface::Adapter]) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("umbrella-adapters-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let mut source = String::new();
+    for (index, adapter) in adapters.iter().enumerate() {
+        let wrapper = interface::render_wrapper(adapter)
+            .map_err(|e| format!("render {}: {e}", adapter.symbol))?;
+        source.push_str(&format!("mod w{index} {{\n{wrapper}\n}}\n"));
+    }
+    let file = dir.join("adapters.rs");
+    std::fs::write(&file, source).map_err(|e| format!("write {}: {e}", file.display()))?;
+    let rlib = bridge_rlib()?;
+    let deps = rlib.parent().unwrap_or(&dir);
+    let out = dir.join("libumbrella_adapters.so");
+    let output = Command::new("rustc")
+        .arg("--crate-type=cdylib")
+        .arg("--edition=2021")
+        .arg("--crate-name=umbrella_adapters")
+        .arg("-L")
+        .arg(format!("dependency={}", deps.display()))
+        .arg("--extern")
+        .arg(format!("austral_cranelift_bridge={}", rlib.display()))
+        .arg("-o")
+        .arg(&out)
+        .arg(&file)
+        .output()
+        .map_err(|e| format!("spawn rustc: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "rustc refused the generated wrappers:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    policy::dlopen(&out)?;
+    Ok(out)
 }
 
 /// 4a. Authorizer state: with a manifest, the bridge's manifest engine
@@ -402,17 +493,37 @@ fn main() {
         }
     }
 
-    // 3. front-end subprocess → CPS bytes.
+    // 3. front-end subprocess → CPS bytes and the adapter descriptors.
     let cps_out: PathBuf =
         std::env::temp_dir().join(format!("umbrella-{}.cps", std::process::id()));
-    let cps = match front_end(&austral, &modules, &cps_out) {
+    let adapters_out: PathBuf =
+        std::env::temp_dir().join(format!("umbrella-{}.adapters", std::process::id()));
+    let (cps, adapters) = match front_end(&austral, &modules, &cps_out, &adapters_out) {
         Ok(b) => {
             let _ = std::fs::remove_file(&cps_out);
+            let _ = std::fs::remove_file(&adapters_out);
             b
         }
         Err(e) => die(e),
     };
     eprintln!("umbrella: front-end emitted {} bytes of CPS", cps.len());
+
+    // 3.5. The wrappers the descriptors ask for. Empty is a real answer: every
+    //      call in the module was word-native and needs no mediation.
+    if adapters.is_empty() {
+        eprintln!("umbrella: the module needs no scalar adapters");
+    } else {
+        let names: Vec<&str> = adapters.iter().map(|a| a.symbol.as_str()).collect();
+        match build_adapters(&adapters) {
+            Ok(path) => eprintln!(
+                "umbrella: built and loaded {} adapter wrapper(s) ({}) from {}",
+                adapters.len(),
+                names.join(", "),
+                path.display()
+            ),
+            Err(e) => die(e),
+        }
+    }
 
     // 4. in-process gate + compile + execute.
     if let Err(e) = install_auth(cli.manifest.as_ref()) {

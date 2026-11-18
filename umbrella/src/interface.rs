@@ -151,6 +151,48 @@ impl Adapter {
         out
     }
 
+    /// Parse a whole `--emit-adapters` document: one descriptor per blank-line
+    /// separated block, `#` comment lines allowed anywhere (the compiler's
+    /// header is three of them). An empty or comment-only document is no
+    /// adapters, which is a real state — a module whose calls are all
+    /// word-native needs no wrapper. A repeated symbol is refused: two blocks
+    /// for one call site would let the last one silently win.
+    pub fn parse_descriptors(text: &str) -> Result<Vec<Adapter>, String> {
+        fn finish(block: &str, adapters: &mut Vec<Adapter>) -> Result<(), String> {
+            let has_fact = block.lines().any(|line| {
+                let line = line.trim();
+                !line.is_empty() && !line.starts_with('#')
+            });
+            if !has_fact {
+                return Ok(());
+            }
+            let adapter = Adapter::parse_descriptor(block)?;
+            if adapters.iter().any(|a| a.symbol == adapter.symbol) {
+                return Err(format!(
+                    "duplicate descriptor for `{}`; one call site gets one block",
+                    adapter.symbol
+                ));
+            }
+            adapter.validate()?;
+            adapters.push(adapter);
+            Ok(())
+        }
+
+        let mut adapters = Vec::new();
+        let mut block = String::new();
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                finish(&block, &mut adapters)?;
+                block.clear();
+            } else {
+                block.push_str(line);
+                block.push('\n');
+            }
+        }
+        finish(&block, &mut adapters)?;
+        Ok(adapters)
+    }
+
     pub fn parse_descriptor(text: &str) -> Result<Adapter, String> {
         let mut schema = None;
         let mut abi_version = None;

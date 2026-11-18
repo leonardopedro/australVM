@@ -175,13 +175,8 @@ fn the_compilers_emitted_descriptors_parse_here() {
         .join("../test-programs/adapters/adapters.golden");
     let text = std::fs::read_to_string(&golden)
         .unwrap_or_else(|e| panic!("read {}: {e}", golden.display()));
-    let mut adapters = Vec::new();
-    for block in text.split("\n\n") {
-        if block.trim().is_empty() || block.trim_start().starts_with('#') {
-            continue;
-        }
-        adapters.push(Adapter::parse_descriptor(block).expect("descriptor parses"));
-    }
+    // The same call the build makes on the file the front-end writes.
+    let adapters = Adapter::parse_descriptors(&text).expect("the emitted document parses");
     let symbols: Vec<&str> = adapters.iter().map(|a| a.symbol.as_str()).collect();
     assert_eq!(
         symbols,
@@ -200,4 +195,21 @@ fn the_compilers_emitted_descriptors_parse_here() {
     }
     assert_eq!(adapters[1].params, vec![Scalar::F64, Scalar::I64]);
     assert_eq!(adapters[1].returns, Scalar::F64);
+}
+
+/// The build's parser is the one that has to be strict, not the front-end's
+/// writer: a document with two blocks for one symbol is refused rather than
+/// letting the second wrapper's layout silently win.
+#[test]
+fn a_document_with_a_repeated_symbol_is_refused() {
+    let block = "schema 1\nabi scalar 1\nsymbol rs_scale__adapter\ntarget rs_scale\n\
+                 params Int32,Float64\nreturns Float64\n";
+    let err = Adapter::parse_descriptors(&format!("{block}\n{block}")).unwrap_err();
+    assert!(err.contains("duplicate descriptor"), "{err}");
+    assert!(err.contains("rs_scale__adapter"), "{err}");
+
+    // A comment-only document is *not* an error: a module whose calls are all
+    // word-native writes exactly the compiler's header and needs no wrapper.
+    let header = "# U11 adapter descriptors\n# sorted by symbol.\n";
+    assert!(Adapter::parse_descriptors(header).expect("header only").is_empty());
 }
