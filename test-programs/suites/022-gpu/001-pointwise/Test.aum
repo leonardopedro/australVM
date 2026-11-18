@@ -1,0 +1,58 @@
+-- G08: the authored Pointwise kernels under the ordinary C backend.
+-- These are the same bodies as examples/gpu/pointwise/Pointwise.aum, printed
+-- so scripts/gpu-source-check's expected fixtures have an end-to-end anchor in
+-- the normal test-program suite. The GPU bundles themselves are checked by
+-- scripts/gpu-source-check; this case only fixes the source semantics.
+
+module body Test is
+    function identity(x: Nat32): Nat32 is
+        return x;
+    end;
+
+    function clamp(x: Nat32): Nat32 is
+        if x > 100 then
+            return 100;
+        else
+            return x;
+        end if;
+    end;
+
+    function difference(x: Nat32, y: Nat32): Nat32 is
+        return modularSubtract(x, y);
+    end;
+
+    function add(x: Nat32, y: Nat32): Nat32 is
+        return modularAdd(x, y);
+    end;
+
+    function multiply(x: Nat32, y: Nat32): Nat32 is
+        return modularMultiply(x, y);
+    end;
+
+    function minimum(x: Nat32, y: Nat32): Nat32 is
+        if x < y then
+            return x;
+        else
+            return y;
+        end if;
+    end;
+
+    function twice(x: Nat32): Nat32 is
+        return modularAdd(x, x);
+    end;
+
+    function polynomial(x: Nat32, y: Nat32): Nat32 is
+        return modularMultiply(twice(x), y);
+    end;
+
+    function main(): ExitCode is
+        printLn(identity(4294967295));
+        printLn(clamp(101));
+        printLn(difference(0, 1));
+        printLn(add(4294967295, 1));
+        printLn(multiply(4294967295, 2));
+        printLn(minimum(2147483648, 2147483647));
+        printLn(polynomial(3, 5));
+        return ExitSuccess();
+    end;
+end module body.
