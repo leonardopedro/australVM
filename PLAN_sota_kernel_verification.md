@@ -366,7 +366,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 141 passed, 6 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan)
+verify-invariants: 141 passed, 7 explained gap(s), 0 failed   # + W9.1 no lean shell (lean-absent gaps: W9.3 Lean development + W9.1, W9.3 no-sorry scan) and U11 (no `austral` built here)
 
 $ ./scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, …
@@ -931,10 +931,10 @@ the artifact, so `mm0-c` checks them too.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 201 `check` statements,
-  116 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 202 `check` statements,
+  117 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 8 of those 116 have a measured perturbed-tree
+  number, not a different claim. 8 of those 117 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
   neither: no check in the gate is unread now, and the gap is the 13 `copy` rows —
@@ -992,6 +992,7 @@ the artifact, so `mm0-c` checks them too.
   | `S29: per-module CPS compile consumes the same census` | tool | needs a build |
   | `S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt` | none | runs the repository's own test |
   | `S30: cadabra2-cli subprocess, not a dependency` | none | an architectural claim about source |
+  | `U11: the CPS lowering's adapter descriptors match the golden` | derived | re-emits the descriptors from the fixture and diffs them with `test-programs/adapters/adapters.golden` |
   | `W3: $_stem matches its approved statements` | copy | per approved row; would need `AUSTRALVM_APPROVED_ROOT` pointed at a drifted copy |
   | `W3: stage-approvals stages exactly §W3's pending rows` | control | the staging runs against a scratch root every run; the row is its refusal path |
   | `W6: generated C probe compiles and passes at tolerance 1e-8` | tool | needs `cc` |
@@ -1101,7 +1102,7 @@ the artifact, so `mm0-c` checks them too.
   rewrites `isa`'s cell to `` `[pass]`, approved in `mm0/approved/` `` with no
   `mm0/approved/isa.stmts` behind it, and runs the gate against the copy through
   `AUSTRALVM_PLAN`. Measured 2026-11-18: exit 1, `verify-invariants: 137 passed,
-  6 explained gap(s), 4 failed`, `[FAIL] W3: the plan's §W3 stmts column matches
+  7 explained gap(s), 4 failed`, `[FAIL] W3: the plan's §W3 stmts column matches
   what each artifact holds` with `[detail] §W3 table vs measured: isa(says
   approved, but …/isa.stmts does not exist)`, and exactly the three other lines
   that read the same cell — the digest column, the approved-row emitter check and
@@ -2496,7 +2497,7 @@ rather than implying both directions are covered. The model's other self-claim i
 driftable the same way, and measured: a copy of `mm0/clif.mm0` whose `-- proves:
 0 theorems` line says `1`, run with `AUSTRALVM_CLIF` at the copy, turns
 `[FAIL] W9: the CLIF model still claims no theorem` and nothing else —
-`verify-invariants: 140 passed, 6 explained gap(s), 1 failed`, 2026-11-18, the
+`verify-invariants: 140 passed, 7 explained gap(s), 1 failed`, 2026-11-18, the
 `proves-line-drift` row of `docs/data/w3/probes.tsv`.
 And the approved path is exercised, not assumed:
 the gate copies the toy staging, deletes its first `axiom` line, and counts the
