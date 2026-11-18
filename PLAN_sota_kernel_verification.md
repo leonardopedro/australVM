@@ -293,18 +293,19 @@ currently indefensible:
    weakened definition is reproduced faithfully by regeneration, so the drift gate
    cannot see it. This is exactly the hole `comparator` was built to close.
 
-### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-17)
+### §3.5 After W9.1/W9.2 and the opcode producers (measured 2026-11-17, re-run 2026-11-18)
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 150 passed, 4 explained gap(s), 0 failed
+verify-invariants: 150 passed, 5 explained gap(s), 0 failed
   [pass] W9.1: the pinned RV64 model converts and mm0-c accepts it
   [detail] 23 opcodes: 15 mapped to a converted model declaration,
            8 structural (no ISA instruction), 0 not covered
   [pass] W9: mm0/clif.mm0 is what the corpus lowering measures
-  [detail] clif2mm0: 20 form(s), 853 instruction(s), 0 theorems
+  [detail] clif2mm0: OK — 20 form(s), 853 instruction(s) over the corpus, 0 theorems
   [pass] W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE
   [detail] REFUTED as stated: load store
+  [gap]  U11: adapter descriptors not measured ()
   [pass] W9.3: the memory projection is stated as vocabulary, accepted by mm0-c
   [pass] W9.3: the projection's citations still match their artifacts (3 pinned)
   [pass] W9.3: the toy model proves the stated projection, not a neighbour
@@ -377,6 +378,18 @@ $ grep '^-- code:' mm0/flux1d_certificate.mm0
   # re-emitted; the statements are byte-identical, only this line moved
 $ make test                                                  # exit 0
 ```
+
+Re-run 2026-11-18 on `b54c60a8` (the excerpt above is that run): the same
+`150 passed, 0 failed`, and every §W9.3 figure — 20 axioms, 28 theorems, 48
+audited declarations, 16276 memories, 27 rows at 4 and 5 atoms, the 13 refused
+toy mutations and 5 refused Lean mutations — is unchanged. Two things had
+moved since the 2026-11-17 quote, both now shown as the gate prints them: the
+`clif2mm0` detail gained its `OK — … over the corpus` wording (same numbers),
+and **U11 is an explained gap rather than a pass**, because
+`scripts/check-adapter-descriptors` needs an `austral` binary and exits 2
+without one, which the gate reports as a gap and never as a pass. That is the
+5th of the 5 gaps; the other four are the §W3 rows still waiting on an owner
+approval.
 
 The three `[FAIL]`s this work produced before those two re-emits were the
 expected ones — the certificate pinned the CPS and object digests of the *old*
