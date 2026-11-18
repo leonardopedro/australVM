@@ -476,17 +476,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   expected `[FAIL]` line. One full gate run per case; logs kept under
   `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
   speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
-  repository only read), and measured 2026-11-18 the 13 cases that existed
-  then take 58m59s at `-j 1` and 42m39s at `-j 2` — 16m20s (28%) off, 1.38x and
-  not the 2x the two cores suggest, because a gate run does not itself
-  parallelise. The last `copy` row, `W3: $_stem matches its approved
-  statements`, is `w3-approved-row`: it copies the whole approved root into
-  scratch and weakens one approved axiom there, so the check runs without the
-  tree holding any new approval.
+  repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
+  `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
+  cores suggest, because a gate run does not itself parallelise. The last
+  `copy` row, `W3: $_stem matches its approved statements`, is
+  `w3-approved-row`: it copies the whole approved root into scratch and weakens
+  one approved axiom there, so the check runs without the tree holding any new
+  approval.
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
   read-only `*-drift-control` scripts the same way, then `obj-drift-control`
   alone (it edits the tree and rebuilds), and `make test` depends on it. The two
-  parallel halves together measure 1h21m43s serial against 1h00m01s at two jobs
+  parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
   (2026-11-18; the second half alone 22m44s → 17m22s). It never
   writes `mm0/approved/` — the approval a case needs lives in a scratch root — so
   no control can approve.

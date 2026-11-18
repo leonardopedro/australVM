@@ -124,10 +124,10 @@ HOST_LOADER = /lib64/ld-linux-x86-64.so.2
 # and reads the repository without writing it. The exception is
 # `obj-drift-control`, which edits the tree and rebuilds the compiler, so it
 # stays last and serial. Measured 2026-11-18 on a two-core host, everything
-# holding either way: the 13 `w3-drift-controls` cases take 58m59s at -j 1 and
-# 42m39s at -j 2, the five read-only controls 22m44s serial and 17m22s at -P 2 —
-# 1h21m43s against 1h00m01s for the two halves, 21m42s (27%) off. Each core is
-# worth ~1.36x, not 2x, because a gate run is itself mostly serial.
+# holding either way: the 14 `w3-drift-controls` cases take 62m43s at -j 1 and
+# 44m9s at -j 2, the five read-only controls 22m44s serial and 17m22s at -P 2 —
+# 1h25m27s against 1h01m31s for the two halves, 23m56s (28%) off. Each core is
+# worth ~1.4x, not 2x, because a gate run is itself mostly serial.
 DRIFT_JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 READ_ONLY_CONTROLS = scripts/w3-emitter-drift-control \
                      scripts/w93-composition-drift-control \

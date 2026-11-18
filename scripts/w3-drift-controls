@@ -22,13 +22,11 @@
 # speed-up available — a case *is* one full gate run — and it is bounded by the
 # cores: this host has two.
 #
-# Measured 2026-11-18 with the 13 cases that existed then (the last `copy` row's
-# `w3-approved-row` came after, so it adds one more gate run), same tree, same
-# `nix develop`:
-#   -j 1  58m59s   (~272 s/case)
-#   -j 2  42m39s   (~373 s/case: two gate runs contend, so the second core is
-#                   worth 1.38x, not 2x — a gate run is not itself parallel)
-# i.e. 16m20s (28%) off the sequential wall clock, which is what `make
+# Measured 2026-11-18, all 14 cases, same tree, same `nix develop`:
+#   -j 1  62m43s   (~269 s/case)
+#   -j 2  44m9s    (~379 s/case: two gate runs contend, so the second core is
+#                   worth 1.42x, not 2x — a gate run is not itself parallel)
+# i.e. 18m34s (30%) off the sequential wall clock, which is what `make
 # drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
 #
 # `w3-approved-row` is the one copy check with no case: its subject is an

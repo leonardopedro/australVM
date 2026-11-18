@@ -965,17 +965,15 @@ the artifact, so `mm0-c` checks them too.
   `make test` depends on it — the Makefile states the cost, because every control
   is a full gate run. A case cannot be made cheaper (the case *is* the gate
   run), so `-j N` runs independent ones at once: measured 2026-11-18 on this
-  two-core host, the 13 cases that existed then take **58m59s** at `-j 1` (~272 s
-  each) against **42m39s** at `-j 2` (~373 s each) — 16m20s, 28%, off the wall
-  clock; the fourteenth, `w3-approved-row`, was added afterwards and so adds one
-  more gate run to each arm. The
-  second core buys 1.38x rather than 2x because a single gate run is itself
-  mostly serial, and every case still holds under `-j 2` (the same 13 `holds`
+  two-core host, all **14** cases take **62m43s** at `-j 1` (~269 s each)
+  against **44m9s** at `-j 2` (~379 s each) — 18m34s, 30%, off the wall clock.
+  The second core buys 1.42x rather than 2x because a single gate run is itself
+  mostly serial, and every case still holds under `-j 2` (the same 14 `holds`
   as at `-j 1`), which is the check that the cases really are independent:
   own scratch tree, own `TMPDIR`, repository read-only. The five read-only
   `*-drift-control` scripts measure the same way — 22m44s serial against 17m22s
   at `-P 2`, all five holding — so the two parallel halves together go from
-  **1h21m43s to 1h00m01s**, 21m42s or 27% of the wall clock. `make
+  **1h25m27s to 1h01m31s**, 23m56s or 28% of the wall clock. `make
   drift-controls` therefore runs at `DRIFT_JOBS` (default `nproc`) and keeps
   `scripts/obj-drift-control` — the one control that edits the tree and
   rebuilds the compiler — last and serial; that one is unchanged and excluded
