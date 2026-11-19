@@ -389,7 +389,7 @@ isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, 23 opco
 $ grep '^-- code:' mm0/flux1d_certificate.mm0
 -- code: cps=5dfcdfe8…d26d1 obj=ad3340b6…f0224 target=host
   # re-emitted; the statements are byte-identical, only this line moved
-$ make test                    # stops in drift-controls under .#ocaml, see below
+$ make test                    # 2026-11-18: stopped in drift-controls, see below
 --- drift controls: one full gate run each, ~4.5 min per case
   gate: verify-invariants: 145 passed, 9 explained gap(s), 0 failed (exit 0)
 w3-drift-controls: FAIL liquid-golden: Liquid subset extraction matches its pinned golden did not fail
@@ -422,21 +422,33 @@ row). The
 unchanged, which is the intended relation: a lowering change the CLIF layer
 measures moves only the artifact that measures it.
 
-`make test` is not green in `.#ocaml` on this host, and the reason is the shell,
-not this measurement: `drift-controls` runs first and its `liquid-golden` case
-requires the pinned-golden check to turn red, but under `.#ocaml` that check is
-an explained `[gap]` (no why3 extraction), so the mutation has nothing to trip —
-the `default` shell that carries the provers cannot be built on this aarch64
-host (`alt-ergo`, see AGENTS.md). The case now reports itself as
-`[gap] liquid-golden: why3 not on PATH …` and the run says
-`13 case(s) held, 1 not covered in this shell` instead of failing; that leaves
-`make test` honest rather than green-for-the-wrong-reason. The `cert-approved`
-case *did* hold when run alone (a transient `SIGTERM` in the batch run,
-`exit 143`, was not reproducible).
-Everything after `drift-controls` in `make test` — `dune build @runtest` and the
-test-program runner — is therefore **not covered by this re-measurement**; the
-suites were run directly for the L11 work (`dune runtest`, 161 tests) and for the
-bridge (`cargo test --workspace`).
+On 2026-11-18 `make test` was not green in `.#ocaml` on this host, and the reason
+was the shell, not the measurement: `drift-controls` runs first and its
+`liquid-golden` case requires the pinned-golden check to turn red, but under
+`.#ocaml` that check was an explained `[gap]` (no why3 extraction), so the
+mutation had nothing to trip — the `default` shell that carries the provers does
+not build on this aarch64 host (`alt-ergo`, see AGENTS.md), and the case printed
+`[gap] liquid-golden: why3 not on PATH …` with a summary of
+`13 case(s) held, 1 not covered in this shell`. The `cert-approved` case *did*
+hold when run alone (a transient `SIGTERM` in the batch run, `exit 143`, was not
+reproducible).
+
+On 2026-11-19 the whole chain was run once at `0baac723` and held end to end,
+so that shell limitation no longer applies here: `why3` is now on the host
+profile and therefore inside `.#ocaml` (`command -v why3` →
+`/home/leo/.nix-profile/bin/why3`), `liquid-golden` took the full path
+(`[FAIL] Liquid subset extraction matches its pinned golden`, 383s), and the run
+reported `w3-drift-controls: 14 case(s) held in 44m1s with -j 2` (2641s,
+188s per case — the
+runner's own third row in `docs/data/w3/drift-timings.tsv`). `cert-approved`
+held as well (358s, the inherent `147 passed, 16 explained gap(s), 7 failed`
+cascade inside the drifted copy). The five read-only controls named by
+`READ_ONLY_CONTROLS` held in parallel, and `obj-drift-control` held serially
+(cps and obj digests move together, gate output `out=0` both sides). Then
+`dune build @runtest` and `dune runtest` were green under the dev-shell loader
+(`loader: dev-shell loader can load the bridge (LD_LIBRARY_PATH)`), both with
+exit status 0 — replayed at the same commit afterwards to capture the status the
+backgrounded run logged but did not print (`build_rc=0`, `runtest_rc=0`).
 
 The three `[FAIL]`s this work produced before those two re-emits were the
 expected ones — the certificate pinned the CPS and object digests of the *old*

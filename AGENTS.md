@@ -508,7 +508,8 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
   repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
   `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
-  cores suggest, because a gate run does not itself parallelise. The last
+  cores suggest, because a gate run does not itself parallelise; a second
+  `-j 2` run on 2026-11-19 took 44m1s, which is the spread to expect. The last
   `copy` row, `W3: $_stem matches its approved statements`, is
   `w3-approved-row`: it copies the whole approved root into scratch and weakens
   one approved axiom there, so the check runs without the tree holding any new
@@ -520,13 +521,14 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   an explained `[gap]` when the prover is absent, so the drifted copy has no
   `[FAIL]` to produce. The case then prints `[gap] liquid-golden: why3 not on
   PATH …` and the summary reads `13 case(s) held, 1 not covered in this shell`
-  — never a silent pass, which is what lets `make test` run past
-  `drift-controls` under `nix develop .#ocaml` (where the `default` shell that
-  carries why3 does not build).
-  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the seven
-  read-only `*-drift-control` scripts the glob matches (`obj-drift-control` is
-  the eighth and runs alone, because it edits the tree and rebuilds), and
-  `make test` depends on it. The two
+  — never a silent pass. On a host with `why3` on the profile PATH (measured
+  2026-11-19) the case takes the full path instead: the drifted copy really
+  trips `[FAIL] Liquid subset extraction matches its pinned golden` and the
+  whole 14-case run holds inside `nix develop .#ocaml`.
+  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
+  read-only scripts `READ_ONLY_CONTROLS` names, and `obj-drift-control` alone
+  after them because it edits the tree and rebuilds; `make test` depends on it.
+  The two
   parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
   (2026-11-18, before the two L11 controls joined the loop; the ~30% saving is
   the point, not the wall clock). It never
