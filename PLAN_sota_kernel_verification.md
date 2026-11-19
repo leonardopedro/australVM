@@ -408,12 +408,20 @@ The six that remain are the four §W3 approvals and the two `lean`-shell ones. T
 what it printed on 2026-11-18; since 2026-11-19 the same line reads **869**, and
 §W9.2 records why.
 
-The two gate numbers are the same 159 checks: the `lean` shell closes one gap the
-`ocaml` shell cannot (W9.1) and the rest stay explained. The block previously
+**Measured 2026-11-19 at `0baac723`:** the `ocaml` shell reports
+`164 passed, 6 explained gap(s), 0 failed` and the `lean` shell
+`173 passed, 4 explained gap(s), 0 failed`. The two numbers are not the same
+check list: 170 checks in the `ocaml` shell against 177 in `lean`, because the
+toolchain that shell carries runs checks the other cannot. `lean` 4.30.0 is
+available on this host in `.#lean` (`/nix/store/…-lean4-4.30.0/bin/lean`). Under
+`.#lean` exactly four gaps remain, all `[gap]  W3: <stem> has no approved
+statements`, i.e. the approval table and nothing else: `isa`, `slot_layout`,
+`store_projection`, `store_projection_toy`. Under `.#ocaml` the two extra gaps
+are `W9.1: RV64 model not re-converted (needs the lean shell: run make w9)` and
+`W9.3: the Lean witness proofs not checked (lean not on PATH)`, both closed by
+the lean shell rather than by anything in this repository. The block previously
 recorded `150 passed, 4 explained gap(s)`; the four §W3 approvals are still the
-owner's pending decision, and the other four of today's gaps are W5's object
-digest (not comparable in this shell) and the three Liquid golden checks (no
-prover reachable here) — reported as explained gaps, never as passes. Of the
+owner's pending decision. Of the
 figures quoted, only `clif2mm0` moved for a reason worth naming: 853 → 854
 instructions, `bnot` leaving the model when opcode `0x19` became `bxor 1`, then
 854 → 869 when `01972e3b` changed the call/store producers (see §W9.2's table
@@ -455,8 +463,30 @@ separate entry point and was run separately at the same commit:
 `python3 test-programs/runner.py` under `.#ocaml` printed **326 `PASS`, 0
 `FAIL`**, ending in `All tests passed`. Together with `make test` that covers
 the gate, its fourteen controls, the OCaml suites and the compiler fixtures at
-`0baac723`; the Rust bridge's own `cargo test --workspace` was last run for the
-L11 work and is not part of this measurement.
+`0baac723`.
+
+The Rust bridge's suite was measured at the same commit, but not in one
+`cargo test --workspace` invocation: this host's root volume is 128 GB at 100%
+(892 MB free) and linking the whole set of test binaries aborts in `ld` with
+`final link failed: No space left on device` — a dozen statically linked
+binaries at ~200 crates each do not fit beside an 18 GB `target/`. Each target
+was therefore run and its binary deleted before the next, and all held:
+`--lib` 65, `cps_tests` 39 (plus the by-design `#[ignore]`d child
+`arith_trap_child_exit`, which panics with `only meaningful as a child process`
+when run on its own), `modhost_cli` 14, `module_tests` 9, `scalar_abi` 6,
+`tier1_extern_rust` 6, `tidepool_tests` 6, `symbol_sync` 4, `capstd_tests` 4,
+`static_seam` 3, `cell_capture` 3, `federation_tests` 3, `liquid_attest_tests`
+3, and 0 in each of the five bins — **165 passed, 0 failed, 1 ignored**. The
+`tests/ecmascript_module.rs` target is excluded because it requires the
+non-default `ecmascript` feature, so it was not run.
+
+One trap this exposed, unrelated to the measurement: `Cargo.toml` declares
+`unfer_protocol = { path = … }` but upstream's `ab9edf22` did not regenerate
+`Cargo.lock`, so every `cargo` invocation rewrites the lock with that edge
+added. Since `check-bridge-fresh` compares `Cargo.lock` against the release
+`.so`, that rewrite makes `make all`/`make test` refuse to link until
+`make bridge` runs again. The lock was reverted here rather than committed,
+because committing it drags a bridge rebuild and the §W9.2 re-pin behind it.
 
 The three `[FAIL]`s this work produced before those two re-emits were the
 expected ones — the certificate pinned the CPS and object digests of the *old*
