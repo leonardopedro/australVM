@@ -504,6 +504,27 @@ certificate's statements (and therefore `mm0/approved/flux1d_certificate.stmts`)
 are unchanged: only the `-- code:` line moved. That is the intended relation —
 a lowering change is a digest diff, not a re-approval.
 
+A second re-pin was needed the same day, and for a reason the first could not
+see. The gate compiles the kernel with `LD_LIBRARY_PATH=$PWD` and therefore
+loads the *copy* of `libaustral_cranelift_bridge.so` at the repository root,
+while `make bridge` writes `safestos/cranelift/target/release/`; the root copy
+was five hours older than the artifact `check-bridge-fresh` guards, so
+`W5 (checked)` had been comparing a digest taken through an old bridge against a
+pin taken through the same old bridge. `scripts/obj-drift-control` is what made
+that visible: it compiles the kernel itself, and printed
+`before: cps=5f5040ea… obj=fac893da…` — a `cps` digest that matched the
+certificate and an `obj` digest that did not. Copying the release artifact over
+the root copy and re-emitting with `--obj fac893da…` (statements byte-identical,
+only the `-- code:` line moved) puts the gate back to
+`[pass] W5 (checked): the certificate's obj digest is the bridge's digest of the
+emitted object (aarch64)` with `164 passed, 6 explained gap(s), 0 failed`. The
+control held at that tree: the reverse-order serializer moved
+`obj=fac893da…→f0f80ace…` while the program's output and exit status were
+identical, `verify-invariants` failed on exactly that W5 line, and the restored
+emitter returned both digests ([transcript](docs/data/gate/2026-11-19-obj-drift-control.log)).
+The lesson is `check-bridge-fresh`'s one copy further out: a stale `.so` at the
+root does not fail, it measures.
+
 ---
 
 ## §4 Workstreams

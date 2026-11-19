@@ -1,0 +1,4 @@
+before: cps=5f5040ea3b61… obj=fac893dab243cd2df4b10812e305c6a9c3ca2aef076541131b086fa6c778e1df out=0
+after:  cps=39cbd41a628a… obj=f0f80ace1802114250d761d85943138fa5ba51e7ef60d105c41d822af2f48e4c out=0
+gate:   [FAIL] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (aarch64)
+obj-drift-control: held — a semantics-preserving edit moved obj=fac893dab243cd2df4b10812e305c6a9c3ca2aef076541131b086fa6c778e1df…→f0f80ace1802114250d761d85943138fa5ba51e7ef60d105c41d822af2f48e4c…, the gate refused it, and the pinned digests returned

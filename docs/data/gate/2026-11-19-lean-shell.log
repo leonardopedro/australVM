@@ -1,3 +1,4 @@
+warning: Git tree '/home/leo/Projects/australVM' is dirty
 [pass] S29: UNFER_SYMBOLS table present
 [pass] S29: UNFER_SYMBOLS registers into the Cranelift JIT
 [pass] S29: per-module CPS compile consumes the same census
