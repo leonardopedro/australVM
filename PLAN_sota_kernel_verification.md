@@ -1057,10 +1057,10 @@ the artifact, so `mm0-c` checks them too.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 213 `check` statements,
-  128 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 222 `check` statements,
+  135 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 22 of those 128 have a measured perturbed-tree
+  number, not a different claim. 22 of those 135 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
   neither: no check in the gate is unread now, and there are no `copy` rows —
@@ -1114,6 +1114,13 @@ the artifact, so `mm0-c` checks them too.
   | `L11c: the split pilot has its own test suite` | none | greps `test/dune` for a suite name |
   | `L11c: the split pilot has an end-to-end suite` | none | a directory's existence |
   | `L11c: the split pilot's facts are checked to erase` | none | greps a test file for a case name |
+  | `L11a: the ordering pin has a negative control` | none | asserts a control script is executable |
+  | `L11a: the ordering control moves the copy through the gate's own hook` | none | greps a script and this gate for the hook's variable name |
+  | `L11b: the conversion pin has a negative control` | none | asserts a control script is executable |
+  | `L11b: the conversion control mutates the rule LiquidIndex declares` | none | greps one source line and the script that rewrites it |
+  | `L11b: the conversion control re-checks the tree after restoring` | none | greps a script for its restore step |
+  | `PC02: word.mm0 + word.mm1 accepted, clamp bounds and map laws proved` | tool | needs `mm0-rs` + `mm0-c` |
+  | `PC02: flipping clamp_upper's conclusion is refused` | control | flips a conclusion in a scratch `.mm1` every run and requires the refusal |
   | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
   | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |
   | `Liquid golden vc-fold-premises.mlw proves in full under z3` | tool | needs `why3` + `z3` |
