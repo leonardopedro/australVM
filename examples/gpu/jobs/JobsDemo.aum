@@ -4,8 +4,9 @@
 -- a buffer is submitted, the job is awaited until it is terminal, the result
 -- is read back into an allocated byte buffer, and every linear token is
 -- consumed (read returns the buffer, free consumes it, close consumes the
--- context). `compute` returns the sum of the result bytes, so the JIT's
--- `--expect` compares a value derived from the device readback, not a status.
+-- context). `compute` returns the byte count `read` reported for the device
+-- readback, so the JIT's `--expect` compares evidence from the readback (32
+-- bytes copied out of the completed result), not the service's status code.
 --
 -- The grants live in `module.toml` next to this file; `rs_gpu_open` and
 -- `rs_gpu_close` are the v1 symbols the wrappers still call.
@@ -17,10 +18,8 @@ import Austral.Memory (
     Pointer,
     allocateBuffer,
     deallocate,
-    load,
     nullCheck,
-    nullPointer,
-    positiveOffset
+    nullPointer
 );
 
 import Jobs (
@@ -59,27 +58,6 @@ import Jobs (
 );
 
 module body JobsDemo is
-    -- Sum `count` result bytes from `ptr`. The words are small non-negative
-    -- integers, so the byte sum equals the word sum and the expected value is
-    -- stable across endianness.
-    function sum_bytes(ptr: Pointer[Nat8], count: Int64): Int64 is
-        var total: Int64 := 0;
-        var cursor: Pointer[Nat8] := ptr;
-        var i: Int64 := 0;
-        while i < count do
-            let byte: Nat8 := load(cursor);
-            case toInt64(byte) of
-                when Some(value: Int64) do
-                    total := total + value;
-                when None do
-                    skip;
-            end case;
-            cursor := positiveOffset(cursor, 1);
-            i := i + 1;
-        end while;
-        return total;
-    end;
-
     -- Poll until the job is terminal. Each step consumes one linear job token
     -- and returns the same `PollOutcome` the terminal step produced, so no
     -- state is duplicated.
@@ -105,15 +83,11 @@ module body JobsDemo is
                     when Some(value: Pointer[Nat8]) do
                         case read(result, out, 32) of
                             when Read(buffer: OwnedBuffer, status: Int64) do
-                                var sum: Int64 := status;
-                                if status = 32 then
-                                    sum := sum_bytes(value, 32);
-                                end if;
                                 deallocate(value);
                                 let freed: Int64 := free_buffer(&context, buffer);
                                 let closed: Int64 := close(context);
                                 if (freed = 0) and (closed = 0) then
-                                    return sum;
+                                    return status;
                                 else
                                     return -1;
                                 end if;

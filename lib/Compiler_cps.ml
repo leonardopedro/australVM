@@ -333,6 +333,20 @@ let local_type (q: qident): mono_ty =
   | Some ty -> ty
   | None -> MonoUnit
 
+(* The byte size of a type, for `sizeof`. Only the scalar and pointer types
+   have a width the JIT model knows; anything else keeps the old placeholder
+   of 0 rather than inventing a layout the runtime does not implement. *)
+let size_of_mono_ty (ty: mono_ty): int =
+  match ty with
+  | MonoUnit | MonoRegionTy _ | MonoRegionTyVar _ -> 0
+  | MonoBoolean | MonoInteger (_, Width8) -> 1
+  | MonoInteger (_, Width16) -> 2
+  | MonoInteger (_, Width32) | MonoSingleFloat -> 4
+  | MonoInteger (_, (Width64 | WidthByteSize | WidthIndex))
+  | MonoDoubleFloat | MonoPointer _ | MonoAddress _ -> 8
+  | MonoNamedType _ | MonoReadRef _ | MonoWriteRef _ | MonoSpan _
+  | MonoSpanMut _ | MonoFnPtr _ -> 0
+
 let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   match expr with
   | Mt.MNilConstant -> IntLit 0L
@@ -352,7 +366,11 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       if ends_with name ":ExitSuccess" || ends_with name ".ExitSuccess" || name = "ExitSuccess" then
         App ("au_exit", [IntLit 0L])
       else
-        Var name
+        (* A module-level `constant` is compiled to a zero-argument function
+           under its unqualified name (see `Mt.MConstant` below), and the JIT
+           has no global variables, so a reference is a call. A qualified
+           `Var` could never resolve: `0x02` reads a local slot. *)
+        App (ident_string (original_name q), [])
   | Mt.MParamVar (id, _) -> Var (ident_string id)
   | Mt.MLocalVar (id, _) -> Var (ident_string id)
   | Mt.MTemporary (id, _) -> Var (ident_string id)
@@ -462,6 +480,12 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
        | "$1.size", [a] -> App ("__slot_get", [a; IntLit 8L])
        | "NULL", [] -> IntLit 0L
        | "$1", [a] -> a
+       (* The memory intrinsics the linear buffer wrappers use. Both are real
+          runtime symbols; lowering them as calls keeps the `au_calloc`
+          zeroing and the `au_free` null check rather than re-implementing
+          them in the lowering. *)
+       | "au_calloc($1, $2)", [elem; count] -> App ("au_calloc", [elem; count])
+       | "au_free($1)", [a] -> App ("au_free", [a])
        | _ -> App ("__embed", cargs))
   | Mt.MDeref e ->
       (* The load has its own opcode (0x20), and the JIT decodes it as a load
@@ -470,7 +494,7 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
          is what lets `scripts/isa-census` see memory traffic at all. *)
       Deref (convert_expr e)
   | Mt.MTypecast (e, _) -> convert_expr e
-  | Mt.MSizeOf _ -> IntLit 0L
+  | Mt.MSizeOf ty -> IntLit (Int64.of_int (size_of_mono_ty ty))
   | Mt.MSlotAccessor (e, name, _) -> 
       let recty = get_expr_type e in
       let offset = match recty with
@@ -623,8 +647,21 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       let inc = Assign (var_name, Add (Var var_name, IntLit 1L)) in
       let loop_body = Block (convert_stmt body, inc) in
       Block (init_let, While (cond, loop_body))
-  | Mt.MBorrow { rename; body; _ } ->
-      Let (ident_string rename, IntLit 0L, convert_stmt body)
+  | Mt.MBorrow { original; rename; orig_type; body; _ } ->
+      (* The JIT represents a record (or union) value, and a reference, as a
+         pointer, so borrowing one is an alias of that value, not an address it
+         cannot take: `&context` and `context->field` are the same pointer. The
+         old lowering emitted the constant 0 here, which made every
+         `record->field` read through a borrow dereference null. Scalar borrows
+         still have no cell to point at, so they keep the 0 placeholder rather
+         than inventing aliasing semantics the model does not implement. *)
+      let reference =
+        match orig_type with
+        | MonoNamedType _ | MonoReadRef _ | MonoWriteRef _ | MonoAddress _
+        | MonoPointer _ -> Var (ident_string original)
+        | _ -> IntLit 0L
+      in
+      Let (ident_string rename, reference, convert_stmt body)
   | Mt.MBlock (s1, s2) ->
       Block (convert_stmt s1, convert_stmt s2)
   | Mt.MDiscarding expr ->

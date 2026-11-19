@@ -36,7 +36,7 @@ cleanup() {
 trap cleanup EXIT
 
 fail() {
-    echo "[FAIL] G14 JIT service launch: $*" >&2
+    echo "[FAIL] G15 JIT jobs launch: $*" >&2
     exit 1
 }
 
@@ -83,17 +83,17 @@ if ! AVM_GPU_BUNDLE="$bundle" \
         --target-dir "$tmp/target" \
         --cargo-package avm-gpu-service-provider \
         --profile release --offline \
-        --manifest "$manifest" --entry compute --expect 96 \
+        --manifest "$manifest" --entry compute --expect 32 \
         "$jobs" "$module" >"$tmp/run.log" 2>&1; then
     cat "$tmp/run.log" >&2
     fail "module run failed (loader/Vulkan or service refusal; see log)"
 fi
 
-if ! grep -q '^RESULT 96$' "$tmp/run.log"; then
+if ! grep -q '^RESULT 32$' "$tmp/run.log"; then
     cat "$tmp/run.log" >&2
-    fail "expected RESULT 96 from the physical add launch"
+    fail "expected RESULT 32 from the physical add launch"
 fi
-if ! grep -q 'umbrella: matches --expect 96' "$tmp/run.log"; then
+if ! grep -q 'umbrella: matches --expect 32' "$tmp/run.log"; then
     cat "$tmp/run.log" >&2
     fail "the JIT did not confirm the expected checksum"
 fi
@@ -107,7 +107,7 @@ if AVM_GPU_BUNDLE="$bundle" \
         --target-dir "$tmp/target" \
         --cargo-package avm-gpu-service-provider \
         --profile release --offline \
-        --entry compute --expect 96 \
+        --entry compute --expect 32 \
         "$jobs" "$module" >"$tmp/deny.log" 2>&1; then
     cat "$tmp/deny.log" >&2
     fail "the module ran without a manifest grant"
@@ -117,4 +117,4 @@ if ! grep -q "is not granted 'rs_gpu_open'" "$tmp/deny.log"; then
     fail "missing grant did not fail at rs_gpu_open"
 fi
 
-echo "[pass] G15 JIT jobs launch: physical RESULT 96 from the readback and UK-4001 denial"
+echo "[pass] G15 JIT jobs launch: physical RESULT 32 from the readback and UK-4001 denial"

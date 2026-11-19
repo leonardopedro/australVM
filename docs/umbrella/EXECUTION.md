@@ -652,19 +652,32 @@ an op still on the integer path is a different number; `test/JitTest.ml` pins
 each op separately (`f64_add`/`f64_subtract`/`f64_multiply`/`f64_divide`, 14
 cases in the suite).
 
-**Float32 arithmetic is the same op, widened.** The bridge keeps no f32
-primitives: a Float32 word is narrowed (f32 bits zero-extended), so the lowering
-emits `au_f32_to_f64` on both operands, the matching `au_f64_*` op, then
-`au_f64_to_f32` — three ordinary grant-free `au_` calls in one expression, the
-shape `App` already nests elsewhere. The widen masks to the low 32 bits instead
-of trusting the upper half, and the narrow rounds to nearest-even like C, so a
-stray high bit cannot be read as part of the value and the result is the word
-the adapter ABI expects. `AdapterLive.aum` now computes
-`(((2.5 + 1.5) * 4.0) - 2.0) / 2.0` in the Float32 leg and accepts only
-`7.0` = `0x40E00000`, so computing on the f32 words as integers or skipping the
-narrow is a different number; `test/JitTest.ml` builds the same chain by hand in
-four `f32_*` cases (18 in the suite), so an unregistered conversion is an
-unresolved symbol there rather than only a failure in the live lane.
+**Float32 arithmetic is not carried, and the reason is in the typechecker.**
+The bridge already keeps both conversions (`au_f32_to_f64`, `au_f64_to_f32`) and
+`test/JitTest.ml` exercises the whole shape by hand in four `f32_*` cases (18 in
+the suite): widen both words, run the matching `au_f64_*` op, narrow back, so
+`(((2.5 + 1.5) * 4.0) - 2.0) / 2.0` reads back `7.0` = `0x40E00000`. A
+prototype of the source-level half was verified end-to-end (`adapter live`
+lane, exit 0, that number accepted) and then reverted: `Float32` has no
+`TrappingArithmetic` instance — `The typeclass TrappingArithmetic has no instance
+which matches for Float32` — and the typechecker refuses the program before
+lowering, so the lowering alone changes nothing.
+
+Adding the instance is a two-line change to `lib/builtin/Pervasive.aui`/`.aum`
+(`concat_builtins.py` embeds them into the generated, git-ignored
+`lib/BuiltInModules.ml`), and that is where the cost is: every Austral
+declaration there consumes ids from the *global* declaration/temp counter, which
+the builtin module increments before any user module, so one `instance` line
+renames every LiquidVC goal (`LiquidConstraints.goal_name` hashes the declaration
+id) and every temporary in the compiled output. Measured on this tree, that one
+line moved five LiquidVC goldens, `mm0/clif.mm0`'s use counts, both memsafe
+ledgers and certificates, the flux1d certificate's `cps=`/`obj=` binding (and its
+`arch`), and the `-- cites:` digests in `mm0/isa.mm0` and
+`mm0/store_projection.mm0` that quote those artifacts — and from there the plan's
+`§W3` digest rows and the toy-Lean pin. Each is regenerable, but they are
+owner-committed trust artifacts, so re-pinning them belongs in its own change
+(the alternative is making goal names and certificates independent of builtin
+declaration order first).
 
 **Still not carried:**
 Float **comparisons** are unchanged for both widths:

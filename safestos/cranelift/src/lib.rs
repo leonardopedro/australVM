@@ -164,6 +164,22 @@ pub extern "C" fn au_alloc(size: i64) -> *mut u8 {
     unsafe { libc::malloc(size as usize) as *mut u8 }
 }
 
+/// `au_calloc(element_size, count)` — the target of the `allocateBuffer`
+/// intrinsic (`@embed(…, "au_calloc($1, $2)", sizeof(T), count)`). Zeroed, and
+/// a zero or overflowing size yields null, which `nullCheck` reports rather
+/// than an allocation the caller would go on to write through.
+#[no_mangle]
+pub extern "C" fn au_calloc(elem_size: i64, count: i64) -> *mut u8 {
+    if elem_size <= 0 || count <= 0 {
+        return std::ptr::null_mut();
+    }
+    let total = match elem_size.checked_mul(count) {
+        Some(total) if total > 0 => total,
+        _ => return std::ptr::null_mut(),
+    };
+    unsafe { libc::calloc(1, total as usize) as *mut u8 }
+}
+
 #[no_mangle]
 pub extern "C" fn au_free(ptr: *mut u8) {
     if !ptr.is_null() {
@@ -415,6 +431,7 @@ pub extern "C" fn cranelift_init() -> i64 {
             builder.symbol("au_print_int", au_print_int as *const u8);
             builder.symbol("au_exit", au_exit as *const u8);
             builder.symbol("au_alloc", au_alloc as *const u8);
+            builder.symbol("au_calloc", au_calloc as *const u8);
             builder.symbol("au_free", au_free as *const u8);
 
             // Register CPS-level intrinsics (handled inline in cps.rs, but

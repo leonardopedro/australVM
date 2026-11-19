@@ -28,11 +28,6 @@
 -- in either place would arrive with bits above 31 set and the wrapper would
 -- refuse it, so neither number can be produced by an unnarrowed word.
 --
--- Float32 arithmetic has no bridge primitive of its own: the CPS lowering emits
--- `au_f32_to_f64` on both operands, the same `au_f64_*` op, then
--- `au_f64_to_f32`, so `(((2.5 + 1.5) * 4.0) - 2.0) / 2.0` must read back as
--- 7.0 = 0x40E00000 = 1088421888. Computing on the f32 words as integers, or
--- skipping the narrow, gives a different word.
 pragma Unsafe_Module;
 
 module body AdapterLive is
@@ -77,17 +72,11 @@ module body AdapterLive is
             if rs_toggle(false) then
                 if literal_bits = 1069547520 then
                     if scaled32_bits = 1075838976 then
-                        let f32_arithmetic: Float32 := (((factor + 1.5) * 4.0) - 2.0) / 2.0;
-                        let f32_arithmetic_bits: Int64 := rs_f32_bits(f32_arithmetic);
-                        if f32_arithmetic_bits = 1088421888 then
-                            let scaled: Float64 := rs_scale(2.5, 4);
-                            let arithmetic: Float64 := (((scaled + 2.5) - 0.5) * 2.0) / 4.0;
-                            let bits: Int64 := rs_bits(arithmetic);
-                            if bits = 4618441417868443648 then
-                                return bits;
-                            else
-                                return 0;
-                            end if;
+                        let scaled: Float64 := rs_scale(2.5, 4);
+                        let arithmetic: Float64 := (((scaled + 2.5) - 0.5) * 2.0) / 4.0;
+                        let bits: Int64 := rs_bits(arithmetic);
+                        if bits = 4618441417868443648 then
+                            return bits;
                         else
                             return 0;
                         end if;
