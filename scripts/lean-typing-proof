@@ -335,6 +335,16 @@ class EncBuf:
         self._flush()
         return "".join(self.chunks)
 
+    def take_parts(self) -> list[str]:
+        """The chunks, unjoined: the term as pieces, never as one string.
+
+        `take` holds the chunks and the joined result at once, so a 1.94 GB
+        term costs ~3.9 GB for the duration of the join; that allocation, not
+        the wrap, was the row's 4 032 MiB floor (§13.44).
+        """
+        self._flush()
+        return self.chunks
+
 
 # One top-level encode (`write`, `digest`, `head`, `enc`) expands a shared
 # subtree once per *path*: a 2.2 GB text is 67.5 M tokens over a few million
@@ -407,6 +417,19 @@ class Enc:
         finally:
             if outer:
                 self._rec = None
+
+    def enc_parts(self, eid: int) -> list[str]:
+        """`eid`'s encoding as its chunks — the bytes `enc` returns, unjoined.
+
+        Same text, same order: a caller that only concatenates or compares the
+        result (`_put`, `_spool_eq`) takes this instead of paying for the join.
+        """
+        s = self._memo.get(eid)
+        if s is not None:
+            return [s]
+        buf = EncBuf()
+        self._top(eid, buf)
+        return buf.take_parts()
 
     def write(self, eid: int, sink) -> int:
         """Append `eid`'s encoding to `sink`, returning its size in bytes.
@@ -1252,6 +1275,10 @@ def _put(fh, piece) -> None:
     if isinstance(piece, Path):
         with piece.open("r") as sp:
             shutil.copyfileobj(sp, fh, 1 << 20)
+    elif isinstance(piece, (list, tuple)):
+        # An unjoined encoding (`Enc.enc_parts`): written chunk by chunk.
+        for p in piece:
+            _put(fh, p)
     else:
         fh.write(piece)
 
@@ -1276,6 +1303,9 @@ def _pieces(parts, chunk: int = 1 << 20):
                     if not block:
                         break
                     yield block
+        elif isinstance(p, (list, tuple)):
+            # An unjoined encoding (`Enc.enc_parts`), chunk by chunk.
+            yield from _pieces(p, chunk)
         else:
             for i in range(0, len(p), chunk):
                 yield p[i:i + chunk]
@@ -1365,7 +1395,9 @@ def main() -> int:
         binder_ty_eids.append(bte)
         binders.append(enc.enc(bte))
         cur = ex.exprs[cur]["forallE"]["body"]
-    body_ty = enc.enc(cur)
+    # Pieces, not a string: the body type of this row is 1.94 GB, and joining it
+    # here is the allocation that set the row's cap floor (§13.44, §13.45).
+    body_ty = enc.enc_parts(cur)
 
 # A value may abstract over more binders than its type's Π spine shows: the
     # extra λs sit under a type that unfolds to a Π, and `Deriver.check` pays a
@@ -1462,7 +1494,11 @@ def main() -> int:
         const_axioms, subst_obligations = len(d.const_ax), len(d.beta_ax)
         d_oblig = d.oblig_tree
     else:
-        axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
+        # Open judgment: the axiom needs one line, so the pieces are joined here
+        # and only here — this path is never the closed goal statement.
+        axioms.append(
+            f"axiom ax_body: $ tty {inner_ctx} {body} {''.join(body_ty)} $;"
+        )
         _step_add(steps_hist, steps_order, "assume body typing")
         base_proof = "ax_body"
         const_axioms, subst_obligations = 0, 0
@@ -1514,9 +1550,10 @@ def main() -> int:
             # which is on disk: comparing it there costs nothing.
             if not _spool_eq(ty_path, (prefix, body_ty, closing)):
                 keep = max(0, 200 - len(prefix))
+                head = next(_pieces(body_ty), "") if keep else ""
                 raise SystemExit(
                     "derived type is not the declared type:\n"
-                    f"  derived  {prefix + body_ty[:keep]}"
+                    f"  derived  {prefix + head[:keep]}"
                     f"\n  declared {_spool_head(ty_path, 200)}"
                 )
         # The body type is dead from here: the goal is the spool on disk.
