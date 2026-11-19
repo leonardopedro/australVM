@@ -1,0 +1,28 @@
+-- G17a: one compile-time bounded `for` loop per entry, over one private
+-- accumulator. The endpoint is inclusive (`from 0 to K` runs K+1 times), as
+-- the language specification and the C renderer state, so `upToZero` performs
+-- one update and `upTo31` performs 32. The loop index is deliberately unused:
+-- the admitted body is a single assignment to the accumulator.
+module body Fold is
+    function upToZero(x: Nat32): Nat32 is
+        var acc: Nat32 := 0;
+        for i from 0 to 0 do
+            acc := modularAdd(acc, x);
+        end for;
+        return acc;
+    end;
+
+    function upTo31(x: Nat32): Nat32 is
+        var acc: Nat32 := 0;
+        for i from 0 to 31 do
+            acc := modularAdd(acc, x);
+        end for;
+        return acc;
+    end;
+
+    function main(): ExitCode is
+        printLn(upToZero(7));
+        printLn(upTo31(7));
+        return ExitSuccess();
+    end;
+end module body.

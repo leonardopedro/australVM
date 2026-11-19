@@ -1,0 +1,5 @@
+module Fold is
+    function upToZero(x: Nat32): Nat32;
+    function upTo31(x: Nat32): Nat32;
+    function main(): ExitCode;
+end module.
