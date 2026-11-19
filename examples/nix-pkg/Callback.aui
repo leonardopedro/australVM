@@ -1,0 +1,6 @@
+module Callback is
+    -- The owner cell exports both: `tick` is what the provider calls back
+    -- into, `main` is the image entrypoint.
+    function tick(x: Int64): Int64;
+    function main(): Int64;
+end module.

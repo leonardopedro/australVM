@@ -1,0 +1,3 @@
+module Wave is
+    function compute(x: Int64): Int64;
+end module.
