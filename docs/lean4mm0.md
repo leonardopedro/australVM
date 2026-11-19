@@ -3824,7 +3824,8 @@ ended by naming the remaining cost: "`lhs`/`rhs` could reference the table too i
 stream format changed". Measured before changing anything, those two keys on FockPair
 are **199 673 205 B + 84 357 010 B of a 294 407 782 B stream (96.5 %)** — the node
 table is 3.5 % of the format that was built to avoid repetition. On the ns row, whose
-shared stream is 90 676 132 250 B, that is the difference between 90.7 GB and ~3.2 GB.
+shared stream is 90 676 132 250 B, that is the difference between 90.7 GB and ~3.2 GB
+(measured in §13.42: 9 154 545 B — the FockPair ratio does not transfer).
 
 **1. What a shared record carries now.** Nothing is lost, because `lhs` was never a
 third term: the record's `lhs` is `(tsubst b x)` and its `rhs` is the encoding of node
@@ -3902,3 +3903,91 @@ The row's artifacts were verified before the space was reclaimed: `.mm0` (and th
 205 GB of shared parts) were `cmp`'d against the 10 GiB run's copies, then deleted,
 leaving the logs, `rss.tsv`, manifest and index (9.7 GB of ZFS-compressed parts
 included in `du`; the stream is 90.7 GB before compression).
+
+> Superseded by §13.42. "No cushion" turned out to be exactly right, and the
+> conclusion wrong: the 6 068 MiB peak *was* the goal-type wrap's three-string
+> allocation, not the row's requirement. A retry of this same run died there with
+> `MemoryError`, and with that allocation removed the row peaks at 4 895 MiB.
+
+### 13.42 The same row, twice failed and then measured: 2 291 s, peak 4 895 MiB
+
+§13.41 left the row at 6 068 MiB with 76 MiB to spare, and called that a floor. It
+was not a floor; it was a coincidence, and the next two attempts at a 6 GiB run are
+what showed it. Both failures are recorded here because the second one is the more
+useful of the two: it fails **after all of the work is done**.
+
+**1. The one that was not the run's fault.** The first retry died at 09:13:58 with no
+Python exception and no output file, because the kernel killed it:
+
+    oom-kill:constraint=CONSTRAINT_NONE,...,global_oom,... task=python3,pid=1639590
+    Out of memory: Killed process 1639590 (python3) total-vm:3052520kB,
+      anon-rss:3017332kB, ... oom_score_adj:200
+
+`global_oom`, not a cgroup limit, and the victim was 3.0 GB into a 6 GiB cap — half
+the allowance it had been given. A `ulimit -v` bounds a process; it reserves nothing.
+The host had 30 GB and the desktop session had the rest (the oom report's process
+table is too truncated in the journal to attribute it reliably, so no per-process
+figure is claimed here), and the kernel picked the largest `oom_score_adj:200` task.
+Nothing about the emitter changed for this one; the run simply cannot be trusted to
+complete while other work is resident, which is why the measurement below ran on a
+quiet host.
+
+**2. The one that was.** The next retry stayed up and ran ~5 000 s, wrote all **580 of
+580** obligations, and then raised `MemoryError` at the goal-type wrap — exit 1, no
+`.mm0`, no `.mm1`. The site was the per-binder f-string loop:
+
+```python
+for k in range(len(binders)):
+    ty = f"(tpi {binders[k]} {ty})"      # line 1477: new string + old string + its encoding
+```
+
+Each step builds a new ~1.94 GB string while the previous one and its encode buffer
+are still alive, so the wrap asks for about three times the term (~5.8 GB) in one
+allocation, on top of the ~2.3 GiB plateau. §13.41's 6 068 MiB peak is exactly this
+construct seen from outside — it fit by 76 MiB, which is a measurement of luck, not of
+requirement. The fix is one allocation instead of *n*:
+
+```python
+prefix = "".join(f"(tpi {b} " for b in binders)
+ty = "".join((prefix, body_ty, ")" * len(binders)))
+del ty                                        # before the tuple below is built
+```
+
+**3. The rerun, measured.** Same target, same environment, same 6 GiB cap, quiet host,
+sampled every second:
+
+| | |
+| --- | ---: |
+| exit | 0 |
+| elapsed | **2 290.3 s** (wall 2 290 s) |
+| peak VmSize | **4 895 MiB** (at t = 2 133 s, 157 s before the end) |
+| peak VmRSS | 4 870 MiB |
+| headroom under the cap | **1 249 MiB** |
+| obligations / parts / shared stream | 580 / **1** / **9 154 545 B** |
+| naming sidecar | 10 968 B |
+| `.mm0` / `.mm1` | 102 543 367 789 / 102 547 674 107 B, both `cmp` identical to §13.41's |
+
+The peak still lands on the goal statement, as §13.41 said — the wrap is genuinely the
+row's largest single term — but 1.2 GiB lower. What remains is one bounded string of
+~1.94 GB plus its encoding, which is the floor now; getting below it means making the
+goal statement itself streamable, the §13.36 problem one step later in the pipeline.
+
+**4. Three numbers from earlier sections that this changes.**
+
+- §13.40 projected the ns shared stream at ~3.2 GB from FockPair's 96.5 %; measured,
+  it is **9 154 545 B**, a ratio of 1 : 9 905 against the 90.7 GB expanded stream
+  rather than 1 : 98. The projection was wrong because the ratio does not transfer: ns
+  is 580 records of very large terms, so its texts are ~156 MB per record and the node
+  indices are a rounding error, where FockPair's stream is already dominated by the
+  table. §13.39's goldens guard the format, not the ratio.
+- §13.41's "6 GiB is the measured floor, and it is a floor with no cushion" held for
+  the build it measured, not for the row: with the wrap fixed the same run needs
+  4 895 MiB, and 6 GiB now has 1.2 GiB of cushion — though it is still a single-term
+  peak, so it is a wall, not a slope.
+- The elapsed time is not a speedup claim. The two runs differ in the stream they
+  write — 90.7 GB then, 9.15 MB now — and nothing else; the `.mm0` and `.mm1` they
+  emit are byte-identical. The 3 102 s difference is what writing 90.7 GB of
+  certificate costs; it says nothing about the emitter's own work.
+
+With this the shared format is measured end to end on the row it was built for: one
+part instead of 43, 9 MB instead of 90.7 GB, no OOM and no `MemoryError`.
