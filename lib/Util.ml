@@ -115,6 +115,46 @@ let search_replace (r: replacement): string =
 let remove_leading (s: string) (n: int): string =
   String.sub s n ((String.length s) - n)
 
+let max_u64_decimal = "18446744073709551615"
+
+let int_literal_word (s: string): int64 =
+  let n = String.length s in
+  let neg = n > 0 && s.[0] = '-' in
+  let body =
+    if n > 0 && (s.[0] = '-' || s.[0] = '+') then String.sub s 1 (n - 1) else s
+  in
+  let decimal =
+    String.length body > 0
+    && String.for_all (fun c -> c >= '0' && c <= '9') body
+  in
+  if neg || not decimal then
+    Int64.of_string s
+  else begin
+    let first_nonzero =
+      let rec go i =
+        if i >= String.length body then String.length body - 1
+        else if body.[i] = '0' then go (i + 1)
+        else i
+      in
+      go 0
+    in
+    let digits =
+      String.sub body first_nonzero (String.length body - first_nonzero)
+    in
+    if String.length digits > String.length max_u64_decimal
+       || (String.length digits = String.length max_u64_decimal
+           && String.compare digits max_u64_decimal > 0)
+    then
+      failwith
+        (Printf.sprintf
+           "%s is outside the 64-bit unsigned range of an Austral integer \
+            literal" s);
+    String.fold_left
+      (fun acc c ->
+        Int64.add (Int64.mul acc 10L) (Int64.of_int (Char.code c - Char.code '0')))
+      0L digits
+  end
+
 let parse_hex (s: string): int =
   int_of_string ("0x" ^ s)
 

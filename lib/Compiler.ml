@@ -50,6 +50,14 @@ let emit_cps_path = ref (None: string option)
 (* U11: the adapter descriptors the CPS lowering requires, in the canonical
    text form `umbrella/src/interface.rs` parses. *)
 let emit_adapters_path = ref (None: string option)
+(* A failed CPS JIT compile cannot run: the module's calls would be aborted at
+   invocation. Raised out of the CPS branch so the catch-all below (which falls
+   back to the C backend and is meant for lowering that cannot be attempted at
+   all) does not turn it into a warning and a successful exit — a build that
+   says "Compilation error" and then exits 0 is the false pass this exists to
+   remove. *)
+exception Jit_compile_failed of string
+
 (* avm-pkg (PLAN_avm_pkg.md): package-module totality gate + derivation
    JSON export. Both are opt-in per invocation — `--pkg-totality` and
    `--emit-derivations <path>` — so ordinary compilation is untouched. *)
@@ -246,7 +254,18 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
                 (* Compile binary — always compiles all functions into JIT module *)
                 let (_fn_ptr, jit_err) = CamlCompiler_rust_bridge.compile_binary binary in
                 (match jit_err with
-                 | Some msg -> Printf.eprintf "CPS JIT: Compilation error: %s\n%!" msg
+                 | Some msg ->
+                    Printf.eprintf "CPS JIT: Compilation error: %s\n%!" msg;
+                    (* `CPS_JIT_ADVISORY=1` marks a caller that wants the CPS
+                       artifact and compiles it itself, loading whatever the
+                       front-end's process cannot see yet (the umbrella builds
+                       the adapter wrappers *after* this run and compiles the
+                       emitted CPS against them). Every other caller gets a
+                       hard error: a module whose JIT compile failed cannot
+                       run, and printing "Compilation error" while exiting 0
+                       is exactly the false pass this refuses. *)
+                    if Sys.getenv_opt "CPS_JIT_ADVISORY" = None then
+                      raise (Jit_compile_failed msg)
                  | None -> ());
 
                 (* Save all compiled function pointers for re-lookup *)
@@ -270,7 +289,21 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
                 let code: string = (compiler_code c) ^ "\n" ^ unit_code in
                 Compiler (env, code)
               end
-            with exn ->
+            with
+            | Jit_compile_failed msg ->
+               austral_raise GenericError [
+                 ErrorText.Text "The CPS JIT could not compile this module, so none \
+                                 of its functions can run: ";
+                 ErrorText.Text msg;
+                 ErrorText.Break;
+                 ErrorText.Text "No C output was written for this module. An \
+                                 unresolved symbol means it is not in the JIT's \
+                                 symbol table: an `rs_*` import needs the generated \
+                                 adapter wrapper loaded first, a `uk_*`/`uz_*` call \
+                                 needs the kernel registered in the bridge build, \
+                                 and `au_*` names are the bridge's own primitives."
+               ]
+            | exn ->
               Printf.eprintf "CPS JIT: Unhandled exception (%s) — falling back to C\n%!"
                 (Printexc.to_string exn);
               let unit: c_unit = gen_module env mono in

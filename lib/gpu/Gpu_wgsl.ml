@@ -11,7 +11,10 @@
    (G07); this module only produces the exact bytes.
 *)
 
-let type_string = function Gpu_ir.TyU32 -> "u32" | Gpu_ir.TyBool -> "bool"
+let type_string = function
+  | Gpu_ir.TyU32 -> "u32"
+  | Gpu_ir.TyBool -> "bool"
+  | Gpu_ir.TyF32 -> "f32"
 
 let intrinsic_string = function
   | Gpu_ir.Add -> "+"
@@ -21,6 +24,18 @@ let intrinsic_string = function
   | Gpu_ir.BitwiseOr -> "|"
   | Gpu_ir.BitwiseXor -> "^"
   | Gpu_ir.BitwiseNot -> "~"
+  (* IEEE-754 binary32 add/sub/mul. No fma() is emitted: the profile forbids
+     contraction, so each operation rounds once in the order written. *)
+  | Gpu_ir.F32Add -> "+"
+  | Gpu_ir.F32Subtract -> "-"
+  | Gpu_ir.F32Multiply -> "*"
+
+let element_string = function
+  | Gpu_ir.ElementU32 -> "u32"
+  | Gpu_ir.ElementF32 -> "f32"
+
+let element_of_kernel (kernel: Gpu_ir.kernel): Gpu_ir.element =
+  Gpu_ir.element_of_profile kernel.Gpu_ir.numeric_profile
 
 let comparison_string = function
   | Gpu_ir.Eq -> "=="
@@ -53,8 +68,10 @@ let rec expr_type (env: env) (e: Gpu_ir.expr): Gpu_ir.value_type =
       | None -> failwith (Printf.sprintf "Gpu_wgsl: unknown param %d" i))
   | Gpu_ir.Local id -> local_type env id
   | Gpu_ir.U32 _ -> Gpu_ir.TyU32
+  | Gpu_ir.F32 _ -> Gpu_ir.TyF32
   | Gpu_ir.Bool _ -> Gpu_ir.TyBool
-  | Gpu_ir.Intrinsic _ -> Gpu_ir.TyU32
+  | Gpu_ir.Intrinsic (i, _) ->
+     if Gpu_ir.is_float_intrinsic i then Gpu_ir.TyF32 else Gpu_ir.TyU32
   | Gpu_ir.Compare _ -> Gpu_ir.TyBool
   | Gpu_ir.BooleanOp _ -> Gpu_ir.TyBool
   | Gpu_ir.Not _ -> Gpu_ir.TyBool
@@ -69,6 +86,7 @@ let rec render_expr (env: env) (e: Gpu_ir.expr): string =
   | Gpu_ir.Param i -> Printf.sprintf "p%d" i
   | Gpu_ir.Local id -> Printf.sprintf "v%d" id
   | Gpu_ir.U32 s -> s ^ "u"
+  | Gpu_ir.F32 s -> s ^ "f"
   | Gpu_ir.Bool true -> "true"
   | Gpu_ir.Bool false -> "false"
   | Gpu_ir.Intrinsic (Gpu_ir.BitwiseNot, [a]) ->
@@ -141,21 +159,24 @@ let render_helper (helper: Gpu_ir.helper): string =
     helper.Gpu_ir.id (String.concat ", " params)
     (type_string helper.Gpu_ir.ret) body
 
-let render_bindings (arity: int): string =
+let render_bindings (arity: int) (element: Gpu_ir.element): string =
+  let ty = element_string element in
   let inputs =
     List.init arity (fun i ->
-      Printf.sprintf "@group(0) @binding(%d) var<storage, read> input%d: array<u32>;\n"
-        i i)
+      Printf.sprintf "@group(0) @binding(%d) var<storage, read> input%d: array<%s>;\n"
+        i i ty)
   in
   let output =
-    Printf.sprintf "@group(0) @binding(%d) var<storage, read_write> output0: array<u32>;\n\n"
-      arity
+    Printf.sprintf
+      "@group(0) @binding(%d) var<storage, read_write> output0: array<%s>;\n\n"
+      arity ty
   in
   String.concat "" inputs ^ output
 
-let render_entry_params (arity: int): string =
+let render_entry_params (arity: int) (element: Gpu_ir.element): string =
+  let ty = element_string element in
   String.concat ", "
-    (List.init arity (fun i -> Printf.sprintf "p%d: u32" i))
+    (List.init arity (fun i -> Printf.sprintf "p%d: %s" i ty))
 
 let render_entry_call_args (arity: int): string =
   String.concat ", " (List.init arity (fun i -> Printf.sprintf "input%d[i]" i))
@@ -163,7 +184,11 @@ let render_entry_call_args (arity: int): string =
 let render (kernel: Gpu_ir.kernel): string =
   Gpu_ir.check_kernel kernel;
   let helper_rets = List.map (fun (h: Gpu_ir.helper) -> (h.Gpu_ir.id, h.Gpu_ir.ret)) kernel.Gpu_ir.helpers in
-  let kenv = { params = List.init kernel.Gpu_ir.input_arity (fun _ -> Gpu_ir.TyU32);
+  let element = element_of_kernel kernel in
+  let scalar_type =
+    match element with Gpu_ir.ElementU32 -> Gpu_ir.TyU32 | Gpu_ir.ElementF32 -> Gpu_ir.TyF32
+  in
+  let kenv = { params = List.init kernel.Gpu_ir.input_arity (fun _ -> scalar_type);
                locals = []; helper_rets } in
   let (body, _) = render_stmt kenv 1 kernel.Gpu_ir.body in
   let helpers =
@@ -173,11 +198,12 @@ let render (kernel: Gpu_ir.kernel): string =
   let buf = Buffer.create 1024 in
   Buffer.add_string buf
     "// Generated from typed KernelIR by the Austral GPU backend. Do not edit.\n";
-  Buffer.add_string buf (render_bindings arity);
+  Buffer.add_string buf (render_bindings arity element);
   Buffer.add_string buf helpers;
   Buffer.add_string buf
-    (Printf.sprintf "fn scalar_entry(%s) -> u32 {\n%s}\n\n"
-       (render_entry_params arity) body);
+    (Printf.sprintf "fn scalar_entry(%s) -> %s {\n%s}\n\n"
+       (render_entry_params arity element)
+       (element_string element) body);
   Buffer.add_string buf
     (Printf.sprintf
        "@compute @workgroup_size(%d)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n\

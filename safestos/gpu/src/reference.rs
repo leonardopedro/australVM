@@ -1,15 +1,21 @@
 //! Bounded reference evaluation of validated KernelIR.
 //!
 //! This is the independent CPU oracle: it executes exactly the typed IR with
-//! Rust `wrapping_*` u32 operations, so it does not share the OCaml or WGSL
-//! evaluation paths. Instruction/call budgets bound runaway artifacts.
+//! Rust `wrapping_*` u32 operations (u32-modular-v1) or Rust `f32` arithmetic
+//! (wgsl-f32-v1), so it does not share the OCaml or WGSL evaluation paths.
+//! Instruction/call budgets bound runaway artifacts.
+//!
+//! Host buffers are `u32` words in both profiles: an f32 value travels as its
+//! IEEE-754 bit pattern, which keeps the device path byte-identical between
+//! profiles and makes no assumption about host float parsing.
 
-use crate::schema::{Expr, Helper, KernelIr, Stmt, ValueType};
+use crate::schema::{Element, Expr, Helper, KernelIr, Stmt, ValueType};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value {
     U32(u32),
+    F32(f32),
     Bool(bool),
 }
 
@@ -17,13 +23,39 @@ impl Value {
     fn as_u32(self) -> Result<u32, String> {
         match self {
             Value::U32(v) => Ok(v),
+            Value::F32(_) => Err("f32 used where u32 was required".to_string()),
             Value::Bool(_) => Err("Boolean used where u32 was required".to_string()),
+        }
+    }
+    fn as_f32(self) -> Result<f32, String> {
+        match self {
+            Value::F32(v) => Ok(v),
+            Value::U32(_) => Err("u32 used where f32 was required".to_string()),
+            Value::Bool(_) => Err("Boolean used where f32 was required".to_string()),
         }
     }
     fn as_bool(self) -> Result<bool, String> {
         match self {
             Value::Bool(v) => Ok(v),
-            Value::U32(_) => Err("u32 used where Boolean was required".to_string()),
+            Value::U32(_) | Value::F32(_) => {
+                Err("numeric value used where Boolean was required".to_string())
+            }
+        }
+    }
+}
+
+impl Element {
+    fn decode(self, word: u32) -> Value {
+        match self {
+            Element::U32 => Value::U32(word),
+            Element::F32 => Value::F32(f32::from_bits(word)),
+        }
+    }
+
+    fn encode(self, value: Value) -> Result<u32, String> {
+        match self {
+            Element::U32 => value.as_u32(),
+            Element::F32 => Ok(value.as_f32()?.to_bits()),
         }
     }
 }
@@ -45,6 +77,7 @@ impl Default for Limits {
 pub struct Evaluator<'a> {
     ir: &'a KernelIr,
     helpers: HashMap<u32, &'a Helper>,
+    element: Element,
     steps: u64,
     limits: Limits,
 }
@@ -60,6 +93,7 @@ impl<'a> Evaluator<'a> {
         Ok(Evaluator {
             ir,
             helpers,
+            element: ir.element()?,
             steps: 0,
             limits,
         })
@@ -76,12 +110,25 @@ impl<'a> Evaluator<'a> {
         Ok(())
     }
 
-    fn literal(s: &str) -> Result<u32, String> {
+    fn u32_literal(s: &str) -> Result<u32, String> {
         if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {
             return Err(format!("u32 literal {s:?} is not a decimal integer"));
         }
         s.parse::<u32>()
             .map_err(|_| format!("u32 literal {s:?} is out of range"))
+    }
+
+    fn f32_literal(s: &str) -> Result<f32, String> {
+        match s.parse::<f32>() {
+            Ok(v) if v.is_finite() => Ok(v),
+            Ok(_) => Err(format!("f32 literal {s:?} is not finite")),
+            Err(_) => Err(format!("f32 literal {s:?} is not a decimal float")),
+        }
+    }
+
+    /// The element a bundle maps over.
+    pub fn element(&self) -> Element {
+        self.element
     }
 
     pub fn eval_expr(
@@ -102,9 +149,28 @@ impl<'a> Evaluator<'a> {
             Expr::Local { index } => *locals
                 .get(index)
                 .ok_or_else(|| format!("local {index} is not bound"))?,
-            Expr::U32 { value } => Value::U32(Self::literal(value)?),
+            Expr::U32 { value } => Value::U32(Self::u32_literal(value)?),
+            Expr::F32 { value } => Value::F32(Self::f32_literal(value)?),
             Expr::Bool { value } => Value::Bool(*value),
             Expr::Intrinsic { op, args } => {
+                if matches!(op.as_str(), "f32Add" | "f32Subtract" | "f32Multiply") {
+                    let mut vals = Vec::with_capacity(args.len());
+                    for a in args {
+                        vals.push(self.eval_expr(a, params, locals, depth)?.as_f32()?);
+                    }
+                    let v = match (op.as_str(), vals.as_slice()) {
+                        ("f32Add", [a, b]) => a + b,
+                        ("f32Subtract", [a, b]) => a - b,
+                        ("f32Multiply", [a, b]) => a * b,
+                        (other, _) => return Err(format!("unknown intrinsic {other:?}")),
+                    };
+                    if !v.is_finite() {
+                        return Err(format!(
+                            "intrinsic {op} produced a non-finite f32, which wgsl-f32-v1 does not admit"
+                        ));
+                    }
+                    return Ok(Value::F32(v));
+                }
                 let mut vals = Vec::with_capacity(args.len());
                 for a in args {
                     vals.push(self.eval_expr(a, params, locals, depth)?.as_u32()?);
@@ -122,6 +188,11 @@ impl<'a> Evaluator<'a> {
                 Value::U32(v)
             }
             Expr::Compare { op, left, right } => {
+                if self.element != Element::U32 {
+                    return Err(
+                        "comparisons are not part of this numeric profile".to_string()
+                    );
+                }
                 let a = self.eval_expr(left, params, locals, depth)?.as_u32()?;
                 let b = self.eval_expr(right, params, locals, depth)?.as_u32()?;
                 let v = match op.as_str() {
@@ -176,7 +247,9 @@ impl<'a> Evaluator<'a> {
                 }
                 for (v, ty) in vals.iter().zip(h.params.iter()) {
                     match (v, ty) {
-                        (Value::U32(_), ValueType::U32) | (Value::Bool(_), ValueType::Bool) => {}
+                        (Value::U32(_), ValueType::U32)
+                        | (Value::F32(_), ValueType::F32)
+                        | (Value::Bool(_), ValueType::Bool) => {}
                         _ => {
                             return Err(format!(
                                 "helper {helper} argument has the wrong type"
@@ -267,11 +340,14 @@ impl<'a> Evaluator<'a> {
         }
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
-            let params: Vec<Value> = inputs.iter().map(|v| Value::U32(v[i])).collect();
+            let params: Vec<Value> = inputs
+                .iter()
+                .map(|v| self.element.decode(v[i]))
+                .collect();
             let v = self
                 .exec_stmt(&self.ir.body, &params, 0)?
                 .ok_or_else(|| format!("kernel body returned no value at index {i}"))?;
-            out.push(v.as_u32()?);
+            out.push(self.element.encode(v)?);
         }
         Ok(out)
     }

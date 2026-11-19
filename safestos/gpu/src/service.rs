@@ -163,6 +163,13 @@ fn open_path(path: &str, require_hardware: i64, adapter_index: i64) -> i64 {
     if crate::validate::validate_bundle(&loaded).is_err() {
         return BUNDLE_REFUSED;
     }
+    // The service synthesises its own inputs as ``seed + i``, which is a u32
+    // contract. An f32 bundle still validates, but those words would be
+    // bit patterns rather than the values a caller expects, so refuse it by
+    // name instead of running a silently wrong job.
+    if loaded.bundle.kernel_ir.numeric_profile != crate::schema::NUMERIC_PROFILE {
+        return BUNDLE_REFUSED;
+    }
     let handle = next_handle();
     let entry = Arc::new(Mutex::new(Entry {
         loaded,

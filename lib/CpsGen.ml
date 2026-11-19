@@ -367,8 +367,9 @@ let rec compile_expr w ctx expr =
   match expr with
   | MIntConstant s ->
       write_op w Cps_codec.Int_lit;
-      let n = try Int64.of_string s with _ -> 0L in
-      write_i64 w n
+      (* The same decoder `Compiler_cps` uses: an unsigned 64-bit literal is a
+         word, and a failure must not become the constant 0. *)
+      write_i64 w (Util.int_literal_word s)
 
   | MBoolConstant b ->
       write_op w Cps_codec.Int_lit;

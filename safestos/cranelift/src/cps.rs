@@ -1,7 +1,58 @@
 use cranelift::prelude::*;
 use cranelift_codegen::ir::FuncRef;
 use cranelift_module::{FuncId, Linkage, Module};
+use std::cell::RefCell;
 use std::collections::HashMap;
+
+// The restart block and parameter names of the function currently being
+// compiled, for self-tail-call elimination. `emit_stmt_list`/`emit_expr` are
+// threaded through many recursive call sites, so the target lives here instead
+// of in every signature; it is set for one function at a time.
+thread_local! {
+    static SELF_TAIL: RefCell<Option<(Block, Vec<String>)>> = const { RefCell::new(None) };
+}
+
+fn self_tail_target(caller: &str, callee: &str, argc: usize) -> Option<Block> {
+    if caller != callee {
+        return None;
+    }
+    SELF_TAIL.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|(block, params)| (params.len() == argc).then_some(*block))
+    })
+}
+
+/// Does this CPS body contain `return <self>(…)`?
+///
+/// The restart block must exist *before* the body is emitted, but creating it
+/// for every function would add a jump to every compiled module and change
+/// the bytes the certificates and the CLIF census are pinned against. The
+/// tail-call encoding is `0x07 0x04 <u32 len> <name>`, so the exact byte
+/// sequence is searched for; a string payload that happens to contain it only
+/// adds an unused (harmless) restart block. A false negative is not possible,
+/// because the real call is encoded exactly this way.
+fn body_has_self_tail(body: &[u8], name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let name = name.as_bytes();
+    let len = (name.len() as u32).to_le_bytes();
+    let mut pattern = Vec::with_capacity(6 + name.len());
+    pattern.extend_from_slice(&[0x07, 0x04]);
+    pattern.extend_from_slice(&len);
+    pattern.extend_from_slice(name);
+    body.windows(pattern.len()).any(|w| w == pattern.as_slice())
+}
+
+fn self_tail_params() -> Vec<String> {
+    SELF_TAIL.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|(_, params)| params.clone())
+            .unwrap_or_default()
+    })
+}
 
 fn check_call_permission(caller: &str, module_name: &str, callee: &str) -> Result<(), String> {
     if callee.starts_with("__") || callee.starts_with("au_") || caller == callee {
@@ -269,12 +320,21 @@ fn emit_expr<M: Module>(
             // Authorization check (module_name threaded through call chain)
             check_call_permission(caller_name, module_name, &func_name)?;
 
-            if func_name == "__slot_get" || func_name == "__ptr_slot_get" {
+            if func_name == "__slot_get" {
                 // (ptr, offset) -> val
                 let ptr = args[0];
                 let offset_val = args[1];
                 let addr = mgr.builder.ins().iadd(ptr, offset_val);
                 return Ok(mgr.builder.ins().load(types::I64, MemFlags::new(), addr, 0));
+            } else if func_name == "__ptr_slot_get" {
+                // (ptr, offset) -> address of the slot. `MPointerSlotAccessor`
+                // denotes the *address* (the C backend wraps it in `AddressOf`)
+                // and the lowering applies `Deref` to it, so this must not load:
+                // doing so made every `record->field` read a load of the field
+                // as an address.
+                let ptr = args[0];
+                let offset_val = args[1];
+                return Ok(mgr.builder.ins().iadd(ptr, offset_val));
             } else if func_name == "__deref" {
                 // (ptr) -> val: `MDeref` lowers to this. Every value in this JIT is
                 // one 64-bit word, so a dereference is a load of the pointee.
@@ -741,7 +801,13 @@ fn emit_stmt_list<M: Module>(
                         let ptr = args[0];
                         let offset_val = args[1];
                         let addr = mgr.builder.ins().iadd(ptr, offset_val);
-                        let val = mgr.builder.ins().load(types::I64, MemFlags::new(), addr, 0);
+                        // `__ptr_slot_get` yields the address; `__slot_get` the
+                        // loaded value (see the matching branch in `emit_expr`).
+                        let val = if func_name == "__ptr_slot_get" {
+                            addr
+                        } else {
+                            mgr.builder.ins().load(types::I64, MemFlags::new(), addr, 0)
+                        };
                         mgr.builder.ins().return_(&[val]);
                         mgr.terminated = true;
                         return Ok(());
@@ -811,6 +877,25 @@ fn emit_stmt_list<M: Module>(
                             );
                         }
                         mgr.builder.ins().return_(&[ptr]);
+                        mgr.terminated = true;
+                        return Ok(());
+                    }
+
+                    // `return f(...)` where `f` is the function being compiled:
+                    // assign the parameters and jump back to the restart block.
+                    // Without this, a linear state machine's polling loop (the
+                    // shape `Waiting` token -> poll -> `Waiting` again) recurses
+                    // once per poll and overflows the stack whenever completion
+                    // takes longer than the recursion budget.
+                    if let Some(loop_block) =
+                        self_tail_target(caller_name, &func_name, args.len())
+                    {
+                        for (pname, val) in self_tail_params().iter().zip(args.iter()) {
+                            if let Some(&var) = vars.get(pname) {
+                                mgr.builder.def_var(var, *val);
+                            }
+                        }
+                        mgr.builder.ins().jump(loop_block, &[]);
                         mgr.terminated = true;
                         return Ok(());
                     }
@@ -1166,8 +1251,24 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
                 vars.insert(pname, var);
             }
 
+            // A restart block so a tail self call can jump back instead of
+            // recursing (see `self_tail_target`). Only when the body really
+            // contains one: every other function keeps its exact previous
+            // code, which the pinned digests and the CLIF census depend on.
+            let restart_block = if body_has_self_tail(body_data, &name) {
+                let block = mgr.create_block();
+                mgr.builder.ins().jump(block, &[]);
+                mgr.switch_to_block(block);
+                SELF_TAIL.with(|slot| {
+                    *slot.borrow_mut() = Some((block, param_names.clone()))
+                });
+                Some(block)
+            } else {
+                None
+            };
+
             let mut body_reader = CpsReader::new(body_data);
-            emit_stmt_list(
+            let emitted = emit_stmt_list(
                 jit,
                 &mut body_reader,
                 &mut mgr,
@@ -1176,7 +1277,11 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
                 &import_map,
                 &name,
                 &module_name,
-            )?;
+            );
+            if restart_block.is_some() {
+                SELF_TAIL.with(|slot| *slot.borrow_mut() = None);
+            }
+            emitted?;
 
             mgr.ensure_terminated(None);
             mgr.seal_all();
