@@ -3965,7 +3965,7 @@ sampled every second:
 | headroom under the cap | **1 249 MiB** |
 | obligations / parts / shared stream | 580 / **1** / **9 154 545 B** |
 | naming sidecar | 10 968 B |
-| `.mm0` / `.mm1` | 102 543 367 789 / 102 547 674 107 B, both `cmp` identical to §13.41's |
+| `.mm0` / `.mm1` | 102 543 367 789 / 102 547 674 107 B, both `cmp` identical to the 10 GiB reference run (§13.41's own copies were already deleted, and its `.mm0` was identical to that reference) |
 
 The peak still lands on the goal statement, as §13.41 said — the wrap is genuinely the
 row's largest single term — but 1.2 GiB lower. What remains is one bounded string of
