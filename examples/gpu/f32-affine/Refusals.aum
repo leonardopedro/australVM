@@ -1,0 +1,27 @@
+-- G16b: constructs the wgsl-f32-v1 profile must refuse.
+--
+-- Each function is a separate entry point for scripts/gpu-f32-profile, which
+-- compiles one entry at a time and requires the refusal to name the construct.
+-- None of these may produce a bundle, and none may be silently narrowed or
+-- widened into an admitted one.
+module body F32Refusals is
+    -- Float64 is not the profile's element, even though the arithmetic is the
+    -- same shape.
+    function wide(x: Float64, y: Float64): Float64 is
+        return trappingAdd(trappingMultiply(x, 2.5), y);
+    end;
+
+    -- Division has no admitted mapping yet: WGSL's / is not the trapping
+    -- contract, and the profile admits add/subtract/multiply only.
+    function divide(x: Float32, y: Float32): Float32 is
+        return trappingDivide(x, y);
+    end;
+
+    -- Float-to-integer conversion is outside the profile; there is no GPU
+    -- rounding contract for it. The conversion classes return Option, an
+    -- unadmitted union, so a conversion cannot even be bound; the entry here
+    -- shows the other half of the refusal: a Nat32 result is not admitted.
+    function narrow(x: Float32): Nat32 is
+        return bitwiseNot(0 : Nat32);
+    end;
+end module body.

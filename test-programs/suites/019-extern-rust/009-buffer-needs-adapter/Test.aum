@@ -1,0 +1,25 @@
+-- A byte buffer in a signature that needs a generated adapter: the scalar
+-- adapter ABI carries one word per parameter and the descriptor has no buffer
+-- layout (no length, capacity or provenance convention yet), so the compiler
+-- cannot describe this signature and no wrapper could implement it. The
+-- word-native shape (Address[Nat8] + Int64 length -> Int64) keeps working: it
+-- names the declared symbol and builds no adapter.
+pragma Unsafe_Module;
+
+import Austral.Memory (Address, allocateBuffer);
+
+module body Test is
+    pragma Foreign_Import(External_Name => "rs_copy_bytes");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_copy_bytes(buf: Address[Nat8], width: Int32): Int64 is
+    end;
+
+    function main(): ExitCode is
+        let buf: Address[Nat8] := allocateBuffer(8);
+        if rs_copy_bytes(buf, 4) = 4 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

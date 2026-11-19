@@ -335,6 +335,16 @@ class EncBuf:
         self._flush()
         return "".join(self.chunks)
 
+    def take_parts(self) -> list[str]:
+        """The chunks, unjoined: the term as pieces, never as one string.
+
+        `take` holds the chunks and the joined result at once, so a 1.94 GB
+        term costs ~3.9 GB for the duration of the join; that allocation, not
+        the wrap, was the row's 4 032 MiB floor (§13.44).
+        """
+        self._flush()
+        return self.chunks
+
 
 # One top-level encode (`write`, `digest`, `head`, `enc`) expands a shared
 # subtree once per *path*: a 2.2 GB text is 67.5 M tokens over a few million
@@ -407,6 +417,19 @@ class Enc:
         finally:
             if outer:
                 self._rec = None
+
+    def enc_parts(self, eid: int) -> list[str]:
+        """`eid`'s encoding as its chunks — the bytes `enc` returns, unjoined.
+
+        Same text, same order: a caller that only concatenates or compares the
+        result (`_put`, `_spool_eq`) takes this instead of paying for the join.
+        """
+        s = self._memo.get(eid)
+        if s is not None:
+            return [s]
+        buf = EncBuf()
+        self._top(eid, buf)
+        return buf.take_parts()
 
     def write(self, eid: int, sink) -> int:
         """Append `eid`'s encoding to `sink`, returning its size in bytes.
@@ -1252,6 +1275,10 @@ def _put(fh, piece) -> None:
     if isinstance(piece, Path):
         with piece.open("r") as sp:
             shutil.copyfileobj(sp, fh, 1 << 20)
+    elif isinstance(piece, (list, tuple)):
+        # An unjoined encoding (`Enc.enc_parts`): written chunk by chunk.
+        for p in piece:
+            _put(fh, p)
     else:
         fh.write(piece)
 
@@ -1261,17 +1288,48 @@ def _spool_head(path: Path, n: int) -> str:
         return fh.read(n)
 
 
-def _spool_eq(path: Path, s: str) -> bool:
-    """Whether `path`'s text is exactly `s`, without holding the file too."""
-    i = 0
-    with path.open("r") as fh:
-        while True:
-            block = fh.read(1 << 20)
-            if not block:
-                return i == len(s)
-            if s[i:i + len(block)] != block:
-                return False
-            i += len(block)
+def _pieces(parts, chunk: int = 1 << 20):
+    """Chunks of `parts` joined: str and `Path` spool pieces, never joined.
+
+    A `Path` is read through like `_put` copies it through; a str is sliced. No
+    piece is ever concatenated with another, so checking a 1.9 GB type against
+    its spool does not need a second 1.9 GB string (§13.43).
+    """
+    for p in parts:
+        if isinstance(p, Path):
+            with p.open("r") as sp:
+                while True:
+                    block = sp.read(chunk)
+                    if not block:
+                        break
+                    yield block
+        elif isinstance(p, (list, tuple)):
+            # An unjoined encoding (`Enc.enc_parts`), chunk by chunk.
+            yield from _pieces(p, chunk)
+        else:
+            for i in range(0, len(p), chunk):
+                yield p[i:i + chunk]
+
+
+def _spool_eq(path: Path, parts) -> bool:
+    """Whether `path`'s text is exactly `parts` joined, holding neither whole.
+
+    Compares two chunk streams with a carry, so the two sides may split at
+    different offsets (the file reads 1 MiB, a piece may end anywhere).
+    """
+    left, right = iter(_pieces((path,))), iter(_pieces(parts))
+    a = b = ""
+    while True:
+        if not a:
+            a = next(left, "")
+        if not b:
+            b = next(right, "")
+        if not a or not b:
+            return a == b
+        n = min(len(a), len(b))
+        if a[:n] != b[:n]:
+            return False
+        a, b = a[n:], b[n:]
 
 
 def spine(ex, eid):
@@ -1337,7 +1395,9 @@ def main() -> int:
         binder_ty_eids.append(bte)
         binders.append(enc.enc(bte))
         cur = ex.exprs[cur]["forallE"]["body"]
-    body_ty = enc.enc(cur)
+    # Pieces, not a string: the body type of this row is 1.94 GB, and joining it
+    # here is the allocation that set the row's cap floor (§13.44, §13.45).
+    body_ty = enc.enc_parts(cur)
 
 # A value may abstract over more binders than its type's Π spine shows: the
     # extra λs sit under a type that unfolds to a Π, and `Deriver.check` pays a
@@ -1434,7 +1494,11 @@ def main() -> int:
         const_axioms, subst_obligations = len(d.const_ax), len(d.beta_ax)
         d_oblig = d.oblig_tree
     else:
-        axioms.append(f"axiom ax_body: $ tty {inner_ctx} {body} {body_ty} $;")
+        # Open judgment: the axiom needs one line, so the pieces are joined here
+        # and only here — this path is never the closed goal statement.
+        axioms.append(
+            f"axiom ax_body: $ tty {inner_ctx} {body} {''.join(body_ty)} $;"
+        )
         _step_add(steps_hist, steps_order, "assume body typing")
         base_proof = "ax_body"
         const_axioms, subst_obligations = 0, 0
@@ -1470,19 +1534,30 @@ def main() -> int:
         # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
         # term is a single expression (MM0 nests proofs in argument position
         # exactly like terms).
-        ty = body_ty
-        for k in range(len(binders) - 1, -1, -1):
+        for _ in binders:
             proof = f"(ty_abs {proof})"
             _step_add(steps_hist, steps_order, "ty_abs")
-            ty = f"(tpi {binders[k]} {ty})"
+        # No allocation of the wrapped type at all: the artifact writes the
+        # spooled declared type, and the wrap exists only to say *which* text the
+        # spool is supposed to hold. Joining it — one string per binder once
+        # (§13.41), then one string total (§13.42) — was still a ~1.9 GB copy of
+        # a type that is already on disk, and that copy is what the 6 GiB runs
+        # were short of. Compared piecewise instead, the wrap never exists.
+        prefix = "".join(f"(tpi {b} " for b in binders)
+        closing = ")" * len(binders)
         if spine:
             # The wrapping is only valid if it reproduces the declared type,
             # which is on disk: comparing it there costs nothing.
-            if not _spool_eq(ty_path, ty):
+            if not _spool_eq(ty_path, (prefix, body_ty, closing)):
+                keep = max(0, 200 - len(prefix))
+                head = next(_pieces(body_ty), "") if keep else ""
                 raise SystemExit(
                     "derived type is not the declared type:\n"
-                    f"  derived  {ty[:200]}\n  declared {_spool_head(ty_path, 200)}"
+                    f"  derived  {prefix + head[:keep]}"
+                    f"\n  declared {_spool_head(ty_path, 200)}"
                 )
+        # The body type is dead from here: the goal is the spool on disk.
+        del body_ty
         goal_ctx, goal_term, goal_ty = "tnil", val_path, ty_path
 
     head = [

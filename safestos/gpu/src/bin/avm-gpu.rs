@@ -42,6 +42,8 @@ fn validate_command(dir: &str) -> i32 {
                     "status": "ok",
                     "entry": loaded.bundle.entry,
                     "input_arity": loaded.bundle.input_arity,
+                    "numeric_profile": loaded.bundle.numeric_profile,
+                    "element": loaded.bundle.kernel_ir.element().ok().map(|e| e.name()).unwrap_or("?"),
                     "ir_sha256": loaded.bundle.ir_sha256,
                     "wgsl_sha256": loaded.bundle.wgsl_sha256,
                 }));
@@ -51,7 +53,7 @@ fn validate_command(dir: &str) -> i32 {
     }
 }
 
-fn read_inputs(path: &str) -> Result<Vec<Vec<u32>>, String> {
+fn read_inputs(path: &str, element: schema::Element) -> Result<Vec<Vec<u32>>, String> {
     let metadata = std::fs::metadata(path)
         .map_err(|e| format!("cannot read inputs {path}: {e}"))?;
     if metadata.len() > artifact::MAX_INPUT_JSON_BYTES {
@@ -75,19 +77,58 @@ fn read_inputs(path: &str) -> Result<Vec<Vec<u32>>, String> {
     for (i, array) in parsed.inputs.iter().enumerate() {
         let mut values = Vec::with_capacity(array.len());
         for (j, n) in array.iter().enumerate() {
-            let v = n
-                .as_u64()
-                .ok_or_else(|| format!("inputs[{i}][{j}] is not an unsigned integer"))?;
-            if v > u32::MAX as u64 {
-                return Err(format!(
-                    "inputs[{i}][{j}] = {v} is outside [0,4294967295]"
-                ));
+            match element {
+                schema::Element::U32 => {
+                    let v = n.as_u64().ok_or_else(|| {
+                        format!("inputs[{i}][{j}] is not an unsigned integer")
+                    })?;
+                    if v > u32::MAX as u64 {
+                        return Err(format!(
+                            "inputs[{i}][{j}] = {v} is outside [0,4294967295]"
+                        ));
+                    }
+                    values.push(v as u32);
+                }
+                schema::Element::F32 => {
+                    let v = n
+                        .as_f64()
+                        .ok_or_else(|| format!("inputs[{i}][{j}] is not a number"))?;
+                    let f = v as f32;
+                    if !f.is_finite() {
+                        return Err(format!(
+                            "inputs[{i}][{j}] = {v} is not a finite binary32 value"
+                        ));
+                    }
+                    values.push(f.to_bits());
+                }
             }
-            values.push(v as u32);
         }
         out.push(values);
     }
     Ok(out)
+}
+
+/// Render output words as profile values: u32 integers for the default
+/// profile, finite f32 numbers for wgsl-f32-v1. A non-finite f32 result is a
+/// profile violation, not something to print as null.
+fn output_values(loaded: &avm_gpu::LoadedBundle, words: &[u32]) -> Result<serde_json::Value, String> {
+    match loaded.bundle.kernel_ir.element()? {
+        schema::Element::U32 => Ok(serde_json::json!(words)),
+        schema::Element::F32 => {
+            let mut values = Vec::with_capacity(words.len());
+            for word in words {
+                let v = f32::from_bits(*word);
+                if !v.is_finite() {
+                    return Err(
+                        "output contains a non-finite f32, which wgsl-f32-v1 does not admit"
+                            .to_string(),
+                    );
+                }
+                values.push(v as f64);
+            }
+            Ok(serde_json::json!(values))
+        }
+    }
 }
 
 fn reference_command(dir: &str, inputs_path: &str) -> i32 {
@@ -98,7 +139,11 @@ fn reference_command(dir: &str, inputs_path: &str) -> i32 {
     if let Err(e) = validate::validate_bundle(&loaded) {
         return fail(&e);
     }
-    let inputs = match read_inputs(inputs_path) {
+    let element = match loaded.bundle.kernel_ir.element() {
+        Ok(e) => e,
+        Err(e) => return fail(&e),
+    };
+    let inputs = match read_inputs(inputs_path, element) {
         Ok(i) => i,
         Err(e) => return fail(&e),
     };
@@ -112,16 +157,21 @@ fn reference_command(dir: &str, inputs_path: &str) -> i32 {
     match evaluator.run(&inputs) {
         Err(e) => fail(&e),
         Ok(output) => {
+            let values = match output_values(&loaded, &output) {
+                Ok(v) => v,
+                Err(e) => return fail(&e),
+            };
             ok_json(serde_json::json!({
                 "status": "ok",
                 "backend": "reference",
-                "numeric_profile": schema::NUMERIC_PROFILE,
+                "numeric_profile": loaded.bundle.numeric_profile,
+                "element": element.name(),
                 "entry": loaded.bundle.entry,
                 "input_arity": loaded.bundle.input_arity,
                 "ir_sha256": loaded.bundle.ir_sha256,
                 "wgsl_sha256": loaded.bundle.wgsl_sha256,
                 "dispatch_count": if inputs.first().map(|v| v.is_empty()).unwrap_or(true) { 0 } else { 1 },
-                "output": output,
+                "output": values,
             }));
             0
         }
@@ -222,17 +272,26 @@ fn run_command(
     if let Err(e) = validate::validate_bundle(&loaded) {
         return fail(&e);
     }
-    let inputs = match read_inputs(inputs_path) {
+    let element = match loaded.bundle.kernel_ir.element() {
+        Ok(e) => e,
+        Err(e) => return fail(&e),
+    };
+    let inputs = match read_inputs(inputs_path, element) {
         Ok(i) => i,
         Err(e) => return fail(&e),
     };
     match run(&loaded, &inputs, require_hardware, &selection) {
         Ok(result) => {
             let device = avm_gpu::device::to_json(&result.adapter);
+            let values = match output_values(&loaded, &result.output) {
+                Ok(v) => v,
+                Err(e) => return fail(&e),
+            };
             ok_json(serde_json::json!({
                 "status": "ok",
                 "backend": "wgpu",
-                "numeric_profile": schema::NUMERIC_PROFILE,
+                "numeric_profile": loaded.bundle.numeric_profile,
+                "element": element.name(),
                 "entry": loaded.bundle.entry,
                 "input_arity": loaded.bundle.input_arity,
                 "ir_sha256": loaded.bundle.ir_sha256,
@@ -246,7 +305,7 @@ fn run_command(
                     "submit": result.submit_ms,
                     "readback": result.readback_ms,
                 },
-                "output": result.output,
+                "output": values,
             }));
             0
         }

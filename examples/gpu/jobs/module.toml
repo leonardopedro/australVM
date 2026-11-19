@@ -2,9 +2,10 @@
 #
 # These are ordinary `rs_*` extern symbols: the bridge's
 # `check_call_permission` compares each JIT call against this list before the
-# symbol is resolved. The linear `Jobs` wrappers call only the entries below
-# (`open`/`close` are v1 symbols); removing one must fail with UK-4001 before
-# the corresponding operation runs.
+# symbol is resolved. The whole `Jobs` module is compiled, so every wrapper it
+# contains names its symbol even when this example does not call it; the header
+# therefore grants the complete v2 surface. Removing one must fail with UK-4001
+# before the corresponding operation runs.
 [module]
 name = "GpuJobs"
 
@@ -13,8 +14,11 @@ kernel = [
     "rs_gpu_open",
     "rs_gpu_close",
     "rs_gpu_buffer_new",
+    "rs_gpu_buffer_write",
+    "rs_gpu_buffer_read",
     "rs_gpu_buffer_free",
     "rs_gpu_submit",
     "rs_gpu_poll",
     "rs_gpu_result",
+    "rs_gpu_cancel",
 ]

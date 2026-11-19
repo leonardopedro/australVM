@@ -292,6 +292,21 @@ let rust_ownership_shape ~ty =
     Text " is not part of the buffer protocol that may cross an extern rust boundary. Parameters and return values of `rs_*` imports must be scalar values (integers, floats, booleans) or addresses/pointers, because those are the shapes the Rust side's ABI speaks."
   ]
 
+let rust_adapter_unsupported ~ty =
+  austral_raise DeclarationError [
+    Text "The type ";
+    Type ty;
+    Text " has no encoding at the extern rust boundary. An `rs_*` parameter or result is carried as a 64-bit word by a generated adapter (`<name>__adapter`), and that adapter ABI defines encodings for Boolean, Int32, Nat32, Int64, Nat64, Float32 and Float64 (plus addresses/pointers) only. An eight- or sixteen-bit integer, Index or ByteSize would arrive truncated, so it is refused here rather than as a call to an adapter that cannot exist."
+  ]
+
+let rust_adapter_buffer_unsupported ~subject ~ty =
+  austral_raise DeclarationError [
+    Text subject;
+    Text " has type ";
+    Type ty;
+    Text ", which cannot cross the extern rust boundary in this signature: the adapter ABI carries one 64-bit word per parameter, and a byte buffer needs a length, capacity and pointer-provenance convention the descriptor does not define yet. Keep every parameter and the result word-native instead (Int64/Nat64, an address or a pointer, with an Int64/Nat64 result — those calls name the declared symbol and build no adapter)."
+  ]
+
 let rust_interop_transport ~ty =
   austral_raise DeclarationError [
     Text "The type ";

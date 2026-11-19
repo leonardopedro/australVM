@@ -21,6 +21,13 @@
 -- integer path, or a result that is not carried as bits shows up as a different
 -- number.
 --
+-- Comparisons: `-2.0 < -1.0` is where comparing the words as signed integers
+-- gives the opposite answer (0xC000… sorts above 0xBFF0…), and `0.0 = -0.0`
+-- is where bit equality gives the opposite answer to IEEE (the words differ in
+-- the sign bit). Both are required below, so a comparison still on the
+-- `Cmp*` opcodes returns 0 here even though every other leg passes. The
+-- Float32 leg (`scaled32 = factor`) takes the widening path.
+--
 -- Float32: `rs_f32_bits(1.5)` checks a literal written straight into an argument
 -- position (0x3FC00000 = 1069547520), and `rs_f32_scale(2.5, 1)` then
 -- `rs_f32_bits` checks a literal held in a Float32 local (0x40200000 =
@@ -28,11 +35,6 @@
 -- in either place would arrive with bits above 31 set and the wrapper would
 -- refuse it, so neither number can be produced by an unnarrowed word.
 --
--- Float32 arithmetic has no bridge primitive of its own: the CPS lowering emits
--- `au_f32_to_f64` on both operands, the same `au_f64_*` op, then
--- `au_f64_to_f32`, so `(((2.5 + 1.5) * 4.0) - 2.0) / 2.0` must read back as
--- 7.0 = 0x40E00000 = 1088421888. Computing on the f32 words as integers, or
--- skipping the narrow, gives a different word.
 pragma Unsafe_Module;
 
 module body AdapterLive is
@@ -66,25 +68,54 @@ module body AdapterLive is
     function rs_f32_bits(value: Float32): Int64 is
     end;
 
+    pragma Foreign_Import(External_Name => "rs_u32_low");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_u32_low(value: Nat32): Nat32 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_u64_high");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_u64_high(value: Nat64): Nat32 is
+    end;
+
     function compute(): Int64 is
         let width: Int32 := 7;
+        -- Unsigned widths. `Nat32` is not word-native, so its call goes through
+        -- an adapter whose `U32` decode refuses a word above u32::MAX; the
+        -- `Nat64` parameter is the full 64-bit word, including the sign bit
+        -- (9223372036854775809 = 0x8000_0000_0000_0001), and its high half is
+        -- the U32 result the wrapper encodes back. A decoder that truncated or
+        -- sign-extended either word changes one of these two numbers.
+        let masked: Nat32 := rs_u32_low(4294967295 : Nat32);
+        let high: Nat32 := rs_u64_high(9223372036854775809 : Nat64);
         let narrowed: Int64 := rs_narrow(width);
         let literal_bits: Int64 := rs_f32_bits(1.5);
         let factor: Float32 := 2.5;
         let scaled32: Float32 := rs_f32_scale(factor, 1);
         let scaled32_bits: Int64 := rs_f32_bits(scaled32);
+        if masked = (65535 : Nat32) then
+        if high = (2147483648 : Nat32) then
         if narrowed = 7 then
             if rs_toggle(false) then
                 if literal_bits = 1069547520 then
                     if scaled32_bits = 1075838976 then
-                        let f32_arithmetic: Float32 := (((factor + 1.5) * 4.0) - 2.0) / 2.0;
-                        let f32_arithmetic_bits: Int64 := rs_f32_bits(f32_arithmetic);
-                        if f32_arithmetic_bits = 1088421888 then
-                            let scaled: Float64 := rs_scale(2.5, 4);
-                            let arithmetic: Float64 := (((scaled + 2.5) - 0.5) * 2.0) / 4.0;
-                            let bits: Int64 := rs_bits(arithmetic);
-                            if bits = 4618441417868443648 then
-                                return bits;
+                        let scaled: Float64 := rs_scale(2.5, 4);
+                        let arithmetic: Float64 := (((scaled + 2.5) - 0.5) * 2.0) / 4.0;
+                        let bits: Int64 := rs_bits(arithmetic);
+                        if bits = 4618441417868443648 then
+                            let smaller: Float64 := -2.0;
+                            let larger: Float64 := -1.0;
+                            let same32: Bool := scaled32 = factor;
+                            if smaller < larger then
+                                if 0.0 = -0.0 then
+                                    if same32 then
+                                        return bits;
+                                    else
+                                        return 0;
+                                    end if;
+                                else
+                                    return 0;
+                                end if;
                             else
                                 return 0;
                             end if;
@@ -100,6 +131,12 @@ module body AdapterLive is
             else
                 return 0;
             end if;
+        else
+            return 0;
+        end if;
+        else
+            return 0;
+        end if;
         else
             return 0;
         end if;

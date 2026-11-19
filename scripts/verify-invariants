@@ -267,6 +267,25 @@ fi
 # the root of trust, not merely that a file exists. The `--code` bytes come from
 # the compiler's own `--emit-cps`, which is why the CPS digest in the header is a
 # claim about the code that runs rather than about this JSON.
+# The obj digest below is taken by whichever bridge the loader finds, and
+# LD_LIBRARY_PATH=$repo_root puts the repo-root copy first while `make bridge`
+# writes only target/release/. A stale root copy measures the kernel with an old
+# bridge and is then compared against a pin written with that same old bridge —
+# a silent pass, found once by scripts/obj-drift-control. Byte-identity between
+# the two copies is the condition that rules it out; an absent copy is a gap.
+_cl_built="$repo_root/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
+_cl_loaded="$repo_root/libaustral_cranelift_bridge.so"
+if [ -f "$_cl_built" ] && [ -f "$_cl_loaded" ]; then
+    if cmp -s "$_cl_loaded" "$_cl_built"; then
+        check "W5 (checked): the bridge the gate loads is the release artifact it was built from" true
+    else
+        echo "      refresh it: cp safestos/cranelift/target/release/libaustral_cranelift_bridge.so ." >&2
+        check "W5 (checked): the bridge the gate loads is the release artifact it was built from" false
+    fi
+else
+    gap "W5: loaded bridge is the release artifact (one of the two copies is absent)"
+fi
+
 _flux_obl="$repo_root/examples/verified-kernel/flux1d/flux1d.obligations.json"
 
 # The staleness note is a comparison, so it is held to the same rule as every

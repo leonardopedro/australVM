@@ -130,12 +130,14 @@ pub fn load_bundle(dir: &Path) -> Result<LoadedBundle, String> {
     if bundle.backend != "wgsl" {
         return Err(format!("backend is {:?}, expected \"wgsl\"", bundle.backend));
     }
-    if bundle.numeric_profile != "u32-modular-v1" {
+    if bundle.numeric_profile != bundle.kernel_ir.numeric_profile {
         return Err(format!(
-            "numeric_profile is {:?}, expected \"u32-modular-v1\"",
-            bundle.numeric_profile
+            "numeric_profile is {:?} but kernel_ir.numeric_profile is {:?}",
+            bundle.numeric_profile, bundle.kernel_ir.numeric_profile
         ));
     }
+    // Refuses an unknown profile name before anything interprets the element.
+    crate::schema::Element::of_profile(&bundle.numeric_profile)?;
     if bundle.kernel_ir.entry != bundle.entry {
         return Err("entry disagrees with kernel_ir.entry".to_string());
     }
@@ -206,10 +208,29 @@ fn check_ir(ir: &crate::schema::KernelIr) -> Result<(), String> {
         Ok(v as u32)
     }
 
+    /// The literal must parse to a finite binary32. `parse::<f32>` in Rust
+    /// rounds a decimal to the nearest f32, the same contract the OCaml writer
+    /// and Naga use.
+    fn f32_literal(s: &str) -> Result<f32, String> {
+        match s.parse::<f32>() {
+            Ok(v) if v.is_finite() && (v == 0.0 || v.abs() >= f32::MIN_POSITIVE) => {
+                Ok(v)
+            }
+            Ok(v) if v.is_finite() => {
+                Err(format!("f32 literal {s:?} is subnormal, outside the admitted domain"))
+            }
+            Ok(_) => Err(format!("f32 literal {s:?} is not finite")),
+            Err(_) => Err(format!("f32 literal {s:?} is not a decimal float")),
+        }
+    }
+
+    let element = ir.element()?;
+
     fn check_expr(
         arity: u32,
         locals: &[u32],
         helpers: &[(u32, usize)],
+        element: crate::schema::Element,
         e: &crate::schema::Expr,
     ) -> Result<(), String> {
         use crate::schema::Expr as E;
@@ -226,12 +247,30 @@ fn check_ir(ir: &crate::schema::KernelIr) -> Result<(), String> {
                 }
                 Ok(())
             }
-            E::U32 { value } => u32_literal(value).map(|_| ()),
+            E::U32 { value } => {
+                if element != crate::schema::Element::U32 {
+                    return Err("a u32 literal is not part of the bundle's numeric profile".to_string());
+                }
+                u32_literal(value).map(|_| ())
+            }
+            E::F32 { value } => {
+                if element != crate::schema::Element::F32 {
+                    return Err("an f32 literal is not part of the bundle's numeric profile".to_string());
+                }
+                f32_literal(value).map(|_| ())
+            }
             E::Bool { .. } => Ok(()),
             E::Intrinsic { op, args } => {
+                let float_op = matches!(op.as_str(), "f32Add" | "f32Subtract" | "f32Multiply");
+                if float_op && element != crate::schema::Element::F32 {
+                    return Err(format!("intrinsic {op} requires the {}", crate::schema::NUMERIC_PROFILE_F32));
+                }
+                if !float_op && element != crate::schema::Element::U32 {
+                    return Err(format!("integer intrinsic {op} is not part of the bundle's numeric profile"));
+                }
                 let expected = match op.as_str() {
                     "add" | "subtract" | "multiply" | "bitwiseAnd" | "bitwiseOr"
-                    | "bitwiseXor" => 2,
+                    | "bitwiseXor" | "f32Add" | "f32Subtract" | "f32Multiply" => 2,
                     "bitwiseNot" => 1,
                     other => return Err(format!("unknown intrinsic {other:?}")),
                 };
@@ -242,29 +281,32 @@ fn check_ir(ir: &crate::schema::KernelIr) -> Result<(), String> {
                     ));
                 }
                 for a in args {
-                    check_expr(arity, locals, helpers, a)?;
+                    check_expr(arity, locals, helpers, element, a)?;
                 }
                 Ok(())
             }
             E::Compare { op, left, right } => {
+                if element != crate::schema::Element::U32 {
+                    return Err("comparisons are not part of the bundle's numeric profile".to_string());
+                }
                 if !matches!(op.as_str(), "eq" | "ne" | "lt" | "le" | "gt" | "ge") {
                     return Err(format!("unknown comparison {op:?}"));
                 }
-                check_expr(arity, locals, helpers, left)?;
-                check_expr(arity, locals, helpers, right)
+                check_expr(arity, locals, helpers, element, left)?;
+                check_expr(arity, locals, helpers, element, right)
             }
             E::Boolean { op, left, right } => {
                 if !matches!(op.as_str(), "and" | "or") {
                     return Err(format!("unknown boolean operation {op:?}"));
                 }
-                check_expr(arity, locals, helpers, left)?;
-                check_expr(arity, locals, helpers, right)
+                check_expr(arity, locals, helpers, element, left)?;
+                check_expr(arity, locals, helpers, element, right)
             }
-            E::Not { value } => check_expr(arity, locals, helpers, value),
+            E::Not { value } => check_expr(arity, locals, helpers, element, value),
             E::Conditional { condition, then, r#else } => {
-                check_expr(arity, locals, helpers, condition)?;
-                check_expr(arity, locals, helpers, then)?;
-                check_expr(arity, locals, helpers, r#else)
+                check_expr(arity, locals, helpers, element, condition)?;
+                check_expr(arity, locals, helpers, element, then)?;
+                check_expr(arity, locals, helpers, element, r#else)
             }
             E::Call { helper, args } => {
                 let expected = helpers
@@ -279,7 +321,7 @@ fn check_ir(ir: &crate::schema::KernelIr) -> Result<(), String> {
                     ));
                 }
                 for a in args {
-                    check_expr(arity, locals, helpers, a)?;
+                    check_expr(arity, locals, helpers, element, a)?;
                 }
                 Ok(())
             }
@@ -290,12 +332,13 @@ fn check_ir(ir: &crate::schema::KernelIr) -> Result<(), String> {
         arity: u32,
         locals: &mut Vec<u32>,
         helpers: &[(u32, usize)],
+        element: crate::schema::Element,
         s: &crate::schema::Stmt,
     ) -> Result<(), String> {
         use crate::schema::Stmt as S;
         match s {
             S::Let { local, value } => {
-                check_expr(arity, locals, helpers, value)?;
+                check_expr(arity, locals, helpers, element, value)?;
                 if locals.contains(local) {
                     return Err(format!("local {local} is bound twice"));
                 }
@@ -304,18 +347,18 @@ fn check_ir(ir: &crate::schema::KernelIr) -> Result<(), String> {
             }
             S::Seq { items } => {
                 for item in items {
-                    check_stmt(arity, locals, helpers, item)?;
+                    check_stmt(arity, locals, helpers, element, item)?;
                 }
                 Ok(())
             }
             S::If { condition, then, r#else } => {
-                check_expr(arity, locals, helpers, condition)?;
+                check_expr(arity, locals, helpers, element, condition)?;
                 let mut t = locals.clone();
-                check_stmt(arity, &mut t, helpers, then)?;
+                check_stmt(arity, &mut t, helpers, element, then)?;
                 let mut f = locals.clone();
-                check_stmt(arity, &mut f, helpers, r#else)
+                check_stmt(arity, &mut f, helpers, element, r#else)
             }
-            S::Return { value } => check_expr(arity, locals, helpers, value),
+            S::Return { value } => check_expr(arity, locals, helpers, element, value),
         }
     }
 
@@ -334,10 +377,10 @@ fn check_ir(ir: &crate::schema::KernelIr) -> Result<(), String> {
     }
     for helper in &ir.helpers {
         let mut locals = Vec::new();
-        check_stmt(helper.params.len() as u32, &mut locals, &helpers, &helper.body)?;
+        check_stmt(helper.params.len() as u32, &mut locals, &helpers, element, &helper.body)?;
     }
     let mut locals = Vec::new();
-    check_stmt(ir.input_arity, &mut locals, &helpers, &ir.body)?;
+    check_stmt(ir.input_arity, &mut locals, &helpers, element, &ir.body)?;
     if ir.memory.map == crate::schema::MapKind::Map1 && ir.input_arity != 1
         || ir.memory.map == crate::schema::MapKind::Map2 && ir.input_arity != 2
     {
@@ -372,6 +415,58 @@ pub fn check_requirements(bundle: &KernelBundle) -> Result<(), String> {
         if binding.get("role").and_then(|v| v.as_str()) != Some(expected_role) {
             return Err(format!("binding {i} role is not {expected_role}"));
         }
+        let element = bundle.kernel_ir.element()?;
+        if binding.get("element").and_then(|v| v.as_str()) != Some(element.name()) {
+            return Err(format!(
+                "binding {i} element is not {}",
+                element.name()
+            ));
+        }
+    }
+    let numeric = reqs
+        .get("numeric")
+        .ok_or_else(|| "requirements.numeric is missing".to_string())?;
+    if numeric.get("profile").and_then(|v| v.as_str())
+        != Some(bundle.numeric_profile.as_str())
+    {
+        return Err("requirements.numeric.profile disagrees with the bundle".to_string());
+    }
+    let element = bundle.kernel_ir.element()?;
+    if numeric.get("element").and_then(|v| v.as_str()) != Some(element.name()) {
+        return Err("requirements.numeric.element disagrees with the profile".to_string());
+    }
+    let expected_contraction = match element {
+        crate::schema::Element::U32 => "not-applicable",
+        // A driver may fuse multiply+add; the profile documents that instead
+        // of forbidding something the backend cannot guarantee.
+        crate::schema::Element::F32 => "permitted",
+    };
+    if numeric.get("contraction").and_then(|v| v.as_str()) != Some(expected_contraction) {
+        return Err(format!(
+            "requirements.numeric.contraction must be {expected_contraction} for {}",
+            element.name()
+        ));
+    }
+    let expected_tolerance = match element {
+        crate::schema::Element::U32 => 0,
+        crate::schema::Element::F32 => 1,
+    };
+    if numeric
+        .get("tolerance_ulp_per_operation")
+        .and_then(|v| v.as_u64())
+        != Some(expected_tolerance)
+    {
+        return Err(format!(
+            "requirements.numeric.tolerance_ulp_per_operation must be {expected_tolerance} for {}",
+            element.name()
+        ));
+    }
+    let ops = numeric
+        .get("operations")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "requirements.numeric.operations is missing".to_string())?;
+    if ops.is_empty() || ops.iter().any(|o| o.as_str().is_none()) {
+        return Err("requirements.numeric.operations must name the admitted operations".to_string());
     }
     Ok(())
 }

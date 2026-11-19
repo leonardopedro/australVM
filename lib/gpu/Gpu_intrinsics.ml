@@ -12,6 +12,11 @@
    The builtin bodies are `@embed` arithmetic. Admitting the *instance method*
    is the audited leaf exception; arbitrary user `@embed` stays refused by
    Gpu_subset.
+
+   `wgsl-f32-v1` resolves the canonical `TrappingArithmetic(Float32)` add /
+   subtract / multiply methods by the same instance-declaration identity.
+   `trappingDivide` is registered as *rejected*, so the refusal names the
+   operation rather than claiming the method is unknown.
 *)
 
 open EnvTypes
@@ -20,6 +25,9 @@ let canonical_nat32 (ty: Type.ty): bool =
   match ty with
   | Type.Integer (Type.Unsigned, Type.Width32) -> true
   | _ -> false
+
+let canonical_float32 (ty: Type.ty): bool =
+  match ty with Type.SingleFloat -> true | _ -> false
 
 let method_intrinsics = [
   ("modularAdd", Gpu_ir.Add);
@@ -31,29 +39,70 @@ let method_intrinsics = [
   ("bitwiseNot", Gpu_ir.BitwiseNot);
 ]
 
-let table_of_env (env: Env.env): (Id.ins_meth_id * Gpu_ir.intrinsic) list =
+(* wgsl-f32-v1 admits add/subtract/multiply only. Division and the trapping
+   contract are deliberately absent: the method resolves here as a *rejected*
+   name so the subset can say why, instead of reporting an unknown method. *)
+let float_method_intrinsics = [
+  ("trappingAdd", Gpu_ir.F32Add);
+  ("trappingSubtract", Gpu_ir.F32Subtract);
+  ("trappingMultiply", Gpu_ir.F32Multiply);
+]
+
+let float_rejected_methods = ["trappingDivide"]
+
+let methods_of_instance env id names =
+  List.filter_map
+    (fun (method_name, intrinsic) ->
+      let name = Identifier.make_ident method_name in
+      match Env.get_instance_method_from_instance_id_and_method_name
+              env id name with
+      | Some (InsMethRec { id = method_id; _ }) -> Some (method_id, intrinsic)
+      | None -> None)
+    names
+
+type t = {
+  admitted: (Id.ins_meth_id * Gpu_ir.intrinsic) list;
+  rejected: Id.ins_meth_id list;
+}
+
+let table_of_env (env: Env.env): t =
   match Env.get_module_by_name env BuiltIn.pervasive_module_name with
-  | None -> []
+  | None -> { admitted = []; rejected = [] }
   | Some (ModRec { id = mod_id; _ }) ->
      let instances = Env.module_instances env mod_id in
-     List.concat_map
-       (fun (decl: decl) ->
-         match decl with
-         | Instance { id; argument; _ } when canonical_nat32 argument ->
-            List.filter_map
-              (fun (method_name, intrinsic) ->
-                let name = Identifier.make_ident method_name in
-                match Env.get_instance_method_from_instance_id_and_method_name
-                        env id name with
-                | Some (InsMethRec { id = method_id; _ }) -> Some (method_id, intrinsic)
-                | None -> None)
-              method_intrinsics
-         | _ -> [])
-       instances
-
-type t = (Id.ins_meth_id * Gpu_ir.intrinsic) list
+     let admitted =
+       List.concat_map
+         (fun (decl: decl) ->
+           match decl with
+           | Instance { id; argument; _ } when canonical_nat32 argument ->
+              methods_of_instance env id method_intrinsics
+           | Instance { id; argument; _ } when canonical_float32 argument ->
+              methods_of_instance env id float_method_intrinsics
+           | _ -> [])
+         instances
+     in
+     let rejected =
+       List.concat_map
+         (fun (decl: decl) ->
+           match decl with
+           | Instance { id; argument; _ } when canonical_float32 argument ->
+              List.filter_map
+                (fun method_name ->
+                  match Env.get_instance_method_from_instance_id_and_method_name
+                          env id (Identifier.make_ident method_name) with
+                  | Some (InsMethRec { id = method_id; _ }) -> Some method_id
+                  | None -> None)
+                float_rejected_methods
+           | _ -> [])
+         instances
+     in
+     { admitted; rejected }
 
 let classify (table: t) (id: Id.ins_meth_id): Gpu_ir.intrinsic option =
-  List.assoc_opt id table
+  List.assoc_opt id table.admitted
+
+let is_rejected (table: t) (id: Id.ins_meth_id): bool =
+  List.mem id table.rejected
 
 let known_names: string list = List.map fst method_intrinsics
+let known_float_names: string list = List.map fst float_method_intrinsics

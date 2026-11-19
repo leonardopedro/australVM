@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 
 pub const SCHEMA: &str = "austral.gpu.kernel.v1";
 pub const BACKEND: &str = "wgsl";
+/// The default integer profile.
 pub const NUMERIC_PROFILE: &str = "u32-modular-v1";
+/// The explicit Float32 profile (`--gpu-numeric-profile=wgsl-f32-v1`).
+pub const NUMERIC_PROFILE_F32: &str = "wgsl-f32-v1";
 pub const MAX_ELEMENTS: u32 = 1_048_576;
 pub const WORKGROUP_SIZE: u32 = 64;
 
@@ -24,6 +27,11 @@ pub struct Source {
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
     pub source: String,
+    /// Which GPU source admission produced the kernel (`v1` or
+    /// `bounded-fold-v1`). Absent in bundles written before G17b, so older
+    /// artifacts still load; the default is the strict profile.
+    #[serde(default)]
+    pub source_profile: Option<String>,
     pub shader_validation: String,
     pub device_kind: String,
     pub execution: String,
@@ -39,6 +47,10 @@ pub enum Expr {
     Local { index: u32 },
     #[serde(rename = "u32")]
     U32 { value: String },
+    /// A binary32 literal, stored as the shortest decimal that round-trips to
+    /// the exact f32 value (validated on load).
+    #[serde(rename = "f32")]
+    F32 { value: String },
     #[serde(rename = "bool")]
     Bool { value: bool },
     #[serde(rename = "intrinsic")]
@@ -74,6 +86,8 @@ pub enum ValueType {
     U32,
     #[serde(rename = "bool")]
     Bool,
+    #[serde(rename = "f32")]
+    F32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -110,6 +124,9 @@ pub struct KernelIr {
     pub helpers: Vec<Helper>,
     pub body: Stmt,
     pub memory: MemoryPlan,
+    /// Part of the semantic IR (and its digest): the same expression is a
+    /// different instruction under a different profile.
+    pub numeric_profile: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -130,7 +147,37 @@ pub struct KernelBundle {
     pub proof_manifest: Option<serde_json::Value>,
 }
 
+/// The storage element a numeric profile maps over. Both profiles use 4-byte
+/// words; the difference is interpretation, so host buffers stay `u32` words
+/// carrying the element's bit pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Element {
+    U32,
+    F32,
+}
+
+impl Element {
+    pub fn of_profile(profile: &str) -> Result<Element, String> {
+        match profile {
+            NUMERIC_PROFILE => Ok(Element::U32),
+            NUMERIC_PROFILE_F32 => Ok(Element::F32),
+            other => Err(format!("unknown numeric profile {other:?}")),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Element::U32 => "u32",
+            Element::F32 => "f32",
+        }
+    }
+}
+
 impl KernelIr {
+    pub fn element(&self) -> Result<Element, String> {
+        Element::of_profile(&self.numeric_profile)
+    }
+
     /// The canonical semantic IR bytes. Source locations and paths are not part
     /// of this value; the digest is over exactly these bytes.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {

@@ -191,6 +191,22 @@ pub extern "C" fn au_alloc(size: i64) -> *mut u8 {
     unsafe { libc::malloc(size as usize) as *mut u8 }
 }
 
+/// `au_calloc(element_size, count)` — the target of the `allocateBuffer`
+/// intrinsic (`@embed(…, "au_calloc($1, $2)", sizeof(T), count)`). Zeroed, and
+/// a zero or overflowing size yields null, which `nullCheck` reports rather
+/// than an allocation the caller would go on to write through.
+#[no_mangle]
+pub extern "C" fn au_calloc(elem_size: i64, count: i64) -> *mut u8 {
+    if elem_size <= 0 || count <= 0 {
+        return std::ptr::null_mut();
+    }
+    let total = match elem_size.checked_mul(count) {
+        Some(total) if total > 0 => total,
+        _ => return std::ptr::null_mut(),
+    };
+    unsafe { libc::calloc(1, total as usize) as *mut u8 }
+}
+
 #[no_mangle]
 pub extern "C" fn au_free(ptr: *mut u8) {
     if !ptr.is_null() {
@@ -295,6 +311,44 @@ pub extern "C" fn au_f64_divide(lhs: u64, rhs: u64) -> u64 {
     }
 }
 
+// The `MComparison` half of the same story. The CPS comparison opcodes are
+// `icmp` on the 64-bit word, which orders an f64's *bit pattern*: right for
+// positive values, reversed between two negatives (`-2.0` = 0xC000… sorts
+// below `-1.0` = 0xBFF0… as an unsigned word, but as a *signed* word above it),
+// and `Eq` on bits calls `-0.0` unequal to `0.0` and a NaN equal to itself. CPS-lowered comparisons on a float operand call these instead; each
+// returns the same one-word boolean the opcodes do (0 or 1), so nothing above
+// knows the difference. IEEE semantics, NaN included: every comparison with a
+// NaN is false except `!=`.
+#[no_mangle]
+pub extern "C" fn au_f64_lt(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) < f64::from_bits(rhs)) as u64
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_le(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) <= f64::from_bits(rhs)) as u64
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_gt(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) > f64::from_bits(rhs)) as u64
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_ge(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) >= f64::from_bits(rhs)) as u64
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_eq(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) == f64::from_bits(rhs)) as u64
+}
+
+#[no_mangle]
+pub extern "C" fn au_f64_ne(lhs: u64, rhs: u64) -> u64 {
+    (f64::from_bits(lhs) != f64::from_bits(rhs)) as u64
+}
+
 /// Widen a Float32 word to an f64 word. A Float32 word is the f32 bits
 /// zero-extended (the adapter ABI refuses a word with bits above 31), so the
 /// low 32 bits are decoded and the upper half is ignored rather than trusted.
@@ -320,6 +374,12 @@ pub(crate) fn register_float_symbols(builder: &mut JITBuilder) {
     builder.symbol("au_f64_subtract", au_f64_subtract as *const u8);
     builder.symbol("au_f64_multiply", au_f64_multiply as *const u8);
     builder.symbol("au_f64_divide", au_f64_divide as *const u8);
+    builder.symbol("au_f64_lt", au_f64_lt as *const u8);
+    builder.symbol("au_f64_le", au_f64_le as *const u8);
+    builder.symbol("au_f64_gt", au_f64_gt as *const u8);
+    builder.symbol("au_f64_ge", au_f64_ge as *const u8);
+    builder.symbol("au_f64_eq", au_f64_eq as *const u8);
+    builder.symbol("au_f64_ne", au_f64_ne as *const u8);
     builder.symbol("au_f32_to_f64", au_f32_to_f64 as *const u8);
     builder.symbol("au_f64_to_f32", au_f64_to_f32 as *const u8);
 }
@@ -454,6 +514,7 @@ pub extern "C" fn cranelift_init() -> i64 {
             builder.symbol("au_print_int", au_print_int as *const u8);
             builder.symbol("au_exit", au_exit as *const u8);
             builder.symbol("au_alloc", au_alloc as *const u8);
+            builder.symbol("au_calloc", au_calloc as *const u8);
             builder.symbol("au_free", au_free as *const u8);
 
             // Register CPS-level intrinsics (handled inline in cps.rs, but

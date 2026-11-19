@@ -333,13 +333,73 @@ let local_type (q: qident): mono_ty =
   | Some ty -> ty
   | None -> MonoUnit
 
+(* The byte size of a type, for `sizeof`. Only the scalar and pointer types
+   have a width the JIT model knows; anything else keeps the old placeholder
+   of 0 rather than inventing a layout the runtime does not implement. *)
+let size_of_mono_ty (ty: mono_ty): int =
+  match ty with
+  | MonoUnit | MonoRegionTy _ | MonoRegionTyVar _ -> 0
+  | MonoBoolean | MonoInteger (_, Width8) -> 1
+  | MonoInteger (_, Width16) -> 2
+  | MonoInteger (_, Width32) | MonoSingleFloat -> 4
+  | MonoInteger (_, (Width64 | WidthByteSize | WidthIndex))
+  | MonoDoubleFloat | MonoPointer _ | MonoAddress _ -> 8
+  | MonoNamedType _ | MonoReadRef _ | MonoWriteRef _ | MonoSpan _
+  | MonoSpanMut _ | MonoFnPtr _ -> 0
+
+(* Comparisons have the same problem as arithmetic, in a quieter form: `Cmp*`
+   are `icmp` on the word, so on an f64 they order its IEEE *bit pattern*.
+   That is right for positive values and reversed between two negatives
+   (`-2.0` = 0xC000… sorts above `-1.0` = 0xBFF0… as a *signed* word, the
+   opposite of their values), `Eq` calls `-0.0` unequal to `0.0`, and a NaN
+   compares equal to itself. The operand's mono type says which world the
+   comparison is in;
+   a Float32 pair is widened to f64 first, which is exact — every f32 is an
+   f64, order and NaN payload included — so one set of primitives serves both
+   widths, as with the arithmetic above. *)
+let float_compare_call (op: Common.comparison_operator) (ty: mono_ty)
+    (a: CpsGen.cps_expr) (b: CpsGen.cps_expr): CpsGen.cps_expr option =
+  let open Common in
+  let sym =
+    match op with
+    | LessThan -> Some "au_f64_lt"
+    | GreaterThan -> Some "au_f64_gt"
+    | LessThanOrEqual -> Some "au_f64_le"
+    | GreaterThanOrEqual -> Some "au_f64_ge"
+    | Equal -> Some "au_f64_eq"
+    | NotEqual -> Some "au_f64_ne"
+  in
+  match sym with
+  | None -> None
+  | Some sym -> (
+      match ty with
+      | MonoDoubleFloat -> Some (App (sym, [a; b]))
+      | MonoSingleFloat ->
+          let widen e = App ("au_f32_to_f64", [e]) in
+          Some (App (sym, [widen a; widen b]))
+      | _ -> None)
+
+(* The type of the *comparison*, which is not always `get_expr_type e1`: a
+   float literal is typed f64 (it has no width in the mono AST) even when the
+   other operand is a Float32, so the narrower operand wins — the typechecker
+   requires equal operands, so a MonoSingleFloat on either side means the
+   comparison is a Float32 one. *)
+let comparison_type (e1: Mt.mexpr) (e2: Mt.mexpr): mono_ty =
+  let t1 = get_expr_type e1 and t2 = get_expr_type e2 in
+  match t1, t2 with
+  | MonoSingleFloat, _ | _, MonoSingleFloat -> MonoSingleFloat
+  | MonoDoubleFloat, _ | _, MonoDoubleFloat -> MonoDoubleFloat
+  | _ -> t1
+
 let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   match expr with
   | Mt.MNilConstant -> IntLit 0L
   | Mt.MBoolConstant b -> BoolLit b
   | Mt.MIntConstant s ->
-      (try IntLit (Int64.of_string s)
-       with _ -> IntLit 0L)
+      (* Not `Int64.of_string` with a zero default: a `Nat64` literal above
+         2^63-1 is a legal word, and answering 0 for it silently changed the
+         program's constant. Out-of-word literals raise instead. *)
+      IntLit (Util.int_literal_word s)
   | Mt.MFloatConstant s ->
       (try FloatLit (float_of_string s)
        with _ -> FloatLit 0.0)
@@ -352,7 +412,11 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       if ends_with name ":ExitSuccess" || ends_with name ".ExitSuccess" || name = "ExitSuccess" then
         App ("au_exit", [IntLit 0L])
       else
-        Var name
+        (* A module-level `constant` is compiled to a zero-argument function
+           under its unqualified name (see `Mt.MConstant` below), and the JIT
+           has no global variables, so a reference is a call. A qualified
+           `Var` could never resolve: `0x02` reads a local slot. *)
+        App (ident_string (original_name q), [])
   | Mt.MParamVar (id, _) -> Var (ident_string id)
   | Mt.MLocalVar (id, _) -> Var (ident_string id)
   | Mt.MTemporary (id, _) -> Var (ident_string id)
@@ -415,15 +479,19 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       App (ident_string id, List.map convert_expr args)
   | Mt.MCast (e, _) -> convert_expr e
   | Mt.MComparison (op, e1, e2) ->
-      let left = convert_expr e1 in
-      let right = convert_expr e2 in
-      (match op with
-       | LessThan -> CmpLt (left, right)
-       | GreaterThan -> CmpGt (left, right)
-       | LessThanOrEqual -> CmpLte (left, right)
-       | GreaterThanOrEqual -> CmpGte (left, right)
-       | Equal -> CmpEq (left, right)
-       | NotEqual -> CmpNeq (left, right))
+      let ty = comparison_type e1 e2 in
+      let left = narrow_float_literal ty e1
+      and right = narrow_float_literal ty e2 in
+      (match float_compare_call op ty left right with
+       | Some e -> e
+       | None ->
+         (match op with
+          | LessThan -> CmpLt (left, right)
+          | GreaterThan -> CmpGt (left, right)
+          | LessThanOrEqual -> CmpLte (left, right)
+          | GreaterThanOrEqual -> CmpGte (left, right)
+          | Equal -> CmpEq (left, right)
+          | NotEqual -> CmpNeq (left, right)))
   | Mt.MConjunction (e1, e2) -> And (convert_expr e1, convert_expr e2)
   | Mt.MDisjunction (e1, e2) -> Or (convert_expr e1, convert_expr e2)
   | Mt.MNegation e -> Not (convert_expr e)
@@ -462,6 +530,12 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
        | "$1.size", [a] -> App ("__slot_get", [a; IntLit 8L])
        | "NULL", [] -> IntLit 0L
        | "$1", [a] -> a
+       (* The memory intrinsics the linear buffer wrappers use. Both are real
+          runtime symbols; lowering them as calls keeps the `au_calloc`
+          zeroing and the `au_free` null check rather than re-implementing
+          them in the lowering. *)
+       | "au_calloc($1, $2)", [elem; count] -> App ("au_calloc", [elem; count])
+       | "au_free($1)", [a] -> App ("au_free", [a])
        | _ -> App ("__embed", cargs))
   | Mt.MDeref e ->
       (* The load has its own opcode (0x20), and the JIT decodes it as a load
@@ -470,7 +544,7 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
          is what lets `scripts/isa-census` see memory traffic at all. *)
       Deref (convert_expr e)
   | Mt.MTypecast (e, _) -> convert_expr e
-  | Mt.MSizeOf _ -> IntLit 0L
+  | Mt.MSizeOf ty -> IntLit (Int64.of_int (size_of_mono_ty ty))
   | Mt.MSlotAccessor (e, name, _) -> 
       let recty = get_expr_type e in
       let offset = match recty with
@@ -617,14 +691,34 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
   | Mt.MWhile (cond, body) ->
       While (convert_expr cond, convert_stmt body)
   | Mt.MFor (id, start_expr, end_expr, body) ->
+      (* Austral's specification and the C renderer use an **inclusive**
+         endpoint: `for i from 0 to K` executes the body K+1 times (see
+         `CRenderer.CFor`, which renders `i <= K`). This lowering used to emit
+         `CmpLt`, silently running one iteration fewer than the defined
+         semantics — `for i from 0 to 0` did nothing here and one update under
+         C. `CmpLte` is already an opcode (0x12) the JIT implements, so the
+         loop condition is now the same relation the specification names. *)
       let var_name = ident_string id in
       let init_let = Let (var_name, convert_expr start_expr, Skip) in
-      let cond = CmpLt (Var var_name, convert_expr end_expr) in
+      let cond = CmpLte (Var var_name, convert_expr end_expr) in
       let inc = Assign (var_name, Add (Var var_name, IntLit 1L)) in
       let loop_body = Block (convert_stmt body, inc) in
       Block (init_let, While (cond, loop_body))
-  | Mt.MBorrow { rename; body; _ } ->
-      Let (ident_string rename, IntLit 0L, convert_stmt body)
+  | Mt.MBorrow { original; rename; orig_type; body; _ } ->
+      (* The JIT represents a record (or union) value, and a reference, as a
+         pointer, so borrowing one is an alias of that value, not an address it
+         cannot take: `&context` and `context->field` are the same pointer. The
+         old lowering emitted the constant 0 here, which made every
+         `record->field` read through a borrow dereference null. Scalar borrows
+         still have no cell to point at, so they keep the 0 placeholder rather
+         than inventing aliasing semantics the model does not implement. *)
+      let reference =
+        match orig_type with
+        | MonoNamedType _ | MonoReadRef _ | MonoWriteRef _ | MonoAddress _
+        | MonoPointer _ -> Var (ident_string original)
+        | _ -> IntLit 0L
+      in
+      Let (ident_string rename, reference, convert_stmt body)
   | Mt.MBlock (s1, s2) ->
       Block (convert_stmt s1, convert_stmt s2)
   | Mt.MDiscarding expr ->

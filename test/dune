@@ -127,6 +127,14 @@
  (modules JitTest)
  (libraries austral_cps_gen austral_rust_bridge ounit2))
 
+; The `for` endpoint lives in the language specification and the C renderer
+; (`i <= K`); this pins the CPS lowering to the same relation so the backend
+; cannot silently run one iteration fewer.
+(tests
+ (names CpsLoopLoweringTest)
+ (modules CpsLoopLoweringTest)
+ (libraries austral_lib austral_cps_gen austral_rust_bridge ounit2))
+
 ; The CPS opcode table: the encoder (lib/Cps_codec.ml, used by CpsGen) and the
 ; decoder must be one table, and that table must be the one `mm0/isa.mm0`
 ; declares, since the ISA model's encdec theorem is about those bytes. The
@@ -168,5 +176,7 @@
  (deps
   ../examples/gpu/pointwise/Pointwise.aui
   ../examples/gpu/pointwise/Pointwise.aum
+  ../examples/gpu/bounded-fold/Fold.aui
+  ../examples/gpu/bounded-fold/Fold.aum
   ../mm0/proof_chain/clamp_source.mm0
   ../mm0/proof_chain/clamp_source.mm1))

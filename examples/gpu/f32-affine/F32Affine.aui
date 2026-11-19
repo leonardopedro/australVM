@@ -1,0 +1,4 @@
+module F32Affine is
+    function axpy(x: Float32, y: Float32): Float32;
+    function cancel(x: Float32): Float32;
+end module.

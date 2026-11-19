@@ -1,6 +1,6 @@
 -- memsafe linearity certificate — linearity_certificate (generated).
 --
--- Source ledger: mm0/ledgers/linearity_ledger.json (sha256 9e8917f297ddb267c891cdd44cb216372216962825f938a3f762252fc12c3642)
+-- Source ledger: mm0/ledgers/linearity_ledger.json (sha256 fc0a0a5a929ca09497b6768bf88cb92fcf7d8cdd2217e01a9adc29b3bd06f060)
 -- Ledger source: mm0/fixtures/linearity_ledger.aum compiled with --emit-linearity-ledger,
 --   whose rows are written at lib/LinearityCheck.ml's decision points (docs/memsafe.md §3).
 -- Target theory: docs/memsafe.mm0 (sha256 73e75fa97cfaf72493053dd4c664ca00c6b11538644e4500f3d2cde396b39edd)
@@ -205,8 +205,8 @@ pub theorem c_consume_in_both_arms__h__b0_a1: $ run c_consume_in_both_arms__h__b
 def c_consume_and_replace__h__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons (tl_cons e_reacq (tl_cons e_cons tl_nil)))) $;
 pub theorem c_consume_and_replace__h__entry: $ run c_consume_and_replace__h__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons (run_cons t_reacq (run_cons t_cons run_nil))));
 
--- LinearityLedger.consume_and_replace (function): linear variable `_t130` : Handle, path entry, 2 event(s)
+-- LinearityLedger.consume_and_replace (function): linear variable `_t131` : Handle, path entry, 2 event(s)
 --   timeline: acquire, consume
-def c_consume_and_replace___t130__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
-pub theorem c_consume_and_replace___t130__entry: $ run c_consume_and_replace___t130__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
+def c_consume_and_replace___t131__entry_timeline: L = $ (tl_cons e_acq (tl_cons e_cons tl_nil)) $;
+pub theorem c_consume_and_replace___t131__entry: $ run c_consume_and_replace___t131__entry_timeline st_idle st_idle $ = '(run_cons t_acq (run_cons t_cons run_nil));
 

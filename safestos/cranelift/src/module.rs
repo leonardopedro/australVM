@@ -863,11 +863,13 @@ fn compile_cps_binary(data: &[u8]) -> Result<HashMap<String, usize>, String> {
         fn au_print_int(i: i64);
         fn au_exit(code: i64);
         fn au_alloc(size: i64) -> *mut u8;
+        fn au_calloc(elem_size: i64, count: i64) -> *mut u8;
         fn au_free(ptr: *mut u8);
     }
     builder.symbol("au_print_int", au_print_int as *const u8);
     builder.symbol("au_exit", au_exit as *const u8);
     builder.symbol("au_alloc", au_alloc as *const u8);
+    builder.symbol("au_calloc", au_calloc as *const u8);
     builder.symbol("au_free", au_free as *const u8);
     builder.symbol("__union_new", au_exit as *const u8);
     builder.symbol("__record_new", au_exit as *const u8);

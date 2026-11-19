@@ -1273,6 +1273,12 @@ can later supply premises for a GPU map or two independently scheduled shards.
 The core Austral linearity checker continues to require each linear resource to
 be consumed along each checked control-flow path.
 
+The [Bend capabilities implementation plan](docs/LIQUID_BEND_PLAN.md) breaks
+L11d into smaller patches and continues with dependent equality, induction,
+certificate-producing conversion and an opt-in profile for the three BendTT
+type features. Start with its L11d.1 card. The host workstream also stages
+shared ownership through existing Rust adapters and structured parallel work.
+
 ### What transfers from BendTT
 
 BendTT checks dependent functions, pairs and equality bidirectionally. An
@@ -1303,15 +1309,13 @@ source of permission to inspect it after a move.
 ### Current AustralVM evidence
 
 `LiquidParse` parses indexed TRL annotations, including arithmetic syntax.
-`LiquidTypes.ty_wf` admits nonnegative literals and explicit `Nat` variables
-as index terms. `ty_equal` compares the type head and rendered index terms
-syntactically. The current call-site VC and Why3 pipeline handles selected
-formula obligations. `FType` is printed as a type annotation by `why3_of_formula`.
-There is no dedicated source obligation connecting such an annotation to the
-actual element type, length or ownership of a runtime buffer. The CPS erasure
-test checks the executable bytes of its fixture. It does not exercise a
-negative call-site case where a checked program must refuse incompatible
-lengths. These points define the next acceptance boundary.
+The legacy L9 helpers provide syntactic well-formedness and equality checks.
+L11a audits the typed index closure, L11b adds bounded sorted conversion,
+and L11c checks actual fields, admitted call sites and branch facts for one
+span-split shape. Its CPS erasure test compares executable bytes. General
+indexed constructors, symbolic split proofs and correspondence to device
+buffer bindings remain open. The Why3 pipeline for selected formula
+obligations is an existing route alongside that pilot.
 [Liquid spec](docs/LIQUID.md#221-index-carrying-types-l9),
 [index representation](lib/liquid/LiquidTypes.ml),
 [contract checking](lib/liquid/LiquidCheck.ml),

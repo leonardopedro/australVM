@@ -27,7 +27,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use austral_cranelift_bridge::{auth, compile_entry_i64, cranelift_last_error, execute_function};
+use austral_cranelift_bridge::{
+    auth, compile_entry_i64, compile_to_function_named, cranelift_last_error, execute_function,
+};
 use umbrella::{cargo, cli, interface, policy, project};
 
 /// U03's JSON event mode: stdout carries one typed event per line and human
@@ -198,7 +200,52 @@ fn front_end(
     modules: &[PathBuf],
     cps_out: &PathBuf,
     adapters_out: &PathBuf,
-) -> Result<(Vec<u8>, Vec<interface::Adapter>), String> {
+) -> Result<(Vec<Vec<u8>>, Vec<interface::Adapter>), String> {
+    // The front-end emits one CPS binary per module and each emission
+    // overwrites `--emit-cps`, so the file left behind holds only the last
+    // module. A module that calls another Austral module (e.g. one importing
+    // `stdlib/gpu/Jobs`) needs both bodies in the JIT module, so compile each
+    // prefix of the source list: prefix `i` ends at module `i` and therefore
+    // emits exactly that module's CPS, after its dependencies typed. This
+    // assumes the sources are listed in dependency order, which the compiler
+    // requires anyway.
+    let prefixes: Vec<&[PathBuf]> = if modules.len() <= 1 {
+        vec![modules]
+    } else {
+        (1..=modules.len()).map(|i| &modules[..i]).collect()
+    };
+    let mut cps_paths: Vec<PathBuf> = Vec::new();
+    for (index, prefix) in prefixes.iter().enumerate() {
+        let out = if prefixes.len() == 1 {
+            cps_out.clone()
+        } else {
+            cps_out.with_extension(format!("{index}.cps"))
+        };
+        front_end_once(austral, prefix, &out, adapters_out)?;
+        cps_paths.push(out);
+    }
+    let mut cps_binaries = Vec::new();
+    for path in &cps_paths {
+        let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        cps_binaries.push(bytes);
+        if path != cps_out {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    let text = std::fs::read_to_string(adapters_out)
+        .map_err(|e| format!("read {}: {e}", adapters_out.display()))?;
+    let adapters = interface::Adapter::parse_descriptors(&text)
+        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+    Ok((cps_binaries, adapters))
+}
+
+/// One front-end run over `modules`, writing that run's CPS to `cps_out`.
+fn front_end_once(
+    austral: &PathBuf,
+    modules: &[PathBuf],
+    cps_out: &PathBuf,
+    adapters_out: &PathBuf,
+) -> Result<(), String> {
     let mut cmd = Command::new(austral);
     // The dune-built front-end links libaustral_cranelift_bridge.so
     // dynamically; Makefile targets and the nix dev shell carry it via
@@ -217,6 +264,13 @@ fn front_end(
             cmd.env("LD_LIBRARY_PATH", lp);
         }
     }
+    // The front-end's own JIT attempt is advisory for this run. The wrapper
+    // crate the build needs does not exist yet, so an `<target>__adapter`
+    // symbol cannot resolve inside the front-end's process; this stage wants
+    // the CPS artifact and the descriptor, and stage 3.5 compiles the CPS
+    // again with the wrappers loaded. Fail-closed stays the default for every
+    // other caller (a module whose JIT compile failed cannot run).
+    cmd.env("CPS_JIT_ADVISORY", "1");
     cmd.arg("compile");
     for m in modules {
         cmd.arg(m);
@@ -251,12 +305,7 @@ fn front_end(
             String::from_utf8_lossy(&outcome.stderr)
         ));
     }
-    let cps = std::fs::read(cps_out).map_err(|e| format!("read {}: {e}", cps_out.display()))?;
-    let text = std::fs::read_to_string(adapters_out)
-        .map_err(|e| format!("read {}: {e}", adapters_out.display()))?;
-    let adapters = interface::Adapter::parse_descriptors(&text)
-        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
-    Ok((cps, adapters))
+    Ok(())
 }
 
 /// The bridge rlib the generated wrapper compiles against. The wrapper calls
@@ -365,6 +414,15 @@ fn install_auth(manifest: Option<&PathBuf>) -> Result<(), String> {
 /// `fn() -> i64`, so the declared contract is "zero parameters, Int64
 /// return"; the bridge refuses a module whose entry declares anything else
 /// instead of handing back a pointer the caller would miscall.
+fn jit_compile_module(cps: &[u8]) -> Result<(), String> {
+    let ptr = compile_to_function_named(cps.as_ptr(), cps.len(), std::ptr::null(), 0);
+    if ptr.is_null() {
+        Err(take_bridge_error())
+    } else {
+        Ok(())
+    }
+}
+
 fn jit_compile(cps: &[u8], entry: &str) -> Result<*const c_void, String> {
     let ptr = compile_entry_i64(cps.as_ptr(), cps.len(), entry.as_ptr(), entry.len(), 0);
     if ptr.is_null() {
@@ -498,7 +556,7 @@ fn main() {
         std::env::temp_dir().join(format!("umbrella-{}.cps", std::process::id()));
     let adapters_out: PathBuf =
         std::env::temp_dir().join(format!("umbrella-{}.adapters", std::process::id()));
-    let (cps, adapters) = match front_end(&austral, &modules, &cps_out, &adapters_out) {
+    let (cps_binaries, adapters) = match front_end(&austral, &modules, &cps_out, &adapters_out) {
         Ok(b) => {
             let _ = std::fs::remove_file(&cps_out);
             let _ = std::fs::remove_file(&adapters_out);
@@ -506,7 +564,11 @@ fn main() {
         }
         Err(e) => die(e),
     };
-    eprintln!("umbrella: front-end emitted {} bytes of CPS", cps.len());
+    let cps_bytes: usize = cps_binaries.iter().map(Vec::len).sum();
+    eprintln!(
+        "umbrella: front-end emitted {} module(s), {cps_bytes} bytes of CPS",
+        cps_binaries.len()
+    );
 
     // 3.5. The wrappers the descriptors ask for. Empty is a real answer: every
     //      call in the module was word-native and needs no mediation.
@@ -529,10 +591,29 @@ fn main() {
     if let Err(e) = install_auth(cli.manifest.as_ref()) {
         die(e);
     }
-    let f = match jit_compile(&cps, &cli.entry) {
+    // Every module but the entry one is compiled for its definitions only; the
+    // entry binary is compiled last through the strict entry path. They share
+    // the process-global JIT module, so cross-module calls resolve by name.
+    let (entry_cps, dependencies) = match cps_binaries.split_last() {
+        Some((entry, rest)) => (entry, rest),
+        None => die("the front-end emitted no CPS".to_string()),
+    };
+    for cps in dependencies {
+        if let Err(e) = jit_compile_module(cps) {
+            die(e);
+        }
+    }
+    if !dependencies.is_empty() {
+        eprintln!(
+            "umbrella: compiled {} dependency module(s) into the JIT",
+            dependencies.len()
+        );
+    }
+    let f = match jit_compile(entry_cps, &cli.entry) {
         Ok(p) => p,
         Err(e) => die(e),
     };
+    eprintln!("umbrella: entry `{}` compiled, executing", cli.entry);
     let result = execute_function(f);
     if json_mode() {
         event(serde_json::json!({"event": "done", "result": result}));

@@ -110,6 +110,32 @@ let test_matches_isa_artifact _ =
       (List.sort compare mine) (List.sort compare artifact)
   end
 
+(* `Int_lit`'s operand is the literal's transport *word*, and a legal `Nat64`
+   above 2^63-1 is a word too. Both lowering paths used to answer `0` for any
+   literal `Int64.of_string` rejected, so `9223372036854775809` compiled to a
+   wrong constant; these cases pin the exact two's-complement word, and that a
+   literal outside the 64-bit range is refused rather than wrapped. *)
+let test_integer_literal_words _ =
+  let eq (s: string) (expected: int64) =
+    assert_equal ~printer:Int64.to_string ~msg:s expected
+      (Util.int_literal_word s)
+  in
+  eq "0" 0L;
+  eq "42" 42L;
+  eq "9223372036854775807" Int64.max_int;
+  eq "9223372036854775808" Int64.min_int;
+  eq "9223372036854775809" (Int64.add Int64.min_int 1L);
+  eq "18446744073709551615" (-1L);
+  eq "000000000000000000000000042" 42L;
+  eq "0x10" 16L;
+  eq "-9223372036854775808" Int64.min_int;
+  List.iter
+    (fun s ->
+      match Util.int_literal_word s with
+      | _ -> assert_failure (s ^ " must be refused, not decoded")
+      | exception _ -> ())
+    ["18446744073709551616"; "-9223372036854775809"]
+
 let suite =
   "CpsCodec" >::: [
     "round trip over the 23 instructions" >:: test_round_trip;
@@ -117,6 +143,7 @@ let suite =
     "bytes and names are injective" >:: test_injective;
     "names are reversible" >:: test_names_are_reversible;
     "table matches mm0/isa.mm0" >:: test_matches_isa_artifact;
+    "integer literal words cover the unsigned range" >:: test_integer_literal_words;
   ]
 
 let () = run_test_tt_main suite

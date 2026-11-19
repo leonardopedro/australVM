@@ -1,0 +1,15 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The parameter `buf`" },
+    { "type": "text", "content": " has type " },
+    { "type": "type", "content": "Address[Nat8]" },
+    {
+      "type": "text",
+      "content": ", which cannot cross the extern rust boundary in this signature: the adapter ABI carries one 64-bit word per parameter, and a byte buffer needs a length, capacity and pointer-provenance convention the descriptor does not define yet. Keep every parameter and the result word-native instead (Int64/Nat64, an address or a pointer, with an Int64/Nat64 result — those calls name the declared symbol and build no adapter)."
+    }
+  ],
+  "span": null,
+  "context": null
+}

@@ -870,3 +870,49 @@ fn tail_position_union_constructions_of_different_arity_compile() {
     assert_eq!(read(with_fields, 1), 7, "first field");
     assert_eq!(read(with_fields, 2), 9, "second field");
 }
+
+/// A tail self call jumps to the function's restart block instead of
+/// recursing. The linear job wrappers await completion with exactly this
+/// shape (`poll -> Pending token -> poll again`), and a machine whose device
+/// work takes longer than the recursion budget used to overflow the stack.
+fn body_tail_self_countdown(fname: &str) -> Vec<u8> {
+    let mut then = Vec::new();
+    then.push(0x07); // return
+    then.push(0x01); // iconst 0
+    write_i64(&mut then, 0);
+
+    let mut otherwise = Vec::new();
+    otherwise.push(0x07); // return
+    otherwise.push(0x04); // App of the function itself
+    write_str(&mut otherwise, fname);
+    write_u32(&mut otherwise, 1);
+    otherwise.push(0x06); // Sub p0 - 1
+    otherwise.push(0x02);
+    write_str(&mut otherwise, "p0");
+    otherwise.push(0x01);
+    write_i64(&mut otherwise, 1);
+
+    let mut body = Vec::new();
+    body.push(0x08); // if
+    body.push(0x14); // CmpEq
+    body.push(0x02);
+    write_str(&mut body, "p0");
+    body.push(0x01);
+    write_i64(&mut body, 0);
+    write_u32(&mut body, then.len() as u32);
+    body.extend(then);
+    write_u32(&mut body, otherwise.len() as u32);
+    body.extend(otherwise);
+    body
+}
+
+#[test]
+fn a_tail_self_call_does_not_grow_the_stack() {
+    let name = "tail_self_countdown";
+    let cps = cps_v1_sig(name, 1, 0x01, &body_tail_self_countdown(name));
+    let ptr = compile(&cps);
+    let countdown: fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+    assert_eq!(countdown(5), 0);
+    // 1_000_000 frames would overflow an 8 MiB stack; the loop returns.
+    assert_eq!(countdown(1_000_000), 0);
+}

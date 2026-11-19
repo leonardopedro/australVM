@@ -1,7 +1,8 @@
-# Proposed GPU kernel v1 contract
+# GPU kernel v1 contract
 
-**Status: proposed, 2026-11-17; not implemented.** This is the implementation
-contract for G01–G12 in [PLAN_gpu_kernels.md](../../PLAN_gpu_kernels.md).
+**Status, 2026-11-19.** The [execution record](EXECUTION.md) records G01–G12,
+including physical execution. This remains the baseline contract for
+[PLAN_gpu_kernels.md](../../PLAN_gpu_kernels.md).
 [Research and prior work](../GPU_KERNEL_REVIEW.md) explain the backend choice.
 Later features must version this contract instead of silently weakening it.
 
@@ -76,7 +77,7 @@ The module itself may not opt into `Unsafe_Module` for a GPU target.
 | `while`, `for`, recursive calls, fold | Reject in v1; a later bounded iteration profile is separate |
 | Mutation, mutable borrows, pointers, spans, array access, allocation/free | Reject; the generated map wrapper owns all storage accesses |
 | Arbitrary `@embed`, foreign calls, function pointers, dynamic dispatch | Reject, including transitive uses |
-| Records/unions/generics, 64-bit values, casts and floats | Reject in v1 |
+| Records/unions/generics, 64-bit values, casts and floats | Reject in v1; `Float32` is admitted only by the explicit `wgsl-f32-v1` profile (§2a) |
 | Atomics, shared memory, barriers, subgroups, device-side launch | Reject in v1 |
 
 Recognize builtins using the canonical compiler-created module/typeclass/
@@ -99,6 +100,70 @@ accept, reject with a named reason, or handle a specific compiler-generated
 administrative form. No wildcard success, `IntLit(0)` default or silently erased
 node. Diagnostics identify the root and helper path, construct and available
 source span; synthesized nodes can point at the containing function.
+
+## 2a. The `wgsl-f32-v1` numeric profile
+
+`u32-modular-v1` is the default and keeps the closure above. `wgsl-f32-v1` is
+a separate, **explicit opt-in** — selected with
+`--gpu-numeric-profile=wgsl-f32-v1` on a `--target-type=wgsl` compile. A program
+is never migrated to it by inference, and the profile is part of the semantic
+KernelIR (the same expression is a different instruction at a different
+width), so it is covered by `ir_sha256`.
+
+**Admitted source shape.** One or two `Float32` entry parameters and a
+`Float32` result; immutable locals, blocks and `return`; same-module acyclic
+monomorphic helpers over `Float32`; the canonical `TrappingArithmetic(Float32)`
+methods `trappingAdd`, `trappingSubtract` and `trappingMultiply`, resolved by
+the Pervasive instance identity (never by a method's textual name). Every
+intermediate is a binary32 operation in the order written. The storage element
+is `f32` (4-byte stride), so `kernel.wgsl` declares `array<f32>` and the scalar
+entry is `f32`.
+
+**Refused, by name, never widened:** `Float64`; `trappingDivide` (WGSL `/` is
+not the trapping contract); float-to-integer conversion (`toNat32` and the rest
+of the conversion classes); float comparisons; `while`/`for`; foreign calls and
+arbitrary `@embed` (the latter is where transcendental functions would live);
+mutation, pointers, spans and records. The `u32-modular-v1` profile refuses the
+same source by naming `Float32` and the profile it would need.
+
+**Admitted numerical domain.** Finite binary32 values whose inputs and
+intermediates are normal: magnitudes in `[2^-126, 2^128)`, plus exact zero.
+Subnormal results, overflow to infinity, NaN, and signed-zero-dependent results
+are *outside the profile*. Inputs are bounded by the harness so none occurs;
+a non-finite result is a profile violation and is refused by the reference
+evaluator and by the device result check, not clamped. Because the source calls
+`trapping*` methods, this domain is also why the profile is sound: within it,
+the trapping contract cannot fire, so replacing the trap with a single WGSL
+operation does not change the program's behavior. Outside it, the CPU program
+would abort and the GPU program would not; that is exactly why the domain is
+part of the contract.
+
+**Rounding and contraction.** Each admitted operation is IEEE-754 binary32
+round-to-nearest-even. The emitter fixes the expression order and writes no
+`fma`, but a backend may still contract a multiply followed by an add: on the
+measured Intel UHD 630 adapter, `axpy(0.1, 0.2)` returns `0x3ee66667`
+(`0.45000001788139343`) where two separately rounded operations return
+`0x3ee66666` (`0.44999998807907104`). WGSL offers no portable way to forbid
+that fusion, so `wgsl-f32-v1` **permits contraction** and records it as
+`"contraction": "permitted"` in `requirements.numeric`; the Rust checker
+requires exactly that string for this profile (and `not-applicable` for
+`u32-modular-v1`). No bit-exact *cross-device* claim is made.
+
+**Tolerances.** The oracle is a binary32 reference computed with explicit
+rounding after each operation (`avm-gpu reference`); the source-level C row is
+the independent second oracle. A physical device result must agree with that
+reference within **1 ULP per admitted operation** (two operations for `axpy`,
+so 2 ULP), which is the budget a contracted multiply-add can consume; anything
+larger is a profile failure. Measured: 4 bounded `axpy` points, max 1 ULP. A
+hardware run is compared against that f32 reference, never against f64 with a
+generous epsilon.
+
+**Host representation.** Input and output buffers remain 4-byte words in both
+profiles; for `wgsl-f32-v1` a word is the IEEE-754 bit pattern of the value.
+`avm-gpu reference` and `avm-gpu run` accept and print values (not words) for
+this profile. The linear GPU job service synthesises `seed + i` as *u32*
+values and therefore refuses an `wgsl-f32-v1` bundle rather than running it with
+meaningless bit patterns.
 
 ## 3. Resource bounds and wrapper
 
@@ -150,9 +215,10 @@ discarded write as evidence that the intended bounds checks worked.
 ## 4. KernelIR and bundle format
 
 Use a small typed structured IR, not a second Austral parser. Preserve source
-locations as diagnostic data. Expression variants are parameter/local, u32/bool
+locations as diagnostic data. Expression variants are parameter/local, u32/f32/bool
 literal, typed intrinsic, comparison, Boolean operation, conditional and resolved
-helper call. Statements are immutable let, sequence, conditional and return.
+helper call; the IR's own `numeric_profile` selects which of them are well
+formed. Statements are immutable let, sequence, conditional and return.
 Represent the generated memory plan explicitly: `map1`/`map2`, identity output
 index, binding roles, guard and workgroup size. The renderer consumes that plan;
 proof tooling must not maintain another handwritten wrapper specification.
@@ -162,14 +228,14 @@ Use JSON schema identifier `austral.gpu.kernel.v1`. `kernel.json` contains:
 | Field | Required content |
 |---|---|
 | `schema` | Exact identifier above |
-| `backend` / `numeric_profile` | `wgsl` / `u32-modular-v1` |
+| `backend` / `numeric_profile` | `wgsl` / `u32-modular-v1` (default) or `wgsl-f32-v1` |
 | `entry` / `input_arity` | Qualified source name / 1 or 2 |
 | `compiler` | Compiler version, build/source identity when available, dirty/unknown explicitly recorded |
 | `sources` | Deterministically ordered logical paths and SHA-256 byte digests for the admitted source closure and canonical builtin source |
 | `kernel_ir` | Typed IR plus memory plan, with deterministic local names/order |
 | `ir_sha256` | SHA-256 of specified canonical semantic-IR bytes |
 | `wgsl_sha256` | SHA-256 of the exact `kernel.wgsl` bytes |
-| `requirements` | Binding/element layout, fixed local size, limits and required backend features |
+| `requirements` | Binding/element layout, fixed local size, limits, required backend features, and the `numeric` contract (profile, element, admitted operations, rounding, contraction, ULP tolerance) |
 | `evidence` | Per-claim statuses; `not-run`, `checked`, `proved-under-assumptions`, `gap`; never one unqualified `verified` flag |
 | `proof_manifest` | Null, or a reference to fixed-relative `proof-manifest.json` with SHA-256, using `austral.proof-chain.v1` |
 

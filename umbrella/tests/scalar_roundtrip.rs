@@ -338,6 +338,13 @@ fn a_wrapper_that_casts_the_float_through_i64_loses_negative_zero() {
 /// the Float64 leg runs. Both are checked *inside* the module, so an unnarrowed
 /// literal cannot reach the entry as a passing RESULT: its f64 bits have bit 31
 /// set and the wrapper's `F32` decode refuses the word, which aborts instead.
+///
+/// The unsigned legs are the `Nat32`/`Nat64` half of U11 step 1: `rs_u32_low`
+/// takes the largest `Nat32` (0xFFFF_FFFF) and returns its low half, and
+/// `rs_u64_high` takes `2^63+1` — the word whose sign bit is set — and returns
+/// its high half `0x8000_0000`. A `U32` decode that truncated, or a `U64`
+/// parameter that was sign-extended or narrowed to 32 bits, changes one of the
+/// two numbers the module checks before returning its RESULT.
 #[test]
 fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
     const EXPECTED: i64 = 0x4018_0000_0000_0000;
@@ -376,7 +383,11 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
          #[no_mangle]\n\
          pub extern \"C\" fn rs_f32_scale(factor: f32, value: i64) -> f32 { factor * value as f32 }\n\
          #[no_mangle]\n\
-         pub extern \"C\" fn rs_f32_bits(value: f32) -> i64 { value.to_bits() as i64 }\n",
+         pub extern \"C\" fn rs_f32_bits(value: f32) -> i64 { value.to_bits() as i64 }\n\
+         #[no_mangle]\n\
+         pub extern \"C\" fn rs_u32_low(value: u32) -> u32 { value & 0xFFFF }\n\
+         #[no_mangle]\n\
+         pub extern \"C\" fn rs_u64_high(value: u64) -> u32 { (value >> 32) as u32 }\n",
     )
     .expect("crate source");
 
@@ -387,7 +398,7 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
         "[module]\n\
          name = \"AdapterLive\"\n\n\
          [grants]\n\
-         kernel = [\"rs_narrow__adapter\", \"rs_toggle__adapter\", \"rs_scale__adapter\", \"rs_bits__adapter\", \"rs_f32_scale__adapter\", \"rs_f32_bits__adapter\"]\n",
+         kernel = [\"rs_narrow__adapter\", \"rs_toggle__adapter\", \"rs_scale__adapter\", \"rs_bits__adapter\", \"rs_f32_scale__adapter\", \"rs_f32_bits__adapter\", \"rs_u32_low__adapter\", \"rs_u64_high__adapter\"]\n",
     )
     .expect("manifest");
 
@@ -421,7 +432,7 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
     // The wrappers were generated from the emitted descriptors, not found by
     // accident: the driver names every one it built and loaded.
     assert!(
-        stderr.contains("built and loaded 6 adapter wrapper(s)"),
+        stderr.contains("built and loaded 8 adapter wrapper(s)"),
         "the build must generate and load the wrappers; stderr:\n{stderr}"
     );
     for symbol in [
@@ -431,6 +442,8 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
         "rs_bits__adapter",
         "rs_f32_scale__adapter",
         "rs_f32_bits__adapter",
+        "rs_u32_low__adapter",
+        "rs_u64_high__adapter",
     ] {
         assert!(stderr.contains(symbol), "stderr must name {symbol}:\n{stderr}");
     }

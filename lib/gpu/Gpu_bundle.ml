@@ -14,6 +14,9 @@ type source = {
 
 type evidence = {
   source: string;
+  (* Which GPU source admission produced the kernel. Recorded here because it
+     is a property of how the entry was admitted, not of the emitted IR. *)
+  source_profile: string;
   shader_validation: string;
   device_kind: string;
   execution: string;
@@ -35,7 +38,47 @@ type t = {
 
 let schema = "austral.gpu.kernel.v1"
 let backend = "wgsl"
-let numeric_profile = "u32-modular-v1"
+
+let numeric_profile (k: Gpu_ir.kernel): string =
+  Gpu_ir.profile_name k.Gpu_ir.numeric_profile
+
+(** The numeric contract travels with the bundle instead of living only in
+    prose, so the checker can refuse a kernel whose requirements disagree with
+    its IR. The tolerance is the one the profile admits, in ULP of the CPU
+    binary32 reference, per admitted operation. *)
+let numeric_contract (k: Gpu_ir.kernel): Yojson.Safe.t =
+  match k.Gpu_ir.numeric_profile with
+  | Gpu_ir.U32ModularV1 ->
+     `Assoc [ "profile", `String (Gpu_ir.profile_name Gpu_ir.U32ModularV1);
+              "element", `String "u32";
+              "operations", `List [ `String "add"; `String "subtract";
+                                   `String "multiply"; `String "bitwiseAnd";
+                                   `String "bitwiseOr"; `String "bitwiseXor";
+                                   `String "bitwiseNot" ];
+              "rounding", `String "modulo-2^32";
+              "contraction", `String "not-applicable";
+              "domain", `String "all-2^32";
+              "subnormals", `String "not-applicable";
+              "overflow", `String "defined-wraparound";
+              "tolerance_ulp_per_operation", `Int 0 ]
+  | Gpu_ir.WgslF32V1 ->
+     `Assoc [ "profile", `String (Gpu_ir.profile_name Gpu_ir.WgslF32V1);
+              "element", `String "f32";
+              "operations", `List [ `String "add"; `String "subtract";
+                                   `String "multiply" ];
+              "rounding", `String "binary32-round-to-nearest-even";
+              (* The emitted expression order is fixed and no `fma` is written,
+                 but a backend may still fuse a multiply followed by an add:
+                 measured on Intel UHD 630, 0.1*2.5+0.2 returns 0x3ee66667
+                 where two roundings return 0x3ee66666. The profile permits
+                 that and budgets for it (1 ULP per admitted operation)
+                 rather than claiming a rounding the platform does not
+                 guarantee. *)
+              "contraction", `String "permitted";
+              "domain", `String "finite";
+              "subnormals", `String "outside-profile";
+              "overflow", `String "outside-profile";
+              "tolerance_ulp_per_operation", `Int 1 ]
 
 let compiler_identity (): string =
   (* The actual compiler version is authoritative. A git revision is included
@@ -50,6 +93,7 @@ let compiler_identity (): string =
 
 let default_evidence (): evidence =
   { source = "checked";
+    source_profile = "v1";
     shader_validation = "not-run";
     device_kind = "not-probed";
     execution = "not-run";
@@ -66,26 +110,28 @@ let builtin_sources (): source list =
     digest_source ~path:"builtin/Austral.Pervasive.aum" BuiltInModules.pervasive_body_source ]
 
 let requirements_json (k: Gpu_ir.kernel): Yojson.Safe.t =
+  let element = Gpu_ir.element_name (Gpu_ir.element_of_profile k.numeric_profile) in
   let bindings =
     List.init k.input_arity (fun i ->
       `Assoc [ "group", `Int 0;
                "binding", `Int i;
                "role", `String "input";
                "access", `String "read";
-               "element", `String "u32";
+               "element", `String element;
                "stride_bytes", `Int 4 ])
     @ [ `Assoc [ "group", `Int 0;
                  "binding", `Int k.input_arity;
                  "role", `String "output";
                  "access", `String "read_write";
-                 "element", `String "u32";
+                 "element", `String element;
                  "stride_bytes", `Int 4 ] ]
   in
   `Assoc [ "bindings", `List bindings;
            "workgroup_size", `Int k.memory.workgroup_size;
            "max_elements", `Int 1048576;
            "required_features", `List [];
-           "backend_features", `List [] ]
+           "backend_features", `List [];
+           "numeric", numeric_contract k ]
 
 let make ?(evidence = default_evidence ()) ?(wgsl = "") ~(sources: source list)
     (kernel: Gpu_ir.kernel): t =
@@ -110,6 +156,7 @@ let json_of_source (s: source) =
 
 let json_of_evidence (e: evidence) =
   `Assoc [ "source", `String e.source;
+           "source_profile", `String e.source_profile;
            "shader_validation", `String e.shader_validation;
            "device_kind", `String e.device_kind;
            "execution", `String e.execution;
@@ -119,7 +166,7 @@ let to_yojson (b: t): Yojson.Safe.t =
   `Assoc [
     "schema", `String schema;
     "backend", `String backend;
-    "numeric_profile", `String numeric_profile;
+    "numeric_profile", `String (numeric_profile b.kernel);
     "entry", `String b.entry;
     "input_arity", `Int b.input_arity;
     "compiler", `String b.compiler;

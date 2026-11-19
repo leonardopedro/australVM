@@ -553,9 +553,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `drift-controls` under `nix develop .#ocaml` (where the `default` shell that
   carries why3 does not build).
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the
-  seven read-only scripts listed in `READ_ONLY_CONTROLS` — the four §W3/§W9.3
-  cell controls, `w3-approval-state-drift-control`, and the two L11 controls
-  (`l11a-ordering`, `l11b-conversion`) — then `obj-drift-control` alone, because
+  eight read-only scripts listed in `READ_ONLY_CONTROLS` — the four §W3/§W9.3
+  cell controls, `w5-arch-gap-control`, `w3-approval-state-drift-control`, and
+  the two L11 controls (`l11a-ordering`, `l11b-conversion`) — then
+  `obj-drift-control` alone, because
   that one edits the tree and rebuilds. `make test` depends on it. The two
   parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
   (2026-11-18, before the two L11 controls joined the loop; the ~30% saving is
@@ -585,16 +586,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `verify-invariants` because it reads the plan's prose rather than an artifact,
   which also means nothing runs it for you: adding a `check` to
   `scripts/verify-invariants` makes it exit 1 until the plan quotes the new
-  numbers. Last measured 2026-11-19: `223 statements, 136 distinct, 22 probe
-  rows (20 matched), 0 neither, copy 0`.
+  numbers. Last measured 2026-11-19, after the merge: `225 statements, 137
+  distinct, 22 probe rows (20 matched), 0 neither, copy 0`.
 - `scripts/lib/arch.sh` — the one recorded-arch reader for the W5 object
   digest (`avm_recorded_arch`, `avm_host_arch`, `avm_arch_gap`), sourced by
   `verify-invariants`, `obj-drift-control` and `w5-arch-gap-control` so all
   three word a host mismatch the same way. The committed certificate records
-  `arch=x86_64` (2026-11-19), so the obj comparison is `[pass]` there and the
-  documented `[gap]` elsewhere; `scripts/obj-drift-control` expects the obj
-  line on a matching host and the cps line on a mismatched one, and exit 2
-  stays an explained gap in `make test`.
+  `arch=aarch64` (2026-11-19, the merge's incoming branch), so the obj
+  comparison is `[pass]` on that host and the documented `[gap]` on this
+  x86_64 one; `scripts/obj-drift-control` expects the obj line on a matching
+  host and the cps line on a mismatched one, and exit 2 stays an explained gap
+  in `make test`.
 - `scripts/w5-arch-gap-control` — the arch-gap path itself: on this host the
   matching-arch run never takes it, so the control sets
   `AUSTRALVM_HOST_ARCH` to a label that is neither the recorded nor the real

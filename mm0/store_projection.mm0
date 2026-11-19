@@ -76,9 +76,9 @@
 -- declarations, and the ISA model the projection has to reach. A stale digest
 -- means this comment is describing files that have since changed, and the gate
 -- fails.
--- cites: mm0/clif.mm0 sha256=9bb0c11ec0736612fdef90e2a3f575b418533872ca1f3a2b530b29dff644fa31
+-- cites: mm0/clif.mm0 sha256=ac2f4efe832683ce8e8832f5a0e415d0c3662eff661c9964bbfd0715c4558767
 -- cites: mm0/statements/rv64_memory.mm0 sha256=ab0e372d5288bafcc18813cd2f610e266cc04468061a5f6f7713004ddfdffa5b
--- cites: mm0/isa.mm0 sha256=ed69dd7abeec123738783c42d5c30cb279303789d1b652e2e4c1ab98ac60f7af
+-- cites: mm0/isa.mm0 sha256=2fc811bdcf2d98a6ddc90b1449a19ba6137bde1c10342c49023b73473177f7f9
 --
 -- certificate: [gap] — nothing in `mm0/approved/` bears on these claims, and an
 --   approval is the owner's commit, not a script's. If `mm0/approved/` ever

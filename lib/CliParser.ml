@@ -78,6 +78,42 @@ module Errors = struct
       Text "one selected entry function and cannot publish a bundle without it."
     ]
 
+  let unknown_numeric_profile (profile: string) =
+    austral_raise CliError [
+      Text "Unknown GPU numeric profile ";
+      Code profile;
+      Text ". Valid profiles are ";
+      Code "u32-modular-v1";
+      Text " and ";
+      Code "wgsl-f32-v1";
+      Text "."
+    ]
+
+  let numeric_profile_without_gpu () =
+    austral_raise CliError [
+      Code "--gpu-numeric-profile";
+      Text " requires ";
+      Code "--target-type=wgsl";
+      Text ": the profile selects the GPU kernel's numeric contract."
+    ]
+
+  let unknown_source_profile (profile: string) =
+    austral_raise CliError [
+      Text "Unknown GPU source profile ";
+      Code profile;
+      Text ". The only opt-in profile is ";
+      Code "bounded-fold-v1";
+      Text "."
+    ]
+
+  let source_profile_without_gpu () =
+    austral_raise CliError [
+      Code "--gpu-source-profile";
+      Text " requires ";
+      Code "--target-type=wgsl";
+      Text ": the profile selects which GPU source admission the entry gets."
+    ]
+
   let invalid_bool_flag_value (name: string) (value: string) =
     austral_raise CliError [
       Text "Invalid value for ";
@@ -117,8 +153,15 @@ type target =
   | Executable of { bin_path: string; entrypoint: entrypoint; }
   | CStandalone of { output_path: string; entrypoint: entrypoint option; }
   (** Compile the checked GPU subset to a WGSL bundle directory.
-      `--output` is the bundle directory (`kernel.json` + `kernel.wgsl`). *)
-  | WgslBundle of { output_dir: string; entrypoint: entrypoint; }
+      `--output` is the bundle directory (`kernel.json` + `kernel.wgsl`).
+      The numeric profile is explicit (`--gpu-numeric-profile`), defaulting to
+      the integer v1 profile; it is never inferred from the source. *)
+  | WgslBundle of {
+      output_dir: string;
+      entrypoint: entrypoint;
+      numeric_profile: Gpu_ir.numeric_profile;
+      source_profile: Gpu_subset.source_profile;
+    }
 [@@deriving eq]
 
 type error_reporting_mode =
@@ -210,11 +253,30 @@ let parse_c_target (arglist: arglist): (arglist * target) =
       | None ->
          Errors.missing_entrypoint ())
 
+let parse_numeric_profile (arglist: arglist): (arglist * Gpu_ir.numeric_profile) =
+  match pop_value_flag arglist "gpu-numeric-profile" with
+  | Some (arglist, value) ->
+     (match Gpu_ir.profile_of_name value with
+      | profile -> (arglist, profile)
+      | exception Gpu_ir.Ir_error _ -> Errors.unknown_numeric_profile value)
+  | None -> (arglist, Gpu_ir.U32ModularV1)
+
+let parse_source_profile (arglist: arglist): (arglist * Gpu_subset.source_profile) =
+  match pop_value_flag arglist "gpu-source-profile" with
+  | Some (arglist, value) ->
+     (match Gpu_subset.source_profile_of_string value with
+      | profile -> (arglist, profile)
+      | exception Gpu_subset.Refused _ -> Errors.unknown_source_profile value)
+  | None -> (arglist, Gpu_subset.StrictV1)
+
 let parse_wgsl_target (arglist: arglist): (arglist * target) =
+  let (arglist, numeric_profile) = parse_numeric_profile arglist in
+  let (arglist, source_profile) = parse_source_profile arglist in
   match pop_value_flag arglist "entrypoint" with
   | Some (arglist, entrypoint) ->
      let (arglist, output_dir) = get_output arglist in
-     (arglist, WgslBundle { output_dir; entrypoint = parse_entrypoint entrypoint })
+     (arglist, WgslBundle { output_dir; entrypoint = parse_entrypoint entrypoint;
+                            numeric_profile; source_profile })
   | None ->
      (match pop_bool_flag arglist "no-entrypoint" with
       | Some _ -> Errors.no_entrypoint_wrong_gpu_target ()
@@ -224,6 +286,14 @@ let parse_target_type (arglist: arglist): (arglist * target) =
   match pop_value_flag arglist "target-type" with
   | Some (arglist, target_value) ->
      (* An explicit target type was passed. *)
+     if target_value <> "wgsl" then
+       (match pop_value_flag arglist "gpu-numeric-profile" with
+        | Some _ -> Errors.numeric_profile_without_gpu ()
+        | None -> ());
+     if target_value <> "wgsl" then
+       (match pop_value_flag arglist "gpu-source-profile" with
+        | Some _ -> Errors.source_profile_without_gpu ()
+        | None -> ());
      (match target_value with
       | "exe" ->
          (* Build an executable binary. *)
@@ -240,6 +310,14 @@ let parse_target_type (arglist: arglist): (arglist * target) =
       | _ ->
          Errors.unknown_target target_value)
   | None ->
+     (* The profile only means something for the GPU target. Refuse it here
+        instead of leaving it to the generic leftover-argument error. *)
+     (match pop_value_flag arglist "gpu-numeric-profile" with
+      | Some _ -> Errors.numeric_profile_without_gpu ()
+      | None -> ());
+     (match pop_value_flag arglist "gpu-source-profile" with
+      | Some _ -> Errors.source_profile_without_gpu ()
+      | None -> ());
      (* The default target is to build an executable binary. This means we need
         an entrypoint. *)
      parse_executable_target arglist
