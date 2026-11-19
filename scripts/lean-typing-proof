@@ -1470,11 +1470,16 @@ def main() -> int:
         # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
         # term is a single expression (MM0 nests proofs in argument position
         # exactly like terms).
-        ty = body_ty
-        for k in range(len(binders) - 1, -1, -1):
+        for _ in binders:
             proof = f"(ty_abs {proof})"
             _step_add(steps_hist, steps_order, "ty_abs")
-            ty = f"(tpi {binders[k]} {ty})"
+        # One allocation, not one per binder. Wrapping in place copies the
+        # 1.9 GB type once per binder and holds `body_ty` the whole time, so the
+        # ns row needed three such strings at once (~5.8 GB) and died at the 6 GiB
+        # cap on the *last* obligation after 5 000 s (§13.41, §13.42). The result
+        # is the same text: `(tpi b0 (tpi b1 … body_ty…))`.
+        prefix = "".join(f"(tpi {b} " for b in binders)
+        ty = "".join((prefix, body_ty, ")" * len(binders)))
         if spine:
             # The wrapping is only valid if it reproduces the declared type,
             # which is on disk: comparing it there costs nothing.
@@ -1483,6 +1488,8 @@ def main() -> int:
                     "derived type is not the declared type:\n"
                     f"  derived  {ty[:200]}\n  declared {_spool_head(ty_path, 200)}"
                 )
+        # `ty` and the body type are dead from here: the goal is on disk.
+        del ty
         goal_ctx, goal_term, goal_ty = "tnil", val_path, ty_path
 
     head = [
