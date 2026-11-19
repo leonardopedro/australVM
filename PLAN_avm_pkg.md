@@ -641,13 +641,39 @@ the runtime work; `link_with` remains the owner-only entry point. Bases are
 assigned deterministically by the CLI (owner base + 0x01000000, +0x02000000,
 …), recorded per provider in `cell.json`, and the executor maps each provider
 text there after checking it is page-aligned and does not overlap the owner
-or the stub page. `examples/nix-pkg/multi-cell.sh` is the end-to-end check:
-`MathLib` exports `double`, `DoubleApp` imports it, the owner cell alone fails
-with `unresolved symbol "double"`, and with `--provider mathlib.avm`
-`double(42)` runs in the provider's image and returns 84. The provider and
-owner are compiled separately because one CPS emission carries one module's
-functions — that separation is what puts the callee in another cell. CI runs
-the script after the linker control.
+or the stub page.
+
+The provider set can also come from the derivation plan: `--plan <json> --for
+<name> --cells <dir>` adds every derivation `<name>` depends on,
+dependency-first, as `<dir>/<derivation>.avm`; an explicit `--provider` whose
+file stem names that derivation wins, and a missing cell fails the load by
+name. A plan-derived cell must record the derivation id the plan resolved, so
+a differently-built cell placed under the expected filename is refused. The
+plan is metadata, not a payload — a `.avm` cell still does not carry its
+dependencies.
+
+A provider contributes executable text, so structure is not a trust decision:
+`load` requires `--key <pubkey-hex32>` whenever a provider is supplied and
+checks the Ed25519 trailer of every provider (and of the owner) before
+linking; `build` reports `"pubkey"` so a caller can verify what it just built.
+A provider with no key is refused, and one signed by another builder fails the
+signature check. Provider text and the owner are verified, never trusted by
+layout alone.
+
+`examples/nix-pkg/multi-cell.sh` is the end-to-end check. `MathLib` exports
+`double`, `DoubleApp` imports it, the owner cell alone fails with `unresolved
+symbol "double"`, and the plan closure resolves it so `double(42)` runs in
+the provider's image and returns 84. The second half is a mutually-referencing
+pair — owner `Callback` defines `tick` and calls `compute`, provider `Wave`
+defines `compute` and calls `tick` — where module imports must be acyclic, so
+both sides use `Foreign_Import` and are compiled separately; the owner alone
+misses `compute`, and the linked image runs 42 → provider → owner `tick` →
+`+1` = 53. The CPS JIT logs an unresolved-symbol diagnostic while compiling
+a cell whose callee is in the other cell (CPS emission happens before that
+step and is unaffected); the script records it as a note instead of letting
+it read as a failure. The provider and owner are compiled separately because
+one CPS emission carries one module's functions — that separation is what
+puts the callee in another cell. CI runs the script after the linker control.
 
 ## §5 Not covered — next steps in order
 

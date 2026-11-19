@@ -512,14 +512,17 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `copy` row, `W3: $_stem matches its approved statements`, is
   `w3-approved-row`: it copies the whole approved root into scratch and weakens
   one approved axiom there, so the check runs without the tree holding any new
-  approval. `liquid-golden` is the one case conditional on the shell: the gate
-  guards that check on `command -v why3` and reports it as an explained `[gap]`
-  when the prover is absent, so the drifted copy has no `[FAIL]` to produce. The
-  case then prints `[gap] liquid-golden: why3 not on PATH …` and the summary
-  reads `13 case(s) held, 1 not covered in this shell` — never a silent pass,
-  which is what lets `make test` run past `drift-controls` under
-  `nix develop .#ocaml` (where the `default` shell that carries why3 does not
-  build).
+  approval. Each run appends its own wall clock to
+  `$W3_DRIFT_LOGS/timings.tsv` (and to `$W3_DRIFT_RECORD` when set); the rows
+  kept in the tree are `docs/data/w3/drift-timings.tsv`, which the plan quotes
+  instead of a retyped number. `liquid-golden` is the one case conditional on
+  the shell: the gate guards that check on `command -v why3` and reports it as
+  an explained `[gap]` when the prover is absent, so the drifted copy has no
+  `[FAIL]` to produce. The case then prints `[gap] liquid-golden: why3 not on
+  PATH …` and the summary reads `13 case(s) held, 1 not covered in this shell`
+  — never a silent pass, which is what lets `make test` run past
+  `drift-controls` under `nix develop .#ocaml` (where the `default` shell that
+  carries why3 does not build).
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the seven
   read-only `*-drift-control` scripts the glob matches (`obj-drift-control` is
   the eighth and runs alone, because it edits the tree and rebuilds), and

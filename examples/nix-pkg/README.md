@@ -176,21 +176,40 @@ examples/nix-pkg/multi-cell.sh
 ```
 
 ```text
-== images (avm-pkg build from each CPS image)
-  [ok] mathlib.avm (provider) and app.avm (owner)
 == negative control (the owner alone must not link)
   [ok] without --provider: unresolved symbol "double" (exit 1)
-== execution (owner + provider cell, linked at load)
+== execution (owner + provider cell, resolved from the plan)
   [ok] double(42) resolved in the provider image (base 0x11000000) and returned 84
+== negative control (a provider without a key is refused)
+  [ok] provider without --key refused (exit 1)
+== negative control (a provider signed by another builder is refused)
+  [ok] provider signed by another builder refused (exit 1)
+== callback execution (owner -> provider -> owner)
+  [ok] provider's compute(42) called owner's tick and returned 53
 ```
 
-The loader now takes repeated `--provider <cell.avm>` flags. Each provider is
-parsed and gated by **its own** capability table — it runs in the same
-process, so `Execute` and its `Call:<symbol>` list are judged too — and then
-`linker::link_cells` builds one symbol table for the whole image and applies
-every cell's relocations at its own base. That second part is what makes a
-provider that calls the owner or the runtime work; the owner-only
-`link_with` leaves provider text unpatched.
+The loader takes repeated `--provider <cell.avm>` flags, or `--plan <plan.json>
+--for <name> --cells <dir>`: the plan names the closure, and every derivation
+the owner depends on (transitively, dependency-first) is taken from
+`<dir>/<name>.avm`. An explicit `--provider` whose file stem names the same
+derivation wins, so one provider can be overridden without dropping the rest;
+a dependency with no cell is a hard error naming the missing file, never a
+silently smaller image. A plan-derived provider is also checked against the
+derivation id the plan resolved: the cell records the id it was built for, so
+a differently-built cell dropped in as `<name>.avm` is refused. Each provider is parsed and gated by **its own**
+capability table — it runs in the same process, so `Execute` and its
+`Call:<symbol>` list are judged too — and then `linker::link_cells` builds one
+symbol table for the whole image and applies every cell's relocations at its
+own base. That second part is what makes a provider that calls the owner or
+the runtime work; the owner-only `link_with` leaves provider text unpatched.
+
+Provider text is executable, so layout is not a trust decision: `load` requires
+`--key <pubkey-hex32>` whenever a provider is supplied and verifies every
+provider (and the owner) against it before linking. `build` prints that public
+key in its report (`"pubkey"`), so a script can verify what it just built;
+without a key the load is refused, and a cell signed by a different builder
+fails the signature check. Neither control is a policy question — a provider
+without a signature is not run at all.
 
 Bases are assigned by the CLI, not guessed by the executor: the owner keeps
 `--base` and provider *n* is linked for `base + n × 0x01000000`. The layout is
@@ -203,8 +222,21 @@ The two modules are compiled **separately**, because one CPS emission carries
 one module's functions: compiling both together would put `double` in the
 owner's cell and delete the thing under test. The derivation plan records
 `doubleapp` as depending on `mathlib`, which is the package-level shape of the
-same edge; the loader still needs the explicit `--provider` because a `.avm`
-cell does not carry its dependencies' bytes.
+same edge, and that plan is now how the provider is found; a `.avm` cell still
+does not carry its dependencies' bytes, which is why `--cells` names the
+directory.
+
+The second half of the script compiles a mutually-referencing pair: the owner
+`Callback` defines `tick` and calls `compute`; the provider `Wave` defines
+`compute` and calls `tick`. Module imports must be acyclic, so each side
+reaches the other through `pragma Foreign_Import(External_Name => …)` and each
+cell is compiled on its own. The CPS JIT logs an unresolved-symbol diagnostic
+while compiling a cell whose callee is in the other cell (the CPS file is
+written before that step, so emission is unaffected); the script records the
+diagnostic in `$CB/*.err` and reports it as a note. Loading the owner alone
+misses `compute`; loading it with the plan closure resolves both directions
+and `main` returns 53 — 42 to the provider, `tick` back in the owner, `+1` in
+the provider. This is the case the shared symbol table exists for.
 
 ## Limits of this test (read before trusting a pass)
 

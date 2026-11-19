@@ -979,9 +979,10 @@ the artifact, so `mm0-c` checks them too.
   reason the recorded row now marks that boundary with `…` rather than quoting a
   sentence no single line of the script contains.
 
-  **The twelve former `copy` rows, and the one that stays.**
-  `scripts/w3-drift-controls` is those twelve controls under one entry point
-  (`<case>`, `--list`, or `all`). Each case builds a scratch copy, drifts one
+  **The thirteen former `copy` rows.**
+  `scripts/w3-drift-controls` is those thirteen controls under one entry point
+  (`<case>`, `--list`, or `all`), plus `cert-approved` for the certificate's
+  approved branch — fourteen cases. Each case builds a scratch copy, drifts one
   claim in it, runs the whole gate with the read-only override that points at the
   copy, and requires exit 1 with the expected `[FAIL]` line — and, where a second
   check reads the same copy, the `[pass]` lines that must not move. Two overrides
@@ -997,25 +998,65 @@ the artifact, so `mm0-c` checks them too.
   where the recorded totals come from. `make drift-controls` runs
   `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
   `make test` depends on it — the Makefile states the cost, because every control
-  is a full gate run (~4.5 min). The one `copy` row left is not a control anyone
-  forgot: `W3: $_stem matches its approved statements` has no branch to exercise
-  until an artifact is approved, and approving is the owner's commit.
+  is a full gate run (~4.5 min). A case cannot be made cheaper (the case *is* the gate
+  run), so `-j N` runs independent ones at once — and a run writes its own wall
+  clock down rather than leaving it in a transcript: the runner appends one row
+  per run to `$W3_DRIFT_LOGS/timings.tsv`, and to `$W3_DRIFT_RECORD` when that
+  is set. The rows kept in the tree are `docs/data/w3/drift-timings.tsv`:
+
+  ```
+  date	rev	jobs	requested	wall_s	per_case_s	held	outcome
+  2026-11-19	de8b11b2	1	14	3763	268	14/14	held
+  2026-11-19	de8b11b2	2	14	2649	189	14/14	held
+  ```
+
+  That is all 14 cases in **62m43s** at `-j 1` (268 s each) against **44m9s** at
+  `-j 2` (189 s of wall clock per case, ~379 s of work, because two gate runs
+  share the core) — 18m34s, 30%, off. The second core is worth 1.42x rather than
+  2x because a single gate run is itself mostly serial, and every case still
+  holds under `-j 2` (the same 14 `holds` as at `-j 1`), which is the check that
+  the cases really are independent: own scratch tree, own `TMPDIR`, repository
+  read-only. Those two rows predate the recorder and were entered from the runs'
+  own gate logs; every row after them is written by the run itself. Reproduce
+  with `W3_DRIFT_RECORD=docs/data/w3/drift-timings.tsv bash
+  scripts/w3-drift-controls -j 2 all`, under `nix develop`. The five read-only
+  `*-drift-control` scripts are separate scripts and write no row of their own;
+  measured the same way, they take 22m44s serial against 17m22s
+  at `-P 2`, all five holding — so the two parallel halves together go from
+  **1h25m27s to 1h01m31s**, 23m56s or 28% of the wall clock. `make
+  drift-controls` therefore runs at `DRIFT_JOBS` (default `nproc`) and keeps
+  `scripts/obj-drift-control` — the one control that edits the tree and
+  rebuilds the compiler — last and serial; that one is unchanged and excluded
+  from the totals above.
+
+  The thirteenth case is the row that used to be the exception. `W3: $_stem
+  matches its approved statements` only runs for an artifact that has an
+  approval, and the §W3 table's own rows are all still pending — so the case
+  brings its own approved root instead of waiting for one: `w3-approved-row`
+  copies `mm0/approved/` into scratch, changes one approved axiom's text
+  (`quasi_rh_7_8`'s single axiom, `cc0` → `cc1`) and leaves the file's digest
+  alone, which is precisely a statement weakened after the fact. Measured
+  2026-11-18: exit 1, `140 passed, 7 explained gap(s), 1 failed`, the single red
+  line being `[FAIL] W3: quasi_rh_7_8 matches its approved statements` with the
+  other 7 gaps and every other check unmoved. Nothing is approved by it —
+  `mm0/approved/` is read and copied, never written, and the scratch copy is
+  deleted with the run — so the owner's commit remains the only way an approval
+  enters the tree.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 202 `check` statements,
-  117 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 213 `check` statements,
+  128 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 21 of those 117 have a measured perturbed-tree
+  number, not a different claim. 22 of those 128 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
-  neither: no check in the gate is unread now, and the gap is the 1 `copy` row —
-  `W3: $_stem matches its approved statements`, which compares an *approved*
-  artifact with its record and so cannot be reached while no artifact is
-  approved; reaching it needs an approval, and only the owner may commit one.
-  Every other `copy` row has a case in `scripts/w3-drift-controls` (twelve
-  perturbed-tree runs, one per row, `make drift-controls`), which is why the
-  `copy` column now holds one row and not thirteen.
+  neither: no check in the gate is unread now, and there are no `copy` rows —
+  the last one, `W3: $_stem matches its approved statements`, is measured by
+  `w3-approved-row` from a scratch approved root rather than by an approval in
+  the tree. Every `copy` row (thirteen perturbed-tree runs, one per row,
+  `make drift-controls`) is now a case in `scripts/w3-drift-controls`, which is
+  why the `copy` column is empty and not thirteen rows.
   `class` is one of five. **control** — the check already perturbs a scratch copy
   (or stages into a scratch root) on every run and requires the refusal, so its
   red path is observed without a second experiment. **derived** — the check
@@ -1024,8 +1065,8 @@ the artifact, so `mm0-c` checks them too.
   drifted claim on either side turns it red by construction. **copy** — a control
   of the `probes.tsv` shape is possible (copy the data, drift one claim, point an
   override at the copy) and is not written yet; this is the one class that is a
-  real gap, and it now holds one row: each of the twelve former members is a case
-  of `scripts/w3-drift-controls`, one `probes.tsv` row apiece. **tool** — the check only runs when an external tool is present
+  real gap, and it now holds no rows: each of the thirteen former members is a
+  case of `scripts/w3-drift-controls`, one `probes.tsv` row apiece. **tool** — the check only runs when an external tool is present
   (`mm0-c`, Lean, `why3`/`z3`, `cc`), so its observed failure mode so far is a
   missing tool, not a drifted claim. **none** — the check asserts a fact about the
   implementation (a file exists, a source line says something, a scan finds no
@@ -1050,6 +1091,17 @@ the artifact, so `mm0-c` checks them too.
   | `L10 Cycle B: liquid_measure tenant registered in Vm_plugin.boot` | none | greps a source file |
   | `L10 Cycle B: liquid_measure is a distinct tenant from liquid` | none | compares two source strings |
   | `L10 Cycle B: LiquidMeasure is the extracted module, listed in dune` | none | greps a build file |
+  | `L11a: LiquidIndexClosure is a module of austral_liquid` | none | greps a build file |
+  | `L11a: the liquid pass runs the index-closure audit before emitting` | none | line numbers out of one source file, compared to each other — recomputed from the tree, nothing recorded to drift |
+  | `L11a: the index-closure audit has its own test suite` | none | greps `test/dune` for a suite name |
+  | `L11b: LiquidIndex is a module of austral_liquid` | none | greps a build file |
+  | `L11b: the sorted index language has its own test suite` | none | greps `test/dune` for a suite name |
+  | `L11b: the sorted index test does not drive the compiler` | none | asserts an absence in one dune stanza |
+  | `L11c: LiquidSplitPilot is a module of austral_liquid` | none | greps a build file |
+  | `L11c: the split pilot runs before the .mlw is emitted` | none | line numbers out of one source file, compared to each other |
+  | `L11c: the split pilot has its own test suite` | none | greps `test/dune` for a suite name |
+  | `L11c: the split pilot has an end-to-end suite` | none | a directory's existence |
+  | `L11c: the split pilot's facts are checked to erase` | none | greps a test file for a case name |
   | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
   | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |
   | `Liquid golden vc-fold-premises.mlw proves in full under z3` | tool | needs `why3` + `z3` |
@@ -1071,7 +1123,7 @@ the artifact, so `mm0-c` checks them too.
   | `S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt` | none | runs the repository's own test |
   | `S30: cadabra2-cli subprocess, not a dependency` | none | an architectural claim about source |
   | `U11: the CPS lowering's adapter descriptors match the golden` | derived | re-emits the descriptors from the fixture and diffs them with `test-programs/adapters/adapters.golden` |
-  | `W3: $_stem matches its approved statements` | copy | per approved row, so it needs an approval to exist; `mm0/approved/` holds none and a control may not create one — the owner's first approval makes it measurable |
+  | `W3: $_stem matches its approved statements` | control | `w3-approved-row` copies the whole approved root, weakens one approved axiom's text and leaves its digest alone, then runs the gate through `AUSTRALVM_APPROVED_ROOT`; `mm0/approved/` is only read, so no control approves |
   | `W3: stage-approvals stages exactly §W3's pending rows` | control | the staging runs against a scratch root every run; the row is its refusal path |
   | `W6: generated C probe compiles and passes at tolerance 1e-8` | tool | needs `cc` |
   | `W8: hypotheses are cited, pinned, and the unchecked count matches its pin` | control | `isa-hypothesis-pin` rewrites `-- unchecked-citations:` to 1 in an `AUSTRALVM_MM0_DIR` copy |
