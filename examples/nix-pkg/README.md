@@ -158,8 +158,11 @@ were fixed at the cause rather than worked around:
   Float64 `+` was a call to the *integer* `trappingAdd`. Float64 is now
   carried as its IEEE-754 bit pattern in the same word (`Int64.bits_of_float`,
   exact for fractions/negatives/NaN) and `Compiler_cps` lowers Float64
-  `+ - * /` to `au_fadd`/`au_fsub`/`au_fmul`/`au_fdiv`, which bitcast, compute
-  in `f64` and bitcast back; pinned by `float_helpers_bitcast_and_compute`.
+  `+ - * /` to the `au_f64_add`/`au_f64_subtract`/`au_f64_multiply`/
+  `au_f64_divide` bridge primitives, which bitcast, compute in `f64` and
+  bitcast back; pinned by `float_helpers_bitcast_and_compute`. The executor's
+  stub page supplies them at the same four addresses as the older `au_f*`
+  names, and `run.sh` resolves both spellings.
 
 None of these is visible from source-level verification; they are why the
 execution step exists.
@@ -189,14 +192,14 @@ examples/nix-pkg/multi-cell.sh
 ```
 
 The loader takes repeated `--provider <cell.avm>` flags, or `--plan <plan.json>
---for <name> --cells <dir>`: the plan names the closure, and every derivation
-the owner depends on (transitively, dependency-first) is taken from
-`<dir>/<name>.avm`. An explicit `--provider` whose file stem names the same
-derivation wins, so one provider can be overridden without dropping the rest;
-a dependency with no cell is a hard error naming the missing file, never a
-silently smaller image. A plan-derived provider is also checked against the
-derivation id the plan resolved: the cell records the id it was built for, so
-a differently-built cell dropped in as `<name>.avm` is refused. Each provider is parsed and gated by **its own**
+--for <name>`: the plan names the closure, and every derivation the owner
+depends on (transitively, dependency-first) is found in the **store by the
+derivation id the plan resolved** — a cell's manifest records the derivation
+it was built for, so the id is the key and there is no filename to substitute;
+a dependency with no cell is a hard error naming the derivation and its id,
+and two cells for one derivation are refused as ambiguous. An explicit
+`--provider` whose file stem names the same derivation wins, so one provider
+can be overridden without dropping the rest. Each provider is parsed and gated by **its own**
 capability table — it runs in the same process, so `Execute` and its
 `Call:<symbol>` list are judged too — and then `linker::link_cells` builds one
 symbol table for the whole image and applies every cell's relocations at its
@@ -222,21 +225,33 @@ The two modules are compiled **separately**, because one CPS emission carries
 one module's functions: compiling both together would put `double` in the
 owner's cell and delete the thing under test. The derivation plan records
 `doubleapp` as depending on `mathlib`, which is the package-level shape of the
-same edge, and that plan is now how the provider is found; a `.avm` cell still
-does not carry its dependencies' bytes, which is why `--cells` names the
-directory.
+same edge, and that plan is now how the provider is found: its id is looked up
+in the store where the build put it, so no directory or filename is involved.
 
 The second half of the script compiles a mutually-referencing pair: the owner
 `Callback` defines `tick` and calls `compute`; the provider `Wave` defines
 `compute` and calls `tick`. Module imports must be acyclic, so each side
 reaches the other through `pragma Foreign_Import(External_Name => …)` and each
-cell is compiled on its own. The CPS JIT logs an unresolved-symbol diagnostic
-while compiling a cell whose callee is in the other cell (the CPS file is
-written before that step, so emission is unaffected); the script records the
-diagnostic in `$CB/*.err` and reports it as a note. Loading the owner alone
-misses `compute`; loading it with the plan closure resolves both directions
-and `main` returns 53 — 42 to the provider, `tick` back in the owner, `+1` in
-the provider. This is the case the shared symbol table exists for.
+cell is compiled on its own. For C output the compiler binds a symbol it
+cannot resolve to a trap thunk (`set_link_time_imports`): the import stays in
+the CPS, the loader resolves it to the real cell address, and the thunk aborts
+if anything ever calls through it — so there is no unresolved-symbol
+diagnostic, and no way to run an unresolved call either. The script asserts
+the diagnostic is absent. Loading the owner alone misses `compute`; loading it
+with the plan closure resolves both directions and `main` returns 53 — 42 to
+the provider, `tick` back in the owner, `+1` in the provider. This is the case
+the shared symbol table exists for.
+
+Each provider in the `load` report carries `imports` (as the cell declares
+them), `calls` (what the gate judged, sorted) and `resolved` (each call with
+the address it resolved to in the shared table, `null` if the cell declares a
+call but no reloc/definition put it there). The owner's top-level `calls` keeps
+its existing meaning.
+
+`missing-provider.sh` is the negative control for the lookup itself: it names
+a plan dependency that was never built and requires `load` to refuse the image
+with the derivation name **and** the id the plan resolved, before any owner
+cell is read. It needs no compiler, and there is no `--cells` to fall back on.
 
 ## Limits of this test (read before trusting a pass)
 

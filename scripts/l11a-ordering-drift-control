@@ -14,12 +14,22 @@
 #
 # Two runs, because either alone is weak:
 #
-#   1. the unmutated copy must produce all three [pass] lines — otherwise a
-#      control that "failed" for an unrelated reason (a hook the gate ignores,
-#      a moved file) would look like a successful control;
-#   2. the mutated copy must exit non-zero with the FAIL line, and the other two
-#      L11a lines must still pass — so the failure is attributable to the
-#      ordering and not to the copy being unreadable.
+#   1. the unmutated copy must produce all three [pass] lines and no [FAIL]
+#      line — otherwise a control that "failed" for an unrelated reason (a hook
+#      the gate ignores, a moved file) would look like a successful control;
+#   2. the mutated copy must flip exactly the ordering pin: that pin prints
+#      [FAIL] and *not* [pass], the other two print [pass] and not [FAIL].
+#
+# Every pin is required by name in both directions, for the reason
+# `l11b-conversion-drift-control` states: asserting only the expected verdict
+# lets a pin print both lines and still pass, and asserting only the mutated
+# run's failures cannot tell which pin carried the failure. So each of the three
+# is checked for its own line and for the absence of the other, and the run must
+# report exactly three [pass] L11a lines and no more than the one expected
+# [FAIL]. The counts are over L11a lines, not the whole gate: an unrelated
+# failure elsewhere in the gate is not this control's finding, and a second
+# failure among the L11a pins is — so the number that matters is what the pins
+# printed, which is also what the pin-by-pin assertions are reading.
 #
 # Usage (python3 is not on PATH in a bare NixOS shell):
 #
@@ -79,21 +89,74 @@ mutated_status=$?
 
 status=0
 
-for line in \
-    "[pass] L11a: LiquidIndexClosure is a module of austral_liquid" \
-    "[pass] L11a: $target_line" \
-    "[pass] L11a: the index-closure audit has its own test suite"
-do
-    if ! grep -Fq "$line" <<<"$baseline"; then
-        echo "control: the unmutated copy did not produce '$line'" >&2
-        status=1
+# The three pins, so a mutation that flips a different one is still checked
+# against all three.
+pins=(
+    "LiquidIndexClosure is a module of austral_liquid"
+    "$target_line"
+    "the index-closure audit has its own test suite"
+)
+
+# expect_verdict <log> pass|fail <pin> <label>: the pin must print that verdict
+# line and must not print the other one, so a pin that prints both (or
+# neither) fails the control instead of satisfying it.
+# verdict_tag <pass|fail>: the bracket spelling the gate prints.
+verdict_tag() {
+    if [ "$1" = pass ]; then echo pass; else echo FAIL; fi
+}
+
+expect_verdict() {
+    local log="$1" want="$2" pin="$3" label="$4" other rc=0
+    want="$(verdict_tag "$want")"
+    if [ "$want" = pass ]; then other=FAIL; else other=pass; fi
+    if ! grep -Fq "[$want] L11a: $pin" <<<"$log"; then
+        echo "control: $label: expected '[$want] L11a: $pin'" >&2
+        rc=1
     fi
+    if grep -Fq "[$other] L11a: $pin" <<<"$log"; then
+        echo "control: $label: '$pin' also printed '[$other] L11a: ...'" >&2
+        rc=1
+    fi
+    return $rc
+}
+
+# count_verdicts <log> pass|fail: how many of the three pins printed that
+# verdict. The gate also prints two `L11a:` *wiring* pins (this control has a
+# negative control, and it moves the copy through the gate's own hook), so a
+# line-prefix count would be five, not three — the count is over the pins this
+# control is about.
+count_verdicts() {
+    local log="$1" want="$2" pin n=0
+    want="$(verdict_tag "$want")"
+    for pin in "${pins[@]}"; do
+        if grep -Fq "[$want] L11a: $pin" <<<"$log"; then
+            n=$((n + 1))
+        fi
+    done
+    echo "$n"
+}
+
+# 1. The unmutated copy passes every pin, one by one, and fails none.
+for pin in "${pins[@]}"; do
+    expect_verdict "$baseline" pass "$pin" "unmutated copy" || status=1
 done
 if [ "$baseline_status" -ne 0 ]; then
     echo "control: the gate failed on the unmutated copy (exit $baseline_status)" >&2
     status=1
 fi
+baseline_failures="$(count_verdicts "$baseline" fail)"
+if [ "$baseline_failures" -ne 0 ]; then
+    echo "control: the unmutated copy failed $baseline_failures L11a pin(s), expected none" >&2
+    status=1
+fi
+baseline_passes="$(count_verdicts "$baseline" pass)"
+if [ "$baseline_passes" -ne 3 ]; then
+    echo "control: the unmutated copy passed $baseline_passes L11a pin(s), expected three" >&2
+    status=1
+fi
 
+# 2. The mutated copy flips the ordering pin and nothing else: that pin must
+#    print [FAIL] and not [pass], the other two [pass] and not [FAIL].
 if ! grep -Fq "$expected_fail" <<<"$mutated"; then
     echo "control: the mutated copy did not fail the L11a ordering pin" >&2
     echo "--- gate output (tail) ---" >&2
@@ -104,21 +167,29 @@ if [ "$mutated_status" -eq 0 ]; then
     echo "control: the gate exited 0 on the mutated copy" >&2
     status=1
 fi
-for line in \
-    "[pass] L11a: LiquidIndexClosure is a module of austral_liquid" \
-    "[pass] L11a: the index-closure audit has its own test suite"
+expect_verdict "$mutated" fail "$target_line" "mutated copy" || status=1
+for pin in \
+    "LiquidIndexClosure is a module of austral_liquid" \
+    "the index-closure audit has its own test suite"
 do
-    if ! grep -Fq "$line" <<<"$mutated"; then
-        echo "control: the mutation also broke an unrelated pin: '$line'" >&2
-        status=1
-    fi
+    expect_verdict "$mutated" pass "$pin" "mutated copy" || status=1
 done
+mutated_passes="$(count_verdicts "$mutated" pass)"
+if [ "$mutated_passes" -ne 2 ]; then
+    echo "control: the mutated copy passed $mutated_passes L11a pin(s), expected the two unrelated ones" >&2
+    status=1
+fi
+mutated_failures="$(count_verdicts "$mutated" fail)"
+if [ "$mutated_failures" -ne 1 ]; then
+    echo "control: the mutated copy failed $mutated_failures L11a pin(s), expected the ordering pin only" >&2
+    status=1
+fi
 
 if [ "$status" -ne 0 ]; then
     echo "l11a-ordering-drift-control: FAILED" >&2
     exit 1
 fi
 
-echo "baseline: [pass] L11a: $target_line (exit 0)"
-echo "mutated:  $expected_fail (exit $mutated_status)"
+echo "baseline: $baseline_passes [pass] L11a pins, $baseline_failures [FAIL] (exit $baseline_status)"
+echo "mutated:  $mutated_failures [FAIL] L11a pin(s) ($expected_fail), $mutated_passes [pass] (exit $mutated_status)"
 echo "l11a-ordering-drift-control: OK"

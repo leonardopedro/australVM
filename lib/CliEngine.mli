@@ -27,6 +27,13 @@ val format_exec_result : int64 -> string option -> string
     parser cannot drift apart. *)
 val compile_help_lines : unit -> string list
 
+(** Whether unresolved imports are bound instead of failing the compile.
+    True for the `c` target, whose output is a cell linked later (a symbol
+    the JIT cannot resolve now is a cross-cell import the loader resolves);
+    false for the execution targets (`tc`, `exe`), which keep the hard
+    failure. Pure, so the policy is pinned without compiling. *)
+val link_time_imports : target -> bool
+
 (** `--jit-server` only takes effect on the `tc` target. Refuses loudly
     (raises `Austral_error`) when `jit_server` is set on any other target,
     where the requested REPL mode would otherwise be silently ignored.

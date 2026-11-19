@@ -432,8 +432,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `dump m;` above the index-closure audit in a scratch copy of
   `lib/liquid/LiquidCheck.ml` and requires the gate (reading that copy through
   `AUSTRALVM_LIQUID_CHECK`) to exit 1 with exactly `[FAIL] L11a: the liquid pass
-  runs the index-closure audit before emitting`, the other two L11a pins still
-  passing; the unmutated copy must pass all three first. Writing it exposed a
+  runs the index-closure audit before emitting`. Every one of the three
+  substance pins is required **by name in both directions**: the unmutated copy
+  must print all three `[pass]` lines and no `[FAIL]` line, and the mutated copy
+  must print `[FAIL]` *and not* `[pass]` for the ordering pin, `[pass]` *and
+  not* `[FAIL]` for the other two, with the counts over those three pins at
+  three passes / zero failures and two passes / one failure. The counts are over
+  the three pins, not `[pass] L11a:` lines, because the gate also prints two
+  `L11a:` wiring pins about this control. Asserting only the expected verdict
+  would let a pin print both lines and still pass, so the opposite line is
+  refused; a copy of the control that appends a `[pass]` ordering line inside
+  `run_gate` (making the mutated run print both) exits 1 with `'the liquid pass
+  runs the index-closure audit before emitting' also printed '[pass] L11a: …'`,
+  which is what makes the both-directions half load-bearing rather than
+  decorative. Writing it exposed a
   weak pin, which now compares against the *first* `dump m;`. The gate pins this
   control's wiring (`L11a: the ordering pin has a negative control`, `… moves the
   copy through the gate's own hook`) because the gate cannot run the control —
@@ -512,7 +524,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   whole gate with the read-only override that points at the copy
   (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
   `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
-  expected `[FAIL]` line. One full gate run per case; logs kept under
+  expected `[FAIL]` line — plus at least one `[pass]` line the drift does not
+  touch, because an expected failure alone is also what a run that broke
+  wholesale prints. Since 2026-11-19 every case carries that second half; the
+  nine that did not (`phase-d-theory-coverage`, `phase-d-imported-theory`,
+  `phase-d-self-vocabulary`, `phase-d-measured-coverage`, `isa-hypothesis-pin`,
+  `witness-axiom`, `memsafe-edge`, `cert-approved`, `w3-approved-row`) assert
+  `Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)`
+  and `W3: every §W3 state cell …`, which read neither the drifted file nor the
+  scratch approval root. One full gate run per case; logs kept under
   `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
   speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
   repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
@@ -604,7 +624,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   clean `make bridge` layout is exercised instead of reported as `[gap]`;
   measured there 2026-11-19: held, `obj=26bb3ab3…` → `524f7432…` with the
   program's exit status unchanged, gate `[FAIL] W5 (checked): the certificate's
-  obj digest … (x86_64)`, pinned digests back after the restore. The
+  obj digest … (x86_64)`, pinned digests back after the restore. The run must
+  also keep two lines it does not touch green — `W3: every §W3 emitter cell
+  names a real command` and `Phase D: gap_certificate pins its trust split` —
+  because the expected W5 `[FAIL]` alone would also appear if the gate had
+  broken elsewhere. The
   `nix-pkg` CI job also runs `verify-invariants` inside `.#ocaml` after the
   OCaml suite, against the built `austral`/bridge and the sibling `unfer`
   checkout, so the checks that need artifacts are measured there instead of

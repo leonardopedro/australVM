@@ -155,6 +155,8 @@ for name in "${names[@]}"; do
     --resolve 'Austral.Pervasive::trappingMultiply=0x20000010' \
     --resolve 'au_fadd=0x20000020' --resolve 'au_fsub=0x20000040' \
     --resolve 'au_fmul=0x20000060' --resolve 'au_fdiv=0x20000080' \
+    --resolve 'au_f64_add=0x20000020' --resolve 'au_f64_subtract=0x20000040' \
+    --resolve 'au_f64_multiply=0x20000060' --resolve 'au_f64_divide=0x20000080' \
     --exec "$WORK/exec-image")
   if [ "$name" = float ]; then
     got=$(printf '%s' "$report" | grep -o 'f64_bits=[0-9.eE+-]*' | cut -d= -f2)

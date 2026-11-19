@@ -990,8 +990,16 @@ the artifact, so `mm0-c` checks them too.
   (`<case>`, `--list`, or `all`), plus `cert-approved` for the certificate's
   approved branch — fourteen cases. Each case builds a scratch copy, drifts one
   claim in it, runs the whole gate with the read-only override that points at the
-  copy, and requires exit 1 with the expected `[FAIL]` line — and, where a second
-  check reads the same copy, the `[pass]` lines that must not move. Two overrides
+  copy, and requires exit 1 with the expected `[FAIL]` line — and the `[pass]`
+  lines that must not move. Since 2026-11-19 that second half is universal
+  rather than "where a second check reads the same copy": nine cases
+  (`phase-d-theory-coverage`, `phase-d-imported-theory`,
+  `phase-d-self-vocabulary`, `phase-d-measured-coverage`, `isa-hypothesis-pin`,
+  `witness-axiom`, `memsafe-edge`, `cert-approved`, `w3-approved-row`) asserted
+  only their failure, so a gate that had broken wholesale would have satisfied
+  them. They now also require `Phase D: gap_certificate pins its trust split (9
+  structural / 0 grounded)` and `W3: every §W3 state cell …`, neither of which
+  reads the drifted file or the scratch approval root. Two overrides
   were added for this, both read-only relocations rather than grants:
   `AUSTRALVM_MM0_DIR` (the model directory the Phase D, W8 pin, witness and
   memsafe checks read) and `AUSTRALVM_LIQUID_GOLDEN` (the extracted OCaml the
@@ -1481,7 +1489,13 @@ restored: cps=cd65d0b4… obj=ceed355c…d2cb  (pinned values return)
 
 So the object digest is sensitive to emitted code, the certificate is not
 silently accepted after such a change, and the control leaves a green tree (it
-restores and rebuilds on every exit path, including failure).
+restores and rebuilds on every exit path, including failure). Since 2026-11-19
+the run also requires two lines that read neither the certificate nor the
+emitter — `[pass] W3: every §W3 emitter cell names a real command` and
+`[pass] Phase D: gap_certificate pins its trust split (9 structural / 0
+grounded)` — because the expected W5 `[FAIL]` would also be printed by a gate
+that had broken wholesale; it was the one drift control with no green
+assertion at all.
 
 Re-measured 2026-11-19 on the *clean* layout this tree now builds — no `.so` at
 the repo root, only `safestos/cranelift/target/release/` — which is why the

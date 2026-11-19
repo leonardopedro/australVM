@@ -6,9 +6,10 @@
 # `run.sh` links one cell at a time against runtime stubs. Here `DoubleApp`
 # imports `double` from `MathLib`: its cell carries that import and one call
 # relocation, so loading it alone must fail with an unresolved symbol. Loading
-# resolving the owner's plan dependency (`--plan … --for doubleapp --cells`)
-# adds `mathlib.avm` as a provider, verified against the builder key from the
-# build report, and the call resolves to the provider's real image base (owner
+# resolving the owner's plan dependency (`--plan … --for doubleapp`) reads
+# `mathlib`'s cell from the store by the derivation id the plan resolved,
+# verifies it against the builder key from the build report, and the call
+# resolves to the provider's real image base (owner
 # base + 0x01000000); both texts are mapped in the executor and it returns 84.
 #
 # A provider without `--key`, and one signed by another builder, are refused.
@@ -101,8 +102,9 @@ math_out=$("$AVM_PKG" --store "$STORE" build "$WORK/math.cps" \
   --plan "$WORK/plan.json" --for mathlib --sign "$SEED" \
   -o "$WORK/mathlib.avm")
 KEY=$(printf '%s' "$math_out" | sed -n 's/.*"pubkey":"\([0-9a-f]\{64\}\)".*/\1/p')
-[ "${#KEY}" -eq 64 ] || {
-  echo "multi-cell.sh: build did not report a pubkey: $math_out" >&2
+MATH_DRV=$(printf '%s' "$math_out" | sed -n 's/.*"drv_hash":"\([0-9a-f]\{64\}\)".*/\1/p')
+[ "${#KEY}" -eq 64 ] && [ "${#MATH_DRV}" -eq 64 ] || {
+  echo "multi-cell.sh: build did not report a pubkey/drv_hash: $math_out" >&2
   exit 1
 }
 "$AVM_PKG" --store "$STORE" build "$WORK/app.cps" \
@@ -127,11 +129,11 @@ fi
 echo "  [ok] without --provider: unresolved symbol \"double\" (exit $alone_rc)"
 
 # The provider set is the plan closure: `--for doubleapp` names `mathlib`,
-# and `--cells` says where that derivation's cell lives.
+# and its cell is looked up in the store by derivation id.
 echo "== execution (owner + provider cell, resolved from the plan)"
 report=$("$AVM_PKG" --store "$STORE" load "$WORK/app.avm" \
   --policy "$POLICY" --base "$BASE" \
-  --plan "$WORK/plan.json" --for doubleapp --cells "$WORK" \
+  --plan "$WORK/plan.json" --for doubleapp \
   --key "$KEY" \
   --resolve "$RESOLVE_MUL" \
   --exec "$WORK/exec-image")
@@ -144,13 +146,29 @@ if [ "$got" != 84 ]; then
 fi
 printf '%s' "$report" | grep -q "\"base\":\"$PROVIDER_BASE\"" ||
   { echo "  [fail] provider was not linked at $PROVIDER_BASE: $report" >&2; exit 1; }
+# The provider report is the evidence, so pin every field it promises rather
+# than only the return value: origin, the derivation id the lookup used, the
+# declared imports, the gated calls, and the address each call resolved to.
+for want in \
+  '"source":"store"' \
+  '"path":"store:mathlib"' \
+  '"derivation":"'"$MATH_DRV"'"' \
+  '"imports":["Austral.Pervasive::trappingMultiply"]' \
+  '"calls":["Austral.Pervasive::trappingMultiply"]' \
+  '"resolved":[{"symbol":"Austral.Pervasive::trappingMultiply","address":"0x20000010"}]'; do
+  printf '%s' "$report" | grep -qF -- "$want" || {
+    echo "  [fail] provider report is missing $want: $report" >&2
+    exit 1
+  }
+done
 echo "  [ok] double(42) resolved in the provider image (base $PROVIDER_BASE) and returned 84"
+echo "        [ok] report names the store-derived provider, its imports, calls and resolved address"
 
 echo "== negative control (a provider without a key is refused)"
 set +e
 no_key=$("$AVM_PKG" --store "$STORE" load "$WORK/app.avm" \
   --policy "$POLICY" --base "$BASE" \
-  --plan "$WORK/plan.json" --for doubleapp --cells "$WORK" \
+  --plan "$WORK/plan.json" --for doubleapp \
   --resolve "$RESOLVE_MUL" 2>&1)
 no_key_rc=$?
 set -e
@@ -162,15 +180,18 @@ fi
 echo "  [ok] provider without --key refused (exit $no_key_rc)"
 
 echo "== negative control (a provider signed by another builder is refused)"
-mkdir -p "$WORK/other"
-"$AVM_PKG" --store "$STORE" build "$WORK/math.cps" \
+# A separate store holding the same derivation signed by a different builder:
+# the lookup by id finds it, and the signature check refuses it.
+OTHER=$WORK/other/store
+"$AVM_PKG" --store "$OTHER" init >/dev/null
+"$AVM_PKG" --store "$OTHER" build "$WORK/math.cps" \
   --plan "$WORK/plan.json" --for mathlib \
   --sign 2222222222222222222222222222222222222222222222222222222222222222 \
-  -o "$WORK/other/mathlib.avm" >/dev/null
+  >/dev/null
 set +e
-wrong_key=$("$AVM_PKG" --store "$STORE" load "$WORK/app.avm" \
+wrong_key=$("$AVM_PKG" --store "$OTHER" load "$WORK/app.avm" \
   --policy "$POLICY" --base "$BASE" \
-  --plan "$WORK/plan.json" --for doubleapp --cells "$WORK/other" \
+  --plan "$WORK/plan.json" --for doubleapp \
   --key "$KEY" \
   --resolve "$RESOLVE_MUL" 2>&1)
 wrong_key_rc=$?
@@ -190,11 +211,11 @@ echo "  [ok] provider signed by another builder refused (exit $wrong_key_rc)"
 #
 # Module-level imports have to be acyclic, so each side declares its callee as
 # a foreign symbol (`@@ Foreign_Import`) with the symbol name the other cell
-# exports, and each cell is compiled on its own. The CPS JIT logs an
-# unresolved-symbol diagnostic while compiling a cell whose callee lives in
-# the other cell; it does not affect CPS emission (the file is written before
-# the JIT step), and the load below resolves the symbol for real. The script
-# records the diagnostic in a log instead of letting it read as a failure.
+# exports, and each cell is compiled on its own. C code generation binds a
+# symbol the JIT cannot resolve to a trap thunk (`set_link_time_imports`): the
+# import is emitted in the CPS and resolved by the loader, and nothing can run
+# through the unresolved address. The script checks that no unresolved-symbol
+# diagnostic is logged.
 CB=$WORK/callback
 mkdir -p "$CB"
 echo "== callback: compiling the mutually-referencing pair"
@@ -207,10 +228,13 @@ echo "== callback: compiling the mutually-referencing pair"
 for f in "$CB/owner.cps" "$CB/wave.cps"; do
   [ -s "$f" ] || { echo "  [fail] no CPS emitted at $f" >&2; exit 1; }
 done
+if grep -q "can't resolve symbol" "$CB/owner.err" "$CB/wave.err"; then
+  echo "  [fail] the compiler still logs an unresolved-symbol diagnostic:" >&2
+  grep -h "can't resolve symbol" "$CB/owner.err" "$CB/wave.err" >&2
+  exit 1
+fi
 printf '  [ok] owner.cps (imports compute) and wave.cps (imports tick)\n'
-printf '        [note] cross-cell diagnostics: %s, %s\n' \
-  "$(sed -n 's/.*can.t resolve symbol \(.*\).*/\1/p' "$CB/owner.err" | head -1)" \
-  "$(sed -n 's/.*can.t resolve symbol \(.*\).*/\1/p' "$CB/wave.err" | head -1)"
+printf '        [ok] cross-cell imports bound at compile time, no diagnostic logged\n'
 
 {
   printf '{ "derivations": [\n'
@@ -245,7 +269,7 @@ echo "  [ok] without the provider: unresolved symbol \"compute\" (exit $cb_alone
 echo "== callback execution (owner -> provider -> owner)"
 cb=$("$AVM_PKG" --store "$STORE" load "$CB/callback.avm" \
   --policy "$POLICY" --base "$BASE" \
-  --plan "$CB/plan.json" --for callback --cells "$CB" --key "$KEY" \
+  --plan "$CB/plan.json" --for callback --key "$KEY" \
   --resolve 'Austral.Pervasive::trappingAdd=0x20000000' \
   --exec "$WORK/exec-image")
 cb_got=$(printf '%s' "$cb" | sed -n 's/.*"stdout":"rax=\(-\{0,1\}[0-9]*\) f64_bits=.*/\1/p')

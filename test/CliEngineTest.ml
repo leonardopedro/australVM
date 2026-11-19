@@ -117,6 +117,27 @@ let test_jit_server_requires_tc_target _ =
   (* No jit-server requested: any target is fine. *)
   CliEngine.validate_jit_server_target false exe_target
 
+(* The C target links cells later, so an unresolved symbol is a cross-cell
+   import to bind; the execution targets must keep the hard failure. The
+   binding itself is exercised by JitTest's
+   `link_time_imports_bind_cross_cell_symbols`. *)
+let test_link_time_imports_only_for_c_target _ =
+  let entry =
+    CliParser.Entrypoint
+      (Identifier.make_mod_name "Test", Identifier.make_ident "main")
+  in
+  let c_target =
+    CliParser.CStandalone { output_path = "x.c"; entrypoint = Some entry }
+  in
+  assert_bool "C output binds cross-cell imports"
+    (CliEngine.link_time_imports c_target);
+  assert_bool "tc target keeps strict resolution"
+    (not (CliEngine.link_time_imports CliParser.TypeCheck));
+  assert_bool "exe target keeps strict resolution"
+    (not
+       (CliEngine.link_time_imports
+          (CliParser.Executable { bin_path = "x"; entrypoint = entry })))
+
 let suite =
   "CliEngine" >::: [
     "sentinel_with_reason_is_error" >:: test_sentinel_with_reason_is_error;
@@ -127,6 +148,8 @@ let suite =
     "compile_help_lists_shipped_flags_and_real_targets"
     >:: test_compile_help_lists_shipped_flags_and_real_targets;
     "jit_server_requires_tc_target" >:: test_jit_server_requires_tc_target;
+    "link_time_imports_only_for_c_target"
+    >:: test_link_time_imports_only_for_c_target;
   ]
 
 let _ = run_test_tt_main suite

@@ -1405,8 +1405,19 @@ it inserts `dump m;` above the audit in a scratch copy and requires
 `[FAIL] L11a: the liquid pass runs the index-closure audit before emitting`
 while the other two L11a pins still pass; it also requires the unmutated copy to
 pass all three, so a control that failed for an unrelated reason cannot read as
-success. Writing it found a weak pin (it compared against the *last* `dump m;`,
-so an extra early dump still passed); the pin now compares against the first.
+success. Each of the three substance pins is required **by name in both
+directions** — the expected verdict present and the opposite one absent — and
+the counts over those three pins must be three passes / zero failures on the
+unmutated copy and two passes / one failure on the mutated one. Requiring only
+the mutated run's `[FAIL]` line, as the first version did, would let a pin that
+printed both verdicts (or a control that flipped two of them) pass; a copy of the
+script that appends a `[pass]` ordering line inside `run_gate` exits 1 with
+`'the liquid pass runs the index-closure audit before emitting' also printed
+'[pass] L11a: …'`. The counts span the three substance pins rather than
+`[pass] L11a:` lines, because the gate also prints two `L11a:` wiring pins about
+this control. Writing it found a weak pin (it compared against the *last*
+`dump m;`, so an extra early dump still passed); the pin now compares against
+the first.
 The control is itself pinned by the gate (`L11a: the ordering pin has a negative
 control`, and `… moves the copy through the gate's own hook`, which asserts that
 the script uses `AUSTRALVM_LIQUID_CHECK=` and that the gate reads it), since the
@@ -1416,10 +1427,24 @@ Measured end to end on 2026-11-19 under `nix develop "git+file://$PWD#ocaml"`,
 exit 0:
 
 ```
-baseline: [pass] L11a: the liquid pass runs the index-closure audit before emitting (exit 0)
-mutated:  [FAIL] L11a: the liquid pass runs the index-closure audit before emitting (exit 1)
+baseline: 3 [pass] L11a pins, 0 [FAIL] (exit 0)
+mutated:  1 [FAIL] L11a pin(s) ([FAIL] L11a: the liquid pass runs the index-closure audit before emitting), 2 [pass] (exit 1)
 l11a-ordering-drift-control: OK
 ```
+
+and the both-directions perturbation of the same run (a scratch copy that
+appends the ordering `[pass]` line inside `run_gate`), exit 1:
+
+```
+control: the gate exited 0 on the mutated copy
+control: mutated copy: 'the liquid pass runs the index-closure audit before emitting' also printed '[pass] L11a: ...'
+control: the mutated copy passed 3 L11a pin(s), expected the two unrelated ones
+l11a-ordering-drift-control: FAILED
+```
+
+The `gate exited 0` line is the stub's own doing — the appended `echo` is the
+last command in `run_gate`, so it masks the gate's status; the assertions under
+test are the two after it.
 
 ### L11b — Elaborate and convert a small sorted index language
 

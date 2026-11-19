@@ -72,6 +72,15 @@ let parse_source_files (mods: mod_source list): (module_source list * source_map
 (* Stored module sources for hot-swap recompilation *)
 let last_module_sources : (module_source list) ref = ref []
 
+(* C output is a cell that is linked later: a symbol the JIT cannot resolve
+   now is a cross-cell import the loader resolves, so the compile binds it
+   instead of failing. JIT execution targets (`tc`, `exe`) keep strict
+   resolution. Pure, so the policy is testable without compiling. *)
+let link_time_imports (target: target): bool =
+  match target with
+  | CStandalone _ -> true
+  | _ -> false
+
 let rec exec (cmd: cmd): unit =
   match cmd with
   | HelpCommand ->
@@ -109,6 +118,11 @@ let rec exec (cmd: cmd): unit =
      Compiler.pkg_totality := pkg_totality;
      Compiler.emit_derivations_path := emit_derivations;
      Compiler.emit_linearity_ledger_path := emit_linearity_ledger;
+     (* C output is a cell to be linked later: a symbol the JIT cannot
+        resolve now is a cross-cell import the loader resolves, so bind it
+        instead of failing the compile. Executable/JIT-check targets keep
+        the strict resolution. *)
+     CamlCompiler_rust_bridge.set_link_time_imports (link_time_imports target);
      if allow_all then CamlCompiler_rust_bridge.set_allow_all ();
      (match auth_manifest with
       | Some path ->

@@ -1,6 +1,7 @@
 use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use std::cell::RefCell;
 use std::ffi::{c_void, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use cps::CpsModule;
 
@@ -34,6 +35,32 @@ pub mod tidepool_mod;
 use policy::CEDAR_ENGINE;
 #[cfg(feature = "cedar")]
 use std::ffi::CStr;
+
+/// When set, a symbol the JIT cannot resolve is bound to
+/// [`unresolved_import_thunk`] instead of failing the compile. The caller
+/// sets this for *code generation* (`--target-type=c`), where the cell is
+/// linked and resolved later: a cross-cell import is an import, not an
+/// error, and the emitted CPS is unaffected either way. The thunk aborts if
+/// it is ever called, so nothing can run with a symbol that was never
+/// resolved. JIT execution targets leave this off and keep the hard failure.
+static LINK_TIME_IMPORTS: AtomicBool = AtomicBool::new(false);
+
+/// Bind unresolved imports to a thunk (see [`LINK_TIME_IMPORTS`]).
+#[no_mangle]
+pub extern "C" fn set_link_time_imports(on: i32) {
+    LINK_TIME_IMPORTS.store(on != 0, Ordering::Relaxed);
+}
+
+/// The address an unresolved import is bound to in link-time mode. It must
+/// never execute: reaching it would mean running a call whose target was
+/// never resolved, so it aborts rather than returning a made-up value.
+extern "C" fn unresolved_import_thunk() -> ! {
+    eprintln!(
+        "australVM: called an unresolved import (compiled link-time; the cell's loader must \
+         resolve it)"
+    );
+    std::process::abort()
+}
 
 thread_local! {
     static JIT: RefCell<Option<JITModule>> = const { RefCell::new(None) };
@@ -410,6 +437,18 @@ pub extern "C" fn cranelift_init() -> i64 {
                 .map_err(|e| format!("ISA finish failed: {}", e))?;
             let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
             use_arena_memory(&mut builder)?;
+
+            // Cross-cell imports: in link-time mode bind an unknown symbol to
+            // a trap thunk instead of letting the backend panic. The flag is
+            // read per lookup, so the same JIT module serves strict execution
+            // and link-time code generation.
+            builder.symbol_lookup_fn(Box::new(|_name| {
+                if LINK_TIME_IMPORTS.load(Ordering::Relaxed) {
+                    Some(unresolved_import_thunk as *const u8)
+                } else {
+                    None
+                }
+            }));
 
             // Register runtime primitives
             builder.symbol("au_print_int", au_print_int as *const u8);

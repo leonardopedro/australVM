@@ -294,7 +294,7 @@ jobs:
   # `rustc` and sets LD_LIBRARY_PATH itself).
   nix-pkg:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout australVM
@@ -351,3 +351,28 @@ jobs:
       # link alone; with --provider it resolves into the second image and runs.
       - name: Multi-cell image with a provider cell
         run: nix develop -c bash ./examples/nix-pkg/multi-cell.sh
+
+      # The plan closure is resolved from the store by derivation id (there is
+      # no --cells directory). A dependency that was never built must be
+      # refused by derivation name and id, before any owner cell is read.
+      - name: Negative control (never-built plan dependency)
+        run: bash ./examples/nix-pkg/missing-provider.sh
+
+      # The OCaml suite is the slow half of the tree (build, typecheck and 18
+      # test suites), so it gets its own step with a budget larger than the
+      # local default; the elapsed seconds are printed for the job log.
+      - name: OCaml suite (build, typecheck, tests)
+        timeout-minutes: 40
+        run: |
+          start=$(date +%s)
+          nix develop "git+file://$PWD#ocaml" -c make test
+          echo "ocaml-suite: $(( $(date +%s) - start ))s"
+
+      # The standalone `verify-invariants` job runs in a bare shell, so the
+      # checks that need built artifacts (W2/W5/W6 re-emit and the object
+      # digest, the symbol census against unfer) report as gaps there. This
+      # step runs the same gate against the tree this job just built, with
+      # python3 from the shell and unfer already checked out as a sibling.
+      - name: verify-invariants (against the built tree)
+        timeout-minutes: 15
+        run: nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants

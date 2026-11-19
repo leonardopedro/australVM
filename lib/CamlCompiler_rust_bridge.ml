@@ -23,10 +23,17 @@ external c_austral_defeq : string -> string -> string option = "ocaml_austral_de
 external c_lookup_function : string -> int64 = "ocaml_lookup_function"
 external c_list_function_names : unit -> string = "ocaml_list_function_names"
 external c_set_allow_all : unit -> unit = "ocaml_set_allow_all"
+external c_set_link_time_imports : bool -> unit = "ocaml_set_link_time_imports"
 external c_load_auth_manifest : string -> int64 = "ocaml_load_auth_manifest"
 external c_swap_binary : bytes -> int -> int64 = "ocaml_swap_binary"
 
 let set_allow_all () : unit = c_set_allow_all ()
+
+(* Code generation (``--target-type=c``) emits a cell that is linked later,
+   so a symbol the JIT cannot resolve is a cross-cell import, not a compile
+   failure. Turning this on binds such imports to a trap thunk; JIT
+   execution targets leave it off and keep the hard failure. *)
+let set_link_time_imports (on: bool) : unit = c_set_link_time_imports on
 
 let load_auth_manifest (manifest: string) : bool =
   c_load_auth_manifest manifest = 1L

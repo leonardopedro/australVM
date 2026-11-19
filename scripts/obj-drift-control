@@ -14,7 +14,10 @@
 #      preserving" half;
 #   4. run `scripts/verify-invariants`: it must FAIL the W5 object check
 #      (on a host whose arch differs from the certificate's, the W5 cps check
-#      is what can fire, and that is the line this control expects);
+#      is what can fire, and that is the line this control expects), while two
+#      lines that read neither the certificate nor the emitter stay green —
+#      the §W3 emitter column and the gap certificate's trust-split pin. The
+#      expected `[FAIL]` alone would still hold if the whole run had broken.
 #   5. restore the emitter, rebuild, and confirm both digests are back to the
 #      pinned values (so a green tree stays green).
 #
@@ -157,6 +160,22 @@ elif ! grep -q "$expected_w5" "$work/gate.log"; then
 else
     say "gate:   $(grep -F "$expected_word" "$work/gate.log" | head -1)"
 fi
+
+# The gate must have failed *only* on that line's claim: a run that also lost
+# checks reading nothing this control touched would make the expected `[FAIL]`
+# a coincidence, not the certificate drift. Two lines are named — one from the
+# plan side and one from the mm0 side — because they exercise different readers
+# (the §W3 emitter registry and the trust-split pin) and neither reads the
+# certificate under test.
+for want in \
+    "[pass] W3: every §W3 emitter cell names a real command" \
+    "[pass] Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)"
+do
+    if ! grep -qF "$want" "$work/gate.log"; then
+        fail "the run also lost an unrelated line: '$want'"
+        status=1
+    fi
+done
 
 # ── 5. restore and confirm the pinned digests come back ────────────────────
 restore

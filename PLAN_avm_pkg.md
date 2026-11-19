@@ -601,8 +601,10 @@ manifest requires to differ and that is never packaged. `run.sh`
    3.75, 42, 212, 6, 42, 7, 0, 1, 3, −2). Float64 is an IEEE-754 bit pattern
    in the same 64-bit word every CPS value uses: `CpsGen` writes
    `Int64.bits_of_float` (exact, not rounded), and `Compiler_cps` lowers
-   Float64 `+ - * /` to the `au_fadd`/`au_fsub`/`au_fmul`/`au_fdiv` runtime
-   helpers, which bitcast, compute in `f64` and bitcast back. The bridge test
+   Float64 `+ - * /` to the `au_f64_add`/`au_f64_subtract`/`au_f64_multiply`/
+   `au_f64_divide` bridge primitives, which bitcast, compute in `f64` and
+   bitcast back (the stub page maps them at the same addresses as `au_f*`,
+   and the scripts resolve both spellings). The bridge test
    `float_helpers_bitcast_and_compute` pins the helpers. The execution step
    carries its own negative control (`examples/nix-pkg/linker-control.sh`):
    it requires the Cedar `Execute` denial to refuse the cell, then reverts
@@ -644,13 +646,13 @@ text there after checking it is page-aligned and does not overlap the owner
 or the stub page.
 
 The provider set can also come from the derivation plan: `--plan <json> --for
-<name> --cells <dir>` adds every derivation `<name>` depends on,
-dependency-first, as `<dir>/<derivation>.avm`; an explicit `--provider` whose
-file stem names that derivation wins, and a missing cell fails the load by
-name. A plan-derived cell must record the derivation id the plan resolved, so
-a differently-built cell placed under the expected filename is refused. The
-plan is metadata, not a payload — a `.avm` cell still does not carry its
-dependencies.
+<name>` adds every derivation `<name>` depends on, dependency-first, looked up
+in the store **by the derivation id the plan resolved** (a manifest records
+its cell's `drv_hash`, so the id is the lookup key and there is no filename to
+substitute). An explicit `--provider` whose file stem names that derivation
+wins; a missing cell fails the load naming the derivation and id, and more
+than one cell for the same derivation is refused as ambiguous. The plan is
+metadata, not a payload — a `.avm` cell still does not carry its dependencies.
 
 A provider contributes executable text, so structure is not a trust decision:
 `load` requires `--key <pubkey-hex32>` whenever a provider is supplied and
@@ -658,7 +660,16 @@ checks the Ed25519 trailer of every provider (and of the owner) before
 linking; `build` reports `"pubkey"` so a caller can verify what it just built.
 A provider with no key is refused, and one signed by another builder fails the
 signature check. Provider text and the owner are verified, never trusted by
-layout alone.
+layout alone. Each provider's report entry also lists `imports` (declared in
+cell order), `calls` (what the gate judged, sorted de-duplicated) and
+`resolved` (each call with the address it resolved to in the shared symbol
+table, `null` if no reloc/definition supplied one); the owner's `calls` field
+keeps its existing meaning.
+
+`examples/nix-pkg/missing-provider.sh` pins the refusal for a dependency that
+was never built: the load exits non-zero naming the derivation and the id the
+plan resolved, before reading any owner cell (it needs no compiler; the owner
+path is deliberately absent). CI runs it right after the multi-cell step.
 
 `examples/nix-pkg/multi-cell.sh` is the end-to-end check. `MathLib` exports
 `double`, `DoubleApp` imports it, the owner cell alone fails with `unresolved
@@ -668,10 +679,12 @@ pair — owner `Callback` defines `tick` and calls `compute`, provider `Wave`
 defines `compute` and calls `tick` — where module imports must be acyclic, so
 both sides use `Foreign_Import` and are compiled separately; the owner alone
 misses `compute`, and the linked image runs 42 → provider → owner `tick` →
-`+1` = 53. The CPS JIT logs an unresolved-symbol diagnostic while compiling
-a cell whose callee is in the other cell (CPS emission happens before that
-step and is unaffected); the script records it as a note instead of letting
-it read as a failure. The provider and owner are compiled separately because
+`+1` = 53. C code generation sets `set_link_time_imports`: a symbol the JIT
+cannot resolve is bound to a trap thunk instead of failing the compile, so a
+cross-cell import is emitted in the CPS for the loader to resolve and no
+unresolved-symbol diagnostic is logged; the thunk aborts if called, so
+nothing can run through an unresolved address. JIT execution targets keep the
+strict resolution. The provider and owner are compiled separately because
 one CPS emission carries one module's functions — that separation is what
 puts the callee in another cell. CI runs the script after the linker control.
 
