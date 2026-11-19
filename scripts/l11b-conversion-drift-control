@@ -16,6 +16,15 @@
 #   austere     `convert` answers Different to every pair    -> the *acceptance*
 #               cases must FAIL, while the refusals still pass.
 #
+# Each of the eight cases is required by name, in both directions: the four of
+# the affected kind must print their `FAIL` line and the other four must print
+# their `ok` line. Requiring only the failures would let a mutation that also
+# broke a case it should leave alone pass, and the two verdicts have different
+# names in the suite (`FAIL m + n must not convert to n + m` against
+# `ok   m + n is not convertible to n + m`), so both spellings are listed. The
+# run must also report exactly four failures, which is what catches a fifth
+# one — a wrong case, or a build that broke something else.
+#
 # The two runs share one test file and differ only in the rule, so a suite that
 # failed for both mutations on the same case would be measuring something other
 # than the rule. Nothing is compiled against a copy of the module: `LiquidTypes`
@@ -82,7 +91,50 @@ run_suite() {
     ( cd "$repo_root" && "${suite[@]}" 2>&1 )
 }
 
+# The eight cases as `<FAIL name>|<ok name>`: the suite prints a different name
+# for the same case depending on which way it went.
+refusal_cases=(
+    "m + n must not convert to n + m|m + n is not convertible to n + m"
+    "n + 1 must not satisfy a requirement for n|n + 1 is refused where n is required"
+    "shadowing must not collapse binders|two binders named n are not convertible"
+    "natural subtraction is not addition|natural subtraction is not addition"
+)
+acceptance_cases=(
+    "n + 0 converts to n|n + 0 converts to n"
+    "(n + 1) + 2 converts to n + 3|(n + 1) + 2 converts to n + 3"
+    "inlining|a closed definition inlines before comparison"
+    "natural subtraction saturates at zero|natural subtraction saturates at zero"
+)
+
+count_failures() {
+    grep -c "^  FAIL " <<<"$1" || true
+}
+
+# expect_cases <log> fail|ok <pair...>: every named case must carry the
+# requested verdict.
+
+expect_cases() {
+    local log="$1" want="$2" pair fail_name ok_name rc=0
+    shift 2
+    for pair in "$@"; do
+        fail_name="${pair%%|*}"
+        ok_name="${pair#*|}"
+        if [ "$want" = fail ]; then
+            grep -Fq "  FAIL $fail_name" <<<"$log" \
+                || { echo "control: expected '$fail_name' to FAIL" >&2; rc=1; }
+        else
+            grep -qxF "  ok   $ok_name" <<<"$log" \
+                || { echo "control: expected '$ok_name' to stay ok" >&2; rc=1; }
+        fi
+    done
+    return $rc
+}
+
 status=0
+permissive=""
+permissive_status=0
+austere=""
+austere_status=0
 
 # 1. The unmutated rule passes. Without this, a suite that was already failing
 #    would make both mutated runs look like successful controls.
@@ -110,19 +162,11 @@ if loosen true; then
         echo "control: a rule that accepts every pair passed the suite" >&2
         status=1
     fi
-    for line in \
-        "  FAIL m + n must not convert to n + m" \
-        "  FAIL n + 1 must not satisfy a requirement for n" \
-        "  FAIL shadowing must not collapse binders" \
-        "  FAIL natural subtraction is not addition"
-    do
-        if ! grep -Fq "$line" <<<"$permissive"; then
-            echo "control: 'always Convertible' did not trip '$line'" >&2
-            status=1
-        fi
-    done
-    if grep -Fq "  FAIL n + 0 converts to n" <<<"$permissive"; then
-        echo "control: 'always Convertible' broke an acceptance case it should not touch" >&2
+    expect_cases "$permissive" fail "${refusal_cases[@]}" || status=1
+    expect_cases "$permissive" ok "${acceptance_cases[@]}" || status=1
+    permissive_failures="$(count_failures "$permissive")"
+    if [ "$permissive_failures" -ne 4 ]; then
+        echo "control: 'always Convertible' failed $permissive_failures case(s), expected the four refusals only" >&2
         status=1
     fi
 else
@@ -137,19 +181,11 @@ if loosen false; then
         echo "control: a rule that refuses every pair passed the suite" >&2
         status=1
     fi
-    for line in \
-        "  FAIL n + 0 converts to n" \
-        "  FAIL (n + 1) + 2 converts to n + 3" \
-        "  FAIL inlining" \
-        "  FAIL natural subtraction saturates at zero"
-    do
-        if ! grep -Fq "$line" <<<"$austere"; then
-            echo "control: 'always Different' did not trip '$line'" >&2
-            status=1
-        fi
-    done
-    if grep -Fq "  FAIL m + n must not convert to n + m" <<<"$austere"; then
-        echo "control: 'always Different' broke a refusal case it should not touch" >&2
+    expect_cases "$austere" fail "${acceptance_cases[@]}" || status=1
+    expect_cases "$austere" ok "${refusal_cases[@]}" || status=1
+    austere_failures="$(count_failures "$austere")"
+    if [ "$austere_failures" -ne 4 ]; then
+        echo "control: 'always Different' failed $austere_failures case(s), expected the four acceptance cases only" >&2
         status=1
     fi
 else
@@ -176,9 +212,6 @@ if [ "$status" -ne 0 ]; then
     exit 1
 fi
 
-count_failures() {
-    grep -c "^  FAIL " <<<"$1" || true
-}
 echo "baseline:   OK (exit 0)"
 echo "permissive: $(count_failures "$permissive") refusal case(s) failed (exit $permissive_status)"
 echo "austere:    $(count_failures "$austere") acceptance case(s) failed (exit $austere_status)"

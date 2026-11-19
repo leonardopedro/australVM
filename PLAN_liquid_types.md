@@ -1499,7 +1499,16 @@ acceptances still pass; `if false then Convertible` (a rule table that accepts
 nothing) must FAIL the four acceptance cases — `n + 0`, the right-spine fold,
 inlining, saturated subtraction — while the refusals still pass. Two contrasts
 in one run are the point: a mutation that broke *both* directions would be a
-broken build, not evidence about the rules. Because `LiquidTypes` depends on
+broken build, not evidence about the rules. Each of the eight cases is required
+by name in both directions — the four of the affected kind must print their
+`FAIL` line and the other four their `ok` line, and the run must report exactly
+four failures. The suite names the two verdicts differently for three of the
+four refusal cases (`FAIL shadowing must not collapse binders` against
+`ok   two binders named n are not convertible`), so the control lists both; and
+requiring only the failing half would let a mutation that also broke a case it
+should leave alone pass. That assertion was itself tested by swapping the
+expectation for the permissive run's acceptance cases: the copy prints
+`control: expected 'n + 0 converts to n' to FAIL` for all four and exits 1. Because `LiquidTypes` depends on
 `Stages` from `austral_core`, the module cannot be compiled separately from the
 library (two same-named modules in one link), so the file is mutated in place
 and restored by a trap; the control re-hashes the restored file and re-runs the

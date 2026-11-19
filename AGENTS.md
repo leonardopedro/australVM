@@ -443,7 +443,16 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   (restored by a trap, re-hashed, suite re-run) and requires the real suite to
   fail in opposite directions — `if true then Convertible` trips the four
   refusal cases while the acceptances still pass, `if false then Convertible`
-  trips the four acceptance cases while the refusals still pass. It mutates in
+  trips the four acceptance cases while the refusals still pass. Each of the
+  eight is required **by name in both directions**: the four of the affected kind
+  must print their `FAIL` line and the other four their `ok` line (the suite
+  spells the two verdicts differently — `FAIL m + n must not convert to n + m`
+  against `ok   m + n is not convertible to n + m` — so both names are listed),
+  and the run must report exactly four failures. Requiring only the failures
+  would let a mutation that also broke a case it should leave alone pass; the
+  swapped-expectation copy of this control (expecting the permissive run's
+  acceptances to `FAIL`) exits 1 naming all four, so the per-case assertion is
+  load-bearing. It mutates in
   place because `LiquidTypes` needs `Stages` from `austral_core`, so a separate
   link of the module is not possible; the restore is asserted, not assumed. It
   needs `dune`, so run it under `nix develop "git+file://$PWD#ocaml"`. Its own
