@@ -450,6 +450,14 @@ cascade inside the drifted copy). The five read-only controls named by
 exit status 0 — replayed at the same commit afterwards to capture the status the
 backgrounded run logged but did not print (`build_rc=0`, `runtest_rc=0`).
 
+That is where `make test` stops; the compiler's end-to-end fixture suite is a
+separate entry point and was run separately at the same commit:
+`python3 test-programs/runner.py` under `.#ocaml` printed **326 `PASS`, 0
+`FAIL`**, ending in `All tests passed`. Together with `make test` that covers
+the gate, its fourteen controls, the OCaml suites and the compiler fixtures at
+`0baac723`; the Rust bridge's own `cargo test --workspace` was last run for the
+L11 work and is not part of this measurement.
+
 The three `[FAIL]`s this work produced before those two re-emits were the
 expected ones — the certificate pinned the CPS and object digests of the *old*
 lowering. They are refreshed with `au2mm0 emit … --code … --obj …`, and the
