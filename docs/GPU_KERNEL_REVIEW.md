@@ -3,7 +3,9 @@
 Reviewed **2026-11-17**. This is source inspection and design research, not a
 compiler implementation, GPU benchmark or fresh proof run. The executable
 follow-up is [PLAN_gpu_kernels.md](../PLAN_gpu_kernels.md); its proposed first
-release contract is [KERNEL_V1.md](gpu/KERNEL_V1.md).
+release contract is [KERNEL_V1.md](gpu/KERNEL_V1.md). For the current compiler
+and the Bend-inspired continuation, see [the execution record](gpu/EXECUTION.md)
+and [the next implementation steps](gpu/NEXT_STEPS.md).
 
 ## The project already has a GPU programme
 

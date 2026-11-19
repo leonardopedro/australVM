@@ -77,9 +77,10 @@ plan's residual obligations explicit, and PC04
 [reflects the real clamp body and KernelIR](docs/proof/SOURCE_IR.md) into a
 proved bound with a recorded trusted edge; the WGSL reflection remains open. The
 [GPU service adapter](examples/gpu/service/README.md) exposes a versioned,
-manifest-gated `rs_gpu_*` contract; its linear-job and asynchronous pieces are
-designed in [G15](docs/gpu/G15_DESIGN.md) and remain unimplemented. The
-[GPU plan](PLAN_gpu_kernels.md) carries the remaining optional tasks.
+manifest-gated `rs_gpu_*` contract. The [G15 record](docs/gpu/EXECUTION.md)
+covers the linear-job API and the asynchronous completion callback. The
+[next implementation steps](docs/gpu/NEXT_STEPS.md) detail a bounded integer
+fold, a workgroup reduction and the MLIR backend from the current KernelIR.
 
 The [compositional MM0 plan](PLAN_proof_chain.md) makes higher-level proofs
 reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_CHAIN.md)

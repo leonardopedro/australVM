@@ -1,7 +1,8 @@
-# Proposed GPU kernel v1 contract
+# GPU kernel v1 contract
 
-**Status: proposed, 2026-11-17; not implemented.** This is the implementation
-contract for G01–G12 in [PLAN_gpu_kernels.md](../../PLAN_gpu_kernels.md).
+**Status, 2026-11-19.** The [execution record](EXECUTION.md) records G01–G12,
+including physical execution. This remains the baseline contract for
+[PLAN_gpu_kernels.md](../../PLAN_gpu_kernels.md).
 [Research and prior work](../GPU_KERNEL_REVIEW.md) explain the backend choice.
 Later features must version this contract instead of silently weakening it.
 
