@@ -4029,19 +4029,21 @@ cache / `--spine`, same `ulimit -v 6291456`, sampled every 10 s:
 | --- | ---: | ---: |
 | exit | 0 | 0 |
 | elapsed | 2 290.3 s | 3 583 s |
-| peak VmSize | 4 895 MiB (t = 2 133 s) | **2 350 MiB** (t = 3 313 s) |
-| peak VmRSS | 4 870 MiB | **2 321 MiB** |
-| headroom under 6 GiB | 1 249 MiB | **3 794 MiB** |
+| peak VmSize sampled (10 s) | 4 895 MiB (t = 2 133 s) | 2 350 MiB (t = 3 313 s) |
+| peak VmRSS sampled (10 s) | 4 870 MiB | 2 321 MiB |
 | obligations / parts / shared stream | 580 / 1 / 9 154 545 B | 580 / 1 / 9 154 545 B |
 | naming sidecar | 10 968 B | 10 968 B |
 | `.mm0` / `.mm1` | 102 543 367 789 / 102 547 674 107 B | same sizes, both `cmp` identical to the 10 GiB reference |
 
-The peak is now **2 350 MiB** — less than half the 6 GiB cap, and the largest term in
-the row is the ~1.94 GB `body_ty` that the derivation itself produces. Nothing in the
-statement path holds a second copy of a term, so this is the first row measurement here
-whose peak is not a function of how the wrap is written. The cap is no longer the
-interesting constraint; the ~1.94 GB live term is, and shrinking *that* means the
-obligation texts stop being strings, which is §13.40's shared table, already in place.
+The peak is no longer a function of how the wrap is written — but **2 350 MiB is not
+the row's peak**, and the number was wrong for a reason worth keeping: this run sampled
+every 10 s, where §13.41 and §13.42 sampled every second. The wrap stopped allocating,
+and the ~1.94 GB `body_ty` the derivation produces was still joined out of its encode
+buffer at t = 73 s — a `take()` that holds the chunks *and* the joined string, so ~3.9 GB
+for under a second. A 10-second sampler walks past it; the 4 096 MiB probe in §13.44
+fails or passes on exactly that allocation, and at 1 s resolution it reads **4 015 MiB**.
+So the wrap fix bought 4 895 → 4 015 MiB (880 MiB), not 2 545 MiB, and it moved the
+ceiling from the wrap to `EncBuf.take()`. §13.44 measures what that ceiling allows.
 
 **The elapsed time is not a claim in either direction.** 3 583 s against 2 290 s is
 56 % slower, on the same command and byte-identical output, and the change removes a
@@ -4049,4 +4051,38 @@ single 1.9 GB `memcpy` that is nowhere near a second of a 3 583 s run. The diffe
 is host contention — this run shared the machine, and its RSS samples show it sitting
 at a 2.37 GB plateau from t = 600 s, with the extra wall time spent in the artifact
 write (`wrote … in 3574.7 s`). Timing across runs on this host is not comparable unless
-the host is quiet; memory peaks are, which is the only quantity this section claims.
+the host is quiet; memory peaks are, which is the only quantity this section claims —
+and only if the sampler is fast enough to see them, which at 10 s it was not.
+
+### 13.44 The row's floor is 4 032 MiB, and it is one `join`
+
+§13.43 left the wrap allocating nothing, so the question became what the row still
+needs. Answering it is cheap in one direction: a cap below the floor dies at the
+`EncBuf.take()` join at t ≈ 73 s, so every failing probe costs ~80 s instead of an hour.
+Same target, same environment, `ulimit -v` in MiB, 1 s sampling:
+
+| cap | outcome | peak VmSize | notes |
+| ---: | --- | ---: | --- |
+| 2 560 | exit 1 at 80 s | 1 897 MiB | `MemoryError` in `take()`, 1.9 GB of chunks alive, join needs a second copy |
+| 3 584 | exit 1 at 74 s | 2 139 MiB | same site |
+| 3 840 | exit 1 at 73 s | 2 161 MiB | same site |
+| 3 968 | exit 1 at 73 s | 2 128 MiB | same site |
+| **4 032** | **exit 0, 3 385 s** | **4 015 MiB** (t = 73 s) | peak RSS 3 244 MiB; artifacts 102 543 367 789 / 102 547 674 107 B |
+| 4 096 | exit 0, 3 327 s | 4 015 MiB (t = 73 s) | peak RSS 2 622 MiB |
+| 6 144 | exit 0, 3 583 s | 4 015 MiB at 1 s; 2 350 MiB at 10 s (§13.43) | the cap was never the constraint |
+
+**4 032 MiB** is the smallest cap the row completes under, with 17 MiB of slack over a
+peak of 4 015 MiB; 4 000 MiB cannot pass, since the peak it must accommodate is larger
+than that. The floor is the same allocation at every cap: `Enc.enc` builds the body type
+into an `EncBuf` as 1 MiB chunks and `take()` does `"".join(self.chunks)` — the chunks
+stay referenced by the buffer, so the join needs the whole term twice, ~3.9 GB, plus the
+~150 MiB the interpreter holds. That is why 6 GiB was never binding and why 2.5 GiB was
+never reachable: the wall sits between them and has nothing to do with the statement
+path §13.41–§13.43 were looking at.
+
+Both passing runs wrote artifacts of exactly the recorded sizes, and the patch itself was
+`cmp`-verified byte-identical at 6 GiB before either probe; the cap changes what the
+allocator may reserve, not what the emitter writes. A lower floor is a different change,
+not a smaller cap: `Enc.write(eid, sink)` already encodes a term into a sink without
+building a string (§13.30), so the join disappears if `enc()`'s callers accept pieces
+instead of a `str`. That is the next measurement, and it is not claimed here.
