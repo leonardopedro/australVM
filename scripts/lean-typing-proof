@@ -1261,17 +1261,45 @@ def _spool_head(path: Path, n: int) -> str:
         return fh.read(n)
 
 
-def _spool_eq(path: Path, s: str) -> bool:
-    """Whether `path`'s text is exactly `s`, without holding the file too."""
-    i = 0
-    with path.open("r") as fh:
-        while True:
-            block = fh.read(1 << 20)
-            if not block:
-                return i == len(s)
-            if s[i:i + len(block)] != block:
-                return False
-            i += len(block)
+def _pieces(parts, chunk: int = 1 << 20):
+    """Chunks of `parts` joined: str and `Path` spool pieces, never joined.
+
+    A `Path` is read through like `_put` copies it through; a str is sliced. No
+    piece is ever concatenated with another, so checking a 1.9 GB type against
+    its spool does not need a second 1.9 GB string (§13.43).
+    """
+    for p in parts:
+        if isinstance(p, Path):
+            with p.open("r") as sp:
+                while True:
+                    block = sp.read(chunk)
+                    if not block:
+                        break
+                    yield block
+        else:
+            for i in range(0, len(p), chunk):
+                yield p[i:i + chunk]
+
+
+def _spool_eq(path: Path, parts) -> bool:
+    """Whether `path`'s text is exactly `parts` joined, holding neither whole.
+
+    Compares two chunk streams with a carry, so the two sides may split at
+    different offsets (the file reads 1 MiB, a piece may end anywhere).
+    """
+    left, right = iter(_pieces((path,))), iter(_pieces(parts))
+    a = b = ""
+    while True:
+        if not a:
+            a = next(left, "")
+        if not b:
+            b = next(right, "")
+        if not a or not b:
+            return a == b
+        n = min(len(a), len(b))
+        if a[:n] != b[:n]:
+            return False
+        a, b = a[n:], b[n:]
 
 
 def spine(ex, eid):
@@ -1473,23 +1501,26 @@ def main() -> int:
         for _ in binders:
             proof = f"(ty_abs {proof})"
             _step_add(steps_hist, steps_order, "ty_abs")
-        # One allocation, not one per binder. Wrapping in place copies the
-        # 1.9 GB type once per binder and holds `body_ty` the whole time, so the
-        # ns row needed three such strings at once (~5.8 GB) and died at the 6 GiB
-        # cap on the *last* obligation after 5 000 s (§13.41, §13.42). The result
-        # is the same text: `(tpi b0 (tpi b1 … body_ty…))`.
+        # No allocation of the wrapped type at all: the artifact writes the
+        # spooled declared type, and the wrap exists only to say *which* text the
+        # spool is supposed to hold. Joining it — one string per binder once
+        # (§13.41), then one string total (§13.42) — was still a ~1.9 GB copy of
+        # a type that is already on disk, and that copy is what the 6 GiB runs
+        # were short of. Compared piecewise instead, the wrap never exists.
         prefix = "".join(f"(tpi {b} " for b in binders)
-        ty = "".join((prefix, body_ty, ")" * len(binders)))
+        closing = ")" * len(binders)
         if spine:
             # The wrapping is only valid if it reproduces the declared type,
             # which is on disk: comparing it there costs nothing.
-            if not _spool_eq(ty_path, ty):
+            if not _spool_eq(ty_path, (prefix, body_ty, closing)):
+                keep = max(0, 200 - len(prefix))
                 raise SystemExit(
                     "derived type is not the declared type:\n"
-                    f"  derived  {ty[:200]}\n  declared {_spool_head(ty_path, 200)}"
+                    f"  derived  {prefix + body_ty[:keep]}"
+                    f"\n  declared {_spool_head(ty_path, 200)}"
                 )
-        # `ty` and the body type are dead from here: the goal is on disk.
-        del ty
+        # The body type is dead from here: the goal is the spool on disk.
+        del body_ty
         goal_ctx, goal_term, goal_ty = "tnil", val_path, ty_path
 
     head = [

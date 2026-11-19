@@ -3972,6 +3972,11 @@ row's largest single term — but 1.2 GiB lower. What remains is one bounded str
 ~1.94 GB plus its encoding, which is the floor now; getting below it means making the
 goal statement itself streamable, the §13.36 problem one step later in the pipeline.
 
+> **Done in §13.43.** There was no floor to reach: the wrapped type does not have to
+exist as a string at all, because the artifact writes the spooled declared type and
+the wrap only has to be *compared* with it. Compared piecewise, the row peaks at
+2 350 MiB.
+
 **4. Three numbers from earlier sections that this changes.**
 
 - §13.40 projected the ns shared stream at ~3.2 GB from FockPair's 96.5 %; measured,
@@ -3991,3 +3996,57 @@ goal statement itself streamable, the §13.36 problem one step later in the pipe
 
 With this the shared format is measured end to end on the row it was built for: one
 part instead of 43, 9 MB instead of 90.7 GB, no OOM and no `MemoryError`.
+
+### 13.43 The wrap never exists: peak 2 350 MiB, artifacts unmoved
+
+§13.42 ended with "one bounded string of ~1.94 GB plus its encoding, which is the
+floor now". That was still a description of the *implementation*, not of the row. The
+wrapped type was never needed: the artifact writes `(tpi tnil <value> <declared
+type>)` from the **spool on disk** (`goal_ty = ty_path`), and the joined string existed
+for one purpose — the `--spine` check that the derivation's wrapping reproduces the
+declared type. A 1.9 GB string was being built, compared, and freed.
+
+The check now compares without joining. `_pieces()` yields 1 MiB chunks of a sequence
+of pieces (a `Path` read through like `_put` copies it, a `str` sliced), and
+`_spool_eq(path, parts)` walks the file's chunks against those with a carry, so the two
+sides may split at different offsets:
+
+```python
+prefix, closing = "".join(f"(tpi {b} " for b in binders), ")" * len(binders)
+if spine and not _spool_eq(ty_path, (prefix, body_ty, closing)):
+    raise SystemExit(...)                     # no `ty` is ever built
+```
+
+`body_ty` is dropped right after (`del body_ty`), so the wrap costs a few hundred bytes
+of prefix and 1 MiB of read buffer. The emitter's artifacts are unchanged, and the
+byte-identity gate says so rather than this paragraph: `scripts/check-lean-typing-proof`
+is `OK — 12 artifact(s) across 3 modes match` with no re-record.
+
+**The rerun, measured.** Same target, same `LTP_OBLIG_SHARE=1` / 2 GiB chunk / 20 000
+cache / `--spine`, same `ulimit -v 6291456`, sampled every 10 s:
+
+| | §13.42 | §13.43 |
+| --- | ---: | ---: |
+| exit | 0 | 0 |
+| elapsed | 2 290.3 s | 3 583 s |
+| peak VmSize | 4 895 MiB (t = 2 133 s) | **2 350 MiB** (t = 3 313 s) |
+| peak VmRSS | 4 870 MiB | **2 321 MiB** |
+| headroom under 6 GiB | 1 249 MiB | **3 794 MiB** |
+| obligations / parts / shared stream | 580 / 1 / 9 154 545 B | 580 / 1 / 9 154 545 B |
+| naming sidecar | 10 968 B | 10 968 B |
+| `.mm0` / `.mm1` | 102 543 367 789 / 102 547 674 107 B | same sizes, both `cmp` identical to the 10 GiB reference |
+
+The peak is now **2 350 MiB** — less than half the 6 GiB cap, and the largest term in
+the row is the ~1.94 GB `body_ty` that the derivation itself produces. Nothing in the
+statement path holds a second copy of a term, so this is the first row measurement here
+whose peak is not a function of how the wrap is written. The cap is no longer the
+interesting constraint; the ~1.94 GB live term is, and shrinking *that* means the
+obligation texts stop being strings, which is §13.40's shared table, already in place.
+
+**The elapsed time is not a claim in either direction.** 3 583 s against 2 290 s is
+56 % slower, on the same command and byte-identical output, and the change removes a
+single 1.9 GB `memcpy` that is nowhere near a second of a 3 583 s run. The difference
+is host contention — this run shared the machine, and its RSS samples show it sitting
+at a 2.37 GB plateau from t = 600 s, with the extra wall time spent in the artifact
+write (`wrote … in 3574.7 s`). Timing across runs on this host is not comparable unless
+the host is quiet; memory peaks are, which is the only quantity this section claims.
