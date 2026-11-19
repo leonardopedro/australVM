@@ -8,8 +8,8 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
-| [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | `48658a42`, re-run after the W5 object re-pin | `164 passed, 6 explained gap(s), 0 failed` |
-| [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | `48658a42` | `173 passed, 4 explained gap(s), 0 failed` |
+| [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | `48658a42`, re-run after the W5 object re-pin and after adding the bridge-copy check | `165 passed, 6 explained gap(s), 0 failed` |
+| [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | `48658a42` | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | after the W5 object re-pin | `obj-drift-control: held` |
 
 The third row is not a gate count but a negative control's transcript: it is
@@ -30,11 +30,13 @@ row is caught only by re-running the command, not by the gate — the same rule 
 `docs/data/w3/probes.tsv` (the perturbation is the measurement; only the
 citation is re-read).
 
-The `ocaml` transcript was re-run twice on the day it was recorded — once after
-the prose edits that cite it, once after the W5 object re-pin — and printed the
-same summary (`164 passed, 6 explained gap(s), 0 failed`, exit 0) both times,
-which is the expected relation: neither a plan-only edit nor a re-pinned digest
-changes the check list.
+Each transcript is the latest run of its command, not the first: the `ocaml` one
+was re-run after the prose edits that cite it and again after the W5 object
+re-pin, printing the same `164 passed, 6 explained gap(s), 0 failed` (exit 0)
+both times, then once more after the bridge-copy check was added (`165 passed`,
+and `174 passed` under `.#lean`). That is the expected relation: a plan-only
+edit does not change the check list, and a re-pinned digest does not either — a
+new check does, and its line is in both logs.
 
 The scripts are unedited stdout, so they contain absolute paths, temp-dir names
 and Nix store hashes from the recording host. The two gate transcripts open with

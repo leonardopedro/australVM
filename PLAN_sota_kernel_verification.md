@@ -397,24 +397,25 @@ $ nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls cert-app
   gate: verify-invariants: 128 passed, 19 explained gap(s), 7 failed (exit 1)
   holds                                                      # exit 0, run alone
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 164 passed, 6 explained gap(s), 0 failed   # 2026-11-19, bridge rebuilt
+verify-invariants: 165 passed, 6 explained gap(s), 0 failed   # 2026-11-19, bridge rebuilt
 ```
 
 That last line is today's: with `clif_dump` and the bridge rebuilt from
 `01972e3b`'s sources (`make bridge`), three checks that had been explained as
-gaps now run, so the tally is 164 passed and 6 explained gaps instead of 150/9.
+gaps now run, so the tally is 165 passed and 6 explained gaps instead of 150/9
+(the 165th is the bridge-copy check added below).
 The six that remain are the four §W3 approvals and the two `lean`-shell ones. The
 `clif2mm0` detail inside §3.5's `lean` transcript still reads 854 because that is
 what it printed on 2026-11-18; since 2026-11-19 the same line reads **813**, and
 §W9.2 records why.
 
 **Measured 2026-11-19 at `48658a42`:** the `ocaml` shell reports
-`164 passed, 6 explained gap(s), 0 failed`
+`165 passed, 6 explained gap(s), 0 failed`
 ([transcript](docs/data/gate/2026-11-19-ocaml-shell.log)) and the `lean` shell
-`173 passed, 4 explained gap(s), 0 failed`
+`174 passed, 4 explained gap(s), 0 failed`
 ([transcript](docs/data/gate/2026-11-19-lean-shell.log)) — each file is the
 unedited stdout of one run, ending in the line quoted here. The two numbers are not the same
-check list: 170 checks in the `ocaml` shell against 177 in `lean`, because the
+check list: 171 checks in the `ocaml` shell against 178 in `lean`, because the
 toolchain that shell carries runs checks the other cannot. `lean` 4.30.0 is
 available on this host in `.#lean` (`/nix/store/…-lean4-4.30.0/bin/lean`). Under
 `.#lean` exactly four gaps remain, all `[gap]  W3: <stem> has no approved
@@ -517,13 +518,26 @@ certificate and an `obj` digest that did not. Copying the release artifact over
 the root copy and re-emitting with `--obj fac893da…` (statements byte-identical,
 only the `-- code:` line moved) puts the gate back to
 `[pass] W5 (checked): the certificate's obj digest is the bridge's digest of the
-emitted object (aarch64)` with `164 passed, 6 explained gap(s), 0 failed`. The
+emitted object (aarch64)` with `165 passed, 6 explained gap(s), 0 failed`. The
 control held at that tree: the reverse-order serializer moved
 `obj=fac893da…→f0f80ace…` while the program's output and exit status were
 identical, `verify-invariants` failed on exactly that W5 line, and the restored
 emitter returned both digests ([transcript](docs/data/gate/2026-11-19-obj-drift-control.log)).
 The lesson is `check-bridge-fresh`'s one copy further out: a stale `.so` at the
 root does not fail, it measures.
+
+So the gate now measures that condition instead of assuming it:
+`verify-invariants` compares the two copies with `cmp` before anything is
+compiled and reports `[pass] W5 (checked): the bridge the gate loads is the
+release artifact it was built from`, or fails with the one-line remedy
+`cp safestos/cranelift/target/release/libaustral_cranelift_bridge.so .` when
+they differ; if either copy is absent (a checkout that never built the bridge)
+the check is a `[gap]`, not a failure. Its negative control is the same fault in
+miniature: appending a single byte to the root copy makes the gate print
+`[FAIL] W5 (checked): the bridge the gate loads is the release artifact it was
+built from` and the remedy line (`2026-11-19`; that run was stopped at the check
+rather than allowed to finish, since one check was the question), and restoring
+the byte-identical copy returns `[pass]`.
 
 ---
 

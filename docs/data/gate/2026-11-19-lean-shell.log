@@ -60,6 +60,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] Phase D: mm0-rs elaborates and mm0-c re-verifies the certificate
   [detail] 4 sorts, 20 term/def, 44 ax/thm
 [pass] W2: docs/kernel_alg.mm0 accepted by mm0-rs + mm0-c
+[pass] W5 (checked): the bridge the gate loads is the release artifact it was built from
 [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it
 [pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
 [pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (aarch64)
@@ -337,4 +338,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 173 passed, 4 explained gap(s), 0 failed
+verify-invariants: 174 passed, 4 explained gap(s), 0 failed
