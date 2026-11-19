@@ -993,9 +993,50 @@ the artifact, so `mm0-c` checks them too.
   where the recorded totals come from. `make drift-controls` runs
   `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
   `make test` depends on it — the Makefile states the cost, because every control
-  is a full gate run (~4.5 min). The one `copy` row left is not a control anyone
-  forgot: `W3: $_stem matches its approved statements` has no branch to exercise
-  until an artifact is approved, and approving is the owner's commit.
+  is a full gate run (~4.5 min). A case cannot be made cheaper (the case *is* the gate
+  run), so `-j N` runs independent ones at once — and a run writes its own wall
+  clock down rather than leaving it in a transcript: the runner appends one row
+  per run to `$W3_DRIFT_LOGS/timings.tsv`, and to `$W3_DRIFT_RECORD` when that
+  is set. The rows kept in the tree are `docs/data/w3/drift-timings.tsv`:
+
+  ```
+  date	rev	jobs	requested	wall_s	per_case_s	held	outcome
+  2026-11-19	de8b11b2	1	14	3763	268	14/14	held
+  2026-11-19	de8b11b2	2	14	2649	189	14/14	held
+  ```
+
+  That is all 14 cases in **62m43s** at `-j 1` (268 s each) against **44m9s** at
+  `-j 2` (189 s of wall clock per case, ~379 s of work, because two gate runs
+  share the core) — 18m34s, 30%, off. The second core is worth 1.42x rather than
+  2x because a single gate run is itself mostly serial, and every case still
+  holds under `-j 2` (the same 14 `holds` as at `-j 1`), which is the check that
+  the cases really are independent: own scratch tree, own `TMPDIR`, repository
+  read-only. Those two rows predate the recorder and were entered from the runs'
+  own gate logs; every row after them is written by the run itself. Reproduce
+  with `W3_DRIFT_RECORD=docs/data/w3/drift-timings.tsv bash
+  scripts/w3-drift-controls -j 2 all`, under `nix develop`. The five read-only
+  `*-drift-control` scripts are separate scripts and write no row of their own;
+  measured the same way, they take 22m44s serial against 17m22s
+  at `-P 2`, all five holding — so the two parallel halves together go from
+  **1h25m27s to 1h01m31s**, 23m56s or 28% of the wall clock. `make
+  drift-controls` therefore runs at `DRIFT_JOBS` (default `nproc`) and keeps
+  `scripts/obj-drift-control` — the one control that edits the tree and
+  rebuilds the compiler — last and serial; that one is unchanged and excluded
+  from the totals above.
+
+  The thirteenth case is the row that used to be the exception. `W3: $_stem
+  matches its approved statements` only runs for an artifact that has an
+  approval, and the §W3 table's own rows are all still pending — so the case
+  brings its own approved root instead of waiting for one: `w3-approved-row`
+  copies `mm0/approved/` into scratch, changes one approved axiom's text
+  (`quasi_rh_7_8`'s single axiom, `cc0` → `cc1`) and leaves the file's digest
+  alone, which is precisely a statement weakened after the fact. Measured
+  2026-11-18: exit 1, `140 passed, 7 explained gap(s), 1 failed`, the single red
+  line being `[FAIL] W3: quasi_rh_7_8 matches its approved statements` with the
+  other 7 gaps and every other check unmoved. Nothing is approved by it —
+  `mm0/approved/` is read and copied, never written, and the scratch copy is
+  deleted with the run — so the owner's commit remains the only way an approval
+  enters the tree.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers

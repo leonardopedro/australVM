@@ -29,10 +29,17 @@
 # i.e. 18m34s (30%) off the sequential wall clock, which is what `make
 # drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
 #
-# `w3-approved-row` is the one copy check with no case: its subject is an
-# *approved* §W3 row, and no artifact is approved in this tree, so the branch
-# cannot be reached without an owner commit. That is stated rather than faked —
-# a control that wrote `mm0/approved/` would be self-approval.
+# `w3-approved-row` is the one case whose subject is an *approved* §W3 row, and
+# no §W3 row is approved in this tree: it copies `mm0/approved/` into scratch and
+# weakens an approved axiom's text there. Nothing is approved by it — a control
+# that wrote `mm0/approved/` would be self-approval.
+#
+# Every run also records its own wall clock, so a timing in the plan is a quoted
+# data row and not a number someone retyped. The row goes to
+# `$W3_DRIFT_LOGS/timings.tsv` always, and to `$W3_DRIFT_RECORD` when it is set
+# (point that at `docs/data/w3/drift-timings.tsv` to keep the row in the tree).
+# Columns, tab separated, one row per run:
+#   date  rev  jobs  requested  wall_s  per_case_s  held  outcome
 #
 # Usage: scripts/w3-drift-controls [-j N] [case|all]   (default -j 1, or
 #          $W3_DRIFT_JOBS; `make drift-controls` passes -j $(nproc))
@@ -56,6 +63,7 @@ command -v python3 >/dev/null 2>&1 || {
 # Each case keeps its whole gate log under $W3_DRIFT_LOGS: the recorded numbers
 # in the plan's probe table are read out of these, so they must outlive the run.
 W3_DRIFT_LOGS="${W3_DRIFT_LOGS:-/tmp/w3-drift-controls}"
+W3_DRIFT_RECORD="${W3_DRIFT_RECORD:-}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$W3_DRIFT_LOGS"
@@ -301,6 +309,24 @@ run_case() {
     printf '%s %s\n' "$rc" "$SECONDS" >"$cw/status"
 }
 
+# The row a run writes about itself. `held` is what the run actually reported
+# holding out of what was asked for, so a case that fails still records its wall
+# clock — the time a red run costs is worth knowing too.
+record_timing() {  # held requested jobs seconds outcome
+    local held="$1" requested="$2" jobs="$3" secs="$4" outcome="$5"
+    local per=0 date rev row
+    [ "$requested" -gt 0 ] && per=$((secs / requested))
+    date="$(date -u +%F)"
+    rev="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+    row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s/%s\t%s' \
+        "$date" "$rev" "$jobs" "$requested" "$secs" "$per" "$held" "$requested" "$outcome")"
+    printf '%s\n' "$row" >>"$W3_DRIFT_LOGS/timings.tsv"
+    if [ -n "$W3_DRIFT_RECORD" ]; then
+        printf '%s\n' "$row" >>"$W3_DRIFT_RECORD"
+    fi
+    say "timing: $held/$requested case(s) in ${secs}s at -j $jobs (${per}s each) — $W3_DRIFT_LOGS/timings.tsv"
+}
+
 report_case() {  # print a finished case's report, return its status
     local c="$1" cw="$work/$1" rc=1 secs=0
     [ -f "$cw/status" ] && read -r rc secs <"$cw/status"
@@ -325,8 +351,14 @@ run_all() {  # case names on stdin
         if [ "$running" -ge "$JOBS" ]; then wait; running=0; fi
     done
     wait
-    local status=0
-    for c in "${order[@]}"; do report_case "$c" || status=1; done
+    local status=0 held=0
+    for c in "${order[@]}"; do
+        if report_case "$c"; then held=$((held + 1)); else status=1; fi
+    done
+    # The wall clock belongs to the run, not to the caller: record it here, where
+    # both entry points (all, one case) end up.
+    record_timing "$held" "${#order[@]}" "$JOBS" "$SECONDS" \
+        "$([ "$status" -eq 0 ] && printf held || printf failed)"
     return "$status"
 }
 
@@ -355,6 +387,7 @@ if [ "$what" = all ]; then
         say "w3-drift-controls: at least one case did not hold" >&2
     fi
 elif declare -F "case_$what" >/dev/null; then
+    SECONDS=0
     printf '%s\n' "$what" | run_all || status=1
 else
     fail "no case named '$what' (known: $(printf '%s\n' $CASES | tr '\n' ' '))"

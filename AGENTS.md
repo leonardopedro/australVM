@@ -504,7 +504,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `copy` row, `W3: $_stem matches its approved statements`, is
   `w3-approved-row`: it copies the whole approved root into scratch and weakens
   one approved axiom there, so the check runs without the tree holding any new
-  approval.
+  approval. Each run appends its own wall clock to
+  `$W3_DRIFT_LOGS/timings.tsv` (and to `$W3_DRIFT_RECORD` when set); the rows
+  kept in the tree are `docs/data/w3/drift-timings.tsv`, which the plan quotes
+  instead of a retyped number.
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
   read-only `*-drift-control` scripts the same way, then `obj-drift-control`
   alone (it edits the tree and rebuilds), and `make test` depends on it. The two
