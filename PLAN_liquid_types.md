@@ -1412,6 +1412,15 @@ control`, and `… moves the copy through the gate's own hook`, which asserts th
 the script uses `AUSTRALVM_LIQUID_CHECK=` and that the gate reads it), since the
 gate cannot run a script that runs the gate.
 
+Measured end to end on 2026-11-19 under `nix develop "git+file://$PWD#ocaml"`,
+exit 0:
+
+```
+baseline: [pass] L11a: the liquid pass runs the index-closure audit before emitting (exit 0)
+mutated:  [FAIL] L11a: the liquid pass runs the index-closure audit before emitting (exit 1)
+l11a-ordering-drift-control: OK
+```
+
 ### L11b — Elaborate and convert a small sorted index language
 
 Add a typed representation for natural length/offset expressions with resolved
@@ -1498,7 +1507,17 @@ suite on it, so the failure that actually matters — leaving a loosened
 `convert` behind — is reported rather than assumed away. Its own failure mode
 was tested by making both mutations no-ops: `the mutation did not apply (true)`,
 `(false)`, `FAILED`, exit 1. Needs `dune`, so it runs under
-`nix develop "git+file://$PWD#ocaml"`.
+`nix develop "git+file://$PWD#ocaml"`. Measured end to end on 2026-11-19, exit
+0, and `lib/liquid/LiquidIndex.ml` re-hashed after the run is byte-identical to
+its pre-run copy:
+
+```
+baseline:   OK (exit 0)
+permissive: 4 refusal case(s) failed (exit 1)
+austere:    4 acceptance case(s) failed (exit 1)
+restored:   OK (exit 0), sha256 unchanged
+l11b-conversion-drift-control: OK
+```
 
 Both controls are wired into the gate, because a control nothing runs on the
 default path is a claim about a script rather than evidence. `verify-invariants`

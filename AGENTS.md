@@ -523,10 +523,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   — never a silent pass, which is what lets `make test` run past
   `drift-controls` under `nix develop .#ocaml` (where the `default` shell that
   carries why3 does not build).
-  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the seven
-  read-only `*-drift-control` scripts the glob matches (`obj-drift-control` is
-  the eighth and runs alone, because it edits the tree and rebuilds), and
-  `make test` depends on it. The two
+  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the
+  seven read-only scripts listed in `READ_ONLY_CONTROLS` — the four §W3/§W9.3
+  cell controls, `w3-approval-state-drift-control`, and the two L11 controls
+  (`l11a-ordering`, `l11b-conversion`) — then `obj-drift-control` alone, because
+  that one edits the tree and rebuilds. `make test` depends on it. The two
   parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
   (2026-11-18, before the two L11 controls joined the loop; the ~30% saving is
   the point, not the wall clock). It never
@@ -551,12 +552,60 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `class` totals (`control` / `derived` / `copy` / `tool` / `none`). It exits 1
   when the plan no longer quotes the measured counts — including the `copy`
   count, which is the gap — so a table that grows without the paragraph moving
-  is caught here. Kept out of `verify-invariants`
-  because it reads the plan's prose rather than an artifact.
+  is caught here, and `make check-census` runs it. Kept out of
+  `verify-invariants` because it reads the plan's prose rather than an artifact,
+  which also means nothing runs it for you: adding a `check` to
+  `scripts/verify-invariants` makes it exit 1 until the plan quotes the new
+  numbers. Last measured 2026-11-19: `223 statements, 136 distinct, 22 probe
+  rows (20 matched), 0 neither, copy 0`.
+- `scripts/lib/arch.sh` — the one recorded-arch reader for the W5 object
+  digest (`avm_recorded_arch`, `avm_host_arch`, `avm_arch_gap`), sourced by
+  `verify-invariants`, `obj-drift-control` and `w5-arch-gap-control` so all
+  three word a host mismatch the same way. The committed certificate records
+  `arch=x86_64` (2026-11-19), so the obj comparison is `[pass]` there and the
+  documented `[gap]` elsewhere; `scripts/obj-drift-control` expects the obj
+  line on a matching host and the cps line on a mismatched one, and exit 2
+  stays an explained gap in `make test`.
+- `scripts/w5-arch-gap-control` — the arch-gap path itself: on this host the
+  matching-arch run never takes it, so the control sets
+  `AUSTRALVM_HOST_ARCH` to a label that is neither the recorded nor the real
+  arch and requires the gate to exit 0 with `W5: object digest not comparable
+  (recorded arch=…, this host is …)`, no obj `[pass]`, and the cps `[pass]`
+  still there. Read-only, one full gate run; in `READ_ONLY_CONTROLS`.
+- W5's failed comparisons carry a staleness line. The certificate's `cps=`/`obj=`
+  digests describe one `austral` and one bridge build, so when a comparison
+  fails the gate prints `staleness: — austral is newer (…T14:08:25) than
+  mm0/flux1d_certificate.mm0 (…T13:57:34), so the recorded digests may describe
+  an older compiler build; re-emit it: …`: the mid-rebuild case reads as an
+  artifact that predates the compiler, not as silently drifted code. It is a
+  diagnosis and never a skip — the two digest `[FAIL]`s stay red. mtime alone
+  cannot refuse the comparison: a rebuild of identical sources leaves the
+  digests equal and the tree green (measured 2026-11-19 with `austral` 34
+  minutes newer than the certificate), and CI writes the artifact at checkout
+  before `make bridge` writes the binary, so an mtime-only refusal would be red
+  on every run. The note is itself a comparison with a control:
+  `[pass] W5: the staleness note is silent when the artifact is newest, and
+  names the newer binary` stamps a scratch pair both ways.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
-  is restored. It rebuilds the compiler twice, so it is not in
-  `verify-invariants`; run it under `nix develop` (needs `dune`).
+  is  restored. It rebuilds the compiler twice, so it is not in
+  `verify-invariants`; run it under `nix develop` (needs `dune`). It resolves the
+  bridge the way the gate, `scripts/cps-corpus` and
+  `scripts/check-adapter-descriptors` do (repo root, else `target/release`), so a
+  clean `make bridge` layout is exercised instead of reported as `[gap]`;
+  measured there 2026-11-19: held, `obj=26bb3ab3…` → `524f7432…` with the
+  program's exit status unchanged, gate `[FAIL] W5 (checked): the certificate's
+  obj digest … (x86_64)`, pinned digests back after the restore. The
+  `nix-pkg` CI job also runs `verify-invariants` inside `.#ocaml` after the
+  OCaml suite, against the built `austral`/bridge and the sibling `unfer`
+  checkout, so the checks that need artifacts are measured there instead of
+  reported as gaps. The standalone `verify-invariants` job was upgraded to the
+  same shape: it installs nix and Rust, runs `make bridge`, and then runs the
+  gate without staging a root `.so` — the gate, `scripts/cps-corpus` and
+  `scripts/check-adapter-descriptors` resolve the bridge at the repo root when
+  it is there and under `safestos/cranelift/target/release` otherwise, which
+  is the layout `make bridge` leaves and CI has. Measured from a clean tree
+  with no root copy: `157 passed, 8 explained gap(s), 0 failed` in 197 s.
 - Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
   `make bridge`, all guarded by `check-bridge-fresh`; `make w9` for the two
   lean-shell checks below), `run-examples.sh`,

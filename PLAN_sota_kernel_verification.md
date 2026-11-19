@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 151 passed, 8 explained gap(s), 0 failed
+verify-invariants: 157 passed, 8 explained gap(s), 0 failed
   [pass] W9: mm0/clif.mm0 + .mm1 accepted by mm0-rs + mm0-c
   [pass] W9: the CLIF model still claims no theorem
   [pass] W9.3: clif_step is vocabulary — declared, stated, never axiomatized
@@ -380,51 +380,57 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: comparator self-test (all three negative controls refuse)
 
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 150 passed, 9 explained gap(s), 0 failed
+verify-invariants: 156 passed, 9 explained gap(s), 0 failed
   # + W9.1 (no lean shell) and the Lean halves of W9.3 are explained gaps here;
   # python3 comes from the OCaml shell, so the scripts run.
 $ bash scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
   result: covered — every opcode used is declared in the decoder and in the artifact
 $ grep '^-- code:' mm0/flux1d_certificate.mm0
--- code: cps=5dfcdfe8…d26d1 obj=ad3340b6…f0224 target=host
+-- code: cps=5dfcdfe8…d26d1 obj=26bb3ab3…850cc target=host
   # re-emitted; the statements are byte-identical, only this line moved
-$ make test                    # stops in drift-controls under .#ocaml, see below
---- drift controls: one full gate run each, ~4.5 min per case
-  gate: verify-invariants: 145 passed, 9 explained gap(s), 0 failed (exit 0)
-w3-drift-controls: FAIL liquid-golden: Liquid subset extraction matches its pinned golden did not fail
-$ nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls cert-approved
-  gate: verify-invariants: 128 passed, 19 explained gap(s), 7 failed (exit 1)
-  holds                                                      # exit 0, run alone
+$ nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls all
+== liquid-golden (0s)
+w3-drift-controls: [gap] liquid-golden: why3 not on PATH, so the pinned-golden check is
+                   an explained [gap]; this control is not covered in this shell
+                   (run it under the default devShell, which carries why3)
+  [gap] not covered in this shell (named above)
+...
+w3-drift-controls: 13 case(s) held, 1 not covered in this shell, in 35m19s with -j 1
+$ LD_LIBRARY_PATH=… dune runtest                              # exit 0
+OK / OK / … (15 executable(s), 0 failures)
 ```
 
-The two gate numbers are the same 159 checks: the `lean` shell closes one gap the
+The two gate numbers are the same 165 checks: the `lean` shell closes one gap the
 `ocaml` shell cannot (W9.1) and the rest stay explained. The block previously
 recorded `150 passed, 4 explained gap(s)`; the four §W3 approvals are still the
 owner's pending decision, and the other four of today's gaps are W5's object
 digest (not comparable in this shell) and the three Liquid golden checks (no
 prover reachable here) — reported as explained gaps, never as passes. Of the
-figures quoted, only `clif2mm0` moved for a reason worth naming: 853 → 854
-instructions, `bnot` leaving the model when opcode `0x19` became `bxor 1`. The
-`w3-pending`/`w3-approved` sizes and the certificate's `-- code:` line are
-unchanged, which is the intended relation: a lowering change the CLIF layer
-measures moves only the artifact that measures it.
+figures quoted, only `clif2mm0` moved for a reason worth naming: the quoted 854
+is now 869 instructions over the same 12 modules, with the form set unchanged
+at 20 and the movement in counters only (one-argument `call` 35 → 50,
+two-argument `call` 63 → 48, `store` 37 → 52), while the opcode census did not
+move at all (905 reads, 23 of 23 opcodes) — so this is a CLIF-layer counter
+change, not a CPS-layer one. The `w3-pending`/`w3-approved` sizes and the certificate's
+`-- code:` line are unchanged, which is the intended relation: a lowering change
+the CLIF layer measures moves only the artifact that measures it.
 
-`make test` is not green in `.#ocaml` on this host, and the reason is the shell,
-not this measurement: `drift-controls` runs first and its `liquid-golden` case
-requires the pinned-golden check to turn red, but under `.#ocaml` that check is
-an explained `[gap]` (no why3 extraction), so the mutation has nothing to trip —
-the `default` shell that carries the provers cannot be built on this aarch64
-host (`alt-ergo`, see AGENTS.md). The case now reports itself as
-`[gap] liquid-golden: why3 not on PATH …` and the run says
-`13 case(s) held, 1 not covered in this shell` instead of failing; that leaves
-`make test` honest rather than green-for-the-wrong-reason. The `cert-approved`
-case *did* hold when run alone (a transient `SIGTERM` in the batch run,
-`exit 143`, was not reproducible).
-Everything after `drift-controls` in `make test` — `dune build @runtest` and the
-test-program runner — is therefore **not covered by this re-measurement**; the
-suites were run directly for the L11 work (`dune runtest`, 161 tests) and for the
-bridge (`cargo test --workspace`).
+`make test` was not re-run as one target, because its first half is the 35-minute
+drift run quoted above; the two halves were measured separately instead, and
+each one is the same command the target runs. `drift-controls` exits 0 with
+`13 case(s) held, 1 not covered in this shell`: `liquid-golden` is the uncovered
+one, because the gate guards the pinned-golden check on `command -v why3` and
+reports it as an explained `[gap]` under `.#ocaml`, so the drifted copy has no
+`[FAIL]` to produce (the `default` shell that carries why3 cannot be built on
+this aarch64 host — `alt-ergo`, see AGENTS.md). Before the case learned to say
+that, it failed and `make test` stopped there — the reason this is a `[gap]`
+line now rather than a green case is that the shell really cannot produce the
+evidence, and a control that silently returns 0 would be the false pass.
+`dune runtest` then passed on the same tree: 15 executables, 0 failures. Not
+re-run in this measurement: the seven read-only `*-drift-control` steps that
+`drift-controls` also drives (the L11b control was run on its own, below; the
+L11a control and `obj-drift-control` were not), and the test-program runner.
 
 The three `[FAIL]`s this work produced before those two re-emits were the
 expected ones — the certificate pinned the CPS and object digests of the *old*
@@ -1045,10 +1051,10 @@ the artifact, so `mm0-c` checks them too.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 213 `check` statements,
-  128 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 223 `check` statements,
+  136 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 22 of those 128 have a measured perturbed-tree
+  number, not a different claim. 22 of those 136 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
   neither: no check in the gate is unread now, and there are no `copy` rows —
@@ -1102,10 +1108,18 @@ the artifact, so `mm0-c` checks them too.
   | `L11c: the split pilot has its own test suite` | none | greps `test/dune` for a suite name |
   | `L11c: the split pilot has an end-to-end suite` | none | a directory's existence |
   | `L11c: the split pilot's facts are checked to erase` | none | greps a test file for a case name |
+  | `L11a: the ordering pin has a negative control` | none | the control script's existence; the gate cannot run it, because it runs the gate |
+  | `L11a: the ordering control moves the copy through the gate's own hook` | none | greps the control for the hook it names, and the gate for that hook |
+  | `L11b: the conversion pin has a negative control` | none | the control script's existence; the gate cannot run it, because it needs `dune` |
+  | `L11b: the conversion control mutates the rule LiquidIndex declares` | none | compares one source line in `LiquidIndex.ml` with the control's view of it |
+  | `L11b: the conversion control re-checks the tree after restoring` | none | greps the control for its digest and restore steps |
+  | `PC02: flipping clamp_upper's conclusion is refused` | control | a scratch `.mm1` with the conclusion flipped, refused on every run |
+  | `PC02: word.mm0 + word.mm1 accepted, clamp bounds and map laws proved` | tool | runs `mm0-rs` + `mm0-c`; a missing toolchain is the failure mode observed so far |
+  | `W5: the staleness note is silent when the artifact is newest, and names the newer binary` | control | a scratch artifact/binary pair is stamped both ways on every run and the note must be empty in one and name the file in the other |
   | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
   | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |
   | `Liquid golden vc-fold-premises.mlw proves in full under z3` | tool | needs `why3` + `z3` |
-  | `Liquid subset extraction matches its pinned golden` | control | `scripts/w3-drift-controls liquid-golden` appends a line to an `AUSTRALVM_LIQUID_GOLDEN` copy and the diff refuses it |
+  | `Liquid subset extraction matches its pinned golden` | control | `scripts/w3-drift-controls liquid-golden` appends a line to an `AUSTRALVM_LIQUID_GOLDEN` copy and the diff refuses it; the one case conditional on the shell — the gate guards that check on `command -v why3`, so a prover-less shell reports `[gap] … not covered in this shell` rather than a false hold |
   | `Liquid subset library extracts with the existing driver` | tool | needs the extraction driver |
   | `Phase D: lean2mm0 emitter present` | none | a script's existence |
   | `Phase D: generated certificate artifacts present` | none | files' existence |
@@ -1423,6 +1437,34 @@ Two limits are written into the code and the gate instead of being smoothed over
   a fresh process's digest to the pinned one on every run) — a claim is tested
   where it is true.
 
+**A failed comparison says which build it is about (measured 2026-11-19).** The
+digests describe one `austral` and one bridge build, so a tree that has been
+rebuilt since the certificate was recorded fails with the same two red lines as
+a drifted one. The gate now attaches the mtimes when they explain it: the
+perturbation below, with the artifact's mtime held at its recorded
+`13:57:34` and `austral` at `14:08:25`, exits 1 with `152 passed, 8 explained
+gap(s), 5 failed` — the re-emit claim, the `obj` digest, and the three citation
+checks that hash the artifact — and both W5 lines carry
+
+```
+      staleness: — austral is newer (2026-11-19T14:08:25) than
+      mm0/flux1d_certificate.mm0 (2026-11-19T13:57:34), so the recorded digests
+      may describe an older compiler build; re-emit it: python3 scripts/au2mm0
+      emit examples/verified-kernel/flux1d/flux1d.obligations.json --code <cps>
+```
+
+The same perturbation with the artifact's mtime left at *now* fails the same
+five checks and prints no staleness line, which is the intended split: the note
+is a diagnosis of *why*, never a skip of the comparison. It cannot be a refusal
+on mtime alone, because a rebuild of identical sources leaves the digests equal
+and the tree green — measured on this host with `austral` 34 minutes newer than
+the certificate, and CI writes the artifact at checkout before `make bridge`
+writes the binary, so an mtime-only refusal would be red on every run. The note
+is itself a comparison with a control: `[pass] W5: the staleness note is silent
+when the artifact is newest, and names the newer binary` stamps a scratch pair
+both ways on every run. Restored: `sha256 924ac3f0…f94` for the certificate,
+gate green again.
+
 **The drift control, measured 2026-11-13.** A digest that never moves would be
 worthless, so the W5 claim is tested by making the emitter move without changing
 behaviour: `scripts/obj-drift-control` reverses the function order in the CPS
@@ -1439,7 +1481,20 @@ restored: cps=cd65d0b4… obj=ceed355c…d2cb  (pinned values return)
 
 So the object digest is sensitive to emitted code, the certificate is not
 silently accepted after such a change, and the control leaves a green tree (it
-restores and rebuilds on every exit path, including failure). It is not in
+restores and rebuilds on every exit path, including failure).
+
+Re-measured 2026-11-19 on the *clean* layout this tree now builds — no `.so` at
+the repo root, only `safestos/cranelift/target/release/` — which is why the
+control resolves the bridge the way the gate does instead of reporting a
+`[gap]`:
+
+```
+before: cps=5dfcdfe8c6dd… obj=26bb3ab35216…50cc out=0
+after:  cps=a3652e1cdf82… obj=524f7432048b…cead out=0      (same exit status)
+gate:   [FAIL] W5 (checked): the certificate's obj digest is the bridge's
+        digest of the emitted object (x86_64)
+held:   pinned cps/obj returned after the restore; lib/CpsGen.ml byte-identical
+``` It is not in
 `verify-invariants` because it rebuilds the compiler twice; it is a script a
 reader can run, with the result above pinned in this document.
 
@@ -1904,7 +1959,7 @@ argument list and the type tuple in the name:
 term iadd__i64_i64__r_i64 (a b: val): op;   -- 58 use(s), 2 operand(s), 1 result(s)
 ```
 
-Measured after the `sub`/`mul`/`match` producers landed: **20 forms, 854
+Measured after the `sub`/`mul`/`match` producers landed: **20 forms, 869
 instructions over 12 modules** (`i64`/`i8` only; `iconst` at both widths, `iadd`,
 `band`, `bor`, `bxor`, `icmp`, `uextend`, `load`, `store`, `call` at four
 arities, `brif`, `jump`, `return`, and the trapping pair `ssub_overflow`/
@@ -1919,7 +1974,11 @@ the CPS layer started emitting them — the corpus grew by a `*` in
 and became `bxor a, 1`: a `bnot` turns 1 into -2, which is truthy, so `not true`
 was returning -2. The form named `bnot` left the model, `bxor` entered it, and
 the extra `iconst 1` each of the corpus's `not`s now emits is the instruction
-count's +1.
+count's +1. It moved again 854 → 869 on 2026-11-19, re-measured over the same
+12 modules: the form set is still 20 and only counters moved (one-argument
+`call` 35 → 50, two-argument `call` 63 → 48, `store` 37 → 52), while
+`scripts/isa-census` still reads 905 opcodes over 23 of 23, so the change is at
+the CLIF layer, not in the CPS the two layers share.
 
 **Corpus coverage is now complete and still pinned.** The corpus grew on
 2026-11-14 from 9 to 12 modules: `examples/control-flow` exists only to drive the
@@ -2925,10 +2984,10 @@ What the commit has to be, and what changes with it:
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
 | S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
-| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5) |
+| S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5). **Re-pinned 2026-11-19** from an x86_64 host: `cps=5dfcdfe8…`, `obj=26bb3ab3… arch=x86_64`, so the object-digest control runs natively there rather than reporting the arch-mismatch `[gap]`; statements unchanged |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
-| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 854 instructions**, re-measured after the arithmetic lowering and again after the `not` fix; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a three-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 28 theorems from 20 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, three distinct stores all readable and the fourth dropping the earliest, the fifth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all three-cell memories on a four-atom domain — four because the eviction axiom needs four distinct addresses — and the six rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in thirteen ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
+| S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 869 instructions**, re-measured after the arithmetic lowering, again after the `not` fix, and again when the CLIF counters moved in 2026-11-19 — the opcode census did not move; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a three-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 28 theorems from 20 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, three distinct stores all readable and the fourth dropping the earliest, the fifth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all three-cell memories on a four-atom domain — four because the eviction axiom needs four distinct addresses — and the six rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in thirteen ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
 | S8 | W8 | `mm0/isa.mm0` compiles and `mm0-c` accepts it, `scripts/isa-census` reports zero uncovered opcodes, and an uncited gap-hypothesis is refused — **met 2026-11-13** (`97 passed, 0 failed`; the corpus census reports 768 opcode reads over 9 modules — including a `uk_version` call and a module that derefs and stores — 11 distinct used, 23 declared, `result: covered`; all four controls trip). **Re-measured 2026-11-14**: 905 reads over 12 modules, **23 distinct**, 23 declared, `UNREACHABLE_OPCODES` now empty (the `sub`/`mul`/`match` producers landed). **Stronger than the criterion, twice:** `encdec` is no longer an axiom (23 theorems from a 23-entry table that `lib/Cps_codec.ml`/`test/CpsCodecTest.ml` and the census both check), and the three `step_refines` axioms are now theorems too. The last hypothesis now has a vocabulary: `mm0/slot_layout.mm0` defines `in_bounds` as slot-list membership and *proves* `in_bounds_alloc` (allocation never drops a slot), so `bounds_from_layout` is `content=checked` and what remains is one sentence about the compiler's layout pass |
 
 S1 before S2 is deliberate: the comparator must exist before the first artifact

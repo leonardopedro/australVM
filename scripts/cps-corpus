@@ -28,7 +28,11 @@ if [ -n "${AUSTRAL_BIN:-}" ]; then
 else
     austral="$ROOT/austral"
 fi
-if [ ! -x "$austral" ] || [ ! -f "$ROOT/libaustral_cranelift_bridge.so" ]; then
+# A developer tree has the bridge at the repo root; a clean `make bridge` (and
+# CI) leaves it only under target/release.
+bridge="$ROOT/libaustral_cranelift_bridge.so"
+[ -f "$bridge" ] || bridge="$ROOT/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
+if [ ! -x "$austral" ] || [ ! -f "$bridge" ]; then
     echo "cps-corpus: [gap] no ./austral or bridge .so — cannot build the corpus" >&2
     exit 2
 fi
@@ -81,7 +85,7 @@ for entry in "${entries[@]}"; do
     fi
     name="$(basename "$dir")"
     if ! ( cd "$ROOT/examples/$dir" \
-        && LD_LIBRARY_PATH="$ROOT" "$austral" compile "${srcs[@]}" \
+        && LD_LIBRARY_PATH="$(dirname "$bridge"):$ROOT" "$austral" compile "${srcs[@]}" \
             --entrypoint="$mod:main" --use-cps-jit --allow-all \
             --target-type=c \
             --emit-cps="$DEST/$name.cps" --output="$DEST/$name.c" ) \
