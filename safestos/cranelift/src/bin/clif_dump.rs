@@ -202,7 +202,11 @@ fn run() -> Result<String, String> {
         let mut module = MeasuringModule::new()?;
         cps::compile_cps_to_clif(&mut module, &ir)
             .map_err(|e| format!("cps compile {}: {e}", path.display()))?;
-        let insts = module.lines.iter().filter(|l| l.starts_with("inst ")).count();
+        let insts = module
+            .lines
+            .iter()
+            .filter(|l| l.starts_with("inst "))
+            .count();
         if insts == 0 {
             return Err(format!(
                 "{}: the compile produced no Cranelift instruction — nothing was measured",

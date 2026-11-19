@@ -10,9 +10,9 @@ fn cps_debug(msg: &str) {
     }
 }
 
+pub mod adapters;
 #[cfg(feature = "arctic-auth")]
 pub mod arctic_auth;
-pub mod adapters;
 pub mod auth;
 pub mod capstd_mod;
 pub mod capture;
@@ -1361,7 +1361,9 @@ fn compile_entry_i64_impl(
         return std::ptr::null();
     }
 
-    cps_debug(&format!("strict entry '{name}' admitted (0x{ret:02x} return)"));
+    cps_debug(&format!(
+        "strict entry '{name}' admitted (0x{ret:02x} return)"
+    ));
     ptr
 }
 
@@ -1651,14 +1653,18 @@ pub extern "C" fn austral_defeq_translate(
     let str_a = match unsafe { CStr::from_ptr(src_a) }.to_str() {
         Ok(s) => s.to_string(),
         Err(e) => {
-            set_last_error(&format!("austral_defeq_translate: side A invalid UTF-8: {e}"));
+            set_last_error(&format!(
+                "austral_defeq_translate: side A invalid UTF-8: {e}"
+            ));
             return std::ptr::null_mut();
         }
     };
     let str_b = match unsafe { CStr::from_ptr(src_b) }.to_str() {
         Ok(s) => s.to_string(),
         Err(e) => {
-            set_last_error(&format!("austral_defeq_translate: side B invalid UTF-8: {e}"));
+            set_last_error(&format!(
+                "austral_defeq_translate: side B invalid UTF-8: {e}"
+            ));
             return std::ptr::null_mut();
         }
     };

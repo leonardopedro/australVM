@@ -82,8 +82,9 @@ COMMANDS (implemented over the real subsystems):
                                build exits 1 with `EPERM: capability
                                denied for action Execute` and no tool
                                process ever existed.
-  load <cell.avm> --policy <cedar.txt> [--base <hex>]
-       [--provider <cell.avm>]... [--resolve SYM=HEX]... [--exec <program>]
+  load <cell.avm> --policy <cedar.txt> [--base <hex>] [--key <hex32>]
+       [--provider <cell.avm>]... [--plan <plan.json> --for NAME --cells <dir>]
+       [--resolve SYM=HEX]... [--exec <program>]
                                gate the cell's own calls: `Execute`, then one
                                `Call:<symbol>` request per import it
                                declares, judged against the cell's *own*
@@ -97,7 +98,14 @@ COMMANDS (implemented over the real subsystems):
                                runtime symbol table the image links against
                                (the JIT's registered `uk_*` addresses).
                                --provider adds a cell whose exported symbols
-                               the image may call; repeat for more. Providers
+                               the image may call; repeat for more.
+                               --plan/--for/--cells adds the owner's plan
+                               closure: every derivation NAME depends on,
+                               dependency-first, as `<dir>/NAME.avm`.
+                               --key is the builder's Ed25519 public key;
+                               providers are signature-checked against it
+                               (and so is the owner), and --provider without
+                               --key is refused. Providers
                                are gated by their own capability tables and
                                their text is relocated too, then each is
                                mapped at base + 0x01000000, +0x02000000, …
@@ -252,8 +260,10 @@ const VALUE_FLAGS: &[&str] = &[
     "--cps2cell",
     "--policy",
     "--base",
+    "--key",
     "--resolve",
     "--provider",
+    "--cells",
     "--exec",
     "--remote",
     "--hot-limit",
@@ -767,7 +777,8 @@ fn cps_to_avce(input: &Path, helper: &Path, runner: Option<&Runner>) -> Result<V
 
 // ── Sprint 3: cell loader (a cell's own calls) ──────────────────────
 
-/// `load <cell.avm> --policy <cedar.txt> [--base HEX] [--resolve SYM=HEX]…
+/// `load <cell.avm> --policy <cedar.txt> [--base HEX] [--key HEX32]
+/// [--provider CELL]… [--plan PLAN --for NAME --cells DIR] [--resolve SYM=HEX]…
 /// [--exec PROG]` — the load-time half of the capability row.
 ///
 /// Unlike `build`, there is no ungated mode: loading a cell *is* the moment
@@ -823,23 +834,117 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
     // their own text is relocated against the same table. Bases are assigned
     // deterministically so the executor can map each image at the address it
     // was linked for: one 16 MiB slot per provider above the owner.
+    //
+    // Explicit `--provider` cells come first (their order fixes their bases),
+    // then the plan closure: `--plan … --for NAME --cells DIR` adds every
+    // derivation NAME depends on, dependency-first, as `DIR/<name>.avm`. An
+    // explicit cell whose file stem names the same derivation wins, so the
+    // caller can override one provider without dropping the rest.
     const PROVIDER_STRIDE: u64 = 0x0100_0000;
-    let mut provider_paths: Vec<&str> = Vec::new();
+    let mut provider_paths: Vec<String> = Vec::new();
+    // A plan-derived provider also has to be *that derivation*: the plan
+    // resolved an id for the name, and the cell records the id it was built
+    // for, so a cell swapped in under `NAME.avm` is refused instead of linked.
+    let mut expected_drv: std::collections::HashMap<String, [u8; 32]> =
+        std::collections::HashMap::new();
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--provider" {
-            provider_paths.push(
-                args.get(i + 1)
-                    .ok_or_else(|| "--provider needs a `.avm` cell path".to_string())?,
-            );
+            let p = args
+                .get(i + 1)
+                .ok_or_else(|| "--provider needs a `.avm` cell path".to_string())?;
+            if !provider_paths.iter().any(|q| q == p) {
+                provider_paths.push(p.clone());
+            }
             i += 2;
         } else {
             i += 1;
         }
     }
+    match (
+        flag(args, "--plan"),
+        flag(args, "--for"),
+        flag(args, "--cells"),
+    ) {
+        (None, None, None) => {}
+        (Some(plan_path), Some(target), Some(cells)) => {
+            let plan = load_plan(plan_path)?;
+            let graph = plan.resolve(Some(target)).map_err(|e| e.to_string())?;
+            for name in &graph.order {
+                // The owner is the cell being loaded, not one of its providers.
+                if name == target {
+                    continue;
+                }
+                let supplied = provider_paths.iter().any(|p| {
+                    Path::new(p).file_stem().and_then(|s| s.to_str()) == Some(name.as_str())
+                });
+                if !supplied {
+                    let path = Path::new(cells)
+                        .join(format!("{name}.avm"))
+                        .display()
+                        .to_string();
+                    if let Some(id) = graph.ids.get(name) {
+                        expected_drv.insert(path.clone(), *id);
+                    }
+                    provider_paths.push(path);
+                }
+            }
+        }
+        _ => {
+            return Err(
+                "--plan, --for and --cells go together: the plan names the closure, \
+                 --for its root, and --cells is the directory holding `NAME.avm`"
+                    .to_string(),
+            )
+        }
+    }
+
+    // A provider contributes executable text, so its layout is not enough:
+    // every provider is checked against its builder's Ed25519 public key
+    // (`--key`), and so is the owner when a key is supplied. A provider with
+    // no key is refused rather than trusted by structure alone.
+    let key: Option<[u8; 32]> = match flag(args, "--key") {
+        Some(h) => {
+            let raw = unhex(h).map_err(|e| format!("bad --key: {e}"))?;
+            let k: [u8; 32] = raw.try_into().map_err(|_| {
+                format!(
+                    "--key must be 32 bytes of hex (64 hex chars), got {}",
+                    h.len()
+                )
+            })?;
+            Some(k)
+        }
+        None => None,
+    };
+    if !provider_paths.is_empty() && key.is_none() {
+        return Err(
+            "--provider needs --key <pubkey-hex32>: a provider contributes \
+             executable text, so it is signature-checked, never trusted by layout alone"
+                .to_string(),
+        );
+    }
+
     let mut providers: Vec<(Vec<u8>, u64)> = Vec::with_capacity(provider_paths.len());
     for (n, path) in provider_paths.iter().enumerate() {
         let bytes = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+        if let Some(k) = &key {
+            let view =
+                avm_exec::CellView::parse(&bytes).map_err(|e| format!("provider {path}: {e}"))?;
+            view.verify_signature(k)
+                .map_err(|e| format!("provider {path}: {e}"))?;
+        }
+        if let Some(want) = expected_drv.get(path) {
+            let view =
+                avm_exec::CellView::parse(&bytes).map_err(|e| format!("provider {path}: {e}"))?;
+            if view.drv_hash != *want {
+                return Err(format!(
+                    "provider {path} records derivation {} but the plan resolved {} for it — \
+                     refusing a cell that is not the planned derivation",
+                    hex(&view.drv_hash),
+                    hex(want)
+                ));
+            }
+        }
         let pbase = base
             .checked_add((n as u64 + 1).saturating_mul(PROVIDER_STRIDE))
             .ok_or_else(|| format!("provider base for {path} overflows"))?;
@@ -847,6 +952,12 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
     }
 
     let bytes = std::fs::read(input).map_err(|e| format!("read {input}: {e}"))?;
+    if let Some(k) = &key {
+        avm_exec::CellView::parse(&bytes)
+            .map_err(|e| format!("{input}: {e}"))?
+            .verify_signature(k)
+            .map_err(|e| format!("{input}: {e}"))?;
+    }
     let refs: Vec<(&[u8], u64)> = providers
         .iter()
         .map(|(b, base)| (b.as_slice(), *base))
@@ -1056,7 +1167,8 @@ fn cmd_build(ctx: &Ctx, args: &[String]) -> Result<String, String> {
     let mut manifest = store
         .put_buffer_with_closure(&name, &version, &cell, Some(drv), closure)
         .map_err(|e| e.to_string())?;
-    sign_manifest(&mut manifest, &signing_key_from_seed(&seed));
+    let signing = signing_key_from_seed(&seed);
+    sign_manifest(&mut manifest, &signing);
     let id = store.put_manifest(&manifest).map_err(|e| e.to_string())?;
 
     let wrote = match flag(args, "-o") {
@@ -1076,6 +1188,7 @@ fn cmd_build(ctx: &Ctx, args: &[String]) -> Result<String, String> {
         "sources": pos,
         "totality": totality,
         "cell_bytes": cell.len(),
+        "pubkey": hex(&signing.verifying_key().to_bytes()),
         "arch": doc.arch,
         "functions": doc.functions.len(),
         "imports": doc.imports.len(),
@@ -1532,6 +1645,11 @@ mod tests {
         let key = ed25519_dalek::SigningKey::from_bytes(&seed);
         view.verify_signature(&key.verifying_key().to_bytes())
             .expect("cell signature must verify against the builder key");
+        assert_eq!(
+            v["pubkey"],
+            hex(&key.verifying_key().to_bytes()),
+            "the report names the public half, so a loader can verify"
+        );
 
         // The same bytes landed in the cold store, under the derivation.
         let id = unhex(v["identity"].as_str().unwrap()).unwrap();
@@ -1703,6 +1821,30 @@ mod tests {
         };
         avm_exec::build_cell(&avm_exec::BuildCell {
             drv_hash: [0x33u8; 32],
+            capability_table: &caps,
+            avce: &doc,
+            signing_seed: &[9u8; 32],
+        })
+        .unwrap()
+    }
+
+    /// A provider cell that *defines* `sym` (one function, no imports) and
+    /// records `drv` as the derivation it was built for.
+    fn cell_defining(sym: &str, drv: [u8; 32]) -> Vec<u8> {
+        let caps = serde_json::json!([
+            { "uid": { "type": "ExecCap", "id": "exec" }, "attrs": {}, "parents": [] }
+        ]);
+        let doc = avm_exec::AvceDoc {
+            arch: "x86_64".into(),
+            functions: vec![avm_exec::AvceFn {
+                name: sym.into(),
+                body: vec![0xB8, 0x07, 0x00, 0x00, 0x00, 0xC3, 0x90, 0x90, 0x90],
+                relocs: vec![],
+            }],
+            imports: vec![],
+        };
+        avm_exec::build_cell(&avm_exec::BuildCell {
+            drv_hash: drv,
             capability_table: &caps,
             avce: &doc,
             signing_seed: &[9u8; 32],
@@ -1891,6 +2033,123 @@ cp '{plan}' "$PLAN"
         assert!(allows("deny-call-au-alloc.cedar", "Execute"));
         assert!(!allows("deny-call-au-alloc.cedar", "Call:au_alloc"));
         assert!(allows("deny-call-au-alloc.cedar", "Call:uk_version"));
+    }
+
+    /// The plan closure is the provider set: `--plan … --for … --cells` turns
+    /// every dependency into `<dir>/NAME.avm`, verifies each against the
+    /// builder key, and links it; a provider with no key, a wrong key, or an
+    /// incomplete closure is refused rather than trusted.
+    #[test]
+    fn load_resolves_the_plan_closure_as_verified_providers() {
+        let ts = TempStore::new();
+        let cells = ts._dir.path().join("cells");
+        std::fs::create_dir(&cells).unwrap();
+        let plan = ts._dir.path().join("plan.json");
+        std::fs::write(
+            &plan,
+            r#"{"derivations":[
+                {"name":"lib","version":"1","builder_symbol":"t","dependencies":[],"sources":[],"env_vars":[]},
+                {"name":"app","version":"1","builder_symbol":"t","dependencies":["lib"],"sources":[],"env_vars":[]}
+            ]}"#,
+        )
+        .unwrap();
+        let lib_drv = *load_plan(&plan.display().to_string())
+            .unwrap()
+            .resolve(Some("app"))
+            .unwrap()
+            .ids
+            .get("lib")
+            .unwrap();
+        write(&cells.join("lib.avm"), &cell_defining("double", lib_drv));
+        let owner = ts._dir.path().join("app.avm");
+        write(
+            &owner,
+            &cell_with_imports(
+                &["double"],
+                vec![avm_exec::AvceReloc {
+                    offset: 1,
+                    addend: 0,
+                    kind: "Abs8".into(),
+                    symbol: "double".into(),
+                }],
+            ),
+        );
+        let allow = ts._dir.path().join("allow.cedar");
+        write(&allow, b"permit(principal, action, resource);\n");
+        let key = hex(&ed25519_dalek::SigningKey::from_bytes(&[9u8; 32])
+            .verifying_key()
+            .to_bytes());
+        let base = [
+            owner.display().to_string(),
+            "--policy".into(),
+            allow.display().to_string(),
+            "--plan".into(),
+            plan.display().to_string(),
+            "--for".into(),
+            "app".into(),
+            "--cells".into(),
+            cells.display().to_string(),
+            "--key".into(),
+            key.clone(),
+        ]
+        .to_vec();
+        let out = cmd_load(&ts.ctx, &base).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["calls"], serde_json::json!(["double"]));
+        assert_eq!(v["providers"].as_array().unwrap().len(), 1, "{out}");
+        assert_eq!(
+            v["providers"][0]["path"],
+            cells.join("lib.avm").display().to_string()
+        );
+        assert_eq!(v["providers"][0]["base"], "0x1000000");
+
+        // No key: a provider is executable text, so it is refused.
+        let mut no_key = base.clone();
+        no_key.truncate(no_key.len() - 2);
+        let err = cmd_load(&ts.ctx, &no_key).unwrap_err();
+        assert!(err.contains("--key"), "got: {err}");
+
+        // Wrong key: the signature, not the layout, refuses it.
+        let mut wrong = base.clone();
+        *wrong.last_mut().unwrap() = hex(&ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+            .verifying_key()
+            .to_bytes());
+        let err = cmd_load(&ts.ctx, &wrong).unwrap_err();
+        assert!(
+            err.contains("lib.avm") && err.contains("signature"),
+            "{err}"
+        );
+
+        // A cell that is not the planned derivation is refused by its
+        // recorded drv hash, even though the filename and signature agree.
+        write(
+            &cells.join("lib.avm"),
+            &cell_defining("double", [0x44u8; 32]),
+        );
+        let err = cmd_load(&ts.ctx, &base).unwrap_err();
+        assert!(
+            err.contains("records derivation") && err.contains("lib.avm"),
+            "{err}"
+        );
+
+        // An incomplete closure names the missing cell instead of linking.
+        std::fs::remove_file(cells.join("lib.avm")).unwrap();
+        let err = cmd_load(&ts.ctx, &base).unwrap_err();
+        assert!(err.contains("lib.avm"), "{err}");
+
+        // Half a plan spec is a usage error, not a silent partial closure.
+        let err = cmd_load(
+            &ts.ctx,
+            &[
+                owner.display().to_string(),
+                "--policy".into(),
+                allow.display().to_string(),
+                "--plan".into(),
+                plan.display().to_string(),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("--cells"), "{err}");
     }
 
     /// A cell that may not call one of its declared symbols is refused *by

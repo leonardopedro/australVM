@@ -84,8 +84,7 @@ fn run() -> Result<String, String> {
     let mut reads_total: u64 = 0;
 
     for ir_path in &modules {
-        let ir =
-            std::fs::read(ir_path).map_err(|e| format!("read {}: {e}", ir_path.display()))?;
+        let ir = std::fs::read(ir_path).map_err(|e| format!("read {}: {e}", ir_path.display()))?;
         isa::clear();
         let mut cap = CaptureModule::new()?;
         cps::compile_cps_to_clif(&mut cap, &ir)
@@ -104,10 +103,7 @@ fn run() -> Result<String, String> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| ir_path.display().to_string());
-        per_module.push(format!(
-            "{name}: {} distinct, {reads} read(s)",
-            hits.len()
-        ));
+        per_module.push(format!("{name}: {} distinct, {reads} read(s)", hits.len()));
     }
 
     let hits: BTreeSet<u8> = measured.clone();

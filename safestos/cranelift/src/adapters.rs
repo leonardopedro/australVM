@@ -131,9 +131,7 @@ impl std::fmt::Display for AdapterError {
                 "adapter: 0x{word:016x} is not a valid {} word: {detail}",
                 ty.name()
             ),
-            AdapterError::UnitHasNoWord => {
-                f.write_str("adapter: Unit occupies no transport word")
-            }
+            AdapterError::UnitHasNoWord => f.write_str("adapter: Unit occupies no transport word"),
         }
     }
 }
@@ -219,28 +217,34 @@ pub fn decode(ty: ScalarType, word: u64) -> Result<ScalarValue, AdapterError> {
 /// refused rather than truncated.
 pub fn narrow_i64(value: i64, ty: ScalarType) -> Result<ScalarValue, AdapterError> {
     match ty {
-        ScalarType::I32 => i32::try_from(value)
-            .map(ScalarValue::I32)
-            .map_err(|_| AdapterError::InvalidWord {
-                ty,
-                word: value as u64,
-                detail: "the value does not fit in Int32",
-            }),
-        ScalarType::U32 => u32::try_from(value)
-            .map(ScalarValue::U32)
-            .map_err(|_| AdapterError::InvalidWord {
-                ty,
-                word: value as u64,
-                detail: "the value does not fit in Nat32",
-            }),
+        ScalarType::I32 => {
+            i32::try_from(value)
+                .map(ScalarValue::I32)
+                .map_err(|_| AdapterError::InvalidWord {
+                    ty,
+                    word: value as u64,
+                    detail: "the value does not fit in Int32",
+                })
+        }
+        ScalarType::U32 => {
+            u32::try_from(value)
+                .map(ScalarValue::U32)
+                .map_err(|_| AdapterError::InvalidWord {
+                    ty,
+                    word: value as u64,
+                    detail: "the value does not fit in Nat32",
+                })
+        }
         ScalarType::I64 => Ok(ScalarValue::I64(value)),
-        ScalarType::U64 => u64::try_from(value)
-            .map(ScalarValue::U64)
-            .map_err(|_| AdapterError::InvalidWord {
-                ty,
-                word: value as u64,
-                detail: "the value does not fit in Nat64",
-            }),
+        ScalarType::U64 => {
+            u64::try_from(value)
+                .map(ScalarValue::U64)
+                .map_err(|_| AdapterError::InvalidWord {
+                    ty,
+                    word: value as u64,
+                    detail: "the value does not fit in Nat64",
+                })
+        }
         other => Err(AdapterError::TypeMismatch {
             expected: other,
             got: ScalarType::I64,
@@ -417,7 +421,10 @@ mod tests {
 
     #[test]
     fn the_encoding_is_versioned() {
-        assert_eq!(SCALAR_ABI_VERSION, 1, "bump the version when a rule changes");
+        assert_eq!(
+            SCALAR_ABI_VERSION, 1,
+            "bump the version when a rule changes"
+        );
         assert_eq!(ScalarType::Unit.words(), 0);
         assert_eq!(ScalarType::F64.words(), 1);
     }
@@ -494,7 +501,13 @@ mod tests {
         );
         for tag in [2u64, 3, u64::MAX] {
             let err = decode(ScalarType::Bool, tag).unwrap_err();
-            assert!(matches!(err, AdapterError::InvalidWord { ty: ScalarType::Bool, .. }));
+            assert!(matches!(
+                err,
+                AdapterError::InvalidWord {
+                    ty: ScalarType::Bool,
+                    ..
+                }
+            ));
             assert!(err.to_string().contains("must be 0 or 1"), "{err}");
         }
         // The direct-call oracle: `!b` written by rustc, read through the tag.
@@ -537,7 +550,10 @@ mod tests {
         let nan = f64::from_bits(nan_bits);
         let word = encode(ScalarType::F64, ScalarValue::F64(nan)).unwrap();
         assert_eq!(word, nan_bits);
-        assert_ne!(word, nan as i64 as u64, "floats must not go through an i64 cast");
+        assert_ne!(
+            word, nan as i64 as u64,
+            "floats must not go through an i64 cast"
+        );
         let back = match decode(ScalarType::F64, word).unwrap() {
             ScalarValue::F64(v) => v,
             other => panic!("not an f64: {other:?}"),

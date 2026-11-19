@@ -1,0 +1,15 @@
+pragma Unsafe_Module;
+
+module body Wave is
+    -- The provider calls back into the owner. `tick` is declared as an external
+    -- symbol (not a module import): the two modules refer to each other, and
+    -- module imports have to stay acyclic. At load the linker resolves `tick`
+    -- against the owner cell's symbol table, exactly as `uk_*` imports resolve
+    -- against the JIT in the other direction.
+    pragma Foreign_Import(External_Name => "tick");
+    function tick(x: Int64): Int64 is end;
+
+    function compute(x: Int64): Int64 is
+        return tick(x) + 1;
+    end;
+end module body.

@@ -1,0 +1,20 @@
+pragma Unsafe_Module;
+
+module body Callback is
+    -- `compute` lives in the provider cell. Declaring it as a foreign import
+    -- (rather than `import Wave (compute)`) is what breaks the module-level
+    -- import cycle: `Wave` imports this module's `tick`, so this module may not
+    -- import `Wave` back. The external name is the symbol the linker resolves
+    -- against the provider image, exactly as `uk_*` imports resolve against
+    -- the JIT in the other direction.
+    pragma Foreign_Import(External_Name => "compute");
+    function compute(x: Int64): Int64 is end;
+
+    function tick(x: Int64): Int64 is
+        return x + 10;
+    end;
+
+    function main(): Int64 is
+        return compute(42);
+    end;
+end module body.

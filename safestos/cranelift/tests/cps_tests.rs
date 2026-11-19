@@ -270,12 +270,27 @@ fn float_helpers_bitcast_and_compute() {
     // site is exactly what these assertions rule out.
     let bits = |f: f64| f.to_bits() as i64;
     let f = |b: i64| f64::from_bits(b as u64);
-    assert_eq!(f(austral_cranelift_bridge::au_fadd(bits(1.5), bits(2.25))), 3.75);
-    assert_eq!(f(austral_cranelift_bridge::au_fsub(bits(1.5), bits(2.25))), -0.75);
-    assert_eq!(f(austral_cranelift_bridge::au_fmul(bits(1.5), bits(2.25))), 1.5 * 2.25);
-    assert_eq!(f(austral_cranelift_bridge::au_fdiv(bits(1.5), bits(2.25))), 1.5 / 2.25);
+    assert_eq!(
+        f(austral_cranelift_bridge::au_fadd(bits(1.5), bits(2.25))),
+        3.75
+    );
+    assert_eq!(
+        f(austral_cranelift_bridge::au_fsub(bits(1.5), bits(2.25))),
+        -0.75
+    );
+    assert_eq!(
+        f(austral_cranelift_bridge::au_fmul(bits(1.5), bits(2.25))),
+        1.5 * 2.25
+    );
+    assert_eq!(
+        f(austral_cranelift_bridge::au_fdiv(bits(1.5), bits(2.25))),
+        1.5 / 2.25
+    );
     // Negative constants are bit patterns too, not sign-magnitude integers.
-    assert_eq!(f(austral_cranelift_bridge::au_fadd(bits(-0.5), bits(0.25))), -0.25);
+    assert_eq!(
+        f(austral_cranelift_bridge::au_fadd(bits(-0.5), bits(0.25))),
+        -0.25
+    );
 }
 
 #[test]
@@ -283,8 +298,14 @@ fn not_opcode_complements_zero_and_one() {
     // 0x19 is the compiler's `not` on a 0/1 Bool. A bitwise complement would
     // return -2 for `not 1`, so this pins the 0/1 contract rather than the
     // instruction the JIT happens to emit.
-    assert_eq!(execute(compile(&cps_v1_named("op_not_true", &body_not(0x19, 1)))), 0);
-    assert_eq!(execute(compile(&cps_v1_named("op_not_false", &body_not(0x19, 0)))), 1);
+    assert_eq!(
+        execute(compile(&cps_v1_named("op_not_true", &body_not(0x19, 1)))),
+        0
+    );
+    assert_eq!(
+        execute(compile(&cps_v1_named("op_not_false", &body_not(0x19, 0)))),
+        1
+    );
 }
 
 #[test]
@@ -724,7 +745,10 @@ fn strict_entry_refuses_a_missing_name() {
 fn strict_entry_refuses_a_wrong_arity() {
     let cps = cps_v1_sig("strict_arity", 1, 0x01, &body_return_const(9));
     let ptr = checked(&cps, "strict_arity", 0);
-    assert!(ptr.is_null(), "a 1-parameter entry must not be called as ()");
+    assert!(
+        ptr.is_null(),
+        "a 1-parameter entry must not be called as ()"
+    );
     assert!(
         last_error().contains("declares 1 parameter") && last_error().contains("passes 0"),
         "{}",
@@ -770,11 +794,7 @@ fn strict_entry_refuses_a_non_i64_return() {
 fn strict_entry_refuses_when_the_caller_expects_arguments() {
     let cps = cps_v1_sig("strict_caller_args", 0, 0x01, &body_return_const(1));
     assert!(checked(&cps, "strict_caller_args", 2).is_null());
-    assert!(
-        last_error().contains("passes 2"),
-        "{}",
-        last_error()
-    );
+    assert!(last_error().contains("passes 2"), "{}", last_error());
 }
 
 /// A union constructed in tail position is lowered inline, not as an import.

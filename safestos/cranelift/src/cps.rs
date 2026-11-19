@@ -278,7 +278,10 @@ fn emit_expr<M: Module>(
             } else if func_name == "__deref" {
                 // (ptr) -> val: `MDeref` lowers to this. Every value in this JIT is
                 // one 64-bit word, so a dereference is a load of the pointee.
-                return Ok(mgr.builder.ins().load(types::I64, MemFlags::new(), args[0], 0));
+                return Ok(mgr
+                    .builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), args[0], 0));
             } else if func_name == "__record_new" {
                 // (size, field1, field2, ...) -> ptr
                 let size_val = args[0];
@@ -744,7 +747,10 @@ fn emit_stmt_list<M: Module>(
                         return Ok(());
                     } else if func_name == "__deref" {
                         // Same intrinsic as the emit_expr arm; see the comment there.
-                        let val = mgr.builder.ins().load(types::I64, MemFlags::new(), args[0], 0);
+                        let val = mgr
+                            .builder
+                            .ins()
+                            .load(types::I64, MemFlags::new(), args[0], 0);
                         mgr.builder.ins().return_(&[val]);
                         mgr.terminated = true;
                         return Ok(());
