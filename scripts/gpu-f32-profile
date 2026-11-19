@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""G16b: the `wgsl-f32-v1` numeric profile, end to end without a GPU.
+
+The card asks for an explicit Float32 profile with a contract, a source-authored
+affine kernel, boundary/cancellation cases and deliberate refusals. This script
+is that check on the CPU side:
+
+  1. compile `examples/gpu/f32-affine` for `axpy` and `cancel` with
+     `--gpu-numeric-profile=wgsl-f32-v1`;
+  2. validate the bundle with `avm-gpu` (schema, canonical IR digest, Naga,
+     wrapper audit) and require the emitted storage/entry to be f32;
+  3. evaluate the KernelIR reference on bounded normal inputs and compare it,
+     bit for bit, against an independent Python binary32 oracle that rounds
+     after every operation (so a widening to f64 cannot pass: at 2^24 the two
+     disagree);
+  4. require the profile to refuse Float64, division, float-to-integer
+     conversion and the default integer profile applied to Float32;
+  5. mutate a scratch copy's `numeric_profile` and require the checker to
+     refuse the disagreement with the KernelIR.
+
+With `--require-hardware` the same bundle is dispatched and its output is
+compared against the oracle within the profile's tolerance (1 ULP per admitted
+operation). Without it the dispatch is still attempted; a missing adapter or a
+build without `device` is reported as `[gap]` and never as a pass.
+
+Exit 0 = the CPU/profile checks passed (device may be a gap).
+Exit 77 = `--require-hardware` was passed and no physical adapter ran the kernel.
+Exit 1 = a check failed.
+
+Usage:
+  scripts/gpu-f32-profile [--compiler PATH] [--checker PATH] [--require-hardware]
+"""
+
+import argparse
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "examples/gpu/f32-affine"
+PROFILE = "wgsl-f32-v1"
+
+# Bounded normal inputs. Every intermediate stays finite and normal, which is
+# the profile's admitted domain.
+AXPY_POINTS = [
+    (3.0, 4.0),
+    (1.0, 0.5),
+    (0.1, 0.2),
+    (16777216.0, 1.0),   # 2^24: x*2.5+1 rounds back to x*2.5
+]
+CANCEL_POINTS = [
+    (1.0,),
+    (16777215.0,),       # (2^24 - 1) + 1 is exact, so the subtraction returns 1
+    (16777216.0,),       # 2^24 + 1 rounds to 2^24, so the subtraction returns 0
+]
+
+
+def env():
+    e = dict(os.environ)
+    bridge = ROOT / "safestos/cranelift/target/release"
+    e["LD_LIBRARY_PATH"] = f"{ROOT}:{bridge}:" + e.get("LD_LIBRARY_PATH", "")
+    return e
+
+
+def run(cmd, e=None, timeout=180):
+    return subprocess.run(
+        [str(c) for c in cmd],
+        env=e or env(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def f32(x):
+    """Round a Python float to binary32, round-to-nearest-even."""
+    return struct.unpack("<f", struct.pack("<f", x))[0]
+
+
+def bits(x):
+    return struct.unpack("<I", struct.pack("<f", f32(x)))[0]
+
+
+def oracle_axpy(x, y):
+    return f32(f32(f32(x) * f32(2.5)) + f32(y))
+
+
+def oracle_cancel(x):
+    return f32(f32(f32(x) + f32(1.0)) - f32(x))
+
+
+ORACLES = {
+    "axpy": (oracle_axpy, AXPY_POINTS),
+    "cancel": (oracle_cancel, CANCEL_POINTS),
+}
+
+
+def compile_bundle(compiler, checker, tmp, module, entry, profile=None,
+                   expect_refused=None):
+    bundle = tmp / f"{module}-{entry}-{profile or 'default'}.avkg"
+    shutil.rmtree(bundle, ignore_errors=True)
+    e = env()
+    e["AUSTRAL_GPU_CHECKER"] = str(checker)
+    source = (
+        str(FIXTURE / "Refusals.aum")
+        if module == "F32Refusals"
+        else f"{FIXTURE/'F32Affine.aui'},{FIXTURE/'F32Affine.aum'}"
+    )
+    cmd = [
+        compiler,
+        "compile",
+        source,
+        "--target-type=wgsl",
+        f"--entrypoint={module}:{entry}",
+        f"--output={bundle}",
+    ]
+    if profile is not None:
+        cmd.append(f"--gpu-numeric-profile={profile}")
+    proc = run(cmd, e)
+    if expect_refused is not None:
+        text = proc.stdout + proc.stderr
+        if proc.returncode == 0:
+            raise RuntimeError(
+                f"{entry}: expected a refusal, got a bundle at {bundle}")
+        for needle in expect_refused:
+            if needle not in text:
+                raise RuntimeError(
+                    f"{entry}: refused for the wrong reason (wanted {needle!r}):"
+                    f"\n{text.strip()}")
+        return None, text
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"GPU compile failed for {entry} under {profile}:\n"
+            f"{proc.stderr or proc.stdout}")
+    return bundle, ""
+
+
+def validate(checker, bundle):
+    proc = run([checker, "validate", bundle])
+    if proc.returncode != 0:
+        raise RuntimeError(f"validate failed for {bundle}:\n{proc.stderr}")
+    return json.loads(proc.stdout)
+
+
+def write_inputs(tmp, name, points):
+    path = tmp / f"{name}.inputs.json"
+    path.write_text(json.dumps({"inputs": [[p[i] for p in points]
+                                           for i in range(len(points[0]))]}))
+    return path
+
+
+def reference(checker, bundle, inputs):
+    proc = run([checker, "reference", bundle, "--inputs", inputs])
+    if proc.returncode != 0:
+        raise RuntimeError(f"reference failed:\n{proc.stderr}")
+    payload = json.loads(proc.stdout)
+    return payload
+
+
+def ulp_distance(a, b):
+    """Distance in representable f32 values between two finite f32 numbers."""
+    ia, ib = bits(a), bits(b)
+    if ia == ib:
+        return 0
+    # Both are finite and non-negative here; the profile's test inputs are.
+    return abs(ia - ib)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--compiler", default=str(ROOT / "austral"))
+    parser.add_argument("--checker", default=str(ROOT / "safestos/gpu/target/release/avm-gpu"))
+    parser.add_argument("--require-hardware", action="store_true")
+    args = parser.parse_args()
+
+    compiler = Path(args.compiler)
+    checker = Path(args.checker)
+    for path, what in ((compiler, "compiler"), (checker, "GPU checker")):
+        if not path.exists():
+            print(f"[gap] G16b: {what} not found at {path}", file=sys.stderr)
+            return 1
+
+    failures = []
+    cascade = {}
+    with tempfile.TemporaryDirectory(prefix="gpu-f32-") as tmpname:
+        tmp = Path(tmpname)
+        try:
+            # 1. bundles and their shape
+            for entry in ("axpy", "cancel"):
+                bundle, _ = compile_bundle(compiler, checker, tmp, "F32Affine",
+                                           entry, PROFILE)
+                cascade[entry] = bundle
+                info = validate(checker, bundle)
+                meta = json.loads((bundle / "kernel.json").read_text())
+                wgsl = (bundle / "kernel.wgsl").read_text()
+                if meta["numeric_profile"] != PROFILE:
+                    failures.append(f"{entry}: bundle profile is {meta['numeric_profile']}")
+                if meta["kernel_ir"]["numeric_profile"] != PROFILE:
+                    failures.append(f"{entry}: KernelIR profile is not {PROFILE}")
+                if info.get("element") != "f32":
+                    failures.append(f"{entry}: checker reports element {info.get('element')}")
+                if "array<f32>" not in wgsl:
+                    failures.append(f"{entry}: storage is not array<f32>")
+                if f"scalar_entry(p0: f32" not in wgsl:
+                    failures.append(f"{entry}: scalar entry is not f32")
+                if "f64" in wgsl:
+                    failures.append(f"{entry}: WGSL mentions f64")
+                if not failures:
+                    print(f"[pass] G16b {entry}: validated f32 bundle "
+                          f"(profile={PROFILE}, element=f32, ir={info['ir_sha256'][:12]})")
+
+            # 2. independent binary32 oracle
+            for entry, (oracle, points) in ORACLES.items():
+                inputs = write_inputs(tmp, entry, points)
+                payload = reference(checker, cascade[entry], inputs)
+                got = [f32(v) for v in payload["output"]]
+                expected = [oracle(*p) for p in points]
+                for point, g, w in zip(points, got, expected):
+                    if bits(g) != bits(w):
+                        failures.append(
+                            f"{entry}{point}: reference {g!r} differs from the "
+                            f"binary32 oracle {w!r} ({bits(g):08x} vs {bits(w):08x})")
+                if not failures:
+                    print(f"[pass] G16b {entry}: reference matches the binary32 "
+                          f"oracle on {len(points)} bounded input(s)")
+
+            # 3. deliberate refusals
+            refusals = [
+                ("wide", PROFILE, ["Float64", PROFILE]),
+                ("divide", PROFILE, ["trappingDivide", "division"]),
+                ("narrow", PROFILE, ["Nat32", "Float32"]),
+                ("axpy", None, ["Float32", "u32-modular-v1"]),
+            ]
+            for entry, profile, needles in refusals:
+                _bundle, text = compile_bundle(
+                    compiler, checker, tmp, "F32Refusals" if entry != "axpy" else "F32Affine",
+                    entry, profile, expect_refused=needles)
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                reason = next(
+                    (line for line in lines
+                     if "GPU subset refused" in line or "Unknown GPU numeric" in line),
+                    lines[-1] if lines else "")
+                print(f"[pass] G16b refused {entry} under "
+                      f"{profile or 'u32-modular-v1'}: {reason}")
+            proc = run([compiler, "compile",
+                        f"{FIXTURE/'F32Affine.aui'},{FIXTURE/'F32Affine.aum'}",
+                        "--target-type=wgsl", "--entrypoint=F32Affine:axpy",
+                        f"--output={tmp/'bogus.avkg'}",
+                        "--gpu-numeric-profile=not-a-profile"])
+            if proc.returncode == 0 or "Unknown GPU numeric profile" not in (
+                    proc.stdout + proc.stderr):
+                failures.append("an unknown --gpu-numeric-profile value was not refused")
+            else:
+                print("[pass] G16b refused an unknown --gpu-numeric-profile value")
+
+            # 4. profile/IR disagreement is refused, not reconciled
+            control = tmp / "profile-control.avkg"
+            shutil.copytree(cascade["axpy"], control)
+            meta = json.loads((control / "kernel.json").read_text())
+            meta["numeric_profile"] = "u32-modular-v1"
+            (control / "kernel.json").write_text(json.dumps(meta))
+            proc = run([checker, "validate", control])
+            text = proc.stdout + proc.stderr
+            if proc.returncode == 0:
+                failures.append("profile control: checker accepted a mismatched profile")
+            elif "numeric_profile" not in text:
+                failures.append(f"profile control: wrong refusal: {text.strip()}")
+            else:
+                print("[pass] G16b refused a bundle whose numeric_profile "
+                      "disagrees with its KernelIR")
+        except RuntimeError as error:
+            failures.append(str(error))
+
+        # 5. optional device dispatch against the same oracle
+        device_ran = False
+        if not failures:
+            inputs = write_inputs(tmp, "axpy", AXPY_POINTS)
+            cmd = [checker, "run", cascade["axpy"], "--inputs", inputs]
+            if args.require_hardware:
+                cmd.append("--require-hardware")
+            proc = run(cmd)
+            try:
+                payload = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                payload = {"status": "error", "message": proc.stderr.strip()}
+            if proc.returncode == 0 and payload.get("status") == "ok":
+                device_ran = True
+                got = [f32(v) for v in payload["output"]]
+                expected = [oracle_axpy(*p) for p in AXPY_POINTS]
+                max_ulp = 0
+                for point, g, w in zip(AXPY_POINTS, got, expected):
+                    distance = ulp_distance(g, w)
+                    max_ulp = max(max_ulp, distance)
+                    # Profile tolerance: 1 ULP per admitted operation (2 here).
+                    if distance > 2:
+                        failures.append(
+                            f"device axpy{point}: {g!r} is more than 2 ULP from "
+                            f"the binary32 oracle {w!r}")
+                adapter = payload.get("device", {})
+                print(f"[pass] G16b device: {len(got)} element(s), max {max_ulp} ULP "
+                      f"from the binary32 oracle (budget 2) on "
+                      f"{adapter.get('name', 'unknown adapter')}")
+            elif args.require_hardware:
+                print(f"[gap] G16b device: no physical adapter ran the kernel "
+                      f"({payload.get('message', 'unavailable')})", file=sys.stderr)
+                return 77
+            else:
+                print(f"[gap] G16b device: no physical adapter ran the kernel "
+                      f"({payload.get('message', 'unavailable')}); "
+                      f"the CPU/profile checks above stand")
+
+        if device_ran:
+            print("[pass] G16b: hardware execution and the binary32 oracle agree")
+
+    if failures:
+        for failure in failures:
+            print(f"[FAIL] G16b: {failure}", file=sys.stderr)
+        return 1
+    print(f"[pass] G16b: {PROFILE} CPU/profile checks (bundle shape, reference, "
+          f"refusals, drift control)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

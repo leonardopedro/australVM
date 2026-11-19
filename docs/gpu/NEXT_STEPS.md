@@ -53,7 +53,8 @@ later task, including the integration obligations of any AGPL-covered reuse.
 | Numerical integration | G16a → G16b → G18 | One explicit Float32 map and a feature-gated unfer example |
 | Local multiple GPUs | G15a → G23a → G23b | Bounded jobs on independently selected physical adapters |
 
-For a single executor, begin with **G17a**. G19a and PC05a can make progress on
+For a single executor, begin with **G22a** (G17a/G17b landed 2026-11-19; see
+[BOUNDED_FOLD.md](BOUNDED_FOLD.md)). G19a and PC05a can make progress on
 the existing v1 corpus when the WGSL hardware lane is unavailable. G22a can
 also start from the original v1 scalar mapper while G17b is in flight. G17 no
 longer depends on Float32. G18 is the only card here that changes unfer.
@@ -95,9 +96,10 @@ Keep bound and binder decisions on the typed monomorphic AST. Write a probe
 that records the actual resolved initializer, loop and assignment nodes.
 
 Austral's specification and the C renderer use the inclusive endpoint. The
-local CPS lowering uses `CmpLt`. Document that discrepancy with the fixture
-before selecting the C executable and a hand-computed count as the oracles.
-Keep CPS equivalence for loops open until its separate behavior is reconciled.
+local CPS lowering used `CmpLt`; it now emits `CmpLte` (reconciled
+2026-11-19, pinned by `test/CpsLoopLoweringTest.ml` and measured through the
+JIT server), so C, KernelIR/WGSL and the CPS JIT agree. The fixture records
+the resolved counts with the C executable and a hand computation as oracles.
 [Austral loop specification](https://austral-lang.org/spec/spec.html#for-loop),
 [C loop renderer](../../lib/CRenderer.ml), [CPS loop lowering](../../lib/Compiler_cps.ml).
 

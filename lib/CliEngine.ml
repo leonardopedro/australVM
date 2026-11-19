@@ -149,6 +149,9 @@ and compile_help_lines (): string list =
     "Options:";
     "    --help          Print this text.";
     "    --target-type   One of `exe`, `tc`, `c`, `wgsl`. Default is `exe`.";
+    "    --gpu-numeric-profile  With `--target-type=wgsl`, the kernel's numeric";
+    "                    contract: `u32-modular-v1` (default) or `wgsl-f32-v1`";
+    "                    (Float32 add/subtract/multiply only).";
     "    --output        Path to the output file.";
     "    --entrypoint    The name of the entrypoint function, in the";
     "                    format `<module name>:<function name>`.";
@@ -294,8 +297,9 @@ and exec_target (mods: module_source list) (target: target): unit =
      exec_compile_to_bin mods bin_path entrypoint
   | CStandalone { output_path; entrypoint; } ->
      exec_compile_to_c mods output_path entrypoint
-  | WgslBundle { output_dir; entrypoint; } ->
-     exec_compile_to_wgsl mods output_dir entrypoint
+  | WgslBundle { output_dir; entrypoint; numeric_profile; source_profile; } ->
+     exec_compile_to_wgsl mods output_dir entrypoint numeric_profile
+       source_profile
 
 (* Handle one JIT-server command line. Never raises: a command whose
    handling throws (e.g. a swap of a nonexistent module) is reported as
@@ -454,7 +458,9 @@ and run_gpu_checker (checker: string) (args: string list): (int * string) =
     (code, output))
 
 and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
-    (entrypoint: entrypoint): unit =
+    (entrypoint: entrypoint)
+    (numeric_profile: Gpu_ir.numeric_profile)
+    (source_profile: Gpu_subset.source_profile): unit =
   let (Entrypoint (entry_module, entry_name)) = entrypoint in
   if Sys.file_exists output_dir then
     err (Printf.sprintf
@@ -485,7 +491,8 @@ and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
   in
   let kernel =
     try
-      Gpu_subset.build ~entry:(Identifier.ident_string entry_name)
+      Gpu_subset.build ~profile:numeric_profile ~source_profile
+        ~entry:(Identifier.ident_string entry_name)
         prepared.Compiler.prepared_env prepared.Compiler.prepared_mono
     with Gpu_subset.Refused msg ->
       err ("GPU subset refused the module: " ^ msg)
@@ -506,7 +513,9 @@ and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
     |> List.concat
   in
   let evidence =
-    { (Gpu_bundle.default_evidence ()) with Gpu_bundle.shader_validation = "checked" }
+    { (Gpu_bundle.default_evidence ()) with
+      Gpu_bundle.shader_validation = "checked";
+      Gpu_bundle.source_profile = Gpu_subset.source_profile_name source_profile }
   in
   let bundle = Gpu_bundle.make ~evidence ~wgsl ~sources kernel in
   let staging =

@@ -2,7 +2,7 @@
 --
 -- reflect: entry=clamp param=x:0 comparison=GreaterThan literal=100 branch=100 operator=umeet
 -- source_sha256=0e0b705fbfdd408a0922df48a2467e3d0e3548c98a125218614b64e11fa4819c
--- ir_sha256=8c41eeead591550b7a1d83eae2fa667d5558d4bf6c1e9177f379ef2c9ca5bce9
+-- ir_sha256=48caf04ea1714fba539ab596cd83d4f7ab537f3eea7837a5b129ccbecb9d8288
 -- typed AST: MIf (MComparison (GreaterThan, MParamVar (x), MIntConstant 100),
 --            MReturn (MIntConstant 100), MReturn (MParamVar x))
 -- KernelIR:  If (Compare (GreaterThan, Param 0, U32 100), Return (U32 100), Return (Param 0))

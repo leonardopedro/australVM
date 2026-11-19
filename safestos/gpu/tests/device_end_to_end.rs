@@ -62,6 +62,8 @@ fn add_bundle() -> KernelBundle {
             "group": 0,
             "binding": i,
             "role": role,
+            "element": "u32",
+            "stride_bytes": 4,
         }));
     }
     KernelBundle {
@@ -91,12 +93,27 @@ fn add_bundle() -> KernelBundle {
                 guard_before_load: true,
                 workgroup_size: WORKGROUP_SIZE,
             },
+            numeric_profile: NUMERIC_PROFILE.to_string(),
         },
         ir_sha256: String::new(),
         wgsl_sha256: String::new(),
-        requirements: serde_json::json!({ "bindings": bindings }),
+        requirements: serde_json::json!({
+            "bindings": bindings,
+            "numeric": {
+                "profile": NUMERIC_PROFILE,
+                "element": "u32",
+                "operations": ["add", "subtract", "multiply", "bitwiseAnd", "bitwiseOr", "bitwiseXor", "bitwiseNot"],
+                "rounding": "modulo-2^32",
+                "contraction": "not-applicable",
+                "domain": "all-2^32",
+                "subnormals": "not-applicable",
+                "overflow": "defined-wraparound",
+                "tolerance_ulp_per_operation": 0
+            }
+        }),
         evidence: Evidence {
             source: "test".to_string(),
+            source_profile: None,
             shader_validation: "naga".to_string(),
             device_kind: "none".to_string(),
             execution: "reference".to_string(),

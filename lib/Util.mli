@@ -40,6 +40,10 @@ val search_replace : replacement -> string
 (** Remove the first n characters of a string. *)
 val remove_leading : string -> int -> string
 
+(** The transport word of an Austral integer literal: the exact unsigned
+    64-bit value for a decimal literal, [Int64.of_string] otherwise. *)
+val int_literal_word : string -> int64
+
 (** Parse a hexadecimal string into an integer. *)
 val parse_hex : string -> int
 

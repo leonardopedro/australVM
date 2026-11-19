@@ -29,8 +29,14 @@ type target =
   (** Compile to C, generate an executable. *)
   | CStandalone of { output_path: string; entrypoint: entrypoint option; }
   (** Compile to a standalone C file. *)
-  | WgslBundle of { output_dir: string; entrypoint: entrypoint; }
-  (** Compile the admitted GPU subset to a WGSL bundle directory. *)
+  | WgslBundle of {
+      output_dir: string;
+      entrypoint: entrypoint;
+      numeric_profile: Gpu_ir.numeric_profile;
+      source_profile: Gpu_subset.source_profile;
+    }
+  (** Compile the admitted GPU subset to a WGSL bundle directory under an
+      explicit numeric profile (`--gpu-numeric-profile`). *)
 [@@deriving eq]
 
 type error_reporting_mode =

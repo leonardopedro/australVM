@@ -1,0 +1,14 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The type " },
+    { "type": "type", "content": "Int16" },
+    {
+      "type": "text",
+      "content": " has no encoding at the extern rust boundary. An `rs_*` parameter or result is carried as a 64-bit word by a generated adapter (`<name>__adapter`), and that adapter ABI defines encodings for Boolean, Int32, Nat32, Int64, Nat64, Float32 and Float64 (plus addresses/pointers) only. An eight- or sixteen-bit integer, Index or ByteSize would arrive truncated, so it is refused here rather than as a call to an adapter that cannot exist."
+    }
+  ],
+  "span": null,
+  "context": null
+}

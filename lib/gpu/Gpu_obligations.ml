@@ -79,6 +79,9 @@ let intrinsic_of_string = function
   | "bitwiseOr" -> Gpu_ir.BitwiseOr
   | "bitwiseXor" -> Gpu_ir.BitwiseXor
   | "bitwiseNot" -> Gpu_ir.BitwiseNot
+  | "f32Add" -> Gpu_ir.F32Add
+  | "f32Subtract" -> Gpu_ir.F32Subtract
+  | "f32Multiply" -> Gpu_ir.F32Multiply
   | s -> fail "unknown intrinsic %S" s
 
 let comparison_of_string = function
@@ -100,6 +103,7 @@ let rec expr_of_json json =
   | "param" -> Gpu_ir.Param (json_int "index" json)
   | "local" -> Gpu_ir.Local (json_int "index" json)
   | "u32" -> Gpu_ir.U32 (Gpu_ir.u32_of_string (json_string "value" json))
+  | "f32" -> Gpu_ir.F32 (Gpu_ir.f32_of_string (json_string "value" json))
   | "bool" -> Gpu_ir.Bool (json_bool "value" json)
   | "intrinsic" ->
      Gpu_ir.Intrinsic
@@ -142,6 +146,7 @@ let rec stmt_of_json json =
 let value_type_of_string = function
   | "u32" -> Gpu_ir.TyU32
   | "bool" -> Gpu_ir.TyBool
+  | "f32" -> Gpu_ir.TyF32
   | s -> fail "unknown KernelIR value type %S" s
 
 let helper_of_json json =
@@ -176,7 +181,9 @@ let kernel_of_json json =
     input_arity = json_int "input_arity" json;
     helpers = List.map helper_of_json (json_list "helpers" json);
     body = stmt_of_json (json_member "body" json);
-    memory = memory_of_json (json_member "memory" json) }
+    memory = memory_of_json (json_member "memory" json);
+    numeric_profile =
+      Gpu_ir.profile_of_name (json_string "numeric_profile" json) }
 
 (* -------------------------------------------------------------------------- *)
 (* Bundle checks                                                              *)
@@ -189,7 +196,14 @@ let contains haystack needle =
   in
   n = 0 || at 0
 
-let check_requirements ~(arity: int) ~(workgroup_size: int) json =
+let check_requirements ~(arity: int) ~(workgroup_size: int)
+    ~(profile: Gpu_ir.numeric_profile) json =
+  let element = Gpu_ir.element_name (Gpu_ir.element_of_profile profile) in
+  let numeric = json_member "numeric" json in
+  if json_string "profile" numeric <> Gpu_ir.profile_name profile then
+    fail "requirements numeric profile disagrees with the KernelIR";
+  if json_string "element" numeric <> element then
+    fail "requirements numeric element disagrees with the KernelIR profile";
   let max_elements = json_int "max_elements" json in
   if max_elements <> 1048576 then
     fail "v1 job bound must be 1048576, bundle says %d" max_elements;
@@ -208,17 +222,19 @@ let check_requirements ~(arity: int) ~(workgroup_size: int) json =
     if json_int "group" b <> 0 || json_int "binding" b <> i
        || json_string "role" b <> "input"
        || json_string "access" b <> "read"
-       || json_string "element" b <> "u32"
+       || json_string "element" b <> element
        || json_int "stride_bytes" b <> 4 then
-      fail "requirements input binding %d is not the v1 read-only u32 binding" i
+      fail "requirements input binding %d is not the v1 read-only %s binding"
+        i element
   done;
   let out = binding arity in
   if json_int "group" out <> 0 || json_int "binding" out <> arity
      || json_string "role" out <> "output"
      || json_string "access" out <> "read_write"
-     || json_string "element" out <> "u32"
+     || json_string "element" out <> element
      || json_int "stride_bytes" out <> 4 then
-    fail "requirements output binding is not the v1 fresh read-write u32 binding";
+    fail "requirements output binding is not the v1 fresh read-write %s binding"
+      element;
   max_elements
 
 let check_shader ~(workgroup_size: int) (wgsl: string) =
@@ -249,13 +265,13 @@ let of_bundle dir =
     fail "kernel.json schema is not %s" Gpu_bundle.schema;
   if json_string "backend" json <> Gpu_bundle.backend then
     fail "kernel.json backend is not %s" Gpu_bundle.backend;
-  if json_string "numeric_profile" json <> Gpu_bundle.numeric_profile then
-    fail "kernel.json numeric profile is not %s" Gpu_bundle.numeric_profile;
-
   let kernel =
     try kernel_of_json (json_member "kernel_ir" json)
     with Gpu_ir.Ir_error msg -> fail "KernelIR refused: %s" msg
   in
+  if json_string "numeric_profile" json
+     <> Gpu_ir.profile_name kernel.Gpu_ir.numeric_profile then
+    fail "kernel.json numeric profile disagrees with kernel_ir.numeric_profile";
   (try Gpu_ir.check_kernel kernel
    with Gpu_ir.Ir_error msg -> fail "KernelIR refused: %s" msg);
   if json_string "entry" json <> kernel.Gpu_ir.entry_name then
@@ -283,6 +299,7 @@ let of_bundle dir =
   let max_elements =
     check_requirements ~arity:kernel.Gpu_ir.input_arity
       ~workgroup_size:kernel.Gpu_ir.memory.Gpu_ir.workgroup_size
+      ~profile:kernel.Gpu_ir.numeric_profile
       (json_member "requirements" json)
   in
   check_shader ~workgroup_size:kernel.Gpu_ir.memory.Gpu_ir.workgroup_size wgsl;

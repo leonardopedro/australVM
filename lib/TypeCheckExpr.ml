@@ -174,24 +174,56 @@ and check_arity (name: identifier) (params: value_parameter list) (args: texpr l
   else
     Errors.call_wrong_arity ~name ~expected:nparams ~actual:nargs
 
+(* A float literal is width-polymorphic: `1.0` is `Float32` where the
+   destination says so and `Float64` otherwise (the CPS back end narrows it,
+   see `narrow_float_literal`). Matching it against a still-unbound type
+   parameter binds the parameter to the literal's default f64, so
+   `trappingMultiply(x, 2.0)` with `x: Float32` failed with "T cannot be bound
+   to both Float32 and Float64", while skipping it entirely would leave
+   `Identity(3.14)` unconstrained. Defer those arguments, let every other
+   argument fix the parameter, and default a parameter still unbound here to
+   Float64 — the literal's default width. *)
+and is_float_literal_arg (arg: texpr): bool =
+  match arg with
+  | TFloatConstant _ -> true
+  | TCast (TFloatConstant _, _) -> true
+  | _ -> false
+
+and is_unbound_tyvar (ty: ty): bool =
+  match ty with TyVar _ -> true | _ -> false
+
 (* Precondition: both lists have the same length. *)
 and check_argument_list' (ctx: expr_ctx) (bindings: type_bindings) (params: value_parameter list) (args: texpr list): type_bindings =
-  match (params, args) with
-  | ((first_param::rest_params), (first_arg::rest_args)) ->
-     let bindings' = merge_bindings bindings (match_parameter ctx first_param first_arg) in
-     check_argument_list' ctx bindings' rest_params rest_args
-  | ([], []) ->
-     bindings
-  | _ ->
-     internal_err ("couldn't check argument list in module `"
-                   ^ (mod_name_string (ctx_module_name ctx))
-                   ^ "` with bindings: "
-                   ^ (show_type_bindings bindings)
-                   ^ ",\n params: `{ "
-                   ^ (String.concat ", " (List.map show_value_parameter params))
-                   ^ " }`,\n and args: `{ "
-                   ^ (String.concat ", " (List.map show_texpr args))
-                   ^ "}`")
+  let pairs = try List.combine params args with Invalid_argument _ -> [] in
+  if (List.length params) <> (List.length args) then
+    internal_err ("couldn't check argument list in module `"
+                  ^ (mod_name_string (ctx_module_name ctx))
+                  ^ "` with bindings: "
+                  ^ (show_type_bindings bindings)
+                  ^ ",\n params: `{ "
+                  ^ (String.concat ", " (List.map show_value_parameter params))
+                  ^ " }`,\n and args: `{ "
+                  ^ (String.concat ", " (List.map show_texpr args))
+                  ^ "}`")
+  else
+    let is_deferred (ValueParameter (_, ty), arg) =
+      (is_unbound_tyvar ty) && (is_float_literal_arg arg)
+    in
+    let (deferred, immediate) = List.partition is_deferred pairs in
+    let bindings =
+      List.fold_left
+        (fun acc (param, arg) -> merge_bindings acc (match_parameter ctx param arg))
+        bindings immediate
+    in
+    List.fold_left
+      (fun acc (ValueParameter (_, ty), arg) ->
+        let ty' = replace_variables acc ty in
+        if is_unbound_tyvar ty' then
+          (* Nothing else fixed this parameter: use the literal's default. *)
+          merge_bindings acc (match_type_ctx ctx ty' DoubleFloat)
+        else
+          merge_bindings acc (match_type_with_value_ctx ctx ty' arg))
+      bindings deferred
 
 and match_parameter (ctx: expr_ctx) (param: value_parameter) (arg: texpr): type_bindings =
   let (ValueParameter (_, ty)) = param in

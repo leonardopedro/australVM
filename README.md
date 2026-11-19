@@ -82,6 +82,11 @@ covers the linear-job API and the asynchronous completion callback. The
 [next implementation steps](docs/gpu/NEXT_STEPS.md) detail a bounded integer
 fold, a workgroup reduction and the MLIR backend from the current KernelIR.
 
+The [Bend capabilities plan](docs/LIQUID_BEND_PLAN.md) starts with the existing
+Liquid split checker and a replayable MM0 certificate. It stages dependent
+types, explicit equality and induction before an optional BendTT-style profile.
+Separate cards reuse the host adapters for shared memory and parallel jobs.
+
 The [compositional MM0 plan](PLAN_proof_chain.md) makes higher-level proofs
 reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_CHAIN.md)
 for CPU, GPU and NPU representations. It follows Hydro's typed-IR/semantic-transfer

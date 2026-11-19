@@ -610,6 +610,41 @@ let rec is_buffer_protocol_type (ty: ty): bool =
   | Address inner | Pointer inner -> is_buffer_protocol_type inner
   | _ -> false
 
+(* U11 step 3: a scalar that crosses an `rs_*` boundary must have an encoding
+   in the adapter ABI (`safestos/cranelift/src/adapters.rs`): Boolean,
+   Int32/Nat32, Int64/Nat64, Float32, Float64. The 8/16-bit integers, `Index`
+   and `ByteSize` have none — `Compiler_cps` would name `<name>__adapter`, and
+   no wrapper can implement a signature the descriptor cannot describe, so the
+   failure surfaced as a JIT `can't resolve symbol` after the typechecker had
+   admitted the program. Refusing it here is the plan's "reject
+   still-unsupported lowering, even if the annotation typechecks". Addresses
+   and pointers keep the buffer-protocol shape: their inner byte type is a
+   layout, not a scalar that travels. *)
+let is_adapter_scalar_type (ty: ty): bool =
+  match ty with
+  | Boolean | SingleFloat | DoubleFloat -> true
+  | Integer ((Signed | Unsigned), (Width32 | Width64)) -> true
+  | _ -> false
+
+let is_adapter_protocol_type (ty: ty): bool =
+  match ty with
+  | Address _ | Pointer _ -> is_buffer_protocol_type ty
+  | _ -> is_adapter_scalar_type ty
+
+(* The word-native half of the interop contract, mirroring
+   `Compiler_cps.is_word_native`: such a call keeps the declared symbol and
+   never builds an adapter descriptor. *)
+let is_word_native_type (ty: ty): bool =
+  match ty with
+  | Integer (_, Width64) -> true
+  | Address _ | Pointer _ | Span _ | SpanMut _ -> true
+  | _ -> false
+
+let is_buffer_type (ty: ty): bool =
+  match ty with
+  | Address _ | Pointer _ | Span _ | SpanMut _ -> true
+  | _ -> false
+
 (* Validate a Rust_Ownership pragma against the signature of the foreign
    import it annotates, and return the pragma unchanged (to ride along on the
    typed declaration for introspection; Monomorphize drops it). All failure
@@ -637,9 +672,34 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
      float-register call. Aggregates stay refused: they are not a scalar word. *)
   List.iter (fun (ValueParameter (_, ty)) ->
       if not (is_buffer_protocol_type ty) then
-        Errors.rust_ownership_shape ~ty) params;
+        Errors.rust_ownership_shape ~ty;
+      if not (is_adapter_protocol_type ty) then
+        Errors.rust_adapter_unsupported ~ty) params;
   if not (is_buffer_protocol_type rt) then
-    Errors.rust_ownership_shape ~ty:rt
+    Errors.rust_ownership_shape ~ty:rt;
+  if not (is_adapter_protocol_type rt) then
+    Errors.rust_adapter_unsupported ~ty:rt;
+  (* U11 step 3 / the U12 seam: an adapter-mediated call cannot also carry a
+     byte buffer. The scalar ABI carries one word per parameter and the
+     descriptor has no buffer layout — no length, capacity, provenance or
+     extent convention exists yet (U12) — so `Compiler_cps` cannot describe the
+     signature and the `<name>__adapter` symbol it names has no implementable
+     wrapper. The word-native path is untouched: an `Address`/`Pointer`
+     parameter with an `Int64`/`Nat64` result keeps the declared symbol. *)
+  let needs_adapter =
+    not (List.for_all
+           (fun (ValueParameter (_, ty)) -> is_word_native_type ty) params
+         && is_word_native_type rt)
+  in
+  if needs_adapter then begin
+    List.iter (fun (ValueParameter (name, ty)) ->
+        if is_buffer_type ty then
+          Errors.rust_adapter_buffer_unsupported
+            ~subject:(Printf.sprintf "The parameter `%s`" (ident_string name))
+            ~ty) params;
+    if is_buffer_type rt then
+      Errors.rust_adapter_buffer_unsupported ~subject:"The result" ~ty:rt
+  end
 
 let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (decl: linked_definition): typed_decl =
   with_frame "Augment declaration"

@@ -13,7 +13,18 @@ let identity_kernel =
     input_arity = 1;
     helpers = [];
     body = Gpu_ir.Return (Gpu_ir.Param 0);
-    memory = Gpu_ir.default_memory_plan 1 }
+    memory = Gpu_ir.default_memory_plan 1;
+    numeric_profile = Gpu_ir.U32ModularV1 }
+
+let f32_kernel =
+  { Gpu_ir.entry_name = "scale";
+    input_arity = 1;
+    helpers = [];
+    body =
+      Gpu_ir.Return
+        (Gpu_ir.Intrinsic (Gpu_ir.F32Multiply, [Gpu_ir.Param 0; Gpu_ir.F32 "2.5"]));
+    memory = Gpu_ir.default_memory_plan 1;
+    numeric_profile = Gpu_ir.WgslF32V1 }
 
 let test_canonical_bytes_are_stable _ =
   let a = Gpu_ir.canonical_bytes identity_kernel
@@ -56,6 +67,55 @@ let test_bundle_lists_builtin_sources _ =
   assert_bool "the canonical Pervasive body is recorded"
     (List.mem "builtin/Austral.Pervasive.aum" paths)
 
+let test_f32_literals_round_trip _ =
+  assert_equal "3.0" (Gpu_ir.f32_of_string "3");
+  assert_equal "0.1" (Gpu_ir.f32_of_string "0.1");
+  assert_equal "2.5" (Gpu_ir.f32_of_string "2.50");
+  assert_bool "an overflowing literal is not a finite binary32 value"
+    (match Gpu_ir.f32_of_string "1e40" with
+     | exception Gpu_ir.Ir_error _ -> true
+     | _ -> false);
+  assert_bool "a literal parses to the same bits it prints"
+    (Gpu_ir.f32_bits_of_string "0.1"
+     = Gpu_ir.f32_bits_of_string (Gpu_ir.f32_of_string "0.1"))
+
+let test_profiles_do_not_mix _ =
+  let json = Gpu_ir.canonical_bytes f32_kernel in
+  assert_bool "the profile is part of the semantic IR"
+    (String.length json > 0
+     && (try
+           let _ = Str.search_forward
+                     (Str.regexp_string "\"numeric_profile\":\"wgsl-f32-v1\"")
+                     json 0 in
+           true
+         with Not_found -> false));
+  assert_bool "an f32 literal in the u32 profile is refused"
+    (match Gpu_ir.check_kernel
+             { identity_kernel with Gpu_ir.body = Gpu_ir.Return (Gpu_ir.F32 "1.0") } with
+     | exception Gpu_ir.Ir_error _ -> true
+     | () -> false);
+  assert_bool "an integer intrinsic in the f32 profile is refused"
+    (match Gpu_ir.check_kernel
+             { f32_kernel with
+               Gpu_ir.body = Gpu_ir.Return (Gpu_ir.Intrinsic (Gpu_ir.Add, [Gpu_ir.Param 0; Gpu_ir.Param 0])) } with
+     | exception Gpu_ir.Ir_error _ -> true
+     | () -> false)
+
+let test_f32_requirements _ =
+  let b = Gpu_bundle.make ~sources:[] f32_kernel in
+  let reqs = Yojson.Safe.from_string
+      (Yojson.Safe.to_string b.Gpu_bundle.requirements) in
+  let open Yojson.Safe.Util in
+  let bindings = reqs |> member "bindings" |> to_list in
+  assert_equal "f32" (List.nth bindings 0 |> member "element" |> to_string);
+  assert_equal 4 (List.nth bindings 0 |> member "stride_bytes" |> to_int);
+  assert_equal "wgsl-f32-v1"
+    (reqs |> member "numeric" |> member "profile" |> to_string);
+  assert_equal 1
+    (reqs |> member "numeric" |> member "tolerance_ulp_per_operation" |> to_int);
+  assert_equal "permitted"
+    (reqs |> member "numeric" |> member "contraction" |> to_string)
+
 let test_requirements_bindings _ =
   let k = { identity_kernel with
             Gpu_ir.entry_name = "add";
@@ -76,6 +136,9 @@ let suite =
   "GpuIrTest" >::: [
     "canonical IR bytes are stable" >:: test_canonical_bytes_are_stable;
     "u32 literal bounds refuse" >:: test_u32_bounds;
+    "f32 literals round-trip" >:: test_f32_literals_round_trip;
+    "numeric profiles do not mix" >:: test_profiles_do_not_mix;
+    "f32 requirements name the profile" >:: test_f32_requirements;
     "comment edits source digest only" >:: test_semantic_vs_source_digest;
     "builtin sources are recorded" >:: test_bundle_lists_builtin_sources;
     "binding roles follow arity" >:: test_requirements_bindings;

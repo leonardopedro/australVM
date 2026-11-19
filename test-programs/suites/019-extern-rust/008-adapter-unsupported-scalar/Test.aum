@@ -1,0 +1,21 @@
+-- A scalar with no encoding at the extern rust boundary: the adapter ABI
+-- carries Bool, Int32/Nat32, Int64/Nat64, Float32 and Float64, so an Int16
+-- (and the other 8/16-bit integers, Index and ByteSize) is refused at
+-- typechecking instead of becoming a call to an adapter that cannot exist.
+pragma Unsafe_Module;
+
+module body Test is
+    pragma Foreign_Import(External_Name => "rs_absorb");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_absorb(value: Int16): Int64 is
+    end;
+
+    function main(): ExitCode is
+        let x: Int16 := 7;
+        if rs_absorb(x) = 7 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

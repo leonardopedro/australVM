@@ -1,0 +1,31 @@
+-- G16a: Float32 affine arithmetic through the ordinary C backend.
+-- The values are chosen so an f32 computation and an f64 computation of the
+-- same source print differently: 16777216 is the last integer any f32 can
+-- distinguish from its successor, and 1e8 is far past f32's integer range.
+-- A pass that widened Float32 to f64 would print the f64 rows instead.
+module body Test is
+    function affine(x: Float32, scale: Float32, bias: Float32): Float32 is
+        return trappingAdd(trappingMultiply(x, scale), bias);
+    end;
+
+    function wideAffine(x: Float64, scale: Float64, bias: Float64): Float64 is
+        return trappingAdd(trappingMultiply(x, scale), bias);
+    end;
+
+    function cancel(one: Float32, big: Float32): Float32 is
+        return trappingSubtract(trappingAdd(one, big), big);
+    end;
+
+    function wideCancel(one: Float64, big: Float64): Float64 is
+        return trappingSubtract(trappingAdd(one, big), big);
+    end;
+
+    function main(): ExitCode is
+        printLn(affine(1.0, 2.0, 1.0));
+        printLn(affine(16777216.0, 1.0, 1.0));
+        printLn(wideAffine(16777216.0, 1.0, 1.0));
+        printLn(cancel(1.0, 100000000.0));
+        printLn(wideCancel(1.0, 100000000.0));
+        return ExitSuccess();
+    end;
+end module body.

@@ -238,6 +238,62 @@ let test_f32_multiply _ =
 let test_f32_divide _ =
   compile_f32 "run_f32_div" "au_f64_divide" [FloatLit32 12.0; FloatLit32 4.0] 0x40400000L
 
+(* Float comparisons: `au_f64_lt/le/gt/ge/eq/ne`, which the front-end picks
+   over the `Cmp*` opcodes when the operands are floats.
+
+   Every expected value here is a *word* the integer opcodes cannot produce.
+   The `icmp` opcodes compare the words as signed 64-bit integers, and that
+   order is reversed between two negative doubles: -2.0 = 0xC000…, -1.0 =
+   0xBFF0…, so `CmpLt` answers `-2.0 < -1.0` with 0. On bits, `-0.0 == 0.0`
+   is 0 (the opcodes) and `NaN == NaN` is 1; IEEE says the opposite, which is
+   what these pin. `0.0 == -0.0` is 1 and every other NaN comparison is 0. *)
+let compile_cmp fname op args expected =
+  compile_and_execute fname (Return (App (op, args))) expected
+
+let test_f64_lt_negatives _ =
+  compile_cmp "run_f64_lt_neg" "au_f64_lt"
+    [FloatLit (-2.0); FloatLit (-1.0)] 1L
+
+let test_f64_gt_negatives _ =
+  compile_cmp "run_f64_gt_neg" "au_f64_gt"
+    [FloatLit (-2.0); FloatLit (-1.0)] 0L
+
+let test_f64_le_boundary _ =
+  compile_cmp "run_f64_le" "au_f64_le" [FloatLit 2.0; FloatLit 2.0] 1L
+
+let test_f64_ge_mixed _ =
+  compile_cmp "run_f64_ge" "au_f64_ge" [FloatLit 2.5; FloatLit 2.0] 1L
+
+let test_f64_eq_signed_zero _ =
+  compile_cmp "run_f64_eq_zero" "au_f64_eq" [FloatLit 0.0; FloatLit (-0.0)] 1L
+
+let test_f64_ne_signed_zero _ =
+  compile_cmp "run_f64_ne_zero" "au_f64_ne" [FloatLit 0.0; FloatLit (-0.0)] 0L
+
+let test_f64_nan_eq_itself _ =
+  compile_cmp "run_f64_nan_eq" "au_f64_eq" [FloatLit nan; FloatLit nan] 0L
+
+let test_f64_nan_ne_itself _ =
+  compile_cmp "run_f64_nan_ne" "au_f64_ne" [FloatLit nan; FloatLit nan] 1L
+
+let test_f64_nan_lt _ =
+  compile_cmp "run_f64_nan_lt" "au_f64_lt" [FloatLit nan; FloatLit 1.0] 0L
+
+(* Float32 comparisons take the same widen-first route (exact: every f32 is
+   an f64), so the lowering test above covers this one too; these pin the
+   width conversion on the comparison path, not only on the arithmetic one. *)
+let compile_cmp_f32 fname op a b expected =
+  let widen e = App ("au_f32_to_f64", [e]) in
+  compile_and_execute fname (Return (App (op, [widen a; widen b]))) expected
+
+let test_f32_lt_negatives _ =
+  compile_cmp_f32 "run_f32_lt_neg" "au_f64_lt"
+    (FloatLit32 (-2.0)) (FloatLit32 (-1.0)) 1L
+
+let test_f32_eq_signed_zero _ =
+  compile_cmp_f32 "run_f32_eq_zero" "au_f64_eq"
+    (FloatLit32 0.0) (FloatLit32 (-0.)) 1L
+
 (* ── suite ──────────────────────────────────────────────────────── *)
 
 let suite =
@@ -263,6 +319,18 @@ let suite =
     "f32_subtract_4_0_2_5" >:: test_f32_subtract;
     "f32_multiply_2_5_4_0" >:: test_f32_multiply;
     "f32_divide_12_0_4_0" >:: test_f32_divide;
+    (* Float comparisons: IEEE order and equality, not word order. *)
+    "f64_lt_negatives" >:: test_f64_lt_negatives;
+    "f64_gt_negatives" >:: test_f64_gt_negatives;
+    "f64_le_boundary" >:: test_f64_le_boundary;
+    "f64_ge_mixed" >:: test_f64_ge_mixed;
+    "f64_eq_signed_zero" >:: test_f64_eq_signed_zero;
+    "f64_ne_signed_zero" >:: test_f64_ne_signed_zero;
+    "f64_nan_eq_itself" >:: test_f64_nan_eq_itself;
+    "f64_nan_ne_itself" >:: test_f64_nan_ne_itself;
+    "f64_nan_lt" >:: test_f64_nan_lt;
+    "f32_lt_negatives" >:: test_f32_lt_negatives;
+    "f32_eq_signed_zero" >:: test_f32_eq_signed_zero;
   ]
 
 let _ = run_test_tt_main suite

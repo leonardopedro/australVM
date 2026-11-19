@@ -1,11 +1,16 @@
 # Austral-authored GPU kernels: implementation plan
 
-**Status, 2026-11-19.** G00–G15 have implementation records. Generated WGSL
+**Status, 2026-11-19.** G00–G16 have implementation records: G16a's Float32
+source arithmetic and G16b's opt-in `wgsl-f32-v1` profile, whose affine kernel
+has run on a physical Vulkan adapter. G17's bounded-fold admission and its
+unrolled KernelIR expansion are in ([contract](docs/gpu/BOUNDED_FOLD.md)); a
+fold bundle has run on a physical adapter at ragged length.
+Generated WGSL
 has run on physical Vulkan adapters. The local GPU service has a linear job
 API and recorded completion callbacks. G13's per-bundle MM0 certificate and
-G16–G23 remain open. See the [execution record](docs/gpu/EXECUTION.md).
+G18–G23 remain open. See the [execution record](docs/gpu/EXECUTION.md).
 
-**Next patch for the executor** is G17a in the [next implementation steps](docs/gpu/NEXT_STEPS.md).
+**Next patch for the executor** is G22a in the [next implementation steps](docs/gpu/NEXT_STEPS.md).
 That continuation gives the researched Bend-inspired integer fold and reduction,
 the optional MLIR backend over existing KernelIR, and a staged proof/host plan.
 Use its order and patch sizes for remaining work. The G-series cards below
@@ -582,7 +587,10 @@ nine mock tests plus one two-context physical test in
 published from wgpu's `Queue::on_submitted_work_done` callback
 (`crate::run::run_with_completion`), and `rs_gpu_close` joins the context's
 workers so device teardown cannot overlap the thread that published the
-completion.
+completion. `examples/gpu/jobs/` plus `scripts/gpu-jobs-jit` exercise the v2
+grants through the JIT end to end (`RESULT 32` from the readback, and the
+grant-omitted `UK-4001` denial); its await is a self tail call, which the bridge
+now lowers to a jump rather than a recursive call.
 
 **Depends:** G14. **Size:** medium, split state machine/wrappers/device tests.
 **Files:** new `stdlib/gpu/Jobs.{aui,aum}`; adapter-owned job state;
@@ -611,7 +619,28 @@ Mock lifecycle tests and real device evidence are reported separately.
 **Size:** medium. **Files:** source `lib/builtin/Pervasive.{aui,aum}` if adding
 Float32 arithmetic instances; GPU intrinsic/IR/schema/emitter code; C/IR/GPU tests.
 
-The current standard arithmetic class lists Float64 but not Float32. Add genuine
+**G16a implemented:** `TrappingArithmetic(Float32)` in
+`lib/builtin/Pervasive.{aui,aum}`, deferred by `lib/TypeCheckExpr.ml` (a float
+literal is width-polymorphic: the other arguments fix `T`, then a still-unbound
+parameter defaults to Float64), with `test-programs/suites/025-gpu-f32/` showing the
+Float32 and Float64 rows of the same affine source printing differently.
+
+**G16b implemented:** `wgsl-f32-v1` is an explicit
+`--gpu-numeric-profile=wgsl-f32-v1` opt-in on `--target-type=wgsl`; the profile
+is part of the semantic KernelIR (and `ir_sha256`), selects f32 storage and an
+f32 scalar entry, and admits only the canonical `TrappingArithmetic(Float32)`
+add/subtract/multiply. Float64, division, float comparisons, conversions and
+transcendentals are refused by name. The contract (`docs/gpu/KERNEL_V1.md` §2a)
+fixes the admitted finite/normal domain, permits contraction (measured on Intel
+UHD 630) and sets the per-operation tolerance at 1 ULP; the bundle carries the
+same contract in `requirements.numeric`. `examples/gpu/f32-affine/` and
+`scripts/gpu-f32-profile --require-hardware` measure it end to end: validated
+f32 bundles, a bit-exact binary32 reference against an independent oracle,
+named refusals, and a 4-element hardware result within 1 ULP. Remaining f32
+gaps are recorded in the execution row: no division/transcendentals, no f32
+proof obligation, and the job service still refuses f32 bundles.
+
+The current standard arithmetic class listed Float64 but not Float32. Add genuine
 Float32 source support with ordinary CPU conformance tests before mapping it to
 WGSL. Never map an existing Float64 program to f32 silently or edit the generated
 `BuiltInModules.ml` directly. Initially admit add/subtract/multiply only and
@@ -819,7 +848,7 @@ owner-comparison workflow for proof statement approvals.
 Suggested prompt for the cheap executor:
 
 > Read AGENTS.md, PLAN_gpu_kernels.md, docs/gpu/NEXT_STEPS.md and the execution
-> record. Start with G17a or the next eligible continuation card if it landed.
+> record. Start with G22a or the next eligible continuation card if it landed.
 > Keep the patch limited to the card, run its meaningful positive and refusal
 > tests, and update the evidence record with exact commands and limitations.
 > Continue with the next eligible task. If a tool/hardware prerequisite is absent,

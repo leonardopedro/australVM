@@ -264,6 +264,13 @@ fn front_end_once(
             cmd.env("LD_LIBRARY_PATH", lp);
         }
     }
+    // The front-end's own JIT attempt is advisory for this run. The wrapper
+    // crate the build needs does not exist yet, so an `<target>__adapter`
+    // symbol cannot resolve inside the front-end's process; this stage wants
+    // the CPS artifact and the descriptor, and stage 3.5 compiles the CPS
+    // again with the wrappers loaded. Fail-closed stays the default for every
+    // other caller (a module whose JIT compile failed cannot run).
+    cmd.env("CPS_JIT_ADVISORY", "1");
     cmd.arg("compile");
     for m in modules {
         cmd.arg(m);

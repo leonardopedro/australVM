@@ -45,12 +45,14 @@ fn bundle_for_arity(input_arity: u32) -> KernelBundle {
                 guard_before_load: true,
                 workgroup_size: WORKGROUP_SIZE,
             },
+            numeric_profile: NUMERIC_PROFILE.to_string(),
         },
         ir_sha256: "0".repeat(64),
         wgsl_sha256: "0".repeat(64),
         requirements: serde_json::json!({ "bindings": bindings }),
         evidence: Evidence {
             source: "compiled".to_string(),
+            source_profile: None,
             shader_validation: "naga".to_string(),
             device_kind: "none".to_string(),
             execution: "reference".to_string(),
@@ -221,6 +223,92 @@ fn reference_uses_wrapping_u32_semantics() {
     assert_eq!(out, vec![0, 42]);
 }
 
+fn f32_bundle(scale: Expr) -> KernelBundle {
+    let mut bundle = bundle_for_arity(1);
+    bundle.numeric_profile = NUMERIC_PROFILE_F32.to_string();
+    bundle.kernel_ir.numeric_profile = NUMERIC_PROFILE_F32.to_string();
+    bundle.kernel_ir.body = Stmt::Return {
+        value: Expr::Intrinsic {
+            op: "f32Add".to_string(),
+            args: vec![
+                Expr::Intrinsic {
+                    op: "f32Multiply".to_string(),
+                    args: vec![Expr::Param { index: 0 }, scale],
+                },
+                Expr::F32 {
+                    value: "1.0".to_string(),
+                },
+            ],
+        },
+    };
+    bundle
+}
+
+#[test]
+fn reference_uses_binary32_semantics() {
+    // 2.5*x + 1.0. At x = 2^24 the sum 41943041 is not representable:
+    // binary32 spacing there is 4, so the result rounds back to 41943040.
+    // A reference that widened to f64 would return 41943041.
+    let bundle = f32_bundle(Expr::F32 {
+        value: "2.5".to_string(),
+    });
+    let mut ev = crate::reference::Evaluator::new(&bundle.kernel_ir, Default::default()).unwrap();
+    assert_eq!(ev.element(), crate::schema::Element::F32);
+    let out = ev
+        .run(&[vec![1.0f32.to_bits(), 16777216.0f32.to_bits()]])
+        .unwrap();
+    assert_eq!(f32::from_bits(out[0]), 3.5);
+    assert_eq!(f32::from_bits(out[1]), 41943040.0);
+}
+
+#[test]
+fn reference_refuses_non_finite_f32_results() {
+    // 1e30 * 1e30 overflows binary32. The profile admits only finite values,
+    // so this is a refused evaluation, not an infinity returned as a result.
+    let mut bundle = f32_bundle(Expr::Param { index: 0 });
+    bundle.kernel_ir.body = Stmt::Return {
+        value: Expr::Intrinsic {
+            op: "f32Multiply".to_string(),
+            args: vec![Expr::Param { index: 0 }, Expr::Param { index: 0 }],
+        },
+    };
+    let mut ev = crate::reference::Evaluator::new(&bundle.kernel_ir, Default::default()).unwrap();
+    let err = ev.run(&[vec![1e30f32.to_bits()]]).unwrap_err();
+    assert!(err.contains("non-finite"), "{err}");
+}
+
+#[test]
+fn load_rejects_a_profile_the_ir_does_not_use() {
+    let scratch = Scratch::new("profile-mismatch");
+    let mut bundle = bundle_for_arity(1);
+    bundle.numeric_profile = NUMERIC_PROFILE_F32.to_string();
+    write_bundle(&scratch.0, bundle, BASE_WGSL);
+    let err = match crate::load_bundle(&scratch.0) {
+        Ok(_) => panic!("a profile disagreement was accepted"),
+        Err(e) => e,
+    };
+    assert!(err.contains("kernel_ir.numeric_profile"), "{err}");
+}
+
+#[test]
+fn load_rejects_a_u32_literal_in_an_f32_kernel() {
+    let scratch = Scratch::new("profile-mixed");
+    let mut bundle = bundle_for_arity(1);
+    bundle.numeric_profile = NUMERIC_PROFILE_F32.to_string();
+    bundle.kernel_ir.numeric_profile = NUMERIC_PROFILE_F32.to_string();
+    bundle.kernel_ir.body = Stmt::Return {
+        value: Expr::U32 {
+            value: "7".to_string(),
+        },
+    };
+    write_bundle(&scratch.0, bundle, BASE_WGSL);
+    let err = match crate::load_bundle(&scratch.0) {
+        Ok(_) => panic!("a u32 literal in an f32 kernel was accepted"),
+        Err(e) => e,
+    };
+    assert!(err.contains("u32 literal is not part"), "{err}");
+}
+
 #[test]
 fn reference_refuses_undefined_locals_and_mismatched_lengths() {
     let mut bundle = bundle_for_arity(1);
@@ -237,4 +325,26 @@ fn reference_refuses_undefined_locals_and_mismatched_lengths() {
     let mut ev = crate::reference::Evaluator::new(&bundle.kernel_ir, Default::default()).unwrap();
     let err = ev.run(&[vec![1], vec![1, 2]]).unwrap_err();
     assert!(err.contains("has length 2, expected 1"), "{err}");
+}
+
+/// G17b adds `evidence.source_profile`. Bundles written before it must keep
+/// loading, and the field must round-trip when present.
+#[test]
+fn source_profile_is_optional_in_the_evidence() {
+    let bundle = bundle_for_arity(1);
+    let mut old = serde_json::to_value(&bundle).unwrap();
+    old["evidence"]
+        .as_object_mut()
+        .unwrap()
+        .remove("source_profile");
+    let parsed: KernelBundle = serde_json::from_value(old).unwrap();
+    assert_eq!(parsed.evidence.source_profile, None);
+
+    let mut new = serde_json::to_value(&bundle).unwrap();
+    new["evidence"]["source_profile"] = serde_json::json!("bounded-fold-v1");
+    let parsed: KernelBundle = serde_json::from_value(new).unwrap();
+    assert_eq!(
+        parsed.evidence.source_profile.as_deref(),
+        Some("bounded-fold-v1")
+    );
 }

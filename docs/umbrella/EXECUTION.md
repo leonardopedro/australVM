@@ -443,7 +443,7 @@ The U04 transport restriction is replaced by adapter-mediated admission.
 
 | Path | Change |
 |---|---|
-| `lib/TypingPass.ml` | `is_transport_word_parameter` / `is_transport_i64_result` and the `rust_interop_transport` rejection are gone: `Bool`, `Int32`/`U32`, `F32`/`F64` parameters and results are admitted. The buffer-protocol shape check (`rust_ownership_shape`) still refuses aggregates. |
+| `lib/TypingPass.ml` | `is_transport_word_parameter` / `is_transport_i64_result` and the `rust_interop_transport` rejection are gone: `Bool`, `Int32`/`U32`, `F32`/`F64` parameters and results are admitted. The buffer-protocol shape check (`rust_ownership_shape`) still refuses aggregates, and `is_adapter_protocol_type` refuses the scalars the adapter ABI has no encoding for (`Int8`/`Int16`/`Nat8`/`Nat16`/`Index`/`ByteSize`) with `rust_adapter_unsupported` — those used to typecheck and then lower to an `<name>__adapter` symbol no wrapper could implement, so the failure surfaced as a JIT `can't resolve symbol` (and, because a JIT error is only printed while the C output is still produced, with exit 0). Fixture: `test-programs/suites/019-extern-rust/008-adapter-unsupported-scalar`. The same reasoning refuses a byte buffer in an *adapter-mediated* signature (`rust_adapter_buffer_unsupported`): the descriptor has no length/capacity/provenance layout yet, so `Compiler_cps` could not describe it. The word-native shape is unchanged — `rs_checksum(buf: Address[Nat8], len: Int64): Int64` still typechecks, emits exactly `rs_checksum` and yields an adapter document with no descriptors. Fixture: `test-programs/suites/019-extern-rust/009-buffer-needs-adapter`. |
 | `lib/Compiler_cps.ml` | `foreign_needs_adapter` decides per `MForeignFunction` signature: if every parameter is `Int64`/`Nat64`/address/pointer and the result is `Int64`/`Nat64`, the call keeps the declared external symbol (unchanged word-native path); otherwise the lowered symbol is `<ext_name>__adapter`. Hence a float-register or narrow-integer call can only ever name the wrapper. |
 
 **Evidence (measured, emitted CPS).** A module declaring and calling
@@ -580,11 +580,11 @@ run reports exactly that and still returns its documented `RESULT`.
 ### U11.4 — the live JIT path, and the float word
 
 `scalar_roundtrip.rs`'s third test drives the real `umbrella` binary over
-`modules/AdapterLive.aum`, whose six externs are `Int32`, `Bool`, two `Float64`
-and two `Float32` signatures — none word-native, so all go through
-`<target>__adapter`. The test builds the target crate, grants the six adapter
-symbols in a manifest, and asserts the `RESULT`, the `built and loaded 6 adapter
-wrapper(s)` line naming each symbol, and that a wrong `--expect` fails (`compute`
+`modules/AdapterLive.aum`, whose eight externs are `Int32`, `Bool`, two `Float64`,
+two `Float32` and (since the unsigned leg) `Nat32`/`Nat64` signatures — none
+word-native, so all go through `<target>__adapter`. The test builds the target
+crate, grants the eight adapter symbols in a manifest, and asserts the `RESULT`,
+the `built and loaded 8 adapter wrapper(s)` line naming each symbol, and that a wrong `--expect` fails (`compute`
 returns `0` unless every mediated result is right, so the wrong-expectation run
 is the oracle that `RESULT` is really the entry's). It needs the dune-built
 `austral` front-end at the repo root and **fails** with that instruction when it
@@ -654,7 +654,7 @@ cases in the suite).
 
 **Float32 arithmetic is not carried, and the reason is in the typechecker.**
 The bridge already keeps both conversions (`au_f32_to_f64`, `au_f64_to_f32`) and
-`test/JitTest.ml` exercises the whole shape by hand in four `f32_*` cases (18 in
+`test/JitTest.ml` exercises the whole shape by hand in four `f32_*` cases (29 in
 the suite): widen both words, run the matching `au_f64_*` op, narrow back, so
 `(((2.5 + 1.5) * 4.0) - 2.0) / 2.0` reads back `7.0` = `0x40E00000`. A
 prototype of the source-level half was verified end-to-end (`adapter live`
@@ -679,10 +679,96 @@ owner-committed trust artifacts, so re-pinning them belongs in its own change
 (the alternative is making goal names and certificates independent of builtin
 declaration order first).
 
+**`Float64`/`Float32` comparisons now lower to bridge primitives too.**
+`MComparison` used to fall through to the integer `CmpLt`/`CmpGt`/… opcodes,
+which `icmp` the bit words as *signed* integers: right for positive values,
+reversed between two negatives (`-2.0` = 0xC000… sorts above `-1.0` = 0xBFF0…),
+`Eq` calling `-0.0` unequal to `0.0`, and a NaN equal to itself. `Compiler_cps`
+now reads the operand type (`comparison_type`: a `MonoSingleFloat` operand makes
+the comparison single-precision, otherwise any `MonoDoubleFloat` makes it
+double) and emits `au_f64_lt`/`le`/`gt`/`ge`/`eq`/`ne` — the same 0/1 word the
+`Cmp*` opcodes produce, so `If` and the boolean ops are untouched, and again no
+opcode, `Cps_codec`, `ISA_REGISTRY` or census change. `Eq`/`NotEqual` go through
+the primitives as well, because IEEE equality is not word equality. Float32
+widens both words with `au_f32_to_f64` first (exact: every f32 is an f64, order
+and NaN-ness preserved), mirroring the arithmetic chain; integer operands keep
+the `Cmp*` opcodes. `AdapterLive.aum` now also requires `-2.0 < -1.0` and
+`0.0 = -0.0` and `scaled32 = factor` (the widening path) before returning its
+bits, so a comparison still on the opcodes returns 0 with every other leg
+passing; `test/JitTest.ml` pins each primitive (11 cases: negative ordering both
+ways, the `<=`/`>=` boundaries, `0.0 = -0.0`, `0.0 ≠ -0.0`, NaN `=`/`≠`/`<`,
+and two Float32 widen cases).
+
+**A `Nat64` literal above 2^63-1 compiled to `0`.** Both lowering paths decoded
+integer literals with `try Int64.of_string s with _ -> 0L`, and `Int64.of_string`
+rejects every unsigned literal above 2^63-1 — so a legal `Nat64` such as
+`9223372036854775809` became the constant `0` in the CPS, silently. The literal's
+text is the value: in the one-word model it is its two's-complement word
+(`0x8000_0000_0000_0001`), so `Util.int_literal_word` now decodes the whole
+unsigned 64-bit range exactly (leading zeros stripped, hex/octal/binary and
+signed forms still through `Int64.of_string`) and *refuses* a literal outside
+the range instead of wrapping it. Measured by diffing the emitted CPS: before,
+the `Int_lit` operand was `00 00 00 00 00 00 00 00`; after, `01 00 00 00 00 00
+00 80`. Pinned by `test/CpsCodecTest.ml`'s `integer literal words cover the
+unsigned range` (2^63, 2^63+1, 2^64-1, sign and hex forms, and the two
+out-of-range refusals), which is the same table the `Int_lit` opcode lives in.
+
+**Unsigned widths, live.** `AdapterLive.aum` now carries the `Nat32`/`Nat64`
+half of U11 step 1 through the real ABI: `rs_u32_low(0xFFFF_FFFF): Nat32` returns
+`0xFFFF` (the `U32` decode refuses a word above `u32::MAX`, so a truncated or
+sign-extended read is a different number), and `rs_u64_high(2^63+1): Nat32`
+returns `0x8000_0000` — the full 64-bit word whose sign bit is set, narrowed by
+the wrapper's `U32` result encode. Both are checked inside the module before it
+returns its RESULT, so a `U64` parameter narrowed to 32 bits or sign-extended
+returns 0 with every other leg passing. The lane's wrapper count rose 6 → 8 and
+the grants name the two new `__adapter` symbols.
+
+**A failed CPS JIT compile is now a hard error, not a printed warning.** A module
+whose JIT compile fails has no runnable function, yet the compile used to print
+`CPS JIT: Compilation error: …` and exit 0 (the C backend output is still
+produced, which is why the old path looked successful). Measured on
+`AdapterLive.aum` compiled without the wrappers loaded: exit 0 before, exit 255
+now, with a diagnostic naming the unresolved symbol and the three ways a symbol
+can be missing (`rs_*` adapter, `uk_*`/`uz_*` kernel, `au_*` primitive).
+`CPS_JIT_ADVISORY=1` is the one opt-out, and only the umbrella's front-end run
+sets it: that stage wants the CPS artifact and the descriptor, cannot see the
+adapters it will build next, and compiles the CPS again itself once they are
+loaded (stage 3.5). Its stderr still carries the compiler's error line, so the
+advisory run reports what it tolerated instead of hiding it.
+
+### U12 (bounded start) — the buffer descriptor's conventions
+
+`umbrella/src/interface.rs` reads and validates an `abi buffer 1` block, so the
+buffer layout is a checked contract before any emitter writes one. What it
+fixes, and refuses anything else about:
+
+* `params <n>` — total parameter count; every index is a parameter index.
+* `lengths Nat64|Int64` — the length is a **separate 64-bit parameter**, named
+  by index in each `buffers` entry. A 32-bit length is refused (a buffer above
+  4 GiB would wrap), and no length is ever inferred from a pointer or an
+  allocation.
+* `buffers mode:buffer:length,…` — `mode` is `read`, `write` or `readwrite`;
+  the buffer and length indices must be in range, distinct, and each buffer
+  appears once. Capacity is the length: a `write` buffer's length is what the
+  caller granted.
+* `empty null-len0` — the only empty convention defined: length 0 means empty
+  and only then may the pointer be null; length > 0 requires a non-null pointer
+  covering at least that many bytes. A non-null pointer alone is never enough.
+  A different convention needs its own ABI version, and an absent `empty` line
+  is an error rather than a default.
+* `returns` — a scalar, not `Unit`.
+
+`abi scalar` blocks in the same document are skipped, so one descriptor file
+can describe both kinds. **No emitter writes `abi buffer` blocks yet**: the CPS
+lowering refuses a buffer in an adapter-mediated signature
+(`rust_adapter_buffer_unsupported`), precisely because this layout has no word
+encoding. Fixing the reader first is what makes the layout a contract instead
+of a guess. Tests: `the buffer block round-trips through its canonical text`,
+`scalar and buffer blocks share one document`, and three refusal tests (mode,
+length type, index/duplicate rules, empty convention, ABI version).
+
 **Still not carried:**
-Float **comparisons** are unchanged for both widths:
-`MComparison` lowers to the integer `CmpLt`/`CmpGt`/… on the bit words, which
-orders positive floats correctly and negative ones backwards, and never treats
-NaN specially. Only literals, mediated calls and Float64 arithmetic carry a
+Only literals, mediated calls, Float64 arithmetic and float comparisons carry a
 float; a Float32 that goes through a slot or a record field is still one opaque
-word, so nothing in the JIT checks the width for you.
+word, so nothing in the JIT checks the width for you, and a Float32 comparison
+is correct because widening cannot fail, not because the width was checked.
