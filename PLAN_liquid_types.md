@@ -1407,6 +1407,10 @@ while the other two L11a pins still pass; it also requires the unmutated copy to
 pass all three, so a control that failed for an unrelated reason cannot read as
 success. Writing it found a weak pin (it compared against the *last* `dump m;`,
 so an extra early dump still passed); the pin now compares against the first.
+The control is itself pinned by the gate (`L11a: the ordering pin has a negative
+control`, and `… moves the copy through the gate's own hook`, which asserts that
+the script uses `AUSTRALVM_LIQUID_CHECK=` and that the gate reads it), since the
+gate cannot run a script that runs the gate.
 
 ### L11b — Elaborate and convert a small sorted index language
 
@@ -1495,6 +1499,20 @@ suite on it, so the failure that actually matters — leaving a loosened
 was tested by making both mutations no-ops: `the mutation did not apply (true)`,
 `(false)`, `FAILED`, exit 1. Needs `dune`, so it runs under
 `nix develop "git+file://$PWD#ocaml"`.
+
+Both controls are wired into the gate, because a control nothing runs on the
+default path is a claim about a script rather than evidence. `verify-invariants`
+cannot *run* them — the L11a control runs the gate itself and the L11b control
+needs `dune`, which lives only inside the OCaml shell — so it pins the wiring:
+that each script exists and is executable, that the L11a control reaches the
+pin through `AUSTRALVM_LIQUID_CHECK` (the same hook the gate reads), that the
+L11b control's mutation anchor is the rule `LiquidIndex.ml` really declares, and
+that the in-place control re-hashes the tree after restoring it. The anchor pin
+is the load-bearing one: rename the rule without updating the control and the
+control exits early on its own "expected exactly one conversion rule" check,
+which no default path would run — the gate reports it instead. Five checks total;
+their behaviour is measured by running the controls, and that is what the
+`baseline`/`permissive`/`austere`/`restored` lines above record.
 
 ### L11c — Check indexed contracts at calls and in branches
 

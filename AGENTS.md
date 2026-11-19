@@ -434,7 +434,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `AUSTRALVM_LIQUID_CHECK`) to exit 1 with exactly `[FAIL] L11a: the liquid pass
   runs the index-closure audit before emitting`, the other two L11a pins still
   passing; the unmutated copy must pass all three first. Writing it exposed a
-  weak pin, which now compares against the *first* `dump m;`.
+  weak pin, which now compares against the *first* `dump m;`. The gate pins this
+  control's wiring (`L11a: the ordering pin has a negative control`, `… moves the
+  copy through the gate's own hook`) because the gate cannot run the control —
+  the control runs the gate.
 - `scripts/l11b-conversion-drift-control` — the L11b negative control: it
   rewrites `LiquidIndex.ml`'s single `convert` decision line twice in place
   (restored by a trap, re-hashed, suite re-run) and requires the real suite to
@@ -445,7 +448,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   link of the module is not possible; the restore is asserted, not assumed. It
   needs `dune`, so run it under `nix develop "git+file://$PWD#ocaml"`. Its own
   control: making both mutations no-ops reports `the mutation did not apply`
-  and exits 1.
+  and exits 1. The gate pins its wiring too (`L11b: the conversion pin has a
+  negative control`, `… mutates the rule LiquidIndex declares`, `… re-checks the
+  tree after restoring`), and the anchor pin is the load-bearing one: rename the
+  rule in `LiquidIndex.ml` without updating the control and the control exits
+  early on its own "expected exactly one conversion rule" check, which nothing
+  on the default path would run — the gate now says so instead.
 - `scripts/w3-emitter-drift-control` — the §W3 negative control that goes through
   the gate itself: it rewrites `isa`'s emitter cell in a copy of the plan to name
   a command `EMITTERS` does not hold for that row and requires
@@ -504,12 +512,21 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `copy` row, `W3: $_stem matches its approved statements`, is
   `w3-approved-row`: it copies the whole approved root into scratch and weakens
   one approved axiom there, so the check runs without the tree holding any new
-  approval.
-  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
-  read-only `*-drift-control` scripts the same way, then `obj-drift-control`
-  alone (it edits the tree and rebuilds), and `make test` depends on it. The two
+  approval. `liquid-golden` is the one case conditional on the shell: the gate
+  guards that check on `command -v why3` and reports it as an explained `[gap]`
+  when the prover is absent, so the drifted copy has no `[FAIL]` to produce. The
+  case then prints `[gap] liquid-golden: why3 not on PATH …` and the summary
+  reads `13 case(s) held, 1 not covered in this shell` — never a silent pass,
+  which is what lets `make test` run past `drift-controls` under
+  `nix develop .#ocaml` (where the `default` shell that carries why3 does not
+  build).
+  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the seven
+  read-only `*-drift-control` scripts the glob matches (`obj-drift-control` is
+  the eighth and runs alone, because it edits the tree and rebuilds), and
+  `make test` depends on it. The two
   parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
-  (2026-11-18; the second half alone 22m44s → 17m22s). It never
+  (2026-11-18, before the two L11 controls joined the loop; the ~30% saving is
+  the point, not the wall clock). It never
   writes `mm0/approved/` — the approval a case needs lives in a scratch root — so
   no control can approve.
 - `docs/data/w3/probes.tsv` — the measured probe evidence (retired emitter,

@@ -34,6 +34,15 @@
 # cannot be reached without an owner commit. That is stated rather than faked —
 # a control that wrote `mm0/approved/` would be self-approval.
 #
+# One case is conditional on the shell: `liquid-golden` needs why3, because the
+# gate *guards* the pinned-golden check on `command -v why3` and reports it as an
+# explained `[gap]` when the prover is absent. Rather than fail (a false
+# negative) or pass (a false positive), the case reports `[gap] not covered in
+# this shell` and the summary counts it separately. In `nix develop .#ocaml` on
+# this aarch64 host that is the expected state — the `default` devShell carries
+# why3 but does not build (`alt-ergo`, see AGENTS.md) — so `make test` now runs
+# past `drift-controls` there with the gap named instead of stopping.
+#
 # Usage: scripts/w3-drift-controls [-j N] [case|all]   (default -j 1, or
 #          $W3_DRIFT_JOBS; `make drift-controls` passes -j $(nproc))
 #        scripts/w3-drift-controls --list
@@ -46,6 +55,10 @@ GATE="$ROOT/scripts/verify-invariants"
 
 say()  { printf '%s\n' "$*"; }
 fail() { printf 'w3-drift-controls: FAIL %s\n' "$*" >&2; }
+# A case this shell cannot exercise. It is reported as a `[gap]` — counted, named
+# in the summary, and never as a hold — because a case that silently `return 0`s
+# would make `make drift-controls` green for the wrong reason.
+skip() { printf 'w3-drift-controls: [gap] %s: %s\n' "$CASE" "$*"; touch "$cw/skipped"; }
 
 command -v python3 >/dev/null 2>&1 || {
     say "w3-drift-controls: [gap] python3 not on PATH — run this under 'nix develop'"
@@ -227,6 +240,15 @@ PY
 }
 
 case_liquid-golden() {
+    # The gate's own condition, quoted rather than guessed: without why3 it
+    # reports both golden checks as explained gaps, so the drifted copy produces
+    # no `[FAIL]` for this case to require and no `[pass]` to protect. The case is
+    # not covered here, and says so; a prover-less shell cannot produce this
+    # evidence, and `make test` must not read that as a passing control.
+    if ! command -v why3 >/dev/null 2>&1; then
+        skip "why3 not on PATH, so the pinned-golden check is an explained [gap]; this control is not covered in this shell (run it under the default devShell, which carries why3)"
+        return 0
+    fi
     cp "$ROOT/lib/liquid/LiquidMeasure.ml" "$cw/LiquidMeasure.ml"
     printf '\n(* drifted by scripts/w3-drift-controls *)\n' >> "$cw/LiquidMeasure.ml"
     gate_run "$cw/g" AUSTRALVM_LIQUID_GOLDEN="$cw/LiquidMeasure.ml" || true
@@ -307,7 +329,13 @@ report_case() {  # print a finished case's report, return its status
     say ""
     say "== $c (${secs}s)"
     cat "$cw/report" 2>/dev/null
-    if [ "$rc" -eq 0 ]; then say "  holds"; else fail "$c: the control did not hold"; fi
+    if [ -f "$cw/skipped" ]; then
+        say "  [gap] not covered in this shell (named above)"
+    elif [ "$rc" -eq 0 ]; then
+        say "  holds"
+    else
+        fail "$c: the control did not hold"
+    fi
     return "$rc"
 }
 
@@ -349,8 +377,12 @@ if [ "$what" = all ]; then
     SECONDS=0
     printf '%s\n' $CASES | run_all || status=1
     say ""
-    if [ "$status" -eq 0 ]; then
-        say "w3-drift-controls: $(printf '%s\n' $CASES | wc -l) case(s) held in $((SECONDS / 60))m$((SECONDS % 60))s with -j $JOBS"
+    skipped=$(ls -1 "$work"/*/skipped 2>/dev/null | wc -l)
+    total=$(printf '%s\n' $CASES | wc -l)
+    if [ "$status" -eq 0 ] && [ "$skipped" -gt 0 ]; then
+        say "w3-drift-controls: $((total - skipped)) case(s) held, $skipped not covered in this shell, in $((SECONDS / 60))m$((SECONDS % 60))s with -j $JOBS"
+    elif [ "$status" -eq 0 ]; then
+        say "w3-drift-controls: $total case(s) held in $((SECONDS / 60))m$((SECONDS % 60))s with -j $JOBS"
     else
         say "w3-drift-controls: at least one case did not hold" >&2
     fi

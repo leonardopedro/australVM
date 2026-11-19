@@ -297,7 +297,7 @@ currently indefensible:
 
 ```
 $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 146 passed, 8 explained gap(s), 0 failed
+verify-invariants: 151 passed, 8 explained gap(s), 0 failed
   [pass] W9: mm0/clif.mm0 + .mm1 accepted by mm0-rs + mm0-c
   [pass] W9: the CLIF model still claims no theorem
   [pass] W9.3: clif_step is vocabulary — declared, stated, never axiomatized
@@ -380,7 +380,7 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: comparator self-test (all three negative controls refuse)
 
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 145 passed, 9 explained gap(s), 0 failed
+verify-invariants: 150 passed, 9 explained gap(s), 0 failed
   # + W9.1 (no lean shell) and the Lean halves of W9.3 are explained gaps here;
   # python3 comes from the OCaml shell, so the scripts run.
 $ bash scripts/isa-census --corpus | head -1
@@ -398,7 +398,7 @@ $ nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls cert-app
   holds                                                      # exit 0, run alone
 ```
 
-The two gate numbers are the same 154 checks: the `lean` shell closes one gap the
+The two gate numbers are the same 159 checks: the `lean` shell closes one gap the
 `ocaml` shell cannot (W9.1) and the rest stay explained. The block previously
 recorded `150 passed, 4 explained gap(s)`; the four §W3 approvals are still the
 owner's pending decision, and the other four of today's gaps are W5's object
@@ -415,8 +415,12 @@ not this measurement: `drift-controls` runs first and its `liquid-golden` case
 requires the pinned-golden check to turn red, but under `.#ocaml` that check is
 an explained `[gap]` (no why3 extraction), so the mutation has nothing to trip —
 the `default` shell that carries the provers cannot be built on this aarch64
-host (`alt-ergo`, see AGENTS.md). The `cert-approved` case *did* hold when run
-alone (a transient `SIGTERM` in the batch run, `exit 143`, was not reproducible).
+host (`alt-ergo`, see AGENTS.md). The case now reports itself as
+`[gap] liquid-golden: why3 not on PATH …` and the run says
+`13 case(s) held, 1 not covered in this shell` instead of failing; that leaves
+`make test` honest rather than green-for-the-wrong-reason. The `cert-approved`
+case *did* hold when run alone (a transient `SIGTERM` in the batch run,
+`exit 143`, was not reproducible).
 Everything after `drift-controls` in `make test` — `dune build @runtest` and the
 test-program runner — is therefore **not covered by this re-measurement**; the
 suites were run directly for the L11 work (`dune runtest`, 161 tests) and for the

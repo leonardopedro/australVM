@@ -2907,6 +2907,33 @@ check "L11b: the sorted index language has its own test suite" \
 check "L11b: the sorted index test does not drive the compiler" \
     bash -c "! awk '/^ \\(names LiquidIndexTest\\)/ { c=3 } c>0 { print; c-- }' '$repo_root/test/dune' | grep -q 'austral.exe'"
 
+# --- L11a/L11b: the two drift controls are wired to what they drift ---
+#
+# The gate cannot run these controls: `l11a-ordering-drift-control` runs the gate
+# again, twice, and `l11b-conversion-drift-control` needs `dune`, which exists
+# only inside the flake's OCaml shell — this script has to stay runnable by
+# python3 alone. So what is pinned here is the wiring that makes each control
+# evidence rather than decoration: the script exists and is executable, it drives
+# the suite or hook it claims, and the anchor it mutates is one the tree really
+# has. The last point is the one a passing control cannot notice by itself: if
+# the rule in `LiquidIndex` is renamed and the control is not, the control exits
+# early with "expected exactly one conversion rule" — a red *control*, which
+# nothing on the default path runs. Pinning the anchor makes that a red gate.
+check "L11a: the ordering pin has a negative control" \
+    test -x "$repo_root/scripts/l11a-ordering-drift-control"
+
+check "L11a: the ordering control moves the copy through the gate's own hook" \
+    bash -c "grep -q 'AUSTRALVM_LIQUID_CHECK=' '$repo_root/scripts/l11a-ordering-drift-control' && grep -q '_liquid_check=' '$repo_root/scripts/verify-invariants'"
+
+check "L11b: the conversion pin has a negative control" \
+    test -x "$repo_root/scripts/l11b-conversion-drift-control"
+
+check "L11b: the conversion control mutates the rule LiquidIndex declares" \
+    bash -c "grep -qxF '     if canonical na = canonical nb then Convertible' '$repo_root/lib/liquid/LiquidIndex.ml' && grep -qF 'if canonical na = canonical nb then Convertible' '$repo_root/scripts/l11b-conversion-drift-control'"
+
+check "L11b: the conversion control re-checks the tree after restoring" \
+    bash -c "grep -q 'sha256sum' '$repo_root/scripts/l11b-conversion-drift-control' && grep -q 'restore' '$repo_root/scripts/l11b-conversion-drift-control'"
+
 # --- L11c: the range-wrapper pilot --------------------------------------------------
 #
 # The pilot is opt-in by shape (a `base`/`off`/`len` record, grounded measures, a

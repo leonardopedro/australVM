@@ -6,9 +6,16 @@
 # `run.sh` links one cell at a time against runtime stubs. Here `DoubleApp`
 # imports `double` from `MathLib`: its cell carries that import and one call
 # relocation, so loading it alone must fail with an unresolved symbol. Loading
-# it with `--provider mathlib.avm` resolves the call to the provider's real
-# image base (owner base + 0x01000000), maps both texts in the executor, and
-# returns 84.
+# resolving the owner's plan dependency (`--plan … --for doubleapp --cells`)
+# adds `mathlib.avm` as a provider, verified against the builder key from the
+# build report, and the call resolves to the provider's real image base (owner
+# base + 0x01000000); both texts are mapped in the executor and it returns 84.
+#
+# A provider without `--key`, and one signed by another builder, are refused.
+#
+# The second half compiles a mutually-referencing pair: the owner's `tick` is
+# called back from the provider's `compute`, so loading either cell alone
+# misses a symbol and only the linked image returns 53.
 #
 # The modules are compiled separately on purpose. The CPS emitter writes the
 # functions of one module per output, so building the provider and the owner
@@ -88,9 +95,16 @@ echo "== derivations (owner depends on the provider)"
 
 echo "== images (avm-pkg build from each CPS image)"
 "$AVM_PKG" --store "$STORE" init >/dev/null
-"$AVM_PKG" --store "$STORE" build "$WORK/math.cps" \
+# The build report names the public half of the signing key. `load` verifies
+# provider cells against it, so a provider cannot be swapped by layout alone.
+math_out=$("$AVM_PKG" --store "$STORE" build "$WORK/math.cps" \
   --plan "$WORK/plan.json" --for mathlib --sign "$SEED" \
-  -o "$WORK/mathlib.avm" >/dev/null
+  -o "$WORK/mathlib.avm")
+KEY=$(printf '%s' "$math_out" | sed -n 's/.*"pubkey":"\([0-9a-f]\{64\}\)".*/\1/p')
+[ "${#KEY}" -eq 64 ] || {
+  echo "multi-cell.sh: build did not report a pubkey: $math_out" >&2
+  exit 1
+}
 "$AVM_PKG" --store "$STORE" build "$WORK/app.cps" \
   --plan "$WORK/plan.json" --for doubleapp --sign "$SEED" \
   -o "$WORK/app.avm" >/dev/null
@@ -112,10 +126,13 @@ if [ "$alone_rc" -eq 0 ] || ! printf '%s' "$alone" | grep -q 'unresolved symbol 
 fi
 echo "  [ok] without --provider: unresolved symbol \"double\" (exit $alone_rc)"
 
-echo "== execution (owner + provider cell, linked at load)"
+# The provider set is the plan closure: `--for doubleapp` names `mathlib`,
+# and `--cells` says where that derivation's cell lives.
+echo "== execution (owner + provider cell, resolved from the plan)"
 report=$("$AVM_PKG" --store "$STORE" load "$WORK/app.avm" \
   --policy "$POLICY" --base "$BASE" \
-  --provider "$WORK/mathlib.avm" \
+  --plan "$WORK/plan.json" --for doubleapp --cells "$WORK" \
+  --key "$KEY" \
   --resolve "$RESOLVE_MUL" \
   --exec "$WORK/exec-image")
 got=$(printf '%s' "$report" | sed -n 's/.*"stdout":"rax=\(-\{0,1\}[0-9]*\) f64_bits=.*/\1/p')
@@ -129,5 +146,116 @@ printf '%s' "$report" | grep -q "\"base\":\"$PROVIDER_BASE\"" ||
   { echo "  [fail] provider was not linked at $PROVIDER_BASE: $report" >&2; exit 1; }
 echo "  [ok] double(42) resolved in the provider image (base $PROVIDER_BASE) and returned 84"
 
+echo "== negative control (a provider without a key is refused)"
+set +e
+no_key=$("$AVM_PKG" --store "$STORE" load "$WORK/app.avm" \
+  --policy "$POLICY" --base "$BASE" \
+  --plan "$WORK/plan.json" --for doubleapp --cells "$WORK" \
+  --resolve "$RESOLVE_MUL" 2>&1)
+no_key_rc=$?
+set -e
+if [ "$no_key_rc" -eq 0 ] || ! printf '%s' "$no_key" | grep -q -- '--key'; then
+  echo "  [fail] a provider was accepted with no key (exit $no_key_rc):" >&2
+  printf '%s\n' "$no_key" >&2
+  exit 1
+fi
+echo "  [ok] provider without --key refused (exit $no_key_rc)"
+
+echo "== negative control (a provider signed by another builder is refused)"
+mkdir -p "$WORK/other"
+"$AVM_PKG" --store "$STORE" build "$WORK/math.cps" \
+  --plan "$WORK/plan.json" --for mathlib \
+  --sign 2222222222222222222222222222222222222222222222222222222222222222 \
+  -o "$WORK/other/mathlib.avm" >/dev/null
+set +e
+wrong_key=$("$AVM_PKG" --store "$STORE" load "$WORK/app.avm" \
+  --policy "$POLICY" --base "$BASE" \
+  --plan "$WORK/plan.json" --for doubleapp --cells "$WORK/other" \
+  --key "$KEY" \
+  --resolve "$RESOLVE_MUL" 2>&1)
+wrong_key_rc=$?
+set -e
+if [ "$wrong_key_rc" -eq 0 ] || ! printf '%s' "$wrong_key" | grep -q 'signature'; then
+  echo "  [fail] a provider signed by another builder was accepted (exit $wrong_key_rc):" >&2
+  printf '%s\n' "$wrong_key" >&2
+  exit 1
+fi
+echo "  [ok] provider signed by another builder refused (exit $wrong_key_rc)"
+
+# ── callback: the provider calls back into the owner ─────────────────────
+#
+# Owner `Callback` defines `tick` and `main`, and calls `compute`; provider
+# `Wave` defines `compute` and calls `tick`. They reference each other, so
+# each cell's text is relocated against the other's symbols at load.
+#
+# Module-level imports have to be acyclic, so each side declares its callee as
+# a foreign symbol (`@@ Foreign_Import`) with the symbol name the other cell
+# exports, and each cell is compiled on its own. The CPS JIT logs an
+# unresolved-symbol diagnostic while compiling a cell whose callee lives in
+# the other cell; it does not affect CPS emission (the file is written before
+# the JIT step), and the load below resolves the symbol for real. The script
+# records the diagnostic in a log instead of letting it read as a failure.
+CB=$WORK/callback
+mkdir -p "$CB"
+echo "== callback: compiling the mutually-referencing pair"
+"$AVM_AUSTRAL" compile "$DIR/Callback.aui,$DIR/Callback.aum" \
+  --target-type=c --no-entrypoint --output="$CB/owner.c" \
+  --use-cps-jit --allow-all --emit-cps="$CB/owner.cps" >/dev/null 2>"$CB/owner.err"
+"$AVM_AUSTRAL" compile "$DIR/Wave.aui,$DIR/Wave.aum" \
+  --target-type=c --no-entrypoint --output="$CB/wave.c" \
+  --use-cps-jit --allow-all --emit-cps="$CB/wave.cps" >/dev/null 2>"$CB/wave.err"
+for f in "$CB/owner.cps" "$CB/wave.cps"; do
+  [ -s "$f" ] || { echo "  [fail] no CPS emitted at $f" >&2; exit 1; }
+done
+printf '  [ok] owner.cps (imports compute) and wave.cps (imports tick)\n'
+printf '        [note] cross-cell diagnostics: %s, %s\n' \
+  "$(sed -n 's/.*can.t resolve symbol \(.*\).*/\1/p' "$CB/owner.err" | head -1)" \
+  "$(sed -n 's/.*can.t resolve symbol \(.*\).*/\1/p' "$CB/wave.err" | head -1)"
+
+{
+  printf '{ "derivations": [\n'
+  printf '  { "name": "wave", "version": "1.0.0", "builder_symbol": "austral.translate",\n'
+  printf '    "dependencies": [], "sources": [], "env_vars": [], "totality": "proven" },\n'
+  printf '  { "name": "callback", "version": "1.0.0", "builder_symbol": "austral.translate",\n'
+  printf '    "dependencies": ["wave"], "sources": [], "env_vars": [], "totality": "proven" }\n'
+  printf '] }\n'
+} > "$CB/plan.json"
+
+"$AVM_PKG" --store "$STORE" build "$CB/wave.cps" \
+  --plan "$CB/plan.json" --for wave --sign "$SEED" \
+  -o "$CB/wave.avm" >/dev/null
+"$AVM_PKG" --store "$STORE" build "$CB/owner.cps" \
+  --plan "$CB/plan.json" --for callback --sign "$SEED" \
+  -o "$CB/callback.avm" >/dev/null
+
+echo "== callback negative control (owner alone misses compute)"
+set +e
+cb_alone=$("$AVM_PKG" --store "$STORE" load "$CB/callback.avm" \
+  --policy "$POLICY" --base "$BASE" --key "$KEY" \
+  --resolve 'Austral.Pervasive::trappingAdd=0x20000000' 2>&1)
+cb_alone_rc=$?
+set -e
+if [ "$cb_alone_rc" -eq 0 ] || ! printf '%s' "$cb_alone" | grep -q 'unresolved symbol "compute"'; then
+  echo "  [fail] owner without the provider did not miss compute (exit $cb_alone_rc):" >&2
+  printf '%s\n' "$cb_alone" >&2
+  exit 1
+fi
+echo "  [ok] without the provider: unresolved symbol \"compute\" (exit $cb_alone_rc)"
+
+echo "== callback execution (owner -> provider -> owner)"
+cb=$("$AVM_PKG" --store "$STORE" load "$CB/callback.avm" \
+  --policy "$POLICY" --base "$BASE" \
+  --plan "$CB/plan.json" --for callback --cells "$CB" --key "$KEY" \
+  --resolve 'Austral.Pervasive::trappingAdd=0x20000000' \
+  --exec "$WORK/exec-image")
+cb_got=$(printf '%s' "$cb" | sed -n 's/.*"stdout":"rax=\(-\{0,1\}[0-9]*\) f64_bits=.*/\1/p')
+[ -n "$cb_got" ] || { echo "multi-cell.sh: no value in: $cb" >&2; exit 1; }
+if [ "$cb_got" != 53 ]; then
+  echo "  [fail] tick(42)=52 in the owner and +1 in the provider should be 53, got $cb_got" >&2
+  printf '%s\n' "$cb" >&2
+  exit 1
+fi
+echo "  [ok] provider's compute(42) called owner's tick and returned 53"
+
 echo
-echo "store: $STORE   cells: $WORK/{mathlib,app}.avm"
+echo "store: $STORE   cells: $WORK/{mathlib,app}.avm and $CB/{wave,callback}.avm"
