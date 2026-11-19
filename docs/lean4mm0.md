@@ -3861,3 +3861,44 @@ re-run in shared mode for this section: its projection (~3.2 GB instead of 90.7 
 follows from the same 96.5 % measured on FockPair and from the record format, which
 has no other difference, and §13.39's goldens are the guard against that changing
 quietly.
+
+### 13.41 The ns row under 6 GiB: peak 6 068 MiB, at the last obligation
+
+§13.36 bounded the write path at a 10 GiB cap (6 068 MiB peak) and left the natural
+question: how much of 10 GiB does the row actually need? The answer, measured, is
+almost all of 6 GiB.
+
+The full row (`LTP_OBLIG_SHARE=1`, `LTP_OBLIG_CHUNK=2147483648`,
+`LTP_EXPRS_CACHE=20000`, `--spine`) under `ulimit -v 6291456` (6 GiB), sampled every
+second:
+
+| | |
+| --- | ---: |
+| exit | 0 |
+| elapsed | 5 392.0 s |
+| peak VmSize | **6 068 MiB** (at t = 5 241 s) |
+| peak VmRSS | 5 999 MiB |
+| headroom under the cap | 76 MiB |
+| obligations / parts / stream | 580 / 43 / 90 676 132 250 B |
+| `.mm0` vs the 10 GiB run | `cmp`: identical (102 543 367 789 B) |
+
+Two things this settles.
+
+**The cap was never the constraint — the single write was.** Every sample from the
+2.3 GiB plateau on is below the 10 GiB peak, and the peak arrives at the *last*
+obligation, 151 s before the run ends: it is the goal statement, whose λ domain is the
+2.2 GB term §13.36 made streamable. Before that fix the same run raised `MemoryError`
+at 10 GiB, because one piece held the string and its encoding at once; 6 GiB now
+survives where 10 GiB did not, which is the difference between a bounded write and a
+bigger ceiling.
+
+**That is not a margin to tighten.** 76 MiB of 6 144 is what is left, and it is left
+because the peak is a single term, not a slow accumulation: a 5.5 GiB cap would not
+degrade gracefully, it would fail at obligation 580 — after 5 000 s of work. The
+10 GiB cap stays the documented recommendation; 6 GiB is the measured floor, and it is
+a floor with no cushion.
+
+The row's artifacts were verified before the space was reclaimed: `.mm0` (and the
+205 GB of shared parts) were `cmp`'d against the 10 GiB run's copies, then deleted,
+leaving the logs, `rss.tsv`, manifest and index (9.7 GB of ZFS-compressed parts
+included in `du`; the stream is 90.7 GB before compression).

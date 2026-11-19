@@ -1,11 +1,17 @@
 # Austral-authored GPU kernels: implementation plan
 
-**Status, 2026-11-18.** G00–G09 are recorded as implemented. The compiler emits
-validated WGSL bundles, and the device runner has a recorded Vulkan adapter
-probe. Start with G10 for dispatch and readback. G11–G23 remain pending,
-including the optional MLIR backend. See the [execution record](docs/gpu/EXECUTION.md).
+**Status, 2026-11-19.** G00–G15 have implementation records. Generated WGSL
+has run on physical Vulkan adapters. The local GPU service has a linear job
+API and recorded completion callbacks. G13's per-bundle MM0 certificate and
+G16–G23 remain open. See the [execution record](docs/gpu/EXECUTION.md).
 
-Read [the research review](docs/GPU_KERNEL_REVIEW.md), then the proposed
+**Next patch for the executor** is G17a in the [next implementation steps](docs/gpu/NEXT_STEPS.md).
+That continuation gives the researched Bend-inspired integer fold and reduction,
+the optional MLIR backend over existing KernelIR, and a staged proof/host plan.
+Use its order and patch sizes for remaining work. The G-series cards below
+retain the milestone-level acceptance criteria.
+
+Read [the research review](docs/GPU_KERNEL_REVIEW.md), then the
 [v1 contract](docs/gpu/KERNEL_V1.md). The original programme is
 [unfer/GPU.md](../unfer/docs/GPU.md) and its partially implemented follow-up,
 [timepiece/GPU_FEDERATION_PLAN.md](../timepiece/GPU_FEDERATION_PLAN.md).
@@ -43,9 +49,9 @@ Proof-producing compilation is a first-class companion workstream:
 [PLAN_proof_chain.md](PLAN_proof_chain.md) and its
 [design contract](docs/PROOF_CHAIN.md) specify reusable MM0 application theorems,
 representation semantics, lowering certificates and typed residual obligations
-across CPU/GPU/NPU branches. Reserve these interfaces in G02 instead of attaching
-an unstructured proof-status label after code generation. Native instruction
-coverage remains the long-term goal; an IR proof is an explicitly earlier cut.
+across CPU/GPU/NPU branches. Extend the existing subjects and evidence statuses
+when adding a target. Native instruction coverage remains the long-term goal.
+A proof at KernelIR establishes properties at that representation.
 
 This is a compiler/backend project. NPU-specific lowering, distributed
 scheduling, FreeToken, automatic tensor partitioning, arbitrary Rust imports,
@@ -65,10 +71,9 @@ requirements. The [distributed plan](PLAN_distributed_security.md) and
 | M5: native backend option | G19–G21 | Pinned MLIR path and measured NVIDIA launch ABI/hardware execution |
 | M6: parallel kernel extensions | G22–G23 | Explicit address/layout/barrier model and measured multiple-device dispatch |
 
-M0–M2 are the default execution scope. M3–M6 are ordered extensions with their
-own acceptance boundaries; do not start all backends and optimizations together.
-If hardware is unavailable, finish CPU-validatable work, record the hardware gap,
-and keep M2 incomplete. An empty dispatch or software adapter does not close it.
+M0–M2 are the baseline for the next phase. M3 has implementation evidence and
+an open MM0 boundary. The continuation stages M4–M6 in small independent lanes
+and names the hardware and proof evidence each still needs.
 
 M2 is an execution-tested kernel release, not completion of the compositional
 proof goal. Coordinate PC00/PC01 with initial interface work; PC02–PC07 can build
@@ -626,24 +631,23 @@ physical error certificate unless separately established.
 
 ### G17 — Add one bounded iteration/composite extension
 
-**Depends:** G16. **Size:** medium; finish one subtask before another.
+**Depends:** G12 for the integer pilot. **Size:** two small patches.
 **Files:** versioned `docs/gpu/` extension contract; GPU IR/validator/emitter;
 source/CPU/device fixtures.
 
-First add fixed-size, explicitly laid-out numeric records/arrays only if the
-chosen example needs them. Do not reuse host OCaml/Rust/C layouts: define offsets,
-alignment, padding and WGSL address space, then test serialized byte fixtures.
-After that, admit one static bounded scalar iteration with at most 1024 steps
-per invocation and a total work budget; reject dynamic/unproved bounds.
+Use the integer fold first. G17a checks one typed private accumulator loop
+with a literal bound. G17b expands it into immutable KernelIR bindings with a
+work budget. The opt-in frontend profile limits the first implementation to
+32 iterations. Add fixed-size composite values only when a demonstrated
+workload needs them, with explicit GPU layout and byte fixtures.
 
-This is a separate kernel profile, not a weakening of Liquid's total fragment
-or permission for arbitrary `while`. Keep all outputs independent, without
-shared memory or barriers. Demonstrate a real finite fold (e.g. a fixed small
-polynomial/complex pointwise transform) authored in Austral.
+The opt-in applies at GPU source admission and keeps Liquid's total fragment
+as specified. Use independent outputs and private accumulators. Demonstrate a
+finite Austral-authored fold, such as a small modular transform.
 
-**Accept:** representation/iteration source cases agree with CPU and GPU oracles;
-changing a field offset or iteration count is caught; oversized/unproved loops
-refuse. This does not yet implement a multi-workgroup reduction.
+**Accept:** the source, C and GPU agree with the hand count. An iteration-count
+mutation changes the result. Oversized or unproved loops refuse. The
+multi-workgroup reduction is tracked by G22.
 
 ### G18 — Exercise one existing unfer workload [SYNC]
 
@@ -741,13 +745,14 @@ native blob digest cannot satisfy a native-proof-required profile.
 
 ### G22 — Add a constrained tiled/shared-memory profile
 
-**Depends:** G13,G17 and a working selected backend. **Size:** multiple small
-patches, each with its own versioned contract and negative cases.
-**Files:** new `docs/gpu/TILED_PROFILE.md`; typed address/memory-plan extension;
+**Depends:** G12,G13 and a working selected backend for the first integer map
+and reduction. G17 enables mappers containing a bounded fold. **Size:** three
+initial patches with a versioned contract and negative cases.
+**Files:** new `docs/gpu/REDUCE_U32.md`; typed address/memory-plan extension;
 backend lowering; layout/obligation/test modules.
 
-Begin with one fixed tile operation; no arbitrary barrier intrinsic in otherwise
-unrestricted control flow. Model global/workgroup/private storage, indices,
+Begin with G22a–G22c's fixed modular map-and-sum operation. Place barriers in
+the generated schedule. Model global/workgroup/private storage, indices,
 active lanes and barrier participation. Padded inactive lanes must participate
 in required barriers rather than take the v1 early return before them. Validate
 workgroup storage and alignment from actual device limits.
@@ -766,7 +771,8 @@ No generalized optimal-layout or deadlock-freedom claim without its own proof.
 
 ### G23 — Add bounded independent dispatch across multiple devices
 
-**Depends:** G15 and one working device backend; no distributed-system expansion.
+**Depends:** G15a's lifecycle audit and fixes, plus one working device backend.
+The initial acceptance is local to one host.
 **Size:** medium. **Files:** runtime context selection, per-device queues/budgets;
 module/source integration fixtures; device tests.
 
@@ -812,10 +818,8 @@ owner-comparison workflow for proof statement approvals.
 
 Suggested prompt for the cheap executor:
 
-> Read AGENTS.md, PLAN_gpu_kernels.md, docs/GPU_KERNEL_REVIEW.md and the relevant
-> part of docs/gpu/KERNEL_V1.md. Inspect git status and the execution record.
-> Start at G10 if it is still pending. Use the execution record to pick up the
-> first pending task in M0–M2 whose dependencies are satisfied.
+> Read AGENTS.md, PLAN_gpu_kernels.md, docs/gpu/NEXT_STEPS.md and the execution
+> record. Start with G17a or the next eligible continuation card if it landed.
 > Keep the patch limited to the card, run its meaningful positive and refusal
 > tests, and update the evidence record with exact commands and limitations.
 > Continue with the next eligible task. If a tool/hardware prerequisite is absent,
