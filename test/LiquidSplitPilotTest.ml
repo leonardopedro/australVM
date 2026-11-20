@@ -50,6 +50,20 @@ let read_file path =
   close_in ic;
   s
 
+(* Tests run with cwd inside `_build`, so a fixture kept in the source tree
+   has to be found by walking up to the project root (same convention as
+   LiquidVCTest). *)
+let rec find_root (dir : string) : string =
+  let candidate = Filename.concat dir "test-programs/suites/024-liquid-split" in
+  if Sys.file_exists candidate then dir
+  else
+    let parent = Filename.dirname dir in
+    if parent = dir then
+      failwith "LiquidSplitPilotTest: cannot locate the project root"
+    else find_root parent
+
+let fixture path = Filename.concat (find_root (Sys.getcwd ())) path
+
 let compile ~(name : string) (source : string) : int * string =
   let dir = workdir () in
   (try Unix.mkdir dir 0o755 with _ -> ());
@@ -495,8 +509,7 @@ let suite =
     "emits evidence for the 001-accept-split fixture"
       >:: (fun _ ->
             let path =
-              Filename.concat "test-programs/suites/024-liquid-split"
-                "001-accept-split/Test.aum"
+              fixture "test-programs/suites/024-liquid-split/001-accept-split/Test.aum"
             in
             let rc, err, ev =
               compile_evidence ~name:"suite-001-window" (read_file path)
