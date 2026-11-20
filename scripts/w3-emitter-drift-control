@@ -110,17 +110,28 @@ if ! grep -F '§W3 emitter column:' "$work/gate.log" \
 fi
 say "detail:    isa(cell says 'scripts/toy-witness check', EMITTERS says 'scripts/isa-encdec check')"
 
-# ── 4. everything else in §W3 still passes ─────────────────────────────────
-missing=""
-while IFS= read -r want; do
-    grep -qF "$want" "$work/gate.log" || missing="$missing
-  $want"
-done <<'WANT'
-[pass] W3: the plan's §W3 stmts column matches what each artifact holds
+# ── 4. everything else in §W3 still passes (or moved for this same drift) ───
+# The drift is in `isa`'s emitter cell. While `isa` has no approved copy that
+# cell is read once (the cell check), so the approved-row re-run stays green;
+# once the owner approves it, that re-run reads the same cell to reproduce the
+# copy, so it moves too — the same one-cell drift, expected rather than
+# collateral. Which of the two happens is a fact about the tree, so it is read
+# from the tree instead of retyped.
+want="[pass] W3: the plan's §W3 stmts column matches what each artifact holds
 [pass] W3: every pending §W3 row's artifact re-derives into a staging
-[pass] W3: every approved §W3 row's emitter still produces its approved copy
-[pass] W3: stage-approvals' artifact list is the §W3 table's rows
-WANT
+[pass] W3: stage-approvals' artifact list is the §W3 table's rows"
+if [ -e "$ROOT/mm0/approved/isa.stmts" ]; then
+    want="$want
+[FAIL] W3: every approved §W3 row's emitter still produces its approved copy"
+else
+    want="$want
+[pass] W3: every approved §W3 row's emitter still produces its approved copy"
+fi
+missing=""
+while IFS= read -r wantline; do
+    grep -qF "$wantline" "$work/gate.log" || missing="$missing
+  $wantline"
+done <<< "$want"
 if [ -n "$missing" ]; then
     fail "the perturbation took other §W3 lines with it:$missing"
     exit 1

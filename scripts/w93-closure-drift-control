@@ -115,12 +115,16 @@ fi
 say "detail:    $detail"
 
 # ── 4. everything else still passes ────────────────────────────────────────
+# Matched without the counts parenthetical the gate appends (`(4 row(s), N from
+# mm0/approved/)`): N follows the tree's approvals, and a control that retyped
+# it would go red the day an artifact is approved while the check it names is
+# still green.
 missing=""
 while IFS= read -r want; do
     grep -qF "$want" "$work/gate.log" || missing="$missing
   $want"
 done <<'WANT'
-[pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
+[pass] W9.3: the composition table's counts match the files it records
 [pass] W9.3: an approved copy that drops an axiom fails the composition counts
 [pass] W3: the plan's §W3 stmts column matches what each artifact holds
 [pass] W3: every §W3 emitter cell names a real command

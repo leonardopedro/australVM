@@ -147,7 +147,7 @@ if ! grep -F '§W3 table vs measured:' "$work/gate.log" | grep -qF "$stem.stmts 
 fi
 say "detail:    $stem(says approved, but …/$stem.stmts does not exist)"
 
-# ── 4. the shape check still passes, and exactly five lines moved ──────────
+# ── 4. the shape check still passes, and exactly four lines moved ──────────
 missing=""
 while IFS= read -r want; do
     grep -qF "[pass] $want" "$work/gate.log" || missing="$missing
@@ -165,10 +165,13 @@ fi
 
 # The cell is what the numbers come from, so the checks that read the file it
 # names are expected to follow it. Spelled out so a run that moves *more* fails.
+# `a §W3 row that disagrees with mm0/approved/ is refused` is deliberately not
+# in the list: it is a self-contained probe (it builds its own scratch root and
+# perturbs its own table), so a plan-only drift leaves it green — which is the
+# separation that makes it evidence rather than a restatement of the table.
 grep '^\[FAIL\] ' "$work/gate.log" | sed 's/^\[FAIL\] //' > "$work/fails.txt"
 cat > "$work/expected.txt" <<'EXPECTED'
 W3: the plan's §W3 stmts column matches what each artifact holds
-W3: a §W3 row that disagrees with mm0/approved/ is refused
 W3: the plan's §W3 digest column matches the file it describes
 W3: every approved §W3 row's emitter still produces its approved copy
 W3: stage-approvals stages exactly §W3's pending rows (exit 0)
