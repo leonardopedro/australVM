@@ -644,7 +644,12 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   a missing file exits 2). `make test` does that every time without a second gate
   run: the control exports the log it just measured (`OBJ_DRIFT_GATE_LOG`), and
   `drift-controls` re-checks it as-is and again with the §W3 line grep-ed out,
-  which must be refused. The alternative — patching `lib/CpsGen.ml` for the
+  which must be refused. That whole target was measured end to end under
+  `.#ocaml` (2026-11-20, `DRIFT_JOBS=3`): 13 cases held and liquid-golden an
+  explained `[gap]` in 26m10s, the eight read-only controls held, obj-drift held
+  with `obj=b138fd6e…`→`699f228e…` and its two green lines intact, both
+  `--check-gate-log` directions silent, `make_exit=0`, tree restored.
+  The alternative — patching `lib/CpsGen.ml` for the
   minutes a gate run takes just to obtain such a log — is how commit `1f8ce68f`
   captured `List.rev` in the tree. The
   `nix-pkg` CI job also runs `verify-invariants` inside `.#ocaml` after the
