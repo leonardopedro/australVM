@@ -38,6 +38,14 @@ let workdir () =
   | Some p -> p
   | None -> Filename.concat (Filename.dirname Sys.executable_name) "split-scratch"
 
+(* Dune runs the test from its build directory, so the suite fixtures are found
+   through the executable's own location (`_build/default/test/...`), not the
+   caller's cwd. `test/dune` declares the `024-liquid-split` tree as a dep for
+   the same reason. *)
+let suite_fixture rel =
+  let build_root = Filename.dirname (Filename.dirname Sys.executable_name) in
+  Filename.concat (Filename.concat build_root "test-programs/suites/024-liquid-split") rel
+
 let write_file path contents =
   let oc = open_out_bin path in
   output_string oc contents;
@@ -494,10 +502,7 @@ let suite =
        copy in this file. `printLn` output stays the suite's concern. *)
     "emits evidence for the 001-accept-split fixture"
       >:: (fun _ ->
-            let path =
-              Filename.concat "test-programs/suites/024-liquid-split"
-                "001-accept-split/Test.aum"
-            in
+            let path = suite_fixture "001-accept-split/Test.aum" in
             let rc, err, ev =
               compile_evidence ~name:"suite-001-window" (read_file path)
             in
