@@ -1,0 +1,9 @@
+id	class	repo	path	status	evidence
+C01	identity	U	unfer_consensus/src/signing.rs	pending	-
+C02	identity	U	unfer_identity/src/lib.rs	pending	-
+C03	codec	U	unfer_protocol/src/durable.rs	pending	-
+C04	storage	U	unfer_consensus/src/net.rs	pending	-
+C05	capability	U	unfer_edge/src/caprpc.rs	pending	-
+C06	consensus	U	unfer_consensus/src/node.rs	pending	-
+C07	runtime	A	safestos/cranelift/src/auth.rs	pending	-
+C08	runtime	A	safestos/cranelift/src/module.rs	pending	-
