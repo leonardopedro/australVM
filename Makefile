@@ -169,10 +169,21 @@ drift-controls: | check-bridge-fresh
 	@printf '%s\n' $(READ_ONLY_CONTROLS) \
 	  | xargs -P $(DRIFT_JOBS) -I{} bash -c 'echo "--- {}"; bash {}'
 	@echo "--- scripts/obj-drift-control (edits the tree, rebuilds: serial)"
-	@bash scripts/obj-drift-control; rc=$$?; \
-	  if [ $$rc -eq 2 ]; then \
+	@obj_log="$$(mktemp)"; \
+	  OBJ_DRIFT_GATE_LOG="$$obj_log" bash scripts/obj-drift-control; rc=$$?; \
+	  if [ "$$rc" -eq 2 ]; then \
 	    echo "obj-drift-control: [gap] not exercised on this host (see above)"; \
-	  else exit $$rc; fi
+	    rc=0; \
+	  else \
+	    bash scripts/obj-drift-control --check-gate-log "$$obj_log" || rc=1; \
+	    grep -vF "[pass] W3: every §W3 emitter cell names a real command" "$$obj_log" \
+	      > "$$obj_log.stripped"; \
+	    if bash scripts/obj-drift-control --check-gate-log "$$obj_log.stripped" >/dev/null 2>&1; then \
+	      echo "obj-drift-control: FAIL its green assertions held on a log with the line removed" >&2; \
+	      rc=1; \
+	    fi; \
+	  fi; \
+	  rm -f "$$obj_log" "$$obj_log.stripped"; exit "$$rc"
 
 .PHONY: test
 test: $(BIN) drift-controls | check-bridge-fresh

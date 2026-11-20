@@ -204,6 +204,13 @@ fi
 # (the §W3 emitter registry and the trust-split pin) and neither reads the
 # certificate under test.
 require_greens "$work/gate.log"
+# `make test` re-runs these assertions against the log this run produced, once
+# as-is and once with a line removed, so the failing direction is exercised on
+# real evidence every time instead of by patching the emitter and waiting out a
+# gate run. Exported here because `$work` is deleted on exit.
+if [ -n "${OBJ_DRIFT_GATE_LOG:-}" ]; then
+    cp "$work/gate.log" "$OBJ_DRIFT_GATE_LOG"
+fi
 
 # ── 5. restore and confirm the pinned digests come back ────────────────────
 restore

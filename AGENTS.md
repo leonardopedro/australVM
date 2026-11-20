@@ -75,6 +75,13 @@ in-process via native `uk_*` symbols registered in the JIT.
   nix develop "git+file://$PWD#ocaml" -c make all     # or test / bridge
   ```
 
+  **Measured 2026-11-20 on an x86_64 host:** the default devShell builds here and
+  carries why3 1.8.2, z3 4.16.0 and alt-ergo 2.6.3, so `liquid-golden` is not a
+  gap in it — `scripts/w3-drift-controls liquid-golden` holds (258 s) and the
+  gate prints `174 passed, 5 explained gap(s), 0 failed`
+  (`docs/data/gate/2026-11-20-default-shell.log`), against `159 passed, 8
+  explained gap(s)` under `.#ocaml`, which ships no prover by design.
+
   `check-dune` (an order-only prerequisite of `$(BIN)` and `bridge`) refuses
   outside the shell and prints that command, because the alternative was a
   `dune: command not found` arriving after `make bridge` had already rebuilt
@@ -634,7 +641,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   without patching anything: `--check-gate-log <file>` runs the same assertions
   over an existing gate log and exits 1 naming the line that is absent (measured
   2026-11-20: the unmodified log exits 0, a log with the §W3 line removed exits 1,
-  a missing file exits 2). The alternative — patching `lib/CpsGen.ml` for the
+  a missing file exits 2). `make test` does that every time without a second gate
+  run: the control exports the log it just measured (`OBJ_DRIFT_GATE_LOG`), and
+  `drift-controls` re-checks it as-is and again with the §W3 line grep-ed out,
+  which must be refused. The alternative — patching `lib/CpsGen.ml` for the
   minutes a gate run takes just to obtain such a log — is how commit `1f8ce68f`
   captured `List.rev` in the tree. The
   `nix-pkg` CI job also runs `verify-invariants` inside `.#ocaml` after the
