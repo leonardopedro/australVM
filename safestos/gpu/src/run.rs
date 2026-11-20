@@ -97,6 +97,7 @@ mod device_path {
         pub output: Vec<u32>,
         pub preflight: Preflight,
         pub dispatch_count: u32,
+        pub iterations: u32,
         /// Adapter request, device creation and pipeline creation.
         pub prepare_ms: f64,
         /// Input buffer creation and `write_buffer` calls.
@@ -121,7 +122,21 @@ mod device_path {
         require_hardware: bool,
         selection: &device::Selection,
     ) -> Result<DeviceOutput, RunFailure> {
-        run_inner(loaded, inputs, require_hardware, selection, None)
+        run_inner(loaded, inputs, require_hardware, selection, None, 1)
+    }
+
+    /// Like [`run`], but submits the same dispatch `iterations` times after one
+    /// preparation, so later submissions are warm (pipelines and buffers are
+    /// reused). Only the last submission is read back; `submit_ms` is the
+    /// total over every submission and `iterations` says how many there were.
+    pub fn run_with_iterations(
+        loaded: &crate::LoadedBundle,
+        inputs: &[Vec<u32>],
+        require_hardware: bool,
+        selection: &device::Selection,
+        iterations: u32,
+    ) -> Result<DeviceOutput, RunFailure> {
+        run_inner(loaded, inputs, require_hardware, selection, None, iterations.max(1))
     }
 
     /// Like [`run`], but the readback is also handed to `on_ready` from the
@@ -139,7 +154,7 @@ mod device_path {
     where
         F: FnOnce(&[u32]) + Send + 'static,
     {
-        run_inner(loaded, inputs, require_hardware, selection, Some(Box::new(on_ready)))
+        run_inner(loaded, inputs, require_hardware, selection, Some(Box::new(on_ready)), 1)
     }
 
     type CompletionHook = Box<dyn FnOnce(&[u32]) + Send>;
@@ -150,6 +165,7 @@ mod device_path {
         require_hardware: bool,
         selection: &device::Selection,
         on_ready: Option<CompletionHook>,
+        iterations: u32,
     ) -> Result<DeviceOutput, RunFailure> {
         let bundle = &loaded.bundle;
         let (adapter, evidence) = match device::request(selection) {
@@ -179,12 +195,13 @@ mod device_path {
         };
         let plan = preflight(bundle, inputs, &limits).map_err(RunFailure::Refused)?;
 
-        let timing = execute(loaded, inputs, &plan, &adapter, &evidence, on_ready)?;
+        let timing = execute(loaded, inputs, &plan, &adapter, &evidence, on_ready, iterations)?;
         Ok(DeviceOutput {
             adapter: evidence,
             output: timing.output,
             preflight: plan,
             dispatch_count: timing.dispatch_count,
+            iterations: timing.iterations,
             prepare_ms: timing.prepare_ms,
             upload_ms: timing.upload_ms,
             submit_ms: timing.submit_ms,
@@ -195,6 +212,7 @@ mod device_path {
     struct Timing {
         output: Vec<u32>,
         dispatch_count: u32,
+        iterations: u32,
         prepare_ms: f64,
         upload_ms: f64,
         submit_ms: f64,
@@ -208,6 +226,7 @@ mod device_path {
         adapter: &wgpu::Adapter,
         _evidence: &AdapterEvidence,
         on_ready: Option<CompletionHook>,
+        iterations: u32,
     ) -> Result<Timing, RunFailure> {
         let prepare_start = Instant::now();
         let device_desc = wgpu::DeviceDescriptor {
@@ -250,6 +269,7 @@ mod device_path {
             return Ok(Timing {
                 output: Vec::new(),
                 dispatch_count: 0,
+                iterations,
                 prepare_ms,
                 upload_ms: 0.0,
                 submit_ms: 0.0,
@@ -306,21 +326,24 @@ mod device_path {
             entries: &entries,
         });
 
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("avm-gpu dispatch"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(plan.groups, 1, 1);
-        }
-        encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging, 0, size);
-
         let submit_start = Instant::now();
-        let submission = queue.submit(Some(encoder.finish()));
+        let mut submission = None;
+        for _ in 0..iterations {
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("avm-gpu dispatch"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(plan.groups, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging, 0, size);
+            submission = Some(queue.submit(Some(encoder.finish())));
+        }
+        let submission = submission.expect("iterations is at least one");
         let submit_ms = submit_start.elapsed().as_secs_f64() * 1000.0;
 
         let readback_start = Instant::now();
@@ -393,7 +416,8 @@ mod device_path {
         let readback_ms = readback_start.elapsed().as_secs_f64() * 1000.0;
         Ok(Timing {
             output,
-            dispatch_count: plan.groups,
+            dispatch_count: plan.groups.saturating_mul(iterations),
+            iterations,
             prepare_ms,
             upload_ms,
             submit_ms,
@@ -404,7 +428,9 @@ mod device_path {
 }
 
 #[cfg(feature = "device")]
-pub use device_path::{run, run_with_completion, DeviceOutput, RunFailure};
+pub use device_path::{
+    run, run_with_completion, run_with_iterations, DeviceOutput, RunFailure,
+};
 
 #[cfg(test)]
 mod tests {

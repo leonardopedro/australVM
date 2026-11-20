@@ -16,6 +16,11 @@ use std::fmt;
 
 pub const OPERATION: &str = "map-sum-u32";
 pub const PROFILE: &str = "reduce-u32-v1";
+/// The tuning variant: four elements per lane, so a group covers 256.
+pub const OPERATION_X4: &str = "map-sum-u32-x4";
+pub const PROFILE_X4: &str = "reduce-u32-x4-v1";
+pub const ELEMENTS_PER_LANE: usize = 4;
+pub const GROUP_ELEMENTS: usize = TILE * ELEMENTS_PER_LANE;
 pub const TILE: usize = 64;
 pub const IDENTITY: u32 = 0;
 pub const MAX_INPUTS: usize = 1_048_576;
@@ -49,22 +54,78 @@ fn ceil_div(a: usize, b: usize) -> usize {
     a.div_ceil(b)
 }
 
-/// Output count of each pass, pass 0 first; empty for empty input.
-pub fn schedule(n: usize) -> Result<Vec<usize>, ScheduleError> {
+/// Which per-lane layout an artifact declares. The reduction's arithmetic is
+/// identical; only the number of elements a workgroup consumes changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strategy {
+    OnePerLane,
+    FourPerLane,
+}
+
+impl Strategy {
+    pub fn from_operation(operation: &str) -> Option<Strategy> {
+        match operation {
+            OPERATION => Some(Strategy::OnePerLane),
+            OPERATION_X4 => Some(Strategy::FourPerLane),
+            _ => None,
+        }
+    }
+
+    pub fn operation(self) -> &'static str {
+        match self {
+            Strategy::OnePerLane => OPERATION,
+            Strategy::FourPerLane => OPERATION_X4,
+        }
+    }
+
+    pub fn profile(self) -> &'static str {
+        match self {
+            Strategy::OnePerLane => PROFILE,
+            Strategy::FourPerLane => PROFILE_X4,
+        }
+    }
+
+    pub fn elements_per_group(self) -> usize {
+        match self {
+            Strategy::OnePerLane => TILE,
+            Strategy::FourPerLane => GROUP_ELEMENTS,
+        }
+    }
+
+    pub fn schedule(self, n: usize) -> Result<Vec<usize>, ScheduleError> {
+        schedule_for(self.elements_per_group(), n)
+    }
+
+    pub fn derive_plan(self, n: usize) -> Result<LaunchPlan, ScheduleError> {
+        derive_plan_for(self.elements_per_group(), n)
+    }
+}
+
+/// Output count of each pass, pass 0 first; empty for empty input. A group
+/// consumes `elements_per_group` elements.
+pub fn schedule_for(elements_per_group: usize, n: usize) -> Result<Vec<usize>, ScheduleError> {
     if n > MAX_INPUTS {
         return Err(ScheduleError::OversizedInput(n));
     }
     if n == 0 {
         return Ok(Vec::new());
     }
-    let mut counts = vec![ceil_div(n, TILE)];
+    let mut counts = vec![ceil_div(n, elements_per_group)];
     while let Some(&out) = counts.last() {
         if out <= 1 {
             break;
         }
-        counts.push(ceil_div(out, TILE));
+        counts.push(ceil_div(out, elements_per_group));
     }
     Ok(counts)
+}
+
+pub fn schedule(n: usize) -> Result<Vec<usize>, ScheduleError> {
+    Strategy::OnePerLane.schedule(n)
+}
+
+pub fn schedule_x4(n: usize) -> Result<Vec<usize>, ScheduleError> {
+    Strategy::FourPerLane.schedule(n)
 }
 
 pub fn pass_count(n: usize) -> usize {
@@ -104,6 +165,15 @@ pub fn partition_index(group: usize, lane: usize) -> Option<usize> {
     Some(TILE * group + lane)
 }
 
+/// The four-per-lane index: lane `lane` of group `group` maps element
+/// `j * 64 + group * 256 + lane` for `0 <= j < 4`.
+pub fn partition_index_x4(group: usize, lane: usize, j: usize) -> Option<usize> {
+    if lane >= TILE || j >= ELEMENTS_PER_LANE {
+        return None;
+    }
+    Some(GROUP_ELEMENTS * group + TILE * j + lane)
+}
+
 /// Independent serial oracle: map each element, then fold with wrapping add.
 pub fn serial_map_sum<F: Fn(u32) -> u32>(mapper: F, input: &[u32]) -> u32 {
     input
@@ -118,32 +188,61 @@ pub fn tiled_map_sum<F: Fn(u32) -> u32>(
     mapper: F,
     input: &[u32],
 ) -> Result<u32, ScheduleError> {
-    let counts = schedule(input.len())?;
+    tiled_map_sum_for(Strategy::OnePerLane, mapper, input)
+}
+
+pub fn tiled_map_sum_x4<F: Fn(u32) -> u32>(
+    mapper: F,
+    input: &[u32],
+) -> Result<u32, ScheduleError> {
+    tiled_map_sum_for(Strategy::FourPerLane, mapper, input)
+}
+
+pub fn tiled_map_sum_for<F: Fn(u32) -> u32>(
+    strategy: Strategy,
+    mapper: F,
+    input: &[u32],
+) -> Result<u32, ScheduleError> {
+    let counts = strategy.schedule(input.len())?;
     if counts.is_empty() {
         return Ok(IDENTITY);
     }
-    let mut current: Vec<u32> = Vec::with_capacity(counts[0]);
-    for group in 0..counts[0] {
+    let group_partial = |current: &[u32], group: usize, map: bool| {
         let mut acc = IDENTITY;
-        for lane in 0..TILE {
-            let i = group * TILE + lane;
-            if i < input.len() {
-                acc = acc.wrapping_add(mapper(input[i]));
-            }
-        }
-        current.push(acc);
-    }
-    while current.len() > 1 {
-        let mut next: Vec<u32> = Vec::with_capacity(ceil_div(current.len(), TILE));
-        for group in 0..ceil_div(current.len(), TILE) {
-            let mut acc = IDENTITY;
-            for lane in 0..TILE {
-                let i = group * TILE + lane;
-                if i < current.len() {
-                    acc = acc.wrapping_add(current[i]);
+        match strategy {
+            Strategy::OnePerLane => {
+                for lane in 0..TILE {
+                    if let Some(i) = partition_index(group, lane) {
+                        if i < current.len() {
+                            acc = acc.wrapping_add(if map { mapper(current[i]) } else { current[i] });
+                        }
+                    }
                 }
             }
-            next.push(acc);
+            Strategy::FourPerLane => {
+                for j in 0..ELEMENTS_PER_LANE {
+                    for lane in 0..TILE {
+                        if let Some(i) = partition_index_x4(group, lane, j) {
+                            if i < current.len() {
+                                acc = acc.wrapping_add(if map { mapper(current[i]) } else { current[i] });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        acc
+    };
+    let elements_per_group = strategy.elements_per_group();
+    let mut current: Vec<u32> = Vec::with_capacity(counts[0]);
+    for group in 0..counts[0] {
+        current.push(group_partial(input, group, true));
+    }
+    while current.len() > 1 {
+        let next_count = ceil_div(current.len(), elements_per_group);
+        let mut next: Vec<u32> = Vec::with_capacity(next_count);
+        for group in 0..next_count {
+            next.push(group_partial(&current, group, false));
         }
         current = next;
     }
@@ -229,7 +328,15 @@ impl std::error::Error for PlanError {}
 
 /// The plan the host derives for `n` validated inputs.
 pub fn derive_plan(n: usize) -> Result<LaunchPlan, ScheduleError> {
-    let counts = schedule(n)?;
+    Strategy::OnePerLane.derive_plan(n)
+}
+
+pub fn derive_plan_x4(n: usize) -> Result<LaunchPlan, ScheduleError> {
+    Strategy::FourPerLane.derive_plan(n)
+}
+
+fn derive_plan_for(elements_per_group: usize, n: usize) -> Result<LaunchPlan, ScheduleError> {
+    let counts = schedule_for(elements_per_group, n)?;
     let roles = (0..counts.len())
         .map(|pass| if pass == 0 { Role::MapperInput } else { Role::PartialInput })
         .collect();
@@ -447,6 +554,87 @@ mod tests {
         assert_eq!(partition_index(0, 63), Some(63));
         assert_eq!(partition_index(1, 0), Some(64));
         assert_eq!(partition_index(0, 64), None);
+    }
+
+    #[test]
+    fn x4_schedule_matches_the_named_sizes() {
+        let cases: [(usize, &[usize]); 10] = [
+            (0, &[]),
+            (1, &[1]),
+            (255, &[1]),
+            (256, &[1]),
+            (257, &[2, 1]),
+            (4096, &[16, 1]),
+            (4097, &[17, 1]),
+            (65, &[1]),
+            (1_048_576, &[4096, 16, 1]),
+            (262_144, &[1024, 4, 1]),
+        ];
+        for (n, expected) in cases {
+            assert_eq!(schedule_x4(n).unwrap(), expected, "x4 schedule for {n}");
+        }
+        assert_eq!(pass_count(MAX_INPUTS), 4);
+        assert_eq!(schedule_x4(MAX_INPUTS).unwrap().len(), 3);
+        assert!(matches!(
+            schedule_x4(MAX_INPUTS + 1),
+            Err(ScheduleError::OversizedInput(_))
+        ));
+    }
+
+    #[test]
+    fn x4_partition_covers_each_index_once() {
+        for n in SIZES.iter().copied().chain([255, 256, 257, 4_099]) {
+            let mut seen = vec![0usize; n];
+            for group in 0..schedule_x4(n).unwrap().first().copied().unwrap_or(0) {
+                for j in 0..ELEMENTS_PER_LANE {
+                    for lane in 0..TILE {
+                        if let Some(i) = partition_index_x4(group, lane, j) {
+                            if i < n {
+                                seen[i] += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                seen.iter().all(|count| *count == 1),
+                "x4 partition misses or repeats an index at {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn x4_tiled_agrees_with_the_serial_oracle() {
+        for n in SIZES.iter().copied().chain([255, 256, 257, 4_099]) {
+            let data = input(n);
+            assert_eq!(
+                tiled_map_sum_x4(mapper, &data),
+                Ok(serial_map_sum(mapper, &data)),
+                "x4 schedule disagrees with the serial sum at {n}"
+            );
+        }
+    }
+
+    /// The x4 short tail is the same control as lane1: mapping padding would
+    /// change the sum, so the identity must be used instead.
+    #[test]
+    fn x4_mapping_padding_would_change_the_sum() {
+        for n in [255usize, 257, 4_097] {
+            let data = input(n);
+            let buggy: u32 = (0..schedule_x4(n).unwrap()[0])
+                .map(|group| {
+                    (0..ELEMENTS_PER_LANE).fold(IDENTITY, |acc, j| {
+                        (0..TILE).fold(acc, |acc, lane| {
+                            let i = partition_index_x4(group, lane, j).unwrap();
+                            let v = if i < n { mapper(data[i]) } else { mapper(0) };
+                            acc.wrapping_add(v)
+                        })
+                    })
+                })
+                .fold(IDENTITY, u32::wrapping_add);
+            assert_ne!(buggy, serial_map_sum(mapper, &data), "vacuous at {n}");
+            assert_ne!(buggy, tiled_map_sum_x4(mapper, &data).unwrap());
+        }
     }
 
     #[test]

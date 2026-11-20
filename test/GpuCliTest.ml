@@ -83,6 +83,38 @@ let test_bounded_fold_source_profile_is_opt_in _ =
          [ "austral"; "compile"; "Foo.aum"; "--target-type=tc";
            "--gpu-source-profile=bounded-fold-v1" ]))
 
+let test_gpu_operation_is_opt_in _ =
+  let cmd =
+    parse_cmd
+      [ "austral"; "compile"; "Foo.aum"; "--target-type=wgsl";
+        "--gpu-operation=map-sum-u32";
+        "--entrypoint=Foo:main"; "--output=out" ]
+  in
+  (match cmd with
+   | WholeProgramCompile { target = WgslBundle { gpu_operation; _ }; _ } ->
+      assert_equal (Some "map-sum-u32") gpu_operation
+   | _ -> assert_failure "expected a WgslBundle target");
+  let cmd =
+    parse_cmd
+      [ "austral"; "compile"; "Foo.aum"; "--target-type=wgsl";
+        "--entrypoint=Foo:main"; "--output=out" ]
+  in
+  (match cmd with
+   | WholeProgramCompile { target = WgslBundle { gpu_operation; _ }; _ } ->
+      assert_equal None gpu_operation
+   | _ -> assert_failure "expected a WgslBundle target");
+  assert_bool "an unknown operation is a CLI error"
+    (refused (fun () ->
+       parse_cmd
+         [ "austral"; "compile"; "Foo.aum"; "--target-type=wgsl";
+           "--gpu-operation=map-sum-u64";
+           "--entrypoint=Foo:main"; "--output=out" ]));
+  assert_bool "the operation is refused without --target-type=wgsl"
+    (refused (fun () ->
+       parse_cmd
+         [ "austral"; "compile"; "Foo.aum"; "--target-type=tc";
+           "--gpu-operation=map-sum-u32" ]))
+
 let test_wgsl_requires_entrypoint _ =
   assert_bool "--no-entrypoint must be refused"
     (refused (fun () ->
@@ -102,6 +134,7 @@ let suite =
       "wgsl target carries entrypoint and output directory" >:: test_wgsl_target;
       "wgsl-f32-v1 is an explicit opt-in" >:: test_wgsl_f32_profile_is_opt_in;
       "bounded-fold-v1 is an explicit source opt-in" >:: test_bounded_fold_source_profile_is_opt_in;
+      "map-sum-u32 is an explicit operation opt-in" >:: test_gpu_operation_is_opt_in;
       "the numeric profile requires the wgsl target" >:: test_profile_requires_the_gpu_target;
       "--no-entrypoint is refused for wgsl" >:: test_wgsl_requires_entrypoint;
       "unknown target is a CLI error" >:: test_unknown_target_names_wgsl;

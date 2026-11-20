@@ -162,6 +162,7 @@
   GpuSubsetTest
   GpuWgslTest
   GpuReduceTest
+  GpuReduceWgslTest
   GpuCliTest
   GpuObligationsTest
   GpuProofInterfaceTest)
@@ -171,6 +172,7 @@
   GpuSubsetTest
   GpuWgslTest
   GpuReduceTest
+  GpuReduceWgslTest
   GpuCliTest
   GpuObligationsTest
   GpuProofInterfaceTest)

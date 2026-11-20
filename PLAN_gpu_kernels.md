@@ -10,7 +10,7 @@ has run on physical Vulkan adapters. The local GPU service has a linear job
 API and recorded completion callbacks. G13's per-bundle MM0 certificate and
 G18–G23 remain open. See the [execution record](docs/gpu/EXECUTION.md).
 
-**Next patch for the executor** is G22b in the [next implementation steps](docs/gpu/NEXT_STEPS.md); G22a (the `map-sum-u32` definition and CPU schedule) landed in [REDUCE_U32.md](docs/gpu/REDUCE_U32.md).
+**Next patch for the executor** is the remaining G18–G23 work in the [next implementation steps](docs/gpu/NEXT_STEPS.md); G22a–G22c (definition, staged WGSL, a physical-adapter run that matches the C oracle, the four-elements-per-lane variant, and a map+fold comparison) landed in [REDUCE_U32.md](docs/gpu/REDUCE_U32.md).
 That continuation gives the researched Bend-inspired integer fold and reduction,
 the optional MLIR backend over existing KernelIR, and a staged proof/host plan.
 Use its order and patch sizes for remaining work. The G-series cards below

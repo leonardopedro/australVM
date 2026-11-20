@@ -172,6 +172,15 @@ and an oversized input refuse. The partition covers each valid index once.
 
 ### G22b — Emit and validate the fixed WGSL reduction
 
+**Landed 2026-11-20** in [REDUCE_U32.md](REDUCE_U32.md):
+`lib/gpu/Gpu_reduce_wgsl.ml` emits `reduce.json`/`reduce.wgsl` (two entries,
+guard + identity, six strides, one barrier per step, single lane-0 write),
+`--gpu-operation=map-sum-u32` selects it, and
+`safestos/gpu/src/{reduce_artifact,reduce_audit}.rs` load and audit it.
+Measured: emitter suite 4 OK, Rust 41 OK (7 audit mutations, each refused by
+name), publish + `validate-reduce` agree on the program digest. A general
+shader/model correspondence is still not claimed.
+
 **Files.** `Gpu_wgsl.ml` or one adjacent reduction emitter, `Gpu_bundle.ml`,
 Rust `schema.rs`/`artifact.rs`/`validate.rs`/`wrapper.rs`, and focused tests.
 
@@ -193,6 +202,25 @@ write to a nonunique slot and a wrong binding role. Report shader validation
 and structural audit separately from semantic preservation.
 
 ### G22c — Dispatch, read back and measure the reduction
+
+**Landed 2026-11-20** in [REDUCE_U32.md](REDUCE_U32.md):
+`safestos/gpu/src/reduce_run.rs` preflights the derived schedule against
+adapter limits, dispatches one ordered pass per level with the previous
+pass's output bound as the next input, and reads the final word once
+(`avm-gpu run-reduce`, `reference-reduce`). Measured on an NVIDIA GTX 1060
+(Vulkan, physical): all nine G22a sizes equal the C oracle bit for bit,
+including `[16384,256,4,1]` at 1 048 576.
+
+The four-elements-per-lane variant landed as `map-sum-u32-x4`
+(`reduce-u32-x4-v1`, `i = group*256 + j*64 + lane`), not as a replacement:
+1 048 576 needs three passes instead of four, and 12 sizes (including
+255/256/257) agree with the reference on hardware. `avm-gpu compare-reduce`
+now compares either reduction with map + full readback + CPU fold and reports
+bytes moved and warm timings; at N = 1 048 576 the x4 reduction moved
+4 210 760 bytes versus 12 582 912 for map+fold and read back 4 bytes versus
+4 MiB. `scripts/gpu-reduce-hardware` is the physical lane, run by
+`scripts/check-gpu required` and grepped by the GPU workflow; the source lane
+validates both artifacts with the CPU checker.
 
 **Files.** `safestos/gpu/src/run.rs` or an adjacent reduction runner, CLI run
 and reference tests, and isolated hardware cases in the GPU scripts.

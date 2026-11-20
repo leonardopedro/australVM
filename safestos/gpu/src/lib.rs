@@ -8,6 +8,9 @@ pub mod artifact;
 #[cfg(feature = "device")]
 pub mod device;
 pub mod reduce;
+pub mod reduce_artifact;
+pub mod reduce_audit;
+pub mod reduce_run;
 pub mod reference;
 pub mod run;
 pub mod schema;
@@ -20,4 +23,5 @@ pub mod wrapper;
 mod tests;
 
 pub use artifact::{load_bundle, LoadedBundle};
+pub use reduce_artifact::{load_reduce, LoadedReduction};
 pub use schema::KernelBundle;

@@ -114,6 +114,25 @@ module Errors = struct
       Text ": the profile selects which GPU source admission the entry gets."
     ]
 
+  let unknown_gpu_operation (operation: string) =
+    austral_raise CliError [
+      Text "Unknown GPU operation ";
+      Code operation;
+      Text ". The fixed reductions in v1 are ";
+      Code "map-sum-u32";
+      Text " and its four-elements-per-lane variant ";
+      Code "map-sum-u32-x4";
+      Text "."
+    ]
+
+  let gpu_operation_without_gpu () =
+    austral_raise CliError [
+      Code "--gpu-operation";
+      Text " requires ";
+      Code "--target-type=wgsl";
+      Text ": the operation selects the staged reduction the GPU target emits."
+    ]
+
   let invalid_bool_flag_value (name: string) (value: string) =
     austral_raise CliError [
       Text "Invalid value for ";
@@ -161,6 +180,9 @@ type target =
       entrypoint: entrypoint;
       numeric_profile: Gpu_ir.numeric_profile;
       source_profile: Gpu_subset.source_profile;
+      (* `None` is the pointwise map wrapper; `Some "map-sum-u32"` selects the
+         staged fixed reduction (G22b), which has its own artifact. *)
+      gpu_operation: string option;
     }
 [@@deriving eq]
 
@@ -269,14 +291,23 @@ let parse_source_profile (arglist: arglist): (arglist * Gpu_subset.source_profil
       | exception Gpu_subset.Refused _ -> Errors.unknown_source_profile value)
   | None -> (arglist, Gpu_subset.StrictV1)
 
+let parse_gpu_operation (arglist: arglist): (arglist * string option) =
+  match pop_value_flag arglist "gpu-operation" with
+  | Some (arglist, value) ->
+     (match value with
+      | "map-sum-u32" | "map-sum-u32-x4" -> (arglist, Some value)
+      | _ -> Errors.unknown_gpu_operation value)
+  | None -> (arglist, None)
+
 let parse_wgsl_target (arglist: arglist): (arglist * target) =
   let (arglist, numeric_profile) = parse_numeric_profile arglist in
   let (arglist, source_profile) = parse_source_profile arglist in
+  let (arglist, gpu_operation) = parse_gpu_operation arglist in
   match pop_value_flag arglist "entrypoint" with
   | Some (arglist, entrypoint) ->
      let (arglist, output_dir) = get_output arglist in
      (arglist, WgslBundle { output_dir; entrypoint = parse_entrypoint entrypoint;
-                            numeric_profile; source_profile })
+                            numeric_profile; source_profile; gpu_operation })
   | None ->
      (match pop_bool_flag arglist "no-entrypoint" with
       | Some _ -> Errors.no_entrypoint_wrong_gpu_target ()
@@ -293,6 +324,10 @@ let parse_target_type (arglist: arglist): (arglist * target) =
      if target_value <> "wgsl" then
        (match pop_value_flag arglist "gpu-source-profile" with
         | Some _ -> Errors.source_profile_without_gpu ()
+        | None -> ());
+     if target_value <> "wgsl" then
+       (match pop_value_flag arglist "gpu-operation" with
+        | Some _ -> Errors.gpu_operation_without_gpu ()
         | None -> ());
      (match target_value with
       | "exe" ->
@@ -317,6 +352,9 @@ let parse_target_type (arglist: arglist): (arglist * target) =
       | None -> ());
      (match pop_value_flag arglist "gpu-source-profile" with
       | Some _ -> Errors.source_profile_without_gpu ()
+      | None -> ());
+     (match pop_value_flag arglist "gpu-operation" with
+      | Some _ -> Errors.gpu_operation_without_gpu ()
       | None -> ());
      (* The default target is to build an executable binary. This means we need
         an entrypoint. *)

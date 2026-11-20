@@ -10,7 +10,7 @@ use std::path::Path;
 
 fn usage() -> i32 {
     eprintln!(
-        "usage:\n  avm-gpu validate BUNDLE\n  avm-gpu reference BUNDLE --inputs FILE\n  avm-gpu probe [--require-hardware] [--list] [--adapter NAME | --adapter-index N]\n  avm-gpu run BUNDLE --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]"
+        "usage:\n  avm-gpu validate BUNDLE\n  avm-gpu reference BUNDLE --inputs FILE\n  avm-gpu validate-reduce REDUCTION\n  avm-gpu reference-reduce REDUCTION --inputs FILE\n  avm-gpu probe [--require-hardware] [--list] [--adapter NAME | --adapter-index N]\n  avm-gpu run BUNDLE --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]\n  avm-gpu run-reduce REDUCTION --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]\n  avm-gpu compare-reduce REDUCTION --map BUNDLE --inputs FILE [--iterations N] [--require-hardware] [--adapter NAME | --adapter-index N]"
     );
     2
 }
@@ -50,6 +50,90 @@ fn validate_command(dir: &str) -> i32 {
                 0
             }
         },
+    }
+}
+
+fn load_reduce(dir: &str) -> Result<avm_gpu::LoadedReduction, String> {
+    avm_gpu::reduce_artifact::load_reduce(Path::new(dir))
+}
+
+/// A reduction takes exactly one input array; the pointwise input format is
+/// reused so the two command families read the same file shape.
+fn read_reduce_input(path: &str) -> Result<Vec<u32>, String> {
+    let inputs = read_inputs(path, schema::Element::U32)?;
+    match inputs.len() {
+        1 => Ok(inputs.into_iter().next().unwrap()),
+        n => Err(format!(
+            "a reduction takes exactly one input array, the request carries {n}"
+        )),
+    }
+}
+
+fn validate_reduce_command(dir: &str) -> i32 {
+    let loaded = match load_reduce(dir) {
+        Ok(l) => l,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_reduction(&loaded) {
+        return fail(&e);
+    }
+    let bundle = &loaded.bundle;
+    ok_json(serde_json::json!({
+        "schema": bundle.schema,
+        "status": "ok",
+        "operation": bundle.operation,
+        "reduction_profile": bundle.reduction_profile,
+        "group_size": bundle.group_size,
+        "scratch_bytes": bundle.scratch_bytes,
+        "identity": bundle.identity,
+        "operator": bundle.operator,
+        "entries": bundle.entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        "program_sha256": bundle.program_sha256,
+        "ir_sha256": bundle.ir_sha256,
+        "wgsl_sha256": bundle.wgsl_sha256,
+    }));
+    0
+}
+
+fn reference_reduce_command(dir: &str, inputs_path: &str) -> i32 {
+    let loaded = match load_reduce(dir) {
+        Ok(l) => l,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_reduction(&loaded) {
+        return fail(&e);
+    }
+    let input = match read_reduce_input(inputs_path) {
+        Ok(i) => i,
+        Err(e) => return fail(&e),
+    };
+    match avm_gpu::reduce_run::cpu_reduce(
+        loaded.strategy(),
+        &loaded.bundle.kernel_ir,
+        &input,
+    ) {
+        Err(e) => fail(&e),
+        Ok(output) => {
+            ok_json(serde_json::json!({
+                "status": "ok",
+                "backend": "reference",
+                "operation": loaded.bundle.operation,
+                "reduction_profile": loaded.bundle.reduction_profile,
+                "elements": input.len(),
+                "dispatch_count": avm_gpu::reduce_run::preflight(
+                    loaded.strategy(),
+                    input.len(),
+                    &avm_gpu::run::LimitsView {
+                        max_buffer_size: u64::MAX,
+                        max_storage_buffer_binding_size: u64::MAX,
+                        max_compute_workgroups_per_dimension: u32::MAX,
+                        max_compute_workgroup_size_x: u32::MAX,
+                    },
+                ).map(|p| p.groups.len()).unwrap_or(0),
+                "output": output,
+            }));
+            0
+        }
     }
 }
 
@@ -345,6 +429,242 @@ fn run_command(
     }
 }
 
+#[cfg(feature = "device")]
+fn compare_reduce_command(
+    dir: &str,
+    map_dir: &str,
+    inputs_path: &str,
+    require_hardware: bool,
+    name: Option<String>,
+    index: Option<usize>,
+    iterations: u32,
+) -> i32 {
+    use avm_gpu::reduce_run::{run_with_iterations, ReduceFailure};
+    let selection = avm_gpu::device::Selection { name, index };
+    let loaded = match load_reduce(dir) {
+        Ok(l) => l,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_reduction(&loaded) {
+        return fail(&e);
+    }
+    let map = match load(map_dir) {
+        Ok(l) => l,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_bundle(&map) {
+        return fail(&e);
+    }
+    if map.bundle.ir_sha256 != loaded.bundle.ir_sha256 {
+        return fail("the map bundle and the reduction do not use the same mapper IR");
+    }
+    let input = match read_reduce_input(inputs_path) {
+        Ok(i) => i,
+        Err(e) => return fail(&e),
+    };
+    let iterations = iterations.max(1);
+
+    let reduction = match run_with_iterations(
+        &loaded,
+        &input,
+        require_hardware,
+        &selection,
+        iterations,
+    ) {
+        Ok(r) => r,
+        Err(ReduceFailure::Unavailable(message)) => {
+            if require_hardware {
+                return fail(&format!("no physical adapter is available: {message}"));
+            }
+            ok_json(serde_json::json!({
+                "status": "gap",
+                "device_kind": "unavailable",
+                "message": message,
+            }));
+            return 77;
+        }
+        Err(ReduceFailure::Refused(message)) => return fail(&message),
+    };
+    let mapped = match avm_gpu::run::run_with_iterations(
+        &map,
+        &[input.clone()],
+        require_hardware,
+        &selection,
+        iterations,
+    ) {
+        Ok(r) => r,
+        Err(avm_gpu::run::RunFailure::Unavailable(message)) => {
+            return fail(&format!("map run found no adapter after the reduction: {message}"))
+        }
+        Err(avm_gpu::run::RunFailure::Refused(message)) => return fail(&message),
+    };
+    let fold_start = std::time::Instant::now();
+    let folded = mapped
+        .output
+        .iter()
+        .fold(avm_gpu::reduce::IDENTITY, |acc, v| acc.wrapping_add(*v));
+    let fold_ms = fold_start.elapsed().as_secs_f64() * 1000.0;
+
+    let input_bytes = input.len() as u64 * 4;
+    let reduction_output_bytes: u64 = reduction.preflight.bytes.iter().sum();
+    let agreement = folded == reduction.output;
+    ok_json(serde_json::json!({
+        "status": if agreement { "ok" } else { "disagree" },
+        "backend": "wgpu",
+        "operation": loaded.bundle.operation,
+        "reduction_profile": loaded.bundle.reduction_profile,
+        "program_sha256": loaded.bundle.program_sha256,
+        "ir_sha256": loaded.bundle.ir_sha256,
+        "elements": input.len(),
+        "iterations": iterations,
+        "device": avm_gpu::device::to_json(&reduction.adapter),
+        "reduction": {
+            "output": reduction.output,
+            "passes": reduction.preflight.groups,
+            "dispatch_count": reduction.dispatch_count,
+            "bytes": {
+                "upload": input_bytes,
+                "device_output": reduction_output_bytes,
+                "readback": 4,
+                "total": input_bytes + reduction_output_bytes + 4,
+            },
+            "timing_ms": {
+                "prepare": reduction.prepare_ms,
+                "upload": reduction.upload_ms,
+                "submit_total": reduction.submit_ms,
+                "warm_submit": reduction.submit_ms / f64::from(iterations),
+                "readback": reduction.readback_ms,
+            },
+        },
+        "map_and_fold": {
+            "folded_output": folded,
+            "agree": agreement,
+            "bytes": {
+                "upload": input_bytes,
+                "device_output": input_bytes,
+                "readback": input_bytes,
+                "total": input_bytes * 3,
+            },
+            "timing_ms": {
+                "prepare": mapped.prepare_ms,
+                "upload": mapped.upload_ms,
+                "submit_total": mapped.submit_ms,
+                "warm_submit": mapped.submit_ms / f64::from(iterations),
+                "readback": mapped.readback_ms,
+                "cpu_fold": fold_ms,
+            },
+        },
+    }));
+    if agreement { 0 } else { 1 }
+}
+
+#[cfg(not(feature = "device"))]
+fn compare_reduce_command(
+    _dir: &str,
+    _map_dir: &str,
+    _inputs_path: &str,
+    require_hardware: bool,
+    _name: Option<String>,
+    _index: Option<usize>,
+    _iterations: u32,
+) -> i32 {
+    if require_hardware {
+        fail("device execution is not built into this crate (feature `device`, G22c)")
+    } else {
+        ok_json(serde_json::json!({
+            "status": "gap",
+            "device_kind": "unavailable",
+            "message": "device execution is not built into this crate (feature `device`, G22c)",
+        }));
+        77
+    }
+}
+
+#[cfg(feature = "device")]
+fn run_reduce_command(
+    dir: &str,
+    inputs_path: &str,
+    require_hardware: bool,
+    name: Option<String>,
+    index: Option<usize>,
+) -> i32 {
+    use avm_gpu::reduce_run::{run, ReduceFailure};
+    let selection = avm_gpu::device::Selection { name, index };
+    let loaded = match load_reduce(dir) {
+        Ok(l) => l,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_reduction(&loaded) {
+        return fail(&e);
+    }
+    let input = match read_reduce_input(inputs_path) {
+        Ok(i) => i,
+        Err(e) => return fail(&e),
+    };
+    match run(&loaded, &input, require_hardware, &selection) {
+        Ok(result) => {
+            let device = avm_gpu::device::to_json(&result.adapter);
+            ok_json(serde_json::json!({
+                "status": "ok",
+                "backend": "wgpu",
+                "operation": loaded.bundle.operation,
+                "reduction_profile": loaded.bundle.reduction_profile,
+                "program_sha256": loaded.bundle.program_sha256,
+                "ir_sha256": loaded.bundle.ir_sha256,
+                "wgsl_sha256": loaded.bundle.wgsl_sha256,
+                "device": device,
+                "dispatch_count": result.dispatch_count,
+                "iterations": result.iterations,
+                "elements": input.len(),
+                "passes": result.preflight.groups,
+                "pass_bytes": result.preflight.bytes,
+                "total_bytes": result.preflight.total_bytes,
+                "timing_ms": {
+                    "prepare": result.prepare_ms,
+                    "upload": result.upload_ms,
+                    "submit": result.submit_ms,
+                    "readback": result.readback_ms,
+                },
+                "output": result.output,
+            }));
+            0
+        }
+        Err(ReduceFailure::Unavailable(message)) => {
+            if require_hardware {
+                fail(&format!("no physical adapter is available: {message}"))
+            } else {
+                ok_json(serde_json::json!({
+                    "status": "gap",
+                    "device_kind": "unavailable",
+                    "message": message,
+                }));
+                77
+            }
+        }
+        Err(ReduceFailure::Refused(message)) => fail(&message),
+    }
+}
+
+#[cfg(not(feature = "device"))]
+fn run_reduce_command(
+    _dir: &str,
+    _inputs_path: &str,
+    require_hardware: bool,
+    _name: Option<String>,
+    _index: Option<usize>,
+) -> i32 {
+    if require_hardware {
+        fail("device execution is not built into this crate (feature `device`, G22c)")
+    } else {
+        ok_json(serde_json::json!({
+            "status": "gap",
+            "device_kind": "unavailable",
+            "message": "device execution is not built into this crate (feature `device`, G22c)",
+        }));
+        77
+    }
+}
+
 /// Parses the flags shared by `probe` and `run`. Returns
 /// `(require_hardware, adapter_name, adapter_index, list)`. `--inputs` is
 /// accepted here so `run` can reuse the parser; its value is skipped.
@@ -361,9 +681,9 @@ fn parse_device_flags(args: &[String]) -> Result<DeviceFlags, String> {
         match args[i].as_str() {
             "--require-hardware" => require = true,
             "--list" => list = true,
-            "--inputs" => {
+            "--inputs" | "--map" | "--iterations" => {
                 if args.get(i + 1).is_none() {
-                    return Err("--inputs needs a value".to_string());
+                    return Err(format!("{} needs a value", args[i]));
                 }
                 i += 1;
             }
@@ -399,7 +719,10 @@ fn parse_device_flags(args: &[String]) -> Result<DeviceFlags, String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let device_subcommand = matches!(args.first().map(String::as_str), Some("probe" | "run"));
+    let device_subcommand = matches!(
+        args.first().map(String::as_str),
+        Some("probe" | "run" | "run-reduce" | "compare-reduce")
+    );
     let (require, adapter_name, adapter_index, list, extra_positional) = if device_subcommand {
         match parse_device_flags(&args[1..]) {
             Ok(flags) => flags,
@@ -419,6 +742,10 @@ fn main() {
         Some("reference") if args.len() == 4 && args[2] == "--inputs" => {
             reference_command(&args[1], &args[3])
         }
+        Some("validate-reduce") if args.len() == 2 => validate_reduce_command(&args[1]),
+        Some("reference-reduce") if args.len() == 4 && args[2] == "--inputs" => {
+            reference_reduce_command(&args[1], &args[3])
+        }
         Some("probe") => {
             if !extra_positional.is_empty() {
                 usage()
@@ -432,7 +759,61 @@ fn main() {
                 probe_command(require, adapter_name, adapter_index, list)
             }
         }
-        Some("run") => {
+        Some(subcommand) if subcommand == "compare-reduce" => {
+            let mut positional = Vec::new();
+            let mut i = 1;
+            let mut inputs = None;
+            let mut map_dir = None;
+            let mut iterations = 1u32;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--inputs" => {
+                        inputs = args.get(i + 1).cloned();
+                        i += 2;
+                        continue;
+                    }
+                    "--map" => {
+                        map_dir = args.get(i + 1).cloned();
+                        i += 2;
+                        continue;
+                    }
+                    "--iterations" => {
+                        match args.get(i + 1).and_then(|v| v.parse::<u32>().ok()) {
+                            Some(n) if n >= 1 => iterations = n,
+                            _ => {
+                                eprintln!(
+                                    "{}",
+                                    serde_json::json!({"status": "error", "message": "--iterations needs a positive integer"})
+                                );
+                                std::process::exit(2);
+                            }
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    "--adapter" | "--adapter-index" => {
+                        i += 2;
+                        continue;
+                    }
+                    flag if flag.starts_with("--") => {}
+                    other => positional.push(other.to_string()),
+                }
+                i += 1;
+            }
+            match (positional.as_slice(), inputs, map_dir) {
+                ([dir], Some(inputs), Some(map_dir)) => compare_reduce_command(
+                    dir,
+                    &map_dir,
+                    &inputs,
+                    require,
+                    adapter_name,
+                    adapter_index,
+                    iterations,
+                ),
+                _ => usage(),
+            }
+        }
+        Some(subcommand) if subcommand == "run" || subcommand == "run-reduce" => {
             let mut positional = Vec::new();
             let mut i = 1;
             let mut inputs = None;
@@ -451,8 +832,11 @@ fn main() {
                 i += 1;
             }
             match (positional.as_slice(), inputs) {
-                ([dir], Some(inputs)) => {
+                ([dir], Some(inputs)) if subcommand == "run" => {
                     run_command(dir, &inputs, require, adapter_name, adapter_index)
+                }
+                ([dir], Some(inputs)) => {
+                    run_reduce_command(dir, &inputs, require, adapter_name, adapter_index)
                 }
                 _ => usage(),
             }
