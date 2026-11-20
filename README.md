@@ -6,11 +6,13 @@
 
 The `status:` line above is a claim with a command behind it, not decoration:
 the commands in the fenced block below are the ones that printed those counts,
-with the date they were measured. No script re-reads the line itself — the gates
+with the date they were measured. No script re-reads the line itself. The gates
 this repo actually runs are `scripts/verify-invariants` (symbol census, symbol
-sync, the `AuthorizationEngine` default and the archetype surface) and
-`scripts/check-todo-ledger`; the counts move only when a suite grows, and are
-bumped by hand together with the run that measured them.
+sync, the `AuthorizationEngine` default and the archetype surface), in CI, and
+`scripts/check-todo-ledger` (code markers reviewed in `docs/TODO_LEDGER.md`),
+which passes but is run by hand — no workflow or make target invokes it. The
+counts move only when a suite grows, and are bumped by hand together with the
+run that measured them.
 
 Everything below runs through the flake devshell — `nix develop -c` supplies
 dune/ocaml/`python3`, which a bare NixOS shell does not have:
@@ -25,7 +27,7 @@ dune runtest --force          # 284 tests, 30 suites, all OK
 cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 141 passed, 6 ignored, 0 failed
 cargo test --manifest-path safestos/cranelift/Cargo.toml         # 167 passed, 1 ignored, 0 failed
 ./run-examples.sh
-python3 test-programs/runner.py   # "All tests passed" (311 programs)
+python3 test-programs/runner.py   # "All tests passed" (331 programs)
 '
 ```
 
@@ -103,7 +105,8 @@ The project has successfully integrated a multi-tier security model combining co
 
 ### Since Phase 11
 Phase 11 is the last *phased* milestone; newer work ships per-plan, and the
-`status:` line at the top is the machine-checked claim (`scripts/check-status`):
+`status:` line at the top is the measured claim, with the counts and the date
+the run that printed them:
 - **Valen-inspired group borrows** — parser + typechecker (`PLAN_valen.md` P1, 2026-10-16).
 - **`extern rust` interop, tier 1** — kernel-boundary gate with an `rs_*` namespace and `modhost authorize` (`PLAN_valen.md` §4 P2, 2026-10-17).
 - **`umbrella/` prototype** — mixed Austral/Rust module bundles; a plain subfolder since 2026-10-18 (`PLAN_valen.md` P3).
