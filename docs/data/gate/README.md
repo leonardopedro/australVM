@@ -8,6 +8,7 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
+| [`2026-11-20-ocaml-shell-zero-w3.log`](2026-11-20-ocaml-shell-zero-w3.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row below | `170 passed, 2 explained gap(s), 0 failed` — the two Lean-only checks |
 | [`2026-11-20-lean-shell-zero-gaps.log`](2026-11-20-lean-shell-zero-gaps.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, the tree that lands the four §W3 approvals | `179 passed, 0 explained gap(s), 0 failed` |
 | [`2026-11-20-lean-shell-all-approved-proto.log`](2026-11-20-lean-shell-all-approved-proto.log) | `AUSTRALVM_PLAN=… AUSTRALVM_APPROVED_ROOT=… nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` — the four staged §W3 approvals in a scratch root, the plan's four state cells flipped there | 2026-11-20, `8249b592` plus the local edit to `scripts/lean2mm0-stmts` | `174 passed, 3 explained gap(s), 2 failed` — what approving all four would do today |
 | [`2026-11-20-lean-shell-postcleanup.log`](2026-11-20-lean-shell-postcleanup.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, `37fd65ec`, after reclaiming stale build caches (38 GB free when it started) | `175 passed, 4 explained gap(s), 0 failed` |
@@ -32,6 +33,12 @@ export eagerly for two roots. That is fixed: `scripts/lean2mm0-stmts` now reads
 the export lazily, 8.99 GiB → 0.46 GiB peak on the 783 MB RV64 memory export,
 with byte-identical output, so the slow run is history rather than a property
 to plan around.
+
+The `2026-11-20-ocaml-shell-zero-w3.log` row is the same tree under the other
+shell, and it is the reason the two counts differ by more than the four approval
+lines did: with the §W3 gaps closed, only the two checks `.#ocaml` cannot run
+(the RV64 re-conversion and the Lean witness proofs) are left, so `170`/`2`/`0`
+is the whole gap list rather than a subset of it.
 
 The `2026-11-20-lean-shell-zero-gaps.log` row is the state the four §W3
 approvals were landed for: with the statements committed, `mm0/clif.mm0` and
