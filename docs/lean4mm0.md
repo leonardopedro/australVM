@@ -4199,7 +4199,7 @@ failure has moved from after the walk back into it, next to the `body_ty` reside
 **What still sets the floor.** `body_ty` is ~1.94 GB of chunks, built at `:1400` and held
 until `:1560`; at 2 352 MiB the run lives within ~1 MiB of the cap for the last third of
 the walk. Spooling `body_ty` to disk like the declared type (compare it there, then free
-it) is the next lever to measure, and this section does not claim a number for it.
+it) is the next lever — §13.48 measures it.
 
 ### 13.47 Running the ns row: the documented recipe
 
@@ -4209,7 +4209,7 @@ reconstructed from prose. Environment first, then the address-space cap in MiB
 
 ```bash
 export LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000
-ulimit -v $(( 2400 * 1024 ))          # 2 400 MiB of address space
+ulimit -v $(( 768 * 1024 ))           # 768 MiB of address space
 mkdir -p /some/out/dir
 python3 scripts/lean-typing-proof \
   mm0/exports/BookProof.Ns.ChapterNsOuterFockSingleTime.ndjson \
@@ -4217,33 +4217,101 @@ python3 scripts/lean-typing-proof \
   /some/out/dir --spine
 ```
 
-**Why 2 400 MiB.** It passed end to end before §13.46's wrap (3 323 s, peak VmSize
-2 358 MiB, §13.45), and it sits 48 MiB above the tightest cap now measured to pass
-(2 352 MiB, §13.46, peak 2 351 MiB), so it is the number to document and hand out,
-while 2 352 is the number to probe when the floor itself is the question. An
-address-space cap is monotone: a run that fits 2 352 fits 2 400, there is simply
-less room to spare.
+**Why 768 MiB.** It is twice the tightest cap now measured to pass — 512 MiB,
+peak 496 MiB (§13.48) — and less than a third of the 2 400 MiB this recipe
+carried before `body_ty` was spooled (§13.47's own measured run, taken with the
+floor at 2 352 MiB). 768 is not itself a probed cap: it sits between the 1 024
+MiB run that passed at the new emitter and the floor §13.48 brackets at
+(480, 512] MiB, and an address-space cap is monotone, so a run that fits 512
+fits 768 with 256 MiB to spare.
 
-**The recipe measured, not inherited.** This exact command, with the wrapped
-emitter of §13.46 and 1 s sampling, was then run at 2 400 MiB: **exit 0 in
+**The recipe measured, not inherited.** This exact command, at the 2 400 MiB it
+carried before §13.48, was run with the wrapped emitter of §13.46 and 1 s
+sampling: **exit 0 in
 2 293 s**, peak VmSize **2 347 MiB** (at t = 1 996 s), peak RSS 2 324 MiB, 53 MiB of
 cap unused at the peak. All six artifacts came out at the recorded sizes and are
 byte-identical (`cmp`) to the 2 352 MiB run's: `.mm0` 102 543 367 789 B, `.mm1`
 102 547 674 107 B, stream 9 154 545 B, naming 10 968 B, index 36 292 B, manifest
-359 B. So the recipe above is a measured row, and 2 400 MiB is measured headroom
-rather than an extrapolation from 2 352.
+359 B. So that cap was measured headroom rather than an extrapolation from 2 352 —
+and the same command with the same environment is what §13.48 then re-measured at
+1 024, 512 and 480 MiB, with the six artifacts again byte-identical to that run's.
+The recipe above just takes the headroom the spool bought.
 
-**What it costs.** 2 293 s in the run above, against 3 323 s (§13.45, pre-wrap) and
-4 144 s (§13.46, 2 352 MiB) for the same artifacts — the spread is host and I/O
-variance, not a code difference, and the fastest run is not evidence of a speedup.
+**What it costs.** 2 293 s in the 2 400 MiB run, against 3 323 s (§13.45, pre-wrap)
+and 4 144 s (§13.46, 2 352 MiB) for the same artifacts, and 2 320–2 408 s for
+§13.48's runs at 1 024, 576 and 512 MiB — the spread is host and I/O variance, not
+a code difference, and the fastest run is not evidence of a speedup.
 Output is ~205 GB: `.mm0` and `.mm1` at 102 543 367 789 / 102 547 674 107 B. On this
 host's compressed pool the finished directory measured **6.9 GB on disk** against
-its 205 GB apparent size; while the run is in flight it also holds `type.tmp` and
-`value.tmp` (1.94 GB each) plus the ~98.6 GB `axioms.tmp` spool, all deleted before
-the run returns. Peak RSS on the passing runs is ~2 325 MiB, so the cap is address
-space, not RAM-monitoring.
+its 205 GB apparent size; while the run is in flight it also holds `type.tmp`,
+`value.tmp` and `bodytype.tmp` (1.94 GB each, §13.48) plus the ~98.6 GB
+`axioms.tmp` spool, the four deleted before the run returns. Peak RSS on the
+passing runs is ~475 MiB (§13.48), so the cap is address space, not
+RAM-monitoring.
 
 **What it produces.** Six artifacts — `.mm0`, `.mm1`, the obligations stream,
 its index and manifest, and the naming file — at the sizes §13.46 records. The
 `--spine` derivation is what makes the `.mm1` nontrivial; without it the run writes
 the body assumed and is not the row this document is about.
+
+### 13.48 Spooling the body type: the floor is 512 MiB
+
+§13.46 ended with the body type as the thing setting the floor: `body_ty` was the
+goal's type, built in memory at `:1400` as ~1.94 GB of chunks and held until the
+artifacts were written. The declared type had already stopped living in memory —
+`enc.spool(cur, ty_path)` writes it to `type.tmp` and the derivation compares the
+two from disk (`_spool_eq`, §13.43). The body type is consumed the same way, so it
+is spooled the same way:
+
+```python
+bt_path = _bodyty_path(stem)                 # <stem>_bodytype.tmp
+bt_bytes = enc.spool(cur, bt_path)
+stats(f"body type spooled ({bt_bytes} B)")
+body_ty = bt_path
+```
+
+Nothing downstream joins it: `_put` streams `Path` pieces into the `.mm0` goal line
+and the `.mm1` write, and `_pieces` iterates them for `_spool_eq`. The one join left
+is the open-judgment axiom line of the body-assumed mode, which is a single axiom
+line either way. `_pieces` now accepts a bare `Path` where it expected a list,
+because a spooled term is exactly one piece. `bt_path` is unlinked beside `ty_path`
+and `val_path`, and on both stopped-run paths, so the files a run leaves behind are
+still the twelve the gate records — `_bodytype.tmp` is a temp, not a new artifact.
+
+**Byte identity.** `scripts/check-lean-typing-proof` green: 12 artifacts across 3
+modes, goldens not re-recorded. The gate does not cover the body-assumed mode, so
+that mode was checked separately: `HEAD`'s script and this one were run on
+`abs_re_inner_pairVec_le` from
+`mm0/exports/BookProof.Toolbox.ChapterFockPairPerturbation.ndjson` without `--spine`,
+and the two output directories are identical file for file (`diff -r` clean).
+
+**The probes.** Same row, same environment, same 1 s sampling, `ulimit -v` in MiB:
+
+| cap | outcome | peak VmSize | notes |
+| ---: | --- | ---: | --- |
+| 1 024 | exit 0, 2 408 s | 502 MiB (t = 2 092 s) | peak RSS 475 MiB |
+| 576 | exit 0, 2 401 s | 502 MiB (t = 2 089 s) | peak RSS 475 MiB |
+| **512** | **exit 0, 2 320 s** | **496 MiB** (t = 1 998 s) | peak RSS 469 MiB; 16 MiB spare |
+| 480 | exit 1 at 1 819 s | 479 MiB (t = 1 652 s) | `MemoryError` in `subst0`'s memo (`:2482`), no artifact |
+
+The floor is now **(480, 512] MiB**, against **(2 304, 2 352] MiB** before: the ns
+row needs at most 512 MiB of address space where it needed 2 400, a drop of ~1 840
+MiB, about 78 %. All six artifacts of the passing runs are byte-identical (`cmp`) to
+the 2 400 MiB reference run's: `.mm0` 102 543 367 789 B, `.mm1` 102 547 674 107 B,
+stream 9 154 545 B, naming 10 968 B, index 36 292 B, manifest 359 B.
+
+**The peak stopped depending on the cap.** 1 024 and 576 MiB peak at the same
+502 MiB, so what is resident is ~500 MiB of working set, not a limit the allocator is
+pressing against; the caps above 512 only add unused room. What remains resident is
+the export and the walk's own memo tables, and that is also where 480 MiB dies: the
+failure is no longer at the write or next to a giga-byte term but inside the
+derivation's substitution memo (`self._subst_memo[key] = out`), which `MEMO_MAX`
+bounds. That is the next lever if a lower floor is wanted; this section does not
+claim a number for it.
+
+**The cost of that.** The run needs ~3.9 GB more disk while it is in flight — a third
+1.94 GB spool beside `type.tmp` and `value.tmp`, all removed before a passing run
+returns. A failing run is unchanged in kind and worse in size: it has always left its
+spools behind (`type.tmp`, `value.tmp`, the partial `axioms.tmp`), and now leaves
+`bodytype.tmp` with them — 1.94 GB more on the crash path, which is 2 % of the ~89 GB
+that path already strands. A probe that fails is cleaned up by hand.

@@ -1283,6 +1283,16 @@ def _put(fh, piece) -> None:
         fh.write(piece)
 
 
+def _bodyty_path(stem) -> Path:
+    """The body type's spool: a temp, removed on the way out (§13.48).
+
+    A stopped run removes it as well, so the set of files a run leaves behind is
+    the one the byte-identity gate records — the type, value and axiom spools
+    are part of that set, and this one is not.
+    """
+    return Path(str(stem) + "_bodytype.tmp")
+
+
 def _spool_head(path: Path, n: int) -> str:
     with path.open("r") as fh:
         return fh.read(n)
@@ -1293,8 +1303,11 @@ def _pieces(parts, chunk: int = 1 << 20):
 
     A `Path` is read through like `_put` copies it through; a str is sliced. No
     piece is ever concatenated with another, so checking a 1.9 GB type against
-    its spool does not need a second 1.9 GB string (§13.43).
+    its spool does not need a second 1.9 GB string (§13.43). A single piece is
+    accepted where a list is, since a spooled term is one `Path` (§13.48).
     """
+    if isinstance(parts, (str, Path)):
+        parts = (parts,)
     for p in parts:
         if isinstance(p, Path):
             with p.open("r") as sp:
@@ -1395,9 +1408,16 @@ def main() -> int:
         binder_ty_eids.append(bte)
         binders.append(enc.enc(bte))
         cur = ex.exprs[cur]["forallE"]["body"]
-    # Pieces, not a string: the body type of this row is 1.94 GB, and joining it
-    # here is the allocation that set the row's cap floor (§13.44, §13.45).
-    body_ty = enc.enc_parts(cur)
+    # On disk, not in pieces: the body type of this row is 1.94 GB, and pieces
+    # of it stayed resident from here to the end of the walk — that residency,
+    # not the join it replaced, is what the cap floor is made of (§13.45,
+    # §13.46). Spooling it costs one streaming encode, the same bytes in the same
+    # order; `_put` and `_spool_eq` already read a `Path` piece, so what the
+    # artifact writes is unchanged.
+    bt_path = _bodyty_path(stem)
+    bt_bytes = enc.spool(cur, bt_path)
+    stats(f"body type spooled ({bt_bytes} B)")
+    body_ty = bt_path
 
 # A value may abstract over more binders than its type's Π spine shows: the
     # extra λs sit under a type that unfolds to a Π, and `Deriver.check` pays a
@@ -1497,7 +1517,8 @@ def main() -> int:
         # Open judgment: the axiom needs one line, so the pieces are joined here
         # and only here — this path is never the closed goal statement.
         axioms.append(
-            f"axiom ax_body: $ tty {inner_ctx} {body} {''.join(body_ty)} $;"
+            f"axiom ax_body: $ tty {inner_ctx} {body} "
+            f"{''.join(_pieces(body_ty))} $;"
         )
         _step_add(steps_hist, steps_order, "assume body typing")
         base_proof = "ax_body"
@@ -1635,6 +1656,7 @@ def main() -> int:
         ax_path.unlink()
     ty_path.unlink()
     val_path.unlink()
+    bt_path.unlink()
     stats(f"artifacts written ({stem.with_suffix('.mm1').stat().st_size >> 20} MB)")
     # The conversion obligations, structurally: the interface the external
     # deltanet check consumes (`scripts/lean-net-cert`). Written even when empty
@@ -1750,6 +1772,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
         "header_bytes": len(header.encode()),
         "elapsed_s": round(time.monotonic() - _PROC_T0, 1),
     }
+    _bodyty_path(stem).unlink(missing_ok=True)
     sp = Path(str(stem) + "_stopped.json")
     sp.write_text(json.dumps(state, indent=1) + "\n")
     print(f"[stopped] {stop}: {d.rule_count} rules, {d.ax_count} axioms, "
@@ -1790,6 +1813,7 @@ def stop_walk(stop: StopWalk, d, ex, enc, oblig_sink, ax_fh, stem) -> int:
         "note": "the walk did not finish, so no .mm0/.mm1 was written: the "
                 "theory needs a proof of the goal and this run did not reach it",
     }
+    _bodyty_path(stem).unlink(missing_ok=True)
     path = Path(str(stem) + "_stopped.json")
     path.write_text(json.dumps(state, indent=1) + "\n")
     print(f"[stopped] {stop}: {d.rule_count} rules, {d.ax_count} axioms, "
