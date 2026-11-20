@@ -170,7 +170,7 @@ drift-controls: | check-bridge-fresh
 	  | xargs -P $(DRIFT_JOBS) -I{} bash -c 'echo "--- {}"; bash {}'
 	@echo "--- scripts/obj-drift-control (edits the tree, rebuilds: serial)"
 	@obj_log="$$(mktemp)"; \
-	  OBJ_DRIFT_GATE_LOG="$$obj_log" bash scripts/obj-drift-control; rc=$$?; \
+	  AVM_TREE_LOCK_HELD=1 OBJ_DRIFT_GATE_LOG="$$obj_log" bash scripts/obj-drift-control; rc=$$?; \
 	  if [ "$$rc" -eq 2 ]; then \
 	    echo "obj-drift-control: [gap] not exercised on this host (see above)"; \
 	    rc=0; \
@@ -213,8 +213,22 @@ drift-controls-all: | check-bridge-fresh
 	    || { echo "liquid-golden: FAIL the case did not report holding" >&2; exit 1; }; \
 	fi
 
+# ── The tree lock ───────────────────────────────────────────────────────────
+# `make test` runs controls that patch the tree in place (obj-drift-control
+# rewrites `lib/CpsGen.ml` for the length of its run) while others run full
+# gates over that same tree, so two concurrent runs interfere: the second one's
+# gates see the first one's patch and fail on it, and a commit made in the
+# patched window captures the patch (commit 1f8ce68f did, and HEAD then carried
+# `List.rev`). Every entry that runs the suite or edits the tree takes this
+# lock; obj-drift-control reuses it when the suite hands it over.
+TREE_LOCK := .tree.lock
+
 .PHONY: test
-test: $(BIN) drift-controls-all | check-bridge-fresh
+test:
+	@flock --timeout 3600 $(TREE_LOCK) $(MAKE) --no-print-directory test-locked
+
+.PHONY: test-locked
+test-locked: $(BIN) drift-controls-all | check-bridge-fresh
 	@mkdir -p $(BRIDGE_DIR)
 	@cp -f $(BRIDGE_SRC) $(BRIDGE_DIR)/
 	@LD_LIBRARY_PATH=$(BRIDGE_DIR) dune build @runtest

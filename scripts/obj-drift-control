@@ -95,6 +95,19 @@ if [ ! -x "$BIN" ] || [ ! -f "$_bridge" ]; then
     exit 2
 fi
 
+# One full test run at a time: `make test` holds this lock for the whole suite
+# and hands it over through AVM_TREE_LOCK_HELD, because this control rewrites
+# `lib/CpsGen.ml` and a gate running beside it would see the patch. Standalone
+# runs take the lock themselves. Inside a suite, re-acquiring it would deadlock.
+if [ "${AVM_TREE_LOCK_HELD:-0}" != 1 ]; then
+    exec 9>"$ROOT/.tree.lock"
+    flock -x -w 3600 9 || {
+        fail "could not take $ROOT/.tree.lock within 3600s (another make test is running)"
+        exit 2
+    }
+    export AVM_TREE_LOCK_HELD=1
+fi
+
 work="$(mktemp -d)"
 backup="$work/CpsGen.ml.orig"
 
