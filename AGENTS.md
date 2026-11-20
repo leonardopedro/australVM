@@ -630,7 +630,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   also keep two lines it does not touch green — `W3: every §W3 emitter cell
   names a real command` and `Phase D: gap_certificate pins its trust split` —
   because the expected W5 `[FAIL]` alone would also appear if the gate had
-  broken elsewhere. The
+  broken elsewhere. That second half is checked in its failing direction
+  without patching anything: `--check-gate-log <file>` runs the same assertions
+  over an existing gate log and exits 1 naming the line that is absent (measured
+  2026-11-20: the unmodified log exits 0, a log with the §W3 line removed exits 1,
+  a missing file exits 2). The alternative — patching `lib/CpsGen.ml` for the
+  minutes a gate run takes just to obtain such a log — is how commit `1f8ce68f`
+  captured `List.rev` in the tree. The
   `nix-pkg` CI job also runs `verify-invariants` inside `.#ocaml` after the
   OCaml suite, against the built `austral`/bridge and the sibling `unfer`
   checkout, so the checks that need artifacts are measured there instead of
