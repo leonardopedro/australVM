@@ -256,6 +256,23 @@ let dump (m : typed_module) =
          output_string oc (LiquidConstraints.to_mlw c);
          close_out oc)
 
+(** L11d.1: write the pilot's structured evidence when [AUSTRAL_LIQUID_EVIDENCE]
+    names a path. Same convention as the `.mlw` dump above: off unless asked
+    for, and a no-op for a module that is not the audited wrapper. The evidence
+    is re-derived here rather than threaded through [check], which keeps the
+    pass inert when nobody asks and keeps the file's contents a function of the
+    source alone. *)
+let dump_evidence (m : typed_module) : unit =
+  match Sys.getenv_opt "AUSTRAL_LIQUID_EVIDENCE" with
+  | None -> ()
+  | Some path -> (
+      match LiquidSplitPilot.evidence_of_module m with
+      | None -> ()
+      | Some e ->
+         let oc = open_out path in
+         output_string oc (LiquidSplitPilot.render_evidence e);
+         close_out oc)
+
 (** The `typed_pass` registered as the `liquid` tenant. Uses the
     self-referential scope: a contract may only mention its own parameters and
     `result`. WF3 — that every applied function symbol is total-fragment
@@ -281,6 +298,7 @@ let check (m : typed_module) : Compiler_plugin.verdict =
   match LiquidSplitPilot.check_module m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->
+  dump_evidence m;
   match LiquidIndexClosure.audit_module m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->

@@ -20,6 +20,10 @@ module body Test is
         return w.off;
     end;
 
+    function element_width(): Int64 is
+        return 8;
+    end;
+
     pragma Liquid_Requires(Contract => "0 <= k && k <= length(w)");
     function split(w: Window, k: Int64): Halves is
         let l: Window := Window(base => w.base, off => offset(w), len => k);

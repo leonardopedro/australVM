@@ -7,7 +7,11 @@
 
 - `001-accept-split` — a literal split. `0 <= 3` and `3 <= length(w) = 8` are
   decided by arithmetic, so the call is discharged without a prover, the halves
-  are consumed in the branch, and the program runs.
+  are consumed in the branch, and the program runs. Its `element_width`
+  declaration makes the byte relation computable: `AUSTRAL_LIQUID_EVIDENCE=<path>`
+  on this compile writes the L11d.1 evidence, whose ranges are
+  `[10,13)`/`[13,18)` and `[80,104)`/`[104,144)` bytes
+  (`test/LiquidSplitPilotTest.ml` holds it to that).
 - `002-refuse-wrong-total` — the right half keeps `length(w)` instead of
   `length(w) - k`, so the halves would not partition the input. Refused at the
   definition, before any caller is checked.
