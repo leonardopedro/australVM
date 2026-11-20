@@ -29,10 +29,13 @@
 # i.e. 18m34s (30%) off the sequential wall clock, which is what `make
 # drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
 #
-# `w3-approved-row` is the one case whose subject is an *approved* §W3 row, and
-# no §W3 row is approved in this tree: it copies `mm0/approved/` into scratch and
-# weakens an approved axiom's text there. Nothing is approved by it — a control
-# that wrote `mm0/approved/` would be self-approval.
+# `w3-approved-row` is the one case whose subject is an *approved* §W3 row: it
+# copies `mm0/approved/` into scratch and weakens an approved axiom's text there.
+# Nothing is approved by it — a control that wrote `mm0/approved/` would be
+# self-approval. It derives the row it weakens from the approved root, so the
+# case follows the tree's approvals instead of naming one that later lands.
+# `cert-approved` has to pick its direction the same way: it asks whether the
+# tree approves `isa` and drifts the opposite way.
 #
 # Every run also records its own wall clock, so a timing in the plan is a quoted
 # data row and not a number someone retyped. The row goes to
@@ -330,16 +333,37 @@ case_liquid-golden() {
 # the same read-only relocation `AUSTRALVM_APPROVED_ROOT` already provides.
 case_cert-approved() {
     mkdir -p "$cw/approved"
-    printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$cw/approved/isa.stmts"
-    gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
-    expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
-    expect_detail "isa.stmts exists" "$cw/g" "clif.mm0 must cite it, not a gap" &&
-    # The approval is inconsistent with everything else *by construction* — a
-    # consistent one is the owner's commit, not something a control may create —
-    # so six comparisons that read the approved copy also move. They are
-    # consequences of the same drift, and the row for this case says so.
-    expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
-    expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g" &&
+    # Two directions, because the check compares `clif.mm0`'s certificate line
+    # with the *approved root*: the drift is whatever the two disagree on. While
+    # the tree has no `isa` approval the file must say `[gap]`, so the drift is
+    # an approved root that grows one; once the owner approves `isa` the file
+    # cites the copy, so the drift is a root without it.
+    if [ -e "$ROOT/mm0/approved/isa.stmts" ]; then
+        gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+        expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
+        expect_detail "no isa approval, yet clif.mm0 does not say" "$cw/g" \
+            "yet clif.mm0 does not say [gap]"
+    else
+        printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$cw/approved/isa.stmts"
+        gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+        expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
+        expect_detail "isa.stmts exists" "$cw/g" "clif.mm0 must cite it, not a gap"
+    fi &&
+    # An approved root that disagrees with the plan's rows is inconsistent with
+    # everything else *by construction* — a consistent root is the owner's
+    # commit, not something a control may create — so the comparisons that read
+    # the approved copy move too. They are consequences of the same drift, and
+    # the row for this case says a whole-root perturbation moves more than one
+    # line; which lines depends on the direction.
+    if [ -e "$ROOT/mm0/approved/isa.stmts" ]; then
+        expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
+        expect_fail "W3: the plan's §W3 digest column matches the file it describes" "$cw/g" &&
+        expect_fail "W3: every approved §W3 row's emitter still produces its approved copy" "$cw/g" &&
+        expect_fail "W3: stage-approvals stages exactly §W3's pending rows (exit 0)" "$cw/g"
+    else
+        expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
+        expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g"
+    fi &&
     # The two lines below read neither the approved root nor clif.mm0, so they
     # are what says the run still worked: without them the expected failures
     # above would also be produced by a gate that had broken wholesale.
