@@ -4200,3 +4200,40 @@ failure has moved from after the walk back into it, next to the `body_ty` reside
 until `:1560`; at 2 352 MiB the run lives within ~1 MiB of the cap for the last third of
 the walk. Spooling `body_ty` to disk like the declared type (compare it there, then free
 it) is the next lever to measure, and this section does not claim a number for it.
+
+### 13.47 Running the ns row: the documented recipe
+
+The row every measurement from §13.36 on uses, written out so it need not be
+reconstructed from prose. Environment first, then the address-space cap in MiB
+(`ulimit -v` takes KiB; the probes above all used `cap * 1024`), then the command:
+
+```bash
+export LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000
+ulimit -v $(( 2400 * 1024 ))          # 2 400 MiB of address space
+mkdir -p /some/out/dir
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Ns.ChapterNsOuterFockSingleTime.ndjson \
+  nsOuterFock_farisLavine_timeIndependent_singleTime \
+  /some/out/dir --spine
+```
+
+**Why 2 400 MiB.** It is the cap that passed end to end before §13.46's wrap
+(3 323 s, peak VmSize 2 358 MiB, §13.45), and it sits 48 MiB above the tightest
+cap now measured to pass (2 352 MiB, §13.46, peak 2 351 MiB) — so it is the number
+to document and hand out, while 2 352 is the number to probe when the floor itself
+is the question. An address-space cap is monotone: a run that fits 2 352 fits 2 400,
+there is simply less room to spare. The run at exactly 2 400 was not repeated after
+the wrap; the 2 352 probe is the tighter evidence for the current script.
+
+**What it costs.** 3 323 s and 4 144 s in the two passing runs above (~1 h), and
+~205 GB of output: `.mm0` and `.mm1` at 102 543 367 789 / 102 547 674 107 B. On this
+host's compressed pool the finished directory measured **6.9 GB on disk** against
+its 205 GB apparent size; while the run is in flight it also holds `type.tmp` and
+`value.tmp` (1.94 GB each) plus the ~98.6 GB `axioms.tmp` spool, all deleted before
+the run returns. Peak RSS on the passing runs is ~2 325 MiB, so the cap is address
+space, not RAM-monitoring.
+
+**What it produces.** Six artifacts — `.mm0`, `.mm1`, the obligations stream,
+its index and manifest, and the naming file — at the sizes §13.46 records. The
+`--spine` derivation is what makes the `.mm1` nontrivial; without it the run writes
+the body assumed and is not the row this document is about.
