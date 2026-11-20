@@ -63,7 +63,8 @@ in-process via native `uk_*` symbols registered in the JIT.
   `dune` command can run at all. `nix develop .#ocaml` is the same nixpkgs and the
   same OCaml/rust/python inputs without why3/alt-ergo/z3; it is enough for
   `make all` and `make test` (measured: 161 tests, 18 suites, 0 failures on a
-  clean `_build`) and **not** enough for anything that must *prove* —
+  clean `_build` on 2026-11-13; re-measured 2026-11-20 as `284 tests` across
+  `30 suites`, all `OK`) and **not** enough for anything that must *prove* —
   `LiquidWhy3.prove` then takes its structured-skip path. Use `.#ocaml` to build,
   `default` to prove. Address the flake as `git+file://$PWD#ocaml`: a plain path
   makes nix copy the whole worktree (14 GB of `refi/target`) into the store

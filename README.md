@@ -21,7 +21,7 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"   # Cranelift bridge 
 export UNFER_LOGOS_BIN=/path/to/unfer/target/debug/logos    # deltanet UNF gate
 
 dune build @install --profile release
-dune runtest --force          # 161 tests, 18 suites, all OK
+dune runtest --force          # 284 tests, 30 suites, all OK
 cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 108 tests, all OK
 cargo test --manifest-path safestos/cranelift/Cargo.toml         # 129 tests, all OK
 ./run-examples.sh
