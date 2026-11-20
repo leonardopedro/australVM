@@ -403,12 +403,21 @@ $ LD_LIBRARY_PATH=… dune runtest                              # exit 0
 OK / OK / … (15 executable(s), 0 failures)
 ```
 
-The two gate numbers are the same 165 checks: the `lean` shell closes one gap the
-`ocaml` shell cannot (W9.1) and the rest stay explained. The block previously
-recorded `150 passed, 4 explained gap(s)`; the four §W3 approvals are still the
-owner's pending decision, and the other four of today's gaps are W5's object
-digest (not comparable in this shell) and the three Liquid golden checks (no
-prover reachable here) — reported as explained gaps, never as passes. Of the
+**Measured 2026-11-20 at `8b8eb323`, after `make bridge`:** the `ocaml` shell
+reports `166 passed, 6 explained gap(s), 0 failed`
+([transcript](docs/data/gate/2026-11-20-ocaml-shell.log)) and the `lean` shell
+`175 passed, 4 explained gap(s), 0 failed`
+([transcript](docs/data/gate/2026-11-20-lean-shell.log)). The transcript block
+above is the branch this was merged from and reads `156 passed, 9 explained
+gap(s)`; the merge added checks and closed three of those gaps. Under `.#ocaml`
+the six that remain are the four §W3 approvals plus the two shell-local ones
+(`W9.1: RV64 model not re-converted`, `W9.3: the Lean witness proofs not checked`);
+under `.#lean` they are the four approvals alone. The `W5 (checked)` object
+digest is a `[pass]` in both shells here, not a gap: the certificate records
+`arch=aarch64` and this host is aarch64, so the comparison is real and its
+`[pass]` means the bytes the bridge compiled are the bytes the certificate
+pinned. On an x86_64 host the same check normalises those two lines and reports
+the incomparable digest as a gap rather than a failure — see AGENTS.md's W5 note. Of the
 figures quoted, only `clif2mm0` moved for a reason worth naming: the quoted 854
 is now **811 instructions** over the same 12 modules (869 on the branch this was
 merged from, before `ab9edf22` stopped initialising a cell for a borrow, which

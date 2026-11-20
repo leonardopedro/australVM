@@ -8,6 +8,8 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
+| [`2026-11-20-ocaml-shell.log`](2026-11-20-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, `8b8eb323` after `make bridge` | `166 passed, 6 explained gap(s), 0 failed` |
+| [`2026-11-20-lean-shell.log`](2026-11-20-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `175 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-19, after the W5 object re-pin and the bridge-copy check | `165 passed, 6 explained gap(s), 0 failed` |
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
@@ -16,6 +18,12 @@ The third row is not a gate count but a negative control's transcript: it is
 here because it produced the `obj=` digest the certificate now pins, and because
 it is what exposed a stale root `.so` that the gate had been measuring through.
 Its command's own last line is the verdict.
+
+The rows are ordered newest first: the 2026-11-19 pair describes `48658a42` and
+the re-pins that followed it (`165`/`174`), and is kept because the plan's §3.5
+block quotes that series; the 2026-11-20 pair is the tree after `8b8eb323`'s
+merge added a check (`166`/`175`). A superseded row is history, not a claim about
+`HEAD`.
 
 The difference between the two shell counts is not a regression in either shell. The `ocaml` shell cannot run
 the Lean-typed checks and the `lean` shell cannot run the OCaml compiler checks,
