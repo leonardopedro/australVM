@@ -559,7 +559,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `$W3_DRIFT_LOGS/runs/<id>/<case>/` — one directory per invocation, one per case
   inside it, holding that case's `01-g.log` and `report.txt`. The old
   `$W3_DRIFT_LOGS/<case>.log` was overwritten by the case's next run, so a red
-  row could not be read back; nothing writes that path now.
+  row could not be read back; nothing writes that path now. Retention is bounded
+  (`W3_DRIFT_KEEP`, default 20 run directories, newest kept; `0` disables
+  pruning), and a run's summary prints, per case, the log files under its own
+  `runs/<id>/<case>/`, so a red case in a `make test` transcript names its
+  transcript.
   `liquid-golden` is the one case conditional on
   the shell: the gate guards that check on `command -v why3` and reports it as
   an explained `[gap]` when the prover is absent, so the drifted copy has no

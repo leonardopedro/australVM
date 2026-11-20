@@ -1018,7 +1018,10 @@ the artifact, so `mm0-c` checks them too.
   case's printed report as `report.txt` beside it — and that log is where the
   recorded totals come from. A run no longer overwrites its case's previous log:
   the file per case name was how a red row lost the transcript that would have
-  explained it. `make drift-controls` runs
+  explained it. The count is bounded — a run removes all but the newest
+  `W3_DRIFT_KEEP` (default 20) run directories, `0` disabling pruning — and the
+  run's summary lists, per case, the gate logs in its own directory, so the
+  transcript of a red case can be found from the summary alone. `make drift-controls` runs
   `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
   `make test` depends on it — the Makefile states the cost, because every control
   is a full gate run (~4.5 min). A case cannot be made cheaper (the case *is* the gate

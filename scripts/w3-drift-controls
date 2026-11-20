@@ -87,7 +87,12 @@ command -v python3 >/dev/null 2>&1 || {
 # (`$W3_DRIFT_LOGS/runs/20261120T113045Z-1234/<case>/01-g.log`, with the case's
 # printed report beside it): writing every case's log to
 # `$W3_DRIFT_LOGS/<case>.log` meant the next run of that case overwrote the
-# transcript, so a red row could not be read back afterwards.
+# transcript, so a red row could not be read back afterwards. The count is
+# bounded: a run removes all but the newest `$W3_DRIFT_KEEP` (default 20) run
+# directories, so the logs of recent runs — what a red row needs — survive
+# without `/tmp` growing without limit. Every run ends by printing, per case,
+# the log files its own directory holds, so the summary `make test` leaves in the
+# transcript points at the transcript of a failing case.
 W3_DRIFT_LOGS="${W3_DRIFT_LOGS:-/tmp/w3-drift-controls}"
 W3_DRIFT_RECORD="${W3_DRIFT_RECORD:-}"
 work="$(mktemp -d)"
@@ -96,6 +101,9 @@ mkdir -p "$W3_DRIFT_LOGS"
 # Created when the first case starts, so `--list` and a bad case name leave no
 # directory behind.
 RUN_DIR="$W3_DRIFT_LOGS/runs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+# The logs are scratch, so their number is bounded: a run removes all but the
+# newest `$W3_DRIFT_KEEP` run directories, itself included. 0 keeps everything.
+W3_DRIFT_KEEP="${W3_DRIFT_KEEP:-20}"
 
 JOBS="${W3_DRIFT_JOBS:-1}"
 
@@ -130,6 +138,22 @@ expect_detail() {  # log, anchor, substring
         return 1
     }
     say "  detail: $3"
+}
+# Keep the newest `keep` run directories and remove the rest. Only names this
+# script writes (`<UTC stamp>-<pid>`) are candidates, so a directory or file put
+# in `runs/` by hand is never deleted. Two overlapping runs can prune each
+# other's directory; the window is wide enough (20 runs) that only a deliberate
+# -j run over more than that could reach one.
+prune_runs() {  # keep
+    local keep="$1" dirs n old
+    [ "$keep" -gt 0 ] || return 0
+    dirs=$(ls -1d "$W3_DRIFT_LOGS"/runs/[0-9]*-* 2>/dev/null | sort)
+    n=$(printf '%s\n' "$dirs" | grep -c .)
+    [ "$n" -gt "$keep" ] || return 0
+    old=$(printf '%s\n' "$dirs" | head -n "$((n - keep))")
+    printf '%s\n' "$old" | while IFS= read -r d; do
+        [ -n "$d" ] && rm -rf "$d" && say "retention: removed $(basename "$d")"
+    done
 }
 mm0_copy() {  # destination — always a fresh copy, so cases cannot stack drifts
     rm -rf "$1"
@@ -446,7 +470,16 @@ run_all() {  # case names on stdin
     record_timing "$held" "${#order[@]}" "$JOBS" "$SECONDS" \
         "$([ "$status" -eq 0 ] && printf held || printf failed)" "$gap" \
         "$(printf '%s' "${order[*]}")"
+    # Which directory a case's transcript went to, printed here because `$work`
+    # (and the report it holds) is deleted when the run exits.
     say "logs: $RUN_DIR (one directory per case, one file per gate run)"
+    printf '  %-29s %s\n' "case" "gate log(s) under runs/$(basename "$RUN_DIR")/"
+    local c logs
+    for c in "${order[@]}"; do
+        logs=$(ls -1 "$RUN_DIR/$c"/*.log 2>/dev/null | sed "s|^$RUN_DIR/$c/||" | tr '\n' ' ')
+        [ -n "$logs" ] || logs="(no gate run)"
+        printf '  %-29s %s\n' "$c" "${logs% }"
+    done
     return "$status"
 }
 
@@ -467,6 +500,8 @@ if [ "$what" = --list ]; then
 fi
 if [ "$what" = all ]; then
     SECONDS=0
+    mkdir -p "$RUN_DIR"
+    prune_runs "$W3_DRIFT_KEEP"
     printf '%s\n' $CASES | run_all || status=1
     say ""
     skipped=$(ls -1 "$work"/*/skipped 2>/dev/null | wc -l)
@@ -480,6 +515,8 @@ if [ "$what" = all ]; then
     fi
 elif declare -F "case_$what" >/dev/null; then
     SECONDS=0
+    mkdir -p "$RUN_DIR"
+    prune_runs "$W3_DRIFT_KEEP"
     printf '%s\n' "$what" | run_all || status=1
 else
     fail "no case named '$what' (known: $(printf '%s\n' $CASES | tr '\n' ' '))"
