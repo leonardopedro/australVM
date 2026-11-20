@@ -123,6 +123,24 @@ def source_lane(compiler: Path, checker: Path) -> tuple[bool, bool]:
             "[pass] shader validation (Naga): "
             f"entry {result['entry']}, wgsl {result['wgsl_sha256'][:12]}…"
         )
+
+    # G22a: the reduction's C oracle. It is part of the source lane because it
+    # needs only the C backend and a host C compiler — no bundle, no device.
+    reduce_proc = run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/gpu-reduce-u32"),
+            "--compiler",
+            str(compiler),
+        ],
+        env,
+    )
+    for line in (reduce_proc.stdout + reduce_proc.stderr).splitlines():
+        if line.startswith(("[pass]", "[fail]")):
+            print(line)
+    if reduce_proc.returncode != 0:
+        print("[fail] G22a reduction C oracle failed; see gpu-reduce-u32 above")
+        return False, True
     return True, True
 
 

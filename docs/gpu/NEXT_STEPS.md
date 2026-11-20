@@ -133,6 +133,10 @@ Existing v1 bundles and the Rust reader remain compatible.
 
 ### G22a — Define map-and-sum and check its CPU schedule
 
+**Landed 2026-11-19** in [REDUCE_U32.md](REDUCE_U32.md): the operation, pass
+schedule, plan identities, the C oracle and the Rust schedule all agree at the
+named sizes. G22b (the staged WGSL emitter) is next.
+
 **Files.** Proposed `docs/gpu/REDUCE_U32.md`, profile plan in `lib/gpu/`, and
 a matching Rust evaluator/schedule under `safestos/gpu/`.
 

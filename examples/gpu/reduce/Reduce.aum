@@ -1,0 +1,55 @@
+-- G22a: the C oracle for `map-sum-u32`.
+--
+-- `mapper` is the Austral scalar function the reduction applies; it has
+-- `mapper(0) = 1`, so an implementation that maps a short tail's padding
+-- instead of adding the identity changes the sum (G22a's exit criterion).
+--
+-- `value` is the shared deterministic input, documented in
+-- `docs/gpu/REDUCE_U32.md`: `value(i) = i * 2654435761 + 12345 (mod 2^32)`.
+-- `sum` is the independent serial oracle: map every element of the prefix and
+-- fold with the modular (wrapping) add. `main` prints one sum per size in
+-- `examples/gpu/reduce/expected.tsv`.
+--
+-- Small literals are typed first: `modularMultiply(x, 3)` would otherwise
+-- infer the right operand as Int32 and fail to bind the method's one type
+-- parameter to both that and Nat32.
+module body Reduce is
+    function mapper(x: Nat32): Nat32 is
+        let three: Nat32 := 3;
+        let one: Nat32 := 1;
+        let scaled: Nat32 := modularMultiply(x, three);
+        return modularAdd(scaled, one);
+    end;
+
+    function value(i: Nat32): Nat32 is
+        let factor: Nat32 := 2654435761;
+        let offset: Nat32 := 12345;
+        let scaled: Nat32 := modularMultiply(i, factor);
+        return modularAdd(scaled, offset);
+    end;
+
+    function sum(length: Nat32): Nat32 is
+        let zero: Nat32 := 0;
+        let one: Nat32 := 1;
+        var acc: Nat32 := zero;
+        var i: Nat32 := zero;
+        while i < length do
+            acc := modularAdd(acc, mapper(value(i)));
+            i := modularAdd(i, one);
+        end while;
+        return acc;
+    end;
+
+    function main(): ExitCode is
+        printLn(sum(0));
+        printLn(sum(1));
+        printLn(sum(63));
+        printLn(sum(64));
+        printLn(sum(65));
+        printLn(sum(4095));
+        printLn(sum(4096));
+        printLn(sum(4097));
+        printLn(sum(1048576));
+        return ExitSuccess();
+    end;
+end module body.

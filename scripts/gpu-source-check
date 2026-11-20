@@ -21,6 +21,12 @@ Mutation controls (each must be detected):
     shape at the source level),
 and one compiler refusal (a `while` loop).
 
+G17b adds a second lane over `examples/gpu/bounded-fold`: the C backend and
+the reference evaluator of a `--gpu-source-profile=bounded-fold-v1` bundle are
+compared at both endpoints (`upToZero` = one update, `upTo31` = 32) against a
+hand-computed `u32((K+1)·x)` table, and a compile without the profile flag must
+be refused. The two lanes share the same compiler/checker and temporary root.
+
 Usage:
   scripts/gpu-source-check [--write-corpus]
   scripts/gpu-source-check --compiler _build/default/bin/austral.exe \
@@ -249,6 +255,142 @@ def gpu_values(compiler, checker, sources, entry, rows, tmp):
     return json.loads(ref.stdout)["output"]
 
 
+FOLD = ROOT / "examples/gpu/bounded-fold"
+FOLD_INPUTS = [0, 1, 2147483647, 2147483648, 4294967294, 4294967295]
+FOLD_ENTRIES = [("upToZero", 0), ("upTo31", 31)]
+U32 = 0xFFFFFFFF
+
+
+def fold_driver_source():
+    lines = ["import Fold (", "    upToZero,", "    upTo31", ");", ""]
+    lines += ["module body FoldCpuDriver is", "    function main(): ExitCode is"]
+    # Grouped by entry, matching `fold_expected`: all upToZero rows, then all
+    # upTo31 rows, so a slice is one entry's six values.
+    for entry, _ in FOLD_ENTRIES:
+        for x in FOLD_INPUTS:
+            lines.append(f"        printLn({entry}({x}));")
+    lines += ["        return ExitSuccess();", "    end;", "end module body.", ""]
+    return "\n".join(lines)
+
+
+def fold_expected(updates):
+    """Hand table: the body runs updates+1 times, so the sum is (K+1)*x."""
+    return [((updates + 1) * x) & U32 for x in FOLD_INPUTS]
+
+
+def fold_lane(compiler, checker, tmp):
+    """Runs the C oracle and both bounded-fold bundles; returns failures."""
+    failures = []
+    sources = [FOLD / "Fold.aui", FOLD / "Fold.aum"]
+    env = env_with_bridge()
+    env["AUSTRAL_GPU_CHECKER"] = str(checker)
+
+    driver = tmp / "FoldCpuDriver.aum"
+    driver.write_text(fold_driver_source())
+    exe = tmp / "fold-driver"
+    proc = run(
+        [
+            str(compiler),
+            "compile",
+            f"{sources[0]},{sources[1]}",
+            str(driver),
+            "--target-type=exe",
+            "--entrypoint=FoldCpuDriver:main",
+            f"--output={exe}",
+        ],
+        env,
+    )
+    try:
+        cvals = c_values(proc, exe)
+    except RuntimeError as e:
+        return [f"G17b bounded fold C driver: {e}"]
+    expected = []
+    for _, updates in FOLD_ENTRIES:
+        expected.extend(fold_expected(updates))
+    if cvals != expected:
+        bad = [
+            (i, cvals[i] if i < len(cvals) else "missing", want)
+            for i, want in enumerate(expected)
+            if i >= len(cvals) or cvals[i] != want
+        ]
+        failures.append(f"G17b bounded fold: C backend disagrees at {bad[:4]}")
+
+    for entry, updates in FOLD_ENTRIES:
+        bundle = tmp / f"fold-{entry}.avkg"
+        proc = run(
+            [
+                str(compiler),
+                "compile",
+                f"{sources[0]},{sources[1]}",
+                "--target-type=wgsl",
+                "--gpu-source-profile=bounded-fold-v1",
+                f"--entrypoint=Fold:{entry}",
+                f"--output={bundle}",
+            ],
+            env,
+        )
+        if proc.returncode != 0:
+            failures.append(
+                f"G17b bounded fold: GPU compile for {entry} failed:\n"
+                f"{proc.stderr or proc.stdout}"
+            )
+            continue
+        inp = tmp / f"fold-{entry}.inputs.json"
+        inp.write_text(json.dumps({"inputs": [FOLD_INPUTS]}))
+        ref = run([str(checker), "reference", str(bundle), "--inputs", str(inp)], env)
+        if ref.returncode != 0:
+            failures.append(
+                f"G17b bounded fold: reference evaluator failed for {entry}:\n{ref.stderr}"
+            )
+            continue
+        vals = json.loads(ref.stdout)["output"]
+        want = fold_expected(updates)
+        offset = 0 if entry == "upToZero" else len(FOLD_INPUTS)
+        cslice = cvals[offset:offset + len(FOLD_INPUTS)]
+        if vals != want:
+            bad = [
+                (i, vals[i] if i < len(vals) else "missing", e)
+                for i, e in enumerate(want)
+                if i >= len(vals) or vals[i] != e
+            ]
+            failures.append(f"G17b bounded fold: reference disagrees at {entry}: {bad[:4]}")
+        elif cslice != vals:
+            failures.append(
+                f"G17b bounded fold: bundle and C oracle disagree at {entry}"
+            )
+
+    # Without the opt-in profile the loop must be refused by name.
+    refusal = run(
+        [
+            str(compiler),
+            "compile",
+            f"{sources[0]},{sources[1]}",
+            "--target-type=wgsl",
+            "--entrypoint=Fold:upTo31",
+            f"--output={tmp/'fold-no-profile.avkg'}",
+        ],
+        env,
+    )
+    refusal_text = (refusal.stdout + refusal.stderr)
+    if refusal.returncode == 0:
+        failures.append(
+            "G17b bounded fold: the default profile accepted the loop without "
+            "--gpu-source-profile=bounded-fold-v1"
+        )
+    elif "bounded-fold-v1" not in refusal_text:
+        failures.append(
+            "G17b bounded fold: the refusal does not name bounded-fold-v1"
+        )
+    else:
+        print("[pass] G17b bounded fold refused without the profile flag")
+    if not failures:
+        print(
+            "[pass] G17b bounded fold: C, reference and the hand table agree for "
+            "upToZero/upTo31 over " + ", ".join(str(x) for x in FOLD_INPUTS)
+        )
+    return failures
+
+
 def compile_refusal(compiler, tmp):
     """A `while` loop in the entry must be refused by the GPU subset."""
     aui = (FIXTURE / "Pointwise.aui").read_text()
@@ -386,9 +528,14 @@ def main():
         else:
             print("[pass] G08 mutation refused: while loop")
 
+        failures.extend(fold_lane(compiler, checker, tmp))
+
     if failures:
         for f in failures:
-            print(f"[fail] G08 {f}")
+            if f.startswith("G17b "):
+                print(f"[fail] G17b {f[len('G17b '):]}")
+            else:
+                print(f"[fail] G08 {f}")
         return 1
     print(
         f"[pass] G08 source/C/IR agree: {len(committed)} cases over {len(ENTRIES)} entries "

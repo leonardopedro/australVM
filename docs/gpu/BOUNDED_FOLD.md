@@ -118,6 +118,13 @@ cc -x c -O0 -o /tmp/fold-c/Fold.exe /tmp/fold-c/Fold -lm && /tmp/fold-c/Fold.exe
 python3 test-programs/runner.py 026-gpu-bounded-fold
 # 026-gpu-bounded-fold  001-c-oracle  PASS
 
+# and `check-gpu source` compares the C backend, the reference evaluator and a
+# hand-computed (K+1)*x table at both endpoints, then requires the compile
+# without `--gpu-source-profile=bounded-fold-v1` to be refused by name
+python3 scripts/check-gpu source
+# [pass] G17b bounded fold: C, reference and the hand table agree ...
+# [pass] G17b bounded fold refused without the profile flag
+
 # published bundles carry the profile; the WGSL is 33 lets for K=31
 ./austral compile … --target-type=wgsl --gpu-source-profile=bounded-fold-v1 \
     --entrypoint=Fold:upTo31 --output=/tmp/fold-bundle-31

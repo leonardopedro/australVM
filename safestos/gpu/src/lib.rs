@@ -7,6 +7,7 @@
 pub mod artifact;
 #[cfg(feature = "device")]
 pub mod device;
+pub mod reduce;
 pub mod reference;
 pub mod run;
 pub mod schema;

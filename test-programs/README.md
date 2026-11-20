@@ -25,6 +25,10 @@ Each test directory contains some Austral source files (in the simplest cases, `
 
 3. If neither file is present, the test is expected to compile and run successfully but produce no output.
 
+4. `source-copy.txt` names a fixture directory, relative to the repository root, whose `.aui`/`.aum` sources this test copies. The runner adds a `<test>/copy` case that fails when a copied module is missing, extra, or differs in bytes from the fixture, so the copy cannot drift from its example.
+
+Run a single suite with `./test-programs/runner.py <suite>`; a second argument filters test names.
+
 Suite and test directories are numbered so that tests run in a predictable order.
 
 The `runner.py` script runs the tests.
