@@ -4217,16 +4217,26 @@ python3 scripts/lean-typing-proof \
   /some/out/dir --spine
 ```
 
-**Why 2 400 MiB.** It is the cap that passed end to end before §13.46's wrap
-(3 323 s, peak VmSize 2 358 MiB, §13.45), and it sits 48 MiB above the tightest
-cap now measured to pass (2 352 MiB, §13.46, peak 2 351 MiB) — so it is the number
-to document and hand out, while 2 352 is the number to probe when the floor itself
-is the question. An address-space cap is monotone: a run that fits 2 352 fits 2 400,
-there is simply less room to spare. The run at exactly 2 400 was not repeated after
-the wrap; the 2 352 probe is the tighter evidence for the current script.
+**Why 2 400 MiB.** It passed end to end before §13.46's wrap (3 323 s, peak VmSize
+2 358 MiB, §13.45), and it sits 48 MiB above the tightest cap now measured to pass
+(2 352 MiB, §13.46, peak 2 351 MiB), so it is the number to document and hand out,
+while 2 352 is the number to probe when the floor itself is the question. An
+address-space cap is monotone: a run that fits 2 352 fits 2 400, there is simply
+less room to spare.
 
-**What it costs.** 3 323 s and 4 144 s in the two passing runs above (~1 h), and
-~205 GB of output: `.mm0` and `.mm1` at 102 543 367 789 / 102 547 674 107 B. On this
+**The recipe measured, not inherited.** This exact command, with the wrapped
+emitter of §13.46 and 1 s sampling, was then run at 2 400 MiB: **exit 0 in
+2 293 s**, peak VmSize **2 347 MiB** (at t = 1 996 s), peak RSS 2 324 MiB, 53 MiB of
+cap unused at the peak. All six artifacts came out at the recorded sizes and are
+byte-identical (`cmp`) to the 2 352 MiB run's: `.mm0` 102 543 367 789 B, `.mm1`
+102 547 674 107 B, stream 9 154 545 B, naming 10 968 B, index 36 292 B, manifest
+359 B. So the recipe above is a measured row, and 2 400 MiB is measured headroom
+rather than an extrapolation from 2 352.
+
+**What it costs.** 2 293 s in the run above, against 3 323 s (§13.45, pre-wrap) and
+4 144 s (§13.46, 2 352 MiB) for the same artifacts — the spread is host and I/O
+variance, not a code difference, and the fastest run is not evidence of a speedup.
+Output is ~205 GB: `.mm0` and `.mm1` at 102 543 367 789 / 102 547 674 107 B. On this
 host's compressed pool the finished directory measured **6.9 GB on disk** against
 its 205 GB apparent size; while the run is in flight it also holds `type.tmp` and
 `value.tmp` (1.94 GB each) plus the ~98.6 GB `axioms.tmp` spool, all deleted before
