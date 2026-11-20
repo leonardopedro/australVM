@@ -8,6 +8,7 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
+| [`2026-11-20-lean-shell-zero-gaps.log`](2026-11-20-lean-shell-zero-gaps.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, the tree that lands the four §W3 approvals | `179 passed, 0 explained gap(s), 0 failed` |
 | [`2026-11-20-lean-shell-all-approved-proto.log`](2026-11-20-lean-shell-all-approved-proto.log) | `AUSTRALVM_PLAN=… AUSTRALVM_APPROVED_ROOT=… nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` — the four staged §W3 approvals in a scratch root, the plan's four state cells flipped there | 2026-11-20, `8249b592` plus the local edit to `scripts/lean2mm0-stmts` | `174 passed, 3 explained gap(s), 2 failed` — what approving all four would do today |
 | [`2026-11-20-lean-shell-postcleanup.log`](2026-11-20-lean-shell-postcleanup.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, `37fd65ec`, after reclaiming stale build caches (38 GB free when it started) | `175 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-20-ocaml-shell-postcleanup.log`](2026-11-20-ocaml-shell-postcleanup.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, `8249b592`, the tree the first two rows run on | `166 passed, 6 explained gap(s), 0 failed` |
@@ -17,12 +18,13 @@ line is the summary the plan quotes.
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
 
-The first row re-runs the gate on the tree the 2026-11-20 pair describes, after
-the volume went from 98% full to 58% by deleting build caches only (the bridge
-release artifacts and the root `.so` copy were kept and re-verified identical,
-and `make check-bridge-fresh` still passes). It is kept as evidence that the
-counts do not depend on the caches: same tree, same `175`/`4`/`0`, and the
-second row repeats it under `.#ocaml` (`166`/`6`/`0`, the two extra gaps being
+The `2026-11-20-lean-shell-postcleanup.log` row re-runs the gate on the tree the
+2026-11-20 pair describes, after the volume went from 98% full to 58% by
+deleting build caches only (the bridge release artifacts and the root `.so` copy
+were kept and re-verified identical, and `make check-bridge-fresh` still
+passes). It is kept as evidence that the counts do not depend on the caches:
+same tree, same `175`/`4`/`0`, and its `…-ocaml-shell-postcleanup.log`
+counterpart repeats it under `.#ocaml` (`166`/`6`/`0`, the two extra gaps being
 the Lean-only W9.1 and witness checks). The lean run was slower than the row
 below it because the host was under memory pressure — one
 `lean2mm0-stmts emit` step held 8.7 GB RSS — which was the gate parsing a whole
@@ -31,7 +33,16 @@ the export lazily, 8.99 GiB → 0.46 GiB peak on the 783 MB RV64 memory export,
 with byte-identical output, so the slow run is history rather than a property
 to plan around.
 
-The first row is a probe rather than a tree state: it stages the four §W3
+The `2026-11-20-lean-shell-zero-gaps.log` row is the state the four §W3
+approvals were landed for: with the statements committed, `mm0/clif.mm0` and
+`mm0/store_projection.mm0` citing them, and the two checks that could only be
+read before now measuring both directions, the gate reports no gap at all. The
+`…-all-approved-proto.log` row below it is the probe that said the approval
+commit alone would not get there, kept because it is the reason the certificate
+and the controls changed in the same change.
+
+The `2026-11-20-lean-shell-all-approved-proto.log` row is a probe rather than a
+tree state: it stages the four §W3
 approvals in a scratch root and flips the plan's state cells there — exactly
 what an approval commit would change — to measure what the gate says about it.
 It says no, twice. `W9.3: certification state matches mm0/approved/` fails

@@ -499,12 +499,16 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
   line and the approval control still passing. One full gate run.
 - `scripts/w93-certification-drift-control` — the §W9.3 control for the
-  refinement's certificate line: it copies `mm0/clif.mm0`, rewrites
-  `-- certificate: [gap]` to claim `mm0/approved/isa.stmts` (which does not
-  exist), and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
-  with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
-  `no isa approval, yet clif.mm0 does not say [gap]`, and the `clif_step`
-  vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
+  refinement's certificate line: it copies `mm0/clif.mm0`, perturbs that one
+  line, and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
+  with `[FAIL] W9.3: certification state matches mm0/approved/` plus the
+  `clif_step` vocabulary, pinned citations and §W3 lines unchanged. The
+  perturbation follows the tree, because which direction is the trap depends on
+  the owner's decision: with no `mm0/approved/isa.stmts` the copy claims the
+  approval (required detail `no isa approval, yet clif.mm0 does not say [gap]`),
+  and once the approval exists the copy drops the citation it must carry
+  (required detail `isa.stmts exists — clif.mm0 must cite it, not a gap`). One
+  full gate run either way.
 - `scripts/w3-approval-state-drift-control` — the §W3 control for the state
   cell: it rewrites `isa`'s cell in a copy of the plan to `` `[pass]`, approved in
   `mm0/approved/` `` with no `mm0/approved/isa.stmts` behind it, and requires
@@ -651,7 +655,9 @@ nix-shell -p python3 --run "bash scripts/verify-invariants"
 nix-shell -p python3 --run "python3 scripts/check-links"
 ```
 
-Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines.
+Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines
+(none on 2026-11-20, when the four §W3 rows were approved, so `w3-pending:` is
+empty and only the `w3-approved:` line prints).
 The gate prints two measured-size lines: `w3-pending:` (what each unapproved
 artifact would hold out) and `w3-approved:` (what each approved one holds now, so
 a shrunk artifact is visible even though its statement diff is the enforcement).

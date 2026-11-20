@@ -804,45 +804,53 @@ the artifact, so `mm0-c` checks them too.
   is an owner commit that touches only `mm0/approved/`, not something this
   plan writes for itself.
 
-  **Pending owner approvals (2026-11-15), one row each.** Each row is a separate
-  `[gap]` line in `verify-invariants`, so a partially-approved set shows up as a
-  shrinking count rather than a single unhelpful "W3 open": the four rows below
-  are the four `[gap] W3: <artifact> has no approved statements` lines in §3.5.
-  The `state` cell is the record of the decision, so approving is one edit — flip
-  that cell to `` `[pass]`, approved in `mm0/approved/` `` — and the gate reads
-  the rest off the two states (see the state-column paragraph below).
+  **Owner approvals (asked 2026-11-15, landed 2026-11-20), one row each.** Each
+  row was a separate `[gap]` line in `verify-invariants`, so a partially-approved
+  set showed up as a shrinking count rather than a single unhelpful "W3 open":
+  the four rows below were the four `[gap] W3: <artifact> has no approved
+  statements` lines in §3.5 until the owner committed the statements. The `state`
+  cell is the record of the decision in both directions — setting it back to
+  `` `[gap]`, awaiting owner commit `` withdraws an approval, and the gate reads
+  the rest off the two states (see the state-column paragraph below). What an
+  approval lands is the statement of record, never a proof: `isa`'s 26 theorems
+  and the toy's 28 carry their proofs in their `.mm1`, `store_projection` has
+  none to carry, and `mm0/clif.mm0` cites the approval while still claiming
+  `0 theorems`.
 
   | artifact | what the approval holds out | stmts | emitter that owns it | state | statements-sha256 |
   |---|---|---|---|---|---|
-  | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | `2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a` |
-  | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[gap]`, awaiting owner commit | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
-  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[gap]`, awaiting owner commit; the claim itself stays `[gap]` (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
-  | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[gap]`, awaiting owner commit | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
+  | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[pass]`, approved in `mm0/approved/` | `2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a` |
+  | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[pass]`, approved in `mm0/approved/` | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
+  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, a certificate naming the approval | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays unproved (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
+  | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[pass]`, approved in `mm0/approved/` | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
   prints a `w3-pending:` and a `w3-approved:` line …
 
   ```
-  $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants \
+  $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants \
       | grep -E '^w3-(pending|approved):|the plan.s §W3'
-  w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
-  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
-  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
-  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
+  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 4 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (0 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
+  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 4 approved)
   [detail] one altered statement: check refused it (unmodified staging: exit 0)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
-  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
+  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 4 from mm0/approved/)
+  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 4 from mm0/approved/)
   [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
   [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
-  [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (4 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
+  [pass] W3: stage-approvals stages exactly §W3's 0 pending row(s) (exit 0)
+  [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
+  [pass] W3: stage-approvals refuses a named artifact that is already approved
+  [pass] W3: stage-approvals refuses an artifact that equals its approved copy
   [pass] W3: the recorded probe evidence still names live gate lines (6 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
