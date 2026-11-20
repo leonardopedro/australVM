@@ -106,13 +106,16 @@ if ! grep -qF "$line" "$work/gate.log"; then
     fail "no '$line' in the run"
     exit 1
 fi
-detail="$ART(says '$new12…', staging '$old12…')"
-if ! grep -F '[detail] §W9.3 closure:' "$work/gate.log" | grep -qF "$detail"; then
+# As in the counts control, the source word follows the row's state.
+detail="$ART(says '$new12…', ... '$old12…')"
+if ! grep -F '[detail] §W9.3 closure:' "$work/gate.log" \
+        | grep -qE "$ART\\(says '$new12…', (staging|approved) '$old12…'\\)"; then
     grep -F '[detail] §W9.3 closure:' "$work/gate.log" | sed 's/^/  /' >&2
     fail "the detail does not name $ART with both digest prefixes"
     exit 1
 fi
-say "detail:    $detail"
+say "detail:    $(grep -F '[detail] §W9.3 closure:' "$work/gate.log" \
+    | grep -E "$ART\(says '$new12…', (staging|approved) '$old12…'\)" | head -1 | sed 's/^ *//')"
 
 # ── 4. everything else still passes ────────────────────────────────────────
 missing=""
