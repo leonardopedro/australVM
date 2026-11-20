@@ -356,7 +356,7 @@ let serialize_functions ?(module_name: string option) (funcs: function_def list)
    | None ->
        write_u32 w 0x43505331l);
   write_u32 w (Int32.of_int (List.length funcs));
-  List.iter (serialize_function_def w) funcs;
+  List.iter (serialize_function_def w) (List.rev funcs);
   Bytes.to_string (Buffer.to_bytes w.buf)
 
 (*************************************************************************

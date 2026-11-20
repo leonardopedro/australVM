@@ -100,6 +100,7 @@ expect_fail() {  # log, check text
 }
 expect_pass() {  # log, check text
     grep -qF "[pass] $1" "$2" || { fail "$CASE: $1 did not stay green"; return 1; }
+    say "  [pass] $1"   # silent-on-success would read like no assertion at all
 }
 expect_detail() {  # log, anchor, substring
     grep -F "$1" "$2" | grep -qF "$3" || {
