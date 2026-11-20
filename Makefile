@@ -185,8 +185,36 @@ drift-controls: | check-bridge-fresh
 	  fi; \
 	  rm -f "$$obj_log" "$$obj_log.stripped"; exit "$$rc"
 
+# ── Drift controls in both shells ───────────────────────────────────────────
+# `drift-controls` runs in whatever shell it is invoked from, and one of its
+# cases — `liquid-golden` — needs why3, which `.#ocaml` does not carry. That case
+# then reports itself as an explained `[gap]`, which is honest but leaves the
+# caller to remember a second command. This target is that second command folded
+# in: the sweep as usual, then `liquid-golden` alone under the `default`
+# devShell, which is the shell with the prover. A host where that shell will not
+# build (see AGENTS.md) gets the `[gap]` line and its reason, never a green.
+# The case is required to report `holds`, not merely to exit 0, because the
+# runner exits 0 for a case it skipped — the same `[gap]` this target exists to
+# remove would otherwise read as a pass.
+.PHONY: drift-controls-all
+drift-controls-all: | check-bridge-fresh
+	@$(MAKE) --no-print-directory drift-controls
+	@if command -v why3 >/dev/null 2>&1; then \
+	  echo "liquid-golden: covered by the sweep above (this shell carries why3)"; \
+	elif ! command -v nix >/dev/null 2>&1; then \
+	  echo "liquid-golden: [gap] no nix on PATH, so the default devShell cannot be entered"; \
+	elif ! nix develop "git+file://$(CURDIR)" -c bash -c 'command -v why3' >/dev/null 2>&1; then \
+	  echo "liquid-golden: [gap] the default devShell did not provide why3 on this host (see AGENTS.md)"; \
+	else \
+	  out="$$(nix develop "git+file://$(CURDIR)" -c bash scripts/w3-drift-controls -j 1 liquid-golden 2>&1)"; \
+	  rc=$$?; printf '%s\n' "$$out"; \
+	  [ "$$rc" -eq 0 ] || exit "$$rc"; \
+	  printf '%s\n' "$$out" | grep -q "  holds" \
+	    || { echo "liquid-golden: FAIL the case did not report holding" >&2; exit 1; }; \
+	fi
+
 .PHONY: test
-test: $(BIN) drift-controls | check-bridge-fresh
+test: $(BIN) drift-controls-all | check-bridge-fresh
 	@mkdir -p $(BRIDGE_DIR)
 	@cp -f $(BRIDGE_SRC) $(BRIDGE_DIR)/
 	@LD_LIBRARY_PATH=$(BRIDGE_DIR) dune build @runtest

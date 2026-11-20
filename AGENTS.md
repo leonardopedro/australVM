@@ -552,20 +552,29 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   approval. Each run appends its own wall clock to
   `$W3_DRIFT_LOGS/timings.tsv` (and to `$W3_DRIFT_RECORD` when set); the rows
   kept in the tree are `docs/data/w3/drift-timings.tsv`, which the plan quotes
-  instead of a retyped number. `liquid-golden` is the one case conditional on
+  instead of a retyped number. Its columns are `date rev jobs requested wall_s
+  per_case_s held gap outcome cases`: `held` reads `held/requested` and does not
+  count a case the shell could not exercise, `gap` is that count, and `cases`
+  names what was asked for (`all` or the case name) — a single-case row is
+  otherwise unreadable once its per-case log is overwritten.
+  `liquid-golden` is the one case conditional on
   the shell: the gate guards that check on `command -v why3` and reports it as
   an explained `[gap]` when the prover is absent, so the drifted copy has no
   `[FAIL]` to produce. The case then prints `[gap] liquid-golden: why3 not on
   PATH …` and the summary reads `13 case(s) held, 1 not covered in this shell`
-  — never a silent pass, which is what lets `make test` run past
-  `drift-controls` under `nix develop .#ocaml` (where the `default` shell that
-  carries why3 does not build).
+  — never a silent pass. `make test` depends on `drift-controls-all`, which is
+  that sweep in the caller's shell followed by `liquid-golden` alone under the
+  `default` devShell (the shell with why3), requiring it to report `holds`
+  rather than merely exit 0 — the runner exits 0 for a case it skipped. Where
+  the `default` shell will not build at all, the target prints the case's `[gap]`
+  with that reason instead of the sweep's, so the split is named in one command.
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the
   eight read-only scripts listed in `READ_ONLY_CONTROLS` — the four §W3/§W9.3
   cell controls, `w5-arch-gap-control`, `w3-approval-state-drift-control`, and
   the two L11 controls (`l11a-ordering`, `l11b-conversion`) — then
   `obj-drift-control` alone, because
-  that one edits the tree and rebuilds. `make test` depends on it. The two
+  that one edits the tree and rebuilds. `make test` depends on
+  `drift-controls-all`, which adds the other shell's `liquid-golden` run. The two
   parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
   (2026-11-18, before the two L11 controls joined the loop; the ~30% saving is
   the point, not the wall clock). It never

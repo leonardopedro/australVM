@@ -1,6 +1,6 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leonardopedro/australVM)
 
-<!-- status: verified | tests: 161 dune / 18 suites + 108 safestos/pkg + 129 bridge cargo (excl. umbrella demo) | last_verified: 2026-10-25 -->
+<!-- status: verified | tests: 284 dune / 30 suites + 141 safestos/pkg + 167 bridge cargo (excl. umbrella demo) | last_verified: 2026-11-20 -->
 
 ## Verification
 
@@ -22,8 +22,8 @@ export UNFER_LOGOS_BIN=/path/to/unfer/target/debug/logos    # deltanet UNF gate
 
 dune build @install --profile release
 dune runtest --force          # 284 tests, 30 suites, all OK
-cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 108 tests, all OK
-cargo test --manifest-path safestos/cranelift/Cargo.toml         # 129 tests, all OK
+cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 141 passed, 6 ignored, 0 failed
+cargo test --manifest-path safestos/cranelift/Cargo.toml         # 167 passed, 1 ignored, 0 failed
 ./run-examples.sh
 python3 test-programs/runner.py   # "All tests passed" (311 programs)
 '

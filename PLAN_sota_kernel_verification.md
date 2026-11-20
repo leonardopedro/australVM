@@ -1024,10 +1024,17 @@ the artifact, so `mm0-c` checks them too.
   is set. The rows kept in the tree are `docs/data/w3/drift-timings.tsv`:
 
   ```
-  date	rev	jobs	requested	wall_s	per_case_s	held	outcome
-  2026-11-19	de8b11b2	1	14	3763	268	14/14	held
-  2026-11-19	de8b11b2	2	14	2649	189	14/14	held
+  date	rev	jobs	requested	wall_s	per_case_s	held	gap	outcome	cases
+  2026-11-19	de8b11b2	1	14	3763	268	14/14	0	held	all
+  2026-11-19	de8b11b2	2	14	2649	189	14/14	0	held	all
   ```
+
+  `held` is `held/requested` and does not count a case the shell could not
+  exercise, so a run that reported `13 case(s) held, 1 not covered` records
+  `13/14` with `gap` = 1 instead of `14/14`; `cases` names what was asked for,
+  which is what makes a single-case row readable after its per-case log has been
+  overwritten. Rows written before those two columns cannot be attributed to a
+  case, and are not the ledger's evidence for anything.
 
   That is all 14 cases in **62m43s** at `-j 1` (268 s each) against **44m9s** at
   `-j 2` (189 s of wall clock per case, ~379 s of work, because two gate runs
