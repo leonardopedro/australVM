@@ -4071,6 +4071,9 @@ Same target, same environment, `ulimit -v` in MiB, 1 s sampling:
 | 4 096 | exit 0, 3 327 s | 4 015 MiB (t = 73 s) | peak RSS 2 622 MiB |
 | 6 144 | exit 0, 3 583 s | 4 015 MiB at 1 s; 2 350 MiB at 10 s (§13.43) | the cap was never the constraint |
 
+Superseded by §13.45: `enc()` now hands out pieces, the join is gone, and the floor is
+2 400 MiB.
+
 **4 032 MiB** is the smallest cap the row completes under, with 17 MiB of slack over a
 peak of 4 015 MiB; 4 000 MiB cannot pass, since the peak it must accommodate is larger
 than that. The floor is the same allocation at every cap: `Enc.enc` builds the body type
@@ -4085,4 +4088,63 @@ Both passing runs wrote artifacts of exactly the recorded sizes, and the patch i
 allocator may reserve, not what the emitter writes. A lower floor is a different change,
 not a smaller cap: `Enc.write(eid, sink)` already encodes a term into a sink without
 building a string (§13.30), so the join disappears if `enc()`'s callers accept pieces
-instead of a `str`. That is the next measurement, and it is not claimed here.
+instead of a `str`. That is measured in §13.45.
+
+### 13.45 `enc()` hands out pieces: the floor is 2 400 MiB, and the proof wrap is next
+
+§13.44 named the ceiling and the change that removes it: `Enc.enc` builds a term into an
+`EncBuf` as 1 MiB chunks, then `take()` does `"".join(self.chunks)` — chunks *and* result
+alive at once, ~3.9 GB for the row's 1.94 GB body type. The join existed for one call
+site. It is gone:
+
+```python
+body_ty = enc.enc_parts(cur)          # the same bytes, as their chunks
+...
+_spool_eq(ty_path, (prefix, body_ty, closing))
+```
+
+`EncBuf.take_parts()` returns the chunk list, `Enc.enc_parts(eid)` fills a buffer the way
+`enc` does (memo hit → one-element list, so small terms still cost one chunk), and the two
+consumers take either: `_put` writes a `list`/`tuple` chunk by chunk, `_pieces` recurses
+into one. Nothing concatenates the body type any more. The one place that still needs a
+string is the **open** judgment's axiom line (`axiom ax_body: …`), which joins its pieces
+there and only there — that path is never the closed goal statement.
+
+**Byte identity first, as always for an emitter change.** `scripts/check-lean-typing-proof`
+is `OK — 12 artifact(s) across 3 modes match lean-typing-proof.golden.tsv`, no re-record:
+the pieces are the same bytes in the same order, so the goldens are untouched.
+
+**The rerun under the old floor's replacement.** Same target, same `LTP_OBLIG_SHARE=1` /
+2 GiB chunk / 20 000 cache / `--spine`, `ulimit -v` in MiB, sampled every second:
+
+| cap | outcome | peak VmSize | notes |
+| ---: | --- | ---: | --- |
+| **2 400** | **exit 0, 3 323 s** | **2 358 MiB** (t = 3 150 s) | peak RSS 2 335 MiB; artifacts 102 543 367 789 / 102 547 674 107 B |
+| 2 352 | exit 1 at 3 945 s | 2 351 MiB | `MemoryError` at `proof = f"(ty_abs {proof})"`, past the walk, no artifact |
+
+So the floor moves **4 032 → 2 400 MiB** and the peak **4 015 → 2 358 MiB**: 1 632 MiB
+less cap for the same row, and the join that §13.44 measured at t = 73 s is simply not in
+the trace — at 189 s the run sits at 2 236 MiB where it used to touch 4 015 MiB. The
+2 352 MiB probe is the failing side of the floor, and it fails somewhere else entirely.
+
+**The new ceiling is the proof's binder wrap.** A closed goal wraps the body's proof once
+per binder, `proof = f"(ty_abs {proof})"` (`scripts/lean-typing-proof:1538`). That line
+runs while `body_ty`'s ~1.94 GB of chunks are still referenced (they are only released at
+`:1560`, after the piecewise check), so the wrap copies a multi-hundred-megabyte proof
+with the body type still resident — which is why 2 352 MiB runs 3 945 s and dies there
+rather than at 73 s. Removing it is the same shape of change as this one: the proof is
+only ever concatenated or compared, so it can be a sequence of pieces too (`(ty_abs `
+repeated, then the proof's pieces, then the parens) with `body_ty` deleted before the
+wrap. It is not done here and not claimed; §13.45's floor is what a measured run says,
+not what the next patch would allow.
+
+**What did not move.** The artifacts: sizes exactly as recorded, and the shared stream
+(9 154 545 B), naming (10 968 B), index (36 292 B) and manifest (359 B) are `cmp`-identical
+to the `sha6` reference copies. The 1.9 GB `.mm0`/`.mm1` from this run were compared by
+size against the recorded reference and by the run's own piecewise derived-vs-declared
+check; the full reference copies themselves were deleted in the earlier space reclaim, so
+no `cmp` of the big files is offered for this run.
+
+**The elapsed time is not a claim.** 3 323 s against §13.44's 3 385 s at 4 032 MiB is
+inside this host's variance (§13.43 saw 2 290 s and 3 583 s on identical output), and the
+patch removes an allocation, not work. Memory is the quantity measured here.

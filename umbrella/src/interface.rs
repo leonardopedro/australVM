@@ -163,7 +163,7 @@ impl Adapter {
                 let line = line.trim();
                 !line.is_empty() && !line.starts_with('#')
             });
-            if !has_fact {
+            if !has_fact || is_buffer_block(block) {
                 return Ok(());
             }
             let adapter = Adapter::parse_descriptor(block)?;

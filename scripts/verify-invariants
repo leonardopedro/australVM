@@ -1431,7 +1431,7 @@ PYSTRIP
                 done <<'LEANMUT'
 ((a, v) :: drop a m).take 3|((a, v) :: drop a m).take 4|put-no-truncation
 if c.1 = a then drop a t else c :: drop a t|if c.1 = a then c :: drop a t else c :: drop a t|drop-keeps-written-address
-def notfullL {α : Type} (m : Mem α) : Prop := m.length < 3|def notfullL {α : Type} (m : Mem α) : Prop := m.length < 4|notfull-weakened-to-four
+abbrev notfullL {α : Type} (m : Mem α) : Prop := m.length < 3|abbrev notfullL {α : Type} (m : Mem α) : Prop := m.length < 4|notfull-weakened-to-four
 ⟨x.val % 2, Nat.lt_of_lt_of_le (Nat.mod_lt _ (by omega)) hn⟩|⟨x.val, x.isLt⟩|narrow4-becomes-identity
 def keep (m : Cap α) (_a _v : α) : Cap α := m|def keep (m : Cap α) (a v : α) : Cap α := put m a v|keep-order-becomes-put
 LEANMUT

@@ -82,7 +82,9 @@ def heldL {α : Type} (m : Mem α) (a : α) : Prop :=
   | c :: t => c.1 = a ∨ heldL t a
 
 /-- The header's `notfull`: fewer than three cells. -/
-def notfullL {α : Type} (m : Mem α) : Prop := m.length < 3
+-- `abbrev` (with `notfull` below) so `decide` unfolds the predicate all the
+-- way to the `Nat` comparison instead of stopping at a `def` head.
+abbrev notfullL {α : Type} (m : Mem α) : Prop := m.length < 3
 
 @[simp] theorem getL_nil {α : Type} [DecidableEq α] [Inhabited α] (a : α) :
     getL ([] : Mem α) a = unset α := rfl
@@ -213,7 +215,12 @@ def get (m : Cap α) (a : α) : α := getL m.val a
 
 def held (m : Cap α) (a : α) : Prop := heldL m.val a
 
-def notfull (m : Cap α) : Prop := notfullL m.val
+-- `abbrev`, not `def`: `decide` must be able to unfold it to the `Nat`
+-- comparison. A bespoke `Decidable (notfull m)` instance is not found by Lean
+-- 4.33's search when `m` is a concrete subtype term, and an `inferInstanceAs`
+-- body for it reduces to a stuck `Decidable` even when applied explicitly; the
+-- abbreviation reaches `Nat`'s decision procedure, which computes.
+abbrev notfull (m : Cap α) : Prop := notfullL m.val
 
 /-- The second width-8 store, with the *other* refresh order: a write to a held
 address keeps the value the cell already has. The model is the identity —
@@ -609,14 +616,9 @@ section Broken
 
 abbrev Atom4 := Fin 4
 
--- `notfull` and `held` are the model's predicates, so `decide` needs their
--- decision procedures spelled out (they are `Decidable` by their definitions).
-instance instDecidableNotfull {α : Type} (m : Cap α) : Decidable (notfull m) :=
-  inferInstanceAs (Decidable (m.val.length < 3))
-
--- `notfull` is a length bound, so `decide` can use the `Nat` decision procedure
--- once the definition is unfolded; `held` is a recursion, so the refutations
--- below compute it instead of deciding it.
+-- `notfull` is an abbreviation for a length bound, so `decide` unfolds it to
+-- the `Nat` comparison and uses `Nat`'s decision procedure; `held` is a
+-- recursion, so the refutations below compute it instead of deciding it.
 
 /-- An earlier revision's closure axiom: `notfull` survives any write. False the
 moment the write takes the third cell — which is exactly what a capacity-3 memory

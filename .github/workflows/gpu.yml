@@ -2,9 +2,13 @@
 #
 # CPU-only CI never presents as GPU coverage. `gpu-source` builds the compiler
 # and the default (CPU-only) checker, then runs `scripts/check-gpu source`:
-# frontend subset, C/IR differential corpus, and Naga validation of the
-# generated WGSL. It prints source=/shader-validation=/device-kind=/execution=/
-# proof= separately, so a green run cannot be read as hardware evidence.
+# frontend subset, C/IR differential corpus, the bounded-fold oracle lane, and
+# Naga validation of the generated WGSL. It prints
+# source=/shader-validation=/device-kind=/execution=/proof= separately, so a
+# green run cannot be read as hardware evidence. The same step re-runs the
+# bounded-fold compile *without* its opt-in profile flag and requires the
+# refusal to name it, so the lane's own summary is not the only evidence that
+# the flag is load-bearing.
 #
 # `gpu-required` is deliberately *not* triggered by pull requests or pushes.
 # It runs only on an explicitly configured self-hosted GPU runner, builds the
@@ -71,6 +75,24 @@ jobs:
               echo "::error::CPU source mode claimed hardware execution" >&2
               exit 1
             fi
+            # G17b: the bounded-fold lane must have run and its opt-in refusal
+            # must be present in the gate's own output.
+            grep -q "^\[pass\] G17b bounded fold: C, reference and the hand table agree" \
+              "$RUNNER_TEMP/gpu-source.log"
+            grep -q "^\[pass\] G17b bounded fold refused without the profile flag$" \
+              "$RUNNER_TEMP/gpu-source.log"
+            # And an explicit control in CI, independent of the script: the
+            # same module compiled without --gpu-source-profile=bounded-fold-v1
+            # must fail, naming the flag it needed.
+            refusal="$RUNNER_TEMP/gpu-fold-refusal.log"
+            if _build/default/bin/austral.exe compile \
+              examples/gpu/bounded-fold/Fold.aui,examples/gpu/bounded-fold/Fold.aum \
+              --target-type=wgsl --entrypoint=Fold:upTo31 \
+              --output="$RUNNER_TEMP/gpu-fold-no-profile.avkg" >"$refusal" 2>&1; then
+              echo "::error::bounded-fold compiled without --gpu-source-profile=bounded-fold-v1" >&2
+              exit 1
+            fi
+            grep -q "bounded-fold-v1" "$refusal"
           '
 
       - name: Austral GPU-service host module type-checks

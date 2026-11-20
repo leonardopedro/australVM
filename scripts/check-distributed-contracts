@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""D00: validate the distributed execution record and contract inventory.
+
+This is the seed checker the later distributed tasks extend (D08, D19, D24).
+It checks structure, not security: a row that validates says the record is
+well-formed and its evidence exists, never that a guarantee holds.
+
+Checks:
+
+  * `docs/distributed/contracts.tsv` has the exact header
+    `id class repo path status evidence`, unique IDs, a known class, repo and
+    status, and every `path`/`evidence` (`-` excepted) exists. `A` paths resolve
+    against this repository, `U` paths against `../unfer`.
+  * `docs/distributed/EXECUTION.md` carries exactly one
+    `<!-- baseline:begin -->` … `<!-- baseline:end -->` block with the header
+    `id command exit evidence`, unique IDs, an integer or `gap` exit, and an
+    existing evidence file per row.
+
+`--selftest` runs the same validation over mutated copies (duplicate ID,
+unknown status, missing file, duplicate baseline row, missing baseline
+evidence, malformed header) and requires each to be refused, so a comparison
+that cannot fail is itself reported as a failure.
+
+Usage:
+  scripts/check-distributed-contracts [--record PATH] [--inventory PATH]
+  scripts/check-distributed-contracts --selftest
+
+Exit codes: 0 valid, 1 problems, 2 usage.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_RECORD = ROOT / "docs/distributed/EXECUTION.md"
+DEFAULT_INVENTORY = ROOT / "docs/distributed/contracts.tsv"
+
+INVENTORY_COLUMNS = ["id", "class", "repo", "path", "status", "evidence"]
+BASELINE_COLUMNS = ["id", "command", "exit", "evidence"]
+CLASSES = {"identity", "codec", "storage", "consensus", "capability", "runtime", "proof"}
+STATUSES = {"pending", "tested", "gap", "refused"}
+REPOS = {"A", "U"}
+BEGIN = "<!-- baseline:begin -->"
+END = "<!-- baseline:end -->"
+
+
+def parse_tsv(text, columns):
+    """Return (rows, problems); blank and `#` lines are ignored."""
+    problems = []
+    lines = [
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    if not lines:
+        return [], ["the file has no header row"]
+    header = lines[0].split("\t")
+    if header != columns:
+        problems.append(f"header is {header}, expected {columns}")
+        return [], problems
+    rows = []
+    for lineno, line in enumerate(lines[1:], start=2):
+        cells = line.split("\t")
+        if len(cells) != len(columns):
+            problems.append(
+                f"line {lineno}: {len(cells)} column(s), expected {len(columns)}"
+            )
+            continue
+        row = dict(zip(columns, cells))
+        row["_line"] = lineno
+        rows.append(row)
+    return rows, problems
+
+
+def resolve(repo, relative):
+    base = ROOT if repo == "A" else ROOT.parent / "unfer"
+    return base / relative
+
+
+def validate_inventory(rows):
+    problems = []
+    seen = set()
+    for row in rows:
+        where = f"inventory line {row['_line']} ({row['id'] or '<empty id>'})"
+        if not row["id"]:
+            problems.append(f"{where}: empty id")
+        elif row["id"] in seen:
+            problems.append(f"{where}: duplicate id")
+        else:
+            seen.add(row["id"])
+        if row["class"] not in CLASSES:
+            problems.append(f"{where}: unknown class {row['class']!r}")
+        if row["repo"] not in REPOS:
+            problems.append(f"{where}: unknown repo {row['repo']!r}")
+        if row["status"] not in STATUSES:
+            problems.append(f"{where}: unknown status {row['status']!r}")
+        if row["repo"] in REPOS and row["path"]:
+            if not resolve(row["repo"], row["path"]).exists():
+                problems.append(f"{where}: path does not exist: {row['path']}")
+        if row["evidence"] != "-" and not (ROOT / row["evidence"]).exists():
+            problems.append(
+                f"{where}: evidence file does not exist: {row['evidence']}"
+            )
+    return problems
+
+
+def baseline_block(record_text):
+    if record_text.count(BEGIN) != 1 or record_text.count(END) != 1:
+        return None, [
+            f"expected exactly one {BEGIN} and one {END} block"
+        ]
+    start = record_text.index(BEGIN) + len(BEGIN)
+    end = record_text.index(END)
+    if end < start:
+        return None, [f"{END} appears before {BEGIN}"]
+    return record_text[start:end], []
+
+
+def validate_baseline(rows):
+    problems = []
+    seen = set()
+    for row in rows:
+        where = f"baseline line {row['_line']} ({row['id'] or '<empty id>'})"
+        if not row["id"]:
+            problems.append(f"{where}: empty id")
+        elif row["id"] in seen:
+            problems.append(f"{where}: duplicate id")
+        else:
+            seen.add(row["id"])
+        if row["exit"] != "gap":
+            try:
+                int(row["exit"])
+            except ValueError:
+                problems.append(
+                    f"{where}: exit is {row['exit']!r}, expected an integer or gap"
+                )
+        if not row["evidence"]:
+            problems.append(f"{where}: empty evidence")
+        elif not (ROOT / row["evidence"]).exists():
+            problems.append(
+                f"{where}: evidence file does not exist: {row['evidence']}"
+            )
+    return problems
+
+
+def check(record_path, inventory_path):
+    problems = []
+    if not inventory_path.exists():
+        problems.append(f"inventory missing: {inventory_path}")
+        inventory_rows = []
+    else:
+        inventory_rows, parse_problems = parse_tsv(
+            inventory_path.read_text(), INVENTORY_COLUMNS
+        )
+        problems.extend(parse_problems)
+        problems.extend(validate_inventory(inventory_rows))
+
+    if not record_path.exists():
+        problems.append(f"record missing: {record_path}")
+        return problems
+
+    record_text = record_path.read_text()
+    if inventory_path.name not in record_text:
+        problems.append(
+            f"record does not reference the inventory ({inventory_path.name})"
+        )
+    block, block_problems = baseline_block(record_text)
+    problems.extend(block_problems)
+    if block is not None:
+        rows, parse_problems = parse_tsv(block, BASELINE_COLUMNS)
+        problems.extend(parse_problems)
+        problems.extend(validate_baseline(rows))
+    return problems
+
+
+def selftest():
+    """Mutate each schema rule and require the corresponding refusal."""
+    controls = []
+
+    def control(name, inventory_text, record_block, expect):
+        rows, parse_problems = parse_tsv(inventory_text, INVENTORY_COLUMNS)
+        problems = list(parse_problems) + validate_inventory(rows)
+        block_rows, block_parse = parse_tsv(record_block, BASELINE_COLUMNS)
+        problems += list(block_parse) + validate_baseline(block_rows)
+        hit = any(expect in problem for problem in problems)
+        controls.append((name, hit, problems))
+        return hit
+
+    good_inventory = (
+        "id\tclass\trepo\tpath\tstatus\tevidence\n"
+        "T01\tidentity\tA\tsafestos/cranelift/src/auth.rs\tpending\t-\n"
+    )
+    good_block = (
+        "id\tcommand\texit\tevidence\n"
+        "T01\tgit diff --check\t0\tdocs/distributed/baseline/git-diff-check.log\n"
+    )
+    control(
+        "duplicate inventory id",
+        good_inventory
+        + "T01\truntime\tA\tsafestos/cranelift/src/module.rs\tpending\t-\n",
+        good_block,
+        "duplicate id",
+    )
+    control(
+        "unknown status",
+        "id\tclass\trepo\tpath\tstatus\tevidence\n"
+        "T02\tidentity\tA\tsafestos/cranelift/src/auth.rs\tverified\t-\n",
+        good_block,
+        "unknown status",
+    )
+    control(
+        "missing path",
+        "id\tclass\trepo\tpath\tstatus\tevidence\n"
+        "T03\tidentity\tA\tdocs/does-not-exist.rs\tpending\t-\n",
+        good_block,
+        "path does not exist",
+    )
+    control(
+        "missing evidence",
+        good_inventory,
+        "id\tcommand\texit\tevidence\n"
+        "T04\tgit diff --check\t0\tdocs/distributed/baseline/nope.log\n",
+        "evidence file does not exist",
+    )
+    control(
+        "duplicate baseline id",
+        good_inventory,
+        good_block + "T01\tgit diff --check\t0\tdocs/distributed/baseline/git-diff-check.log\n",
+        "duplicate id",
+    )
+    _, header_problems = parse_tsv("id\tclass\nT05\tidentity\n", INVENTORY_COLUMNS)
+    controls.append(
+        ("malformed header", bool(header_problems), header_problems)
+    )
+
+    failed = [name for name, hit, _ in controls if not hit]
+    for name, hit, problems in controls:
+        if hit:
+            print(f"[pass] D00 checker refuses: {name}")
+        else:
+            print(f"[fail] D00 checker accepted: {name} ({problems})")
+    if failed:
+        print(f"[fail] D00 selftest: {len(failed)} control(s) did not fire")
+        return 1
+    print(f"[pass] D00 selftest: {len(controls)} mutation control(s) refused")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--record", default=str(DEFAULT_RECORD))
+    ap.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
+    ap.add_argument("--selftest", action="store_true")
+    args = ap.parse_args()
+    if args.selftest:
+        return selftest()
+    problems = check(Path(args.record), Path(args.inventory))
+    if problems:
+        for problem in problems:
+            print(f"[fail] D00 {problem}")
+        return 1
+    inventory, _ = parse_tsv(Path(args.inventory).read_text(), INVENTORY_COLUMNS)
+    block, _ = baseline_block(Path(args.record).read_text())
+    baseline, _ = parse_tsv(block, BASELINE_COLUMNS)
+    gaps = sum(1 for row in baseline if row["exit"] == "gap")
+    print(
+        f"[pass] D00 contracts: {len(inventory)} contract row(s), "
+        f"{len(baseline)} baseline row(s) ({gaps} named gap(s)), all paths and "
+        "evidence files present"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,6 +1,9 @@
 # Distributed security development plan: australVM + unfer
 
-**Status: proposed, 2026-11-15. No implementation task below is complete.**
+**Status: proposed, 2026-11-15. D00 (reproducible baseline + contract
+checker) is complete as of 2026-11-19 — see
+[docs/distributed/EXECUTION.md](docs/distributed/EXECUTION.md). D01–D26 are
+not started.**
 This plan covers both repositories as one project. It follows a source review
 of the local Hydro checkout, including Hydro Lean, and incorporates the owner's
 instruction to use Rust libraries through `umbrella` and `cap-std` where useful.

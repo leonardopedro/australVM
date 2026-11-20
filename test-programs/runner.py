@@ -137,6 +137,27 @@ class TestProgramFailure(Test):
         self.expected_program_stderr = expected_program_stderr
 
 
+class TestFixtureCopy(Test):
+    """
+    A case that checks a fixture copy still matches the fixture it came from.
+
+    A suite that copies a module (rather than compiling the example in place)
+    cannot see the example change: the copy keeps compiling the old program and
+    the suite goes on passing. `source-copy.txt` names the origin directory
+    relative to the repository root; this case compares the set of `*.aui` and
+    `*.aum` names on both sides and each file's bytes. An origin with no module
+    sources is a failure, so the comparison cannot pass vacuously.
+    """
+
+    source_dir: str
+
+    def __init__(
+        self, name: str, suite_name: str, directory: str, source_dir: str
+    ):
+        super().__init__(name=name, suite_name=suite_name, directory=directory, cli=None)
+        self.source_dir = source_dir
+
+
 class TestLoaderPath(Test):
     """
     A case with no source: it checks the runner's own loader setup.
@@ -295,6 +316,19 @@ def collect_tests() -> list[Test]:
             )
             cli: str | None = _get_file_contents(test_dir, "cli.txt")
             loader_note: str | None = _get_file_contents(test_dir, "loader-path.txt")
+            source_copy: str | None = _get_file_contents(test_dir, "source-copy.txt")
+            if source_copy is not None:
+                # An extra case beside the program: the runner checks the
+                # copied sources still match their origin, then the metadata
+                # below decides what the program itself is expected to do.
+                tests.append(
+                    TestFixtureCopy(
+                        name=test_name + "/copy",
+                        suite_name=suite_name,
+                        directory=test_dir,
+                        source_dir=source_copy,
+                    )
+                )
             if loader_note is not None:
                 # Not a program: the runner checks its own environment.
                 tests.append(
@@ -395,6 +429,8 @@ def run_test_inner(test: Test, replace_stderr: bool) -> TestResult:
         return _run_failure_test(test, replace_stderr)
     elif isinstance(test, TestProgramFailure):
         return _run_program_failure_test(test)
+    elif isinstance(test, TestFixtureCopy):
+        return _run_fixture_copy_test(test)
     elif isinstance(test, TestLoaderPath):
         return _run_loader_path_test(test)
     else:
@@ -693,6 +729,82 @@ def _run_program_failure_test(test: TestProgramFailure) -> TestResult:
 
 
 BRIDGE_LIBRARY = "libaustral_cranelift_bridge.so"
+
+
+def _run_fixture_copy_test(test: TestFixtureCopy) -> TestResult:
+    """
+    Compares the copy with its declared origin, both ways.
+
+    Both directions matter: a missing copy means the suite is compiling
+    something else (or nothing), and an extra module beside it means the case
+    runs code the origin never had.
+    """
+    origin = os.path.join(_ROOT, test.source_dir)
+    compile_cmd: list[str] = [
+        "diff",
+        "-r",
+        origin,
+        test.directory,
+    ]
+
+    def module_sources(directory: str) -> list[str]:
+        return sorted(
+            name
+            for name in os.listdir(directory)
+            if name.endswith(".aui") or name.endswith(".aum")
+        )
+
+    if not os.path.isdir(origin):
+        return TestFail(
+            test=test,
+            austral_cmd=compile_cmd,
+            cc_cmd=None,
+            reason=f"the declared copy origin `{test.source_dir}` is not a directory",
+            outputs=[("ORIGIN", origin), ("COPY", test.directory)],
+        )
+    wanted: list[str] = module_sources(origin)
+    if not wanted:
+        return TestFail(
+            test=test,
+            austral_cmd=compile_cmd,
+            cc_cmd=None,
+            reason=f"the declared copy origin `{test.source_dir}` holds no "
+            "`.aui`/`.aum` module, so this case could not detect drift",
+            outputs=[("ORIGIN", origin)],
+        )
+    present: list[str] = module_sources(test.directory)
+    missing: list[str] = [name for name in wanted if name not in present]
+    extra: list[str] = [name for name in present if name not in wanted]
+    differing: list[str] = []
+    for name in wanted:
+        if name not in present:
+            continue
+        with open(os.path.join(origin, name), "rb") as stream:
+            original: bytes = stream.read()
+        with open(os.path.join(test.directory, name), "rb") as stream:
+            copied: bytes = stream.read()
+        if original != copied:
+            differing.append(name)
+    if missing or extra or differing:
+        outputs: list[tuple[str, str]] = [
+            ("ORIGIN", origin),
+            ("COPY", test.directory),
+        ]
+        if missing:
+            outputs.append(("MISSING FROM COPY", "\n".join(missing)))
+        if extra:
+            outputs.append(("NOT IN ORIGIN", "\n".join(extra)))
+        if differing:
+            outputs.append(("DIFFERENT BYTES", "\n".join(differing)))
+        return TestFail(
+            test=test,
+            austral_cmd=compile_cmd,
+            cc_cmd=None,
+            reason=f"the copy no longer matches `{test.source_dir}`; refresh the "
+            "copied sources or compile the example in place",
+            outputs=outputs,
+        )
+    return TestPass(test=test)
 
 
 def _run_loader_path_test(test: TestLoaderPath) -> TestResult:

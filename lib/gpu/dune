@@ -14,5 +14,6 @@
   Gpu_intrinsics
   Gpu_subset
   Gpu_wgsl
+  Gpu_reduce
   Gpu_proof_interface
   Gpu_obligations))

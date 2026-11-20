@@ -1,0 +1,5 @@
+module Reduce is
+    function mapper(x: Nat32): Nat32;
+    function sum(length: Nat32): Nat32;
+    function main(): ExitCode;
+end module.

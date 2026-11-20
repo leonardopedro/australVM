@@ -6,7 +6,12 @@ C half of its oracle: the same source that the GPU path unrolls and the CPS JIT
 executes, compiled through the ordinary C backend.
 
 `001-c-oracle` compiles a copy of `examples/gpu/bounded-fold/Fold.{aui,aum}`
-for `Fold:main` and expects
+for `Fold:main`. Its `source-copy.txt` declares that origin, so the runner also
+reports `001-c-oracle/copy`: that case fails if a copied module is missing,
+extra, or differs in bytes from the example, which is what keeps the copy from
+drifting when the fixture changes.
+
+The program must produce
 
 ```
 7

@@ -67,6 +67,29 @@
       before the transfer. Using the moved value again is the linear type
       checker's refusal, not this pass's, and the pilot does not duplicate it.
 
+   ## L11d.1: the law is held out, the evidence is reflected
+
+   The shape the pass checks is stated once, above [verify_split], as
+   [held_out_split_law]: a reviewed statement that a checked split returns
+   `[off, off+k)` and `[off+k, off+n)`, that the lengths add to `n`, that no
+   element belongs to both halves, and that byte addresses are element indices
+   scaled by a checked element width. Nothing derives it from the source; the
+   analyser's reading of the source (its structured evidence) is compared
+   against it, and a split whose evidence cannot be read into the law is
+   refused at the same place a wrong length was always refused.
+
+   The evidence is also exposed: [evidence_of_module] returns the resolved
+   function/field declarations, the canonical binders, the measured operands,
+   the numeric interpretation (a checked literal or an unbounded index) and the
+   span pair actually constructed, and `LiquidCheck` writes it to the path in
+   `AUSTRAL_LIQUID_EVIDENCE`. Binder identities in that output are canonical
+   (`w.len`, `w.off`, `k`), not the allocator's `v0`, so a proof subject does
+   not move when an unrelated binder is introduced.
+
+   `left.len + right.len = n` and the disjointness of the halves are *stated*
+   by the law and recorded as `[stated]` obligations: L11d.1 reflects and holds
+   them out; L11d.2 is where the arithmetic gets a proof.
+
    ## What is deliberately not here
 
    - No prover: a symbolic obligation the facts do not settle is a refusal, not
@@ -119,6 +142,13 @@ type pilot = {
   both_case : string;
   len_fn : string;
   off_fn : string;
+  union_ty : string;
+  both_slots : string list;   (** the case's slots, in declaration order *)
+  record_id : int;
+  split_id : int;
+  len_id : int;
+  off_id : int;
+  width : int option;         (** an `element_width` declaration, when present *)
 }
 
 let span_slots = [ "base"; "off"; "len" ]
@@ -133,7 +163,7 @@ let find_record (decls : typed_decl list) : (string * Type.typed_slot list) opti
   go decls
 
 let find_union_case (decls : typed_decl list) (span_ty : string) :
-    (string * string) option =
+    (string * string * string list) option =
   let two_spans (slots : Type.typed_slot list) =
     List.length slots = 2 && List.for_all (fun s -> ty_is_named (slot_ty s) span_ty) slots
   in
@@ -145,11 +175,44 @@ let find_union_case (decls : typed_decl list) (span_ty : string) :
             (fun (Stages.Linked.LCase (_, _, slots)) -> two_spans slots)
             cases
         with
-        | Some (Stages.Linked.LCase (_, cn, _)) -> Some (name_of un, name_of cn)
+        | Some (Stages.Linked.LCase (_, cn, slots)) ->
+           Some (name_of un, name_of cn, List.map slot_name slots)
         | None -> go rest)
     | _ :: rest -> go rest
   in
   go decls
+
+(** The element width the law's byte relation is stated over. A module may pin
+    it with `function element_width(): Int64 is return 8; end;`; when it does
+    not, the width is a layout premise supplied by the host and the evidence
+    says so instead of inventing one. A declaration that is *not* a positive
+    literal is a refusal: a byte relation over a width nobody can compute is a
+    fiction, and the pilot's job is not to invent premises. *)
+let element_width_of (decls : typed_decl list) : int option =
+  let rec go = function
+    | [] -> None
+    | TFunction (_, _, n, _, params, _, body, _, _) :: rest ->
+       if name_of n <> "element_width" then go rest
+       else begin
+         match (params, body) with
+         | [], TReturn (_, TIntConstant s) -> (
+             match int_of_string_opt s with
+             | Some w when w > 0 && w <= LiquidIndex.max_value LiquidIndex.E64 -> Some w
+             | _ ->
+                refuse
+                  "L11d.1: `element_width` must return a positive literal that \
+                   fits a machine offset; the law's byte relation is stated over \
+                   a width the module can compute")
+         | _ ->
+            refuse
+              "L11d.1: `element_width` must be `function element_width(): Int64 \
+               is return <literal>; end;` so the byte relation has a real width"
+       end
+    | _ :: rest -> go rest
+  in
+  go decls
+
+let decl_id (Id.DeclId n) = n
 
 (** The variable a projection starts from, seeing through the reference a
     borrowed parameter is read through. *)
@@ -206,13 +269,27 @@ let measure_reads_slot (decls : typed_decl list) (fn : string) (span_ty : string
   in
   go decls
 
+let find_decl_id (decls : typed_decl list) (fn : string) : int option =
+  List.find_map
+    (function
+      | TFunction (id, _, n, _, _, _, _, _, _) when name_of n = fn -> Some (decl_id id)
+      | _ -> None)
+    decls
+
+let find_record_id (decls : typed_decl list) (name : string) : int option =
+  List.find_map
+    (function
+      | TRecord (id, _, n, _, _, _, _) when name_of n = name -> Some (decl_id id)
+      | _ -> None)
+    decls
+
 let recognize (decls : typed_decl list) : pilot option =
   match find_record decls with
   | None -> None
   | Some (span_ty, _) -> (
       match find_union_case decls span_ty with
       | None -> None
-      | Some (_, both_case) ->
+      | Some (union_ty, both_case, both_slots) ->
          let has_split =
            List.exists
              (function
@@ -231,9 +308,16 @@ let recognize (decls : typed_decl list) : pilot option =
            && measure_reads_slot decls "length" span_ty "len"
            && measure_reads_slot decls "offset" span_ty "off"
          then
-           Some
-             { span_ty; split_fn = "split"; both_case; len_fn = "length";
-               off_fn = "offset" }
+           match
+             ( find_record_id decls span_ty, find_decl_id decls "split",
+               find_decl_id decls "length", find_decl_id decls "offset" )
+           with
+           | Some record_id, Some split_id, Some len_id, Some off_id ->
+              Some
+                { span_ty; split_fn = "split"; both_case; len_fn = "length";
+                  off_fn = "offset"; union_ty; both_slots; record_id; split_id;
+                  len_id; off_id; width = element_width_of decls }
+           | _ -> None
          else None)
 
 (* ── facts ───────────────────────────────────────────────────────────────── *)
@@ -249,6 +333,90 @@ type vinfo =
 
 type split_info = { si_len : LiquidIndex.t; si_off : LiquidIndex.t; si_k : LiquidIndex.t }
 
+(* ── the held-out law (L11d.1) ─────────────────────────────────────────────
+
+   Stated here, by hand, independently of anything the analyser derives. The
+   law's terms are a tiny explicit language over the three binders the pilot
+   reasons about (`off`, `n`, `k`), so the comparison against the constructed
+   spans is a structural instantiation and not a re-run of the analyser's own
+   arithmetic. *)
+
+type law_term = LOff | LLen | LK | LAdd of law_term * law_term | LSub of law_term * law_term
+
+type law_span = { lp_off : law_term; lp_len : law_term }
+
+type split_law = {
+  law_id : string;
+  law_owner : string;
+  law_binders : string list;
+  law_premises : string list;
+  law_left : law_span;
+  law_right : law_span;
+  law_conservation : string;
+  law_disjoint : string;
+  law_bytes : string;
+}
+
+(** The reviewed statement L11d.1 holds out. `off`, `n`, `k` are natural
+    element units; the span's measured `len` is `n`. *)
+let held_out_split_law : split_law =
+  { law_id = "liquid-split.extent-conservation";
+    law_owner = "L11d.1";
+    law_binders = [ "off"; "n"; "k" ];
+    law_premises =
+      [ "k <= n";
+        "the extent [off, off+n) fits the validated allocation domain";
+        "an element is `width` bytes, with width > 0 (layout premise)" ];
+    law_left = { lp_off = LOff; lp_len = LK };
+    law_right = { lp_off = LAdd (LOff, LK); lp_len = LSub (LLen, LK) };
+    law_conservation = "left.len + right.len = n";
+    law_disjoint = "no element index belongs to both halves";
+    law_bytes = "byte address = element index * width, checked to fit Int64" }
+
+let rec instantiate_law ~(off : LiquidIndex.t) ~(len : LiquidIndex.t)
+    ~(k : LiquidIndex.t) (t : law_term) : LiquidIndex.t =
+  match t with
+  | LOff -> off
+  | LLen -> len
+  | LK -> k
+  | LAdd (a, b) ->
+     LiquidIndex.add (instantiate_law ~off ~len ~k a) (instantiate_law ~off ~len ~k b)
+  | LSub (a, b) ->
+     LiquidIndex.nat_sub (instantiate_law ~off ~len ~k a)
+       (instantiate_law ~off ~len ~k b)
+
+(* ── structured evidence (L11d.1) ───────────────────────────────────────── *)
+
+type span_ev = { se_off : LiquidIndex.t; se_len : LiquidIndex.t; se_base : string }
+
+type call_evidence = {
+  ce_in : string;                (** the function the call appears in *)
+  ce_off : LiquidIndex.t;
+  ce_len : LiquidIndex.t;
+  ce_k : LiquidIndex.t;
+}
+
+type binder_ev = { be_role : string; be_name : string }
+
+type evidence = {
+  ev_law : string;
+  ev_module : string;
+  ev_span_ty : string;
+  ev_fields : string list;
+  ev_union : string;
+  ev_case : string;
+  ev_case_slots : string list;
+  ev_ids : (string * int) list;
+  ev_split : string;
+  ev_names : (int * string) list;  (** binder id → canonical name, for the subject *)
+  ev_binders : binder_ev list;
+  ev_premises : string list;
+  ev_left : span_ev;
+  ev_right : span_ev;
+  ev_calls : call_evidence list;
+  ev_width : int option;
+}
+
 type ctx = {
   mutable idx : LiquidIndex.env;
   pilot : pilot;
@@ -259,12 +427,23 @@ type ctx = {
   mutable splits : (string * split_info) list;
   mutable loc : string option;
   mutable aliases : (string * string) list;
+  module_name : string;
+  mutable names : (int * string) list;  (** binder id → canonical evidence name *)
+  mutable calls : call_evidence list;
+  mutable ev : evidence option;
 }
 
-let fresh (ctx : ctx) (hint : string) : LiquidIndex.t =
+(** A binder allocated for the *analysis*, with a canonical name for the
+    evidence. The name is the proof subject (`w.len`, `w.off`, `k`, …), so it is
+    stable under binder renumbering: two runs that agree on the source agree on
+    the evidence, whatever order the allocator handed out ids in. *)
+let fresh_named (ctx : ctx) ~(name : string) (hint : string) : LiquidIndex.t =
   let env, id = LiquidIndex.bind ctx.idx ~name:hint ~sort:LiquidTypes.SNat in
   ctx.idx <- env;
+  ctx.names <- (id, name) :: ctx.names;
   LiquidIndex.var id
+
+let fresh (ctx : ctx) (hint : string) : LiquidIndex.t = fresh_named ctx ~name:hint hint
 
 (** A borrow renames its variable (`s` becomes `s_tmp_ref1` in the body), so a
     lookup has to follow the rename before it can find the measurement. *)
@@ -549,21 +728,40 @@ let rec flatten (ctx : ctx) (s : tstmt) (acc : (string * texpr) list) :
         split must be a sequence of `let` bindings and a `return`%s"
        ctx.fn (at ctx)
 
+(* ── call sites and branches ─────────────────────────────────────────────── *)
+
+let requires_of (pragmas : Common.pragma list) : LiquidTypes.formula list =
+  List.filter_map
+    (function
+      | Common.LiquidPragma (kind, src) when kind = "Requires" -> (
+          try
+            match
+              (LiquidParse.parse_contract ~is_known_type:(fun _ -> false)
+                 LiquidTypes.KRequires src)
+                .LiquidTypes.formula
+            with
+            | Some f -> Some f
+            | None -> None
+          with Failure _ -> None)
+      | _ -> None)
+    pragmas
+
 let verify_split (ctx : ctx) (decls : typed_decl list) : unit =
   (* The parameter names are the *declaration's*: a pilot that reads a
      hard-coded `s`/`k` silently measures nothing for any other spelling. *)
   let decl =
     let rec go = function
       | [] -> None
-      | TFunction (_, _, n, _, params, _, body, _, _) :: rest ->
-         if name_of n = ctx.pilot.split_fn then Some (params, body) else go rest
+      | TFunction (_, _, n, _, params, _, body, _, pragmas) :: rest ->
+         if name_of n = ctx.pilot.split_fn then Some (params, body, pragmas)
+         else go rest
       | _ :: rest -> go rest
     in
     go decls
   in
   match decl with
   | None -> ()
-  | Some (params, body) ->
+  | Some (params, body, pragmas) ->
      ctx.fn <- ctx.pilot.split_fn;
      let whole_name, k_name =
        match params with
@@ -575,8 +773,9 @@ let verify_split (ctx : ctx) (decls : typed_decl list) : unit =
               (name_of a, match rest with Type.ValueParameter (b, _) :: _ -> name_of b | [] -> "k")
            | [] -> ("w", "k"))
      in
-     let s_len = fresh ctx "s_len" and s_off = fresh ctx "s_off" in
-     let k = fresh ctx "k" in
+     let s_len = fresh_named ctx ~name:(whole_name ^ ".len") "s_len" in
+     let s_off = fresh_named ctx ~name:(whole_name ^ ".off") "s_off" in
+     let k = fresh_named ctx ~name:k_name "k" in
      ctx.vars <-
        [ (whole_name, VSpan { len = s_len; off = s_off }); (k_name, VInt k) ];
      let binds, ret = flatten ctx body [] in
@@ -602,75 +801,91 @@ let verify_split (ctx : ctx) (decls : typed_decl list) : unit =
                 ctx.pilot.split_fn what (LiquidIndex.canonical actual)
                 (LiquidIndex.canonical expected) (at ctx)
          in
-         check ~what:(l ^ ".off") ~expected:s_off ~actual:left.b_off;
-         check ~what:(l ^ ".len") ~expected:k ~actual:left.b_len;
-         check ~what:(r ^ ".off") ~expected:(LiquidIndex.add s_off k)
-           ~actual:right.b_off;
-         check ~what:(r ^ ".len") ~expected:(LiquidIndex.nat_sub s_len k)
-           ~actual:right.b_len;
+         (* The expected terms come from the *held-out law*, instantiated at the
+            declaration's own binders — not from a second copy of the shape
+            written next to the check. `n` is the span's measured length. *)
+         let law = held_out_split_law in
+         let left_law =
+           { b_off = instantiate_law ~off:s_off ~len:s_len ~k law.law_left.lp_off;
+             b_len = instantiate_law ~off:s_off ~len:s_len ~k law.law_left.lp_len;
+             b_base = left.b_base }
+         in
+         let right_law =
+           { b_off = instantiate_law ~off:s_off ~len:s_len ~k law.law_right.lp_off;
+             b_len = instantiate_law ~off:s_off ~len:s_len ~k law.law_right.lp_len;
+             b_base = right.b_base }
+         in
+         check ~what:(l ^ ".off") ~expected:left_law.b_off ~actual:left.b_off;
+         check ~what:(l ^ ".len") ~expected:left_law.b_len ~actual:left.b_len;
+         check ~what:(r ^ ".off") ~expected:right_law.b_off ~actual:right.b_off;
+         check ~what:(r ^ ".len") ~expected:right_law.b_len ~actual:right.b_len;
          if left.b_base <> right.b_base then
            refuse
              "L11c: `%s` gives the halves different origins (`%s` and `%s`); \
               the two halves must share the input's base%s"
              ctx.pilot.split_fn left.b_base right.b_base (at ctx);
          (* Contiguity and conservation are *consequences* of the rules above,
-            not separate checks: `l.len = k`, `l.off = offset(w)` and
-            `r.off = offset(w) + k` put the right half exactly where the left
-            one ends, and `r.len = length(w) - k` with the precondition
-            `k <= length(w)` makes the two lengths add up. So an overlap is
-            refused by the `r.off` rule (with the precondition's arithmetic in
-            hand) and a lost byte by the `r.len` rule — which is why the two
-            extra conversions this pass used to run were deleted: they could
-            never fire once the rules held, and dead checks read as coverage. *)
-         (* Conservation is by construction, not by arithmetic: the left length
-            is literally `k` and the right literally `length(s) - k`, and the
-            precondition `0 <= k && k <= length(s)` says the subtraction is
-            exact. Stating it as a conversion would need ring reasoning
-            (`k + (n - k) = n`) that L11b deliberately does not have, and a
-            prover this pilot deliberately does not call; a wrong length is
-            already refused by the two rules above, which is the check that
-            matters. *)
-         ignore s_len;
-         (* The return must hand back exactly those two halves. *)
+            not separate checks: the law's right half starts where its left one
+            ends, and with the precondition `k <= n` the two lengths add up. So
+            an overlap is refused by the `r.off` rule and a lost byte by the
+            `r.len` rule. Conservation itself (`k + (n - k) = n`) needs ring
+            reasoning that L11b deliberately does not have; L11d.2 is where the
+            stated obligation gets a proof, and until then the evidence records
+            it as `[stated]` rather than claiming it. *)
+         (* The return must hand back exactly those two halves, *in the case's
+            own slot order*: `Both(left => r, right => l)` hands a caller a
+            left half at the right offset, so a reversed field is refused here
+            rather than silently accepted because both names were present. *)
+         let ordered fs =
+           List.map (fun (k, _) -> name_of k) fs = ctx.pilot.both_slots
+           && List.filter_map
+                (fun (_, e) ->
+                  match e with
+                  | TLocalVar (v, _) | TParamVar (v, _) -> Some (name_of v)
+                  | _ -> None)
+                fs
+              = [ l; r ]
+         in
          (match ret with
           | TUnionConstructor (_, c, fs)
-            when name_of c = ctx.pilot.both_case
-                 && List.length fs = 2
-                 && List.for_all
-                      (fun (_, e) ->
-                        match e with
-                        | TLocalVar (v, _) | TParamVar (v, _) ->
-                           List.mem (name_of v) [ l; r ]
-                        | _ -> false)
-                      fs ->
+            when name_of c = ctx.pilot.both_case && List.length fs = 2
+                 && ordered fs ->
              ()
           | _ ->
              refuse
                "L11c: `%s` must return the `%s` case built from the two halves \
-                it just constructed%s"
-               ctx.pilot.split_fn ctx.pilot.both_case (at ctx))
+                it just constructed, in the case's slot order%s"
+               ctx.pilot.split_fn ctx.pilot.both_case (at ctx));
+         (* Reflect what the analyser actually read, so a caller can replay the
+            obligation against the law instead of trusting a green exit. *)
+         ctx.ev <-
+           Some
+             { ev_law = law.law_id;
+               ev_module = ctx.module_name;
+               ev_span_ty = ctx.pilot.span_ty;
+               ev_fields = span_slots;
+               ev_union = ctx.pilot.union_ty;
+               ev_case = ctx.pilot.both_case;
+               ev_case_slots = ctx.pilot.both_slots;
+               ev_ids =
+                 [ ("record", ctx.pilot.record_id); ("split", ctx.pilot.split_id);
+                   ("length", ctx.pilot.len_id); ("offset", ctx.pilot.off_id) ];
+               ev_split = ctx.pilot.split_fn;
+               ev_names = ctx.names;
+               ev_binders =
+                 [ { be_role = "span"; be_name = whole_name };
+                   { be_role = "number"; be_name = k_name } ];
+               ev_premises =
+                 List.map LiquidTypes.string_of_formula (requires_of pragmas)
+                 @ law.law_premises;
+               ev_left = { se_off = left.b_off; se_len = left.b_len; se_base = left.b_base };
+               ev_right = { se_off = right.b_off; se_len = right.b_len; se_base = right.b_base };
+               ev_calls = [];
+               ev_width = ctx.pilot.width }
       | _ ->
          refuse
            "L11c: `%s` must build exactly two spans of `%s`%s"
            ctx.pilot.split_fn ctx.pilot.span_ty (at ctx))
-
-(* ── call sites and branches ─────────────────────────────────────────────── *)
-
-let requires_of (pragmas : Common.pragma list) : LiquidTypes.formula list =
-  List.filter_map
-    (function
-      | Common.LiquidPragma (kind, src) when kind = "Requires" -> (
-          try
-            match
-              (LiquidParse.parse_contract ~is_known_type:(fun _ -> false)
-                 LiquidTypes.KRequires src)
-                .LiquidTypes.formula
-            with
-            | Some f -> Some f
-            | None -> None
-          with Failure _ -> None)
-      | _ -> None)
-    pragmas
 
 let callee_requires (decls : typed_decl list) (fn : string) :
     (string list * LiquidTypes.formula list) option =
@@ -725,6 +940,11 @@ let split_actuals (ctx : ctx) (args : texpr list) : split_info =
            (at ctx))
   | _ -> refuse "L11c: `%s` calls `%s` with the wrong arity%s" ctx.fn ctx.pilot.split_fn (at ctx)
 
+let record_call (ctx : ctx) (info : split_info) : unit =
+  ctx.calls <-
+    { ce_in = ctx.fn; ce_off = info.si_off; ce_len = info.si_len; ce_k = info.si_k }
+    :: ctx.calls
+
 let rec walk (ctx : ctx) (decls : typed_decl list) (s : tstmt) : unit =
   match s with
   | TSkip _ -> ()
@@ -738,6 +958,7 @@ let rec walk (ctx : ctx) (decls : typed_decl list) (s : tstmt) : unit =
       | TFuncall (_, f, args, _, _) when qname f = ctx.pilot.split_fn ->
          let info = split_actuals ctx args in
          check_call ctx decls ctx.pilot.split_fn args;
+         record_call ctx info;
          ctx.splits <- (n, info) :: ctx.splits;
          ctx.vars <- (n, VOther) :: ctx.vars
       | TFuncall (_, f, args, _, _) ->
@@ -757,7 +978,9 @@ let rec walk (ctx : ctx) (decls : typed_decl list) (s : tstmt) : unit =
      (match e with
       | TFuncall (_, f, args, _, _) when qname f = ctx.pilot.split_fn ->
          check_call ctx decls ctx.pilot.split_fn args;
-         ctx.splits <- (n, split_actuals ctx args) :: ctx.splits;
+         let info = split_actuals ctx args in
+         record_call ctx info;
+         ctx.splits <- (n, info) :: ctx.splits;
          ctx.vars <- (n, VOther) :: ctx.vars
       | TFuncall (_, f, args, _, _) ->
          check_call ctx decls (qname f) args;
@@ -772,7 +995,9 @@ let rec walk (ctx : ctx) (decls : typed_decl list) (s : tstmt) : unit =
        match scrutinee with
        | TFuncall (_, f, args, _, _) when qname f = ctx.pilot.split_fn ->
           check_call ctx decls ctx.pilot.split_fn args;
-          Some (split_actuals ctx args)
+          let info = split_actuals ctx args in
+          record_call ctx info;
+          Some info
        | TParamVar (n, _) | TLocalVar (n, _) | TTemporary (n, _) ->
           List.assoc_opt (name_of n) ctx.splits
        | _ -> None
@@ -798,8 +1023,10 @@ let rec walk (ctx : ctx) (decls : typed_decl list) (s : tstmt) : unit =
                in
                match slots with
                | [ (l, l_rename); (r, r_rename) ] ->
-                  let l_len = fresh ctx "l_len" and l_off = fresh ctx "l_off" in
-                  let r_len = fresh ctx "r_len" and r_off = fresh ctx "r_off" in
+                  let l_len = fresh_named ctx ~name:(l ^ ".len") "l_len" in
+                  let l_off = fresh_named ctx ~name:(l ^ ".off") "l_off" in
+                  let r_len = fresh_named ctx ~name:(r ^ ".len") "r_len" in
+                  let r_off = fresh_named ctx ~name:(r ^ ".off") "r_off" in
                   let bind_span n len off =
                     ctx.vars <- (n, VSpan { len; off }) :: ctx.vars
                   in
@@ -892,9 +1119,11 @@ let check_function (ctx : ctx) (decls : typed_decl list) (name : string)
     (fun (Type.ValueParameter (p, t)) ->
       let n = name_of p in
       if ty_is_named t ctx.pilot.span_ty then
-        let len = fresh ctx (n ^ "_len") and off = fresh ctx (n ^ "_off") in
+        let len = fresh_named ctx ~name:(n ^ ".len") (n ^ "_len") in
+        let off = fresh_named ctx ~name:(n ^ ".off") (n ^ "_off") in
         ctx.vars <- (n, VSpan { len; off }) :: ctx.vars
-      else if ty_is_int64 t then ctx.vars <- (n, VInt (fresh ctx n)) :: ctx.vars
+      else if ty_is_int64 t then
+        ctx.vars <- (n, VInt (fresh_named ctx ~name:n n)) :: ctx.vars
       else ctx.vars <- (n, VOther) :: ctx.vars)
     params;
   (* The function's own `Requires` are its assumptions. *)
@@ -906,40 +1135,185 @@ let check_function (ctx : ctx) (decls : typed_decl list) (name : string)
     (requires_of pragmas);
   walk ctx decls body
 
-let check_module (m : typed_module) : string option =
-  let (TypedModule (_, decls)) = m in
+(* ── evidence: rendering and numeric interpretation (L11d.1) ─────────────── *)
+
+let rec eval (t : LiquidIndex.t) : int option =
+  match t.LiquidIndex.node with
+  | LiquidIndex.Lit n -> Some n
+  | LiquidIndex.Add (a, b) -> (
+      match (eval a, eval b) with
+      | Some x, Some y when y >= 0 && x <= max_int - y -> Some (x + y)
+      | _ -> None)
+  | LiquidIndex.NatSub (a, b) -> (
+      match (eval a, eval b) with
+      | Some x, Some y -> Some (max 0 (x - y))
+      | _ -> None)
+  | LiquidIndex.Var _ | LiquidIndex.Mod _ | LiquidIndex.Def _ | LiquidIndex.Machine _ -> None
+
+type range = { rg_start : int; rg_len : int }
+
+let range_of (off : LiquidIndex.t) (len : LiquidIndex.t) : range option =
+  match (eval off, eval len) with Some o, Some l -> Some { rg_start = o; rg_len = l } | _ -> None
+
+(** Byte addresses are element indices scaled by the width, and the scaling is
+    *checked*: an extent that would overflow the host integer is [None], not a
+    wrapped range. *)
+let byte_range ~(width : int) (r : range) : range option =
+  if width <= 0 then None
+  else if r.rg_len > max_int / width || r.rg_start > max_int / width then None
+  else Some { rg_start = r.rg_start * width; rg_len = r.rg_len * width }
+
+(** How the evidence reads a term: a decidable literal *is* a checked machine
+    offset, and anything else stays an unbounded index rather than being
+    given a number the pilot did not derive. *)
+let interpretation (t : LiquidIndex.t) : string =
+  match eval t with Some n -> Printf.sprintf "checked %d" n | None -> "unbounded"
+
+let rec render_term ?(names = []) (t : LiquidIndex.t) : string =
+  let r = render_term ~names in
+  match t.LiquidIndex.node with
+  | LiquidIndex.Var id -> (
+      match List.assoc_opt id names with
+      | Some n -> n
+      | None -> LiquidIndex.canonical t)
+  | LiquidIndex.Lit n -> string_of_int n
+  | LiquidIndex.Add (a, b) -> Printf.sprintf "(+ %s %s)" (r a) (r b)
+  | LiquidIndex.NatSub (a, b) -> Printf.sprintf "(- %s %s)" (r a) (r b)
+  | LiquidIndex.Mod (a, b) -> Printf.sprintf "(mod %s %s)" (r a) (r b)
+  | LiquidIndex.Def (f, args) ->
+     Printf.sprintf "(%s%s)" f
+       (String.concat "" (List.map (fun a -> " " ^ r a) args))
+  | LiquidIndex.Machine (w, op, a, b) ->
+     Printf.sprintf "(#%s %s %s %s)" (LiquidIndex.string_of_elem w)
+       (match op with LiquidIndex.MAdd -> "+" | LiquidIndex.MSub -> "-")
+       (r a) (r b)
+
+let render_range (r : range) : string =
+  Printf.sprintf "[%d,%d) len=%d" r.rg_start (r.rg_start + r.rg_len) r.rg_len
+
+(** Deterministic, line-oriented: a caller diffs this against a stored subject
+    instead of parsing a tree. *)
+let render_evidence (e : evidence) : string =
+  let term = render_term ~names:e.ev_names in
+  let buf = Buffer.create 1024 in
+  let line fmt = Printf.ksprintf (fun s -> Buffer.add_string buf (s ^ "\n")) fmt in
+  line "# liquid split evidence (L11d.1)";
+  line "law: %s [%s]" e.ev_law held_out_split_law.law_owner;
+  line "module: %s" e.ev_module;
+  line "record: %s fields %s" e.ev_span_ty (String.concat "," e.ev_fields);
+  line "union: %s case %s slots %s" e.ev_union e.ev_case
+    (String.concat "," e.ev_case_slots);
+  List.iter (fun (what, id) -> line "decl: %s id=%d" what id) e.ev_ids;
+  List.iter (fun b -> line "binder: %s %s" b.be_role b.be_name) e.ev_binders;
+  List.iter (fun p -> line "premise: %s" p) e.ev_premises;
+  (match e.ev_width with
+   | Some w -> line "width: %d (module declaration)" w
+   | None -> line "width: host-supplied (no `element_width` declaration)");
+  (* The constructed spans, in the law's own vocabulary (`w.off`, `k`, `w.len`),
+     so a reader compares them to the law rather than to the allocator's ids. *)
+  line "obligation %s: left = (%s, %s)" held_out_split_law.law_id
+    (term e.ev_left.se_off) (term e.ev_left.se_len);
+  line "obligation %s: right = (%s, %s)" held_out_split_law.law_id
+    (term e.ev_right.se_off) (term e.ev_right.se_len);
+  line "obligation left.base = right.base = %s [checked against the law]"
+    e.ev_left.se_base;
+  (* Conservation and disjointness are `[stated]`: L11d.2 owns their proof and
+     nothing in this line claims one. *)
+  line "obligation conservation: %s [stated: L11d.2]"
+    held_out_split_law.law_conservation;
+  line "obligation disjoint: %s [stated: L11d.2]" held_out_split_law.law_disjoint;
+  line "obligation bytes: %s [premise: width]" held_out_split_law.law_bytes;
+  List.iter
+    (fun c ->
+      line "call: %s calls %s" c.ce_in e.ev_split;
+      line "  operands: off=%s n=%s k=%s" (term c.ce_off) (term c.ce_len)
+        (term c.ce_k);
+      line "  interpretation: off=%s n=%s k=%s"
+        (interpretation c.ce_off) (interpretation c.ce_len) (interpretation c.ce_k);
+      match (range_of c.ce_off c.ce_len, eval c.ce_k) with
+      | Some whole, Some k when k <= whole.rg_len ->
+         let left = { rg_start = whole.rg_start; rg_len = k } in
+         let right = { rg_start = whole.rg_start + k; rg_len = whole.rg_len - k } in
+         line "  element ranges: left %s, right %s" (render_range left)
+           (render_range right);
+         line "  conservation: %d + %d = %d [checked]" left.rg_len right.rg_len
+           whole.rg_len;
+         line "  disjoint: %d <= %d [checked]" (left.rg_start + left.rg_len)
+           right.rg_start;
+         (match e.ev_width with
+          | Some w -> (
+              match (byte_range ~width:w left, byte_range ~width:w right) with
+              | Some bl, Some br ->
+                 line "  byte ranges: left %s, right %s" (render_range bl)
+                   (render_range br)
+              | _ ->
+                 line
+                   "  byte ranges: [gap] the element extent does not fit a \
+                    checked machine offset at width %d" w)
+          | None -> line "  byte ranges: [premise] width supplied by the host")
+      | Some whole, Some k ->
+         line "  ranges: [REFUSED] k=%d exceeds the measured extent %s" k
+           (render_range whole)
+      | _ -> line "  ranges: symbolic (unbounded index arithmetic)")
+    (List.rev e.ev_calls);
+  Buffer.contents buf
+
+let check_module_evidence (m : typed_module) : string option * evidence option =
+  let (TypedModule (mod_name, decls)) = m in
   match recognize decls with
-  | None -> None
+  | None -> (None, None)
   | Some pilot ->
      let ctx =
        { idx = LiquidIndex.empty; pilot; vars = []; scopes = [ [] ]; dropped = [];
-         fn = ""; splits = []; loc = None; aliases = [] }
+         fn = ""; splits = []; loc = None; aliases = [];
+         module_name = Identifier.mod_name_string mod_name; names = [];
+         calls = []; ev = None }
      in
-     try
-       (try verify_split ctx decls
-        with Outside msg ->
-          refuse
-            "L11c: the checked split `%s` uses a construct the pilot cannot \
-             read (%s)" pilot.split_fn msg);
-       List.iter
-         (fun d ->
-           match d with
-           | TFunction (_, _, n, _, params, _, body, _, pragmas) ->
-              (try check_function ctx decls (name_of n) params body pragmas
-               with
-               | Outside _ when name_of n <> pilot.split_fn ->
-                  (* Skipped, not checked: the pass is inert for a function it
-                     cannot read. A real refusal is a [Refuse] and reaches the
-                     user — the distinction is the whole reason [Outside]
-                     exists. *)
-                  ()
-               | Outside msg ->
-                  raise
-                    (Refuse
-                       (Printf.sprintf
-                          "L11c: `%s` is the checked split but uses a construct \
-                           the pilot cannot read (%s)" pilot.split_fn msg)))
-           | _ -> ())
-         decls;
-       None
-     with Refuse msg -> Some msg
+     match
+       (try
+          (try verify_split ctx decls
+           with Outside msg ->
+             refuse
+               "L11c: the checked split `%s` uses a construct the pilot cannot \
+                read (%s)" pilot.split_fn msg);
+          `Ok ()
+        with Refuse msg -> `Refused msg)
+     with
+     | `Refused msg -> (Some msg, None)
+     | `Ok () ->
+        (try
+           List.iter
+             (fun d ->
+               match d with
+               | TFunction (_, _, n, _, params, _, body, _, pragmas) ->
+                  (try check_function ctx decls (name_of n) params body pragmas
+                   with
+                   | Outside _ when name_of n <> pilot.split_fn ->
+                      (* Skipped, not checked: the pass is inert for a function
+                         it cannot read. A real refusal is a [Refuse] and
+                         reaches the user. *)
+                      ()
+                   | Outside msg ->
+                      raise
+                        (Refuse
+                           (Printf.sprintf
+                              "L11c: `%s` is the checked split but uses a \
+                               construct the pilot cannot read (%s)"
+                              pilot.split_fn msg)))
+               | _ -> ())
+             decls;
+           let ev =
+             match ctx.ev with
+             | None -> None
+             | Some e ->
+                (* `names` is filled by the per-function walk too, so the final
+                   evidence carries every binder the calls mention. *)
+                Some { e with ev_calls = List.rev ctx.calls; ev_names = ctx.names }
+           in
+           (None, ev)
+         with Refuse msg -> (Some msg, None))
+
+let check_module (m : typed_module) : string option = fst (check_module_evidence m)
+
+let evidence_of_module (m : typed_module) : evidence option =
+  snd (check_module_evidence m)
