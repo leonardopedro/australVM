@@ -1,0 +1,148 @@
+-- mm0-comparator v1 — approved statements for store_projection_toy
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: store_projection_toy
+-- closure-sha256: 09842af8888899541cef6b58221d346616fe64310cc6b102506f512f81cedcbf
+-- theory-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+-- statements-sha256: abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e
+
+provable sort Prop;
+delimiter $ ( ) $;
+sort l0;
+sort l1;
+term l2: l1;
+term l3: l0;
+term l4 (x: l0): l0;
+term l5 (m: l1) (a v: l0): l1;
+term l6 (m: l1) (a: l0): l0;
+term l7 (m: l1): Prop;
+term l8 (m: l1) (a: l0): Prop;
+term l9 (x y: l0): Prop;
+term l10 (x y: l0): Prop;
+axiom l11 (x: l0): $ l10 x x $;
+axiom l12 (x y z: l0) (h1: $ l10 x y $) (h2: $ l10 y z $): $ l10 x z $;
+axiom l13 (x y: l0) (h: $ l9 x y $): $ l9 y x $;
+axiom l14 (x y: l0) (h: $ l10 x y $): $ l10 (l4 x) (l4 y) $;
+axiom l15 (x: l0): $ l10 (l4 (l4 x)) (l4 x) $;
+axiom l16 (a: l0): $ l10 (l6 l2 a) l3 $;
+axiom l17: $ l7 l2 $;
+axiom l18 (a v: l0): $ l7 (l5 l2 a v) $;
+axiom l19 (a b va vb: l0):
+  $ l7 (l5 (l5 l2 a va) b vb) $;
+axiom l20 (m: l1) (a v: l0): $ l10 (l6 (l5 m a v) a) v $;
+axiom l21 (m: l1) (a v: l0): $ l8 (l5 m a v) a $;
+axiom l22 (m: l1) (a b v: l0) (h: $ l9 a b $)
+  (k: $ l8 m b $) (f: $ l7 m $):
+  $ l8 (l5 m a v) b $;
+axiom l23 (m: l1) (x y w: l0) (h: $ l9 x y $)
+  (k: $ l8 m x $):
+  $ l10 (l6 (l5 m x w) y) (l6 m y) $;
+axiom l24 (m: l1) (x y w: l0) (h: $ l9 x y $)
+  (j: $ l8 m y $) (k: $ l8 m x $):
+  $ l8 (l5 m x w) y $;
+axiom l25 (m: l1) (x y w: l0) (h: $ l9 x y $)
+  (j: $ l8 (l5 m x w) y $):
+  $ l8 m y $;
+axiom l26 (m: l1) (a b v: l0) (h: $ l9 a b $) (k: $ l7 m $):
+  $ l10 (l6 (l5 m a v) b) (l6 m b) $;
+axiom l27 (m: l1) (x y z w: l0) (vx vy vz vw: l0)
+  (hxy: $ l9 x y $) (hxz: $ l9 x z $) (hxw: $ l9 x w $)
+  (hyz: $ l9 y z $) (hyw: $ l9 y w $) (hzw: $ l9 z w $):
+  $ l10 (l6 (l5 (l5 (l5 (l5 m x vx) y vy) z vz) w vw) x) l3 $;
+axiom l28 (m: l1) (x y z w: l0) (vx vy vz vw: l0)
+  (hxy: $ l9 x y $) (hxz: $ l9 x z $) (hxw: $ l9 x w $)
+  (hyz: $ l9 y z $) (hyw: $ l9 y w $) (hzw: $ l9 z w $):
+  $ l10 (l6 (l5 (l5 (l5 (l5 m x vx) y vy) z vz) w vw) y) vy $;
+term l29 (m: l1) (a v: l0): l1;
+axiom l30 (m: l1) (x w: l0) (k: $ l8 m x $):
+  $ l10 (l6 (l29 m x w) x) (l6 m x) $;
+axiom l31 (m: l1) (x y w: l0) (h: $ l9 x y $):
+  $ l10 (l6 (l29 m x w) y) (l6 m y) $;
+def l32 (m: l1) (a v: l0): l1 = $ l5 m a v $;
+def l33 (m: l1) (a v: l0): l1 = $ l5 m a v $;
+def l34 (m: l1) (a: l0): l0 = $ l6 m a $;
+def l35 (m: l1) (a: l0): l0 = $ l6 m a $;
+def l36 (m: l1) (a v: l0): l1 = $ l5 m a (l4 v) $;
+def l37 (m: l1) (a v: l0): l1 = $ l5 m a (l4 v) $;
+def l38 (m: l1) (a: l0): l0 = $ l4 (l6 m a) $;
+def l39 (m: l1) (a: l0): l0 = $ l4 (l6 m a) $;
+theorem l40 (a: l0):
+  $ l10 (l6 l2 a) l3 $;
+theorem l41 (m: l1) (a v: l0):
+  $ l10 (l6 (l32 m a v) a) v $;
+theorem l42 (m: l1) (a v: l0):
+  $ l10 (l6 (l33 m a v) a) v $;
+theorem l43 (m: l1) (a v: l0):
+  $ l10 (l6 (l32 m a v) a) (l6 (l33 m a v) a) $;
+theorem l44 (m: l1) (a: l0):
+  $ l10 (l34 m a) (l35 m a) $;
+theorem l45 (m: l1) (a b v: l0)
+    (h: $ l9 a b $) (k: $ l7 m $):
+  $ l10 (l6 (l32 m a v) b) (l6 m b) $;
+theorem l46 (m: l1) (a b v: l0)
+    (h: $ l9 a b $) (k: $ l7 m $):
+  $ l10 (l6 (l33 m a v) b) (l6 m b) $;
+theorem l47 (a b va vb: l0) (h: $ l9 a b $):
+  $ l10 (l6 (l32 (l32 l2 a va) b vb) a) va $;
+theorem l48 (a b va vb: l0) (h: $ l9 a b $):
+  $ l10 (l6 (l33 (l33 l2 a va) b vb) a) va $;
+theorem l49 (a b va vb va2: l0)
+    (h: $ l9 a b $):
+  $ l10 (l6 (l32 (l32 (l32 l2 a va) b vb) a va2) b) vb $;
+theorem l50 (a b va vb va2: l0)
+    (h: $ l9 a b $):
+  $ l10 (l6 (l33 (l33 (l33 l2 a va) b vb) a va2) b) vb $;
+theorem l51 (a b va vb va2: l0):
+  $ l10 (l6 (l32 (l32 (l32 l2 a va) b vb) a va2) a) va2 $;
+theorem l52 (a b va vb va2: l0):
+  $ l10 (l6 (l33 (l33 (l33 l2 a va) b vb) a va2) a) va2 $;
+theorem l53 (a b va vb va2: l0)
+    (h: $ l9 a b $):
+  $ l8 (l32 (l32 (l32 l2 a va) b vb) a va2) b $;
+theorem l54 (a b va vb va2: l0) (h: $ l9 a b $)
+    (k: $ l8 (l32 (l32 (l32 l2 a va) b vb) a va2) b $):
+  $ l8 (l32 (l32 l2 a va) b vb) b $;
+theorem l55 (a b va vb va2 va3: l0)
+    (h: $ l9 a b $):
+  $ l10 (l6 (l32 (l32 (l32 (l32 l2 a va) b vb) a va2) a va3) b) vb $;
+theorem l56
+    (a b c va vb vc: l0) (hab: $ l9 a b $) (hac: $ l9 a c $):
+  $ l10 (l6 (l32 (l32 (l32 l2 a va) b vb) c vc) a) va $;
+theorem l57
+    (a b c d va vb vc vd: l0)
+    (hab: $ l9 a b $) (hac: $ l9 a c $) (had: $ l9 a d $)
+    (hbc: $ l9 b c $) (hbd: $ l9 b d $) (hcd: $ l9 c d $):
+  $ l10 (l6 (l32 (l32 (l32 (l32 l2 a va) b vb) c vc) d vd) a) l3 $;
+theorem l58
+    (a b c d e va vb vc vd ve: l0)
+    (hbc: $ l9 b c $) (hbd: $ l9 b d $) (hbe: $ l9 b e $)
+    (hcd: $ l9 c d $) (hce: $ l9 c e $) (hde: $ l9 d e $):
+  $ l10 (l6 (l32 (l32 (l32 (l32 (l32 l2 a va) b vb) c vc) d vd) e ve) b) l3 $;
+theorem l59
+    (a b c d va vb vc vd: l0)
+    (hab: $ l9 a b $) (hac: $ l9 a c $) (had: $ l9 a d $)
+    (hbc: $ l9 b c $) (hbd: $ l9 b d $) (hcd: $ l9 c d $):
+  $ l10 (l6 (l32 (l32 (l32 (l32 l2 a va) b vb) c vc) d vd) b) vb $;
+theorem l60
+    (a b c d va vb vc vd: l0):
+  $ l10
+      (l6 (l32 (l32 (l32 (l32 l2 a va) b vb) c vc) d vd) c)
+      (l6 (l33 (l33 (l33 (l33 l2 a va) b vb) c vc) d vd) c) $;
+theorem l61 (m: l1) (a v: l0):
+  $ l10 (l6 (l36 m a v) a) (l4 v) $;
+theorem l62 (m: l1) (a v: l0):
+  $ l10 (l6 (l36 m a v) a) (l6 (l37 m a v) a) $;
+theorem l63 (m: l1) (a: l0):
+  $ l10 (l38 m a) (l39 m a) $;
+theorem l64 (m: l1) (a v: l0):
+  $ l10 (l38 (l32 m a v) a) (l4 v) $;
+theorem l65 (m: l1) (a v: l0):
+  $ l10 (l38 (l36 m a v) a) (l4 v) $;
+theorem l66 (m: l1) (a v: l0) (k: $ l8 m a $):
+  $ l10 (l6 (l29 m a v) a) (l6 m a) $;
+theorem l67 (a b va vb va2: l0)
+    (h: $ l9 a b $):
+  $ l10 (l6 (l29 (l32 (l32 l2 a va) b vb) a va2) a) va $;
