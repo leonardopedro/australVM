@@ -993,7 +993,11 @@ the artifact, so `mm0-c` checks them too.
   **The thirteen former `copy` rows.**
   `scripts/w3-drift-controls` is those thirteen controls under one entry point
   (`<case>`, `--list`, or `all`), plus `cert-approved` for the certificate's
-  approved branch — fourteen cases. Each case builds a scratch copy, drifts one
+  approved branch — fourteen cases, and `mm0-toolchain-gap` as the fifteenth:
+  it runs the *unmodified* gate with `mm0-rs`/`mm0-c` removed from `PATH` and
+  requires the four W9.3 measures to report `[gap]` and the run to exit 0, which
+  is what makes every other case runnable on a host that has no mm0 toolchain.
+  Each case builds a scratch copy, drifts one
   claim in it, runs the whole gate with the read-only override that points at the
   copy, and requires exit 1 with the expected `[FAIL]` line — and the `[pass]`
   lines that must not move. Since 2026-11-19 that second half is universal
@@ -1029,7 +1033,7 @@ the artifact, so `mm0-c` checks them too.
   2026-11-19	de8b11b2	2	14	2649	189	14/14	held
   ```
 
-  That is all 14 cases in **62m43s** at `-j 1` (268 s each) against **44m9s** at
+  That is all 14 cases in those rows in **62m43s** at `-j 1` (268 s each) against **44m9s** at
   `-j 2` (189 s of wall clock per case, ~379 s of work, because two gate runs
   share the core) — 18m34s, 30%, off. The second core is worth 1.42x rather than
   2x because a single gate run is itself mostly serial, and every case still
@@ -1038,7 +1042,11 @@ the artifact, so `mm0-c` checks them too.
   read-only. Those two rows predate the recorder and were entered from the runs'
   own gate logs; every row after them is written by the run itself. Reproduce
   with `W3_DRIFT_RECORD=docs/data/w3/drift-timings.tsv bash
-  scripts/w3-drift-controls -j 2 all`, under `nix develop`. The five read-only
+  scripts/w3-drift-controls -j 2 all`, under `nix develop`. With
+  `mm0-toolchain-gap` added, 15 requested cases took **18m49s** at `-j 12` on a
+  twelve-core host on 2026-11-20: 14 held and `liquid-golden` reported `[gap]`
+  for the absent why3. A skipped case is counted apart from `held` in that row,
+  so a `[gap]` cannot be recorded as a hold. The five read-only
   `*-drift-control` scripts are separate scripts and write no row of their own;
   measured the same way, they take 22m44s serial against 17m22s
   at `-P 2`, all five holding — so the two parallel halves together go from

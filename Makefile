@@ -124,9 +124,11 @@ HOST_LOADER = /lib64/ld-linux-x86-64.so.2
 # and reads the repository without writing it. The exception is
 # `obj-drift-control`, which edits the tree and rebuilds the compiler, so it
 # stays last and serial. Measured 2026-11-18 on a two-core host, everything
-# holding either way: the 14 `w3-drift-controls` cases take 62m43s at -j 1 and
-# 44m9s at -j 2, the read-only controls 22m44s serial and 17m22s at -P 2 (that
-# figure measured with five of them; the two L11 controls joined the list later) —
+# holding either way: the then-14 `w3-drift-controls` cases take 62m43s at -j 1
+# and 44m9s at -j 2 (`mm0-toolchain-gap` joined as the 15th afterwards; 15/15 in
+# 18m49s at -j 12 on 2026-11-20), the read-only controls 22m44s serial and
+# 17m22s at -P 2 (that figure measured with five of them; the two L11 controls
+# joined the list later) —
 # 1h25m27s against 1h01m31s for the two halves, 23m56s (28%) off. Each core is
 # worth ~1.4x, not 2x, because a gate run is itself mostly serial. The first half
 # writes a row per run to `docs/data/w3/drift-timings.tsv` when

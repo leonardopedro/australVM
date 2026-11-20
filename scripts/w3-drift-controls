@@ -22,12 +22,14 @@
 # speed-up available — a case *is* one full gate run — and it is bounded by the
 # cores: this host has two.
 #
-# Measured 2026-11-18, all 14 cases, same tree, same `nix develop`:
+# Measured 2026-11-18, the 14 cases then present, same tree, same `nix develop`:
 #   -j 1  62m43s   (~269 s/case)
 #   -j 2  44m9s    (~379 s/case: two gate runs contend, so the second core is
 #                   worth 1.42x, not 2x — a gate run is not itself parallel)
 # i.e. 18m34s (30%) off the sequential wall clock, which is what `make
 # drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
+# `mm0-toolchain-gap` is the 15th case (added 2026-11-20); measured alone at 128s
+# and 15/15 in 18m49s at -j 12 on a twelve-core host the same day.
 #
 # `w3-approved-row` is the one case whose subject is an *approved* §W3 row, and
 # no §W3 row is approved in this tree: it copies `mm0/approved/` into scratch and
@@ -100,6 +102,10 @@ expect_fail() {  # log, check text
 }
 expect_pass() {  # log, check text
     grep -qF "[pass] $1" "$2" || { fail "$CASE: $1 did not stay green"; return 1; }
+}
+expect_gap() {  # log, check text — `gap` prints `[gap]` followed by two spaces
+    grep -qF "[gap]  $1" "$2" || { fail "$CASE: $1 did not report a gap"; return 1; }
+    say "  [gap] $1"
 }
 expect_detail() {  # log, anchor, substring
     grep -F "$1" "$2" | grep -qF "$3" || {
@@ -327,10 +333,52 @@ PY
     expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
+# The negative control for the gate's "absent tool is a gap" branch. The W9.3
+# measures need mm0-rs/mm0-c, so where they are missing the gate must report
+# `[gap]` rather than `[FAIL]` — otherwise the baseline is red for a tool and
+# every control above that needs a green unmutated run stops being runnable on
+# that host. This case runs the gate *unmodified* with the two commands taken out
+# of PATH and requires the four measures to be gaps and the run to exit 0. On a
+# host where they are already absent nothing is removed and the same lines are
+# asserted; where a directory provides them, its other tools (python3, …) are
+# re-exposed through a shim so the gate still works.
+case_mm0-toolchain-gap() {
+    local d f b shim="$cw/bin" stripped
+    local -a keep=()
+    mkdir -p "$shim"
+    local IFS=:
+    for d in $PATH; do
+        [ -n "$d" ] || continue
+        if [ -x "$d/mm0-rs" ] || [ -x "$d/mm0-c" ]; then
+            for f in "$d"/*; do
+                b="${f##*/}"
+                case "$b" in mm0-rs|mm0-c) continue ;; esac
+                [ -e "$shim/$b" ] || ln -s "$f" "$shim/$b" 2>/dev/null
+            done
+        else
+            keep+=("$d")
+        fi
+    done
+    unset IFS
+    if [ "${#keep[@]}" -gt 0 ]; then
+        stripped="$shim:$(IFS=:; printf '%s' "${keep[*]}")"
+    else
+        stripped="$shim"
+    fi
+    local rc=0
+    gate_run "$cw/g" PATH="$stripped" || rc=$?
+    [ "$rc" -eq 0 ] || { fail "$CASE: the gate exits $rc where a missing tool is a gap"; return 1; }
+    expect_gap "W9.3: the memory projection not checked (mm0-rs/mm0-c absent" "$cw/g" &&
+    expect_gap "W9.3: the toy projection's theorems not checked (mm0-rs/mm0-c absent" "$cw/g" &&
+    expect_gap "W9.3: the toy's shape figures not compared (no mm0-rs measurement here)" "$cw/g" &&
+    expect_gap "W9.3: the toy's proofs not mutation-tested (mm0-rs absent" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g"
+}
+
 CASES="phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage
 phase-d-imported-theory phase-d-self-vocabulary phase-d-measured-coverage
 isa-hypothesis-pin clif-vocabulary clif-citations witness-axiom memsafe-edge
-liquid-golden cert-approved w3-approved-row"
+liquid-golden cert-approved w3-approved-row mm0-toolchain-gap"
 
 # One case, in its own scratch dir and temporary root. Runs in a subshell: the
 # report lands in `$work/<case>/report` and the status in `$work/<case>/status`,
@@ -402,7 +450,14 @@ run_all() {  # case names on stdin
     wait
     local status=0 held=0
     for c in "${order[@]}"; do
-        if report_case "$c"; then held=$((held + 1)); else status=1; fi
+        # A skipped case exits 0 with exit 2 unavailable (it is inside a subshell),
+        # so it is told apart by its marker: counting it as held would make the
+        # recorded row claim a hold for a case this shell never ran.
+        if report_case "$c"; then
+            [ -f "$work/$c/skipped" ] || held=$((held + 1))
+        else
+            status=1
+        fi
     done
     # The wall clock belongs to the run, not to the caller: record it here, where
     # both entry points (all, one case) end up.

@@ -516,11 +516,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   still green. One full gate run.
 - `scripts/w3-drift-controls` — one case for each of the thirteen checks the
   census classified `copy`, plus the certification run with an approval present
-  (`<case>`, `--list`, `all`, `-j N`); 14 cases: Phase D's two
+  (`<case>`, `--list`, `all`, `-j N`); 15 cases: Phase D's two
   trust splits and its four coverage/vocabulary claims, the W8 hypothesis pin,
   the `clif_step` vocabulary and pinned citations, the witness's axiom table, the
-  memsafe edge census, the Liquid golden, and the refinement's certificate with an
-  approval present. Each builds a scratch copy, drifts one claim in it, runs the
+  memsafe edge census, the Liquid golden, the refinement's certificate with an
+  approval present, and `mm0-toolchain-gap` (the gate's "absent tool is a gap"
+  branch: `mm0-rs`/`mm0-c` are taken out of `PATH` and the four W9.3 measures
+  must read `[gap]` with the run still exiting 0 — otherwise every control above
+  that needs a green baseline is unrunnable on a host without them). Each builds
+  a scratch copy, drifts one claim in it, runs the
   whole gate with the read-only override that points at the copy
   (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
   `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
@@ -535,9 +539,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   scratch approval root. One full gate run per case; logs kept under
   `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
   speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
-  repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
-  `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
-  cores suggest, because a gate run does not itself parallelise. The last
+  repository only read), and measured 2026-11-18 the then-14 cases take 62m43s
+  at `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
+  cores suggest, because a gate run does not itself parallelise. (`mm0-toolchain-gap`
+  joined as the 15th; 15 requested in 18m49s at `-j 12` on 2026-11-20, 14 held
+  and `liquid-golden` reported `[gap]` for the absent why3.) A case this shell
+  cannot exercise is counted apart from `held` in the recorded row, so the row
+  cannot claim a hold for a case that did not run. The last
   `copy` row, `W3: $_stem matches its approved statements`, is
   `w3-approved-row`: it copies the whole approved root into scratch and weakens
   one approved axiom there, so the check runs without the tree holding any new
