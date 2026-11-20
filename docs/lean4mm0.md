@@ -2252,6 +2252,13 @@ suggested at the 315 MB point. Four artifacts were cleaned up and are marked
 estimated: their sizes (506, 586, 607, 1 024 MB) times the class's median
 9.36 B/node.
 
+The working directories behind the counts — `classify-work/` here and `round3/`
+from §13.28 — have since been reclaimed. Before they were deleted every count
+above was re-derived from the artifacts: all 17 measured rows reproduce the
+nodes in this table exactly, so the table is the record now. `emit-long/`, which
+still holds `comm_map_id`, was left in place, and `arena-probe.txt`'s two paths
+are transcripts of files that were inside the reclamation.
+
 At §13.19's measured 385 B/node, fitting 12 GiB is a per-node budget:
 
 | declaration | nodes | arena at 385 B/node | fits 12 GiB at | shrink |
