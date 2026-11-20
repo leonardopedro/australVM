@@ -1009,11 +1009,12 @@ the artifact, so `mm0-c` checks them too.
 
   **The thirteen former `copy` rows.**
   `scripts/w3-drift-controls` is those thirteen controls under one entry point
-  (`<case>`, `--list`, or `all`), plus `cert-approved` for the certificate's
-  approved branch — fourteen cases. Each case builds a scratch copy, drifts one
-  claim in it, runs the whole gate with the read-only override that points at the
-  copy, and requires exit 1 with the expected `[FAIL]` line — and the `[pass]`
-  lines that must not move. Since 2026-11-19 that second half is universal
+  (`<case>`, `--list`, or `all`), plus `cert-approved` for the digest the
+  certificate's approval citation carries — fourteen cases. Each case builds a
+  scratch copy, drifts one claim in it, runs the whole gate with the read-only
+  override that points at the copy, and requires exit 1 with the expected
+  `[FAIL]` line — and the `[pass]` lines that must not move. Since 2026-11-19
+  that second half is universal
   rather than "where a second check reads the same copy": nine cases
   (`phase-d-theory-coverage`, `phase-d-imported-theory`,
   `phase-d-self-vocabulary`, `phase-d-measured-coverage`, `isa-hypothesis-pin`,
@@ -2728,20 +2729,30 @@ citations still passing — one uncertified claim, one failure. Recorded as the
 `certification-claim` row of `docs/data/w3/probes.tsv`.
 
 The approved branch — an approval exists, so a `[gap]` line is the drift — is
-measured too, and it took moving one path: the check asked
-`$repo_root/mm0/approved/isa.stmts` directly, which no override could reach, so it
-now asks `$_appr_root/isa.stmts` — the directory `AUSTRALVM_APPROVED_ROOT` already
-names for the §W3 rows — and `scripts/w3-drift-controls cert-approved` creates a
-scratch approval and runs the gate against it. Measured 2026-11-18: exit 1,
-`verify-invariants: 124 passed, 17 explained gap(s), 7 failed`, `[FAIL] W9.3:
-certification state matches mm0/approved/`, detail `…/approved/isa.stmts exists —
-clif.mm0 must cite it, not a gap`. Seven failures, not one, and the row says why:
-a scratch approval is inconsistent with the rest of the tree *by construction* —
-it is not the approved bytes, so the §W3 stmts column, the pending re-derivation,
-the composition counts and closure digests, the toy's axiom count and the staging
-count all move with it. A consistent approval is the owner's commit; the control's
-claim is only that the certificate line stops saying `[gap]` when an approval
-exists, and that is what it asserts. The model's other self-claim is
+measured too, and until the owner's approvals landed it took moving one path: the
+check asked `$repo_root/mm0/approved/isa.stmts` directly, which no override could
+reach, so it now asks `$_appr_root/isa.stmts` — the directory
+`AUSTRALVM_APPROVED_ROOT` already names for the §W3 rows. Measured 2026-11-18 with
+a scratch approval: exit 1, `verify-invariants: 124 passed, 17 explained gap(s),
+7 failed`, `[FAIL] W9.3: certification state matches mm0/approved/`, detail
+`…/approved/isa.stmts exists — clif.mm0 must cite it, not a gap`. Seven failures,
+not one, and the row said why: a scratch approval is inconsistent with the rest of
+the tree *by construction* — it is not the approved bytes, so the §W3 stmts
+column, the pending re-derivation, the composition counts and closure digests, the
+toy's axiom count and the staging count all move with it. A consistent approval is
+the owner's commit, so once the four §W3 approvals landed that branch became the
+tree's own state, and `scripts/w93-certification-drift-control` measures it in
+both directions from a copy of `mm0/clif.mm0` (`[gap]` with no approval, an
+uncited approval with one). What no scratch approval could reach is the digest the
+citation carries: a model may name the approval and still pin bytes it no longer
+holds, which is how a citation rots. `scripts/w3-drift-controls cert-approved`
+flips one hex digit on the copy's `-- cites: mm0/approved/isa.stmts` line, the copy
+read through the existing read-only `AUSTRALVM_CLIF`. Measured 2026-11-20: exit 1,
+`verify-invariants: 178 passed, 0 explained gap(s), 1 failed`, `[FAIL] W9.3: the
+refinement's citations still match their artifacts`, detail `stale citations:
+mm0/approved/isa.stmts`, with the certificate line itself, the `Phase D` trust
+split and the §W3 state cells still passing — one rotted citation, one failure.
+The model's other self-claim is
 driftable the same way, and measured: a copy of `mm0/clif.mm0` whose `-- proves:
 0 theorems` line says `1`, run with `AUSTRALVM_CLIF` at the copy, turns
 `[FAIL] W9: the CLIF model still claims no theorem` and nothing else —

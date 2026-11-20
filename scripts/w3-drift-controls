@@ -29,10 +29,11 @@
 # i.e. 18m34s (30%) off the sequential wall clock, which is what `make
 # drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
 #
-# `w3-approved-row` is the one case whose subject is an *approved* §W3 row, and
-# no §W3 row is approved in this tree: it copies `mm0/approved/` into scratch and
-# weakens an approved axiom's text there. Nothing is approved by it — a control
-# that wrote `mm0/approved/` would be self-approval.
+# `w3-approved-row` is the one case whose subject is an *approved* §W3 row: it
+# copies `mm0/approved/` into scratch and weakens an approved axiom's text there.
+# Nothing is approved by it — a control that wrote `mm0/approved/` would be
+# self-approval — and it does not depend on which rows are approved, only that
+# one is (since 2026-11-20 all four are).
 #
 # Every run also records its own wall clock, so a timing in the plan is a quoted
 # data row and not a number someone retyped. The row goes to
@@ -279,25 +280,33 @@ case_liquid-golden() {
     expect_pass "Liquid subset library extracts with the existing driver" "$cw/g"
 }
 
-# The certificate's *approved* branch: an approval exists, so a `[gap]` line is
-# the drift. It needs an approval to exist, and only the owner may commit one —
-# so the approval here lives in a scratch root the gate is pointed at, which is
-# the same read-only relocation `AUSTRALVM_APPROVED_ROOT` already provides.
+# The approval citation's *pin*. This case used to stage a scratch approval so
+# the certificate's `[gap]` branch was reachable; once the owner committed all
+# four §W3 approvals the approved branch became the tree's own state, and
+# `scripts/w93-certification-drift-control` measures it in both directions
+# (`[gap]` with no approval, an uncited approval with one). What neither of those
+# can reach is the digest the citation carries: a model may name the approval and
+# still pin bytes it no longer holds, which is how a citation rots. One hex digit
+# flipped on `-- cites: mm0/approved/isa.stmts` in a copy of `mm0/clif.mm0`,
+# read through the existing read-only `AUSTRALVM_CLIF`, is that drift.
 case_cert-approved() {
-    mkdir -p "$cw/approved"
-    printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$cw/approved/isa.stmts"
-    gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
-    expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
-    expect_detail "isa.stmts exists" "$cw/g" "clif.mm0 must cite it, not a gap" &&
-    # The approval is inconsistent with everything else *by construction* — a
-    # consistent one is the owner's commit, not something a control may create —
-    # so six comparisons that read the approved copy also move. They are
-    # consequences of the same drift, and the row for this case says so.
-    expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
-    expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g" &&
-    # The two lines below read neither the approved root nor clif.mm0, so they
-    # are what says the run still worked: without them the expected failures
-    # above would also be produced by a gate that had broken wholesale.
+    python3 - "$ROOT/mm0/clif.mm0" "$cw/clif.mm0" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+new, n = re.subn(r"(-- cites: mm0/approved/isa\.stmts sha256=)([0-9a-f])",
+                 lambda m: m.group(1) + ("0" if m.group(2) != "0" else "1"), text, count=1)
+if n != 1:
+    raise SystemExit("no `-- cites: mm0/approved/isa.stmts` digest to flip")
+pathlib.Path(sys.argv[2]).write_text(new)
+PY
+    gate_run "$cw/g" AUSTRALVM_CLIF="$cw/clif.mm0" || true
+    expect_fail "W9.3: the refinement's citations still match their artifacts" "$cw/g" &&
+    expect_detail "stale citations:" "$cw/g" "mm0/approved/isa.stmts" &&
+    # The certificate line itself still names the approval — the pin is the
+    # drift, not the claim — so that check and the two below must hold. The last
+    # two read neither the copied clif nor the approval, so they are what says
+    # the run still worked.
+    expect_pass "W9.3: certification state matches mm0/approved/" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
     expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
