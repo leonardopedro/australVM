@@ -721,3 +721,14 @@ is expected. Refresh with:
 ```bash
 nix run nixpkgs#git-cliff -- -o CHANGELOG.md
 ```
+
+This checkout carries **no tags** (`git tag` is empty, upstream included), so
+the plain command above folds the six released sections (`[0.2.0]` … `[0.0.1]`)
+into `[Unreleased]` — git-cliff has no tag boundary to split on. Generate the
+unreleased section and keep the released ones as they stand instead:
+
+```bash
+nix run nixpkgs#git-cliff -- --unreleased -o /tmp/unreleased.md
+# then splice: /tmp/unreleased.md up to `## [0.2.0]`, and the released
+# sections verbatim from the committed CHANGELOG.md
+```
