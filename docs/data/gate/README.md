@@ -11,13 +11,29 @@ line is the summary the plan quotes.
 | [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-19, after the W5 object re-pin and the bridge-copy check | `165 passed, 6 explained gap(s), 0 failed` |
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
+| [`2026-11-20-ocaml-shell.log`](2026-11-20-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, after the certificate re-pin on x86_64 | `159 passed, 8 explained gap(s), 0 failed` |
+| [`2026-11-20-default-shell.log`](2026-11-20-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `174 passed, 5 explained gap(s), 0 failed` |
 
 The third row is not a gate count but a negative control's transcript: it is
 here because it produced the `obj=` digest the certificate now pins, and because
 it is what exposed a stale root `.so` that the gate had been measuring through.
 Its command's own last line is the verdict.
 
-The difference between the two shell counts is not a regression in either shell. The `ocaml` shell cannot run
+The 2026-11-20 `ocaml` row exists because the 2026-11-19 one does not reproduce
+on this tree: it records `165 passed, 6 explained gap(s)` with the Liquid checks
+as `[pass]`, while the same command on this tree prints `159 passed, 8 explained
+gap(s)` and reports the Liquid golden and subset checks as a `[gap]`
+(`why3 not on PATH`). That shell carries no prover by design (`flake.nix`), so
+its Liquid lines can only be a `[pass]` where why3 was on PATH for some other
+reason. The `159` figure is the one the plan quotes.
+
+The `default` shell is where the Liquid checks are not a gap, and on an x86_64
+host it builds: it carries why3 1.8.2, z3 4.16.0 and alt-ergo 2.6.3, the gate
+runs all fifteen Liquid checks as `[pass]`, and `scripts/w3-drift-controls
+liquid-golden` holds there in 258 s (its drifted copy reports `173 passed, 5
+explained gap(s), 1 failed`, which is the drift the case asserts).
+
+The difference between the shell counts is not a regression in either shell. The `ocaml` shell cannot run
 the Lean-typed checks and the `lean` shell cannot run the OCaml compiler checks,
 so each reports the other's checks as explained `[gap]` lines; the `lean` shell
 carries the four §W3 approval gaps (isa, slot_layout, store_projection,
