@@ -380,17 +380,17 @@ w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certi
   [pass] W3: comparator self-test (all three negative controls refuse)
 
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants | tail -1
-verify-invariants: 156 passed, 9 explained gap(s), 0 failed
+verify-invariants: 159 passed, 8 explained gap(s), 0 failed
   # + W9.1 (no lean shell) and the Lean halves of W9.3 are explained gaps here;
   # python3 comes from the OCaml shell, so the scripts run.
 $ bash scripts/isa-census --corpus | head -1
 isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, 23 opcode(s) declared in mm0/isa.mm0
   result: covered — every opcode used is declared in the decoder and in the artifact
 $ grep '^-- code:' mm0/flux1d_certificate.mm0
--- code: cps=c10ca9a9…4d11 obj=fac893da…e1df target=host
-  # re-emitted by the merge's incoming branch; the statements are byte-identical,
-  # only this line moved (obj is host-native: arch=aarch64, so it is a
-  # documented gap on an x86_64 host — see AGENTS.md's W5 note)
+-- code: cps=c10ca9a9…4d11 obj=b138fd6e…f099b target=host
+  # re-emitted 2026-11-20 on an x86_64 host against the merge's cps bytes; the
+  # statements are byte-identical, only this line moved, so the W5 object
+  # comparison is a `[pass]` here instead of the aarch64 arch-gap
 $ nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls all
 == liquid-golden (0s)
 w3-drift-controls: [gap] liquid-golden: why3 not on PATH, so the pinned-golden check is
@@ -3010,7 +3010,9 @@ What the commit has to be, and what changes with it:
 host: `cps=c10ca9a9…` (which is what this tree's compiler produces — the cps
 digest check is `[pass]` here), `obj=fac893da… arch=aarch64`, statements
 unchanged, so the object-digest comparison is the documented arch-mismatch
-`[gap]` on an x86_64 host |
+`[gap]` on an x86_64 host. **Re-pinned 2026-11-20** on this x86_64 host against
+that same `cps=c10ca9a9…`: `obj=b138fd6e… arch=x86_64`, statements unchanged, so
+the object comparison is a `[pass]` here |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
 | S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 811 instructions**, re-measured after the arithmetic lowering, again after the `not` fix, and again when the CLIF counters moved in 2026-11-19 — the opcode census did not move; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a three-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 28 theorems from 20 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, three distinct stores all readable and the fourth dropping the earliest, the fifth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all three-cell memories on a four-atom domain — four because the eviction axiom needs four distinct addresses — and the six rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in thirteen ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |
