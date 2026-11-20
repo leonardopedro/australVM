@@ -1013,8 +1013,12 @@ the artifact, so `mm0-c` checks them too.
   explained gap(s), 1 failed`, and `witness-axiom` at `137 passed, 8 explained
   gap(s), 3 failed`, the extra two being the count checks that read the same
   appended axiom. Each case's whole gate log is kept under
-  `$W3_DRIFT_LOGS` (default `/tmp/w3-drift-controls/<case>.log`); that log is
-  where the recorded totals come from. `make drift-controls` runs
+  `$W3_DRIFT_LOGS` (default `/tmp/w3-drift-controls`), one directory per
+  invocation and one per case inside it — `runs/<id>/<case>/01-g.log`, with the
+  case's printed report as `report.txt` beside it — and that log is where the
+  recorded totals come from. A run no longer overwrites its case's previous log:
+  the file per case name was how a red row lost the transcript that would have
+  explained it. `make drift-controls` runs
   `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
   `make test` depends on it — the Makefile states the cost, because every control
   is a full gate run (~4.5 min). A case cannot be made cheaper (the case *is* the gate
@@ -1032,9 +1036,9 @@ the artifact, so `mm0-c` checks them too.
   `held` is `held/requested` and does not count a case the shell could not
   exercise, so a run that reported `13 case(s) held, 1 not covered` records
   `13/14` with `gap` = 1 instead of `14/14`; `cases` names what was asked for,
-  which is what makes a single-case row readable after its per-case log has been
-  overwritten. Rows written before those two columns cannot be attributed to a
-  case, and are not the ledger's evidence for anything.
+  which is what ties a row to the run directory that holds that case's logs.
+  Rows written before those two columns cannot be attributed to a case, and are
+  not the ledger's evidence for anything.
 
   That is all 14 cases in **62m43s** at `-j 1` (268 s each) against **44m9s** at
   `-j 2` (189 s of wall clock per case, ~379 s of work, because two gate runs

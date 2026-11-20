@@ -555,8 +555,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   instead of a retyped number. Its columns are `date rev jobs requested wall_s
   per_case_s held gap outcome cases`: `held` reads `held/requested` and does not
   count a case the shell could not exercise, `gap` is that count, and `cases`
-  names what was asked for (`all` or the case name) — a single-case row is
-  otherwise unreadable once its per-case log is overwritten.
+  names what was asked for (`all` or the case name), which is what ties a row to
+  `$W3_DRIFT_LOGS/runs/<id>/<case>/` — one directory per invocation, one per case
+  inside it, holding that case's `01-g.log` and `report.txt`. The old
+  `$W3_DRIFT_LOGS/<case>.log` was overwritten by the case's next run, so a red
+  row could not be read back; nothing writes that path now.
   `liquid-golden` is the one case conditional on
   the shell: the gate guards that check on `command -v why3` and reports it as
   an explained `[gap]` when the prover is absent, so the drifted copy has no

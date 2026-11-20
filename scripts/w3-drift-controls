@@ -43,9 +43,9 @@
 # `held` is `held/requested` and does not count a case this shell could not
 # exercise — a `[gap]` is not a hold, so the column cannot read `14/14` for a run
 # whose summary said `13 case(s) held, 1 not covered`. `gap` is that count;
-# `cases` names what was asked for (`all`, or the case name(s)), because a row
-# from a single-case run was otherwise unattributable once its per-case log had
-# been overwritten by the next run.
+# `cases` names what was asked for (`all`, or the case name(s)), which is what
+# ties a row to the run directory that holds its logs
+# (`$W3_DRIFT_LOGS/runs/<id>/<case>/`).
 #
 # One case is conditional on the shell: `liquid-golden` needs why3, because the
 # gate *guards* the pinned-golden check on `command -v why3` and reports it as an
@@ -83,11 +83,19 @@ command -v python3 >/dev/null 2>&1 || {
 
 # Each case keeps its whole gate log under $W3_DRIFT_LOGS: the recorded numbers
 # in the plan's probe table are read out of these, so they must outlive the run.
+# One directory per invocation and one per case inside it
+# (`$W3_DRIFT_LOGS/runs/20261120T113045Z-1234/<case>/01-g.log`, with the case's
+# printed report beside it): writing every case's log to
+# `$W3_DRIFT_LOGS/<case>.log` meant the next run of that case overwrote the
+# transcript, so a red row could not be read back afterwards.
 W3_DRIFT_LOGS="${W3_DRIFT_LOGS:-/tmp/w3-drift-controls}"
 W3_DRIFT_RECORD="${W3_DRIFT_RECORD:-}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$W3_DRIFT_LOGS"
+# Created when the first case starts, so `--list` and a bad case name leave no
+# directory behind.
+RUN_DIR="$W3_DRIFT_LOGS/runs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
 JOBS="${W3_DRIFT_JOBS:-1}"
 
@@ -96,9 +104,14 @@ JOBS="${W3_DRIFT_JOBS:-1}"
 # case never sees another case's files or the gate's `mktemp -d` results.
 gate_run() {   # log, then VAR=value … for the gate's environment
     local log="$1"; shift
-    local rc=0
+    local rc=0 dir n
     ( cd "$ROOT" && env "$@" bash scripts/verify-invariants ) >"$log" 2>&1 || rc=$?
-    cp "$log" "$W3_DRIFT_LOGS/$CASE.log"
+    # Kept per run: a case that runs the gate twice keeps both logs, numbered in
+    # the order they ran, instead of the second overwriting the first.
+    dir="$RUN_DIR/$CASE"
+    mkdir -p "$dir"
+    n=$(ls -1 "$dir" | wc -l)
+    cp "$log" "$dir/$(printf '%02d' $((n + 1)))-$(basename "$log").log"
     say "  gate: $(tail -1 "$log") (exit $rc)"
     return "$rc"
 }
@@ -348,7 +361,7 @@ run_case() {
     local c="$1"
     CASE="$c"
     cw="$work/$c"
-    mkdir -p "$cw/tmp"
+    mkdir -p "$cw/tmp" "$RUN_DIR/$c"
     export TMPDIR="$cw/tmp"
     SECONDS=0
     local rc=0
@@ -386,12 +399,15 @@ report_case() {  # print a finished case's report, return its status
     say ""
     say "== $c (${secs}s)"
     cat "$cw/report" 2>/dev/null
+    # The report is the readable half of the log: keep it with the gate output so
+    # a red case can be re-read after the run ends.
+    [ -f "$cw/report" ] && cp "$cw/report" "$RUN_DIR/$c/report.txt"
     if [ -f "$cw/skipped" ]; then
         say "  [gap] not covered in this shell (named above)"
     elif [ "$rc" -eq 0 ]; then
         say "  holds"
     else
-        fail "$c: the control did not hold"
+        fail "$c: the control did not hold — logs: $RUN_DIR/$c"
     fi
     return "$rc"
 }
@@ -430,6 +446,7 @@ run_all() {  # case names on stdin
     record_timing "$held" "${#order[@]}" "$JOBS" "$SECONDS" \
         "$([ "$status" -eq 0 ] && printf held || printf failed)" "$gap" \
         "$(printf '%s' "${order[*]}")"
+    say "logs: $RUN_DIR (one directory per case, one file per gate run)"
     return "$status"
 }
 
