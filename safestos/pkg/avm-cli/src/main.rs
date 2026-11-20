@@ -74,6 +74,10 @@ COMMANDS (implemented over the real subsystems):
                                The derivation identity (and closure, §4.2)
                                comes from --drv or from the plan's `--for`
                                derivation (default: --name / the source stem).
+                               The report names what it wrote: `identity` (the
+                               store manifest hash, i.e. the argument to `get`
+                               / `stat`), the cell's `drv_hash`, and the
+                               signing `pubkey` (what `load --key` verifies).
                                --policy names a Cedar policy set: the cell's
                                --caps table is then judged before anything
                                is spawned, and the compiler/cps2cell run
@@ -83,7 +87,7 @@ COMMANDS (implemented over the real subsystems):
                                denied for action Execute` and no tool
                                process ever existed.
   load <cell.avm> --policy <cedar.txt> [--base <hex>] [--key <hex32>]
-       [--provider <cell.avm>]... [--plan <plan.json> --for NAME --cells <dir>]
+       [--provider <cell.avm>]... [--plan <plan.json> --for NAME]
        [--resolve SYM=HEX]... [--exec <program>]
                                gate the cell's own calls: `Execute`, then one
                                `Call:<symbol>` request per import it
@@ -99,9 +103,12 @@ COMMANDS (implemented over the real subsystems):
                                (the JIT's registered `uk_*` addresses).
                                --provider adds a cell whose exported symbols
                                the image may call; repeat for more.
-                               --plan/--for/--cells adds the owner's plan
-                               closure: every derivation NAME depends on,
-                               dependency-first, as `<dir>/NAME.avm`.
+                               --plan/--for adds the owner's plan closure:
+                               every derivation NAME depends on,
+                               dependency-first, read from the *store* by the
+                               derivation id the plan resolved (a cell's
+                               manifest records it, so there is no filename
+                               to substitute).
                                --key is the builder's Ed25519 public key;
                                providers are signature-checked against it
                                (and so is the owner), and --provider without
@@ -263,7 +270,6 @@ const VALUE_FLAGS: &[&str] = &[
     "--key",
     "--resolve",
     "--provider",
-    "--cells",
     "--exec",
     "--remote",
     "--hot-limit",
@@ -784,7 +790,7 @@ fn cps_to_avce(input: &Path, helper: &Path, runner: Option<&Runner>) -> Result<V
 /// Unlike `build`, there is no ungated mode: loading a cell *is* the moment
 /// its calls become reachable, so a missing policy is a usage error rather
 /// than an implicit allow.
-fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
+fn cmd_load(ctx: &Ctx, args: &[String]) -> Result<String, String> {
     let pos = positionals(args);
     let input = *pos
         .first()
@@ -836,64 +842,71 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
     // was linked for: one 16 MiB slot per provider above the owner.
     //
     // Explicit `--provider` cells come first (their order fixes their bases),
-    // then the plan closure: `--plan … --for NAME --cells DIR` adds every
-    // derivation NAME depends on, dependency-first, as `DIR/<name>.avm`. An
-    // explicit cell whose file stem names the same derivation wins, so the
-    // caller can override one provider without dropping the rest.
+    // then the plan closure: `--plan … --for NAME` adds every derivation NAME
+    // depends on, dependency-first. Those are looked up in the **store by the
+    // derivation id the plan resolved** — a cell's manifest records the id it
+    // was built for, so the id is the key and there is no filename to
+    // substitute. An explicit cell whose file stem names the same derivation
+    // wins, so the caller can override one provider without dropping the rest.
     const PROVIDER_STRIDE: u64 = 0x0100_0000;
-    let mut provider_paths: Vec<String> = Vec::new();
-    // A plan-derived provider also has to be *that derivation*: the plan
-    // resolved an id for the name, and the cell records the id it was built
-    // for, so a cell swapped in under `NAME.avm` is refused instead of linked.
-    let mut expected_drv: std::collections::HashMap<String, [u8; 32]> =
-        std::collections::HashMap::new();
+    enum Source {
+        File(String),
+        Store { name: String, drv: [u8; 32] },
+    }
+    let mut sources: Vec<Source> = Vec::new();
+    // `--for` names the derivation the positional cell is: the plan resolved
+    // an id for it, and a cell that records a different one is not that
+    // derivation, so it is refused instead of being linked under the name.
+    let mut expected_owner: Option<(&str, [u8; 32])> = None;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--provider" {
             let p = args
                 .get(i + 1)
                 .ok_or_else(|| "--provider needs a `.avm` cell path".to_string())?;
-            if !provider_paths.iter().any(|q| q == p) {
-                provider_paths.push(p.clone());
+            let known = sources
+                .iter()
+                .any(|s| matches!(s, Source::File(q) if q == p));
+            if !known {
+                sources.push(Source::File(p.clone()));
             }
             i += 2;
         } else {
             i += 1;
         }
     }
-    match (
-        flag(args, "--plan"),
-        flag(args, "--for"),
-        flag(args, "--cells"),
-    ) {
-        (None, None, None) => {}
-        (Some(plan_path), Some(target), Some(cells)) => {
+    match (flag(args, "--plan"), flag(args, "--for")) {
+        (None, None) => {}
+        (Some(plan_path), Some(target)) => {
             let plan = load_plan(plan_path)?;
             let graph = plan.resolve(Some(target)).map_err(|e| e.to_string())?;
+            expected_owner = graph.ids.get(target).map(|id| (target, *id));
             for name in &graph.order {
                 // The owner is the cell being loaded, not one of its providers.
                 if name == target {
                     continue;
                 }
-                let supplied = provider_paths.iter().any(|p| {
-                    Path::new(p).file_stem().and_then(|s| s.to_str()) == Some(name.as_str())
+                let supplied = sources.iter().any(|s| {
+                    matches!(s, Source::File(p)
+                        if Path::new(p).file_stem().and_then(|s| s.to_str()) == Some(name.as_str()))
                 });
-                if !supplied {
-                    let path = Path::new(cells)
-                        .join(format!("{name}.avm"))
-                        .display()
-                        .to_string();
-                    if let Some(id) = graph.ids.get(name) {
-                        expected_drv.insert(path.clone(), *id);
-                    }
-                    provider_paths.push(path);
+                if supplied {
+                    continue;
                 }
+                let drv = *graph
+                    .ids
+                    .get(name)
+                    .ok_or_else(|| format!("the plan resolved no id for dependency `{name}`"))?;
+                sources.push(Source::Store {
+                    name: name.clone(),
+                    drv,
+                });
             }
         }
         _ => {
             return Err(
-                "--plan, --for and --cells go together: the plan names the closure, \
-                 --for its root, and --cells is the directory holding `NAME.avm`"
+                "--plan and --for go together: the plan names the closure and --for its root \
+                 (provider cells are then found in the store by derivation id)"
                     .to_string(),
             )
         }
@@ -916,39 +929,38 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
         }
         None => None,
     };
-    if !provider_paths.is_empty() && key.is_none() {
+    if !sources.is_empty() && key.is_none() {
         return Err(
-            "--provider needs --key <pubkey-hex32>: a provider contributes \
+            "providers need --key <pubkey-hex32>: a provider contributes \
              executable text, so it is signature-checked, never trusted by layout alone"
                 .to_string(),
         );
     }
 
-    let mut providers: Vec<(Vec<u8>, u64)> = Vec::with_capacity(provider_paths.len());
-    for (n, path) in provider_paths.iter().enumerate() {
-        let bytes = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+    let mut providers: Vec<(Vec<u8>, u64)> = Vec::with_capacity(sources.len());
+    let mut provider_labels: Vec<String> = Vec::with_capacity(sources.len());
+    for (n, src) in sources.iter().enumerate() {
+        let (bytes, label) = match src {
+            Source::File(path) => {
+                let bytes = std::fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
+                (bytes, path.clone())
+            }
+            Source::Store { name, drv } => {
+                let bytes = store_cell_by_derivation(ctx, name, drv)?;
+                (bytes, format!("store:{name}"))
+            }
+        };
         if let Some(k) = &key {
             let view =
-                avm_exec::CellView::parse(&bytes).map_err(|e| format!("provider {path}: {e}"))?;
+                avm_exec::CellView::parse(&bytes).map_err(|e| format!("provider {label}: {e}"))?;
             view.verify_signature(k)
-                .map_err(|e| format!("provider {path}: {e}"))?;
-        }
-        if let Some(want) = expected_drv.get(path) {
-            let view =
-                avm_exec::CellView::parse(&bytes).map_err(|e| format!("provider {path}: {e}"))?;
-            if view.drv_hash != *want {
-                return Err(format!(
-                    "provider {path} records derivation {} but the plan resolved {} for it — \
-                     refusing a cell that is not the planned derivation",
-                    hex(&view.drv_hash),
-                    hex(want)
-                ));
-            }
+                .map_err(|e| format!("provider {label}: {e}"))?;
         }
         let pbase = base
             .checked_add((n as u64 + 1).saturating_mul(PROVIDER_STRIDE))
-            .ok_or_else(|| format!("provider base for {path} overflows"))?;
+            .ok_or_else(|| format!("provider base for {label} overflows"))?;
         providers.push((bytes, pbase));
+        provider_labels.push(label);
     }
 
     let bytes = std::fs::read(input).map_err(|e| format!("read {input}: {e}"))?;
@@ -957,6 +969,17 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
             .map_err(|e| format!("{input}: {e}"))?
             .verify_signature(k)
             .map_err(|e| format!("{input}: {e}"))?;
+    }
+    if let Some((name, want)) = expected_owner {
+        let view = avm_exec::CellView::parse(&bytes).map_err(|e| format!("{input}: {e}"))?;
+        if view.drv_hash != want {
+            return Err(format!(
+                "{input} records derivation {} but the plan's `{name}` resolves {} — \
+                 refusing to load a different derivation under that name",
+                hex(&view.drv_hash),
+                hex(&want)
+            ));
+        }
     }
     let refs: Vec<(&[u8], u64)> = providers
         .iter()
@@ -973,10 +996,32 @@ fn cmd_load(_ctx: &Ctx, args: &[String]) -> Result<String, String> {
         "calls": loaded.calls,
         "symbols": loaded.image.symbols.len(),
         "text_bytes": loaded.image.text.len(),
-        "providers": provider_paths
+        "providers": provider_labels
             .iter()
             .zip(loaded.providers.iter())
-            .map(|(p, loaded)| serde_json::json!({ "path": p, "base": format!("{:#x}", loaded.base) }))
+            .map(|(p, loaded)| {
+                // Each provider's origin and recorded derivation, the imports
+                // it declares, the calls the gate judged, and the address each
+                // call resolved to in the shared table (null when the cell
+                // declares a call but no reloc/definition put it there — the
+                // import is still gated).
+                serde_json::json!({
+                    "path": p,
+                    "source": if p.starts_with("store:") { "store" } else { "file" },
+                    "derivation": hex(&loaded.drv_hash),
+                    "base": format!("{:#x}", loaded.base),
+                    "imports": loaded.imports,
+                    "calls": loaded.calls,
+                    "resolved": loaded
+                        .calls
+                        .iter()
+                        .map(|s| serde_json::json!({
+                            "symbol": s,
+                            "address": loaded.image.symbols.get(s).map(|a| format!("{a:#x}")),
+                        }))
+                        .collect::<Vec<_>>(),
+                })
+            })
             .collect::<Vec<_>>(),
         "spawned": exec.is_some(),
     });
@@ -1364,6 +1409,37 @@ impl ClosureIndex for StoreClosures {
 
 /// Hydrate a cell through the hot store; returns payload + stats for the
 /// caller (main prints, tests assert).
+/// A provider cell from the store, found by the derivation id the plan
+/// resolved. A manifest records the derivation it was built for, so the id is
+/// the lookup key — there is no filename that could be substituted. More than
+/// one manifest for the same derivation is refused as ambiguous rather than
+/// picked by directory order.
+fn store_cell_by_derivation(ctx: &Ctx, name: &str, drv: &[u8; 32]) -> Result<Vec<u8>, String> {
+    let store = open_store(ctx)?;
+    let mut hits = Vec::new();
+    for id in store.list_manifests().map_err(|e| e.to_string())? {
+        let m = store.get_manifest(&id).map_err(|e| e.to_string())?;
+        if m.drv_hash.as_ref() == Some(drv) {
+            hits.push(id);
+        }
+    }
+    match hits.len() {
+        0 => Err(format!(
+            "the store has no cell for derivation `{name}` ({}) — build it first",
+            hex(drv)
+        )),
+        1 => {
+            let limit = hot_limit_from_env()?;
+            hydrate_get(ctx, &hex(&hits[0]), limit).map(|(bytes, _, _)| bytes)
+        }
+        n => Err(format!(
+            "the store holds {n} cells for derivation `{name}` ({}) — refusing an \
+             ambiguous provider",
+            hex(drv)
+        )),
+    }
+}
+
 fn hydrate_get(
     ctx: &Ctx,
     id_hex: &str,
@@ -1807,6 +1883,16 @@ mod tests {
     /// the loader's input. Nine bytes of text so an `Abs8` slot at offset 1
     /// fits.
     fn cell_with_imports(imports: &[&str], relocs: Vec<avm_exec::AvceReloc>) -> Vec<u8> {
+        cell_with_imports_drv(imports, relocs, [0x33u8; 32])
+    }
+
+    /// [`cell_with_imports`] with an explicit derivation hash, for plan-bound
+    /// cells (the loader checks the owner's and provider's recorded ids).
+    fn cell_with_imports_drv(
+        imports: &[&str],
+        relocs: Vec<avm_exec::AvceReloc>,
+        drv: [u8; 32],
+    ) -> Vec<u8> {
         let caps = serde_json::json!([
             { "uid": { "type": "ExecCap", "id": "exec" }, "attrs": {}, "parents": [] }
         ]);
@@ -1820,7 +1906,7 @@ mod tests {
             imports: imports.iter().map(|s| s.to_string()).collect(),
         };
         avm_exec::build_cell(&avm_exec::BuildCell {
-            drv_hash: [0x33u8; 32],
+            drv_hash: drv,
             capability_table: &caps,
             avce: &doc,
             signing_seed: &[9u8; 32],
@@ -1828,9 +1914,20 @@ mod tests {
         .unwrap()
     }
 
-    /// A provider cell that *defines* `sym` (one function, no imports) and
-    /// records `drv` as the derivation it was built for.
-    fn cell_defining(sym: &str, drv: [u8; 32]) -> Vec<u8> {
+    /// Put a cell in the store under the derivation it records, the way
+    /// `build` does (payload + manifest with `drv_hash`), so a plan-derived
+    /// provider can be found by id.
+    fn put_cell_in_store(ctx: &Ctx, name: &str, drv: [u8; 32], bytes: &[u8]) {
+        let store = open_store(ctx).unwrap();
+        let m = store
+            .put_buffer_with_closure(name, "1", bytes, Some(drv), None)
+            .unwrap();
+        store.put_manifest(&m).unwrap();
+    }
+
+    /// A provider cell that *defines* `sym` (one function) and records `drv`
+    /// as the derivation it was built for.
+    fn cell_defining(sym: &str, drv: [u8; 32], imports: &[&str]) -> Vec<u8> {
         let caps = serde_json::json!([
             { "uid": { "type": "ExecCap", "id": "exec" }, "attrs": {}, "parents": [] }
         ]);
@@ -1841,7 +1938,7 @@ mod tests {
                 body: vec![0xB8, 0x07, 0x00, 0x00, 0x00, 0xC3, 0x90, 0x90, 0x90],
                 relocs: vec![],
             }],
-            imports: vec![],
+            imports: imports.iter().map(|s| s.to_string()).collect(),
         };
         avm_exec::build_cell(&avm_exec::BuildCell {
             drv_hash: drv,
@@ -2042,8 +2139,6 @@ cp '{plan}' "$PLAN"
     #[test]
     fn load_resolves_the_plan_closure_as_verified_providers() {
         let ts = TempStore::new();
-        let cells = ts._dir.path().join("cells");
-        std::fs::create_dir(&cells).unwrap();
         let plan = ts._dir.path().join("plan.json");
         std::fs::write(
             &plan,
@@ -2053,18 +2148,26 @@ cp '{plan}' "$PLAN"
             ]}"#,
         )
         .unwrap();
-        let lib_drv = *load_plan(&plan.display().to_string())
+        let graph = load_plan(&plan.display().to_string())
             .unwrap()
             .resolve(Some("app"))
-            .unwrap()
-            .ids
-            .get("lib")
             .unwrap();
-        write(&cells.join("lib.avm"), &cell_defining("double", lib_drv));
+        let lib_drv = *graph.ids.get("lib").unwrap();
+        let app_drv = *graph.ids.get("app").unwrap();
+        // The provider lives in the store under the derivation the plan
+        // resolved: load finds it by that id, not a filename. It also declares
+        // a call back into the owner (`run`), so its report entry has imports,
+        // gated calls, and a resolved address.
+        put_cell_in_store(
+            &ts.ctx,
+            "lib",
+            lib_drv,
+            &cell_defining("double", lib_drv, &["run"]),
+        );
         let owner = ts._dir.path().join("app.avm");
         write(
             &owner,
-            &cell_with_imports(
+            &cell_with_imports_drv(
                 &["double"],
                 vec![avm_exec::AvceReloc {
                     offset: 1,
@@ -2072,6 +2175,7 @@ cp '{plan}' "$PLAN"
                     kind: "Abs8".into(),
                     symbol: "double".into(),
                 }],
+                app_drv,
             ),
         );
         let allow = ts._dir.path().join("allow.cedar");
@@ -2087,8 +2191,6 @@ cp '{plan}' "$PLAN"
             plan.display().to_string(),
             "--for".into(),
             "app".into(),
-            "--cells".into(),
-            cells.display().to_string(),
             "--key".into(),
             key.clone(),
         ]
@@ -2097,11 +2199,17 @@ cp '{plan}' "$PLAN"
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["calls"], serde_json::json!(["double"]));
         assert_eq!(v["providers"].as_array().unwrap().len(), 1, "{out}");
-        assert_eq!(
-            v["providers"][0]["path"],
-            cells.join("lib.avm").display().to_string()
-        );
+        assert_eq!(v["providers"][0]["path"], "store:lib");
+        assert_eq!(v["providers"][0]["source"], "store");
+        assert_eq!(v["providers"][0]["derivation"], hex(&lib_drv));
         assert_eq!(v["providers"][0]["base"], "0x1000000");
+        assert_eq!(v["providers"][0]["imports"], serde_json::json!(["run"]));
+        assert_eq!(v["providers"][0]["calls"], serde_json::json!(["run"]));
+        assert_eq!(
+            v["providers"][0]["resolved"],
+            serde_json::json!([{ "symbol": "run", "address": "0x0" }]),
+            "a provider's declared call names the address it resolved to"
+        );
 
         // No key: a provider is executable text, so it is refused.
         let mut no_key = base.clone();
@@ -2116,26 +2224,71 @@ cp '{plan}' "$PLAN"
             .to_bytes());
         let err = cmd_load(&ts.ctx, &wrong).unwrap_err();
         assert!(
-            err.contains("lib.avm") && err.contains("signature"),
+            err.contains("store:lib") && err.contains("signature"),
             "{err}"
         );
 
-        // A cell that is not the planned derivation is refused by its
-        // recorded drv hash, even though the filename and signature agree.
+        // The positional cell is the derivation `--for` names: a different
+        // recorded id is refused even with a valid provider and signature.
         write(
-            &cells.join("lib.avm"),
-            &cell_defining("double", [0x44u8; 32]),
+            &owner,
+            &cell_with_imports_drv(
+                &["double"],
+                vec![avm_exec::AvceReloc {
+                    offset: 1,
+                    addend: 0,
+                    kind: "Abs8".into(),
+                    symbol: "double".into(),
+                }],
+                [0x55u8; 32],
+            ),
         );
         let err = cmd_load(&ts.ctx, &base).unwrap_err();
         assert!(
-            err.contains("records derivation") && err.contains("lib.avm"),
+            err.contains("records derivation") && err.contains("`app`"),
             "{err}"
         );
+        write(
+            &owner,
+            &cell_with_imports_drv(
+                &["double"],
+                vec![avm_exec::AvceReloc {
+                    offset: 1,
+                    addend: 0,
+                    kind: "Abs8".into(),
+                    symbol: "double".into(),
+                }],
+                app_drv,
+            ),
+        );
 
-        // An incomplete closure names the missing cell instead of linking.
-        std::fs::remove_file(cells.join("lib.avm")).unwrap();
-        let err = cmd_load(&ts.ctx, &base).unwrap_err();
-        assert!(err.contains("lib.avm"), "{err}");
+        // A dependency the store cannot supply is named instead of linking a
+        // smaller image.
+        let missing_plan = ts._dir.path().join("missing.json");
+        std::fs::write(
+            &missing_plan,
+            r#"{"derivations":[
+                {"name":"absent","version":"1","builder_symbol":"t","dependencies":[],"sources":[],"env_vars":[]},
+                {"name":"app","version":"1","builder_symbol":"t","dependencies":["absent"],"sources":[],"env_vars":[]}
+            ]}"#,
+        )
+        .unwrap();
+        let err = cmd_load(
+            &ts.ctx,
+            &[
+                owner.display().to_string(),
+                "--policy".into(),
+                allow.display().to_string(),
+                "--plan".into(),
+                missing_plan.display().to_string(),
+                "--for".into(),
+                "app".into(),
+                "--key".into(),
+                key.clone(),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.contains("`absent`") && err.contains("no cell"), "{err}");
 
         // Half a plan spec is a usage error, not a silent partial closure.
         let err = cmd_load(
@@ -2149,7 +2302,7 @@ cp '{plan}' "$PLAN"
             ],
         )
         .unwrap_err();
-        assert!(err.contains("--cells"), "{err}");
+        assert!(err.contains("--for"), "{err}");
     }
 
     /// A cell that may not call one of its declared symbols is refused *by

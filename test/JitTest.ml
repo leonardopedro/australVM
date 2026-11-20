@@ -294,6 +294,35 @@ let test_f32_eq_signed_zero _ =
   compile_cmp_f32 "run_f32_eq_zero" "au_f64_eq"
     (FloatLit32 0.0) (FloatLit32 (-0.)) 1L
 
+(* Cross-cell imports are not compile errors for C output: the cell is linked
+   later, so the compiler binds the symbol to a trap thunk. JIT execution
+   targets must keep the hard failure (an unresolved call would be a runtime
+   hole). This pins both halves through the same FFI the CLI uses. *)
+let test_link_time_imports_bind_cross_cell_symbols _ =
+  init ();
+  let f = {
+    name = "link_time_probe";
+    params = [];
+    return_type = I64;
+    body = Return (App ("CrossCell::compute", [IntLit 42L]));
+  } in
+  let bin = serialize_functions [f] in
+  let contains needle hay =
+    let re = Str.regexp_string needle in
+    try ignore (Str.search_forward re hay 0); true with Not_found -> false
+  in
+  let (strict_ptr, strict_err) = compile_binary bin in
+  assert_bool "strict (tc/exe) compile refuses the unresolved import"
+    (strict_ptr = Int64.zero
+     && (match strict_err with
+         | Some m -> contains "resolve symbol" m
+         | None -> false));
+  set_link_time_imports true;
+  let (bound_ptr, _bound_err) = compile_binary bin in
+  set_link_time_imports false;
+  assert_bool "C-target (link-time) compile binds the cross-cell import"
+    (bound_ptr <> Int64.zero)
+
 (* ── suite ──────────────────────────────────────────────────────── *)
 
 let suite =
@@ -331,6 +360,9 @@ let suite =
     "f64_nan_lt" >:: test_f64_nan_lt;
     "f32_lt_negatives" >:: test_f32_lt_negatives;
     "f32_eq_signed_zero" >:: test_f32_eq_signed_zero;
+    (* Cross-cell imports: a JIT target refuses one, a C target binds it. *)
+    "link_time_imports_bind_cross_cell_symbols"
+    >:: test_link_time_imports_bind_cross_cell_symbols;
   ]
 
 let _ = run_test_tt_main suite

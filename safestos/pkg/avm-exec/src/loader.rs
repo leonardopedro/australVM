@@ -85,6 +85,13 @@ impl From<std::io::Error> for LoadError {
 pub struct LoadedProvider {
     pub base: u64,
     pub image: LinkedImage,
+    /// The derivation the cell records (the caller checks it against the id
+    /// its plan resolved when the provider is plan-derived).
+    pub drv_hash: [u8; 32],
+    /// The imports the cell declares, in cell order (as built).
+    pub imports: Vec<String>,
+    /// The calls the gate judged: sorted and de-duplicated import names.
+    pub calls: Vec<String>,
 }
 
 /// A cell that passed the call gate and has been relocated.
@@ -162,9 +169,10 @@ pub fn load_with(
     let calls = gate(&view, policy_src)?;
 
     let mut provider_views = Vec::with_capacity(providers.len());
+    let mut provider_calls: Vec<Vec<String>> = Vec::with_capacity(providers.len());
     for (bytes, provider_base) in providers {
         let pview = CellView::parse(bytes)?;
-        gate(&pview, policy_src)?;
+        provider_calls.push(gate(&pview, policy_src)?);
         provider_views.push((pview, *provider_base));
     }
     let refs: Vec<Provider<'_, '_>> = provider_views
@@ -177,7 +185,14 @@ pub fn load_with(
         .providers
         .into_iter()
         .zip(providers.iter().map(|(_, b)| *b))
-        .map(|(image, base)| LoadedProvider { base, image })
+        .zip(provider_views.iter().zip(provider_calls))
+        .map(|((image, base), ((view, _), calls))| LoadedProvider {
+            base,
+            image,
+            drv_hash: view.drv_hash,
+            imports: view.imports.clone(),
+            calls,
+        })
         .collect();
 
     Ok(LoadedImage {
@@ -392,7 +407,9 @@ mod tests {
                 symbol: "give".into(),
             }],
         );
-        // Provider: `mov eax, 7; ret` under the imported name.
+        // Provider: `mov eax, 7; ret` under the imported name. It also
+        // declares a call back into the owner (`run`) — the report must show
+        // that import and where it resolved.
         let provider_doc = AvceDoc {
             arch: "x86_64".into(),
             functions: vec![AvceFn {
@@ -400,7 +417,7 @@ mod tests {
                 body: vec![0xB8, 0x07, 0x00, 0x00, 0x00, 0xC3],
                 relocs: vec![],
             }],
-            imports: vec![],
+            imports: vec!["run".into()],
         };
         let provider = build_cell(&BuildCell {
             drv_hash: [0x22u8; 32],
@@ -422,6 +439,13 @@ mod tests {
         assert_eq!(loaded.providers.len(), 1);
         assert_eq!(loaded.providers[0].base, 0x2000);
         assert_eq!(loaded.providers[0].image.text.len(), 6);
+        assert_eq!(loaded.providers[0].imports, vec!["run".to_string()]);
+        assert_eq!(loaded.providers[0].calls, vec!["run".to_string()]);
+        assert_eq!(
+            loaded.providers[0].image.symbols.get("run"),
+            Some(&0x1000),
+            "the provider's callback resolved to the owner's definition"
+        );
 
         let doc = String::from_utf8(render_image(&loaded)).unwrap();
         assert!(doc.contains("\"providers\""), "{doc}");

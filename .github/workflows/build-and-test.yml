@@ -111,6 +111,7 @@ jobs:
   # unfer checkout (the gate cross-checks the symbol census against unfer_ffi).
   verify-invariants:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout australVM
@@ -122,8 +123,30 @@ jobs:
       - name: Checkout unfer as sibling (path dep)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
 
-      - name: Run scripts/verify-invariants (H1)
-        run: bash scripts/verify-invariants
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
+
+      - name: nix cache
+        uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6  # nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install Rust toolchain (bridge)
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # actions-rust-lang/setup-rust-toolchain@v1
+
+      # The artifact checks need the compiler and the bridge, not just the
+      # sources: `make bridge` builds the release `.so` and then `austral`.
+      # Without this the gate has to report W2/W5/W6 and the census as gaps.
+      - name: make bridge (compiler + JIT bridge + cps2cell)
+        run: nix develop -c bash -c 'make bridge'
+
+      # The gate re-emits the certificate and hashes the emitted object through
+      # the bridge, so it runs against the tree just built. The `ocaml` shell
+      # provides python3, mm0 and dune; `make bridge` above is what put the
+      # `.so` and `austral` in place.
+      - name: Run scripts/verify-invariants against the built tree (H1)
+        run: nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants
 
   jit-stack:
     runs-on: ubuntu-latest
@@ -271,7 +294,7 @@ jobs:
   # `rustc` and sets LD_LIBRARY_PATH itself).
   nix-pkg:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout australVM
@@ -328,3 +351,28 @@ jobs:
       # link alone; with --provider it resolves into the second image and runs.
       - name: Multi-cell image with a provider cell
         run: nix develop -c bash ./examples/nix-pkg/multi-cell.sh
+
+      # The plan closure is resolved from the store by derivation id (there is
+      # no --cells directory). A dependency that was never built must be
+      # refused by derivation name and id, before any owner cell is read.
+      - name: Negative control (never-built plan dependency)
+        run: bash ./examples/nix-pkg/missing-provider.sh
+
+      # The OCaml suite is the slow half of the tree (build, typecheck and 18
+      # test suites), so it gets its own step with a budget larger than the
+      # local default; the elapsed seconds are printed for the job log.
+      - name: OCaml suite (build, typecheck, tests)
+        timeout-minutes: 40
+        run: |
+          start=$(date +%s)
+          nix develop "git+file://$PWD#ocaml" -c make test
+          echo "ocaml-suite: $(( $(date +%s) - start ))s"
+
+      # The standalone `verify-invariants` job runs in a bare shell, so the
+      # checks that need built artifacts (W2/W5/W6 re-emit and the object
+      # digest, the symbol census against unfer) report as gaps there. This
+      # step runs the same gate against the tree this job just built, with
+      # python3 from the shell and unfer already checked out as a sibling.
+      - name: verify-invariants (against the built tree)
+        timeout-minutes: 15
+        run: nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants

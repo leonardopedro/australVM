@@ -43,6 +43,50 @@ check_py() {
 }
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+# `. "$repo_root/scripts/lib/arch.sh"` holds the recorded-vs-host arch check
+# shared with `scripts/obj-drift-control`.
+. "$repo_root/scripts/lib/arch.sh"
+
+# The compiler loads the bridge from `LD_LIBRARY_PATH`. A developer tree keeps a
+# copy at the repo root; a clean `make bridge` (and CI) leaves it only under
+# `target/release`, so resolve it once here instead of at each call site.
+_bridge_so="$repo_root/libaustral_cranelift_bridge.so"
+[ -f "$_bridge_so" ] || _bridge_so="$repo_root/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
+_bridge_dir="$(dirname "$_bridge_so")"
+
+# ── which compiler build the certificate's digests describe ──────────────────
+# A certificate records digests taken by one `austral` and one bridge build. A
+# binary newer than the artifact may describe different bytes, so when a digest
+# comparison fails the mtimes decide whether to read it as drift or as an
+# artifact that predates the compiler — the mid-rebuild case, where the failure
+# used to arrive as a bare "digests differ".
+#
+# It is a diagnosis, never a skip: mtime alone cannot refuse the comparison,
+# because a rebuild of identical sources leaves the digests equal and the tree
+# green (measured 2026-11-19: `austral` 14:08:25, certificate recorded 13:57:34,
+# gate exit 0). In CI the checkout writes the artifact before `make bridge`
+# writes the binary, so an mtime-only refusal would be red on every run.
+#
+#   avm_stale_note <artifact> <candidate>…   -> note, or nothing
+# The note names the newest candidate newer than the artifact; nothing when no
+# candidate is. The self-test below is what keeps "nothing" reachable.
+avm_stale_note() {
+    local art="$1" cand art_epoch cand_epoch newest=0 newest_name=""
+    shift
+    art_epoch="$(stat -c %Y "$art" 2>/dev/null || echo 0)"
+    for cand in "$@"; do
+        [ -e "$cand" ] || continue
+        cand_epoch="$(stat -c %Y "$cand" 2>/dev/null || echo 0)"
+        if [ "$cand_epoch" -gt "$newest" ]; then
+            newest="$cand_epoch"
+            newest_name="$cand"
+        fi
+    done
+    [ "$newest" -gt "$art_epoch" ] || return 0
+    printf ' — %s is newer (%s) than %s (%s), so the recorded digests may describe an older compiler build; re-emit it: python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json --code <cps>' \
+        "${newest_name#"$repo_root"/}" "$(date -d "@$newest" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $newest")" \
+        "${art#"$repo_root"/}" "$(date -d "@$art_epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $art_epoch")"
+}
 
 # Read-only relocation hooks, for drift controls only. Each names a *file or
 # directory to read* — never something to write, and never something that grants
@@ -223,17 +267,57 @@ fi
 # the root of trust, not merely that a file exists. The `--code` bytes come from
 # the compiler's own `--emit-cps`, which is why the CPS digest in the header is a
 # claim about the code that runs rather than about this JSON.
+# The obj digest below is taken by whichever bridge the loader finds, and
+# LD_LIBRARY_PATH=$repo_root puts the repo-root copy first while `make bridge`
+# writes only target/release/. A stale root copy measures the kernel with an old
+# bridge and is then compared against a pin written with that same old bridge —
+# a silent pass, found once by scripts/obj-drift-control. Byte-identity between
+# the two copies is the condition that rules it out; an absent copy is a gap.
+_cl_built="$repo_root/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
+_cl_loaded="$repo_root/libaustral_cranelift_bridge.so"
+if [ -f "$_cl_built" ] && [ -f "$_cl_loaded" ]; then
+    if cmp -s "$_cl_loaded" "$_cl_built"; then
+        check "W5 (checked): the bridge the gate loads is the release artifact it was built from" true
+    else
+        echo "      refresh it: cp safestos/cranelift/target/release/libaustral_cranelift_bridge.so ." >&2
+        check "W5 (checked): the bridge the gate loads is the release artifact it was built from" false
+    fi
+else
+    gap "W5: loaded bridge is the release artifact (one of the two copies is absent)"
+fi
+
 _flux_obl="$repo_root/examples/verified-kernel/flux1d/flux1d.obligations.json"
+
+# The staleness note is a comparison, so it is held to the same rule as every
+# other one here: a scratch pair where the artifact is newest must produce no
+# note, and the same pair with a newer binary must name it. A note that could
+# only ever be non-empty would look right on the tree that produced it.
+_stale_probe="$(mktemp -d)"
+: > "$_stale_probe/artifact"
+: > "$_stale_probe/binary"
+touch -d '2026-01-01 00:01:00' "$_stale_probe/artifact"
+touch -d '2026-01-01 00:00:00' "$_stale_probe/binary"
+_stale_quiet="$(avm_stale_note "$_stale_probe/artifact" "$_stale_probe/binary")"
+touch -d '2026-01-01 00:02:00' "$_stale_probe/binary"
+_stale_loud="$(avm_stale_note "$_stale_probe/artifact" "$_stale_probe/binary")"
+rm -rf "$_stale_probe"
+check "W5: the staleness note is silent when the artifact is newest, and names the newer binary" \
+    test -n "$_stale_loud" -a -z "$_stale_quiet" -a "${_stale_loud#*binary}" != "$_stale_loud"
+
 if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     _cert_tmp="$(mktemp -d)"
     _cert_code=""
     _obj=""
     _obj_arch=""
     _cert_obj_arch=""
-    if [ -x "$repo_root/austral" ] \
-        && [ -f "$repo_root/libaustral_cranelift_bridge.so" ]; then
+    # Where the bridge may sit: `make bridge` leaves it in the release dir, and
+    # a developer tree often also has a copy at the root. Either is enough for
+    # the compiler to load, so a fresh checkout (no root copy) is not a gap.
+    _bridge_lib="$_bridge_so"
+    if [ -x "$repo_root/austral" ] && [ -f "$_bridge_lib" ]; then
         ( cd "$repo_root/examples/verified-kernel/flux1d" \
-            && LD_LIBRARY_PATH="$repo_root" "$repo_root/austral" compile \
+            && LD_LIBRARY_PATH="$_bridge_dir:$repo_root" \
+                "$repo_root/austral" compile \
                 Flux1d.aui,Flux1d.aum --entrypoint=Flux1d:main \
                 --use-cps-jit --emit-cps="$_cert_tmp/flux1d.cps" \
                 --output="$_cert_tmp/flux1d.bin" ) \
@@ -276,8 +360,16 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     # The committed artifact records the arch its object digest was taken on; a
     # different host cannot reproduce that number, so it normalises instead of
     # failing and the mismatch is reported as a gap by the W5 (checked) block.
-    _cert_obj_arch="$(sed -n 's/.*arch=\([a-z0-9_]*\).*/\1/p' \
-        "$repo_root/mm0/flux1d_certificate.mm0" 2>/dev/null | head -1)"
+    _cert_obj_arch="$(avm_recorded_arch "$repo_root/mm0/flux1d_certificate.mm0")"
+    # A control can name the host it wants compared against
+    # (`AUSTRALVM_HOST_ARCH`, used by `scripts/w5-arch-gap-control`); a normal
+    # run uses the architecture the bridge actually reported.
+    _obj_host_arch="${AUSTRALVM_HOST_ARCH:-$_obj_arch}"
+    # Attached to a failed comparison below, never used to skip one: a binary
+    # newer than the artifact turns "the digests differ" into "these digests
+    # may describe an older compiler build", which is the mid-rebuild case.
+    _stale_note="$(avm_stale_note "$repo_root/mm0/flux1d_certificate.mm0" \
+        "$repo_root/austral" "$_bridge_so")"
     _cert_same() {
         case "$1" in
             _probe.c) cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1" ;;
@@ -307,6 +399,7 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
             check "$_cert_claim" true
         else
             echo "      committed artifact is stale — run: python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json --code <cps>" >&2
+            [ -n "$_stale_note" ] && echo "      staleness:$_stale_note" >&2
             check "$_cert_claim" false
         fi
         # W5 (checked): the `cps=` digest in the certificate header must be the
@@ -341,6 +434,7 @@ PY
                 check "W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes" true
             else
                 echo "      recorded=$_fp_recorded bridge=$_fp_bridge mutated=$_fp_mut" >&2
+                [ -n "$_stale_note" ] && echo "      staleness:$_stale_note" >&2
                 check "W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes" false
             fi
             # The object half: recorded only when the bridge produced an object
@@ -353,12 +447,14 @@ PY
                 gap "W5: object digest unrecorded in the committed certificate"
             elif [ -z "$_obj" ]; then
                 gap "W5: object digest not re-derived (bridge could not compile the bytes)"
-            elif [ "$_cert_obj_arch" != "$_obj_arch" ]; then
-                gap "W5: object digest not comparable (recorded arch=$_cert_obj_arch, this host $_obj_arch)"
+            elif [ "$_cert_obj_arch" != "$_obj_host_arch" ]; then
+                _arch_gap="$(avm_arch_gap "$repo_root/mm0/flux1d_certificate.mm0" "$_obj_host_arch" || true)"
+                gap "W5: object digest not comparable (${_arch_gap:-recorded arch=$_cert_obj_arch, this host $_obj_host_arch})"
             elif [ "$_obj" = "$_obj_recorded" ]; then
                 check "W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object ($_obj_arch)" true
             else
                 echo "      recorded=$_obj_recorded bridge=$_obj" >&2
+                [ -n "$_stale_note" ] && echo "      staleness:$_stale_note" >&2
                 check "W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object ($_obj_arch)" false
             fi
         fi
@@ -1395,9 +1491,9 @@ check_py "W2/W4: au2mm0 self-test (weakened scheme, division, false obligation a
 # that is the path whose CPS bytes the certificate fingerprint records, so the
 # gate fails if the kernel stops lowering or the JIT stops executing it.
 _flux_dir="$repo_root/examples/verified-kernel/flux1d"
-if [ -x "$repo_root/austral" ] && [ -f "$repo_root/libaustral_cranelift_bridge.so" ]; then
+if [ -x "$repo_root/austral" ] && [ -f "$_bridge_so" ]; then
     _flux_tmp="$(mktemp -d)"
-    if LD_LIBRARY_PATH="$repo_root" "$repo_root/austral" compile \
+    if LD_LIBRARY_PATH="$_bridge_dir:$repo_root" "$repo_root/austral" compile \
             "$_flux_dir/Flux1d.aui,$_flux_dir/Flux1d.aum" \
             --entrypoint=Flux1d:main --use-cps-jit \
             --output="$_flux_tmp/flux1d" \
@@ -2664,7 +2760,7 @@ ledger_drift() {
     local pinned="$2"
     local tmp
     tmp="$(mktemp -d)"
-    if ! ( cd "$tmp" && LD_LIBRARY_PATH="$repo_root/safestos/cranelift/target/release:$repo_root" \
+    if ! ( cd "$tmp" && LD_LIBRARY_PATH="$_bridge_dir:$repo_root" \
              "$repo_root/_build/default/bin/austral.exe" compile \
              "$fixture" \
              --target-type=c --no-entrypoint \

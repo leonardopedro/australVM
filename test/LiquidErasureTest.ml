@@ -102,8 +102,14 @@ let compile_to_cps ~work name source =
   let cps = Filename.concat work (name ^ ".cpsbin") in
   let c = Filename.concat work (name ^ ".c") in
   write_file src source;
+  (* `CPS_JIT_ADVISORY=1` because the claim under test is about the emitted
+     CPS, not about running it: the fixtures end in `printLn`, a Pervasive
+     typeclass method whose symbol the JIT has no implementation for (as with
+     `trappingSubtract` before the bridge registered it), so a hard JIT error
+     would reject a module whose *CPS bytes* are exactly what erasure is
+     measured on. Everything below still compares those bytes. *)
   let cmd =
-    Printf.sprintf "%s compile %s --entrypoint=Probe:main --use-cps-jit --emit-cps=%s --output=%s >%s.out 2>%s.err"
+    Printf.sprintf "CPS_JIT_ADVISORY=1 %s compile %s --entrypoint=Probe:main --use-cps-jit --emit-cps=%s --output=%s >%s.out 2>%s.err"
       (Filename.quote (compiler ())) (Filename.quote src) (Filename.quote cps)
       (Filename.quote c) (Filename.quote work) (Filename.quote work)
   in

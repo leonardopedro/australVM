@@ -125,17 +125,21 @@ HOST_LOADER = /lib64/ld-linux-x86-64.so.2
 # `obj-drift-control`, which edits the tree and rebuilds the compiler, so it
 # stays last and serial. Measured 2026-11-18 on a two-core host, everything
 # holding either way: the 14 `w3-drift-controls` cases take 62m43s at -j 1 and
-# 44m9s at -j 2, the five read-only controls 22m44s serial and 17m22s at -P 2 —
+# 44m9s at -j 2, the read-only controls 22m44s serial and 17m22s at -P 2 (that
+# figure measured with five of them; the two L11 controls joined the list later) —
 # 1h25m27s against 1h01m31s for the two halves, 23m56s (28%) off. Each core is
 # worth ~1.4x, not 2x, because a gate run is itself mostly serial. The first half
 # writes a row per run to `docs/data/w3/drift-timings.tsv` when
 # `W3_DRIFT_RECORD` names it, so those numbers are quoted rather than retyped.
 DRIFT_JOBS ?= $(shell nproc 2>/dev/null || echo 1)
 READ_ONLY_CONTROLS = scripts/w3-emitter-drift-control \
+                     scripts/w5-arch-gap-control \
                      scripts/w93-composition-drift-control \
                      scripts/w93-closure-drift-control \
                      scripts/w93-certification-drift-control \
-                     scripts/w3-approval-state-drift-control
+                     scripts/w3-approval-state-drift-control \
+                     scripts/l11a-ordering-drift-control \
+                     scripts/l11b-conversion-drift-control
 
 # ── Emitter byte-identity gate (docs/lean4mm0.md §13.39) ─────────────────────
 # Every rewrite since §13.30 is justified by "the artifacts do not move", and
@@ -149,6 +153,15 @@ READ_ONLY_CONTROLS = scripts/w3-emitter-drift-control \
 check-typing-proof:
 	@python3 scripts/check-lean-typing-proof $(if $(RECORD),--record,)
 
+# ── The plan's check census ─────────────────────────────────────────────────
+# `scripts/check-census` counts the gate's `check` statements against the
+# evidence the plan records for them. It reads the plan's prose, so it is not a
+# prerequisite of anything here: run it after adding a check to
+# `scripts/verify-invariants`, or after editing the census paragraph.
+.PHONY: check-census
+check-census:
+	@bash scripts/check-census
+
 .PHONY: drift-controls
 drift-controls: | check-bridge-fresh
 	@echo "--- drift controls: one full gate run each, $(DRIFT_JOBS) at a time"
@@ -156,7 +169,10 @@ drift-controls: | check-bridge-fresh
 	@printf '%s\n' $(READ_ONLY_CONTROLS) \
 	  | xargs -P $(DRIFT_JOBS) -I{} bash -c 'echo "--- {}"; bash {}'
 	@echo "--- scripts/obj-drift-control (edits the tree, rebuilds: serial)"
-	@bash scripts/obj-drift-control
+	@bash scripts/obj-drift-control; rc=$$?; \
+	  if [ $$rc -eq 2 ]; then \
+	    echo "obj-drift-control: [gap] not exercised on this host (see above)"; \
+	  else exit $$rc; fi
 
 .PHONY: test
 test: $(BIN) drift-controls | check-bridge-fresh

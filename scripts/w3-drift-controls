@@ -137,7 +137,9 @@ case_phase-d-theory-coverage() {
     mm0_copy "$cw/mm0"
     sed -i '/^-- theory coverage: /d' "$cw/mm0/slot_layout.mm0"
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
-    expect_fail "Phase D: slot_layout.mm0 states its theory coverage" "$cw/g"
+    expect_fail "Phase D: slot_layout.mm0 states its theory coverage" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 case_phase-d-imported-theory() {
@@ -146,14 +148,18 @@ case_phase-d-imported-theory() {
         "$cw/mm0/slot_layout.mm0"
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "Phase D: slot_layout.mm0 only claims rules its theory declares" "$cw/g" &&
-    expect_detail "claims used rules the theory does not declare:" "$cw/g" "tnope_not_declared"
+    expect_detail "claims used rules the theory does not declare:" "$cw/g" "tnope_not_declared" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 case_phase-d-self-vocabulary() {
     mm0_copy "$cw/mm0"
     sed -i '/^-- theory: self-declared vocabulary/d' "$cw/mm0/store_projection.mm0"
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
-    expect_fail "Phase D: store_projection.mm0 states its theory coverage" "$cw/g"
+    expect_fail "Phase D: store_projection.mm0 states its theory coverage" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 case_phase-d-measured-coverage() {
@@ -173,7 +179,9 @@ if hits != 1:
 p.write_text("".join(lines))
 PY
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
-    expect_fail "Phase D: clif.mm0 states its measured coverage" "$cw/g"
+    expect_fail "Phase D: clif.mm0 states its measured coverage" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 case_isa-hypothesis-pin() {
@@ -188,7 +196,9 @@ if not m:
 p.write_text(text[:m.start(1)] + str(int(m.group(1)) + 1) + text[m.end(1):])
 PY
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
-    expect_fail "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" "$cw/g"
+    expect_fail "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 case_clif-vocabulary() {
@@ -222,7 +232,9 @@ case_witness-axiom() {
     # the axiom count, the fail branch does not). The count checks read the same
     # file, so they move with it and are left to fire, not hidden: the log shows
     # the witness's axiom list missing `toy_not_held` beside the count drift.
-    expect_fail "W9.3: the witness exercises every axiom the toy declares" "$cw/g"
+    expect_fail "W9.3: the witness exercises every axiom the toy declares" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 case_memsafe-edge() {
@@ -244,7 +256,9 @@ if hits != 2:
 PY
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "memsafe: fixtures exercise every automaton edge" "$cw/g" &&
-    expect_detail "neither fixture reaches:" "$cw/g" "t_acq"
+    expect_detail "neither fixture reaches:" "$cw/g" "t_acq" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 case_liquid-golden() {
@@ -279,7 +293,12 @@ case_cert-approved() {
     # so six comparisons that read the approved copy also move. They are
     # consequences of the same drift, and the row for this case says so.
     expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
-    expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g"
+    expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g" &&
+    # The two lines below read neither the approved root nor clif.mm0, so they
+    # are what says the run still worked: without them the expected failures
+    # above would also be produced by a gate that had broken wholesale.
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 # The last `copy` row: `W3: $_stem matches its approved statements`. Its failing
@@ -303,7 +322,9 @@ if drifted == text:
 p.write_text(drifted)
 PY
     gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
-    expect_fail "W3: quasi_rh_7_8 matches its approved statements" "$cw/g"
+    expect_fail "W3: quasi_rh_7_8 matches its approved statements" "$cw/g" &&
+    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
 }
 
 CASES="phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage

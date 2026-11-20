@@ -170,6 +170,52 @@ fn calls_uk_version() {
     assert_eq!(execute(compile(&cps)), 1);
 }
 
+/// Code generation must bind a cross-cell import, not fail on it: the cell
+/// is linked later, so the symbol is an import the loader resolves. Strict
+/// mode (JIT execution) keeps the hard failure. The bound thunk is never
+/// executed here — reaching it would abort.
+#[test]
+fn link_time_mode_binds_a_cross_cell_import() {
+    let cps = cps_v1_named("cross_cell_probe", &body_call_import("CrossCell::compute"));
+    let compile_once = || {
+        let _lock = COMPILE_LOCK.lock().unwrap();
+        austral_cranelift_bridge::auth::set_allow_all();
+        let p = austral_cranelift_bridge::compile_to_function_named(
+            cps.as_ptr(),
+            cps.len(),
+            ptr::null(),
+            0,
+        );
+        let err = austral_cranelift_bridge::cranelift_last_error();
+        let msg = if err.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(err) }
+                .to_string_lossy()
+                .to_string()
+        };
+        (p, msg)
+    };
+
+    let (strict_ptr, strict_err) = compile_once();
+    austral_cranelift_bridge::set_link_time_imports(1);
+    let (bound_ptr, bound_err) = compile_once();
+    austral_cranelift_bridge::set_link_time_imports(0);
+
+    assert!(
+        strict_ptr.is_null(),
+        "strict mode must not bind a host-less symbol"
+    );
+    assert!(
+        strict_err.contains("resolve symbol"),
+        "strict refusal names the symbol: {strict_err}"
+    );
+    assert!(
+        !bound_ptr.is_null(),
+        "link-time mode must compile the import: {bound_err}"
+    );
+}
+
 #[test]
 fn calls_uk_init() {
     let cps = cps_v1(&body_call_import("uk_init"));

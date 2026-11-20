@@ -30,6 +30,7 @@ extern void cranelift_free_string(char* s);
 extern char* austral_unf_translate(const char* src);
 extern char* austral_defeq_translate(const char* src_a, const char* src_b);
 extern void set_allow_all(void);
+extern void set_link_time_imports(int on);
 extern int64_t safestos_load_auth_manifest(const unsigned char* ptr, size_t len);
 extern void* cranelift_swap_binary(const unsigned char* data, int len);
 
@@ -205,6 +206,14 @@ CAMLprim value ocaml_lookup_function(value name) {
 CAMLprim value ocaml_set_allow_all(value unit) {
     CAMLparam1(unit);
     set_allow_all();
+    CAMLreturn(Val_unit);
+}
+
+/* Bind unresolved imports instead of failing: used for code generation
+   (`--target-type=c`), where the cell is linked and resolved at load. */
+CAMLprim value ocaml_set_link_time_imports(value on) {
+    CAMLparam1(on);
+    set_link_time_imports(Bool_val(on));
     CAMLreturn(Val_unit);
 }
 

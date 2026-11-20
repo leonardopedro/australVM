@@ -1409,12 +1409,46 @@ it inserts `dump m;` above the audit in a scratch copy and requires
 `[FAIL] L11a: the liquid pass runs the index-closure audit before emitting`
 while the other two L11a pins still pass; it also requires the unmutated copy to
 pass all three, so a control that failed for an unrelated reason cannot read as
-success. Writing it found a weak pin (it compared against the *last* `dump m;`,
-so an extra early dump still passed); the pin now compares against the first.
+success. Each of the three substance pins is required **by name in both
+directions** — the expected verdict present and the opposite one absent — and
+the counts over those three pins must be three passes / zero failures on the
+unmutated copy and two passes / one failure on the mutated one. Requiring only
+the mutated run's `[FAIL]` line, as the first version did, would let a pin that
+printed both verdicts (or a control that flipped two of them) pass; a copy of the
+script that appends a `[pass]` ordering line inside `run_gate` exits 1 with
+`'the liquid pass runs the index-closure audit before emitting' also printed
+'[pass] L11a: …'`. The counts span the three substance pins rather than
+`[pass] L11a:` lines, because the gate also prints two `L11a:` wiring pins about
+this control. Writing it found a weak pin (it compared against the *last*
+`dump m;`, so an extra early dump still passed); the pin now compares against
+the first.
 The control is itself pinned by the gate (`L11a: the ordering pin has a negative
 control`, and `… moves the copy through the gate's own hook`, which asserts that
 the script uses `AUSTRALVM_LIQUID_CHECK=` and that the gate reads it), since the
 gate cannot run a script that runs the gate.
+
+Measured end to end on 2026-11-19 under `nix develop "git+file://$PWD#ocaml"`,
+exit 0:
+
+```
+baseline: 3 [pass] L11a pins, 0 [FAIL] (exit 0)
+mutated:  1 [FAIL] L11a pin(s) ([FAIL] L11a: the liquid pass runs the index-closure audit before emitting), 2 [pass] (exit 1)
+l11a-ordering-drift-control: OK
+```
+
+and the both-directions perturbation of the same run (a scratch copy that
+appends the ordering `[pass]` line inside `run_gate`), exit 1:
+
+```
+control: the gate exited 0 on the mutated copy
+control: mutated copy: 'the liquid pass runs the index-closure audit before emitting' also printed '[pass] L11a: ...'
+control: the mutated copy passed 3 L11a pin(s), expected the two unrelated ones
+l11a-ordering-drift-control: FAILED
+```
+
+The `gate exited 0` line is the stub's own doing — the appended `echo` is the
+last command in `run_gate`, so it masks the gate's status; the assertions under
+test are the two after it.
 
 ### L11b — Elaborate and convert a small sorted index language
 
@@ -1494,7 +1528,16 @@ acceptances still pass; `if false then Convertible` (a rule table that accepts
 nothing) must FAIL the four acceptance cases — `n + 0`, the right-spine fold,
 inlining, saturated subtraction — while the refusals still pass. Two contrasts
 in one run are the point: a mutation that broke *both* directions would be a
-broken build, not evidence about the rules. Because `LiquidTypes` depends on
+broken build, not evidence about the rules. Each of the eight cases is required
+by name in both directions — the four of the affected kind must print their
+`FAIL` line and the other four their `ok` line, and the run must report exactly
+four failures. The suite names the two verdicts differently for three of the
+four refusal cases (`FAIL shadowing must not collapse binders` against
+`ok   two binders named n are not convertible`), so the control lists both; and
+requiring only the failing half would let a mutation that also broke a case it
+should leave alone pass. That assertion was itself tested by swapping the
+expectation for the permissive run's acceptance cases: the copy prints
+`control: expected 'n + 0 converts to n' to FAIL` for all four and exits 1. Because `LiquidTypes` depends on
 `Stages` from `austral_core`, the module cannot be compiled separately from the
 library (two same-named modules in one link), so the file is mutated in place
 and restored by a trap; the control re-hashes the restored file and re-runs the
@@ -1502,7 +1545,17 @@ suite on it, so the failure that actually matters — leaving a loosened
 `convert` behind — is reported rather than assumed away. Its own failure mode
 was tested by making both mutations no-ops: `the mutation did not apply (true)`,
 `(false)`, `FAILED`, exit 1. Needs `dune`, so it runs under
-`nix develop "git+file://$PWD#ocaml"`.
+`nix develop "git+file://$PWD#ocaml"`. Measured end to end on 2026-11-19, exit
+0, and `lib/liquid/LiquidIndex.ml` re-hashed after the run is byte-identical to
+its pre-run copy:
+
+```
+baseline:   OK (exit 0)
+permissive: 4 refusal case(s) failed (exit 1)
+austere:    4 acceptance case(s) failed (exit 1)
+restored:   OK (exit 0), sha256 unchanged
+l11b-conversion-drift-control: OK
+```
 
 Both controls are wired into the gate, because a control nothing runs on the
 default path is a claim about a script rather than evidence. `verify-invariants`

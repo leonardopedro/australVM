@@ -56,6 +56,8 @@ load_rax() {
        --resolve 'Austral.Pervasive::trappingAdd=0x20000000' \
        --resolve 'Austral.Pervasive::trappingMultiply=0x20000010' \
        --resolve 'au_fadd=0x20000020' --resolve 'au_fsub=0x20000040' \
+       --resolve 'au_f64_add=0x20000020' --resolve 'au_f64_subtract=0x20000040' \
+       --resolve 'au_f64_multiply=0x20000060' --resolve 'au_f64_divide=0x20000080' \
        --resolve 'au_fmul=0x20000060' --resolve 'au_fdiv=0x20000080' \
        --exec "$EXEC" 2>&1); then
     return 1

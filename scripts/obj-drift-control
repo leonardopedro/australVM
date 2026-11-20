@@ -12,7 +12,12 @@
 #   2. rebuild, compile the certified kernel, and record `cps=` / `obj=`;
 #   3. run the program: identical output and exit status is the "semantics
 #      preserving" half;
-#   4. run `scripts/verify-invariants`: it must FAIL the W5 object check;
+#   4. run `scripts/verify-invariants`: it must FAIL the W5 object check
+#      (on a host whose arch differs from the certificate's, the W5 cps check
+#      is what can fire, and that is the line this control expects), while two
+#      lines that read neither the certificate nor the emitter stay green —
+#      the §W3 emitter column and the gap certificate's trust-split pin. The
+#      expected `[FAIL]` alone would still hold if the whole run had broken.
 #   5. restore the emitter, rebuild, and confirm both digests are back to the
 #      pinned values (so a green tree stays green).
 #
@@ -27,6 +32,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The recorded-vs-host arch check is shared with `scripts/verify-invariants`.
+. "$ROOT/scripts/lib/arch.sh"
 SRC="$ROOT/lib/CpsGen.ml"
 BIN="$ROOT/austral"
 KERNEL_DIR="$ROOT/examples/verified-kernel/flux1d"
@@ -41,7 +48,13 @@ for tool in dune; do
         exit 2
     }
 done
-if [ ! -x "$BIN" ] || [ ! -f "$ROOT/libaustral_cranelift_bridge.so" ]; then
+# Where the bridge may sit: a developer tree keeps a copy at the root, and a
+# clean `make bridge` (which is also what CI has) leaves it only under
+# `target/release`. Either is enough for the compiler to load, so the clean
+# layout is exercised instead of reported as a gap.
+_bridge="$ROOT/libaustral_cranelift_bridge.so"
+[ -f "$_bridge" ] || _bridge="$ROOT/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
+if [ ! -x "$BIN" ] || [ ! -f "$_bridge" ]; then
     say "obj-drift-control: [gap] no ./austral or bridge .so — run 'make all' first"
     exit 2
 fi
@@ -60,7 +73,7 @@ restore() {
 trap 'restore; rm -rf "$work"' EXIT INT TERM
 
 emit() { # emit <cps-out> <log>
-    ( cd "$KERNEL_DIR" && LD_LIBRARY_PATH="$ROOT" "$BIN" compile "$KERNEL_SRC" \
+    ( cd "$KERNEL_DIR" && LD_LIBRARY_PATH="$(dirname "$_bridge"):$ROOT" "$BIN" compile "$KERNEL_SRC" \
         --entrypoint=Flux1d:main --use-cps-jit --emit-cps="$1" \
         --output="$2" ) >"$2.log" 2>&1
 }
@@ -79,6 +92,20 @@ base_cps="$(fp "" "$work/base.cps")"
 base_obj="$(fp --object "$work/base.cps")"
 base_out="$("$work/base.bin" 2>&1)"; base_code=$?
 say "before: cps=${base_cps:0:12}… obj=${base_obj%% *} out=$base_code"
+
+# The object digest is host-native, and the gate compares it only on the
+# architecture the certificate recorded (elsewhere it is a stated gap). On a
+# mismatched host the object line cannot fire, and the cps digest — the
+# bridge's hash of the emitted bytes against the certificate's recorded one —
+# is what catches the same drift. Expect whichever line this host can produce.
+if arch_gap="$(avm_arch_gap "$ROOT/mm0/flux1d_certificate.mm0")"; then
+    say "note: certificate $arch_gap — the gate reports the object digest as a gap here, so this control checks the cps digest instead"
+    expected_w5='^\[FAIL\] W5 (checked): the certificate.s cps digest is the bridge'
+    expected_word='cps digest'
+else
+    expected_w5='^\[FAIL\] W5 (checked): the certificate.s obj digest is the bridge'
+    expected_word='obj digest'
+fi
 
 # ── 1. the semantics-preserving edit ───────────────────────────────────────
 python3 - "$SRC" <<'PY' || exit 2
@@ -126,14 +153,29 @@ fi
 if bash "$ROOT/scripts/verify-invariants" >"$work/gate.log" 2>&1; then
     fail "verify-invariants passed while the emitted object had changed"
     status=1
-elif ! grep -q '^\[FAIL\] W5 (checked): the certificate.s obj digest is the bridge' \
-        "$work/gate.log"; then
-    fail "the gate failed, but not on the W5 object digest"
+elif ! grep -q "$expected_w5" "$work/gate.log"; then
+    fail "the gate failed, but not on the W5 $expected_word"
     grep -E '^\[FAIL\]' "$work/gate.log" | head -5 >&2
     status=1
 else
-    say "gate:   $(grep -F 'obj digest' "$work/gate.log" | head -1)"
+    say "gate:   $(grep -F "$expected_word" "$work/gate.log" | head -1)"
 fi
+
+# The gate must have failed *only* on that line's claim: a run that also lost
+# checks reading nothing this control touched would make the expected `[FAIL]`
+# a coincidence, not the certificate drift. Two lines are named — one from the
+# plan side and one from the mm0 side — because they exercise different readers
+# (the §W3 emitter registry and the trust-split pin) and neither reads the
+# certificate under test.
+for want in \
+    "[pass] W3: every §W3 emitter cell names a real command" \
+    "[pass] Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)"
+do
+    if ! grep -qF "$want" "$work/gate.log"; then
+        fail "the run also lost an unrelated line: '$want'"
+        status=1
+    fi
+done
 
 # ── 5. restore and confirm the pinned digests come back ────────────────────
 restore

@@ -18,6 +18,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURE="$ROOT/test-programs/adapters/rs_scalars.aum"
 GOLDEN="$ROOT/test-programs/adapters/adapters.golden"
 AUSTRAL="${AUSTRAL:-$ROOT/austral}"
+# A developer tree has the bridge at the repo root; a clean `make bridge` (and
+# CI) leaves it only under target/release.
+BRIDGE="$ROOT/libaustral_cranelift_bridge.so"
+[ -f "$BRIDGE" ] || BRIDGE="$ROOT/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
 
 for path in "$FIXTURE" "$GOLDEN" "$AUSTRAL"; do
     if [ ! -e "$path" ]; then
@@ -29,7 +33,7 @@ done
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-if ! LD_LIBRARY_PATH="$ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+if ! LD_LIBRARY_PATH="$(dirname "$BRIDGE"):$ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
      "$AUSTRAL" compile "$FIXTURE" \
      --entrypoint=Adapters:main --use-cps-jit --allow-all --target-type=c \
      --emit-cps="$tmp/mod.cps" --emit-adapters="$tmp/adapters.golden" \

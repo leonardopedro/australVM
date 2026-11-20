@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Census the gate's `check` statements against the evidence recorded for them.
 #
-#   nix-shell -p python3 --run 'python3 scripts/check-census'
+#   nix-shell -p python3 --run 'bash scripts/check-census'   (or `make check-census`)
 #
 # The plan's "which checks have no measured failure" paragraph quotes four
 # numbers: the statements, the distinct texts, the ones a probe row measures, and

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# w5-arch-gap-control — the W5 object-digest arch-gap path, exercised.
+#
+# The certificate's object digest is a host-native AVCE capture, so
+# `verify-invariants` compares it only on the architecture it records and
+# otherwise reports `[gap] W5: object digest not comparable (…)`. On the host
+# that recorded it that gap never fires, which is exactly why it needs a
+# control: `AUSTRALVM_HOST_ARCH` names a foreign host, and this control
+# requires
+#   - exit 0 (a gap is a stated limitation, not a failure),
+#   - the gap line naming the recorded arch and the simulated host,
+#   - no obj `[pass]` line (the digest must not be compared at all),
+#   - the cps `[pass]` line still present, so only the arch branch changed.
+# Nothing is edited: one full gate run, read-only.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT/scripts/lib/arch.sh"
+
+say() { printf 'w5-arch-gap-control: %s\n' "$*"; }
+fail() { say "FAIL: $*"; exit 1; }
+
+if ! command -v python3 >/dev/null 2>&1; then
+    say "[gap] python3 is not on PATH; the gate cannot re-derive the certificate"
+    exit 2
+fi
+
+cert="$ROOT/mm0/flux1d_certificate.mm0"
+recorded="$(avm_recorded_arch "$cert")"
+host="$(avm_host_arch)"
+if [ -z "$recorded" ] || [ -z "$host" ]; then
+    say "[gap] no recorded arch in $cert (or no host arch); nothing to exercise"
+    exit 2
+fi
+
+# A label that is neither the recorded arch nor this host's, so the run really
+# takes the mismatch branch whichever machine this is.
+other=""
+for candidate in x86_64 aarch64 riscv64; do
+    if [ "$candidate" != "$recorded" ] && [ "$candidate" != "$host" ]; then
+        other="$candidate"
+        break
+    fi
+done
+if [ -z "$other" ]; then
+    fail "cannot name a simulated host distinct from recorded=$recorded and this host=$host"
+fi
+
+say "certificate records arch=$recorded; simulating host arch $other"
+out="$(AUSTRALVM_HOST_ARCH="$other" bash "$ROOT/scripts/verify-invariants" 2>&1)"
+rc=$?
+
+# The gate pads its status column, so match the message from `W5:` on.
+expected="W5: object digest not comparable (recorded arch=$recorded, this host is $other)"
+if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$out" | tail -5 >&2
+    fail "the gate exited $rc on a simulated foreign host (a gap must not fail the gate)"
+fi
+printf '%s\n' "$out" | grep -Fq "$expected" || {
+    printf '%s\n' "$out" | grep -F "W5" >&2
+    fail "the gate did not state: $expected"
+}
+if printf '%s\n' "$out" | grep -Fq "[pass] W5 (checked): the certificate's obj digest"; then
+    fail "the gate compared the object digest across architectures"
+fi
+printf '%s\n' "$out" | grep -Fq "[pass] W5 (checked): the certificate's cps digest" || {
+    fail "the cps digest check stopped passing; the arch branch changed more than it should"
+}
+
+say "held — the object digest is a stated gap on host arch $other, the cps digest is still checked"

@@ -432,8 +432,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `dump m;` above the index-closure audit in a scratch copy of
   `lib/liquid/LiquidCheck.ml` and requires the gate (reading that copy through
   `AUSTRALVM_LIQUID_CHECK`) to exit 1 with exactly `[FAIL] L11a: the liquid pass
-  runs the index-closure audit before emitting`, the other two L11a pins still
-  passing; the unmutated copy must pass all three first. Writing it exposed a
+  runs the index-closure audit before emitting`. Every one of the three
+  substance pins is required **by name in both directions**: the unmutated copy
+  must print all three `[pass]` lines and no `[FAIL]` line, and the mutated copy
+  must print `[FAIL]` *and not* `[pass]` for the ordering pin, `[pass]` *and
+  not* `[FAIL]` for the other two, with the counts over those three pins at
+  three passes / zero failures and two passes / one failure. The counts are over
+  the three pins, not `[pass] L11a:` lines, because the gate also prints two
+  `L11a:` wiring pins about this control. Asserting only the expected verdict
+  would let a pin print both lines and still pass, so the opposite line is
+  refused; a copy of the control that appends a `[pass]` ordering line inside
+  `run_gate` (making the mutated run print both) exits 1 with `'the liquid pass
+  runs the index-closure audit before emitting' also printed '[pass] L11a: …'`,
+  which is what makes the both-directions half load-bearing rather than
+  decorative. Writing it exposed a
   weak pin, which now compares against the *first* `dump m;`. The gate pins this
   control's wiring (`L11a: the ordering pin has a negative control`, `… moves the
   copy through the gate's own hook`) because the gate cannot run the control —
@@ -443,7 +455,16 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   (restored by a trap, re-hashed, suite re-run) and requires the real suite to
   fail in opposite directions — `if true then Convertible` trips the four
   refusal cases while the acceptances still pass, `if false then Convertible`
-  trips the four acceptance cases while the refusals still pass. It mutates in
+  trips the four acceptance cases while the refusals still pass. Each of the
+  eight is required **by name in both directions**: the four of the affected kind
+  must print their `FAIL` line and the other four their `ok` line (the suite
+  spells the two verdicts differently — `FAIL m + n must not convert to n + m`
+  against `ok   m + n is not convertible to n + m` — so both names are listed),
+  and the run must report exactly four failures. Requiring only the failures
+  would let a mutation that also broke a case it should leave alone pass; the
+  swapped-expectation copy of this control (expecting the permissive run's
+  acceptances to `FAIL`) exits 1 naming all four, so the per-case assertion is
+  load-bearing. It mutates in
   place because `LiquidTypes` needs `Stages` from `austral_core`, so a separate
   link of the module is not possible; the restore is asserted, not assumed. It
   needs `dune`, so run it under `nix develop "git+file://$PWD#ocaml"`. Its own
@@ -503,13 +524,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   whole gate with the read-only override that points at the copy
   (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
   `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
-  expected `[FAIL]` line. One full gate run per case; logs kept under
+  expected `[FAIL]` line — plus at least one `[pass]` line the drift does not
+  touch, because an expected failure alone is also what a run that broke
+  wholesale prints. Since 2026-11-19 every case carries that second half; the
+  nine that did not (`phase-d-theory-coverage`, `phase-d-imported-theory`,
+  `phase-d-self-vocabulary`, `phase-d-measured-coverage`, `isa-hypothesis-pin`,
+  `witness-axiom`, `memsafe-edge`, `cert-approved`, `w3-approved-row`) assert
+  `Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)`
+  and `W3: every §W3 state cell …`, which read neither the drifted file nor the
+  scratch approval root. One full gate run per case; logs kept under
   `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
   speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
   repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
   `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
-  cores suggest, because a gate run does not itself parallelise; a second
-  `-j 2` run on 2026-11-19 took 44m1s, which is the spread to expect. The last
+  cores suggest, because a gate run does not itself parallelise. The last
   `copy` row, `W3: $_stem matches its approved statements`, is
   `w3-approved-row`: it copies the whole approved root into scratch and weakens
   one approved axiom there, so the check runs without the tree holding any new
@@ -521,14 +549,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   an explained `[gap]` when the prover is absent, so the drifted copy has no
   `[FAIL]` to produce. The case then prints `[gap] liquid-golden: why3 not on
   PATH …` and the summary reads `13 case(s) held, 1 not covered in this shell`
-  — never a silent pass. On a host with `why3` on the profile PATH (measured
-  2026-11-19) the case takes the full path instead: the drifted copy really
-  trips `[FAIL] Liquid subset extraction matches its pinned golden` and the
-  whole 14-case run holds inside `nix develop .#ocaml`.
-  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the five
-  read-only scripts `READ_ONLY_CONTROLS` names, and `obj-drift-control` alone
-  after them because it edits the tree and rebuilds; `make test` depends on it.
-  The two
+  — never a silent pass, which is what lets `make test` run past
+  `drift-controls` under `nix develop .#ocaml` (where the `default` shell that
+  carries why3 does not build).
+  `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the
+  eight read-only scripts listed in `READ_ONLY_CONTROLS` — the four §W3/§W9.3
+  cell controls, `w5-arch-gap-control`, `w3-approval-state-drift-control`, and
+  the two L11 controls (`l11a-ordering`, `l11b-conversion`) — then
+  `obj-drift-control` alone, because
+  that one edits the tree and rebuilds. `make test` depends on it. The two
   parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
   (2026-11-18, before the two L11 controls joined the loop; the ~30% saving is
   the point, not the wall clock). It never
@@ -553,12 +582,65 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `class` totals (`control` / `derived` / `copy` / `tool` / `none`). It exits 1
   when the plan no longer quotes the measured counts — including the `copy`
   count, which is the gap — so a table that grows without the paragraph moving
-  is caught here. Kept out of `verify-invariants`
-  because it reads the plan's prose rather than an artifact.
+  is caught here, and `make check-census` runs it. Kept out of
+  `verify-invariants` because it reads the plan's prose rather than an artifact,
+  which also means nothing runs it for you: adding a `check` to
+  `scripts/verify-invariants` makes it exit 1 until the plan quotes the new
+  numbers. Last measured 2026-11-19, after the merge: `225 statements, 137
+  distinct, 22 probe rows (20 matched), 0 neither, copy 0`.
+- `scripts/lib/arch.sh` — the one recorded-arch reader for the W5 object
+  digest (`avm_recorded_arch`, `avm_host_arch`, `avm_arch_gap`), sourced by
+  `verify-invariants`, `obj-drift-control` and `w5-arch-gap-control` so all
+  three word a host mismatch the same way. The committed certificate records
+  `arch=aarch64` (2026-11-19, the merge's incoming branch), so the obj
+  comparison is `[pass]` on that host and the documented `[gap]` on this
+  x86_64 one; `scripts/obj-drift-control` expects the obj line on a matching
+  host and the cps line on a mismatched one, and exit 2 stays an explained gap
+  in `make test`.
+- `scripts/w5-arch-gap-control` — the arch-gap path itself: on this host the
+  matching-arch run never takes it, so the control sets
+  `AUSTRALVM_HOST_ARCH` to a label that is neither the recorded nor the real
+  arch and requires the gate to exit 0 with `W5: object digest not comparable
+  (recorded arch=…, this host is …)`, no obj `[pass]`, and the cps `[pass]`
+  still there. Read-only, one full gate run; in `READ_ONLY_CONTROLS`.
+- W5's failed comparisons carry a staleness line. The certificate's `cps=`/`obj=`
+  digests describe one `austral` and one bridge build, so when a comparison
+  fails the gate prints `staleness: — austral is newer (…T14:08:25) than
+  mm0/flux1d_certificate.mm0 (…T13:57:34), so the recorded digests may describe
+  an older compiler build; re-emit it: …`: the mid-rebuild case reads as an
+  artifact that predates the compiler, not as silently drifted code. It is a
+  diagnosis and never a skip — the two digest `[FAIL]`s stay red. mtime alone
+  cannot refuse the comparison: a rebuild of identical sources leaves the
+  digests equal and the tree green (measured 2026-11-19 with `austral` 34
+  minutes newer than the certificate), and CI writes the artifact at checkout
+  before `make bridge` writes the binary, so an mtime-only refusal would be red
+  on every run. The note is itself a comparison with a control:
+  `[pass] W5: the staleness note is silent when the artifact is newest, and
+  names the newer binary` stamps a scratch pair both ways.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
-  is restored. It rebuilds the compiler twice, so it is not in
-  `verify-invariants`; run it under `nix develop` (needs `dune`).
+  is  restored. It rebuilds the compiler twice, so it is not in
+  `verify-invariants`; run it under `nix develop` (needs `dune`). It resolves the
+  bridge the way the gate, `scripts/cps-corpus` and
+  `scripts/check-adapter-descriptors` do (repo root, else `target/release`), so a
+  clean `make bridge` layout is exercised instead of reported as `[gap]`;
+  measured there 2026-11-19: held, `obj=26bb3ab3…` → `524f7432…` with the
+  program's exit status unchanged, gate `[FAIL] W5 (checked): the certificate's
+  obj digest … (x86_64)`, pinned digests back after the restore. The run must
+  also keep two lines it does not touch green — `W3: every §W3 emitter cell
+  names a real command` and `Phase D: gap_certificate pins its trust split` —
+  because the expected W5 `[FAIL]` alone would also appear if the gate had
+  broken elsewhere. The
+  `nix-pkg` CI job also runs `verify-invariants` inside `.#ocaml` after the
+  OCaml suite, against the built `austral`/bridge and the sibling `unfer`
+  checkout, so the checks that need artifacts are measured there instead of
+  reported as gaps. The standalone `verify-invariants` job was upgraded to the
+  same shape: it installs nix and Rust, runs `make bridge`, and then runs the
+  gate without staging a root `.so` — the gate, `scripts/cps-corpus` and
+  `scripts/check-adapter-descriptors` resolve the bridge at the repo root when
+  it is there and under `safestos/cranelift/target/release` otherwise, which
+  is the layout `make bridge` leaves and CI has. Measured from a clean tree
+  with no root copy: `157 passed, 8 explained gap(s), 0 failed` in 197 s.
 - Entry points outside `scripts/`: the `Makefile` (`make all` / `make test` /
   `make bridge`, all guarded by `check-bridge-fresh`; `make w9` for the two
   lean-shell checks below), `run-examples.sh`,
