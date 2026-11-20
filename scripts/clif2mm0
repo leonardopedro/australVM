@@ -70,6 +70,12 @@ CITES = [
     "mm0/slot_layout.mm0",
 ]
 
+# The owner's approval of `isa`'s statements, once it exists. Approval is a
+# commit touching only `mm0/approved/`, so the certificate line follows the
+# file rather than a flag: absent, the obligation is stated and left `[gap]`;
+# present, it is cited by digest and the gate requires the citation to match.
+APPROVED_ISA = "mm0/approved/isa.stmts"
+
 
 def sha256_of(rel):
     with open(os.path.join(ROOT, rel), "rb") as f:
@@ -207,15 +213,24 @@ def render(forms, instructions):
     out.append("-- content and pinned by digest — the same four artifacts `mm0/isa.mm0`")
     out.append("-- cites for `linear`/`typed`/`in_bounds`, plus the ISA model the CLIF")
     out.append("-- step has to refine into:")
-    for rel in CITES:
+    approved = os.path.exists(os.path.join(ROOT, APPROVED_ISA))
+    for rel in CITES + ([APPROVED_ISA] if approved else []):
         out.append(f"-- cites: {rel} sha256={sha256_of(rel)}")
     out.append("--")
-    out.append("-- certificate: [gap] — `mm0/approved/` carries no approval for `isa`,")
-    out.append("--   and an approval is the owner's commit, not a script's. So the")
-    out.append("--   obligation is stated with citations and left uncertified on purpose;")
-    out.append("--   `scripts/verify-invariants` fails this gap if `mm0/approved/isa.stmts`")
-    out.append("--   appears, because then the citation must name it and a proof must")
-    out.append("--   arrive with it. Nothing here is pinned as `approved` by itself.")
+    if approved:
+        out.append(f"-- certificate: {APPROVED_ISA} sha256={sha256_of(APPROVED_ISA)} —")
+        out.append("--   the owner approved `isa`'s statements in `mm0/approved/`, so the")
+        out.append("--   layer-1 vocabulary the refinement assumes is now held out and")
+        out.append("--   diffed rather than re-read. The obligation itself remains stated,")
+        out.append("--   not proved: this file still carries no `axiom`/`theorem`, and the")
+        out.append("--   approval is of the *statements*, not of the step refinement.")
+    else:
+        out.append("-- certificate: [gap] — `mm0/approved/` carries no approval for `isa`,")
+        out.append("--   and an approval is the owner's commit, not a script's. So the")
+        out.append("--   obligation is stated with citations and left uncertified on purpose;")
+        out.append("--   `scripts/verify-invariants` fails this gap if `mm0/approved/isa.stmts`")
+        out.append("--   appears, because then the citation must name it and a proof must")
+        out.append("--   arrive with it. Nothing here is pinned as `approved` by itself.")
     out.append("sort St;                        -- a machine state: registers + memory, uninterpreted")
     out.append("term clif_step (s: St) (o: op) (t: St): Prop;")
     out.append("")

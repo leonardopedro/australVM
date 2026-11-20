@@ -1781,7 +1781,11 @@ EOF
     # to flip the cell. The scratch copy is a staging; `mm0/approved/` is never
     # read into it or written.
     _w3r_ctl="$_cert_tmp/w3-row-control"
-    _w3r_stem="slot_layout"
+    # A row the table still marks pending: the third probe below puts a staged
+    # copy behind it and requires the table to be told to flip its cell, which
+    # only means anything while the row is not approved. Derived, so approving
+    # an artifact moves the probe to the next pending row instead of breaking it.
+    _w3r_stem="$(printf '%s\n' $_w3_tab_pending | head -1)"
     _w3r_row="$(printf '%s\n' "$_w3_plan" | grep -x "$_w3r_stem=[0-9]*" | head -1)"
     if ! command -v python3 >/dev/null 2>&1; then
         gap "W3: the §W3 row check's approved-row control not run (no python3 here)"

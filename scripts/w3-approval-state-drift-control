@@ -13,22 +13,26 @@
 # the owner had signed it. So, the way `scripts/w93-certification-drift-control`
 # measures the certificate line:
 #
-#   1. copy the plan and rewrite `mm0/isa.mm0`'s state cell to
+#   1. copy the plan and rewrite the state cell of a row that is *still pending*
+#      (the first such row whose `mm0/approved/<stem>.stmts` is absent) to
 #      ``[pass]`, approved in `mm0/approved/` ``, leaving its stmts, emitter and
-#      digest cells alone. Refuses to run if `mm0/approved/isa.stmts` exists,
-#      because then the row would be telling the truth;
+#      digest cells alone. The target is derived, not named, so approving one
+#      artifact moves the control to the next pending row instead of leaving it
+#      refusing to run; it refuses only when every row is approved, because then
+#      no claimed approval could be false;
 #   2. run `scripts/verify-invariants` against that copy through `AUSTRALVM_PLAN`
 #      and require exit 1;
 #   3. require `[FAIL] W3: the plan's §W3 stmts column matches what each artifact
-#      holds` and the detail `isa(says approved, but …/isa.stmts does not exist)`
-#      — the row naming the missing copy is the whole point of the control;
+#      holds` and the detail `<stem>(says approved, but …/<stem>.stmts does not
+#      exist)` — the row naming the missing copy is the whole point of the control;
 #   4. require the shape check, which owns the cell and cannot see the approval,
 #      to still pass: the perturbation is a cell that parses, not a broken cell.
 #      Three derived checks do move with it, and the run names them rather than
 #      pretending isolation: the digest column and the approved-row emitter check
 #      read the same approved copy the cell points at, and `scripts/stage-approvals`
-#      stops counting `isa` as pending. Exactly those four lines are allowed to
-#      turn red; a fifth would mean the perturbation reached past one cell.
+#      stops counting the perturbed row as pending. Exactly those five lines are
+#      allowed to turn red; a sixth would mean the perturbation reached past one
+#      cell.
 #
 # Nothing is written into the repository and `mm0/approved/` is only read, so this
 # script cannot approve anything.
@@ -41,7 +45,6 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAN="$ROOT/PLAN_sota_kernel_verification.md"
 GATE="$ROOT/scripts/verify-invariants"
-APPROVAL="$ROOT/mm0/approved/isa.stmts"
 
 say()  { printf '%s\n' "$*"; }
 fail() { printf 'w3-approval-state-drift-control: FAIL %s\n' "$*" >&2; }
@@ -52,8 +55,34 @@ command -v python3 >/dev/null 2>&1 || {
 }
 [ -f "$PLAN" ] || { fail "no plan at $PLAN"; exit 2; }
 [ -f "$GATE" ] || { fail "no gate at $GATE"; exit 2; }
+
+# The row to lie about: the first §W3 row still marked pending whose approved
+# copy does not exist. Derived so a real approval does not invalidate the
+# control — it moves to the next pending row.
+stem="$(python3 - "$PLAN" <<'PY'
+import pathlib, sys
+plan = pathlib.Path(sys.argv[1]).read_text().splitlines()
+for line in plan:
+    s = line.lstrip()
+    if not s.startswith("| `mm0/"):
+        continue
+    cells = [c.strip() for c in s.split("|")]
+    if len(cells) < 7 or "`[gap]`, awaiting owner commit" not in cells[5]:
+        continue
+    path = cells[1].strip("`")
+    if not path.startswith("mm0/") or not path.endswith(".mm0"):
+        continue
+    print(path[len("mm0/"):-len(".mm0")])
+    break
+PY
+)"
+if [ -z "$stem" ]; then
+    fail "every §W3 row is approved, so no claimed approval would be false"
+    exit 2
+fi
+APPROVAL="$ROOT/mm0/approved/$stem.stmts"
 if [ -e "$APPROVAL" ]; then
-    fail "mm0/approved/isa.stmts exists, so a claimed approval would not be false"
+    fail "$stem's row says pending but mm0/approved/$stem.stmts exists — fix the table first"
     exit 2
 fi
 
@@ -62,15 +91,16 @@ trap 'rm -rf "$work"' EXIT INT TERM
 perturbed="$work/PLAN.md"
 
 # ── 1. the perturbation: one cell, one row ─────────────────────────────────
-python3 - "$PLAN" "$perturbed" <<'PY' || exit 2
+python3 - "$PLAN" "$perturbed" "$stem" <<'PY' || exit 2
 import pathlib, sys
 src, dst = (pathlib.Path(p) for p in sys.argv[1:3])
+stem = sys.argv[3]
 lines = src.read_text().splitlines(keepends=True)
 pending = "`[gap]`, awaiting owner commit"
 approved = "`[pass]`, approved in `mm0/approved/`"
 hits = 0
 for i, line in enumerate(lines):
-    if not line.lstrip().startswith("| `mm0/isa.mm0`"):
+    if not line.lstrip().startswith(f"| `mm0/{stem}.mm0`"):
         continue
     # Only the §W3 row carries a state cell; other tables quote the same path.
     if pending not in line:
@@ -78,14 +108,14 @@ for i, line in enumerate(lines):
     lines[i] = line.replace(pending, approved)
     hits += 1
 if hits != 1:
-    raise SystemExit(f"expected one pending `mm0/isa.mm0` row, found {hits}")
+    raise SystemExit(f"expected one pending `mm0/{stem}.mm0` row, found {hits}")
 dst.write_text("".join(lines))
 PY
-grep -q '| `mm0/isa.mm0` |.*| `\[pass\]`, approved in `mm0/approved/` |' "$perturbed" || {
+grep -q "| \`mm0/$stem.mm0\` |.*| \`\\[pass\\]\`, approved in \`mm0/approved/\`" "$perturbed" || {
     fail "the copy does not carry the drifted state cell"
     exit 2
 }
-say "perturbed: isa's state cell now says approved, with no mm0/approved/isa.stmts"
+say "perturbed: $stem's state cell now says approved, with no mm0/approved/$stem.stmts"
 
 # ── 2. the whole gate, pointed at the copy ─────────────────────────────────
 rc=0
@@ -105,19 +135,19 @@ if ! grep -qF "$line" "$work/gate.log"; then
     fail "no '$line' in the run"
     exit 1
 fi
-detail='isa(says approved, but'
+detail="$stem(says approved, but"
 if ! grep -F '§W3 table vs measured:' "$work/gate.log" | grep -qF "$detail"; then
     grep -F '§W3 table vs measured:' "$work/gate.log" | sed 's/^/  /' >&2
-    fail "the detail does not name isa's missing approved copy"
+    fail "the detail does not name $stem's missing approved copy"
     exit 1
 fi
-if ! grep -F '§W3 table vs measured:' "$work/gate.log" | grep -qF 'isa.stmts does not exist)'; then
+if ! grep -F '§W3 table vs measured:' "$work/gate.log" | grep -qF "$stem.stmts does not exist)"; then
     fail "the detail does not say which file is missing"
     exit 1
 fi
-say "detail:    isa(says approved, but …/isa.stmts does not exist)"
+say "detail:    $stem(says approved, but …/$stem.stmts does not exist)"
 
-# ── 4. the shape check still passes, and exactly four lines moved ──────────
+# ── 4. the shape check still passes, and exactly five lines moved ──────────
 missing=""
 while IFS= read -r want; do
     grep -qF "[pass] $want" "$work/gate.log" || missing="$missing
@@ -138,16 +168,17 @@ fi
 grep '^\[FAIL\] ' "$work/gate.log" | sed 's/^\[FAIL\] //' > "$work/fails.txt"
 cat > "$work/expected.txt" <<'EXPECTED'
 W3: the plan's §W3 stmts column matches what each artifact holds
+W3: a §W3 row that disagrees with mm0/approved/ is refused
 W3: the plan's §W3 digest column matches the file it describes
 W3: every approved §W3 row's emitter still produces its approved copy
 W3: stage-approvals stages exactly §W3's pending rows (exit 0)
 EXPECTED
 if ! diff -u "$work/expected.txt" "$work/fails.txt" > "$work/fails.diff"; then
     sed 's/^/  /' "$work/fails.diff" >&2
-    fail "the run did not fail exactly the four checks the state cell feeds"
+    fail "the run did not fail exactly the checks the state cell feeds"
     exit 1
 fi
-say "moved:     the four lines the cell feeds, and nothing else —"
+say "moved:     the lines the cell feeds, and nothing else —"
 sed 's/^/             [FAIL] /' "$work/fails.txt"
 say "control:   holds — one false approval, the stmts [FAIL] naming the missing copy,"
 say "           the shape check and the emitter column still green"

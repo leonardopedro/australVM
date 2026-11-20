@@ -1,0 +1,36 @@
+-- mm0-comparator v1 — approved statements for slot_layout
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: slot_layout
+-- closure-sha256: 2be35aa287735ea593c71ad5787b1b34dc725dcaccdece6460a26366db5e3114
+-- theory-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+-- statements-sha256: 98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4
+
+provable sort Prop;
+delimiter $ ( ) $;
+sort l0;
+term l1: l0;
+prefix l1: $0$ prec max;
+sort l2;
+term l3: l2;
+term l4 (i: l0) (t: l2): l2;
+term l5 (i: l0) (l: l2): Prop;
+axiom l6 (i: l0) (l: l2): $ l5 i (l4 i l) $;
+axiom l7 (i j: l0) (l: l2): $ l5 i l $ > $ l5 i (l4 j l) $;
+term l8 (l m: l2): Prop;
+axiom l9 (l: l2): $ l8 l l $;
+axiom l10 (l m: l2): $ l8 l m $ > $ l8 m l $;
+axiom l11 (l m n: l2): $ l8 l m $ > $ l8 m n $ > $ l8 l n $;
+axiom l12 (i: l0) (l m: l2): $ l8 l m $ > $ l5 i l $ > $ l5 i m $;
+sort l13;
+term l14 (s: l13): l2;
+term l15 (s: l13) (i: l0): l13;
+axiom l16 (s: l13) (i: l0): $ l8 (l14 (l15 s i)) (l4 i (l14 s)) $;
+def l17 (s: l13) (i: l0): Prop = $ l5 i (l14 s) $;
+theorem l18 (s: l13) (i: l0) (j: l0) (h: $ l5 i (l14 s) $):
+  $ l5 i (l14 (l15 s j)) $;
+theorem l19 (s: l13) (i: l0) (j: l0) (h: $ l17 s i $):
+  $ l17 (l15 s j) i $;

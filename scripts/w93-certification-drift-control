@@ -47,8 +47,9 @@ command -v python3 >/dev/null 2>&1 || {
 [ -f "$CLIF" ] || { fail "no mm0/clif.mm0 at $CLIF"; exit 2; }
 [ -f "$GATE" ] || { fail "no gate at $GATE"; exit 2; }
 if [ -e "$APPROVAL" ]; then
-    fail "mm0/approved/isa.stmts exists, so the [gap] branch is not the state under test"
-    exit 2
+    direction=approved
+else
+    direction=pending
 fi
 
 work="$(mktemp -d)"
@@ -56,29 +57,47 @@ trap 'rm -rf "$work"' EXIT INT TERM
 perturbed="$work/clif.mm0"
 
 # ── 1. the perturbation: one claim, one line ───────────────────────────────
-python3 - "$CLIF" "$perturbed" <<'PY' || exit 2
+python3 - "$CLIF" "$perturbed" "$direction" <<'PY' || exit 2
 import pathlib, sys
-src, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+src, dst, direction = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 lines = src.read_text().splitlines(keepends=True)
 hits = 0
 for i, line in enumerate(lines):
-    if line.startswith("-- certificate: [gap]"):
-        lines[i] = ("-- certificate: mm0/approved/isa.stmts — claimed by a control, "
-                    "not by the owner\n")
-        hits += 1
+    if direction == "approved":
+        # The approval exists, so the drift is a certificate that still says
+        # [gap] while the owner's copy sits in mm0/approved/.
+        if line.startswith("-- certificate: mm0/approved/isa.stmts"):
+            lines[i] = ("-- certificate: [gap] — downgraded by a control, "
+                        "not by the owner\n")
+            hits += 1
+    else:
+        # No approval, so the drift is a claim of one that does not exist.
+        if line.startswith("-- certificate: [gap]"):
+            lines[i] = ("-- certificate: mm0/approved/isa.stmts — claimed by a control, "
+                        "not by the owner\n")
+            hits += 1
 if hits != 1:
-    raise SystemExit(f"expected exactly one '[gap]' certificate line, found {hits}")
+    raise SystemExit(f"expected exactly one certificate line to rewrite ({direction}), found {hits}")
 dst.write_text("".join(lines))
 PY
-grep -qF -- '-- certificate: mm0/approved/isa.stmts' "$perturbed" \
-    || { fail "the copy does not carry the claimed certificate"; exit 2; }
-if grep -q '^-- certificate: \[gap\]' "$perturbed"; then
-    fail "the copy still says [gap]"
-    exit 2
+if [ "$direction" = pending ]; then
+    grep -qF -- '-- certificate: mm0/approved/isa.stmts' "$perturbed" \
+        || { fail "the copy does not carry the claimed certificate"; exit 2; }
+    if grep -q '^-- certificate: \[gap\]' "$perturbed"; then
+        fail "the copy still says [gap]"
+        exit 2
+    fi
+else
+    grep -q '^-- certificate: \[gap\]' "$perturbed" \
+        || { fail "the copy does not downgrade the certificate"; exit 2; }
 fi
 grep -qF -- '-- cites: mm0/slot_layout.mm0' "$perturbed" \
     || { fail "the copy lost its citations"; exit 2; }
-say "perturbed: clif.mm0's certificate line claims mm0/approved/isa.stmts (citations kept)"
+if [ "$direction" = pending ]; then
+    say "perturbed: clif.mm0's certificate line claims mm0/approved/isa.stmts (citations kept)"
+else
+    say "perturbed: clif.mm0's certificate line says [gap] although mm0/approved/isa.stmts exists"
+fi
 
 # ── 2. the whole gate, pointed at the copy ─────────────────────────────────
 rc=0
@@ -88,7 +107,11 @@ say "gate:      exit $rc"
 tail -1 "$work/gate.log"
 
 if [ "$rc" -eq 0 ]; then
-    fail "the gate accepted a certificate claim with no approval behind it"
+    if [ "$direction" = pending ]; then
+        fail "the gate accepted a certificate claim with no approval behind it"
+    else
+        fail "the gate accepted a certificate that ignores the owner's approval"
+    fi
     exit 1
 fi
 
@@ -98,7 +121,11 @@ if ! grep -qF "$line" "$work/gate.log"; then
     fail "no '$line' in the run"
     exit 1
 fi
-detail='no isa approval, yet clif.mm0 does not say [gap]'
+if [ "$direction" = pending ]; then
+    detail='no isa approval, yet clif.mm0 does not say [gap]'
+else
+    detail='isa.stmts exists — clif.mm0 must cite it, not a gap'
+fi
 if ! grep -qF "$detail" "$work/gate.log"; then
     fail "the run does not say '$detail'"
     exit 1
@@ -112,13 +139,17 @@ while IFS= read -r want; do
   $want"
 done <<'WANT'
 [pass] W9.3: clif_step is vocabulary — declared, stated, never axiomatized
-[pass] W9.3: the refinement's citations still match their artifacts (5 pinned)
-[pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
+[pass] W9.3: the refinement's citations still match their artifacts
+[pass] W9.3: the composition table's counts match the files it records
 [pass] W3: every §W3 emitter cell names a real command
 WANT
 if [ -n "$missing" ]; then
     fail "the perturbation took other lines with it:$missing"
     exit 1
 fi
-say "control:   holds — one uncertified claim, the certification [FAIL], every other clif/§W3 line unchanged"
+if [ "$direction" = pending ]; then
+    say "control:   holds — one uncertified claim, the certification [FAIL], every other clif/§W3 line unchanged"
+else
+    say "control:   holds — one downgraded certificate, the certification [FAIL], every other clif/§W3 line unchanged"
+fi
 exit 0
