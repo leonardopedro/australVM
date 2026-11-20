@@ -9,6 +9,7 @@ line is the summary the plan quotes.
 | file | command | tree | summary |
 |---|---|---|---|
 | [`2026-11-20-lean-shell-postcleanup.log`](2026-11-20-lean-shell-postcleanup.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, `37fd65ec`, after reclaiming stale build caches (38 GB free when it started) | `175 passed, 4 explained gap(s), 0 failed` |
+| [`2026-11-20-ocaml-shell-postcleanup.log`](2026-11-20-ocaml-shell-postcleanup.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, `8249b592`, the tree the first two rows run on | `166 passed, 6 explained gap(s), 0 failed` |
 | [`2026-11-20-ocaml-shell.log`](2026-11-20-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, `8b8eb323` after `make bridge` | `166 passed, 6 explained gap(s), 0 failed` |
 | [`2026-11-20-lean-shell.log`](2026-11-20-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `175 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-19, after the W5 object re-pin and the bridge-copy check | `165 passed, 6 explained gap(s), 0 failed` |
@@ -19,8 +20,10 @@ The first row re-runs the gate on the tree the 2026-11-20 pair describes, after
 the volume went from 98% full to 58% by deleting build caches only (the bridge
 release artifacts and the root `.so` copy were kept and re-verified identical,
 and `make check-bridge-fresh` still passes). It is kept as evidence that the
-counts do not depend on the caches: same tree, same `175`/`4`/`0`. The run was
-slower than the row below because the host was under memory pressure — one
+counts do not depend on the caches: same tree, same `175`/`4`/`0`, and the
+second row repeats it under `.#ocaml` (`166`/`6`/`0`, the two extra gaps being
+the Lean-only W9.1 and witness checks). The lean run was slower than the row
+below it because the host was under memory pressure — one
 `lean2mm0-stmts emit` step held 8.7 GB RSS — which is a property of the host,
 not of the gate.
 
