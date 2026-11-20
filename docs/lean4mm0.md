@@ -4090,7 +4090,7 @@ not a smaller cap: `Enc.write(eid, sink)` already encodes a term into a sink wit
 building a string (§13.30), so the join disappears if `enc()`'s callers accept pieces
 instead of a `str`. That is measured in §13.45.
 
-### 13.45 `enc()` hands out pieces: the floor is 2 400 MiB, and the proof wrap is next
+### 13.45 `enc()` hands out pieces: the floor is 2 400 MiB
 
 §13.44 named the ceiling and the change that removes it: `Enc.enc` builds a term into an
 `EncBuf` as 1 MiB chunks, then `take()` does `"".join(self.chunks)` — chunks *and* result
@@ -4120,23 +4120,26 @@ the pieces are the same bytes in the same order, so the goldens are untouched.
 | cap | outcome | peak VmSize | notes |
 | ---: | --- | ---: | --- |
 | **2 400** | **exit 0, 3 323 s** | **2 358 MiB** (t = 3 150 s) | peak RSS 2 335 MiB; artifacts 102 543 367 789 / 102 547 674 107 B |
-| 2 352 | exit 1 at 3 945 s | 2 351 MiB | `MemoryError` at `proof = f"(ty_abs {proof})"`, past the walk, no artifact |
+| 2 352 | exit 1 at 3 945 s | 2 351 MiB | with the scalar proof wrap; `MemoryError` at `proof = f"(ty_abs {proof})"`, past the walk, no artifact — §13.46 passes this cap |
 
 So the floor moves **4 032 → 2 400 MiB** and the peak **4 015 → 2 358 MiB**: 1 632 MiB
 less cap for the same row, and the join that §13.44 measured at t = 73 s is simply not in
 the trace — at 189 s the run sits at 2 236 MiB where it used to touch 4 015 MiB. The
-2 352 MiB probe is the failing side of the floor, and it fails somewhere else entirely.
+2 352 MiB probe is the failing side of the floor, and it fails somewhere else entirely
+(§13.46 then removes that failure and passes at 2 352).
 
-**The new ceiling is the proof's binder wrap.** A closed goal wraps the body's proof once
-per binder, `proof = f"(ty_abs {proof})"` (`scripts/lean-typing-proof:1538`). That line
-runs while `body_ty`'s ~1.94 GB of chunks are still referenced (they are only released at
-`:1560`, after the piecewise check), so the wrap copies a multi-hundred-megabyte proof
-with the body type still resident — which is why 2 352 MiB runs 3 945 s and dies there
-rather than at 73 s. Removing it is the same shape of change as this one: the proof is
-only ever concatenated or compared, so it can be a sequence of pieces too (`(ty_abs `
-repeated, then the proof's pieces, then the parens) with `body_ty` deleted before the
-wrap. It is not done here and not claimed; §13.45's floor is what a measured run says,
-not what the next patch would allow.
+**Where 2 352 MiB died is not where the memory is.** The traceback pins the failure at
+`proof = f"(ty_abs {proof})"` (`scripts/lean-typing-proof:1538`), and this section first
+read that as the new ceiling. The artifacts say otherwise: `.mm1 − .mm0 = 4 306 318 B`, so
+the whole proof is ~4.3 MB and twelve copies of it are ~48 MB — the wrap is the allocation
+that hit the wall, not the wall. The wall is `body_ty` itself. `enc_parts(cur)` runs
+*before* the derivation (`:1400`) and its ~1.94 GB of chunks stay referenced for the whole
+walk, until `del body_ty` (`:1560`): every sample from t = 189 s on is that 1.94 GB plus
+the deriver's slowly growing state, with no drop anywhere — 2 236 MiB at 189 s, 2 320 at
+1 948 s, 2 358 at 3 150 s. So 2 352 MiB left ~0.5 MiB above what the process had already
+reached by t = 3 038 s, and the next allocation of any size was fatal. §13.46 measures the
+wrap as pieces anyway (the copies were O(n²) bytes for nothing) and reports what that does
+and does not buy.
 
 **What did not move.** The artifacts: sizes exactly as recorded, and the shared stream
 (9 154 545 B), naming (10 968 B), index (36 292 B) and manifest (359 B) are `cmp`-identical
@@ -4148,3 +4151,45 @@ no `cmp` of the big files is offered for this run.
 **The elapsed time is not a claim.** 3 323 s against §13.44's 3 385 s at 4 032 MiB is
 inside this host's variance (§13.43 saw 2 290 s and 3 583 s on identical output), and the
 patch removes an allocation, not work. Memory is the quantity measured here.
+
+### 13.46 The proof wrap is pieces too: the floor is 2 352 MiB
+
+§13.45's 2 352 MiB failure pointed at `proof = f"(ty_abs {proof})"`: each of the 12
+binders copied the whole proof, and the twelfth copy ran with `body_ty`'s 1.94 GB still
+resident. The copies are avoidable, so they are gone:
+
+```python
+proof = ["(ty_abs "] * len(binders) + [proof] + [")"] * len(binders)
+```
+
+`proof` is a piece list from the derivation on, and the only two consumers already iterate
+pieces — `_put` streams them into `type.tmp`, and the `.mm1` write emits ` =\n  '`,
+`_put(fh, proof)`, `;\n`. No join, no `''.join` of the wrapped form, so the 12 copies are
+never materialized.
+
+**Byte identity.** `scripts/check-lean-typing-proof` green, 12 artifacts across 3 modes,
+goldens not re-recorded.
+
+**The rerun.** Same row, same environment, `ulimit -v` in MiB, sampled every second:
+
+| cap | outcome | peak VmSize | notes |
+| ---: | --- | ---: | --- |
+| **2 352** | **exit 0, 4 144 s** | **2 351 MiB** (t = 3 078 s) | peak RSS 2 325 MiB; same six artifacts |
+| 2 304 | exit 1 at 2 054 s | 2 303 MiB (t = 902 s) | `MemoryError` inside the walk at `f"(ty_app …)"` (`:2760`), no artifact |
+
+The cap that failed with the scalar wrap (§13.45, `MemoryError` at 3 945 s) now passes at
+the same value, so the ns row's floor is **2 400 → ≤ 2 352 MiB**, a 48 MiB drop. That is
+the size of the thing removed — twelve copies of a 4 306 318 B proof ≈ 48 MB — so the
+change is real and small, exactly as §13.45's correction predicted. All six artifacts of
+the passing run come out at the recorded sizes: `.mm0` 102 543 367 789 B, `.mm1`
+102 547 674 107 B, stream 9 154 545 B, naming 10 968 B, index 36 292 B, manifest 359 B.
+
+One step lower brackets the gain: at 2 304 MiB the run dies at 2 054 s in the derivation
+itself, at `res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"` (`:2760`) — not at the
+wrap and not at the write — so the floor is somewhere in **(2 304, 2 352] MiB**, and the
+failure has moved from after the walk back into it, next to the `body_ty` residency.
+
+**What still sets the floor.** `body_ty` is ~1.94 GB of chunks, built at `:1400` and held
+until `:1560`; at 2 352 MiB the run lives within ~1 MiB of the cap for the last third of
+the walk. Spooling `body_ty` to disk like the declared type (compare it there, then free
+it) is the next lever to measure, and this section does not claim a number for it.

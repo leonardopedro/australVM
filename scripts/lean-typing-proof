@@ -1534,8 +1534,12 @@ def main() -> int:
         # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
         # term is a single expression (MM0 nests proofs in argument position
         # exactly like terms).
+        # Pieces, not copies. `proof = f"(ty_abs {proof})"` copied the whole
+        # proof once per binder — 12 copies of 4.3 MB on this row, and O(n²)
+        # bytes in general. The nesting only ever gets concatenated or written,
+        # so it is a list: `(ty_abs ` × n, the proof, `)` × n.
+        proof = ["(ty_abs "] * len(binders) + [proof] + [")"] * len(binders)
         for _ in binders:
-            proof = f"(ty_abs {proof})"
             _step_add(steps_hist, steps_order, "ty_abs")
         # No allocation of the wrapped type at all: the artifact writes the
         # spooled declared type, and the wrap exists only to say *which* text the
@@ -1621,7 +1625,12 @@ def main() -> int:
             fh.write(" ")
             _put(fh, goal_ty)
             fh.write(" $")
-            fh.write(";\n" if suffix == ".mm0" else f" =\n  '{proof};\n")
+            if suffix == ".mm0":
+                fh.write(";\n")
+            else:
+                fh.write(" =\n  '")
+                _put(fh, proof)
+                fh.write(";\n")
     if ax_fh is not None:
         ax_path.unlink()
     ty_path.unlink()
