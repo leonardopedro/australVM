@@ -6,6 +6,7 @@
 
 pub mod cargo;
 pub mod cli;
+pub mod handles;
 pub mod interface;
 pub mod policy;
 pub mod process;
