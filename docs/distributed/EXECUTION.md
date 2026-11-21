@@ -303,6 +303,106 @@ All exit 0.
 - Envelope version 1 objects are refused, not migrated. Nothing durable stored
   them (in-memory struct), so there is no migration to write.
 
+## D03 — authenticate capability RPC and constrain promise ownership (2026-11-21)
+
+U `unfer_edge/src/{caprpc,main}.rs`; U `b0aaa7c` + this patch.
+
+### What the ingress could and could not authenticate
+
+Measured, not assumed: `unfer_edge` has **no session authentication** — the
+`x-principal` header is documented as trusted (A9), and `/api/cap/*` attributed
+every request to the admin principal (`admin::admin_principal()`). D03 therefore
+does two separate things and says which is which:
+
+1. **Ingress (implemented, tested):** `/api/cap/*` now refuses any peer whose
+   address is not loopback, and refuses an unknown peer. `capability_peer_allowed`
+   is a pure predicate, tested for IPv4/IPv6 loopback, a private address, the
+   unspecified address and `None`. The real session's `client_addr()` feeds it.
+   A deployment on `0.0.0.0` no longer hands out capability authority; per-session
+   principals still need the S22 seam, which is a named gap, not a claim.
+2. **Registry (implemented, tested):** owner checks now hold for every verb, so
+   two local principals are separated even while the HTTP layer has one:
+   `new_promise` records its owner and its grant ceiling; `resolve_promise` needs
+   an *existing* promise, owned by the caller, on the promise's own endpoint,
+   resolving once, with grants ⊆ the promise's; `revoke` needs the caller to own
+   the id (or the pending promise) and returns false otherwise; the HTTP revoke
+   route turns that false into 403 instead of 200.
+
+### Witnesses (`caprpc::tests`, `main::tests`)
+
+| Witness | Asserts |
+|---|---|
+| `another_principal_holds_no_authority_over_a_capability` | bob cannot resolve alice's promise, revoke alice's cap, or invoke it; alice still can, afterwards |
+| `invented_or_reused_promise_id_is_refused` | a guessed id resolves nothing; a resolved promise cannot resolve again |
+| `resolution_cannot_escalate_grants_or_swap_endpoint` | `admin` added to an `echo` promise is refused; another endpoint is refused; the refusals do not consume the promise |
+| `revoked_promise_cannot_be_resolved` | cancelling the promise removes the authority |
+| `capability_surface_is_loopback_only` | loopback v4/v6 allowed only; private, unspecified and unknown peers refused |
+
+```
+$ cargo test --locked --offline -p unfer_edge --features audit   # 89 + 1 passed
+```
+
+Log: `evidence/d03-unfer_edge_audit.log`, exit 0.
+
+### Gap this does **not** close
+
+`/api/cap/*` still attributes every loopback request to the admin principal.
+A and B sharing loopback are only separated by the registry's owner checks, not
+by credentials. That is A9's auth seam (S22), and a cryptographic session
+principal is a separate task, not something D03 can honestly claim.
+
+## D04 — make domain refusal atomic (2026-11-21)
+
+U `unfer_consensus/src/{certs,auction,mathbond,mathbond_market,attribution}.rs`;
+U `b0aaa7c` + this patch.
+
+### The bug: a burn mutated while it validated
+
+`apply_burn` spent each input **inside** its validation loop. A burn whose first
+input was valid and whose second was nonexistent, foreign, repeated or
+overflowing returned `Err` after the first input was already removed from the
+UTXO set, recorded as spent and deleted from the SMT — a refused operation that
+changed consensus state. It is now validate-then-commit like `apply_transfer`
+(which already had the right shape): dedup, ownership/amount via the read-only
+`spend_input`, `checked_add` over the whole input set, then one commit loop.
+
+A second, distinct finding came out of the fingerprint itself: `total_supply()`
+used `sum()`, which **panicked** on overflow once two `u64::MAX` mints existed.
+A reporting accessor must not panic on state the ledger accepted, so it folds
+with `saturating_add` and says why.
+
+### Witnesses
+
+`certs::tests::burn_refusal_preserves_state` — four refusal shapes (valid first +
+ghost second, the same input twice, foreign-owned second input, `checked_add`
+overflow), each compared against a *whole-ledger* fingerprint: UTXOs and their
+amounts/owners/blindings, the spent set, the SMT root, supply and unspent count.
+The succeeding case is asserted too, so the test is not just "refusals fail".
+
+### Audit of the other four ledgers
+
+Each got the same whole-state refusal test, since "add regression cases only for
+distinct risks found" needs a check to find them:
+`auction::tests::refusal_preserves_state` (below floor, self-bid, unknown lot
+close), `mathbond::tests::refusal_preserves_state` (zero amount, overfunding,
+unissued bond), `mathbond_market::tests::refusal_preserves_state` (more shares
+than held, zero deposit, invented pool), `attribution::tests::refusal_preserves_state`
+(non-author approve, invented credit, offer over an unregistered item). **All
+four already validate before mutating** — no ledger rewrite was made, and the
+tests pin that shape against regression.
+
+```
+$ cargo test --locked --offline -p unfer_consensus --lib   # 121 passed
+```
+
+Log: `evidence/d04-unfer_consensus_lib.log`, exit 0.
+
+### Scope
+
+This is domain atomicity within one applied op. Crash atomicity (a torn write
+during the commit) is D07's, and the ledger's `write`+`rename` without `fsync`
+still stands between here and a restart-safety claim.
+
 ## Task status
 
 | Task | Status | Note |
@@ -310,4 +410,6 @@ All exit 0.
 | D00 | complete (re-measured 2026-11-21) | this record, the inventory and the checker; all seven suites green on this host, the remaining gaps named above |
 | D01 | verified within stated scope | identity authority bound at the ordered point; five witnesses above; the limits listed there |
 | D02 | verified within stated scope | per-object key context, authenticated metadata, version refusal; eleven witnesses and the ffi vault suite |
-| D03–D26 | not started | D03 is next in the M0 sequence |
+| D03 | verified within stated scope | capability RPC loopback-only at ingress; registry owner/grant checks per verb; the auth seam (A9) stays a named gap |
+| D04 | verified within stated scope | burn is validate-then-commit; four refusal fingerprints; `total_supply` no longer panics on overflow |
+| D05–D26 | not started | M0 (D00–D04) is complete; D05 splits submission from commitment |
