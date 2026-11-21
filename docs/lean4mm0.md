@@ -4603,8 +4603,7 @@ the probe measures memory, and does not claim a speedup. What it does measure is
 416 MiB — the cap §13.51 recorded as a `subst0` memo failure — now completes, with 362 MiB
 of reservation at the peak instead of 431. So the bracket (416, 432] from §13.51 becomes
 *at most 416* on the passing side; the failing side below it is untested, and a 384 MiB
-probe is the next step rather than an assumption. That probe was then run, and it passes:
-below.
+probe is the next step rather than an assumption. That probe was then run, and it passes, together with the two caps below it.
 
 **384 MiB.** A third dedup run at a 384 MiB cap completes too: exit 0, peak 363 MiB
 `VmSize` at 3 582 s of 3 742 s, peak RSS 333 MB, and the same six files. Their spelling and
@@ -4732,7 +4731,8 @@ format.)
 the golden file — `shared/abs_re_inner_pairVec_le_typing_obligations.jsonl`, 10 349 935 →
 4 258 753 B — and nothing else in any mode, since `default` and `stop` write the expanded
 record and never reach `tree_share`. After that re-record, `LTP_DEDUP_NODES` can be
-defaulted on with no further byte change, which is the whole of §13.52's memory win (416
+defaulted on with no further byte change, which is the whole of §13.52's memory win (368
 MiB instead of 432 on the ns row) for free. That re-record is the owner's call, not this
 document's: the golden file is a gate, so both knobs stay off until the change is accepted
 as an artifact change.
+
