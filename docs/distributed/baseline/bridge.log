@@ -1,2 +1,146 @@
-error: cannot update the lock file /media/leo/e7ed9d6f-5f0a-4e19-a74e-83424bc154ba/australVM/safestos/cranelift/Cargo.lock because --locked was passed to prevent this
-help: to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.
+warning: Git tree '/home/leo/Projects/australVM' is dirty
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> /home/leo/Projects/unfer/fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+   Compiling austral_cranelift_bridge v0.1.0 (/home/leo/Projects/australVM/safestos/cranelift)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+warning: `rsffi` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (build script) generated 1 warning (1 duplicate)
+warning: austral_cranelift_bridge@0.1.0: In file included from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/bits/libc-header-start.h:33,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/stdint.h:26,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/pbhbzkcvlr4h63bh9w0hin5sbflqdg08-gcc-15.3.0/lib/gcc/aarch64-unknown-linux-gnu/15.3.0/include/stdint.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../include/vm.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../runtime/scheduler.c:8:
+warning: austral_cranelift_bridge@0.1.0: /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/features.h:435:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+warning: austral_cranelift_bridge@0.1.0:   435 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+warning: austral_cranelift_bridge@0.1.0:       |    ^~~~~~~
+warning: austral_cranelift_bridge@0.1.0: In file included from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/bits/libc-header-start.h:33,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/stdint.h:26,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/pbhbzkcvlr4h63bh9w0hin5sbflqdg08-gcc-15.3.0/lib/gcc/aarch64-unknown-linux-gnu/15.3.0/include/stdint.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../include/vm.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../runtime/cell_loader.c:7:
+warning: austral_cranelift_bridge@0.1.0: /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/features.h:435:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+warning: austral_cranelift_bridge@0.1.0:   435 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+warning: austral_cranelift_bridge@0.1.0:       |    ^~~~~~~
+warning: austral_cranelift_bridge@0.1.0: In file included from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/bits/libc-header-start.h:33,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/stdint.h:26,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/pbhbzkcvlr4h63bh9w0hin5sbflqdg08-gcc-15.3.0/lib/gcc/aarch64-unknown-linux-gnu/15.3.0/include/stdint.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../include/vm.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../runtime/serialize.c:7:
+warning: austral_cranelift_bridge@0.1.0: /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/features.h:435:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+warning: austral_cranelift_bridge@0.1.0:   435 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+warning: austral_cranelift_bridge@0.1.0:       |    ^~~~~~~
+warning: austral_cranelift_bridge@0.1.0: In file included from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/bits/libc-header-start.h:33,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/stdint.h:26,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/pbhbzkcvlr4h63bh9w0hin5sbflqdg08-gcc-15.3.0/lib/gcc/aarch64-unknown-linux-gnu/15.3.0/include/stdint.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../include/vm.h:11,
+warning: austral_cranelift_bridge@0.1.0:                  from ../runtime/region.c:8:
+warning: austral_cranelift_bridge@0.1.0: /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/features.h:435:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+warning: austral_cranelift_bridge@0.1.0:   435 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+warning: austral_cranelift_bridge@0.1.0:       |    ^~~~~~~
+warning: austral_cranelift_bridge@0.1.0: In file included from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/bits/libc-header-start.h:33,
+warning: austral_cranelift_bridge@0.1.0:                  from /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/stdlib.h:26,
+warning: austral_cranelift_bridge@0.1.0:                  from ../runtime/capabilities.c:7:
+warning: austral_cranelift_bridge@0.1.0: /nix/store/fsm5ifr5khlqjj54j026c3akbhp1q0gj-glibc-2.42-84-dev/include/features.h:435:4: warning: #warning _FORTIFY_SOURCE requires compiling with optimization (-O) [-Wcpp]
+warning: austral_cranelift_bridge@0.1.0:   435 | #  warning _FORTIFY_SOURCE requires compiling with optimization (-O)
+warning: austral_cranelift_bridge@0.1.0:       |    ^~~~~~~
+warning: `austral_cranelift_bridge` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 09s
+     Running unittests src/lib.rs (safestos/cranelift/target/debug/deps/austral_cranelift_bridge-849bb70a6908d5c9)
+
+running 65 tests
+test adapters::tests::f32_uses_the_low_word_and_refuses_high_bits ... ok
+test adapters::tests::floats_are_bit_preserving_not_numeric_casts ... ok
+test adapters::tests::a_bool_is_a_tag_and_other_tags_are_refused ... ok
+test adapters::tests::i32_values_roundtrip_and_match_the_direct_call ... ok
+test adapters::tests::mixed_argument_classes_keep_their_order ... ok
+test adapters::tests::the_direct_float_call_agrees_with_the_adapter ... ok
+test adapters::tests::the_encoding_is_versioned ... ok
+test adapters::tests::words_that_are_not_their_type_are_refused ... ok
+test auth::tests::allow_all_permits_everything ... ok
+test adapters::tests::narrowing_is_checked_not_truncating ... ok
+test auth::tests::manifest_effect_grant_method ... ok
+test auth::tests::manifest_effect_grant_namespace ... ok
+test auth::tests::manifest_effect_merge ... ok
+test auth::tests::manifest_grant_deny ... ok
+test auth::tests::manifest_grant_method ... ok
+test auth::tests::manifest_merge ... ok
+test auth::tests::manifest_missing_grants ... ok
+test auth::tests::manifest_bad_toml ... ok
+test auth::tests::manifest_missing_module_section ... ok
+test compile_guard_tests::delegate_compile_is_guarded_too ... ok
+test compile_guard_tests::malformed_codegen_panic_fails_closed_not_unwind ... ok
+test compile_guard_tests::successful_unf_translate_clears_stale_compile_error ... ok
+test compile_guard_tests::trapping_divide_fails_closed_on_zero_and_overflow ... ok
+test cps::a10_live_grant_tests::live_jit_denies_uk_calls_the_module_manifest_does_not_grant ... ok
+test fingerprint::tests::a_single_flipped_byte_changes_the_digest ... ok
+test fingerprint::tests::empty_input_matches_the_published_digest ... ok
+test fingerprint::tests::null_bytes_is_refused_not_dereferenced ... ok
+test compile_guard_tests::swap_panic_inducing_ir_fails_closed_and_preserves_current ... ok
+test hotswap_tests::hotswap_gate_accepts_compatible ... ok
+test hotswap_tests::hotswap_gate_rejects_caps_escalation ... ok
+test hotswap_tests::hotswap_gate_rejects_null ... ok
+test hotswap_tests::hotswap_gate_rejects_type_mismatch ... ok
+test hotswap_tests::hotswap_rejects_invalid_cell_id ... ok
+test isa::tests::an_op_line_is_parsed_and_a_bad_one_is_refused ... ok
+test isa::tests::recording_is_a_set_not_a_counter ... ok
+test isa::tests::the_registry_is_sorted_and_unique ... ok
+test fingerprint::tests::the_object_digest_is_well_formed_and_arch_named ... ok
+test liquid_attest::tests::a_matching_mlw_under_any_name_is_accepted ... ok
+test liquid_attest::tests::mlw_hash_mismatch_is_refused ... ok
+test liquid_attest::tests::editing_both_sides_is_the_documented_limit ... ok
+test liquid_attest::tests::off_is_a_no_op ... ok
+test liquid_attest::tests::optional_without_sidecar_is_allowed ... ok
+test liquid_attest::tests::re_emitted_obligations_are_caught ... ok
+test liquid_attest::tests::refused_and_unknown_never_satisfy_required ... ok
+test liquid_attest::tests::required_accepts_a_matching_proved_attestation ... ok
+test liquid_attest::tests::required_without_sidecar_is_refused ... ok
+test liquid_attest::tests::unknown_key_is_refused ... ok
+test liquid_attest::tests::stale_attestation_is_refused_after_an_edit ... ok
+test module::tests::cold_restart_reuses_recorded_choice ... ok
+test module::tests::fallback_used_when_module_names_nothing ... ok
+test module::tests::limits_default_absent ... ok
+test module::tests::parses_limits_table ... ok
+test module::tests::unapproved_archetype_is_rejected ... ok
+test panic_guard_tests::compile_guard_passes_through_success ... ok
+test panic_guard_tests::compile_guard_preserves_swap_panic_payload ... ok
+test panic_guard_tests::compile_guard_reports_non_string_payload ... ok
+test module::tests::resolve_archetype_per_scope ... ok
+test panic_guard_tests::execute_function_1_panic_returns_sentinel ... ok
+test panic_guard_tests::execute_function_2_panic_returns_sentinel ... ok
+test panic_guard_tests::execute_function_null_ptr_returns_minus_one ... ok
+test panic_guard_tests::execute_function_panic_returns_sentinel_not_ub ... ok
+test panic_guard_tests::swap_empty_ir_reports_real_message ... ok
+test panic_guard_tests::execute_function_happy_path_still_returns_value ... ok
+test tests::uk_version_linkage ... ok
+test tests::uk_init_linkage ... ok
+
+test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+[Loader] Capability requirement mismatch
+[Loader] Type hash mismatch: abc123 != xyz789
+EXIT=0
