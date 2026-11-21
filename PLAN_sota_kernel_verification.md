@@ -417,10 +417,14 @@ certificate printed `arch=aarch64` there, so its `W5 (checked)` object digest
 compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
-**Re-measured 2026-11-21 at `d2099104` on this x86_64 host, in all three
+**Re-measured 2026-11-21 at `8c774296` on this x86_64 host, in all three
 shells:** `176 passed, 2 explained gap(s), 0 failed` under
-`nix develop "git+file://$PWD"`, `161 passed, 5 explained gap(s), 0 failed`
-under `.#ocaml`, and `162 passed, 4 explained gap(s), 0 failed` under `.#lean`.
+`nix develop "git+file://$PWD"`
+([transcript](docs/data/gate/2026-11-21-default-shell.log)), `161 passed, 5
+explained gap(s), 0 failed` under `.#ocaml`
+([transcript](docs/data/gate/2026-11-21-ocaml-shell.log)), and `162 passed, 4
+explained gap(s), 0 failed` under `.#lean`
+([transcript](docs/data/gate/2026-11-21-lean-shell.log)).
 None of those numbers is a correction of the ones above; each is a different
 shell over the same checks, and the differences close exactly. The four
 approvals closed their four `[gap] W3: <artifact> has no approved statements`

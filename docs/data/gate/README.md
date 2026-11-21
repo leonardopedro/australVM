@@ -8,6 +8,9 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
+| [`2026-11-21-lean-shell.log`](2026-11-21-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-21, `8c774296`, the merged tree with all four §W3 approvals landed | `162 passed, 4 explained gap(s), 0 failed` |
+| [`2026-11-21-ocaml-shell.log`](2026-11-21-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-21, same tree | `161 passed, 5 explained gap(s), 0 failed` — the same three Liquid gaps plus `W9.1` |
+| [`2026-11-21-default-shell.log`](2026-11-21-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-21, same tree, an x86_64 host where `devShells.default` builds | `176 passed, 2 explained gap(s), 0 failed` — `why3` present, so the 15 per-file Liquid passes run |
 | [`2026-11-20-lean-shell-final.log`](2026-11-20-lean-shell-final.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, `b205f73f` plus the uncommitted §W3 control fixes and the regenerated `CHANGELOG.md` (log opens with Nix's dirty-tree warning) | `179 passed, 0 explained gap(s), 0 failed` |
 | [`2026-11-20-ocaml-shell-final.log`](2026-11-20-ocaml-shell-final.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `170 passed, 2 explained gap(s), 0 failed` — the two Lean-only checks |
 | [`2026-11-20-default-shell.log`](2026-11-20-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-20, an x86_64 host where `devShells.default` builds | `174 passed, 5 explained gap(s), 0 failed` |
@@ -21,6 +24,18 @@ line is the summary the plan quotes.
 | [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-19, after the W5 object re-pin and the bridge-copy check | `165 passed, 6 explained gap(s), 0 failed` |
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
+
+The 2026-11-21 trio is the merged tree at `8c774296`, after the four §W3
+approvals landed, so it carries a gap the 2026-11-20 rows do not:
+`[gap]  W3: the §W3 row check's approved-row control not run (no  row carries a
+count)`. With every row approved, the two approved-row controls (`an approved
+§W3 row passes when the approved copy holds what it says`, `a §W3 row that
+disagrees with mm0/approved/ is refused`) have no row left to pick, so they stop
+running and the gate says so instead of counting them as passes. The three
+summaries close against each other: `161 + 15 = 176` once `why3` is on PATH,
+and `162 = 161 + 1` once the RV64 model is re-converted, with the four §W3
+approvals having turned their own four `[gap]` lines into four
+`[pass] W3: <artifact> matches its approved statements` lines.
 
 The `2026-11-20-lean-shell-postcleanup.log` row re-runs the gate on the tree the
 2026-11-20 pair describes, after the volume went from 98% full to 58% by
