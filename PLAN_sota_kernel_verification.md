@@ -856,7 +856,7 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[pass]`, approved in `mm0/approved/` | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
   | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, a certificate naming the approval | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays unproved (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
   | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[pass]`, approved in `mm0/approved/` | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
-  | `mm0/liquid_split.mm0` | L11d's split law: extent conservation, disjoint halves and non-interference of the halves' writes, all guarded by `ok_split`; 10 residual premises, 10 proved theorems, no `sorry` | 41 | `scripts/liquid-split-mm0 check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | `00aff128a87dd3e2d95b96e262713d4c081aba9489ec222b3153a63a58f96e5b` |
+  | `mm0/liquid_split.mm0` | L11d's split law: extent conservation, disjoint halves and non-interference of the halves' writes, all guarded by `ok_split`; 10 residual premises, 10 proved theorems, no `sorry` | 41 | `scripts/liquid-split-mm0 check` — **registered** in `EMITTERS` | `[pass]`, approved in `mm0/approved/` | `00aff128a87dd3e2d95b96e262713d4c081aba9489ec222b3153a63a58f96e5b` |
 
   The fifth row is L11d's split law (`PLAN_liquid_types.md` L11d), which that
   card asks to keep as a single reviewed held-out statement. `mm0/liquid_split.mm0`
@@ -870,7 +870,10 @@ the artifact, so `mm0-c` checks them too.
   above. What the row does *not* claim is that the Austral split function
   conserves extents: those are L11d's Why3 obligations, and the axioms here are
   quoted so a reviewer can disagree with the premises instead of with a
-  derivation. The state cell is `[gap]` because approval is the owner's commit.
+  derivation. The owner approved the 41 staged statements on 2026-11-21 (owner-
+  directed; `mm0/approved/liquid_split.stmts` is the statement of record, and the
+  approval holds out statements only — the ten proofs are in the `.mm1`, where
+  `mm0-c` re-checks them).
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
