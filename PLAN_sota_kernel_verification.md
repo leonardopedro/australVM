@@ -1319,7 +1319,7 @@ the artifact, so `mm0-c` checks them too.
   the row. Everything downstream is then read off the two states: the `stmts`
   and digest columns are compared with the approved copy for approved rows and
   with a fresh staging for pending ones (the pass lines report the split:
-  `(5 row(s), 0 approved)` today), the `w3-pending:` line shortens and
+  `(4 row(s), 4 approved)` today), the `w3-pending:` line shortens and
   `w3-approved:` grows without anyone editing a second list, and
   `scripts/stage-approvals` stops staging the artifact because its approved
   copy now exists. Half an approval is refused rather than half-made: a pending
@@ -2875,9 +2875,10 @@ Two things this pins down that a count could not:
   place any of this is proved), and it does not upgrade `isa`'s encoder laws to
   facts about the compiler — they are the model's, cited as such.
 - **The counts are gate-pinned, the names are not.** `verify-invariants` prints
-  `w3-pending: isa(193 stmt) liquid_split(91 stmt) slot_layout(23 stmt)
-  store_projection(11 stmt) store_projection_toy(70 stmt)` every run, so a
-  statement added to any of the five moves that line and this table has to move
+  `w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt)
+  isa(193 stmt) … store_projection_toy(70 stmt)` every run (the `w3-pending:`
+  line is empty today, all four rows approved), so a statement added to any of
+  the four moves that line and this table has to move
   with it; the closure digests
   above are the rule for the *names*, since the canonical form does not keep
   them. `scripts/check-links` will not catch a stale name in a list like this —
