@@ -34,8 +34,9 @@ module WidgetHandle is
     -- non-zero refused.
     function dispose(widget: Widget): Int64;
 
-    -- The intended path, as a compile-checked witness: adopt once, read once,
-    -- dispose once, and return what the provider said. A second dispose or a
-    -- forgotten one does not fit these lines, which is the point of the type.
+    -- The intended path, as a compile-checked witness: mint through a granted
+    -- `<target>__new` call, adopt once, read once, dispose once, and return
+    -- what the provider said. A second dispose or a forgotten one does not fit
+    -- these lines, which is the point of the type.
     function main(): ExitCode;
 end module.
