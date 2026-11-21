@@ -984,6 +984,16 @@ over one registry:
   A refusal (null `out`, stale words, another owner) returns `1` and leaves
   `out` untouched, so a caller cannot read an old word as a fresh value, and
   reading does not consume: the words stay live for `__dispose`.
+* `__with(lo, hi, callback, out)` — the scoped borrow, rendered for every
+  handle adapter because it needs nothing from the provider. The live pair is
+  resolved, the caller's `extern "C" fn(*mut c_void) -> i64` is handed the
+  provider's own pointer *while the table is locked*, and its word is written
+  to `out`. The borrow ends with the call: the value cannot be destroyed while
+  the callback holds it, and the module receives a word, never the pointer. A
+  null `out`, a null callback, a stale pair, another owner or a previous
+  generation is refused before the callback runs. The lock is not re-entrant,
+  so a callback that calls back into this registry would deadlock — the price
+  of a borrow the other wrappers cannot invalidate.
 * The registry's `PROVIDER_GENERATION` is the render's, not the descriptor's:
   `render_handle_wrapper_at` writes the build's generation, `main.rs` takes the
   next number for every build in the process, and generation 0 (the reserved
@@ -1007,17 +1017,20 @@ straight back to the dispose wrapper. The body declares no wrapper symbol:
 `Handle_Ownership` names the provider facts (including `Use =>
 "avm_widget_read"`); the compiler derives `avm_widget__dispose` for the call
 and emits the block the generator renders. `read` borrows the record, passes
-its words and a local `Pointer[Int64]` slot to the generated
+its words and a local `Pointer[Word]` slot to the generated
 `avm_widget__use` (a pointer, not an `Address`: the wrapper writes one word
-through it, and the module needs no identity embed for it — see the `__embed`
-note below), and returns the word the provider's reader produced or `-1`
-when the words were refused — a borrow, not a consume, which is why the same
-handle can still be disposed afterwards. `main` is the whole path: adopt, read
-(refused here, because the words name no live slot in a test build), dispose.
-Both parameters are 64-bit scalars, so the call is word-native: measured, the
-compiled body contains
+through it — and a *record* borrow, because the lowering makes a scalar borrow
+the constant address 0), and returns the word the provider's reader produced
+or `-1` when the words were refused — a borrow, not a consume, which is why
+the same handle can still be disposed afterwards. `main` is the whole path,
+from source: `widgetNew(7, 9, refMutToPointer(&!pair))` writes the minted pair
+into a local record, `adopt` makes it the linear value, `read` borrows it,
+`dispose` hands it back once. Both constructor parameters are 64-bit scalars,
+so the call is word-native: measured, the compiled body contains
 `extern au_int64_t avm_widget__dispose(au_int64_t lo, au_int64_t hi);` and the
-direct call, with no adapter, because there is no buffer and nothing to encode.
+direct call, `extern au_int64_t avm_widget__new(au_int64_t lo, au_int64_t hi,
+mono_15* out);` and its direct call, with no adapter, because there is no
+buffer and nothing to encode.
 `--emit-adapters` writes `test-programs/adapters/handles.golden`, which
 `scripts/check-adapter-descriptors` diffs byte for byte, and
 `umbrella/tests/interface.rs` parses with the same reader the build uses.
@@ -1042,21 +1055,20 @@ linearity error ("has already been consumed"). `./austral compile
 umbrella/modules/WidgetHandle.aui,umbrella/modules/WidgetHandle.aum
 --entrypoint=WidgetHandle:main --target-type=c` exits 0.
 
-**Not yet carried:** the lowering emits the `abi handle 1` block and the
-`read` seam calls `__use`, but no module calls `__new` yet, and the reason is
-measured rather than assumed: the constructor needs an out slot, so the module
-would allocate one (`allocateBuffer`, an `__embed` with two arguments) and read
-the pair back (`load`, an `__embed` with one), and the bridge declares
-`__embed` once per module — it fails with "Failed to declare import `__embed`:
-… is incompatible with previous declaration …" and emits no C. Until the
-bridge either names the shapes apart or fixes one widest signature, the
-wrapper test is still the only caller of the generated constructor and
-`WidgetHandle.main` adopts words rather than minting them;
-there is no scoped borrow (`__with`) that lends the value to a callback; and
-borrows/views over an owned handle are U14's. The provider generation is no
-longer constant: each build takes the next number, but no *reload* path in the
-host re-renders and reloads a crate yet, so the generation is exercised by the
-wrapper test's second render, not by a live reload.
+**Not yet carried:** the module now mints through `__new` (the bridge names
+`__embed` per arity — `__embed$<argc>` — so one module may carry embeds of
+several shapes, which is what the record out slot needed), reads through
+`__use` and disposes through `__dispose`. The `__with` wrapper exists and is
+tested through the host ABI, but no module can call it yet: the CPS lowering
+has no first-class function value to pass as the callback (`MFptrCall` is a
+call by name, not an address), so `WidgetHandle` lends nothing and keeps
+`read`. The provider generation is not constant and is no longer exercised by
+a second render: `umbrella/src/adapters.rs` builds each crate at the next
+generation into a new artifact, and `tests/handles.rs` drives a real reload —
+build, `dlopen`, build again, `dlopen` — so the reloaded crate refuses the
+previous build's words while the previous crate still resolves its own. A
+provider that is rebuilt while a module runs is not hot-reloaded live, and
+borrows/views over an owned handle are U14's.
 
 **Still not carried:**
 Only literals, mediated calls, Float64 arithmetic and float comparisons carry a

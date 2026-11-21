@@ -83,16 +83,37 @@ fn check_call_permission(caller: &str, module_name: &str, callee: &str) -> Resul
     crate::auth::check(&principal, "Call", callee)
 }
 
+/// The external symbol an *unlowered* `@embed` call declares.
+///
+/// The JIT cannot execute the C text of an arbitrary embed, so the call is a
+/// link-time import. `cranelift_module::ModuleDeclarations` keys imports by
+/// name and refuses a second declaration of one name at a different signature,
+/// which made a module containing embeds of two shapes (`load` takes one word,
+/// `store`/an allocating embed two) fail to compile at all with "incompatible
+/// with previous declaration". The arity is therefore part of the symbol: each
+/// shape declares its own import, and if one is ever actually reached the
+/// resolution error names the shape that had no lowering.
+fn embed_symbol(argc: usize) -> String {
+    format!("__embed${}", argc)
+}
+
 /// Declare `name` as an external import with `argc` i64 params returning i64,
 /// returning its `FuncId`. Used for runtime/kernel builtins and for cross-module
 /// Austral calls (resolved by name to a definition in the persistent JITModule).
 fn declare_import<M: Module>(jit: &mut M, name: &str, argc: usize) -> Result<FuncId, String> {
+    // Unknown embeds are keyed by shape (see `embed_symbol`); every other
+    // import keeps the name the runtime or the other module exports.
+    let name = if name == "__embed" {
+        embed_symbol(argc)
+    } else {
+        name.to_string()
+    };
     let mut sig = jit.make_signature();
     for _ in 0..argc {
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
-    jit.declare_function(name, Linkage::Import, &sig)
+    jit.declare_function(&name, Linkage::Import, &sig)
         .map_err(|e| format!("Failed to declare import {}: {}", name, e))
 }
 
@@ -1409,5 +1430,31 @@ mod a10_live_grant_tests {
         // test leaves the process-global state it found.
         auth::set_auth_engine(Box::new(auth::DenyAll));
         auth::set_deployment_principal(String::new());
+    }
+}
+
+#[cfg(test)]
+mod embed_shape_tests {
+    use super::{declare_import, embed_symbol};
+    use cranelift_jit::{JITBuilder, JITModule};
+    use cranelift_module::default_libcall_names;
+
+    /// REGRESSION: cranelift-module keys imports by name, so one module that
+    /// contained an unlowered `__embed` of two shapes (one word, as `load` is;
+    /// two, as an allocating embed is) failed at the *second* declaration —
+    /// "Failed to declare import __embed: … incompatible with previous
+    /// declaration" — and the compiler emitted no C at all. The shape is part
+    /// of the symbol now, so both declarations succeed.
+    #[test]
+    fn one_module_can_declare_embeds_of_two_arities() {
+        let mut jit = JITModule::new(JITBuilder::new(default_libcall_names()).unwrap());
+        assert_ne!(embed_symbol(1), embed_symbol(2));
+        let one = declare_import(&mut jit, "__embed", 1).expect("one-word embed declares");
+        let two = declare_import(&mut jit, "__embed", 2).expect("two-word embed declares");
+        assert_ne!(one, two, "each shape must be its own declaration");
+        // A second call of the same shape names the same import, so two
+        // `load`s in one function do not multiply the table.
+        let again = declare_import(&mut jit, "__embed", 1).expect("re-declaration is accepted");
+        assert_eq!(one, again);
     }
 }

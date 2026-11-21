@@ -4,6 +4,7 @@
 //! here so integration tests can exercise them without spawning the whole
 //! pipeline (which needs the stock `austral` front-end).
 
+pub mod adapters;
 pub mod cargo;
 pub mod cli;
 pub mod handles;

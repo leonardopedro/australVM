@@ -896,6 +896,12 @@ impl HandleAdapter {
         format!("{}__use", self.target)
     }
 
+    /// The symbol of the scoped-borrow wrapper, `<target>__with`. It needs no
+    /// provider symbol of its own: the callback is the caller's.
+    pub fn with_symbol(&self) -> String {
+        format!("{}__with", self.target)
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.schema != DESCRIPTOR_SCHEMA {
             return Err(format!(
@@ -1128,9 +1134,9 @@ fn is_handle_block(block: &str) -> bool {
 }
 
 /// Render the Rust wrappers an `abi handle` descriptor calls for: the
-/// constructor (`<target>__new`), the destructor (`<target>__dispose`), and —
-/// when the descriptor names a provider accessor — the reader
-/// (`<target>__use`).
+/// constructor (`<target>__new`), the destructor (`<target>__dispose`), the
+/// scoped borrow (`<target>__with`), and — when the descriptor names a provider
+/// accessor — the reader (`<target>__use`).
 ///
 /// All of them go through one registry, so the words one wrapper mints are the
 /// words the others resolve. The value itself never leaves the provider: the
@@ -1145,6 +1151,23 @@ fn is_handle_block(block: &str) -> bool {
 /// the two registries refuse each other's handles.
 pub fn render_handle_wrapper(adapter: &HandleAdapter) -> Result<String, String> {
     render_handle_wrapper_at(adapter, 1)
+}
+
+/// The provider generation the next build renders at. The first build in a
+/// process is generation 1 and a reload is 2; `build_adapters` allocates one
+/// per build, so each build's table refuses the previous build's handles
+/// instead of resolving a slot number that now names a different value.
+/// Generation 0 is reserved (`render_handle_wrapper_at` refuses it), so a
+/// counter that wraps skips it rather than minting an unrenderable build.
+static PROVIDER_GENERATION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+pub fn next_provider_generation() -> u32 {
+    loop {
+        let generation = PROVIDER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if generation != 0 {
+            return generation;
+        }
+    }
 }
 
 /// Render the wrappers for one provider build. The generation is the build's,
@@ -1233,6 +1256,27 @@ pub fn render_handle_wrapper_at(
             adapter.use_symbol(), accessor
         ));
     }
+    out.push_str(&format!(
+        "#[no_mangle]\npub extern \"C\" fn {}(lo: i64, hi: i64,\n\
+         \x20   callback: Option<unsafe extern \"C\" fn(ptr: *mut core::ffi::c_void) -> i64>,\n\
+         \x20   out: *mut i64,\n\
+         ) -> i64 {{\n\
+         \x20   if out.is_null() {{\n        return 1;\n    }}\n\
+         \x20   let Some(callback) = callback else {{\n        return 1;\n    }};\n\
+         \x20   let table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
+         \x20   let handle = match table.handle_from_words(lo as u64, hi as u64) {{\n        Ok(handle) => handle,\n        Err(_) => return 1,\n    }};\n\
+         \x20   let ptr = match table.get(handle) {{\n        Ok(value) => value.as_ptr(),\n        Err(_) => return 1,\n    }};\n\
+         \x20   // The table stays locked for the call, so the borrow is scoped to\n\
+         \x20   // it: the value cannot be destroyed while the callback holds it,\n\
+         \x20   // and the callback's word — not the value — is what the module\n\
+         \x20   // receives. Calling back into this registry from the callback\n\
+         \x20   // would deadlock on the same lock, which is the price of a borrow\n\
+         \x20   // the other wrappers cannot invalidate.\n\
+         \x20   let value = unsafe {{ callback(ptr) }};\n\
+         \x20   unsafe {{\n        *out = value;\n    }}\n\
+         \x20   0\n}}\n\n",
+        adapter.with_symbol()
+    ));
     out.push_str(&format!(
         "#[no_mangle]\npub extern \"C\" fn {}(lo: i64, hi: i64) -> i64 {{\n\
          \x20   let mut table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
@@ -1706,6 +1750,19 @@ mod tests {
             wrapper.contains("fn rs_widget_read(ptr: *mut core::ffi::c_void) -> i64;"),
             "{wrapper}"
         );
+        assert_eq!(adapter.with_symbol(), "rs_widget__with");
+        assert!(
+            wrapper.contains("pub extern \"C\" fn rs_widget__with("),
+            "the scoped borrow is rendered beside the reader: {wrapper}"
+        );
+        assert!(
+            wrapper.contains("let value = unsafe { callback(ptr) };"),
+            "the callback is the caller's, called with the provider's pointer: {wrapper}"
+        );
+        assert!(
+            wrapper.contains("let Some(callback) = callback else"),
+            "a null callback is refused: {wrapper}"
+        );
         assert!(
             wrapper.contains(
                 "pub extern \"C\" fn rs_widget__use(lo: i64, hi: i64, out: *mut i64) -> i64"
@@ -1722,15 +1779,19 @@ mod tests {
             "the reader resolves the constructor's table: {wrapper}"
         );
 
-        // A descriptor without the line renders no reader at all.
+        // A descriptor without the line renders no reader at all, but the
+        // scoped borrow needs no provider symbol, so it is always there.
         let plain = parse_handle(&handle_text("rs_widget"))
             .expect("parse")
             .remove(0);
+        let plain_wrapper = render_handle_wrapper(&plain).expect("wrapper");
         assert!(
-            !render_handle_wrapper(&plain)
-                .expect("wrapper")
-                .contains("__use"),
+            !plain_wrapper.contains("__use"),
             "a provider that names no reader gets no reader wrapper"
+        );
+        assert!(
+            plain_wrapper.contains("pub extern \"C\" fn rs_widget__with("),
+            "a scoped borrow needs only the registry: {plain_wrapper}"
         );
     }
 

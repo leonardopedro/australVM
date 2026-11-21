@@ -1,0 +1,19 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "The " },
+    { "type": "code", "content": "Handle_Ownership" },
+    {
+      "type": "text",
+      "content": " pragma can only annotate a foreign import declared with "
+    },
+    { "type": "code", "content": "Foreign_Import" },
+    {
+      "type": "text",
+      "content": ": it describes the provider symbols the generated handle wrappers call, and a function with a body is not an import."
+    }
+  ],
+  "span": null,
+  "context": null
+}

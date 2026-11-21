@@ -325,91 +325,17 @@ fn front_end_once(
     Ok(())
 }
 
-/// The bridge rlib the generated wrapper compiles against. The wrapper calls
-/// the same `encode`/`decode` the JIT's scalar ABI implements, so it is linked
-/// rather than reimplemented; umbrella already links that crate, so its
-/// artifact is next to this executable.
-fn bridge_rlib() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let profile = exe
-        .parent()
-        .ok_or_else(|| "the umbrella executable has no directory".to_string())?;
-    let mut found: Vec<PathBuf> = Vec::new();
-    for dir in [profile.join("deps"), profile.to_path_buf()] {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
-            let is_rlib = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("libaustral_cranelift_bridge") && n.ends_with(".rlib"))
-                .unwrap_or(false);
-            if is_rlib {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found.pop().ok_or_else(|| {
-        format!(
-            "no bridge rlib under {}; generate the wrappers from a cargo build of umbrella",
-            profile.display()
-        )
-    })
-}
-
-/// The provider generation the next `build_adapters` renders at. Init 1, so
-/// the first build is generation 1 and a reload is 2.
-static PROVIDER_GENERATION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-
 /// 3.5. Generate the wrappers the front-end asked for and load them where the
 ///      JIT can resolve them. Each adapter becomes one module (the generator
 ///      writes a file per adapter and each starts with the same `use`), all in
 ///      one crate; the targets are already global because the crate's cdylib
-///      was dlopen'd in step 2, so `RTLD_NOW` can bind them.
+///      was dlopen'd in step 2, so `RTLD_NOW` can bind them. Every call is a
+///      new build at the next provider generation (see `adapters`), which is
+///      what lets a provider reload build and load a second crate here.
 fn build_adapters(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<PathBuf, String> {
-    let dir = std::env::temp_dir().join(format!("umbrella-adapters-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    // Every build gets the next provider generation, so the handle tables of
-    // two builds in one process refuse each other's handles: a value minted by
-    // the previous build died with that build's provider, and its slot number
-    // in the new table means a different value. `fetch_add` wraps, so a table
-    // that would be generation 0 (the reserved number) refuses instead.
-    let generation = PROVIDER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut source = String::new();
-    for (index, adapter) in adapters.iter().enumerate() {
-        let wrapper = adapter
-            .render_at(generation)
-            .map_err(|e| format!("render {}: {e}", adapter.symbol()))?;
-        source.push_str(&format!("mod w{index} {{\n{wrapper}\n}}\n"));
-    }
-    let file = dir.join("adapters.rs");
-    std::fs::write(&file, source).map_err(|e| format!("write {}: {e}", file.display()))?;
-    let rlib = bridge_rlib()?;
-    let deps = rlib.parent().unwrap_or(&dir);
-    let out = dir.join("libumbrella_adapters.so");
-    let output = Command::new("rustc")
-        .arg("--crate-type=cdylib")
-        .arg("--edition=2021")
-        .arg("--crate-name=umbrella_adapters")
-        .arg("-L")
-        .arg(format!("dependency={}", deps.display()))
-        .arg("--extern")
-        .arg(format!("austral_cranelift_bridge={}", rlib.display()))
-        .arg("-o")
-        .arg(&out)
-        .arg(&file)
-        .output()
-        .map_err(|e| format!("spawn rustc: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "rustc refused the generated wrappers:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    policy::dlopen(&out)?;
-    Ok(out)
+    let built = umbrella::adapters::build_next(adapters)?;
+    umbrella::adapters::load(&built)?;
+    Ok(built.path)
 }
 
 /// 4a. Authorizer state: with a manifest, the bridge's manifest engine
