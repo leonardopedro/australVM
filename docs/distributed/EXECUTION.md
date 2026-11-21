@@ -213,10 +213,101 @@ Logs: `evidence/d01-unfer_consensus_lib.log`,
   refused by the DID's own sequence number, which is durable in the registry;
   the submission-level request identity (D06) is untouched.
 
+## D02 — version and repair the encrypted content envelopes (2026-11-21)
+
+U `unfer_data/src/{crypto,store,blueprint,publisher}.rs`, `src/lib.rs`,
+`tests/integration.rs`; U `b0aaa7c` + this patch. No A code changed.
+
+### The failure, characterized before the change
+
+The old scheme had two defects that compound:
+
+- `crypto.rs` built the GCM nonce as eight zero bytes followed by the chunk
+  index (old lines 49-51), so the nonce is a function of the index alone.
+- `store.rs::KeyRing::encrypt_envelope` used **one** epoch key for every cell
+  (old line 79-83), and `blueprint.rs::encrypt_stored_cell`/`publisher.rs`
+  derived one AES key per keypair with no per-object salt. There was no
+  associated data at all: version, epoch, object identity, chunk count and
+  length were unauthenticated, and a body could be re-attached to another
+  object's metadata under the same key.
+
+Consequence: two envelopes in one KeyRing epoch encrypted chunk 0 under the
+same key and the same nonce. That is a GCM nonce reuse, not a theoretical
+weakness — the commutative keystream lets a reader recover
+`P1 ⊕ P2` and produce a valid tag for a modified chunk.
+
+Legacy ciphertexts: `CellEnvelope` was never serialized with a version (it is
+an in-memory struct), and the old format authenticated no metadata. Version 1
+therefore cannot be distinguished or safely opened under the new derivation,
+so it is **refused by name** rather than mis-decrypted; there is no silent
+fallback.
+
+### The repair
+
+- `crypto::ObjectKey` = domain-separated SHA-256 of the epoch/transport key and
+  the object identifier (§D02.2's per-object key context). The identifier is
+  either fresh from `OsRng` (`ObjectKey::fresh`, `seal_object`) or derived from
+  the plaintext digest for content-addressed callers (`content_object_id`,
+  `seal_object_with_id`). A failed RNG read is an error, never a zero salt.
+- Every chunk is sealed with AAD `version ‖ epoch ‖ object_id ‖ object_len ‖
+  chunk_count ‖ index` under domain `unfer-cell-chunk-v2`. Bounds checked before
+  the cipher is touched: `object_len ≤ 2^40`, `chunk_count ≥ 1`,
+  `index < chunk_count`, and the chunk count must fit the `u32` counter.
+- `SealedObject` carries `version`, `object_id`, `object_len`, `chunk_count` and
+  the chunks, so a bare `Vec<Vec<u8>>` can no longer travel without the metadata
+  it was authenticated against. `open_object` refuses a foreign version, a
+  chunk-count disagreement and a reassembled length that differs from the bound
+  length.
+- `KeyRing::encrypt_envelope` seals each cell under a fresh object context;
+  `encrypt_stored_cell`/`decrypt_stored_cell` take the same treatment; the
+  publisher derives a content-addressed context and keeps its own chunk size.
+  No AEAD primitive is implemented here: AES-256-GCM and SHA-256 both come from
+  the existing dependencies.
+
+### Evidence
+
+| Witness | Asserts |
+|---|---|
+| `crypto::tests::two_objects_in_one_epoch_do_not_share_a_nonce` | distinct object ids, distinct chunk-0 ciphertexts for identical plaintext in one epoch |
+| `crypto::tests::shared_object_context_repeats_the_nonce_which_is_the_old_bug` | negative control: with a shared object id the ciphertext *is* identical, so the test above is not vacuous |
+| `crypto::tests::chunk_cannot_be_spliced_between_objects` | a chunk moved between objects fails authentication |
+| `crypto::tests::epoch_and_length_are_authenticated` | replay into another epoch and a shortened declared length both fail |
+| `crypto::tests::version_one_envelope_is_refused` | the legacy format is refused with the reason |
+| `crypto::tests::out_of_range_index_and_oversize_object_are_refused` | counter and length bounds |
+| `crypto::tests::content_addressed_sealing_derives_a_stable_object_id` | digest-derived id round-trips, different cells differ |
+| `store::tests::two_envelopes_in_one_epoch_do_not_share_a_nonce` | the KeyRing-level version of the same witness |
+| `store::tests::envelope_body_cannot_be_moved_to_another_object` | same length, same epoch key, foreign body refused |
+| `blueprint::tests::repeated_use_of_one_keypair_does_not_repeat_a_nonce` | the `DataKeypair` path |
+| `blueprint::tests::stored_cell_body_cannot_be_spliced` | body moved under one keypair is refused |
+
+```
+$ cargo test --locked --offline -p unfer_data --lib            # 62 passed
+$ cargo test --locked --offline -p unfer_data --test integration # 4 passed
+$ cargo test --locked --offline -p unfer_ffi --lib             # 175 passed (vault uses CellEnvelope)
+```
+
+Logs: `evidence/d02-unfer_data_lib.log`,
+`evidence/d02-unfer_data_integration.log`, `evidence/d02-unfer_ffi_lib.log`.
+All exit 0.
+
+### What this does **not** claim
+
+- No recipient/transport redesign: `DataPublisher`'s self-DH convention still
+  discards the secret key, so its ciphertext is not decryptable by a third
+  party. D02 fixes nonce reuse and metadata binding; key *distribution* is
+  D10/D11's transport work.
+- The derived (content-addressed) identifier means re-sealing the same plaintext
+  under the same key reproduces the same ciphertext. That is a repeated message,
+  not a nonce reused under different data; the random-id path is the default for
+  store and blueprint seals.
+- Envelope version 1 objects are refused, not migrated. Nothing durable stored
+  them (in-memory struct), so there is no migration to write.
+
 ## Task status
 
 | Task | Status | Note |
 |---|---|---|
 | D00 | complete (re-measured 2026-11-21) | this record, the inventory and the checker; all seven suites green on this host, the remaining gaps named above |
 | D01 | verified within stated scope | identity authority bound at the ordered point; five witnesses above; the limits listed there |
-| D02–D26 | not started | D02 is the content-envelope nonce repair; its first substep is the failing witness |
+| D02 | verified within stated scope | per-object key context, authenticated metadata, version refusal; eleven witnesses and the ffi vault suite |
+| D03–D26 | not started | D03 is next in the M0 sequence |
