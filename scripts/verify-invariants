@@ -858,16 +858,27 @@ PY
         # verdict is measured, not retyped. Exit 1 is the interesting case: it
         # means the shapes *agree* now, and the stronger correspondence must be
         # re-argued instead of silently kept.
+        # Exit 2 is "the evidence is unavailable": `mem-refines` reads the
+        # pinned sail-riscv-lean checkout, which a Nix GC can evict or a fresh
+        # clone may never have fetched. That is a missing input, not a verdict
+        # about the lowering, so it is reported as an explained gap — an
+        # evicted store path must not read as "the shapes now agree".
         if [[ -x "$repo_root/scripts/mem-refines" ]] \
             && command -v nix >/dev/null 2>&1; then
-            if "$repo_root/scripts/mem-refines" >"$_cert_tmp/mem.log" 2>&1; then
-                echo "  [detail] $(grep -m1 'REFUTED as stated' "$_cert_tmp/mem.log" \
-                    | sed 's/^ *//')"
-                check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" true
-            else
-                tail -6 "$_cert_tmp/mem.log" >&2
-                check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" false
-            fi
+            "$repo_root/scripts/mem-refines" >"$_cert_tmp/mem.log" 2>&1
+            _mem_status=$?
+            case "$_mem_status" in
+                0)
+                    echo "  [detail] $(grep -m1 'REFUTED as stated' "$_cert_tmp/mem.log" \
+                        | sed 's/^ *//')"
+                    check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" true ;;
+                2)
+                    gap "W9.3: memory correspondence not measured ($(grep -m1 . "$_cert_tmp/mem.log" \
+                        | sed 's/^ *//'))" ;;
+                *)
+                    tail -6 "$_cert_tmp/mem.log" >&2
+                    check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" false ;;
+            esac
         else
             gap "W9.3: memory correspondence not checked (needs the lean shell and scripts/mem-refines: run make w9)"
         fi
