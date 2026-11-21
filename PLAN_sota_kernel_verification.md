@@ -357,23 +357,24 @@ verify-invariants: 157 passed, 8 explained gap(s), 0 failed
   [gap]  W3: slot_layout has no approved statements (run scripts/mm0-comparator approve slot_layout, then commit mm0/approved/)
   [gap]  W3: store_projection has no approved statements (run scripts/mm0-comparator approve store_projection, then commit mm0/approved/)
   [gap]  W3: store_projection_toy has no approved statements (run scripts/mm0-comparator approve store_projection_toy, then commit mm0/approved/)
-w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+  [gap]  W3: liquid_split has no approved statements (run scripts/mm0-comparator approve liquid_split, then commit mm0/approved/)
+w3-pending: isa(193 stmt) liquid_split(91 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
-  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
-  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 0 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (5 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
+  [pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 0 approved)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W3: every §W3 emitter cell names a real command (4 row(s))
+  [pass] W3: every §W3 emitter cell names a real command (5 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
   [pass] W3: the recorded probe evidence still names live gate lines (21 row(s))
-  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
-  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
+  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
+  [pass] W3: stage-approvals stages exactly §W3's 5 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
@@ -807,8 +808,10 @@ the artifact, so `mm0-c` checks them too.
   **Owner approvals (asked 2026-11-15, landed 2026-11-20), one row each.** Each
   row was a separate `[gap]` line in `verify-invariants`, so a partially-approved
   set showed up as a shrinking count rather than a single unhelpful "W3 open":
-  the four rows below were the four `[gap] W3: <artifact> has no approved
-  statements` lines in §3.5 until the owner committed the statements. The `state`
+  the five rows below were the five `[gap] W3: <artifact> has no approved
+  statements` lines in §3.5; the owner committed four of them, and
+  `liquid_split` (L11d.2) is still waiting, so the split is 4 approved / 1
+  pending rather than all or nothing. The `state`
   cell is the record of the decision in both directions — setting it back to
   `` `[gap]`, awaiting owner commit `` withdraws an approval, and the gate reads
   the rest off the two states (see the state-column paragraph below). What an
@@ -823,6 +826,7 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[pass]`, approved in `mm0/approved/` | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
   | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, a certificate naming the approval | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays unproved (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
   | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[pass]`, approved in `mm0/approved/` | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
+  | `mm0/liquid_split.mm0` | L11d.2's held-out split law in the law's own variables (guard `k <= n`, declared premises and residual, 12 ring identities); binding-independent, so two launch plans share it | 91 | `scripts/liquid-split-mm0 check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | `65214b34c22f9bcc2ce1dadeef3863e3567d25842de420959a887efd766a0d35` |
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
@@ -852,10 +856,10 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
   [pass] W3: the recorded probe evidence still names live gate lines (6 row(s))
-  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
-  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
+  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
+  [pass] W3: stage-approvals stages exactly §W3's 5 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
@@ -1292,7 +1296,7 @@ the artifact, so `mm0-c` checks them too.
   the row. Everything downstream is then read off the two states: the `stmts`
   and digest columns are compared with the approved copy for approved rows and
   with a fresh staging for pending ones (the pass lines report the split:
-  `(4 row(s), 0 approved)` today), the `w3-pending:` line shortens and
+  `(5 row(s), 0 approved)` today), the `w3-pending:` line shortens and
   `w3-approved:` grows without anyone editing a second list, and
   `scripts/stage-approvals` stops staging the artifact because its approved
   copy now exists. Half an approval is refused rather than half-made: a pending
@@ -2848,9 +2852,10 @@ Two things this pins down that a count could not:
   place any of this is proved), and it does not upgrade `isa`'s encoder laws to
   facts about the compiler — they are the model's, cited as such.
 - **The counts are gate-pinned, the names are not.** `verify-invariants` prints
-  `w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt)
-  store_projection_toy(70 stmt)` every run, so a statement added to any of the
-  four moves that line and this table has to move with it; the closure digests
+  `w3-pending: isa(193 stmt) liquid_split(91 stmt) slot_layout(23 stmt)
+  store_projection(11 stmt) store_projection_toy(70 stmt)` every run, so a
+  statement added to any of the five moves that line and this table has to move
+  with it; the closure digests
   above are the rule for the *names*, since the canonical form does not keep
   them. `scripts/check-links` will not catch a stale name in a list like this —
   the enforcement is that a re-approval changes the digest in this table, which
@@ -2995,9 +3000,9 @@ What the commit has to be, and what changes with it:
   in §W3. That one edit is the whole of it: the `stmts` and digest cells are then
   compared with `mm0/approved/store_projection_toy.stmts` (they already hold those
   numbers), `w3-pending:` loses `store_projection_toy(70 stmt)`, the
-  `w3-approved:` report gains it, the four `[gap] W3: … has no approved
-  statements` lines in §3.5 become three, and the `row(s)` counts go on saying
-  four with `1 approved`. `scripts/stage-approvals` stops staging it on its own,
+  `w3-approved:` report gains it, the five `[gap] W3: … has no approved
+  statements` lines in §3.5 become four, and the `row(s)` counts go on saying
+  five with `1 approved`. `scripts/stage-approvals` stops staging it on its own,
   and no list anywhere else has to shrink — if one is left un-flipped (the copy
   committed, the cell still `[gap]`) the gate names the row and says `flip this
   row's state cell`; if the cell says approved and the copy is missing or holds a
