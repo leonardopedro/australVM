@@ -4237,6 +4237,10 @@ and the same command with the same environment is what §13.48 then re-measured 
 1 024, 512 and 480 MiB, with the six artifacts again byte-identical to that run's.
 The recipe above just takes the headroom the spool bought.
 
+This is the row every probe from §13.36 on runs, but not the only row this document
+follows. §13.49 gives the same treatment — measured peak, probed cap, copy-pastable
+block — to the other five rows the sections below cite.
+
 **What it costs.** 2 293 s in the 2 400 MiB run, against 3 323 s (§13.45, pre-wrap)
 and 4 144 s (§13.46, 2 352 MiB) for the same artifacts, and 2 320–2 408 s for
 §13.48's runs at 1 024, 576 and 512 MiB — the spread is host and I/O variance, not
@@ -4306,8 +4310,9 @@ pressing against; the caps above 512 only add unused room. What remains resident
 the export and the walk's own memo tables, and that is also where 480 MiB dies: the
 failure is no longer at the write or next to a giga-byte term but inside the
 derivation's substitution memo (`self._subst_memo[key] = out`), which `MEMO_MAX`
-bounds. That is the next lever if a lower floor is wanted; this section does not
-claim a number for it.
+bounds. That looked like the next lever if a lower floor was wanted; §13.50 measured
+it and found it null — the memos are 2.6 MB of the 469 MiB peak, and the bracket
+(480, 512] MiB stands at either memo size.
 
 **The cost of that.** The run needs ~3.9 GB more disk while it is in flight — a third
 1.94 GB spool beside `type.tmp` and `value.tmp`, all removed before a passing run
@@ -4315,3 +4320,161 @@ returns. A failing run is unchanged in kind and worse in size: it has always lef
 spools behind (`type.tmp`, `value.tmp`, the partial `axioms.tmp`), and now leaves
 `bodytype.tmp` with them — 1.94 GB more on the crash path, which is 2 % of the ~89 GB
 that path already strands. A probe that fails is cleaned up by hand.
+
+### 13.49 The other rows this document follows, with their commands
+
+§13.47 wrote the `nsOuterFock…singleTime` row out because every probe from §13.36 on
+runs it. It is not the only row the document follows, and the recipe does not carry
+over verbatim: the environment is the same, but each row's cap and mode are its own.
+Each row below was run on this host with §13.47's environment, one-second sampling of
+`VmSize`/`VmRSS`, `LTP_CENSUS=1` for the split, once uncapped (8 GiB, to read the peak)
+and then at the cap written in its block. **Every cap below is a run that finished**,
+not an arithmetic headroom on the peak, and the peak column is what that uncapped run
+reached:
+
+| row | file under `mm0/exports/` | peak VmSize at 8 GiB | cap probed | wall clock at the cap | `.mm0` bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `dense_range_add_relBounded` | `BookProof.Toolbox.ChapterKatoRellichRelative.ndjson` | 1 812 MiB | 2 048 MiB | 126 s | 13 396 035 927 |
+| `equiv_pgLp` | `BookProof.Sm.ChapterSmComparisonEsa.ndjson` | 825 MiB | 1 024 MiB | 149 s | 4 354 934 901 |
+| `abs_re_inner_pairVec_le` | `BookProof.Toolbox.ChapterFockPairPerturbation.ndjson` | 532 MiB | 768 MiB | 29 s | 1 041 771 375 |
+| `brst_leakage_bound` | `BookProof.Sirk.ChapterSirkRestart.ndjson` | 219 MiB | 384 MiB | 6 s | 242 162 576 |
+| `multiShiftSeq_succ` | `BookProof.Sirk.ChapterSirkMultiShift.ndjson` | 19 MiB | 128 MiB | 1 s | 1 012 315 |
+
+The environment trio, unchanged across all five:
+
+```bash
+export LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000
+```
+
+`dense_range_add_relBounded` — the §13.31 row, the largest of these at 13.4 GB, and the
+one whose cost was the context rebuild at every leaf:
+
+```bash
+ulimit -v $(( 2048 * 1024 ))
+mkdir -p /some/out/dense
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Toolbox.ChapterKatoRellichRelative.ndjson \
+  dense_range_add_relBounded /some/out/dense --spine
+```
+
+`equiv_pgLp` — 4.35 GB of `.mm0`, the row §13.28's clock table names:
+
+```bash
+ulimit -v $(( 1024 * 1024 ))
+mkdir -p /some/out/equiv
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Sm.ChapterSmComparisonEsa.ndjson \
+  equiv_pgLp /some/out/equiv --spine
+```
+
+`abs_re_inner_pairVec_le` — the row `scripts/check-lean-typing-proof` uses for byte
+identity, and §13.31's gigabyte-scale `cmp`:
+
+```bash
+ulimit -v $(( 768 * 1024 ))
+mkdir -p /some/out/smoke
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Toolbox.ChapterFockPairPerturbation.ndjson \
+  abs_re_inner_pairVec_le /some/out/smoke --spine
+```
+
+`brst_leakage_bound` — 242 MB of `.mm0`, and the row whose uncapped emitter time §13.29
+records:
+
+```bash
+ulimit -v $(( 384 * 1024 ))
+mkdir -p /some/out/brst
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Sirk.ChapterSirkRestart.ndjson \
+  brst_leakage_bound /some/out/brst --spine
+```
+
+`multiShiftSeq_succ` — 1 MB, the smallest row the document follows; it is here because
+§13.30 and §13.31 use it for `cmp` checks, not because it is expensive:
+
+```bash
+ulimit -v $(( 128 * 1024 ))
+mkdir -p /some/out/multishift
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Sirk.ChapterSirkMultiShift.ndjson \
+  multiShiftSeq_succ /some/out/multishift --spine
+```
+
+**Why these caps and not tighter ones.** Only the `nsOuterFock…singleTime` row has a
+probed floor (§13.48 brackets it at (480, 512] MiB). For these five rows the cap is a
+single passing measurement with the peak quoted beside it, so the slack is visible:
+`dense` peaks 186 MiB under its cap, `equiv` 182, the smoke row 237, `brst` 178,
+`multiShiftSeq_succ` 108. Dropping them closer to the peak is exactly the §13.48
+procedure, row by row; nothing here claims a floor.
+
+**What the split says about them.** The census's synthetic-node table dominates every
+one of these rows — 868 MB of it on `dense`, 220 MB on `equiv`, 77 MB on the smoke row —
+because each node of the export becomes a synthetic term before any proof is built. The
+two rewrite memos are small on all five (63 MB together on `dense`, 42 MB of that the
+substitution memo), and the context memo is 190 MB on `dense` only, which is the row
+where §13.31 measured 648 307 lookups for 163 distinct contexts. So the memos bound by
+`MEMO_MAX` are not what these rows need room for — that is the lever §13.50 measures on
+the row that does hit them.
+
+**What was checked and what was not.** Sizes are `ls -l` on the artifacts of the passing
+runs; wall clocks were taken while the §13.50 probe was also running, so they read slow
+rather than fast, and the peaks are the measurement that matters. Byte identity against
+the artifacts the document quotes was not re-established here: the `.mm0` byte counts in
+the table are this host's, and they match the numbers §13.31 and §13.30 record for
+`dense_range_add_relBounded` and `abs_re_inner_pairVec_le` exactly.
+
+### 13.50 The substitution memo is not the floor: `MEMO_MAX` measured
+
+§13.48 ended by naming the substitution memo as the next lever, since the 480 MiB
+failure was inside `subst0`'s memo write rather than in any of the spooled buffers.
+That lever was then measured instead of assumed. `MEMO_MAX` (the bound on both the
+substitution and the lift memo, default 1 000 000) is now overridable per run —
+`LTP_MEMO_MAX=…` — so the probe does not need an edit and every recorded artifact
+keeps the default's behaviour. Two runs at the ns row's bracket:
+
+| cap | `LTP_MEMO_MAX` | outcome | peak VmSize | wall clock |
+| ---: | ---: | --- | ---: | ---: |
+| 384 | 100 000 | exit 1 at 435 s | — | `MemoryError` in `infer`, the `ty_app` f-string (`:2786`) |
+| **512** | **100 000** | **exit 0, 2 344 s** | **497 MiB** (t = 2 025 s) | peak RSS 469 MiB |
+| 512 | default | exit 0, 2 320 s | 496 MiB (t = 1 998 s) | peak RSS 469 MiB (§13.48) |
+
+**The lever is null.** Ten times less memo does not buy the floor: 384 MiB still dies,
+now inside `infer` instead of `subst0`, and at 512 MiB the peak is the same 496–497 MiB
+byte for byte within one MiB — while the run costs 24 s (1.0 %) more, because the memo
+misses are recomputed. The bracket stays **(480, 512] MiB** at either memo size, and
+`MEMO_MAX` is left as a probe knob, not a lever.
+
+**Why nothing was left to win.** The 512 MiB census (memo at 100 000, so the memos are
+at their smallest) accounts for the peak:
+
+| component | MB |
+| --- | ---: |
+| export parse table | 71.6 |
+| synthetic nodes | 102.7 |
+| encoding memo | 67.1 |
+| context memo | 29.3 |
+| lift memo | 1.3 |
+| substitution memo | 1.3 |
+| largest proof | 4.3 |
+| peak RSS | 469 |
+
+The two rewrite memos together are 2.6 MB of 469 — 0.6 % of the footprint. The three
+tables that matter (export 71.6, synthetic nodes 102.7, encoding memo 67.1) are 241 MB
+and none of them is what `MEMO_MAX` bounds; the context memo, 29.3 MB, is the one that
+moves with the cap at all (190 MB on the `dense` row, §13.49). Shrinking the rewrite
+memo past 100 000 would trade more recomputation for no measurable peak, which is
+exactly what the 512 MiB pair shows.
+
+**What this costs in artifacts.** `.mm0`, `.mm1`, and the naming table are byte-identical
+between the two 512 MiB runs (`cmp`), so the emitted proof does not depend on the memo
+size. The obligation sidecar does: its index/manifest/part differ, 6 of the 580
+substitution records change (e.g. `ax_subst_574` is 70 731 characters with the memo at
+its default and 88 357 at 100 000 — the record re-inlines a subterm the memo was
+sharing), and the manifest's `bytes` field moves 9 154 545 → 9 381 765. So the knob is
+safe for the artifacts the document's checks compare, and *not* safe for a
+sidecar-level comparison against a recorded run — which is why it stays an environment
+variable that no default path sets.
+
+**What is still open.** The floor is now set by the export's own tables, so the next
+candidate levers are the synthetic-node table (102.7 MB) and the encoding memo
+(67.1 MB), neither of which has been probed. Nothing here claims a lower bracket.

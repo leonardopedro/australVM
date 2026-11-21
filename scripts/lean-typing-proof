@@ -634,8 +634,10 @@ def peak_mb() -> int:
 # Cap on the de Bruijn rewrite memos. Both are pure functions of their key,
 # so dropping one only costs recomputation; at ~200 B/entry this bounds them
 # at a couple of hundred megabytes while a declaration's derivation touches
-# far fewer distinct (expression, shift) pairs than that.
-MEMO_MAX = 1_000_000
+# far fewer distinct (expression, shift) pairs than that. `LTP_MEMO_MAX`
+# overrides it, which is how the cap floor it sets is measured (§13.50); the
+# default is what every recorded artifact was produced with.
+MEMO_MAX = int(os.environ.get("LTP_MEMO_MAX") or 1_000_000)
 
 # Total size of the strings `Enc` caches; past it new encodings are simply not
 # cached (they are recomputed, never wrong).
