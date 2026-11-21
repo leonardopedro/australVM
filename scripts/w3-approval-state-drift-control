@@ -27,9 +27,9 @@
 #      to still pass: the perturbation removes a file, not a cell. Two derived
 #      checks do move with it, and the run names them rather than pretending
 #      isolation: the digest column and the approved-row emitter check read the
-#      same approved copy the row points at. Exactly those three lines are
-#      allowed to turn red; a fourth would mean the perturbation reached past one
-#      approval.
+#      same approved copy the row points at, and the staging count stops treating
+#      isa as pending. Exactly those five lines are allowed to turn red; a sixth
+#      would mean the perturbation reached past one approval.
 #
 # This control used to flip a *pending* cell to approved, which needed isa to be
 # pending. Once the owner committed all four §W3 approvals there was no pending
@@ -126,12 +126,15 @@ say "moved:     the lines the copy feeds, and nothing else —"
 sed 's/^/             [FAIL] /' "$work/fails.txt"
 
 # ── 5. what the cell owns still passes ─────────────────────────────────────
+# The pass lines are matched without their `(N row(s))` suffix: that count grows
+# with every approval, and matching the suffix turned this control red when a
+# fifth row was added. What it asserts is the shape check, not the table's length.
 missing=""
 while IFS= read -r want; do
     grep -qF "[pass] $want" "$work/gate.log" || missing="$missing
   $want"
 done <<'WANT'
-W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
+W3: every §W3 state cell says whether the row is approved or still waiting on the owner
 W3: every §W3 emitter cell names a real command
 W3: every pending §W3 row's artifact re-derives into a staging
 W3: stage-approvals' artifact list is the §W3 table's rows
