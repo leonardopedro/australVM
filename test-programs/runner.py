@@ -330,26 +330,37 @@ DEFAULT_SUITES: tuple[str, ...] = (
 )
 
 
-def collect_tests() -> list[Test]:
+def collect_tests(
+    suites_dir: str | None = None,
+    suites: tuple[str, ...] | None = None,
+) -> list[Test]:
     """
     Get the tests of every suite in `DEFAULT_SUITES`.
 
     Raises `ValueError` when `suites/` and `DEFAULT_SUITES` disagree, in either
     direction: an unlisted suite would be compiled by no default run, and a
     listed suite with no directory is a stale entry.
+
+    `suites_dir` and `suites` name another pair to collect from. The defaults
+    are the repository's, so the CLI needs no arguments; the parameters exist so
+    `test_runner.py` can hold the disagreement rule to a scratch pair instead of
+    planting directories in the tree.
     """
     # Result aggregator.
     tests: list[Test] = []
     # Find the `suites/`` directory.
-    suites_dir: str = os.path.join(DIR, "suites")
+    if suites_dir is None:
+        suites_dir = os.path.join(DIR, "suites")
+    if suites is None:
+        suites = DEFAULT_SUITES
     # Find the test suites.
     discovered: list = sorted(
         name
         for name in os.listdir(suites_dir)
         if os.path.isdir(os.path.join(suites_dir, name))
     )
-    unwired: list = [name for name in discovered if name not in DEFAULT_SUITES]
-    missing: list = [name for name in DEFAULT_SUITES if name not in discovered]
+    unwired: list = [name for name in discovered if name not in suites]
+    missing: list = [name for name in suites if name not in discovered]
     if unwired:
         raise ValueError(
             "Suite(s) present in suites/ but not wired into DEFAULT_SUITES, so "
@@ -363,7 +374,7 @@ def collect_tests() -> list[Test]:
             + ", ".join(missing)
             + ". Remove them from DEFAULT_SUITES in test-programs/runner.py."
         )
-    suite_names: list = list(DEFAULT_SUITES)
+    suite_names: list = list(suites)
     # Iterate over each test suite.
     for suite_name in suite_names:
         # Find the tests in this suite.
