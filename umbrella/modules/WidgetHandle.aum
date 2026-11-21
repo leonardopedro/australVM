@@ -1,0 +1,37 @@
+pragma Unsafe_Module;
+
+module body WidgetHandle is
+    -- The two words a generated `__new` wrapper wrote. Linear, so the only way
+    -- to end a value is `dispose`, and it can only end once.
+    record Widget: Linear is
+        lo: Int64;
+        hi: Int64;
+    end;
+
+    function adopt(lo: Int64, hi: Int64): Widget is
+        return Widget(lo => lo, hi => hi);
+    end;
+
+    -- Both parameters are 64-bit scalars, so this call is word-native: no
+    -- buffer or scalar descriptor is needed, and the words cross as they are.
+    pragma Foreign_Import(External_Name => "avm_widget__dispose");
+    function widgetDispose(lo: Int64, hi: Int64): Int64 is end;
+
+    function dispose(widget: Widget): Int64 is
+        -- Destructuring is what discharges the linear obligation; the two
+        -- words go back to the registry, which is the only place that decides
+        -- whether a destructor runs.
+        let { lo: Int64, hi: Int64 } := widget;
+        return widgetDispose(lo, hi);
+    end;
+
+    function main(): ExitCode is
+        let widget: Widget := adopt(1, 2);
+        let outcome: Int64 := dispose(widget);
+        if outcome = 0 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

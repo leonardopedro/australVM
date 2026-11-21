@@ -545,7 +545,9 @@ impl BufferAdapter {
                 }
                 "abi" => {
                     let rest = value.strip_prefix("buffer ").ok_or_else(|| {
-                        format!("`{line}` is not a buffer block (`abi buffer {BUFFER_ABI_VERSION}`)")
+                        format!(
+                            "`{line}` is not a buffer block (`abi buffer {BUFFER_ABI_VERSION}`)"
+                        )
                     })?;
                     abi_version = Some(
                         rest.parse::<u32>()
@@ -591,8 +593,9 @@ impl BufferAdapter {
         }
         let adapter = BufferAdapter {
             schema: schema.ok_or("descriptor has no `schema` line")?,
-            abi_version: abi_version
-                .ok_or_else(|| format!("descriptor has no `abi buffer {BUFFER_ABI_VERSION}` line"))?,
+            abi_version: abi_version.ok_or_else(|| {
+                format!("descriptor has no `abi buffer {BUFFER_ABI_VERSION}` line")
+            })?,
             symbol: symbol.ok_or("descriptor has no `symbol` line")?,
             target: target.ok_or("descriptor has no `target` line")?,
             params: params.ok_or("descriptor has no `params` line")?,
@@ -791,9 +794,7 @@ pub fn render_buffer_wrapper(adapter: &BufferAdapter) -> Result<String, String> 
         rust_scalar(adapter.returns)
     );
     let _ = writeln!(out);
-    let words: Vec<String> = (0..adapter.params)
-        .map(|i| format!("w{i}: u64"))
-        .collect();
+    let words: Vec<String> = (0..adapter.params).map(|i| format!("w{i}: u64")).collect();
     let _ = writeln!(
         out,
         "#[no_mangle]\npub extern \"C\" fn {}({}) -> u64 {{",
@@ -1034,7 +1035,9 @@ impl HandleAdapter {
                 }
                 "abi" => {
                     let rest = value.strip_prefix("handle ").ok_or_else(|| {
-                        format!("`{line}` is not a handle block (`abi handle {HANDLE_ABI_VERSION}`)")
+                        format!(
+                            "`{line}` is not a handle block (`abi handle {HANDLE_ABI_VERSION}`)"
+                        )
                     })?;
                     abi_version = Some(
                         rest.parse::<u32>()
@@ -1058,8 +1061,9 @@ impl HandleAdapter {
         }
         let adapter = HandleAdapter {
             schema: schema.ok_or("descriptor has no `schema` line")?,
-            abi_version: abi_version
-                .ok_or_else(|| format!("descriptor has no `abi handle {HANDLE_ABI_VERSION}` line"))?,
+            abi_version: abi_version.ok_or_else(|| {
+                format!("descriptor has no `abi handle {HANDLE_ABI_VERSION}` line")
+            })?,
             symbol: symbol.ok_or("descriptor has no `symbol` line")?,
             target: target.ok_or("descriptor has no `target` line")?,
             type_name: type_name.ok_or("descriptor has no `type` line")?,
@@ -1105,11 +1109,9 @@ pub fn render_handle_wrapper(adapter: &HandleAdapter) -> Result<String, String> 
         adapter.abi_version, adapter.schema, adapter.owner
     ));
     out.push_str(
-        "use austral_cranelift_bridge::handles::{\n    HandleRegistry, Owner, ProviderValue, TypeTag, HANDLE_SCHEMA,\n};\n\n",
+        "use austral_cranelift_bridge::handles::{\n    HandleRegistry, Owner, ProviderValue, TypeTag,\n};\n\n",
     );
-    let words: Vec<String> = (0..adapter.params)
-        .map(|i| format!("w{i}: i64"))
-        .collect();
+    let words: Vec<String> = (0..adapter.params).map(|i| format!("w{i}: i64")).collect();
     out.push_str(&format!(
         "extern \"C\" {{\n    fn {}({}) -> *mut core::ffi::c_void;\n    fn {}(ptr: *mut core::ffi::c_void);\n}}\n\n",
         adapter.constructor,
@@ -1117,7 +1119,11 @@ pub fn render_handle_wrapper(adapter: &HandleAdapter) -> Result<String, String> 
         adapter.destructor
     ));
     out.push_str(&format!(
-        "static REGISTRY: std::sync::Mutex<HandleRegistry<ProviderValue>> =\n    std::sync::Mutex::new(HandleRegistry::new(\n        Owner::issued({}),\n        TypeTag::named(\"{}\"),\n        HANDLE_SCHEMA,\n    ));\n\n",
+        "// The provider generation this table belongs to. A provider reload builds\n\
+         // a new wrapper crate and so a new registry, which mints generation 2;\n\
+         // a handle from the previous build carries generation 1 and is refused.\n\
+         const PROVIDER_GENERATION: u32 = 1;\n\n\
+         static REGISTRY: std::sync::Mutex<HandleRegistry<ProviderValue>> =\n    std::sync::Mutex::new(HandleRegistry::new(\n        Owner::issued({}),\n        TypeTag::named(\"{}\"),\n        PROVIDER_GENERATION,\n    ));\n\n",
         adapter.owner, adapter.type_name
     ));
     let mut args = String::new();
@@ -1332,9 +1338,18 @@ mod tests {
 
     #[test]
     fn scalar_and_buffer_blocks_share_one_document() {
-        let text = format!("{}\n{}", sample().descriptor_text(), buffer_text("read:0:2", "Int64", "null-len0"));
+        let text = format!(
+            "{}\n{}",
+            sample().descriptor_text(),
+            buffer_text("read:0:2", "Int64", "null-len0")
+        );
         assert_eq!(Adapter::parse_descriptors(&text).expect("scalars").len(), 1);
-        assert_eq!(BufferAdapter::parse_descriptors(&text).expect("buffers").len(), 1);
+        assert_eq!(
+            BufferAdapter::parse_descriptors(&text)
+                .expect("buffers")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1353,8 +1368,8 @@ mod tests {
         assert!(err.contains("both a buffer and its own length"), "{err}");
         let err = parse_buffer(&buffer_text("read:0:3", "Nat64", "null-len0")).unwrap_err();
         assert!(err.contains("out of range"), "{err}");
-        let err = parse_buffer(&buffer_text("read:0:2,write:0:2", "Nat64", "null-len0"))
-            .unwrap_err();
+        let err =
+            parse_buffer(&buffer_text("read:0:2,write:0:2", "Nat64", "null-len0")).unwrap_err();
         assert!(err.contains("twice"), "{err}");
     }
 
@@ -1368,9 +1383,8 @@ mod tests {
             "{wrapper}"
         );
         assert!(
-            wrapper.contains(
-                "pub extern \"C\" fn rs_copy__adapter(w0: u64, w1: u64, w2: u64) -> u64"
-            ),
+            wrapper
+                .contains("pub extern \"C\" fn rs_copy__adapter(w0: u64, w1: u64, w2: u64) -> u64"),
             "{wrapper}"
         );
         assert_eq!(
@@ -1416,8 +1430,9 @@ mod tests {
     fn only_the_stated_empty_convention_is_accepted() {
         let err = parse_buffer(&buffer_text("read:0:2", "Nat64", "ptr-only")).unwrap_err();
         assert!(err.contains("null-len0"), "{err}");
-        let err = parse_buffer(&buffer_text("read:0:2", "Nat64", "null-len0")
-            .replace("abi buffer 1", "abi buffer 2"))
+        let err = parse_buffer(
+            &buffer_text("read:0:2", "Nat64", "null-len0").replace("abi buffer 1", "abi buffer 2"),
+        )
         .unwrap_err();
         assert!(err.contains("buffer transport version 2"), "{err}");
         let err = parse_buffer(
@@ -1472,18 +1487,34 @@ mod tests {
             handle_text("rs_widget")
         );
         assert_eq!(Adapter::parse_descriptors(&text).expect("scalars").len(), 1);
-        assert_eq!(BufferAdapter::parse_descriptors(&text).expect("buffers").len(), 1);
-        assert_eq!(HandleAdapter::parse_descriptors(&text).expect("handles").len(), 1);
+        assert_eq!(
+            BufferAdapter::parse_descriptors(&text)
+                .expect("buffers")
+                .len(),
+            1
+        );
+        assert_eq!(
+            HandleAdapter::parse_descriptors(&text)
+                .expect("handles")
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn a_handle_descriptor_refuses_what_it_cannot_derive() {
-        let err = parse_handle(&handle_text("rs_widget").replace("symbol rs_widget__new", "symbol rs_new"))
-            .unwrap_err();
+        let err = parse_handle(
+            &handle_text("rs_widget").replace("symbol rs_widget__new", "symbol rs_new"),
+        )
+        .unwrap_err();
         assert!(err.contains("rs_widget__new"), "{err}");
 
-        let err = parse_handle(&format!("{}\n{}", handle_text("rs_widget"), handle_text("rs_widget")))
-            .unwrap_err();
+        let err = parse_handle(&format!(
+            "{}\n{}",
+            handle_text("rs_widget"),
+            handle_text("rs_widget")
+        ))
+        .unwrap_err();
         assert!(err.contains("duplicate handle descriptor"), "{err}");
 
         let err = parse_handle(&handle_text("rs_widget").replace("type widget", "type wi-dget"))
@@ -1494,12 +1525,16 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("handle transport version 2"), "{err}");
 
-        let mut adapter = parse_handle(&handle_text("rs_widget")).expect("parse").remove(0);
+        let mut adapter = parse_handle(&handle_text("rs_widget"))
+            .expect("parse")
+            .remove(0);
         adapter.owner = 0;
         let err = adapter.validate().unwrap_err();
         assert!(err.contains("null handle's owner"), "{err}");
 
-        let mut adapter = parse_handle(&handle_text("rs_widget")).expect("parse").remove(0);
+        let mut adapter = parse_handle(&handle_text("rs_widget"))
+            .expect("parse")
+            .remove(0);
         adapter.destructor = adapter.constructor.clone();
         let err = adapter.validate().unwrap_err();
         assert!(err.contains("both constructor and destructor"), "{err}");
@@ -1507,7 +1542,9 @@ mod tests {
 
     #[test]
     fn a_handle_descriptor_renders_both_wrappers_through_one_registry() {
-        let adapter = parse_handle(&handle_text("rs_widget")).expect("parse").remove(0);
+        let adapter = parse_handle(&handle_text("rs_widget"))
+            .expect("parse")
+            .remove(0);
         let wrapper = render_handle_wrapper(&adapter).expect("wrapper");
         assert!(
             wrapper.contains("fn rs_widget_ctor(w0: i64) -> *mut core::ffi::c_void;"),
@@ -1521,10 +1558,7 @@ mod tests {
             wrapper.contains("Owner::issued(1)"),
             "the registry carries its tag: {wrapper}"
         );
-        assert!(
-            wrapper.contains("TypeTag::named(\"widget\")"),
-            "{wrapper}"
-        );
+        assert!(wrapper.contains("TypeTag::named(\"widget\")"), "{wrapper}");
         assert!(
             wrapper.contains("pub extern \"C\" fn rs_widget__new(w0: i64, out: *mut i64) -> i64"),
             "{wrapper}"

@@ -171,7 +171,13 @@ fn a_word_pair_round_trips_and_the_null_pair_is_refused() {
         Err(HandleError::Malformed { lo: 0, hi: 0 }),
         "the null pair is refused rather than read as slot 0"
     );
-    assert_eq!(registry.get_words(0, hi), Err(HandleError::ForeignOwner { expected: 3, found: 0 }));
+    assert_eq!(
+        registry.get_words(0, hi),
+        Err(HandleError::ForeignOwner {
+            expected: 3,
+            found: 0
+        })
+    );
     assert_eq!(
         registry.get_words(lo, hi + (1 << 32)),
         Err(HandleError::StaleProvider {
@@ -195,10 +201,18 @@ fn allocation_and_free_counters_stand_apart_from_the_drop_oracle() {
     assert_eq!(registry.freed(), 1, "only `destroy` frees in the table");
     assert_eq!(registry.released(), 2, "both slots are free");
     assert_eq!(registry.live(), 0);
-    assert_eq!(&*drops.borrow(), &[1], "a moved value is the caller's to drop");
+    assert_eq!(
+        &*drops.borrow(),
+        &[1],
+        "a moved value is the caller's to drop"
+    );
 
     drop(value);
-    assert_eq!(&*drops.borrow(), &[1, 2], "the oracle agrees with `freed` + the moved drop");
+    assert_eq!(
+        &*drops.borrow(),
+        &[1, 2],
+        "the oracle agrees with `freed` + the moved drop"
+    );
 }
 
 #[test]
@@ -216,4 +230,318 @@ fn take_moves_the_value_out_and_leaves_the_handle_stale() {
     let err = registry.take(handle).expect_err("second take");
     assert!(matches!(err, HandleError::Stale { .. }), "{err}");
     assert_eq!(&*drops.borrow(), &[5], "the value was not dropped again");
+}
+
+// ── the generated `__new`/`__dispose` wrappers, through the real ABI ────────
+//
+// The registry above is the table. These tests are the other half: wrappers
+// rendered from `abi handle` descriptors, compiled next to a provider that
+// implements the declared constructor and destructor, and called the way the
+// JIT calls them — two 64-bit handle words in, a status word out. The
+// provider's own drop counter is the oracle; nothing in the test can ask the
+// registry what it thinks.
+
+use std::ffi::CString;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use umbrella::interface::{
+    render_handle_wrapper, HandleAdapter, DESCRIPTOR_SCHEMA, HANDLE_ABI_VERSION,
+};
+
+fn scratch(name: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "umbrella-handles-{}-{unique}-{name}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch");
+    dir
+}
+
+fn bridge_rlib() -> PathBuf {
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug");
+    let mut found: Vec<PathBuf> = Vec::new();
+    for dir in [target.join("deps"), target.clone()] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+            let is_rlib = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("libaustral_cranelift_bridge") && n.ends_with(".rlib"))
+                .unwrap_or(false);
+            if is_rlib {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found.pop().unwrap_or_else(|| {
+        panic!(
+            "no bridge rlib under {}; run `cargo test` first",
+            target.display()
+        )
+    })
+}
+
+fn handle_adapter(target: &str, type_name: &str, owner: u32) -> HandleAdapter {
+    HandleAdapter {
+        schema: DESCRIPTOR_SCHEMA,
+        abi_version: HANDLE_ABI_VERSION,
+        symbol: format!("{target}__new"),
+        target: target.to_string(),
+        constructor: format!("{target}_ctor"),
+        destructor: format!("{target}_dtor"),
+        type_name: type_name.to_string(),
+        params: 1,
+        owner,
+    }
+}
+
+/// The declared targets, written the way Rust declares them, followed by the
+/// two generated wrapper modules. Both counters live in the provider, so a
+/// destructor call that did not happen (or happened twice) is visible.
+fn library_source() -> String {
+    let mut source = String::from(
+        r##"// the provider's side of the declared handle targets
+static WIDGET_LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static WIDGET_DROPS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static GADGET_DROPS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+#[export_name = "avm_widget_ctor"]
+pub extern "C" fn widget_ctor(value: i64) -> *mut core::ffi::c_void {
+    WIDGET_LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Box::into_raw(Box::new(value)) as *mut core::ffi::c_void
+}
+
+#[export_name = "avm_widget_dtor"]
+pub unsafe extern "C" fn widget_dtor(ptr: *mut core::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    WIDGET_LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    WIDGET_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    drop(Box::from_raw(ptr as *mut i64));
+}
+
+#[export_name = "avm_gadget_ctor"]
+pub extern "C" fn gadget_ctor(value: i64) -> *mut core::ffi::c_void {
+    Box::into_raw(Box::new(value)) as *mut core::ffi::c_void
+}
+
+#[export_name = "avm_gadget_dtor"]
+pub unsafe extern "C" fn gadget_dtor(ptr: *mut core::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    GADGET_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    drop(Box::from_raw(ptr as *mut i64));
+}
+
+#[export_name = "avm_widget_live"]
+pub extern "C" fn widget_live() -> i64 {
+    WIDGET_LIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[export_name = "avm_widget_drops"]
+pub extern "C" fn widget_drops() -> i64 {
+    WIDGET_DROPS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[export_name = "avm_gadget_drops"]
+pub extern "C" fn gadget_drops() -> i64 {
+    GADGET_DROPS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+"##,
+    );
+    for (i, adapter) in [
+        handle_adapter("avm_widget", "widget", 1),
+        handle_adapter("avm_gadget", "gadget", 2),
+    ]
+    .iter()
+    .enumerate()
+    {
+        source.push_str(&format!(
+            "mod w{i} {{\n{}\n}}\n",
+            render_handle_wrapper(adapter).expect("render")
+        ));
+    }
+    source
+}
+
+fn compiled_library() -> PathBuf {
+    use std::sync::OnceLock;
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY
+        .get_or_init(|| {
+            let dir = scratch("wrappers");
+            let file = dir.join("lib.rs");
+            std::fs::write(&file, library_source()).expect("write library");
+            let deps = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/deps");
+            let rlib = bridge_rlib();
+            let out = dir.join("libhandles.so");
+            let output = Command::new("rustc")
+                .arg("--crate-type=cdylib")
+                .arg("--edition=2021")
+                .arg("--crate-name=handle_wrappers")
+                .arg("-L")
+                .arg(format!("dependency={}", deps.display()))
+                .arg("--extern")
+                .arg(format!("austral_cranelift_bridge={}", rlib.display()))
+                .arg("-o")
+                .arg(&out)
+                .arg(&file)
+                .output()
+                .expect("spawn rustc");
+            assert!(
+                output.status.success(),
+                "the provider and its generated wrappers must compile:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            out
+        })
+        .clone()
+}
+
+struct Library(*mut libc::c_void);
+
+impl Library {
+    fn open(path: &Path) -> Self {
+        let c = CString::new(path.to_str().expect("utf-8 path")).expect("no NUL");
+        let handle = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        assert!(!handle.is_null(), "dlopen {}", path.display());
+        Self(handle)
+    }
+
+    fn symbol(&self, name: &str) -> *mut libc::c_void {
+        let c = CString::new(name).expect("no NUL");
+        let ptr = unsafe { libc::dlsym(self.0, c.as_ptr()) };
+        assert!(!ptr.is_null(), "dlsym {name}");
+        ptr
+    }
+
+    fn new_fn(&self, name: &str) -> unsafe extern "C" fn(i64, *mut i64) -> i64 {
+        unsafe { std::mem::transmute(self.symbol(name)) }
+    }
+
+    fn dispose_fn(&self, name: &str) -> unsafe extern "C" fn(i64, i64) -> i64 {
+        unsafe { std::mem::transmute(self.symbol(name)) }
+    }
+
+    fn count_fn(&self, name: &str) -> unsafe extern "C" fn() -> i64 {
+        unsafe { std::mem::transmute(self.symbol(name)) }
+    }
+}
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        unsafe {
+            libc::dlclose(self.0);
+        }
+    }
+}
+
+#[test]
+fn the_generated_wrappers_create_and_destroy_a_provider_value_once() {
+    let lib = Library::open(&compiled_library());
+    let widget_new = lib.new_fn("avm_widget__new");
+    let widget_dispose = lib.dispose_fn("avm_widget__dispose");
+    let widget_live = lib.count_fn("avm_widget_live");
+    let widget_drops = lib.count_fn("avm_widget_drops");
+    let gadget_dispose = lib.dispose_fn("avm_gadget__dispose");
+    let gadget_drops = lib.count_fn("avm_gadget_drops");
+
+    // 1. A constructor writes two words and reports done.
+    let mut words = [0i64; 2];
+    let status = unsafe { widget_new(7, words.as_mut_ptr()) };
+    assert_eq!(status, 0, "the constructor reports done");
+    assert_ne!(words, [0, 0], "the handle is not the null pair");
+    assert_eq!(unsafe { widget_live() }, 1);
+    assert_eq!(unsafe { widget_drops() }, 0, "nothing is freed yet");
+
+    // 2. Disposing the same words frees exactly once; the second attempt is a
+    //    refusal, not a second destructor call.
+    let status = unsafe { widget_dispose(words[0], words[1]) };
+    assert_eq!(status, 0, "the first dispose succeeds");
+    assert_eq!(unsafe { widget_live() }, 0);
+    assert_eq!(unsafe { widget_drops() }, 1);
+    let status = unsafe { widget_dispose(words[0], words[1]) };
+    assert_ne!(status, 0, "the second dispose is refused");
+    assert_eq!(
+        unsafe { widget_drops() },
+        1,
+        "the destructor did not run twice"
+    );
+
+    // 3. Another type's registry refuses these words: the owner tag differs,
+    //    so no cross-type destructor is reachable.
+    let mut gadget_words = [0i64; 2];
+    let gadget_new = lib.new_fn("avm_gadget__new");
+    assert_eq!(unsafe { gadget_new(9, gadget_words.as_mut_ptr()) }, 0);
+    assert_ne!(
+        unsafe { gadget_dispose(words[0], words[1]) },
+        0,
+        "a widget's words do not dispose a gadget's table entry"
+    );
+    assert_eq!(
+        unsafe { gadget_dispose(gadget_words[0], gadget_words[1]) },
+        0,
+        "the gadget's own words still work"
+    );
+    assert_eq!(unsafe { gadget_drops() }, 1);
+
+    // 4. A slot reused after disposal bumps its generation, so the old words
+    //    stay stale and the new value survives their refusal.
+    let mut first = [0i64; 2];
+    assert_eq!(unsafe { widget_new(1, first.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { widget_dispose(first[0], first[1]) }, 0);
+    let mut reused = [0i64; 2];
+    assert_eq!(unsafe { widget_new(2, reused.as_mut_ptr()) }, 0);
+    assert_eq!(
+        reused[0], first[0],
+        "the same slot is handed out again (same low word)"
+    );
+    assert_ne!(reused[1], first[1], "but its generation moved on");
+    assert_ne!(
+        unsafe { widget_dispose(first[0], first[1]) },
+        0,
+        "the stale words are refused"
+    );
+    assert_eq!(
+        unsafe { widget_live() },
+        1,
+        "the live value was not touched"
+    );
+    assert_eq!(unsafe { widget_dispose(reused[0], reused[1]) }, 0);
+    assert_eq!(unsafe { widget_live() }, 0);
+
+    // 5. Forged words: a previous provider generation, a null out pointer and
+    //    the null pair are all refusals before any provider code runs.
+    let mut live = [0i64; 2];
+    assert_eq!(unsafe { widget_new(5, live.as_mut_ptr()) }, 0);
+    assert_ne!(
+        unsafe { widget_dispose(live[0], live[1] + (1 << 32)) },
+        0,
+        "a future provider generation is not this provider"
+    );
+    assert_eq!(unsafe { widget_live() }, 1);
+    assert_ne!(
+        unsafe { widget_new(6, std::ptr::null_mut()) },
+        0,
+        "a null out pointer is refused"
+    );
+    assert_eq!(unsafe { widget_live() }, 1, "nothing was allocated for it");
+    assert_ne!(
+        unsafe { widget_dispose(0, 0) },
+        0,
+        "the null pair is refused"
+    );
+    assert_eq!(unsafe { widget_dispose(live[0], live[1]) }, 0);
+    assert_eq!(unsafe { widget_live() }, 0);
 }

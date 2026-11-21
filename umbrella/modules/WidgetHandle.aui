@@ -1,0 +1,35 @@
+module WidgetHandle is
+    """
+    U13 — the module's side of an owned Rust value.
+
+    `Widget` is a linear record over the two 64-bit words a generated
+    `__new` wrapper writes (`owner << 32 | slot`, `provider generation << 32 |
+    slot generation`). Only the interface is exported, so a client module
+    cannot construct a record itself: `adopt` is the construction seam (it
+    takes the words a granted `<target>__new` call produced) and `dispose` is
+    the only consumer. That is what makes "destroy it exactly once" a type
+    obligation rather than a comment: forgetting a `Widget` is a linearity
+    error, and disposing it twice is a use-after-consume error.
+
+    The words are not a value: nothing here dereferences them. `dispose` hands
+    them back to the provider's `__dispose` wrapper, which refuses a null pair,
+    another registry's owner, a previous provider generation and a stale slot.
+    The provider frees its own allocation; neither the module nor the host
+    allocator ever does.
+    """
+    type Widget: Linear;
+
+    -- The construction seam. The words must come from a granted `__new` call;
+    -- `dispose` is what turns them back into a refusal or a destructor call.
+    function adopt(lo: Int64, hi: Int64): Widget;
+
+    -- The dispose path: destructures the linear record (the obligation is
+    -- discharged there) and returns the wrapper's status word — 0 done,
+    -- non-zero refused.
+    function dispose(widget: Widget): Int64;
+
+    -- The intended path, as a compile-checked witness: adopt once, dispose
+    -- once, and return what the provider said. A second dispose or a forgotten
+    -- one does not fit these three lines, which is the point of the type.
+    function main(): ExitCode;
+end module.

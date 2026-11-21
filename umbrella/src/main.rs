@@ -301,8 +301,8 @@ fn front_end_once(
         // generate. An unrepresentable signature fails the front-end here, so
         // no guessed layout can reach the JIT.
         .arg(format!("--emit-adapters={}", adapters_out.display())); // U06: bounded child. A compiler that hangs must not hang umbrella, and a
-                                                           // deadline is only meaningful if the whole process group is killed — the
-                                                           // front-end spawns helpers of its own.
+                                                                     // deadline is only meaningful if the whole process group is killed — the
+                                                                     // front-end spawns helpers of its own.
     let outcome = umbrella::process::run(cmd, FRONT_END_DEADLINE)
         .map_err(|e| format!("run {austral:?}: {e}"))?;
     if outcome.timed_out {
@@ -576,13 +576,13 @@ fn main() {
         std::env::temp_dir().join(format!("umbrella-{}.adapters", std::process::id()));
     let (cps_binaries, buffers, handles, scalars) =
         match front_end(&austral, &modules, &cps_out, &adapters_out) {
-        Ok(b) => {
-            let _ = std::fs::remove_file(&cps_out);
-            let _ = std::fs::remove_file(&adapters_out);
-            b
-        }
-        Err(e) => die(e),
-    };
+            Ok(b) => {
+                let _ = std::fs::remove_file(&cps_out);
+                let _ = std::fs::remove_file(&adapters_out);
+                b
+            }
+            Err(e) => die(e),
+        };
     let cps_bytes: usize = cps_binaries.iter().map(Vec::len).sum();
     eprintln!(
         "umbrella: front-end emitted {} module(s), {cps_bytes} bytes of CPS",
