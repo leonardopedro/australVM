@@ -163,6 +163,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
   marker is reported `[stale]` so it leaves with the work. Markdown
   historical status prose is out of scan scope by policy.
+- `scripts/check-distributed-contracts` — the D00 structural checker for
+  `docs/distributed/EXECUTION.md` (its baseline block) and
+  `docs/distributed/contracts.tsv` (the boundary inventory): exact headers,
+  unique ids, a known class/repo/status, and every referenced path and evidence
+  file present — `U` paths resolve against `../unfer`. `--selftest` mutates each
+  rule and requires the refusal. `verify-invariants` runs both, as two checks
+  (`D00:`), and reports the sibling-repo absence as an explained gap rather than
+  a red gate. A valid row says the record is well-formed; it never says the
+  guarantee holds.
 - `scripts/cps-fingerprint <cps>` — the bridge's own sha256 of the bytes
   (`austral_cps_fingerprint`); `--object <cps>` gives the digest of the
   cranelift-emitted code capture plus `arch=`. Not JIT symbols: no manifest

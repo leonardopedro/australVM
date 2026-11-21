@@ -165,6 +165,26 @@ else
     gap "H2: sibling unfer repo not present at ../unfer — skipping generator check"
 fi
 
+# --- D00: the distributed execution record and contract inventory ---
+# `scripts/check-distributed-contracts` validates docs/distributed/EXECUTION.md's
+# baseline block and docs/distributed/contracts.tsv: the exact headers, unique
+# ids, a known class/repo/status, and every referenced path and evidence file
+# (repo `U` paths resolve against ../unfer). `--selftest` mutates each rule and
+# requires the refusal, so the checker cannot pass by being unable to fail.
+# Structure only, by construction: a valid row says the record is well-formed,
+# never that a guarantee holds. The `U` rows need the sibling checkout, so its
+# absence is an explained gap here (as H2 above), not a failure of the record.
+if [ ! -f "$repo_root/scripts/check-distributed-contracts" ]; then
+    check "D00: distributed contract checker present" false
+elif [ ! -d "$repo_root/../unfer" ]; then
+    gap "D00: distributed contract inventory (sibling unfer repo not present at ../unfer, so its rows cannot be resolved)"
+else
+    check_py "D00: distributed execution record and contract inventory are well-formed" \
+        python3 "$repo_root/scripts/check-distributed-contracts"
+    check_py "D00: the distributed contract checker refuses every mutated record" \
+        python3 "$repo_root/scripts/check-distributed-contracts" --selftest
+fi
+
 # --- Phase D: the Lean4 -> DeltaNets -> MM0 certificate (docs/lean4mm0.md §5) ---
 #
 # gap_certificate.{mm0,mm1} and layout_certificate.{mm0,mm1} are generated
