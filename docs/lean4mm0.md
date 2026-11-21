@@ -4563,7 +4563,7 @@ measured, and neither is an assumption:
 tables that the emitter never evicts (export 71.6 + synthetic 93.7 + encoding memo 2.3,
 plus the context memo at 18.5). Moving it further needs a change to how nodes are
 represented or retained, not another environment variable — and §13.52 does move it, to
-at most 384 MiB, by interning the synthetic table.
+368 MiB (the floor brackets at (360, 368]), by interning the synthetic table.
 
 ### 13.52 Interning the synthetic table: measured, neutral for the proof, not for the sidecar
 
@@ -4589,6 +4589,13 @@ were. The interning index is live memory and is inside every peak below; it is s
 | §13.51, no dedup | 432 MiB | 0 | 431 MiB | 404 MB | 93.7 MB | 18.5 MB | 10.5 MB | 2 879 s |
 | dedup | 432 MiB | 0 | 361 MiB | 333 MB | 26.4 MB | 8.5 MB | 5.2 MB | 2 617 s* |
 | dedup | 416 MiB | 0 | 362 MiB | 331 MB | 26.4 MB | 8.5 MB | 5.2 MB | 2 617 s* |
+| dedup | 384 MiB | 0 | 363 MiB | 333 MB | 26.5 MB | 8.5 MB | 5.2 MB | 3 742 s† |
+| dedup | 368 MiB | 0 | 363 MiB | 334 MB | 26.5 MB | 8.5 MB | 5.2 MB | 3 761 s† |
+| dedup | 360 MiB | 1 | 357 MiB | 328 MB | — | — | — | 3 611 s† |
+
+†Not comparable to the others: these ran under host memory pressure and contention (see
+the clock note under the 384 MiB run). The 360 MiB row has no census because the census
+prints after the copy that failed.
 
 \*The two dedup runs ran concurrently, two cores, so their clocks are comparable to
 each other (2 615.1 s and 2 615.9 s of emitter time) and not to the single 2 879 s run;
@@ -4599,24 +4606,46 @@ of reservation at the peak instead of 431. So the bracket (416, 432] from §13.5
 probe is the next step rather than an assumption. That probe was then run, and it passes:
 below.
 
-**384 MiB.** A third dedup run at a 384 MiB cap completes too. Completion is decided by
-the artifacts, not by the probe's own record: the manifest is written only at a clean
-close, and all six files are present and byte-identical to the 416 MiB run — `cmp` reports
-`.mm0` (102 543 367 789 B), `.mm1` (102 547 674 107 B), the naming, index and manifest
-files identical, so the sidecar is again 5 645 247 B with the same 580 records,
-`ax_subst_0` … `ax_subst_579`.
+**384 MiB.** A third dedup run at a 384 MiB cap completes too: exit 0, peak 363 MiB
+`VmSize` at 3 582 s of 3 742 s, peak RSS 333 MB, and the same six files. Their spelling and
+their content are identical to the 416 MiB run — `cmp` reports `.mm0` (102 543 367 789 B),
+`.mm1` (102 547 674 107 B), naming, index and manifest identical, so the sidecar is again
+5 645 247 B with the same 580 records, `ax_subst_0` … `ax_subst_579`. 363 MiB is the highest
+peak of the four runs (416 and 432 both peaked at 361–362), which is the expected shape
+when the cap is close: the emitter's peak grows into the room it is given, by a few MiB,
+before it is refused.
 
-The probe's sampler did not survive the run. The host ran out of memory at 21:06 — swap
-fully consumed, and the kernel killed three Firefox content processes and an `ld.gold` —
-while a build, tmpfs-backed scratch files and this run shared the machine; the shell that
-sampled `VmSize` and would have written `summary.txt` stopped twelve minutes later, at
-2 723 s of sampling, and no OOM entry names it. The emitter inherited the 384 MiB address-
-space limit at `exec`, so the limit held for the whole run and the completion is the
-measurement; what is missing is the peak above the last sample (347 MiB `VmSize`, 320 MB
-RSS) and any clock that could be compared to the table above. So: the passing side is now
-*at most 384*, the failing side is still untested, and the next probe is 352 or 320 MiB,
-not a claim. Operationally, two things this run teaches: keep run artifacts on disk rather
-than on a tmpfs, and do not overlap a memory probe with a build.
+The clock is not comparable to the table: the run shared the host with a build, the kernel
+ran out of memory at 21:06 (swap fully consumed; it killed three Firefox content processes
+and an `ld.gold`), and this run's 3 742 s is 43 % longer than the 2 617 s dedup runs above
+at an unchanged emitter workload. The run's own peak stayed at ~330 MB throughout, so the
+memory the host ran out of was not this probe's; the sample series and the summary were
+written to completion, and the run was not what was killed. Operationally the lesson is
+only about scheduling: a memory probe and a build should not share a machine, because the
+probe's cap does not bound the rest of it.
+
+**The failing side: 368 passes, 360 dies.** Two more probes, the same command and env
+trio, ran concurrently at caps 368 and 360 MiB. 368 completes: exit 0, peak 363 MiB
+`VmSize` at 3 609 s of 3 761 s, peak RSS 334 MB. 360 does not: exit 1 at 3 611 s, peak
+357 MiB `VmSize`, peak RSS 328 MB. Both spent the same time in the derivation (3 609 s),
+so nothing earlier in the run changed — the difference is in the tail, and it is not a
+table.
+
+The traceback names where the room ran out:
+
+```
+File "scripts/lean-typing-proof", line 1660, in main
+  shutil.copyfileobj(spool, fh, 1 << 20)
+MemoryError
+```
+
+That is the final copy of the spooled axioms into the artifact, and the `1 << 20` is the
+copy buffer: under a 360 MiB address-space ceiling, a derivation that has already reached
+357 MiB cannot allocate one more MiB. So the floor of this row at the current emitter is
+set by the size of the last allocation, not by any of the live tables — with 368 MiB it
+fits with 5 MiB to spare. The bracket is now **(360, 368] MiB**, eight MiB wide; 352 and
+320 MiB are below the measured failure point and are expected to fail in the same place,
+which is what their probes check rather than assume.
 
 Two tables move besides the one the knob names: context memo 18.5 → 8.5 MB and
 substitution memo 10.5 → 5.2 MB. Neither is interned — their entries are keyed by ids and
