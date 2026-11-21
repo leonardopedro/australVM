@@ -1,0 +1,5 @@
+perturbed: store_projection_toy's composition cell now says `21 axioms` (stmts cell left at 70)
+gate:      exit 1
+verify-invariants: 170 passed, 2 explained gap(s), 1 failed
+detail:    [detail] §W9.3 composition: store_projection_toy(says 21 axioms, approved 20)
+control:   holds — one drifted count, the composition [FAIL], every independent §W3/§W9.3 line unchanged

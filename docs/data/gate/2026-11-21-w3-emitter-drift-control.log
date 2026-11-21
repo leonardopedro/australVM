@@ -1,0 +1,7 @@
+perturbed: isa's emitter cell now says `scripts/toy-witness check`
+registry:  scripts/isa-encdec check
+gate:      exit 1
+verify-invariants: 168 passed, 2 explained gap(s), 3 failed
+detail:    isa(cell says 'scripts/toy-witness check', EMITTERS says 'scripts/isa-encdec check')
+control:   holds — one drifted cell, the emitter [FAIL] and isa's approved copy with it,
+           every independent §W3 line unchanged

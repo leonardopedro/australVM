@@ -1,0 +1,5 @@
+perturbed: store_projection_toy's closure cell now says `19842af88888…` (counts left alone)
+gate:      exit 1
+verify-invariants: 170 passed, 2 explained gap(s), 1 failed
+detail:    [detail] §W9.3 closure: store_projection_toy(says '19842af88888…', approved '09842af88888…')
+control:   holds — one drifted digest, the closure [FAIL], every count and §W3 line unchanged

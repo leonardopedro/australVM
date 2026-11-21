@@ -1,0 +1,5 @@
+perturbed: clif.mm0's certificate line drops the approval it must cite (citations kept)
+gate:      exit 1
+verify-invariants: 170 passed, 2 explained gap(s), 1 failed
+detail:    isa.stmts exists — clif.mm0 must cite it, not a gap
+control:   holds — one uncertified claim, the certification [FAIL], every other clif/§W3 line unchanged

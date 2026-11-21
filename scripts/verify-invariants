@@ -2450,6 +2450,47 @@ EOF
         echo "  [detail] §W3 probe evidence:${_w3_probe_bad}" >&2
         check "W3: the recorded probe evidence still names live gate lines" false
     fi
+    # A control is an experiment, and its result is only re-readable if the run
+    # that produced it was kept. `docs/data/gate/README.md` is where those runs
+    # are kept — one row per transcript, its `command` column naming the control.
+    # So every drift control the plan names must have such a row. The suite's
+    # cases are separate experiments (one drifts the Liquid golden, another the
+    # certificate's citation digest), so a case the plan names by name needs a
+    # row of its own; `all` and flags (`--list`, `-j`) are not cases. The row only
+    # has to *name* the control: whether the file it links still resolves is
+    # `scripts/check-links`'s question, because asking it here would stop a
+    # control from recording the transcript this check demands. Executability is
+    # checked: a plan naming a control that is gone, or is not runnable, is
+    # evidence pointing at nothing.
+    _w3_ctl_table="$repo_root/docs/data/gate/README.md"
+    _w3_ctl_bad=""
+    _w3_ctl_n=0
+    _w3_ctl_inv="$( {
+        grep -oE 'scripts/[A-Za-z0-9_.-]*drift-control[A-Za-z0-9_.-]*' "$_plan_file"
+        grep -oE 'scripts/w3-drift-controls [a-z][a-z0-9-]*' "$_plan_file" \
+            | grep -v ' all$'
+    } | sort -u)"
+    while IFS= read -r _c_inv; do
+        case "$_c_inv" in '') continue ;; esac
+        _w3_ctl_n=$((_w3_ctl_n + 1))
+        _c_path="${_c_inv%% *}"
+        if [ ! -f "$repo_root/$_c_path" ] || [ ! -x "$repo_root/$_c_path" ]; then
+            _w3_ctl_bad="$_w3_ctl_bad $_c_inv(no such executable control)"
+        fi
+        if [ ! -f "$_w3_ctl_table" ] || ! grep -qF "$_c_inv" "$_w3_ctl_table"; then
+            _w3_ctl_bad="$_w3_ctl_bad $_c_inv(no recorded transcript row)"
+        fi
+    done <<EOF
+$_w3_ctl_inv
+EOF
+    if [ ! -f "$_w3_ctl_table" ]; then
+        gap "W3: the plan's drift controls not checked against the transcripts (docs/data/gate/README.md is absent)"
+    elif [ -z "$_w3_ctl_bad" ]; then
+        check "W3: every drift control the plan names has a recorded transcript ($_w3_ctl_n invocation(s))" true
+    else
+        echo "  [detail] §W3 drift controls:${_w3_ctl_bad}" >&2
+        check "W3: every drift control the plan names has a recorded transcript" false
+    fi
     # … and the state column has to say *why* the artifact is still unapproved,
     # not merely that it is. A bare `[gap]` is a status: it tells a reader the
     # gate is red without saying whether anyone is working on it, whether
