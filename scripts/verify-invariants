@@ -917,12 +917,28 @@ PY
             if grep -qE '^(axiom|theorem) ' "$_proj"; then
                 echo "  [detail] store_projection.mm0 asserts what it has not proved" >&2
                 check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
-            elif grep -q '^term store_projects ' "$_proj" \
-                && grep -q '^term load_projects ' "$_proj" \
-                && grep -q '^-- certificate: \[gap\]' "$_proj"; then
+            elif ! grep -q '^term store_projects ' "$_proj" \
+                || ! grep -q '^term load_projects ' "$_proj"; then
+                echo "  [detail] missing a relation symbol" >&2
+                check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
+            # The certificate line follows the approval, exactly as `clif.mm0`'s
+            # does: `[gap]` while `mm0/approved/` holds no copy, and the copy's
+            # name once it does. An approval fixes the statement of record and
+            # never the claim, so "cites the approval" here may not replace the
+            # vocabulary — the two `term` lines above are what make the artifact
+            # a statement at all.
+            elif [ -e "$_appr_root/store_projection.stmts" ]; then
+                if grep -q '^-- certificate: \[gap\]' "$_proj" \
+                        || ! grep -q 'mm0/approved/store_projection.stmts' "$_proj"; then
+                    echo "  [detail] $_appr_root/store_projection.stmts exists — its certificate must name it, not a gap" >&2
+                    check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
+                else
+                    check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" true
+                fi
+            elif grep -q '^-- certificate: \[gap\]' "$_proj"; then
                 check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" true
             else
-                echo "  [detail] missing the relation symbol or the [gap] line" >&2
+                echo "  [detail] no store_projection approval, yet the certificate does not say [gap]" >&2
                 check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
             fi
         else
@@ -1822,9 +1838,19 @@ EOF
             _w3r_ok="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
             rm -f "$_w3r_ctl/$_w3r_stem.stmts"
             _w3r_missing="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
-            _w3_tab_appr="$_w3r_saved_appr"
+            # The stale-state half is the edit an owner makes by mistake: the
+            # copy is committed, the cell still says pending. Approving every
+            # §W3 artifact makes the real cell say approved, so the probe *is*
+            # that mistake — the stem is taken out of the approved set for this
+            # one call instead of being assumed absent from it.
+            _w3r_stale_appr=""
+            for _w3r_tok in $_w3r_saved_appr; do
+                [ "$_w3r_tok" = "$_w3r_stem" ] || _w3r_stale_appr="$_w3r_stale_appr $_w3r_tok"
+            done
+            _w3_tab_appr="$_w3r_stale_appr"
             cp "$_w3r_staged" "$_w3r_ctl/$_w3r_stem.stmts"
             _w3r_stale="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
+            _w3_tab_appr="$_w3r_saved_appr"
             _appr_root="$_w3r_saved_root"
             if [ -z "$_w3r_ok" ]; then
                 check "W3: an approved §W3 row passes when the approved copy holds what it says" true
@@ -2586,6 +2612,18 @@ EOF
         # the one as approved. That is the mechanism that lets an approval be a
         # single row edit instead of a row edit plus an array edit.
         _sa_first="${_sa_pending%% *}"
+        # The three controls below need one staging to copy into a scratch
+        # approved root. Their subject is the *script*, not the owner's pending
+        # list, so a fully approved §W3 table must not turn them into gaps: with
+        # nothing pending, one artifact is staged against an empty approved root
+        # (a first approval, by construction) and that copy drives the controls.
+        if [ -z "$_sa_first" ] && [ -n "$_sa_names" ]; then
+            _sa_first="${_sa_names%% *}"
+            mkdir -p "$_sa/empty"
+            bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only \
+                --root "$_sa/all" --approved-root "$_sa/empty" \
+                >"$_sa/first.log" 2>&1 || _sa_first=""
+        fi
         mkdir -p "$_sa/appr1"
         if [ -n "$_sa_first" ] && cp "$_sa/all/$_sa_first.stmts" "$_sa/appr1/" 2>/dev/null; then
             _sa_one=0

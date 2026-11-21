@@ -97,13 +97,18 @@ if ! grep -qF "$line" "$work/gate.log"; then
     fail "no '$line' in the run"
     exit 1
 fi
-detail="$ART(says 21 axioms, staging 20)"
-if ! grep -F '§W9.3 composition:' "$work/gate.log" | grep -qF "$detail"; then
+# The second word follows the row's state — a pending row is counted from its
+# staging, an approved one from `mm0/approved/` — so the control pins the two
+# numbers and the frame, not the source that produced them.
+detail="$ART(says 21 axioms, ... 20)"
+if ! grep -F '§W9.3 composition:' "$work/gate.log" \
+        | grep -qE "$ART\\(says 21 axioms, (staging|approved) 20\\)"; then
     grep -F '§W9.3 composition:' "$work/gate.log" | sed 's/^/  /' >&2
     fail "the detail does not name $ART with both counts"
     exit 1
 fi
-say "detail:    $detail"
+say "detail:    $(grep -F '§W9.3 composition:' "$work/gate.log" \
+    | grep -E "$ART\(says 21 axioms, (staging|approved) 20\)" | head -1 | sed 's/^ *//')"
 
 # ── 4. everything else still passes ────────────────────────────────────────
 missing=""

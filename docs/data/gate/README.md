@@ -8,32 +8,83 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
+| [`2026-11-20-lean-shell-final.log`](2026-11-20-lean-shell-final.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, `b205f73f` plus the uncommitted §W3 control fixes and the regenerated `CHANGELOG.md` (log opens with Nix's dirty-tree warning) | `179 passed, 0 explained gap(s), 0 failed` |
+| [`2026-11-20-ocaml-shell-final.log`](2026-11-20-ocaml-shell-final.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `170 passed, 2 explained gap(s), 0 failed` — the two Lean-only checks |
+| [`2026-11-20-default-shell.log`](2026-11-20-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-20, an x86_64 host where `devShells.default` builds | `174 passed, 5 explained gap(s), 0 failed` |
+| [`2026-11-20-ocaml-shell-zero-w3.log`](2026-11-20-ocaml-shell-zero-w3.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row below | `170 passed, 2 explained gap(s), 0 failed` — the two Lean-only checks |
+| [`2026-11-20-lean-shell-zero-gaps.log`](2026-11-20-lean-shell-zero-gaps.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, the tree that lands the four §W3 approvals | `179 passed, 0 explained gap(s), 0 failed` |
+| [`2026-11-20-lean-shell-all-approved-proto.log`](2026-11-20-lean-shell-all-approved-proto.log) | `AUSTRALVM_PLAN=… AUSTRALVM_APPROVED_ROOT=… nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` — the four staged §W3 approvals in a scratch root, the plan's four state cells flipped there | 2026-11-20, `8249b592` plus the local edit to `scripts/lean2mm0-stmts` | `174 passed, 3 explained gap(s), 2 failed` — what approving all four would do today |
+| [`2026-11-20-lean-shell-postcleanup.log`](2026-11-20-lean-shell-postcleanup.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, `37fd65ec`, after reclaiming stale build caches (38 GB free when it started) | `175 passed, 4 explained gap(s), 0 failed` |
+| [`2026-11-20-ocaml-shell-postcleanup.log`](2026-11-20-ocaml-shell-postcleanup.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, `8249b592`, the tree the first two rows run on | `166 passed, 6 explained gap(s), 0 failed` |
+| [`2026-11-20-ocaml-shell.log`](2026-11-20-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, `8b8eb323` after `make bridge` | `166 passed, 6 explained gap(s), 0 failed` |
+| [`2026-11-20-lean-shell.log`](2026-11-20-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `175 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-19, after the W5 object re-pin and the bridge-copy check | `165 passed, 6 explained gap(s), 0 failed` |
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
-| [`2026-11-20-ocaml-shell.log`](2026-11-20-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, after the certificate re-pin on x86_64 | `159 passed, 8 explained gap(s), 0 failed` |
-| [`2026-11-20-default-shell.log`](2026-11-20-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `174 passed, 5 explained gap(s), 0 failed` |
 
-The third row is not a gate count but a negative control's transcript: it is
+The `2026-11-20-lean-shell-postcleanup.log` row re-runs the gate on the tree the
+2026-11-20 pair describes, after the volume went from 98% full to 58% by
+deleting build caches only (the bridge release artifacts and the root `.so` copy
+were kept and re-verified identical, and `make check-bridge-fresh` still
+passes). It is kept as evidence that the counts do not depend on the caches:
+same tree, same `175`/`4`/`0`, and its `…-ocaml-shell-postcleanup.log`
+counterpart repeats it under `.#ocaml` (`166`/`6`/`0`, the two extra gaps being
+the Lean-only W9.1 and witness checks). The lean run was slower than the row
+below it because the host was under memory pressure — one
+`lean2mm0-stmts emit` step held 8.7 GB RSS — which was the gate parsing a whole
+export eagerly for two roots. That is fixed: `scripts/lean2mm0-stmts` now reads
+the export lazily, 8.99 GiB → 0.46 GiB peak on the 783 MB RV64 memory export,
+with byte-identical output, so the slow run is history rather than a property
+to plan around.
+
+The `2026-11-20-default-shell.log` row is the one shell where the Liquid checks
+are not a gap: it carries why3 1.8.2, z3 4.16.0 and alt-ergo 2.6.3, so
+`liquid-golden` holds there (258 s) and the five remaining gaps are the Lean-only
+transcripts. Under `.#ocaml` the same tree reports the Liquid golden and subset
+checks as a `[gap]` (`why3 not on PATH`), which is why that shell's count is
+lower; neither figure is a regression in the other shell.
+
+The `2026-11-20-ocaml-shell-zero-w3.log` row is the same tree under the other
+shell, and it is the reason the two counts differ by more than the four approval
+lines did: with the §W3 gaps closed, only the two checks `.#ocaml` cannot run
+(the RV64 re-conversion and the Lean witness proofs) are left, so `170`/`2`/`0`
+is the whole gap list rather than a subset of it.
+
+The `2026-11-20-lean-shell-zero-gaps.log` row is the state the four §W3
+approvals were landed for: with the statements committed, `mm0/clif.mm0` and
+`mm0/store_projection.mm0` citing them, and the two checks that could only be
+read before now measuring both directions, the gate reports no gap at all. The
+`…-all-approved-proto.log` row below it is the probe that said the approval
+commit alone would not get there, kept because it is the reason the certificate
+and the controls changed in the same change.
+
+The `2026-11-20-lean-shell-all-approved-proto.log` row is a probe rather than a
+tree state: it stages the four §W3
+approvals in a scratch root and flips the plan's state cells there — exactly
+what an approval commit would change — to measure what the gate says about it.
+It says no, twice. `W9.3: certification state matches mm0/approved/` fails
+because `mm0/clif.mm0` still carries the `[gap]` certificate block, and that
+block is emitted by `scripts/clif2mm0`, so citing the approval is a generator
+edit rather than a comment edit. `W3: a §W3 row that disagrees with
+mm0/approved/ is refused` fails because its stale-state probe is made by
+flipping a *pending* row, and an all-approved table leaves it nothing to flip.
+The three gaps are the same shape: `stage-approvals` stages nothing once every
+artifact is approved, so the controls that copy a staging have none. Closing
+those is §W3's described work — attach the proofs, cite the approval, build the
+probe differently — not a copy of four files.
+
+The `2026-11-19-obj-drift-control.log` row is not a gate count but a negative control's transcript: it is
 here because it produced the `obj=` digest the certificate now pins, and because
 it is what exposed a stale root `.so` that the gate had been measuring through.
 Its command's own last line is the verdict.
 
-The 2026-11-20 `ocaml` row exists because the 2026-11-19 one does not reproduce
-on this tree: it records `165 passed, 6 explained gap(s)` with the Liquid checks
-as `[pass]`, while the same command on this tree prints `159 passed, 8 explained
-gap(s)` and reports the Liquid golden and subset checks as a `[gap]`
-(`why3 not on PATH`). That shell carries no prover by design (`flake.nix`), so
-its Liquid lines can only be a `[pass]` where why3 was on PATH for some other
-reason. The `159` figure is the one the plan quotes.
+The rows are ordered newest first: the 2026-11-19 pair describes `48658a42` and
+the re-pins that followed it (`165`/`174`), and is kept because the plan's §3.5
+block quotes that series; the 2026-11-20 pair is the tree after `8b8eb323`'s
+merge added a check (`166`/`175`). A superseded row is history, not a claim about
+`HEAD`.
 
-The `default` shell is where the Liquid checks are not a gap, and on an x86_64
-host it builds: it carries why3 1.8.2, z3 4.16.0 and alt-ergo 2.6.3, the gate
-runs all fifteen Liquid checks as `[pass]`, and `scripts/w3-drift-controls
-liquid-golden` holds there in 258 s (its drifted copy reports `173 passed, 5
-explained gap(s), 1 failed`, which is the drift the case asserts).
-
-The difference between the shell counts is not a regression in either shell. The `ocaml` shell cannot run
+The difference between the two shell counts is not a regression in either shell. The `ocaml` shell cannot run
 the Lean-typed checks and the `lean` shell cannot run the OCaml compiler checks,
 so each reports the other's checks as explained `[gap]` lines; the `lean` shell
 carries the four §W3 approval gaps (isa, slot_layout, store_projection,

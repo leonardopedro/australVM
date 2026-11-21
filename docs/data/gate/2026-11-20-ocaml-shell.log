@@ -1,4 +1,3 @@
-warning: Git tree '/home/leo/Projects/australVM' is dirty
 [pass] S29: UNFER_SYMBOLS table present
 [pass] S29: UNFER_SYMBOLS registers into the Cranelift JIT
 [pass] S29: per-module CPS compile consumes the same census
@@ -48,10 +47,9 @@ lean2mm0 selftest: 'net' tamper refused (quasi_rh_certificate) — read_bound_ve
 lean2mm0 selftest: 'bound' tamper refused (quasi_rh_7_8) — seven-eighths identity failed: 8×8750 != 6×10000 (the emitted fraction is not the Lean bound)
 lean2mm0 selftest: 'shape' tamper refused (quasi_rh_7_8) — structure mismatch: hypothesis head is LTlt, expected LEle
 lean2mm0 selftest: OK — all four anchors refuse tampered input (kernel rfl, evaluator vs net, statement shape, seven-eighths bound)
-lean2mm0 verify: label contract grounded — all 13 set.mm0 labels exist with the expected sorts
-lean2mm0 verify: mm0-rs compile OK (quasi_rh_7_8) — 3 sorts, 1479 term/def, 50031 ax/thm
-lean2mm0 verify: mm0-c OK (quasi_rh_7_8) — the root of trust accepts the axiom and every imported set.mm proof
-lean2mm0 verify: negative anchor OK — mm0-rs refuses the corrupted set.mmu proof (idi's proof → ax_1, set.mmu:8)
+lean2mm0 verify: [gap] statement stems NOT verified — australVM/mm0/metamath/set.mmu absent (untracked toolchain state, not committed)
+  provision: mm0-from-mm from-mm mm0/metamath/set.mm -o mm0/metamath/set.mm0 mm0/metamath/set.mmu
+  then:      sed -i 's/^(pub //' mm0/metamath/set.mmu
 lean2mm0 verify: mm0-rs compile OK (gap_certificate) — 3 sorts, 46 term/def, 39 ax/thm
 lean2mm0 verify: mm0-c OK (gap_certificate) — the root of trust accepts the proofs
 lean2mm0 verify: mm0-rs compile OK (layout_certificate) — 3 sorts, 34 term/def, 24 ax/thm
@@ -65,7 +63,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W5: the staleness note is silent when the artifact is newest, and names the newer binary
 [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it
 [pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
-[pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (x86_64)
+[pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (aarch64)
 [pass] W7: a certificate with a flipped coefficient is refused
   [detail] 6 sorts, 71 term/def, 91 ax/thm
 [pass] W8: mm0/isa.mm0 + isa.mm1 accepted by mm0-rs + mm0-c, no sorry
@@ -140,17 +138,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W9.3: the witness exercises all 20 axioms the toy declares
   [detail] toy-witness: 5 atom(s) (0 = unset), 16276 memories (every shape of at most three cells)
 [pass] W9.3: the witness's verdicts do not change when the domain grows (27 rows at 4 and 5 atoms)
-  [detail] lean-witness: 20 axiom(s) proved for an arbitrary atom domain, 6 rejected candidate(s) proved false
-[pass] W9.3: a Lean development proves the same 20 axioms
-[pass] W9.3: the Lean development proves the toy's 28 theorems too
-[pass] W9.3: every Lean declaration rests on Lean's standard foundation only (48 audited)
-[pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
-  [detail] injected sorry at line 810: lean accepted the file (exit 0), the scan refused it
-[pass] W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts
-[pass] W9.3: the no-sorry scan does not count banned words inside comments
-[pass] W9.3: both witnesses reject the same candidates
-  [detail] lean mutations refused: put-no-truncation(refused@199), drop-keeps-written-address(refused@133), notfull-weakened-to-four(refused@236), narrow4-becomes-identity(refused@606), keep-order-becomes-put(refused@360)
-[pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
+[gap]  W9.3: the Lean witness proofs not checked (lean not on PATH)
   [detail] flux1d probe: 4 identit(ies), 1000 states, max relative deviation 0.000e+00
 [pass] W6: generated C probe compiles and passes at tolerance 1e-8
 [pass] W6: no certificate claims a float path is proved
@@ -228,6 +216,11 @@ mm0-comparator selftest: tampered approval refused — the approved file is what
 mm0-comparator selftest: OK — all three negative controls refuse
 [pass] W3: comparator self-test (all three negative controls refuse)
 logos CNL → DeltaNet → MM0 gate
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
 [pass] emitter built (/home/leo/Projects/australVM/../unfer/target/debug/logos)
 [pass] theory compiles and re-checks (2 sorts, 9 term/def, 18 ax/thm)
 [pass] Kopperman theory compiles and re-checks (2 sorts, 33 term/def, 64 ax/thm)
@@ -298,9 +291,21 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] H8: cap-std Rust backend module exists
 [pass] S30: cadabra2-cli subprocess, not a dependency
 [pass] S21: ZENODO_SYMBOLS (uz_*) registered separately
-[gap]  Liquid golden Why3 parse check (why3 not on PATH)
-[gap]  Liquid golden vc-fold-premises.mlw full z3 validity (why3 not on PATH)
-[gap]  Liquid subset extraction check (why3 not on PATH)
+[pass] Liquid golden constraint-generation.mlw type-checks under Why3
+[pass] Liquid golden vc-arithmetic.mlw type-checks under Why3
+[pass] Liquid golden vc-callsite-and-invariant.mlw type-checks under Why3
+[pass] Liquid golden vc-fold-premises.mlw type-checks under Why3
+[pass] Liquid golden vc-operators.mlw type-checks under Why3
+[pass] Liquid golden vc-projection.mlw type-checks under Why3
+[pass] Liquid golden constraint-generation.mlw parses under Why3
+[pass] Liquid golden vc-arithmetic.mlw parses under Why3
+[pass] Liquid golden vc-callsite-and-invariant.mlw parses under Why3
+[pass] Liquid golden vc-fold-premises.mlw parses under Why3
+[pass] Liquid golden vc-operators.mlw parses under Why3
+[pass] Liquid golden vc-projection.mlw parses under Why3
+[pass] Liquid golden vc-fold-premises.mlw proves in full under z3
+[pass] Liquid subset library extracts with the existing driver
+[pass] Liquid subset extraction matches its pinned golden
 [pass] L10 Cycle B: liquid_measure tenant registered in Vm_plugin.boot
 [pass] L10 Cycle B: liquid_measure is a distinct tenant from liquid
 [pass] L10 Cycle B: LiquidMeasure is the extracted module, listed in dune
@@ -322,4 +327,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 159 passed, 8 explained gap(s), 0 failed
+verify-invariants: 166 passed, 6 explained gap(s), 0 failed

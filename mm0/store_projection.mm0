@@ -76,16 +76,18 @@
 -- declarations, and the ISA model the projection has to reach. A stale digest
 -- means this comment is describing files that have since changed, and the gate
 -- fails.
--- cites: mm0/clif.mm0 sha256=e481d5f533f01bd972e96f603cb94dc5db92f0218bb683db4978c03188589ed4
+-- cites: mm0/clif.mm0 sha256=2d891ff05089734afa33060214e1e2232cdc7eb156441660f7b43e8573222341
 -- cites: mm0/statements/rv64_memory.mm0 sha256=ab0e372d5288bafcc18813cd2f610e266cc04468061a5f6f7713004ddfdffa5b
 -- cites: mm0/isa.mm0 sha256=7c811140293bb2cf8cf5cbbb3e3616e1b661764507e36657147fff906ce43092
 --
--- certificate: [gap] — an approval is the owner's commit, not a script's, and
---   `mm0/approved/store_projection.stmts` approves the *statements* below: the
---   vocabulary, not a proof. The claims stay uncertified, so this line stays
---   `[gap]` until a proof exists; the gate's `W9.3: certification state matches
---   mm0/approved/` applies to `clif.mm0`'s reference to `isa`, not to this
---   file's own certificate.
+-- certificate: the statements above are the owner's approval, pinned in
+--   `mm0/approved/store_projection.stmts`; the claim itself stays unproved.
+--   What the approval holds out is the statement of record — this artifact's
+--   vocabulary and its three citations — so the projection remains an
+--   obligation, and no proof arrived with the approval because none can: see
+--   "What this file is NOT" above. `scripts/verify-invariants` compares these
+--   statements with the approved copy and refuses an artifact that claims a
+--   certificate it does not have.
 
 -- theory: self-declared vocabulary — the sorts and terms below are this
 -- artifact's whole theory; it imports no rule from `cic.mm0` or `isa.mm0`, so

@@ -29,8 +29,9 @@ The one thing it adds beyond shapes is W9.3's *vocabulary*: `sort St` and
 `term clif_step (s: St) (o: op) (t: St): Prop` — a relation symbol, with no
 `axiom` and no theorem attached, so the obligation `clif_step s o t ⇒
 isa_step (lower o) s t` can be written down without being claimed. The cited
-artifacts are pinned by digest at generation time and the certification state is
-`[gap]`; both are checked by `scripts/verify-invariants` rather than trusted to
+artifacts are pinned by digest at generation time, and the certificate line is
+`[gap]` while `mm0/approved/` holds no ISA approval and names that approval once
+it does; both are checked by `scripts/verify-invariants` rather than trusted to
 this comment. Both halves are
 checked: `mm0-rs` compiles `clif.mm1`, `mm0-c` checks the declarations against
 that compiled artifact (a mismatch is refused), and `scripts/clif2mm0` refuses
@@ -52,6 +53,9 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL = os.path.join(ROOT, "mm0", "clif.mm0")
+# The owner's §W3 approval of the ISA statements: cited by the refinement when
+# it exists, and the reason the certificate line is not a `[gap]` then.
+ISA_APPROVAL = "mm0/approved/isa.stmts"
 PROOF = os.path.join(ROOT, "mm0", "clif.mm1")
 BIN = os.path.join(ROOT, "safestos", "cranelift", "target", "release", "clif_dump")
 CORPUS = os.path.join(ROOT, "scripts", "cps-corpus")
@@ -69,12 +73,6 @@ CITES = [
     "mm0/flux1d_certificate.mm0",
     "mm0/slot_layout.mm0",
 ]
-
-# The owner's approval of `isa`'s statements, once it exists. Approval is a
-# commit touching only `mm0/approved/`, so the certificate line follows the
-# file rather than a flag: absent, the obligation is stated and left `[gap]`;
-# present, it is cited by digest and the gate requires the citation to match.
-APPROVED_ISA = "mm0/approved/isa.stmts"
 
 
 def sha256_of(rel):
@@ -213,17 +211,29 @@ def render(forms, instructions):
     out.append("-- content and pinned by digest — the same four artifacts `mm0/isa.mm0`")
     out.append("-- cites for `linear`/`typed`/`in_bounds`, plus the ISA model the CLIF")
     out.append("-- step has to refine into:")
-    approved = os.path.exists(os.path.join(ROOT, APPROVED_ISA))
-    for rel in CITES + ([APPROVED_ISA] if approved else []):
+    for rel in CITES:
         out.append(f"-- cites: {rel} sha256={sha256_of(rel)}")
+    # The approval, when the owner has made one, is a *statement of record* the
+    # obligation is written in — not a proof of it. The certificate line names it
+    # instead of the gap, and the header's `proves: 0 theorems` stays what it
+    # was, so "the ISA vocabulary is approved" cannot read as "the refinement is
+    # proved". Two-sided by construction: this generator emits the gap block when
+    # the approval is absent, and `scripts/verify-invariants` fails whichever of
+    # the two lines disagrees with `mm0/approved/`. The digest is computed here,
+    # so a re-approved statement set drifts this file rather than silently
+    # keeping a citation that no longer describes its content.
+    approved = os.path.exists(os.path.join(ROOT, ISA_APPROVAL))
+    if approved:
+        out.append(f"-- cites: {ISA_APPROVAL} sha256={sha256_of(ISA_APPROVAL)}")
     out.append("--")
     if approved:
-        out.append(f"-- certificate: {APPROVED_ISA} sha256={sha256_of(APPROVED_ISA)} —")
-        out.append("--   the owner approved `isa`'s statements in `mm0/approved/`, so the")
-        out.append("--   layer-1 vocabulary the refinement assumes is now held out and")
-        out.append("--   diffed rather than re-read. The obligation itself remains stated,")
-        out.append("--   not proved: this file still carries no `axiom`/`theorem`, and the")
-        out.append("--   approval is of the *statements*, not of the step refinement.")
+        out.append("-- certificate: cites the owner's approval, `mm0/approved/isa.stmts`,")
+        out.append("--   pinned by digest above. The approval fixes the ISA vocabulary this")
+        out.append("--   obligation is written in; it is not a proof of the refinement, so")
+        out.append("--   `clif_step s o t ⇒ isa_step (lower o) s t` stays stated and unproved")
+        out.append("--   and `-- proves: 0 theorems` above is that limit. A check cannot turn")
+        out.append("--   an approval into a proof, so `scripts/verify-invariants` only holds")
+        out.append("--   the citation and the approval together: drop either and it fails.")
     else:
         out.append("-- certificate: [gap] — `mm0/approved/` carries no approval for `isa`,")
         out.append("--   and an approval is the owner's commit, not a script's. So the")

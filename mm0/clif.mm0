@@ -84,11 +84,12 @@ term uextend__i8__r_i64 (a: val): op;   -- 22 use(s), 1 operand(s), 1 result(s)
 -- cites: mm0/slot_layout.mm0 sha256=67b61dc15a3b6bcc5bfe1da2a39edea08f0305e9c1978e1a9625cfa152a8965d
 -- cites: mm0/approved/isa.stmts sha256=21dcf49056068c4ad51c5dac133590ba4a060d27dab60ed0b4bfe3bcf3ecec48
 --
--- certificate: mm0/approved/isa.stmts sha256=21dcf49056068c4ad51c5dac133590ba4a060d27dab60ed0b4bfe3bcf3ecec48 —
---   the owner approved `isa`'s statements in `mm0/approved/`, so the
---   layer-1 vocabulary the refinement assumes is now held out and
---   diffed rather than re-read. The obligation itself remains stated,
---   not proved: this file still carries no `axiom`/`theorem`, and the
---   approval is of the *statements*, not of the step refinement.
+-- certificate: cites the owner's approval, `mm0/approved/isa.stmts`,
+--   pinned by digest above. The approval fixes the ISA vocabulary this
+--   obligation is written in; it is not a proof of the refinement, so
+--   `clif_step s o t ⇒ isa_step (lower o) s t` stays stated and unproved
+--   and `-- proves: 0 theorems` above is that limit. A check cannot turn
+--   an approval into a proof, so `scripts/verify-invariants` only holds
+--   the citation and the approval together: drop either and it fails.
 sort St;                        -- a machine state: registers + memory, uninterpreted
 term clif_step (s: St) (o: op) (t: St): Prop;

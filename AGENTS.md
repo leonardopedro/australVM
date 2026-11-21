@@ -279,18 +279,14 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `execute_STORE`: 4; both return `SailM ExecutionResult`, check `width ≤
   xlen_bytes` and can fault in `vmem_read`/`vmem_write`), so the verdict is
   measured instead of retyped. Exit 0 = refuted (the expected state), 1 = the
-  shapes now agree (re-argue the correspondence), 2 = evidence missing. The
-  pinned model source is a Nix store path, so it can be evicted; `verify-invariants`
-  pins exit 0 as `[pass]` and reports exit 2 as an explained `[gap]`
-  (`W9.3: memory correspondence not measured (…)`), never as the refutation
-  failing.
+  shapes now agree (re-argue the correspondence), 2 = evidence missing.
+  `verify-invariants` runs it and pins the refutation as `[pass]`.
 - `scripts/mm0-comparator` — W3's held-out statements. Both modes take
   `--approved-root DIR`, and `approve --dry-run` prints what would be approved
-  and writes nothing: the flow for an unapproved artifact
-  (`store_projection_toy` today; `isa`, `slot_layout` and `store_projection` are
-  approved) is *approve into a scratch root, `check` against it, read the
-  statements, then let the owner commit `mm0/approved/<artifact>.stmts`*.
-  `isa`'s emitter is registered
+  and writes nothing: the flow for an unapproved artifact (`isa`, `slot_layout`,
+  `store_projection`, `store_projection_toy`) is *approve into a scratch root,
+  `check` against it, read the statements, then let the owner commit
+  `mm0/approved/<artifact>.stmts`*. `isa`'s emitter is registered
   (`scripts/isa-encdec`), so its approval is anchored to a current artifact; the
   hand-written specifications have no emitter and the comparator says so.
 - `mm0/store_projection.mm0` — the claims that *survive* that refutation, for
@@ -511,21 +507,22 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
   line and the approval control still passing. One full gate run.
 - `scripts/w93-certification-drift-control` — the §W9.3 control for the
-  refinement's certificate line, reading the tree's direction: with
-  `mm0/approved/isa.stmts` committed it copies `mm0/clif.mm0` and rewrites the
-  certificate back to `-- certificate: [gap]`; with no approval it would instead
-  claim one. It runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit
-  1 with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
-  `isa.stmts exists — clif.mm0 must cite it, not a gap` (the pending direction's
-  detail is `no isa approval, yet clif.mm0 does not say [gap]`), and the `clif_step`
-  vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
+  refinement's certificate line: it copies `mm0/clif.mm0`, perturbs that one
+  line, and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
+  with `[FAIL] W9.3: certification state matches mm0/approved/` plus the
+  `clif_step` vocabulary, pinned citations and §W3 lines unchanged. The
+  perturbation follows the tree, because which direction is the trap depends on
+  the owner's decision: with no `mm0/approved/isa.stmts` the copy claims the
+  approval (required detail `no isa approval, yet clif.mm0 does not say [gap]`),
+  and once the approval exists the copy drops the citation it must carry
+  (required detail `isa.stmts exists — clif.mm0 must cite it, not a gap`). One
+  full gate run either way.
 - `scripts/w3-approval-state-drift-control` — the §W3 control for the state
-  cell: it derives the first §W3 row still marked pending (`store_projection_toy`
-  today), rewrites that row's cell in a copy of the plan to `` `[pass]`, approved
-  in `mm0/approved/` `` with no approved copy behind it, and requires
+  cell: it rewrites `isa`'s cell in a copy of the plan to `` `[pass]`, approved in
+  `mm0/approved/` `` with no `mm0/approved/isa.stmts` behind it, and requires
   `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: the
   plan's §W3 stmts column matches what each artifact holds`, the detail
-  `<stem>(says approved, but …/<stem>.stmts does not exist)`, exactly the three other
+  `isa(says approved, but …/isa.stmts does not exist)`, exactly the three other
   lines that read the same cell red (digest column, approved-row emitter check,
   staging count) and nothing else, and the shape check plus the emitter column
   still green. One full gate run.
@@ -570,25 +567,20 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   (`W3_DRIFT_KEEP`, default 20 run directories, newest kept; `0` disables
   pruning), and a run's summary prints, per case, the log files under its own
   `runs/<id>/<case>/`, so a red case in a `make test` transcript names its
-  transcript.
-  `liquid-golden` is the one case conditional on
+  transcript. `liquid-golden` is the one case conditional on
   the shell: the gate guards that check on `command -v why3` and reports it as
   an explained `[gap]` when the prover is absent, so the drifted copy has no
   `[FAIL]` to produce. The case then prints `[gap] liquid-golden: why3 not on
   PATH …` and the summary reads `13 case(s) held, 1 not covered in this shell`
-  — never a silent pass. `make test` depends on `drift-controls-all`, which is
-  that sweep in the caller's shell followed by `liquid-golden` alone under the
-  `default` devShell (the shell with why3), requiring it to report `holds`
-  rather than merely exit 0 — the runner exits 0 for a case it skipped. Where
-  the `default` shell will not build at all, the target prints the case's `[gap]`
-  with that reason instead of the sweep's, so the split is named in one command.
+  — never a silent pass, which is what lets `make test` run past
+  `drift-controls` under `nix develop .#ocaml` (where the `default` shell that
+  carries why3 does not build).
   `make drift-controls` runs it at `DRIFT_JOBS` (default `nproc`) plus the
   eight read-only scripts listed in `READ_ONLY_CONTROLS` — the four §W3/§W9.3
   cell controls, `w5-arch-gap-control`, `w3-approval-state-drift-control`, and
   the two L11 controls (`l11a-ordering`, `l11b-conversion`) — then
   `obj-drift-control` alone, because
-  that one edits the tree and rebuilds. `make test` depends on
-  `drift-controls-all`, which adds the other shell's `liquid-golden` run. The two
+  that one edits the tree and rebuilds. `make test` depends on it. The two
   parallel halves together measure 1h25m27s serial against 1h01m31s at two jobs
   (2026-11-18, before the two L11 controls joined the loop; the ~30% saving is
   the point, not the wall clock). It never
@@ -661,21 +653,7 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   also keep two lines it does not touch green — `W3: every §W3 emitter cell
   names a real command` and `Phase D: gap_certificate pins its trust split` —
   because the expected W5 `[FAIL]` alone would also appear if the gate had
-  broken elsewhere. That second half is checked in its failing direction
-  without patching anything: `--check-gate-log <file>` runs the same assertions
-  over an existing gate log and exits 1 naming the line that is absent (measured
-  2026-11-20: the unmodified log exits 0, a log with the §W3 line removed exits 1,
-  a missing file exits 2). `make test` does that every time without a second gate
-  run: the control exports the log it just measured (`OBJ_DRIFT_GATE_LOG`), and
-  `drift-controls` re-checks it as-is and again with the §W3 line grep-ed out,
-  which must be refused. That whole target was measured end to end under
-  `.#ocaml` (2026-11-20, `DRIFT_JOBS=3`): 13 cases held and liquid-golden an
-  explained `[gap]` in 26m10s, the eight read-only controls held, obj-drift held
-  with `obj=b138fd6e…`→`699f228e…` and its two green lines intact, both
-  `--check-gate-log` directions silent, `make_exit=0`, tree restored.
-  The alternative — patching `lib/CpsGen.ml` for the
-  minutes a gate run takes just to obtain such a log — is how commit `1f8ce68f`
-  captured `List.rev` in the tree. The
+  broken elsewhere. The
   `nix-pkg` CI job also runs `verify-invariants` inside `.#ocaml` after the
   OCaml suite, against the built `austral`/bridge and the sibling `unfer`
   checkout, so the checks that need artifacts are measured there instead of
@@ -696,7 +674,9 @@ nix-shell -p python3 --run "bash scripts/verify-invariants"
 nix-shell -p python3 --run "python3 scripts/check-links"
 ```
 
-Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines.
+Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines
+(none on 2026-11-20, when the four §W3 rows were approved, so `w3-pending:` is
+empty and only the `w3-approved:` line prints).
 The gate prints two measured-size lines: `w3-pending:` (what each unapproved
 artifact would hold out) and `w3-approved:` (what each approved one holds now, so
 a shrunk artifact is visible even though its statement diff is the enforcement).
@@ -759,4 +739,15 @@ is expected. Refresh with:
 
 ```bash
 nix run nixpkgs#git-cliff -- -o CHANGELOG.md
+```
+
+This checkout carries **no tags** (`git tag` is empty, upstream included), so
+the plain command above folds the six released sections (`[0.2.0]` … `[0.0.1]`)
+into `[Unreleased]` — git-cliff has no tag boundary to split on. Generate the
+unreleased section and keep the released ones as they stand instead:
+
+```bash
+nix run nixpkgs#git-cliff -- --unreleased -o /tmp/unreleased.md
+# then splice: /tmp/unreleased.md up to `## [0.2.0]`, and the released
+# sections verbatim from the committed CHANGELOG.md
 ```
