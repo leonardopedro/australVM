@@ -1886,6 +1886,12 @@ class Deriver:
         self.ax_count = 0
         self.ax_bytes = 0
         self.ax_max = 0
+        # `LTP_DEDUP_NODES=1` interns synthetic nodes by content: two equal
+        # records share one id instead of one each. It is a probe, not a default:
+        # the index that makes it work costs memory too, and sharing ids can
+        # change any derivation step that compares two ids for identity, so the
+        # artifacts are what decides whether it is neutral (§13.52).
+        self._dedup: dict[str, int] = {} if os.environ.get("LTP_DEDUP_NODES") else None
         # Largest proof string returned so far (bytes); see `_check`.
         self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}
@@ -2298,9 +2304,16 @@ class Deriver:
 
     # ── export manipulation ──────────────────────────────────────────────
     def mk(self, d: dict) -> int:
+        if self._dedup is not None:
+            key = repr(d)
+            i = self._dedup.get(key)
+            if i is not None:
+                return i
         i = self.next_id
         self.next_id += 1
         self.ex.exprs[i] = d
+        if self._dedup is not None:
+            self._dedup[key] = i
         return i
 
     def ind_decl(self, nm: str) -> dict | None:

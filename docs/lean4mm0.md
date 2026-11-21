@@ -4547,17 +4547,87 @@ measured, and neither is an assumption:
    different node — so no environment variable can bound it. At 400 MiB the failing
    write is literally `extra[eid] = d` (`lean2mm0:351`), i.e. below 416 MiB this table
    is what the run dies on.
-2. *Content deduplication is the only candidate, and it is small.* `LTP_CENSUS_DUPS`
-   now reports distinct-by-content against minted entries. On the smoke row
-   (`abs_re_inner_pairVec_le`, 76.7 MB table): 170 592 minted, 119 643 distinct — 30 %
-   of the table is the same node re-minted, one content 5 293 times. Scaling that share
-   to the ns row's 93.7 MB gives ~28 MB, and that is an arithmetic estimate, not a
-   measurement. Deduplication changes which ids exist, so unlike `LTP_ENC_MAX` it cannot
-   be assumed artifact-neutral — the naming table and the obligation records reference
-   those ids — and proving it costs a full 2 900 s run for at most a third of what the
-   encoding memo already returned. Not pursued; recorded so it is not re-derived.
+2. *Content deduplication is the only candidate, and the census understates it by ~2.4×.*
+   `LTP_CENSUS_DUPS` now reports distinct-by-content against minted entries. On the smoke
+   row (`abs_re_inner_pairVec_le`, 76.7 MB table): 170 592 minted, 119 643 distinct —
+   30 % of the table is the same node re-minted, one content 5 293 times. Scaling that
+   share to the ns row's 93.7 MB gives ~28 MB, and that is an arithmetic estimate, not a
+   measurement. It is also wrong in the safe direction: the census keys on
+   `hash(repr(rec))`, and a record's `repr` carries the **ids** of its children, so two
+   equal subtrees reached through different ids count as distinct. Real interning on that
+   same row merges the 170 592 mintings into **12 761** nodes, not 119 643 (§13.52), and
+   on the ns row it takes the table 93.7 → 26.4 MB. The estimate is kept here as the
+   record of what a census can and cannot see; the measurement is §13.52.
 
 **What is next.** The floor at (416, 432] MiB is now set by three live, id-addressed
 tables that the emitter never evicts (export 71.6 + synthetic 93.7 + encoding memo 2.3,
 plus the context memo at 18.5). Moving it further needs a change to how nodes are
-represented or retained, not another environment variable.
+represented or retained, not another environment variable — and §13.52 does move it, to
+at most 416 MiB, by interning the synthetic table.
+
+### 13.52 Interning the synthetic table: measured, neutral for the proof, not for the sidecar
+
+§13.51 called the synthetic-node table the part of the floor no environment variable
+could reach, and estimated content deduplication at ~28 MB. That estimate came from
+`LTP_CENSUS_DUPS`, whose key is `hash(repr(rec))` — and a node's `repr` carries the ids
+of its children, so the census counts equal subtrees reached through different ids as
+different nodes. Interning is transitive by construction: once the children have one id,
+the parents compare equal, and duplication collapses level by level. So the census was
+not a measurement of what deduplication can recover, and the probe below is.
+
+**The knob.** `LTP_DEDUP_NODES=1` makes `Deriver.mk` intern synthetic nodes by content:
+`repr(d)` is the key, an existing id is returned on a hit, otherwise the id is minted as
+before. Default off, so every default-mode artifact and the golden file stay what they
+were. The interning index is live memory and is inside every peak below; it is small here
+(tens of thousands of keys against a 90 MB table), unlike an index over *all* expressions.
+
+**The ns row.** Same command and env trio as §13.51, `LTP_ENC_MAX=2 MB`, with
+`LTP_DEDUP_NODES=1` added:
+
+| run | cap | exit | peak VmSize | peak RSS | synthetic nodes | context memo | subst memo | wall clock |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| §13.51, no dedup | 432 MiB | 0 | 431 MiB | 404 MB | 93.7 MB | 18.5 MB | 10.5 MB | 2 879 s |
+| dedup | 432 MiB | 0 | 361 MiB | 333 MB | 26.4 MB | 8.5 MB | 5.2 MB | 2 617 s* |
+| dedup | 416 MiB | 0 | 362 MiB | 331 MB | 26.4 MB | 8.5 MB | 5.2 MB | 2 617 s* |
+
+\*The two dedup runs ran concurrently, two cores, so their clocks are comparable to
+each other (2 615.1 s and 2 615.9 s of emitter time) and not to the single 2 879 s run;
+the probe measures memory, and does not claim a speedup. What it does measure is that
+416 MiB — the cap §13.51 recorded as a `subst0` memo failure — now completes, with 362 MiB
+of reservation at the peak instead of 431. So the bracket (416, 432] from §13.51 becomes
+*at most 416* on the passing side; the failing side below it is untested, and a 384 MiB
+probe is the next step rather than an assumption.
+
+Two tables move besides the one the knob names: context memo 18.5 → 8.5 MB and
+substitution memo 10.5 → 5.2 MB. Neither is interned — their entries are keyed by ids and
+values, and fewer distinct ids means fewer distinct keys to hold. Export parse 71.6,
+encoding memo 2.3, obligation list 0.3 and the largest proof are unchanged.
+
+**Byte identity, for the proof.** `cmp` reports `.mm0` (102 543 367 789 B), `.mm1`
+(102 547 674 107 B) and the naming table identical to `cap-432-enc2` — the no-dedup
+reference of §13.51 — and the 416 MiB run identical to the 432 MiB run in all six files.
+So for the proof artifacts, interning is neutral at the 432 MiB cap.
+
+**Not neutral for the obligation sidecar.** Its three files differ: `part-000.jsonl`
+9 154 545 → 5 645 247 B, `index.jsonl` 36 292 → 36 076 B, `manifest.json`'s byte counts
+with it. The difference is spelling, not content, and that was checked rather than
+asserted: both runs carry the same 580 substitution obligations, in the same order, with
+the same ids and kinds; expanding each record's node table and comparing the three terms
+`(b, x, r)` after expansion gives 580 of 580 identical triples, and 580 distinct triples
+on either side (no obligation was merged away). What shrinks is the node table the
+records are spelled against — 469 589 entries → 278 281 — and which index names an equal
+node: with interning, the redex `r` of a substitution obligation *is* the node the
+conclusion already used, where before it was a fresh copy of it.
+
+That matters because `scripts/lean-typing-proof.golden.tsv` records
+`shared/…_obligations.jsonl`: defaulting interning on would re-baseline the byte-identity
+gate for a spelling change, so the knob stays an env-gated probe like `LTP_ENC_MAX`, and
+the sidecar is the one place the two differ.
+
+**The smoke row, and why its ratio does not transfer.** `abs_re_inner_pairVec_le` at its
+768 MiB cap, with and without the knob (same env trio, `LTP_CENSUS` on): synthetic nodes
+76.8 → 6.2 MB, peak RSS 573 → 493 MB, wall 32.2 → 31.1 s, 170 592 mintings → 12 761
+nodes (92.5 % of the table was re-minting). The ns row recovers 72 %. Node-level
+duplication is a property of the derivation being replayed, not of the emitter, so the
+smoke ratio is not a scale factor — which is the same lesson the ~28 MB estimate carried,
+one level down.
