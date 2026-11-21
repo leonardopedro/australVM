@@ -1,0 +1,71 @@
+-- mm0-comparator v1 — approved statements for liquid_split
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: liquid_split
+-- closure-sha256: 4db6a19f97b333b4abedeb3b1d1ebeb3d0627e1e5076be82281ca7b5a7a879f8
+-- theory-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+-- statements-sha256: 00aff128a87dd3e2d95b96e262713d4c081aba9489ec222b3153a63a58f96e5b
+
+provable sort Prop;
+delimiter $ ( ) $;
+sort l0;
+sort l1;
+sort l2;
+sort l3;
+term l4: l0;
+term l5 (x y: l0): l0;
+term l6 (b: l1): l0;
+term l7 (b: l1) (k: l0): l1;
+term l8 (b: l1) (k: l0): l1;
+term l9 (b: l1) (k: l0): Prop;
+term l10 (b c: l1): Prop;
+term l11 (b: l1) (i: l0): Prop;
+term l12 (s: l2) (b: l1) (i: l0) (v: l3): l2;
+term l13 (s: l2) (b: l1) (i: l0): l3;
+term l14 (x y: l0): Prop;
+term l15 (x y: l3): Prop;
+term l16 (x y: l0): Prop;
+def l17 (b: l1) (k: l0): l1 = $ l7 b k $;
+def l18 (b: l1) (k: l0): l1 = $ l8 b k $;
+axiom l19 (x y z: l3) (h1: $ l15 x y $) (h2: $ l15 y z $): $ l15 x z $;
+axiom l20 (x: l0): $ l16 l4 x $;
+axiom l21 (x y: l0): $ l16 x (l5 x y) $;
+axiom l22 (x y z: l0) (h: $ l14 (l5 x y) z $): $ l16 x z $;
+axiom l23 (b: l1) (k: l0) (h: $ l9 b k $):
+  $ l14 (l5 (l6 (l7 b k)) (l6 (l8 b k))) (l6 b) $;
+axiom l24 (b: l1) (k: l0) (h: $ l9 b k $):
+  $ l10 (l7 b k) (l8 b k) $;
+axiom l25 (b: l1) (k: l0) (i: l0) (h: $ l9 b k $)
+  (j: $ l11 (l7 b k) i $): $ l11 b i $;
+axiom l26 (b c: l1) (h: $ l10 b c $): $ l10 c b $;
+axiom l27 (s: l2) (b: l1) (i: l0) (v: l3):
+  $ l15 (l13 (l12 s b i v) b i) v $;
+axiom l28 (s: l2) (b c: l1) (i j: l0) (v: l3)
+  (h: $ l10 b c $):
+  $ l15 (l13 (l12 s b i v) c j) (l13 s c j) $;
+theorem l29 (b: l1) (k: l0) (h: $ l9 b k $):
+  $ l14 (l5 (l6 (l17 b k)) (l6 (l18 b k))) (l6 b) $;
+theorem l30 (b: l1) (k: l0) (h: $ l9 b k $):
+  $ l10 (l17 b k) (l18 b k) $;
+theorem l31 (b: l1) (k: l0) (i: l0)
+  (h: $ l9 b k $) (j: $ l11 (l17 b k) i $): $ l11 b i $;
+theorem l32 (s: l2) (b: l1) (k: l0) (i j: l0) (v: l3)
+  (h: $ l9 b k $):
+  $ l15 (l13 (l12 s (l17 b k) i v) (l18 b k) j) (l13 s (l18 b k) j) $;
+theorem l33 (s: l2) (b: l1) (k: l0) (i j: l0) (v: l3)
+  (h: $ l9 b k $):
+  $ l15 (l13 (l12 s (l18 b k) i v) (l17 b k) j) (l13 s (l17 b k) j) $;
+theorem l34 (s: l2) (b: l1) (k: l0) (i: l0) (v: l3):
+  $ l15 (l13 (l12 s (l17 b k) i v) (l17 b k) i) v $;
+theorem l35 (s: l2) (b: l1) (k: l0) (i j: l0)
+  (va vb: l3) (h: $ l9 b k $):
+  $ l15 (l13 (l12 (l12 s (l18 b k) j vb) (l17 b k) i va) (l18 b k) j) vb $;
+theorem l36 (b: l1) (k: l0):
+  $ l16 l4 (l6 (l17 b k)) $;
+theorem l37 (b: l1) (k: l0):
+  $ l16 (l6 (l17 b k)) (l5 (l6 (l17 b k)) (l6 (l18 b k))) $;
+theorem l38 (b: l1) (k: l0) (h: $ l9 b k $):
+  $ l16 (l6 (l17 b k)) (l6 b) $;
