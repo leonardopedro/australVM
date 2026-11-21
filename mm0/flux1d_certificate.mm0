@@ -23,7 +23,7 @@
 -- theory coverage: used=tint,pvar,padd,pmul,pneg,peq,ev,req unused=rcomp,radd,rmul,rneg,rlit
 -- assumed: 1 (uniform_state: l = r (a uniform interface))
 -- witness: uniform_state: l=1 r=1 meets all 1 hypothesis/hypotheses
--- code: cps=c10ca9a935ae13ae13fa757621f7cf02edc0357d1c70b2e36fe5b71610f84d11 obj=fac893dab243cd2df4b10812e305c6a9c3ca2aef076541131b086fa6c778e1df target=host
+-- code: cps=fa4e9b29c0b8e056e29034078aa49477d27055f855a7a38cd5719595c7c8ebef obj=f0f80ace1802114250d761d85943138fa5ba51e7ef60d105c41d822af2f48e4c target=host
 -- code-status: recorded (cps = sha256 of the --emit-cps bytes; obj = sha256 of the AVCE capture of those bytes, arch=aarch64)
 -- float-gap: idealization=integer exact probe=mm0/flux1d_probe.c tolerance=1e-8 status=tested-not-proved
 
