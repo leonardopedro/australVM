@@ -439,12 +439,16 @@ The certificate on this host records `arch=x86_64` with `cps=c10ca9a9…` and
 check normalises those two lines and reports the incomparable digest as a gap
 rather than a failure — see AGENTS.md's W5 note.
 
-One gap is shared by all three shells and is a coverage loss, not a shell fact:
+One gap was shared by all three shells and was a coverage loss, not a shell fact:
 `[gap]  W3: the §W3 row check's approved-row control not run (no  row carries a
 count)`. With every §W3 row approved, the two controls `an approved §W3 row
 passes when the approved copy holds what it says` and `a §W3 row that disagrees
-with mm0/approved/ is refused` have no row left to pick, so they stopped running;
-the gate reports that as a gap, never as a pass.
+with mm0/approved/ is refused` had no row left to pick, so they stopped running;
+the gate reported that as a gap, never as a pass. `5d7a0dea` closes it: the
+control now takes a pending row when the table has one and otherwise the first
+approved row, whose stale-state half already models the owner's mistake, so both
+probes run again and today's three sums are two passes and one gap better than
+the transcripts above.
 
 Of the
 figures quoted, only `clif2mm0` moved for a reason worth naming: the quoted 854

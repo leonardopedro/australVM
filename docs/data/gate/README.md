@@ -35,7 +35,10 @@ running and the gate says so instead of counting them as passes. The three
 summaries close against each other: `161 + 15 = 176` once `why3` is on PATH,
 and `162 = 161 + 1` once the RV64 model is re-converted, with the four §W3
 approvals having turned their own four `[gap]` lines into four
-`[pass] W3: <artifact> matches its approved statements` lines.
+`[pass] W3: <artifact> matches its approved statements` lines. That shared gap
+was closed by `5d7a0dea`, after these three runs: the control now falls back to
+an approved row, so a run on that commit prints the two probes as passes again —
+two more passes and one fewer gap than each summary above, per shell.
 
 The `2026-11-20-lean-shell-postcleanup.log` row re-runs the gate on the tree the
 2026-11-20 pair describes, after the volume went from 98% full to 58% by
