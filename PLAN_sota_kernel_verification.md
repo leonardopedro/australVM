@@ -1042,11 +1042,13 @@ the artifact, so `mm0-c` checks them too.
   read-only. Those two rows predate the recorder and were entered from the runs'
   own gate logs; every row after them is written by the run itself. Reproduce
   with `W3_DRIFT_RECORD=docs/data/w3/drift-timings.tsv bash
-  scripts/w3-drift-controls -j 2 all`, under `nix develop`. With
-  `mm0-toolchain-gap` added, 15 requested cases took **18m49s** at `-j 12` on a
-  twelve-core host on 2026-11-20: 14 held and `liquid-golden` reported `[gap]`
-  for the absent why3. A skipped case is counted apart from `held` in that row,
-  so a `[gap]` cannot be recorded as a hold. The five read-only
+  scripts/w3-drift-controls -j 12 all`, under `nix develop`. With
+  `mm0-toolchain-gap` added, the row written that way on 2026-11-21 over a
+  twelve-core host is
+  `2026-11-21\t4c7fce42\t12\t15\t452\t30\t14/15\theld` — 15 requested cases in
+  452s, 14 held and `liquid-golden` reported `[gap]` for the absent why3 (an
+  earlier unrecorded pass took 18m49s for the same 15). A skipped case is counted
+  apart from `held` in that row, so a `[gap]` cannot be recorded as a hold. The five read-only
   `*-drift-control` scripts are separate scripts and write no row of their own;
   measured the same way, they take 22m44s serial against 17m22s
   at `-P 2`, all five holding — so the two parallel halves together go from

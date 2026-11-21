@@ -542,8 +542,10 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   repository only read), and measured 2026-11-18 the then-14 cases take 62m43s
   at `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
   cores suggest, because a gate run does not itself parallelise. (`mm0-toolchain-gap`
-  joined as the 15th; 15 requested in 18m49s at `-j 12` on 2026-11-20, 14 held
-  and `liquid-golden` reported `[gap]` for the absent why3.) A case this shell
+  joined as the 15th; the row the tree holds for it is
+  `2026-11-21\t4c7fce42\t12\t15\t452\t30\t14/15\theld` — 15 requested in 452s at
+  `-j 12`, 14 held and `liquid-golden` a `[gap]` for the absent why3. An earlier
+  unrecorded pass took 18m49s for the same 15.) A case this shell
   cannot exercise is counted apart from `held` in the recorded row, so the row
   cannot claim a hold for a case that did not run. The last
   `copy` row, `W3: $_stem matches its approved statements`, is
