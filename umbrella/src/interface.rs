@@ -869,6 +869,12 @@ pub struct HandleAdapter {
     /// The provider symbol that frees the value. Called by the wrapper's
     /// registry, exactly once per destroyed value.
     pub destructor: String,
+    /// The provider's accessor for the value itself: `unsafe extern "C" fn
+    /// (*mut c_void) -> i64`. Optional, because a provider need not expose its
+    /// value as a word; without it no `__use` wrapper is rendered, so a
+    /// descriptor that omits it describes a handle that can be created and
+    /// destroyed but not read.
+    pub use_symbol: Option<String>,
     /// The object type name the registry compares handles against.
     pub type_name: String,
     /// How many 64-bit words the constructor takes.
@@ -882,6 +888,12 @@ pub struct HandleAdapter {
 impl HandleAdapter {
     pub fn dispose_symbol(&self) -> String {
         format!("{}__dispose", self.target)
+    }
+
+    /// The symbol of the reading wrapper, `<target>__use`, rendered only for a
+    /// descriptor that names a provider accessor.
+    pub fn use_symbol(&self) -> String {
+        format!("{}__use", self.target)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -944,6 +956,26 @@ impl HandleAdapter {
                 self.symbol, self.constructor
             ));
         }
+        if let Some(accessor) = &self.use_symbol {
+            if accessor.is_empty()
+                || !accessor
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                return Err(format!(
+                    "`{accessor}` is not a plain identifier: a `use` line names the \
+                     provider symbol the `__use` wrapper calls"
+                ));
+            }
+            if *accessor == self.constructor || *accessor == self.destructor {
+                return Err(format!(
+                    "`{accessor}` is both an accessor and the constructor or \
+                     destructor of `{}`; reading a value and creating or freeing it \
+                     cannot share one provider symbol",
+                    self.symbol
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -951,9 +983,13 @@ impl HandleAdapter {
     /// use. The registry tag is not part of the text: it is the generator's
     /// numbering, assigned when the wrappers are rendered into one crate.
     pub fn descriptor_text(&self) -> String {
+        let use_line = match &self.use_symbol {
+            Some(accessor) => format!("use {accessor}\n"),
+            None => String::new(),
+        };
         format!(
             "schema {}\nabi handle {}\nsymbol {}\ntarget {}\ntype {}\nconstructor {}\n\
-             destructor {}\nparams {}\n",
+             destructor {}\n{}params {}\n",
             self.schema,
             self.abi_version,
             self.symbol,
@@ -961,6 +997,7 @@ impl HandleAdapter {
             self.type_name,
             self.constructor,
             self.destructor,
+            use_line,
             self.params
         )
     }
@@ -1016,6 +1053,7 @@ impl HandleAdapter {
         let mut type_name = None;
         let mut constructor = None;
         let mut destructor = None;
+        let mut use_symbol = None;
         let mut params = None;
         for line in text.lines() {
             let line = line.trim();
@@ -1049,6 +1087,7 @@ impl HandleAdapter {
                 "type" => type_name = Some(value.to_string()),
                 "constructor" => constructor = Some(value.to_string()),
                 "destructor" => destructor = Some(value.to_string()),
+                "use" => use_symbol = Some(value.to_string()),
                 "params" => {
                     params = Some(
                         value
@@ -1069,6 +1108,7 @@ impl HandleAdapter {
             type_name: type_name.ok_or("descriptor has no `type` line")?,
             constructor: constructor.ok_or("descriptor has no `constructor` line")?,
             destructor: destructor.ok_or("descriptor has no `destructor` line")?,
+            use_symbol,
             params: params.ok_or("descriptor has no `params` line")?,
             // Filled in by `parse_descriptors`, which numbers the registries.
             owner: 1,
@@ -1087,18 +1127,43 @@ fn is_handle_block(block: &str) -> bool {
     })
 }
 
-/// Render the two Rust wrappers an `abi handle` descriptor calls for: the
-/// constructor (`<target>__new`) and the destructor (`<target>__dispose`).
+/// Render the Rust wrappers an `abi handle` descriptor calls for: the
+/// constructor (`<target>__new`), the destructor (`<target>__dispose`), and —
+/// when the descriptor names a provider accessor — the reader
+/// (`<target>__use`).
 ///
-/// Both go through one registry, so the words one wrapper mints are the words
-/// the other resolves. The value itself never leaves the provider: the
+/// All of them go through one registry, so the words one wrapper mints are the
+/// words the others resolve. The value itself never leaves the provider: the
 /// constructor's pointer is wrapped in a `ProviderValue` whose `Drop` calls the
 /// provider's destructor, so a refused insert frees the value and a destroyed
 /// value is freed once. The status word is `0` for done and `1` for refused —
 /// an unencodable handle, a null out pointer, a null constructor result, a
 /// foreign owner, a previous provider generation or a stale slot.
+///
+/// This is generation 1's table. A reload of the provider renders the same
+/// descriptor again at the next generation (see `render_handle_wrapper_at`), and
+/// the two registries refuse each other's handles.
 pub fn render_handle_wrapper(adapter: &HandleAdapter) -> Result<String, String> {
+    render_handle_wrapper_at(adapter, 1)
+}
+
+/// Render the wrappers for one provider build. The generation is the build's,
+/// not the descriptor's: every wrapper this process renders after the first
+/// gets the next number, so a handle minted by an earlier build carries an
+/// earlier generation and the new table refuses it as `StaleProvider` instead
+/// of resolving a slot that now means something else.
+pub fn render_handle_wrapper_at(
+    adapter: &HandleAdapter,
+    generation: u32,
+) -> Result<String, String> {
     adapter.validate()?;
+    if generation == 0 {
+        return Err(format!(
+            "provider generation 0 is reserved: `{}` must be rendered at 1 or later, \
+             so a handle always names the build that minted it",
+            adapter.symbol
+        ));
+    }
     let mut out = String::new();
     out.push_str(&format!(
         "// @generated by umbrella from `{}` — do not edit.\n",
@@ -1113,16 +1178,24 @@ pub fn render_handle_wrapper(adapter: &HandleAdapter) -> Result<String, String> 
     );
     let words: Vec<String> = (0..adapter.params).map(|i| format!("w{i}: i64")).collect();
     out.push_str(&format!(
-        "extern \"C\" {{\n    fn {}({}) -> *mut core::ffi::c_void;\n    fn {}(ptr: *mut core::ffi::c_void);\n}}\n\n",
+        "extern \"C\" {{\n    fn {}({}) -> *mut core::ffi::c_void;\n    fn {}(ptr: *mut core::ffi::c_void);\n{}}}\n\n",
         adapter.constructor,
         words.join(", "),
-        adapter.destructor
+        adapter.destructor,
+        match &adapter.use_symbol {
+            Some(accessor) => format!(
+                "    // The provider's reader: one word out of the value it owns.\n    \
+                 fn {accessor}(ptr: *mut core::ffi::c_void) -> i64;\n"
+            ),
+            None => String::new(),
+        }
     ));
     out.push_str(&format!(
         "// The provider generation this table belongs to. A provider reload builds\n\
-         // a new wrapper crate and so a new registry, which mints generation 2;\n\
-         // a handle from the previous build carries generation 1 and is refused.\n\
-         const PROVIDER_GENERATION: u32 = 1;\n\n\
+         // a new wrapper crate and so a new registry, which mints the next\n\
+         // generation; a handle from the previous build carries the older one and\n\
+         // is refused.\n\
+         const PROVIDER_GENERATION: u32 = {generation};\n\n\
          static REGISTRY: std::sync::Mutex<HandleRegistry<ProviderValue>> =\n    std::sync::Mutex::new(HandleRegistry::new(\n        Owner::issued({}),\n        TypeTag::named(\"{}\"),\n        PROVIDER_GENERATION,\n    ));\n\n",
         adapter.owner, adapter.type_name
     ));
@@ -1144,6 +1217,22 @@ pub fn render_handle_wrapper(adapter: &HandleAdapter) -> Result<String, String> 
          \x20   match table.insert(ProviderValue::new(raw, {})) {{\n        Ok(handle) => {{\n            let (lo, hi) = handle.to_words();\n            unsafe {{\n                *out = lo as i64;\n                *out.add(1) = hi as i64;\n            }}\n            0\n        }}\n        // The refused value is dropped here, so its destructor runs once and\n        // the provider is not leaked by a table that refused it.\n        Err(_) => 1,\n    }}\n}}\n\n",
         adapter.symbol, adapter.constructor, adapter.destructor
     ));
+    if let Some(accessor) = &adapter.use_symbol {
+        out.push_str(&format!(
+            "#[no_mangle]\npub extern \"C\" fn {}(lo: i64, hi: i64, out: *mut i64) -> i64 {{\n\
+             \x20   if out.is_null() {{\n        return 1;\n    }}\n\
+             \x20   let table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
+             \x20   let handle = match table.handle_from_words(lo as u64, hi as u64) {{\n        Ok(handle) => handle,\n        Err(_) => return 1,\n    }};\n\
+             \x20   let ptr = match table.get(handle) {{\n        Ok(value) => value.as_ptr(),\n        Err(_) => return 1,\n    }};\n\
+             \x20   // The accessor is the provider's, called with the provider's own\n\
+             \x20   // pointer while the table is locked, so the value cannot be\n\
+             \x20   // destroyed underneath the read.\n\
+             \x20   let value = unsafe {{ {}(ptr) }};\n\
+             \x20   unsafe {{\n        *out = value;\n    }}\n\
+             \x20   0\n}}\n\n",
+            adapter.use_symbol(), accessor
+        ));
+    }
     out.push_str(&format!(
         "#[no_mangle]\npub extern \"C\" fn {}(lo: i64, hi: i64) -> i64 {{\n\
          \x20   let mut table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
@@ -1172,10 +1261,17 @@ impl<'a> GeneratedAdapter<'a> {
     }
 
     pub fn render(&self) -> Result<String, String> {
+        self.render_at(1)
+    }
+
+    /// Render for one provider build. The generation only reaches the handle
+    /// adapters: scalar and buffer wrappers carry no handle table, so a reload
+    /// changes nothing they resolve.
+    pub fn render_at(&self, generation: u32) -> Result<String, String> {
         match self {
             GeneratedAdapter::Scalar(a) => render_wrapper(a),
             GeneratedAdapter::Buffer(a) => render_buffer_wrapper(a),
-            GeneratedAdapter::Handle(a) => render_handle_wrapper(a),
+            GeneratedAdapter::Handle(a) => render_handle_wrapper_at(a, generation),
         }
     }
 }
@@ -1584,6 +1680,103 @@ mod tests {
             1,
             "one registry serves both wrappers: {wrapper}"
         );
+    }
+
+    fn handle_text_with_use(target: &str) -> String {
+        handle_text(target).replace(
+            "destructor rs_widget_dtor\n",
+            "destructor rs_widget_dtor\nuse rs_widget_read\n",
+        )
+    }
+
+    #[test]
+    fn a_use_line_adds_a_reading_wrapper_and_round_trips() {
+        let text = handle_text_with_use("rs_widget");
+        let adapter = parse_handle(&text).expect("parse").remove(0);
+        assert_eq!(adapter.use_symbol.as_deref(), Some("rs_widget_read"));
+        assert_eq!(adapter.use_symbol(), "rs_widget__use");
+        assert_eq!(
+            adapter.descriptor_text(),
+            text,
+            "the optional line round-trips in place"
+        );
+
+        let wrapper = render_handle_wrapper(&adapter).expect("wrapper");
+        assert!(
+            wrapper.contains("fn rs_widget_read(ptr: *mut core::ffi::c_void) -> i64;"),
+            "{wrapper}"
+        );
+        assert!(
+            wrapper.contains(
+                "pub extern \"C\" fn rs_widget__use(lo: i64, hi: i64, out: *mut i64) -> i64"
+            ),
+            "{wrapper}"
+        );
+        assert!(
+            wrapper.contains("let value = unsafe { rs_widget_read(ptr) };"),
+            "{wrapper}"
+        );
+        assert_eq!(
+            wrapper.matches("static REGISTRY").count(),
+            1,
+            "the reader resolves the constructor's table: {wrapper}"
+        );
+
+        // A descriptor without the line renders no reader at all.
+        let plain = parse_handle(&handle_text("rs_widget"))
+            .expect("parse")
+            .remove(0);
+        assert!(
+            !render_handle_wrapper(&plain)
+                .expect("wrapper")
+                .contains("__use"),
+            "a provider that names no reader gets no reader wrapper"
+        );
+    }
+
+    #[test]
+    fn a_use_line_must_name_a_distinct_plain_identifier() {
+        let err = parse_handle(&handle_text_with_use("rs_widget"))
+            .expect("parse")
+            .remove(0)
+            .validate();
+        assert!(err.is_ok(), "the sample is valid");
+
+        let mut adapter = parse_handle(&handle_text_with_use("rs_widget"))
+            .expect("parse")
+            .remove(0);
+        adapter.use_symbol = Some("rs_widget_dtor".to_string());
+        let err = adapter.validate().unwrap_err();
+        assert!(
+            err.contains("both an accessor and the constructor"),
+            "{err}"
+        );
+
+        let mut adapter = parse_handle(&handle_text_with_use("rs_widget"))
+            .expect("parse")
+            .remove(0);
+        adapter.use_symbol = Some("rs read".to_string());
+        let err = adapter.validate().unwrap_err();
+        assert!(err.contains("not a plain identifier"), "{err}");
+    }
+
+    #[test]
+    fn a_reload_renders_the_next_generation_and_generation_zero_is_refused() {
+        let adapter = parse_handle(&handle_text_with_use("rs_widget"))
+            .expect("parse")
+            .remove(0);
+        let first = render_handle_wrapper(&adapter).expect("wrapper");
+        assert!(
+            first.contains("const PROVIDER_GENERATION: u32 = 1;"),
+            "{first}"
+        );
+        let second = render_handle_wrapper_at(&adapter, 2).expect("wrapper");
+        assert!(
+            second.contains("const PROVIDER_GENERATION: u32 = 2;"),
+            "{second}"
+        );
+        let err = render_handle_wrapper_at(&adapter, 0).unwrap_err();
+        assert!(err.contains("generation 0 is reserved"), "{err}");
     }
 
     #[test]

@@ -1,5 +1,10 @@
 pragma Unsafe_Module;
 
+import Austral.Memory (
+    Address,
+    refMutToPointer
+);
+
 module body WidgetHandle is
     -- The two words a generated `__new` wrapper wrote. Linear, so the only way
     -- to end a value is `dispose`, and it can only end once.
@@ -12,10 +17,35 @@ module body WidgetHandle is
         return Widget(lo => lo, hi => hi);
     end;
 
-    -- Both parameters are 64-bit scalars, so this call is word-native: no
-    -- buffer or scalar descriptor is needed, and the words cross as they are.
-    pragma Foreign_Import(External_Name => "avm_widget__dispose");
+    -- The import names the handle's *target*, not a wrapper: the compiler
+    -- derives `avm_widget__dispose` from it (that is the symbol this call
+    -- lowers to) and emits the `abi handle 1` descriptor the umbrella
+    -- generator turns into both wrappers, `avm_widget__new` and
+    -- `avm_widget__dispose`. Both parameters are 64-bit scalars, so the call
+    -- itself is word-native: the words cross as they are.
+    pragma Foreign_Import(External_Name => "avm_widget");
+    pragma Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor", Destructor => "avm_widget_dtor", Params => "2", Use => "avm_widget_read");
     function widgetDispose(lo: Int64, hi: Int64): Int64 is end;
+
+    -- The reading import names the generated `<target>__use` wrapper, which
+    -- resolves the words in the same registry and calls the provider's reader
+    -- (`avm_widget_read`, the pragma's `Use`) to hand one word back. The out
+    -- slot is a local; a refusal leaves it untouched.
+    pragma Foreign_Import(External_Name => "avm_widget__use");
+    function widgetUse(lo: Int64, hi: Int64, out: Address[Int64]): Int64 is end;
+
+    generic [R: Region]
+    function read(widget: &[Widget, R]): Int64 is
+        var word: Int64 := -1;
+        let slot: Address[Int64] :=
+            @embed(Address[Int64], "$1", refMutToPointer(&!word));
+        let status: Int64 := widgetUse(widget->lo, widget->hi, slot);
+        if status = 0 then
+            return word;
+        else
+            return -1;
+        end if;
+    end;
 
     function dispose(widget: Widget): Int64 is
         -- Destructuring is what discharges the linear obligation; the two
@@ -27,9 +57,18 @@ module body WidgetHandle is
 
     function main(): ExitCode is
         let widget: Widget := adopt(1, 2);
+        -- The reading seam, called: `read` hands the words to `__use`, which
+        -- resolves them in the registry and returns the provider's word. The
+        -- words above name no live slot, so this is refused; the status is
+        -- what says so, and `-1` is the module's own "nothing read".
+        let value: Int64 := read(&widget);
         let outcome: Int64 := dispose(widget);
-        if outcome = 0 then
-            return ExitSuccess();
+        if value = -1 then
+            if outcome = 0 then
+                return ExitSuccess();
+            else
+                return ExitFailure();
+            end if;
         else
             return ExitFailure();
         end if;

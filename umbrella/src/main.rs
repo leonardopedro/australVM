@@ -359,6 +359,10 @@ fn bridge_rlib() -> Result<PathBuf, String> {
     })
 }
 
+/// The provider generation the next `build_adapters` renders at. Init 1, so
+/// the first build is generation 1 and a reload is 2.
+static PROVIDER_GENERATION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
 /// 3.5. Generate the wrappers the front-end asked for and load them where the
 ///      JIT can resolve them. Each adapter becomes one module (the generator
 ///      writes a file per adapter and each starts with the same `use`), all in
@@ -367,10 +371,16 @@ fn bridge_rlib() -> Result<PathBuf, String> {
 fn build_adapters(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join(format!("umbrella-adapters-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    // Every build gets the next provider generation, so the handle tables of
+    // two builds in one process refuse each other's handles: a value minted by
+    // the previous build died with that build's provider, and its slot number
+    // in the new table means a different value. `fetch_add` wraps, so a table
+    // that would be generation 0 (the reserved number) refuses instead.
+    let generation = PROVIDER_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut source = String::new();
     for (index, adapter) in adapters.iter().enumerate() {
         let wrapper = adapter
-            .render()
+            .render_at(generation)
             .map_err(|e| format!("render {}: {e}", adapter.symbol()))?;
         source.push_str(&format!("mod w{index} {{\n{wrapper}\n}}\n"));
     }

@@ -936,6 +936,25 @@ destructor rs_widget_dtor
 params 1
 ```
 
+The compiler writes that block itself: a `Foreign_Import` carrying a
+`Handle_Ownership` pragma names only the handle's *target*, and the CPS
+lowering derives `<target>__dispose` for the call and emits one `abi handle 1`
+block beside the scalar/buffer ones, in the same canonical document
+(`--emit-adapters`). The pragma is
+`Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor",
+Destructor => "avm_widget_dtor", Params => "2", Use => "avm_widget_read")`;
+the field is spelled `Object` because `Type` is a keyword, and `Use` is optional
+— it names the provider's reader and is what makes a `use` line, and so a
+`__use` wrapper, exist. It is validated against the import's signature on the
+typed AST: it needs a `Foreign_Import`, a plain-identifier target that is not
+already a wrapper name, a non-empty and distinct constructor/destructor pair,
+non-negative arity, and exactly the dispose ABI (two `Int64` words in, one
+`Int64` status word out). The annotation rides through monomorphization as the
+descriptor's facts, since the lowering — not the typing pass — writes adapters.
+A `Foreign_Import(External_Name => "avm_widget__use")` is what calls the
+reading wrapper; the lowering leaves that name alone, because the wrapper is a
+generated symbol, not a handle import.
+
 `HandleAdapter::parse_descriptors` numbers the registries from 1 and the number
 is the owner tag the words carry; the tag is not part of the text, because it is
 the generator's numbering inside one crate, not a fact about the type. The
@@ -953,6 +972,18 @@ over one registry:
 * `__dispose(lo, hi)` — the two words back through `destroy_words`: a null pair,
   another registry's owner, a previous provider generation and a stale slot are
   all `1`, and only a live pair reaches the destructor.
+* `__use(lo, hi, out)` — rendered only when the descriptor has a `use` line.
+  The same live pair is resolved in the same registry, the provider's reader
+  (`avm_widget_read`) turns its pointer into one `i64`, and `out` receives it.
+  A refusal (null `out`, stale words, another owner) returns `1` and leaves
+  `out` untouched, so a caller cannot read an old word as a fresh value, and
+  reading does not consume: the words stay live for `__dispose`.
+* The registry's `PROVIDER_GENERATION` is the render's, not the descriptor's:
+  `render_handle_wrapper_at` writes the build's generation, `main.rs` takes the
+  next number for every build in the process, and generation 0 (the reserved
+  number) is refused at render time. A reload's table therefore refuses the
+  previous build's words as `StaleProvider` instead of resolving a slot that
+  now means a different value.
 * The constructor's pointer is wrapped in `ProviderValue`, whose `Drop` calls the
   provider's destructor. The host never frees a provider's memory; a refused
   insert drops the value there and then, so the provider is not leaked, and a
@@ -960,20 +991,34 @@ over one registry:
   again.
 
 **The module side is a linear type.** `umbrella/modules/WidgetHandle.aui`
-exports only `type Widget: Linear;` plus `adopt(lo, hi)`, `dispose(widget)` and a
-`main` that is the intended path; the record itself is the body's, so no client
+exports only `type Widget: Linear;` plus `adopt(lo, hi)`, `read(widget)`,
+`dispose(widget)` and a `main` that is the intended path; the record itself is the body's, so no client
 module can construct a `Widget` by hand. `adopt` is the construction seam (it
 takes the words a granted `__new` produced) and `dispose` destructures the
 record — which is the linear obligation discharged — and hands the words
-straight back to `avm_widget__dispose`. Both parameters are 64-bit scalars, so
-the call is word-native: measured, the compiled body contains
+straight back to the dispose wrapper. The body declares no wrapper symbol:
+`pragma Foreign_Import(External_Name => "avm_widget");` names the target and
+`Handle_Ownership` names the provider facts (including `Use =>
+"avm_widget_read"`); the compiler derives `avm_widget__dispose` for the call
+and emits the block the generator renders. `read` borrows the record, passes
+its words and one local `Address[Int64]` slot to the generated
+`avm_widget__use`, and returns the word the provider's reader produced or `-1`
+when the words were refused — a borrow, not a consume, which is why the same
+handle can still be disposed afterwards. `main` is the whole path: adopt, read
+(refused here, because the words name no live slot in a test build), dispose.
+Both parameters are 64-bit scalars, so the call is word-native: measured, the
+compiled body contains
 `extern au_int64_t avm_widget__dispose(au_int64_t lo, au_int64_t hi);` and the
 direct call, with no adapter, because there is no buffer and nothing to encode.
+`--emit-adapters` writes `test-programs/adapters/handles.golden`, which
+`scripts/check-adapter-descriptors` diffs byte for byte, and
+`umbrella/tests/interface.rs` parses with the same reader the build uses.
 
 Evidence: `cargo test --offline --lib handles` in the bridge (3 white-box
 tests: the retirement path, the word pair and the separated counters) and
-`cargo test --offline --lib --test handles` in the umbrella (60 lib tests + 11
-integration tests: ten registry/encoding cases and the wrapper test), The wrapper test compiles the provider and
+`cargo test --offline --lib --test handles` in the umbrella (60 lib tests + 13
+integration tests: ten registry/encoding cases and three wrapper cases — create/
+destroy, read, and a reload), The wrapper test compiles the provider and
 both generated modules into one `cdylib` and drives them through `dlsym`: a
 constructor returns `0` and a non-null pair, the first dispose returns `0` and
 the provider's drop counter moves once, the second returns `1` with the counter
@@ -989,14 +1034,16 @@ linearity error ("has already been consumed"). `./austral compile
 umbrella/modules/WidgetHandle.aui,umbrella/modules/WidgetHandle.aum
 --entrypoint=WidgetHandle:main --target-type=c` exits 0.
 
-**Not yet carried:** nothing in the lowering emits an `abi handle` block yet,
-so `WidgetHandle` declares the dispose symbol by hand and no module calls
-`__new` — a module cannot create a handle from Austral source yet, and the
-wrapper test is the only caller of the generated constructor; the provider
-generation is the constant 1 with no reload path that bumps it; the module has
-no operation that *reads* through a handle (no `__use`/`__with` wrapper), so a
-value can be created and destroyed but not yet used; and borrows/views over an
-owned handle are U14's.
+**Not yet carried:** the lowering emits the `abi handle 1` block and the
+`read` seam calls `__use`, but no module calls `__new` yet — the constructor
+needs an out pointer, which Austral source has no allocation seam for at this
+stage, so the wrapper test is still the only caller of the generated
+constructor, and `WidgetHandle.main` adopts words rather than minting them;
+there is no scoped borrow (`__with`) that lends the value to a callback; and
+borrows/views over an owned handle are U14's. The provider generation is no
+longer constant: each build takes the next number, but no *reload* path in the
+host re-renders and reloads a crate yet, so the generation is exercised by the
+wrapper test's second render, not by a live reload.
 
 **Still not carried:**
 Only literals, mediated calls, Float64 arithmetic and float comparisons carry a

@@ -1,0 +1,14 @@
+# U11/U12 adapter descriptors, emitted by the compiler's CPS lowering.
+# Canonical form: fixed field order, one fact per line, descriptors
+# sorted by symbol, blocks separated by a blank line.
+# `umbrella/src/interface.rs` parses this text.
+
+schema 1
+abi handle 1
+symbol avm_widget__new
+target avm_widget
+type widget
+constructor avm_widget_ctor
+destructor avm_widget_dtor
+use avm_widget_read
+params 2

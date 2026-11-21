@@ -740,6 +740,60 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
     end
   end
 
+(* U13: an `abi handle 1` import. The module names the handle's *target* —
+   the provider's namespace for the generated pair — and the two wrappers are
+   derived from it: the import's symbol is `<target>__dispose` and the
+   descriptor the lowering emits describes `<target>__new` /
+   `<target>__dispose`. Nothing in Austral source writes a wrapper name. The
+   signature is the dispose ABI's: two 64-bit words in, one status word out. *)
+let handle_dispose_symbol (target: string): string = target ^ "__dispose"
+
+let is_plain_ident (s: string): bool =
+  s <> "" &&
+  String.for_all
+    (fun c ->
+      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+      || (c >= '0' && c <= '9') || c = '_')
+    s
+
+let has_suffix s suffix =
+  let ls = String.length s and lf = String.length suffix in
+  ls >= lf && String.sub s (ls - lf) lf = suffix
+
+let is_word64 (ty: ty): bool =
+  match ty with
+  | Integer (Signed, Width64) -> true
+  | _ -> false
+
+let check_handle_ownership
+    ~(external_name: string)
+    ~(params: value_parameter list)
+    ~(rt: ty)
+    (type_name, constructor, destructor, arity, accessor): unit =
+  (* A wrapper name in the target would make the derived symbol ambiguous
+     (`w__dispose__dispose`), and the type name is rendered into the
+     registry's type tag, so both are plain identifiers. *)
+  if not (is_plain_ident external_name)
+     || has_suffix external_name "__dispose"
+     || has_suffix external_name "__new"
+  then Errors.handle_ownership_bad_target ~name:external_name;
+  if not (is_plain_ident type_name) then
+    Errors.handle_ownership_bad_type ~type_name;
+  if constructor = "" || destructor = "" || constructor = destructor then
+    Errors.handle_ownership_symbols ~constructor ~destructor;
+  (match accessor with
+   | None -> ()
+   | Some use_symbol ->
+      if not (is_plain_ident use_symbol)
+         || use_symbol = constructor
+         || use_symbol = destructor
+      then Errors.handle_ownership_accessor ~use_symbol);
+  let _ = arity in
+  match params with
+  | [ValueParameter (_, lo); ValueParameter (_, hi)] when is_word64 lo && is_word64 hi
+                                                        && is_word64 rt -> ()
+  | _ -> Errors.handle_ownership_shape ()
+
 let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (decl: linked_definition): typed_decl =
   with_frame "Augment declaration"
     (fun _ ->
@@ -766,7 +820,8 @@ let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (
          in
 let recognized = List.for_all (fun p ->
             match p with
-            | ForeignImportPragma _ | ForeignExportPragma _ | LiquidPragma _ | RustOwnershipPragma _ -> true
+            | ForeignImportPragma _ | ForeignExportPragma _ | LiquidPragma _
+            | RustOwnershipPragma _ | HandleOwnershipPragma _ -> true
             | _ -> false) pragmas
           and import_name = List.find_map (fun p ->
             match p with
@@ -784,6 +839,12 @@ let recognized = List.for_all (fun p ->
             match p with
             | RustOwnershipPragma (owners, ret) -> Some (owners, ret)
             | _ -> None) pragmas
+          and handle_ownership = List.find_map (fun p ->
+            match p with
+            | HandleOwnershipPragma (type_name, constructor, destructor, arity,
+                                     accessor) ->
+               Some (type_name, constructor, destructor, arity, accessor)
+            | _ -> None) pragmas
           in
           let _ =
             (* A Rust_Ownership pragma is only meaningful on a foreign
@@ -798,6 +859,18 @@ let recognized = List.for_all (fun p ->
                    Errors.rust_ownership_not_foreign ()
                 | Some s ->
                    check_rust_ownership ~external_name:s ~params ~rt owners ret)
+          in
+          let _ =
+            (* A Handle_Ownership pragma is an import contract too: it names
+               the provider symbols the generated wrappers call, so it is
+               meaningless on a function with a body. *)
+            match handle_ownership with
+            | None -> ()
+            | Some fields ->
+               (match import_name with
+                | None -> Errors.handle_ownership_not_foreign ()
+                | Some s ->
+                   check_handle_ownership ~external_name:s ~params ~rt fields)
           in
           let _ =
             match import_name with
@@ -817,6 +890,13 @@ let recognized = List.for_all (fun p ->
              | (Some _, Some _) ->
                 Errors.fun_invalid_pragmas ()
              | (Some s, None) ->
+                (* The module wrote the target; the call names the dispose
+                   wrapper derived from it, in both backends. *)
+                let s =
+                  match handle_ownership with
+                  | Some _ -> handle_dispose_symbol s
+                  | None -> s
+                in
                 if typarams_size typarams = 0 then
                   if kind = UnsafeModule then
                     (* The ownership annotation rides on the typed decl for
@@ -828,7 +908,7 @@ let recognized = List.for_all (fun p ->
                       liquid_pragmas
                       @ (List.filter_map (fun p ->
                             match p with
-                            | RustOwnershipPragma _ -> Some p
+                            | RustOwnershipPragma _ | HandleOwnershipPragma _ -> Some p
                             | _ -> None) pragmas)
                     in
                     TForeignFunction (decl_id, vis, name, params, rt, s, doc, all_pragmas)

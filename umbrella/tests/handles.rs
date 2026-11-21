@@ -246,7 +246,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use umbrella::interface::{
-    render_handle_wrapper, HandleAdapter, DESCRIPTOR_SCHEMA, HANDLE_ABI_VERSION,
+    render_handle_wrapper, render_handle_wrapper_at, HandleAdapter, DESCRIPTOR_SCHEMA,
+    HANDLE_ABI_VERSION,
 };
 
 fn scratch(name: &str) -> PathBuf {
@@ -289,7 +290,12 @@ fn bridge_rlib() -> PathBuf {
     })
 }
 
-fn handle_adapter(target: &str, type_name: &str, owner: u32) -> HandleAdapter {
+fn handle_adapter(
+    target: &str,
+    type_name: &str,
+    owner: u32,
+    accessor: Option<&str>,
+) -> HandleAdapter {
     HandleAdapter {
         schema: DESCRIPTOR_SCHEMA,
         abi_version: HANDLE_ABI_VERSION,
@@ -300,6 +306,7 @@ fn handle_adapter(target: &str, type_name: &str, owner: u32) -> HandleAdapter {
         type_name: type_name.to_string(),
         params: 1,
         owner,
+        use_symbol: accessor.map(str::to_string),
     }
 }
 
@@ -348,6 +355,14 @@ pub extern "C" fn widget_live() -> i64 {
     WIDGET_LIVE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+#[export_name = "avm_widget_read"]
+pub unsafe extern "C" fn widget_read(ptr: *mut core::ffi::c_void) -> i64 {
+    if ptr.is_null() {
+        return -1;
+    }
+    *(ptr as *mut i64)
+}
+
 #[export_name = "avm_widget_drops"]
 pub extern "C" fn widget_drops() -> i64 {
     WIDGET_DROPS.load(std::sync::atomic::Ordering::SeqCst)
@@ -360,18 +375,35 @@ pub extern "C" fn gadget_drops() -> i64 {
 
 "##,
     );
-    for (i, adapter) in [
-        handle_adapter("avm_widget", "widget", 1),
-        handle_adapter("avm_gadget", "gadget", 2),
-    ]
-    .iter()
-    .enumerate()
-    {
+    let widget = handle_adapter("avm_widget", "widget", 1, Some("avm_widget_read"));
+    let gadget = handle_adapter("avm_gadget", "gadget", 2, None);
+    for (i, adapter) in [&widget, &gadget].iter().enumerate() {
         source.push_str(&format!(
             "mod w{i} {{\n{}\n}}\n",
             render_handle_wrapper(adapter).expect("render")
         ));
     }
+    // The same descriptor rendered again, as a provider *reload* renders it: a
+    // second build of the same provider, at generation 2, with its own table.
+    // Only the exported wrapper names differ (`avm_reload__*`), because two
+    // copies cannot both own the generation-1 symbols in one process.
+    let mut reloaded = render_handle_wrapper_at(&widget, 2).expect("render reloaded");
+    // The generation is the render's, not the descriptor's, so rendering at 2
+    // already wrote it; only the exported symbol names need renaming to keep
+    // this crate linkable beside the generation-1 module above.
+    assert!(
+        reloaded.contains("const PROVIDER_GENERATION: u32 = 2;"),
+        "{reloaded}"
+    );
+    for (from, to) in [
+        ("fn avm_widget__new", "fn avm_reload__new"),
+        ("fn avm_widget__use", "fn avm_reload__use"),
+        ("fn avm_widget__dispose", "fn avm_reload__dispose"),
+    ] {
+        assert!(reloaded.contains(from), "the reload edit `{from}` applies");
+        reloaded = reloaded.replace(from, to);
+    }
+    source.push_str(&format!("mod reloaded {{\n{reloaded}\n}}\n"));
     source
 }
 
@@ -426,7 +458,21 @@ impl Library {
         ptr
     }
 
+    fn try_symbol(&self, name: &str) -> Option<*mut libc::c_void> {
+        let c = CString::new(name).expect("no NUL");
+        let ptr = unsafe { libc::dlsym(self.0, c.as_ptr()) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(ptr)
+        }
+    }
+
     fn new_fn(&self, name: &str) -> unsafe extern "C" fn(i64, *mut i64) -> i64 {
+        unsafe { std::mem::transmute(self.symbol(name)) }
+    }
+
+    fn use_fn(&self, name: &str) -> unsafe extern "C" fn(i64, i64, *mut i64) -> i64 {
         unsafe { std::mem::transmute(self.symbol(name)) }
     }
 
@@ -447,9 +493,20 @@ impl Drop for Library {
     }
 }
 
+/// The wrappers' provider counters (`live`, `drops`) are statics in the loaded
+/// library, and tests run in parallel, so two tests sharing one image would
+/// read each other's numbers. `dlopen` keys on the file, so each test gets its
+/// own copy of the compiled wrappers and therefore its own statics.
+fn fresh_library(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    let copy = dir.join("libhandles.so");
+    std::fs::copy(compiled_library(), &copy).expect("copy the compiled wrappers");
+    copy
+}
+
 #[test]
 fn the_generated_wrappers_create_and_destroy_a_provider_value_once() {
-    let lib = Library::open(&compiled_library());
+    let lib = Library::open(&fresh_library("create"));
     let widget_new = lib.new_fn("avm_widget__new");
     let widget_dispose = lib.dispose_fn("avm_widget__dispose");
     let widget_live = lib.count_fn("avm_widget_live");
@@ -543,5 +600,127 @@ fn the_generated_wrappers_create_and_destroy_a_provider_value_once() {
         "the null pair is refused"
     );
     assert_eq!(unsafe { widget_dispose(live[0], live[1]) }, 0);
+    assert_eq!(unsafe { widget_live() }, 0);
+}
+
+#[test]
+fn the_reading_wrapper_hands_back_the_provider_value() {
+    let lib = Library::open(&fresh_library("use"));
+    let widget_new = lib.new_fn("avm_widget__new");
+    let widget_dispose = lib.dispose_fn("avm_widget__dispose");
+    let widget_use = lib.use_fn("avm_widget__use");
+    let widget_live = lib.count_fn("avm_widget_live");
+    let widget_drops = lib.count_fn("avm_widget_drops");
+
+    let mut words = [0i64; 2];
+    assert_eq!(unsafe { widget_new(41, words.as_mut_ptr()) }, 0);
+
+    // 1. The reader resolves the words through the same registry the
+    //    constructor wrote them to, and the provider's accessor is what turns
+    //    its pointer into the word the module reads.
+    let mut out = [0i64; 1];
+    assert_eq!(
+        unsafe { widget_use(words[0], words[1], out.as_mut_ptr()) },
+        0,
+        "reading a live handle succeeds"
+    );
+    assert_eq!(out[0], 41, "the value the constructor stored");
+    assert_eq!(unsafe { widget_live() }, 1, "reading does not destroy");
+
+    // 2. A refusal leaves the out slot untouched: no provider code ran, so
+    //    the module cannot mistake an old word for a fresh read.
+    let mut untouched = [-9i64; 1];
+    assert_ne!(
+        unsafe { widget_use(words[0], words[1] + (1 << 32), untouched.as_mut_ptr()) },
+        0,
+        "a future provider generation is not this table"
+    );
+    assert_eq!(untouched[0], -9, "a refusal does not write the out slot");
+    assert_ne!(
+        unsafe { widget_use(0, 0, untouched.as_mut_ptr()) },
+        0,
+        "the null pair is refused"
+    );
+    assert_eq!(untouched[0], -9);
+    assert_ne!(
+        unsafe { widget_use(words[0], words[1], std::ptr::null_mut()) },
+        0,
+        "a null out pointer is refused"
+    );
+
+    // 3. After disposal the words are stale, so the reader refuses them too —
+    //    the read path cannot see a value the destroy path already freed.
+    assert_eq!(unsafe { widget_dispose(words[0], words[1]) }, 0);
+    assert_ne!(
+        unsafe { widget_use(words[0], words[1], out.as_mut_ptr()) },
+        0,
+        "a destroyed handle is not readable"
+    );
+    assert_eq!(out[0], 41, "the refusal did not rewrite the last read");
+    assert_eq!(unsafe { widget_drops() }, 1);
+
+    // 4. A target with no `use` line gets no reading wrapper: the descriptor
+    //    decides, so a provider cannot be made to expose a reader it never
+    //    named.
+    assert!(
+        lib.try_symbol("avm_gadget__use").is_none(),
+        "a descriptor without `use` renders no `__use` wrapper"
+    );
+}
+
+#[test]
+fn a_reload_refuses_handles_from_the_previous_build() {
+    let lib = Library::open(&fresh_library("reload"));
+    let widget_new = lib.new_fn("avm_widget__new");
+    let widget_dispose = lib.dispose_fn("avm_widget__dispose");
+    let reload_new = lib.new_fn("avm_reload__new");
+    let reload_dispose = lib.dispose_fn("avm_reload__dispose");
+    let reload_use = lib.use_fn("avm_reload__use");
+    let widget_live = lib.count_fn("avm_widget_live");
+
+    // One provider value per build: the two tables are separate registries,
+    // as a reload's are.
+    let mut old = [0i64; 2];
+    assert_eq!(unsafe { widget_new(1, old.as_mut_ptr()) }, 0);
+    let mut fresh = [0i64; 2];
+    assert_eq!(unsafe { reload_new(2, fresh.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { widget_live() }, 2);
+
+    // The new table refuses the old build's words: the slot they name is this
+    // table's slot too, and the value behind it is a different one.
+    let mut out = [0i64; 1];
+    assert_ne!(
+        unsafe { reload_dispose(old[0], old[1]) },
+        0,
+        "the generation-1 words are refused by the generation-2 table"
+    );
+    assert_ne!(
+        unsafe { reload_use(old[0], old[1], out.as_mut_ptr()) },
+        0,
+        "and they are not readable through it either"
+    );
+    assert_eq!(
+        unsafe { widget_live() },
+        2,
+        "the refusal ran no destructor: the old value is still alive"
+    );
+
+    // The old value is still usable through the table that minted it, which is
+    // what "refused by the new build" has to mean rather than "leaked".
+    assert_eq!(
+        unsafe { widget_dispose(old[0], old[1]) },
+        0,
+        "the generation-1 table still resolves its own words"
+    );
+    assert_eq!(unsafe { widget_live() }, 1);
+    assert_eq!(
+        unsafe { reload_use(fresh[0], fresh[1], out.as_mut_ptr()) },
+        0
+    );
+    assert_eq!(
+        out[0], 2,
+        "the new build's value reads through its own table"
+    );
+    assert_eq!(unsafe { reload_dispose(fresh[0], fresh[1]) }, 0);
     assert_eq!(unsafe { widget_live() }, 0);
 }

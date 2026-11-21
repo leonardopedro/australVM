@@ -42,6 +42,17 @@ type pragma =
       annotation. Checked on the typed AST and erased before CPS: the
       monomorphized foreign declaration carries no pragmas. *)
   | RustOwnershipPragma of string list * string
+  (** U13: a foreign import that brings an owned value across as a handle. The
+      import's external name is the handle's *target*; the lowering derives
+      `<target>__dispose` for the call and emits an `abi handle 1` descriptor
+      for `<target>__new` / `<target>__dispose`, so neither wrapper name is
+      written in Austral source. The components are the object type name the
+      registry compares handles against, the provider's constructor and
+      destructor symbols, and the constructor's arity in 64-bit words. The
+      optional last component is the provider's reader (`*mut c_void -> i64`),
+      which the generated `<target>__use` wrapper calls; without it the handle
+      can be created and destroyed but not read. *)
+  | HandleOwnershipPragma of string * string * string * int * string option
 
 (** Whether a variable is immutable or mutable. *)
 type mutability =

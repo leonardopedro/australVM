@@ -285,6 +285,72 @@ let rust_ownership_annotation ~annotation =
     Text "."
   ]
 
+let handle_ownership_not_foreign () =
+  austral_raise DeclarationError [
+    Text "The ";
+    Code "Handle_Ownership";
+    Text " pragma can only annotate a foreign import declared with ";
+    Code "Foreign_Import";
+    Text ": it describes the provider symbols the generated handle wrappers call, and a function with a body is not an import."
+  ]
+
+let handle_ownership_bad_target ~name =
+  austral_raise DeclarationError [
+    Text "Invalid handle target ";
+    Code name;
+    Text ". The external name of a ";
+    Code "Handle_Ownership";
+    Text " import is the handle's target: a plain identifier from which the wrappers derive ";
+    Code "<target>__new";
+    Text " and ";
+    Code "<target>__dispose";
+    Text ", so it must be non-empty, use only letters, digits and underscores, and not already name one of those wrappers."
+  ]
+
+let handle_ownership_bad_type ~type_name =
+  austral_raise DeclarationError [
+    Text "Invalid handle type name ";
+    Code type_name;
+    Text ". It is rendered into the handle registry's type tag, so it must be a plain identifier (letters, digits and underscores)."
+  ]
+
+let handle_ownership_symbols ~constructor ~destructor =
+  austral_raise DeclarationError [
+    Text "Invalid provider symbols in a ";
+    Code "Handle_Ownership";
+    Text " pragma: ";
+    Code constructor;
+    Text " and ";
+    Code destructor;
+    Text " must both be non-empty and different, because one symbol cannot both allocate and free the value."
+  ]
+
+let handle_ownership_accessor ~use_symbol =
+  austral_raise DeclarationError [
+    Text "Invalid ";
+    Code "Use";
+    Text " symbol ";
+    Code use_symbol;
+    Text " in a ";
+    Code "Handle_Ownership";
+    Text " pragma. It names the provider's reader, which the generated ";
+    Code "__use";
+    Text " wrapper calls as ";
+    Code "unsafe extern \"C\" fn(*mut c_void) -> i64";
+    Text ", so it must be a non-empty plain identifier and must not be the constructor or the destructor: reading a value and creating or freeing it cannot share one provider symbol."
+  ]
+
+let handle_ownership_shape () =
+  austral_raise DeclarationError [
+    Text "A ";
+    Code "Handle_Ownership";
+    Text " import must have the dispose wrapper's signature: two ";
+    Code "Int64";
+    Text " words in (the handle's two words) and one ";
+    Code "Int64";
+    Text " status word out (0 done, non-zero refused). The wrappers are generated with exactly that ABI, so any other signature could not name a wrapper that exists."
+  ]
+
 let rust_ownership_shape ~ty =
   austral_raise DeclarationError [
     Text "The type ";

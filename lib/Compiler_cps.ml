@@ -117,6 +117,31 @@ type adapter_requirement = {
 
 let required_adapters : (string, adapter_requirement) Hashtbl.t = Hashtbl.create 8
 
+(* U13: the owned-value handles this module imports, keyed by target. The
+   typing pass has already validated the pragma and renamed the import to the
+   derived `<target>__dispose`, so the descriptor is a rendering of facts the
+   typechecker checked, not a second reading of them. *)
+type handle_requirement = {
+  hr_target: string;
+  hr_type_name: string;
+  hr_constructor: string;
+  hr_destructor: string;
+  hr_params: int;
+  hr_use: string option;
+}
+
+let required_handles : (string, handle_requirement) Hashtbl.t = Hashtbl.create 4
+
+(* The typed external name of a handle import is `<target>__dispose`; the
+   descriptor names the target itself, because `interface.rs` derives both
+   wrapper symbols from it. *)
+let handle_target_of_dispose_symbol (symbol: string): string =
+  let suffix = "__dispose" in
+  let ls = String.length symbol and lf = String.length suffix in
+  if ls > lf && String.sub symbol (ls - lf) lf = suffix then
+    String.sub symbol 0 (ls - lf)
+  else symbol
+
 (* The descriptor schema's vocabulary: Unit, Bool, Int32, Nat32, Int64, Nat64,
    Float32, Float64. Anything else cannot be described yet, and is an error at
    emission rather than a silently guessed layout. *)
@@ -283,6 +308,25 @@ let adapter_block (req: adapter_requirement): (string, string) result =
    symbol, blocks separated by a blank line. Regenerating is byte-identical.
    A block is `abi buffer 1` when its signature carries a byte buffer and
    `abi scalar 1` otherwise; the reader keeps both kinds in one document. *)
+(* U13: one `abi handle 1` block, in the canonical field order
+   `HandleAdapter::descriptor_text` uses in `umbrella/src/interface.rs`. The
+   registry tag is not written: the generator numbers registries when it reads
+   the document. *)
+let handle_block (req: handle_requirement): string =
+  (* `use` is optional and sits where `HandleAdapter::descriptor_text` puts it:
+     after the destructor and before `params`. A provider without a reader
+     still gets the constructor and destructor wrappers. *)
+  let use_line =
+    match req.hr_use with
+    | Some accessor -> Printf.sprintf "use %s\n" accessor
+    | None -> ""
+  in
+  Printf.sprintf
+    "schema 1\nabi handle 1\nsymbol %s__new\ntarget %s\ntype %s\nconstructor %s\n\
+     destructor %s\n%sparams %d\n"
+    req.hr_target req.hr_target req.hr_type_name req.hr_constructor
+    req.hr_destructor use_line req.hr_params
+
 let adapter_descriptors_text (): (string, string) result =
   let items =
     Hashtbl.fold (fun _ req acc -> req :: acc) required_adapters []
@@ -312,6 +356,14 @@ let adapter_descriptors_text (): (string, string) result =
          Buffer.add_string buf "\n";
          Buffer.add_string buf text)
        blocks;
+     (* Handle blocks follow the scalar/buffer ones, sorted by target, so the
+        document is byte-identical across runs and one registry tag per target
+        is stable. *)
+     Hashtbl.fold (fun _ req acc -> req :: acc) required_handles []
+     |> List.sort (fun a b -> String.compare a.hr_target b.hr_target)
+     |> List.iter (fun req ->
+         Buffer.add_string buf "\n";
+         Buffer.add_string buf (handle_block req));
      Ok (Buffer.contents buf)
 
 let write_adapter_descriptors (path: string): (unit, string) result =
@@ -955,8 +1007,19 @@ let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list 
             Hashtbl.replace function_params id (param_types params)
         | Mt.MFunctionMonomorph (id, params, _, _) ->
             Hashtbl.replace monomorph_params id (param_types params)
-        | Mt.MForeignFunction (id, name, params, rt, ext_name) ->
+        | Mt.MForeignFunction (id, name, params, rt, ext_name, handle) ->
             Hashtbl.replace function_params id (param_types params);
+            (match handle with
+             | Some h ->
+                let target = handle_target_of_dispose_symbol ext_name in
+                Hashtbl.replace required_handles target
+                  { hr_target = target;
+                    hr_type_name = h.mh_type_name;
+                    hr_constructor = h.mh_constructor;
+                    hr_destructor = h.mh_destructor;
+                    hr_params = h.mh_params;
+                    hr_use = h.mh_use }
+             | None -> ());
             let ext_name =
               if is_rust_import ext_name && foreign_needs_adapter params rt then begin
                 let symbol = adapter_symbol ext_name in
