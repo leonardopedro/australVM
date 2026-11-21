@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use umbrella::interface::{
-    render_wrapper, Adapter, Scalar, ADAPTER_ABI_VERSION, DESCRIPTOR_SCHEMA,
+    render_buffer_wrapper, render_wrapper, Adapter, BufferAdapter, Scalar,
+    ADAPTER_ABI_VERSION, BUFFER_ABI_VERSION, DESCRIPTOR_SCHEMA,
 };
 
 fn fixtures() -> PathBuf {
@@ -195,6 +196,31 @@ fn the_compilers_emitted_descriptors_parse_here() {
     }
     assert_eq!(adapters[1].params, vec![Scalar::F64, Scalar::I64]);
     assert_eq!(adapters[1].returns, Scalar::F64);
+
+    // The same document carries the U12 blocks: the compiler's writer and this
+    // generator's reader are pinned together for buffers too.
+    let buffers = BufferAdapter::parse_descriptors(&text).expect("the buffer blocks parse");
+    let symbols: Vec<&str> = buffers.iter().map(|a| a.symbol.as_str()).collect();
+    assert_eq!(symbols, vec!["rs_count__adapter", "rs_fill__adapter"]);
+    for adapter in &buffers {
+        adapter.validate().expect("the compiler emits valid buffer descriptors");
+        assert_eq!(adapter.abi_version, BUFFER_ABI_VERSION);
+        assert_eq!(adapter.params, 2);
+        assert_eq!(adapter.empty.name(), "null-len0");
+        let wrapper = render_buffer_wrapper(adapter).expect("buffer wrapper");
+        assert!(
+            wrapper.contains(&format!("pub extern \"C\" fn {}__adapter", adapter.target)),
+            "{wrapper}"
+        );
+    }
+    // `Pointer` is read-only, `Address` mutable: the direction comes from the
+    // parameter type, not from the ownership annotation Monomorphize drops.
+    assert_eq!(buffers[0].buffers[0].mode.name(), "read");
+    assert_eq!(buffers[0].lengths, Scalar::U64);
+    assert_eq!(buffers[0].returns, Scalar::U32);
+    assert_eq!(buffers[1].buffers[0].mode.name(), "readwrite");
+    assert_eq!(buffers[1].lengths, Scalar::I64);
+    assert_eq!(buffers[1].returns, Scalar::I32);
 }
 
 /// The build's parser is the one that has to be strict, not the front-end's

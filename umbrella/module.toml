@@ -5,9 +5,15 @@
 # grant fails JIT compile with UK-4001. The same file drives both demo
 # paths — run with --manifest for the granted path, omit the flag to
 # take the explicit-DenyAll path.
+#
+# The grant names the *adapter*, not the native function: a call carrying a
+# byte buffer is always mediated (`Compiler_cps.foreign_needs_adapter`), because
+# the wrapper is where the null/length guards live. `rs_demo_checksum` is
+# therefore no longer reachable from a module, and granting it would grant
+# nothing.
 
 [module]
 name = "Demo"
 
 [grants]
-kernel = ["rs_demo_checksum"]
+kernel = ["rs_demo_checksum__adapter"]

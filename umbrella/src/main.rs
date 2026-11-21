@@ -200,7 +200,15 @@ fn front_end(
     modules: &[PathBuf],
     cps_out: &PathBuf,
     adapters_out: &PathBuf,
-) -> Result<(Vec<Vec<u8>>, Vec<interface::Adapter>), String> {
+) -> Result<
+    (
+        Vec<Vec<u8>>,
+        Vec<interface::BufferAdapter>,
+        Vec<interface::HandleAdapter>,
+        Vec<interface::Adapter>,
+    ),
+    String,
+> {
     // The front-end emits one CPS binary per module and each emission
     // overwrites `--emit-cps`, so the file left behind holds only the last
     // module. A module that calls another Austral module (e.g. one importing
@@ -234,9 +242,18 @@ fn front_end(
     }
     let text = std::fs::read_to_string(adapters_out)
         .map_err(|e| format!("read {}: {e}", adapters_out.display()))?;
+    // One document carries both block kinds: the scalar reader skips
+    // `abi buffer` blocks and the buffer reader skips `abi scalar` ones, so a
+    // module that calls both gets both wrappers.
     let adapters = interface::Adapter::parse_descriptors(&text)
         .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
-    Ok((cps_binaries, adapters))
+    let buffers = interface::BufferAdapter::parse_descriptors(&text)
+        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+    // U13: a handle block names an owned-value type; the reader numbers its
+    // registries from 1, which is the owner tag the handle words carry.
+    let handles = interface::HandleAdapter::parse_descriptors(&text)
+        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+    Ok((cps_binaries, buffers, handles, adapters))
 }
 
 /// One front-end run over `modules`, writing that run's CPS to `cps_out`.
@@ -347,13 +364,14 @@ fn bridge_rlib() -> Result<PathBuf, String> {
 ///      writes a file per adapter and each starts with the same `use`), all in
 ///      one crate; the targets are already global because the crate's cdylib
 ///      was dlopen'd in step 2, so `RTLD_NOW` can bind them.
-fn build_adapters(adapters: &[interface::Adapter]) -> Result<PathBuf, String> {
+fn build_adapters(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join(format!("umbrella-adapters-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let mut source = String::new();
     for (index, adapter) in adapters.iter().enumerate() {
-        let wrapper = interface::render_wrapper(adapter)
-            .map_err(|e| format!("render {}: {e}", adapter.symbol))?;
+        let wrapper = adapter
+            .render()
+            .map_err(|e| format!("render {}: {e}", adapter.symbol()))?;
         source.push_str(&format!("mod w{index} {{\n{wrapper}\n}}\n"));
     }
     let file = dir.join("adapters.rs");
@@ -556,7 +574,8 @@ fn main() {
         std::env::temp_dir().join(format!("umbrella-{}.cps", std::process::id()));
     let adapters_out: PathBuf =
         std::env::temp_dir().join(format!("umbrella-{}.adapters", std::process::id()));
-    let (cps_binaries, adapters) = match front_end(&austral, &modules, &cps_out, &adapters_out) {
+    let (cps_binaries, buffers, handles, scalars) =
+        match front_end(&austral, &modules, &cps_out, &adapters_out) {
         Ok(b) => {
             let _ = std::fs::remove_file(&cps_out);
             let _ = std::fs::remove_file(&adapters_out);
@@ -571,11 +590,19 @@ fn main() {
     );
 
     // 3.5. The wrappers the descriptors ask for. Empty is a real answer: every
-    //      call in the module was word-native and needs no mediation.
+    //      call in the module was word-native and needs no mediation. Buffer
+    //      adapters are rendered into the same crate as the scalar ones — the
+    //      JIT resolves `<name>__adapter` whichever block produced it.
+    let adapters: Vec<interface::GeneratedAdapter<'_>> = scalars
+        .iter()
+        .map(interface::GeneratedAdapter::Scalar)
+        .chain(buffers.iter().map(interface::GeneratedAdapter::Buffer))
+        .chain(handles.iter().map(interface::GeneratedAdapter::Handle))
+        .collect();
     if adapters.is_empty() {
-        eprintln!("umbrella: the module needs no scalar adapters");
+        eprintln!("umbrella: the module needs no adapters");
     } else {
-        let names: Vec<&str> = adapters.iter().map(|a| a.symbol.as_str()).collect();
+        let names: Vec<&str> = adapters.iter().map(|a| a.symbol()).collect();
         match build_adapters(&adapters) {
             Ok(path) => eprintln!(
                 "umbrella: built and loaded {} adapter wrapper(s) ({}) from {}",

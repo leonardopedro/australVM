@@ -21,7 +21,9 @@ publish = false
 # The bridge's baked rs_* table contains the reference crate's symbols,
 # never `rs_demo_checksum` — the demo's extern resolves solely through
 # the dlsym(RTLD_DEFAULT) fallback after this project dlopens its own
-# cdylib, which is the P3 claim under test.
+# cdylib, which is the P3 claim under test. The module itself names
+# `rs_demo_checksum__adapter` (a byte buffer is always mediated), and that
+# generated wrapper is what dlsyms the native symbol.
 
 [dependencies]
 austral_cranelift_bridge = { path = "../safestos/cranelift" }
