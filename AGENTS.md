@@ -557,9 +557,13 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `$W3_DRIFT_LOGS/timings.tsv` (and to `$W3_DRIFT_RECORD` when set); the rows
   kept in the tree are `docs/data/w3/drift-timings.tsv`, which the plan quotes
   instead of a retyped number. Its columns are `date rev jobs requested wall_s
-  per_case_s held gap outcome cases`: `held` reads `held/requested` and does not
-  count a case the shell could not exercise, `gap` is that count, and `cases`
-  names what was asked for (`all` or the case name), which is what ties a row to
+  per_case_s held gap outcome cases died`: `held` reads `held/requested` and does
+  not count a case the shell could not exercise, `gap` is that count, `cases`
+  names what was asked for (`all` or the case name), and `died` names (comma
+  separated) the cases that ended before their gate wrote a byte — empty report
+  and empty status, so no transcript to attribute a red row to. `-` there means
+  no such case, `?` a row recorded before the column existed. `cases` is what
+  ties a row to
   `$W3_DRIFT_LOGS/runs/<id>/<case>/` — one directory per invocation, one per case
   inside it, holding that case's `01-g.log` and `report.txt`. The old
   `$W3_DRIFT_LOGS/<case>.log` was overwritten by the case's next run, so a red

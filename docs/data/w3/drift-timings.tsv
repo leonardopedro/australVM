@@ -1,4 +1,4 @@
-date	rev	jobs	requested	wall_s	per_case_s	held	gap	outcome	cases
-2026-11-19	de8b11b2	1	14	3763	268	14/14	0	held	all
-2026-11-19	de8b11b2	2	14	2649	189	14/14	0	held	all
-2026-11-19	0baac723	2	14	2641	188	14/14	0	held	all
+date	rev	jobs	requested	wall_s	per_case_s	held	gap	outcome	cases	died
+2026-11-19	de8b11b2	1	14	3763	268	14/14	0	held	all	?
+2026-11-19	de8b11b2	2	14	2649	189	14/14	0	held	all	?
+2026-11-19	0baac723	2	14	2641	188	14/14	0	held	all	?

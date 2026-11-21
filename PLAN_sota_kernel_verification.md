@@ -1049,17 +1049,23 @@ the artifact, so `mm0-c` checks them too.
   is set. The rows kept in the tree are `docs/data/w3/drift-timings.tsv`:
 
   ```
-  date	rev	jobs	requested	wall_s	per_case_s	held	gap	outcome	cases
-  2026-11-19	de8b11b2	1	14	3763	268	14/14	0	held	all
-  2026-11-19	de8b11b2	2	14	2649	189	14/14	0	held	all
+  date	rev	jobs	requested	wall_s	per_case_s	held	gap	outcome	cases	died
+  2026-11-19	de8b11b2	1	14	3763	268	14/14	0	held	all	?
+  2026-11-19	de8b11b2	2	14	2649	189	14/14	0	held	all	?
   ```
 
   `held` is `held/requested` and does not count a case the shell could not
   exercise, so a run that reported `13 case(s) held, 1 not covered` records
   `13/14` with `gap` = 1 instead of `14/14`; `cases` names what was asked for,
   which is what ties a row to the run directory that holds that case's logs.
-  Rows written before those two columns cannot be attributed to a case, and are
-  not the ledger's evidence for anything.
+  `died` names the cases that did not hold and left no gate transcript at all —
+  the subshell ended before `gate_run` wrote its first line, which is also what
+  a case killed by the host looks like (empty report, empty status, no log) —
+  so a `failed` row carries names instead of only a count. `-` there means every
+  case that ran reached the gate (a control that ran and lost its assertion is
+  not a death: its transcript is in its run directory), and `?` means the row
+  was written before the column existed. Rows written before `gap` and `cases`
+  cannot be attributed to a case, and are not the ledger's evidence for anything.
 
   That is all 14 cases in **62m43s** at `-j 1` (268 s each) against **44m9s** at
   `-j 2` (189 s of wall clock per case, ~379 s of work, because two gate runs
