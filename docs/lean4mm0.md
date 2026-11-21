@@ -4563,7 +4563,7 @@ measured, and neither is an assumption:
 tables that the emitter never evicts (export 71.6 + synthetic 93.7 + encoding memo 2.3,
 plus the context memo at 18.5). Moving it further needs a change to how nodes are
 represented or retained, not another environment variable — and §13.52 does move it, to
-at most 416 MiB, by interning the synthetic table.
+at most 384 MiB, by interning the synthetic table.
 
 ### 13.52 Interning the synthetic table: measured, neutral for the proof, not for the sidecar
 
@@ -4596,7 +4596,27 @@ the probe measures memory, and does not claim a speedup. What it does measure is
 416 MiB — the cap §13.51 recorded as a `subst0` memo failure — now completes, with 362 MiB
 of reservation at the peak instead of 431. So the bracket (416, 432] from §13.51 becomes
 *at most 416* on the passing side; the failing side below it is untested, and a 384 MiB
-probe is the next step rather than an assumption.
+probe is the next step rather than an assumption. That probe was then run, and it passes:
+below.
+
+**384 MiB.** A third dedup run at a 384 MiB cap completes too. Completion is decided by
+the artifacts, not by the probe's own record: the manifest is written only at a clean
+close, and all six files are present and byte-identical to the 416 MiB run — `cmp` reports
+`.mm0` (102 543 367 789 B), `.mm1` (102 547 674 107 B), the naming, index and manifest
+files identical, so the sidecar is again 5 645 247 B with the same 580 records,
+`ax_subst_0` … `ax_subst_579`.
+
+The probe's sampler did not survive the run. The host ran out of memory at 21:06 — swap
+fully consumed, and the kernel killed three Firefox content processes and an `ld.gold` —
+while a build, tmpfs-backed scratch files and this run shared the machine; the shell that
+sampled `VmSize` and would have written `summary.txt` stopped twelve minutes later, at
+2 723 s of sampling, and no OOM entry names it. The emitter inherited the 384 MiB address-
+space limit at `exec`, so the limit held for the whole run and the completion is the
+measurement; what is missing is the peak above the last sample (347 MiB `VmSize`, 320 MB
+RSS) and any clock that could be compared to the table above. So: the passing side is now
+*at most 384*, the failing side is still untested, and the next probe is 352 or 320 MiB,
+not a claim. Operationally, two things this run teaches: keep run artifacts on disk rather
+than on a tmpfs, and do not overlap a memory probe with a build.
 
 Two tables move besides the one the knob names: context memo 18.5 → 8.5 MB and
 substitution memo 10.5 → 5.2 MB. Neither is interned — their entries are keyed by ids and
