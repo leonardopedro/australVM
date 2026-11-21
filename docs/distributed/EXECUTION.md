@@ -154,9 +154,69 @@ $ # end-to-end controls: a duplicate row appended inside the block and an
 $ # inventory naming docs/nope.rs each exit 1 naming the offending line
 ```
 
+## D01 — identity authority bound on submit and replay (2026-11-21)
+
+U `unfer_consensus/src/{identity,signing}.rs`, U `b0aaa7c` (clean before the
+patch; the patch is the only local change). No A code changed.
+
+### The failure, stated as the tests that now pass
+
+`identity::tests` (all five added in this patch, each one a witness that was
+red before the registry change):
+
+| Witness | Was | Now |
+|---|---|---|
+| `create_cannot_claim_another_dids_name` | a create naming Alice's DID with the attacker's key was accepted, because `Create` only checked the DID was unused | refused `INVALID_SIGNATURE`; a DID is `did:unfer:<hex key>` and cannot name a key it does not own |
+| `attacker_update_under_its_own_key_is_refused` | `verify_transaction` authenticates an identity op under `op.signing_key`, so an attacker-signed update *verified*; the registry then applied it, moving Alice's endpoint | refused; state compared byte for byte before and after |
+| `attacker_revoke_under_its_own_key_is_refused` | same path, `Revoke` set `revoked = true` with no key check at all | refused; `resolve` still returns Alice |
+| `stale_revoke_is_refused` | `Revoke` assigned `entry.seq = op.seq` unconditionally, so a replayed revoke with `seq = 2` ended a DID already at `seq = 5` | refused `DUPLICATE_TRANSACTION`; state unchanged |
+| `unsigned_create_is_refused` | no signature check inside the registry, so a tampered op applied if it arrived already committed | refused `INVALID_SIGNATURE` |
+
+### The repair
+
+- `signing::verify_identity_op_as(op, pubkey)` verifies an identity op against a
+  caller-supplied key. `verify_transaction` must trust `op.signing_key` (ingress
+  has no state); the registry must not.
+- `IdentityRegistry::apply_identity_op` is now the enforcement point, at the
+  ordered application position recovery also passes through: create requires
+  `did == did:unfer:hex(signing_key)` and a valid self-signature; update and
+  revoke require `signing_key` equal to the *stored* authority, a signature by
+  that authority, and a strictly increasing `seq` (revoke included). No unsigned
+  rotation: an op carrying a different key is refused rather than silently
+  ignored, which is what the old `Update` did with `op.signing_key`.
+- Ingress verification is unchanged, and deliberately so: the attacker's op is
+  authentic under its own key, which is why this belongs at the ordered point
+  and why a test asserts that `verify_identity_op_as` accepts the forgery while
+  the registry refuses it.
+
+### Evidence
+
+```
+$ cargo test --locked --offline -p unfer_consensus --lib          # 116 passed
+$ cargo test --locked --offline -p unfer_identity                 # 6 + 1 passed
+$ cargo test --locked --offline -p unfer_consensus --features network --test phase6_testnet  # 4 passed
+$ cargo test --locked --offline -p unfer_data                     # passed
+```
+
+Logs: `evidence/d01-unfer_consensus_lib.log`,
+`evidence/d01-unfer_identity.log`, `evidence/d01-phase6_testnet.log`,
+`evidence/d01-data.log`. All exit 0.
+
+### What this does **not** claim
+
+- Non-identity transactions still verify only at ingress; this patch makes the
+  identity path state-dependent and leaves the other ledgers to their own tasks
+  (D03, D14).
+- Key rotation is refused, not implemented. Adding it is a protocol change with
+  its own witness and is not smuggled in as “update”.
+- `duplicate replay consistently with D05/D06`: a replayed identity op is
+  refused by the DID's own sequence number, which is durable in the registry;
+  the submission-level request identity (D06) is untouched.
+
 ## Task status
 
 | Task | Status | Note |
 |---|---|---|
 | D00 | complete (re-measured 2026-11-21) | this record, the inventory and the checker; all seven suites green on this host, the remaining gaps named above |
-| D01–D26 | not started | D01 begins in the sibling `unfer` repository. The plan's §3 authorizes a coordinated change there for a task that names both repositories, but the patch is not written yet; its failing witness is the first substep |
+| D01 | verified within stated scope | identity authority bound at the ordered point; five witnesses above; the limits listed there |
+| D02–D26 | not started | D02 is the content-envelope nonce repair; its first substep is the failing witness |

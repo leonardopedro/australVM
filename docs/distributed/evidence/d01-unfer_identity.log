@@ -1,0 +1,52 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+   Compiling unfer_consensus v0.1.0 (/home/leo/Projects/unfer/unfer_consensus)
+   Compiling unfer_identity v0.1.0 (/home/leo/Projects/unfer/unfer_identity)
+warning: `unfer_identity` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_identity` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s
+     Running unittests src/lib.rs (target/debug/deps/unfer_identity-95b6e8558c0818a6)
+
+running 6 tests
+test tests::did_pubkey_roundtrip ... ok
+test tests::create_and_resolve_did ... ok
+test tests::duplicate_create_fails ... ok
+test tests::resolve_json_is_valid ... ok
+test tests::revoke_did ... ok
+test tests::update_service_endpoint ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+   Doc-tests unfer_identity
+
+running 1 test
+test unfer_identity/src/lib.rs - (line 12) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 6.72s; merged doctests compilation took 6.69s
+EXIT=0

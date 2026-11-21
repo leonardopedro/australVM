@@ -903,6 +903,7 @@ evidence of work performed.
 | Task/patch | Status | Source revisions + dirty inputs | Targeted checks/logs | Evidence class | Remaining assumptions/gaps |
 |---|---|---|---|---|---|
 | D00 | implemented with gaps | A `3ad01bac`+; U `b0aaa7c`, clean | [`docs/distributed/EXECUTION.md`](docs/distributed/EXECUTION.md), `scripts/check-distributed-contracts --selftest` | structural checker | The 2026-11-19 rows that were `gap` for a missing `cc` cache are re-measured on this aarch64 host; the suites still not run keep their named gap |
+| D01 | verified within stated scope | U `b0aaa7c` + this patch; A unchanged | `unfer_consensus --lib` 116 passed, `unfer_identity`, `phase6_testnet`, `unfer_data`; logs under `docs/distributed/evidence/` | runtime-tested | Identity authority is enforced at the ordered point; other op kinds still verify at ingress only, and unsigned key rotation is refused rather than implemented |
 
 The D00 record is the ledger: every later task appends its row there with the
 command, exit, evidence path and the assumption it leaves behind.
