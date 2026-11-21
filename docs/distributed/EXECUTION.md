@@ -403,6 +403,104 @@ This is domain atomicity within one applied op. Crash atomicity (a torn write
 during the commit) is D07's, and the ledger's `write`+`rename` without `fsync`
 still stands between here and a restart-safety claim.
 
+## D05 — separate submission, commitment and application (2026-11-21)
+
+**New** U `unfer_protocol/src/submission.rs`; U
+`unfer_consensus/src/{engine,node,net}.rs`, `unfer_identity/src/lib.rs`,
+`unfer_data/src/publisher.rs`; U `b0aaa7c` + this patch.
+
+### The confusion that was there
+
+`ConsensusEngine::submit` returned one `u64` that callers used as both a
+receipt id and a log position. That is true on `LocalConsensus` (submission *is*
+commitment there) and false on `NetConsensus`, which reserves an id from
+`next_id` before QuePaxa runs and appends the payload at whatever slot the
+decision lands in. `DidManager` and the publisher then reported success as soon
+as `submit` returned, so a network caller could be told a DID was created while
+the entry was still only *pending*.
+
+### What is now distinct
+
+| Type | Meaning |
+|---|---|
+| `SubmissionId` | the receipt identity `submit` returns; not a position |
+| `Slot` | the committed position the payload landed at |
+| `Watermark` | the highest slot **applied** to this node's state |
+| `ReceiptState` | `Pending`, `Committed(slot)`, `Refused{slot, refusal}`, `Unknown(reason)` |
+| `Refusal` | a domain verdict as (code, message), equal iff the same entry was refused the same way |
+| `HaltReason` | `Gap{expected, found}` / `OutOfOrder` — a property of the *history*, not the entry |
+
+The engine gained `receipt(id)` and a bounded `wait(id, timeout)`; a deadline
+returns `Unknown(TimedOut)`, never success and never a refusal. `ConsensusNode`
+gained `submit_tracked`, `settle(id, timeout)` (wait, apply, then report the
+settled outcome), `watermark()`, `refusal(slot)`, `halted()` and `sync_report()`.
+`submit` and `sync` keep their shapes as documented adapters.
+
+On `NetConsensus` the id→slot mapping is durable (`LedgerSnapshot.committed_ids`,
+`serde(default)` so a pre-existing snapshot still loads), because a restarted
+node must still be able to answer what happened to a submission id it handed out
+before the restart.
+
+### Application semantics, and what changed in them
+
+Previously any `Err` from applying a committed entry came back out of `sync()
+and stopped the prefix there, which meant one domain refusal wedged every good
+entry committed behind it — and the watermark then sat *before* an entry the
+engine had already committed, forever. Now:
+
+* a **domain refusal** is recorded against its slot and the slot advances;
+* a **gap or backwards slot** halts the node: it applies nothing further, keeps
+the reason, and refuses later `sync` calls rather than silently skipping the
+history it could not apply;
+* each committed entry is **re-verified** before application. Ingress
+  verification only covers what this node submitted; without this, an entry
+  arriving through the log with a stripped signature would apply.
+
+Two existing tests changed because the contract changed, and their names say
+what they now assert: `invalid_certificate_op_rejected_before_log` became
+`refused_certificate_op_advances_the_slot_with_a_typed_outcome` (the old name
+claimed a rejection *before* the log, which is not where it ever happened), and
+`market_resolve_forgery_rejected` now asserts a typed refusal at its slot
+instead of `sync().unwrap_err()`.
+
+### Witnesses
+
+| Witness | Asserts |
+|---|---|
+| `a_refused_entry_between_two_good_ones_does_not_wedge_the_suffix` | 3 slots applied, watermark 3, refusal at slot 2, both good mints present and the refused 500 absent (supply 150) |
+| `a_refused_entry_leaves_the_ledger_fingerprint_unchanged` | whole-`CertificateLedger` `Debug` fingerprint identical before/after (D04's comparison reused) |
+| `a_gap_in_committed_history_halts_without_applying_anything_past_it` | `HaltReason::Gap{expected:2, found:3}`, watermark 1, supply 100, and a second `sync` still refuses |
+| `a_tampered_entry_is_refused_on_replay` | a signature flipped after signing is refused `INVALID_SIGNATURE` at application, supply 0 |
+| `settle_applies_the_entry_it_reports_as_committed` | `Committed` implies `total_supply() == 100` — the state, not just the log |
+| `settle_reports_a_refusal_rather_than_committed` | unauthorized mint settles as `Refused` with UK-7001 at slot 1 |
+| `a_receipt_bounded_wait_reports_unknown_not_success` | an unknown id settles as UK-1010 |
+| `local_receipt_is_its_own_slot` | `LocalConsensus` receipt is the slot; an unreserved id is not |
+| `pending_creation_is_not_reported_as_created` | `DidManager` over an engine that never commits returns UK-1010, `applied_seq() == 0`, DID absent |
+| `publication_is_not_reported_before_application` | `DataPublisher` over the same engine returns UK-1010, nothing applied |
+
+```
+$ cargo test --locked --offline -p unfer_protocol --lib          # 351 passed
+$ cargo test --locked --offline -p unfer_consensus --lib         # 129 passed
+$ cargo test --locked --offline -p unfer_consensus --features network --test phase6_testnet  # 4 passed
+$ cargo test --locked --offline -p unfer_identity                # 7 + 1 doc passed
+$ cargo test --locked --offline -p unfer_data --lib              # 63 passed
+```
+
+Logs: `evidence/d05-unfer_{protocol,consensus,identity,data}*.log`, all exit 0.
+The `phase6_testnet` run matters twice over: it drives a real 2-of-3 QuePaxa
+cluster through the new id→slot receipt path, and its restart test proves the
+mapping survives a full-cluster restart.
+
+### Not claimed
+
+Local receipt/commitment/application separation is **not** evidence of
+Byzantine ordering; QuePaxa's own guarantees are unchanged and untested here.
+D06 owns durable *request* identity (a caller retrying across a crash), and D07
+owns crash atomicity — `settle` says "applied to this node", not "durable on
+disk". Classification of halts is by history shape only: the ledgers still
+report storage failures as domain diagnostics, so a future storage dependency
+inside application will need an explicit `Halt`.
+
 ## Task status
 
 | Task | Status | Note |
@@ -412,4 +510,5 @@ still stands between here and a restart-safety claim.
 | D02 | verified within stated scope | per-object key context, authenticated metadata, version refusal; eleven witnesses and the ffi vault suite |
 | D03 | verified within stated scope | capability RPC loopback-only at ingress; registry owner/grant checks per verb; the auth seam (A9) stays a named gap |
 | D04 | verified within stated scope | burn is validate-then-commit; four refusal fingerprints; `total_supply` no longer panics on overflow |
-| D05–D26 | not started | M0 (D00–D04) is complete; D05 splits submission from commitment |
+| D05 | verified within stated scope | receipt/slot/watermark are distinct; a domain refusal advances the slot, a gap halts; identity and publishing settle before reporting |
+| D06–D26 | not started | M0 complete; D06 is next (durable request identity) |
