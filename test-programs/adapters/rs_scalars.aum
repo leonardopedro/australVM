@@ -1,8 +1,13 @@
--- U11 golden fixture: every foreign signature here needs the generated adapter
--- wrapper, so compiling it with --emit-adapters must produce exactly
+-- U11/U12 golden fixture: every foreign signature here needs the generated
+-- adapter wrapper, so compiling it with --emit-adapters must produce exactly
 -- `adapters.golden`. The two word-native shapes below must produce nothing:
 -- they keep their declared symbol and call the native function directly.
+-- The last two are the buffer shapes of version 1: a Nat8 buffer and the
+-- 64-bit length right after it, with a scalar result — `Pointer[Nat8]` crosses
+-- as `read`, `Address[Nat8]` as `readwrite`.
 pragma Unsafe_Module;
+
+import Austral.Memory (Address, Pointer);
 
 module body Adapters is
     pragma Foreign_Import(External_Name => "rs_scale");
@@ -23,6 +28,16 @@ module body Adapters is
     pragma Foreign_Import(External_Name => "rs_word_native");
     pragma Rust_Ownership(Params => "owned", Return => "owned");
     function rs_word_native(x: Int64): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_count");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_count(bytes: Pointer[Nat8], len: Nat64): Nat32 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_fill");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_fill(bytes: Address[Nat8], len: Int64): Int32 is
     end;
 
     function main(): ExitCode is

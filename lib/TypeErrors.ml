@@ -304,7 +304,53 @@ let rust_adapter_buffer_unsupported ~subject ~ty =
     Text subject;
     Text " has type ";
     Type ty;
-    Text ", which cannot cross the extern rust boundary in this signature: the adapter ABI carries one 64-bit word per parameter, and a byte buffer needs a length, capacity and pointer-provenance convention the descriptor does not define yet. Keep every parameter and the result word-native instead (Int64/Nat64, an address or a pointer, with an Int64/Nat64 result — those calls name the declared symbol and build no adapter)."
+    Text ", which cannot cross the extern rust boundary in this signature: buffer transport version 1 carries a Nat8 byte buffer as an ";
+    Code "Address[Nat8]";
+    Text " or ";
+    Code "Pointer[Nat8]";
+    Text " parameter with its length as the next parameter, and a scalar result. A buffer result, a span, or a pointer to anything but Nat8 bytes is a different protocol, which needs its own version and its own tests. Keep the result word-native instead (Int64/Nat64 — those calls name the declared symbol and build no adapter)."
+  ]
+
+let rust_adapter_buffer_needs_length ~name ~ty =
+  austral_raise DeclarationError [
+    Text "The parameter ";
+    Code name;
+    Text " has type ";
+    Type ty;
+    Text " and is a byte buffer, but the parameter after it is not its length. A buffer cannot cross the extern rust boundary without one: the length is the extent the wrapper (";
+    Code "<name>__adapter";
+    Text ") uses to build the slice, and it must be a ";
+    Code "Nat64";
+    Text " or ";
+    Code "Int64";
+    Text " parameter directly after the buffer."
+  ]
+
+let rust_adapter_buffer_length_unpaired ~name =
+  austral_raise DeclarationError [
+    Text "The parameter ";
+    Code name;
+    Text " is a 64-bit integer in a signature that carries a byte buffer, but it does not directly follow a buffer, so it does not measure one. Buffer transport version 1 takes each length to be the parameter immediately after its buffer, and a length with no buffer has no extent to describe."
+  ]
+
+let rust_adapter_buffer_scalar_beside ~name ~ty =
+  austral_raise DeclarationError [
+    Text "The parameter ";
+    Code name;
+    Text " has type ";
+    Type ty;
+    Text " in a signature that carries a byte buffer. Buffer transport version 1 describes a signature as Nat8 byte buffers, the 64-bit length after each one, and a scalar result; it has no per-parameter type list, so a scalar or a non-Nat8 pointer beside a buffer cannot be described and its wrapper cannot be generated."
+  ]
+
+let rust_adapter_buffer_length_types ~first ~second =
+  austral_raise DeclarationError [
+    Text "The buffer lengths in this signature have different types (";
+    Type first;
+    Text " and ";
+    Type second;
+    Text "). One descriptor states one ";
+    Code "lengths";
+    Text " type, so every length parameter must be the same 64-bit integer type."
   ]
 
 let rust_interop_transport ~ty =

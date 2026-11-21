@@ -679,26 +679,65 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
     Errors.rust_ownership_shape ~ty:rt;
   if not (is_adapter_protocol_type rt) then
     Errors.rust_adapter_unsupported ~ty:rt;
-  (* U11 step 3 / the U12 seam: an adapter-mediated call cannot also carry a
-     byte buffer. The scalar ABI carries one word per parameter and the
-     descriptor has no buffer layout — no length, capacity, provenance or
-     extent convention exists yet (U12) — so `Compiler_cps` cannot describe the
-     signature and the `<name>__adapter` symbol it names has no implementable
-     wrapper. The word-native path is untouched: an `Address`/`Pointer`
-     parameter with an `Int64`/`Nat64` result keeps the declared symbol. *)
+  (* U11 step 3 / U12: an adapter-mediated call may carry a byte buffer only in
+     the shape `abi buffer 1` describes — Nat8 buffers, each immediately
+     followed by its 64-bit length, with a scalar result. That is exactly what
+     `Compiler_cps.adapter_descriptors_text` writes and what
+     `umbrella/src/interface.rs` can implement as `<name>__adapter`; a shape
+     admitted here but not describable there would name a wrapper that cannot
+     exist. A byte buffer forces mediation even when every word is 64 bits wide
+     (`Address` + `Nat64` + an `Int64` result), because the wrapper is where
+     the protocol's guards are: a direct call would dereference a pointer the
+     null/length checks never saw. *)
+  let is_byte_buffer (ty: ty): bool =
+    match ty with
+    | Address inner | Pointer inner ->
+      (match inner with Integer (Unsigned, Width8) -> true | _ -> false)
+    | _ -> false
+  in
+  let is_length_type (ty: ty): bool =
+    match ty with Integer ((Signed | Unsigned), Width64) -> true | _ -> false
+  in
   let needs_adapter =
-    not (List.for_all
+    List.exists (fun (ValueParameter (_, ty)) -> is_byte_buffer ty) params
+    || not (
+         List.for_all
            (fun (ValueParameter (_, ty)) -> is_word_native_type ty) params
          && is_word_native_type rt)
   in
   if needs_adapter then begin
-    List.iter (fun (ValueParameter (name, ty)) ->
-        if is_buffer_type ty then
-          Errors.rust_adapter_buffer_unsupported
-            ~subject:(Printf.sprintf "The parameter `%s`" (ident_string name))
-            ~ty) params;
+    let params =
+      List.map
+        (fun (ValueParameter (name, ty)) -> (ident_string name, ty))
+        params
+    in
     if is_buffer_type rt then
-      Errors.rust_adapter_buffer_unsupported ~subject:"The result" ~ty:rt
+      Errors.rust_adapter_buffer_unsupported ~subject:"The result" ~ty:rt;
+    if List.exists (fun (_, ty) -> is_buffer_type ty) params then begin
+      let lengths = ref [] in
+      let rec scan = function
+        | [] -> ()
+        | (name, ty) :: rest ->
+          if is_byte_buffer ty then
+            match rest with
+            | (_, len_ty) :: rest' when is_length_type len_ty ->
+              lengths := len_ty :: !lengths;
+              scan rest'
+            | _ -> Errors.rust_adapter_buffer_needs_length ~name ~ty
+          else if is_length_type ty then
+            Errors.rust_adapter_buffer_length_unpaired ~name
+          else
+            Errors.rust_adapter_buffer_scalar_beside ~name ~ty
+      in
+      scan params;
+      match !lengths with
+      | first :: rest ->
+        (match List.find_opt (fun ty -> ty <> first) rest with
+         | Some other ->
+           Errors.rust_adapter_buffer_length_types ~first ~second:other
+         | None -> ())
+      | [] -> ()
+    end
   end
 
 let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (decl: linked_definition): typed_decl =
