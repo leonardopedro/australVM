@@ -29,6 +29,8 @@ Each test directory contains some Austral source files (in the simplest cases, `
 
 Run a single suite with `./test-programs/runner.py <suite>`; a second argument filters test names.
 
+The no-argument run compiles the suites named in `runner.DEFAULT_SUITES`, in that order. Wiring a suite is therefore an explicit edit: `collect_tests` refuses a directory under `suites/` that the tuple does not name, and refuses a name that has no directory, so neither a forgotten suite nor a stale entry can pass quietly.
+
 Suite and test directories are numbered so that tests run in a predictable order.
 
 The `runner.py` script runs the tests.

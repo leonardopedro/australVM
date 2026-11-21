@@ -284,17 +284,86 @@ def try_join(l: list[str] | None) -> str:
 # Collection
 #
 
+# The suites the default run compiles, in run order.
+#
+# This is the list the runner's no-argument invocation uses. It is explicit so
+# that wiring a suite is a recorded decision rather than a side effect of a
+# directory existing: `collect_tests` refuses a `suites/` directory this tuple
+# does not name (a suite nobody compiles), and refuses a name with no directory
+# (a stale entry). Adding a suite is therefore an edit here; dropping one is an
+# edit too, and both cannot happen silently.
+DEFAULT_SUITES: tuple[str, ...] = (
+    "001-trivial",
+    "002-constants",
+    "003-record",
+    "004-union",
+    "005-fixed-string",
+    "006-linearity",
+    "007-borrowing",
+    "008-typeclasses",
+    "009-names",
+    "010-functions",
+    "011-bugs",
+    "012-numbers",
+    "013-ref-transforms",
+    "014-int-constants",
+    "015-mutability",
+    "016-spans",
+    "017-austral-memory",
+    "018-group-borrow",
+    "019-extern-rust",
+    "020-liquid-syntax",
+    "021-virtio",
+    "022-gpu",
+    "023-liquid-index-closure",
+    "023-runner-loader",
+    "024-gpu-jobs",
+    "024-liquid-split",
+    "025-gpu-f32",
+    "025-linear-handles",
+    "026-gpu-bounded-fold",
+    # 027-handle-pragma: the `Handle_Ownership` pragma's two typing refusals (a
+    # dispose import whose signature is not the wrapper ABI, and the pragma on a
+    # function that is not a foreign import). Both are fixtures with captured
+    # stderr, so a reworded diagnostic is a fixture update.
+    "027-handle-pragma",
+)
+
 
 def collect_tests() -> list[Test]:
     """
-    Get the list of all test suites.
+    Get the tests of every suite in `DEFAULT_SUITES`.
+
+    Raises `ValueError` when `suites/` and `DEFAULT_SUITES` disagree, in either
+    direction: an unlisted suite would be compiled by no default run, and a
+    listed suite with no directory is a stale entry.
     """
     # Result aggregator.
     tests: list[Test] = []
     # Find the `suites/`` directory.
     suites_dir: str = os.path.join(DIR, "suites")
     # Find the test suites.
-    suite_names: list = sorted(os.listdir(suites_dir))
+    discovered: list = sorted(
+        name
+        for name in os.listdir(suites_dir)
+        if os.path.isdir(os.path.join(suites_dir, name))
+    )
+    unwired: list = [name for name in discovered if name not in DEFAULT_SUITES]
+    missing: list = [name for name in DEFAULT_SUITES if name not in discovered]
+    if unwired:
+        raise ValueError(
+            "Suite(s) present in suites/ but not wired into DEFAULT_SUITES, so "
+            "the default run compiles none of them: "
+            + ", ".join(unwired)
+            + ". Add them to DEFAULT_SUITES in test-programs/runner.py."
+        )
+    if missing:
+        raise ValueError(
+            "Suite(s) named in DEFAULT_SUITES with no directory under suites/: "
+            + ", ".join(missing)
+            + ". Remove them from DEFAULT_SUITES in test-programs/runner.py."
+        )
+    suite_names: list = list(DEFAULT_SUITES)
     # Iterate over each test suite.
     for suite_name in suite_names:
         # Find the tests in this suite.
