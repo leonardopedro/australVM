@@ -897,12 +897,106 @@ drop-counter oracle): schema version, read through the handle, double destroy
 drops once, a reused slot does not resurrect, foreign owner, foreign type,
 stale provider generation, and `take` leaving the handle stale.
 
-**Not yet carried (this is a bounded start):** no generated wrappers, so no
-`<name>__new`/`__dispose` symbol exists and no module can hold a handle yet; no
-Austral `Linear` type with private construction, so the linearity is the
-registry's, not the type system's; the handle is not encoded to the two words
-the ABI will carry; and the owning instance is a tag compared for equality —
-there is no lifetime link to the instance, only a refusal once it changes.
+**The wire form.** A handle crosses as two 64-bit words, packed without loss
+because every component is 32 bits: `word0 = owner << 32 | slot`, `word1 =
+provider generation << 32 | slot generation`. The pair `(0, 0)` is the null
+handle and is refused as `Malformed` rather than read as slot 0, and owner tags
+start at 1, so no live handle encodes to it. The words carry no type tag: the
+type is the wrapper's, because the generator numbers the registries in one
+adapter crate from 1, so a handle minted for one object type has an owner tag no
+other registry in that crate holds. That is what keeps "wrong type" a refusal
+even though the pair has no room for a type.
+
+**The registry lives in the bridge.** `safestos/cranelift/src/handles.rs` is the
+table; `umbrella/src/handles.rs` re-exports it. A generated wrapper is compiled
+with `austral_cranelift_bridge` as its only dependency, so a registry hosted in
+the umbrella crate could not be linked by the very code that must use it — and
+two copies of the table would be two tables. `HandleRegistry::new` is `const`,
+which is what lets a wrapper hold one in a `static Mutex` with no initialization
+step and no allocation until the first insert.
+
+**Allocation and free are counted separately.** `allocated` counts stored
+values and `freed` counts the values this table destroyed in place;
+`take` releases a slot but hands the value to the caller, so it is not a
+`freed`. That is what lets a test hold `allocated`, `freed`, `released` and the
+provider's own drop counter against each other: a value that left through
+`take` is dropped by the caller, and the oracle sees exactly that.
+
+**The generator.** An `abi handle 1` block names the type, the two provider
+symbols and the constructor's arity:
+
+```text
+schema 1
+abi handle 1
+symbol rs_widget__new
+target rs_widget
+type widget
+constructor rs_widget_ctor
+destructor rs_widget_dtor
+params 1
+```
+
+`HandleAdapter::parse_descriptors` numbers the registries from 1 and the number
+is the owner tag the words carry; the tag is not part of the text, because it is
+the generator's numbering inside one crate, not a fact about the type. The
+descriptor is refused unless `symbol` is exactly `<target>__new` (so the dispose
+symbol `<target>__dispose` is derived from the same name and a module cannot
+name a dispose for a type whose constructor it never named), unless the type is
+a plain identifier, unless the tag is non-zero, and unless constructor and
+destructor differ. `render_handle_wrapper` writes both wrappers into one module
+over one registry:
+
+* `__new(words…, out)` — the constructor's `params` 64-bit words, a status word,
+  and the handle's two words written through `out`. Status `0` is done, `1` is
+  refused; a null `out` is refused *before* the provider allocates, so a
+  mistaken caller cannot leak an allocation that has no handle.
+* `__dispose(lo, hi)` — the two words back through `destroy_words`: a null pair,
+  another registry's owner, a previous provider generation and a stale slot are
+  all `1`, and only a live pair reaches the destructor.
+* The constructor's pointer is wrapped in `ProviderValue`, whose `Drop` calls the
+  provider's destructor. The host never frees a provider's memory; a refused
+  insert drops the value there and then, so the provider is not leaked, and a
+  destroyed value is freed once because the registry never mints its words
+  again.
+
+**The module side is a linear type.** `umbrella/modules/WidgetHandle.aui`
+exports only `type Widget: Linear;` plus `adopt(lo, hi)`, `dispose(widget)` and a
+`main` that is the intended path; the record itself is the body's, so no client
+module can construct a `Widget` by hand. `adopt` is the construction seam (it
+takes the words a granted `__new` produced) and `dispose` destructures the
+record — which is the linear obligation discharged — and hands the words
+straight back to `avm_widget__dispose`. Both parameters are 64-bit scalars, so
+the call is word-native: measured, the compiled body contains
+`extern au_int64_t avm_widget__dispose(au_int64_t lo, au_int64_t hi);` and the
+direct call, with no adapter, because there is no buffer and nothing to encode.
+
+Evidence: `cargo test --offline --lib handles` in the bridge (3 white-box
+tests: the retirement path, the word pair and the separated counters) and
+`cargo test --offline --lib --test handles` in the umbrella (60 lib tests + 11
+integration tests: ten registry/encoding cases and the wrapper test), The wrapper test compiles the provider and
+both generated modules into one `cdylib` and drives them through `dlsym`: a
+constructor returns `0` and a non-null pair, the first dispose returns `0` and
+the provider's drop counter moves once, the second returns `1` with the counter
+unchanged, another type's dispose refuses these words while its own still work,
+a slot reused after disposal hands out the same low word with a new generation
+and the old words are refused while the new value stays live, and a forged
+provider generation, a null `out` and the null pair are each refused without
+allocating. `test-programs/suites/025-linear-handles` runs three fixtures
+(`python3 test-programs/runner.py 025-linear-handles` → 3 PASS): adopt-then-
+dispose runs and exits 0, forgetting the handle is a linearity error ("is not
+consumed by the time of the return statement"), and disposing it twice is a
+linearity error ("has already been consumed"). `./austral compile
+umbrella/modules/WidgetHandle.aui,umbrella/modules/WidgetHandle.aum
+--entrypoint=WidgetHandle:main --target-type=c` exits 0.
+
+**Not yet carried:** nothing in the lowering emits an `abi handle` block yet,
+so `WidgetHandle` declares the dispose symbol by hand and no module calls
+`__new` — a module cannot create a handle from Austral source yet, and the
+wrapper test is the only caller of the generated constructor; the provider
+generation is the constant 1 with no reload path that bumps it; the module has
+no operation that *reads* through a handle (no `__use`/`__with` wrapper), so a
+value can be created and destroyed but not yet used; and borrows/views over an
+owned handle are U14's.
 
 **Still not carried:**
 Only literals, mediated calls, Float64 arithmetic and float comparisons carry a

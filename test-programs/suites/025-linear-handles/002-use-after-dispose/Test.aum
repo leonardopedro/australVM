@@ -1,0 +1,30 @@
+module body Test is
+    record Handle: Linear is
+        lo: Int64;
+        hi: Int64;
+    end;
+
+    function adopt(lo: Int64, hi: Int64): Handle is
+        return Handle(lo => lo, hi => hi);
+    end;
+
+    function dispose(handle: Handle): Int64 is
+        let { lo: Int64, hi: Int64 } := handle;
+        return lo + hi;
+    end;
+
+    function main(): ExitCode is
+        let handle: Handle := adopt(1, 2);
+        let first: Int64 := dispose(handle);
+        let second: Int64 := dispose(handle);
+        if first >= 0 then
+            if second >= 0 then
+                return ExitSuccess();
+            else
+                return ExitFailure();
+            end if;
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.
