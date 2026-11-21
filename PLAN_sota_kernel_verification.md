@@ -118,7 +118,7 @@ Exact (grep/ls-verified for this plan):
 | proof-term derivation check | `scripts/lean-proof-scan`, `lean-typing-proof`, `lean-typing-check` | **exists** |
 | kernel obbligation oracle | `safestos/cranelift/.../netcert`, `uk_austral_defeq`, `scripts/lean-net-cert` | **exists** |
 | C backend | `--target-type=c` (`lib/CliParser.ml`) | **exists** |
-| symbolic (class-of-states) certificate | `mm0/flux1d_certificate.{mm0,mm1}` — 4 obligations over `docs/kernel_alg.mm0`, 15 grounded + 6 structural facts, one hypothesis eliminated by substitution, `mm0-rs` + `mm0-c` accept the `peq` chain | **exists** (flux1d; approval pending) |
+| symbolic (class-of-states) certificate | `mm0/flux1d_certificate.{mm0,mm1}` — 4 obligations over `docs/kernel_alg.mm0`, 15 grounded + 6 structural facts, one hypothesis eliminated by substitution, `mm0-rs` + `mm0-c` accept the `peq` chain | **exists** (flux1d; approved in `mm0/approved/` 2026-11-20) |
 | **kernel-spec surface (flux algebra) in Austral** | `examples/verified-kernel/flux1d/` (spec + execution side, obligations sidecar) | **partial** (no CPS-IR carrier yet) |
 | comparator: approved statement vs generated | `scripts/mm0-comparator` (diff + closure hash + theory hash, 3 negative controls) | **exists** (S1); `mm0/approved/` empty on purpose |
 | **`assumed=N` budget** | `-- assumed:` + `-- witness:` emitted by `au2mm0`, pinned in `BUDGETS` and gated; `lean-typing-check --assumed-json` for Lean artifacts | **exists** (flux1d: `assumed=1`; lean2mm0 gap below) |
@@ -357,24 +357,23 @@ verify-invariants: 157 passed, 8 explained gap(s), 0 failed
   [gap]  W3: slot_layout has no approved statements (run scripts/mm0-comparator approve slot_layout, then commit mm0/approved/)
   [gap]  W3: store_projection has no approved statements (run scripts/mm0-comparator approve store_projection, then commit mm0/approved/)
   [gap]  W3: store_projection_toy has no approved statements (run scripts/mm0-comparator approve store_projection_toy, then commit mm0/approved/)
-  [gap]  W3: liquid_split has no approved statements (run scripts/mm0-comparator approve liquid_split, then commit mm0/approved/)
-w3-pending: isa(193 stmt) liquid_split(91 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
 w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
-  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 0 approved)
-  [pass] W3: every pending §W3 row's artifact re-derives into a staging (5 row(s))
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-  [pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 0 approved)
+  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W3: every §W3 emitter cell names a real command (5 row(s))
+  [pass] W3: every §W3 emitter cell names a real command (4 row(s))
   [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
   [pass] W3: the recorded probe evidence still names live gate lines (21 row(s))
-  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
-  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 5 pending row(s) (exit 0)
+  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
+  [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
@@ -808,10 +807,8 @@ the artifact, so `mm0-c` checks them too.
   **Owner approvals (asked 2026-11-15, landed 2026-11-20), one row each.** Each
   row was a separate `[gap]` line in `verify-invariants`, so a partially-approved
   set showed up as a shrinking count rather than a single unhelpful "W3 open":
-  the five rows below were the five `[gap] W3: <artifact> has no approved
-  statements` lines in §3.5; the owner committed four of them, and
-  `liquid_split` (L11d.2) is still waiting, so the split is 4 approved / 1
-  pending rather than all or nothing. The `state`
+  the four rows below were the four `[gap] W3: <artifact> has no approved
+  statements` lines in §3.5 until the owner committed the statements. The `state`
   cell is the record of the decision in both directions — setting it back to
   `` `[gap]`, awaiting owner commit `` withdraws an approval, and the gate reads
   the rest off the two states (see the state-column paragraph below). What an
@@ -826,7 +823,15 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[pass]`, approved in `mm0/approved/` | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
   | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, a certificate naming the approval | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays unproved (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
   | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[pass]`, approved in `mm0/approved/` | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
-  | `mm0/liquid_split.mm0` | L11d.2's held-out split law in the law's own variables (guard `k <= n`, declared premises and residual, 12 ring identities); binding-independent, so two launch plans share it | 91 | `scripts/liquid-split-mm0 check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | `65214b34c22f9bcc2ce1dadeef3863e3567d25842de420959a887efd766a0d35` |
+
+  A fifth artifact is **planned, not a row**: L11d.2 wants the split law kept as
+  a single reviewed held-out statement (`PLAN_liquid_types.md` L11d), which would
+  arrive as `mm0/liquid_split.mm0` with an emitter under `scripts/` and an
+  `EMITTERS` entry. None of the three exists, and L11d says the pilot "needs no
+  change to the existing W3 counts", so there is nothing here to give a `stmts`,
+  state or digest cell: this table's every cell is checked against the artifact
+  it names, and a row for an artifact the tree does not hold fails the gate. The
+  row lands with the artifact, not before it.
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
@@ -856,13 +861,9 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
   [pass] W3: the recorded probe evidence still names live gate lines (6 row(s))
-  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
-  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 5 pending row(s) (exit 0)
-  [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
-  [pass] W3: stage-approvals refuses a named artifact that is already approved
-  [pass] W3: stage-approvals refuses an artifact that equals its approved copy
+  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
   ```
 
   The `statements-sha256` column is checked the same way, because a quoted digest
@@ -1296,7 +1297,7 @@ the artifact, so `mm0-c` checks them too.
   the row. Everything downstream is then read off the two states: the `stmts`
   and digest columns are compared with the approved copy for approved rows and
   with a fresh staging for pending ones (the pass lines report the split:
-  `(5 row(s), 0 approved)` today), the `w3-pending:` line shortens and
+  `(4 row(s), 0 approved)` in that run), the `w3-pending:` line shortens and
   `w3-approved:` grows without anyone editing a second list, and
   `scripts/stage-approvals` stops staging the artifact because its approved
   copy now exists. Half an approval is refused rather than half-made: a pending
@@ -1697,7 +1698,7 @@ instructions the emitter produces for the certified fragment — the same mechan
 as `SYMBOL_REGISTRY`'s census, with an `ISA_REGISTRY` beside it:
 
 ```
-austral compile examples/verified-kernel/flux1d/flux1d.aum --use-cps-jit \
+austral compile examples/verified-kernel/flux1d/Flux1d.aum --use-cps-jit \
   --emit-cps=/tmp/flux1d.cps        # the IR the model must cover
 ./scripts/isa-census /tmp/flux1d.cps   # decoder vs artifact vs measured
 ```
@@ -2852,9 +2853,9 @@ Two things this pins down that a count could not:
   place any of this is proved), and it does not upgrade `isa`'s encoder laws to
   facts about the compiler — they are the model's, cited as such.
 - **The counts are gate-pinned, the names are not.** `verify-invariants` prints
-  `w3-pending: isa(193 stmt) liquid_split(91 stmt) slot_layout(23 stmt)
+  `w3-pending: isa(193 stmt) slot_layout(23 stmt)
   store_projection(11 stmt) store_projection_toy(70 stmt)` every run, so a
-  statement added to any of the five moves that line and this table has to move
+  statement added to any of the four moves that line and this table has to move
   with it; the closure digests
   above are the rule for the *names*, since the canonical form does not keep
   them. `scripts/check-links` will not catch a stale name in a list like this —
@@ -3037,7 +3038,7 @@ What the commit has to be, and what changes with it:
 |---|---|---|
 | S1 | W0, W3 | `scripts/mm0-comparator` rejects all three negative controls; `lean2mm0 check` byte-identical — **met 2026-11-12** |
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
-| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
+| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approved in `mm0/approved/` 2026-11-20 |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5).**Re-pinned 2026-11-19** by the branch this was merged from, from an aarch64
 host: `cps=c10ca9a9…` (which is what this tree's compiler produces — the cps
