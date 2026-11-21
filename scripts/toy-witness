@@ -5,7 +5,10 @@
 # dependencies, and it must be runnable from `verify-invariants` without touching
 # any build directory. rustc absent is exit 2 ("cannot check here"), the same
 # convention `scripts/mm0-comparator` uses for an unprovisioned theory, so the
-# gate reports a gap instead of a failure.
+# gate reports a gap instead of a failure. A `rustc` that cannot *link* — a rustup
+# shim whose cc points at a garbage-collected store path is the case measured in
+# the `lean` shell on 2026-11-21 — is the same "cannot check here", so it exits 2
+# too: a linker error says nothing about the axioms the file checks.
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -19,6 +22,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 if ! rustc -O --edition 2021 -o "$tmp/toy-witness" "$here/toy-witness.rs" >"$tmp/rustc.log" 2>&1; then
+    # A toolchain that cannot link is a property of this shell, not of the
+    # source: report it as "cannot check here" so the gate gaps, never fails.
+    if grep -qE 'collect2:|ld returned|error: linker|linker .* not found|crt1\.o' "$tmp/rustc.log"; then
+        echo "toy-witness: rustc cannot link in this shell — no working C toolchain for it, so the witness cannot be built here:" >&2
+        sed -n '1,5p' "$tmp/rustc.log" >&2
+        exit 2
+    fi
     echo "toy-witness: rustc refused the checker:" >&2
     sed -n '1,20p' "$tmp/rustc.log" >&2
     exit 1
