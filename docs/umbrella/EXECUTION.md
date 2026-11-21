@@ -923,7 +923,8 @@ provider's own drop counter against each other: a value that left through
 `take` is dropped by the caller, and the oracle sees exactly that.
 
 **The generator.** An `abi handle 1` block names the type, the two provider
-symbols and the constructor's arity:
+symbols, the constructor's arity and — when the module names one — the
+provider's reader:
 
 ```text
 schema 1
@@ -933,8 +934,13 @@ target rs_widget
 type widget
 constructor rs_widget_ctor
 destructor rs_widget_dtor
+use rs_widget_read
 params 1
 ```
+
+The `use` line is optional and sits between `destructor` and `params`, so a
+descriptor without a reader is byte-identical to the older form and a reader is
+never implied.
 
 The compiler writes that block itself: a `Foreign_Import` carrying a
 `Handle_Ownership` pragma names only the handle's *target*, and the CPS
@@ -1001,8 +1007,10 @@ straight back to the dispose wrapper. The body declares no wrapper symbol:
 `Handle_Ownership` names the provider facts (including `Use =>
 "avm_widget_read"`); the compiler derives `avm_widget__dispose` for the call
 and emits the block the generator renders. `read` borrows the record, passes
-its words and one local `Address[Int64]` slot to the generated
-`avm_widget__use`, and returns the word the provider's reader produced or `-1`
+its words and a local `Pointer[Int64]` slot to the generated
+`avm_widget__use` (a pointer, not an `Address`: the wrapper writes one word
+through it, and the module needs no identity embed for it — see the `__embed`
+note below), and returns the word the provider's reader produced or `-1`
 when the words were refused — a borrow, not a consume, which is why the same
 handle can still be disposed afterwards. `main` is the whole path: adopt, read
 (refused here, because the words name no live slot in a test build), dispose.
@@ -1016,7 +1024,7 @@ direct call, with no adapter, because there is no buffer and nothing to encode.
 
 Evidence: `cargo test --offline --lib handles` in the bridge (3 white-box
 tests: the retirement path, the word pair and the separated counters) and
-`cargo test --offline --lib --test handles` in the umbrella (60 lib tests + 13
+`cargo test --offline --lib --test handles` in the umbrella (63 lib tests + 13
 integration tests: ten registry/encoding cases and three wrapper cases — create/
 destroy, read, and a reload), The wrapper test compiles the provider and
 both generated modules into one `cdylib` and drives them through `dlsym`: a
@@ -1035,10 +1043,15 @@ umbrella/modules/WidgetHandle.aui,umbrella/modules/WidgetHandle.aum
 --entrypoint=WidgetHandle:main --target-type=c` exits 0.
 
 **Not yet carried:** the lowering emits the `abi handle 1` block and the
-`read` seam calls `__use`, but no module calls `__new` yet — the constructor
-needs an out pointer, which Austral source has no allocation seam for at this
-stage, so the wrapper test is still the only caller of the generated
-constructor, and `WidgetHandle.main` adopts words rather than minting them;
+`read` seam calls `__use`, but no module calls `__new` yet, and the reason is
+measured rather than assumed: the constructor needs an out slot, so the module
+would allocate one (`allocateBuffer`, an `__embed` with two arguments) and read
+the pair back (`load`, an `__embed` with one), and the bridge declares
+`__embed` once per module — it fails with "Failed to declare import `__embed`:
+… is incompatible with previous declaration …" and emits no C. Until the
+bridge either names the shapes apart or fixes one widest signature, the
+wrapper test is still the only caller of the generated constructor and
+`WidgetHandle.main` adopts words rather than minting them;
 there is no scoped borrow (`__with`) that lends the value to a callback; and
 borrows/views over an owned handle are U14's. The provider generation is no
 longer constant: each build takes the next number, but no *reload* path in the

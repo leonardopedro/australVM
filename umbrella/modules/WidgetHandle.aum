@@ -1,7 +1,7 @@
 pragma Unsafe_Module;
 
 import Austral.Memory (
-    Address,
+    Pointer,
     refMutToPointer
 );
 
@@ -30,15 +30,19 @@ module body WidgetHandle is
     -- The reading import names the generated `<target>__use` wrapper, which
     -- resolves the words in the same registry and calls the provider's reader
     -- (`avm_widget_read`, the pragma's `Use`) to hand one word back. The out
-    -- slot is a local; a refusal leaves it untouched.
+    -- slot is a local `Pointer`, not an `Address`: the wrapper writes one word
+    -- through it, a pointer is the word the C ABI takes, and this way the
+    -- module needs no identity `@embed` for it — the JIT declares `__embed`
+    -- with one signature per module, so a module that embeds both an
+    -- allocation and an identity currently fails to compile. A refusal leaves
+    -- the slot untouched.
     pragma Foreign_Import(External_Name => "avm_widget__use");
-    function widgetUse(lo: Int64, hi: Int64, out: Address[Int64]): Int64 is end;
+    function widgetUse(lo: Int64, hi: Int64, out: Pointer[Int64]): Int64 is end;
 
     generic [R: Region]
     function read(widget: &[Widget, R]): Int64 is
         var word: Int64 := -1;
-        let slot: Address[Int64] :=
-            @embed(Address[Int64], "$1", refMutToPointer(&!word));
+        let slot: Pointer[Int64] := refMutToPointer(&!word);
         let status: Int64 := widgetUse(widget->lo, widget->hi, slot);
         if status = 0 then
             return word;
@@ -56,11 +60,18 @@ module body WidgetHandle is
     end;
 
     function main(): ExitCode is
+        -- The words a granted `__new` produced. Calling `__new` from source
+        -- needs an out slot it can write through, and the pair read back out
+        -- of it: in the JIT that is an allocation (`__embed` at two words) plus
+        -- a load (`__embed` at one), and the bridge declares `__embed` once per
+        -- module, so it refuses the pair -- a measured limitation, not a
+        -- decision here. Until that is fixed `adopt` takes the words the
+        -- wrapper test's `dlsym` call got.
         let widget: Widget := adopt(1, 2);
         -- The reading seam, called: `read` hands the words to `__use`, which
         -- resolves them in the registry and returns the provider's word. The
-        -- words above name no live slot, so this is refused; the status is
-        -- what says so, and `-1` is the module's own "nothing read".
+        -- words above name no live slot, so this is refused and `read` says
+        -- so with `-1`; that refusal is the module-side witness for `__use`.
         let value: Int64 := read(&widget);
         let outcome: Int64 := dispose(widget);
         if value = -1 then
