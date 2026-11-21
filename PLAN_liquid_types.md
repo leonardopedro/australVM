@@ -171,7 +171,7 @@ qualification. Layout:
 | `LiquidWhy3.ml` | Horn → `.mlw` emitter + `why3 prove` subprocess driver (L5) |
 | `LiquidInfer.ml` | qualifier fixed point / Houdini elimination (L6) |
 | `lib/liquid/golden/` | pinned `.mlw` + extraction diffs (the `authorize_gate` discipline) |
-| `lib/liquid/liquid.drv` | extraction driver (native ints, sibling of `unfer_ocaml.drv`) |
+| `lib/why3_plugin/unfer_ocaml.drv` | extraction driver (native ints) — reused rather than copied; the `liquid.drv` this table first named was never created, see §8 L10's reuse decision |
 
 Hook point: `Compiler.compile_mod`, after `check_module_linearity typed`,
 before `extract_bodies`/`monomorphize` (see §5 for the pre/post-mono decision).

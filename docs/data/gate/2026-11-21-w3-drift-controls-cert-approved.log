@@ -1,0 +1,10 @@
+
+== cert-approved (275s)
+  gate: verify-invariants: 170 passed, 2 explained gap(s), 1 failed (exit 1)
+  [FAIL] W9.3: the refinement's citations still match their artifacts
+  detail: mm0/approved/isa.stmts
+  [pass] W9.3: certification state matches mm0/approved/
+  [pass] Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
+  holds
+timing: 1/1 case(s) in 275s at -j 1 (275s each) — /tmp/w3-drift-controls/timings.tsv

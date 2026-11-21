@@ -1,454 +1,398 @@
 #!/usr/bin/env python3
-"""liquid-split-mm0 — emit (and check) the split law, `mm0/liquid_split.mm0` (L11d.1).
+"""liquid-split-mm0 — generate (and check) the split law's MM0 artifact.
 
-`LiquidSplitPilot` checks one audited wrapper: `split(w, k)` must build
-`(off(w), k)` and `(off(w) + k, len(w) - k)` over a shared base, and a caller's
-`case` gets conservation and disjointness only after the pilot has *derived*
-them. L11d.1 holds that shape out as `held_out_split_law` and reflects the
-analyser's reading of a module as structured evidence
-(`AUSTRAL_LIQUID_EVIDENCE`, rendered by `LiquidSplitPilot.render_evidence`).
-Until this script existed the law lived only in that source comment: nothing
-outside the pass could be reviewed, held out, or compared against a change.
+`PLAN_liquid_types.md` L11d asks for one reviewed split law kept as a held-out
+statement: extent conservation plus disjoint writes under the guarded split
+precondition, bound to the elaborated model, function and numeric profile. The
+Why3 half of that card checks the *implementation* obligations; this artifact is
+the MM0 profile's half — the exact statement and its residual premises, as an
+MM0 proof application that `mm0-c` re-checks from the specification.
 
-This script writes the law down in MM0, *from the evidence of one accepted
-module* (`test-programs/suites/024-liquid-split/001-accept-split/Test.aum`):
+WHAT IS STATED. A buffer `b` split at an index `k`, guarded by `ok_split b k`
+(the numeric profile's `0 <= k <= len b`, named rather than restated), yields
+`left b k` and `right b k`; the law says their extents sum to `len b`, that the
+two halves are disjoint, that an index inside a half is an index inside the
+buffer, and that a write into one half does not disturb a read from the other.
 
-  * the law's obligations — the two constructed spans, the shared base,
-    conservation, disjointness and byte scaling — one statement per evidence
-    line, with the guard as a premise and the layer each line claims
-    (`[checked]`, `[stated: L11d.2]`, `[premise: width]`) in the comment above
-    the statement it applies to;
-  * that module's call instantiation — the guard the pilot discharged, and the
-    arithmetic it *checked* (`[10,13)`, `[13,18)`, `3 + 5 = 8`, `13 <= 13`,
-    `[80,104)`/`[104,144)` bytes) — quoted verbatim in the artifact's
-    `-- evidence:` block, so a reviewer sees the measurement the statements
-    were written from without running the compiler.
+WHAT IS PROVED. Ten theorems, each an instance or a composition of the premises:
 
-WHAT THIS FILE IS, AND IS NOT. It is a specification: every statement is a
-`term … : Prop`, and there is no `axiom` and no `theorem` in it. Nothing here
-says the law holds — the pilot's `[checked]` lines are the pass's own verdict,
-L11d.2 owns a proof, and the certificate line is `[gap]` until the owner
-commits an approval. `scripts/verify-invariants` refuses an `axiom` or
-`theorem` in this artifact, so it cannot start claiming one.
+  split_extent_conserved             the guarded split conserves the extent
+  split_halves_disjoint              the halves' writes cannot alias
+  split_left_index_is_buffer_index   in-bounds in a half ⇒ in-bounds in `b`
+  split_write_left_keeps_right       a write to the left is invisible on the right
+  split_write_right_keeps_left       … and the mirror image
+  split_write_visible_in_half        a write is visible where it wrote
+  split_one_write_per_half           the two halves' writes commute: a program
+                                     may use one half without disturbing the other
+  split_parts_are_nonnegative        an extent is not negative
+  split_left_fits_the_whole          the left extent is within the sum
+  split_conservation_pins_the_bound  … and within `len b` by conservation
 
-The evidence is the input, not a decoration: the emitter refuses to write when
-the pilot rejects the fixture, when a `[checked]` line's arithmetic does not
-add up (three really is `8 - 5` and `10 + 3` really is `13`), or when a law
-obligation line the statements are generated from is missing. A law that moved
-in `LiquidSplitPilot.ml` therefore shows up as a drift in this file, and a
-fixture that stopped being accepted shows up as a refusal.
+WHAT IS ASSUMED. MM0 has no arithmetic, so `Idx` and `plus`/`le`/`ieq` are
+uninterpreted and the split's own laws (`split_conserves`, `split_disjoint`,
+`split_parts_in`) are axioms: they are the residual premises the guarded split
+precondition supplies. What the theorems add is the *composition* — that those
+premises are enough for a program to read one half after writing the other,
+which is the shape the implementation obligations have to instantiate.
+
+WHAT IS NOT PROVED. That the Austral split function conserves extents, that the
+elaborated model's `k` really satisfies `ok_split`, or that the residual
+premises hold of any concrete buffer. Those are L11d's Why3 obligations and the
+statement comparator's job, and this file does not stand in for either: the
+axioms are quoted here so a reviewer can disagree with the premises themselves.
+
+This pilot needed no change to the existing W3 counts (`PLAN_liquid_types.md`
+L11d): it adds a row of its own, `mm0/liquid_split.mm0` in §W3, and leaves the
+other artifacts' statement counts alone.
 
 Usage:
-    scripts/liquid-split-mm0 [check]     # check the committed artifact is current
-    scripts/liquid-split-mm0 --write     # regenerate mm0/liquid_split.mm0 and .mm1
-Exit: 0 current/emitted, 1 drift, 2 could not run (reported as `[gap]` upstream).
+    scripts/liquid-split-mm0            # check the committed pair is current
+    scripts/liquid-split-mm0 check      # same (the name mm0-comparator EMITTERS uses)
+    scripts/liquid-split-mm0 --write    # rewrite mm0/liquid_split.{mm0,mm1}
+Exit: 0 current/proved, 1 stale or malformed, 2 cannot run.
 """
 
-import hashlib
-import os
+import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL = os.path.join(ROOT, "mm0", "liquid_split.mm0")
-PROOF = os.path.join(ROOT, "mm0", "liquid_split.mm1")
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+MM0 = ROOT / "mm0" / "liquid_split.mm0"
+MM1 = ROOT / "mm0" / "liquid_split.mm1"
 
-# The accepted module whose evidence the law is reflected from: a literal split,
-# so the pilot's arithmetic decides `0 <= 3` and `3 <= length(w) = 8` and the
-# evidence carries `[checked]` ranges rather than `symbolic` ones.
-FIXTURE = "test-programs/suites/024-liquid-split/001-accept-split/Test.aum"
+# Every theorem's proof term, by name. A theorem in the specification that has no
+# entry here is an error, never a silent `sorry`: the pair must not claim what it
+# has not proved. The proofs are short because the law is stated so that each
+# goal is one premise, or two premises composed by `veq_trans`.
+PROOFS = {
+    "split_extent_conserved": "split_conserves (h)",
+    "split_halves_disjoint": "split_disjoint (h)",
+    "split_left_index_is_buffer_index": "split_parts_in (h) (j)",
+    "split_write_left_keeps_right": "rd_wr_disjoint (split_disjoint (h))",
+    "split_write_right_keeps_left":
+        "rd_wr_disjoint (disj_sym (split_disjoint (h)))",
+    "split_write_visible_in_half": "rd_wr_same",
+    "split_one_write_per_half":
+        "veq_trans (rd_wr_disjoint (split_disjoint (h))) (rd_wr_same)",
+    "split_parts_are_nonnegative": "le_zero",
+    "split_left_fits_the_whole": "le_plus_left",
+    "split_conservation_pins_the_bound": "le_sum_bound (split_conserves (h))",
+}
 
-# The pass that produces the evidence is cited by content, not by name: a
-# change to the law in `LiquidSplitPilot.ml` makes this artifact stale, which is
-# the pressure that keeps the two from drifting apart.
-CITE_PASS = "lib/liquid/LiquidSplitPilot.ml"
+# The axiom set, by name. Listed here so `check` can say which premise a missing
+# axiom would have removed, and so the count is a fact rather than a grep.
+AXIOMS = [
+    "veq_trans", "le_zero", "le_plus_left", "le_sum_bound",
+    "split_conserves", "split_disjoint", "split_parts_in", "disj_sym",
+    "rd_wr_same", "rd_wr_disjoint",
+]
 
-BRIDGE_DIR = os.path.join(ROOT, "safestos", "cranelift", "target", "release")
+SPEC = r"""-- liquid_split.mm0 — the split law L11d stages, stated for the MM0 profile.
+--
+-- GENERATED by `scripts/liquid-split-mm0 --write`; edit the script, not this
+-- file. The proof file `liquid_split.mm1` is derived from this text, so the
+-- statements and the proofs cannot drift apart.
+--
+-- WHAT IS STATED. A buffer `b` split at an index `k`, guarded by `ok_split b k`
+-- — the numeric profile's `0 <= k <= len b`, named rather than restated here —
+-- yields `left b k` and `right b k`. The law says that the two extents sum to
+-- `len b`, that the halves are disjoint, that an index inside a half is an index
+-- inside `b`, and that a write into one half does not disturb a read from the
+-- other. The last of those is the one a split buffer program actually relies on.
+--
+-- WHAT IS PROVED (10 theorems, 0 sorry):
+--
+--   split_extent_conserved             the guarded split conserves the extent
+--   split_halves_disjoint              the halves' writes cannot alias
+--   split_left_index_is_buffer_index   in-bounds in a half ⇒ in-bounds in `b`
+--   split_write_left_keeps_right       a write to the left is invisible on the right
+--   split_write_right_keeps_left       … and the mirror image
+--   split_write_visible_in_half        a write is visible where it wrote
+--   split_one_write_per_half           the halves' writes commute (two writes,
+--                                      one read, no interference)
+--   split_parts_are_nonnegative        an extent is not negative
+--   split_left_fits_the_whole          the left extent is within the sum
+--   split_conservation_pins_the_bound  … and within `len b` by conservation
+--
+-- WHAT IS ASSUMED, AND WHY. MM0 has no arithmetic: `Idx` is an uninterpreted
+-- sort, `plus`, `le` and `ieq` are uninterpreted terms, and the split's own laws
+-- are axioms. Those three — conservation, disjointness, and an in-half index
+-- being a buffer index — are exactly the residual premises the guarded split
+-- precondition supplies, so what the theorems add is the *composition*: that
+-- those premises suffice for a program to write one half and read the other.
+-- A reviewer who disagrees with a premise can point at the one axiom and not at
+-- a derivation.
+--
+-- WHAT IS *NOT* PROVED. That the Austral split function conserves extents, that
+-- the elaborated model's index satisfies `ok_split`, or that the residual
+-- premises hold of any concrete buffer. Those are L11d's Why3 obligations and
+-- the statement comparator's subject; this artifact is the exact statement
+-- those obligations instantiate, and it is a statement of record, not a
+-- certificate about the implementation.
+--
+-- `veq_trans` is the only bridge between value equalities, so a composition
+-- proof reads as a chain of reads; the two numeric laws (`le_zero`,
+-- `le_plus_left`) and their bound (`le_sum_bound`) are what let the extent
+-- figures be compared at all without an arithmetic theory.
+
+-- theory: self-declared vocabulary — the sorts and terms below are this
+-- artifact's whole theory; it imports no rule from `cic.mm0` or `isa.mm0`, so
+-- there is no `used=` coverage list to state. What the split law rests on is
+-- the axioms in the next section, each named as a residual premise.
+
+provable sort Prop;
+delimiter $ ( ) $;
+
+-- ── The profile's vocabulary ─────────────────────────────────────────────
+-- `Idx` is the numeric profile's extent/index domain (the Int64 lengths of the
+-- Austral side), `Buf` a buffer, `St` a machine state, `Val` a stored value.
+-- None is given a structure: the law below is about extents and interference,
+-- not about how a buffer or a state is laid out.
+sort Idx;
+sort Buf;
+sort St;
+sort Val;
+
+term zero: Idx;
+term plus (x y: Idx): Idx;
+term len (b: Buf): Idx;
+-- The split, and its guard. `take`/`drop` are the two halves; `ok_split` is the
+-- precondition the law is guarded by, named so that the theorem statements carry
+-- it as a hypothesis instead of restating a numeric comparison in each one.
+term take (b: Buf) (k: Idx): Buf;
+term drop (b: Buf) (k: Idx): Buf;
+term ok_split (b: Buf) (k: Idx): Prop;
+term disjoint (b c: Buf): Prop;
+term inb (b: Buf) (i: Idx): Prop;
+-- Writing a value into a buffer at an index (`wr`), and reading one back (`rd`).
+term wr (s: St) (b: Buf) (i: Idx) (v: Val): St;
+term rd (s: St) (b: Buf) (i: Idx): Val;
+-- Extent equality and order, and value equality. Uninterpreted: the three
+-- numeric axioms below are the whole arithmetic this artifact uses.
+term ieq (x y: Idx): Prop;
+term veq (x y: Val): Prop;
+term le (x y: Idx): Prop;
+
+-- The two halves of a split are named here because every theorem below is
+-- stated in those names: a reader should be able to see "left" and "right" in
+-- the goal without translating back to `take`/`drop` first.
+def left (b: Buf) (k: Idx): Buf = $ take b k $;
+def right (b: Buf) (k: Idx): Buf = $ drop b k $;
+
+-- ── The residual premises ────────────────────────────────────────────────
+-- Value equality composes; the split's conservation and disjointness are
+-- assumed *of the guarded split*, which is what makes them premises rather than
+-- theorems. Everything the law claims about interference is derived from these.
+axiom veq_trans (x y z: Val) (h1: $ veq x y $) (h2: $ veq y z $): $ veq x z $;
+-- The numeric profile: an extent is non-negative, and a sum is at least its
+-- left part. `le_sum_bound` turns a conserved sum into a bound on the whole —
+-- the step that makes `split_conservation_pins_the_bound` a theorem about `b`
+-- rather than about `plus`.
+axiom le_zero (x: Idx): $ le zero x $;
+axiom le_plus_left (x y: Idx): $ le x (plus x y) $;
+axiom le_sum_bound (x y z: Idx) (h: $ ieq (plus x y) z $): $ le x z $;
+-- Extent conservation: the guarded split's two extents add up to the buffer's.
+axiom split_conserves (b: Buf) (k: Idx) (h: $ ok_split b k $):
+  $ ieq (plus (len (take b k)) (len (drop b k))) (len b) $;
+-- Disjointness: the halves' writes cannot alias, which is the premise every
+-- interference theorem below consumes.
+axiom split_disjoint (b: Buf) (k: Idx) (h: $ ok_split b k $):
+  $ disjoint (take b k) (drop b k) $;
+-- An index inside a half is an index inside the buffer the half came from.
+axiom split_parts_in (b: Buf) (k: Idx) (i: Idx) (h: $ ok_split b k $)
+  (j: $ inb (take b k) i $): $ inb b i $;
+axiom disj_sym (b c: Buf) (h: $ disjoint b c $): $ disjoint c b $;
+-- The two write/read laws the composition rests on: a write is visible where it
+-- wrote, and a write into a buffer disjoint from the one being read is not
+-- visible at all.
+axiom rd_wr_same (s: St) (b: Buf) (i: Idx) (v: Val):
+  $ veq (rd (wr s b i v) b i) v $;
+axiom rd_wr_disjoint (s: St) (b c: Buf) (i j: Idx) (v: Val)
+  (h: $ disjoint b c $):
+  $ veq (rd (wr s b i v) c j) (rd s c j) $;
+
+-- ── The law ──────────────────────────────────────────────────────────────
+-- Conservation, restated over `left`/`right`: the definitions unfold, so this is
+-- the statement a reader of the split law looks for.
+theorem split_extent_conserved (b: Buf) (k: Idx) (h: $ ok_split b k $):
+  $ ieq (plus (len (left b k)) (len (right b k))) (len b) $;
+-- Disjointness under the same guard, in the same names.
+theorem split_halves_disjoint (b: Buf) (k: Idx) (h: $ ok_split b k $):
+  $ disjoint (left b k) (right b k) $;
+theorem split_left_index_is_buffer_index (b: Buf) (k: Idx) (i: Idx)
+  (h: $ ok_split b k $) (j: $ inb (left b k) i $): $ inb b i $;
+-- Interference: writing into the left half leaves a read of the right half
+-- exactly as it was. This is the property that makes a split usable — the two
+-- halves may be handed to different code without synchronisation — and its
+-- mirror image below.
+theorem split_write_left_keeps_right (s: St) (b: Buf) (k: Idx) (i j: Idx) (v: Val)
+  (h: $ ok_split b k $):
+  $ veq (rd (wr s (left b k) i v) (right b k) j) (rd s (right b k) j) $;
+theorem split_write_right_keeps_left (s: St) (b: Buf) (k: Idx) (i j: Idx) (v: Val)
+  (h: $ ok_split b k $):
+  $ veq (rd (wr s (right b k) i v) (left b k) j) (rd s (left b k) j) $;
+-- Visibility inside a half, with no guard: a write is visible where it wrote.
+theorem split_write_visible_in_half (s: St) (b: Buf) (k: Idx) (i: Idx) (v: Val):
+  $ veq (rd (wr s (left b k) i v) (left b k) i) v $;
+-- The composition: write the right half, write the left half, then read the
+-- right half back — the value the first write left is still there. Neither write
+-- saw the other, which is the whole reason the split exists.
+theorem split_one_write_per_half (s: St) (b: Buf) (k: Idx) (i j: Idx)
+  (va vb: Val) (h: $ ok_split b k $):
+  $ veq (rd (wr (wr s (right b k) j vb) (left b k) i va) (right b k) j) vb $;
+-- The numeric-profile side of the same law: both extents are non-negative, the
+-- left one is within the sum, and conservation turns that into a bound by the
+-- buffer's own extent.
+theorem split_parts_are_nonnegative (b: Buf) (k: Idx):
+  $ le zero (len (left b k)) $;
+theorem split_left_fits_the_whole (b: Buf) (k: Idx):
+  $ le (len (left b k)) (plus (len (left b k)) (len (right b k))) $;
+theorem split_conservation_pins_the_bound (b: Buf) (k: Idx) (h: $ ok_split b k $):
+  $ le (len (left b k)) (len b) $;
+"""
 
 
-def rel(path):
-    return os.path.relpath(path, ROOT).replace(os.sep, "/")
+def mm1_text(mm0_text: str) -> str:
+    """The proof file: the same declarations, each theorem carrying its proof.
 
-
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def die_gap(msg):
-    print(f"liquid-split-mm0: [gap] {msg}", file=sys.stderr)
-    sys.exit(2)
-
-
-def die_fail(msg):
-    print(f"liquid-split-mm0: FAIL {msg}", file=sys.stderr)
-    sys.exit(1)
-
-
-# ── the measurement: the pilot's own evidence for the accepted module ────────
-
-
-def measure():
-    """Compile the fixture with `AUSTRAL_LIQUID_EVIDENCE` and read the file.
-
-    The compiler is the one the rest of the gate uses (`$AUSTRAL_BIN`, else
-    `./austral`): the evidence has to come from the build under test, or this
-    artifact would describe a pilot nobody is running.
+    Statements can span lines, so this scans per theorem rather than per line.
+    A theorem with no entry in PROOFS is fatal — emitting it without one would
+    make `mm0-rs` print a `sorry` warning and `mm0-c` refuse the file, which is
+    the correct outcome, but the reason would be this script's silence.
     """
-    austral = os.environ.get("AUSTRAL_BIN") or os.path.join(ROOT, "austral")
-    if not os.access(austral, os.X_OK):
-        die_gap(f"no compiler at {rel(austral) or austral} — build it (`make bridge`)")
-    env = dict(os.environ)
-    env["LD_LIBRARY_PATH"] = os.pathsep.join(
-        [BRIDGE_DIR, ROOT] + ([env["LD_LIBRARY_PATH"]] if env.get("LD_LIBRARY_PATH") else []))
-    with tempfile.TemporaryDirectory(prefix="liquid-split-mm0-") as td:
-        ev = os.path.join(td, "evidence.txt")
-        env["AUSTRAL_LIQUID_EVIDENCE"] = ev
-        res = subprocess.run(
-            [austral, "compile", os.path.join(ROOT, FIXTURE), "--target-type=tc"],
-            capture_output=True, text=True, env=env)
-        if res.returncode != 0:
-            die_gap("the pilot refused the accepted fixture:\n"
-                    + (res.stderr.strip() or res.stdout.strip())[:800])
-        try:
-            with open(ev) as f:
-                text = f.read()
-        except FileNotFoundError:
-            die_gap("the compiler wrote no evidence file for the accepted fixture "
-                    "(is `AUSTRAL_LIQUID_EVIDENCE` still read by the pilot?)")
-    if not text.startswith("# liquid split evidence (L11d.1)\n"):
-        die_fail("the evidence file does not start with the L11d.1 marker")
-    return text
+    header = (
+        "-- liquid_split.mm1 — the proof file for mm0/liquid_split.mm0.\n"
+        "--\n"
+        "-- GENERATED by `scripts/liquid-split-mm0 --write`; edit the script, not\n"
+        "-- this file. `mm0-c` checks these proofs against the specification on\n"
+        "-- every run that compiles them, so the statement and its proof cannot\n"
+        "-- disagree. Proof arguments are hypotheses and term arguments are\n"
+        "-- inferred in proof position, which is why the proofs are one premise or\n"
+        f"-- two composed by `veq_trans`: {len(PROOFS)} theorem(s), no `sorry`.\n"
+        "--\n"
+        "-- Keep this file's declarations in the same order as the `.mm0`: mm0-c\n"
+        "-- matches them in order, and a swap surfaces as an unrelated unify\n"
+        "-- failure elsewhere.\n\n"
+    )
+    lines = mm0_text.splitlines()
+    out, n, i = [], 0, 0
+    while i < len(lines):
+        m = re.match(r"^theorem\s+([A-Za-z0-9_]+)\b", lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        name = m.group(1)
+        chunk = [lines[i]]
+        while not chunk[-1].rstrip().endswith(";"):
+            i += 1
+            if i >= len(lines):
+                raise SystemExit(f"liquid-split-mm0: theorem {name} never ends with `;`")
+            chunk.append(lines[i])
+        stmt = "\n".join(chunk).rstrip()[:-1]  # drop the terminating `;`
+        if name not in PROOFS:
+            raise SystemExit(
+                f"liquid-split-mm0: theorem {name} has no proof term — add one to "
+                "PROOFS rather than emitting an unproved theorem"
+            )
+        out.append(re.sub(r"^theorem\b", "pub theorem", stmt)
+                   + f" = '({PROOFS[name]});")
+        n += 1
+        i += 1
+    if n != len(PROOFS):
+        raise SystemExit(
+            f"liquid-split-mm0: {n} theorem(s) in the specification, "
+            f"{len(PROOFS)} proof term(s) — one of them is orphaned"
+        )
+    return header + "\n".join(out) + "\n"
 
 
-class Evidence:
-    """The lines the statements are generated from, each validated."""
+def toolchain(mm0_text: str, mm1_text_: str) -> str:
+    """Compile the pair and re-check it with `mm0-c`, when the tools are here.
 
-    def __init__(self, text):
-        self.text = text
-        self.lines = text.rstrip("\n").split("\n")
-
-        def one(pattern, what):
-            hits = [ln for ln in self.lines if re.match(pattern, ln)]
-            if len(hits) != 1:
-                die_fail(f"evidence has {len(hits)} {what} line(s), want exactly 1")
-            return hits[0]
-
-        self.law_line = one(r"^law: \S+ \[L11d\.1\]$", "`law:`")
-        self.law = self.law_line[len("law: "):].split(" [")[0]
-        self.module_line = one(r"^module: \S+$", "`module:`")
-        self.module = self.module_line[len("module: "):]
-        self.width_line = one(r"^width: .+$", "`width:`")
-        self.left_line = one(
-            rf"^obligation {re.escape(self.law)}: left = \([^()]+, [^()]+\)$",
-            "left-span obligation")
-        self.right_line = one(
-            rf"^obligation {re.escape(self.law)}: right = \(\(.+\)\)$",
-            "right-span obligation")
-        self.base_line = one(r"^obligation left\.base = right\.base = \S+ ", "shared-base")
-        self.conservation_line = one(r"^obligation conservation: .+$", "conservation")
-        self.disjoint_line = one(r"^obligation disjoint: .+$", "disjointness")
-        self.bytes_line = one(r"^obligation bytes: .+$", "byte-scaling")
-        self.calls = [ln for ln in self.lines if ln.startswith("call: ")]
-        if not self.calls:
-            die_fail("evidence has no `call:` line — the accepted fixture must "
-                     "call the split, or there is nothing to instantiate")
-        for ln in self.lines:
-            if "[REFUSED]" in ln:
-                die_fail(f"evidence records a refusal: {ln}")
-        # `[checked]` arithmetic must actually hold: these numbers are what the
-        # pilot decided, and the artifact quotes them as measured facts.
-        self.checked = [ln for ln in self.lines
-                        if ln.startswith("  conservation:") or ln.startswith("  disjoint:")
-                        or ln.startswith("  element ranges:") or ln.startswith("  byte ranges:")]
-        self._check_arithmetic()
-
-    def _check_arithmetic(self):
-        m = [ln for ln in self.lines if ln.startswith("  conservation:")]
-        if len(m) != 1:
-            die_fail("evidence has no single checked `conservation:` line")
-        mm = re.match(r"^  conservation: (\d+) \+ (\d+) = (\d+) \[checked\]$", m[0])
-        if not mm:
-            die_fail(f"conservation line is not a checked identity: {m[0]!r}")
-        a, b, c = (int(x) for x in mm.groups())
-        if a + b != c:
-            die_fail(f"evidence says {a} + {b} = {c}, which is false")
-
-        m = [ln for ln in self.lines if ln.startswith("  disjoint:")]
-        if len(m) != 1:
-            die_fail("evidence has no single checked `disjoint:` line")
-        mm = re.match(r"^  disjoint: (\d+) <= (\d+) \[checked\]$", m[0])
-        if not mm:
-            die_fail(f"disjoint line is not a checked inequality: {m[0]!r}")
-        if int(mm.group(1)) > int(mm.group(2)):
-            die_fail(f"evidence says {mm.group(1)} <= {mm.group(2)}, which is false")
-
-        ranges = [ln for ln in self.lines if ln.startswith("  element ranges:")]
-        ranges += [ln for ln in self.lines if ln.startswith("  byte ranges:")]
-        for ln in ranges:
-            left = re.search(r"left \[(\d+),(\d+)\) len=(\d+)", ln)
-            right = re.search(r"right \[(\d+),(\d+)\) len=(\d+)", ln)
-            if not left or not right:
-                die_fail(f"range line is not in the pinned shape: {ln!r}")
-            for rng in (left, right):
-                start, end, length = (int(x) for x in rng.groups())
-                if end - start != length:
-                    die_fail(f"range [{start},{end}) has length {length} in: {ln!r}")
-            if int(left.group(2)) != int(right.group(1)):
-                die_fail(f"the two halves are not contiguous in: {ln!r}")
-
-
-# ── rendering ───────────────────────────────────────────────────────────────
-
-
-def render(ev, fixture_sha, pass_sha, evidence_sha):
-    out = []
-    w = out.append
-
-    w("-- liquid split law — liquid_split (generated by scripts/liquid-split-mm0).")
-    w("--")
-    w("-- Source: " + FIXTURE)
-    w(f"--   sha256 {fixture_sha} — the accepted L11c module whose evidence this")
-    w("--   artifact reflects (a literal split: the pilot decides its call by")
-    w("--   arithmetic, so the evidence carries `[checked]` ranges).")
-    w(f"-- Pass:   {CITE_PASS}")
-    w(f"--   sha256 {pass_sha} — the law this file writes down, and the evidence")
-    w("--   renderer whose lines are quoted below.")
-    w(f"-- Evidence: the pilot's L11d.1 output for the source above, sha256 {evidence_sha}")
-    w("--   (canonical binder names, as `AUSTRAL_LIQUID_EVIDENCE` writes them).")
-    w("--")
-    w("-- WHAT IS CLAIMED. L11d.1 holds out one law, `" + ev.law + "`: a checked")
-    w("-- `split(w, k)` returns the spans")
-    w("--")
-    w(f"--     left  = {ev.left_line.split(' = ', 1)[1]}")
-    w(f"--     right = {ev.right_line.split(' = ', 1)[1]}")
-    w("--")
-    w("-- over a shared base, conserves the extent (`left.len + right.len = n`),")
-    w("-- and does not overlap (`left.off + left.len <= right.off`); byte addresses")
-    w("-- are element indices scaled by a checked element width. The law's special")
-    w("-- case — two launch plans sharing one split — is why the statements are in")
-    w("-- the law's own variables (`s`, `k`, `width`), not in a caller's.")
-    w("--")
-    w("-- HOW EACH LINE IS BACKED. The pilot's evidence labels every fact:")
-    w("--")
-    w("--   [checked]          the pass decided it for the accepted module (the")
-    w("--                      call's guard, the ranges, the arithmetic). Those")
-    w("--                      lines are quoted verbatim below and instantiated as")
-    w("--                      `ev_*` statements — the measurement, not a claim.")
-    w("--   [stated: L11d.2]   the law states it and L11d.2 owns the proof; the")
-    w("--                      statements here name the obligation and stay unproved.")
-    w("--   [premise]          a premise the law declares (`width > 0`, the extent")
-    w("--                      fitting the allocation domain, the byte address")
-    w("--                      fitting Int64). Declared as vocabulary, never assumed.")
-    w("--")
-    w("-- WHAT THIS FILE IS NOT: a certificate. There is no `axiom` and no `theorem`")
-    w("-- in it — every statement is a `term … : Prop` — so nothing here says the")
-    w("-- law holds. `scripts/verify-invariants` refuses an `axiom` or `theorem` in")
-    w("-- this artifact, and the certificate line stays `[gap]` until the owner")
-    w("-- commits an approval into `mm0/approved/liquid_split.stmts`. The `[gap]`")
-    w("-- is the honest state: the law is written down and held out, and its proof")
-    w("-- is L11d.2's.")
-    w("--")
-    w("-- The evidence block, verbatim (one line per `-- evidence: ` entry):")
-    for ln in ev.lines:
-        w("-- evidence: " + ln)
-    w("--")
-    w("-- theory: self-declared vocabulary — the sorts and terms below are this")
-    w("-- artifact's whole theory; it imports no rule from `cic.mm0`, `isa.mm0` or")
-    w("-- `kernel_alg.mm0`, so there is no `used=` coverage list to state. The law")
-    w("-- is about the split's *shape*; the arithmetic the pilot checked is quoted")
-    w("-- in the evidence block, and a proof of the general identity is L11d.2's.")
-    w("-- certificate: [gap — no owner approval in mm0/approved/ and no proof]")
-    w("")
-    w("-- `provable sort Prop` is how this repo's MM0 files get a proposition sort")
-    w("-- (see `mm0/clif.mm0:30`); without it `: Prop` is \"sort not found\" —")
-    w("-- measured, not guessed.")
-    w("sort Val;                       -- element offsets, extents, bases, widths")
-    w("sort Span;                      -- the audited (base, off, len) wrapper")
-    w("provable sort Prop;")
-    w("")
-    w("-- Values. `add`/`sub`/`mul` are the law's notation, uninterpreted: what")
-    w("-- they mean is the sentence above, where a reviewer can disagree with it,")
-    w("-- and the pilot's own checked arithmetic is quoted in the evidence block.")
-    w("term veq (a b: Val): Prop;      -- the law's `=` (MM0 has no built-in equality)")
-    w("term vle (a b: Val): Prop;      -- the law's `<=`")
-    w("term add (a b: Val): Val;")
-    w("term sub (a b: Val): Val;")
-    w("term mul (a b: Val): Val;")
-    w("")
-    w("-- The law's operations on the wrapper. `split_left` / `split_right` are the")
-    w("-- halves a checked `split` returns, `byte_extent` is the element extent")
-    w("-- scaled by a checked width, and `fits_int64` is the byte-address premise.")
-    w("term span_base (s: Span): Val;")
-    w("term span_off (s: Span): Val;")
-    w("term span_len (s: Span): Val;")
-    w("term guard (s: Span) (k: Val): Prop;      -- the declared `Requires`")
-    w("term split_left (s: Span) (k: Val): Span;")
-    w("term split_right (s: Span) (k: Val): Span;")
-    w("term byte_extent (s: Span) (w: Val): Span;")
-    w("term extent_in_domain (s: Span): Prop;    -- premise: fits the allocation domain")
-    w("term width_positive (w: Val): Prop;       -- premise: width > 0 (layout)")
-    w("term fits_int64 (s: Span): Prop;          -- premise: byte address fits Int64")
-    w("")
-    w("-- ── The law, one statement per evidence obligation ────────────────────")
-    w("--")
-    w("-- Each statement is a relation symbol; the formula it is a symbol *for* is")
-    w("-- the comment above it. MM0 `term` declarations take no premises and no")
-    w("-- body, and an `axiom` would be a claim this file is not making — the same")
-    w("-- shape `mm0/clif.mm0` uses for `clif_step`. The layer the evidence gives")
-    w("-- each fact is in its comment; `[stated: L11d.2]` is an obligation this")
-    w("-- file names and does not prove.")
-    w("")
-    w(f"-- [{ev.left_line}]")
-    w("-- [checked against the law] the left span is built from offset(s) and k:")
-    w("--   guard s k  ⇒  veq (span_off (split_left s k)) (span_off s)")
-    w("--   guard s k  ⇒  veq (span_len (split_left s k)) k")
-    w("term law_left_off (s: Span) (k: Val): Prop;")
-    w("term law_left_len (s: Span) (k: Val): Prop;")
-    w("")
-    w(f"-- [{ev.right_line}]")
-    w("-- [checked against the law] the right span is built from offset(s)+k and")
-    w("-- len(s)-k:")
-    w("--   guard s k  ⇒  veq (span_off (split_right s k)) (add (span_off s) k)")
-    w("--   guard s k  ⇒  veq (span_len (split_right s k)) (sub (span_len s) k)")
-    w("term law_right_off (s: Span) (k: Val): Prop;")
-    w("term law_right_len (s: Span) (k: Val): Prop;")
-    w("")
-    w(f"-- [{ev.base_line}]")
-    w("-- [checked against the law] both halves share the input's base:")
-    w("--   guard s k  ⇒  veq (span_base (split_left s k)) (span_base s)")
-    w("--   guard s k  ⇒  veq (span_base (split_right s k)) (span_base s)")
-    w("term law_base_left (s: Span) (k: Val): Prop;")
-    w("term law_base_right (s: Span) (k: Val): Prop;")
-    w("")
-    w(f"-- [{ev.conservation_line}]")
-    w("-- [stated: L11d.2] the halves partition the input's extent:")
-    w("--   guard s k  ⇒")
-    w("--   veq (add (span_len (split_left s k)) (span_len (split_right s k)))")
-    w("--       (span_len s)")
-    w("term law_conservation (s: Span) (k: Val): Prop;")
-    w("")
-    w(f"-- [{ev.disjoint_line}]")
-    w("-- [stated: L11d.2] the left half ends at or before the right half starts:")
-    w("--   guard s k  ⇒")
-    w("--   vle (add (span_off (split_left s k)) (span_len (split_left s k)))")
-    w("--       (span_off (split_right s k))")
-    w("term law_disjoint (s: Span) (k: Val): Prop;")
-    w("")
-    w(f"-- [{ev.bytes_line}]")
-    w("-- [premise: width] byte addresses are element indices scaled by the width,")
-    w("-- on both halves, with the byte extent required to fit Int64:")
-    w("--   guard s k  ⇒  width_positive width  ⇒")
-    w("--   veq (span_off (byte_extent (split_left s k) width))")
-    w("--       (mul (span_off (split_left s k)) width)          [and the right]")
-    w("--   guard s k  ⇒  width_positive width  ⇒  extent_in_domain s  ⇒")
-    w("--   fits_int64 (byte_extent s width)  ⇒")
-    w("--   fits_int64 (byte_extent (split_right s k) width)")
-    w("term law_bytes_off_left (s: Span) (k: Val) (width: Val): Prop;")
-    w("term law_bytes_off_right (s: Span) (k: Val) (width: Val): Prop;")
-    w("term law_bytes_fit (s: Span) (k: Val) (width: Val): Prop;")
-    w("")
-    w("-- ── The accepted module's instantiation ──────────────────────────────")
-    w("--")
-    w(f"-- The evidence measures one call in `{ev.module}`: the guard the pilot")
-    w("-- discharged, and the arithmetic it checked. The binders appear as")
-    w("-- constants (`ev_w`, `ev_k`) exactly as the canonical evidence names them;")
-    w("-- the numbers are in the evidence block above, where the pilot's own")
-    w("-- `[checked]` lines are quoted verbatim.")
-    w("")
-    for ln in ev.lines:
-        if ln.startswith("binder: "):
-            w(f"-- [{ln}]")
-    w("term ev_w: Span;")
-    w("term ev_k: Val;")
-    w(f"-- [{ev.width_line}]")
-    w("term ev_width: Val;")
-    w("")
-    w(f"-- [{ev.calls[0]}] — the guard is discharged by the pilot, not assumed:")
-    w("-- the call's `Requires` is instantiated and decided (literal arithmetic or")
-    w("-- a fact the caller already assumes).")
-    w("--   guard ev_w ev_k")
-    w("term ev_guarded: Prop;")
-    w("")
-    for ln in ev.lines:
-        if ln.startswith("  conservation:") or ln.startswith("  disjoint:"):
-            w(f"-- [{ln}]")
-    w("--   veq (add (span_len (split_left ev_w ev_k))")
-    w("--       (span_len (split_right ev_w ev_k))) (span_len ev_w)")
-    w("--   vle (add (span_off (split_left ev_w ev_k))")
-    w("--       (span_len (split_left ev_w ev_k)))")
-    w("--       (span_off (split_right ev_w ev_k))")
-    w("term ev_conservation: Prop;")
-    w("term ev_disjoint: Prop;")
-    for ln in ev.lines:
-        if ln.startswith("  byte ranges:"):
-            w(f"-- [{ln}]")
-            w("--   fits_int64 (byte_extent (split_right ev_w ev_k) ev_width)")
-            w("term ev_bytes_fit: Prop;")
-    w("")
-    return "\n".join(out)
+    `mm0-rs` warnings are refusals: a `sorry` is a theorem that is not proved,
+    which is exactly what this artifact must not contain. Absent tooling is
+    reported, not treated as a pass — the caller prints this line either way.
+    """
+    for tool in ("mm0-rs", "mm0-c"):
+        if shutil.which(tool) is None:
+            return f"[gap] {tool} not on PATH — the pair was not compiled here"
+    with tempfile.TemporaryDirectory() as td:
+        tmp = pathlib.Path(td)
+        (tmp / "liquid_split.mm1").write_text(mm1_text_)
+        (tmp / "liquid_split.mm0").write_text(mm0_text)
+        v = subprocess.run(["mm0-rs", "compile", str(tmp / "liquid_split.mm1"),
+                            str(tmp / "liquid_split.mmb")],
+                           capture_output=True, text=True)
+        if v.returncode != 0 or "warning:" in (v.stderr + v.stdout):
+            return ("[FAIL] mm0-rs compile refused the pair:\n"
+                    + (v.stderr + v.stdout).strip()[:500])
+        with open(tmp / "liquid_split.mm0") as spec:
+            c = subprocess.run(["mm0-c", str(tmp / "liquid_split.mmb")],
+                               stdin=spec, capture_output=True, text=True)
+        if c.returncode != 0:
+            return ("[FAIL] mm0-c refused the pair:\n"
+                    + (c.stderr + c.stdout).strip()[:500])
+    return "[ok] mm0-rs compiled and mm0-c accepted the pair"
 
 
 def main(argv):
-    write = "--write" in argv
-    unknown = [a for a in argv if a.startswith("--") and a != "--write"]
-    if unknown:
-        die_gap(f"unknown flag {unknown[0]}")
-    # `check` is the mode `mm0-comparator`'s `EMITTERS` registry invokes and is
-    # the default behaviour; anything else positional is a mistake this script
-    # cannot honour, because the fixture is pinned and there is nothing to name.
-    rest = [a for a in argv if not a.startswith("--")]
-    if rest not in ([], ["check"]):
-        die_gap("liquid-split-mm0 takes no artifact argument — it reflects the "
-                "pinned fixture (usage: scripts/liquid-split-mm0 [check|--write])")
+    write = "--write" in argv[1:]
+    want_mm0, want_mm1 = SPEC, mm1_text(SPEC)
+    problems = []
 
-    ev = Evidence(measure())
-    text = render(ev, sha256_file(os.path.join(ROOT, FIXTURE)),
-                  sha256_file(os.path.join(ROOT, CITE_PASS)),
-                  hashlib.sha256(ev.text.encode()).hexdigest())
-    n = sum(1 for ln in text.splitlines()
-            if re.match(r"^(provable sort|sort|delimiter|prefix|term|def|axiom|theorem) ", ln))
+    # Structural invariants first: they are what make the file a *statement of
+    # record* rather than a re-run of the same text. A theorem that turned into
+    # an axiom would report a law as an assumption, so it is refused by name.
+    for name in PROOFS:
+        if not re.search(rf"^theorem\s+{name}\b", want_mm0, re.MULTILINE):
+            problems.append(f"theorem {name} is missing from the specification")
+        if re.search(rf"^axiom\s+{name}\b", want_mm0, re.MULTILINE):
+            problems.append(f"{name} is an axiom again — it was proved")
+    for name in AXIOMS:
+        if not re.search(rf"^axiom\s+{name}\b", want_mm0, re.MULTILINE):
+            problems.append(f"axiom {name} is missing (a premise was dropped)")
+    if "ok_split" not in re.search(
+            r"^axiom split_conserves[^\n]*", want_mm0, re.MULTILINE).group(0):
+        problems.append("split_conserves is no longer guarded by ok_split")
+    got_axioms = re.findall(r"^axiom\s+([A-Za-z0-9_]+)\b", want_mm0, re.MULTILINE)
+    if got_axioms != AXIOMS:
+        problems.append(f"axiom set is {got_axioms}, expected {AXIOMS}")
+
+    if problems:
+        for p in problems:
+            print(f"liquid-split-mm0: FAIL {p}", file=sys.stderr)
+        return 1
 
     if write:
-        with open(MODEL, "w") as f:
-            f.write(text + "\n")
-        with open(PROOF, "w") as f:
-            f.write(text + "\n")
-        print(f"liquid-split-mm0: wrote {rel(MODEL)} and .mm1 — {n} statement(s), "
-              "0 theorems, certificate [gap]")
+        MM0.write_text(want_mm0)
+        MM1.write_text(want_mm1)
+        print(f"liquid-split-mm0: wrote mm0/liquid_split.{{mm0,mm1}} — "
+              f"{len(AXIOMS)} axiom(s), {len(PROOFS)} proved theorem(s)")
+        print(toolchain(want_mm0, want_mm1))
         return 0
 
-    try:
-        with open(MODEL) as f:
-            committed = f.read()
-    except FileNotFoundError:
-        die_fail(f"{rel(MODEL)} is missing — run scripts/liquid-split-mm0 --write")
-    want = text + "\n"
-    if committed != want:
-        import difflib
-        diff = list(difflib.unified_diff(
-            committed.splitlines(), want.splitlines(),
-            f"{rel(MODEL)} (committed)", "mm0/liquid_split.mm0 (measured)",
-            lineterm="", n=1))
-        print("\n".join(diff[:40]), file=sys.stderr)
-        die_fail("the committed law is not what the pilot's evidence measures — "
-                 "run scripts/liquid-split-mm0 --write")
-    try:
-        with open(PROOF) as f:
-            if f.read() != committed:
-                die_fail("mm0/liquid_split.mm1 differs from the specification of "
-                         "the same statements")
-    except FileNotFoundError:
-        die_fail("mm0/liquid_split.mm1 is missing")
-    print(f"liquid-split-mm0: OK — {n} statement(s) reflect {ev.law} for "
-          f"{FIXTURE}, 0 theorems")
+    for path, want in ((MM0, want_mm0), (MM1, want_mm1)):
+        if not path.is_file():
+            print(f"liquid-split-mm0: FAIL {path.name} is missing — run "
+                  "scripts/liquid-split-mm0 --write", file=sys.stderr)
+            return 1
+        if path.read_text() != want:
+            print(f"liquid-split-mm0: FAIL {path.name} is stale — run "
+                  "scripts/liquid-split-mm0 --write", file=sys.stderr)
+            return 1
+
+    verdict = toolchain(want_mm0, want_mm1)
+    print(verdict)
+    if verdict.startswith("[FAIL]"):
+        return 1
+    print(f"liquid-split-mm0: current — {len(AXIOMS)} residual premise(s), "
+          f"{len(PROOFS)} proved theorem(s)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main(sys.argv))

@@ -1,0 +1,7 @@
+
+== liquid-golden (272s)
+  gate: verify-invariants: 170 passed, 2 explained gap(s), 1 failed (exit 1)
+  [FAIL] Liquid subset extraction matches its pinned golden
+  [pass] Liquid subset library extracts with the existing driver
+  holds
+timing: 1/1 case(s) in 272s at -j 1 (272s each) — /tmp/w3-drift-controls/timings.tsv

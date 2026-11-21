@@ -4298,7 +4298,9 @@ and the two output directories are identical file for file (`diff -r` clean).
 | **512** | **exit 0, 2 320 s** | **496 MiB** (t = 1 998 s) | peak RSS 469 MiB; 16 MiB spare |
 | 480 | exit 1 at 1 819 s | 479 MiB (t = 1 652 s) | `MemoryError` in `subst0`'s memo (`:2482`), no artifact |
 
-The floor is now **(480, 512] MiB**, against **(2 304, 2 352] MiB** before: the ns
+The floor is now **(416, 432] MiB** — §13.51 found the encoding memo's cap to be the
+remaining spendable table and measured the bracket down from the (480, 512] MiB this
+section established — against **(2 304, 2 352] MiB** before: the ns
 row needs at most 512 MiB of address space where it needed 2 400, a drop of ~1 840
 MiB, about 78 %. All six artifacts of the passing runs are byte-identical (`cmp`) to
 the 2 400 MiB reference run's: `.mm0` 102 543 367 789 B, `.mm1` 102 547 674 107 B,
@@ -4312,7 +4314,8 @@ failure is no longer at the write or next to a giga-byte term but inside the
 derivation's substitution memo (`self._subst_memo[key] = out`), which `MEMO_MAX`
 bounds. That looked like the next lever if a lower floor was wanted; §13.50 measured
 it and found it null — the memos are 2.6 MB of the 469 MiB peak, and the bracket
-(480, 512] MiB stands at either memo size.
+(480, 512] MiB stood at either memo size — and §13.51 moved the floor with the
+encoding memo instead, to (416, 432] MiB.
 
 **The cost of that.** The run needs ~3.9 GB more disk while it is in flight — a third
 1.94 GB spool beside `type.tmp` and `value.tmp`, all removed before a passing run
@@ -4478,3 +4481,83 @@ variable that no default path sets.
 **What is still open.** The floor is now set by the export's own tables, so the next
 candidate levers are the synthetic-node table (102.7 MB) and the encoding memo
 (67.1 MB), neither of which has been probed. Nothing here claims a lower bracket.
+
+(Census caveat, added with §13.51: the 102.7 / 29.3 lines above come from the
+`LTP_MEMO_MAX=100 000` run, not from a default-memo run, so they are not comparable
+with a default census. The default-memo census on the same row reads 93.7 synthetic
+nodes and 18.5 context memo.)
+
+### 13.51 The encoding memo is the floor: `ENC_MEMO_BYTES` measured, bracket (416, 432]
+
+§13.50 left two candidates. Both were probed. One is a lever and moves the floor by
+**80 MiB**; the other has no knob at all, and the probe says why.
+
+**The encoding memo is the lever.** `ENC_MEMO_BYTES` (default `64 << 20`) bounds the
+cache of encoded strings keyed by expression id. A miss re-encodes the term — it costs
+time and changes nothing, because the encoding of a node is a pure function of the
+node. That is the property the substitution memo lacks: shrinking *that* memo changed
+6 of the 580 substitution records in the sidecar (§13.50), while this one cannot change
+any emitted byte. It is now overridable as `LTP_ENC_MAX`, the default untouched, so
+recorded artifacts keep the behaviour they were produced with.
+
+| cap | `LTP_ENC_MAX` | outcome | peak VmSize | peak RSS | wall clock |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 400 | 2 MB | exit 1 at 1 706 s | 399 MiB (t = 1 613 s) | 373 MiB | `MemoryError` in `mk` → `LazyExprs.__setitem__`, `extra[eid] = d` (`lean2mm0:351`) |
+| 416 | 2 MB | exit 1 at 2 244 s | 415 MiB (t = 1 794 s) | 388 MiB | `MemoryError` in `subst0`'s memo write (`:2499`) |
+| **432** | **2 MB** | **exit 0, 2 879 s** | **431 MiB** (t = 2 088 s) | 405 MiB | |
+| 448 | 2 MB | exit 0, 2 567 s | 440 MiB (t = 2 237 s) | 412 MiB | |
+| 480 | 2 MB | exit 0, 2 590 s | 442 MiB (t = 2 252 s) | 414 MiB | |
+| 480 | default | exit 1 at 1 819 s | 479 MiB (t = 1 652 s) | — | `MemoryError` in `subst0`'s memo write (`:2482`, §13.48) |
+| 512 | default | exit 0, 2 320 s | 496 MiB (t = 1 998 s) | 469 MiB | §13.48 |
+
+**The bracket moves from (480, 512] to (416, 432] MiB** — 80 MiB off the top of the
+bracket, 64 MiB off the bottom, for a 32× smaller encoding cap. It costs wall clock:
+2 590 s at 480 MiB against 2 320 s at
+512 MiB with the default, +270 s (+11.6 %), all of it re-encoding. The 432 MiB pass is
+slower still (2 879 s) because at that cap the run spends its peak phase pinned to its
+ceiling; compare wall clocks only within one cap, and treat the tight-cap ones as noisy.
+The 416 and 400 rows were run concurrently on the same host, so their clocks are not
+comparable to the rest — their peaks and failure sites are.
+
+**Artifacts are byte-identical, all six.** At 480, 448 and 432 MiB, `cmp` reports
+`.mm0`, `.mm1`, the naming table, and the three obligation-sidecar files identical to
+the 512 MiB default reference. The substitution-memo knob changed the sidecar; this one
+does not touch it, because a re-encoded string is the same string. So `LTP_ENC_MAX` is
+a safe probe knob — and still not a default change: the 11.6 % wall clock is real, and
+the default is what every recorded artifact was produced with.
+
+**The census, measured with the lever on** (identical at 432, 448 and 480): export parse
+table 71.6 MB, synthetic nodes 93.7, encoding memo 2.3, context memo 18.5, obligation
+list 0.3, lift memo 1.3, substitution memo 10.5, largest proof 4.3, 20 478 context
+lookups (20 392 hits), peak RSS 404–414. The encoding memo's 67.1 → 2.3 MB is the whole
+win; nothing else moves, which is why the floor lands where the cap stops being spent
+on cached strings. (A smoke row, `abs_re_inner_pairVec_le`, shows the same shape at
+small scale: peak 540 → 511 MiB, encoding memo 67.5 → 2.2 MB, synthetic nodes 76.7 and
+context memo 27.8 on either side of the change — the lever is exactly its own table and
+nothing else.)
+
+**The synthetic-node table has no knob, and the probe says so.** Two things were
+measured, and neither is an assumption:
+
+1. *It cannot be reduced from outside.* `ex.exprs.extra` is consulted by
+   `LazyExprs.__getitem__` before the export's own `_off` array, keyed by the id the
+   emitter mints for each synthesized node, and nothing ever deletes from it. Unlike
+   the encoding memo (a cache whose loss only costs time) and the rewrite memos (whose
+   bound only costs recomputation), dropping an entry here hands later readers a
+   different node — so no environment variable can bound it. At 400 MiB the failing
+   write is literally `extra[eid] = d` (`lean2mm0:351`), i.e. below 416 MiB this table
+   is what the run dies on.
+2. *Content deduplication is the only candidate, and it is small.* `LTP_CENSUS_DUPS`
+   now reports distinct-by-content against minted entries. On the smoke row
+   (`abs_re_inner_pairVec_le`, 76.7 MB table): 170 592 minted, 119 643 distinct — 30 %
+   of the table is the same node re-minted, one content 5 293 times. Scaling that share
+   to the ns row's 93.7 MB gives ~28 MB, and that is an arithmetic estimate, not a
+   measurement. Deduplication changes which ids exist, so unlike `LTP_ENC_MAX` it cannot
+   be assumed artifact-neutral — the naming table and the obligation records reference
+   those ids — and proving it costs a full 2 900 s run for at most a third of what the
+   encoding memo already returned. Not pursued; recorded so it is not re-derived.
+
+**What is next.** The floor at (416, 432] MiB is now set by three live, id-addressed
+tables that the emitter never evicts (export 71.6 + synthetic 93.7 + encoding memo 2.3,
+plus the context memo at 18.5). Moving it further needs a change to how nodes are
+represented or retained, not another environment variable.

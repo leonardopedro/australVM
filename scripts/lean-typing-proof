@@ -640,8 +640,10 @@ def peak_mb() -> int:
 MEMO_MAX = int(os.environ.get("LTP_MEMO_MAX") or 1_000_000)
 
 # Total size of the strings `Enc` caches; past it new encodings are simply not
-# cached (they are recomputed, never wrong).
-ENC_MEMO_BYTES = 64 << 20
+# cached (they are recomputed, never wrong). `LTP_ENC_MAX` overrides it, which is
+# how the cap's share of the floor is measured (§13.51); the default is what
+# every recorded artifact was produced with.
+ENC_MEMO_BYTES = int(os.environ.get("LTP_ENC_MAX") or (64 << 20))
 
 # Total size of the proof strings the `check` result memo holds. Proofs are
 # nested text, so this is a real budget: the same cap as the encoding memo would
@@ -999,6 +1001,22 @@ def census(ex, enc, d) -> None:
                   f"({d._ctx_hits} hits, {d._ctx_scan} entries scanned)",
                   file=sys.stderr, flush=True)
         print(f"[census]   {peak_mb():10d}  peak RSS (MB)", file=sys.stderr, flush=True)
+        if os.environ.get("LTP_CENSUS_DUPS") and hasattr(ex.exprs, "extra"):
+            # Is the synthetic table a *set* inflated by repeated minting, or are
+            # its entries distinct nodes? Hash-keyed so the counting itself does
+            # not hold a second copy of the table. Two biases, both noted: a hash
+            # collision merges two nodes into one bucket (overstates duplication),
+            # and `repr` depends on key order, so equal content inserted in a
+            # different order counts as distinct. Treat the result as an estimate.
+            seen: dict[int, int] = {}
+            for rec in ex.exprs.extra.values():
+                h = hash(repr(rec))
+                seen[h] = seen.get(h, 0) + 1
+            print(f"[census]   {len(seen):10d}  synthetic nodes, distinct by content "
+                  f"(of {len(ex.exprs.extra)} minted)", file=sys.stderr, flush=True)
+            if seen:
+                print(f"[census]   {max(seen.values()):10d}  most repetitions of one node",
+                      file=sys.stderr, flush=True)
     except Exception as exc:  # a census must never hide the real failure
         print(f"[census] failed: {type(exc).__name__}: {exc}", file=sys.stderr,
               flush=True)
