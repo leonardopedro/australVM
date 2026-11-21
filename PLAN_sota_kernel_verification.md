@@ -416,23 +416,27 @@ certificate printed `arch=aarch64` there, so its `W5 (checked)` object digest
 compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
-**Re-measured 2026-11-21 at `8c774296` on this x86_64 host, in all three
-shells:** `176 passed, 2 explained gap(s), 0 failed` under
-`nix develop "git+file://$PWD"`
-([transcript](docs/data/gate/2026-11-21-default-shell.log)), `161 passed, 5
+**Re-measured 2026-11-21 at `1a77f056` plus the uncommitted `toy-witness` gap
+guard, on this x86_64 host, in all three shells, after the merge and the
+`liquid_split` approval:** `183 passed, 1
+explained gap(s), 0 failed` under `nix develop "git+file://$PWD"`
+([transcript](docs/data/gate/2026-11-21-default-shell.log)), `168 passed, 4
 explained gap(s), 0 failed` under `.#ocaml`
-([transcript](docs/data/gate/2026-11-21-ocaml-shell.log)), and `162 passed, 4
+([transcript](docs/data/gate/2026-11-21-ocaml-shell.log)), and `164 passed, 8
 explained gap(s), 0 failed` under `.#lean`
 ([transcript](docs/data/gate/2026-11-21-lean-shell.log)).
 None of those numbers is a correction of the ones above; each is a different
-shell over the same checks, and the differences close exactly. The four
-approvals closed their four `[gap] W3: <artifact> has no approved statements`
+shell over the same checks, and the differences close exactly. The five
+approvals closed their five `[gap] W3: <artifact> has no approved statements`
 lines and added one `[pass] W3: <artifact> matches its approved statements` line
-each. `.#ocaml` carries `lean` but not `why3`, so the 15 per-file Liquid passes
-of the 2026-11-20 shell are the three `Liquid golden…`/`Liquid subset` gaps
-there — hence `161 + 15 = 176` against the default shell and `5 − 3 = 2` — while
-the eight Lean witness passes replace the `W9.3` gap. `.#lean` re-converts the
-RV64 model as well, turning `W9.1` into a pass (`162 = 161 + 1`, `4 = 5 − 1`).
+each, so no `w3-pending:` row remains and `w3-approved:` lists all thirteen.
+`.#ocaml` carries `lean` but not `why3`, so the 15 per-file Liquid passes of the
+default shell are the three `Liquid golden…`/`Liquid subset` gaps there — hence
+`168 + 15 = 183` and `4 − 3 = 1`. `.#lean` re-converts the RV64 model, turning
+`W9.1` into a pass, but it has no rust toolchain of its own: `rustc` there is the
+host's rustup shim, whose `cc` names a garbage-collected store path, so the five
+`scripts/toy-witness` comparisons cannot be built and report as gaps instead of
+failing on an empty witness list (`164 = 168 + 1 − 5`, `8 = 4 − 1 + 5`).
 The certificate on this host records `arch=x86_64` with `cps=c10ca9a9…` and
 `obj=b138fd6e…`; on a host whose certificate recorded the other arch, the same
 check normalises those two lines and reports the incomparable digest as a gap
@@ -2743,8 +2747,9 @@ row(s), 0 from mm0/approved/)` and `… closure digests match the files it
 records (4 row(s), 0 from mm0/approved/)`. The breakdown is not decoration: a
 row is **counted from `mm0/approved/<stem>.stmts`** once that file exists,
 because the row is a record of an approval and the approval is those bytes; a
-row still pending is counted from a fresh staging. `0 from mm0/approved/` today
-is the four approvals being un-made, and it moves on its own when one lands. If
+row still pending is counted from a fresh staging. The `N from mm0/approved/`
+figure counts the rows whose approved copies exist — all 4 on the current tree —
+and it moves on its own when one is approved or un-made. If
 the staged copy and the approved copy differ — an artifact edited after its
 approval — the row reports `staged bytes differ from the approved copy` instead
 of describing whichever copy was read, so a drift cannot keep the counts green.
@@ -2999,8 +3004,9 @@ Without `--stat-only` it prints the full `git diff --no-index` for each artifact
 is the human decision" means in the comparator's own header: the names in the
 list above are gone from the file, so the only thing readable in the diff is the
 *shape* of each statement plus the digests. `mm0/approved/` is never written by
-this script, and `verify-invariants` keeps reporting the four `[gap] W3` lines,
-so staging cannot be mistaken for approval.
+this script, and `verify-invariants` reports a `[gap] W3: <artifact> has no
+approved statements` line for every artifact without an approved copy, so
+staging cannot be mistaken for approval.
 
 **Its own exit codes are gated, because a staging run that "worked" is not
 self-evident.** Three cases decide whether a person reading the output is being

@@ -1,3 +1,4 @@
+warning: Git tree '/home/leo/Projects/australVM' is dirty
 [pass] S29: UNFER_SYMBOLS table present
 [pass] S29: UNFER_SYMBOLS registers into the Cranelift JIT
 [pass] S29: per-module CPS compile consumes the same census
@@ -48,9 +49,10 @@ lean2mm0 selftest: 'net' tamper refused (quasi_rh_certificate) — read_bound_ve
 lean2mm0 selftest: 'bound' tamper refused (quasi_rh_7_8) — seven-eighths identity failed: 8×8750 != 6×10000 (the emitted fraction is not the Lean bound)
 lean2mm0 selftest: 'shape' tamper refused (quasi_rh_7_8) — structure mismatch: hypothesis head is LTlt, expected LEle
 lean2mm0 selftest: OK — all four anchors refuse tampered input (kernel rfl, evaluator vs net, statement shape, seven-eighths bound)
-lean2mm0 verify: [gap] statement stems NOT verified — australVM/mm0/metamath/set.mmu absent (untracked toolchain state, not committed)
-  provision: mm0-from-mm from-mm mm0/metamath/set.mm -o mm0/metamath/set.mm0 mm0/metamath/set.mmu
-  then:      sed -i 's/^(pub //' mm0/metamath/set.mmu
+lean2mm0 verify: label contract grounded — all 13 set.mm0 labels exist with the expected sorts
+lean2mm0 verify: mm0-rs compile OK (quasi_rh_7_8) — 3 sorts, 1479 term/def, 50031 ax/thm
+lean2mm0 verify: mm0-c OK (quasi_rh_7_8) — the root of trust accepts the axiom and every imported set.mm proof
+lean2mm0 verify: negative anchor OK — mm0-rs refuses the corrupted set.mmu proof (idi's proof → ax_1, set.mmu:8)
 lean2mm0 verify: mm0-rs compile OK (gap_certificate) — 3 sorts, 46 term/def, 39 ax/thm
 lean2mm0 verify: mm0-c OK (gap_certificate) — the root of trust accepts the proofs
 lean2mm0 verify: mm0-rs compile OK (layout_certificate) — 3 sorts, 34 term/def, 24 ax/thm
@@ -64,7 +66,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W5: the staleness note is silent when the artifact is newest, and names the newer binary
 [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it
 [pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
-[pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (aarch64)
+[pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (x86_64)
 [pass] W7: a certificate with a flipped coefficient is refused
   [detail] 6 sorts, 71 term/def, 91 ax/thm
 [pass] W8: mm0/isa.mm0 + isa.mm1 accepted by mm0-rs + mm0-c, no sorry
@@ -135,20 +137,17 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
   [detail] mutations refused: toy_jit_store_visible(refused), toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused), toy_jit_fourth_store_drops_oldest(refused), toy_jit_recent_cells_readable(refused), toy_jit_third_store_kept(refused), toy_jit_refresh_keeps_other_cell(refused), toy_jit_refresh_keeps_other_cell(refused), toy_jit_two_cells_preserved(refused), toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused), toy_width4_load_after_wide_store(refused), toy_width4_store_load_roundtrip(refused)
 [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
-  [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
-[pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
-[pass] W9.3: the witness exercises all 20 axioms the toy declares
-  [detail] toy-witness: 5 atom(s) (0 = unset), 16276 memories (every shape of at most three cells)
-[pass] W9.3: the witness's verdicts do not change when the domain grows (27 rows at 4 and 5 atoms)
-  [detail] lean-witness: 20 axiom(s) proved for an arbitrary atom domain, 6 rejected candidate(s) proved false
-[pass] W9.3: a Lean development proves the same 20 axioms
+[gap]  W9.3: toy axioms not run against a concrete model (the witness could not be built here)
+[gap]  W9.3: the witness's axiom list not compared (the witness could not be built here)
+[gap]  W9.3: the domain-5 regression not run (the witness could not be built here)
+[gap]  W9.3: the Lean axiom list not compared (the witness could not be built here)
 [pass] W9.3: the Lean development proves the toy's 28 theorems too
 [pass] W9.3: every Lean declaration rests on Lean's standard foundation only (48 audited)
 [pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
   [detail] injected sorry at line 810: lean accepted the file (exit 0), the scan refused it
 [pass] W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts
 [pass] W9.3: the no-sorry scan does not count banned words inside comments
-[pass] W9.3: both witnesses reject the same candidates
+[gap]  W9.3: rejected-candidate cross-check not run (the witness could not be built here)
   [detail] lean mutations refused: put-no-truncation(refused@199), drop-keeps-written-address(refused@133), notfull-weakened-to-four(refused@236), narrow4-becomes-identity(refused@606), keep-order-becomes-put(refused@360)
 [pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
   [detail] flux1d probe: 4 identit(ies), 1000 states, max relative deviation 0.000e+00
@@ -164,6 +163,7 @@ au2mm0: Flux1d (/home/leo/Projects/australVM/examples/verified-kernel/flux1d/flu
   [ok]   uniform_state: l = r => delta l r = 0 (lhs-rhs = 0 over 2 variable(s) under 1 hypothesis/hypotheses (l = r (a uniform interface)), witness l=1 r=1)
 au2mm0: 4 obligation(s), 0 failure(s), 0 gap(s)
 [pass] W2: au2mm0 decides Flux1d's four obligations (both routes agree, hypothesis eliminated by substitution)
+[pass] W3: every §W3 row's emitter script exists before its state cell is read (5 row(s))
 [note] flux1d_certificate: no emitter registered — compared as committed
 [ok]   flux1d_certificate: 100 statements, closure 01ba7608ce71eaea…, theory e3b0c44298fc1c14…
 mm0-comparator: 1 approved, 0 gap(s)
@@ -183,7 +183,9 @@ mm0-comparator: 1 approved, 0 gap(s)
 [ok]   linearity_certificate_spans: 71 statements, closure 709158f38732cc22…, theory ef6e46e2c30e023b…
 mm0-comparator: 1 approved, 0 gap(s)
 [pass] W3: linearity_certificate_spans matches its approved statements
-[gap]  W3: liquid_split has no approved statements (run scripts/mm0-comparator approve liquid_split, then commit mm0/approved/)
+[ok]   liquid_split: 41 statements, closure 4db6a19f97b333b4…, theory e3b0c44298fc1c14…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: liquid_split matches its approved statements
 [ok]   quasi_rh_7_8: 3 statements, closure 48dbc45a6738318c…, theory a5f1603ca493b374…
 mm0-comparator: 1 approved, 0 gap(s)
 [pass] W3: quasi_rh_7_8 matches its approved statements
@@ -205,13 +207,12 @@ mm0-comparator: 1 approved, 0 gap(s)
 [ok]   store_projection_toy: 70 statements, closure 09842af888889954…, theory e3b0c44298fc1c14…
 mm0-comparator: 1 approved, 0 gap(s)
 [pass] W3: store_projection_toy matches its approved statements
-w3-pending: liquid_split(41 stmt)
-w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
-[pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 4 approved)
-[pass] W3: every pending §W3 row's artifact re-derives into a staging (1 row(s))
+w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) liquid_split(41 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+[pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 5 approved)
+[pass] W3: every pending §W3 row's artifact re-derives into a staging (0 row(s))
 [pass] W3: an approved §W3 row passes when the approved copy holds what it says
 [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-[pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 4 approved)
+[pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 5 approved)
 mutated line 16
   [detail] one altered statement: check refused it (unmodified staging: exit 0)
 [pass] W3: one altered statement makes the comparator refuse the approved copy
@@ -224,14 +225,14 @@ dropped line 25
 [pass] W9.3: an approved copy that drops an axiom fails the composition counts
 [pass] W3: every §W3 emitter cell names a real command (5 row(s))
 [pass] Plan: every file a plan table row names exists on disk (5 row(s))
-[pass] W3: every approved §W3 row's emitter still produces its approved copy (4 row(s))
+[pass] W3: every approved §W3 row's emitter still produces its approved copy (5 row(s))
 [pass] W3: an approved §W3 row whose emitter left the registry is refused
-[pass] W3: the recorded probe evidence still names live gate lines (22 row(s))
+[pass] W3: the recorded probe evidence still names live gate lines (25 row(s))
 [pass] W3: every drift control the plan names has a recorded transcript (9 invocation(s))
 [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
 [pass] W3: stage-approvals answers an unknown artifact name with exit 64
 [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
-[pass] W3: stage-approvals stages exactly §W3's 1 pending row(s) (exit 0)
+[pass] W3: stage-approvals stages exactly §W3's 0 pending row(s) (exit 0)
 [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
 [pass] W3: stage-approvals refuses a named artifact that is already approved
 [pass] W3: stage-approvals refuses an artifact that equals its approved copy
@@ -242,11 +243,6 @@ mm0-comparator selftest: tampered approval refused — the approved file is what
 mm0-comparator selftest: OK — all three negative controls refuse
 [pass] W3: comparator self-test (all three negative controls refuse)
 logos CNL → DeltaNet → MM0 gate
-warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
-  |
-  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
-  = help: you might have meant: `fp16`
-
 [pass] emitter built (/home/leo/Projects/australVM/../unfer/target/debug/logos)
 [pass] theory compiles and re-checks (2 sorts, 9 term/def, 18 ax/thm)
 [pass] Kopperman theory compiles and re-checks (2 sorts, 33 term/def, 64 ax/thm)
@@ -317,21 +313,9 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] H8: cap-std Rust backend module exists
 [pass] S30: cadabra2-cli subprocess, not a dependency
 [pass] S21: ZENODO_SYMBOLS (uz_*) registered separately
-[pass] Liquid golden constraint-generation.mlw type-checks under Why3
-[pass] Liquid golden vc-arithmetic.mlw type-checks under Why3
-[pass] Liquid golden vc-callsite-and-invariant.mlw type-checks under Why3
-[pass] Liquid golden vc-fold-premises.mlw type-checks under Why3
-[pass] Liquid golden vc-operators.mlw type-checks under Why3
-[pass] Liquid golden vc-projection.mlw type-checks under Why3
-[pass] Liquid golden constraint-generation.mlw parses under Why3
-[pass] Liquid golden vc-arithmetic.mlw parses under Why3
-[pass] Liquid golden vc-callsite-and-invariant.mlw parses under Why3
-[pass] Liquid golden vc-fold-premises.mlw parses under Why3
-[pass] Liquid golden vc-operators.mlw parses under Why3
-[pass] Liquid golden vc-projection.mlw parses under Why3
-[pass] Liquid golden vc-fold-premises.mlw proves in full under z3
-[pass] Liquid subset library extracts with the existing driver
-[pass] Liquid subset extraction matches its pinned golden
+[gap]  Liquid golden Why3 parse check (why3 not on PATH)
+[gap]  Liquid golden vc-fold-premises.mlw full z3 validity (why3 not on PATH)
+[gap]  Liquid subset extraction check (why3 not on PATH)
 [pass] L10 Cycle B: liquid_measure tenant registered in Vm_plugin.boot
 [pass] L10 Cycle B: liquid_measure is a distinct tenant from liquid
 [pass] L10 Cycle B: LiquidMeasure is the extracted module, listed in dune
@@ -353,4 +337,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 182 passed, 1 explained gap(s), 0 failed
+verify-invariants: 164 passed, 8 explained gap(s), 0 failed

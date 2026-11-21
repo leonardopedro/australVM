@@ -1181,12 +1181,17 @@ MUTATIONS
                 || tail -5 "$_cert_tmp/witness.log" >&2
             check "W9.3: the toy's axioms hold in a concrete model (no counterexample)" false
         else
-            gap "W9.3: toy axioms not run against a concrete model (rustc not on PATH)"
+            gap "W9.3: toy axioms not run against a concrete model (the witness could not be built here)"
         fi
         # A new axiom must be *checked*, not just declared: the names the witness
         # proves are compared with the names the artifact carries, so adding an
         # axiom to the `.mm0` without teaching the model about it is red.
-        if [ -s "$_cert_tmp/witness.log" ]; then
+        # `_wit_rc -eq 0`, not a non-empty log: a witness that could not be built
+        # leaves a linker error there, and comparing against it would read as
+        # "the witness holds no axioms" — a content failure where none was
+        # measured (the `lean` shell, 2026-11-21).
+        _ax_file=""
+        if [ "$_wit_rc" -eq 0 ] && [ -s "$_cert_tmp/witness.log" ]; then
             _ax_file="$(sed -n 's/^axiom \([a-z0-9_]*\).*/\1/p' "$_toy" | sort)"
             _ax_wit="$(sed -n 's/^\[hold\]  *\([a-z0-9_]*\).*/\1/p' \
                 "$_cert_tmp/witness.log" | sort)"
@@ -1198,6 +1203,8 @@ MUTATIONS
                      "witness=[$(echo "$_ax_wit" | tr '\n' ' ')]" >&2
                 check "W9.3: the witness exercises every axiom the toy declares" false
             fi
+        else
+            gap "W9.3: the witness's axiom list not compared (the witness could not be built here)"
         fi
 
         # The enumeration's own regression: the same verdicts at a larger domain.
@@ -1213,9 +1220,9 @@ MUTATIONS
             "$repo_root/scripts/toy-witness" --domain 5 >"$_cert_tmp/witness-d5.log" 2>&1 \
                 || _w5_rc=$?
         fi
-        if [ "$_w5_rc" -eq 2 ]; then
-            gap "W9.3: the domain-5 regression not run (rustc not on PATH)"
-        elif [ "$_w5_rc" -eq 0 ] && [ -s "$_cert_tmp/witness.log" ] \
+        if [ "$_w5_rc" -eq 2 ] || [ "$_w5_rc" -lt 0 ]; then
+            gap "W9.3: the domain-5 regression not run (the witness could not be built here)"
+        elif [ "$_w5_rc" -eq 0 ] && [ "$_wit_rc" -eq 0 ] \
                 && grep -q '20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must' \
                     "$_cert_tmp/witness-d5.log" \
                 && [ "$(sed -n 's/^\[\(hold\|reject\|model\)\]  *\([a-z0-9_]*\).*/\1 \2/p' \
@@ -1246,7 +1253,9 @@ MUTATIONS
                 >"$_cert_tmp/leanwit.log" 2>&1 || _lean_rc=$?
             _lean_ax="$(sed -n 's/^lean-witness-axioms: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
             _lean_br="$(sed -n 's/^lean-witness-broken: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
-            if [ "$_lean_rc" -eq 0 ] && [ -n "$_lean_ax" ] && [ "$_lean_ax" = "$_ax_file" ]; then
+            if [ -z "$_ax_file" ]; then
+                gap "W9.3: the Lean axiom list not compared (the witness could not be built here)"
+            elif [ "$_lean_rc" -eq 0 ] && [ -n "$_lean_ax" ] && [ "$_lean_ax" = "$_ax_file" ]; then
                 echo "  [detail] $(grep -m1 '^lean-witness: ' "$_cert_tmp/leanwit.log")"
                 check "W9.3: a Lean development proves the same $(printf '%s\n' "$_lean_ax" | grep -c .) axioms" true
             else
@@ -1394,8 +1403,8 @@ PYSTRIP
                     check "W9.3: the no-sorry scan does not count banned words inside comments" false
                 fi
             fi
-            if [ ! -s "$_cert_tmp/witness.log" ]; then
-                gap "W9.3: rejected-candidate cross-check not run (rustc absent)"
+            if [ "$_wit_rc" -ne 0 ] || [ ! -s "$_cert_tmp/witness.log" ]; then
+                gap "W9.3: rejected-candidate cross-check not run (the witness could not be built here)"
             else
                 _rust_br="$(sed -n 's/^\[reject\]  *\([a-z0-9_]*\).*/\1/p' "$_cert_tmp/witness.log" | sort)"
                 if [ -n "$_lean_br" ] && [ "$_lean_br" = "$_rust_br" ]; then
