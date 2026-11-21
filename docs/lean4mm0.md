@@ -4592,6 +4592,8 @@ were. The interning index is live memory and is inside every peak below; it is s
 | dedup | 384 MiB | 0 | 363 MiB | 333 MB | 26.5 MB | 8.5 MB | 5.2 MB | 3 742 s† |
 | dedup | 368 MiB | 0 | 363 MiB | 334 MB | 26.5 MB | 8.5 MB | 5.2 MB | 3 761 s† |
 | dedup | 360 MiB | 1 | 357 MiB | 328 MB | — | — | — | 3 611 s† |
+| dedup | 352 MiB | 1 | 351 MiB | 323 MB | — | — | — | 4 524 s† |
+| dedup | 320 MiB | 1 | 319 MiB | 291 MB | — | — | — | 943 s† |
 
 †Not comparable to the others: these ran under host memory pressure and contention (see
 the clock note under the 384 MiB run). The 360 MiB row has no census because the census
@@ -4642,9 +4644,30 @@ That is the final copy of the spooled axioms into the artifact, and the `1 << 20
 copy buffer: under a 360 MiB address-space ceiling, a derivation that has already reached
 357 MiB cannot allocate one more MiB. So the floor of this row at the current emitter is
 set by the size of the last allocation, not by any of the live tables — with 368 MiB it
-fits with 5 MiB to spare. The bracket is now **(360, 368] MiB**, eight MiB wide; 352 and
-320 MiB are below the measured failure point and are expected to fail in the same place,
-which is what their probes check rather than assume.
+fits with 5 MiB to spare.
+
+**352 and 320 MiB fail, and earlier in the run.** Two further probes at 352 and 320 MiB
+confirm the descending side, and they show it is not one wall:
+
+| cap | exit | peak VmSize | peak RSS | elapsed | where it ran out |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 352 MiB | 1 | 351 MiB | 323 MB | 4 524 s | `_spool_eq`, `yield block` (the tail comparison) |
+| 320 MiB | 1 | 319 MiB | 291 MB | 943 s | `infer`, building a `(ty_app …)` proof string |
+
+At 352 MiB the derivation completes and the run dies in its equality spool, as the 360 MiB
+run does in the artifact copy; at 320 MiB it dies in the derivation itself, at the
+fifteenth minute. Each failure is an allocation of a proof string or a copy block that no
+longer fits, so the last few MiB of this bracket are not about how many nodes are retained
+— 320 and 368 hold the same tables — but about how much room the tail's transient
+allocations need once the ceiling is close. The 352 MiB elapsed time is not a performance
+measurement: the process sat at its ceiling for its last twenty minutes, so the run is a
+slow failure, not a slow success.
+
+**The bracket.** The smallest cap that completes the row is 368 MiB, and 360 MiB fails, so
+the floor at the current emitter is **(360, 368] MiB**, down from §13.51's (416, 432] — a
+48 MiB reduction, with 363 MiB of reservation at the peak instead of 431. Below 360 the
+failure moves earlier in the run, which is what makes 368 rather than, say, 344 the
+interesting number: the tables are the same at both ends; only the transient room differs.
 
 Two tables move besides the one the knob names: context memo 18.5 → 8.5 MB and
 substitution memo 10.5 → 5.2 MB. Neither is interned — their entries are keyed by ids and
@@ -4696,8 +4719,9 @@ exist and those indices are already canonical, so the entry string *is* the node
 content: equal subtrees reach the same index and the later id simply points at the
 earlier one. The cost is one dict lookup per node — no `repr` of a subtree, no second
 pass — and one dict per certificate, cleared in `_sh_reset` because a record's numbering
-restarts there. Default off, like `LTP_DEDUP_NODES`: it changes a committed artifact, and
-that is a re-record, not a tweak.
+restarts there. It is now the default (§13.53's last paragraph is that decision);
+`LTP_SHARE_DEDUP=0` still produces the pre-13.53 bytes, which is how the measurement
+below was taken and how the old line can be reproduced.
 
 **Measured on the smoke row** (`abs_re_inner_pairVec_le`, shared mode, the record the
 golden file pins):
@@ -4727,12 +4751,14 @@ entries. (That expanded size is also `default/…_obligations.jsonl` in the gold
 shared encoding expands to the unshared artifact, which is what makes the two modes one
 format.)
 
-**What a default costs.** Flipping `LTP_SHARE_DEDUP` to default changes exactly one line of
-the golden file — `shared/abs_re_inner_pairVec_le_typing_obligations.jsonl`, 10 349 935 →
-4 258 753 B — and nothing else in any mode, since `default` and `stop` write the expanded
-record and never reach `tree_share`. After that re-record, `LTP_DEDUP_NODES` can be
-defaulted on with no further byte change, which is the whole of §13.52's memory win (368
-MiB instead of 432 on the ns row) for free. That re-record is the owner's call, not this
-document's: the golden file is a gate, so both knobs stay off until the change is accepted
-as an artifact change.
+**What the re-record cost: one line.** `check-lean-typing-proof --record` after flipping the
+default changed exactly one entry of `scripts/lean-typing-proof.golden.tsv` —
+`shared/abs_re_inner_pairVec_le_typing_obligations.jsonl`, 10 349 935 B `bf627caf…` →
+4 258 753 B `97d7337a…` — and nothing else in any mode, since `default` and `stop` write the
+expanded record and never reach `tree_share`. The eleven other artifacts, including both
+large `.mm0`/`.mm1` pairs, are unchanged, so the byte-identity gate is still pinning the
+proof itself: what moved is one sidecar's table bookkeeping, in the smaller direction, and
+the `[run]` lines show the same 1 041 771 375 / 1 075 343 397 B outputs as before. With
+this in place `LTP_DEDUP_NODES` can be defaulted on with no further byte change — the whole
+of §13.52's memory win on the ns row, for free.
 
