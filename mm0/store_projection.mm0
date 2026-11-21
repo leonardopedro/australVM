@@ -80,10 +80,12 @@
 -- cites: mm0/statements/rv64_memory.mm0 sha256=ab0e372d5288bafcc18813cd2f610e266cc04468061a5f6f7713004ddfdffa5b
 -- cites: mm0/isa.mm0 sha256=7c811140293bb2cf8cf5cbbb3e3616e1b661764507e36657147fff906ce43092
 --
--- certificate: [gap] — nothing in `mm0/approved/` bears on these claims, and an
---   approval is the owner's commit, not a script's. If `mm0/approved/` ever
---   gains an entry naming this artifact, the gap line and the missing proofs
---   have to go together; `scripts/verify-invariants` fails until they do.
+-- certificate: [gap] — an approval is the owner's commit, not a script's, and
+--   `mm0/approved/store_projection.stmts` approves the *statements* below: the
+--   vocabulary, not a proof. The claims stay uncertified, so this line stays
+--   `[gap]` until a proof exists; the gate's `W9.3: certification state matches
+--   mm0/approved/` applies to `clif.mm0`'s reference to `isa`, not to this
+--   file's own certificate.
 
 -- theory: self-declared vocabulary — the sorts and terms below are this
 -- artifact's whole theory; it imports no rule from `cic.mm0` or `isa.mm0`, so

@@ -279,14 +279,18 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `execute_STORE`: 4; both return `SailM ExecutionResult`, check `width ≤
   xlen_bytes` and can fault in `vmem_read`/`vmem_write`), so the verdict is
   measured instead of retyped. Exit 0 = refuted (the expected state), 1 = the
-  shapes now agree (re-argue the correspondence), 2 = evidence missing.
-  `verify-invariants` runs it and pins the refutation as `[pass]`.
+  shapes now agree (re-argue the correspondence), 2 = evidence missing. The
+  pinned model source is a Nix store path, so it can be evicted; `verify-invariants`
+  pins exit 0 as `[pass]` and reports exit 2 as an explained `[gap]`
+  (`W9.3: memory correspondence not measured (…)`), never as the refutation
+  failing.
 - `scripts/mm0-comparator` — W3's held-out statements. Both modes take
   `--approved-root DIR`, and `approve --dry-run` prints what would be approved
-  and writes nothing: the flow for an unapproved artifact (`isa`, `slot_layout`,
-  `store_projection`, `store_projection_toy`) is *approve into a scratch root,
-  `check` against it, read the statements, then let the owner commit
-  `mm0/approved/<artifact>.stmts`*. `isa`'s emitter is registered
+  and writes nothing: the flow for an unapproved artifact
+  (`store_projection_toy` today; `isa`, `slot_layout` and `store_projection` are
+  approved) is *approve into a scratch root, `check` against it, read the
+  statements, then let the owner commit `mm0/approved/<artifact>.stmts`*.
+  `isa`'s emitter is registered
   (`scripts/isa-encdec`), so its approval is anchored to a current artifact; the
   hand-written specifications have no emitter and the comparator says so.
 - `mm0/store_projection.mm0` — the claims that *survive* that refutation, for
@@ -507,18 +511,21 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
   line and the approval control still passing. One full gate run.
 - `scripts/w93-certification-drift-control` — the §W9.3 control for the
-  refinement's certificate line: it copies `mm0/clif.mm0`, rewrites
-  `-- certificate: [gap]` to claim `mm0/approved/isa.stmts` (which does not
-  exist), and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
-  with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
-  `no isa approval, yet clif.mm0 does not say [gap]`, and the `clif_step`
+  refinement's certificate line, reading the tree's direction: with
+  `mm0/approved/isa.stmts` committed it copies `mm0/clif.mm0` and rewrites the
+  certificate back to `-- certificate: [gap]`; with no approval it would instead
+  claim one. It runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit
+  1 with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
+  `isa.stmts exists — clif.mm0 must cite it, not a gap` (the pending direction's
+  detail is `no isa approval, yet clif.mm0 does not say [gap]`), and the `clif_step`
   vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
 - `scripts/w3-approval-state-drift-control` — the §W3 control for the state
-  cell: it rewrites `isa`'s cell in a copy of the plan to `` `[pass]`, approved in
-  `mm0/approved/` `` with no `mm0/approved/isa.stmts` behind it, and requires
+  cell: it derives the first §W3 row still marked pending (`store_projection_toy`
+  today), rewrites that row's cell in a copy of the plan to `` `[pass]`, approved
+  in `mm0/approved/` `` with no approved copy behind it, and requires
   `verify-invariants` (via `AUSTRALVM_PLAN`) to exit 1 with `[FAIL] W3: the
   plan's §W3 stmts column matches what each artifact holds`, the detail
-  `isa(says approved, but …/isa.stmts does not exist)`, exactly the three other
+  `<stem>(says approved, but …/<stem>.stmts does not exist)`, exactly the three other
   lines that read the same cell red (digest column, approved-row emitter check,
   staging count) and nothing else, and the shape check plus the emitter column
   still green. One full gate run.

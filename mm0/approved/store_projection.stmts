@@ -1,0 +1,22 @@
+-- mm0-comparator v1 — approved statements for store_projection
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: store_projection
+-- closure-sha256: 26699dbc9a27c1c4ae87bfc55ddd140bc85c24f5d082fac8c449fd56bf7f4554
+-- theory-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+-- statements-sha256: 5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2
+
+sort l0;
+sort l1;
+provable sort Prop;
+term l2 (a: l1): Prop;
+term l3 (a: l1): Prop;
+term l4 (s: l0) (a v: l1): l0;
+term l5 (s: l0) (a v: l1): l0;
+term l6 (s: l0) (a: l1): l1;
+term l7 (s: l0) (a: l1): l1;
+term l8 (s: l0) (a v: l1): Prop;
+term l9 (s: l0) (a: l1): Prop;

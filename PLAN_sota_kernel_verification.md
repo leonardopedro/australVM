@@ -795,10 +795,12 @@ the artifact, so `mm0-c` checks them too.
   is an owner commit that touches only `mm0/approved/`, not something this
   plan writes for itself.
 
-  **Pending owner approvals (2026-11-15), one row each.** Each row is a separate
-  `[gap]` line in `verify-invariants`, so a partially-approved set shows up as a
-  shrinking count rather than a single unhelpful "W3 open": the four rows below
-  are the four `[gap] W3: <artifact> has no approved statements` lines in §3.5.
+  **Owner approvals, one row each (2026-11-15; `isa`, `slot_layout` and
+  `store_projection` approved 2026-11-21).** Each row is a separate `[gap]` line
+  in `verify-invariants`, so a partially-approved set shows up as a shrinking
+  count rather than a single unhelpful "W3 open": three of the four rows below
+  are approved, and `store_projection_toy` is the one `[gap] W3: <artifact> has
+  no approved statements` line left.
   The `state` cell is the record of the decision, so approving is one edit — flip
   that cell to `` `[pass]`, approved in `mm0/approved/` `` — and the gate reads
   the rest off the two states (see the state-column paragraph below).
@@ -807,7 +809,7 @@ the artifact, so `mm0-c` checks them too.
   |---|---|---|---|---|---|
   | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[pass]`, approved in `mm0/approved/` | `2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a` |
   | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[pass]`, approved in `mm0/approved/` | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
-  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[gap]`, awaiting owner commit; the claim itself stays `[gap]` (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
+  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays `[gap]` (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
   | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[gap]`, awaiting owner commit | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
@@ -817,28 +819,29 @@ the artifact, so `mm0-c` checks them too.
   ```
   $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants \
       | grep -E '^w3-(pending|approved):|the plan.s §W3'
-  w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
-  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
-  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
-  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
+  w3-pending: store_projection_toy(70 stmt)
+  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt)
+  [gap]  W3: store_projection_toy has no approved statements (run scripts/mm0-comparator approve store_projection_toy, then commit mm0/approved/)
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 3 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (1 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
+  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 3 approved)
   [detail] one altered statement: check refused it (unmodified staging: exit 0)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
-  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
+  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 3 from mm0/approved/)
+  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 3 from mm0/approved/)
   [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
   [pass] W9.3: an approved copy that drops an axiom fails the composition counts
   [pass] W3: every §W3 emitter cell names a real command (4 row(s))
-  [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (3 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
-  [pass] W3: the recorded probe evidence still names live gate lines (6 row(s))
+  [pass] W3: the recorded probe evidence still names live gate lines (22 row(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
+  [pass] W3: stage-approvals stages exactly §W3's 1 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
@@ -1288,7 +1291,7 @@ the artifact, so `mm0-c` checks them too.
   the row. Everything downstream is then read off the two states: the `stmts`
   and digest columns are compared with the approved copy for approved rows and
   with a fresh staging for pending ones (the pass lines report the split:
-  `(4 row(s), 0 approved)` today), the `w3-pending:` line shortens and
+  `(4 row(s), 3 approved)` today), the `w3-pending:` line shortens and
   `w3-approved:` grows without anyone editing a second list, and
   `scripts/stage-approvals` stops staging the artifact because its approved
   copy now exists. Half an approval is refused rather than half-made: a pending
@@ -2618,10 +2621,12 @@ The remaining work is exactly what it was, now with a place to put it:
   the hypothesis list is content-checked with a pinned count.
 
 
-**What the four pending approvals would cover, exactly (2026-11-16).** §W3
-records four artifacts waiting on an owner commit — `isa`, `slot_layout`,
-`store_projection`, `store_projection_toy`, counted as 193 + 23 + 11 + 70
-statements. Those counts are the *comparator's* (declarations plus the notation a
+**What the four approvals cover, exactly (2026-11-16; three landed
+2026-11-21).** §W3 records four artifacts that waited on an owner commit —
+`isa`, `slot_layout`, `store_projection`, `store_projection_toy`, counted as
+193 + 23 + 11 + 70 statements. The first three are approved, so their rows are
+counted from `mm0/approved/`; `store_projection_toy` is still pending and its
+row is counted from a fresh staging. Those counts are the *comparator's* (declarations plus the notation a
 file needs to round-trip), and a count is not a list, so this subsection records
 what each approval actually hands the gate. Measured, not remembered:
 `scripts/mm0-comparator approve --dry-run <artifact>` writes nothing, and the
@@ -2642,12 +2647,14 @@ declarations" sum (which counts every `sort` line, `Prop` included: 6 + 70 + 1 +
 65 + 26 = 168 for `isa`), the numeral and `delimiter` lines, and the closure
 digest, with the file a run wrote —
 `[pass] W9.3: the composition table's counts match the files it records (4
-row(s), 0 from mm0/approved/)` and `… closure digests match the files it
-records (4 row(s), 0 from mm0/approved/)`. The breakdown is not decoration: a
+row(s), 3 from mm0/approved/)` and `… closure digests match the files it
+records (4 row(s), 3 from mm0/approved/)`. The breakdown is not decoration: a
 row is **counted from `mm0/approved/<stem>.stmts`** once that file exists,
 because the row is a record of an approval and the approval is those bytes; a
-row still pending is counted from a fresh staging. `0 from mm0/approved/` today
-is the four approvals being un-made, and it moves on its own when one lands. If
+row still pending is counted from a fresh staging. `3 from mm0/approved/` today
+is `isa`, `slot_layout` and `store_projection` approved and
+`store_projection_toy` still counted from its staging; it moves on its own when
+an approval lands. If
 the staged copy and the approved copy differ — an artifact edited after its
 approval — the row reports `staged bytes differ from the approved copy` instead
 of describing whichever copy was read, so a drift cannot keep the counts green.
@@ -2846,7 +2853,7 @@ Two things this pins down that a count could not:
   stages each §W3 row into its own scratch directory, reads the digest back out
   of the file the comparator wrote, and compares — which is the line
   `[pass] W3: the plan's §W3 digest column matches the file it describes (4
-  row(s), 0 approved)` — the trailing count is the approved/pending split, and an
+  row(s), 3 approved)` — the trailing count is the approved/pending split, and an
   approved row is read from `mm0/approved/<stem>.stmts` instead of a staging. So the
   hex strings quoted here are produced by a run, not copied from the previous
   one: add or remove a statement, or let an emitter drift, and that line turns
