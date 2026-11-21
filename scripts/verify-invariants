@@ -2265,6 +2265,36 @@ EOF
         echo "  [detail] §W3 emitter column:${_w3_emit_bad}" >&2
         check "W3: every §W3 emitter cell names a real command" false
     fi
+    # A row's every other column is a comparison *with* the artifact it names, so
+    # a row for a path the tree does not hold used to surface as a complaint about
+    # a count or a digest — true, but not the finding. This asks the table's own
+    # question: does the file a row points at exist? It reads every table in the
+    # plan, not only §W3's, and skips glob-shaped cells (`mm0/approved/*.stmts` is
+    # a pattern, not a path) so the answer stays about concrete files.
+    _tbl_rows=0
+    _tbl_missing=""
+    while IFS= read -r _tbl_path; do
+        [ -n "$_tbl_path" ] || continue
+        _tbl_rows=$((_tbl_rows + 1))
+        [ -e "$repo_root/$_tbl_path" ] \
+            || _tbl_missing="$_tbl_missing $_tbl_path(absent)"
+    done <<EOF
+$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`[A-Za-z0-9_./-]+`[ \t]*\|/ {
+            p = $2
+            gsub(/^[ \t]+|[ \t]+$/, "", p)
+            gsub(/`/, "", p)
+            if (p ~ /^(mm0|docs|scripts|lib|examples|test|bin|safestos|standard|editor|umbrella|corpus|refi)\/[A-Za-z0-9_.\/-]+\.(mm0|mm1|md|rs|ml|mli|sh|py|aui|aum|toml|json|tbl|tsv|log)$/) print p
+        }' "$_plan_file" | sort -u)
+EOF
+    if [ "$_tbl_rows" -eq 0 ]; then
+        gap "Plan: the plan's table rows name files the tree holds (no path-shaped row found)"
+    elif [ -z "$_tbl_missing" ]; then
+        check "Plan: every file a plan table row names exists on disk ($_tbl_rows row(s))" true
+    else
+        echo "  [detail] table rows naming absent files:${_tbl_missing}" >&2
+        check "Plan: every file a plan table row names exists on disk" false
+    fi
     # … and for an *approved* row the emitter cell is not merely a description. The
     # `stmts` and digest columns read the copy an owner committed, so on their own
     # they would keep passing after the emitter was retired or its output changed:
