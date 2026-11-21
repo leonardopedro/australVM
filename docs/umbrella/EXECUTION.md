@@ -987,7 +987,7 @@ wrapper is `__dispose`.
 | --- | --- | --- |
 | `__new` | `(w0..wN-1, *mut i64 out) -> i64` | `out` receives the two handle words; a null `out` refuses before the provider allocates |
 | `__use` | `(lo, hi, *mut i64 out) -> i64` | one provider word written through `out`; rendered only with a `Use` fact; does not consume the handle |
-| `__with` | `(lo, hi, extern "C" fn(*mut c_void) -> i64, *mut i64 out) -> i64` | the callback gets the provider's pointer while the table is locked; `out` gets its word. Rendered always, but a module can only call it once the lowering can pass a function value |
+| `__with` | `(lo, hi, extern "C" fn(*mut c_void) -> i64, *mut i64 out) -> i64` | the callback gets the provider's pointer while the table is locked; `out` gets its word. Rendered always; a module passes an ordinary Austral function of type `Fn[Pointer[T], Int64]`, whose code address the lowering takes |
 | `__dispose` | `(lo, hi) -> i64` | only a live pair reaches the destructor; every other case is `1` |
 
 The out slot is an `i64*`, so the module hands over a `Pointer[T]` obtained from
@@ -1073,7 +1073,7 @@ Evidence: `cargo test --offline --lib handles` in the bridge (3 white-box
 tests: the retirement path, the word pair and the separated counters) and
 `cargo test --offline --lib --test handles` in the umbrella (63 lib tests plus
 the handles integration test: the registry and encoding cases, create/destroy,
-read, and a reload), The wrapper test compiles the provider and
+read, the scoped borrow, and a reload), The wrapper test compiles the provider and
 both generated modules into one `cdylib` and drives them through `dlsym`: a
 constructor returns `0` and a non-null pair, the first dispose returns `0` and
 the provider's drop counter moves once, the second returns `1` with the counter
@@ -1084,23 +1084,28 @@ provider generation, a null `out` and the null pair are each refused without
 allocating. `test-programs/suites/025-linear-handles` runs three fixtures
 (`python3 test-programs/runner.py 025-linear-handles` → 3 PASS): adopt-then-
 dispose runs and exits 0, forgetting the handle is a linearity error ("is not
-consumed by the time of the return statement"), and disposing it twice is a
-linearity error ("has already been consumed"), and
-`test-programs/suites/027-handle-pragma` runs the pragma's two refusals
+consumed by the time of the return statement"), and disposing it twice is a linearity error ("has already been consumed"),
+and `test-programs/suites/027-handle-pragma` runs the pragma's two refusals
 (`python3 test-programs/runner.py 027-handle-pragma` → 2 PASS): a dispose
 import with an `Int32` word and the pragma on a non-foreign function.
 `./austral compile
 umbrella/modules/WidgetHandle.aui,umbrella/modules/WidgetHandle.aum
 --entrypoint=WidgetHandle:main --target-type=c` exits 0.
 
-**Not yet carried:** the module now mints through `__new` (the bridge names
+**Not yet carried:** the module mints through `__new` (the bridge names
 `__embed` per arity — `__embed$<argc>` — so one module may carry embeds of
 several shapes, which is what the record out slot needed), reads through
-`__use` and disposes through `__dispose`. The `__with` wrapper exists and is
-tested through the host ABI, but no module can call it yet: the CPS lowering
-has no first-class function value to pass as the callback (`MFptrCall` is a
-call by name, not an address), so `WidgetHandle` lends nothing and keeps
-`read`. The provider generation is not constant and is no longer exercised by
+`__use`, lends through `__with` and disposes through `__dispose`. The
+callback is the module's own `onBorrow`, declared with the foreign import as
+`Fn[Pointer[Pair], Int64]`: the CPS lowering names the emitted function
+(`function_value_names`) and the JIT resolves a bare `Var` that is not a
+local to that function's **code address** (`func_addr`), which the call
+passes as the `au_fnptr_t` argument. Two limits stay visible: a function
+value resolves only to a function *in the same CPS module* (a cross-module
+function value would need an import with a signature the name alone does not
+carry), and `MFptrCall` is still a call by name, so a module cannot yet call
+through a function value it was given — it can only hand one over. The
+provider generation is not constant and is no longer exercised by
 a second render: `umbrella/src/adapters.rs` builds each crate at the next
 generation into a new artifact, and `tests/handles.rs` drives a real reload —
 build, `dlopen`, build again, `dlopen` — so the reloaded crate refuses the

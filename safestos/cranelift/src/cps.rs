@@ -317,6 +317,14 @@ fn emit_expr<M: Module>(
             let name = reader.read_string()?;
             if let Some(&var) = vars.get(&name) {
                 Ok(mgr.builder.use_var(var))
+            } else if let Some(&fid) = name_map.get(&name) {
+                // A function used as a value: the lowering writes the emitted
+                // function's own name, so the reference resolves to its
+                // address here — an i64 the foreign ABI can carry (the module's
+                // `__with` callback). Locals win over functions of the same
+                // name, because a function value is only ever a bare name.
+                let fref = jit.declare_func_in_func(fid, mgr.builder.func);
+                Ok(mgr.builder.ins().func_addr(types::I64, fref))
             } else {
                 Err(format!("Undefined variable: {}", name))
             }

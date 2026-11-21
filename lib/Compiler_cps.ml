@@ -509,6 +509,13 @@ let float_arith_call (q: qident) (ty: mono_ty) (a: CpsGen.cps_expr)
    function's return type. *)
 let function_params : (decl_id, mono_ty list) Hashtbl.t = Hashtbl.create 32
 
+(* A function *used as a value* (`TFunVar`) is lowered to a `Var` that names
+   the emitted function, so the JIT can hand its address to a foreign call
+   (the `__with` callback). The name has to be the one the function is emitted
+   under — `ident_string name` — not the numeric decl id, or the variable
+   never resolves. Filled in the same first pass as `function_params`. *)
+let function_value_names : (decl_id, string) Hashtbl.t = Hashtbl.create 32
+
 let monomorph_params : (mono_id, mono_ty list) Hashtbl.t = Hashtbl.create 32
 
 let local_types : (string, mono_ty) Hashtbl.t = Hashtbl.create 32
@@ -611,7 +618,10 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MLocalVar (id, _) -> Var (ident_string id)
   | Mt.MTemporary (id, _) -> Var (ident_string id)
   | Mt.MGenericFunVar (id, _) -> Var ("monomorph_" ^ show_mono_id id)
-  | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ show_decl_id id)
+  | Mt.MConcreteFunVar (id, _) ->
+      (match Hashtbl.find_opt function_value_names id with
+       | Some name -> Var name
+       | None -> Var ("fun_" ^ show_decl_id id))
   | Mt.MConcreteFuncall (decl_id, q, args, ty) ->
       let name = qident_to_string q in
       let is_exit_success = 
@@ -1011,8 +1021,9 @@ let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list 
       List.iter (function
         | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
         | Mt.MUnionMonomorph (id, cases) -> Hashtbl.replace union_layouts id cases
-        | Mt.MFunction (id, _, params, _, _) ->
-            Hashtbl.replace function_params id (param_types params)
+        | Mt.MFunction (id, name, params, _, _) ->
+            Hashtbl.replace function_params id (param_types params);
+            Hashtbl.replace function_value_names id (ident_string name)
         | Mt.MFunctionMonomorph (id, params, _, _) ->
             Hashtbl.replace monomorph_params id (param_types params)
         | Mt.MForeignFunction (id, name, params, rt, ext_name, handle) ->

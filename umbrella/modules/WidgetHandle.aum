@@ -56,6 +56,20 @@ module body WidgetHandle is
     pragma Foreign_Import(External_Name => "avm_widget__use");
     function widgetUse(lo: Int64, hi: Int64, out: Pointer[Word]): Int64 is end;
 
+    -- The scoped borrow's callback: an ordinary Austral function, used as a
+    -- value. The JIT hands the wrapper its *address*; the wrapper resolves the
+    -- handle, calls it with the provider's own pointer while the value is lent,
+    -- and writes the word it returns. Nothing about the value crosses.
+    function onBorrow(ptr: Pointer[Pair]): Int64 is
+        return 1;
+    end;
+
+    -- The generated `__with` wrapper: (lo, hi, callback, out) -> status. The
+    -- callback parameter is the function value above, and `Pointer[Word]` is
+    -- the one-word out slot a refusal leaves untouched.
+    pragma Foreign_Import(External_Name => "avm_widget__with");
+    function widgetWith(lo: Int64, hi: Int64, callback: Fn[Pointer[Pair], Int64], out: Pointer[Word]): Int64 is end;
+
     generic [R: Region]
     function read(widget: &[Widget, R]): Int64 is
         var word: Word := Word(value => -1);
@@ -79,18 +93,32 @@ module body WidgetHandle is
     function main(): ExitCode is
         -- The intended path, constructed from source: `__new` mints the pair
         -- into a local cell, `adopt` makes it the linear value, `read` borrows
-        -- it through `__use`, and `dispose` hands it back exactly once.
+        -- it through `__use`, `__with` lends it to an Austral function value,
+        -- and `dispose` hands it back exactly once.
         var pair: Pair := Pair(lo => -1, hi => -1);
         let status: Int64 := widgetNew(7, 9, refMutToPointer(&!pair));
         let widget: Widget := adopt(pair.lo, pair.hi);
-        let value: Int64 := read(&widget);
+        let readWord: Int64 := read(&widget);
+        -- The scoped borrow: the handle is lent to `onBorrow` for one call, and
+        -- the word the callback returns comes back through `lent`.
+        var lent: Word := Word(value => -1);
+        let borrowed: Int64 := widgetWith(widget.lo, widget.hi, onBorrow, refMutToPointer(&!lent));
         let outcome: Int64 := dispose(widget);
+        let { value: Int64 } := lent;
         -- `-1` is `read`'s refusal sentinel, so a provider word of `-1` is not
         -- reachable here; the point of these lines is the calls, not the value.
         if status = 0 then
-            if value /= -1 then
-                if outcome = 0 then
-                    return ExitSuccess();
+            if readWord /= -1 then
+                if borrowed = 0 then
+                    if value = 1 then
+                        if outcome = 0 then
+                            return ExitSuccess();
+                        else
+                            return ExitFailure();
+                        end if;
+                    else
+                        return ExitFailure();
+                    end if;
                 else
                     return ExitFailure();
                 end if;
