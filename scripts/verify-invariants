@@ -1812,12 +1812,18 @@ EOF
     # copy behind it and requires the table to be told to flip its cell, which
     # only means anything while the row is not approved. Derived, so approving
     # an artifact moves the probe to the next pending row instead of breaking it.
+    # Once *every* row is approved there is no pending one left, and that used to
+    # turn this control into a `[gap]` — its coverage disappearing exactly when
+    # the approvals all landed. An approved row is a valid subject: the stale-state
+    # half already models the owner's mistake against one, so fall back to it and
+    # the probes keep running instead of needing a pending row to exist.
     _w3r_stem="$(printf '%s\n' $_w3_tab_pending | head -1)"
+    [ -n "$_w3r_stem" ] || _w3r_stem="$(printf '%s\n' $_w3_tab_appr | head -1)"
     _w3r_row="$(printf '%s\n' "$_w3_plan" | grep -x "$_w3r_stem=[0-9]*" | head -1)"
     if ! command -v python3 >/dev/null 2>&1; then
         gap "W3: the §W3 row check's approved-row control not run (no python3 here)"
     elif [ -z "$_w3r_row" ]; then
-        gap "W3: the §W3 row check's approved-row control not run (no $_w3r_stem row carries a count)"
+        gap "W3: the §W3 row check's approved-row control not run (no §W3 row carries a count)"
     else
         rm -rf "$_w3r_ctl"; mkdir -p "$_w3r_ctl"
         _w3r_staged="$_cert_tmp/approvals/$_w3r_stem.stmts"
