@@ -1972,6 +1972,17 @@ class Deriver:
         self._sh_idx = array.array("i", [-1]) * 1024
         self._sh_touched: list[int] = []
         self._sh_n = 0
+        # Sharing by content rather than by expression id (§13.53). The table
+        # is keyed by the id the export gave a subterm, so two ids that hold
+        # structurally equal nodes are written twice unless the *deriver*
+        # interns them first (`LTP_DEDUP_NODES`). A writer that keys on the
+        # rendered entry instead makes the record a function of the term alone,
+        # so interning stops changing this artifact and the deriver can own its
+        # memory without owning the certificate's spelling. Default off: it
+        # shrinks a committed artifact, and that is a re-record, not a tweak.
+        self._sh_seen: dict[str, int] | None = (
+            {} if self._share
+            and os.environ.get("LTP_SHARE_DEDUP", "0") == "1" else None)
         self._stop_rules = int(os.environ.get("LTP_STOP_RULES", "0") or 0)
         _stop_at = float(os.environ.get("LTP_STOP_AT", "0") or 0)
         self._stop_at = (time.monotonic() + _stop_at) if _stop_at else 0.0
@@ -2128,6 +2139,8 @@ class Deriver:
             idx[eid] = -1
         self._sh_touched.clear()
         self._sh_n = 0
+        if self._sh_seen is not None:
+            self._sh_seen.clear()
 
     def tree_share(self, eid: int, out) -> int:
         """Write `eid`'s node into the shared table and return its index.
@@ -2217,10 +2230,22 @@ class Deriver:
             else:
                 raise SystemExit(
                     f"tree_share: unhandled expression {sorted(e.keys())}")
+            seen = self._sh_seen
+            if seen is not None:
+                # Child indices are already canonical, so the rendered entry is
+                # the node's content: equal subtrees reach the same `got` and
+                # the later id simply points at the earlier index.
+                got = seen.get(ent)
+                if got is not None:
+                    idx[eid] = got
+                    self._sh_touched.append(eid)
+                    return got
             i = self._sh_n
             self._sh_n = i + 1
             idx[eid] = i
             self._sh_touched.append(eid)
+            if seen is not None:
+                seen[ent] = i
             if i:
                 write(", ")
             write(ent)

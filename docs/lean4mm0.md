@@ -4622,7 +4622,8 @@ conclusion already used, where before it was a fresh copy of it.
 That matters because `scripts/lean-typing-proof.golden.tsv` records
 `shared/…_obligations.jsonl`: defaulting interning on would re-baseline the byte-identity
 gate for a spelling change, so the knob stays an env-gated probe like `LTP_ENC_MAX`, and
-the sidecar is the one place the two differ.
+the sidecar is the one place the two differ. §13.53 moves the sharing to the writer,
+where the difference disappears.
 
 **The smoke row, and why its ratio does not transfer.** `abs_re_inner_pairVec_le` at its
 768 MiB cap, with and without the knob (same env trio, `LTP_CENSUS` on): synthetic nodes
@@ -4631,3 +4632,58 @@ nodes (92.5 % of the table was re-minting). The ns row recovers 72 %. Node-level
 duplication is a property of the derivation being replayed, not of the emitter, so the
 smoke ratio is not a scale factor — which is the same lesson the ~28 MB estimate carried,
 one level down.
+
+### 13.53 Sharing by content in the writer: the sidecar stops depending on interning
+
+§13.52 left one loose end: interning is neutral for the proof and changes the sidecar, and
+the sidecar is what `scripts/lean-typing-proof.golden.tsv` records, so the memory win
+could only be had by re-baselining the byte-identity gate on a spelling change. The
+spelling was never the point — the sharing table is keyed by *expression id*, so two ids
+holding structurally equal nodes are written twice, and whether interning collapsed those
+ids was the deriver's business leaking into a certificate.
+
+**The knob, and where it lives.** `LTP_SHARE_DEDUP=1` keys the shared table on the
+rendered entry instead of the id. Each entry is built only after its children's indices
+exist and those indices are already canonical, so the entry string *is* the node's
+content: equal subtrees reach the same index and the later id simply points at the
+earlier one. The cost is one dict lookup per node — no `repr` of a subtree, no second
+pass — and one dict per certificate, cleared in `_sh_reset` because a record's numbering
+restarts there. Default off, like `LTP_DEDUP_NODES`: it changes a committed artifact, and
+that is a re-record, not a tweak.
+
+**Measured on the smoke row** (`abs_re_inner_pairVec_le`, shared mode, the record the
+golden file pins):
+
+| run | sidecar | sha256 | `.mm0` | `.mm1` |
+| --- | ---: | --- | ---: | ---: |
+| control (`LTP_OBLIG_SHARE=1` only) | 10 349 935 B | `bf627caf…` | 1 041 771 375 B | 1 075 343 397 B |
+| `LTP_SHARE_DEDUP=1` | 4 258 753 B | `97d7337a…` | same | same |
+| `LTP_SHARE_DEDUP=1 LTP_DEDUP_NODES=1` | 4 258 753 B | `97d7337a…` | same | same |
+
+The control reproduces the golden line exactly, so the knob is off by default in the
+artifact and in the gate. Rows two and three are byte-identical to each other: that is
+the property §13.52 could not get — once the writer owns the spelling, id interning no
+longer moves this artifact at all, so the deriver can own its memory without owning the
+certificate.
+
+**More than interning recovered, and that is the diagnosis.** Interning alone gave
+5 289 891 B on this row (§13.52); keying on content gives 4 258 753 B, because an export's
+own ids can hold structurally equal nodes that `Deriver.mk` never mints and so never
+interned. It is the same duplication one level up, found by looking at the writer rather
+than the allocator.
+
+**Neutral, checked rather than asserted.** `scripts/oblig-expand` expands both the control
+and the content-shared stream to the historical record form: 1 012 915 095 B each, `cmp`
+identical — the same obligations, the same `(b, x, r)` terms, spelled against fewer table
+entries. (That expanded size is also `default/…_obligations.jsonl` in the golden file: the
+shared encoding expands to the unshared artifact, which is what makes the two modes one
+format.)
+
+**What a default costs.** Flipping `LTP_SHARE_DEDUP` to default changes exactly one line of
+the golden file — `shared/abs_re_inner_pairVec_le_typing_obligations.jsonl`, 10 349 935 →
+4 258 753 B — and nothing else in any mode, since `default` and `stop` write the expanded
+record and never reach `tree_share`. After that re-record, `LTP_DEDUP_NODES` can be
+defaulted on with no further byte change, which is the whole of §13.52's memory win (416
+MiB instead of 432 on the ns row) for free. That re-record is the owner's call, not this
+document's: the golden file is a gate, so both knobs stay off until the change is accepted
+as an artifact change.
