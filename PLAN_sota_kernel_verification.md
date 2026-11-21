@@ -841,13 +841,17 @@ the artifact, so `mm0-c` checks them too.
   row was a separate `[gap]` line in `verify-invariants`, so a partially-approved
   set showed up as a shrinking count rather than a single unhelpful "W3 open":
   the four rows below were the four `[gap] W3: <artifact> has no approved
-  statements` lines in §3.5 until the owner committed all four. A fifth row that
-  some transcripts quote — `mm0/liquid_split.mm0`, emitted by
-  `scripts/liquid-split-mm0` — is **not** in this table: neither the artifact nor
-  the emitter exists in any commit, so the table would be asserting files the
-  tree does not have, and the checks that read the table (its `stmts` column, its
-  emitter cell, its staging) would be reading a claim that cannot be measured.
-  It belongs here in the commit that lands both. The `state`
+  statements` lines in §3.5 until the owner committed all four. A fifth row,
+  `mm0/liquid_split.mm0`, is **pending**: earlier transcripts quoted it (91
+  statements) before either the artifact or its emitter existed in any commit,
+  which is why it was left out of the table — the checks that read a row (its
+  `stmts` column, its emitter cell, its staging) would have been reading a claim
+  that could not be measured. It landed with both: `scripts/liquid-split-mm0`
+  compiles the accepted L11c fixture, reads the pilot's L11d.1 evidence, and
+  writes the law as one statement per evidence obligation with the measured
+  call instantiated; `check` re-derives it, so the row's count and digest are
+  measured like every other row's. Its `state` cell is the owner's decision and
+  stays `` `[gap]`, awaiting owner commit ``. The `state`
   cell is the record of the decision in both directions — setting it back to
   `` `[gap]`, awaiting owner commit `` withdraws an approval, and the gate reads
   the rest off the two states (see the state-column paragraph below). What an
@@ -862,6 +866,7 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[pass]`, approved in `mm0/approved/` | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
   | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, a certificate naming the approval | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays unproved (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
   | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[pass]`, approved in `mm0/approved/` | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
+  | `mm0/liquid_split.mm0` | L11d.1's held-out split law in the law's own variables — the two constructed spans, the shared base, conservation, disjointness and byte scaling, one statement per evidence obligation, plus the accepted fixture's checked call instantiation; no `axiom`, no `theorem` | 36 | `scripts/liquid-split-mm0 check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | `414d1ed03836d368ef9c7ece3a3b5504254224772876a42955bae9e3992f180a` |
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
@@ -1141,10 +1146,10 @@ the artifact, so `mm0-c` checks them too.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 225 `check` statements,
-  137 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 230 `check` statements,
+  138 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 22 of those 137 have a measured perturbed-tree
+  number, not a different claim. 25 of those 138 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
   neither: no check in the gate is unread now, and there are no `copy` rows —
@@ -1256,6 +1261,7 @@ the artifact, so `mm0-c` checks them too.
   | `W3: a §W3 row that disagrees with mm0/approved/ is refused` | control | runs the row function against a scratch approved root, missing copy then stale cell |
   | `W3: an approved §W3 row passes when the approved copy holds what it says` | control | the positive branch of the same scratch-approval probe |
   | `W3: an approved §W3 row whose emitter left the registry is refused` | control | drops `isa` from a scratch registry and requires the refusal |
+  | `W3: every §W3 row's emitter script exists before its state cell is read` | derived | stats the script each row's emitter cell names, before any state cell is read — a missing emitter must be the first thing a reader met (`liquid_split` arrived the other way round) |
   | `W3: every §W3 state cell says whether the row is approved or still waiting on the owner` | none | validates the plan's cells against the two allowed shapes; the red path is a plan edit |
   | `W3: one altered statement makes the comparator refuse the approved copy` | control | alters one statement in a scratch staging |
   | `W3: stage-approvals answers an unknown artifact name with exit 64` | control | runs `stage-approvals` with an unknown name against a scratch root |

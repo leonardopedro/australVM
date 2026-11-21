@@ -1583,6 +1583,57 @@ w3_measure() {
 _plan_file="${AUSTRALVM_PLAN:-$repo_root/PLAN_sota_kernel_verification.md}"
 
 if [ -f "$repo_root/scripts/mm0-comparator" ]; then
+    # The emitter cell is checked *before* the state cell is read. `liquid_split`
+    # (2026-11-21) is why: it reached this gate as a row naming
+    # `scripts/liquid-split-mm0 check` while that script existed in no commit, and
+    # the failure that named the absent file arrived only after the checks that
+    # read the row's `state` — so the first line a reader met was "its artifact
+    # does not re-derive here", which reads like a broken generator rather than
+    # "the command it names is not in the tree". The table is the owner's next
+    # decision, so the command that would make it is what the row must be able
+    # to name. The full comparison against `EMITTERS` is below and unchanged;
+    # this is the existence half, and it runs first.
+    _w3_early="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $5
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            print path "\t" cell
+        }' "$_plan_file")"
+    _w3_early_bad=""
+    _w3_early_n=0
+    while IFS="$(printf '\t')" read -r _s_stem _s_cell; do
+        [ -n "$_s_stem" ] || continue
+        _w3_early_n=$((_w3_early_n + 1))
+        case "$_s_cell" in
+            none*) ;;
+            '`'*'`'*)
+                _s_cmd="$(printf '%s' "$_s_cell" | sed -n 's/^`\([^`]*\)`.*/\1/p')"
+                _s_script="${_s_cmd%% *}"
+                if [ -z "$_s_script" ]; then
+                    _w3_early_bad="$_w3_early_bad $_s_stem(emitter cell has an empty command)"
+                elif [ ! -f "$repo_root/$_s_script" ]; then
+                    _w3_early_bad="$_w3_early_bad $_s_stem(names '$_s_script', which does not exist)"
+                elif [ ! -x "$repo_root/$_s_script" ]; then
+                    _w3_early_bad="$_w3_early_bad $_s_stem(names '$_s_script', which is not executable)"
+                fi
+                ;;
+            *)
+                _w3_early_bad="$_w3_early_bad $_s_stem(emitter cell names no command and does not say none)"
+                ;;
+        esac
+    done <<EOF
+$_w3_early
+EOF
+    if [ "$_w3_early_n" -eq 0 ]; then
+        gap "W3: §W3 emitter cells not checked before their state (no row carries one)"
+    elif [ -z "$_w3_early_bad" ]; then
+        check "W3: every §W3 row's emitter script exists before its state cell is read ($_w3_early_n row(s))" true
+    else
+        echo "  [detail] §W3 emitter scripts:${_w3_early_bad}" >&2
+        check "W3: every §W3 row's emitter script exists before its state cell is read" false
+    fi
     _w3_line=""
     _w3_pairs=""
     _w3_ok=""

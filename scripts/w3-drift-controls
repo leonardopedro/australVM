@@ -196,7 +196,7 @@ case_phase-d-theory-coverage() {
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "Phase D: slot_layout.mm0 states its theory coverage" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_phase-d-imported-theory() {
@@ -207,7 +207,7 @@ case_phase-d-imported-theory() {
     expect_fail "Phase D: slot_layout.mm0 only claims rules its theory declares" "$cw/g" &&
     expect_detail "claims used rules the theory does not declare:" "$cw/g" "tnope_not_declared" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_phase-d-self-vocabulary() {
@@ -216,7 +216,7 @@ case_phase-d-self-vocabulary() {
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "Phase D: store_projection.mm0 states its theory coverage" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_phase-d-measured-coverage() {
@@ -238,7 +238,7 @@ PY
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "Phase D: clif.mm0 states its measured coverage" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_isa-hypothesis-pin() {
@@ -255,7 +255,7 @@ PY
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_clif-vocabulary() {
@@ -291,7 +291,7 @@ case_witness-axiom() {
     # the witness's axiom list missing `toy_not_held` beside the count drift.
     expect_fail "W9.3: the witness exercises every axiom the toy declares" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_memsafe-edge() {
@@ -315,7 +315,7 @@ PY
     expect_fail "memsafe: fixtures exercise every automaton edge" "$cw/g" &&
     expect_detail "neither fixture reaches:" "$cw/g" "t_acq" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_liquid-golden() {
@@ -376,7 +376,7 @@ case_cert-approved() {
     # are what says the run still worked: without them the expected failures
     # above would also be produced by a gate that had broken wholesale.
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 # The last `copy` row: `W3: $_stem matches its approved statements`. Its failing
@@ -402,7 +402,7 @@ PY
     gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
     expect_fail "W3: quasi_rh_7_8 matches its approved statements" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 CASES="phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage

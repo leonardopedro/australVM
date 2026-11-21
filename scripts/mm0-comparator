@@ -80,6 +80,11 @@ EMITTERS = {
     # `store_projection` and its toy are hand-written specifications: no emitter
     # owns them, and the comparator says so rather than skipping the note.
     "isa": ("scripts/isa-encdec", "check"),
+    # `mm0/liquid_split.mm0` is reflected from the pilot's own L11d.1 evidence
+    # (`lib/liquid/LiquidSplitPilot.ml`), so its approval is anchored to a
+    # current artifact too: `check` re-compiles the accepted fixture and diffs
+    # the law it writes down.
+    "liquid_split": ("scripts/liquid-split-mm0", "check"),
 }
 
 # MM0 identifier charset (mm0-rs), used for reference extraction. Note `-` is

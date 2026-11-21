@@ -53,7 +53,7 @@ comparator="$here/mm0-comparator"
 
 # The artifacts the plan's §W3 table has a row for. Approval state is read from
 # the approved root, not stored here.
-artifacts_all=(isa slot_layout store_projection store_projection_toy)
+artifacts_all=(isa liquid_split slot_layout store_projection store_projection_toy)
 
 root="${TMPDIR:-/tmp}/australvm-approve-staging"
 approved_root="$repo_root/mm0/approved"
