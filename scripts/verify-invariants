@@ -1627,7 +1627,7 @@ if [ -f "$repo_root/scripts/mm0-comparator" ]; then
 $_w3_early
 EOF
     if [ "$_w3_early_n" -eq 0 ]; then
-        gap "W3: §W3 emitter cells not checked before their state (no row carries one)"
+        check "W3: §W3 emitter cells not checked before their state (no row carries one)" false
     elif [ -z "$_w3_early_bad" ]; then
         check "W3: every §W3 row's emitter script exists before its state cell is read ($_w3_early_n row(s))" true
     else
@@ -1801,7 +1801,7 @@ EOF
     if [ "$_w3_rows" -gt 0 ] && [ -z "$_w3_bad" ]; then
         check "W3: the plan's §W3 stmts column matches what each artifact holds ($_w3_rows row(s), $_w3_appr_rows approved)" true
     elif [ "$_w3_rows" -eq 0 ]; then
-        gap "W3: the plan's §W3 stmts column not compared (no table row carries a count)"
+        check "W3: the plan's §W3 stmts column not compared (no table row carries a count)" false
     else
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
         check "W3: the plan's §W3 stmts column matches what each artifact holds" false
@@ -1874,7 +1874,7 @@ EOF
     if ! command -v python3 >/dev/null 2>&1; then
         gap "W3: the §W3 row check's approved-row control not run (no python3 here)"
     elif [ -z "$_w3r_row" ]; then
-        gap "W3: the §W3 row check's approved-row control not run (no §W3 row carries a count)"
+        check "W3: the §W3 row check's approved-row control not run (no §W3 row carries a count)" false
     else
         rm -rf "$_w3r_ctl"; mkdir -p "$_w3r_ctl"
         _w3r_staged="$_cert_tmp/approvals/$_w3r_stem.stmts"
@@ -1979,7 +1979,7 @@ EOF
     if ! command -v python3 >/dev/null 2>&1; then
         gap "W3: the §W3 statements-sha256 column not compared (no python3 here)"
     elif [ "$_w3_dig_n" -eq 0 ]; then
-        gap "W3: the §W3 statements-sha256 column not compared (no table row quotes one)"
+        check "W3: the §W3 statements-sha256 column not compared (no table row quotes one)" false
     elif [ -z "$_w3_dig_bad" ]; then
         check "W3: the plan's §W3 digest column matches the file it describes ($_w3_dig_n row(s), $_w3_dig_appr_n approved)" true
     else
@@ -2330,7 +2330,7 @@ EOF
     if [ -z "$_w3_reg" ]; then
         gap "W3: the plan's §W3 emitter column not compared (the comparator printed no registry)"
     elif [ "$_w3_emit_rows_n" -eq 0 ]; then
-        gap "W3: the plan's §W3 emitter column not compared (no table row carries one)"
+        check "W3: the plan's §W3 emitter column not compared (no table row carries one)" false
     elif [ -z "$_w3_emit_bad" ]; then
         check "W3: every §W3 emitter cell names a real command ($_w3_emit_rows_n row(s))" true
     else
@@ -2641,7 +2641,7 @@ EOF
 $_w3_state_rows
 EOF
     if [ "$_w3_state_rows_n" -eq 0 ]; then
-        gap "W3: the plan's §W3 state column not compared (no table row carries one)"
+        check "W3: the plan's §W3 state column not compared (no table row carries one)" false
     elif [ -z "$_w3_state_bad" ]; then
         check "W3: every §W3 state cell says whether the row is approved or still waiting on the owner ($_w3_state_rows_n row(s))" true
     else
@@ -2700,7 +2700,7 @@ EOF
         if [ "$_sa_rows_n" -gt 0 ] && [ -z "$_sa_names_bad" ]; then
             check "W3: stage-approvals' artifact list is the §W3 table's rows ($_sa_rows_n name(s))" true
         elif [ "$_sa_rows_n" -eq 0 ]; then
-            gap "W3: stage-approvals' artifact list not compared (no §W3 row carries a state)"
+            check "W3: stage-approvals' artifact list not compared (no §W3 row carries a state)" false
         else
             echo "  [detail] artifact lists:${_sa_names_bad}" >&2
             check "W3: stage-approvals' artifact list is the §W3 table's rows" false

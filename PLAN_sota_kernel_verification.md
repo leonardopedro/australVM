@@ -880,42 +880,42 @@ the artifact, so `mm0-c` checks them too.
   prints a `w3-pending:` and a `w3-approved:` line …
 
   ```
-  $ nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants \
+  $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants \
       | grep -E '^w3-(pending|approved):| W3:|Plan:|W9.3: the composition'
+  [pass] W3: every §W3 row's emitter script exists before its state cell is read (5 row(s))
   [pass] W3: flux1d_certificate matches its approved statements
   [pass] W3: gap_certificate matches its approved statements
   [pass] W3: isa matches its approved statements
   [pass] W3: layout_certificate matches its approved statements
   [pass] W3: linearity_certificate matches its approved statements
   [pass] W3: linearity_certificate_spans matches its approved statements
-  [gap]  W3: liquid_split has no approved statements (run scripts/mm0-comparator approve liquid_split, then commit mm0/approved/)
+  [pass] W3: liquid_split matches its approved statements
   [pass] W3: quasi_rh_7_8 matches its approved statements
   [pass] W3: quasi_rh_certificate matches its approved statements
   [pass] W3: service_isolation_certificate matches its approved statements
   [pass] W3: slot_layout matches its approved statements
   [pass] W3: store_projection matches its approved statements
   [pass] W3: store_projection_toy matches its approved statements
-  w3-pending: liquid_split(41 stmt)
-  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
-  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 4 approved)
-  [pass] W3: every pending §W3 row's artifact re-derives into a staging (1 row(s))
+  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) liquid_split(41 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 5 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (0 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-  [pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 4 approved)
+  [pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 5 approved)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
   [pass] W9.3: the composition table's counts match the files it records (4 row(s), 4 from mm0/approved/)
   [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 4 from mm0/approved/)
   [pass] W3: every §W3 emitter cell names a real command (5 row(s))
   [pass] Plan: every file a plan table row names exists on disk (5 row(s))
-  [pass] W3: every approved §W3 row's emitter still produces its approved copy (4 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (5 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
-  [pass] W3: the recorded probe evidence still names live gate lines (22 row(s))
+  [pass] W3: the recorded probe evidence still names live gate lines (25 row(s))
   [pass] W3: every drift control the plan names has a recorded transcript (9 invocation(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 1 pending row(s) (exit 0)
+  [pass] W3: stage-approvals stages exactly §W3's 0 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
@@ -1163,10 +1163,10 @@ the artifact, so `mm0-c` checks them too.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 232 `check` statements,
-  139 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 241 `check` statements,
+  147 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 22 of those 139 have a measured perturbed-tree
+  number, not a different claim. 25 of those 147 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
   neither: no check in the gate is unread now, and there are no `copy` rows —
@@ -1291,6 +1291,13 @@ the artifact, so `mm0-c` checks them too.
   | `W3: stage-approvals' artifact list is the §W3 table's rows` | derived | compares the script's artifact list with the §W3 rows it is generated from |
   | `W3: the plan's §W3 digest column matches the file it describes` | derived | recomputes each quoted digest from the file or approved copy the row names |
   | `W3: the recorded probe evidence still names live gate lines` | derived | re-reads `probes.tsv` and checks each row against the gate it cites |
+  | `W3: §W3 emitter cells not checked before their state (no row carries one)` | none | fires when the table carries no emitter cell at all — a defect in the plan, so the gate fails there instead of gapping |
+  | `W3: stage-approvals' artifact list not compared` | none | fires when no §W3 row carries a state — a defect in the plan, not a missing tool, so it fails |
+  | `W3: the §W3 row check's approved-row control not run` | none | fires when no §W3 row carries a count — a table defect, so the gate fails rather than gapping |
+  | `W3: the §W3 statements-sha256 column not compared (no table row quotes one)` | none | fires when no §W3 row quotes a digest — a table defect, so it fails |
+  | `W3: the plan's §W3 emitter column not compared (no table row carries one)` | none | fires when no §W3 row carries an emitter cell — a table defect, so it fails |
+  | `W3: the plan's §W3 state column not compared (no table row carries one)` | none | fires when no §W3 row carries a state cell — a table defect, so it fails |
+  | `W3: the plan's §W3 stmts column not compared (no table row carries a count)` | none | fires when no §W3 row carries a count — a table defect, so it fails |
   | `W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes` | derived | recomputes the CPS digest through the bridge and compares the recorded one; also mutates a CPS copy |
   | `W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object` | derived | recomputes the object digest through the bridge |
   | `W5 (checked): the bridge the gate loads is the release artifact it was built from` | derived | compares the repo-root copy against the one `make bridge` writes; a stale root copy measuring the kernel with an old bridge is the silent pass `scripts/obj-drift-control` found once |
@@ -1376,8 +1383,10 @@ the artifact, so `mm0-c` checks them too.
   the row. Everything downstream is then read off the two states: the `stmts`
   and digest columns are compared with the approved copy for approved rows and
   with a fresh staging for pending ones (the pass lines report the split:
-  `(4 row(s), 0 approved)` in that run), the `w3-pending:` line shortens and
-  `w3-approved:` grows without anyone editing a second list, and
+  `(5 row(s), 5 approved)` on the current tree), a pending row becomes an
+  approved one by shortening `w3-pending:` and growing `w3-approved:` — once
+  every row is approved the `w3-pending:` line is empty and is not printed at
+  all — without anyone editing a second list, and
   `scripts/stage-approvals` stops staging the artifact because its approved
   copy now exists. Half an approval is refused rather than half-made: a pending
   row whose approved copy *does* exist fails with `… exists — flip this row's
@@ -2932,9 +2941,13 @@ Two things this pins down that a count could not:
   place any of this is proved), and it does not upgrade `isa`'s encoder laws to
   facts about the compiler — they are the model's, cited as such.
 - **The counts are gate-pinned, the names are not.** `verify-invariants` prints
-  `w3-pending: isa(193 stmt) slot_layout(23 stmt)
-  store_projection(11 stmt) store_projection_toy(70 stmt)` every run, so a
-  statement added to any of the four moves that line and this table has to move
+  `w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt)
+  isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt)
+  linearity_certificate_spans(71 stmt) liquid_split(41 stmt) quasi_rh_7_8(3 stmt)
+  quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
+  slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)`
+  every run (all thirteen approved, so `w3-pending:` is empty and absent), so a
+  statement added to any artifact moves that line and this table has to move
   with it; the closure digests
   above are the rule for the *names*, since the canonical form does not keep
   them. `scripts/check-links` will not catch a stale name in a list like this —
