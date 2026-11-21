@@ -961,6 +961,40 @@ A `Foreign_Import(External_Name => "avm_widget__use")` is what calls the
 reading wrapper; the lowering leaves that name alone, because the wrapper is a
 generated symbol, not a handle import.
 
+**The pragma's refusals are fixtures, not prose.** Both are typing-pass errors,
+so they fire before any descriptor is written and need no provider symbol to
+exist. `test-programs/suites/027-handle-pragma` runs them:
+
+* `000-dispose-signature` — the import the pragma annotates must have the
+dispose ABI, two `Int64` words in and one `Int64` out. An `Int32` first
+parameter is refused with "A `Handle_Ownership` import must have the dispose
+wrapper's signature…", because the call the lowering derives (and the words
+the registry accepts) are 64 bits wide.
+* `001-not-foreign` — the pragma describes a foreign import only. Putting it on
+a function with a body is refused with "The `Handle_Ownership` pragma can only
+annotate a foreign import declared with `Foreign_Import`…", so a plain Austral
+function cannot be given a destructor it never had.
+
+Both stderr transcripts are captured byte for byte, so a reworded diagnostic is
+a fixture update rather than a silent drift.
+
+**The wrapper ABI.** All four wrappers speak `i64` only and return a status
+word: `0` done, `1` refused. A refusal never writes the out slot, so a caller
+cannot mistake an old word for a fresh one, and the words stay live unless the
+wrapper is `__dispose`.
+
+| wrapper | signature | notes |
+| --- | --- | --- |
+| `__new` | `(w0..wN-1, *mut i64 out) -> i64` | `out` receives the two handle words; a null `out` refuses before the provider allocates |
+| `__use` | `(lo, hi, *mut i64 out) -> i64` | one provider word written through `out`; rendered only with a `Use` fact; does not consume the handle |
+| `__with` | `(lo, hi, extern "C" fn(*mut c_void) -> i64, *mut i64 out) -> i64` | the callback gets the provider's pointer while the table is locked; `out` gets its word. Rendered always, but a module can only call it once the lowering can pass a function value |
+| `__dispose` | `(lo, hi) -> i64` | only a live pair reaches the destructor; every other case is `1` |
+
+The out slot is an `i64*`, so the module hands over a `Pointer[T]` obtained from
+a *record* borrow (`refMutToPointer(&!slot)`): a scalar borrow lowers to the
+constant address 0 and would be refused as a null `out`, which is why the
+slots are one-word records rather than bare `Int64`s.
+
 `HandleAdapter::parse_descriptors` numbers the registries from 1 and the number
 is the owner tag the words carry; the tag is not part of the text, because it is
 the generator's numbering inside one crate, not a fact about the type. The
@@ -1037,9 +1071,9 @@ buffer and nothing to encode.
 
 Evidence: `cargo test --offline --lib handles` in the bridge (3 white-box
 tests: the retirement path, the word pair and the separated counters) and
-`cargo test --offline --lib --test handles` in the umbrella (63 lib tests + 13
-integration tests: ten registry/encoding cases and three wrapper cases — create/
-destroy, read, and a reload), The wrapper test compiles the provider and
+`cargo test --offline --lib --test handles` in the umbrella (63 lib tests plus
+the handles integration test: the registry and encoding cases, create/destroy,
+read, and a reload), The wrapper test compiles the provider and
 both generated modules into one `cdylib` and drives them through `dlsym`: a
 constructor returns `0` and a non-null pair, the first dispose returns `0` and
 the provider's drop counter moves once, the second returns `1` with the counter
@@ -1051,7 +1085,11 @@ allocating. `test-programs/suites/025-linear-handles` runs three fixtures
 (`python3 test-programs/runner.py 025-linear-handles` → 3 PASS): adopt-then-
 dispose runs and exits 0, forgetting the handle is a linearity error ("is not
 consumed by the time of the return statement"), and disposing it twice is a
-linearity error ("has already been consumed"). `./austral compile
+linearity error ("has already been consumed"), and
+`test-programs/suites/027-handle-pragma` runs the pragma's two refusals
+(`python3 test-programs/runner.py 027-handle-pragma` → 2 PASS): a dispose
+import with an `Int32` word and the pragma on a non-foreign function.
+`./austral compile
 umbrella/modules/WidgetHandle.aui,umbrella/modules/WidgetHandle.aum
 --entrypoint=WidgetHandle:main --target-type=c` exits 0.
 

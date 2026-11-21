@@ -727,6 +727,14 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
        | "au_calloc($1, $2)", [elem; count] -> App ("au_calloc", [elem; count])
        | "au_free($1)", [a] -> App ("au_free", [a])
        | _ -> App ("__embed", cargs))
+  | Mt.MDeref (Mt.MSlotAccessor (e, name, ty)) ->
+      (* A record value's field read arrives here as a dereference of the slot
+         accessor, because the typing pass makes the accessor yield the field's
+         address. The C backend can keep both halves, but the CPS accessor is
+         `__slot_get`, which already performs the load, so the enclosing
+         `Deref` would load the field's value as an address — a segfault for
+         any value that is not one. Drop the redundant dereference. *)
+      convert_expr (Mt.MSlotAccessor (e, name, ty))
   | Mt.MDeref e ->
       (* The load has its own opcode (0x20), and the JIT decodes it as a load
          from the pointer — `__deref` survives in `cps.rs` for binaries emitted
