@@ -404,21 +404,45 @@ $ LD_LIBRARY_PATH=… dune runtest                              # exit 0
 OK / OK / … (15 executable(s), 0 failures)
 ```
 
-**Measured 2026-11-20 at `8b8eb323`, after `make bridge`:** the `ocaml` shell
-reports `166 passed, 6 explained gap(s), 0 failed`
+**Measured 2026-11-20 at `8b8eb323`, on an aarch64 host, after `make bridge`:**
+the `ocaml` shell reports `166 passed, 6 explained gap(s), 0 failed`
 ([transcript](docs/data/gate/2026-11-20-ocaml-shell.log)) and the `lean` shell
 `175 passed, 4 explained gap(s), 0 failed`
 ([transcript](docs/data/gate/2026-11-20-lean-shell.log)). The transcript block
 above is the branch this was merged from and reads `156 passed, 9 explained
-gap(s)`; the merge added checks and closed three of those gaps. Under `.#ocaml`
-the six that remain are the four §W3 approvals plus the two shell-local ones
-(`W9.1: RV64 model not re-converted`, `W9.3: the Lean witness proofs not checked`);
-under `.#lean` they are the four approvals alone. The `W5 (checked)` object
-digest is a `[pass]` in both shells here, not a gap: the certificate records
-`arch=aarch64` and this host is aarch64, so the comparison is real and its
-`[pass]` means the bytes the bridge compiled are the bytes the certificate
-pinned. On an x86_64 host the same check normalises those two lines and reports
-the incomparable digest as a gap rather than a failure — see AGENTS.md's W5 note. Of the
+gap(s)`; the merge added checks and closed three of those gaps. In that `ocaml`
+shell the six gaps were the four §W3 approvals plus `W9.1: RV64 model not
+re-converted` and `W9.3: the Lean witness proofs not checked`, and the
+certificate printed `arch=aarch64` there, so its `W5 (checked)` object digest
+compared for real: the `[pass]` means the bytes the bridge compiled are the
+bytes the certificate pinned.
+
+**Re-measured 2026-11-21 at `d2099104` on this x86_64 host, in all three
+shells:** `176 passed, 2 explained gap(s), 0 failed` under
+`nix develop "git+file://$PWD"`, `161 passed, 5 explained gap(s), 0 failed`
+under `.#ocaml`, and `162 passed, 4 explained gap(s), 0 failed` under `.#lean`.
+None of those numbers is a correction of the ones above; each is a different
+shell over the same checks, and the differences close exactly. The four
+approvals closed their four `[gap] W3: <artifact> has no approved statements`
+lines and added one `[pass] W3: <artifact> matches its approved statements` line
+each. `.#ocaml` carries `lean` but not `why3`, so the 15 per-file Liquid passes
+of the 2026-11-20 shell are the three `Liquid golden…`/`Liquid subset` gaps
+there — hence `161 + 15 = 176` against the default shell and `5 − 3 = 2` — while
+the eight Lean witness passes replace the `W9.3` gap. `.#lean` re-converts the
+RV64 model as well, turning `W9.1` into a pass (`162 = 161 + 1`, `4 = 5 − 1`).
+The certificate on this host records `arch=x86_64` with `cps=c10ca9a9…` and
+`obj=b138fd6e…`; on a host whose certificate recorded the other arch, the same
+check normalises those two lines and reports the incomparable digest as a gap
+rather than a failure — see AGENTS.md's W5 note.
+
+One gap is shared by all three shells and is a coverage loss, not a shell fact:
+`[gap]  W3: the §W3 row check's approved-row control not run (no  row carries a
+count)`. With every §W3 row approved, the two controls `an approved §W3 row
+passes when the approved copy holds what it says` and `a §W3 row that disagrees
+with mm0/approved/ is refused` have no row left to pick, so they stopped running;
+the gate reports that as a gap, never as a pass.
+
+Of the
 figures quoted, only `clif2mm0` moved for a reason worth naming: the quoted 854
 is now **811 instructions** over the same 12 modules (869 on the branch this was
 merged from, before `ab9edf22` stopped initialising a cell for a borrow, which
@@ -426,10 +450,10 @@ the merged lowering includes), with the form set unchanged at 20 and the
 movement in counters only (one-argument `call` 35 → 50, two-argument `call`
 63 → 48, `store` 37 → 52), while the opcode census did not move at all (905
 reads, 23 of 23 opcodes) — so this is a CLIF-layer counter change, not a
-CPS-layer one. The `w3-pending`/`w3-approved` sizes and the certificate's
-statements are unchanged; its `-- code:` line was re-emitted for this host (see
-above), which is the intended relation: a lowering change the CLIF layer
-measures moves only the artifact that measures it.
+CPS-layer one. The `w3-approved` sizes and the certificate's statements are
+unchanged; its `-- code:` line was re-emitted for this host (see above), which is
+the intended relation: a lowering change the CLIF layer measures moves only the
+artifact that measures it.
 
 `make test` was not re-run as one target, because its first half is the 35-minute
 drift run quoted above; the two halves were measured separately instead, and
