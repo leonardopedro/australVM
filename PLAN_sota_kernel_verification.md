@@ -888,34 +888,33 @@ the artifact, so `mm0-c` checks them too.
   [pass] W3: layout_certificate matches its approved statements
   [pass] W3: linearity_certificate matches its approved statements
   [pass] W3: linearity_certificate_spans matches its approved statements
-  [gap]  W3: liquid_split has no approved statements (run scripts/mm0-comparator approve liquid_split, then commit mm0/approved/)
+  [pass] W3: liquid_split matches its approved statements
   [pass] W3: quasi_rh_7_8 matches its approved statements
   [pass] W3: quasi_rh_certificate matches its approved statements
   [pass] W3: service_isolation_certificate matches its approved statements
   [pass] W3: slot_layout matches its approved statements
   [pass] W3: store_projection matches its approved statements
   [pass] W3: store_projection_toy matches its approved statements
-  w3-pending: liquid_split(41 stmt)
-  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
-  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 4 approved)
-  [pass] W3: every pending §W3 row's artifact re-derives into a staging (1 row(s))
+  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) liquid_split(41 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 5 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (0 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-  [pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 4 approved)
+  [pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 5 approved)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
   [pass] W9.3: the composition table's counts match the files it records (4 row(s), 4 from mm0/approved/)
   [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 4 from mm0/approved/)
   [pass] W3: every §W3 emitter cell names a real command (5 row(s))
   [pass] Plan: every file a plan table row names exists on disk (5 row(s))
-  [pass] W3: every approved §W3 row's emitter still produces its approved copy (4 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (5 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
   [pass] W3: the recorded probe evidence still names live gate lines (22 row(s))
   [pass] W3: every drift control the plan names has a recorded transcript (9 invocation(s))
   [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
   [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 1 pending row(s) (exit 0)
+  [pass] W3: stage-approvals stages exactly §W3's 0 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
