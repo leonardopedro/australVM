@@ -12,3 +12,4 @@ pub mod interface;
 pub mod policy;
 pub mod process;
 pub mod project;
+pub mod trust;

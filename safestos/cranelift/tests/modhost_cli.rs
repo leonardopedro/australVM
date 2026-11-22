@@ -69,6 +69,24 @@ fn make_module_dir(dir: &Path, name: &str, grants: &[&str], cps_data: &[u8]) {
     std::fs::write(dir.join("module.cps"), cps_data).unwrap();
 }
 
+/// A module that serves a remote node: the manifest declares `node`, and the
+/// entrypoint it exposes is granted by name.
+fn temp_remote_module(name: &str, node: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("modhost_cli_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let toml = format!(
+        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\nentry = \"run\"\nnode = \"{node}\"\n\n[grants]\nkernel = [\"run\"]\n"
+    );
+    std::fs::write(dir.join("module.toml"), toml).unwrap();
+    std::fs::write(
+        dir.join("module.cps"),
+        cps_v1_with_name("run", &body_return_const(7)),
+    )
+    .unwrap();
+    dir
+}
+
 fn temp_module(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("modhost_cli_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -275,6 +293,39 @@ fn host_load_failure_is_error_event_json_and_exit_1() {
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("one JSON object");
     assert_eq!(v["event"], "error");
     assert_eq!(v["kind"], "load_failed");
+}
+
+// D08: `--peer` is the receiver path, not the local one. The call is dispatched
+// only for the node the module declares; a different peer, and a module that
+// declares no node at all, are refused with UK-4001.
+#[test]
+fn peer_calls_are_served_only_for_the_declared_node() {
+    let remote = temp_remote_module("remote", "node-7");
+    let d = remote.to_str().unwrap();
+
+    let (code, stdout, stderr) = modhost(&["host", d, "--call", "run", "--peer", "node-7"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("run: 7"), "{stdout}");
+
+    let (code, stdout, stderr) = modhost(&["host", d, "--call", "run", "--peer", "node-8"]);
+    assert_eq!(code, 1, "a different peer must be refused");
+    assert!(!stdout.contains("run: "), "no result for a refused call: {stdout}");
+    assert!(stderr.contains("cannot certify its own node"), "{stderr}");
+
+    // A module with no `[module] node` is local: it has no remote authority.
+    let local = temp_module("local_peer");
+    let l = local.to_str().unwrap();
+    let (code, _, stderr) = modhost(&["host", l, "--call", "run", "--peer", "node-7"]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("names no remote node"), "{stderr}");
+    // The same module still runs locally: `--peer` chooses the path, it does not
+    // change what a local call is allowed to do.
+    let (code, stdout, _) = modhost(&["host", l, "--call", "run"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("run: 42"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(&remote);
+    let _ = std::fs::remove_dir_all(&local);
 }
 
 #[test]

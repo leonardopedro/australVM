@@ -1,0 +1,364 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> /home/leo/Projects/unfer/fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> /home/leo/Projects/unfer/unfer_consensus/src/storage.rs:230:13
+    |
+230 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (build script) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+warning: `rsffi` (lib) generated 1 warning (1 duplicate)
+   Compiling austral_cranelift_bridge v0.1.0 (/home/leo/Projects/australVM/safestos/cranelift)
+warning: `austral_cranelift_bridge` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "cps2cell") generated 1 warning (1 duplicate)
+warning: unnecessary `unsafe` block
+  --> src/bin/netcert.rs:53:5
+   |
+53 |     unsafe { austral_cranelift_bridge::cranelift_free_string(out) };
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: `austral_cranelift_bridge` (bin "netcert" test) generated 2 warnings (1 duplicate)
+warning: `austral_cranelift_bridge` (test "module_tests") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (lib test) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "cell_capture") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "symbol_sync") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "isa_census") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "cps2cell" test) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "liquid_attest_tests") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "scalar_abi") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "modhost") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "isa_census" test) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "tidepool_tests") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "modhost_cli") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "clif_dump") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "cps_tests") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "modhost" test) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "netcert") generated 2 warnings (2 duplicates)
+warning: `austral_cranelift_bridge` (test "capstd_tests") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "federation_tests") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "static_seam") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "clif_dump" test) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "tier1_extern_rust") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 40s
+     Running unittests src/lib.rs (target/debug/deps/austral_cranelift_bridge-d3853426ae7d1de2)
+
+running 66 tests
+test adapters::tests::f32_uses_the_low_word_and_refuses_high_bits ... ok
+test adapters::tests::floats_are_bit_preserving_not_numeric_casts ... ok
+test adapters::tests::i32_values_roundtrip_and_match_the_direct_call ... ok
+test adapters::tests::mixed_argument_classes_keep_their_order ... ok
+test adapters::tests::narrowing_is_checked_not_truncating ... ok
+test adapters::tests::the_direct_float_call_agrees_with_the_adapter ... ok
+test adapters::tests::the_encoding_is_versioned ... ok
+test adapters::tests::words_that_are_not_their_type_are_refused ... ok
+test auth::tests::allow_all_permits_everything ... ok
+test auth::tests::manifest_bad_toml ... ok
+test adapters::tests::a_bool_is_a_tag_and_other_tags_are_refused ... ok
+test auth::tests::manifest_effect_grant_method ... ok
+test auth::tests::manifest_effect_grant_namespace ... ok
+test auth::tests::manifest_effect_merge ... ok
+test auth::tests::manifest_grant_method ... ok
+test auth::tests::manifest_grant_deny ... ok
+test auth::tests::manifest_missing_grants ... ok
+test auth::tests::manifest_merge ... ok
+test auth::tests::manifest_missing_module_section ... ok
+test compile_guard_tests::delegate_compile_is_guarded_too ... ok
+test compile_guard_tests::malformed_codegen_panic_fails_closed_not_unwind ... ok
+test compile_guard_tests::successful_unf_translate_clears_stale_compile_error ... ok
+test compile_guard_tests::trapping_divide_fails_closed_on_zero_and_overflow ... ok
+test cps::a10_live_grant_tests::an_instance_context_is_the_authority_and_a_stale_one_is_refused ... ok
+test cps::a10_live_grant_tests::live_jit_denies_uk_calls_the_module_manifest_does_not_grant ... ok
+test compile_guard_tests::swap_panic_inducing_ir_fails_closed_and_preserves_current ... ok
+test fingerprint::tests::a_single_flipped_byte_changes_the_digest ... ok
+test fingerprint::tests::empty_input_matches_the_published_digest ... ok
+test fingerprint::tests::null_bytes_is_refused_not_dereferenced ... ok
+test hotswap_tests::hotswap_gate_accepts_compatible ... ok
+test hotswap_tests::hotswap_gate_rejects_caps_escalation ... ok
+test hotswap_tests::hotswap_gate_rejects_null ... ok
+test hotswap_tests::hotswap_gate_rejects_type_mismatch ... ok
+test hotswap_tests::hotswap_rejects_invalid_cell_id ... ok
+test isa::tests::an_op_line_is_parsed_and_a_bad_one_is_refused ... ok
+test isa::tests::recording_is_a_set_not_a_counter ... ok
+test isa::tests::the_registry_is_sorted_and_unique ... ok
+test liquid_attest::tests::a_matching_mlw_under_any_name_is_accepted ... ok
+test fingerprint::tests::the_object_digest_is_well_formed_and_arch_named ... ok
+test liquid_attest::tests::mlw_hash_mismatch_is_refused ... ok
+test liquid_attest::tests::editing_both_sides_is_the_documented_limit ... ok
+test liquid_attest::tests::optional_without_sidecar_is_allowed ... ok
+test liquid_attest::tests::off_is_a_no_op ... ok
+test liquid_attest::tests::re_emitted_obligations_are_caught ... ok
+test liquid_attest::tests::refused_and_unknown_never_satisfy_required ... ok
+test liquid_attest::tests::required_accepts_a_matching_proved_attestation ... ok
+test liquid_attest::tests::stale_attestation_is_refused_after_an_edit ... ok
+test liquid_attest::tests::required_without_sidecar_is_refused ... ok
+test module::tests::cold_restart_reuses_recorded_choice ... ok
+test module::tests::fallback_used_when_module_names_nothing ... ok
+test module::tests::limits_default_absent ... ok
+test module::tests::parses_limits_table ... ok
+test module::tests::resolve_archetype_per_scope ... ok
+test module::tests::unapproved_archetype_is_rejected ... ok
+test panic_guard_tests::compile_guard_passes_through_success ... ok
+test panic_guard_tests::compile_guard_preserves_swap_panic_payload ... ok
+test panic_guard_tests::compile_guard_reports_non_string_payload ... ok
+test panic_guard_tests::execute_function_1_panic_returns_sentinel ... ok
+test panic_guard_tests::execute_function_2_panic_returns_sentinel ... ok
+test panic_guard_tests::execute_function_happy_path_still_returns_value ... ok
+test panic_guard_tests::execute_function_null_ptr_returns_minus_one ... ok
+test panic_guard_tests::execute_function_panic_returns_sentinel_not_ub ... ok
+test panic_guard_tests::swap_empty_ir_reports_real_message ... ok
+test liquid_attest::tests::unknown_key_is_refused ... ok
+test tests::uk_version_linkage ... ok
+test tests::uk_init_linkage ... ok
+
+test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+[Loader] Capability requirement mismatch
+[Loader] Type hash mismatch: abc123 != xyz789
+     Running unittests src/bin/clif_dump.rs (target/debug/deps/clif_dump-866ff658db2a6366)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/cps2cell.rs (target/debug/deps/cps2cell-aaa8eba7b1743e4f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/isa_census.rs (target/debug/deps/isa_census-78f6cfacd5aa6ccf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/modhost.rs (target/debug/deps/modhost-c6980d6bce942306)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/netcert.rs (target/debug/deps/netcert-490a51189f096e96)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/capstd_tests.rs (target/debug/deps/capstd_tests-bc810994935c905a)
+
+running 4 tests
+test capstd_stub_returns_error ... ok
+test manifest_defaults_fs_net_grants_empty ... ok
+test manifest_parses_rust_capstd_archetype ... ok
+test hotswap_rejects_fs_grant_escalation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/cell_capture.rs (target/debug/deps/cell_capture-e4b96e8677920c31)
+
+running 3 tests
+test avce_container_parses_fully_and_deterministically ... ok
+test capture_yields_bodies_and_named_relocs ... ok
+test imports_from_extern_calls_are_listed_not_defined ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/cps_tests.rs (target/debug/deps/cps_tests-182e100760f6a270)
+
+running 42 tests
+test arith_trap_child_exit ... ignored
+test au_call_allowed_under_deny_all ... ok
+test au_print_int_allowed_under_deny_all ... ok
+test a_tail_self_call_does_not_grow_the_stack ... ok
+test bad_magic_returns_null ... ok
+test bad_opcode_returns_null ... ok
+test calls_uk_version ... ok
+test empty_input_returns_null ... ok
+test float_helpers_bitcast_and_compute ... ok
+test link_time_mode_binds_a_cross_cell_import ... ok
+test mul_opcode_computes_the_product ... ok
+test calls_uk_init ... ok
+test not_opcode_complements_zero_and_one ... ok
+test null_input_returns_null ... ok
+test reset_jit_returns_a_claimed_export_name ... ok
+test returns_constant_42 ... ok
+test returns_constant_max_i64 ... ok
+test returns_constant_negative ... ok
+test returns_constant_zero ... ok
+test self_call_allowed_under_deny_all ... ok
+test strict_entry_admits_a_matching_signature ... ok
+test strict_entry_refuses_a_missing_name ... ok
+test strict_entry_refuses_a_non_i64_return ... ok
+test strict_entry_refuses_a_wrong_arity ... ok
+test strict_entry_refuses_an_empty_name ... ok
+test strict_entry_refuses_when_the_caller_expects_arguments ... ok
+test strict_entry_returns_every_i64_boundary_value ... ok
+test sub_opcode_computes_the_difference ... ok
+test sub_opcode_traps_on_overflow ... ok
+test tail_position_union_constructions_of_different_arity_compile ... ok
+test trapping_add_resolves_and_executes ... ok
+test trapping_divide_resolves_and_executes ... ok
+test trapping_multiply_resolves_and_executes ... ok
+test trapping_packed_return_matches_durable_status_module ... ok
+test trapping_subtract_resolves_and_executes ... ok
+test truncated_body_returns_null ... ok
+test truncated_input_returns_null ... ok
+test two_run_exports_in_one_thread_both_compile_and_keep_their_own_body ... ok
+test uk_call_allowed_under_grant ... ok
+test uk_call_denied_under_deny_all ... ok
+test uk_call_denied_when_grant_missing ... ok
+test mul_opcode_traps_on_overflow ... ok
+
+test result: ok. 41 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.81s
+
+     Running tests/federation_tests.rs (target/debug/deps/federation_tests-b8508a0a31d3d293)
+
+running 3 tests
+test artifact_cid_deterministic ... ok
+test artifact_cid_different_for_different_data ... ok
+test module_identity_stub ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/liquid_attest_tests.rs (target/debug/deps/liquid_attest_tests-13fbc5f8c9476509)
+
+running 3 tests
+test ocaml_written_attestation_is_accepted ... ok
+test off_modules_are_unaffected ... ok
+test editing_a_source_makes_the_attestation_stale ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/modhost_cli.rs (target/debug/deps/modhost_cli-51db663e4a19f133)
+
+running 15 tests
+test authorize_human_allowed ... ok
+test authorize_json_allowed_is_one_decision_object ... ok
+test authorize_denied_is_exit_1_with_reason ... ok
+test authorize_requires_exactly_three_positionals ... ok
+test help_exits_zero_with_usage_on_stdout ... ok
+test authorize_missing_manifest_is_usage_error_and_json_error_event ... ok
+test host_human_transcript_unchanged ... ok
+test host_json_emits_loaded_and_call_events_per_line ... ok
+test host_load_failure_is_error_event_json_and_exit_1 ... ok
+test malformed_repeat_is_a_usage_error ... ok
+test host_unknown_entrypoint_is_call_failed_event ... ok
+test non_integer_args_is_a_usage_error ... ok
+test missing_option_value_is_a_usage_error ... ok
+test unknown_option_is_a_usage_error ... ok
+test peer_calls_are_served_only_for_the_declared_node ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/module_tests.rs (target/debug/deps/module_tests-790e20533fa58cef)
+
+running 12 tests
+test call_nonexistent_module_fails ... ok
+test call_nonexistent_entrypoint_fails ... ok
+test d08_a_remote_call_is_served_only_for_the_declared_peer ... ok
+test d08_instances_are_isolated_revocable_and_retired_by_swap ... ok
+test hotswap_name_mismatch_rejected ... ok
+test hotswap_preserves_name_rejects_escalation ... ok
+test hotswap_same_grants_succeeds ... ok
+test load_and_call_multiple_times ... ok
+test loaded_modules_lists_all ... ok
+test manifest_defaults ... ok
+test manifest_parses_correctly ... ok
+test d08_strict_profile_is_explicit_and_cannot_be_swapped_away ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/scalar_abi.rs (target/debug/deps/scalar_abi-2379e320de412d61)
+
+running 6 tests
+test booleans_are_tags_at_the_c_surface ... ok
+test floats_cross_as_bit_patterns_and_refuse_garbage ... ok
+test integers_cross_the_c_surface_with_their_extension_rules ... ok
+test the_c_surface_reports_the_version_it_was_built_with ... ok
+test type_tags_roundtrip_and_unknown_tags_are_refused ... ok
+test unit_and_null_outputs_are_refused ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/static_seam.rs (target/debug/deps/static_seam-ff1a5b0273eda53a)
+
+running 3 tests
+test late_registration_is_refused ... ok
+test c_abi_registrar_reaches_the_registry ... ok
+test static_seam_resolves_executes_and_the_gate_still_applies ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/symbol_sync.rs (target/debug/deps/symbol_sync-dddc624bcac5ae32)
+
+running 4 tests
+test uk_last_error_initially_empty ... ok
+test uk_model_create_free_round_trip ... ok
+test uk_symbols_match_expected ... ok
+test uk_engram_round_trips_through_the_bridge ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/tidepool_tests.rs (target/debug/deps/tidepool_tests-2e3a11098338904a)
+
+running 6 tests
+test compile_and_run_haskell_stub_returns_error ... ok
+test effect_gating_allows_granted_effect ... ok
+test manifest_defaults_archetype_to_austral_cps ... ok
+test effect_gating_rejects_ungranted_effect ... ok
+test manifest_parses_limits ... ok
+test manifest_parses_haskell_effect_archetype ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tier1_extern_rust.rs (target/debug/deps/tier1_extern_rust-801c79f4bfe3d44e)
+
+running 6 tests
+test granted_manifest_executes_scalar_rs_version ... ok
+test granted_manifest_executes_reference_checksum ... ok
+test no_manifest_denies_rs_call ... ok
+test rs_namespace_table_registers_reference_symbols ... ok
+test modhost_authorize_answers_for_rs_namespace ... ok
+test uk_grant_does_not_grant_rs_namespace ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests austral_cranelift_bridge
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT=0

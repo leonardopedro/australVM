@@ -39,14 +39,14 @@ impl Profile {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Module {
     pub name: String,
     pub sources: Vec<PathBuf>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildPermission {
     #[serde(default)]
@@ -57,7 +57,7 @@ pub struct BuildPermission {
     pub krate: Option<PathBuf>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoadPermission {
     #[serde(default)]
@@ -67,14 +67,33 @@ pub struct LoadPermission {
     pub providers: Vec<PathBuf>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grant {
     /// One extern symbol the module may invoke (`rs_*`, `uk_*`, `uz_*`).
     pub symbol: String,
 }
 
-#[derive(Debug, Deserialize)]
+/// D09: the artifact identity a build/load authorization is pinned to. Building
+/// a crate runs its build scripts and mapping a cdylib runs its initializer, so
+/// the document names the exact dependency graph, feature set, library bytes and
+/// ABI exports that were approved — not merely "a crate" and "a provider".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedArtifact {
+    /// SHA-256 (hex) of the crate's `Cargo.lock`, checked before `cargo build`.
+    pub lock_sha256: String,
+    /// The exact feature set to build with; an extra one is a different build.
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// SHA-256 (hex) of the cdylib, checked after the build and before `dlopen`.
+    pub library_sha256: String,
+    /// Extern symbols the library must define, checked before `dlopen`.
+    #[serde(default)]
+    pub exports: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub schema: u32,
@@ -86,6 +105,13 @@ pub struct Project {
     pub load: LoadPermission,
     #[serde(default)]
     pub grants: Vec<Grant>,
+    /// D09: required whenever the project authorizes a build or a load.
+    #[serde(default)]
+    pub trusted: Option<TrustedArtifact>,
+    /// The features the caller asked cargo for. Not a document field: the
+    /// command line supplies it, and the trust gate compares it with the pin.
+    #[serde(skip)]
+    pub requested_features: Vec<String>,
 }
 
 /// Parse and validate a project document. Errors are diagnostics, not a
@@ -107,12 +133,26 @@ pub fn parse(path: &Path, text: &str) -> Result<Project, String> {
     reject_unknown(
         &value,
         "",
-        &["schema", "profile", "module", "build", "load", "grants"],
+        &[
+            "schema",
+            "profile",
+            "module",
+            "build",
+            "load",
+            "grants",
+            "trusted",
+        ],
         &mut unknown,
     );
     reject_unknown_in(&value, "module", &["name", "sources"], &mut unknown);
     reject_unknown_in(&value, "build", &["allowed", "crate"], &mut unknown);
     reject_unknown_in(&value, "load", &["allowed", "providers"], &mut unknown);
+    reject_unknown_in(
+        &value,
+        "trusted",
+        &["lock_sha256", "features", "library_sha256", "exports"],
+        &mut unknown,
+    );
     if let Some(grants) = value.get("grants").and_then(|g| g.as_array()) {
         for (i, g) in grants.iter().enumerate() {
             reject_unknown(g, &format!("grants[{i}]."), &["symbol"], &mut unknown);
@@ -130,6 +170,10 @@ pub fn parse(path: &Path, text: &str) -> Result<Project, String> {
         serde_json::from_str(text).map_err(|e| format!("project {}: {e}", path.display()))?;
     validate(path, &project)?;
     Ok(project)
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn reject_unknown(
@@ -180,6 +224,33 @@ fn validate(path: &Path, p: &Project) -> Result<(), String> {
     if p.load.allowed && p.load.providers.is_empty() {
         problems.push("`load.allowed` is true but `load.providers` is empty".to_string());
     }
+    // D09: an authorization to build or load without a pinned artifact identity
+    // would be an authorization to run whatever the tree happens to contain.
+    if (p.build.allowed || p.load.allowed) && p.trusted.is_none() {
+        problems.push(
+            "`build`/`load` is authorized but `trusted` is absent: the artifact identity \
+             (lock_sha256, library_sha256) must be pinned before it can run"
+                .to_string(),
+        );
+    }
+    if let Some(t) = &p.trusted {
+        for (field, value) in [
+            ("trusted.lock_sha256", &t.lock_sha256),
+            ("trusted.library_sha256", &t.library_sha256),
+        ] {
+            if !is_sha256_hex(value) {
+                problems.push(format!("`{field}` must be 64 hex digits, got {value:?}"));
+            }
+        }
+        if t.exports.is_empty() {
+            problems.push("`trusted.exports` is empty: pin the ABI the loader expects".to_string());
+        }
+        for (i, name) in t.exports.iter().enumerate() {
+            if name.trim().is_empty() {
+                problems.push(format!("`trusted.exports[{i}]` is empty"));
+            }
+        }
+    }
     for (i, g) in p.grants.iter().enumerate() {
         let sym = g.symbol.trim();
         if sym.is_empty() {
@@ -209,7 +280,13 @@ mod tests {
         "module": {"name": "demo", "sources": ["Demo.aum"]},
         "build": {"allowed": true, "crate": "modules/rscrate"},
         "load": {"allowed": true, "providers": ["libdemo.so"]},
-        "grants": [{"symbol": "rs_demo_checksum"}]
+        "grants": [{"symbol": "rs_demo_checksum"}],
+        "trusted": {
+            "lock_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+            "features": [],
+            "library_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+            "exports": ["rs_demo_checksum"]
+        }
     }"#;
 
     fn p() -> &'static Path {
@@ -263,5 +340,36 @@ mod tests {
         )
         .expect_err("build needs a crate");
         assert!(err.contains("`build.crate` is absent"), "{err}");
+    }
+
+    /// D09: the pin is what a build authorization is *for*, so it is not optional
+    /// and it is not free-form: a wrong-length digest or an empty export list is
+    /// a document error, not a weaker trust decision.
+    #[test]
+    fn a_build_without_a_pinned_artifact_is_refused() {
+        let no_pin = r#"{"schema":1,"profile":"trusted-native",
+            "module":{"name":"d","sources":["D.aum"]},
+            "build":{"allowed":true,"crate":"modules/rscrate"},
+            "load":{"allowed":false}}"#;
+        let err = parse(p(), no_pin).expect_err("no pin must be refused");
+        assert!(err.contains("`trusted` is absent"), "{err}");
+
+        let short_digest = BASE.replace(
+            "0000000000000000000000000000000000000000000000000000000000000001",
+            "abc123",
+        );
+        let err = parse(p(), &short_digest).expect_err("a short digest must be refused");
+        assert!(err.contains("trusted.lock_sha256"), "{err}");
+
+        let no_exports = BASE.replace("\"exports\": [\"rs_demo_checksum\"]", "\"exports\": []");
+        let err = parse(p(), &no_exports).expect_err("an empty export list must be refused");
+        assert!(err.contains("`trusted.exports` is empty"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_trusted_field_is_named() {
+        let err = parse(p(), &BASE.replace("\"features\": []", "\"feature\": []"))
+            .expect_err("unknown trusted field must be refused");
+        assert!(err.contains("trusted.feature"), "{err}");
     }
 }

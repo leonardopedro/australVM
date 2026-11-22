@@ -1,0 +1,70 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> /home/leo/Projects/unfer/fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> /home/leo/Projects/unfer/unfer_consensus/src/storage.rs:230:13
+    |
+230 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (build script) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+warning: `rsffi` (lib) generated 1 warning (1 duplicate)
+   Compiling austral_cranelift_bridge v0.1.0 (/home/leo/Projects/australVM/safestos/cranelift)
+warning: `austral_cranelift_bridge` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (test "capstd_tests") generated 1 warning (1 duplicate)
+warning: unnecessary `unsafe` block
+  --> src/bin/netcert.rs:53:5
+   |
+53 |     unsafe { austral_cranelift_bridge::cranelift_free_string(out) };
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: `austral_cranelift_bridge` (bin "clif_dump") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "netcert") generated 2 warnings (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "cps2cell") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "isa_census") generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (bin "modhost") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 17s
+     Running tests/capstd_tests.rs (target/debug/deps/capstd_tests-bc810994935c905a)
+
+running 6 tests
+test capstd_stub_returns_error ... ok
+test d09::the_rs_boundary_uses_the_current_instance_and_refuses_a_stale_one ... ok
+test d09::handles_are_instance_scoped_bounded_and_never_reach_a_denied_target ... ok
+test manifest_defaults_fs_net_grants_empty ... ok
+test manifest_parses_rust_capstd_archetype ... ok
+test hotswap_rejects_fs_grant_escalation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+EXIT=0

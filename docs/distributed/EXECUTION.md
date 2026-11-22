@@ -799,22 +799,170 @@ $ nix develop "git+file://#ocaml" -c dune build @runtest  # EXIT=0
 Revocation is enforced at the **host** boundary and at the receiver of a
 remote/distributed call, not inside the JIT-compiled function body: the gate is
 a compile-time decision, and an already-running function is not interrupted.
-`check_remote_use` is exercised by tests but has no in-repo service consuming it
-in production yet (a distributed receiver is D11/D17), so what is proven is the
-wrapper's semantics, not that some service calls it.
-
 The A-side compiler integration (dune `@runtest`, with the rebuilt release
 artifact on `LD_LIBRARY_PATH`) passes; it asserts that the bridge still loads and
 the compiler suites are unmoved, not that the OCaml path exercises the new
-identity. `make test` itself was run and stopped inside its `drift-controls`
-stage, because those controls run a full gate over the tree *before*
-`test-locked` copies the release `.so` to `./libaustral_cranelift_bridge.so`, so
-the W5 "bridge is the artifact it was built from" check failed on a copy that
-any bridge rebuild makes stale. Copying the artifact and re-running the gate
-gives the 177/3/0 above, and `dune build @runtest` directly gives EXIT=0: the
-stop is this repo's ordering, not this change, but it is left recorded rather
-than papered over. Legacy native calls outside `uk_*`/`uz_*`/`rs_*` are not
-generalized into this result.
+identity. Legacy native calls outside `uk_*`/`uz_*`/`rs_*` are not generalized
+into this result.
+
+The peer a remote call arrives from is operator-supplied at the front door
+(`modhost --peer`): the transport that would *authenticate* it is D11/D17's, so
+what this proves is that a call is refused when the loaded instance serves a
+different node, serves none, is ungranted for the entrypoint, or has been
+revoked — not that some network connection's identity was verified.
+
+### The receiver (follow-up, 2026-11-22)
+
+`check_remote_use` had no caller outside its tests. `ModuleHost::call_from_peer`
+is now that caller, and it is the only host entry point that takes a peer
+identity, so a request cannot name its own node:
+
+* `[module] node = "…"` binds the instance to the node it serves; a swap may not
+  change it (that is a re-load, like a profile change).
+* The receiver refuses a context that names no node, one whose node is not the
+  authenticated peer, one that is not live at this receiver, and one whose
+  module is not granted the entrypoint it was asked to serve.
+* `modhost host <dir> --call <ep> --peer <node>` is the front door to it.
+
+| Witness | Asserts |
+|---|---|
+| `d08_a_remote_call_is_served_only_for_the_declared_peer` | the declared peer is served; another peer, a local module, an ungranted entrypoint and a revoked instance are each refused; a swap to a different node is refused |
+| `peer_calls_are_served_only_for_the_declared_node` | the same through the binary: `--peer` matches → result; `--peer` differs → exit 1 with UK-4001; a module with no node → refused; the local path still works |
+
+```
+$ cargo test --test module_tests   # 12 passed
+$ cargo test --test modhost_cli    # 15 passed
+$ cargo test                       # EXIT=0 (lib 66, cps_tests 14, modhost_cli 15, module_tests 12)
+```
+
+### Gate ordering (follow-up, 2026-11-22)
+
+The earlier `make test` stop was not a test failure but a stale *derived copy*:
+`verify-invariants` W5 compares the repository-root `.so` with the release
+artifact, and `test-locked` staged it only inside its own recipe — which runs
+after the drift controls have already run a full gate over the tree. Any release
+rebuild therefore turned every control red on a tree that was current.
+`make stage-bridge` now deploys both copies (root and `$(BRIDGE_DIR)`), `bridge`
+calls it, and `drift-controls`, `drift-controls-all` and `test-locked` take it as
+an order-only prerequisite, so "rebuilt" and "staged" are one event.
+
+Measured: `make bridge` EXIT=0 with both copies byte-identical to the artifact
+(`cmp`), `make -n drift-controls` shows the two `cp -f` lines before
+`scripts/w3-drift-controls`, an emptied root copy is healed by `make
+stage-bridge`, and the gate is 177 passed / 3 explained gaps / 0 failed.
+`make test` itself (1.5 h of drift controls) was not re-run in full; the
+structural order is what changed, and it is what the above checks.
+
+One tree-state caveat, recorded because the numbers above are otherwise read as
+"HEAD is green": those runs were taken on 2026-11-22 ~15:00, before this branch
+merged origin's compiler update (`lib/Compiler_cps.ml` +363 lines,
+`lib/CliEngine.ml`, `lib/gpu/*`, with a two-line certificate refresh). After that
+merge the gate reports one failure — W5 "the certificate's cps digest is the
+bridge's digest of the emitted bytes" — because `mm0/flux1d_certificate.mm0` was
+emitted before the last `lib/` change, so the recorded digest names an older
+compiler build. Re-emitting it belongs to that compiler change, not to D08/D09:
+nothing here touches CPS emission, and the certificate is a proof artifact whose
+refresh should carry the author's own measurement. The remaining gaps are the
+same explained ones (W5 object arch, W9.1 RV64, W9.3 Lean, plus PC05a/lean2mm0
+when the mm0 tools are not on `PATH`).
+
+## D09 — trusted artifact identity and instance capabilities (2026-11-22, steps 1–3 of 4)
+
+A `umbrella/src/{project,trust,main}.rs`, `safestos/cranelift/src/{capstd_mod,module,lib}.rs`;
+tests `umbrella/tests/{policy,cli,entry}.rs`, `safestos/cranelift/tests/capstd_tests.rs`.
+
+### Why a pin, and why two of them
+
+`umbrella` decides three separate permissions (build, load, call) *before* the
+first stage runs. What it did not decide was **which artifact** the first two
+permissions are for: authorizing a build authorized whatever the crate happened
+to contain, and authorizing a load authorized whatever cdylib path was named.
+Building a crate executes its build scripts and `dlopen` runs the library's
+initializer, so both are native execution.
+
+A project that authorizes either now has to pin the identity in a `trusted`
+block, and the document is refused at parse time without one:
+
+| Field | Checked | Against |
+|---|---|---|
+| `trusted.lock_sha256` | before `cargo build` | the crate's `Cargo.lock` (a different dependency graph is a different build) |
+| `trusted.features` | before `cargo build` | the features the caller asked for (an added feature is a different build) |
+| `trusted.library_sha256` | after the build, before `dlopen` | the bytes about to be mapped |
+| `trusted.exports` | after the build, before `dlopen` | the library's dynamic symbol table |
+
+A wrong-length digest, an empty export list, or an unknown field is a document
+error — not a weaker trust decision. The library digest is checked before the
+export list: if the bytes are not the pinned ones, their symbols say nothing.
+
+### Witnesses
+
+| Witness | Asserts |
+|---|---|
+| `a_drifted_lock_is_refused_before_anything_runs` | one byte of lock drift refuses the build, and the refusal names the pin |
+| `an_added_feature_is_refused_even_with_a_pinned_lock` | the pinned set is exact; a command-line extra is refused |
+| `a_project_without_a_pin_is_refused_rather_than_trusted` | both the parser and the gate refuse an unpinned build/load |
+| `a_build_without_a_pinned_artifact_is_refused` / `an_unknown_trusted_field_is_named` | the document rules, by field name |
+| `a_library_that_is_not_the_pinned_one_is_refused_and_its_exports_never_consulted` | digest mismatch stops before the symbol table |
+| `an_unreadable_library_is_a_refusal_not_a_pass` | an artifact that cannot be hashed is not trusted |
+
+```
+$ cargo test --lib           # 59 passed
+$ cargo test                 # EXIT=0 (6 integration binaries: 5+6+4+7+6+3 passed)
+```
+
+### Capabilities: handles, not paths (steps 2–3)
+
+`ModuleHost::load` now constructs one `capstd_mod::caps::InstanceCaps` per
+instance and installs it under the instance id:
+
+* the **directory** capability is rooted at `<module-dir>/.state`, canonicalised
+  once at construction, so a symlinked state directory cannot widen it later;
+  absolute paths and any `..` component are refused before I/O, and a resolved
+  parent that escapes the root is refused too;
+* the **network** capability addresses exactly `[module] node` — the one peer the
+  instance serves (D08). No node means no peers, and a peer outside that set is
+  refused *before* anything is delivered, so the adapter has no way to dial an
+  arbitrary host;
+* a handle is an opaque `u64` issued to one module. Presenting it as another
+  module is refused, ids are never reused, and `close` ends the capability.
+
+The `rs_cap_*` boundary (registered in `RS_FFI_SYMBOLS`, so the manifest gate
+gates each verb by name like any other `rs_*` call) takes the caller from the
+current instance context rather than from an argument, refuses a revoked or
+replaced instance before looking at any handle, checks every length against a
+1 MiB bound, copies buffers in and out (nothing borrowed is retained), and wraps
+each call in `catch_unwind` — unwinding into JIT'd code is undefined, so a panic
+returns `-101` instead. A short output buffer reports the required length as a
+negative number, so a caller cannot mistake truncation for a full frame.
+
+| Witness | Asserts |
+|---|---|
+| `handles_are_instance_scoped_bounded_and_never_reach_a_denied_target` | relative read/write works; `..` and absolute paths refused; another module's handle refused; oversized write refused; unconfigured peer refused with **no sink line**; accepted frame is pending until settled; cancelled request never reaches the sink; closed handle is gone and ids are not reused |
+| `the_rs_boundary_uses_the_current_instance_and_refuses_a_stale_one` | no caller → `-1`; the installed instance's `rs_cap_dir_open`/`write`/`read` work; short buffer → negated length; absolute path → negative code; a revoked instance → `-3` before any handle |
+
+```
+$ cargo test --test capstd_tests   # 6 passed
+$ cargo test                       # EXIT=0 (lib 70, capstd 6, modhost_cli 42, module_tests 12)
+```
+
+### Not claimed
+
+This is a digest pin, not a signature: it says the artifact is the one the
+project approved, not who approved it or what the code does. `trusted.exports`
+is read from `nm -D --defined-only` — a host without `nm` is refused rather than
+passed — and it checks that a symbol exists, not its signature; C has no
+signature in the symbol table, so the ABI must still match by construction.
+
+The capability tier is the Tier 1 coupling this file opens with: a module that
+can call `std::fs` or `TcpStream` directly is *not* contained by refused paths or
+a peer allowlist, and hard isolation stays the VM tier's job. The transport that
+would settle a pending request is not here — `settle` is called by tests, and the
+sink is a file in the state directory, so what is proven is the boundary's
+refusals and ownership, not a live network path. Step 4's Austral
+positive/negative demo and the umbrella-side adapter that would *call* these verbs
+are not written: nothing yet compiles an Austral module against `rs_cap_*`, so
+the FFI surface is exercised from Rust, not from Austral. `untrusted-native`
+remains U26's tier and is still refused by preflight.
 
 ## Task status
 
@@ -828,5 +976,6 @@ generalized into this result.
 | D05 | verified within stated scope | receipt/slot/watermark are distinct; a domain refusal advances the slot, a gap halts; identity and publishing settle before reporting |
 | D06 | verified within stated scope | a client-named request replays its settled result, conflicts are refused, retention is an acknowledged floor and a full book backpressures |
 | D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
-| D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; receiver checks peer-derived context |
+| D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; `call_from_peer` is the production receiver and checks against the peer the transport authenticated |
+| D09 | in progress (steps 1–3 of 4) | `umbrella` pins the artifact identity — Cargo.lock digest and feature set before cargo runs, library digest and ABI exports before dlopen; the host issues per-instance directory and single-peer network handles, and `rs_cap_*` bounds, copies and contains them. Step 4's Austral demo and umbrella adapter are not written |
 | D08–D26 | not started | D08 is next (scoped caller context, dynamic remote policy) |

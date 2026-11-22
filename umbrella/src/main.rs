@@ -30,7 +30,7 @@ use std::sync::OnceLock;
 use austral_cranelift_bridge::{
     auth, compile_entry_i64, compile_to_function_named, cranelift_last_error, execute_function,
 };
-use umbrella::{cargo, cli, interface, policy, project};
+use umbrella::{cargo, cli, interface, policy, project, trust};
 
 /// U03's JSON event mode: stdout carries one typed event per line and human
 /// diagnostics stay on stderr. Set once, before any stage.
@@ -455,6 +455,16 @@ fn main() {
             .as_ref()
             .and_then(|(d, _)| d.build.krate.clone())
             .unwrap_or_else(|| default_crate_dir.clone());
+        // D09: the build is only attempted for the pinned dependency graph and
+        // feature set. A mismatch is a refusal *here*, with no cargo process
+        // started — building an arbitrary crate is executing its build scripts.
+        if let Some((doc, _)) = &planned {
+            let mut doc = doc.clone();
+            doc.requested_features = cli.features.clone();
+            if let Err(e) = trust::verify_before_build(&doc, &krate) {
+                die(e);
+            }
+        }
         match cargo_build(&cli, &krate) {
             Ok(p) => p,
             Err(e) => die(e),
@@ -487,6 +497,15 @@ fn main() {
              (any build above already ran)",
             cdylib.display()
         ));
+    }
+    // D09: the bytes that are about to be mapped must be the pinned artifact,
+    // and it must define the pinned ABI exports. This runs after the build (the
+    // digest is of what was produced) and before `dlopen` (the initializer runs
+    // on load).
+    if let Some((doc, _)) = &planned {
+        if let Err(e) = trust::verify_before_load(doc, &cdylib) {
+            die(e);
+        }
     }
     if let Err(e) = policy::dlopen(&cdylib) {
         die(e);

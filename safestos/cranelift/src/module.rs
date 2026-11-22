@@ -57,6 +57,10 @@ pub struct ModuleManifest {
     /// manifest grants it; no prefix is an ambient grant. Absent or any other
     /// value means the historical (grant-list) profile.
     pub strict: bool,
+    /// D08: `[module] node` — the remote node this module serves. A context with
+    /// a node is the only kind a receiver will accept across the distributed
+    /// boundary, and the value is configuration: a peer never supplies it.
+    pub node: Option<String>,
 }
 
 impl ModuleManifest {
@@ -174,6 +178,13 @@ impl ModuleManifest {
                 ))
             }
         };
+        let node = match module.get("node") {
+            None => None,
+            Some(v) => match v.as_str() {
+                Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                _ => return Err("[module] node must be a non-empty string".to_string()),
+            },
+        };
         let fs_grants = v
             .get("grants")
             .and_then(|g| g.get("fs"))
@@ -221,6 +232,7 @@ impl ModuleManifest {
             memory_max_bytes,
             gatekeeper_mode,
             strict,
+            node,
         })
     }
 }
@@ -403,7 +415,11 @@ impl ModuleHost {
         // manifest happened to load last. The process-global deployment
         // principal is deliberately left alone: loading a module must not
         // redefine the authority of code compiled outside it.
-        let context = auth::bind_instance(manifest.name.clone(), manifest.strict);
+        let context = auth::bind_instance_for_node(
+            manifest.name.clone(),
+            manifest.strict,
+            manifest.node.clone(),
+        );
         let previous_grants = auth::install_module_grants(engine);
 
         let instance = context.instance;
@@ -484,6 +500,26 @@ impl ModuleHost {
 
         match loaded {
             Ok((name, handle)) => {
+                // D09: the host builds this instance's capabilities — a directory
+                // rooted in its own state directory and the single peer it serves
+                // — and installs them under its identity. A module receives
+                // handles from here; it never receives a path it could re-root or
+                // a network capability that can dial an arbitrary host. A load
+                // that cannot get its capability set is a failed load.
+                let state_dir = module_dir.join(".state");
+                let peers: Vec<String> = handle.manifest.node.clone().into_iter().collect();
+                match crate::capstd_mod::caps::InstanceCaps::new(
+                    handle.manifest.name.clone(),
+                    &state_dir,
+                    peers,
+                ) {
+                    Ok(caps) => crate::capstd_mod::caps::install(instance, caps),
+                    Err(error) => {
+                        crate::auth::restore_manifest_engine(previous_grants);
+                        auth::revoke_instance(instance);
+                        return Err(format!("UK-4001: cannot construct capabilities: {error}"));
+                    }
+                }
                 self.modules.insert(name.clone(), handle);
                 Ok(self.modules.get(&name).unwrap())
             }
@@ -493,6 +529,7 @@ impl ModuleHost {
                 // identity never becomes live.
                 auth::restore_manifest_engine(previous_grants);
                 auth::revoke_instance(instance);
+                crate::capstd_mod::caps::uninstall(instance);
                 Err(error)
             }
         }
@@ -577,6 +614,32 @@ impl ModuleHost {
             handle.call_count += 1;
         }
         Ok(result)
+    }
+
+    /// A call arriving across the distributed boundary.
+    ///
+    /// `peer` is the identity the transport authenticated for this connection —
+    /// it is an argument of this method, never a field of the request, so a
+    /// caller cannot name itself. `auth::check_remote_use` then requires the
+    /// loaded instance to be bound to that same node (`[module] node`), to be
+    /// live at this receiver, and to be granted the entrypoint here, before the
+    /// call is dispatched. A local module (no node) is refused: it has no remote
+    /// authority to lend.
+    pub fn call_from_peer(
+        &mut self,
+        peer: &str,
+        module_name: &str,
+        entrypoint: &str,
+        args: &[i64],
+    ) -> Result<i64, String> {
+        let context = self
+            .modules
+            .get(module_name)
+            .ok_or_else(|| format!("module '{module_name}' not loaded"))?
+            .context
+            .clone();
+        auth::check_remote_use(peer, &context, "Call", entrypoint)?;
+        self.call(module_name, entrypoint, args)
     }
 
     /// ECMAScript-backend call path: RPC the workerd sidecar's entrypoint with a JSON payload.
@@ -672,6 +735,16 @@ impl ModuleHost {
         if new_manifest.strict != old_handle.manifest.strict {
             return Err(
                 "UK-4001 swap rejected: the replacement changes the module's authority profile \
+                 (unload and load it again instead)"
+                    .to_string(),
+            );
+        }
+        // The served node is part of the identity too: a swap that points the
+        // same instance at a different peer would let a remote caller change
+        // which node it is talking to.
+        if new_manifest.node != old_handle.manifest.node {
+            return Err(
+                "UK-4001 swap rejected: the replacement changes the module's served node \
                  (unload and load it again instead)"
                     .to_string(),
             );
