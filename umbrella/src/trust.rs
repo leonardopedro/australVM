@@ -281,6 +281,7 @@ mod tests {
             },
             grants: Vec::new(),
             trusted: None,
+            capabilities: None,
             requested_features: Vec::new(),
         };
         let err = verify_before_build(&unpinned, &dir).expect_err("no pin must be refused");

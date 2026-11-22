@@ -1,0 +1,8 @@
+--- granted
+modhost: loaded 'DistributedIo' v0.1.0 (2 functions, entry='main')
+modhost: liquid checking off for this module
+compute: 25
+wrote: hello from distributed_io
+--- ungranted (rs_cap_write removed)
+modhost: load failed: UK-4001: Authorization denied — 'DistributedIo' is not granted 'rs_cap_write'
+refused, and nothing was written

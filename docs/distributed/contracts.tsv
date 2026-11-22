@@ -18,3 +18,4 @@ C16	consensus	U	unfer_consensus/src/storage.rs	tested	docs/distributed/evidence/
 C17	runtime	A	safestos/cranelift/src/cps.rs	tested	docs/distributed/evidence/d08-austral_cranelift_tests.log
 C18	runtime	A	umbrella/src/trust.rs	tested	docs/distributed/evidence/d09-umbrella_tests.log
 C19	runtime	A	safestos/cranelift/src/capstd_mod.rs	tested	docs/distributed/evidence/d09-capstd_tests.log
+C20	runtime	A	umbrella/modules/distributed_io/DistributedIo.aum	tested	docs/distributed/evidence/d09-distributed_io_demo.log

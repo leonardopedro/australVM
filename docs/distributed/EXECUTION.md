@@ -849,7 +849,7 @@ an order-only prerequisite, so "rebuilt" and "staged" are one event.
 Measured: `make bridge` EXIT=0 with both copies byte-identical to the artifact
 (`cmp`), `make -n drift-controls` shows the two `cp -f` lines before
 `scripts/w3-drift-controls`, an emptied root copy is healed by `make
-stage-bridge`, and the gate is 178 passed / 4 explained gaps / 0 failed
+stage-bridge`, and the gate is 179 passed / 4 explained gaps / 0 failed
 (`docs/distributed/evidence/d09-verify-invariants.log`). `make test` itself (1.5 h
 of drift controls) was not re-run in full; the structural order is what changed,
 and it is what the above checks.
@@ -942,6 +942,42 @@ $ cargo test --test capstd_tests   # 6 passed
 $ cargo test                       # EXIT=0 (lib 70, capstd 6, modhost_cli 42, module_tests 12)
 ```
 
+### The Austral demo (step 4)
+
+`umbrella/modules/distributed_io/` is a module that can only touch the
+filesystem through a capability handle: it declares `rs_cap_dir_open` and
+`rs_cap_write`, opens the handle the host issues, and writes `note.txt` under
+its state directory. `DistributedIo.aum` is compiled by the **ordinary
+front-end** (`gen_cps.sh` → `austral compile … --emit-cps=module.cps`), and the
+resulting CPS is what `modhost` loads, so the run goes through the same manifest
+gate as any hosted module.
+
+Two details worth knowing about the shape:
+
+* the buffer verbs take their two addresses as 64-bit words, because a
+  `Rust_Ownership` declaration with an `Address[Nat8]` parameter lowers to a
+  generated `<name>__adapter` wrapper, and the host has no wrapper to resolve.
+  What the host checks is unchanged: non-null pointer, bounded length, path
+  contained in the state directory.
+* the module host did not register `rs_*` at all — `compile_cps_binary` copied
+  `au_*`, `uk_*` and `uz_*` only — so a granted `rs_*` call failed with
+  `can't resolve symbol`. That gap is fixed here; registration is still not
+  permission, the manifest gate decides by name.
+
+| Witness | Asserts |
+|---|---|
+| `the_granted_module_writes_through_its_capability` | grant → `compute: 25` and `note.txt` contains `hello from distributed_io`, written through the handle |
+| `without_the_grant_the_call_is_refused_and_nothing_is_written` | removing `rs_cap_write` → exit 1, UK-4001 naming the verb, and no file on disk |
+| `run_demo.sh` | the same two runs from the shell, against the release binary; refusal leaves nothing behind |
+
+```
+$ cargo test --test distributed_io   # 2 passed
+$ bash umbrella/modules/distributed_io/run_demo.sh   # granted: 25 bytes; ungranted: UK-4001, nothing written
+$ cargo test                         # EXIT=0 (lib 70, capstd 6, distributed_io 2, modhost_cli 42)
+$ bash scripts/verify-invariants     # 179 passed, 4 explained gap(s), 0 failed
+$ nix develop … -c dune build @runtest   # EXIT=0
+```
+
 ### Not claimed
 
 This is a digest pin, not a signature: it says the artifact is the one the
@@ -955,11 +991,14 @@ can call `std::fs` or `TcpStream` directly is *not* contained by refused paths o
 a peer allowlist, and hard isolation stays the VM tier's job. The transport that
 would settle a pending request is not here — `settle` is called by tests, and the
 sink is a file in the state directory, so what is proven is the boundary's
-refusals and ownership, not a live network path. Step 4's Austral
-positive/negative demo and the umbrella-side adapter that would *call* these verbs
-are not written: nothing yet compiles an Austral module against `rs_cap_*`, so
-the FFI surface is exercised from Rust, not from Austral. `untrusted-native`
-remains U26's tier and is still refused by preflight.
+refusals and ownership, not a live network path. Only the *directory* capability
+is exercised end to end from Austral: nothing yet sends a frame, so
+`rs_cap_send`/`query`/`cancel` are proven from Rust only. The umbrella's own
+capability wiring (`capabilities` in the project document: bind an instance,
+install its set, run the entry inside that scope) compiles and is covered by the
+schema tests, but no test drives it through a real run — the demo's witness is
+`modhost`. `untrusted-native` remains U26's tier and is still refused by
+preflight.
 
 ## Task status
 
@@ -974,5 +1013,5 @@ remains U26's tier and is still refused by preflight.
 | D06 | verified within stated scope | a client-named request replays its settled result, conflicts are refused, retention is an acknowledged floor and a full book backpressures |
 | D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
 | D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; `call_from_peer` is the production receiver and checks against the peer the transport authenticated |
-| D09 | in progress (steps 1–3 of 4) | `umbrella` pins the artifact identity — Cargo.lock digest and feature set before cargo runs, library digest and ABI exports before dlopen; the host issues per-instance directory and single-peer network handles, and `rs_cap_*` bounds, copies and contains them. Step 4's Austral demo and umbrella adapter are not written |
+| D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
 | D08–D26 | not started | D08 is next (scoped caller context, dynamic remote policy) |
