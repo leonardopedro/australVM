@@ -663,7 +663,7 @@ tell" and halts. This is the classification D05 left as a documented gap.
 | `a_torn_transition_write_halts_at_that_slot` | halt at slot 1, watermark 0, the next sync also refuses |
 | `an_acknowledged_request_result_survives_a_restart` | the retry reuses the recorded submission, watermark 1 |
 | `an_unrecordable_request_result_is_reported_as_unrecorded_not_refused` | `Unknown(Unrecorded)`, no halt |
-| `a_storage_failure_is_a_halt_and_a_domain_error_is_a_refusal` | UK-5011 halts, UK-7003 refuses |
+| `a_storage_failure_is_a_halt_and_a_domain_error_is_a_refusal` | UK-5011 halts, UK-7002 refuses |
 
 ```
 $ cargo test --locked --offline -p unfer_consensus --lib                        # 150 passed
