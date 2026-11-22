@@ -5,6 +5,16 @@ warning: Git tree '/home/leo/Projects/australVM' is dirty
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
+[pass] D00 contracts: 14 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present
+[pass] D00: distributed execution record and contract inventory are well-formed
+[pass] D00 checker refuses: duplicate inventory id
+[pass] D00 checker refuses: unknown status
+[pass] D00 checker refuses: missing path
+[pass] D00 checker refuses: missing evidence
+[pass] D00 checker refuses: duplicate baseline id
+[pass] D00 checker refuses: malformed header
+[pass] D00 selftest: 6 mutation control(s) refused
+[pass] D00: the distributed contract checker refuses every mutated record
 [pass] Phase D: lean2mm0 emitter present
 [pass] Phase D: generated certificate artifacts present
 lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports
@@ -64,6 +74,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W2: docs/kernel_alg.mm0 accepted by mm0-rs + mm0-c
 [pass] W5 (checked): the bridge the gate loads is the release artifact it was built from
 [pass] W5: the staleness note is silent when the artifact is newest, and names the newer binary
+[pass] W5: the binary note is silent when the binary is newest, and names the newer source
 [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it
 [pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
 [pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (x86_64)
@@ -339,4 +350,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 168 passed, 4 explained gap(s), 0 failed
+verify-invariants: 171 passed, 4 explained gap(s), 0 failed

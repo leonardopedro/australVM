@@ -199,6 +199,17 @@ let refined_params (params : Type.value_parameter list)
   in
   List.filter (fun n -> List.mem n free) names
 
+(* L11e: a marked direct-descent definition is exempted from T1's *self*
+   edge only. Passing a body-local copy of the graph keeps the exemption from
+   hiding a mutual cycle: every other edge is still visible to L3. *)
+let totality_graph_for ~(id : Id.decl_id) ~(graph : (int, int list) Hashtbl.t) :
+    (int, int list) Hashtbl.t =
+  let k = decl_key id in
+  let g = Hashtbl.copy graph in
+  let succs = match Hashtbl.find_opt g k with None -> [] | Some l -> l in
+  Hashtbl.replace g k (List.filter (fun n -> n <> k) succs);
+  g
+
 let totality (m : typed_module) : string option =
   let (TypedModule (_, decls)) = m in
   let names : (int, string) Hashtbl.t = Hashtbl.create 16 in
@@ -231,10 +242,22 @@ let totality (m : typed_module) : string option =
            in
            if not contracted then go rest
            else
-             TotalityCheck.check_function
-               ~name:(Identifier.ident_string name)
-               ~entry:id ~body ~graph ~foreign ~names
-               ~refined:(refined_params params pragmas)
+             let graph' =
+               if LiquidDescent.is_marked pragmas then
+                 totality_graph_for ~id ~graph
+               else graph
+             in
+             let r =
+               TotalityCheck.check_function
+                 ~name:(Identifier.ident_string name)
+                 ~entry:id ~body ~graph:graph' ~foreign ~names
+                 ~refined:(refined_params params pragmas)
+             in
+             (* Continue to the next contracted declaration when this one is
+                total. Returning the check result directly stopped after the
+                first contracted function, so a cycle whose first member was
+                clean was never seen. *)
+             (match r with Some msg -> Some msg | None -> go rest)
         | _ -> go rest)
   in
   go decls
@@ -261,8 +284,13 @@ let dump (m : typed_module) =
     for, and a no-op for a module that is not the audited wrapper. The evidence
     is re-derived here rather than threaded through [check], which keeps the
     pass inert when nobody asks and keeps the file's contents a function of the
-    source alone. *)
-let dump_evidence (m : typed_module) : unit =
+    source alone.
+
+    L11d.2: the Why3 lane's verdict is passed in, not recomputed, and appears
+    in the dump only when the lane was asked for — a stored L11d.1 subject must
+    not move because a prover happens to be installed. *)
+let dump_evidence ?(why3 : LiquidWhy3.outcome option = None) (m : typed_module) :
+    unit =
   match Sys.getenv_opt "AUSTRAL_LIQUID_EVIDENCE" with
   | None -> ()
   | Some path -> (
@@ -270,8 +298,26 @@ let dump_evidence (m : typed_module) : unit =
       | None -> ()
       | Some e ->
          let oc = open_out path in
-         output_string oc (LiquidSplitPilot.render_evidence e);
+         output_string oc (LiquidSplitPilot.render_evidence ~why3:why3 e);
          close_out oc)
+
+(** L11d.2: the split lane, opt-in through [AUSTRAL_LIQUID_SPLIT_VERIFY]. The
+    `.mlw` is written where [AUSTRAL_LIQUID_SPLIT_DUMP] says, and the same
+    directory is where the prover is pointed. [None] means the lane was not
+    asked for — distinct from [NoEngine], which is "asked, and the engine is
+    missing". *)
+let split_why3 (m : typed_module) : LiquidWhy3.outcome option =
+  match
+    (Sys.getenv_opt "AUSTRAL_LIQUID_SPLIT_DUMP",
+     Sys.getenv_opt "AUSTRAL_LIQUID_SPLIT_VERIFY")
+  with
+  | None, None -> None
+  | _ -> (
+      match LiquidSplitPilot.evidence_of_module m with
+      | None -> None
+      | Some e ->
+         ignore (LiquidSplitPilot.dump_split_vcs e);
+         LiquidSplitPilot.discharge_split_why3 e)
 
 (** The `typed_pass` registered as the `liquid` tenant. Uses the
     self-referential scope: a contract may only mention its own parameters and
@@ -279,6 +325,15 @@ let dump_evidence (m : typed_module) : unit =
     admissible — is L3's totality gate, not this pass's job. *)
 let check (m : typed_module) : Compiler_plugin.verdict =
   let (TypedModule (_, _decls)) = m in
+  (* L11e: a separate carve-out from L3, not a relaxation of it. It runs
+     first so a marked function that fails its own fragment gets the L11e
+     diagnostic rather than L3's generic T1, and the evidence dump is written
+     off the same typed tree the checker saw. *)
+  let descent_rejection = LiquidDescent.check m in
+  LiquidDescent.dump_evidence m;
+  match descent_rejection with
+  | Some msg -> Compiler_plugin.VerdictReject msg
+  | None ->
   (* WF1's scope is per-declaration, exactly as `check_module` builds it below:
      `result` plus *this* function's own parameters. It used to be seeded with
      every parameter of every function in the module, which made the free-variable
@@ -298,7 +353,8 @@ let check (m : typed_module) : Compiler_plugin.verdict =
   match LiquidSplitPilot.check_module m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->
-  dump_evidence m;
+  let why3_split = split_why3 m in
+  dump_evidence ~why3:why3_split m;
   match LiquidIndexClosure.audit_module m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->
@@ -310,6 +366,16 @@ let check (m : typed_module) : Compiler_plugin.verdict =
     | None -> None
     | Some _ -> LiquidWhy3.verify m
   in
+  (* L11d.2: the split lane's verdict is reported but never upgrades the MM0
+     artifact — they are different claims over different vocabularies. Only a
+     refusal/unknown is a compiler verdict here; a missing engine is the
+     structured skip `LiquidWhy3.verdict` already words. *)
+  let split_verdict =
+    match why3_split with
+    | None -> None
+    | Some o ->
+       Some (LiquidWhy3.verdict ~where_:"the L11d.2 split VCs" o)
+  in
   match check_module ~bound:[ "result" ] m with
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->
@@ -318,6 +384,13 @@ let check (m : typed_module) : Compiler_plugin.verdict =
      | None ->
         (* A prover refusal outranks everything the syntactic pass found: the
            contract was parsed, total, and then *disproved*. *)
-        (match prove_verdict with
+        let verdicts =
+          List.filter_map (fun v -> v) [ prove_verdict; split_verdict ]
+        in
+        (match
+           List.find_opt
+             (function Compiler_plugin.VerdictReject _ -> true | _ -> false)
+             verdicts
+         with
          | Some v -> v
          | None -> Compiler_plugin.VerdictOk)

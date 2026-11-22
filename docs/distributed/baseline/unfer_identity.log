@@ -1,4 +1,71 @@
-error: failed to download `cc v1.6.0`
+   Compiling fnv v1.0.7
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
 
-Caused by:
-  attempting to make an HTTP request, but --offline was specified
+warning: `fock_sirk` (build script) generated 1 warning
+   Compiling zeroize v1.9.1
+   Compiling darling_core v0.20.11
+   Compiling curve25519-dalek v4.1.3
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+   Compiling ed25519-dalek v2.2.0
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+   Compiling arctic v0.1.0 (/home/leo/Projects/dynamic-arctic)
+   Compiling darling_macro v0.20.11
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+   Compiling darling v0.20.11
+   Compiling cached_proc_macro v0.27.0
+   Compiling cached v0.59.0
+   Compiling scirs2-core v0.4.4
+   Compiling scirs2-autograd v0.4.4
+   Compiling scirs2-linalg v0.4.4
+   Compiling quantrs2-symengine-pure v0.1.3
+   Compiling nested_fock_algebra v0.1.0 (/home/leo/Projects/unfer/nested_fock_algebra)
+   Compiling fock_sirk v0.1.0 (/home/leo/Projects/unfer/fock_sirk)
+warning: `nested_fock_algebra` (lib) generated 1 warning (1 duplicate)
+   Compiling ode_sirk v0.1.0 (/home/leo/Projects/unfer/ode_sirk)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+   Compiling qfm v0.1.0 (/home/leo/Projects/unfer/qfm)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+   Compiling prob_kernel v0.1.0 (/home/leo/Projects/unfer/prob_kernel)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+   Compiling unfer_consensus v0.1.0 (/home/leo/Projects/unfer/unfer_consensus)
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+   Compiling unfer_identity v0.1.0 (/home/leo/Projects/unfer/unfer_identity)
+warning: `unfer_identity` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_identity` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 36s
+     Running unittests src/lib.rs (target/debug/deps/unfer_identity-95b6e8558c0818a6)
+
+running 6 tests
+test tests::did_pubkey_roundtrip ... ok
+test tests::create_and_resolve_did ... ok
+test tests::duplicate_create_fails ... ok
+test tests::resolve_json_is_valid ... ok
+test tests::revoke_did ... ok
+test tests::update_service_endpoint ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests unfer_identity
+
+running 1 test
+test unfer_identity/src/lib.rs - (line 12) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 7.03s; merged doctests compilation took 7.00s
+EXIT=0

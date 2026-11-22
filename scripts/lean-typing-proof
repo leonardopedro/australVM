@@ -1286,15 +1286,40 @@ def _nat_lit(n: int) -> str:
     return out
 
 
+def _copy_spool(fh, sp) -> None:
+    """Copy one spool file into an artifact without a user-space buffer.
+
+    `shutil.copyfileobj(sp, fh, 1 << 20)` allocates its whole `length` before
+    the first byte moves, so a run that is at a memory cap when it reaches this
+    copy dies *on the copy*, after minutes of writing that succeeded (§13.52:
+    the 360 MiB run's `MemoryError` is inside `copyfileobj`, at the axiom
+    concat of the 444 MB statement). The kernel's own copy allocates nothing.
+    Where `sendfile` is absent or refuses, the fallback is a sixteenth of the
+    old buffer — the same copy, at a smaller granularity.
+    """
+    fh.flush()
+    sendfile = getattr(os, "sendfile", None)
+    if sendfile is not None:
+        dst, src = fh.fileno(), sp.fileno()
+        while True:
+            try:
+                moved = sendfile(dst, src, None, 1 << 20)
+            except OSError:
+                break
+            if not moved:
+                return
+    shutil.copyfileobj(sp, fh, 1 << 16)
+
+
 def _put(fh, piece) -> None:
     """Write a statement piece: a str, or a spool file copied through.
 
     A `Path` piece is text already on disk because it was too large to keep in
-    memory; `copyfileobj` streams it into the artifact a megabyte at a time.
+    memory; it is streamed into the artifact instead of being read back.
     """
     if isinstance(piece, Path):
         with piece.open("r") as sp:
-            shutil.copyfileobj(sp, fh, 1 << 20)
+            _copy_spool(fh, sp)
     elif isinstance(piece, (list, tuple)):
         # An unjoined encoding (`Enc.enc_parts`): written chunk by chunk.
         for p in piece:
@@ -1649,7 +1674,7 @@ def main() -> int:
     tail0 = "\n-- ── the derivation ──\n"
     tail1 = "\n-- ── the derivation ──\npub "
     # Written in pieces: the prefix, the spooled assumptions copied through
-    # (`shutil.copyfileobj`, so their bytes are never in this process twice),
+    # (`_copy_spool`, so their bytes are never in this process twice),
     # then the tail. Concatenated in memory this is 444 MB of axiom text on
     # `adjoint_aeval`, before it is even a string.
     for suffix, tail in ((".mm0", tail0), (".mm1", tail1)):
@@ -1657,7 +1682,7 @@ def main() -> int:
             fh.write(pre)
             if ax_fh is not None:
                 with ax_path.open("r") as spool:
-                    shutil.copyfileobj(spool, fh, 1 << 20)
+                    _copy_spool(fh, spool)
             else:
                 fh.write("".join(a + "\n" for a in axioms))
             fh.write(tail)
@@ -1773,7 +1798,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
         fh.write(header)
         if ax_fh is not None:
             with ax_path.open("r") as spool:
-                shutil.copyfileobj(spool, fh, 1 << 20)
+                _copy_spool(fh, spool)
         else:
             fh.write("".join(a + "\n" for a in axioms))
         fh.write("\n-- ── the goal, stated and not derived ──\n")
@@ -1886,6 +1911,12 @@ class Deriver:
         self.ax_count = 0
         self.ax_bytes = 0
         self.ax_max = 0
+        # `LTP_DEDUP_NODES=1` interns synthetic nodes by content: two equal
+        # records share one id instead of one each. It is a probe, not a default:
+        # the index that makes it work costs memory too, and sharing ids can
+        # change any derivation step that compares two ids for identity, so the
+        # artifacts are what decides whether it is neutral (§13.52).
+        self._dedup: dict[str, int] = {} if os.environ.get("LTP_DEDUP_NODES") else None
         # Largest proof string returned so far (bytes); see `_check`.
         self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}
@@ -1966,6 +1997,18 @@ class Deriver:
         self._sh_idx = array.array("i", [-1]) * 1024
         self._sh_touched: list[int] = []
         self._sh_n = 0
+        # Sharing by content rather than by expression id (§13.53). The table
+        # is keyed by the id the export gave a subterm, so two ids that hold
+        # structurally equal nodes are written twice unless the *deriver*
+        # interns them first (`LTP_DEDUP_NODES`). A writer that keys on the
+        # rendered entry instead makes the record a function of the term alone,
+        # so interning stops changing this artifact and the deriver can own its
+        # memory without owning the certificate's spelling. Default on since the
+        # golden was re-recorded for it (§13.53: one line, 10 349 935 →
+        # 4 258 753 B); `LTP_SHARE_DEDUP=0` still reproduces the old bytes.
+        self._sh_seen: dict[str, int] | None = (
+            {} if self._share
+            and os.environ.get("LTP_SHARE_DEDUP", "1") == "1" else None)
         self._stop_rules = int(os.environ.get("LTP_STOP_RULES", "0") or 0)
         _stop_at = float(os.environ.get("LTP_STOP_AT", "0") or 0)
         self._stop_at = (time.monotonic() + _stop_at) if _stop_at else 0.0
@@ -2122,6 +2165,8 @@ class Deriver:
             idx[eid] = -1
         self._sh_touched.clear()
         self._sh_n = 0
+        if self._sh_seen is not None:
+            self._sh_seen.clear()
 
     def tree_share(self, eid: int, out) -> int:
         """Write `eid`'s node into the shared table and return its index.
@@ -2211,10 +2256,22 @@ class Deriver:
             else:
                 raise SystemExit(
                     f"tree_share: unhandled expression {sorted(e.keys())}")
+            seen = self._sh_seen
+            if seen is not None:
+                # Child indices are already canonical, so the rendered entry is
+                # the node's content: equal subtrees reach the same `got` and
+                # the later id simply points at the earlier index.
+                got = seen.get(ent)
+                if got is not None:
+                    idx[eid] = got
+                    self._sh_touched.append(eid)
+                    return got
             i = self._sh_n
             self._sh_n = i + 1
             idx[eid] = i
             self._sh_touched.append(eid)
+            if seen is not None:
+                seen[ent] = i
             if i:
                 write(", ")
             write(ent)
@@ -2298,9 +2355,16 @@ class Deriver:
 
     # ── export manipulation ──────────────────────────────────────────────
     def mk(self, d: dict) -> int:
+        if self._dedup is not None:
+            key = repr(d)
+            i = self._dedup.get(key)
+            if i is not None:
+                return i
         i = self.next_id
         self.next_id += 1
         self.ex.exprs[i] = d
+        if self._dedup is not None:
+            self._dedup[key] = i
         return i
 
     def ind_decl(self, nm: str) -> dict | None:

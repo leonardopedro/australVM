@@ -63,18 +63,49 @@ let goals_in (mlw_path : string) : string list =
      while true do
        let line = input_line ic in
        let line = String.trim line in
-       if String.length line > 6 && String.sub line 0 6 = "  goal" then begin
-         let rest = String.trim (String.sub line 6 (String.length line - 6)) in
-         (* `goal <name>:` *)
-         let n = String.length rest in
-         if n > 0 && rest.[n - 1] = ':' then
-           found := String.sub rest 0 (n - 1) :: !found
+       (* The line is trimmed above, so it starts at `goal`, not at the two
+          spaces the emitter wrote. Testing for `"  goal"` here was the other
+          half of why this reader never found a single goal. *)
+       if String.length line > 5 && String.sub line 0 5 = "goal " then begin
+         let rest = String.trim (String.sub line 5 (String.length line - 5)) in
+         (* `goal <name>: <term>`. The name ends at the FIRST colon, not at
+            the end of the line: a goal's term follows on the same line. The
+            old end-of-line test found nothing for any emitted `.mlw`, so a
+            fully proved file reported `Proved 0`. *)
+         (match String.index_opt rest ':' with
+          | Some i ->
+             let name = String.trim (String.sub rest 0 i) in
+             if name <> "" then found := name :: !found
+          | None -> ())
        end
      done
    with End_of_file -> close_in ic);
   List.rev !found
 
 (* ── the driver ──────────────────────────────────────────────────────────── *)
+
+(** `Util.run_command` hands the child an environment containing only [PATH],
+    so Why3 cannot find `~/.why3.conf` on its own: it then says "No prover in
+    .why3.conf corresponds to alt-ergo" and exits 1, which looked exactly like
+    a *refuted* goal (with no name, because no goal was ever run). Point it at
+    the config explicitly, the same way a registered prover is found by a
+    normal shell. A missing config stays the structured `NoEngine`/`Unknown`
+    path; supplying `-C` never claims a proof.
+*)
+let why3_config_arg () : string =
+  let candidates =
+    [ Sys.getenv_opt "WHY3_CONFIG";
+      (match Sys.getenv_opt "XDG_CONFIG_HOME" with
+       | Some d -> Some (Filename.concat d "why3/why3.conf")
+       | None -> None);
+      (match Sys.getenv_opt "HOME" with
+       | Some h -> Some (Filename.concat h ".why3.conf")
+       | None -> None) ]
+  in
+  match List.find_opt (fun p -> Sys.file_exists p)
+          (List.filter_map (fun p -> p) candidates) with
+  | Some p -> " -C " ^ Filename.quote p
+  | None -> ""
 
 (** Run `why3 prove` over an emitted `.mlw`.
 
@@ -86,8 +117,8 @@ let prove (mlw_path : string) : outcome =
   (* `run_command` goes through `sh -c`, and `mlw_path`'s directory comes from
      `AUSTRAL_LIQUID_DUMP` or `TMPDIR` — either can hold a space. *)
   let cmd =
-    Printf.sprintf "%s prove -P alt-ergo %s"
-      (Filename.quote (why3_cli ())) (Filename.quote mlw_path)
+    Printf.sprintf "%s%s prove -P alt-ergo %s"
+      (Filename.quote (why3_cli ())) (why3_config_arg ()) (Filename.quote mlw_path)
   in
   let (Util.CommandOutput { code; stdout; stderr; _ }) = Util.run_command cmd in
   let cli = why3_cli () in

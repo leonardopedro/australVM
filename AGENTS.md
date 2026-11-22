@@ -163,6 +163,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
   marker is reported `[stale]` so it leaves with the work. Markdown
   historical status prose is out of scan scope by policy.
+- `scripts/check-distributed-contracts` — the D00 structural checker for
+  `docs/distributed/EXECUTION.md` (its baseline block) and
+  `docs/distributed/contracts.tsv` (the boundary inventory): exact headers,
+  unique ids, a known class/repo/status, and every referenced path and evidence
+  file present — `U` paths resolve against `../unfer`. `--selftest` mutates each
+  rule and requires the refusal. `verify-invariants` runs both, as two checks
+  (`D00:`), and reports the sibling-repo absence as an explained gap rather than
+  a red gate. A valid row says the record is well-formed; it never says the
+  guarantee holds.
 - `scripts/cps-fingerprint <cps>` — the bridge's own sha256 of the bytes
   (`austral_cps_fingerprint`); `--object <cps>` gives the digest of the
   cranelift-emitted code capture plus `arch=`. Not JIT symbols: no manifest
@@ -644,6 +653,18 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   on every run. The note is itself a comparison with a control:
   `[pass] W5: the staleness note is silent when the artifact is newest, and
   names the newer binary` stamps a scratch pair both ways.
+- The mirror case has its own note, learned 2026-11-21: a checkout rewrites the
+  artifact's mtime, so a `./austral` built before a serializer change looks
+  *older* than the certificate and the note above stays silent — the gate then
+  fails W5 with `recorded=c10ca9a9… bridge=fa4e9b29…` and explains nothing.
+  `avm_binary_stale_note` compares the loaded binary against `lib/*.ml`,
+  `lib/*.mli`, `bin/*.ml` and `_build/default/bin/austral.exe` and, only when a
+  digest comparison has already failed, prints `— lib/CpsGen.ml is newer (…) than
+  austral (…): the binary predates this tree, so its digests describe an older
+  compiler build; run: make all`. Measured on this aarch64 host: `make all`
+  alone restored `recorded == bridge`, because the pin was right and the binary
+  was not. Control: `[pass] W5: the binary note is silent when the binary is
+  newest, and names the newer source`.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is  restored. It rebuilds the compiler twice, so it is not in

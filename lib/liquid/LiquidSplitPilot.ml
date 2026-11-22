@@ -1191,9 +1191,228 @@ let rec render_term ?(names = []) (t : LiquidIndex.t) : string =
 let render_range (r : range) : string =
   Printf.sprintf "[%d,%d) len=%d" r.rg_start (r.rg_start + r.rg_len) r.rg_len
 
+(* ── the Why3 lane (L11d.2) ────────────────────────────────────────────────
+
+   The split law's arithmetic is discharged twice, and the two lanes do not
+   share a verdict: `mm0/liquid_split.mm0` replays the polynomial identities,
+   and this lane asks Why3 about the guarded arithmetic and about the module's
+   *actual* spans. A Why3 verdict therefore never upgrades the MM0 artifact, and
+   the MM0 replay never upgrades a Why3 goal — the evidence line records which
+   lane spoke, not that "the split is proved".
+
+   The VCs are generated from the held-out law and from the spans the analyser
+   read, never from numbers in this file. A wrong offset changes
+   `split_module_contiguous`; a missing guard makes `split_right_len_nonneg`
+   false. Both are the failures the card asks a check to catch. *)
+
+(** A binder's canonical evidence name (`w.off`) is not a Why3 identifier. *)
+let why3_ident (n : string) : string =
+  String.map (function '.' | '-' -> '_' | c -> c) n
+
+(** The index language as a Why3 `int` term. Infix, because Why3's arithmetic
+    is; `NatSub` is the *integer* `-` here, which is exactly the gap the guard
+    closes (and the reason the lane states it). *)
+let rec why3_term ?(names = []) (t : LiquidIndex.t) : string =
+  let r = why3_term ~names in
+  match t.LiquidIndex.node with
+  | LiquidIndex.Var id -> (
+      match List.assoc_opt id names with
+      | Some n -> why3_ident n
+      | None -> Printf.sprintf "v%d" id)
+  | LiquidIndex.Lit n -> Printf.sprintf "(%d)" n
+  | LiquidIndex.Add (a, b) -> Printf.sprintf "(%s + %s)" (r a) (r b)
+  | LiquidIndex.NatSub (a, b) -> Printf.sprintf "(%s - %s)" (r a) (r b)
+  | LiquidIndex.Mod (a, b) -> Printf.sprintf "(%s mod %s)" (r a) (r b)
+  | LiquidIndex.Def (f, args) ->
+     Printf.sprintf "%s%s" (why3_ident f)
+       (String.concat "" (List.map (fun a -> " " ^ r a) args))
+  | LiquidIndex.Machine (_, op, a, b) ->
+     Printf.sprintf "(%s %s %s)" (r a)
+       (match op with LiquidIndex.MAdd -> "+" | LiquidIndex.MSub -> "-")
+       (r b)
+
+(** Every binder an index term mentions, so a goal quantifies exactly its
+    free variables rather than a fixed list that drifts. *)
+let rec index_vars (t : LiquidIndex.t) (acc : int list) : int list =
+  match t.LiquidIndex.node with
+  | LiquidIndex.Var id -> id :: acc
+  | LiquidIndex.Lit _ -> acc
+  | LiquidIndex.Add (a, b) | LiquidIndex.NatSub (a, b) | LiquidIndex.Mod (a, b) ->
+     index_vars b (index_vars a acc)
+  | LiquidIndex.Def (_, args) ->
+     List.fold_left (fun a t -> index_vars t a) acc args
+  | LiquidIndex.Machine (_, _, a, b) -> index_vars b (index_vars a acc)
+
+let why3_binder ~(names : (int * string) list) (terms : LiquidIndex.t list) :
+    string =
+  let ids =
+    List.sort_uniq compare (List.concat_map (fun t -> index_vars t []) terms)
+  in
+  (* Two index ids can carry the same canonical evidence name (`w.len` seen in
+     the split and again in the caller). Why3 rejects a repeated binder name,
+     and the goal text is in canonical names anyway, so dedupe by the rendered
+     name rather than by id. *)
+  let names =
+    List.sort_uniq compare
+      (List.map
+         (fun id ->
+            match List.assoc_opt id names with
+            | Some n -> n
+            | None -> Printf.sprintf "v%d" id)
+         ids)
+  in
+  let decls = String.concat " " (List.map why3_ident names) in
+  (* Why3 quantifier binders are `forall a b: int. P` — the parenthesised
+     `(a: int) (b: int)` form belongs to function parameters and is a syntax
+     error here. All split binders are ints, so one annotation covers them. *)
+  if decls = "" then "" else "forall " ^ decls ^ ": int. "
+
+let split_goal ~name ~rule ~binder ~assumes ~body : LiquidConstraints.goal =
+  { LiquidConstraints.gname = name; grule = rule; gbinder = binder;
+    gassumes = assumes; gbody = body; gsyms = [] }
+
+(** The law half: guarded arithmetic over the law's own names. The guard is in
+    the premise, so `split_right_len_nonneg` is the goal that *needs* it —
+    without `k <= n`, `0 <= n - k` is false and Why3 refuses. *)
+let split_law_goals : LiquidConstraints.goal list =
+  let binder = "forall off n k width: int. " in
+  let guard = "0 <= k && k <= n" in
+  [ split_goal ~name:"split_right_len_nonneg"
+      ~rule:"L11d.2: the guard makes natural `n - k` non-negative"
+      ~binder ~assumes:(Some guard) ~body:"0 <= n - k";
+    split_goal ~name:"split_conservation"
+      ~rule:"L11d.2: the halves' lengths add to n"
+      ~binder ~assumes:(Some guard) ~body:"k + (n - k) = n";
+    split_goal ~name:"split_right_within"
+      ~rule:"L11d.2: the right half ends at off+n"
+      ~binder ~assumes:(Some guard) ~body:"off + k + (n - k) = off + n";
+    split_goal ~name:"split_bytes"
+      ~rule:"L11d.2: byte extents are the element extents scaled by width"
+      ~binder ~assumes:(Some "0 <= k && k <= n && 0 < width")
+      ~body:"(off + k + (n - k)) * width = (off + n) * width" ]
+
+(** One index var by its canonical evidence name (`w.len`), so a binding goal
+    can quantify the module's own whole extent without the analyser's ids. *)
+let index_var_named (e : evidence) (name : string) : LiquidIndex.t option =
+  match List.find_opt (fun (_, n) -> n = name) e.ev_names with
+  | Some (id, _) -> Some (LiquidIndex.var id)
+  | None -> None
+
+(** The binding half: the same law instantiated at the spans *this module*
+    built. A wrong offset makes `split_module_contiguous` false, which is why
+    this half is generated from the evidence and not from the law alone. *)
+let split_binding_goals (e : evidence) : LiquidConstraints.goal list =
+  let span =
+    List.find_opt (fun b -> b.be_role = "span") e.ev_binders
+    |> Option.map (fun b -> b.be_name)
+  in
+  let number =
+    List.find_opt (fun b -> b.be_role = "number") e.ev_binders
+    |> Option.map (fun b -> b.be_name)
+  in
+  match (span, number) with
+  | Some span, Some number -> (
+      match index_var_named e (span ^ ".len") with
+      | None -> []
+      | Some whole_len ->
+         let lo = e.ev_left.se_off and ll = e.ev_left.se_len in
+         let ro = e.ev_right.se_off and rl = e.ev_right.se_len in
+         let tt = why3_term ~names:e.ev_names in
+         let binder = why3_binder ~names:e.ev_names [ lo; ll; ro; rl; whole_len ] in
+         let guard =
+           Some
+             (Printf.sprintf "0 <= %s && %s <= %s" (why3_ident number)
+                (why3_ident number) (tt whole_len))
+         in
+         let goals =
+           [ split_goal ~name:"split_module_contiguous"
+               ~rule:"L11d.2: the module's right half starts where its left ends"
+               ~binder ~assumes:guard
+               ~body:(Printf.sprintf "%s + %s = %s" (tt lo) (tt ll) (tt ro));
+             split_goal ~name:"split_module_conservation"
+               ~rule:"L11d.2: the module's half lengths add to its extent"
+               ~binder ~assumes:guard
+               ~body:(Printf.sprintf "%s + %s = %s" (tt ll) (tt rl) (tt whole_len));
+             split_goal ~name:"split_module_right_len_nonneg"
+               ~rule:"L11d.2: the guard makes the right half's length natural"
+               ~binder ~assumes:guard
+               ~body:(Printf.sprintf "0 <= %s" (tt rl)) ]
+         in
+         match e.ev_width with
+         | Some w when w > 0 ->
+            goals
+            @ [ split_goal ~name:"split_module_bytes"
+                  ~rule:"L11d.2: the module's byte extent is its element \
+                         extent scaled by the declared width"
+                  ~binder ~assumes:guard
+                  ~body:
+                    (Printf.sprintf "(%s + %s) * %d = %s * %d" (tt ll) (tt rl) w
+                       (tt whole_len) w) ]
+         | _ -> goals)
+  | _ -> []
+
+let split_vcs (e : evidence) : LiquidConstraints.t =
+  let c = LiquidConstraints.empty_module ~module_name:(e.ev_module ^ "_split") in
+  LiquidConstraints.with_goals c (split_law_goals @ split_binding_goals e)
+
+let split_vc_text (e : evidence) : string =
+  LiquidConstraints.to_mlw (split_vcs e)
+
+(** Write the `.mlw` when `AUSTRAL_LIQUID_SPLIT_DUMP` names a directory. Off
+    by default, like the other dumps in this pass. *)
+let split_dump_dir () : string option =
+  match Sys.getenv_opt "AUSTRAL_LIQUID_SPLIT_DUMP" with
+  | Some d -> Some d
+  | None -> None
+
+let dump_split_vcs (e : evidence) : string option =
+  match split_dump_dir () with
+  | None -> None
+  | Some dir ->
+     let text = split_vc_text e in
+     let path = Filename.concat dir (e.ev_module ^ "_split.mlw") in
+     let oc = open_out path in
+     output_string oc text;
+     close_out oc;
+     Some path
+
+(** Run Why3 over the split VCs, opt-in through `AUSTRAL_LIQUID_SPLIT_VERIFY`.
+
+    Returns [None] when the lane was not asked for, so a caller can tell "not
+    asked" from "asked and the engine is missing" — the latter is `NoEngine`, a
+    structured gap. The `.mlw` is written to the dump directory when one is set,
+    and to the temp directory otherwise. *)
+let discharge_split_why3 (e : evidence) : LiquidWhy3.outcome option =
+  match Sys.getenv_opt "AUSTRAL_LIQUID_SPLIT_VERIFY" with
+  | None -> None
+  | Some dir when dir = "" ->
+     let path = Filename.concat (Filename.get_temp_dir_name ())
+         (e.ev_module ^ "_split.mlw") in
+     let oc = open_out path in
+     output_string oc (split_vc_text e);
+     close_out oc;
+     Some (LiquidWhy3.prove path)
+  | Some dir ->
+     let path = Filename.concat dir (e.ev_module ^ "_split.mlw") in
+     let oc = open_out path in
+     output_string oc (split_vc_text e);
+     close_out oc;
+     Some (LiquidWhy3.prove path)
+
+(** One line per lane. The wording is deliberately per-claim: a Why3 verdict
+    says nothing about the MM0 artifact and vice versa. *)
+let render_why3_lane (o : LiquidWhy3.outcome) : string =
+  match o with
+  | LiquidWhy3.Proved n -> Printf.sprintf "valid (%d goal(s))" n
+  | LiquidWhy3.Refused goals ->
+     Printf.sprintf "refused (%s)" (String.concat ", " goals)
+  | LiquidWhy3.Unknown msg -> Printf.sprintf "unknown (%s)" msg
+  | LiquidWhy3.NoEngine msg -> Printf.sprintf "[gap] %s" msg
+
 (** Deterministic, line-oriented: a caller diffs this against a stored subject
     instead of parsing a tree. *)
-let render_evidence (e : evidence) : string =
+let render_evidence ?(why3 : LiquidWhy3.outcome option = None) (e : evidence) :
+    string =
   let term = render_term ~names:e.ev_names in
   let buf = Buffer.create 1024 in
   let line fmt = Printf.ksprintf (fun s -> Buffer.add_string buf (s ^ "\n")) fmt in
@@ -1256,6 +1475,12 @@ let render_evidence (e : evidence) : string =
            (render_range whole)
       | _ -> line "  ranges: symbolic (unbounded index arithmetic)")
     (List.rev e.ev_calls);
+  (* Only when the lane was actually asked for: a default render stays the
+     L11d.1 subject, so a stored golden does not move just because a prover
+     happens to be installed. *)
+  (match why3 with
+   | Some o -> line "lane: why3 %s" (render_why3_lane o)
+   | None -> ());
   Buffer.contents buf
 
 let check_module_evidence (m : typed_module) : string option * evidence option =

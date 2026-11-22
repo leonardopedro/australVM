@@ -1,0 +1,25 @@
+module body Test is
+    """
+    L11e, CPU path: the direct-descent marker on a total function and the
+    existing fold marker on the same measure produce the same result. The
+    recursive-union fixture cannot be emitted as C (its by-value tail has no
+    C representation), so the executable correspondence is measured on the
+    Int64 measure the fold combinator already uses. The checker's proper-subterm
+    cases are the `--target-type=tc` suite LiquidDescentTest.
+    """
+    pragma Liquid_Fold;
+    function foldMeasure(init: Int64, n: Int64): Int64 is
+        return init + n;
+    end;
+
+    pragma Liquid_Descent;
+    function measure(n: Int64): Int64 is
+        return n;
+    end;
+
+    function main(): ExitCode is
+        printLn(foldMeasure(0, 3));
+        printLn(measure(3));
+        return ExitSuccess();
+    end;
+end module body.

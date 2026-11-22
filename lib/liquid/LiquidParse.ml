@@ -443,13 +443,13 @@ let parse_formula ?(is_known_type = fun _ -> false) (src : string)
     err_at st st.pos (len st) "unexpected trailing input after the formula";
   f
 
-(** Parse the contract of a pragma kind. Marker kinds ([KMeasure], [KFold])
-    carry no formula and so reject any non-empty contract string. *)
+(** Parse the contract of a pragma kind. Marker kinds ([KMeasure], [KFold],
+    [KDescent]) carry no formula and so reject any non-empty contract string. *)
 let parse_contract ?(is_known_type = fun _ -> false)
     (kind : LiquidTypes.contract_kind) (src : string)
   : LiquidTypes.contract =
   match kind with
-  | LiquidTypes.KMeasure | LiquidTypes.KFold ->
+  | LiquidTypes.KMeasure | LiquidTypes.KFold | LiquidTypes.KDescent ->
      if String.trim src = "" then
        { kind; source = src; formula = None }
      else

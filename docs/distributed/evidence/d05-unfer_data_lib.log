@@ -1,0 +1,99 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_identity` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_data` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src/lib.rs (target/debug/deps/unfer_data-ebb80fe38044ac01)
+
+running 63 tests
+test blueprint::tests::blueprint_immutable_itness_content_addressed ... ok
+test blueprint::tests::cell_content_id_is_deterministic ... ok
+test blueprint::tests::blueprint_record_register_get_list_idempotent_import ... ok
+test blueprint::tests::content_cid_shape_gate ... ok
+test blueprint::tests::register_rejects_corrupt_cell ... ok
+test blueprint::tests::cell_encrypt_decrypt_roundtrip_through_content_plane ... ok
+test blueprint::tests::store_cell_chunks_and_addresses ... ok
+test blueprint::tests::repeated_use_of_one_keypair_does_not_repeat_a_nonce ... ok
+test blueprint::tests::stored_cell_body_cannot_be_spliced ... ok
+test chunk::tests::chunk_refs_have_correct_cids ... ok
+test chunk::tests::chunker_empty_input ... ok
+test chunk::tests::chunker_single_chunk ... ok
+test chunk::tests::chunker_splits_correctly ... ok
+test chunk::tests::compute_cid_differs_for_different_data ... ok
+test chunk::tests::compute_cid_is_deterministic ... ok
+test chunk::tests::reassembled_chunks_match_original ... ok
+test chunk::tests::verify_chunk_fails_for_wrong_cid ... ok
+test chunk::tests::verify_chunk_passes_for_correct_cid ... ok
+test blueprint::tests::verify_cell_matches_content_cid ... ok
+test crypto::tests::content_addressed_sealing_derives_a_stable_object_id ... ok
+test crypto::tests::different_chunk_indices_produce_different_ciphertext ... ok
+test crypto::tests::empty_plaintext_roundtrips ... ok
+test crypto::tests::encrypt_decrypt_roundtrip ... ok
+test crypto::tests::epoch_and_length_are_authenticated ... ok
+test crypto::tests::keypair_generates_unique_keys ... ok
+test crypto::tests::large_chunk_roundtrips ... ok
+test crypto::tests::out_of_range_index_and_oversize_object_are_refused ... ok
+test crypto::tests::public_key_hex_is_64_chars ... ok
+test crypto::tests::shared_object_context_repeats_the_nonce_which_is_the_old_bug ... ok
+test crypto::tests::shared_secret_is_symmetric ... ok
+test crypto::tests::two_objects_in_one_epoch_do_not_share_a_nonce ... ok
+test crypto::tests::version_one_envelope_is_refused ... ok
+test crypto::tests::wrong_chunk_index_fails_decryption ... ok
+test crypto::tests::wrong_key_fails_decryption ... ok
+test magnet::tests::build_magnet_basic ... ok
+test magnet::tests::build_magnet_encodes_special_chars ... ok
+test magnet::tests::build_magnet_with_name ... ok
+test magnet::tests::content_cid_differs_for_different_chunks ... ok
+test magnet::tests::content_cid_is_deterministic ... ok
+test magnet::tests::content_cid_order_matters ... ok
+test magnet::tests::empty_chunk_list_produces_valid_cid ... ok
+test magnet::tests::parse_magnet_no_xt_returns_none ... ok
+test magnet::tests::parse_magnet_roundtrip ... ok
+test publisher::tests::chunk_cids_are_unique_per_chunk ... ok
+test publisher::tests::publication_is_not_reported_before_application ... ok
+test publisher::tests::publish_and_resolve ... ok
+test publisher::tests::publish_empty_data ... ok
+test publisher::tests::publish_large_data_multiple_chunks ... ok
+test publisher::tests::resolve_unknown_cid_returns_none ... ok
+test release::tests::baseline_release ... ok
+test release::tests::cids_are_sha256_hex_and_byte_unique ... ok
+test release::tests::promote_creates_one_content_addressed_copy ... ok
+test release::tests::promote_refuses_tampered_artifact_address ... ok
+test release::tests::wrong_byte_changes_manifest ... ok
+test store::tests::envelope_body_cannot_be_moved_to_another_object ... ok
+test store::tests::keyring_retires_old_epoch_past_retention ... ok
+test store::tests::keyring_rotate_reads_within_retention ... ok
+test store::tests::keyring_roundtrip_and_content_address_preserved ... ok
+test store::tests::pin_unknown_cid_errors ... ok
+test store::tests::store_pin_unpin_prune_keeps_only_pinned ... ok
+test store::tests::store_records_prune_event_with_seq ... ok
+test store::tests::two_envelopes_in_one_epoch_do_not_share_a_nonce ... ok
+test crypto::tests::chunk_cannot_be_spliced_between_objects ... ok
+
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+EXIT=0

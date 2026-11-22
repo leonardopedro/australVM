@@ -73,6 +73,12 @@
  (libraries ounit2 unix test_util)
  (deps ../bin/austral.exe (source_tree ../test-programs/suites/024-liquid-split)))
 
+(tests
+ (names LiquidDescentTest)
+ (modules LiquidDescentTest)
+ (libraries ounit2 unix test_util)
+ (deps ../bin/austral.exe))
+
 ; L11a: the index-closure admissibility audit (WF3). Drives `austral.exe` at
 ; `--target-type=tc`, because the claim is about the diagnostic a user sees.
 (tests

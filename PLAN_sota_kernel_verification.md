@@ -416,13 +416,13 @@ certificate printed `arch=aarch64` there, so its `W5 (checked)` object digest
 compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
-**Re-measured 2026-11-21 at `1a77f056` plus the uncommitted `toy-witness` gap
-guard, on this x86_64 host, in all three shells, after the merge and the
-`liquid_split` approval:** `183 passed, 1
-explained gap(s), 0 failed` under `nix develop "git+file://$PWD"`
-([transcript](docs/data/gate/2026-11-21-default-shell.log)), `168 passed, 4
+**Re-measured 2026-11-21 on this x86_64 host, in all three shells, at the tree
+where this branch's `toy-witness`/`logos2mm0` "cannot link here" guard meets the
+pulled `ab6d1074`:** `186 passed, 1 explained gap(s), 0 failed` under
+`nix develop "git+file://$PWD"`
+([transcript](docs/data/gate/2026-11-21-default-shell.log)), `171 passed, 4
 explained gap(s), 0 failed` under `.#ocaml`
-([transcript](docs/data/gate/2026-11-21-ocaml-shell.log)), and `164 passed, 8
+([transcript](docs/data/gate/2026-11-21-ocaml-shell.log)), and `166 passed, 9
 explained gap(s), 0 failed` under `.#lean`
 ([transcript](docs/data/gate/2026-11-21-lean-shell.log)).
 None of those numbers is a correction of the ones above; each is a different
@@ -432,11 +432,17 @@ lines and added one `[pass] W3: <artifact> matches its approved statements` line
 each, so no `w3-pending:` row remains and `w3-approved:` lists all thirteen.
 `.#ocaml` carries `lean` but not `why3`, so the 15 per-file Liquid passes of the
 default shell are the three `Liquid golden…`/`Liquid subset` gaps there — hence
-`168 + 15 = 183` and `4 − 3 = 1`. `.#lean` re-converts the RV64 model, turning
+`171 + 15 = 186` and `4 − 3 = 1`. `.#lean` re-converts the RV64 model, turning
 `W9.1` into a pass, but it has no rust toolchain of its own: `rustc` there is the
 host's rustup shim, whose `cc` names a garbage-collected store path, so the five
 `scripts/toy-witness` comparisons cannot be built and report as gaps instead of
-failing on an empty witness list (`164 = 168 + 1 − 5`, `8 = 4 − 1 + 5`).
+failing on an empty witness list, and `cargo build -p logos` cannot link either,
+so the fragment gate cannot run (`166 = 171 + 1 − 5 − 1`, `9 = 4 − 1 + 5 + 1`).
+Both scripts now treat a *linker* failure as exit 2, the convention
+`scripts/mm0-comparator` already used for an unprovisioned theory: the gate
+prints a gap with the linker's own line and never a pass, while a compile error
+in the crate stays a failure. The missing-toolchain cases those lists carry are
+the same ones the transcripts above record; nothing was reclassified as passing.
 The certificate on this host records `arch=x86_64` with `cps=c10ca9a9…` and
 `obj=b138fd6e…`; on a host whose certificate recorded the other arch, the same
 check normalises those two lines and reports the incomparable digest as a gap
@@ -450,8 +456,10 @@ with mm0/approved/ is refused` had no row left to pick, so they stopped running;
 the gate reported that as a gap, never as a pass. `5d7a0dea` closes it: the
 control now takes a pending row when the table has one and otherwise the first
 approved row, whose stale-state half already models the owner's mistake, so both
-probes run again and today's three sums are two passes and one gap better than
-the transcripts above.
+probes run again, so today's three sums each carry those two passes and not that
+gap — which is why the trio above is not comparable, check for check, with the
+`174`/`183`/`176` reading taken at `3ad01bac`: that one predates both `5d7a0dea`
+and the three `D00`/`W5` checks the merge brings, and its own paragraphs say so.
 
 Of the
 figures quoted, only `clif2mm0` moved for a reason worth naming: the quoted 854
@@ -1167,10 +1175,10 @@ the artifact, so `mm0-c` checks them too.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 241 `check` statements,
-  147 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 243 `check` statements,
+  149 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 25 of those 147 have a measured perturbed-tree
+  number, not a different claim. 25 of those 149 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
   neither: no check in the gate is unread now, and there are no `copy` rows —
@@ -1229,8 +1237,10 @@ the artifact, so `mm0-c` checks them too.
   | `L11b: the conversion pin has a negative control` | none | the control script's existence; the gate cannot run it, because it needs `dune` |
   | `L11b: the conversion control mutates the rule LiquidIndex declares` | none | compares one source line in `LiquidIndex.ml` with the control's view of it |
   | `L11b: the conversion control re-checks the tree after restoring` | none | greps the control for its digest and restore steps |
+  | `D00: distributed contract checker present` | none | asserts the script exists and lists the checks it has; its subject is the tree |
   | `PC02: flipping clamp_upper's conclusion is refused` | control | a scratch `.mm1` with the conclusion flipped, refused on every run |
   | `PC02: word.mm0 + word.mm1 accepted, clamp bounds and map laws proved` | tool | runs `mm0-rs` + `mm0-c`; a missing toolchain is the failure mode observed so far |
+  | `W5: the binary note is silent when the binary is newest, and names the newer source` | control | a scratch source/binary pair is stamped both ways on every run and the note must be empty in one and name the newer source in the other |
   | `W5: the staleness note is silent when the artifact is newest, and names the newer binary` | control | a scratch artifact/binary pair is stamped both ways on every run and the note must be empty in one and name the file in the other |
   | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
   | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |

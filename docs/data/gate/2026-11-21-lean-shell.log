@@ -5,6 +5,16 @@ warning: Git tree '/home/leo/Projects/australVM' is dirty
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
+[pass] D00 contracts: 14 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present
+[pass] D00: distributed execution record and contract inventory are well-formed
+[pass] D00 checker refuses: duplicate inventory id
+[pass] D00 checker refuses: unknown status
+[pass] D00 checker refuses: missing path
+[pass] D00 checker refuses: missing evidence
+[pass] D00 checker refuses: duplicate baseline id
+[pass] D00 checker refuses: malformed header
+[pass] D00 selftest: 6 mutation control(s) refused
+[pass] D00: the distributed contract checker refuses every mutated record
 [pass] Phase D: lean2mm0 emitter present
 [pass] Phase D: generated certificate artifacts present
 lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports
@@ -64,6 +74,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W2: docs/kernel_alg.mm0 accepted by mm0-rs + mm0-c
 [pass] W5 (checked): the bridge the gate loads is the release artifact it was built from
 [pass] W5: the staleness note is silent when the artifact is newest, and names the newer binary
+[pass] W5: the binary note is silent when the binary is newest, and names the newer source
 [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it
 [pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
 [pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (x86_64)
@@ -243,24 +254,11 @@ mm0-comparator selftest: tampered approval refused — the approved file is what
 mm0-comparator selftest: OK — all three negative controls refuse
 [pass] W3: comparator self-test (all three negative controls refuse)
 logos CNL → DeltaNet → MM0 gate
-[pass] emitter built (/home/leo/Projects/australVM/../unfer/target/debug/logos)
-[pass] theory compiles and re-checks (2 sorts, 9 term/def, 18 ax/thm)
-[pass] Kopperman theory compiles and re-checks (2 sorts, 33 term/def, 64 ax/thm)
-[pass] Kopperman/Mehler theory compiles and re-checks (2 sorts, 33 term/def, 68 ax/thm)
-[pass] claim corpus certifies (52 lines, every expectation held)
-[pass] kernel corpus cites flux1d_certificate (4 obligation(s), 1 honest unproved)
-[pass] kernel corpus refuses a certificate whose pinned sidecar digest does not match
-[pass] corpus wrote 39 certificate(s) and 1 goal(s)
-[pass] upstream corpus certifies (21 open claim(s) rewritten, 24 goal(s) for the induction-only theorems)
-[pass] Kopperman corpus certifies (39 lines, every expectation held)
-[pass] Kopperman corpus wrote 32 certificate(s) and 6 goal(s)
-[pass] dk front end certifies (4 rule(s) re-proved, 8 theorem(s), mm0-c re-checked)
-[pass] dk front end refuses a non-conversion (induction named, exit 1)
-[pass] questions answered: yes=0, no=2 (the contract callers branch on)
-[pass] tampered certificate rejected (5 → 4 no longer proves the statement)
-
-logos2mm0: 15 passed, 0 failed, 0 gapped
-[pass] logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)
+[gap]  cargo cannot link in this shell — no working C toolchain for it, so the emitter cannot be built here:
+        = note: /home/leo/.rustup/toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld: line 5: /nix/store/b5rxg3fjf23qax03mqw8pbv14gqn12sr-rustup-1.29.3/nix-support/ld-wrapper.sh: No such file or directory
+                collect2: error: ld returned 127 exit status
+logos2mm0: 0 passed, 0 failed, 1 gapped
+[gap]  logos mm0: the fragment gate could not run here (the emitter cannot be built in this shell)
 [pass] memsafe: theory, emitter, both fixtures, ledgers and certificates present
 [pass] memsafe: certificate + ledger emitter present and executable
 ledger2mm0 check: OK — certificates are in sync with the pinned ledger and theory
@@ -337,4 +335,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 164 passed, 8 explained gap(s), 0 failed
+verify-invariants: 166 passed, 9 explained gap(s), 0 failed

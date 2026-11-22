@@ -1,0 +1,135 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_edge` (test "ops_e2e") generated 1 warning (1 duplicate)
+warning: `unfer_edge` (bin "unfer_edge") generated 1 warning (1 duplicate)
+warning: `unfer_edge` (bin "unfer_edge" test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src/main.rs (target/debug/deps/unfer_edge-d4d2d85cf77241f3)
+
+running 89 tests
+test admin::tests::admin_path_detection ... ok
+test admin::tests::patch_non_admin_403 ... ok
+test admin::tests::patch_refuses_hard_keys ... ok
+test admin::tests::patch_updates_soft_config ... ok
+test admin::tests::status_is_admin_gated ... ok
+test audit::tests::audit_list_body_roundtrips_entries ... ok
+test audit::tests::audit_path_detection ... ok
+test blueprint::tests::hex_transport_roundtrip ... ok
+test blueprint::tests::import_mints_and_seeds_content_gateway ... ok
+test blueprint::tests::import_refuses_malformed_archive ... ok
+test caprpc::tests::invented_or_reused_promise_id_is_refused ... ok
+test caprpc::tests::another_principal_holds_no_authority_over_a_capability ... ok
+test caprpc::tests::method_returns_capability_stub ... ok
+test caprpc::tests::mint_and_invoke_granted_method ... ok
+test caprpc::tests::promise_is_eager_and_resolvable ... ok
+test caprpc::tests::mint_invoke_revoke_lifecycle ... ok
+test caprpc::tests::resolution_cannot_escalate_grants_or_swap_endpoint ... ok
+test caprpc::tests::revoked_capability_is_refused ... ok
+test caprpc::tests::revoked_promise_cannot_be_resolved ... ok
+test caprpc::tests::ungranted_method_is_refused ... ok
+test caprpc::tests::wrong_caller_is_refused ... ok
+test cells::tests::cid_path_parsing ... ok
+test cells::tests::resolve_non_cell_path_is_400 ... ok
+test config::tests::a_bad_flag_still_fails_even_in_init_mode ... ok
+test cells::tests::resolve_present_and_absent_cells ... ok
+test config::tests::a_config_path_after_init_is_still_honoured ... ok
+test config::tests::a_bare_port_number_is_not_a_valid_listen_address ... ok
+test config::tests::a_config_path_before_init_is_also_honoured ... ok
+test config::tests::a_config_path_parses_in_both_spellings ... ok
+test config::tests::a_json_object_is_treated_as_absent_not_as_a_string ... ok
+test config::tests::a_json_scalar_is_read_even_when_it_is_not_a_string ... ok
+test config::tests::a_malformed_env_value_falls_back_to_the_file_layer ... ok
+test config::tests::a_malformed_value_falls_back_and_leaves_provenance_at_the_layer_below ... ok
+test config::tests::a_valueless_flag_is_an_error_not_a_silent_default ... ok
+test config::tests::addresses_are_validated_before_pingora_sees_them ... ok
+test config::tests::an_unknown_flag_names_itself ... ok
+test config::tests::an_unknown_key_in_the_file_is_ignored_rather_than_fatal ... ok
+test config::tests::both_flag_spellings_parse ... ok
+test config::tests::defaults_apply_when_nothing_else_is_supplied ... ok
+test config::tests::env_beats_file ... ok
+test config::tests::every_startup_key_is_either_soft_or_on_the_admin_refuse_list ... ok
+test config::tests::every_key_has_provenance_even_when_unset ... ok
+test config::tests::file_beats_default ... ok
+test config::tests::flag_beats_everything ... ok
+test config::tests::hard_patch_keys_agree_with_the_admin_refuse_list ... ok
+test config::tests::init_is_its_own_invocation ... ok
+test config::tests::help_returns_usage_as_an_error_so_the_process_can_exit_non_zero ... ok
+test config::tests::the_default_listen_is_loopback_because_there_is_no_wire_auth ... ok
+test config::tests::the_starter_config_is_byte_identical_for_the_same_answers ... ok
+test config::tests::the_full_ladder_is_ordered_on_one_key ... ok
+test config::tests::the_starter_config_mentions_every_key_and_its_env_var ... ok
+test config::tests::the_starter_config_round_trips_through_the_resolver ... ok
+test config::tests::version_json_reports_provenance_per_key ... ok
+test early_route_tests::a_malformed_envelope_is_400 ... ok
+test early_route_tests::a_clean_batch_is_accepted ... ok
+test early_route_tests::a_partial_accept_is_200_with_the_refusals_named ... ok
+test early_route_tests::a_secret_in_a_submitted_message_is_not_echoed ... ok
+test early_route_tests::an_unregistered_source_is_reported_as_a_health_signal ... ok
+test early_route_tests::capability_invoke_yields_the_remainder_and_requires_post ... ok
+test early_route_tests::capability_surface_is_loopback_only ... ok
+test early_route_tests::everything_else_is_forwarded ... ok
+test early_route_tests::healthz_and_version_are_get_only ... ok
+test early_route_tests::ingest_is_post_only_and_local ... ok
+test early_route_tests::metrics_keeps_its_prometheus_format_switch ... ok
+test early_route_tests::version_json_names_the_service_and_a_version ... ok
+test early_route_tests::version_json_reports_which_configuration_layer_won ... ok
+test filter::tests::absent_screener_surfaces_notice_never_silent_pass ... ok
+test filter::tests::all_allowed_ops_pass ... ok
+test filter::tests::allowlist_has_no_duplicates ... ok
+test filter::tests::allowlist_matches_shared_registry ... ok
+test filter::tests::bad_json_gives_uk1001 ... ok
+test filter::tests::denied_op_gives_uk4001 ... ok
+test filter::tests::provenance_label_survives_validation ... ok
+test filter::tests::valid_request_passes ... ok
+test gate::tests::gate_path_detection ... ok
+test gate::tests::pending_approve_reject_console_roundtrip ... ok
+test gate::tests::reject_discards_and_frees_queue ... ok
+test gate::tests::reject_returns_unknown_handle_error ... ok
+test mask::tests::leaves_non_sensitive_fields_untouched ... ok
+test mask::tests::mask_body_redacts_agent_response_shape ... ok
+test mask::tests::mask_body_roundtrips_non_json_unchanged ... ok
+test mask::tests::redacts_nested_secret_field ... ok
+test mask::tests::redacts_secret_inside_array ... ok
+test mask::tests::redacts_top_level_secret_field ... ok
+test metrics::tests::metric_rows_never_panic_on_concurrent_record ... ok
+test metrics::tests::prometheus_text_lists_all_allowed_ops ... ok
+test metrics::tests::records_calls_and_errors ... ok
+test metrics::tests::spend_attribute_reports_denied_without_consuming_op_rows ... ok
+test early_route_tests::an_oversize_batch_is_400_rather_than_partially_applied ... ok
+
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/ops_e2e.rs (target/debug/deps/ops_e2e-b01ac12fabf0f210)
+
+running 1 test
+test the_ops_surface_answers_over_a_real_socket ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+EXIT=0

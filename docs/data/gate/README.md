@@ -15,9 +15,11 @@ line is the summary the plan quotes.
 | [`2026-11-21-w93-certification-drift-control.log`](2026-11-21-w93-certification-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w93-certification-drift-control` | 2026-11-21, same tree | `w93-certification-drift-control: holds` — gate `170 passed, 2 explained gap(s), 1 failed`, the dropped approval |
 | [`2026-11-21-w93-composition-drift-control.log`](2026-11-21-w93-composition-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w93-composition-drift-control` | 2026-11-21, same tree | `w93-composition-drift-control: holds` — gate `170 passed, 2 explained gap(s), 1 failed`, the drifted axiom count |
 | [`2026-11-21-w93-closure-drift-control.log`](2026-11-21-w93-closure-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w93-closure-drift-control` | 2026-11-21, same tree | `w93-closure-drift-control: holds` — gate `170 passed, 2 explained gap(s), 1 failed`, the drifted closure digest |
-| [`2026-11-21-ocaml-shell.log`](2026-11-21-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-21, `1a77f056` plus the uncommitted `toy-witness` gap guard, this x86_64 host — re-recorded after the merge, so all five §W3 rows are approved | `168 passed, 4 explained gap(s), 0 failed` — `W9.1` plus the three per-file Liquid checks `why3` would run |
-| [`2026-11-21-lean-shell.log`](2026-11-21-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-21, same tree as the row above | `164 passed, 8 explained gap(s), 0 failed` — `W9.1` becomes a pass and the five Lean-witness checks run, but this shell has no rust toolchain of its own: `rustc` is the host's rustup shim whose `cc` points at a removed store path, so the five `scripts/toy-witness` comparisons gap rather than fail (`168 + 1 − 5 = 164`, `4 − 1 + 5 = 8`) |
-| [`2026-11-21-default-shell.log`](2026-11-21-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-21, same tree, an x86_64 host where `devShells.default` builds | `183 passed, 1 explained gap(s), 0 failed` — `why3` present, so the three Liquid checks are 15 passes instead of 3 gaps (`168 + 15 = 183`, `4 − 3 = 1`) |
+| [`2026-11-21-ocaml-shell.log`](2026-11-21-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-21, the merge of `b3c78130` with `ab6d1074`, this x86_64 host — re-recorded after the pull, so it covers the D00 and W5 checks too | `171 passed, 4 explained gap(s), 0 failed` — `W9.1` plus the three per-file Liquid checks `why3` would run |
+| [`2026-11-21-lean-shell.log`](2026-11-21-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-21, same tree as the row above | `166 passed, 9 explained gap(s), 0 failed` — `W9.1` passes and `why3` is still absent, but this shell cannot link: its `rustc` is the host's rustup shim whose `cc` names a removed store path, so the five `scripts/toy-witness` comparisons and the `logos` emitter build gap instead of failing (`171 + 1 − 5 − 1 = 166`, `4 − 1 + 5 + 1 = 9`) |
+| [`2026-11-21-default-shell.log`](2026-11-21-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-21, same tree, where `devShells.default` builds | `186 passed, 1 explained gap(s), 0 failed` — `why3` present, so the three Liquid checks are 15 passes instead of 3 gaps (`171 + 15 = 186`, `4 − 3 = 1`) |
+| [`2026-11-21-ocaml-shell-aarch64-d00-gated.log`](2026-11-21-ocaml-shell-aarch64-d00-gated.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-21, `3ad01bac` plus the W5 binary note and the D00 record | `177 passed, 3 explained gap(s), 0 failed` — the same three gaps as the run below, plus the two D00 checks (record well-formed, checker refuses every mutated record) |
+| [`2026-11-21-ocaml-shell-aarch64.log`](2026-11-21-ocaml-shell-aarch64.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-21, `3ad01bac` plus the binary-staleness note and its control, an aarch64 host after `make all` | `175 passed, 3 explained gap(s), 0 failed` — the two Lean-only checks, the object digest pinned on x86_64, and the new `W5: the binary note …` control |
 | [`2026-11-20-lean-shell-final.log`](2026-11-20-lean-shell-final.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-20, `b205f73f` plus the uncommitted §W3 control fixes and the regenerated `CHANGELOG.md` (log opens with Nix's dirty-tree warning) | `179 passed, 0 explained gap(s), 0 failed` |
 | [`2026-11-20-ocaml-shell-final.log`](2026-11-20-ocaml-shell-final.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-20, same tree as the row above | `170 passed, 2 explained gap(s), 0 failed` — the two Lean-only checks |
 | [`2026-11-20-default-shell.log`](2026-11-20-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-20, an x86_64 host where `devShells.default` builds | `174 passed, 5 explained gap(s), 0 failed` |
@@ -32,20 +34,20 @@ line is the summary the plan quotes.
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
 
-The 2026-11-21 trio re-records the merged tree (`1a77f056` plus the uncommitted
-`toy-witness` gap guard), whose five §W3 rows are all approved. An earlier recording of the same date read
-`173 passed, 3 explained gap(s)` / `182` / `176`: it ran before that tree's
-`liquid_split` approval, so it carried
-`[gap]  W3: liquid_split has no approved statements`, and it was taken before
-`5d7a0dea` taught the approved-row control to fall back to an approved row — with
-every row approved the control had no pending row to pick, and its own line said
-so. Both are now passes, which is why the summaries above are counted from this
-tree rather than from that run. Within the trio the arithmetic closes:
-`168 + 15 = 183` once `why3` is on PATH (the 15 per-file Liquid passes replace
-three gaps) and `4 − 3 = 1`; the `lean` shell turns `W9.1` into a pass but cannot
-build `scripts/toy-witness` (`rustc` there is the host's rustup shim, whose `cc`
-names a removed store path), so its five witness comparisons are gaps:
-`168 + 1 − 5 = 164`, `4 − 1 + 5 = 8`.
+The 2026-11-21 trio re-records the tree where `b3c78130` and the pulled
+`ab6d1074` meet, whose five §W3 rows are all approved. Two earlier recordings of
+the same date are superseded by it, and both numbers are kept here because the
+difference is a fact about the tree rather than a correction:
+`174` / `183` / `176` was taken at `3ad01bac`, before the `D00` contracts, the
+`D00` checker and the `W5: the binary note …` control were counted by the gate,
+so it is three passes short of this trio in every shell; `168` / `164` / `183`
+was this host's reading of the pre-merge tree, which is the same trio minus
+those three checks. Within the trio the arithmetic closes: `171 + 15 = 186` once
+`why3` is on PATH (the three Liquid checks become 15 passes there, so
+`4 − 3 = 1` gap), and the `lean` shell turns `W9.1` into a pass while adding six
+gaps — the five `scripts/toy-witness` comparisons, which cannot be built there,
+and the `logos` emitter, whose `cargo build` cannot link in that shell
+(`171 + 1 − 5 − 1 = 166`, `4 − 1 + 5 + 1 = 9`).
 
 The `2026-11-20-lean-shell-postcleanup.log` row re-runs the gate on the tree the
 2026-11-20 pair describes, after the volume went from 98% full to 58% by

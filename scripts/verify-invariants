@@ -88,6 +88,41 @@ avm_stale_note() {
         "${art#"$repo_root"/}" "$(date -d "@$art_epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $art_epoch")"
 }
 
+# ── whether the loaded `austral` is the build of this tree ───────────────────
+# The artifact note above answers "is the certificate older than the binary?".
+# The mirror-image question has no answer from mtimes in a checked-out tree —
+# a checkout rewrites every artifact's mtime, so a *stale binary* (built before
+# a serializer change, then left in place while the sources were re-checked out)
+# makes the certificate look newest and the note stay silent. Measured
+# 2026-11-21: `./austral` 09:02 against `lib/CpsGen.ml` 14:12 made W5 fail with
+# `recorded=c10ca9a9… bridge=fa4e9b29…` and no explanation; `make all` alone
+# restored `recorded == bridge`, because the binary had been built before
+# `d11050fe Restore the natural function order in the CPS serializer`.
+#
+# The signal that does exist is the compiler's own: a source file or a dune
+# build output newer than the binary means the binary does not describe the
+# tree. Like the artifact note this is a diagnosis of a failure already seen,
+# never a skip, and it is controls-tested below.
+#
+#   avm_binary_stale_note <binary> <candidate>…   -> note, or nothing
+avm_binary_stale_note() {
+    local bin="$1" cand bin_epoch cand_epoch newest=0 newest_name=""
+    shift
+    bin_epoch="$(stat -c %Y "$bin" 2>/dev/null || echo 0)"
+    for cand in "$@"; do
+        [ -e "$cand" ] || continue
+        cand_epoch="$(stat -c %Y "$cand" 2>/dev/null || echo 0)"
+        if [ "$cand_epoch" -gt "$newest" ]; then
+            newest="$cand_epoch"
+            newest_name="$cand"
+        fi
+    done
+    [ "$newest" -gt "$bin_epoch" ] || return 0
+    printf ' — %s is newer (%s) than %s (%s): the binary predates this tree, so its digests describe an older compiler build; run: make all' \
+        "${newest_name#"$repo_root"/}" "$(date -d "@$newest" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $newest")" \
+        "${bin#"$repo_root"/}" "$(date -d "@$bin_epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $bin_epoch")"
+}
+
 # Read-only relocation hooks, for drift controls only. Each names a *file or
 # directory to read* — never something to write, and never something that grants
 # an approval — so a control can drift one claim in a scratch copy and watch the
@@ -128,6 +163,26 @@ if [ -f "$repo_root/../unfer/scripts/gen_symbol_artifacts" ]; then
         python3 "$repo_root/../unfer/scripts/gen_symbol_artifacts" check
 else
     gap "H2: sibling unfer repo not present at ../unfer — skipping generator check"
+fi
+
+# --- D00: the distributed execution record and contract inventory ---
+# `scripts/check-distributed-contracts` validates docs/distributed/EXECUTION.md's
+# baseline block and docs/distributed/contracts.tsv: the exact headers, unique
+# ids, a known class/repo/status, and every referenced path and evidence file
+# (repo `U` paths resolve against ../unfer). `--selftest` mutates each rule and
+# requires the refusal, so the checker cannot pass by being unable to fail.
+# Structure only, by construction: a valid row says the record is well-formed,
+# never that a guarantee holds. The `U` rows need the sibling checkout, so its
+# absence is an explained gap here (as H2 above), not a failure of the record.
+if [ ! -f "$repo_root/scripts/check-distributed-contracts" ]; then
+    check "D00: distributed contract checker present" false
+elif [ ! -d "$repo_root/../unfer" ]; then
+    gap "D00: distributed contract inventory (sibling unfer repo not present at ../unfer, so its rows cannot be resolved)"
+else
+    check_py "D00: distributed execution record and contract inventory are well-formed" \
+        python3 "$repo_root/scripts/check-distributed-contracts"
+    check_py "D00: the distributed contract checker refuses every mutated record" \
+        python3 "$repo_root/scripts/check-distributed-contracts" --selftest
 fi
 
 # --- Phase D: the Lean4 -> DeltaNets -> MM0 certificate (docs/lean4mm0.md §5) ---
@@ -304,6 +359,21 @@ rm -rf "$_stale_probe"
 check "W5: the staleness note is silent when the artifact is newest, and names the newer binary" \
     test -n "$_stale_loud" -a -z "$_stale_quiet" -a "${_stale_loud#*binary}" != "$_stale_loud"
 
+# Same rule for the mirror question: a binary newest than every compiler source
+# says nothing; a binary older than one names that source. Without the quiet
+# half the note would be a constant, and a constant is not a diagnosis.
+_bin_probe="$(mktemp -d)"
+: > "$_bin_probe/austral"
+: > "$_bin_probe/CpsGen.ml"
+touch -d '2026-01-01 00:01:00' "$_bin_probe/CpsGen.ml"
+touch -d '2026-01-01 00:02:00' "$_bin_probe/austral"
+_bin_quiet="$(avm_binary_stale_note "$_bin_probe/austral" "$_bin_probe/CpsGen.ml")"
+touch -d '2026-01-01 00:03:00' "$_bin_probe/CpsGen.ml"
+_bin_loud="$(avm_binary_stale_note "$_bin_probe/austral" "$_bin_probe/CpsGen.ml")"
+rm -rf "$_bin_probe"
+check "W5: the binary note is silent when the binary is newest, and names the newer source" \
+    test -n "$_bin_loud" -a -z "$_bin_quiet" -a "${_bin_loud#*CpsGen.ml}" != "$_bin_loud"
+
 if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     _cert_tmp="$(mktemp -d)"
     _cert_code=""
@@ -370,6 +440,14 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     # may describe an older compiler build", which is the mid-rebuild case.
     _stale_note="$(avm_stale_note "$repo_root/mm0/flux1d_certificate.mm0" \
         "$repo_root/austral" "$_bridge_so")"
+    # The other half of the same question, consulted only after a digest
+    # comparison has failed: the loaded binary may predate the tree itself (a
+    # serialiser change landed, the tree was re-checked out, `make all` was not
+    # re-run). `_build`'s executable is included because a `dune build` without
+    # the `cp` that `make all` does leaves exactly that gap.
+    _bin_note="$(avm_binary_stale_note "$repo_root/austral" \
+        "$repo_root"/lib/*.ml "$repo_root"/lib/*.mli "$repo_root"/bin/*.ml \
+        "$repo_root/_build/default/bin/austral.exe")"
     _cert_same() {
         case "$1" in
             _probe.c) cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1" ;;
@@ -435,6 +513,7 @@ PY
             else
                 echo "      recorded=$_fp_recorded bridge=$_fp_bridge mutated=$_fp_mut" >&2
                 [ -n "$_stale_note" ] && echo "      staleness:$_stale_note" >&2
+                [ -n "$_bin_note" ] && echo "      staleness:$_bin_note" >&2
                 check "W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes" false
             fi
             # The object half: recorded only when the bridge produced an object
@@ -455,6 +534,7 @@ PY
             else
                 echo "      recorded=$_obj_recorded bridge=$_obj" >&2
                 [ -n "$_stale_note" ] && echo "      staleness:$_stale_note" >&2
+                [ -n "$_bin_note" ] && echo "      staleness:$_bin_note" >&2
                 check "W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object ($_obj_arch)" false
             fi
         fi
@@ -2842,8 +2922,18 @@ fi
 # end-to-end chain *and* its anchor — a tampered certificate must be rejected,
 # or "verified" means nothing.
 if [ -f "$repo_root/scripts/logos2mm0" ] && [ -f "$repo_root/../unfer/logos/mm0/claims.txt" ]; then
-    check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" \
-        bash "$repo_root/scripts/logos2mm0"
+    # Exit 2 is "cannot check here" (`scripts/logos2mm0` prints the reason): the
+    # emitter cannot be *built* in a shell whose cargo has no working linker —
+    # the `lean` shell on 2026-11-21 is one — which is a fact about the shell,
+    # not about the fragment, so it is a gap and never a pass.
+    _logos_rc=0
+    bash "$repo_root/scripts/logos2mm0" || _logos_rc=$?
+    if [ "$_logos_rc" -eq 2 ]; then
+        gap "logos mm0: the fragment gate could not run here (the emitter cannot be built in this shell)"
+    else
+        check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" \
+            test "$_logos_rc" -eq 0
+    fi
 else
     gap "logos mm0: sibling unfer repo absent at ../unfer — skipping the fragment gate"
 fi
