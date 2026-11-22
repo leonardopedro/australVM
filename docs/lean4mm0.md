@@ -4825,7 +4825,7 @@ a `def` block changes what a reader of the certificate sees even when the conten
 same. The knob is therefore the same shape as `LTP_ENC_MAX`: an env-gated probe whose
 unset path is byte-identical, until a re-record is a decision rather than a side effect.
 
-### 13.55 The tail's last megabyte: 360 MiB completes, and the bracket moves to (352, 360]
+### 13.55 The tail's last megabyte: 360 MiB completes, and the bracket moves to (352, 356]
 
 §13.52 left the floor of the ns row pinned to the *size of the tail's allocation*: the
 final copy of the spooled axioms into the artifact ran through
@@ -4849,6 +4849,7 @@ LTP_CENSUS=1 LTP_DEDUP_NODES=1`, two cores, concurrent with each other):
 | ---: | ---: | ---: | ---: | ---: | --- |
 | 364 MiB | 0 | 356 MiB @3 411 s | 329 MB | 3 802 s | completes |
 | 360 MiB | 0 | 356 MiB @3 425 s | 329 MB | 3 802 s | completes |
+| 356 MiB | 0 | 355 MiB @2 907 s | 326 MB | 3 636 s | completes |
 | 352 MiB | 1 | 351 MiB @3 204 s | 323 MB | 3 713 s | `MemoryError`, `self.oblig.append(ax)` |
 | 344 MiB | 1 | 343 MiB @2 008 s | 316 MB | 7 304 s | `MemoryError`, `self._ds_off` |
 
@@ -4865,11 +4866,17 @@ would not. The proof artifacts themselves are untouched by either change.
 (`infer`'s `self.oblig.append(ax)`) rather than in the old copy, and 344 MiB never leaves
 its ceiling: its `VmSize` sat flat at 352 084 kB — 172 KiB under a 352 256 kB limit — from
 2 008 s to 7 303 s, then raised `MemoryError` in `_ds_off`. That is a thrash at the
-boundary, not a computation, so its 7 304 s is a slow failure and not a timing. So the
-floor at the current emitter is **(352, 360] MiB** — down from §13.52's (360, 368], and
-the 360 MiB entry of that bracket is now a passing one. The next bisection is 356 MiB;
-it was not run here, because each probe of this row is a ~63-minute investment and the
-bracket is already recorded as a bracket rather than as a number.
+boundary, not a computation, so its 7 304 s is a slow failure and not a timing.
+
+**The 356 MiB bisection, run afterwards.** 356 MiB completes too: exit 0, peak VmSize
+355 MiB at 2 907 s (RSS 326 MB), 3 636 s — the same ~2 MiB of headroom over the peak that
+360 had, and both samplers agree on the peak. Its `.mm0` and `.mm1` are `cmp`-identical to
+`cap-432-dedup`, the same two byte counts as the 360 MiB run, so a 4 MiB narrower ceiling
+changes nothing about what is emitted. So the floor at the current emitter is
+**(352, 356] MiB** — down from §13.52's (360, 368], with both former failing caps now
+passing. The bracket is left at 4 MiB rather than bisected further: the next probe (354)
+buys 2 MiB of resolution for another ~60-minute run, and no consumer of this number
+places a cap within 2 MiB of the peak.
 
 **One control worth keeping.** The first attempt at these two caps was launched without
 `LTP_DEDUP_NODES=1`, and both runs died at 921 s and 938 s with `MemoryError` inside
