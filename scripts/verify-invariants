@@ -2922,18 +2922,28 @@ fi
 # end-to-end chain *and* its anchor — a tampered certificate must be rejected,
 # or "verified" means nothing.
 if [ -f "$repo_root/scripts/logos2mm0" ] && [ -f "$repo_root/../unfer/logos/mm0/claims.txt" ]; then
-    # Exit 2 is "cannot check here" (`scripts/logos2mm0` prints the reason): the
-    # emitter cannot be *built* in a shell whose cargo has no working linker —
-    # the `lean` shell on 2026-11-21 is one — which is a fact about the shell,
-    # not about the fragment, so it is a gap and never a pass.
+    # `scripts/logos2mm0` is a sub-gate, and its own `[gap]` lines must not be
+    # laundered into this gate's `[pass]`: it exits 0 for "gapped" (no cargo, no
+    # mm0 toolchain, no dk fixtures) as well as for green, and 2 for "cannot
+    # check here" (the emitter cannot be *built* in a shell whose cargo has no
+    # working linker — the `lean` shell on 2026-11-21 is one). Each of those is
+    # a fact about this shell, not about the fragment, so it is a gap; only a run
+    # that gapped nothing and failed nothing is a pass.
     _logos_rc=0
-    bash "$repo_root/scripts/logos2mm0" || _logos_rc=$?
+    _logos_log="$(mktemp)"
+    bash "$repo_root/scripts/logos2mm0" >"$_logos_log" 2>&1 || _logos_rc=$?
+    cat "$_logos_log"
+    _logos_gaps="$(sed -n 's/^\[gap\]  *//p' "$_logos_log" | paste -sd'; ' -)"
     if [ "$_logos_rc" -eq 2 ]; then
         gap "logos mm0: the fragment gate could not run here (the emitter cannot be built in this shell)"
+    elif [ "$_logos_rc" -ne 0 ]; then
+        check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" false
+    elif [ -n "$_logos_gaps" ]; then
+        gap "logos mm0: the fragment gate could not run in full here ($_logos_gaps)"
     else
-        check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" \
-            test "$_logos_rc" -eq 0
+        check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" true
     fi
+    rm -f "$_logos_log"
 else
     gap "logos mm0: sibling unfer repo absent at ../unfer — skipping the fragment gate"
 fi

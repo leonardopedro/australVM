@@ -441,8 +441,15 @@ so the fragment gate cannot run (`166 = 171 + 1 − 5 − 1`, `9 = 4 − 1 + 5 +
 Both scripts now treat a *linker* failure as exit 2, the convention
 `scripts/mm0-comparator` already used for an unprovisioned theory: the gate
 prints a gap with the linker's own line and never a pass, while a compile error
-in the crate stays a failure. The missing-toolchain cases those lists carry are
-the same ones the transcripts above record; nothing was reclassified as passing.
+in the crate stays a failure. The gate also reads the sub-gate's own verdict
+instead of its exit status alone: `scripts/logos2mm0` exits 0 for "gapped" (no
+cargo, no `mm0` toolchain, no `dk` fixtures, a missing Kopperman corpus) as well
+as for green, so a run that printed any `[gap]` line is now this gate's gap, with
+that line quoted, and only an all-pass run is its pass — see `[pass] logos mm0`
+in the `ocaml` transcript against `[gap]  logos mm0: the fragment gate could not
+run here` in the `lean` one. A failing sub-check is still this gate's `[FAIL]`.
+The missing-toolchain cases those lists carry are the same ones the transcripts
+above record; nothing was reclassified as passing.
 The certificate on this host records `arch=x86_64` with `cps=c10ca9a9…` and
 `obj=b138fd6e…`; on a host whose certificate recorded the other arch, the same
 check normalises those two lines and reports the incomparable digest as a gap

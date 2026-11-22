@@ -241,6 +241,49 @@ AVM_HOT_DIR=/dev/shm ./target/release/avm-pkg hot-bench             # both rows 
 nix-instantiate --eval --strict target/nixbench/graph1000.nix       # 36.7 ms
 ```
 
+**Re-run on the merged tree (2026-11-22).** Every command above was run
+again on `ec115e21` (the merge of `b3c78130` with `origin/master`), with
+`austral` rebuilt from the merged `lib/` first (`make all` under `nix
+develop "git+file://$PWD#ocaml"`) and the release bridge still
+`check-bridge-fresh`-clean. Results, all measured rather than carried
+forward:
+
+* `cargo test --workspace` — **141 passed, 6 ignored, 0 failed**
+  (31 + 1 + 23 + 22 + 17 + 19 + 28), unchanged.
+* `hot-bench --require` — exit 0, `acquire_mean_ns` **30.98** (0 evictions,
+  `acquire_under_1us: true`), `fault_in_median_ms` **6.4867**
+  (`fault_in_under_15ms: true`), inside the 30–51 ns and 6.5 ms rows.
+* `--ignored --test-threads=1` — all six acceptances `ok` (the four
+  hot-store rows in 4.65 s; `real_bootstrap_payloads_resolve_and_round_trip`
+  `ok` against `target/pkg-sources` + `target/pkg-store`), exit 0.
+* OCaml side: `make test` exit 0 — 163 test cases across 18 suites, plus
+  the drift controls, each failing on exactly the mutated row it targets
+  (`[FAIL] Phase D: …` / `holds`), with the real tree at 171 passed, 4
+  gap, 0 failed.
+* `./examples/nix-pkg/run.sh` — exit 0: **14 pairs, 13 equivalent, 1
+  different (`precedence`, the declared mismatch), 0 errors**; all 14 packaged
+cells execute to their expected values (`arith` 20 … `neg` −2), and the
+negative control (`41 -> 42` reported different) exits 1.
+* Bootstrap `put`s into a **fresh** store (`/tmp/avm-fresh-store`) printed
+  `55b85fce…e4da11`, `40532f98…bfcad3`, `bf28e188…9876d`, `3321eda4…04f1` —
+  the four digests pinned in `Bootstrap.aum`, still byte-identical.
+* The §3 `build` command reproduces `drv_hash b073a1cc…cef98` (the
+table's `hello` plan hash). Its output cell is now **11,160 bytes**
+(`1 chunk`) against the 6,632 bytes recorded 2026-11-17: the CPS/JIT path
+changed since (memory opcodes lowered from source, the `uk_*` kernel
+symbols registered), so the size row is a dated measurement, not a
+constant. The new cell stores and hydrates through the hot store
+(`get -o` wrote 11,160 bytes).
+* Nix comparison (§4.12), median of 7, this host idle: `avm-pkg eval`
+  **5 ms**, `nix-instantiate --eval --strict` **35 ms**, plain
+  `nix-instantiate` **51 ms** — the recorded 4.3 / 36.7 / 48.3 ms hold
+  within run-to-run noise, and the ratio is ~7–10×.
+* Storage row: ten 1 MiB versions differing in one byte, `avm-pkg put`
+  grew the store **1,504,379 bytes total** (first copy + 9 × 49.5 KiB),
+  `nix-store --add` produced **10,486,880 nar bytes** (one full nar each) —
+  ~7×, the direction the 2026-11-18 row recorded (then 78.6 KiB per
+  rebuild).
+
 **Offline-cache caveat (2026-11-17).** `CARGO_NET_OFFLINE=true` now fails
 before compiling anything: `ar_archive_writer v0.5.3` (a transitive
 dependency of `psm`, pulled in through Cedar) is absent from this machine's
@@ -452,8 +495,15 @@ property: what one 1 MiB output version costs to keep. Nix's answer is one
 full nar per version (10,485,760 bytes; its store does not deduplicate
 file contents at chunk granularity), avm-pkg's is the first copy plus
 78.6 KiB per rebuild (chunk reuse). The generated inputs live in
-`target/nixbench/` and are not committed; the commands in §3 regenerate
-them.
+`target/nixbench/` and are not committed, and no generator is committed
+either — §3's commands *consume* them. Their shape is pinned here instead:
+`plan1000.json` is a 1,000-entry `derivations` list, `n_i` depending on
+`n_{i-1}` (synthetic 32-byte source digests, `builder_symbol`
+`stdenv.build`); `graph1000.nix` is a `let` chain of the same depth ending
+in `n999`, so `nix-instantiate` writes the whole 1,000-path `.drv` closure
+(checked with `nix path-info -r`, 1,000). The 2026-11-22 re-run rebuilt
+both ad hoc from that description; two runs therefore share the shape, not
+the bytes.
 
 **4.13 The live capability gate: what `--policy` actually enforces.**
 `avm-exec`'s runner was written before anything called it: its Cedar check,
