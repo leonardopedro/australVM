@@ -194,7 +194,10 @@ def main() -> int:
 
     # 4. MM0 replay of the assembled chain.
     if not (shutil.which("mm0-rs") and shutil.which("mm0-c")):
-        print("[gap] PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)")
+        print(
+            "[gap] PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH; "
+            "`nix build .#mm0` and put its bin/ on PATH)"
+        )
         return 3 if failures == 0 else 1
     with tempfile.TemporaryDirectory(prefix="pc05-mm0-") as tmp:
         tmp_path = Path(tmp)

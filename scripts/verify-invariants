@@ -747,6 +747,33 @@ PY
             gap "PC05a: parsed-WGSL reflection not checked (tooling absent: python3)"
         fi
 
+        # PC05b transports the clamp bound through that reflected edge. The
+        # premise register, the byte-identity check and the refusals it owns run
+        # without the toolchain; exit 3 means "transport checked, replay
+        # skipped" and is a gap, never a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc05b=0
+            python3 "$repo_root/scripts/pc05b-transport" \
+                >"$_cert_tmp/pc05b.log" 2>&1 || _pc05b=$?
+            case $_pc05b in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/pc05b.log" >&2
+                    check "PC05b: transported bound through the reflected edge" true
+                    ;;
+                3)
+                    grep -E '^  \[detail\]' "$_cert_tmp/pc05b.log" >&2
+                    gap "PC05b: clamp_transport.mm0 not replayed (no mm0-rs/mm0-c on PATH)"
+                    check "PC05b: transported bound through the reflected edge" true
+                    ;;
+                *)
+                    cat "$_cert_tmp/pc05b.log" >&2
+                    check "PC05b: transported bound through the reflected edge" false
+                    ;;
+            esac
+        else
+            gap "PC05b: transport of the clamp bound not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then

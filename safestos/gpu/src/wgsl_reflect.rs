@@ -6,10 +6,12 @@
 //! helper it calls, and the storage roles around them, and admits exactly one
 //! shape:
 //!
-//!     fn scalar_entry(p0: u32) -> u32 {
-//!         let v0: bool = (p0 > 100u);
-//!         if v0 { return 100u; } else { return p0; }
-//!     }
+//! ```text
+//! fn scalar_entry(p0: u32) -> u32 {
+//!     let v0: bool = (p0 > 100u);
+//!     if v0 { return 100u; } else { return p0; }
+//! }
+//! ```
 //!
 //! with `output0[i] = scalar_entry(input0[i])` in the entry. Anything else is
 //! refused rather than approximated: another comparison, another width, a
