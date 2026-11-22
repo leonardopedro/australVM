@@ -1,0 +1,21 @@
+-- clamp_transport.mm1 — proofs for clamp_transport.mm0 (PC05b).
+--
+-- Two applications of PC03's `transfer_through_eq`, the first over PC05a's
+-- `wgsl_inherits_source_bound`: the dependency on the earlier theorem is the
+-- nested proof term, not a comment. Dropping that theorem's proof refuses
+-- this file (`scripts/pc05b-transport`, control `drop-import`).
+def wgsl_edge (x y: u32): Prop = $ ueq (wgsl_clamp x) y $;
+term wrapper_admits (i: u32): Prop;
+def extent_guard (i len: u32): Prop = $ ule i len $;
+def binding_index (i j: u32): Prop = $ ueq i j $;
+def native_agrees (y n: u32): Prop = $ ueq y n $;
+pub theorem shader_edge_bound (x y: u32)
+    (edge: $ wgsl_edge x y $): $ ule y u100 $
+  = '(transfer_through_eq wgsl_inherits_source_bound edge);
+pub theorem transported_bound (x i j y len n: u32)
+    (edge: $ wgsl_edge x y $)
+    (hw: $ wrapper_admits i $)
+    (he: $ extent_guard i len $)
+    (hb: $ binding_index i j $)
+    (hn: $ native_agrees y n $): $ ule n u100 $
+  = '(transfer_through_eq (transfer_through_eq wgsl_inherits_source_bound edge) hn);
