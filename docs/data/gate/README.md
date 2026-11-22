@@ -8,11 +8,11 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
-| [`2026-11-22-default-shell.log`](2026-11-22-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-22, `395c74c3` (the merge of `b152fb6f` plus the certificate re-pin chain and the D00 revision report), on a clean tree | `187 passed, 2 explained gap(s), 0 failed` — `W9.1` (needs the lean shell) and `PC05a`, the merged clamp replay, which needs `mm0-rs`/`mm0-c` on `PATH` |
-| [`2026-11-22-ocaml-shell.log`](2026-11-22-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-22, `395c74c3` (the merge of `b152fb6f` plus the certificate re-pin chain and the D00 revision report), on a clean tree | `172 passed, 5 explained gap(s), 0 failed` — `PC05a`, `W9.1` and the three `why3` checks |
-| [`2026-11-22-lean-shell-rust.log`](2026-11-22-lean-shell-rust.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `395c74c3` (the merge of `b152fb6f` plus the certificate re-pin chain and the D00 revision report), on a clean tree — the shell with `pkgs.rustc`, `pkgs.cargo` and `pkgs.stdenv.cc` | `173 passed, 4 explained gap(s), 0 failed` — `W9.1` passes and `PC05a` plus the three `why3` checks remain; the five `toy-witness` comparisons and `[pass] logos mm0` run here |
+| [`2026-11-22-default-shell.log`](2026-11-22-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-22, `c3a922de` (the merge of `79b29839` plus `mm0` in the shell, the quoted PC05 gap and the lock update the sibling's `nanoda_lib` move needs), on a clean tree | `188 passed, 1 explained gap(s), 0 failed` — only `W9.1`, which needs the lean shell; `PC05a`/`PC05b` replay here because this shell carries `packages.mm0` and `safestos/gpu`'s debug `avm-gpu` is built |
+| [`2026-11-22-ocaml-shell.log`](2026-11-22-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-22, `c3a922de` (the merge of `79b29839` plus `mm0` in the shell, the quoted PC05 gap and the lock update the sibling's `nanoda_lib` move needs), on a clean tree | `173 passed, 4 explained gap(s), 0 failed` — `W9.1` and the three `why3` checks (`173 = 188 − 15`, `4 = 1 + 3`) |
+| [`2026-11-22-lean-shell-rust.log`](2026-11-22-lean-shell-rust.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `c3a922de` (the merge of `79b29839` plus `mm0` in the shell, the quoted PC05 gap and the lock update the sibling's `nanoda_lib` move needs), on a clean tree — the shell with `pkgs.rustc`, `pkgs.cargo` and `pkgs.stdenv.cc` | `174 passed, 3 explained gap(s), 0 failed` — `W9.1` passes (`174 = 173 + 1`) and the three `why3` checks remain; the five `toy-witness` comparisons and `[pass] logos mm0` run here |
 | [`2026-11-22-lean-shell.log`](2026-11-22-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `c7237736`, on a clean tree — superseded by the row above after `ff53c29b` gave the shell a linker | `166 passed, 9 explained gap(s), 0 failed` — `W9.1` passes here; `why3` is absent (3), the witness cannot be built (5), and the logos emitter cannot link, whose gap quotes the sub-gate's own line |
-| [`2026-11-22-nix-shell-python3.log`](2026-11-22-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-22, `395c74c3` (the merge of `b152fb6f` plus the certificate re-pin chain and the D00 revision report), on a clean tree | `166 passed, 11 explained gap(s), 0 failed` — `PC05a`, no `why3` (3 Liquid checks), no Lean shell (`W9.1` plus the five `toy-witness` comparisons), and `cargo` cannot link, so the two logos lines are one gap |
+| [`2026-11-22-nix-shell-python3.log`](2026-11-22-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-22, `c3a922de` (the merge of `79b29839` plus `mm0` in the shell, the quoted PC05 gap and the lock update the sibling's `nanoda_lib` move needs), on a clean tree | `167 passed, 10 explained gap(s), 0 failed` — no `why3` (3 Liquid checks), no Lean shell (`W9.1` plus the five `toy-witness` comparisons), and `cargo` cannot link, so the two logos lines are one gap |
 | [`2026-11-21-w3-approval-state-drift-control.log`](2026-11-21-w3-approval-state-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-approval-state-drift-control` | 2026-11-21, `85a368eb` plus the drift-control transcript check and the certificate re-pin `1f8ce68f`'s CPS order forced | `w3-approval-state-drift-control: holds` — gate `165 passed, 3 explained gap(s), 5 failed`, the five being the lines the deleted copy feeds |
 | [`2026-11-21-w3-emitter-drift-control.log`](2026-11-21-w3-emitter-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-emitter-drift-control` | 2026-11-21, same tree as the row above | `w3-emitter-drift-control: holds` — gate `168 passed, 2 explained gap(s), 3 failed`, one drifted emitter cell and isa's approved copy with it |
 | [`2026-11-21-w3-drift-controls-cert-approved.log`](2026-11-21-w3-drift-controls-cert-approved.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls cert-approved` | 2026-11-21, same tree | `cert-approved: holds` — gate `170 passed, 2 explained gap(s), 1 failed`, the refinement's citations |
@@ -39,24 +39,28 @@ line is the summary the plan quotes.
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
 
-The 2026-11-22 set re-runs the gate once per shell on `395c74c3` — the merge of
-`origin/master` `b152fb6f`, which added the D09 record and the `PC05a` replay,
-plus the certificate and citation re-pin that merge's lowering forced, plus the
-D00 line that names the sibling it measured — which is why its D00 line reads 18
-contract rows rather than 14 and ends `measured against unfer c68470c`.
-`devShells.default` reads `187`/`2`/`0`: `.#ocaml`'s 15 missing Liquid passes
-become its three `why3` gaps, so `172 = 187 − 15` and `5 = 2 + 3`. `.#lean`
-converts `W9.1` (`173 = 172 + 1`, `4 = 5 − 1`), and the bare `nix-shell -p
+The 2026-11-22 set re-runs the gate once per shell on `c3a922de` — the merge of
+`origin/master` `79b29839`, which added the D09 record, the `PC05b` transport
+and the `PC05a` replay, plus `packages.mm0` in the default and ocaml shells, the
+gap line that quotes `scripts/pc05-reflect`'s own reason, and the workspace
+locks the sibling's `nanoda_lib` move needs. Its D00 line reads 18 contract rows
+rather than 14 and ends `measured against unfer c68470c`.
+`devShells.default` reads `188`/`1`/`0`: `.#ocaml`'s 15 missing Liquid passes
+become its three `why3` gaps, so `173 = 188 − 15` and `4 = 1 + 3`. `.#lean`
+converts `W9.1` (`174 = 173 + 1`, `3 = 4 − 1`), and the bare `nix-shell -p
 python3` invocation — the one `AGENTS.md` documents — loses the Lean checks and
-the logos build (`166`/`11`/`0`). `PC05a` is new with the merge and gaps in all
-four shells: it replays `mm0/proof_chain/clamp_wgsl.mm0` with `mm0-rs`/`mm0-c`,
-which no shell here puts on `PATH`. All are clean-tree runs of one tree, so
-unlike the 2026-11-21 rows they carry no `warning: Git tree '…' is dirty` line.
-Each of the four was first recorded on the commit that changed its shell
-(`d8111a94`, `6a3e385f`, `ff53c29b`), refreshed at `5d484b18` (the merge, which
-moved only the D00 row count), again at `c24ea9a3` and `d498b930`, and finally
-at `395c74c3`, where the changed lines are the D00 row count and sibling
-revision, the merged checks and the re-pinned digests.
+the logos build (`167`/`10`/`0`). Both PC05 replays pass in every shell now: the
+earlier recordings on `395c74c3` gapped `PC05a` in all four, and three of those
+`[gap]` lines blamed `mm0-rs`/`mm0-c` when the missing piece was the
+`safestos/gpu` debug `avm-gpu` the script also needs — which is why the gate now
+passes the script's own reason through instead of naming the toolchain. All are
+clean-tree runs of one tree, so unlike the 2026-11-21 rows they carry no
+`warning: Git tree '…' is dirty` line. Each of the four was first recorded on
+the commit that changed its shell (`d8111a94`, `6a3e385f`, `ff53c29b`), refreshed
+at `5d484b18` (the merge, which moved only the D00 row count), again at
+`c24ea9a3` and `d498b930`, at `395c74c3` where the certificate and citation
+re-pin moved the digests, and finally at `c3a922de`, where the changed lines are
+the two PC05 checks and their counts.
 
 The `lean` shell appears twice. The older row (`c7237736`) is what it reported
 while its `rustc`/`cargo` were the host's rustup shims, whose `cc` names a
