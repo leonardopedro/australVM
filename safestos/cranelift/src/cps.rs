@@ -68,6 +68,22 @@ fn check_call_permission(caller: &str, module_name: &str, callee: &str) -> Resul
     if !callee.starts_with("uk_") && !callee.starts_with("uz_") && !callee.starts_with("rs_") {
         return Ok(());
     }
+    // D08: if a host entered an instance context, that context is the authority:
+    // its module is the principal (never "whichever manifest loaded last"), its
+    // liveness is checked before its grants, and its strict profile decides
+    // whether the symbol must be a declared ABI entry.
+    if let Some(context) = crate::auth::current_caller() {
+        return crate::auth::check_instance_call(&context, callee);
+    }
+    // No context (a legacy binary compiled outside a module host): the strict
+    // profile, when on, still refuses a gated symbol no table declares.
+    if crate::auth::strict_profile() && !crate::auth::is_declared_abi_symbol(callee) {
+        return Err(format!(
+            "UK-4001: strict profile refuses '{}' — it is not a declared ABI symbol \
+             (a prefix is not a grant)",
+            callee
+        ));
+    }
     // Prefer the deployment principal (the manifest's module name, e.g.
     // "demo_module") over the CPS header's Austral module name, falling back to
     // the caller name for legacy binaries that lack module headers.
@@ -1311,6 +1327,125 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
 mod a10_live_grant_tests {
     use super::check_call_permission;
     use crate::auth;
+
+    /// D08: one test for all context scenarios, because the installed engine is
+    /// process-global and this binary's tests run in parallel — a second test
+    /// mutating it would race this one through no fault of either.
+    #[test]
+    fn an_instance_context_is_the_authority_and_a_stale_one_is_refused() {
+        let engine = auth::ManifestAuthEngine::from_toml_str(
+            "[module]\nname = \"d08_a\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
+        )
+        .expect("A's manifest parses");
+        let mut merged = engine.clone();
+        merged.merge(
+            auth::ManifestAuthEngine::from_toml_str(
+                "[module]\nname = \"d08_b\"\n\n[grants]\nkernel = [\"uk_evolve\"]\n",
+            )
+            .expect("B's manifest parses"),
+        );
+        auth::set_auth_engine(Box::new(merged.clone()));
+        // A stale process-global principal must not matter any more: this is the
+        // value the old gate attributed *every* module to.
+        auth::set_deployment_principal("d08_b".to_string());
+
+        let a = auth::bind_instance("d08_a", false);
+        let b = auth::bind_instance("d08_b", false);
+
+        {
+            let _scope = auth::enter_caller(&a);
+            assert!(
+                check_call_permission("run", "", "uk_version").is_ok(),
+                "A's own grant must authorize A, whatever principal was installed last"
+            );
+            let denied = check_call_permission("run", "", "uk_evolve")
+                .expect_err("B's grant is not A's");
+            assert!(
+                denied.contains("d08_a") && !denied.contains("'d08_b'"),
+                "the refusal must name A as the principal, got: {denied}"
+            );
+        }
+        {
+            let _scope = auth::enter_caller(&b);
+            assert!(check_call_permission("run", "", "uk_evolve").is_ok());
+            assert!(
+                check_call_permission("run", "", "uk_version").is_err(),
+                "module B never borrows module A's grants"
+            );
+        }
+        // Outside any scope the legacy fallback is unchanged (the global
+        // principal here is d08_b, exactly as `safestos_load_auth_manifest` leaves
+        // it for binaries compiled without a host).
+        assert!(check_call_permission("run", "", "uk_evolve").is_ok());
+        assert!(check_call_permission("run", "", "uk_version").is_err());
+
+        // A revoked identity is refused before any grant is consulted: already
+        // compiled code cannot keep using authority it obtained earlier.
+        assert!(auth::revoke_instance(a.instance));
+        let stale = auth::check_instance_call(&a, "uk_version")
+            .expect_err("a revoked context is not live");
+        assert!(stale.contains("no longer live"), "got: {stale}");
+        assert!(auth::check_instance_call(&b, "uk_evolve").is_ok());
+
+        // A rebind moves the epoch, which also retires the old context.
+        let reborn = auth::rebind_instance(&b, "d08_b");
+        assert!(auth::is_live(&reborn));
+        assert!(!auth::is_live(&b), "the pre-rebind context is stale");
+        assert!(auth::check_instance_call(&b, "uk_evolve").is_err());
+        assert!(auth::check_instance_call(&reborn, "uk_evolve").is_ok());
+        auth::revoke_instance(reborn.instance);
+
+        // Strict profile: a granted symbol that no table declares is still not a
+        // call — a prefix is not an ambient grant.
+        let strict_engine = auth::ManifestAuthEngine::from_toml_str(
+            "[module]\nname = \"d08_strict\"\n\n[grants]\nkernel = [\"uk_version\", \"uk_not_a_real_symbol\"]\n",
+        )
+        .expect("strict manifest parses");
+        auth::set_auth_engine(Box::new(strict_engine));
+        let strict = auth::bind_instance("d08_strict", true);
+        assert!(
+            auth::check_instance_call(&strict, "uk_version").is_ok(),
+            "a declared ABI symbol that the manifest grants is callable"
+        );
+        let undeclared = auth::check_instance_call(&strict, "uk_not_a_real_symbol")
+            .expect_err("strict profile refuses an undeclared symbol");
+        assert!(
+            undeclared.contains("not a declared ABI symbol"),
+            "got: {undeclared}"
+        );
+        auth::revoke_instance(strict.instance);
+
+        // The receiver-side wrapper: the peer identity comes from the transport,
+        // never from the context it is checking. (The strict block above replaced
+        // the engine, so put the two-module policy back first.)
+        auth::set_auth_engine(Box::new(merged.clone()));
+        let node = auth::bind_instance("d08_a", false).delegated(
+            Some("did:unfer:alice".to_string()),
+            Some("node-7".to_string()),
+        );
+        // `delegated` returns a copy of the registered identity; re-register it
+        // so the copy (not just the one `bind_instance` returned) is the live one.
+        let node = auth::rebind_instance(&node, "d08_a");
+        assert_eq!(node.node.as_deref(), Some("node-7"));
+        assert_eq!(node.delegator.as_deref(), Some("did:unfer:alice"));
+        assert!(
+            auth::check_remote_use("node-7", &node, "Call", "uk_version").is_ok(),
+            "matching peer, live context, granted symbol"
+        );
+        let spoofed = auth::check_remote_use("node-8", &node, "Call", "uk_version")
+            .expect_err("a context cannot certify its own node");
+        assert!(spoofed.contains("cannot certify its own node"), "got: {spoofed}");
+        let local = auth::bind_instance("d08_a", false);
+        assert!(
+            auth::check_remote_use("node-7", &local, "Call", "uk_version").is_err(),
+            "a context with no remote node is not usable across the boundary"
+        );
+        assert!(auth::revoke_instance(node.instance));
+        assert!(auth::check_remote_use("node-7", &node, "Call", "uk_version").is_err());
+        auth::revoke_instance(local.instance);
+        auth::set_deployment_principal(String::new());
+        auth::set_strict_profile(false);
+    }
 
     /// A10: the LIVE JIT gate — the function the CPS emitter itself calls at
     /// compile time, not `modhost authorize` (which the module e2e jobs

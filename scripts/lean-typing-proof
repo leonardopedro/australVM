@@ -302,7 +302,8 @@ class EncBuf:
     without ever existing in memory (see `Enc.spool`).
     """
 
-    __slots__ = ("chunks", "pend", "pend_chars", "tokens", "sink", "bytes")
+    __slots__ = ("chunks", "pend", "pend_chars", "tokens", "sink", "bytes",
+                 "chars")
 
     def __init__(self, sink=None):
         self.chunks: list[str] = []
@@ -311,6 +312,9 @@ class EncBuf:
         self.tokens = 0
         self.sink = sink
         self.bytes = 0
+        # Characters appended so far, flushed or not: one `_enc` call's size is
+        # a difference of this, which is what def-sharing measures (§13.55).
+        self.chars = 0
 
     def _flush(self) -> None:
         if not self.pend:
@@ -327,6 +331,7 @@ class EncBuf:
     def append(self, t: str) -> None:
         self.pend.append(t)
         self.pend_chars += len(t)
+        self.chars += len(t)
         self.tokens += 1
         if self.pend_chars >= ENC_CHUNK:
             self._flush()
@@ -358,6 +363,15 @@ class EncBuf:
 REC_CACHE_MAX = 1 << 21
 
 
+class _NullSink:
+    """A sink that keeps nothing: measurement walks append into the void."""
+
+    __slots__ = ()
+
+    def write(self, s: str) -> None:
+        return None
+
+
 class Enc:
     def __init__(self, ex, succ_idx: bool = False):
         self.ex = ex
@@ -380,6 +394,22 @@ class Enc:
         self._memo: dict[int, str] = {}
         self._memo_bytes = 0
         self._digest: dict[int, bytes] = {}
+        # Def-sharing (`LTP_DEF_SHARE=<bytes>`): the artifact is a *tree*
+        # expansion of the export's DAG, so a shared type is paid once per path
+        # — 465 020 of the smoke row's 467 710 axioms have a body it already
+        # contains, and 67 % of a giant axiom's bytes is a sub-expression the
+        # same line already wrote (§13.55). A subterm whose expansion is at
+        # least this many bytes becomes one `def sdK: Term = $ … $;` and every
+        # use is the name. Defs are notation: `mm0-rs` expands them, so `mm0-c`
+        # checks the statements it checks today, and expanding the names back
+        # reproduces the shared-mode bytes exactly.
+        self.ds_min = int(os.environ.get("LTP_DEF_SHARE", "0") or 0)
+        self._ds_names: dict[int, str] = {}  # active substitutions
+        self._ds_all: dict[int, str] = {}    # every interned node
+        self._ds_order: list[int] = []       # first-use order
+        self._ds_size: dict[int, int] = {}   # expanded bytes, memoised
+        self._ds_off = 0                     # >0: measuring or writing a body
+        self._ds_assign = True               # main text interns, bodies do not
 
     def sort(self, e) -> str:
         # A universe is a *term*: its exported level id becomes one constant, so
@@ -431,6 +461,52 @@ class Enc:
         self._top(eid, buf)
         return buf.take_parts()
 
+    def _ds_bytes(self, eid: int) -> int:
+        """Expanded size of `eid`'s encoding, measured once per expression.
+
+        The walk records every node it visits (`_enc` does that while `_ds_off`
+        is set), so measuring a subtree also sizes its parts and the whole
+        certificate costs one extra expansion, not one per node.
+        """
+        n = self._ds_size.get(eid)
+        if n is not None:
+            return n
+        self._ds_off += 1
+        try:
+            buf = EncBuf(_NullSink())
+            self._top(eid, buf)
+            buf._flush()
+        finally:
+            self._ds_off -= 1
+        return self._ds_size.get(eid, 0)
+
+    def write_defs(self, fh) -> int:
+        """Write one `def` per interned subterm, before any use of it.
+
+        Reverse first-use order: a node is always first used inside the node
+        that was interned before it, so its children's names are declared
+        first and a body may use them. A body is encoded with only the names
+        already declared, which means the file never refers forward.
+        """
+        if not self._ds_order:
+            return 0
+        fh.write("-- ── shared subterms: one expansion per interned `Term` ──\n")
+        live: dict[int, str] = {}
+        outer, outer_assign = self._ds_names, self._ds_assign
+        self._ds_assign = False
+        try:
+            for eid in reversed(self._ds_order):
+                self._ds_names = live
+                fh.write(f"def {self._ds_all[eid]}: Term = $ ")
+                buf = EncBuf(fh)
+                self._top(eid, buf)
+                buf._flush()
+                fh.write(" $;\n")
+                live[eid] = self._ds_all[eid]
+        finally:
+            self._ds_names, self._ds_assign = outer, outer_assign
+        return len(self._ds_order)
+
     def write(self, eid: int, sink) -> int:
         """Append `eid`'s encoding to `sink`, returning its size in bytes.
 
@@ -450,8 +526,18 @@ class Enc:
             return d
         h = _Hasher()
         buf = EncBuf(h)
-        self._top(eid, buf)
-        buf._flush()
+        # Always the *expanded* text, even under def-sharing. A digest decides
+        # whether two types are the same type (§13.36), and a name is one
+        # expression's spelling, not its content: hashing `sd12` against the
+        # expansion it stands for turned 7 923 conversions that used to be
+        # recognised as identical into extra `ty_deq` assumptions (measured
+        # 2026-11-22). With this the assumption count is the one it is today.
+        self._ds_off += 1
+        try:
+            self._top(eid, buf)
+            buf._flush()
+        finally:
+            self._ds_off -= 1
         d = h.digest()
         # One 32-byte digest per expression seen: the memo is a convenience (a
         # miss recomputes), so it is simply dropped when it gets large.
@@ -493,11 +579,21 @@ class Enc:
         resident for the whole run, and the statement f-string then copied
         them twice more (§13.30). The bytes are the same ones `enc` produces.
         """
-        with path.open("w") as fh:
-            buf = EncBuf(fh)
-            self._top(eid, buf)
-            buf._flush()
-            return buf.bytes
+        # Def-sharing is off for these three spools on purpose. The declared
+        # type on disk is compared, byte for byte, with a wrap this run builds
+        # out of the body's spool (§13.42): the wrap is a *reconstruction*, not
+        # an expression, so it can never carry the name of the type as a whole.
+        # Interning the statement here would make the two texts differ in
+        # exactly the place the check is meant to police.
+        self._ds_off += 1
+        try:
+            with path.open("w") as fh:
+                buf = EncBuf(fh)
+                self._top(eid, buf)
+                buf._flush()
+                return buf.bytes
+        finally:
+            self._ds_off -= 1
 
     def _enc(self, eid: int, out: EncBuf) -> None:
         """Append `eid`'s encoding to `out`, token by token, in emit order.
@@ -514,8 +610,31 @@ class Enc:
         if s is not None:
             out.append(s)
             return
+        if self.ds_min and not self._ds_off:
+            # Main text sees every name ever assigned; a `def` body sees only
+            # the ones already declared before it, so it cannot refer forward.
+            tbl = self._ds_all if self._ds_assign else self._ds_names
+            nm = tbl.get(eid)
+            if nm is not None:
+                out.append(nm)
+                return
+            # Interning is decided at *first* use, by size alone: the same
+            # expression then encodes to the same text whenever it is asked
+            # for, which is what lets the declared type on disk stay
+            # comparable with the wrap the derivation builds (§13.42).
+            if self._ds_assign and self._ds_bytes(eid) >= self.ds_min:
+                nm = f"sd{len(self._ds_order)}"
+                self._ds_all[eid] = nm  # and every later use of `eid` reuses it
+                self._ds_order.append(eid)
+                out.append(nm)
+                return
         mark = out.tokens
+        mark_c = out.chars
         self._enc_tokens(eid, out)
+        if self._ds_off:
+            # Only an inline encode knows the expanded size: with a name in
+            # place the difference would be the length of the name.
+            self._ds_size.setdefault(eid, out.chars - mark_c)
         # Cache the *small* encodings only. Those are the ones a derivation
         # reuses (types, constants, short spines), and a handful of tokens joins
         # cheaply; a multi-megabyte term is deliberately left streamed, because
@@ -1642,6 +1761,12 @@ def main() -> int:
         f"-- Assumptions   : {ax_total} ({const_axioms} constant types, "
         f"{subst_obligations} substitution obligations)"
     ]
+    if enc.ds_min:
+        # Only in this mode: the default artifact's header is a byte-for-byte
+        # contract (`lean-typing-proof.golden.tsv`), so nothing is added to it
+        # when sharing is off.
+        head.append(f"-- Shared subterms : {len(enc._ds_order)} defs, "
+                    f"LTP_DEF_SHARE={enc.ds_min} B")
     nat_decls = [f"term {n}: nat;" for n in NATS]
     # Everything before the assumptions, in the order and with the separators the
     # one-shot `"\n".join(out)` produced. The assumptions themselves come next,
@@ -1680,6 +1805,10 @@ def main() -> int:
     for suffix, tail in ((".mm0", tail0), (".mm1", tail1)):
         with stem.with_suffix(suffix).open("w") as fh:
             fh.write(pre)
+            # The names the spool below already uses are declared here, once,
+            # and both artifacts get the same block: a `.mm0`/`.mm1` pair that
+            # disagreed about `sdK` would not elaborate.
+            enc.write_defs(fh)
             if ax_fh is not None:
                 with ax_path.open("r") as spool:
                     _copy_spool(fh, spool)
@@ -1796,6 +1925,11 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
     header = "\n".join(out) + "\n"
     with path.open("w") as fh:
         fh.write(header)
+        # Def-sharing puts the shared subterms between the header and the
+        # assumptions, so the heuristic "payload starts at header_bytes" stays
+        # true: the offset is taken after they are written, not before.
+        d.enc.write_defs(fh)
+        head_end = fh.tell()
         if ax_fh is not None:
             with ax_path.open("r") as spool:
                 _copy_spool(fh, spool)
@@ -1814,7 +1948,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
         "obligations": oblig_sink.lines,
         "stopped_theory": str(path.name),
         "stopped_theory_bytes": path.stat().st_size,
-        "header_bytes": len(header.encode()),
+        "header_bytes": head_end,
         "elapsed_s": round(time.monotonic() - _PROC_T0, 1),
     }
     _bodyty_path(stem).unlink(missing_ok=True)
@@ -1911,12 +2045,16 @@ class Deriver:
         self.ax_count = 0
         self.ax_bytes = 0
         self.ax_max = 0
-        # `LTP_DEDUP_NODES=1` interns synthetic nodes by content: two equal
-        # records share one id instead of one each. It is a probe, not a default:
-        # the index that makes it work costs memory too, and sharing ids can
-        # change any derivation step that compares two ids for identity, so the
-        # artifacts are what decides whether it is neutral (§13.52).
-        self._dedup: dict[str, int] = {} if os.environ.get("LTP_DEDUP_NODES") else None
+        # Interns synthetic nodes by content: two equal records share one id
+        # instead of one each, which is 92.5 % of the table on the smoke row and
+        # 72 % on the ns row (§13.52). It is the default since §13.53 gave the
+        # writer content-keyed sharing: interning no longer moves any artifact
+        # (`LTP_SHARE_DEDUP` makes the sidecar a function of the term alone), so
+        # the deriver can own its memory without owning the certificate's
+        # spelling. `LTP_DEDUP_NODES=0` reproduces the pre-13.53 deriver, which
+        # is the 432 MiB configuration §13.51 measured.
+        self._dedup: dict[str, int] | None = (
+            {} if os.environ.get("LTP_DEDUP_NODES", "1") == "1" else None)
         # Largest proof string returned so far (bytes); see `_check`.
         self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}

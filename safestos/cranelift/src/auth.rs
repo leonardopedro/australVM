@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::{OnceLock, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -361,6 +363,346 @@ fn new_engine_principal(toml_str: &str) -> String {
         Ok(n) => n.module.name,
         Err(_) => String::new(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// D08: immutable per-instance caller context
+// ---------------------------------------------------------------------------
+//
+// Before this block the JIT answered "who is calling?" with a process-global:
+// whichever manifest loaded most recently set `DEPLOYMENT_PRINCIPAL` and
+// replaced the whole authorization engine. With two modules loaded, module A's
+// calls were attributed to module B, so A borrowed B's grants — and A's own
+// grants disappeared the moment B loaded. Loading a module that then failed to
+// compile left the new engine installed anyway.
+//
+// An [`InstanceContext`] is bound once, at load, and immutable for the life of
+// the loaded module. It keeps the three identities the plan requires *distinct*:
+//
+// * `module`     — the deployment module the manifest grants by;
+// * `delegator`  — the user (or the module) on whose behalf it acts;
+// * `node`       — the remote node it is executing for, if any.
+//
+// `instance` + `epoch` are the identity the host validates: a context is live
+// only while its id is registered with the same epoch, so revocation and
+// hot-swap invalidate an already-compiled module's authority without touching
+// the code that was generated.
+
+/// The identity one loaded module instance acts as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceContext {
+    /// Allocated once per `load`; never reused, never guessed.
+    pub instance: u64,
+    /// The manifest's `[module] name` — the principal grants are keyed by.
+    pub module: String,
+    /// The user on whose behalf the module acts, when a host supplied one.
+    pub delegator: Option<String>,
+    /// The remote node this instance serves, when it is a distributed endpoint.
+    pub node: Option<String>,
+    /// Bumped when the instance is reloaded or its policy is replaced.
+    pub epoch: u64,
+    /// D08 strict profile: only declared ABI registry entries are callable.
+    pub strict: bool,
+}
+
+impl InstanceContext {
+    /// A context with no delegator and no remote node (a local module).
+    pub fn local(instance: u64, module: impl Into<String>, strict: bool) -> Self {
+        Self {
+            instance,
+            module: module.into(),
+            delegator: None,
+            node: None,
+            epoch: 0,
+            strict,
+        }
+    }
+
+    /// The same context acting for a user and/or a remote node.
+    pub fn delegated(mut self, delegator: Option<String>, node: Option<String>) -> Self {
+        self.delegator = delegator;
+        self.node = node;
+        self
+    }
+
+    /// A one-line description for diagnostics; never a rendered grant list.
+    pub fn label(&self) -> String {
+        match (&self.delegator, &self.node) {
+            (None, None) => format!("{}#{}@{}", self.module, self.instance, self.epoch),
+            (Some(user), None) => format!("{}#{}@{} for {user}", self.module, self.instance, self.epoch),
+            (None, Some(node)) => format!("{}#{}@{} at {node}", self.module, self.instance, self.epoch),
+            (Some(user), Some(node)) => format!(
+                "{}#{}@{} for {user} at {node}",
+                self.module, self.instance, self.epoch
+            ),
+        }
+    }
+}
+
+static INSTANCES: OnceLock<RwLock<HashMap<u64, InstanceContext>>> = OnceLock::new();
+static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
+fn instance_registry() -> &'static RwLock<HashMap<u64, InstanceContext>> {
+    INSTANCES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Bind a fresh immutable instance identity. The context returned is the one the
+/// host attaches to the compiled module; nothing else can change its module.
+pub fn bind_instance(module: impl Into<String>, strict: bool) -> InstanceContext {
+    let id = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
+    let context = InstanceContext::local(id, module, strict);
+    instance_registry()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, context.clone());
+    context
+}
+
+/// Whether this context is still the registered one for its instance id. A
+/// revoked instance, or one whose epoch moved (reload/hot-swap), is not live:
+/// the caller must stop trusting authority it obtained before the change.
+pub fn is_live(context: &InstanceContext) -> bool {
+    instance_registry()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&context.instance)
+        .is_some_and(|registered| registered.epoch == context.epoch)
+}
+
+/// Revoke an instance's authority. Returns whether it was live. Already-compiled
+/// code keeps its bytes; what stops is the authority those bytes carried.
+pub fn revoke_instance(instance: u64) -> bool {
+    instance_registry()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&instance)
+        .is_some()
+}
+
+/// Move an instance to a new epoch (reload/hot-swap), returning the replacement
+/// context. The old one stops being live immediately.
+pub fn rebind_instance(context: &InstanceContext, module: impl Into<String>) -> InstanceContext {
+    let replacement = InstanceContext {
+        instance: context.instance,
+        module: module.into(),
+        delegator: context.delegator.clone(),
+        node: context.node.clone(),
+        epoch: context.epoch + 1,
+        strict: context.strict,
+    };
+    instance_registry()
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(replacement.instance, replacement.clone());
+    replacement
+}
+
+thread_local! {
+    /// The context of the module instance whose code is being compiled or run on
+    /// this thread. A stack, so a nested host call restores its caller's context.
+    static CALLER_STACK: RefCell<Vec<Arc<InstanceContext>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The guard that pops the caller context when it goes out of scope.
+pub struct CallerScope {
+    _private: (),
+}
+
+impl Drop for CallerScope {
+    fn drop(&mut self) {
+        CALLER_STACK.with(|stack| {
+            stack.borrow_mut().pop();
+        });
+    }
+}
+
+/// Enter `context` as the current caller for the rest of this scope.
+pub fn enter_caller(context: &InstanceContext) -> CallerScope {
+    CALLER_STACK.with(|stack| stack.borrow_mut().push(Arc::new(context.clone())));
+    CallerScope { _private: () }
+}
+
+/// The current caller, if a host entered one.
+pub fn current_caller() -> Option<Arc<InstanceContext>> {
+    CALLER_STACK.with(|stack| stack.borrow().last().cloned())
+}
+
+/// Why this context may not act right now, if it may not. Separate from a grant
+/// check so the two refusals stay distinguishable in a diagnostic.
+pub fn context_refusal(context: &InstanceContext) -> Option<String> {
+    if context.module.trim().is_empty() {
+        return Some("UK-4001: the caller context names no module".to_string());
+    }
+    if !is_live(context) {
+        return Some(format!(
+            "UK-4001: the caller context {} is no longer live (revoked or replaced); \
+             already-compiled code may not keep using authority it obtained earlier",
+            context.label()
+        ));
+    }
+    None
+}
+
+// ── strict profile: the declared ABI registry ───────────────────────
+//
+// A prefix is not a grant. `uk_`/`uz_`/`rs_` name *namespaces*, and the old gate
+// admitted any symbol in them that a manifest happened to list. The strict
+// profile additionally requires the symbol to be one the bridge actually
+// declared (the same tables the JIT builder registers from), so a typo, a symbol
+// from another build, or a name a manifest invented cannot become a call.
+
+static STRICT_PROFILE: AtomicBool = AtomicBool::new(false);
+
+static DECLARED_ABI: OnceLock<RwLock<Option<HashSet<String>>>> = OnceLock::new();
+
+/// Every ABI symbol name the bridge declares, derived from the tables the JIT
+/// registers (`UNFER_SYMBOLS`, `ZENODO_SYMBOLS`, `RS_FFI_SYMBOLS`) plus the
+/// `au_*`/`__*` runtime builtins. One source of truth: a symbol the JIT can
+/// resolve is a symbol the strict profile can name.
+fn declared_abi() -> &'static RwLock<Option<HashSet<String>>> {
+    DECLARED_ABI.get_or_init(|| {
+        let mut names: HashSet<String> = HashSet::new();
+        #[cfg(feature = "unfer-kernel")]
+        for symbol in crate::UNFER_SYMBOLS {
+            names.insert(symbol.name.to_string());
+        }
+        #[cfg(feature = "zenodo-store")]
+        for symbol in crate::ZENODO_SYMBOLS {
+            names.insert(symbol.name.to_string());
+        }
+        #[cfg(feature = "tier1-rs")]
+        for symbol in crate::RS_FFI_SYMBOLS {
+            names.insert(symbol.name.to_string());
+        }
+        for name in [
+            "au_print_int",
+            "au_exit",
+            "au_alloc",
+            "au_calloc",
+            "au_free",
+            "__union_new",
+            "__record_new",
+            "__slot_get",
+        ] {
+            names.insert(name.to_string());
+        }
+        RwLock::new(Some(names))
+    })
+}
+
+/// Turn the strict profile on or off for callers without an instance context
+/// (legacy binaries and `modhost authorize`). A host-loaded module uses the
+/// profile recorded in its own [`InstanceContext`] instead.
+pub fn set_strict_profile(on: bool) {
+    STRICT_PROFILE.store(on, Ordering::Relaxed);
+}
+
+pub fn strict_profile() -> bool {
+    STRICT_PROFILE.load(Ordering::Relaxed)
+}
+
+/// Declare an ABI symbol beyond the built-in tables (a host-provided adapter).
+pub fn declare_abi_symbol(name: &str) {
+    let mut guard = declared_abi().write().unwrap_or_else(|e| e.into_inner());
+    guard.get_or_insert_with(HashSet::new).insert(name.to_string());
+}
+
+/// Whether `name` is a declared ABI symbol.
+pub fn is_declared_abi_symbol(name: &str) -> bool {
+    declared_abi()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|names| names.contains(name))
+}
+
+/// Check one gated call for an instance context: liveness first (stale authority
+/// is refused before any grant is consulted), then the strict ABI check, then the
+/// grant for this context's own module.
+pub fn check_instance_call(context: &InstanceContext, callee: &str) -> Result<(), String> {
+    if let Some(refusal) = context_refusal(context) {
+        return Err(refusal);
+    }
+    if context.strict && !is_declared_abi_symbol(callee) {
+        return Err(format!(
+            "UK-4001: strict profile refuses '{}' — it is not a declared ABI symbol \
+             (a prefix is not a grant)",
+            callee
+        ));
+    }
+    check(&context.module, "Call", callee)
+}
+
+/// The receiver side of the distributed/effect boundary.
+///
+/// A context arrives from another process, so the receiver must not trust it:
+/// `from_peer` is the peer identity the transport *authenticated*, passed
+/// separately from the token, and it must equal the context's `node`. The
+/// context is then checked for liveness at the receiver (its own registry) and
+/// for a grant — never by asking the sender.
+pub fn check_remote_use(
+    from_peer: &str,
+    context: &InstanceContext,
+    action: &str,
+    resource: &str,
+) -> Result<(), String> {
+    match context.node.as_deref() {
+        Some(node) if node == from_peer => {}
+        Some(node) => {
+            return Err(format!(
+                "UK-4001: context {} claims node '{node}' but the authenticated peer is \
+                 '{from_peer}': a context cannot certify its own node",
+                context.label()
+            ))
+        }
+        None => {
+            return Err(format!(
+                "UK-4001: context {} names no remote node and cannot be used across the \
+                 distributed boundary",
+                context.label()
+            ))
+        }
+    }
+    if let Some(refusal) = context_refusal(context) {
+        return Err(refusal);
+    }
+    if context.strict && !is_declared_abi_symbol(resource) {
+        return Err(format!(
+            "UK-4001: strict profile refuses '{resource}' — it is not a declared ABI symbol"
+        ));
+    }
+    // The grant is looked up by the *context's* module at the receiver's own
+    // policy, so a sender's stale copy of its grants buys nothing here.
+    check(&context.module, action, resource)
+}
+
+/// Snapshot the manifest engine so a failed load can be rolled back exactly
+/// (D08: a load that fails must leave the previous authority untouched).
+pub fn manifest_engine_snapshot() -> ManifestAuthEngine {
+    manifest_lock()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Merge a module's grants into the live manifest engine instead of replacing it,
+/// so loading module B does not forget module A's grants. Returns the previous
+/// engine for [`restore_manifest_engine`].
+pub fn install_module_grants(engine: ManifestAuthEngine) -> ManifestAuthEngine {
+    let previous = manifest_engine_snapshot();
+    let mut merged = manifest_lock().write().unwrap_or_else(|e| e.into_inner());
+    merged.merge(engine);
+    let live = merged.clone();
+    drop(merged);
+    set_auth_engine(Box::new(live));
+    previous
+}
+
+/// Put back a snapshot from [`install_module_grants`] (used when the load that
+/// installed the grants then failed).
+pub fn restore_manifest_engine(previous: ManifestAuthEngine) {
+    *manifest_lock().write().unwrap_or_else(|e| e.into_inner()) = previous.clone();
+    set_auth_engine(Box::new(previous));
 }
 
 #[cfg(test)]

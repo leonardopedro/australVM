@@ -4625,8 +4625,9 @@ written to completion, and the run was not what was killed. Operationally the le
 only about scheduling: a memory probe and a build should not share a machine, because the
 probe's cap does not bound the rest of it.
 
-**The failing side: 368 passes, 360 dies.** Two more probes, the same command and env
-trio, ran concurrently at caps 368 and 360 MiB. 368 completes: exit 0, peak 363 MiB
+**The failing side: 368 passes, 360 dies.** (This paragraph records the state *before*
+§13.55 removed the tail's last megabyte-sized allocation; there, 360 passes.) Two more
+probes, the same command and env trio, ran concurrently at caps 368 and 360 MiB. 368 completes: exit 0, peak 363 MiB
 `VmSize` at 3 609 s of 3 761 s, peak RSS 334 MB. 360 does not: exit 1 at 3 611 s, peak
 357 MiB `VmSize`, peak RSS 328 MB. Both spent the same time in the derivation (3 609 s),
 so nothing earlier in the run changed — the difference is in the tail, and it is not a
@@ -4761,4 +4762,119 @@ proof itself: what moved is one sidecar's table bookkeeping, in the smaller dire
 the `[run]` lines show the same 1 041 771 375 / 1 075 343 397 B outputs as before. With
 this in place `LTP_DEDUP_NODES` can be defaulted on with no further byte change — the whole
 of §13.52's memory win on the ns row, for free.
+
+**Defaulted on.** It is now the default in the script, and the claim above was checked
+rather than assumed on the way: unset, `scripts/check-lean-typing-proof` still reports
+12 artifacts across 3 modes matching the golden, so interning moves no byte in `shared`,
+`default` *or* `stop` — a broader neutrality than §13.52 could show, because the modes
+that never reach `tree_share` are exactly the ones where an id-keyed structure could have
+leaked a change. `LTP_DEDUP_NODES=0` still reproduces the pre-13.53 deriver, which is the
+432 MiB configuration §13.51 measured and the control §13.55 quotes.
+
+### 13.54 Sharing repeated subterms as MM0 `def`s: 2.94×, and 3.12× with interning on
+
+The certificates of §13.51–13.53 are repetitive rather than deep: the smoke row's
+467 710 assumptions carry only 2 690 distinct bodies, and its largest axioms repeat the
+same subterm on one line. So the encoder can pay a term once and name it. Under
+`LTP_DEF_SHARE=<min bytes>` a subterm whose expansion is at least that many bytes becomes
+a nullary `def sdK: Term = $ … $;`, written before any use of it, and every use site is
+three tokens instead of tens of kilobytes. Unset, the emitter takes the byte-identical
+default path and the golden gate confirms it.
+
+**The rules, because each one is a way this could be wrong.** Interning is decided at a
+node's *first* use by expanded size alone, so the same expression always encodes to the
+same text. Bodies are emitted in reverse first-use order against a `live` set of names
+already written, so no body refers forward. `digest()` — the hash deciding when two types
+share a `ty_deq` obligation — keeps hashing the expanded text: hashing the name instead
+turned 7 923 identical conversions into extra `ty_deq` assumptions (measured while
+building this). And `Enc.spool` does not intern at all, because the declared type on disk
+is compared byte for byte with a wrap the run reconstructs (§13.42), and a reconstruction
+can never carry the name of the whole type.
+
+**Measured on the smoke row** (shared mode, `BookProof.Toolbox.ChapterFockPairPerturbation`,
+`abs_re_inner_pairVec_le`, `--spine`):
+
+| run | `.mm0` | `.mm1` | defs | sidecar |
+| --- | ---: | ---: | ---: | ---: |
+| default | 1 041 771 375 B | 1 075 343 397 B | — | 1 012 915 095 B |
+| `LTP_DEF_SHARE=1024`, interning off | 354 580 487 B (2.94×) | 388 152 509 B (2.77×) | 1 694 | 4 258 753 B |
+| `LTP_DEF_SHARE=1024`, interning on (default) | 334 175 929 B (3.12×) | 367 747 951 B (2.92×) | 1 560 | 4 258 753 B |
+
+The last row is the one the current script produces for this command, and the middle row
+is the same command with `LTP_DEDUP_NODES=0`: it reproduces 354 580 487 B and 1 694 defs
+exactly, so the 20 MB between them is interning, not noise. The two layers compose
+because interning hands the encoder fewer distinct ids to reach a first use — 1 560
+defs instead of 1 694 — and their bodies are then written against a smaller node table.
+Neither layer shrinks the sidecar here: the obligations are the same 467 710 assumptions,
+of which 1 279 constant types and 1 256 substitutions, and sharing compresses the *text*
+of a derivation, not its obligations.
+
+**Content is unchanged, checked outside this script.** Expanding every `sdK` back into
+its uses and dropping the `def` block gives 980 180 332 B of non-comment text on both
+sides, `cmp` clean; and a slice of the shared artifact — both theories with their
+`import` lines stripped, the header, the payload declarations, the def block and the
+first 2 000 axioms (215 219 297 B) — compiles with `mm0-rs` (`3 sorts, 2146 term/def,
+2026 ax/thm`, 1 887 232 B `.mmb`) and re-checks in `mm0-c` in 1.6 s. The full artifact
+was not elaborated: 2 000 axioms cost 140 s, so the run reports a slice rather than an
+extrapolation. `docs/mm0-setmm-coverage.md` §9.2 records both checks and the trap that
+looks like a defect and is not (`mm0-rs compile` takes its output second positional;
+`-o` is accepted silently and writes nothing).
+
+**Why opt-in.** The artifact format is a contract — the golden file pins its bytes — and
+a `def` block changes what a reader of the certificate sees even when the content is the
+same. The knob is therefore the same shape as `LTP_ENC_MAX`: an env-gated probe whose
+unset path is byte-identical, until a re-record is a decision rather than a side effect.
+
+### 13.55 The tail's last megabyte: 360 MiB completes, and the bracket moves to (352, 360]
+
+§13.52 left the floor of the ns row pinned to the *size of the tail's allocation*: the
+final copy of the spooled axioms into the artifact ran through
+`shutil.copyfileobj(spool, fh, 1 << 20)`, so a derivation that had already reached 357 MiB
+under a 360 MiB ceiling could not allocate one more MiB and the run died there — at the
+last step, with the whole proof already derived.
+
+**The change, and why it is the allocation and not the copy.** The three spool copies
+(`_put`'s spool-to-artifact, the axioms concat, and the stopped path) now go through one
+helper, `_copy_spool`, which flushes the destination and then loops `os.sendfile` in 1 MiB
+steps with no user-space buffer at all, falling back to a 64 KiB `copyfileobj` where
+`sendfile` is unavailable or refuses (non-regular files). A 1 MiB *step* is not a 1 MiB
+*allocation*: the kernel copies page-cache to page-cache, so the last allocation the
+emitter asks of its own address space is gone rather than merely made smaller.
+
+**Measured at 364 and 360 MiB** (same driver, same env trio
+`LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB
+LTP_CENSUS=1 LTP_DEDUP_NODES=1`, two cores, concurrent with each other):
+
+| cap | exit | peak VmSize | peak RSS | elapsed | outcome |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 364 MiB | 0 | 356 MiB @3 411 s | 329 MB | 3 802 s | completes |
+| 360 MiB | 0 | 356 MiB @3 425 s | 329 MB | 3 802 s | completes |
+| 352 MiB | 1 | 351 MiB @3 204 s | 323 MB | 3 713 s | `MemoryError`, `self.oblig.append(ax)` |
+| 344 MiB | 1 | 343 MiB @2 008 s | 316 MB | 7 304 s | `MemoryError`, `self._ds_off` |
+
+360 MiB is the cap §13.52 recorded as failing at the last copy, and it now completes with
+4 MiB to spare, so the byte-identity question was asked again at full scale rather than
+assumed: `cmp` reports `.mm0` (102 543 367 789 B), `.mm1` (102 547 674 107 B) and the
+naming table identical to `cap-432-dedup` (§13.52's 432 MiB reference), and the manifest
+differs only in the sidecar's own byte counts. With §13.53's default on, that sidecar is
+smaller at this scale too — `part-000.jsonl` 5 645 247 → 5 288 097 B (−6.3 %),
+`index.jsonl` 36 076 → 36 034 B — the smoke row's 59 % not transferring, as §13.52 said it
+would not. The proof artifacts themselves are untouched by either change.
+
+**The failing side moved down by one probe.** 352 MiB still dies, now in the axiom list
+(`infer`'s `self.oblig.append(ax)`) rather than in the old copy, and 344 MiB never leaves
+its ceiling: its `VmSize` sat flat at 352 084 kB — 172 KiB under a 352 256 kB limit — from
+2 008 s to 7 303 s, then raised `MemoryError` in `_ds_off`. That is a thrash at the
+boundary, not a computation, so its 7 304 s is a slow failure and not a timing. So the
+floor at the current emitter is **(352, 360] MiB** — down from §13.52's (360, 368], and
+the 360 MiB entry of that bracket is now a passing one. The next bisection is 356 MiB;
+it was not run here, because each probe of this row is a ~63-minute investment and the
+bracket is already recorded as a bracket rather than as a number.
+
+**One control worth keeping.** The first attempt at these two caps was launched without
+`LTP_DEDUP_NODES=1`, and both runs died at 921 s and 938 s with `MemoryError` inside
+`infer` at peaks of 358 and 363 MiB. That is not a regression from `_copy_spool`: without
+interning the deriver is the 432 MiB configuration of §13.51, and it fails early. It is
+recorded because the env trio *is* part of the measurement — every cap in the table above
+holds the same tables, and only the room around them differs.
 

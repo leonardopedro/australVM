@@ -1,0 +1,50 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> unfer_consensus/src/storage.rs:230:13
+    |
+230 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_consensus` (test "request_identity") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/request_identity.rs (target/debug/deps/request_identity-bfd63954f88c8fd8)
+
+running 6 tests
+test a_conflicting_retry_is_refused_and_applies_nothing ... ok
+test a_request_below_the_acknowledged_floor_is_refused_after_restart_of_retention ... ok
+test a_client_that_invents_incarnations_is_bounded_and_can_retire_a_run ... ok
+test a_settled_rejection_is_replayed_to_the_retrying_client ... ok
+test a_retried_request_is_submitted_once_and_lands_in_one_slot ... ok
+test different_request_ids_with_identical_bytes_are_distinct_actions ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
