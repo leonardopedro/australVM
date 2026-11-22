@@ -441,6 +441,21 @@ let find_record_slot_offset id name =
   | Some slots -> find_slot_offset slots name 0
   | None -> 0
 
+(** The record a field access is really about.
+
+    The typer hands a field access through a borrow the type of the borrow
+    *temp* it introduced, and a re-borrow nests: `read(hot: &[Hot, R])`
+    accessing `hot->hi` sees `&&Hot`, because the CPS local that carries the
+    parameter is itself a read reference. Stripping one layer left a
+    `MonoReadRef`, which is not a `MonoNamedType`, so every field of the record
+    resolved to offset 0 — `hi` silently read `lo`'s word. Strip to the
+    pointee, however many borrows the front-end wrapped around it. *)
+let rec pointee_type (ty: mono_ty): mono_ty =
+  match ty with
+  | MonoPointer inner | MonoAddress inner
+  | MonoReadRef (inner, _) | MonoWriteRef (inner, _) -> pointee_type inner
+  | ty -> ty
+
 let rec get_expr_type (expr: Mt.mexpr): mono_ty =
   match expr with
   | Mt.MNilConstant -> MonoUnit
@@ -787,28 +802,15 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MTypecast (e, _) -> convert_expr e
   | Mt.MSizeOf ty -> IntLit (Int64.of_int (size_of_mono_ty ty))
   | Mt.MSlotAccessor (e, name, _) -> 
-      (* The typer hands a field read through a borrow (`&Pair`) the borrow
-         temp's type, so unwrap it before resolving the offset — otherwise
-         every field of a borrowed record resolves to offset 0 and field two
-         reads field one's word. `__slot_get` already performs the load, so the
-         address it is given may be the borrow's; only the offset lookup needs
-         the pointee type. *)
-      let recty = match get_expr_type e with
-        | MonoPointer ty | MonoAddress ty
-        | MonoReadRef (ty, _) | MonoWriteRef (ty, _) -> ty
-        | ty -> ty
-      in
-      let offset = match recty with
+      (* `__slot_get` already performs the load, so the address it is given may
+         be the borrow's; only the offset lookup needs the pointee record. *)
+      let offset = match pointee_type (get_expr_type e) with
         | MonoNamedType id -> find_record_slot_offset id name
         | _ -> 0
       in
       App ("__slot_get", [convert_expr e; IntLit (Int64.of_int offset)])
   | Mt.MPointerSlotAccessor (e, name, _) -> 
-      let recty = match get_expr_type e with
-        | MonoPointer ty | MonoAddress ty | MonoReadRef (ty, _) | MonoWriteRef (ty, _) -> ty
-        | _ -> MonoUnit
-      in
-      let offset = match recty with
+      let offset = match pointee_type (get_expr_type e) with
         | MonoNamedType id -> find_record_slot_offset id name
         | _ -> 0
       in
@@ -860,7 +862,7 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
          MSlotAccessor lowers `record.field`. Passing `Var name` here (the old
          behaviour) made the JIT look up a non-existent variable named after the
          field -> "Undefined variable: <field>". *)
-      let recty = get_expr_type expr in
+      let recty = pointee_type (get_expr_type expr) in
       let binding_stmts = List.map (fun (Mtast.MonoBinding { rename; name; _ }) ->
         let offset = match recty with
           | MonoNamedType id -> find_record_slot_offset id name

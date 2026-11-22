@@ -152,6 +152,17 @@
  (libraries austral_cps_gen ounit2 str)
  (deps ../mm0/isa.mm0))
 
+; A record field read is typed as a dereference of the slot accessor, but the
+; CPS accessor (`__slot_get`) already loads: an enclosing `Deref` loads the
+; field's value as an address and segfaults the JIT. Pinned on emitted CPS, so
+; the redundant dereference cannot come back unnoticed — and the offsets are
+; pinned too, because `find_record_slot_offset` falls back to 0 on a miss and a
+; count-only fixture cannot tell a read of the wrong slot from a right one.
+(tests
+ (names CpsFieldReadTest)
+ (modules CpsFieldReadTest)
+ (libraries austral_lib austral_cps_gen austral_rust_bridge ounit2))
+
 ; avm-pkg spec task 2.1: the package totality pass and the Derivation
 ; JSON export (lib/Totality.ml, lib/DerivAst.ml). Hand-built typed ASTs —
 ; no codegen, so austral_core alone is enough.
