@@ -417,10 +417,11 @@ compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
 **Re-measured 2026-11-22 on this x86_64 host, in all three shells and the bare
-`nix-shell -p python3` invocation, on `c24ea9a3` (the merged tree plus the D00
-line that names the sibling it resolved its rows against: the pulled D06/D07
-records' two extra inventory rows are why it reads 16 contract rows rather than
-14, and it ends `measured against unfer 14e0a7a`):** `186 passed, 1 explained gap(s), 0 failed` under
+`nix-shell -p python3` invocation, on `d498b930` (the merge of `origin/master`
+`fc5055ab` with the D00 line that names the sibling it resolved its rows
+against: the pulled D06/D07 records' two extra inventory rows and the merge's
+D08 row are why it reads 17 contract rows rather than 14, and it ends
+`measured against unfer c68470c`):** `186 passed, 1 explained gap(s), 0 failed` under
 `nix develop "git+file://$PWD"`
 ([transcript](docs/data/gate/2026-11-22-default-shell.log)), `171 passed, 4
 explained gap(s), 0 failed` under `.#ocaml`
