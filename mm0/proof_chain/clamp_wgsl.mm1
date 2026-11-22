@@ -1,0 +1,13 @@
+-- clamp_wgsl.mm1 — proofs for clamp_wgsl.mm0 (PC05a).
+--
+-- `wgsl_clamp` and `ir_clamp` unfold to the same reflected operator, so
+-- the witness against the KernelIR is reflexivity and the bound is
+-- PC02's meet lower bound. Under a reflected `ujoin` neither unifies: the
+-- theorem follows the parsed comparison, not a recorded digest.
+def wgsl_clamp (x: u32): u32 = $ umeet x u100 $;
+pub theorem wgsl_clamp_matches_ir (x: u32):
+  $ ueq (wgsl_clamp x) (ir_clamp x) $
+  = '(ueq_refl);
+pub theorem wgsl_inherits_source_bound (x: u32):
+  $ ule (wgsl_clamp x) u100 $
+  = '(umeet_lb_r);
