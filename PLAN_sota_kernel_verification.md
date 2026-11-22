@@ -416,15 +416,18 @@ certificate printed `arch=aarch64` there, so its `W5 (checked)` object digest
 compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
-**Re-measured 2026-11-21 on this x86_64 host, in all three shells, at the tree
-where this branch's `toy-witness`/`logos2mm0` "cannot link here" guard meets the
-pulled `ab6d1074`:** `186 passed, 1 explained gap(s), 0 failed` under
+**Re-measured 2026-11-22 on this x86_64 host, in all three shells and the bare
+`nix-shell -p python3` invocation, on the tree where this branch's
+`toy-witness`/`logos2mm0` "cannot link here" guard meets the pulled
+`ab6d1074`:** `186 passed, 1 explained gap(s), 0 failed` under
 `nix develop "git+file://$PWD"`
-([transcript](docs/data/gate/2026-11-21-default-shell.log)), `171 passed, 4
+([transcript](docs/data/gate/2026-11-22-default-shell.log)), `171 passed, 4
 explained gap(s), 0 failed` under `.#ocaml`
-([transcript](docs/data/gate/2026-11-21-ocaml-shell.log)), and `166 passed, 9
+([transcript](docs/data/gate/2026-11-22-ocaml-shell.log)), `172 passed, 3
 explained gap(s), 0 failed` under `.#lean`
-([transcript](docs/data/gate/2026-11-21-lean-shell.log)).
+([transcript](docs/data/gate/2026-11-22-lean-shell-rust.log)), and `165 passed,
+10 explained gap(s), 0 failed` where only `python3` comes from a shell
+([transcript](docs/data/gate/2026-11-22-nix-shell-python3.log)).
 None of those numbers is a correction of the ones above; each is a different
 shell over the same checks, and the differences close exactly. The five
 approvals closed their five `[gap] W3: <artifact> has no approved statements`
@@ -433,11 +436,16 @@ each, so no `w3-pending:` row remains and `w3-approved:` lists all thirteen.
 `.#ocaml` carries `lean` but not `why3`, so the 15 per-file Liquid passes of the
 default shell are the three `Liquid golden…`/`Liquid subset` gaps there — hence
 `171 + 15 = 186` and `4 − 3 = 1`. `.#lean` re-converts the RV64 model, turning
-`W9.1` into a pass, but it has no rust toolchain of its own: `rustc` there is the
-host's rustup shim, whose `cc` names a garbage-collected store path, so the five
-`scripts/toy-witness` comparisons cannot be built and report as gaps instead of
-failing on an empty witness list, and `cargo build -p logos` cannot link either,
-so the fragment gate cannot run (`166 = 171 + 1 − 5 − 1`, `9 = 4 − 1 + 5 + 1`).
+`W9.1` into a pass, and since `ff53c29b` it also carries `pkgs.rustc`,
+`pkgs.cargo` and `pkgs.stdenv.cc`, so the five `scripts/toy-witness`
+comparisons and the `logos` emitter build there: `172 = 171 + 1` and
+`3 = 4 − 1`. Before that commit the shell's `rustc`/`cargo` were the host's
+rustup shims, whose `cc` names a garbage-collected store path, so those six
+checks could only be reported as gaps in the linker's own words; that run is
+kept as
+[`2026-11-22-lean-shell.log`](docs/data/gate/2026-11-22-lean-shell.log)
+(`166`/`9`/`0`) so the fix is evidence rather than an assertion. The bare shell
+has no C toolchain at all and remains `165`/`10`/`0`.
 Both scripts now treat a *linker* failure as exit 2, the convention
 `scripts/mm0-comparator` already used for an unprovisioned theory: the gate
 prints a gap with the linker's own line and never a pass, while a compile error
@@ -446,10 +454,11 @@ instead of its exit status alone: `scripts/logos2mm0` exits 0 for "gapped" (no
 cargo, no `mm0` toolchain, no `dk` fixtures, a missing Kopperman corpus) as well
 as for green, so a run that printed any `[gap]` line is now this gate's gap, with
 that line quoted, and only an all-pass run is its pass — see `[pass] logos mm0`
-in the `ocaml` transcript against `[gap]  logos mm0: the fragment gate could not
-run here` in the `lean` one. A failing sub-check is still this gate's `[FAIL]`.
-The missing-toolchain cases those lists carry are the same ones the transcripts
-above record; nothing was reclassified as passing.
+in the `ocaml` and `lean` transcripts against `[gap]  logos mm0: the fragment
+gate could not run here` in the bare `nix-shell -p python3` one. A failing
+sub-check is still this gate's `[FAIL]`. The missing-toolchain cases those lists
+carry are the same ones the transcripts above record; nothing was reclassified
+as passing.
 The certificate on this host records `arch=x86_64` with `cps=c10ca9a9…` and
 `obj=b138fd6e…`; on a host whose certificate recorded the other arch, the same
 check normalises those two lines and reports the incomparable digest as a gap
