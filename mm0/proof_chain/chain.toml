@@ -1,0 +1,233 @@
+# chain.toml — PC07's frozen proof-chain fixture.
+#
+# This file is a *declaration*, not a proof. `scripts/proof-chain check` replays
+# the MM0 artifacts below with mm0-rs/mm0-c and then holds every row here to
+# what the replay establishes: the assembly order, each artifact's theorems,
+# the theorem dependency graph, the subject cut and its digests, and the
+# residual register the entry theorem rests on. A disagreement is a finding —
+# the replay is authoritative, and editing a row here is how a *different*
+# chain is declared, not how a failure is made to pass.
+
+[chain]
+name = "clamp"
+# The chain's one conditional claim: the source property, transported through
+# the IR and the parsed-WGSL edge, at the value the device returns.
+entry = "transported_bound"
+
+# ── The cut ─────────────────────────────────────────────────────────────
+# Source → admitted IR → parsed WGSL. Each layer is a reflected subject with
+# its own function and its own *proved* upper bound; the step from one layer
+# to the next is an equality theorem, not prose. `scripts/proof-chain` checks
+# that each link's conclusion really equates the previous layer's function
+# with this layer's, and that each bound is `ule (<function> x) u100`.
+[[subject]]
+layer = "source"
+artifact = "word"
+function = "source_clamp"
+bound = "clamp_upper"
+
+[[subject]]
+layer = "ir"
+artifact = "clamp_source"
+function = "ir_clamp"
+bound = "ir_inherits_source_bound"
+link = "ir_clamp_matches_source"
+
+[[subject]]
+layer = "shader"
+artifact = "clamp_wgsl"
+function = "wgsl_clamp"
+bound = "wgsl_inherits_source_bound"
+link = "wgsl_clamp_matches_ir"
+
+[policy]
+# A chain missing any of these layers is refused, not reported as conditional.
+require_layers = ["source", "ir", "shader"]
+# Digests that more than one artifact records must agree across all of them:
+# this is the fixture's measured "same IR on both sides of the cut" fact.
+shared_digests = ["ir_sha256"]
+# The `checked` profile: every residual must be declared with one of these
+# classes. The `certified` profile allows only the interface condition, so a
+# runtime premise or an external model assumption is a hard failure there.
+allowed_classes = ["interface-condition", "runtime-premise", "external-model"]
+
+[policy.certified]
+allowed_classes = ["interface-condition"]
+
+# ── Assembly order and the theorems each artifact declares ──────────────
+# `theorems` is the complete set: a theorem added to a fragment without a row
+# here fails, and so does a row naming a theorem the fragment no longer has.
+[[artifact]]
+name = "word"
+file = "word.mm0"
+proof = "word.mm1"
+theorems = [
+  "clamp_upper",
+  "clamp_lower",
+  "map_read_after_write",
+  "map_write_frame",
+  "map_write_then_read",
+]
+
+[[artifact]]
+name = "relation"
+file = "relation.mm0"
+proof = "relation.mm1"
+theorems = [
+  "transfer_through_eq",
+  "compose_bound",
+  "identity_transfer",
+  "edge1_bound",
+  "compose_conditional",
+  "compose_discharged",
+  "step_transfer",
+  "observes_chain",
+]
+
+[[artifact]]
+name = "clamp_source"
+file = "clamp_source.mm0"
+proof = "clamp_source.mm1"
+digest = "source_sha256"
+theorems = ["ir_clamp_matches_source", "ir_inherits_source_bound"]
+
+[[artifact]]
+name = "clamp_wgsl"
+file = "clamp_wgsl.mm0"
+proof = "clamp_wgsl.mm1"
+digest = "wgsl_sha256"
+theorems = ["wgsl_clamp_matches_ir", "wgsl_inherits_source_bound"]
+
+[[artifact]]
+name = "clamp_transport"
+file = "clamp_transport.mm0"
+proof = "clamp_transport.mm1"
+theorems = ["shader_edge_bound", "transported_bound"]
+
+# ── The declared proof graph ────────────────────────────────────────────
+# One row per *theorem* (axioms have no proof and get no row): the complete
+# set of declared names its proof term mentions. Passing a theorem as a proof
+# argument is a dependency too, which is how `transported_bound` is seen to
+# reuse PC05a's `wgsl_inherits_source_bound` and not merely restate it.
+[[applies]]
+theorem = "clamp_upper"
+on = ["umeet_lb_r"]
+
+[[applies]]
+theorem = "clamp_lower"
+on = ["umeet_greatest", "uzero_le"]
+
+[[applies]]
+theorem = "map_read_after_write"
+on = ["mget_put_same"]
+
+[[applies]]
+theorem = "map_write_frame"
+on = ["mget_put_other"]
+
+[[applies]]
+theorem = "map_write_then_read"
+on = ["mget_put_other"]
+
+[[applies]]
+theorem = "transfer_through_eq"
+on = ["ueq_sub_le"]
+
+[[applies]]
+theorem = "compose_bound"
+on = ["ueq_sub_le"]
+
+[[applies]]
+theorem = "identity_transfer"
+on = ["transfer_through_eq"]
+
+[[applies]]
+theorem = "edge1_bound"
+on = ["clamp_upper", "ueq_sub_le"]
+
+[[applies]]
+theorem = "compose_conditional"
+on = ["ueq_sub_le"]
+
+[[applies]]
+theorem = "compose_discharged"
+on = ["clamp_upper", "compose_bound"]
+
+[[applies]]
+theorem = "step_transfer"
+on = ["compose_discharged"]
+
+[[applies]]
+theorem = "observes_chain"
+on = ["ueq_trans"]
+
+[[applies]]
+theorem = "ir_clamp_matches_source"
+on = ["ueq_refl"]
+
+[[applies]]
+theorem = "ir_inherits_source_bound"
+on = ["umeet_lb_r"]
+
+[[applies]]
+theorem = "wgsl_clamp_matches_ir"
+on = ["ueq_refl"]
+
+[[applies]]
+theorem = "wgsl_inherits_source_bound"
+on = ["umeet_lb_r"]
+
+[[applies]]
+theorem = "shader_edge_bound"
+on = ["transfer_through_eq", "wgsl_inherits_source_bound"]
+
+[[applies]]
+theorem = "transported_bound"
+on = ["transfer_through_eq", "wgsl_inherits_source_bound"]
+
+# ── What the entry theorem rests on ─────────────────────────────────────
+# `premises` is the entry's premise list, `axioms` the unproved leaves its
+# transitive dependency closure reaches. Together they are the exact residual
+# closure: the bound is conditional on these five premises and these two
+# word-model axioms, and on nothing else.
+[entry]
+theorem = "transported_bound"
+premises = [
+  "wgsl_edge x y",
+  "wrapper_admits i",
+  "extent_guard i len",
+  "binding_index i j",
+  "native_agrees y n",
+]
+axioms = ["ueq_sub_le", "umeet_lb_r"]
+
+# Each entry premise's classification. `interface-condition` is a hypothesis
+# the caller must establish about its own data (that `y` is the shader's value
+# for this invocation); the other three are runtime premises the wrapper or the
+# device supplies; `native_agrees` is the external model assumption — the only
+# one the transport proof actually consumes, and the one the `certified`
+# profile refuses.
+[[residual]]
+name = "edge"
+term = "wgsl_edge"
+class = "interface-condition"
+
+[[residual]]
+name = "wrapper"
+term = "wrapper_admits"
+class = "runtime-premise"
+
+[[residual]]
+name = "extents"
+term = "extent_guard"
+class = "runtime-premise"
+
+[[residual]]
+name = "bindings"
+term = "binding_index"
+class = "runtime-premise"
+
+[[residual]]
+name = "native"
+term = "native_agrees"
+class = "external-model"

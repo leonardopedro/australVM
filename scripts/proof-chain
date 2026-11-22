@@ -1,0 +1,610 @@
+#!/usr/bin/env python3
+"""PC07: the first complete IR-level composition, and its gate.
+
+The fixture is frozen in `mm0/proof_chain/chain.toml`: the assembly order of
+the five artifacts, the subject cut (source → admitted IR → parsed WGSL), the
+theorem dependency graph, and the residual register the entry theorem rests on.
+This script replays the artifacts and holds the declaration to what the replay
+establishes.
+
+  check      replay, then the full policy: graph, cut, shared digests, the
+             entry theorem's exact residual closure, and the residual classes
+             of `--profile` (`checked` by default, `certified` for the strict
+             one). Exit 1 names every disagreement; exit 3 means the MM0
+             toolchain is absent, so nothing is reported as checked.
+  report     the same replay and the same structural checks, printed as the
+             conditional theorem it is — with each premise's class — but
+             without applying the profile policy. A chain that the strict
+             profile refuses still reports here, which is the point: a
+             conditional theorem is a result, a certificate is a policy.
+  selftest   the negative controls, in a scratch copy of the chain: a changed
+             statement, an incomplete proof file, a forged proof record, a
+             missing cut layer, a stale graph row, an undeclared residual, a
+             disagreeing shared digest, the strict profile's refusal, report
+             mode's success where the strict profile fails, and a missing
+             toolchain (which must be a gap, not a pass).
+
+Nothing here is GPU instruction certification: the cut's edges are recorded
+reflections, not verified parsers, and the runtime premises stay conditional.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve()
+ROOT = SCRIPT.parent.parent
+CHAIN_REL = Path("mm0/proof_chain")
+MANIFEST_REL = CHAIN_REL / "chain.toml"
+
+BOUND = "u100"
+
+
+def load_pc06():
+    """The declaration parser PC06 already uses, so both cards read MM0 the
+    same way (one parser, not two that can disagree)."""
+    loader = SourceFileLoader("pc06_obligations", str(ROOT / "scripts/pc06-obligations"))
+    spec = importlib.util.spec_from_loader("pc06_obligations", loader)
+    if spec is None:
+        raise SystemExit("[FAIL] PC07: cannot load scripts/pc06-obligations")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class Findings:
+    def __init__(self) -> None:
+        self.items: list[tuple[str, str]] = []
+        self.details: list[str] = []
+
+    def fail(self, name: str, detail: str = "") -> None:
+        self.items.append((name, detail))
+
+    def detail(self, text: str) -> None:
+        self.details.append(text)
+
+    def emit(self) -> int:
+        if not self.items:
+            for text in self.details:
+                print(f"  [detail] {text}")
+            return 0
+        for text in self.details:
+            print(f"  [detail] {text}")
+        for name, detail in self.items:
+            print(f"[FAIL] PC07: {name}{': ' + detail if detail else ''}")
+        return 1
+
+
+def norm(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def toolchain() -> tuple[str, str] | None:
+    rs, cc = shutil.which("mm0-rs"), shutil.which("mm0-c")
+    return (rs, cc) if rs and cc else None
+
+
+def replay(root: Path, manifest: dict, workdir: Path) -> tuple[str, str] | str:
+    """Assemble the declared order and check it with both MM0 tools."""
+    tools = toolchain()
+    if tools is None:
+        return "absent"
+    rs, cc = tools
+    spec_parts: list[str] = []
+    proof_parts: list[str] = []
+    for artifact in manifest["artifact"]:
+        spec_parts.append((root / CHAIN_REL / artifact["file"]).read_text())
+        proof_parts.append((root / CHAIN_REL / artifact["proof"]).read_text())
+    spec_text = "\n".join(spec_parts)
+    proof_text = "\n".join(proof_parts)
+    (workdir / "chain.mm0").write_text(spec_text)
+    (workdir / "chain.mm1").write_text(proof_text)
+    compiled = subprocess.run(
+        [rs, "compile", str(workdir / "chain.mm1"), str(workdir / "chain.mmb")],
+        capture_output=True, text=True)
+    if compiled.returncode != 0:
+        tail = (compiled.stderr or compiled.stdout).strip().splitlines()
+        return "mm0-rs refused the proof file: " + (tail[0] if tail else "no output")
+    checked = subprocess.run([cc, str(workdir / "chain.mmb")],
+                             input=spec_text, capture_output=True, text=True)
+    if checked.returncode != 0:
+        tail = (checked.stderr or checked.stdout).strip().splitlines()
+        return "mm0-c refused the specification: " + (tail[-1] if tail else "no output")
+    shape = ""
+    for line in reversed((compiled.stdout or "").strip().splitlines()):
+        if re.match(r"^\d+ sorts?, ", line):
+            shape = line.strip()
+            break
+    return spec_text, proof_text, shape
+
+
+def header_facts(text: str) -> dict:
+    """The digest keys and `-- premise:` register an artifact records."""
+    digests: dict[str, str] = {}
+    premises: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        match = re.match(r"^-- ([A-Za-z0-9_-]+)=([0-9a-f]{64})$", line)
+        if match:
+            digests[match.group(1)] = match.group(2)
+            continue
+        match = re.match(r"^-- premise: (\w+) = (\w+);", line)
+        if match:
+            premises.append((match.group(1), match.group(2)))
+    return {"digests": digests, "premises": premises}
+
+
+def dependencies(proof: str, known: set, self_name: str) -> list[str]:
+    """Declared names a proof term mentions.
+
+    Proof-position arguments count: `(transfer_through_eq
+    wgsl_inherits_source_bound edge)` depends on both theorems, and a graph
+    that only counted head applications would miss the reuse of PC05a's bound
+    — which is the property this card is about.
+    """
+    tokens = set(re.findall(r"[A-Za-z_][\w']*", proof))
+    return sorted(t for t in tokens if t in known and t != self_name)
+
+
+def premise_head(text: str) -> str:
+    return norm(text).lstrip("(").split()[0].rstrip(")")
+
+
+def definitions(spec_text: str) -> set[str]:
+    """The `def`/`term` names — the functions a subject layer can name."""
+    return set(re.findall(r"(?m)^(?:pub )?(?:def|term) (\w+)", spec_text))
+
+
+def statement_introduces(decl: dict, function: str) -> bool:
+    """Is the conclusion `ule (<function> x) u100` for the statement's own var?"""
+    concl = norm(decl["concl"])
+    match = re.match(rf"^ule \(\s*{re.escape(function)}\s+(\w+)\s*\)\s*{BOUND}$", concl)
+    return match is not None
+
+
+def equality_links(decl: dict, left: str, right: str) -> bool:
+    """Is the conclusion `ueq (<left> x) (<right> x)` for one shared variable?"""
+    concl = norm(decl["concl"])
+    match = re.match(
+        rf"^ueq \(\s*{re.escape(left)}\s+(\w+)\s*\)\s*\(\s*{re.escape(right)}\s+(\w+)\s*\)$",
+        concl)
+    return match is not None and match.group(1) == match.group(2)
+
+
+def blocks(text: str) -> list[str]:
+    """Split a TOML file into table blocks, header line included."""
+    out: list[list[str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and not stripped.startswith("[#"):
+            out.append([line])
+        elif out:
+            out[-1].append(line)
+        else:
+            out.append([line])
+    return ["\n".join(b).rstrip() + "\n" for b in out]
+
+
+def derive(root: Path, manifest: dict, spec_text: str, proof_text: str,
+           findings: Findings) -> dict:
+    """Everything the replay establishes, keyed by theorem name."""
+    pc = load_pc06()
+    decls = pc.parse_declarations(spec_text)
+    proofs = pc.parse_declarations(proof_text)
+    known = set(decls)
+
+    # Each artifact declares its fragments; per-fragment parsing is what makes
+    # "this theorem lives in that artifact" measured rather than assumed.
+    for artifact in manifest["artifact"]:
+        text = (root / CHAIN_REL / artifact["file"]).read_text()
+        local = pc.parse_declarations(text)
+        present = sorted(n for n, d in local.items() if d["kind"] == "theorem")
+        declared = artifact.get("theorems", [])
+        if sorted(declared) != present:
+            missing = sorted(set(present) - set(declared))
+            extra = sorted(set(declared) - set(present))
+            detail = []
+            if missing:
+                detail.append(f"theorem(s) not declared: {missing}")
+            if extra:
+                detail.append(f"declared theorem(s) absent: {extra}")
+            findings.fail("every artifact's theorem set is the declared one",
+                          f"{artifact['name']}: " + "; ".join(detail))
+
+    graph: dict[str, list[str]] = {}
+    for name in sorted(decls):
+        if decls[name]["kind"] != "theorem":
+            continue
+        proof = proofs[name]["proof"] if name in proofs else ""
+        graph[name] = dependencies(proof, known, name)
+    return {"decls": decls, "graph": graph, "known": known,
+            "functions": definitions(spec_text)}
+
+
+def graph_checks(manifest: dict, derived: dict, findings: Findings) -> None:
+    declared = {row["theorem"]: sorted(row.get("on", [])) for row in manifest.get("applies", [])}
+    graph = derived["graph"]
+    for name in sorted(set(declared) | set(graph)):
+        if name not in graph:
+            findings.fail("the declared proof graph matches the replay",
+                          f"{name}: declared, but the artifacts prove no such theorem")
+            continue
+        if name not in declared:
+            findings.fail("the declared proof graph matches the replay",
+                          f"{name}: proved, but the manifest declares no row")
+            continue
+        if declared[name] != graph[name]:
+            findings.fail("the declared proof graph matches the replay",
+                          f"{name}: declared {declared[name]}, proof term mentions {graph[name]}")
+    if not findings.items:
+        findings.detail(f"PC07 graph: {len(graph)} theorem row(s) match the proof terms")
+
+
+def closure(root: Path, manifest: dict, derived: dict, findings: Findings) -> dict:
+    entry = manifest["entry"]["theorem"]
+    decls, graph = derived["decls"], derived["graph"]
+    if entry not in decls or decls[entry]["kind"] != "theorem":
+        findings.fail("the entry theorem exists", f"{entry}: not a proved theorem")
+        return {"axioms": [], "premises": []}
+
+    seen: set[str] = set()
+
+    def walk(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        for other in graph.get(name, []):
+            walk(other)
+
+    walk(entry)
+    axioms = sorted(n for n in seen if decls[n]["kind"] == "axiom")
+    if axioms != sorted(manifest["entry"].get("axioms", [])):
+        findings.fail("the entry theorem's residual closure is exact",
+                      f"axiom leaves: replay reaches {axioms}, manifest declares "
+                      f"{sorted(manifest['entry'].get('axioms', []))}")
+
+    premises = [norm(p) for _, p in decls[entry]["premises"]]
+    declared = [norm(p) for p in manifest["entry"].get("premises", [])]
+    if premises != declared:
+        findings.fail("the entry theorem's residual closure is exact",
+                      f"premises: replay has {premises}, manifest declares {declared}")
+
+    register = {row["term"]: row for row in manifest.get("residual", [])}
+    heads = [premise_head(p) for p in premises]
+    for row in manifest.get("residual", []):
+        if row["term"] not in heads:
+            findings.fail("each entry premise is classified",
+                          f"`{row['name']}` ({row['term']}) is declared but is not an "
+                          f"entry premise")
+    for head in heads:
+        if head not in register:
+            findings.fail("each entry premise is classified",
+                          f"entry premise `{head}` has no residual row")
+    return {"axioms": axioms, "premises": premises, "heads": heads, "register": register}
+
+
+def cut_checks(root: Path, manifest: dict, derived: dict, findings: Findings) -> list[dict]:
+    decls = derived["decls"]
+    functions = derived["functions"]
+    artifacts = {a["name"]: a for a in manifest["artifact"]}
+    subjects = manifest.get("subject", [])
+    layers = [s["layer"] for s in subjects]
+    for required in manifest.get("policy", {}).get("require_layers", []):
+        if required not in layers:
+            findings.fail("the subject cut is declared as required",
+                          f"the chain has no {required} layer")
+    previous: dict | None = None
+    for subject in subjects:
+        artifact = artifacts.get(subject["artifact"])
+        if artifact is None:
+            findings.fail("the subject cut is declared as required",
+                          f"{subject['layer']}: unknown artifact {subject['artifact']}")
+            continue
+        if subject["function"] not in functions:
+            findings.fail("the subject cut is declared as required",
+                          f"{subject['layer']}: `{subject['function']}` is not declared")
+        bound = decls.get(subject["bound"])
+        if bound is None or bound["kind"] != "theorem":
+            findings.fail("the subject cut is declared as required",
+                          f"{subject['layer']}: `{subject['bound']}` is not a theorem")
+        elif not statement_introduces(bound, subject["function"]):
+            findings.fail("the subject cut is declared as required",
+                          f"{subject['layer']}: `{subject['bound']}` does not state "
+                          f"`ule ({subject['function']} x) {BOUND}`")
+        if "link" in subject:
+            if previous is None:
+                findings.fail("the subject cut is declared as required",
+                              f"{subject['layer']}: a link with no previous layer")
+            else:
+                link = decls.get(subject["link"])
+                if link is None or link["kind"] != "theorem":
+                    findings.fail("the subject cut is declared as required",
+                                  f"{subject['layer']}: `{subject['link']}` is not a theorem")
+                elif not equality_links(link, subject["function"], previous["function"]):
+                    findings.fail("the subject cut is declared as required",
+                                  f"{subject['layer']}: `{subject['link']}` does not equate "
+                                  f"`{subject['function']}` with `{previous['function']}`")
+        if "digest" in subject:
+            facts = header_facts((root / CHAIN_REL / artifact["file"]).read_text())
+            if subject["digest"] not in facts["digests"]:
+                findings.fail("the subject cut is declared as required",
+                              f"{subject['layer']}: {artifact['file']} records no "
+                              f"`{subject['digest']}`")
+        previous = subject
+    return subjects
+
+
+def digest_checks(root: Path, manifest: dict, findings: Findings) -> dict[str, str]:
+    """Shared subject identities: the same IR digest on both sides of a cut."""
+    recorded: dict[str, list[tuple[str, str]]] = {}
+    for artifact in manifest["artifact"]:
+        facts = header_facts((root / CHAIN_REL / artifact["file"]).read_text())
+        for key, value in facts["digests"].items():
+            recorded.setdefault(key, []).append((artifact["name"], value))
+        if "digest" in artifact and artifact["digest"] not in facts["digests"]:
+            findings.fail("each artifact records the digest it declares",
+                          f"{artifact['name']}: no `{artifact['digest']}` in the header")
+    for key in manifest.get("policy", {}).get("shared_digests", []):
+        rows = recorded.get(key, [])
+        if len(rows) < 2:
+            findings.fail("shared digests agree across the artifacts",
+                          f"`{key}` is recorded by {len(rows)} artifact(s); a shared "
+                          f"subject needs at least two")
+            continue
+        values = {value for _, value in rows}
+        if len(values) != 1:
+            findings.fail("shared digests agree across the artifacts",
+                          f"`{key}`: " + ", ".join(f"{n}={v[:12]}…" for n, v in rows))
+        else:
+            findings.detail(f"PC07 identity: {key} {rows[0][1][:12]}… recorded by "
+                            + ", ".join(n for n, _ in rows))
+    return {row[0]: row[1] for rows in recorded.values() for row in rows}
+
+
+def policy_checks(manifest: dict, profile: str, region: dict, findings: Findings) -> None:
+    allowed = manifest.get("policy", {}).get("allowed_classes", [])
+    if profile == "certified":
+        allowed = manifest.get("policy", {}).get("certified", {}).get("allowed_classes", [])
+    for name, row in sorted(region["register"].items()):
+        if row["class"] not in allowed:
+            findings.fail("the residual classes satisfy the profile",
+                          f"`{row['name']}` is a {row['class']}, which the {profile} "
+                          f"profile does not allow (allowed: {allowed})")
+
+
+def report_region(region: dict) -> None:
+    for premise in region["premises"]:
+        head = premise_head(premise)
+        row = region["register"].get(head)
+        label = f"{row['class']} ({row['name']})" if row else "unclassified"
+        print(f"  [premise] {premise} — {label}")
+
+
+def structural(root: Path, manifest: dict, workdir: Path, findings: Findings,
+               profile: str, apply_policy: bool) -> dict:
+    replayed = replay(root, manifest, workdir)
+    if replayed == "absent":
+        return {"gap": True}
+    if isinstance(replayed, str):
+        findings.fail("the chain replays with mm0-rs and mm0-c", replayed)
+        return {"gap": False}
+    spec_text, proof_text, shape_line = replayed
+    derived = derive(root, manifest, spec_text, proof_text, findings)
+    graph_checks(manifest, derived, findings)
+    region = closure(root, manifest, derived, findings)
+    cut_checks(root, manifest, derived, findings)
+    digests = digest_checks(root, manifest, findings)
+    if apply_policy and region.get("register") is not None:
+        policy_checks(manifest, profile, region, findings)
+    return {"gap": False, "derived": derived, "region": region,
+            "spec": spec_text, "proof": proof_text, "digests": digests,
+            "shape": shape_line}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=["check", "report", "selftest"])
+    parser.add_argument("--root", default=str(ROOT),
+                        help="tree holding mm0/proof_chain (for the selftest's copies)")
+    parser.add_argument("--profile", choices=["checked", "certified"], default="checked")
+    args = parser.parse_args()
+    root = Path(args.root).resolve()
+
+    if args.mode == "selftest":
+        return selftest(root)
+
+    manifest_path = root / MANIFEST_REL
+    if not manifest_path.exists():
+        print(f"[FAIL] PC07: the frozen fixture exists: {MANIFEST_REL} is missing")
+        return 1
+    manifest = tomllib.loads(manifest_path.read_text())
+    findings = Findings()
+    with tempfile.TemporaryDirectory() as tmp:
+        result = structural(root, manifest, Path(tmp), findings, args.profile,
+                            apply_policy=(args.mode == "check"))
+    if result.get("gap"):
+        print("[gap] PC07: the chain is not replayed here (mm0-rs/mm0-c absent); "
+              "run it under `nix develop \"git+file://$PWD#mm0\"`")
+        return 3
+
+    if args.mode == "report" and not findings.items:
+        print(f"  [report] chain: {manifest['chain']['name']} — "
+              f"{len(manifest['artifact'])} artifact(s); {result['shape']}")
+        for subject in manifest.get("subject", []):
+            link = f" ⇐ {subject['link']}" if "link" in subject else ""
+            print(f"  [report] cut: {subject['layer']}: {subject['function']}{link} "
+                  f"⊦ {subject['bound']}")
+        entry = manifest["entry"]["theorem"]
+        decl = result["derived"]["decls"][entry]
+        variables = ", ".join(f"{v}: {decl['types'][v]}" for v in decl["vars"])
+        print(f"  [report] entry: {entry} ({variables}) ⊦ {norm(decl['concl'])}")
+        report_region(result["region"])
+        print(f"  [report] closure: {len(result['region']['axioms'])} axiom(s) "
+              f"({', '.join(result['region']['axioms'])}) and "
+              f"{len(result['region']['premises'])} premise(s)")
+        external = [row["name"] for row in manifest.get("residual", [])
+                    if row["class"] == "external-model"]
+        verdict = ("conditional — " + (", ".join(external) + " is an external model "
+                   "assumption, not a proof" if external else "no external model assumption"))
+        print(f"  [report] verdict: {verdict}")
+        print("  [report] this is a conditional theorem over a recorded cut, not GPU "
+              "instruction certification")
+    return findings.emit()
+
+
+# ── The negative controls ───────────────────────────────────────────────
+
+def run_control(root: Path, mode: str, *extra: str, env: dict | None = None
+                ) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, str(SCRIPT), mode, "--root", str(root), *extra],
+                          capture_output=True, text=True, env=env)
+
+
+def selftest(root: Path) -> int:
+    if toolchain() is None:
+        print("[gap] PC07: the selftest needs mm0-rs/mm0-c; run it under "
+              "`nix develop \"git+file://$PWD#mm0\"`")
+        return 3
+
+    source = root / CHAIN_REL
+    files = [p.name for p in sorted(source.glob("*.mm0"))] + \
+            [p.name for p in sorted(source.glob("*.mm1"))]
+    manifest_text = (root / MANIFEST_REL).read_text()
+
+    controls: list[tuple[str, callable]] = []
+
+    def scratch(mutate_files=None, mutate_manifest=None) -> Path:
+        tmp = Path(tempfile.mkdtemp(prefix="pc07-"))
+        chain = tmp / CHAIN_REL
+        chain.mkdir(parents=True)
+        for name in files:
+            (chain / name).write_text((source / name).read_text())
+        text = manifest_text
+        if mutate_files:
+            for name, old, new in mutate_files:
+                path = chain / name
+                body = path.read_text()
+                if old not in body:
+                    raise SystemExit(f"[FAIL] PC07 selftest: mutation missing from {name}: {old!r}")
+                path.write_text(body.replace(old, new, 1))
+        if mutate_manifest:
+            text = mutate_manifest(text)
+        (chain / "chain.toml").write_text(text)
+        return tmp
+
+    def expect(name: str, proc: subprocess.CompletedProcess[str], code: int,
+               needle: str) -> None:
+        problems = []
+        if proc.returncode != code:
+            problems.append(f"exit {proc.returncode}, expected {code}")
+        if needle not in (proc.stdout + proc.stderr):
+            problems.append(f"output does not say {needle!r}")
+        if problems:
+            print(f"[FAIL] PC07 selftest: {name}: " + "; ".join(problems))
+            print((proc.stdout + proc.stderr).strip()[-1500:])
+            raise SystemExit(1)
+        print(f"  [pass] PC07 control refused: {name}")
+
+    def drop_block(header: str):
+        def mutate(text: str) -> str:
+            kept = [b for b in blocks(text) if not b.lstrip().startswith(header)]
+            if len(kept) == len(blocks(text)):
+                raise SystemExit(f"[FAIL] PC07 selftest: no {header!r} block to drop")
+            return "".join(kept)
+        return mutate
+
+    def edit_manifest(old: str, new: str):
+        def mutate(text: str) -> str:
+            if old not in text:
+                raise SystemExit(f"[FAIL] PC07 selftest: manifest mutation missing: {old!r}")
+            return text.replace(old, new, 1)
+        return mutate
+
+    # 1. The replay is authoritative: a changed statement the proof no longer
+    #    proves is refused by mm0, not accepted because the manifest agrees.
+    tmp = scratch(mutate_files=[("clamp_wgsl.mm0", f"ule (wgsl_clamp x) {BOUND}",
+                                 "ule (wgsl_clamp x) u99")])
+    expect("a changed statement is refused by the replay",
+           run_control(tmp, "check"), 1, "the chain replays with mm0-rs and mm0-c")
+
+    # 2. An incomplete proof file: the entry theorem's proof is removed.
+    tmp = scratch()
+    proof = (tmp / CHAIN_REL / "clamp_transport.mm1").read_text()
+    cut = proof.index("pub theorem transported_bound")
+    (tmp / CHAIN_REL / "clamp_transport.mm1").write_text(proof[:cut])
+    expect("an incomplete proof file is refused",
+           run_control(tmp, "check"), 1, "the chain replays with mm0-rs and mm0-c")
+
+    # 3. A forged record: a proof term that does not prove the statement.
+    tmp = scratch(mutate_files=[("clamp_transport.mm1",
+                                 "= '(transfer_through_eq (transfer_through_eq "
+                                 "wgsl_inherits_source_bound edge) hn);",
+                                 "= '(ueq_refl);")])
+    expect("a forged proof record is refused",
+           run_control(tmp, "check"), 1, "the chain replays with mm0-rs and mm0-c")
+
+    # 4. A missing cut layer is not a conditional theorem: the shader subject
+    #    is deleted from the declaration, with the artifact still assembled.
+    tmp = scratch(mutate_manifest=drop_block("[[subject]]\nlayer = \"shader\""))
+    expect("a chain with no shader layer is refused",
+           run_control(tmp, "check"), 1, "the subject cut is declared as required")
+
+    # 5. A stale graph row: the reuse of PC05a's bound is dropped.
+    tmp = scratch(mutate_manifest=edit_manifest(
+        'theorem = "transported_bound"\non = ["transfer_through_eq", '
+        '"wgsl_inherits_source_bound"]',
+        'theorem = "transported_bound"\non = ["transfer_through_eq"]'))
+    expect("a declared graph that drops a dependency is refused",
+           run_control(tmp, "check"), 1, "the declared proof graph matches the replay")
+
+    # 6. A residual dropped from the register: the premise becomes unclassified.
+    tmp = scratch(mutate_manifest=lambda text: re.sub(
+        r'\n\[\[residual\]\]\nname = "native".*?\nclass = "external-model"\n',
+        "\n", text, count=1, flags=re.S))
+    expect("an undeclared residual premise is refused",
+           run_control(tmp, "check"), 1, "each entry premise is classified")
+
+    # 7. A shared subject identity that disagrees across the cut.
+    tmp = scratch()
+    edge = (tmp / CHAIN_REL / "clamp_wgsl.mm0").read_text()
+    tampered = re.sub(r"^-- ir_sha256=([0-9a-f])", "-- ir_sha256=f", edge, count=1, flags=re.M)
+    (tmp / CHAIN_REL / "clamp_wgsl.mm0").write_text(tampered)
+    expect("a shared digest that disagrees is refused",
+           run_control(tmp, "check"), 1, "shared digests agree across the artifacts")
+
+    # 8/9. Profile and mode are separate: the strict profile refuses the
+    #      external model assumption, and report mode still states the
+    #      conditional theorem.
+    tmp = scratch()
+    expect("the certified profile refuses an external model assumption",
+           run_control(tmp, "check", "--profile", "certified"), 1,
+           "the residual classes satisfy the profile")
+    report = run_control(tmp, "report", "--profile", "certified")
+    if report.returncode != 0 or "verdict: conditional" not in report.stdout:
+        print("[FAIL] PC07 selftest: report mode does not state the conditional theorem "
+              f"where the certified profile refuses (exit {report.returncode})")
+        print((report.stdout + report.stderr).strip()[-1500:])
+        return 1
+    print("  [pass] PC07 control: report mode states the conditional theorem where the "
+          "certified profile refuses")
+
+    # 10. A missing toolchain is a gap, never a pass.
+    empty = Path(tempfile.mkdtemp(prefix="pc07-path-"))
+    env = {"PATH": str(empty), "HOME": str(empty), "LANG": "C.UTF-8"}
+    expect("an absent MM0 toolchain is a gap", run_control(tmp, "check", env=env), 3,
+           "[gap] PC07")
+
+    print("[pass] PC07 selftest: 10 controls behave")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,116 @@
+# native/add.capture — PC08's captured host fragment (generated).
+#
+# Written by `scripts/native-edge capture`; every run of
+# `scripts/native-edge` re-decodes the recorded bytes and refuses a file
+# that disagrees, so this is evidence, not a hint. Nothing here is
+# executed: the bytes are the ones the bridge compiled, read back through
+# the same `CaptureModule` the JIT path uses (`cps2cell`).
+[meta]
+arch = "x86_64"
+source = "examples/native-fragment/NativeFragment.aum"
+module = "NativeFragment"
+subject = "add"
+cps_sha256 = "e180db5f49e97bc1731479f6b8290a974d47932e475044551914a675bea8d362"
+avce_sha256 = "07c2e5a9022ebfb99d030ab400a3962435a8cfa3cb24c9604f6085bb31266adb"
+clif = ["inst call 2 1 i64,i64 -> i64", "inst return 1 0 i64 -> none"]
+[[import]]
+name = "Austral.Pervasive::trappingAdd"
+[[import]]
+name = "au_alloc"
+[[function]]
+name = "add"
+bytes = "554889e549b8000000000000000041ffd04889ec5dc3"
+[[function.reloc]]
+offset = 6
+addend = 0
+kind = "Abs8"
+symbol = "Austral.Pervasive::trappingAdd"
+[[function.insn]]
+offset = 0
+bytes = "55"
+form = "push rbp"
+[[function.insn]]
+offset = 1
+bytes = "4889e5"
+form = "mov rbp, rsp"
+[[function.insn]]
+offset = 4
+bytes = "49b80000000000000000"
+form = "movabs r8, imm64 @Austral.Pervasive::trappingAdd"
+[[function.insn]]
+offset = 14
+bytes = "41ffd0"
+form = "call r8"
+[[function.insn]]
+offset = 17
+bytes = "4889ec"
+form = "mov rsp, rbp"
+[[function.insn]]
+offset = 20
+bytes = "5d"
+form = "pop rbp"
+[[function.insn]]
+offset = 21
+bytes = "c3"
+form = "ret"
+[[function]]
+name = "main"
+bytes = "554889e5bf03000000be04000000e800000000bf0800000048be0000000000000000ffd648c700010000004889ec5dc3"
+[[function.reloc]]
+offset = 15
+addend = -4
+kind = "X86CallPCRel4"
+symbol = "add"
+[[function.reloc]]
+offset = 26
+addend = 0
+kind = "Abs8"
+symbol = "au_alloc"
+[[function.insn]]
+offset = 0
+bytes = "55"
+form = "push rbp"
+[[function.insn]]
+offset = 1
+bytes = "4889e5"
+form = "mov rbp, rsp"
+[[function.insn]]
+offset = 4
+bytes = "bf03000000"
+form = "mov edi, imm32 0x3"
+[[function.insn]]
+offset = 9
+bytes = "be04000000"
+form = "mov esi, imm32 0x4"
+[[function.insn]]
+offset = 14
+bytes = "e800000000"
+form = "call rel32 @add"
+[[function.insn]]
+offset = 19
+bytes = "bf08000000"
+form = "mov edi, imm32 0x8"
+[[function.insn]]
+offset = 24
+bytes = "48be0000000000000000"
+form = "movabs rsi, imm64 @au_alloc"
+[[function.insn]]
+offset = 34
+bytes = "ffd6"
+form = "call rsi"
+[[function.insn]]
+offset = 36
+bytes = "48c70001000000"
+form = "mov qword [rax], imm32 0x1"
+[[function.insn]]
+offset = 43
+bytes = "4889ec"
+form = "mov rsp, rbp"
+[[function.insn]]
+offset = 46
+bytes = "5d"
+form = "pop rbp"
+[[function.insn]]
+offset = 47
+bytes = "c3"
+form = "ret"

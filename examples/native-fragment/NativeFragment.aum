@@ -1,0 +1,14 @@
+module body NativeFragment is
+    -- PC08's captured fragment: one scalar function with a bounded, visible
+    -- body, called from the entrypoint with constant arguments. The capture
+    -- records the machine code `add` and `main` compile to; nothing here is
+    -- executed by the proof tooling.
+    function add(x: Int64, y: Int64): Int64 is
+        return (x + y);
+    end;
+
+    function main(): ExitCode is
+        let r: Int64 := add(3, 4);
+        return ExitSuccess();
+    end;
+end module body.

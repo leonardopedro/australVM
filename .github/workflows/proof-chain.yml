@@ -1,0 +1,78 @@
+# PC07: replay the frozen proof chain and run its negative controls.
+#
+# This is a separate workflow so the signal is about the chain, not about the
+# whole gate: `nix build .#mm0` plus python3 is all it needs — no OCaml build,
+# no Rust bridge, no Lean corpus, no GPU. `scripts/verify-invariants` runs the
+# same two commands and reports an explained `[gap]` when the mm0 toolchain is
+# absent, which is the normal case outside a dev shell; this job is where an
+# absent toolchain would be a *failure* rather than a gap.
+#
+# Three commands, and all three matter:
+#   `check`    replays word→relation→clamp_source→clamp_wgsl→clamp_transport
+#              with `mm0-rs` + `mm0-c` and holds the declared graph, the
+#              subject cut, the shared digests and the residual closure to it;
+#   `report`   must print the conditional theorem (and exit 0) — a chain that
+#              stops being reportable is a regression the strict profile hides;
+#   `selftest` is the card's ten refusal controls. Without it, a checker that
+#              stopped detecting anything would still be green here.
+name: PC07 proof chain
+
+on:
+  pull_request:
+    paths:
+      - "mm0/proof_chain/**"
+      - "scripts/proof-chain"
+      - "scripts/pc06-obligations"
+      - "docs/proof/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/proof-chain.yml"
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  chain:
+    name: replay, report and controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703 # nixbuild/nix-quick-install-action@v30
+
+      - name: nix cache
+        uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6 # nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-mm0-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-mm0-${{ runner.os }}-${{ runner.arch }}-
+
+      # `git+file:` addresses the flake without copying the worktree into the
+      # store (the repo carries multi-GB build directories that a plain path
+      # would copy before anything starts).
+      - name: mm0 and python3
+        run: |
+          MM0=$(nix build "git+file://$PWD#mm0" --no-link --print-out-paths | tail -1)
+          PY=$(nix build nixpkgs#python3 --no-link --print-out-paths | tail -1)
+          echo "PATH=$MM0/bin:$PY/bin:$PATH" >> "$GITHUB_ENV"
+          command -v mm0-rs
+          command -v mm0-c
+          command -v python3
+
+      # `check` exits 3 (a gap, never a pass) when either tool is missing; in
+      # this job that is a broken setup, so it is treated as a failure.
+      - name: check (replay + declaration)
+        run: python3 scripts/proof-chain check
+
+      - name: report (conditional theorem)
+        run: |
+          out=$(python3 scripts/proof-chain report)
+          echo "$out"
+          grep -q "verdict: conditional" <<<"$out"
+
+      - name: selftest (ten refusals)
+        run: python3 scripts/proof-chain selftest
