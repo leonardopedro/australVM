@@ -39,6 +39,12 @@
           rustc
           cargo
 
+          # The frozen MM0 toolchain (packages.mm0 below). The gate's PC05a/
+          # PC05b replays need `mm0-rs`/`mm0-c`, and a host profile that happens
+          # to carry them is not the shell: a gap there would describe the
+          # machine, not this checkout.
+          self.packages.${system}.mm0
+
           # OCaml libraries
           ocamlPackages.yojson
           ocamlPackages.ppx_deriving
@@ -348,6 +354,10 @@
             ocamlPackages.ppx_sexp_conv
             ocamlPackages.zarith
             ocamlPackages.digestif
+            # The MM0 replay (PC05a/PC05b, Phase D, W2…): this shell has no
+            # prover, so it must carry the verifier explicitly rather than
+            # inherit one from a host profile.
+            self.packages.${system}.mm0
           ];
         };
 
