@@ -7,8 +7,11 @@ the edge/composition layer and the conditional→discharged premise step
 that composition to G13's memory plan and states its residuals
 (`mm0/proof_chain/gpu_plan.mm0`, `docs/proof/GPU_PLAN.md`); PC04 reflects the
 real clamp body and its KernelIR into a proved bound
-(`mm0/proof_chain/clamp_source.mm0`, `docs/proof/SOURCE_IR.md`); PC00, PC01,
-PC05 and PC07–PC15 are pending.** This is an extension of
+(`mm0/proof_chain/clamp_source.mm0`, `docs/proof/SOURCE_IR.md`); PC07 is the
+first whole-chain gate (`mm0/proof_chain/chain.toml`, `docs/proof/CHAIN_GATE.md`);
+PC08 captures one real host fragment and states its edge, open, because no
+x86_64 model exists (`mm0/proof_chain/native/add.capture`,
+`docs/proof/NATIVE_EDGE.md`); PC00, PC01, PC05 and PC09–PC15 are pending.** This is an extension of
 [PLAN_gpu_kernels.md](PLAN_gpu_kernels.md) for the owner's requested proof reuse
 across Austral, intermediate representations, and CPU/GPU/NPU instructions.
 The [design contract](docs/PROOF_CHAIN.md) specifies the semantics, obligation
@@ -277,8 +280,15 @@ checks fail even though byte provenance has been made internally consistent.
 the clamp clause and by G13's plan at two launch bounds
 (`mm0/proof_chain/gpu_plan.mm0`, `docs/proof/GPU_PLAN.md`);
 `scripts/pc06-obligations` checks the assembly, the reuse, the residual table
-and forged records. The plan's arithmetic/runtime premises stay residual, and
-the obligation cache and alpha-renaming matrix are not implemented.
+and forged records. The plan's arithmetic/runtime premises stay residual.
+The obligation cache and the alpha-renaming matrix are implemented over that
+one assembled theory: `mm0/proof_chain/gpu_plan.closure` records each
+statement's canonical digest, its applications and its transitive premise
+closure, and is recomputed and refused when stale; instance rows are checked by
+a binder-substitution matcher that refuses a renamed-away binder, a dropped
+premise and a collision. What remains is reuse *across* theories (the cache is
+single-theory) and a discharge that closes a residual, since no residual has an
+MM0 route yet.
 
 **Depends:** PC03,PC05. **Files:** obligation linker/checker, tiny cache, negative
 fixtures; shared theory imports and bound proof references.
@@ -319,6 +329,26 @@ Lean corpus or a GPU merely to check these proof terms.
 small source fixture. Required cut/profile failures are nonzero. Report mode can
 show a valid conditional theorem without satisfying a stricter policy.
 
+**Status:** implemented. `mm0/proof_chain/chain.toml` declares the fixture —
+assembly order, the source→IR→shader cut (function, proved bound, equality link
+and recorded digest per layer), one proof-graph row per theorem, and the entry
+theorem with its premises, axiom leaves and residual classes — and
+`scripts/proof-chain check` replays the five artifacts with `mm0-rs`/`mm0-c`
+before holding every row to what the replay establishes. The graph counts
+proof-position references as dependencies, so `transported_bound` is seen to
+reuse PC05a's `wgsl_inherits_source_bound` rather than restate it; PC06's cache
+uses the same definition (`name@n` applied, bare `name` mentioned) and checks it
+against the artifact that exercises it, so the two graphs cannot drift. `check --profile
+certified` refuses the one external model assumption (`native_agrees`);
+`report` prints the same chain as a conditional theorem without applying the
+profile, which is the plan's "report mode" sentence. `selftest` runs ten
+controls — a changed statement, an incomplete proof file, a forged proof
+record, a deleted cut layer, a graph row that drops a dependency, an undeclared
+residual, a disagreeing shared digest, the strict profile's refusal, report
+mode's success where that profile fails, and an absent toolchain as a gap.
+Nothing here is GPU instruction certification, and no parser/decoder is proved:
+the cut's edges are recorded reflections.
+
 ### PC08 — Connect one actual CPU instruction fragment
 
 **Depends:** PC07; actual CPU code-capture/build availability from PC00.
@@ -340,6 +370,26 @@ census and `encdec` laws remain useful coverage checks, not this preservation pr
 claim with an accurate target cut. Change an instruction operand/immediate or
 relocation and the relation fails. An unavailable decoder/model produces an
 explicit open edge, not a successful native profile.
+
+**Status:** partial, by the card's own third sentence. `examples/native-fragment`
+is compiled on the CPS path and captured through the bridge's `cps2cell`, so
+`mm0/proof_chain/native/add.capture` holds the machine code the JIT would run
+for `add` (22 bytes, 7 instructions, one `Abs8` relocation to
+`Austral.Pervasive::trappingAdd`) and for its caller `main` (48 bytes, the
+immediates `3`/`4` and the intra-capture call). `scripts/native-edge` re-decodes
+those bytes with a closed 13-form x86_64 table (an unknown byte is refused, and
+a relocation must land on an immediate of matching width), re-derives the capture
+byte-identically from the fixture when a toolchain is present, and holds the
+generated statement `mm0/proof_chain/native_add.mm0` to it. The edge is **open**:
+there is no x86_64 instruction semantics in this repository (the converted
+models are RV64, which `docs/PROOF_CHAIN.md` records cannot certify other
+targets), so the artifact states `native_add_edge` with `-- certificate: [gap]`,
+no `axiom` and no `theorem`, and the gate prints the gap rather than a profile.
+Eight controls each refuse: a changed argument immediate, a changed relocation
+target, a flipped instruction byte, a truncated body, a relabelled arch, a
+hand-edited statement, an edge relabelled a certificate, and an added axiom.
+Closing it needs a reviewed x86_64 model, an ABI-level simulation and a model of
+`trappingAdd`; none of those is invented here.
 
 ### PC09 — Track and certify selected MLIR lowering steps
 

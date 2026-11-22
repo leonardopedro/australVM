@@ -7,6 +7,8 @@
 //! destruction: it is independent of the registry's own release accounting, so
 //! the two must agree.
 
+mod support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -259,7 +261,8 @@ fn scratch(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch");
-    install_scratch_cleanup();
+    support::cleanup_on_exit("umbrella-handles");
+    support::cleanup_on_exit("umbrella-adapters");
     dir
 }
 
@@ -290,42 +293,6 @@ fn bridge_rlib() -> PathBuf {
     })
 }
 
-/// Remove this process's scratch directories when the test binary exits.
-///
-/// Each one holds a debug cdylib of the whole bridge — a wrapper crate is
-/// ~585 MB — so a handful of runs leaves gigabytes behind, and once the disk
-/// fills, every later `rustc` stalls and a plain test run looks hung. The
-/// directories are `umbrella-handles-<pid>-*` (this file) and
-/// `umbrella-adapters-<pid>-*` (`umbrella::adapters::build_next`), both named
-/// for the process that made them, so the pid prefix is the whole selection.
-extern "C" fn remove_scratch_dirs() {
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return;
-    };
-    let pid = std::process::id();
-    let prefixes = [
-        format!("umbrella-handles-{pid}-"),
-        format!("umbrella-adapters-{pid}-"),
-    ];
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if prefixes.iter().any(|p| name.to_string_lossy().starts_with(p)) {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
-}
-
-/// Register [`remove_scratch_dirs`] once. `atexit` runs it on the harness's
-/// normal exit, which is the path a green run takes; a killed process can
-/// still leave a directory, which the pid prefix keeps from confusing the next.
-fn install_scratch_cleanup() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        libc::atexit(remove_scratch_dirs);
-    });
-}
-
 /// One native build at a time.
 ///
 /// Every fixture below that needs a provider or a generated wrapper crate
@@ -334,11 +301,17 @@ fn install_scratch_cleanup() {
 /// cores, 15 GB) put the machine at a load of ~90 and no build finishes, which
 /// is what made this file require `--test-threads=1`. The tests themselves are
 /// independent — the *link step* is what contends — so only the builds are
-/// serialized and the tests still run concurrently.
+/// serialized and the tests still run concurrently. The guard covers the
+/// `rustc` invocation and nothing else: held across a `dlopen` it forms a cycle
+/// with the loader lock and the building tests deadlock.
 fn native_build_lock() -> std::sync::MutexGuard<'static, ()> {
     use std::sync::{Mutex, OnceLock};
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    install_scratch_cleanup();
+    // The adapter crates are built by `umbrella::adapters::build_next`, which
+    // names them `umbrella-adapters-<pid>-*`; this file's own fixtures are
+    // `umbrella-handles-<pid>-*`. Both are cleanup's business.
+    support::cleanup_on_exit("umbrella-handles");
+    support::cleanup_on_exit("umbrella-adapters");
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

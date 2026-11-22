@@ -5,6 +5,9 @@
 //! cdylib through `policy::dlopen` — the same function the driver uses. A
 //! denied stage is never invoked, so its line never appears.
 
+
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -17,6 +20,7 @@ fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("umbrella-policy-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
+    support::cleanup_on_exit("umbrella-policy");
     dir
 }
 

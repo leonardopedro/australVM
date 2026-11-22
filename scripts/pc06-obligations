@@ -26,6 +26,7 @@ as checked. Nothing here discharges `gpu_memory.mm0`; that artifact stays
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import shutil
 import subprocess
@@ -35,6 +36,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CHAIN = ["word", "relation", "gpu_plan"]
+TRANSPORT_CHAIN = ["word", "relation", "clamp_source", "clamp_wgsl",
+                   "clamp_transport"]
 FRAGMENT = ROOT / "mm0/proof_chain/gpu_plan.mm0"
 GEN = ROOT / "lib/gpu/Gpu_obligations.ml"
 DOC = ROOT / "docs/proof/GPU_PLAN.md"
@@ -81,6 +84,552 @@ def run(cmd: list[str], stdin=None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, stdin=stdin, capture_output=True, text=True)
 
 
+# ── Closure matrix and obligation cache (PC06) ─────────────────────────────
+# The card asks for theorem matching with exact types and contexts, binder
+# substitution, subject identity, a recomputed transitive assumption set and a
+# tiny cache. The cache lives in `mm0/proof_chain/gpu_plan.closure`; every run
+# recomputes the rows from the assembled specification and proofs and refuses a
+# file that disagrees. A cached row is therefore only ever a hint: the MM0
+# replay is the authority, and deleting the file cannot make anything green.
+
+CLOSURE = ROOT / "mm0/proof_chain/gpu_plan.closure"
+SHARED = "compose_bound"
+SHARED_USES = {"compose_discharged", "plan_write_bound", "plan_write_bound_256"}
+
+
+def norm(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def paren_end(text: str, start: int) -> int:
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    raise ValueError("unbalanced parenthesis")
+
+
+def parse_declarations(text: str) -> dict:
+    """Every `theorem`/`axiom`, with binders, premises and conclusion.
+
+    The proof term (a `.mm1` only feature) is kept so applications can be read
+    out of it; statement matching only ever looks at binders, premises and the
+    conclusion, which is what makes a pure renaming invisible to the digests.
+    """
+    decls: dict[str, dict] = {}
+    for m in re.finditer(r"(?m)^(?:pub )?(theorem|axiom)\s+(\w+)", text):
+        end = text.find(";", m.end())
+        if end == -1:
+            raise ValueError(f"unterminated declaration {m.group(2)}")
+        block = text[m.start():end + 1]
+        pos = m.end() - m.start()
+        names: list[str] = []
+        types: dict[str, str] = {}
+        premises: list[tuple[str, str]] = []
+        while True:
+            ws = re.match(r"\s*", block[pos:])
+            pos += ws.end()
+            if pos >= len(block) or block[pos] != "(":
+                break
+            close = paren_end(block, pos)
+            inner = block[pos + 1:close]
+            if "$" in inner:
+                label, _, prop = inner.partition(":")
+                premises.append((label.strip(), norm(prop.strip().strip("$"))))
+            else:
+                head, _, type_part = inner.partition(":")
+                for name in head.split():
+                    names.append(name)
+                    types[name] = norm(type_part)
+            pos = close + 1
+        tail = block[pos:]
+        colon = re.match(r"\s*:", tail)
+        if colon is None:
+            raise ValueError(f"cannot read the conclusion of {m.group(2)}")
+        # Premises may be parenthesized hypothesis groups or an arrow chain
+        # (`$ A $ > $ B $`), the two forms MM0 allows. The arrow chain's
+        # last segment is the conclusion.
+        props = [norm(p) for p in re.findall(r"\$(.*?)\$", tail, re.S)]
+        if not props:
+            raise ValueError(f"cannot read the conclusion of {m.group(2)}")
+        premises += [(f"p{len(premises) + i}", p) for i, p in enumerate(props[:-1])]
+        decls[m.group(2)] = {
+            "kind": m.group(1),
+            "vars": names,
+            "types": types,
+            "premises": premises,
+            "concl": props[-1],
+            "proof": block[pos + colon.end():],
+        }
+    return decls
+
+
+def canonical(decl: dict) -> dict:
+    """Binder-erased form: names become their first-occurrence position."""
+    ren = {n: f"v{i}" for i, n in enumerate(decl["vars"])}
+
+    def sub(text: str) -> str:
+        return re.sub(r"[A-Za-z_][\w']*", lambda m: ren.get(m.group(0), m.group(0)), text)
+
+    return {
+        "types": [decl["types"][n] for n in decl["vars"]],
+        "premises": [sub(p) for _, p in decl["premises"]],
+        "concl": sub(decl["concl"]),
+    }
+
+
+def stmt_text(decl: dict) -> str:
+    can = canonical(decl)
+    return "|".join([",".join(can["types"]), "; ".join(can["premises"]), can["concl"]])
+
+
+def stmt_digest(decl: dict) -> str:
+    return hashlib.sha256(stmt_text(decl).encode()).hexdigest()[:16]
+
+
+def sexp(text: str):
+    tokens = re.findall(r"\(|\)|[^\s()]+", text)
+
+    def parse(i: int):
+        items: list = []
+        while i < len(tokens) and tokens[i] != ")":
+            if tokens[i] == "(":
+                node, i = parse(i + 1)
+                items.append(node)
+            else:
+                items.append(tokens[i])
+                i += 1
+        return items, i + 1
+
+    node, _ = parse(0)
+    return node[0] if len(node) == 1 else node
+
+
+def render(node) -> str:
+    if isinstance(node, str):
+        return node
+    return "(" + " ".join(render(x) for x in node) + ")"
+
+
+def sexp_eq(a, b) -> bool:
+    return render(a) == render(b)
+
+
+def match_node(gen, spec, subs: dict, genvars: set, gtypes: dict,
+               stypes: dict) -> bool:
+    """Match one general subterm against one specific subterm."""
+    if isinstance(gen, str):
+        if gen in genvars:
+            if gen in subs:
+                return sexp_eq(subs[gen], spec)
+            if isinstance(spec, str) and spec in stypes and stypes[spec] != gtypes[gen]:
+                return False
+            subs[gen] = spec
+            return True
+        return isinstance(spec, str) and gen == spec
+    if not isinstance(spec, list) or not gen or not spec:
+        return False
+    if not isinstance(gen[0], str) or gen[0] != spec[0] or len(gen) != len(spec):
+        return False
+    return all(match_node(g, s, subs, genvars, gtypes, stypes)
+               for g, s in zip(gen[1:], spec[1:]))
+
+
+def instance_of(general: dict, specific: dict):
+    """Match `specific` as a binder-instance of `general`.
+
+    Returns `(subs, "")` or `(None, reason)`. Every binder of the general
+    statement must be instantiated, and two binders may not collapse onto the
+    same term: a statement that identifies them is a weaker special case, not
+    the shared statement under a renaming, so it is refused as a collision.
+    """
+    if len(general["premises"]) > len(specific["premises"]):
+        return None, "the specific statement has fewer premises"
+    gvars = set(general["vars"])
+    gtypes = general["types"]
+    stypes = specific["types"]
+    found: list[dict] = []
+
+    def walk(i: int, subs: dict, used: frozenset) -> bool:
+        if i == len(general["premises"]):
+            trial = dict(subs)
+            if match_node(sexp(general["concl"]), sexp(specific["concl"]),
+                          trial, gvars, gtypes, stypes):
+                found.append(trial)
+                return True
+            return False
+        target = sexp(general["premises"][i][1])
+        for j, (_, prop) in enumerate(specific["premises"]):
+            if j in used:
+                continue
+            trial = dict(subs)
+            if match_node(target, sexp(prop), trial, gvars, gtypes, stypes):
+                if walk(i + 1, trial, used | {j}):
+                    return True
+        return False
+
+    if not walk(0, {}, frozenset()):
+        return None, "no substitution matches the premises and conclusion"
+    subs = found[0]
+    missing = [v for v in general["vars"] if v not in subs]
+    if missing:
+        return None, f"binders {missing} are not instantiated"
+    images = [render(subs[v]) for v in general["vars"]]
+    if len(set(images)) < len(images):
+        return None, "distinct binders collapse onto one term (renaming collision)"
+    return subs, ""
+
+
+def applications(proof: str, known: set) -> list[tuple[str, int]]:
+    """Every theorem/axiom the proof term applies, with its argument count."""
+    found: list[tuple[str, int]] = []
+
+    def walk(node) -> None:
+        if isinstance(node, list):
+            if node and isinstance(node[0], str) and node[0] in known:
+                found.append((node[0], len(node) - 1))
+            for child in node:
+                walk(child)
+
+    walk(sexp(proof))
+    return found
+
+
+def mentions(proof: str, known: set) -> set:
+    """Every declared theorem/axiom the proof term names, at any position.
+
+    Proof-position arguments count: `(transfer_through_eq wgsl_inherits_source_bound
+    edge)` reuses that theorem without applying it, and a graph that counted only
+    head applications would report the reuse as absent. This is the same
+    dependency definition `scripts/proof-chain` (PC07) applies, so the two
+    graphs cannot disagree about the same proof.
+    """
+    found: set = set()
+
+    def walk(node) -> None:
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+        elif isinstance(node, str) and node in known:
+            found.add(node)
+
+    walk(sexp(proof))
+    return found
+
+
+def premise_closure(name: str, decls: dict, applies: dict,
+                    active: frozenset = frozenset()) -> set:
+    """The transitive premise leaves a theorem's validity depends on.
+
+    A proof that starts applying a theorem with premises of its own grows this
+    set, which is the check against a silently added trusted leaf.
+    """
+    if name in applies and applies[name].get("_closure") is not None:
+        return applies[name]["_closure"]
+    if name in active:
+        return set()
+    leaves = {(name, i) for i in range(len(decls[name]["premises"]))}
+    for other in applies.get(name, {}).get("mentions", set()):
+        if other in decls:
+            leaves |= premise_closure(other, decls, applies, active | {name})
+    if name in applies:
+        applies[name]["_closure"] = leaves
+    return leaves
+
+
+CLOSURE_HEADER = """\
+-- gpu_plan.closure — PC06's obligation cache (a hint, not a certificate).
+--
+-- layer: PC06 obligation cache
+-- status: generated by `scripts/pc06-obligations --write`; every run of
+--   `scripts/pc06-obligations` recomputes these rows from the assembled
+--   specification and proofs and refuses a file that disagrees. An entry here
+--   never discharges anything: the MM0 replay is authoritative.
+--
+-- WHAT A ROW RECORDS. A `theorem` row carries the canonical statement digest
+-- (binders erased to first-occurrence order, so a pure renaming does not move
+-- it), the proofs' dependencies, and the transitive premise
+-- closure (`owner#index` leaves). A dependency is written `name@n` when the
+-- proof applies it to `n` argument(s) and bare `name` when it appears only as a
+-- proof-position argument — the reuse `PC05a` relies on names a theorem without
+-- applying it, so counting head applications alone would hide a dependency. The closure grows when a proof starts
+-- applying a theorem with premises of its own, which is how a silently added
+-- trusted leaf becomes visible. `instance` rows are the alpha-renaming matrix:
+-- the specific statement is a binder-instance of the general one under the
+-- recorded substitution, and a substitution that identifies two of the general
+-- binders is refused as a collision.
+"""
+
+
+def derive_rows(spec_text: str, proof_text: str):
+    """Canonical statement rows, applications and closure for one artifact."""
+    decls = parse_declarations(spec_text)
+    pdecls = parse_declarations(proof_text)
+    known = set(decls)
+    applies: dict[str, dict] = {}
+    for name in sorted(decls):
+        proof = pdecls[name]["proof"] if name in pdecls else ""
+        applies[name] = {"calls": applications(proof, known) if proof else [],
+                         "mentions": mentions(proof, known) if proof else set(),
+                         "_closure": None}
+    problems: list[str] = []
+    for name, info in applies.items():
+        for other, nargs in info["calls"]:
+            if other not in decls:
+                continue
+            expected = len(decls[other]["premises"])
+            if nargs != expected:
+                problems.append(
+                    f"{name} applies {other} to {nargs} argument(s), "
+                    f"but it declares {expected} premise(s)")
+    uses = {name for name, info in applies.items()
+            if SHARED in info["mentions"]}
+    rows: list[str] = []
+    for name in sorted(decls):
+        decl = decls[name]
+        applied = applies[name]["calls"]
+        applied_names = {o for o, _ in applied}
+        deps = sorted(f"{o}@{n}" for o, n in applied)
+        deps += sorted("".join(o) for o in applies[name]["mentions"]
+                       if o not in applied_names)
+        app_text = ",".join(deps) or "-"
+        leaves = sorted(premise_closure(name, decls, applies))
+        closure = ",".join(f"{o}#{i}" for o, i in leaves) or "-"
+        types = [decl["types"][v] for v in decl["vars"]]
+        uniform = len(set(types)) == 1
+        var_text = (f"{len(types)}:{types[0]}" if uniform
+                    else f"{len(types)}:[{','.join(types)}]")
+        rows.append(
+            f"theorem {name} | vars {var_text} | premises "
+            f"{len(decl['premises'])} | applies {app_text} | "
+            f"stmt {stmt_digest(decl)} | closure {closure}")
+    for general in sorted(decls):
+        if decls[general]["kind"] != "theorem":
+            continue
+        for specific in sorted(decls):
+            if general == specific or decls[specific]["kind"] != "theorem":
+                continue
+            subs, _ = instance_of(decls[general], decls[specific])
+            if subs is None:
+                continue
+            mapping = ",".join(f"{v}=>{render(subs[v])}"
+                               for v in decls[general]["vars"])
+            rows.append(f"instance {specific} <= {general} subs {mapping}")
+    return decls, applies, rows, uses, problems
+
+
+def cache_diff(cache_text: str, derived: list[str]) -> list[str]:
+    """Field-level differences between a cache file and the derived rows."""
+    def index(rows: list[str]) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for row in rows:
+            fields = row.split(" | ")
+            out[fields[0]] = fields
+        return out
+
+    old = index([l for l in cache_text.splitlines()
+                 if re.match(r"^(theorem|instance) ", l)])
+    new = index(derived)
+    diffs: list[str] = []
+    for key in sorted(set(old) | set(new)):
+        if key not in new:
+            diffs.append(f"{key}: recorded in the cache, absent from the artifact")
+            continue
+        if key not in old:
+            diffs.append(f"{key}: in the artifact, not recorded in the cache")
+            continue
+        for a, b in zip(old[key], new[key]):
+            if a != b:
+                diffs.append(f"{key}: cache says {a!r}, artifact has {b!r}")
+    return diffs
+
+
+def closure_checks(spec_text: str, proof_text: str, tmp_path: Path,
+                   cache_path: Path | None = None, write: bool = False) -> bool:
+    cache_path = CLOSURE if cache_path is None else cache_path
+    ok = True
+    decls, applies, rows, uses, problems = derive_rows(spec_text, proof_text)
+
+    for problem in problems:
+        ok = fail("PC06: each application supplies the applied theorem's premises",
+                  problem)
+    if uses != SHARED_USES:
+        ok = fail("PC06: the shared theorem is applied by the three artifacts",
+                  f"assembled uses {sorted(uses)}, expected {sorted(SHARED_USES)}")
+
+    instances = [r for r in rows if r.startswith("instance ")]
+    theorems = [r for r in rows if r.startswith("theorem ")]
+
+    if write:
+        cache_path.write_text(CLOSURE_HEADER + "\n" + "\n".join(rows) + "\n")
+        print(f"  [detail] PC06 cache: wrote {len(theorems)} theorem row(s) and "
+              f"{len(instances)} instance row(s) to {cache_path.relative_to(ROOT)}")
+        return ok
+
+    recorded = cache_path.read_text() if cache_path.exists() else ""
+    diffs = cache_diff(recorded, rows)
+    if not cache_path.exists():
+        ok = fail("PC06: the obligation cache exists",
+                  "run `python3 scripts/pc06-obligations --write`")
+    else:
+        for diff in diffs:
+            ok = fail("PC06 cache: the recorded rows match the artifact", diff)
+        if not diffs:
+            print(f"  [detail] PC06 cache: {len(theorems)} theorem row(s) and "
+                  f"{len(instances)} instance row(s) recomputed and matched")
+
+    # ── Controls: the cache is a hint, and a row cannot be trusted to hold ──
+    # (1) A stale statement: the plan's guard premise becomes stronger. The
+    #     digest moves and the row is refused by name and field.
+    stale_spec = spec_text.replace("(hb: $ ule i n $)", "(hb: $ ule i uzero $)", 1)
+    _, _, stale_rows, _, _ = derive_rows(stale_spec, proof_text)
+    stale_diffs = cache_diff(recorded, stale_rows)
+    if not any("stmt" in d for d in stale_diffs):
+        ok = fail("PC06 cache: a changed statement is refused as stale",
+                  "the stronger premise left the statement digest unchanged")
+    else:
+        print("  [detail] PC06 cache: a stronger premise moves plan_write_bound's "
+              "statement digest and the row is refused")
+
+    # (2) A silently added trusted leaf: one extra application changes the
+    #     recorded application set and the closure.
+    extra_proof = proof_text.replace(
+        "= '(compose_bound (h1) (h2) (hb));",
+        "= '(compose_bound (h1) (h2) (hb)) (edge1_bound (h1));", 1)
+    _, _, extra_rows, _, _ = derive_rows(spec_text, extra_proof)
+    extra_diffs = cache_diff(recorded, extra_rows)
+    if not (any("applies" in d for d in extra_diffs)
+            and any("closure" in d for d in extra_diffs)):
+        ok = fail("PC06 cache: an added application is refused",
+                  "an extra theorem application left the row unchanged")
+    else:
+        print("  [detail] PC06 cache: an extra application is refused "
+              "(applies/closure change; the replay refuses it too)")
+
+    # (2b) A proof-position mention is a dependency, not a decoration. This is
+    #      the rule PC07's graph applies, checked on the artifact that really
+    #      uses it: PC05b's transport passes PC05a's bound theorem to
+    #      `transfer_through_eq` instead of applying it, so its row must name it
+    #      bare (no `@n`) and its closure must reach that theorem's own premises.
+    t_spec = "\n".join((ROOT / f"mm0/proof_chain/{n}.mm0").read_text()
+                       for n in TRANSPORT_CHAIN)
+    t_proof = "\n".join((ROOT / f"mm0/proof_chain/{n}.mm1").read_text()
+                        for n in TRANSPORT_CHAIN)
+    _, t_applies, t_rows, _, _ = derive_rows(t_spec, t_proof)
+    entry = next((r for r in t_rows
+                  if r.startswith("theorem transported_bound |")), None)
+    mentioned = ("wgsl_inherits_source_bound"
+                 in t_applies.get("transported_bound", {}).get("mentions", set()))
+    bare = entry is not None and any(
+        cell == "wgsl_inherits_source_bound"
+        for cell in entry.split(" | ")[-3].removeprefix("applies ").split(","))
+    # The old head-application-only definition is the control: on this row it
+    # produces a strictly smaller dependency cell, so a rule that stopped
+    # counting proof-position arguments would be visible as a byte difference.
+    head_only = ",".join(sorted(f"{o}@{n}" for o, n
+                                in t_applies["transported_bound"]["calls"])) or "-"
+    cell = (entry.split(" | ")[-3].removeprefix("applies ")
+            if entry else "-")
+    if not (mentioned and bare and cell != head_only):
+        ok = fail("PC06 cache: a proof-position mention is a dependency",
+                  f"transported_bound mentions={mentioned} bare={bare} "
+                  f"cell {cell!r} vs head-only {head_only!r}")
+    else:
+        print("  [detail] PC06 cache: a proof-position mention is a dependency "
+              "(clamp_transport names PC05a's bound theorem without applying it)")
+
+    # (3) A lower obligation closed: a new theorem's own proof bytes appear and
+    #     the higher row (`compose_bound`) must stay byte-identical.
+    closed_spec = spec_text + "\ntheorem plan_index_self (i: u32): $ ueq i i $;\n"
+    closed_proof = proof_text + (
+        "\npub theorem plan_index_self (i: u32): $ ueq i i $\n"
+        "  = '(ueq_refl);\n")
+    _, _, closed_rows, _, _ = derive_rows(closed_spec, closed_proof)
+    def row_of(names: list[str], theorem: str) -> str | None:
+        for row in names:
+            if row.startswith(f"theorem {theorem} |"):
+                return row
+        return None
+    before = row_of(theorems, SHARED)
+    after = row_of(closed_rows, SHARED)
+    if after is None or after != before:
+        ok = fail("PC06 cache: closing a lower obligation leaves the higher row "
+                  "stable", f"compose_bound row {before!r} became {after!r}")
+    elif row_of(closed_rows, "plan_index_self") is None:
+        ok = fail("PC06 cache: the closure control is not vacuous",
+                  "the added theorem left no row")
+    else:
+        print("  [detail] PC06 cache: closing a lower obligation adds its row and "
+              "leaves compose_bound's row byte-identical")
+
+    # (4) The cache cannot shrink a closure: dropping one leaf from a row is a
+    #     disagreement, so a hint can never hide a premise.
+    if recorded:
+        lines = recorded.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("theorem compose_bound |") and "closure " in line:
+                head, _, tail = line.rpartition("closure ")
+                leaves = tail.split(",")
+                lines[i] = head + "closure " + ",".join(leaves[1:])
+                break
+        shrunk = cache_diff("\n".join(lines), rows)
+        if not any("closure" in d for d in shrunk):
+            ok = fail("PC06 cache: a shortened closure is refused",
+                      "dropping a premise leaf left the rows equal")
+        else:
+            print("  [detail] PC06 cache: a shortened closure row is refused")
+
+    # (5) Alpha-renaming matrix: a substitution that identifies two of the
+    #     general statement's binders is a special case, not a renaming.
+    base = decls.get("plan_write_bound_256")
+    if base is not None:
+        collapsed = dict(base)
+        collapsed["premises"] = [
+            ("h1", "edge_plan_flat i j"),
+            ("h2", "edge_plan_slot j j"),
+            ("hb", "ule i u256"),
+        ]
+        collapsed["concl"] = "ule j u256"
+        subs, why = instance_of(decls["plan_write_bound"], collapsed)
+        if subs is not None or "collapse" not in why:
+            ok = fail("PC06 alpha matrix: a renaming collision is refused",
+                      f"accepted with {why or subs}")
+        else:
+            print("  [detail] PC06 alpha matrix: two binders collapsing onto one "
+                  "term are refused")
+
+        # (6) A specific statement with fewer premises is a different (stronger)
+        #     claim, not the shared statement under a renaming: the discharge
+        #     that dropped `hpending` is refused as an instance of the
+        #     conditional composition.
+        subs, why = instance_of(decls["compose_bound"], decls["compose_discharged"])
+        if subs is not None or "fewer premises" not in why:
+            ok = fail("PC06 alpha matrix: a dropped premise is refused",
+                      f"accepted with {why or subs}")
+        else:
+            print("  [detail] PC06 alpha matrix: a statement with fewer premises "
+                  "is refused as an instance")
+
+        # (7) A binder the general statement never uses is not defaulted to a
+        #     witness: the substitution must cover every declared binder.
+        dangling = dict(decls["plan_write_bound"])
+        dangling["vars"] = decls["plan_write_bound"]["vars"] + ["q"]
+        dangling["types"] = dict(decls["plan_write_bound"]["types"], q="u32")
+        subs, why = instance_of(dangling, base)
+        if subs is not None or "not instantiated" not in why:
+            ok = fail("PC06 alpha matrix: an uninstantiated binder is refused",
+                      f"accepted with {why or subs}")
+        else:
+            print("  [detail] PC06 alpha matrix: a binder the instance never "
+                  "instantiates is refused")
+
+    return ok
+
+
 def plan_checks(plan: Path) -> bool:
     """The emitted G13 artifact: statements only, five slots, no forged proof."""
     ok = True
@@ -114,6 +663,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", default=None,
                     help="an emitted gpu_memory.mm0 to check against the table")
+    ap.add_argument("--write", action="store_true",
+                    help="regenerate mm0/proof_chain/gpu_plan.closure")
+    ap.add_argument("--cache", default=None,
+                    help="compare against this closure file instead")
     args = ap.parse_args()
 
     if not (shutil.which("mm0-rs") and shutil.which("mm0-c")):
@@ -209,6 +762,13 @@ def main() -> int:
                 "PC06: a hidden stronger precondition is refused",
                 assembled.replace("(hb: $ ule i n $)", "(hb: $ ule i uzero $)", 1),
             )
+
+        # ── Obligation cache and alpha-renaming matrix ──────────────────────
+        ok &= closure_checks(
+            assembled, proofs, tmp_path,
+            cache_path=Path(args.cache) if args.cache else None,
+            write=args.write,
+        )
 
     # ── Residual obligations ────────────────────────────────────────────────
     doc = DOC.read_text() if DOC.exists() else ""

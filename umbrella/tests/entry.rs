@@ -6,6 +6,9 @@
 //! the declared signature the test's variable. A `RESULT` line on stdout is
 //! the invocation marker: it can only appear after the entry actually ran.
 
+
+mod support;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -14,6 +17,7 @@ fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("umbrella-entry-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
+    support::cleanup_on_exit("umbrella-entry");
     dir
 }
 

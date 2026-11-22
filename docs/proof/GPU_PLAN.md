@@ -65,11 +65,44 @@ slots, and `scripts/pc06-obligations` fails if a slot or this table drifts.
   discharge. `scripts/gpu-obligations` reports the two routes separately.
 - No safety or progress property beyond the single write bound is claimed.
 
+## The closure matrix and the obligation cache
+
+`mm0/proof_chain/gpu_plan.closure` is the card's obligation cache. Every run of
+`scripts/pc06-obligations` recomputes its rows from the assembled specification
+and proofs; the file is a hint, never a discharge, and deleting it fails the
+check rather than passing it.
+
+A `theorem` row records the **canonical statement digest**, the **applications**
+the proof term makes, and the **transitive premise closure** — the `owner#index`
+leaves its validity depends on. Bindering is erased to first-occurrence order
+before digesting, so a pure renaming does not move the digest; the closure grows
+when a proof starts applying a theorem with premises of its own, which is how a
+silently added trusted leaf becomes visible. An `instance` row is the
+alpha-renaming matrix: `specific` is a binder-instance of `general` under the
+recorded substitution.
+
+Controls, each exercised on every run:
+
+| Control | Refusal |
+|---|---|
+| stronger guard premise (`ule i n` → `ule i uzero`) | `plan_write_bound`'s digest moves and the row is refused as stale |
+| extra application in a proof | `applies` and `closure` both move, so the row is refused |
+| a lower obligation closed (new theorem added) | the new row appears and `compose_bound`'s row stays byte-identical |
+| one leaf dropped from a recorded closure | the cache cannot shrink a closure |
+| two binders collapsing onto one term | refused as a renaming collision, not accepted as a special case |
+| a specific with fewer premises (`compose_discharged` vs `compose_bound`) | refused: a dropped premise is a stronger claim, not a renaming |
+| a general binder the instance never instantiates | refused, never defaulted |
+
+`--write` regenerates the file; `--cache PATH` compares against another copy.
+The rows say nothing about the plan's residual obligations: O1–O5 above are
+still evidence-classed, not discharged.
+
 ## Commands
 
 ```sh
 nix shell '.#mm0' nixpkgs#python3 -c python3 scripts/pc06-obligations
 python3 scripts/pc06-obligations --plan <emitted>/gpu_memory.mm0
+python3 scripts/pc06-obligations --write   # regenerate the closure cache
 ```
 
 `--plan` checks an artifact emitted by `scripts/gpu-obligations emit`: it must

@@ -23,6 +23,8 @@
 //!   *before* the target runs; both are checked in a child process, because a
 //!   panic in an `extern "C"` wrapper aborts and cannot be caught in-process.
 
+mod support;
+
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,6 +45,7 @@ fn scratch(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch");
+    support::cleanup_on_exit("umbrella-buffers");
     dir
 }
 

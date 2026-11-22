@@ -6,6 +6,9 @@
 //! against the bridge's own rlib, and a deliberately broken copy must fail to
 //! compile — otherwise the check proves nothing.
 
+
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -31,6 +34,7 @@ fn scratch(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch");
+    support::cleanup_on_exit("umbrella-iface");
     dir
 }
 

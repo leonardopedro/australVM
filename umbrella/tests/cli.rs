@@ -6,6 +6,9 @@
 //! `src/cli.rs`; the last test here also drives a non-UTF-8 path through the
 //! binary to the front-end.
 
+
+mod support;
+
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
@@ -20,6 +23,7 @@ fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("umbrella-cli-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
+    support::cleanup_on_exit("umbrella-cli");
     dir
 }
 

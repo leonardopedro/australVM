@@ -6,6 +6,9 @@
 //! Nothing here is synthetic: the JSON is what `cargo build` printed, into a
 //! custom `--target-dir`, so a selection is pinned to files that exist.
 
+
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,6 +25,7 @@ fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("umbrella-cargo-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
+    support::cleanup_on_exit("umbrella-cargo");
     dir
 }
 

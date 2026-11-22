@@ -16,6 +16,8 @@
 //! * `rs_narrow(-7)` (a negative `Int32` sign-extends),
 //! * `rs_toggle(true)` (a `Bool` word is 0 or 1, not "nonzero").
 
+mod support;
+
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,6 +35,7 @@ fn scratch(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch");
+    support::cleanup_on_exit("umbrella-scalars");
     dir
 }
 
