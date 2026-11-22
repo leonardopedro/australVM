@@ -4626,7 +4626,7 @@ only about scheduling: a memory probe and a build should not share a machine, be
 probe's cap does not bound the rest of it.
 
 **The failing side: 368 passes, 360 dies.** (This paragraph records the state *before*
-§13.54 removed the tail's last megabyte-sized allocation; there, 360 passes.) Two more
+§13.55 removed the tail's last megabyte-sized allocation; there, 360 passes.) Two more
 probes, the same command and env trio, ran concurrently at caps 368 and 360 MiB. 368 completes: exit 0, peak 363 MiB
 `VmSize` at 3 609 s of 3 761 s, peak RSS 334 MB. 360 does not: exit 1 at 3 611 s, peak
 357 MiB `VmSize`, peak RSS 328 MB. Both spent the same time in the derivation (3 609 s),
@@ -4763,7 +4763,7 @@ the `[run]` lines show the same 1 041 771 375 / 1 075 343 397 B outputs as befor
 this in place `LTP_DEDUP_NODES` can be defaulted on with no further byte change — the whole
 of §13.52's memory win on the ns row, for free.
 
-### 13.54 The tail's last megabyte: 360 MiB completes, and the bracket moves to (352, 360]
+### 13.55 The tail's last megabyte: 360 MiB completes, and the bracket moves to (352, 360]
 
 §13.52 left the floor of the ns row pinned to the *size of the tail's allocation*: the
 final copy of the spooled axioms into the artifact ran through
