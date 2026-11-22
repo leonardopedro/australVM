@@ -71,10 +71,23 @@ let foreign_functions_by_name = Hashtbl.create 16
    marshalled by the generated adapter wrapper, so the call must name the
    adapter symbol, not the native function. Word-native means: every
    parameter is an Int64/Nat64/byte buffer address or pointer, and the result
-   is an Int64/Nat64. Direct word calls keep their existing symbol. *)
+   is an Int64/Nat64. Direct word calls keep their existing symbol.
+
+   A byte buffer is the exception: such a call is always mediated, even when
+   every word in it is 64 bits wide and nothing needs marshalling. The wrapper
+   is where the buffer protocol's guards live (a length that is negative or
+   beyond `i64::MAX`, a null pointer with a non-zero length), so a direct call
+   would be the one buffer path that dereferences a pointer the protocol has
+   not checked. *)
 let is_word_native (ty: mono_ty): bool =
   match ty with
   | MonoInteger (_, Width64) -> true
+  | MonoAddress _ | MonoPointer _ | MonoSpan _ | MonoSpanMut _ -> true
+  | _ -> false
+
+(* Declared before `foreign_needs_adapter`, which forces mediation for these. *)
+let is_buffer_param (ty: mono_ty): bool =
+  match ty with
   | MonoAddress _ | MonoPointer _ | MonoSpan _ | MonoSpanMut _ -> true
   | _ -> false
 
@@ -85,9 +98,10 @@ let is_rust_import (name: string): bool =
   String.length name >= 3 && String.sub name 0 3 = "rs_"
 
 let foreign_needs_adapter (params: Mt.mvalue_parameter list) (rt: mono_ty): bool =
-  not (
-    List.for_all (function Mt.MValueParameter (_, ty) -> is_word_native ty) params
-    && is_word_native rt)
+  List.exists (function Mt.MValueParameter (_, ty) -> is_buffer_param ty) params
+  || not (
+       List.for_all (function Mt.MValueParameter (_, ty) -> is_word_native ty) params
+       && is_word_native rt)
 
 let adapter_symbol (name: string): string = name ^ "__adapter"
 
@@ -102,6 +116,31 @@ type adapter_requirement = {
 }
 
 let required_adapters : (string, adapter_requirement) Hashtbl.t = Hashtbl.create 8
+
+(* U13: the owned-value handles this module imports, keyed by target. The
+   typing pass has already validated the pragma and renamed the import to the
+   derived `<target>__dispose`, so the descriptor is a rendering of facts the
+   typechecker checked, not a second reading of them. *)
+type handle_requirement = {
+  hr_target: string;
+  hr_type_name: string;
+  hr_constructor: string;
+  hr_destructor: string;
+  hr_params: int;
+  hr_use: string option;
+}
+
+let required_handles : (string, handle_requirement) Hashtbl.t = Hashtbl.create 4
+
+(* The typed external name of a handle import is `<target>__dispose`; the
+   descriptor names the target itself, because `interface.rs` derives both
+   wrapper symbols from it. *)
+let handle_target_of_dispose_symbol (symbol: string): string =
+  let suffix = "__dispose" in
+  let ls = String.length symbol and lf = String.length suffix in
+  if ls > lf && String.sub symbol (ls - lf) lf = suffix then
+    String.sub symbol 0 (ls - lf)
+  else symbol
 
 (* The descriptor schema's vocabulary: Unit, Bool, Int32, Nat32, Int64, Nat64,
    Float32, Float64. Anything else cannot be described yet, and is an error at
@@ -119,61 +158,245 @@ let adapter_scalar_name (ty: mono_ty): string option =
 
 let mono_ty_show (ty: mono_ty): string = MonoType.show_mono_ty ty
 
+(* U12: a byte buffer parameter. `Address[Nat8]` is a mutable address, so its
+   bytes cross as `readwrite`; `Pointer[Nat8]` is read-only, so they cross as
+   `read`. Either way the buffer's length is the parameter immediately after
+   it, a 64-bit integer, and the descriptor states both indices. Version 1 of
+   the buffer transport carries buffers, their lengths and a scalar result;
+   version 2 adds 64-bit integer words beside a buffer (the GPU service's
+   `(context, buffer, offset, address, length)` calls). Anything else is
+   refused here rather than described by a guess. *)
+type buffer_parameter = {
+  bp_mode: string;
+  bp_index: int;
+  bp_length: int;
+}
+
+(* A 64-bit integer word that is not a buffer's length. Version 2 names it in
+   the descriptor's `scalars` line, so a wrapper cannot mistake it for a
+   length: the two are the same width and only the line tells them apart. *)
+type scalar_parameter = {
+  sp_index: int;
+  sp_name: string;
+}
+
+let buffer_length_name (ty: mono_ty): string =
+  match ty with
+  | MonoInteger (Signed, Width64) -> "Int64"
+  | _ -> "Nat64"
+
+let is_nat8 (ty: mono_ty): bool =
+  match ty with
+  | MonoInteger (Unsigned, Width8) -> true
+  | _ -> false
+
+let is_length_type (ty: mono_ty): bool =
+  match ty with
+  | MonoInteger ((Signed | Unsigned), Width64) -> true
+  | _ -> false
+
+let buffer_mode_of (ty: mono_ty): string option =
+  match ty with
+  | MonoAddress inner when is_nat8 inner -> Some "readwrite"
+  | MonoPointer inner when is_nat8 inner -> Some "read"
+  | _ -> None
+
+(* The `buffers` and `lengths` lines of an `abi buffer 1` block, or the reason
+   the signature cannot be described. Mirrors the admission rule in
+   TypingPass.check_rust_ownership: an admitted buffer signature always has a
+   descriptor, and a refused one never names an adapter. *)
+let buffer_layout (req: adapter_requirement)
+  : (buffer_parameter list * scalar_parameter list * mono_ty, string) result =
+  let params = Array.of_list req.ar_params in
+  let n = Array.length params in
+  let problem what =
+    Error (Printf.sprintf "adapter for %s cannot be described: %s" req.ar_symbol what)
+  in
+  let needs_length i ty =
+    problem (Printf.sprintf
+               "parameter %d (%s) is a byte buffer but the parameter after it is not \
+                its length; a buffer's length is a 64-bit integer (Nat64 or Int64) \
+                directly after the buffer"
+               i (mono_ty_show ty))
+  in
+  let rec go i acc scalars lengths =
+    if i >= n then
+      match List.rev lengths with
+      | [] -> problem "the signature names no byte buffer"
+      | first :: rest ->
+        (match List.find_opt (fun ty -> ty <> first) rest with
+         | Some other ->
+           problem (Printf.sprintf
+                      "its buffer lengths are %s and %s; one descriptor states one \
+                       `lengths` type, so every length parameter must have the same \
+                       64-bit integer type"
+                      (mono_ty_show first) (mono_ty_show other))
+         | None -> Ok (List.rev acc, List.rev scalars, first))
+    else
+      let ty = params.(i) in
+      match buffer_mode_of ty with
+      | Some mode ->
+        if i + 1 >= n then needs_length i ty
+        else if not (is_length_type params.(i + 1)) then needs_length i ty
+        else
+          go (i + 2)
+            ({ bp_mode = mode; bp_index = i; bp_length = i + 1 } :: acc)
+            scalars
+            (params.(i + 1) :: lengths)
+      | None ->
+        if is_length_type ty then
+          (* Version 2: a 64-bit integer that does not measure a buffer is a
+             word the wrapper passes through unchanged. The descriptor names
+             it, so the wrapper never treats it as a length. *)
+          go (i + 1)
+            acc
+            ({ sp_index = i; sp_name = buffer_length_name ty } :: scalars)
+            lengths
+        else
+          problem (Printf.sprintf
+                     "parameter %d (%s) is neither one of the signature's Nat8 \
+                      buffers, a buffer's 64-bit length, nor a 64-bit integer \
+                      word; buffer transport version 2 carries byte buffers, \
+                      their lengths, 64-bit words and a scalar result only"
+                     i (mono_ty_show ty))
+  in
+  go 0 [] [] []
+
+(* One descriptor block, canonical field order. Buffered signatures become
+   `abi buffer 1` blocks; scalar-only ones keep their U11 `abi scalar 1` form. *)
+let adapter_block (req: adapter_requirement): (string, string) result =
+  let scalar_result () =
+    match adapter_scalar_name req.ar_result with
+    | Some name -> Ok name
+    | None ->
+      Error (Printf.sprintf
+               "adapter for %s cannot be described: the result type %s is not a \
+                scalar (Unit, Bool, Int32, Nat32, Int64, Nat64, Float32, \
+                Float64), and the descriptor's `returns` line is a scalar"
+               req.ar_symbol (mono_ty_show req.ar_result))
+  in
+  if List.exists is_buffer_param req.ar_params then
+    match buffer_layout req with
+    | Error e -> Error e
+    | Ok (buffers, scalars, length_ty) ->
+      (match scalar_result () with
+       | Error e -> Error e
+       | Ok returns ->
+         let buffers =
+           String.concat ","
+             (List.map
+                (fun b -> Printf.sprintf "%s:%d:%d" b.bp_mode b.bp_index b.bp_length)
+                buffers)
+         in
+         (* Version 2 only when a word actually sits beside a buffer, so every
+            signature version 1 describes keeps its byte-identical block. *)
+         let abi_version = if scalars = [] then 1 else 2 in
+         let scalars_line =
+           match scalars with
+           | [] -> []
+           | _ ->
+             [ "scalars "
+               ^ String.concat ","
+                   (List.map
+                      (fun s -> Printf.sprintf "%d:%s" s.sp_index s.sp_name)
+                      scalars) ]
+         in
+         Ok (String.concat "\n"
+               ([ "schema 1";
+                  Printf.sprintf "abi buffer %d" abi_version;
+                  Printf.sprintf "symbol %s" req.ar_symbol;
+                  Printf.sprintf "target %s" req.ar_target;
+                  Printf.sprintf "params %d" (List.length req.ar_params);
+                  Printf.sprintf "lengths %s" (buffer_length_name length_ty);
+                  Printf.sprintf "buffers %s" buffers ]
+                @ scalars_line
+                @ [ "empty null-len0";
+                    Printf.sprintf "returns %s" returns ])
+              ^ "\n"))
+  else
+    match scalar_result () with
+    | Error e -> Error e
+    | Ok returns ->
+      let unrepresentable =
+        List.find_opt (fun ty -> adapter_scalar_name ty = None) req.ar_params
+      in
+      (match unrepresentable with
+       | Some ty ->
+         Error (Printf.sprintf
+                  "adapter for %s cannot be described: parameter type %s is not a \
+                   scalar (Unit, Bool, Int32, Nat32, Int64, Nat64, Float32, \
+                   Float64)"
+                  req.ar_symbol (mono_ty_show ty))
+       | None ->
+         let names =
+           List.map
+             (fun ty -> match adapter_scalar_name ty with Some n -> n | None -> assert false)
+             req.ar_params
+         in
+         Ok (Printf.sprintf
+               "schema 1\nabi scalar 1\nsymbol %s\ntarget %s\nparams %s\nreturns %s\n"
+               req.ar_symbol req.ar_target (String.concat "," names) returns))
+
 (* Canonical text: fixed field order, one fact per line, descriptors sorted by
-   symbol, blocks separated by a blank line. Regenerating is byte-identical. *)
+   symbol, blocks separated by a blank line. Regenerating is byte-identical.
+   A block is `abi buffer 1` when its signature carries a byte buffer and
+   `abi scalar 1` otherwise; the reader keeps both kinds in one document. *)
+(* U13: one `abi handle 1` block, in the canonical field order
+   `HandleAdapter::descriptor_text` uses in `umbrella/src/interface.rs`. The
+   registry tag is not written: the generator numbers registries when it reads
+   the document. *)
+let handle_block (req: handle_requirement): string =
+  (* `use` is optional and sits where `HandleAdapter::descriptor_text` puts it:
+     after the destructor and before `params`. A provider without a reader
+     still gets the constructor and destructor wrappers. *)
+  let use_line =
+    match req.hr_use with
+    | Some accessor -> Printf.sprintf "use %s\n" accessor
+    | None -> ""
+  in
+  Printf.sprintf
+    "schema 1\nabi handle 1\nsymbol %s__new\ntarget %s\ntype %s\nconstructor %s\n\
+     destructor %s\n%sparams %d\n"
+    req.hr_target req.hr_target req.hr_type_name req.hr_constructor
+    req.hr_destructor use_line req.hr_params
+
 let adapter_descriptors_text (): (string, string) result =
   let items =
     Hashtbl.fold (fun _ req acc -> req :: acc) required_adapters []
     |> List.sort (fun a b -> String.compare a.ar_symbol b.ar_symbol)
   in
-  let unrepresentable =
-    List.find_map
-      (fun req ->
-        match List.find_map (fun ty ->
-            match adapter_scalar_name ty with
-            | Some _ -> None
-            | None -> Some ty) req.ar_params with
-        | Some ty -> Some (req.ar_symbol, ty)
-        | None ->
-          (match adapter_scalar_name req.ar_result with
-           | Some _ -> None
-           | None -> Some (req.ar_symbol, req.ar_result)))
-      items
+  let rec describe acc = function
+    | [] -> Ok (List.rev acc)
+    | req :: rest ->
+      (match adapter_block req with
+       | Error e -> Error e
+       | Ok text -> describe (text :: acc) rest)
   in
-  match unrepresentable with
-  | Some (symbol, ty) ->
-     Error (Printf.sprintf
-              "adapter for %s cannot be described: parameter or result type %s \
-               is not a scalar (Unit, Bool, Int32, Nat32, Int64, Nat64, Float32, \
-               Float64); a buffer parameter next to a scalar result needs a \
-               versioned layout that does not exist yet"
-              symbol (mono_ty_show ty))
-  | None ->
+  match describe [] items with
+  | Error e -> Error e
+  | Ok blocks ->
      let buf = Buffer.create 256 in
      Buffer.add_string buf
-       "# U11 adapter descriptors, emitted by the compiler's CPS lowering.\n";
+       "# U11/U12 adapter descriptors, emitted by the compiler's CPS lowering.\n";
      Buffer.add_string buf
        "# Canonical form: fixed field order, one fact per line, descriptors\n";
      Buffer.add_string buf
-       "# sorted by symbol. `umbrella/src/interface.rs` parses this text.\n";
+       "# sorted by symbol, blocks separated by a blank line.\n";
+     Buffer.add_string buf
+       "# `umbrella/src/interface.rs` parses this text.\n";
      List.iter
-       (fun req ->
-         let name ty =
-           match adapter_scalar_name ty with
-           | Some n -> n
-           | None -> assert false
-         in
+       (fun text ->
          Buffer.add_string buf "\n";
-         Buffer.add_string buf "schema 1\n";
-         Buffer.add_string buf "abi scalar 1\n";
-         Buffer.add_string buf (Printf.sprintf "symbol %s\n" req.ar_symbol);
-         Buffer.add_string buf (Printf.sprintf "target %s\n" req.ar_target);
-         Buffer.add_string buf
-           (Printf.sprintf "params %s\n"
-              (String.concat "," (List.map name req.ar_params)));
-         Buffer.add_string buf
-           (Printf.sprintf "returns %s\n" (name req.ar_result)))
-       items;
+         Buffer.add_string buf text)
+       blocks;
+     (* Handle blocks follow the scalar/buffer ones, sorted by target, so the
+        document is byte-identical across runs and one registry tag per target
+        is stable. *)
+     Hashtbl.fold (fun _ req acc -> req :: acc) required_handles []
+     |> List.sort (fun a b -> String.compare a.hr_target b.hr_target)
+     |> List.iter (fun req ->
+         Buffer.add_string buf "\n";
+         Buffer.add_string buf (handle_block req));
      Ok (Buffer.contents buf)
 
 let write_adapter_descriptors (path: string): (unit, string) result =
@@ -319,6 +542,13 @@ let float_arith_call (q: qident) (ty: mono_ty) (a: CpsGen.cps_expr)
    function's return type. *)
 let function_params : (decl_id, mono_ty list) Hashtbl.t = Hashtbl.create 32
 
+(* A function *used as a value* (`TFunVar`) is lowered to a `Var` that names
+   the emitted function, so the JIT can hand its address to a foreign call
+   (the `__with` callback). The name has to be the one the function is emitted
+   under — `ident_string name` — not the numeric decl id, or the variable
+   never resolves. Filled in the same first pass as `function_params`. *)
+let function_value_names : (decl_id, string) Hashtbl.t = Hashtbl.create 32
+
 let monomorph_params : (mono_id, mono_ty list) Hashtbl.t = Hashtbl.create 32
 
 let local_types : (string, mono_ty) Hashtbl.t = Hashtbl.create 32
@@ -421,7 +651,10 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MLocalVar (id, _) -> Var (ident_string id)
   | Mt.MTemporary (id, _) -> Var (ident_string id)
   | Mt.MGenericFunVar (id, _) -> Var ("monomorph_" ^ show_mono_id id)
-  | Mt.MConcreteFunVar (id, _) -> Var ("fun_" ^ show_decl_id id)
+  | Mt.MConcreteFunVar (id, _) ->
+      (match Hashtbl.find_opt function_value_names id with
+       | Some name -> Var name
+       | None -> Var ("fun_" ^ show_decl_id id))
   | Mt.MConcreteFuncall (decl_id, q, args, ty) ->
       let name = qident_to_string q in
       let is_exit_success = 
@@ -537,6 +770,14 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
        | "au_calloc($1, $2)", [elem; count] -> App ("au_calloc", [elem; count])
        | "au_free($1)", [a] -> App ("au_free", [a])
        | _ -> App ("__embed", cargs))
+  | Mt.MDeref (Mt.MSlotAccessor (e, name, ty)) ->
+      (* A record value's field read arrives here as a dereference of the slot
+         accessor, because the typing pass makes the accessor yield the field's
+         address. The C backend can keep both halves, but the CPS accessor is
+         `__slot_get`, which already performs the load, so the enclosing
+         `Deref` would load the field's value as an address — a segfault for
+         any value that is not one. Drop the redundant dereference. *)
+      convert_expr (Mt.MSlotAccessor (e, name, ty))
   | Mt.MDeref e ->
       (* The load has its own opcode (0x20), and the JIT decodes it as a load
          from the pointer — `__deref` survives in `cps.rs` for binaries emitted
@@ -546,7 +787,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MTypecast (e, _) -> convert_expr e
   | Mt.MSizeOf ty -> IntLit (Int64.of_int (size_of_mono_ty ty))
   | Mt.MSlotAccessor (e, name, _) -> 
-      let recty = get_expr_type e in
+      (* The typer hands a field read through a borrow (`&Pair`) the borrow
+         temp's type, so unwrap it before resolving the offset — otherwise
+         every field of a borrowed record resolves to offset 0 and field two
+         reads field one's word. `__slot_get` already performs the load, so the
+         address it is given may be the borrow's; only the offset lookup needs
+         the pointee type. *)
+      let recty = match get_expr_type e with
+        | MonoPointer ty | MonoAddress ty
+        | MonoReadRef (ty, _) | MonoWriteRef (ty, _) -> ty
+        | ty -> ty
+      in
       let offset = match recty with
         | MonoNamedType id -> find_record_slot_offset id name
         | _ -> 0
@@ -813,12 +1064,24 @@ let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list 
       List.iter (function
         | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
         | Mt.MUnionMonomorph (id, cases) -> Hashtbl.replace union_layouts id cases
-        | Mt.MFunction (id, _, params, _, _) ->
-            Hashtbl.replace function_params id (param_types params)
+        | Mt.MFunction (id, name, params, _, _) ->
+            Hashtbl.replace function_params id (param_types params);
+            Hashtbl.replace function_value_names id (ident_string name)
         | Mt.MFunctionMonomorph (id, params, _, _) ->
             Hashtbl.replace monomorph_params id (param_types params)
-        | Mt.MForeignFunction (id, name, params, rt, ext_name) ->
+        | Mt.MForeignFunction (id, name, params, rt, ext_name, handle) ->
             Hashtbl.replace function_params id (param_types params);
+            (match handle with
+             | Some h ->
+                let target = handle_target_of_dispose_symbol ext_name in
+                Hashtbl.replace required_handles target
+                  { hr_target = target;
+                    hr_type_name = h.mh_type_name;
+                    hr_constructor = h.mh_constructor;
+                    hr_destructor = h.mh_destructor;
+                    hr_params = h.mh_params;
+                    hr_use = h.mh_use }
+             | None -> ());
             let ext_name =
               if is_rust_import ext_name && foreign_needs_adapter params rt then begin
                 let symbol = adapter_symbol ext_name in

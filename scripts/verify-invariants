@@ -720,6 +720,33 @@ PY
             gap "PC04: mm0/proof_chain/clamp_source.mm0 not re-checked (no mm0 toolchain)"
         fi
 
+        # PC05a reflects the *parsed* WGSL the runtime validates. Only its MM0
+        # replay needs the toolchain, so the reflection, the byte-identity check
+        # and the three parsed-shader refusals run even here; exit 3 means
+        # "reflection checked, replay skipped" and is a gap, never a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc05=0
+            python3 "$repo_root/scripts/pc05-reflect" \
+                >"$_cert_tmp/pc05.log" 2>&1 || _pc05=$?
+            case $_pc05 in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/pc05.log" >&2
+                    check "PC05a: parsed-WGSL reflection of the clamp fixture" true
+                    ;;
+                3)
+                    grep -E '^  \[detail\]' "$_cert_tmp/pc05.log" >&2
+                    gap "PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)"
+                    check "PC05a: parsed-WGSL reflection of the clamp fixture" true
+                    ;;
+                *)
+                    cat "$_cert_tmp/pc05.log" >&2
+                    check "PC05a: parsed-WGSL reflection of the clamp fixture" false
+                    ;;
+            esac
+        else
+            gap "PC05a: parsed-WGSL reflection not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then
@@ -983,13 +1010,28 @@ PY
             gap "U11: adapter descriptors not checked (scripts/check-adapter-descriptors missing)"
         fi
 
+        # The W9.3 statements and their toy model are checked only where the mm0
+        # toolchain exists. A host without it must read them as a measurement
+        # gap, not as a failure of the artifact — otherwise the baseline gate is
+        # red on every machine that lacks mm0-rs, which also makes every drift
+        # control that requires a green unmutated baseline unrunnable there.
+        if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+            _have_mm0=true
+        else
+            _have_mm0=false
+        fi
+
         # W9.3, statement half: `mm0/store_projection.mm0` names the claim that
         # survives the refutation, with pinned citations and no assertion. Same
         # discipline as `clif.mm0`: sorts and terms only, so `mm0-c` accepting
         # it means "the obligation is well-formed", never "the obligation
         # holds".
         _proj="$repo_root/mm0/store_projection.mm0"
-        if [[ -f $_proj ]] && mm0-rs compile "$repo_root/mm0/store_projection.mm1" \
+        if [[ ! -f $_proj ]]; then
+            check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
+        elif ! $_have_mm0; then
+            gap "W9.3: the memory projection not checked (mm0-rs/mm0-c absent; see docs/lean4mm0.md §5)"
+        elif mm0-rs compile "$repo_root/mm0/store_projection.mm1" \
                 "$_cert_tmp/store_projection.mmb" >"$_cert_tmp/proj.log" 2>&1 \
             && mm0-c "$_cert_tmp/store_projection.mmb" < "$_proj" \
                 >>"$_cert_tmp/proj.log" 2>&1; then
@@ -1086,7 +1128,9 @@ PY
             check "W9.3: the toy's citation digest refuses a changed claim" true
         fi
         _toy_shape=""
-        if mm0-rs compile "$repo_root/mm0/store_projection_toy.mm1" \
+        if ! $_have_mm0; then
+            gap "W9.3: the toy projection's theorems not checked (mm0-rs/mm0-c absent; see docs/lean4mm0.md §5)"
+        elif mm0-rs compile "$repo_root/mm0/store_projection_toy.mm1" \
                 "$_cert_tmp/toy.mmb" >"$_cert_tmp/toy.log" 2>&1 \
             && mm0-c "$_cert_tmp/toy.mmb" < "$_toy" >>"$_cert_tmp/toy.log" 2>&1; then
             _toy_shape="$(grep -m1 'ax/thm' "$_cert_tmp/toy.log" | sed 's/^ *//')"
@@ -1195,6 +1239,9 @@ EOF
         # "<old conclusion>|<new conclusion>|<theorem that must now fail>"
         while IFS='|' read -r _mut_from _mut_to _mut_victim; do
             [ -n "$_mut_from" ] || continue
+            # No mm0-rs means no mutation run; the gap is reported below rather
+            # than letting an absent tool look like a surviving mutation.
+            $_have_mm0 || continue
             _mut_n=$((_mut_n + 1))
             _mut_file="$_cert_tmp/toy-mut$_mut_n.mm1"
             _mut_text="${_toy_src/$_mut_from/$_mut_to}"
@@ -1231,7 +1278,9 @@ $ held m y $;|$ held init y $;|toy_jit_refresh_no_new_held
 $ veq (narrow4 x) (narrow4 y) $|$ veq (narrow4 x) x $|toy_width4_load_after_wide_store
 $ veq (narrow4 (narrow4 x)) (narrow4 x) $|$ veq (narrow4 (narrow4 x)) x $|toy_width4_store_load_roundtrip
 MUTATIONS
-        if $_mut_ok && [ "$_mut_n" -eq 13 ]; then
+        if ! $_have_mm0; then
+            gap "W9.3: the toy's proofs not mutation-tested (mm0-rs absent; see docs/lean4mm0.md §5)"
+        elif $_mut_ok && [ "$_mut_n" -eq 13 ]; then
             echo "  [detail] mutations refused:$(echo "$_mut_seen" | tr ' ' '\n' | sed '/^$/d' | sed 's/^/ /' | paste -sd, -)" >&2
             check "W9.3: the toy's proofs depend on its axioms (mutating one refuses them)" true
         else

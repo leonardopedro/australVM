@@ -311,9 +311,9 @@ and exec_target (mods: module_source list) (target: target): unit =
      exec_compile_to_bin mods bin_path entrypoint
   | CStandalone { output_path; entrypoint; } ->
      exec_compile_to_c mods output_path entrypoint
-  | WgslBundle { output_dir; entrypoint; numeric_profile; source_profile; } ->
+  | WgslBundle { output_dir; entrypoint; numeric_profile; source_profile; gpu_operation; } ->
      exec_compile_to_wgsl mods output_dir entrypoint numeric_profile
-       source_profile
+       source_profile gpu_operation
 
 (* Handle one JIT-server command line. Never raises: a command whose
    handling throws (e.g. a swap of a nonexistent module) is reported as
@@ -474,7 +474,8 @@ and run_gpu_checker (checker: string) (args: string list): (int * string) =
 and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
     (entrypoint: entrypoint)
     (numeric_profile: Gpu_ir.numeric_profile)
-    (source_profile: Gpu_subset.source_profile): unit =
+    (source_profile: Gpu_subset.source_profile)
+    (gpu_operation: string option): unit =
   let (Entrypoint (entry_module, entry_name)) = entrypoint in
   if Sys.file_exists output_dir then
     err (Printf.sprintf
@@ -511,9 +512,6 @@ and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
     with Gpu_subset.Refused msg ->
       err ("GPU subset refused the module: " ^ msg)
   in
-  let wgsl = Gpu_wgsl.render kernel in
-  if String.trim wgsl = "" then
-    err "Internal error: the WGSL renderer produced an empty shader.";
   let sources =
     List.map
       (fun (source: module_source) ->
@@ -531,7 +529,32 @@ and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
       Gpu_bundle.shader_validation = "checked";
       Gpu_bundle.source_profile = Gpu_subset.source_profile_name source_profile }
   in
-  let bundle = Gpu_bundle.make ~evidence ~wgsl ~sources kernel in
+  (* A pointwise entry publishes `kernel.json`/`kernel.wgsl`; `map-sum-u32`
+     publishes the staged `reduce.json`/`reduce.wgsl` and is validated by the
+     checker's reduce path. Ordinary bundle bytes and validation are
+     untouched. *)
+  let (wgsl, artifact_name, artifact_json, wgsl_name, validate_command) =
+    match gpu_operation with
+    | None ->
+       let wgsl = Gpu_wgsl.render kernel in
+       let bundle = Gpu_bundle.make ~evidence ~wgsl ~sources kernel in
+       (wgsl, "kernel.json", Gpu_bundle.render_kernel_json bundle,
+        "kernel.wgsl", "validate")
+    | Some "map-sum-u32" ->
+       (Gpu_reduce_wgsl.render kernel, "reduce.json",
+        Gpu_reduce_wgsl.metadata ~evidence ~sources kernel,
+        "reduce.wgsl", "validate-reduce")
+    | Some "map-sum-u32-x4" ->
+       (Gpu_reduce_wgsl.render ~variant:Gpu_reduce_wgsl.Lane4 kernel,
+        "reduce.json",
+        Gpu_reduce_wgsl.metadata ~variant:Gpu_reduce_wgsl.Lane4
+          ~evidence ~sources kernel,
+        "reduce.wgsl", "validate-reduce")
+    | Some other ->
+       err (Printf.sprintf "Internal error: unhandled GPU operation %s" other)
+  in
+  if String.trim wgsl = "" then
+    err "Internal error: the WGSL renderer produced an empty shader.";
   let staging =
     Printf.sprintf "%s.staging-%d" output_dir (Unix.getpid ())
   in
@@ -541,15 +564,14 @@ and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
   Fun.protect
     ~finally:(fun () ->
       if not !published then begin
-        (try Sys.remove (Filename.concat staging "kernel.json") with Sys_error _ -> ());
-        (try Sys.remove (Filename.concat staging "kernel.wgsl") with Sys_error _ -> ());
+        (try Sys.remove (Filename.concat staging artifact_name) with Sys_error _ -> ());
+        (try Sys.remove (Filename.concat staging wgsl_name) with Sys_error _ -> ());
         (try Unix.rmdir staging with Unix.Unix_error _ -> ())
       end)
     (fun () ->
       Unix.mkdir staging 0o755;
-      write_string_to_file (Filename.concat staging "kernel.json")
-        (Gpu_bundle.render_kernel_json bundle);
-      write_string_to_file (Filename.concat staging "kernel.wgsl") wgsl;
+      write_string_to_file (Filename.concat staging artifact_name) artifact_json;
+      write_string_to_file (Filename.concat staging wgsl_name) wgsl;
       let checker =
         match gpu_checker_path () with
         | Some path -> path
@@ -561,27 +583,47 @@ and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
               --manifest-path safestos/gpu/Cargo.toml --bin avm-gpu) and set \
               AUSTRAL_GPU_CHECKER, or put avm-gpu on PATH."
       in
-      let (code, output) = run_gpu_checker checker ["validate"; staging] in
+      let (code, output) = run_gpu_checker checker [validate_command; staging] in
       if code <> 0 then
         err (Printf.sprintf
-               "The GPU checker refused the staged bundle (exit %d):\n%s"
+               "The GPU checker refused the staged %s (exit %d):\n%s"
+               (if gpu_operation = None then "bundle" else "reduction bundle")
                code output);
       (* The checker's structured response must agree with what we staged. *)
       (try
          let json = Yojson.Safe.from_string output in
          let open Yojson.Safe.Util in
+         let expected_schema, expected_program =
+           match gpu_operation with
+           | None ->
+              (Gpu_bundle.schema, None)
+           | Some "map-sum-u32-x4" ->
+              (Gpu_reduce_wgsl.schema,
+               Some (Gpu_reduce_wgsl.program_id
+                       ~variant:Gpu_reduce_wgsl.Lane4 kernel))
+           | Some _ ->
+              (Gpu_reduce_wgsl.schema, Some (Gpu_reduce_wgsl.program_id kernel))
+         in
          let schema = json |> member "schema" |> to_string in
-         if schema <> Gpu_bundle.schema then
+         if schema <> expected_schema then
            err (Printf.sprintf "Checker schema %s does not match %s"
-                  schema Gpu_bundle.schema);
+                  schema expected_schema);
          let ir = json |> member "ir_sha256" |> to_string
          and wgsl_sha = json |> member "wgsl_sha256" |> to_string in
-         if ir <> bundle.Gpu_bundle.ir_sha256 then
+         if ir <> Gpu_ir.semantic_sha256 kernel then
            err "Checker IR digest does not match the staged KernelIR.";
-         if wgsl_sha <> bundle.Gpu_bundle.wgsl_sha256 then
-           err "Checker WGSL digest does not match the staged shader."
+         if wgsl_sha <> Gpu_ir.sha256_hex wgsl then
+           err "Checker WGSL digest does not match the staged shader.";
+         (match expected_program with
+          | None -> ()
+          | Some program ->
+             let staged = json |> member "program_sha256" |> to_string in
+             if staged <> program then
+               err "Checker program digest does not match the reduction program.")
        with Yojson.Json_error msg ->
          err ("The GPU checker returned malformed JSON: " ^ msg));
       Unix.rename staging output_dir;
       published := true;
-      Printf.eprintf "GPU bundle published to %s\n%!" output_dir)
+      Printf.eprintf "GPU %s published to %s\n%!"
+        (if gpu_operation = None then "bundle" else "reduction bundle")
+        output_dir)

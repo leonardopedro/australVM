@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""G22c: the reduction's physical-adapter lane.
+
+Builds both fixed reductions from the same source (`map-sum-u32` and its
+four-elements-per-lane variant `map-sum-u32-x4`) plus the pointwise map bundle
+for the mapper, then for every named size requires:
+
+  * the KernelIR reference reduction to agree with the pinned C oracle (where
+    `examples/gpu/reduce/expected.tsv` has a row) and with itself otherwise;
+  * `compare-reduce` to report `status=ok` and `agree=true`, i.e. the staged
+    reduction, and a map-to-full-readback-plus-CPU-fold run on the same
+    physical adapter, produce the same word;
+  * the device word to equal the reference.
+
+The comparison also reports bytes moved and warm timings. This script is a
+hardware lane: no adapter is `[gap]` (exit 77), never a pass. `check-gpu
+required` converts that gap into failure.
+
+Usage:
+  scripts/gpu-reduce-hardware [--compiler PATH] [--checker PATH]
+                              [--adapter NAME | --adapter-index N]
+                              [--iterations N]
+
+Exit: 0 pass, 1 failure, 2 usage, 77 no physical adapter.
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "examples/gpu/reduce"
+TABLE = FIXTURE / "expected.tsv"
+DEFAULT_COMPILER = ROOT / "_build/default/bin/austral.exe"
+DEFAULT_CHECKER = ROOT / "safestos/gpu/target/release/avm-gpu"
+SIZES = [0, 1, 63, 64, 65, 255, 256, 257, 4095, 4096, 4097, 1_048_576]
+MASK = (1 << 32) - 1
+
+
+def env_with_bridge() -> dict:
+    import os
+
+    env = os.environ.copy()
+    bridge = ROOT / "safestos/cranelift/target/release"
+    env["LD_LIBRARY_PATH"] = f"{ROOT}:{bridge}:" + env.get("LD_LIBRARY_PATH", "")
+    return env
+
+
+def run(cmd, timeout=1800):
+    return subprocess.run(
+        cmd, cwd=ROOT, env=env_with_bridge(), capture_output=True, text=True,
+        timeout=timeout,
+    )
+
+
+def pinned_table() -> dict:
+    rows = {}
+    for line in TABLE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        size, expected = line.split("\t")
+        rows[int(size)] = int(expected)
+    return rows
+
+
+def value(i: int) -> int:
+    """The documented shared input generator (mod 2^32)."""
+    return (i * 2_654_435_761 + 12_345) & MASK
+
+
+def write_inputs(path: Path, n: int) -> None:
+    path.write_text(json.dumps({"inputs": [[value(i) for i in range(n)]]}))
+
+
+def compile_bundle(compiler: Path, out: Path, operation: str | None) -> None:
+    cmd = [
+        str(compiler), "compile", f"{FIXTURE/'Reduce.aum'}",
+        "--target-type=wgsl", "--entrypoint=Reduce:mapper",
+        f"--output={out}",
+    ]
+    if operation is not None:
+        cmd.append(f"--gpu-operation={operation}")
+    proc = run(cmd)
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"compiling {operation or 'pointwise'} failed: "
+            f"{(proc.stdout + proc.stderr).strip()[-600:]}"
+        )
+
+
+def adapter_args(args) -> list:
+    if args.adapter:
+        return ["--adapter", args.adapter]
+    if args.adapter_index is not None:
+        return ["--adapter-index", str(args.adapter_index)]
+    return []
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--compiler", default=str(DEFAULT_COMPILER))
+    ap.add_argument("--checker", default=str(DEFAULT_CHECKER))
+    ap.add_argument("--adapter")
+    ap.add_argument("--adapter-index", type=int)
+    ap.add_argument("--iterations", type=int, default=5)
+    args = ap.parse_args()
+    if args.iterations < 1:
+        print("[fail] --iterations must be positive", file=sys.stderr)
+        return 2
+    compiler = Path(args.compiler)
+    checker = Path(args.checker)
+    if not compiler.exists():
+        print(f"[fail] compiler not built: {compiler}")
+        return 1
+    if not checker.exists():
+        print(f"[fail] checker not built (needs --features device): {checker}")
+        return 1
+    # `austral compile --target-type=wgsl` validates its staging through this
+    # checker; point it at the same binary this lane measured with.
+    import os
+
+    os.environ["AUSTRAL_GPU_CHECKER"] = str(checker)
+    pinned = pinned_table()
+    select = adapter_args(args)
+
+    with tempfile.TemporaryDirectory(prefix="avm-reduce-hw-") as td:
+        tmp = Path(td)
+        try:
+            map_bundle = tmp / "map.avkg"
+            compile_bundle(compiler, map_bundle, None)
+            for operation in ("map-sum-u32", "map-sum-u32-x4"):
+                bundle = tmp / operation
+                compile_bundle(compiler, bundle, operation)
+                summary = []
+                for n in SIZES:
+                    inputs = tmp / f"in-{n}.json"
+                    write_inputs(inputs, n)
+                    ref = run([
+                        str(checker), "reference-reduce", str(bundle),
+                        "--inputs", str(inputs),
+                    ])
+                    if ref.returncode != 0:
+                        print(
+                            f"[fail] {operation} reference at N={n}: "
+                            f"{(ref.stdout + ref.stderr).strip()[:400]}"
+                        )
+                        return 1
+                    reference = json.loads(ref.stdout)["output"]
+                    if n in pinned and reference != pinned[n]:
+                        print(
+                            f"[fail] {operation} reference at N={n} is "
+                            f"{reference}, pinned {pinned[n]}"
+                        )
+                        return 1
+                    cmp = run([
+                        str(checker), "compare-reduce", str(bundle),
+                        "--map", str(map_bundle), "--inputs", str(inputs),
+                        "--iterations", str(args.iterations), "--require-hardware",
+                    ] + select)
+                    if cmp.returncode == 77:
+                        print(
+                            "[gap] no physical adapter: "
+                            f"{(cmp.stdout + cmp.stderr).strip()[:300]}"
+                        )
+                        return 77
+                    if cmp.returncode != 0:
+                        print(
+                            f"[fail] {operation} compare at N={n}: "
+                            f"{(cmp.stdout + cmp.stderr).strip()[:600]}"
+                        )
+                        return 1
+                    result = json.loads(cmp.stdout)
+                    device = result["reduction"]["output"]
+                    fold = result["map_and_fold"]["folded_output"]
+                    if result.get("status") != "ok" or not result["map_and_fold"]["agree"]:
+                        print(f"[fail] {operation} map/fold disagrees at N={n}")
+                        return 1
+                    if device != reference or fold != reference:
+                        print(
+                            f"[fail] {operation} at N={n}: device {device}, "
+                            f"fold {fold}, reference {reference}"
+                        )
+                        return 1
+                    if n == SIZES[-1]:
+                        summary.append(result)
+                if not summary:
+                    print(f"[fail] {operation} produced no summary")
+                    return 1
+                big = summary[0]
+                rb = big["reduction"]["bytes"]
+                mb = big["map_and_fold"]["bytes"]
+                rt = big["reduction"]["timing_ms"]
+                mt = big["map_and_fold"]["timing_ms"]
+                print(
+                    f"[pass] G22c reduction hardware {operation}: "
+                    f"{len(SIZES)} sizes at N={SIZES[-1]} agree with the "
+                    f"reference and the map+fold path; {len(big['reduction']['passes'])} "
+                    f"pass(es), bytes reduce={rb['total']} map+fold={mb['total']}"
+                )
+                print(
+                    f"[info] {operation} warm submit={rt['warm_submit']:.5f} ms "
+                    f"readback={rt['readback']:.4f} ms; map+fold warm "
+                    f"submit={mt['warm_submit']:.5f} ms readback={mt['readback']:.4f} ms "
+                    f"cpu_fold={mt['cpu_fold']:.4f} ms over {args.iterations} iterations"
+                )
+        except RuntimeError as error:
+            print(f"[fail] {error}")
+            return 1
+    print("[pass] G22c reduction hardware lane complete")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

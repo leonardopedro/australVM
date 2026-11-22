@@ -176,7 +176,15 @@ fn a_non_utf8_path_reaches_the_front_end_unchanged() {
             "module": {"name": "probe", "sources": ["unused.aum"]},
             "build": {"allowed": false},
             "load": {"allowed": true, "providers": [so]},
-            "grants": [{"symbol": "rs_probe"}]
+            "grants": [{"symbol": "rs_probe"}],
+            // D09: a load authorization pins the bytes it approves.
+            "trusted": {
+                "lock_sha256": "0".repeat(64),
+                "features": [],
+                "library_sha256": umbrella::trust::sha256_file(&so)
+                    .expect("hash the fixture library"),
+                "exports": ["stageprobe_version"]
+            }
         })
         .to_string(),
     )

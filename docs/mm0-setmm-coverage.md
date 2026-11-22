@@ -589,7 +589,9 @@ both worth recording because they look like defects in the artifact and are not:
 **Memory floor, re-probed.** §9.1 recorded 384 MiB as the floor for the 102 GB ns row; §13.55 of
 `lean4mm0.md` is the re-probe the `sendfile` tail copy asked for, and the answer is that 360 MiB *does*
 pass: 3 802 s, peak VmSize 356 MiB, exit 0, with the proof artifacts `cmp`-identical to the
-432 MiB reference. The bracket is (352, 360] MiB, and 352 MiB still dies in the axiom list.
+432 MiB reference. The bisection then run at 356 MiB also completes (3 636 s, peak 355 MiB,
+same `cmp`-identical artifacts), so the bracket is **(352, 356] MiB**; 352 MiB still dies in
+the axiom list.
 
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB

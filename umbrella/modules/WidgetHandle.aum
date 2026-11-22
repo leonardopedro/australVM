@@ -1,0 +1,132 @@
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Pointer,
+    refMutToPointer
+);
+
+module body WidgetHandle is
+    -- The two words a generated `__new` wrapper wrote. Linear, so the only way
+    -- to end a value is `dispose`, and it can only end once.
+    record Widget: Linear is
+        lo: Int64;
+        hi: Int64;
+    end;
+
+    -- An out cell whose *address* the JIT can take. A borrow of a scalar is the
+    -- constant 0 in this lowering (a scalar has no cell to point at), but a
+    -- record value is a pointer to its own allocation, so borrowing one hands a
+    -- wrapper a cell it can really write. `Word` is one word, `Pair` the two a
+    -- constructor writes.
+    record Word: Free is
+        value: Int64;
+    end;
+
+    record Pair: Free is
+        lo: Int64;
+        hi: Int64;
+    end;
+
+    function adopt(lo: Int64, hi: Int64): Widget is
+        return Widget(lo => lo, hi => hi);
+    end;
+
+    -- The import names the handle's *target*, not a wrapper: the compiler
+    -- derives `avm_widget__dispose` from it (that is the symbol this call
+    -- lowers to) and emits the `abi handle 1` descriptor the umbrella
+    -- generator turns into both wrappers, `avm_widget__new` and
+    -- `avm_widget__dispose`. Both parameters are 64-bit scalars, so the call
+    -- itself is word-native: the words cross as they are.
+    pragma Foreign_Import(External_Name => "avm_widget");
+    pragma Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor", Destructor => "avm_widget_dtor", Params => "2", Use => "avm_widget_read");
+    function widgetDispose(lo: Int64, hi: Int64): Int64 is end;
+
+    -- The constructor wrapper the generator renders from the same descriptor:
+    -- it takes the `params` words, calls the provider's constructor, inserts the
+    -- value in this build's registry and writes the minted pair through `out`.
+    -- The out slot is a `Pointer[Pair]` — two `i64`s in a row — which is exactly
+    -- the C `i64 *` the wrapper takes, so no cast and no embed is needed.
+    pragma Foreign_Import(External_Name => "avm_widget__new");
+    function widgetNew(lo: Int64, hi: Int64, out: Pointer[Pair]): Int64 is end;
+
+    -- The reading import names the generated `<target>__use` wrapper, which
+    -- resolves the words in the same registry and calls the provider's reader
+    -- (`avm_widget_read`, the pragma's `Use`) to hand one word back. A
+    -- `Pointer[Word]` is that one-word out slot; a refusal leaves it untouched.
+    pragma Foreign_Import(External_Name => "avm_widget__use");
+    function widgetUse(lo: Int64, hi: Int64, out: Pointer[Word]): Int64 is end;
+
+    -- The scoped borrow's callback: an ordinary Austral function, used as a
+    -- value. The JIT hands the wrapper its *address*; the wrapper resolves the
+    -- handle, calls it with the provider's own pointer while the value is lent,
+    -- and writes the word it returns. Nothing about the value crosses.
+    function onBorrow(ptr: Pointer[Pair]): Int64 is
+        return 1;
+    end;
+
+    -- The generated `__with` wrapper: (lo, hi, callback, out) -> status. The
+    -- callback parameter is the function value above, and `Pointer[Word]` is
+    -- the one-word out slot a refusal leaves untouched.
+    pragma Foreign_Import(External_Name => "avm_widget__with");
+    function widgetWith(lo: Int64, hi: Int64, callback: Fn[Pointer[Pair], Int64], out: Pointer[Word]): Int64 is end;
+
+    generic [R: Region]
+    function read(widget: &[Widget, R]): Int64 is
+        var word: Word := Word(value => -1);
+        let status: Int64 := widgetUse(widget->lo, widget->hi, refMutToPointer(&!word));
+        if status = 0 then
+            let { value: Int64 } := word;
+            return value;
+        else
+            return -1;
+        end if;
+    end;
+
+    function dispose(widget: Widget): Int64 is
+        -- Destructuring is what discharges the linear obligation; the two
+        -- words go back to the registry, which is the only place that decides
+        -- whether a destructor runs.
+        let { lo: Int64, hi: Int64 } := widget;
+        return widgetDispose(lo, hi);
+    end;
+
+    function main(): ExitCode is
+        -- The intended path, constructed from source: `__new` mints the pair
+        -- into a local cell, `adopt` makes it the linear value, `read` borrows
+        -- it through `__use`, `__with` lends it to an Austral function value,
+        -- and `dispose` hands it back exactly once.
+        var pair: Pair := Pair(lo => -1, hi => -1);
+        let status: Int64 := widgetNew(7, 9, refMutToPointer(&!pair));
+        let widget: Widget := adopt(pair.lo, pair.hi);
+        let readWord: Int64 := read(&widget);
+        -- The scoped borrow: the handle is lent to `onBorrow` for one call, and
+        -- the word the callback returns comes back through `lent`.
+        var lent: Word := Word(value => -1);
+        let borrowed: Int64 := widgetWith(widget.lo, widget.hi, onBorrow, refMutToPointer(&!lent));
+        let outcome: Int64 := dispose(widget);
+        let { value: Int64 } := lent;
+        -- `-1` is `read`'s refusal sentinel, so a provider word of `-1` is not
+        -- reachable here; the point of these lines is the calls, not the value.
+        if status = 0 then
+            if readWord /= -1 then
+                if borrowed = 0 then
+                    if value = 1 then
+                        if outcome = 0 then
+                            return ExitSuccess();
+                        else
+                            return ExitFailure();
+                        end if;
+                    else
+                        return ExitFailure();
+                    end if;
+                else
+                    return ExitFailure();
+                end if;
+            else
+                return ExitFailure();
+            end if;
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

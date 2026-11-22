@@ -2,13 +2,23 @@
   "module": "Test",
   "kind": "Declaration Error",
   "text": [
-    { "type": "text", "content": "The parameter `buf`" },
+    { "type": "text", "content": "The parameter " },
+    { "type": "code", "content": "buf" },
     { "type": "text", "content": " has type " },
     { "type": "type", "content": "Address[Nat8]" },
     {
       "type": "text",
-      "content": ", which cannot cross the extern rust boundary in this signature: the adapter ABI carries one 64-bit word per parameter, and a byte buffer needs a length, capacity and pointer-provenance convention the descriptor does not define yet. Keep every parameter and the result word-native instead (Int64/Nat64, an address or a pointer, with an Int64/Nat64 result — those calls name the declared symbol and build no adapter)."
-    }
+      "content": " and is a byte buffer, but the parameter after it is not its length. A buffer cannot cross the extern rust boundary without one: the length is the extent the wrapper ("
+    },
+    { "type": "code", "content": "<name>__adapter" },
+    {
+      "type": "text",
+      "content": ") uses to build the slice, and it must be a "
+    },
+    { "type": "code", "content": "Nat64" },
+    { "type": "text", "content": " or " },
+    { "type": "code", "content": "Int64" },
+    { "type": "text", "content": " parameter directly after the buffer." }
   ],
   "span": null,
   "context": null

@@ -30,7 +30,7 @@ use std::sync::OnceLock;
 use austral_cranelift_bridge::{
     auth, compile_entry_i64, compile_to_function_named, cranelift_last_error, execute_function,
 };
-use umbrella::{cargo, cli, interface, policy, project};
+use umbrella::{cargo, cli, interface, policy, project, trust};
 
 /// U03's JSON event mode: stdout carries one typed event per line and human
 /// diagnostics stay on stderr. Set once, before any stage.
@@ -200,7 +200,15 @@ fn front_end(
     modules: &[PathBuf],
     cps_out: &PathBuf,
     adapters_out: &PathBuf,
-) -> Result<(Vec<Vec<u8>>, Vec<interface::Adapter>), String> {
+) -> Result<
+    (
+        Vec<Vec<u8>>,
+        Vec<interface::BufferAdapter>,
+        Vec<interface::HandleAdapter>,
+        Vec<interface::Adapter>,
+    ),
+    String,
+> {
     // The front-end emits one CPS binary per module and each emission
     // overwrites `--emit-cps`, so the file left behind holds only the last
     // module. A module that calls another Austral module (e.g. one importing
@@ -234,9 +242,18 @@ fn front_end(
     }
     let text = std::fs::read_to_string(adapters_out)
         .map_err(|e| format!("read {}: {e}", adapters_out.display()))?;
+    // One document carries both block kinds: the scalar reader skips
+    // `abi buffer` blocks and the buffer reader skips `abi scalar` ones, so a
+    // module that calls both gets both wrappers.
     let adapters = interface::Adapter::parse_descriptors(&text)
         .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
-    Ok((cps_binaries, adapters))
+    let buffers = interface::BufferAdapter::parse_descriptors(&text)
+        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+    // U13: a handle block names an owned-value type; the reader numbers its
+    // registries from 1, which is the owner tag the handle words carry.
+    let handles = interface::HandleAdapter::parse_descriptors(&text)
+        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+    Ok((cps_binaries, buffers, handles, adapters))
 }
 
 /// One front-end run over `modules`, writing that run's CPS to `cps_out`.
@@ -284,8 +301,8 @@ fn front_end_once(
         // generate. An unrepresentable signature fails the front-end here, so
         // no guessed layout can reach the JIT.
         .arg(format!("--emit-adapters={}", adapters_out.display())); // U06: bounded child. A compiler that hangs must not hang umbrella, and a
-                                                           // deadline is only meaningful if the whole process group is killed — the
-                                                           // front-end spawns helpers of its own.
+                                                                     // deadline is only meaningful if the whole process group is killed — the
+                                                                     // front-end spawns helpers of its own.
     let outcome = umbrella::process::run(cmd, FRONT_END_DEADLINE)
         .map_err(|e| format!("run {austral:?}: {e}"))?;
     if outcome.timed_out {
@@ -308,80 +325,17 @@ fn front_end_once(
     Ok(())
 }
 
-/// The bridge rlib the generated wrapper compiles against. The wrapper calls
-/// the same `encode`/`decode` the JIT's scalar ABI implements, so it is linked
-/// rather than reimplemented; umbrella already links that crate, so its
-/// artifact is next to this executable.
-fn bridge_rlib() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let profile = exe
-        .parent()
-        .ok_or_else(|| "the umbrella executable has no directory".to_string())?;
-    let mut found: Vec<PathBuf> = Vec::new();
-    for dir in [profile.join("deps"), profile.to_path_buf()] {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
-            let is_rlib = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("libaustral_cranelift_bridge") && n.ends_with(".rlib"))
-                .unwrap_or(false);
-            if is_rlib {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found.pop().ok_or_else(|| {
-        format!(
-            "no bridge rlib under {}; generate the wrappers from a cargo build of umbrella",
-            profile.display()
-        )
-    })
-}
-
 /// 3.5. Generate the wrappers the front-end asked for and load them where the
 ///      JIT can resolve them. Each adapter becomes one module (the generator
 ///      writes a file per adapter and each starts with the same `use`), all in
 ///      one crate; the targets are already global because the crate's cdylib
-///      was dlopen'd in step 2, so `RTLD_NOW` can bind them.
-fn build_adapters(adapters: &[interface::Adapter]) -> Result<PathBuf, String> {
-    let dir = std::env::temp_dir().join(format!("umbrella-adapters-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let mut source = String::new();
-    for (index, adapter) in adapters.iter().enumerate() {
-        let wrapper = interface::render_wrapper(adapter)
-            .map_err(|e| format!("render {}: {e}", adapter.symbol))?;
-        source.push_str(&format!("mod w{index} {{\n{wrapper}\n}}\n"));
-    }
-    let file = dir.join("adapters.rs");
-    std::fs::write(&file, source).map_err(|e| format!("write {}: {e}", file.display()))?;
-    let rlib = bridge_rlib()?;
-    let deps = rlib.parent().unwrap_or(&dir);
-    let out = dir.join("libumbrella_adapters.so");
-    let output = Command::new("rustc")
-        .arg("--crate-type=cdylib")
-        .arg("--edition=2021")
-        .arg("--crate-name=umbrella_adapters")
-        .arg("-L")
-        .arg(format!("dependency={}", deps.display()))
-        .arg("--extern")
-        .arg(format!("austral_cranelift_bridge={}", rlib.display()))
-        .arg("-o")
-        .arg(&out)
-        .arg(&file)
-        .output()
-        .map_err(|e| format!("spawn rustc: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "rustc refused the generated wrappers:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    policy::dlopen(&out)?;
-    Ok(out)
+///      was dlopen'd in step 2, so `RTLD_NOW` can bind them. Every call is a
+///      new build at the next provider generation (see `adapters`), which is
+///      what lets a provider reload build and load a second crate here.
+fn build_adapters(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<PathBuf, String> {
+    let built = umbrella::adapters::build_next(adapters)?;
+    umbrella::adapters::load(&built)?;
+    Ok(built.path)
 }
 
 /// 4a. Authorizer state: with a manifest, the bridge's manifest engine
@@ -501,6 +455,16 @@ fn main() {
             .as_ref()
             .and_then(|(d, _)| d.build.krate.clone())
             .unwrap_or_else(|| default_crate_dir.clone());
+        // D09: the build is only attempted for the pinned dependency graph and
+        // feature set. A mismatch is a refusal *here*, with no cargo process
+        // started — building an arbitrary crate is executing its build scripts.
+        if let Some((doc, _)) = &planned {
+            let mut doc = doc.clone();
+            doc.requested_features = cli.features.clone();
+            if let Err(e) = trust::verify_before_build(&doc, &krate) {
+                die(e);
+            }
+        }
         match cargo_build(&cli, &krate) {
             Ok(p) => p,
             Err(e) => die(e),
@@ -534,6 +498,15 @@ fn main() {
             cdylib.display()
         ));
     }
+    // D09: the bytes that are about to be mapped must be the pinned artifact,
+    // and it must define the pinned ABI exports. This runs after the build (the
+    // digest is of what was produced) and before `dlopen` (the initializer runs
+    // on load).
+    if let Some((doc, _)) = &planned {
+        if let Err(e) = trust::verify_before_load(doc, &cdylib) {
+            die(e);
+        }
+    }
     if let Err(e) = policy::dlopen(&cdylib) {
         die(e);
     }
@@ -556,14 +529,15 @@ fn main() {
         std::env::temp_dir().join(format!("umbrella-{}.cps", std::process::id()));
     let adapters_out: PathBuf =
         std::env::temp_dir().join(format!("umbrella-{}.adapters", std::process::id()));
-    let (cps_binaries, adapters) = match front_end(&austral, &modules, &cps_out, &adapters_out) {
-        Ok(b) => {
-            let _ = std::fs::remove_file(&cps_out);
-            let _ = std::fs::remove_file(&adapters_out);
-            b
-        }
-        Err(e) => die(e),
-    };
+    let (cps_binaries, buffers, handles, scalars) =
+        match front_end(&austral, &modules, &cps_out, &adapters_out) {
+            Ok(b) => {
+                let _ = std::fs::remove_file(&cps_out);
+                let _ = std::fs::remove_file(&adapters_out);
+                b
+            }
+            Err(e) => die(e),
+        };
     let cps_bytes: usize = cps_binaries.iter().map(Vec::len).sum();
     eprintln!(
         "umbrella: front-end emitted {} module(s), {cps_bytes} bytes of CPS",
@@ -571,11 +545,19 @@ fn main() {
     );
 
     // 3.5. The wrappers the descriptors ask for. Empty is a real answer: every
-    //      call in the module was word-native and needs no mediation.
+    //      call in the module was word-native and needs no mediation. Buffer
+    //      adapters are rendered into the same crate as the scalar ones — the
+    //      JIT resolves `<name>__adapter` whichever block produced it.
+    let adapters: Vec<interface::GeneratedAdapter<'_>> = scalars
+        .iter()
+        .map(interface::GeneratedAdapter::Scalar)
+        .chain(buffers.iter().map(interface::GeneratedAdapter::Buffer))
+        .chain(handles.iter().map(interface::GeneratedAdapter::Handle))
+        .collect();
     if adapters.is_empty() {
-        eprintln!("umbrella: the module needs no scalar adapters");
+        eprintln!("umbrella: the module needs no adapters");
     } else {
-        let names: Vec<&str> = adapters.iter().map(|a| a.symbol.as_str()).collect();
+        let names: Vec<&str> = adapters.iter().map(|a| a.symbol()).collect();
         match build_adapters(&adapters) {
             Ok(path) => eprintln!(
                 "umbrella: built and loaded {} adapter wrapper(s) ({}) from {}",

@@ -1,0 +1,74 @@
+-- umbrella/modules/BufferLive.aum — U12's live path.
+--
+-- The first buffer call from a *compiled Austral module* through the JIT: a
+-- Nat8 buffer allocated by the module (`allocateBuffer` is the `au_calloc`
+-- intrinsic, a real JIT symbol), a 64-bit length parameter directly after it,
+-- and an `Int32` result so the call cannot be word-native — the front-end
+-- names `<target>__adapter`, the driver must generate, compile and load the
+-- wrapper, and the JIT must resolve the mediated call.
+--
+-- The module never reads its own memory: the targets do the writing and the
+-- reading, so a wrong byte order, a short slice, or a wrapper that passed the
+-- allocation size instead of the declared length shows up as a different
+-- RESULT rather than as a passing run.
+--
+-- The third target carries the same buffer with an `Int64` result — every word
+-- is 64 bits wide, which used to mean a direct call with no wrapper at all.
+-- Buffer calls are mediated regardless (see `foreign_needs_adapter`), and this
+-- module's grant list says so: `rs_live_wide__adapter` and not `rs_live_wide`.
+--
+-- `rs_live_fill(buf, 4)` writes 0x11, 0x22, 0x33, 0x44 into the first four bytes
+-- of an eight-byte buffer and returns how many it wrote; `rs_live_checksum`
+-- sums exactly the declared four, which is 0xAA here. The two bytes past the
+-- declared length are checked inside `rs_live_fill` itself (the buffer is
+-- zeroed by `au_calloc`, so a slice built from the allocation size would
+-- overwrite them and change the following call's sum).
+pragma Unsafe_Module;
+
+import Austral.Memory (Address, allocateBuffer);
+
+module body BufferLive is
+    pragma Foreign_Import(External_Name => "rs_live_fill");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_live_fill(buf: Address[Nat8], len: Nat64): Int32 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_live_checksum");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_live_checksum(buf: Address[Nat8], len: Nat64): Int32 is
+    end;
+
+    -- A buffer signature whose words are *all* 64 bits wide. This one used to be
+    -- lowered as a direct call to `rs_live_wide`, which skipped the wrapper's
+    -- null/length guards; the manifest below grants only `rs_live_wide__adapter`,
+    -- so a regression to the direct symbol is denied by the JIT gate rather
+    -- than passing quietly.
+    pragma Foreign_Import(External_Name => "rs_live_wide");
+    pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
+    function rs_live_wide(buf: Address[Nat8], len: Nat64): Int64 is
+    end;
+
+    function compute(): Int64 is
+        let buf: Address[Nat8] := allocateBuffer(8);
+        let written: Int32 := rs_live_fill(buf, 4);
+        let sum: Int32 := rs_live_checksum(buf, 4);
+        let wide: Int64 := rs_live_wide(buf, 4);
+        if written = (4 : Int32) then
+            if sum = (170 : Int32) then
+                if wide = 170 then
+                    return 170;
+                else
+                    return 0;
+                end if;
+            else
+                return 0;
+            end if;
+        else
+            return 0;
+        end if;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

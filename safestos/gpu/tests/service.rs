@@ -729,6 +729,274 @@ fn a_timeout_is_terminal_and_returns_the_allocation() {
     assert_eq!(avm_gpu::service::rs_gpu_close(h), 0);
 }
 
+// ---------------------------------------------------------------------------
+// G15a: the host-state hazards, held at the exact window each race needs.
+//
+// `service_test_set_hook` installs a closure at a named point inside a
+// critical section. The window below is a two-way handoff: the service thread
+// announces it is inside the window, then waits until the other side reports
+// it finished. The other side's report is the observation the test needs:
+// with the window reopened it arrives immediately (the racer was not blocked),
+// with the window held it cannot arrive until the held lock is released, so
+// the wait ends by timeout instead. That makes each test fail on an assertion
+// against the unfixed ordering and pass on observation, not on a sleep.
+// ---------------------------------------------------------------------------
+
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
+
+use avm_gpu::service::{service_test_set_hook, TestPoint};
+
+#[derive(Default)]
+struct WindowState {
+    entered: Mutex<bool>,
+    done: Mutex<bool>,
+    entered_cv: Condvar,
+    done_cv: Condvar,
+}
+
+struct Window(Arc<WindowState>);
+
+impl Window {
+    fn new() -> Arc<Window> {
+        Arc::new(Window(Arc::new(WindowState::default())))
+    }
+
+    fn hook(self: &Arc<Window>, timeout: Duration) -> Arc<dyn Fn() + Send + Sync> {
+        let window = self.clone();
+        Arc::new(move || {
+            {
+                let mut entered = window.0.entered.lock().unwrap();
+                *entered = true;
+                window.0.entered_cv.notify_all();
+            }
+            window.wait_done(timeout);
+        })
+    }
+
+    /// Called by the thread on the other side of the window once it has an
+    /// outcome to report.
+    fn mark_done(&self) {
+        *self.0.done.lock().unwrap() = true;
+        self.0.done_cv.notify_all();
+    }
+
+    fn wait_entered(&self) {
+        let mut entered = self.0.entered.lock().unwrap();
+        while !*entered {
+            let (guard, timeout) = self
+                .0
+                .entered_cv
+                .wait_timeout(entered, Duration::from_secs(20))
+                .unwrap();
+            entered = guard;
+            assert!(!timeout.timed_out(), "the service never reached the hook");
+        }
+    }
+
+    fn wait_done(&self, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut done: MutexGuard<'_, bool> = self.0.done.lock().unwrap();
+        while !*done {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return *done;
+            }
+            let (guard, _) = self.0.done_cv.wait_timeout(done, deadline - now).unwrap();
+            done = guard;
+        }
+        true
+    }
+}
+
+fn clear_hook(point: TestPoint, identity: i64) {
+    service_test_set_hook(point, identity, None);
+}
+
+fn words(bytes: Vec<u8>) -> Vec<u32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+#[test]
+fn a_result_never_observes_bytes_the_completion_has_not_copied() {
+    let scratch = Scratch::new("publish-window");
+    write_add_bundle(&scratch.0);
+    let h = open(&scratch.0, 0);
+    let buffer = avm_gpu::service::rs_gpu_buffer_new(h, 4);
+    // Pre-fill the output (before the job owns it) so a reader that wins the
+    // window returns visible stale bytes instead of zeros that a broken
+    // implementation might also produce by accident.
+    assert_eq!(write_words(h, buffer, &[9, 9, 9, 9]), 0);
+    let job = avm_gpu::service::service_test_submit(h, buffer, 4, 0);
+    assert!(job > 0);
+
+    let window = Window::new();
+    service_test_set_hook(
+        TestPoint::PublishBeforeCopy,
+        job,
+        Some(window.hook(Duration::from_secs(2))),
+    );
+    let publisher = std::thread::spawn(move || {
+        avm_gpu::service::service_test_publish(
+            job,
+            avm_gpu::service::COMPLETE,
+            &[11, 22, 33, 44],
+        )
+    });
+    window.wait_entered();
+    let reader = std::thread::spawn({
+        let window = window.clone();
+        move || {
+            let mut out = vec![0u8; 16];
+            let read = avm_gpu::service::rs_gpu_result(h, job, out.as_mut_ptr(), 16);
+            window.mark_done();
+            (read, out)
+        }
+    });
+    let published = publisher.join().unwrap();
+    let (read, bytes) = reader.join().unwrap();
+    clear_hook(TestPoint::PublishBeforeCopy, job);
+
+    assert_eq!(published, 0);
+    assert_eq!(read, 16, "the receipt was not readable once published");
+    assert_eq!(
+        words(bytes),
+        vec![11, 22, 33, 44],
+        "the reader copied bytes from before the completion"
+    );
+    assert_eq!(avm_gpu::service::rs_gpu_buffer_free(h, buffer), 0);
+    assert_eq!(avm_gpu::service::rs_gpu_close(h), 0);
+}
+
+#[test]
+fn one_receipt_is_claimed_by_exactly_one_reader() {
+    let scratch = Scratch::new("receipt-claim");
+    write_add_bundle(&scratch.0);
+    let h = open(&scratch.0, 0);
+    let buffer = avm_gpu::service::rs_gpu_buffer_new(h, 4);
+    let job = avm_gpu::service::service_test_submit(h, buffer, 4, 0);
+    assert_eq!(
+        avm_gpu::service::service_test_publish(
+            job,
+            avm_gpu::service::COMPLETE,
+            &[5, 6, 7, 8]
+        ),
+        0
+    );
+
+    let window = Window::new();
+    service_test_set_hook(
+        TestPoint::ResultBeforeCopy,
+        job,
+        Some(window.hook(Duration::from_secs(2))),
+    );
+    let first = std::thread::spawn({
+        let window = window.clone();
+        move || {
+            let mut out = vec![0u8; 16];
+            let read = avm_gpu::service::rs_gpu_result(h, job, out.as_mut_ptr(), 16);
+            window.mark_done();
+            (read, out)
+        }
+    });
+    window.wait_entered();
+    let second = std::thread::spawn({
+        let window = window.clone();
+        move || {
+            let mut out = vec![0u8; 16];
+            let read = avm_gpu::service::rs_gpu_result(h, job, out.as_mut_ptr(), 16);
+            window.mark_done();
+            (read, out)
+        }
+    });
+    let first = first.join().unwrap();
+    let second = second.join().unwrap();
+    clear_hook(TestPoint::ResultBeforeCopy, job);
+
+    let mut reads = vec![first.0, second.0];
+    reads.sort_by_key(|r| -(*r));
+    assert_eq!(
+        reads,
+        vec![16, avm_gpu::service::STALE],
+        "exactly one reader claims the receipt"
+    );
+    let claimed = if first.0 == 16 { first.1 } else { second.1 };
+    assert_eq!(words(claimed), vec![5, 6, 7, 8]);
+    assert_eq!(avm_gpu::service::rs_gpu_buffer_free(h, buffer), 0);
+    assert_eq!(avm_gpu::service::rs_gpu_close(h), 0);
+}
+
+#[test]
+fn a_destination_too_small_leaves_the_receipt_unclaimed() {
+    let scratch = Scratch::new("small-target");
+    write_add_bundle(&scratch.0);
+    let h = open(&scratch.0, 0);
+    let buffer = avm_gpu::service::rs_gpu_buffer_new(h, 2);
+    let job = avm_gpu::service::service_test_submit(h, buffer, 2, 0);
+    assert_eq!(
+        avm_gpu::service::service_test_publish(job, avm_gpu::service::COMPLETE, &[1, 2]),
+        0
+    );
+    let mut small = vec![0u8; 4];
+    assert_eq!(
+        avm_gpu::service::rs_gpu_result(h, job, small.as_mut_ptr(), 4),
+        avm_gpu::service::LIMIT_REFUSED
+    );
+    // The refusal did not consume the receipt, so the same job is readable with
+    // a large enough destination...
+    let mut full = vec![0u8; 8];
+    assert_eq!(avm_gpu::service::rs_gpu_result(h, job, full.as_mut_ptr(), 8), 8);
+    assert_eq!(words(full), vec![1, 2]);
+    // ...exactly once.
+    assert_eq!(
+        avm_gpu::service::rs_gpu_result(h, job, small.as_mut_ptr(), 8),
+        avm_gpu::service::STALE
+    );
+    assert_eq!(avm_gpu::service::rs_gpu_buffer_free(h, buffer), 0);
+    assert_eq!(avm_gpu::service::rs_gpu_close(h), 0);
+}
+
+#[test]
+fn a_submission_that_raced_a_close_refuses_and_starts_no_worker() {
+    let scratch = Scratch::new("submit-close");
+    write_add_bundle(&scratch.0);
+    let h = open(&scratch.0, 0);
+    let buffer = avm_gpu::service::rs_gpu_buffer_new(h, 4);
+
+    let window = Window::new();
+    service_test_set_hook(
+        TestPoint::SubmitBeforeAdmission,
+        h,
+        Some(window.hook(Duration::from_secs(20))),
+    );
+    let submitter =
+        std::thread::spawn(move || avm_gpu::service::rs_gpu_submit(h, buffer, 4, 0));
+    window.wait_entered();
+    // The submission has resolved the context and its buffer but has not been
+    // admitted, so nobody holds the context: the close succeeds here.
+    assert_eq!(avm_gpu::service::rs_gpu_close(h), 0);
+    window.mark_done();
+    let job = submitter.join().unwrap();
+    clear_hook(TestPoint::SubmitBeforeAdmission, h);
+
+    assert_eq!(
+        job,
+        avm_gpu::service::UNKNOWN_HANDLE,
+        "a submission whose context closed under it must refuse"
+    );
+    assert_eq!(
+        avm_gpu::service::rs_gpu_poll(h, job),
+        avm_gpu::service::UNKNOWN_HANDLE
+    );
+    assert_eq!(
+        avm_gpu::service::rs_gpu_close(h),
+        avm_gpu::service::UNKNOWN_HANDLE
+    );
+}
+
 #[test]
 fn a_mock_loss_is_never_a_completion() {
     let scratch = Scratch::new("loss");

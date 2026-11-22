@@ -363,7 +363,9 @@ the same way Sprint 6/7 were:
   **Done:** the cross-build (`librscrate.a`, staticlib added beside cdylib)
   and the CPS bake (2 functions / 297 B emitted; the JIT's
   `can't resolve symbol rs_demo_checksum` is the expected ungated
-  refusal) — §5; **and the seam swap itself** — the bridge grew a static
+  refusal — since U12's mediation the ungated message names
+  `rs_demo_checksum__adapter`, the wrapper being the only reachable form)
+  — §5; **and the seam swap itself** — the bridge grew a static
   import registry (`register_static_symbol` + the C-ABI
   `austral_register_static_symbol` a Hermit-side image calls in place of
   dlopen), every JIT builder consults it at init, and 3 integration

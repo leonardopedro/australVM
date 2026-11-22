@@ -1,0 +1,21 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "handle" },
+    { "type": "text", "content": " has already been consumed." }
+  ],
+  "span": {
+    "filename": "test-programs/suites/025-linear-handles/002-use-after-dispose/Test.aum",
+    "startp": { "line": 19, "column": 8 },
+    "end": { "line": 19, "column": 45 }
+  },
+  "context": [
+    [ 17, "        let handle: Handle := adopt(1, 2);" ],
+    [ 18, "        let first: Int64 := dispose(handle);" ],
+    [ 19, "        let second: Int64 := dispose(handle);" ],
+    [ 20, "        if first >= 0 then" ],
+    [ 21, "            if second >= 0 then" ]
+  ]
+}

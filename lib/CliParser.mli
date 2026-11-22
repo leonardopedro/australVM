@@ -34,9 +34,11 @@ type target =
       entrypoint: entrypoint;
       numeric_profile: Gpu_ir.numeric_profile;
       source_profile: Gpu_subset.source_profile;
+      gpu_operation: string option;
     }
   (** Compile the admitted GPU subset to a WGSL bundle directory under an
-      explicit numeric profile (`--gpu-numeric-profile`). *)
+      explicit numeric profile (`--gpu-numeric-profile`). `--gpu-operation`
+      selects a reduction artifact instead of the pointwise one. *)
 [@@deriving eq]
 
 type error_reporting_mode =

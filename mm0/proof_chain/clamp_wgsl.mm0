@@ -1,0 +1,21 @@
+-- clamp_wgsl.mm0 — PC05a parsed-WGSL reflection of the scalar clamp (generated).
+--
+-- reflect-wgsl: entry=clamp helper=scalar_entry param=p0:0 width=32 comparison=GreaterThan literal=100 branch=100 operator=umeet roles=read/read_write workgroup=64
+-- wgsl_sha256=468a150d1e195ffc1670bd45783da8574905ac2c35c0cb865d99439732ad3161
+-- ir_sha256=48caf04ea1714fba539ab596cd83d4f7ab537f3eea7837a5b129ccbecb9d8288
+-- parsed Naga: fn scalar_entry(p0: u32) -> u32 {
+--              let v0: bool = (p0 > 100u); if v0 { return 100u; } else { return p0; } }
+-- KernelIR:  If (Compare (GreaterThan, Param 0, U32 100), Return (U32 100), Return (Param 0))
+--
+-- trusted-edge: parsing the shader and reading the scalar helper's nodes
+--   above as this fragment is recorded here, not proved. The bound below
+--   is proved from PC02's order laws and is tied to the comparison the
+--   parsed shader actually carries. A digest never makes a mismatched
+--   correspondence pass: the checker re-parses and compares these lines.
+--
+-- This fragment is assembled after word.mm0 and clamp_source.mm0.
+def wgsl_clamp (x: u32): u32 = $ umeet x u100 $;
+theorem wgsl_clamp_matches_ir (x: u32):
+  $ ueq (wgsl_clamp x) (ir_clamp x) $;
+theorem wgsl_inherits_source_bound (x: u32):
+  $ ule (wgsl_clamp x) u100 $;

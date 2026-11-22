@@ -1,6 +1,27 @@
-# U11 adapter descriptors, emitted by the compiler's CPS lowering.
+# U11/U12 adapter descriptors, emitted by the compiler's CPS lowering.
 # Canonical form: fixed field order, one fact per line, descriptors
-# sorted by symbol. `umbrella/src/interface.rs` parses this text.
+# sorted by symbol, blocks separated by a blank line.
+# `umbrella/src/interface.rs` parses this text.
+
+schema 1
+abi buffer 1
+symbol rs_count__adapter
+target rs_count
+params 2
+lengths Nat64
+buffers read:0:1
+empty null-len0
+returns Nat32
+
+schema 1
+abi buffer 1
+symbol rs_fill__adapter
+target rs_fill
+params 2
+lengths Int64
+buffers readwrite:0:1
+empty null-len0
+returns Int32
 
 schema 1
 abi scalar 1
@@ -15,6 +36,17 @@ symbol rs_scale__adapter
 target rs_scale
 params Float64,Int64
 returns Float64
+
+schema 1
+abi buffer 2
+symbol rs_stamp__adapter
+target rs_stamp
+params 3
+lengths Int64
+buffers readwrite:0:1
+scalars 2:Int64
+empty null-len0
+returns Int64
 
 schema 1
 abi scalar 1

@@ -29,6 +29,33 @@ module Errors = struct
       Text " (the return value's ownership annotation)."
     ]
 
+  let handle_ownership_args () =
+    austral_raise DeclarationError [
+      Text "Invalid Handle_Ownership pragma.";
+      Break;
+      Text "This pragma takes four named string arguments (plus an optional ";
+      Code "Use";
+      Text "): ";
+      Code "Type";
+      Text " (the object type name the handle registry compares against; spelled ";
+      Code "Object";
+      Text " because ";
+      Code "Type";
+      Text " is a keyword), ";
+      Code "Constructor";
+      Text " and ";
+      Code "Destructor";
+      Text " (the provider symbols the generated wrappers call) and ";
+      Code "Params";
+      Text " (the constructor's arity in 64-bit words), and ";
+      Code "Use";
+      Text " (the provider's reader, ";
+      Code "*mut c_void -> i64";
+      Text ", which the generated ";
+      Code "__use";
+      Text " wrapper calls to hand one word back to the module)."
+    ]
+
   let unknown_pragma name =
     austral_raise DeclarationError [
       Text "Unknown pragma ";
@@ -179,6 +206,39 @@ let make_pragma name args =
            The kind is the substring after "Liquid_". Contract-carrying pragmas
            take exactly one named argument, Contract => "<string>"; the marker
            pragmas (Liquid_Measure, Liquid_Fold) take none. *)
+        if s = "Handle_Ownership" then
+          (* U13: the fields are named string constants in any order (`Use` is
+             optional). A repeated or missing field is refused here rather than
+             silently taking the last one: the descriptor it produces names the
+             wrapper symbols, so a typo must not compile into a different
+             handle. *)
+          let raise_err () = Errors.handle_ownership_args () in
+          let fields =
+            match args with
+            | ConcreteNamedArgs args ->
+               List.map (fun (a, v) ->
+                   match v with
+                   | CStringConstant (_, str) -> (ident_string a, str)
+                   | _ -> raise_err ()) args
+            | _ -> raise_err ()
+          in
+          let known = ["Object"; "Constructor"; "Destructor"; "Params"; "Use"] in
+          List.iter (fun (k, _) -> if not (List.mem k known) then raise_err ()) fields;
+          if List.length fields < 4 || List.length fields > 5 then raise_err ();
+          let field name =
+            match List.assoc_opt name fields with
+            | Some v -> v
+            | None -> raise_err ()
+          in
+          let params =
+            match int_of_string_opt (String.trim (field "Params")) with
+            | Some n when n >= 0 -> n
+            | _ -> raise_err ()
+          in
+          HandleOwnershipPragma
+            (field "Object", field "Constructor", field "Destructor", params,
+             List.assoc_opt "Use" fields)
+        else
         let liquid_kind = String.sub s 7 (String.length s - 7) in
         let is_liquid = String.length s > 7 && String.sub s 0 7 = "Liquid_" in
         if not is_liquid then

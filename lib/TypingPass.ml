@@ -679,27 +679,125 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
     Errors.rust_ownership_shape ~ty:rt;
   if not (is_adapter_protocol_type rt) then
     Errors.rust_adapter_unsupported ~ty:rt;
-  (* U11 step 3 / the U12 seam: an adapter-mediated call cannot also carry a
-     byte buffer. The scalar ABI carries one word per parameter and the
-     descriptor has no buffer layout — no length, capacity, provenance or
-     extent convention exists yet (U12) — so `Compiler_cps` cannot describe the
-     signature and the `<name>__adapter` symbol it names has no implementable
-     wrapper. The word-native path is untouched: an `Address`/`Pointer`
-     parameter with an `Int64`/`Nat64` result keeps the declared symbol. *)
+  (* U11 step 3 / U12: an adapter-mediated call may carry a byte buffer only in
+     the shape `abi buffer` describes — Nat8 buffers, each immediately followed
+     by its 64-bit length, with a scalar result, and (version 2) 64-bit integer
+     words alongside them. That is exactly what
+     `Compiler_cps.adapter_descriptors_text` writes and what
+     `umbrella/src/interface.rs` can implement as `<name>__adapter`; a shape
+     admitted here but not describable there would name a wrapper that cannot
+     exist. A byte buffer forces mediation even when every word is 64 bits wide
+     (`Address` + `Nat64` + an `Int64` result), because the wrapper is where
+     the protocol's guards are: a direct call would dereference a pointer the
+     null/length checks never saw. *)
+  let is_byte_buffer (ty: ty): bool =
+    match ty with
+    | Address inner | Pointer inner ->
+      (match inner with Integer (Unsigned, Width8) -> true | _ -> false)
+    | _ -> false
+  in
+  let is_length_type (ty: ty): bool =
+    match ty with Integer ((Signed | Unsigned), Width64) -> true | _ -> false
+  in
   let needs_adapter =
-    not (List.for_all
+    List.exists (fun (ValueParameter (_, ty)) -> is_byte_buffer ty) params
+    || not (
+         List.for_all
            (fun (ValueParameter (_, ty)) -> is_word_native_type ty) params
          && is_word_native_type rt)
   in
   if needs_adapter then begin
-    List.iter (fun (ValueParameter (name, ty)) ->
-        if is_buffer_type ty then
-          Errors.rust_adapter_buffer_unsupported
-            ~subject:(Printf.sprintf "The parameter `%s`" (ident_string name))
-            ~ty) params;
+    let params =
+      List.map
+        (fun (ValueParameter (name, ty)) -> (ident_string name, ty))
+        params
+    in
     if is_buffer_type rt then
-      Errors.rust_adapter_buffer_unsupported ~subject:"The result" ~ty:rt
+      Errors.rust_adapter_buffer_unsupported ~subject:"The result" ~ty:rt;
+    if List.exists (fun (_, ty) -> is_buffer_type ty) params then begin
+      let lengths = ref [] in
+      let rec scan = function
+        | [] -> ()
+        | (name, ty) :: rest ->
+          if is_byte_buffer ty then
+            match rest with
+            | (_, len_ty) :: rest' when is_length_type len_ty ->
+              lengths := len_ty :: !lengths;
+              scan rest'
+            | _ -> Errors.rust_adapter_buffer_needs_length ~name ~ty
+          else if is_length_type ty then
+            (* Version 2: a 64-bit integer that does not measure a buffer is a
+               word the wrapper passes through unchanged. `buffer_layout` names
+               it in the descriptor's `scalars` line, so the wrapper never
+               mistakes it for a length. *)
+            scan rest
+          else
+            Errors.rust_adapter_buffer_scalar_beside ~name ~ty
+      in
+      scan params;
+      match !lengths with
+      | first :: rest ->
+        (match List.find_opt (fun ty -> ty <> first) rest with
+         | Some other ->
+           Errors.rust_adapter_buffer_length_types ~first ~second:other
+         | None -> ())
+      | [] -> ()
+    end
   end
+
+(* U13: an `abi handle 1` import. The module names the handle's *target* —
+   the provider's namespace for the generated pair — and the two wrappers are
+   derived from it: the import's symbol is `<target>__dispose` and the
+   descriptor the lowering emits describes `<target>__new` /
+   `<target>__dispose`. Nothing in Austral source writes a wrapper name. The
+   signature is the dispose ABI's: two 64-bit words in, one status word out. *)
+let handle_dispose_symbol (target: string): string = target ^ "__dispose"
+
+let is_plain_ident (s: string): bool =
+  s <> "" &&
+  String.for_all
+    (fun c ->
+      (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+      || (c >= '0' && c <= '9') || c = '_')
+    s
+
+let has_suffix s suffix =
+  let ls = String.length s and lf = String.length suffix in
+  ls >= lf && String.sub s (ls - lf) lf = suffix
+
+let is_word64 (ty: ty): bool =
+  match ty with
+  | Integer (Signed, Width64) -> true
+  | _ -> false
+
+let check_handle_ownership
+    ~(external_name: string)
+    ~(params: value_parameter list)
+    ~(rt: ty)
+    (type_name, constructor, destructor, arity, accessor): unit =
+  (* A wrapper name in the target would make the derived symbol ambiguous
+     (`w__dispose__dispose`), and the type name is rendered into the
+     registry's type tag, so both are plain identifiers. *)
+  if not (is_plain_ident external_name)
+     || has_suffix external_name "__dispose"
+     || has_suffix external_name "__new"
+  then Errors.handle_ownership_bad_target ~name:external_name;
+  if not (is_plain_ident type_name) then
+    Errors.handle_ownership_bad_type ~type_name;
+  if constructor = "" || destructor = "" || constructor = destructor then
+    Errors.handle_ownership_symbols ~constructor ~destructor;
+  (match accessor with
+   | None -> ()
+   | Some use_symbol ->
+      if not (is_plain_ident use_symbol)
+         || use_symbol = constructor
+         || use_symbol = destructor
+      then Errors.handle_ownership_accessor ~use_symbol);
+  let _ = arity in
+  match params with
+  | [ValueParameter (_, lo); ValueParameter (_, hi)] when is_word64 lo && is_word64 hi
+                                                        && is_word64 rt -> ()
+  | _ -> Errors.handle_ownership_shape ()
 
 let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (decl: linked_definition): typed_decl =
   with_frame "Augment declaration"
@@ -727,7 +825,8 @@ let rec augment_decl (module_name: module_name) (kind: module_kind) (env: env) (
          in
 let recognized = List.for_all (fun p ->
             match p with
-            | ForeignImportPragma _ | ForeignExportPragma _ | LiquidPragma _ | RustOwnershipPragma _ -> true
+            | ForeignImportPragma _ | ForeignExportPragma _ | LiquidPragma _
+            | RustOwnershipPragma _ | HandleOwnershipPragma _ -> true
             | _ -> false) pragmas
           and import_name = List.find_map (fun p ->
             match p with
@@ -745,6 +844,12 @@ let recognized = List.for_all (fun p ->
             match p with
             | RustOwnershipPragma (owners, ret) -> Some (owners, ret)
             | _ -> None) pragmas
+          and handle_ownership = List.find_map (fun p ->
+            match p with
+            | HandleOwnershipPragma (type_name, constructor, destructor, arity,
+                                     accessor) ->
+               Some (type_name, constructor, destructor, arity, accessor)
+            | _ -> None) pragmas
           in
           let _ =
             (* A Rust_Ownership pragma is only meaningful on a foreign
@@ -759,6 +864,18 @@ let recognized = List.for_all (fun p ->
                    Errors.rust_ownership_not_foreign ()
                 | Some s ->
                    check_rust_ownership ~external_name:s ~params ~rt owners ret)
+          in
+          let _ =
+            (* A Handle_Ownership pragma is an import contract too: it names
+               the provider symbols the generated wrappers call, so it is
+               meaningless on a function with a body. *)
+            match handle_ownership with
+            | None -> ()
+            | Some fields ->
+               (match import_name with
+                | None -> Errors.handle_ownership_not_foreign ()
+                | Some s ->
+                   check_handle_ownership ~external_name:s ~params ~rt fields)
           in
           let _ =
             match import_name with
@@ -778,6 +895,13 @@ let recognized = List.for_all (fun p ->
              | (Some _, Some _) ->
                 Errors.fun_invalid_pragmas ()
              | (Some s, None) ->
+                (* The module wrote the target; the call names the dispose
+                   wrapper derived from it, in both backends. *)
+                let s =
+                  match handle_ownership with
+                  | Some _ -> handle_dispose_symbol s
+                  | None -> s
+                in
                 if typarams_size typarams = 0 then
                   if kind = UnsafeModule then
                     (* The ownership annotation rides on the typed decl for
@@ -789,7 +913,7 @@ let recognized = List.for_all (fun p ->
                       liquid_pragmas
                       @ (List.filter_map (fun p ->
                             match p with
-                            | RustOwnershipPragma _ -> Some p
+                            | RustOwnershipPragma _ | HandleOwnershipPragma _ -> Some p
                             | _ -> None) pragmas)
                     in
                     TForeignFunction (decl_id, vis, name, params, rt, s, doc, all_pragmas)

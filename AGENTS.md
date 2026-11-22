@@ -39,6 +39,11 @@ in-process via native `uk_*` symbols registered in the JIT.
   run `check-bridge-fresh`, which refuses to link when any bridge source
   (`src/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the `.so` and tells
   you to run `make bridge`. Check it alone with `make check-bridge-fresh`.
+  `make bridge` also runs `make stage-bridge`, which deploys the two derived
+  copies the gates read — `./libaustral_cranelift_bridge.so` (what
+  `verify-invariants` W5 compares) and `$(HOME)/.local/lib/` (what the test
+  binaries load) — and `drift-controls`/`test-locked` take it as an order-only
+  prerequisite, so a fresh release build is never seen as stale by a control.
 - **Shell discipline (measured 2026-10-21).** Run every `dune` command
   inside `nix develop`, never a bare `nix-shell`. The two environments
   carry different glibcs (devshell 2.42, bare nix-shell 2.37 on this
@@ -537,11 +542,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   still green. One full gate run.
 - `scripts/w3-drift-controls` — one case for each of the thirteen checks the
   census classified `copy`, plus the certification run with an approval present
-  (`<case>`, `--list`, `all`, `-j N`); 14 cases: Phase D's two
+  (`<case>`, `--list`, `all`, `-j N`); 15 cases: Phase D's two
   trust splits and its four coverage/vocabulary claims, the W8 hypothesis pin,
   the `clif_step` vocabulary and pinned citations, the witness's axiom table, the
-  memsafe edge census, the Liquid golden, and the refinement's certificate with an
-  approval present. Each builds a scratch copy, drifts one claim in it, runs the
+  memsafe edge census, the Liquid golden, the refinement's certificate with an
+  approval present, and `mm0-toolchain-gap` (the gate's "absent tool is a gap"
+  branch: `mm0-rs`/`mm0-c` are taken out of `PATH` and the four W9.3 measures
+  must read `[gap]` with the run still exiting 0 — otherwise every control above
+  that needs a green baseline is unrunnable on a host without them). Each builds
+  a scratch copy, drifts one claim in it, runs the
   whole gate with the read-only override that points at the copy
   (`AUSTRALVM_MM0_DIR`, `AUSTRALVM_LIQUID_GOLDEN`, or the existing
   `AUSTRALVM_CLIF` / `AUSTRALVM_APPROVED_ROOT`), and requires exit 1 with the
@@ -556,9 +565,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   scratch approval root. One full gate run per case; logs kept under
   `$W3_DRIFT_LOGS`. A case is one gate run and nothing shorter, so the only
   speed-up is `-j N`: cases are independent (own scratch tree, own `TMPDIR`, the
-  repository only read), and measured 2026-11-18 all 14 cases take 62m43s at
-  `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
-  cores suggest, because a gate run does not itself parallelise. The last
+  repository only read), and measured 2026-11-18 the then-14 cases take 62m43s
+  at `-j 1` and 44m9s at `-j 2` — 18m34s (30%) off, 1.42x and not the 2x the two
+  cores suggest, because a gate run does not itself parallelise. (`mm0-toolchain-gap`
+  joined as the 15th; the row the tree holds for it is
+  `2026-11-21\t4c7fce42\t12\t15\t452\t30\t14/15\theld` — 15 requested in 452s at
+  `-j 12`, 14 held and `liquid-golden` a `[gap]` for the absent why3. An earlier
+  unrecorded pass took 18m49s for the same 15.) A case this shell
+  cannot exercise is counted apart from `held` in the recorded row, so the row
+  cannot claim a hold for a case that did not run. The last
   `copy` row, `W3: $_stem matches its approved statements`, is
   `w3-approved-row`: it copies the whole approved root into scratch and weakens
   one approved axiom there, so the check runs without the tree holding any new

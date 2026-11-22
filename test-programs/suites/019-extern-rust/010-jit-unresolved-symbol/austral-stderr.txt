@@ -1,0 +1,23 @@
+CPS JIT: Generated 1 functions (182 bytes)
+CPS JIT: Compilation error: compile: JIT panicked: can't resolve symbol rs_absent_word; result is null (JIT module state undefined)
+{
+  "module": null,
+  "kind": "Generic Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "The CPS JIT could not compile this module, so none of its functions can run: "
+    },
+    {
+      "type": "text",
+      "content": "compile: JIT panicked: can't resolve symbol rs_absent_word; result is null (JIT module state undefined)"
+    },
+    { "type": "break" },
+    {
+      "type": "text",
+      "content": "No C output was written for this module. An unresolved symbol means it is not in the JIT's symbol table: an `rs_*` import needs the generated adapter wrapper loaded first, a `uk_*`/`uz_*` call needs the kernel registered in the bridge build, and `au_*` names are the bridge's own primitives."
+    }
+  ],
+  "span": null,
+  "context": null
+}

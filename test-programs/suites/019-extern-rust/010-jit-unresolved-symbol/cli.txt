@@ -1,0 +1,1 @@
+./austral compile $DIR/Test.aum --use-cps-jit --allow-all --target-type=tc --error-format=json

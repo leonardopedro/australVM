@@ -1,0 +1,14 @@
+-- A Handle_Ownership pragma is an import contract: it names the provider
+-- symbols the generated wrappers call, so it cannot annotate a function with
+-- a body. An annotation the compiler silently ignored would be a contract the
+-- author believes is enforced.
+module body Test is
+    pragma Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor", Destructor => "avm_widget_dtor", Params => "2");
+    function widgetDispose(lo: Int64, hi: Int64): Int64 is
+        return lo;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

@@ -1,0 +1,309 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> /home/leo/Projects/unfer/fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> /home/leo/Projects/unfer/unfer_consensus/src/storage.rs:230:13
+    |
+230 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (build script) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+warning: `rsffi` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (lib) generated 1 warning (1 duplicate)
+   Compiling umbrella v0.1.0 (/home/leo/Projects/australVM/umbrella)
+warning: `umbrella` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.03s
+     Running unittests src/lib.rs (target/debug/deps/umbrella-89ebcb0d11adc842)
+
+running 59 tests
+test cargo::tests::a_compiler_wrapper_is_refused_and_flags_are_recorded ... ok
+test cargo::tests::a_feature_list_stays_one_argument ... ok
+test cargo::tests::every_explicit_field_reaches_the_argv ... ok
+test cargo::tests::refuses_a_matching_artifact_that_is_not_shared ... ok
+test cargo::tests::reads_the_cdylib_target_for_the_crate_directory ... ok
+test cargo::tests::refuses_a_stream_it_cannot_parse ... ok
+test cargo::tests::refuses_a_package_without_a_cdylib_target ... ok
+test cargo::tests::refuses_an_ambiguous_crate_directory ... ok
+test cargo::tests::refuses_two_shared_libraries_for_one_target ... ok
+test cargo::tests::refuses_when_the_wanted_target_is_absent ... ok
+test cargo::tests::selects_by_id_when_the_id_carries_no_package_name ... ok
+test cargo::tests::the_default_build_request_is_the_old_hardcoded_invocation ... ok
+test cargo::tests::selects_the_wanted_target_and_ignores_other_shared_libraries ... ok
+test cli::tests::a_duplicate_single_valued_option_is_refused ... ok
+test cargo::tests::the_package_name_selects_a_workspace_member ... ok
+test cli::tests::a_negative_expectation_is_unambiguous ... ok
+test cli::tests::a_prefix_lookalike_is_not_an_option ... ok
+test cli::tests::an_option_is_never_consumed_as_a_value ... ok
+test cli::tests::build_option_errors_are_usage_errors ... ok
+test cli::tests::build_options_are_explicit_and_keep_their_boundaries ... ok
+test cli::tests::dash_leading_tokens_need_the_separator ... ok
+test cli::tests::empty_and_missing_selection_is_usage ... ok
+test cli::tests::equals_and_separated_forms_agree ... ok
+test cli::tests::help_and_version_win_anywhere_before_the_separator ... ok
+test cli::tests::malformed_values_are_refused_by_name ... ok
+test cli::tests::json_mode_is_a_flag_and_repeats_are_refused ... ok
+test cli::tests::os_paths_survive_without_a_utf8_round_trip ... ok
+test cli::tests::policy_sources_are_not_mixed ... ok
+test cli::tests::the_legacy_demo_invocation_still_parses ... ok
+test interface::tests::a_buffer_block_round_trips_through_its_canonical_text ... ok
+test interface::tests::a_buffer_length_must_be_its_own_parameter_inside_the_list ... ok
+test interface::tests::a_buffer_without_a_direction_or_length_is_refused ... ok
+test interface::tests::a_wrapper_decodes_arguments_in_declared_order ... ok
+test interface::tests::aggregate_and_layout_types_are_refused_with_guidance ... ok
+test interface::tests::an_encoding_version_mismatch_is_refused_by_name ... ok
+test interface::tests::an_empty_parameter_list_renders_without_arguments ... ok
+test interface::tests::only_the_stated_empty_convention_is_accepted ... ok
+test interface::tests::scalar_and_buffer_blocks_share_one_document ... ok
+test interface::tests::the_descriptor_text_is_canonical ... ok
+test interface::tests::the_golden_descriptor_and_wrapper_are_byte_identical ... ok
+test interface::tests::unit_in_either_position_is_refused ... ok
+test process::tests::a_missing_program_is_a_spawn_error ... ok
+test process::tests::a_noisy_child_cannot_deadlock_the_pipes ... ok
+test process::tests::child_helper ... ok
+test process::tests::exit_codes_and_signals_are_distinct_outcomes ... ok
+test process::tests::a_hanging_child_is_killed_at_the_deadline_and_reaped ... ok
+test project::tests::a_build_without_a_pinned_artifact_is_refused ... ok
+test project::tests::a_complete_project_parses ... ok
+test project::tests::a_malformed_grant_is_named ... ok
+test project::tests::an_unknown_field_is_refused_by_name ... ok
+test project::tests::an_unknown_trusted_field_is_named ... ok
+test project::tests::an_unsupported_schema_version_is_named ... ok
+test project::tests::build_without_a_crate_is_refused ... ok
+test trust::tests::a_drifted_lock_is_refused_before_anything_runs ... ok
+test trust::tests::a_library_that_is_not_the_pinned_one_is_refused_and_its_exports_never_consulted ... ok
+test trust::tests::a_project_without_a_pin_is_refused_rather_than_trusted ... ok
+test trust::tests::an_added_feature_is_refused_even_with_a_pinned_lock ... ok
+test trust::tests::an_unreadable_library_is_a_refusal_not_a_pass ... ok
+test process::tests::the_whole_process_group_dies_with_the_leader ... ok
+
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+EXIT=0
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> /home/leo/Projects/unfer/fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> /home/leo/Projects/unfer/unfer_consensus/src/storage.rs:230:13
+    |
+230 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (build script) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+warning: `rsffi` (lib) generated 1 warning (1 duplicate)
+warning: `austral_cranelift_bridge` (lib) generated 1 warning (1 duplicate)
+warning: `umbrella` (lib) generated 1 warning (1 duplicate)
+warning: `umbrella` (lib test) generated 1 warning (1 duplicate)
+   Compiling umbrella v0.1.0 (/home/leo/Projects/australVM/umbrella)
+warning: `umbrella` (bin "umbrella" test) generated 1 warning (1 duplicate)
+warning: `umbrella` (bin "umbrella") generated 1 warning (1 duplicate)
+warning: `umbrella` (test "cli") generated 1 warning (1 duplicate)
+warning: `umbrella` (test "interface") generated 1 warning (1 duplicate)
+warning: `umbrella` (test "cargo_select") generated 1 warning (1 duplicate)
+warning: `umbrella` (test "scalar_roundtrip") generated 1 warning (1 duplicate)
+warning: `umbrella` (test "entry") generated 1 warning (1 duplicate)
+warning: `umbrella` (test "policy") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.48s
+     Running unittests src/lib.rs (target/debug/deps/umbrella-89ebcb0d11adc842)
+
+running 59 tests
+test cargo::tests::a_compiler_wrapper_is_refused_and_flags_are_recorded ... ok
+test cargo::tests::a_feature_list_stays_one_argument ... ok
+test cargo::tests::every_explicit_field_reaches_the_argv ... ok
+test cargo::tests::reads_the_cdylib_target_for_the_crate_directory ... ok
+test cargo::tests::refuses_a_matching_artifact_that_is_not_shared ... ok
+test cargo::tests::refuses_a_package_without_a_cdylib_target ... ok
+test cargo::tests::refuses_a_stream_it_cannot_parse ... ok
+test cargo::tests::refuses_an_ambiguous_crate_directory ... ok
+test cargo::tests::refuses_when_the_wanted_target_is_absent ... ok
+test cargo::tests::refuses_two_shared_libraries_for_one_target ... ok
+test cargo::tests::selects_by_id_when_the_id_carries_no_package_name ... ok
+test cargo::tests::selects_the_wanted_target_and_ignores_other_shared_libraries ... ok
+test cargo::tests::the_default_build_request_is_the_old_hardcoded_invocation ... ok
+test cli::tests::a_duplicate_single_valued_option_is_refused ... ok
+test cargo::tests::the_package_name_selects_a_workspace_member ... ok
+test cli::tests::a_prefix_lookalike_is_not_an_option ... ok
+test cli::tests::a_negative_expectation_is_unambiguous ... ok
+test cli::tests::an_option_is_never_consumed_as_a_value ... ok
+test cli::tests::build_option_errors_are_usage_errors ... ok
+test cli::tests::build_options_are_explicit_and_keep_their_boundaries ... ok
+test cli::tests::dash_leading_tokens_need_the_separator ... ok
+test cli::tests::empty_and_missing_selection_is_usage ... ok
+test cli::tests::equals_and_separated_forms_agree ... ok
+test cli::tests::help_and_version_win_anywhere_before_the_separator ... ok
+test cli::tests::json_mode_is_a_flag_and_repeats_are_refused ... ok
+test cli::tests::malformed_values_are_refused_by_name ... ok
+test cli::tests::os_paths_survive_without_a_utf8_round_trip ... ok
+test cli::tests::policy_sources_are_not_mixed ... ok
+test cli::tests::the_legacy_demo_invocation_still_parses ... ok
+test interface::tests::a_buffer_block_round_trips_through_its_canonical_text ... ok
+test interface::tests::a_buffer_length_must_be_its_own_parameter_inside_the_list ... ok
+test interface::tests::a_buffer_without_a_direction_or_length_is_refused ... ok
+test interface::tests::aggregate_and_layout_types_are_refused_with_guidance ... ok
+test interface::tests::a_wrapper_decodes_arguments_in_declared_order ... ok
+test interface::tests::an_empty_parameter_list_renders_without_arguments ... ok
+test interface::tests::an_encoding_version_mismatch_is_refused_by_name ... ok
+test interface::tests::only_the_stated_empty_convention_is_accepted ... ok
+test interface::tests::scalar_and_buffer_blocks_share_one_document ... ok
+test interface::tests::the_descriptor_text_is_canonical ... ok
+test interface::tests::unit_in_either_position_is_refused ... ok
+test interface::tests::the_golden_descriptor_and_wrapper_are_byte_identical ... ok
+test process::tests::a_missing_program_is_a_spawn_error ... ok
+test process::tests::a_noisy_child_cannot_deadlock_the_pipes ... ok
+test process::tests::child_helper ... ok
+test process::tests::exit_codes_and_signals_are_distinct_outcomes ... ok
+test process::tests::a_hanging_child_is_killed_at_the_deadline_and_reaped ... ok
+test project::tests::a_build_without_a_pinned_artifact_is_refused ... ok
+test project::tests::a_complete_project_parses ... ok
+test project::tests::a_malformed_grant_is_named ... ok
+test project::tests::an_unknown_field_is_refused_by_name ... ok
+test project::tests::an_unknown_trusted_field_is_named ... ok
+test project::tests::an_unsupported_schema_version_is_named ... ok
+test project::tests::build_without_a_crate_is_refused ... ok
+test trust::tests::a_drifted_lock_is_refused_before_anything_runs ... ok
+test trust::tests::a_library_that_is_not_the_pinned_one_is_refused_and_its_exports_never_consulted ... ok
+test trust::tests::a_project_without_a_pin_is_refused_rather_than_trusted ... ok
+test trust::tests::an_added_feature_is_refused_even_with_a_pinned_lock ... ok
+test trust::tests::an_unreadable_library_is_a_refusal_not_a_pass ... ok
+test process::tests::the_whole_process_group_dies_with_the_leader ... ok
+
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+     Running unittests src/main.rs (target/debug/deps/umbrella-94fa2cd9582f3cf1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cargo_select.rs (target/debug/deps/cargo_select-a971185d545365bc)
+
+running 5 tests
+test a_package_and_target_from_different_identities_do_not_match ... ok
+test each_cdylib_is_selected_from_its_own_package_identity ... ok
+test explicit_package_profile_and_policy_reach_the_real_build ... ok
+test the_fixture_stream_really_carries_the_confusable_artifacts ... ok
+test the_transitive_library_is_refused_as_not_shared ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.64s
+
+     Running tests/cli.rs (target/debug/deps/cli-aee47f4fdeb6498b)
+
+running 6 tests
+test a_usage_error_writes_no_protocol_at_all ... ok
+test help_and_version_exit_zero_without_touching_a_stage ... ok
+test json_mode_prints_one_typed_event_and_diagnostics_on_stderr ... ok
+test malformed_invocations_exit_2_and_spawn_nothing ... ok
+test the_legacy_demo_invocation_is_not_a_usage_error ... ok
+test a_non_utf8_path_reaches_the_front_end_unchanged ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/entry.rs (target/debug/deps/entry-cd942ab830bffb4c)
+
+running 4 tests
+test a_matching_entry_runs_and_reports_the_result ... ok
+test a_missing_entry_is_refused_by_name ... ok
+test a_non_i64_return_is_refused_before_invocation ... ok
+test a_wrong_arity_entry_is_refused_before_invocation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.91s
+
+     Running tests/interface.rs (target/debug/deps/interface-4ec1cac1d3b64c3b)
+
+running 7 tests
+test a_descriptor_with_another_encoding_version_cannot_render ... ok
+test a_document_with_a_repeated_symbol_is_refused ... ok
+test the_committed_golden_descriptor_roundtrips ... ok
+test the_compilers_emitted_descriptors_parse_here ... ok
+test the_descriptor_names_the_encoding_the_bridge_implements ... ok
+test the_generated_wrapper_typechecks_against_the_bridge ... ok
+test a_wrapper_whose_call_does_not_match_its_signature_is_rejected_by_rustc ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/policy.rs (target/debug/deps/policy-6beaba9e85f029eb)
+
+running 6 tests
+test a_failing_stage_names_itself ... ok
+test denied_call_reports_that_build_and_load_already_ran ... ok
+test no_build_and_no_load_is_refused_before_any_stage ... ok
+test unknown_field_and_malformed_grant_are_refused_by_name ... ok
+test untrusted_native_profile_is_refused ... ok
+test authorized_stages_run_in_order_and_leave_markers ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/scalar_roundtrip.rs (target/debug/deps/scalar_roundtrip-359a792ad712e99e)
+
+running 3 tests
+test a_wrapper_that_casts_the_float_through_i64_loses_negative_zero ... ok
+test the_jit_executes_an_austral_module_through_the_generated_adapters has been running for over 60 seconds
+test the_wrapper_returns_the_same_bits_as_a_direct_call ... ok
+test the_jit_executes_an_austral_module_through_the_generated_adapters ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 66.43s
+
+   Doc-tests umbrella
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT=0

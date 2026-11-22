@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "handle" },
+    {
+      "type": "text",
+      "content": " is not consumed by the time of the return statement. Did you forget to call a destructor, or destructure the contents?"
+    }
+  ],
+  "span": {
+    "filename": "test-programs/suites/025-linear-handles/001-forget-the-handle/Test.aum",
+    "startp": { "line": 18, "column": 8 },
+    "end": { "line": 18, "column": 29 }
+  },
+  "context": [
+    [ 16, "    function main(): ExitCode is" ],
+    [ 17, "        let handle: Handle := adopt(1, 2);" ],
+    [ 18, "        return ExitSuccess();" ],
+    [ 19, "    end;" ],
+    [ 20, "end module body." ]
+  ]
+}

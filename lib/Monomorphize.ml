@@ -466,11 +466,24 @@ let rec monomorphize_decl (env: env) (decl: typed_decl): (mdecl option * env) =
            (Some decl, env)
          else
            (None, env))
-  | TForeignFunction (id, _, name, params, rt, underlying, _, _) ->
-     (* Foreign functions are intrinsically monomorphic. *)
+  | TForeignFunction (id, _, name, params, rt, underlying, _, pragmas) ->
+     (* Foreign functions are intrinsically monomorphic. U13: a
+        Handle_Ownership pragma survives as the descriptor's facts, because the
+        CPS lowering — not the typing pass — is what emits adapters. *)
+     let handle =
+       List.find_map (function
+           | Common.HandleOwnershipPragma (type_name, constructor, destructor,
+                                           arity, accessor) ->
+              Some { mh_type_name = type_name;
+                     mh_constructor = constructor;
+                     mh_destructor = destructor;
+                     mh_params = arity;
+                     mh_use = accessor }
+           | _ -> None) pragmas
+     in
      let (env, params) = monomorphize_params env params in
      let (rt, env) = strip_and_mono env rt in
-     let decl = MForeignFunction (id, name, params, rt, underlying) in
+     let decl = MForeignFunction (id, name, params, rt, underlying, handle) in
      (Some decl, env)
   | TTypeClass _ ->
      (* Type classes are purely "informative" declarations: they have no physical

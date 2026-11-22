@@ -35,13 +35,16 @@ and requires `RESULT 32`. It then reruns without a manifest and requires the
 `module.toml` grants the complete v2 surface:
 
 ```text
-rs_gpu_open, rs_gpu_close, rs_gpu_buffer_new, rs_gpu_buffer_write,
-rs_gpu_buffer_read, rs_gpu_buffer_free, rs_gpu_submit, rs_gpu_poll,
-rs_gpu_result, rs_gpu_cancel
+rs_gpu_open, rs_gpu_close, rs_gpu_buffer_new, rs_gpu_buffer_free,
+rs_gpu_submit, rs_gpu_poll, rs_gpu_cancel
+rs_gpu_buffer_write__adapter, rs_gpu_buffer_read__adapter,
+rs_gpu_result__adapter
 ```
 
 The whole `Jobs` module is compiled, so even wrappers this demo does not call
-name their symbol at compile time.
+name their symbol at compile time. The three buffer calls are mediated, so the
+symbol the gate sees is the generated `__adapter` wrapper, not the native
+`rs_gpu_*` name.
 
 Drop one and JIT compilation fails with `UK-4001` before the operation runs.
 

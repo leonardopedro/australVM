@@ -81,6 +81,13 @@ jobs:
               "$RUNNER_TEMP/gpu-source.log"
             grep -q "^\[pass\] G17b bounded fold refused without the profile flag$" \
               "$RUNNER_TEMP/gpu-source.log"
+            # G22b: both staged reductions validate without a device.
+            grep -q "^\[pass\] G22b reduction bundle validated (map-sum-u32):" \
+              "$RUNNER_TEMP/gpu-source.log"
+            grep -q "^\[pass\] G22b reduction bundle validated (map-sum-u32-x4):" \
+              "$RUNNER_TEMP/gpu-source.log"
+            grep -q "^\[pass\] G22a C oracle: 9 sizes" \
+              "$RUNNER_TEMP/gpu-source.log"
             # And an explicit control in CI, independent of the script: the
             # same module compiled without --gpu-source-profile=bounded-fold-v1
             # must fail, naming the flag it needed.
@@ -182,4 +189,11 @@ jobs:
             grep -q "^shader-validation=pass$" "$RUNNER_TEMP/gpu-required.log"
             grep -q "^device-kind=physical$" "$RUNNER_TEMP/gpu-required.log"
             grep -q "^execution=pass$" "$RUNNER_TEMP/gpu-required.log"
+            # G22c: both reductions ran against the map+fold path on hardware.
+            grep -q "^\[pass\] G22c reduction hardware map-sum-u32:" \
+              "$RUNNER_TEMP/gpu-required.log"
+            grep -q "^\[pass\] G22c reduction hardware map-sum-u32-x4:" \
+              "$RUNNER_TEMP/gpu-required.log"
+            grep -q "^\[pass\] G22c reduction hardware lane complete$" \
+              "$RUNNER_TEMP/gpu-required.log"
           '

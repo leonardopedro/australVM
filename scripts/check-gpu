@@ -8,8 +8,9 @@ The modes are deliberately not one "verified" value:
   optional  source lane plus a device probe. A missing adapter or a software
             adapter is printed as `[gap]` and exits 0; it never becomes a
             hardware pass.
-  required  source lane plus a physical adapter probe and the full hardware
-            corpus/control run (`scripts/gpu-hardware-check`). Every gap is
+  required  source lane plus a physical adapter probe, the full hardware
+            corpus/control run (`scripts/gpu-hardware-check`) and G22c's
+            reduction lane (`scripts/gpu-reduce-hardware`). Every gap is
             converted into exit 1; there is no skip or fallback. Adding
             `--require-proof` also makes a missing Why3 engine or an unproved
             G13 obligation fatal.
@@ -48,6 +49,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "examples/gpu/pointwise"
 SOURCE_CHECK = ROOT / "scripts/gpu-source-check"
 HARDWARE_CHECK = ROOT / "scripts/gpu-hardware-check"
+REDUCE_CHECK = ROOT / "scripts/gpu-reduce-hardware"
 DEFAULT_COMPILER = ROOT / "_build/default/bin/austral.exe"
 DEFAULT_CHECKER = ROOT / "safestos/gpu/target/debug/avm-gpu"
 
@@ -141,6 +143,47 @@ def source_lane(compiler: Path, checker: Path) -> tuple[bool, bool]:
     if reduce_proc.returncode != 0:
         print("[fail] G22a reduction C oracle failed; see gpu-reduce-u32 above")
         return False, True
+
+    # G22b: publish both fixed reductions and let the CPU checker validate the
+    # staged artifact. This needs no device; the dispatch path is G22c's own
+    # hardware lane. A wrong program digest or a structural audit failure is a
+    # source-lane failure, not a hardware gap.
+    with tempfile.TemporaryDirectory(prefix="avm-check-reduce-") as td:
+        for operation in ("map-sum-u32", "map-sum-u32-x4"):
+            bundle = Path(td) / operation
+            compile_proc = run(
+                [
+                    str(compiler),
+                    "compile",
+                    f"{ROOT/'examples/gpu/reduce/Reduce.aum'}",
+                    "--target-type=wgsl",
+                    "--entrypoint=Reduce:mapper",
+                    f"--gpu-operation={operation}",
+                    f"--output={bundle}",
+                ],
+                env,
+            )
+            if compile_proc.returncode != 0:
+                print(
+                    f"[fail] G22b could not publish {operation}: "
+                    f"{(compile_proc.stdout + compile_proc.stderr).strip()[:400]}"
+                )
+                return False, True
+            validate_proc = run(
+                [str(checker), "validate-reduce", str(bundle)], env
+            )
+            if validate_proc.returncode != 0:
+                print(
+                    f"[fail] G22b checker refused {operation}: "
+                    f"{(validate_proc.stdout + validate_proc.stderr).strip()[:400]}"
+                )
+                return False, True
+            result = json.loads(validate_proc.stdout)
+            print(
+                f"[pass] G22b reduction bundle validated ({operation}): "
+                f"{result['reduction_profile']}, entries "
+                f"{','.join(result['entries'])}, program {result['program_sha256'][:12]}…"
+            )
     return True, True
 
 
@@ -312,8 +355,34 @@ def main() -> int:
         print("[fail] GPU required mode: hardware corpus/control failure")
         field("execution", "fail")
         return 1
+
+    # G22c: both fixed reductions, each compared with the reference and with
+    # map-to-full-readback-plus-CPU-fold on the same physical adapter.
+    reduce_proc = run(
+        [
+            sys.executable,
+            str(REDUCE_CHECK),
+            "--compiler",
+            str(compiler),
+            "--checker",
+            str(checker),
+        ],
+        env_with_bridge(checker),
+    )
+    for line in (reduce_proc.stdout + reduce_proc.stderr).splitlines():
+        if line.startswith(("[pass]", "[fail]", "[gap]", "[info]")):
+            print(line)
+    if reduce_proc.returncode == 77:
+        print("[fail] GPU required mode: reduction lane reported no physical adapter")
+        field("execution", "fail")
+        return 1
+    if reduce_proc.returncode != 0:
+        print("[fail] GPU required mode: reduction lane failure")
+        field("execution", "fail")
+        return 1
+
     field("execution", "pass")
-    print("[pass] GPU required mode: source lane + physical-device corpus")
+    print("[pass] GPU required mode: source lane + physical-device corpus + reductions")
     return 0
 
 

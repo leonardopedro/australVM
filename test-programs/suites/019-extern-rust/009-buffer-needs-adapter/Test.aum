@@ -1,9 +1,12 @@
--- A byte buffer in a signature that needs a generated adapter: the scalar
--- adapter ABI carries one word per parameter and the descriptor has no buffer
--- layout (no length, capacity or provenance convention yet), so the compiler
--- cannot describe this signature and no wrapper could implement it. The
--- word-native shape (Address[Nat8] + Int64 length -> Int64) keeps working: it
--- names the declared symbol and builds no adapter.
+-- A byte buffer in a signature that needs a generated adapter must state the
+-- buffer's length as the parameter directly after it: buffer transport version
+-- 1 is `abi buffer 1`, whose `buffers` line names the buffer and length
+-- parameters. `width: Int32` promises no extent, so no wrapper can build the
+-- slice and the signature is refused at typechecking.
+--
+-- The describable shape (`Pointer[Nat8]`/`Address[Nat8]` + Nat64/Int64 length
+-- with a scalar result) is admitted and emitted; `test-programs/adapters`
+-- pins that emission as a golden.
 pragma Unsafe_Module;
 
 import Austral.Memory (Address, allocateBuffer);

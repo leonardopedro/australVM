@@ -18,6 +18,15 @@ from concurrent.futures import ProcessPoolExecutor, Future
 # The `test-programs/` directory.
 DIR: str = "test-programs/"
 
+# How many tests may compile at once.
+#
+# `ProcessPoolExecutor()` defaults to one worker per CPU. Each worker runs the
+# compiler (and several fixtures also run the JIT), and a full default run on a
+# 12-core host with 12 GB of RAM exhausted memory: more compiling at once is
+# not the same as finishing sooner. A full run does not need more than this,
+# and `worker_count` caps it further on a smaller host or a smaller selection.
+MAX_WORKERS: int = 4
+
 # `./austral` links the cranelift bridge as a shared library. Callers used to
 # have to export `LD_LIBRARY_PATH` themselves; without it every fixture died at
 # the loader with `libaustral_cranelift_bridge.so: cannot open shared object
@@ -284,17 +293,101 @@ def try_join(l: list[str] | None) -> str:
 # Collection
 #
 
+# The suites the default run compiles, in run order.
+#
+# This is the list the runner's no-argument invocation uses. It is explicit so
+# that wiring a suite is a recorded decision rather than a side effect of a
+# directory existing: `collect_tests` refuses a `suites/` directory this tuple
+# does not name (a suite nobody compiles), and refuses a name with no directory
+# (a stale entry). Adding a suite is therefore an edit here; dropping one is an
+# edit too, and both cannot happen silently.
+DEFAULT_SUITES: tuple[str, ...] = (
+    "001-trivial",
+    "002-constants",
+    "003-record",
+    "004-union",
+    "005-fixed-string",
+    "006-linearity",
+    "007-borrowing",
+    "008-typeclasses",
+    "009-names",
+    "010-functions",
+    "011-bugs",
+    "012-numbers",
+    "013-ref-transforms",
+    "014-int-constants",
+    "015-mutability",
+    "016-spans",
+    "017-austral-memory",
+    "018-group-borrow",
+    "019-extern-rust",
+    "020-liquid-syntax",
+    "021-virtio",
+    "022-gpu",
+    "023-liquid-index-closure",
+    "023-runner-loader",
+    "024-gpu-jobs",
+    "024-liquid-split",
+    "025-gpu-f32",
+    "025-linear-handles",
+    "026-gpu-bounded-fold",
+    # 027-handle-pragma: the `Handle_Ownership` pragma's two typing refusals (a
+    # dispose import whose signature is not the wrapper ABI, and the pragma on a
+    # function that is not a foreign import). Both are fixtures with captured
+    # stderr, so a reworded diagnostic is a fixture update.
+    "027-handle-pragma",
+    # 027-liquid-descent: L11e's opt-in `Liquid_Descent` pragma — one measure
+    # printed by both the fold and the descent function, and two fixtures whose
+    # recursive call is refused (the original argument, a rebuilt value).
+    "027-liquid-descent",
+)
 
-def collect_tests() -> list[Test]:
+
+def collect_tests(
+    suites_dir: str | None = None,
+    suites: tuple[str, ...] | None = None,
+) -> list[Test]:
     """
-    Get the list of all test suites.
+    Get the tests of every suite in `DEFAULT_SUITES`.
+
+    Raises `ValueError` when `suites/` and `DEFAULT_SUITES` disagree, in either
+    direction: an unlisted suite would be compiled by no default run, and a
+    listed suite with no directory is a stale entry.
+
+    `suites_dir` and `suites` name another pair to collect from. The defaults
+    are the repository's, so the CLI needs no arguments; the parameters exist so
+    `test_runner.py` can hold the disagreement rule to a scratch pair instead of
+    planting directories in the tree.
     """
     # Result aggregator.
     tests: list[Test] = []
     # Find the `suites/`` directory.
-    suites_dir: str = os.path.join(DIR, "suites")
+    if suites_dir is None:
+        suites_dir = os.path.join(DIR, "suites")
+    if suites is None:
+        suites = DEFAULT_SUITES
     # Find the test suites.
-    suite_names: list = sorted(os.listdir(suites_dir))
+    discovered: list = sorted(
+        name
+        for name in os.listdir(suites_dir)
+        if os.path.isdir(os.path.join(suites_dir, name))
+    )
+    unwired: list = [name for name in discovered if name not in suites]
+    missing: list = [name for name in suites if name not in discovered]
+    if unwired:
+        raise ValueError(
+            "Suite(s) present in suites/ but not wired into DEFAULT_SUITES, so "
+            "the default run compiles none of them: "
+            + ", ".join(unwired)
+            + ". Add them to DEFAULT_SUITES in test-programs/runner.py."
+        )
+    if missing:
+        raise ValueError(
+            "Suite(s) named in DEFAULT_SUITES with no directory under suites/: "
+            + ", ".join(missing)
+            + ". Remove them from DEFAULT_SUITES in test-programs/runner.py."
+        )
+    suite_names: list = list(suites)
     # Iterate over each test suite.
     for suite_name in suite_names:
         # Find the tests in this suite.
@@ -907,11 +1000,16 @@ def run_all_tests(
     return run_tests_parallel(filtered, replace_stderr)
 
 
+def worker_count(tests: list[Test]) -> int:
+    """Workers for `tests`: never more than the tests, `MAX_WORKERS`, or the CPUs."""
+    return max(1, min(len(tests), MAX_WORKERS, os.cpu_count() or 1))
+
+
 def run_tests_parallel(
     tests: list[Test],
     replace_stderr: bool,
 ) -> list[TestResult]:
-    with ProcessPoolExecutor() as executor:
+    with ProcessPoolExecutor(max_workers=worker_count(tests)) as executor:
         futures: list[Future[TestResult | None]] = [
             executor.submit(run_test, test, replace_stderr)
             for test in tests

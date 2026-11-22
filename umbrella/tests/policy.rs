@@ -33,8 +33,16 @@ fn project_text(build: bool, load: bool, grants: &[&str]) -> String {
             "module": {{"name": "probe", "sources": ["Probe.aum"]}},
             "build": {{"allowed": {build}, "crate": "{FIXTURE}"}},
             "load": {{"allowed": {load}, "providers": ["libstageprobe.so"]}},
-            "grants": [{grants}]
-        }}"#
+            "grants": [{grants}],
+            "trusted": {{
+                "lock_sha256": "{}",
+                "features": [],
+                "library_sha256": "{}",
+                "exports": ["stageprobe_version"]
+            }}
+        }}"#,
+        "0".repeat(64),
+        "1".repeat(64)
     )
 }
 

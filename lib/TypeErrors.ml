@@ -285,6 +285,72 @@ let rust_ownership_annotation ~annotation =
     Text "."
   ]
 
+let handle_ownership_not_foreign () =
+  austral_raise DeclarationError [
+    Text "The ";
+    Code "Handle_Ownership";
+    Text " pragma can only annotate a foreign import declared with ";
+    Code "Foreign_Import";
+    Text ": it describes the provider symbols the generated handle wrappers call, and a function with a body is not an import."
+  ]
+
+let handle_ownership_bad_target ~name =
+  austral_raise DeclarationError [
+    Text "Invalid handle target ";
+    Code name;
+    Text ". The external name of a ";
+    Code "Handle_Ownership";
+    Text " import is the handle's target: a plain identifier from which the wrappers derive ";
+    Code "<target>__new";
+    Text " and ";
+    Code "<target>__dispose";
+    Text ", so it must be non-empty, use only letters, digits and underscores, and not already name one of those wrappers."
+  ]
+
+let handle_ownership_bad_type ~type_name =
+  austral_raise DeclarationError [
+    Text "Invalid handle type name ";
+    Code type_name;
+    Text ". It is rendered into the handle registry's type tag, so it must be a plain identifier (letters, digits and underscores)."
+  ]
+
+let handle_ownership_symbols ~constructor ~destructor =
+  austral_raise DeclarationError [
+    Text "Invalid provider symbols in a ";
+    Code "Handle_Ownership";
+    Text " pragma: ";
+    Code constructor;
+    Text " and ";
+    Code destructor;
+    Text " must both be non-empty and different, because one symbol cannot both allocate and free the value."
+  ]
+
+let handle_ownership_accessor ~use_symbol =
+  austral_raise DeclarationError [
+    Text "Invalid ";
+    Code "Use";
+    Text " symbol ";
+    Code use_symbol;
+    Text " in a ";
+    Code "Handle_Ownership";
+    Text " pragma. It names the provider's reader, which the generated ";
+    Code "__use";
+    Text " wrapper calls as ";
+    Code "unsafe extern \"C\" fn(*mut c_void) -> i64";
+    Text ", so it must be a non-empty plain identifier and must not be the constructor or the destructor: reading a value and creating or freeing it cannot share one provider symbol."
+  ]
+
+let handle_ownership_shape () =
+  austral_raise DeclarationError [
+    Text "A ";
+    Code "Handle_Ownership";
+    Text " import must have the dispose wrapper's signature: two ";
+    Code "Int64";
+    Text " words in (the handle's two words) and one ";
+    Code "Int64";
+    Text " status word out (0 done, non-zero refused). The wrappers are generated with exactly that ABI, so any other signature could not name a wrapper that exists."
+  ]
+
 let rust_ownership_shape ~ty =
   austral_raise DeclarationError [
     Text "The type ";
@@ -304,7 +370,46 @@ let rust_adapter_buffer_unsupported ~subject ~ty =
     Text subject;
     Text " has type ";
     Type ty;
-    Text ", which cannot cross the extern rust boundary in this signature: the adapter ABI carries one 64-bit word per parameter, and a byte buffer needs a length, capacity and pointer-provenance convention the descriptor does not define yet. Keep every parameter and the result word-native instead (Int64/Nat64, an address or a pointer, with an Int64/Nat64 result — those calls name the declared symbol and build no adapter)."
+    Text ", which cannot cross the extern rust boundary in this signature: buffer transport versions 1 and 2 carry a Nat8 byte buffer as an ";
+    Code "Address[Nat8]";
+    Text " or ";
+    Code "Pointer[Nat8]";
+    Text " parameter with its length as the next parameter, version 2 also carries 64-bit integer words, and the result is a scalar. A buffer result, a span, or a pointer to anything but Nat8 bytes is a different protocol, which needs its own version and its own tests. Keep the result word-native instead (Int64/Nat64 — those calls name the declared symbol and build no adapter)."
+  ]
+
+let rust_adapter_buffer_needs_length ~name ~ty =
+  austral_raise DeclarationError [
+    Text "The parameter ";
+    Code name;
+    Text " has type ";
+    Type ty;
+    Text " and is a byte buffer, but the parameter after it is not its length. A buffer cannot cross the extern rust boundary without one: the length is the extent the wrapper (";
+    Code "<name>__adapter";
+    Text ") uses to build the slice, and it must be a ";
+    Code "Nat64";
+    Text " or ";
+    Code "Int64";
+    Text " parameter directly after the buffer."
+  ]
+
+let rust_adapter_buffer_scalar_beside ~name ~ty =
+  austral_raise DeclarationError [
+    Text "The parameter ";
+    Code name;
+    Text " has type ";
+    Type ty;
+    Text " in a signature that carries a byte buffer. Buffer transport version 2 describes a signature as Nat8 byte buffers, the 64-bit length after each one, 64-bit integer words, and a scalar result. A narrower integer, Bool, float or non-Nat8 pointer beside a buffer would need marshalling the descriptor has no per-parameter type for, so its wrapper cannot be generated."
+  ]
+
+let rust_adapter_buffer_length_types ~first ~second =
+  austral_raise DeclarationError [
+    Text "The buffer lengths in this signature have different types (";
+    Type first;
+    Text " and ";
+    Type second;
+    Text "). One descriptor states one ";
+    Code "lengths";
+    Text " type, so every length parameter must be the same 64-bit integer type."
   ]
 
 let rust_interop_transport ~ty =

@@ -60,6 +60,13 @@ jobs:
       - name: make test
         run: nix develop -c bash -c 'export UNFER_LOGOS_BIN=$PWD/../unfer/target/release/logos; make test'
 
+      # The default run compiles `DEFAULT_SUITES`, and the collector refuses a
+      # suite directory that list does not name. This is the unit test for that
+      # rule (scratch directories, no compiler), so a guard that stopped firing
+      # is a red step rather than a quietly shortened default run.
+      - name: runner suite list is honest
+        run: nix develop -c bash -c 'python3 test-programs/test_runner.py'
+
       # The `austral` binary has no rpath, so every step that runs it needs
       # LD_LIBRARY_PATH pointing at the bridge .so's build dir (make bridge
       # above produced it there) — the ci.yml pattern.

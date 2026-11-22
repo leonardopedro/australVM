@@ -1,0 +1,19 @@
+-- A Handle_Ownership pragma declares the ABI of the dispose call it derives:
+-- the compiler rewrites the import to `<target>__dispose`, so the declared
+-- function must take two words and return one. A narrower first parameter
+-- would hand the C wrapper the wrong argument width, so it is refused here
+-- rather than left to fail in the generated C.
+module body Test is
+    record Widget: Free is
+        lo: Int64;
+        hi: Int64;
+    end;
+
+    pragma Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor", Destructor => "avm_widget_dtor", Params => "2");
+    pragma Foreign_Import(External_Name => "avm_widget");
+    function widgetDispose(lo: Int32, hi: Int64): Int64 is end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

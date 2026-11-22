@@ -1,0 +1,26 @@
+-- A word-native `rs_*` call names its declared symbol directly (it needs no
+-- adapter wrapper), so the JIT must find that symbol when it compiles the
+-- module. This module names one the bridge does not define: the compile has to
+-- stop with the JIT's error instead of "succeeding" and leaving a binary that
+-- cannot run.
+--
+-- `cli.txt` compiles with `--target-type=tc`, the target that keeps strict
+-- symbol resolution. `--target-type=c` deliberately does not: its output is a
+-- cell linked later, so an unresolved import is bound to the loader's thunk
+-- there, which would make this fixture pass for the wrong reason.
+pragma Unsafe_Module;
+
+module body Test is
+    pragma Foreign_Import(External_Name => "rs_absent_word");
+    pragma Rust_Ownership(Params => "borrowed", Return => "owned");
+    function rs_absent_word(value: Int64): Int64 is
+    end;
+
+    function main(): ExitCode is
+        if rs_absent_word(1) = 1 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

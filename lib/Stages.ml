@@ -590,9 +590,20 @@ module Mtast = struct
     | MUnionMonomorph of mono_id * mono_case list
     | MFunction of decl_id * identifier * mvalue_parameter list * mono_ty * mstmt
     | MFunctionMonomorph of mono_id * mvalue_parameter list * mono_ty * mstmt
-    | MForeignFunction of decl_id * identifier * mvalue_parameter list * mono_ty * string
+    | MForeignFunction of decl_id * identifier * mvalue_parameter list * mono_ty * string * mono_handle option
     | MConcreteInstance of decl_id * qident * mono_ty  * concrete_method list
     | MMethodMonomorph of mono_id * mvalue_parameter list * mono_ty * mstmt
+
+  (** U13: the provider facts an `abi handle 1` descriptor states, carried
+      past monomorphization so the CPS lowering can emit it. `None` is every
+      other foreign import. *)
+  and mono_handle = {
+      mh_type_name: string;
+      mh_constructor: string;
+      mh_destructor: string;
+      mh_params: int;
+      mh_use: string option;
+    }
 
   and concrete_method =
     MConcreteMethod of ins_meth_id * identifier * mvalue_parameter list * mono_ty * mstmt

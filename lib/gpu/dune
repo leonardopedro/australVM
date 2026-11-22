@@ -15,5 +15,6 @@
   Gpu_subset
   Gpu_wgsl
   Gpu_reduce
+  Gpu_reduce_wgsl
   Gpu_proof_interface
   Gpu_obligations))

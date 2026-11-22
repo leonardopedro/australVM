@@ -549,7 +549,7 @@ let gen_decl (env: env) (mn: module_name) (decl: mdecl): c_decl list =
      [
        CFunctionDefinition (d, gen_mono_id id, gen_params mn' params, gen_type rt, gen_stmt mn body)
      ]
-  | MForeignFunction (id, _, params, rt, underlying) ->
+  | MForeignFunction (id, _, params, rt, underlying, _) ->
      let def_d = Desc "Foreign function" in
      let param_type_to_c_type (t: mono_ty): c_ty =
        (match t with
@@ -643,7 +643,7 @@ and gen_fun_decl mn decl =
   | MFunctionMonomorph (id, p, rt, _) ->
      let d = Desc "Function monomorph forward declaration" in
      Some [CFunctionDeclaration (d, gen_mono_id id, gen_params mn p, gen_type rt, LinkageInternal)]
-  | MForeignFunction (id, _, p, rt, _) ->
+  | MForeignFunction (id, _, p, rt, _, _) ->
      let d = Desc "Foreign function forward declaration" in
      Some [CFunctionDeclaration (d, gen_decl_id id, gen_params mn p, gen_type rt, LinkageInternal)]
   | MConcreteInstance (_, _, _, ms) ->

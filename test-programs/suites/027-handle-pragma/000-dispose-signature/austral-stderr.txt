@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Declaration Error",
+  "text": [
+    { "type": "text", "content": "A " },
+    { "type": "code", "content": "Handle_Ownership" },
+    {
+      "type": "text",
+      "content": " import must have the dispose wrapper's signature: two "
+    },
+    { "type": "code", "content": "Int64" },
+    {
+      "type": "text",
+      "content": " words in (the handle's two words) and one "
+    },
+    { "type": "code", "content": "Int64" },
+    {
+      "type": "text",
+      "content": " status word out (0 done, non-zero refused). The wrappers are generated with exactly that ABI, so any other signature could not name a wrapper that exists."
+    }
+  ],
+  "span": null,
+  "context": null
+}

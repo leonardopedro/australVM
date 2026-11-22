@@ -22,6 +22,7 @@ pub mod cps;
 pub mod ecma;
 pub mod federation;
 pub mod fingerprint;
+pub mod handles;
 pub mod isa;
 pub mod liquid_attest;
 pub mod module;
@@ -1193,7 +1194,20 @@ pub fn registered_static_symbols() -> Vec<(String, usize)> {
 /// identifies the actual path; the panic payload is downcast and included so
 /// the diagnostic carries the real reason, not a guess.
 fn compile_guarded(label: &str, f: impl FnOnce() -> *const c_void) -> *const c_void {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+    // The default panic hook prints the payload (with a thread id and an
+    // absolute registry path) *before* `catch_unwind` runs, so the same
+    // failure reported below also landed on stderr in a form no caller can
+    // compare or parse. The reason is already carried by `set_last_error`, so
+    // silence the hook for the duration of the guarded compile. Serialised so
+    // two concurrent compiles cannot leave a hook installed: `f` does not
+    // spawn threads, and the lock is released on the unwind path too.
+    static HOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _hook_guard = HOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    std::panic::set_hook(previous_hook);
+    match guarded {
         Ok(ptr) => ptr,
         Err(payload) => {
             let reason = if let Some(s) = payload.downcast_ref::<&str>() {

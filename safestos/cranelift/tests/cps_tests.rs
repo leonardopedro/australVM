@@ -916,3 +916,44 @@ fn a_tail_self_call_does_not_grow_the_stack() {
     // 1_000_000 frames would overflow an 8 MiB stack; the loop returns.
     assert_eq!(countdown(1_000_000), 0);
 }
+
+// ── Function values ────────────────────────────────────────────────
+
+/// A CPS v1 module with two functions: `cb` and `entry`, both returning an
+/// i64 and taking no parameters. `Var` in `entry` can then name `cb`, which is
+/// the shape an Austral function used as a value lowers to.
+fn cps_v1_two_functions(cb: &str, cb_body: &[u8], entry: &str, entry_body: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    write_u32(&mut buf, 0x43505331); // magic v1
+    write_u32(&mut buf, 2); // func_count
+    for (name, body) in [(cb, cb_body), (entry, entry_body)] {
+        write_str(&mut buf, name);
+        write_u32(&mut buf, 0); // param_count
+        buf.push(0x01); // ret_type: Int64
+        write_u32(&mut buf, body.len() as u32);
+        buf.extend_from_slice(body);
+    }
+    buf
+}
+
+/// Body that returns the value of a bare name (`0x02`), the expression an
+/// Austral function used as a value lowers to.
+fn body_return_var(name: &str) -> Vec<u8> {
+    let mut body = vec![0x07, 0x02];
+    write_str(&mut body, name);
+    body
+}
+
+#[test]
+fn a_function_used_as_a_value_resolves_to_its_code_address() {
+    let cb = "fnvalue_cb_address";
+    let entry = "fnvalue_entry_address";
+    let cps = cps_v1_two_functions(cb, &body_return_const(7), entry, &body_return_var(cb));
+    let ptr = checked(&cps, entry, 0);
+    assert!(!ptr.is_null(), "compile failed: {}", last_error());
+    let addr = execute(ptr);
+    // The callback's body returns 7; a resolved function *value* is its code
+    // address, so 7 (called, not taken) or 0 (unresolved) both fail here.
+    assert_ne!(addr, 0, "function value resolved to null");
+    assert_ne!(addr, 7, "function value was called, not taken");
+}

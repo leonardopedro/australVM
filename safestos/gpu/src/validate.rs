@@ -22,3 +22,23 @@ pub fn validate_bundle(loaded: &crate::LoadedBundle) -> Result<(), String> {
     crate::artifact::check_requirements(&loaded.bundle)?;
     validate_wgsl(&loaded.wgsl, &loaded.bundle)
 }
+
+/// Naga validation of a reduction shader, then the G22b structural audit.
+/// The pointwise wrapper audit does not apply: this artifact has no map
+/// wrapper, and the reduction's own shape is audited separately.
+pub fn validate_reduce_wgsl(wgsl: &str, operation: &str) -> Result<(), String> {
+    let module = naga::front::wgsl::parse_str(wgsl)
+        .map_err(|e| format!("WGSL parse error: {}", e.emit_to_string(wgsl)))?;
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    );
+    validator
+        .validate(&module)
+        .map_err(|e| format!("Naga validation failed: {e:?}"))?;
+    crate::reduce_audit::audit_for(operation, wgsl)
+}
+
+pub fn validate_reduction(loaded: &crate::reduce_artifact::LoadedReduction) -> Result<(), String> {
+    validate_reduce_wgsl(&loaded.wgsl, &loaded.bundle.operation)
+}

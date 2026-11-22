@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use umbrella::interface::{
-    render_wrapper, Adapter, Scalar, ADAPTER_ABI_VERSION, DESCRIPTOR_SCHEMA,
+    render_buffer_wrapper, render_handle_wrapper, render_wrapper, Adapter, BufferAdapter,
+    HandleAdapter, Scalar, ScalarParam, ADAPTER_ABI_VERSION, BUFFER_ABI_VERSION,
+    DESCRIPTOR_SCHEMA, HANDLE_ABI_VERSION,
 };
 
 fn fixtures() -> PathBuf {
@@ -171,8 +173,8 @@ fn a_descriptor_with_another_encoding_version_cannot_render() {
 /// generator, so a field the compiler renames cannot pass unnoticed.
 #[test]
 fn the_compilers_emitted_descriptors_parse_here() {
-    let golden = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../test-programs/adapters/adapters.golden");
+    let golden =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-programs/adapters/adapters.golden");
     let text = std::fs::read_to_string(&golden)
         .unwrap_or_else(|e| panic!("read {}: {e}", golden.display()));
     // The same call the build makes on the file the front-end writes.
@@ -180,11 +182,17 @@ fn the_compilers_emitted_descriptors_parse_here() {
     let symbols: Vec<&str> = adapters.iter().map(|a| a.symbol.as_str()).collect();
     assert_eq!(
         symbols,
-        vec!["rs_narrow__adapter", "rs_scale__adapter", "rs_toggle__adapter"],
+        vec![
+            "rs_narrow__adapter",
+            "rs_scale__adapter",
+            "rs_toggle__adapter"
+        ],
         "descriptors must be sorted by symbol and the word-native import absent"
     );
     for adapter in &adapters {
-        adapter.validate().expect("the compiler emits valid descriptors");
+        adapter
+            .validate()
+            .expect("the compiler emits valid descriptors");
         assert_eq!(adapter.abi_version, ADAPTER_ABI_VERSION);
         assert_eq!(adapter.schema, DESCRIPTOR_SCHEMA);
         assert_eq!(
@@ -195,6 +203,94 @@ fn the_compilers_emitted_descriptors_parse_here() {
     }
     assert_eq!(adapters[1].params, vec![Scalar::F64, Scalar::I64]);
     assert_eq!(adapters[1].returns, Scalar::F64);
+
+    // The same document carries the U12 blocks: the compiler's writer and this
+    // generator's reader are pinned together for buffers too.
+    let buffers = BufferAdapter::parse_descriptors(&text).expect("the buffer blocks parse");
+    let symbols: Vec<&str> = buffers.iter().map(|a| a.symbol.as_str()).collect();
+    assert_eq!(
+        symbols,
+        vec!["rs_count__adapter", "rs_fill__adapter", "rs_stamp__adapter"]
+    );
+    for adapter in &buffers {
+        adapter
+            .validate()
+            .expect("the compiler emits valid buffer descriptors");
+        // The first two blocks are version 1 and stay byte-identical; only a
+        // signature with a word beside the buffer is written as version 2.
+        assert!(adapter.abi_version <= BUFFER_ABI_VERSION);
+        assert_eq!(adapter.empty.name(), "null-len0");
+        let wrapper = render_buffer_wrapper(adapter).expect("buffer wrapper");
+        assert!(
+            wrapper.contains(&format!("pub extern \"C\" fn {}__adapter", adapter.target)),
+            "{wrapper}"
+        );
+    }
+    // `Pointer` is read-only, `Address` mutable: the direction comes from the
+    // parameter type, not from the ownership annotation Monomorphize drops.
+    assert_eq!(buffers[0].buffers[0].mode.name(), "read");
+    assert_eq!(buffers[0].lengths, Scalar::U64);
+    assert_eq!(buffers[0].returns, Scalar::U32);
+    assert_eq!(buffers[1].buffers[0].mode.name(), "readwrite");
+    assert_eq!(buffers[1].lengths, Scalar::I64);
+    assert_eq!(buffers[1].returns, Scalar::I32);
+    assert_eq!(buffers[0].params, 2);
+    assert_eq!(buffers[1].params, 2);
+    assert!(buffers[0].scalars.is_empty());
+
+    // Version 2 carries `tag` beside the buffer: the block names it, so the
+    // wrapper passes it through instead of reading it as a second length.
+    let stamp = &buffers[2];
+    assert_eq!(stamp.abi_version, 2);
+    assert_eq!(stamp.params, 3);
+    assert_eq!(
+        stamp.scalars,
+        vec![ScalarParam {
+            index: 2,
+            ty: Scalar::I64
+        }]
+    );
+    let wrapper = render_buffer_wrapper(stamp).expect("version 2 wrapper");
+    assert!(wrapper.contains("s2: i64"), "{wrapper}");
+    assert!(wrapper.contains("w2 as i64"), "{wrapper}");
+    assert!(!wrapper.contains("let len2"), "{wrapper}");
+
+    // U13: the same pair of goldens covers an owned-value handle. The module
+    // writes only the handle's *target*; the lowering derives the dispose
+    // symbol its call names and writes this block, which is what this crate
+    // turns into `avm_widget__new` / `avm_widget__dispose`.
+    let handle_golden =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-programs/adapters/handles.golden");
+    let handle_text = std::fs::read_to_string(&handle_golden)
+        .unwrap_or_else(|e| panic!("read {}: {e}", handle_golden.display()));
+    let handles =
+        HandleAdapter::parse_descriptors(&handle_text).expect("the emitted handle block parses");
+    assert_eq!(handles.len(), 1);
+    let handle = &handles[0];
+    handle
+        .validate()
+        .expect("the compiler emits a valid handle descriptor");
+    assert_eq!(handle.abi_version, HANDLE_ABI_VERSION);
+    assert_eq!(handle.schema, DESCRIPTOR_SCHEMA);
+    assert_eq!(handle.symbol, "avm_widget__new");
+    assert_eq!(handle.dispose_symbol(), "avm_widget__dispose");
+    assert_eq!(handle.target, "avm_widget");
+    assert_eq!(handle.params, 2);
+    assert_eq!(
+        handle.use_symbol.as_deref(),
+        Some("avm_widget_read"),
+        "the module names the provider's reader; the generator renders `__use`"
+    );
+    assert_eq!(handle.owner, 1, "the generator numbers registries from 1");
+    let wrapper = render_handle_wrapper(handle).expect("handle wrapper");
+    assert!(
+        wrapper.contains("pub extern \"C\" fn avm_widget__new"),
+        "{wrapper}"
+    );
+    assert!(
+        wrapper.contains("pub extern \"C\" fn avm_widget__dispose"),
+        "{wrapper}"
+    );
 }
 
 /// The build's parser is the one that has to be strict, not the front-end's
@@ -211,5 +307,7 @@ fn a_document_with_a_repeated_symbol_is_refused() {
     // A comment-only document is *not* an error: a module whose calls are all
     // word-native writes exactly the compiler's header and needs no wrapper.
     let header = "# U11 adapter descriptors\n# sorted by symbol.\n";
-    assert!(Adapter::parse_descriptors(header).expect("header only").is_empty());
+    assert!(Adapter::parse_descriptors(header)
+        .expect("header only")
+        .is_empty());
 }

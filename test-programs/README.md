@@ -29,6 +29,10 @@ Each test directory contains some Austral source files (in the simplest cases, `
 
 Run a single suite with `./test-programs/runner.py <suite>`; a second argument filters test names.
 
+The no-argument run compiles the suites named in `runner.DEFAULT_SUITES`, in that order. Wiring a suite is therefore an explicit edit: `collect_tests` refuses a directory under `suites/` that the tuple does not name, and refuses a name that has no directory, so neither a forgotten suite nor a stale entry can pass quietly. `python3 test-programs/test_runner.py` holds that rule to scratch directories (no compiler needed).
+
+The run compiles at most `runner.MAX_WORKERS` (4) tests at once, and never more than the CPUs. `ProcessPoolExecutor()`'s default — one worker per CPU — exhausted memory on a 12-core/12 GB host during a full run; the cap is what keeps a full run's footprint bounded.
+
 Suite and test directories are numbered so that tests run in a predictable order.
 
 The `runner.py` script runs the tests.

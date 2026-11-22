@@ -88,6 +88,10 @@ let check_pragma (module_name: module_name) (fn_name: identifier) (p: pragma): u
      violation module_name "rule 3"
        ("function `" ^ (ident_string fn_name)
         ^ "` is an `extern rust` foreign import: package modules may not perform unmediated I/O")
+  | HandleOwnershipPragma _ ->
+     violation module_name "rule 3"
+       ("function `" ^ (ident_string fn_name)
+        ^ "` imports an owned-value handle: package modules may not perform unmediated I/O")
   | LiquidPragma _ ->
      ()
 

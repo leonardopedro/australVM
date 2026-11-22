@@ -2,13 +2,17 @@
 # check-adapter-descriptors — re-emit U11's adapter descriptors from the
 # compiler's CPS path and diff them against the pinned golden.
 #
-# The golden is `test-programs/adapters/adapters.golden`, produced by compiling
-# `test-programs/adapters/rs_scalars.aum` with `--emit-adapters`. The file is
-# the contract between the compiler (which decides *which* calls need a
-# wrapper and what their scalars are) and `umbrella/src/interface.rs` (which
-# turns the text into a generated wrapper), so it is compared byte for byte:
-# a reordered field, a dropped descriptor or a newly-adapter'd word-native
-# signature all fail here.
+# The goldens are `test-programs/adapters/adapters.golden`, produced by
+# compiling `test-programs/adapters/rs_scalars.aum`, and
+# `test-programs/adapters/handles.golden`, produced by compiling the
+# `WidgetHandle` module, each with `--emit-adapters`. They are the contract
+# between the compiler (which decides *which* calls need a wrapper and what
+# their scalars are) and `umbrella/src/interface.rs` (which turns the text into
+# generated wrappers), so they are compared byte for byte: a reordered field, a
+# dropped descriptor or a newly-adapter'd word-native signature all fail here.
+# The handle golden additionally pins that the module writes only the handle's
+# *target* and the lowering derives `<target>__dispose` and the `abi handle 1`
+# block from it.
 #
 # Exits 0 on an exact match, 1 on a diff, 2 when it cannot measure (no compiler
 # binary, no fixture, compilation failed) — a gap is never reported as a pass.
@@ -17,13 +21,16 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURE="$ROOT/test-programs/adapters/rs_scalars.aum"
 GOLDEN="$ROOT/test-programs/adapters/adapters.golden"
+HANDLE_FIXTURE="$ROOT/umbrella/modules/WidgetHandle.aui,$ROOT/umbrella/modules/WidgetHandle.aum"
+HANDLE_GOLDEN="$ROOT/test-programs/adapters/handles.golden"
 AUSTRAL="${AUSTRAL:-$ROOT/austral}"
 # A developer tree has the bridge at the repo root; a clean `make bridge` (and
 # CI) leaves it only under target/release.
 BRIDGE="$ROOT/libaustral_cranelift_bridge.so"
 [ -f "$BRIDGE" ] || BRIDGE="$ROOT/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
 
-for path in "$FIXTURE" "$GOLDEN" "$AUSTRAL"; do
+for path in "$FIXTURE" "$GOLDEN" "$HANDLE_GOLDEN" "$AUSTRAL" \
+            "${HANDLE_FIXTURE%%,*}" "${HANDLE_FIXTURE##*,}"; do
     if [ ! -e "$path" ]; then
         echo "check-adapter-descriptors: [gap] missing $path" >&2
         exit 2
@@ -43,12 +50,32 @@ if ! LD_LIBRARY_PATH="$(dirname "$BRIDGE"):$ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_
     exit 2
 fi
 
-if diff -u "$GOLDEN" "$tmp/adapters.golden"; then
-    echo "check-adapter-descriptors: [pass] $(grep -c '^symbol ' "$GOLDEN") descriptor(s) match the golden"
-    exit 0
+if ! LD_LIBRARY_PATH="$(dirname "$BRIDGE"):$ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+     "$AUSTRAL" compile "$HANDLE_FIXTURE" \
+     --entrypoint=WidgetHandle:main --use-cps-jit --allow-all --target-type=c \
+     --emit-adapters="$tmp/handles.golden" \
+     --output="$tmp/handles.c" > "$tmp/handles.log" 2>&1; then
+    echo "check-adapter-descriptors: [gap] the handle fixture did not compile" >&2
+    tail -5 "$tmp/handles.log" >&2
+    exit 2
 fi
 
-echo "check-adapter-descriptors: FAIL the emitted descriptors differ from the golden" >&2
-echo "  regenerate only if the change is intended: copy the emitted file over" \
-     "test-programs/adapters/adapters.golden and review the diff" >&2
-exit 1
+status=0
+if diff -u "$GOLDEN" "$tmp/adapters.golden"; then
+    echo "check-adapter-descriptors: [pass] $(grep -c '^symbol ' "$GOLDEN") descriptor(s) match the golden"
+else
+    echo "check-adapter-descriptors: FAIL the emitted descriptors differ from the golden" >&2
+    echo "  regenerate only if the change is intended: copy the emitted file over" \
+         "test-programs/adapters/adapters.golden and review the diff" >&2
+    status=1
+fi
+
+if diff -u "$HANDLE_GOLDEN" "$tmp/handles.golden"; then
+    echo "check-adapter-descriptors: [pass] $(grep -c '^symbol ' "$HANDLE_GOLDEN") handle descriptor(s) match the golden"
+else
+    echo "check-adapter-descriptors: FAIL the emitted handle descriptors differ from the golden" >&2
+    echo "  regenerate only if the change is intended: copy the emitted file over" \
+         "test-programs/adapters/handles.golden and review the diff" >&2
+    status=1
+fi
+exit "$status"

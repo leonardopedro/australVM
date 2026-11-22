@@ -2,7 +2,12 @@
 //!
 //! Subcommands:
 //!   authorize   <manifest.toml> <module> <uk_symbol> [--json]  — check authorization
-//!   host        <module-dir> --call <ep> [--args ...] [--args-json <json>] [--repeat N] [--swap <dir>] [--json]
+//!   host        <module-dir> --call <ep> [--args ...] [--args-json <json>] [--repeat N] [--swap <dir>] [--peer <node>] [--json]
+//!
+//!   `--peer <node>` treats the call as arriving from that authenticated peer:
+//!   it dispatches through `ModuleHost::call_from_peer`, which requires the
+//!   loaded instance to serve exactly that node (`[module] node`), to be live,
+//!   and to be granted the entrypoint at this receiver (D08).
 //!   host-legacy <austral-path> <module-src>... -- <entrypoint>...
 //!
 //! The `host` subcommand loads a pre-compiled module directory (module.cps +
@@ -33,7 +38,8 @@ use std::process::{Child, Command, ExitCode, Stdio};
 const USAGE_AUTHORIZE: &str =
     "usage: modhost authorize <manifest.toml> <module> <uk_symbol> [--json]";
 const USAGE_HOST: &str = "usage: modhost host <module-dir> --call <ep> [--args ...] \
-                           [--args-json <json>] [--repeat N] [--swap <dir>] [--json]";
+                           [--args-json <json>] [--repeat N] [--swap <dir>] \
+                           [--peer <node>] [--json]";
 const USAGE_LEGACY: &str =
     "usage: modhost host-legacy <austral-path> <module-src>... -- <entrypoint>...";
 
@@ -165,6 +171,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
     let mut args_json: Option<String> = None;
     let mut repeat: u64 = 1;
     let mut swap_dir: Option<String> = None;
+    let mut peer: Option<String> = None;
     let mut json = false;
 
     let mut i = 3;
@@ -210,6 +217,16 @@ fn cmd_host(args: &[String]) -> ExitCode {
             },
             "--swap" => match opt_value(args, &mut i, "--swap", USAGE_HOST) {
                 Ok(v) => swap_dir = Some(v),
+                Err(code) => return code,
+            },
+            // D08: the peer identity the *transport* authenticated. Until the
+            // distributed transport lands (D11/D17), this front door takes it
+            // from the operator: what it decides is that a call is dispatched
+            // only when the loaded instance serves exactly this node, holds a
+            // grant here, and is still live — and that a local module, or a
+            // different node, is refused.
+            "--peer" => match opt_value(args, &mut i, "--peer", USAGE_HOST) {
+                Ok(v) => peer = Some(v),
                 Err(code) => return code,
             },
             "--json" => json = true,
@@ -357,7 +374,17 @@ fn cmd_host(args: &[String]) -> ExitCode {
         if repeat > 1 && !json {
             println!("--- call {}/{} ---", call_idx + 1, repeat);
         }
-        let result: Result<String, String> = if let Some(json) = &args_json {
+        let result: Result<String, String> = if let Some(peer) = peer.as_deref() {
+            // A remote-bound call goes through the receiver, never the local
+            // path: `--args-json` is an ECMAScript transport detail with no
+            // remote equivalent here yet, so mixing the two is a usage error.
+            if args_json.is_some() {
+                eprintln!("modhost: --peer cannot be combined with --args-json");
+                return ExitCode::from(2);
+            }
+            host.call_from_peer(peer, &module_name, &entrypoint, &call_args)
+                .map(|v| v.to_string())
+        } else if let Some(json) = &args_json {
             #[cfg(feature = "ecmascript")]
             {
                 host.call_json(&module_name, &entrypoint, json)

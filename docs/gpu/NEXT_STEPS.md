@@ -172,6 +172,15 @@ and an oversized input refuse. The partition covers each valid index once.
 
 ### G22b — Emit and validate the fixed WGSL reduction
 
+**Landed 2026-11-20** in [REDUCE_U32.md](REDUCE_U32.md):
+`lib/gpu/Gpu_reduce_wgsl.ml` emits `reduce.json`/`reduce.wgsl` (two entries,
+guard + identity, six strides, one barrier per step, single lane-0 write),
+`--gpu-operation=map-sum-u32` selects it, and
+`safestos/gpu/src/{reduce_artifact,reduce_audit}.rs` load and audit it.
+Measured: emitter suite 4 OK, Rust 41 OK (7 audit mutations, each refused by
+name), publish + `validate-reduce` agree on the program digest. A general
+shader/model correspondence is still not claimed.
+
 **Files.** `Gpu_wgsl.ml` or one adjacent reduction emitter, `Gpu_bundle.ml`,
 Rust `schema.rs`/`artifact.rs`/`validate.rs`/`wrapper.rs`, and focused tests.
 
@@ -193,6 +202,25 @@ write to a nonunique slot and a wrong binding role. Report shader validation
 and structural audit separately from semantic preservation.
 
 ### G22c — Dispatch, read back and measure the reduction
+
+**Landed 2026-11-20** in [REDUCE_U32.md](REDUCE_U32.md):
+`safestos/gpu/src/reduce_run.rs` preflights the derived schedule against
+adapter limits, dispatches one ordered pass per level with the previous
+pass's output bound as the next input, and reads the final word once
+(`avm-gpu run-reduce`, `reference-reduce`). Measured on an NVIDIA GTX 1060
+(Vulkan, physical): all nine G22a sizes equal the C oracle bit for bit,
+including `[16384,256,4,1]` at 1 048 576.
+
+The four-elements-per-lane variant landed as `map-sum-u32-x4`
+(`reduce-u32-x4-v1`, `i = group*256 + j*64 + lane`), not as a replacement:
+1 048 576 needs three passes instead of four, and 12 sizes (including
+255/256/257) agree with the reference on hardware. `avm-gpu compare-reduce`
+now compares either reduction with map + full readback + CPU fold and reports
+bytes moved and warm timings; at N = 1 048 576 the x4 reduction moved
+4 210 760 bytes versus 12 582 912 for map+fold and read back 4 bytes versus
+4 MiB. `scripts/gpu-reduce-hardware` is the physical lane, run by
+`scripts/check-gpu required` and grepped by the GPU workflow; the source lane
+validates both artifacts with the CPU checker.
 
 **Files.** `safestos/gpu/src/run.rs` or an adjacent reduction runner, CLI run
 and reference tests, and isolated hardware cases in the GPU scripts.
@@ -356,6 +384,19 @@ and solver stay on their existing paths during this experiment.
 
 ### G15a — Close host-state hazards before widening dispatch
 
+**Landed 2026-11-22.** `service.rs` publishes a completion and its words in one
+critical section under the job lock, claims a receipt inside that same lock
+(too-short capacity still retryable), and serializes close against admission
+with a per-context `closed` transition taken before the handle leaves the
+registry — spawning and registering the worker under that same lock. The lock
+order is documented in the module header and in [G15_DESIGN.md](G15_DESIGN.md).
+Four tests force the interleavings through test-only hooks
+(`service_test_set_hook`); against the unfixed ordering they fail with stale
+bytes, two claims of one receipt and the wrong refusal code respectively. No
+ABI or kernel change. The device path was re-measured: two physical contexts
+and three child-process teardown cycles on the Intel UHD 630. TSan/loom and a
+machine-checked lock order remain gaps.
+
 **Files.** `service.rs`, its lifecycle tests, and `run.rs` only where completion
 classification needs it. Keep the kernel and the ABI stable for this card.
 
@@ -383,6 +424,21 @@ service suites and retain the physical callback test.
 
 ### G23a — Bound placement and progress with mock devices
 
+**Landed 2026-11-22.** `safestos/gpu/src/coordinator.rs` (feature `service`)
+owns one reusable worker per device and a per-device `Budget` (in-flight jobs
+and reserved bytes). Admission reserves capacity, the worker's terminal
+`Outcome` returns it, and a device whose worker is gone admits nothing until
+`teardown` joins it and releases the reservation. A context is bound to one
+device and a generation; `poll`/`result` refuse another context's job
+(`UNKNOWN_HANDLE`) and a stale generation (`STALE`). `Identity::is_physical`
+keeps a mock or software device out of a hardware claim. Seven mock tests in
+`safestos/gpu/tests/coordinator.rs` cover the card's exit cases, and seven
+mutation controls (byte budget, queue budget, context and generation binding,
+capacity release, one shared worker, both lost-worker admission paths) each
+fail the test that claims them; the unmutated source is sha256-restored. G23b
+replaces the mock identity and queue with selected adapters; nothing here is a
+device record.
+
 **Files.** A local coordinator beside `service.rs`, the existing adapter
 selection code, and a mock lifecycle fixture. Hold explicit per-device queue
 and byte limits, reserve capacity before admitting work, and return capacity
@@ -395,6 +451,24 @@ Refuse an over-budget submission, a cross-context receipt and a stale
 generation. A lost worker's reserved budget is accounted for until teardown.
 
 ### G23b — Check two physical adapters in one process
+
+**Landed 2026-11-22.** `safestos/gpu/tests/dual_device.rs` (features
+`device` + `service`) enumerates adapters, collapses views of one card to one
+selection (PCI vendor/device when the backend reports it, the name otherwise —
+the two views of this host's NVIDIA card spell their names differently), and
+requires two distinct physical cards, else a `[gap]` with
+`AVM_GPU_ALLOW_ONE_DEVICE=1` or a failure. It then places one kernel per card
+through the G23a coordinator — so the hardware lane uses the same
+one-worker-per-device admission path the mock tests pin — submits both before
+awaiting either, checks each device against the KernelIR reference on its own
+tagged inputs, and records per-device prepare/upload/submit/readback timings.
+Overlap is host-side correlation made comparable: the two submit→terminal
+windows must intersect, and the concurrent wall clock is reported against a
+serial phase of the same work (598 ms vs 1185 ms here, 1.98x). Device loss is
+not triggerable on either adapter and is recorded as this card's open gap; the
+mock slow/lost cases stay G23a's. Three controls (serialized phase, swapped
+expected vectors, no card collapse) each fail the assertion that owns the
+property.
 
 Select two distinct adapters and record how identity is established, including
 duplicate backend views of one card. Submit independent generated pointwise

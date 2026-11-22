@@ -443,7 +443,7 @@ The U04 transport restriction is replaced by adapter-mediated admission.
 
 | Path | Change |
 |---|---|
-| `lib/TypingPass.ml` | `is_transport_word_parameter` / `is_transport_i64_result` and the `rust_interop_transport` rejection are gone: `Bool`, `Int32`/`U32`, `F32`/`F64` parameters and results are admitted. The buffer-protocol shape check (`rust_ownership_shape`) still refuses aggregates, and `is_adapter_protocol_type` refuses the scalars the adapter ABI has no encoding for (`Int8`/`Int16`/`Nat8`/`Nat16`/`Index`/`ByteSize`) with `rust_adapter_unsupported` — those used to typecheck and then lower to an `<name>__adapter` symbol no wrapper could implement, so the failure surfaced as a JIT `can't resolve symbol` (and, because a JIT error is only printed while the C output is still produced, with exit 0). Fixture: `test-programs/suites/019-extern-rust/008-adapter-unsupported-scalar`. The same reasoning refuses a byte buffer in an *adapter-mediated* signature (`rust_adapter_buffer_unsupported`): the descriptor has no length/capacity/provenance layout yet, so `Compiler_cps` could not describe it. The word-native shape is unchanged — `rs_checksum(buf: Address[Nat8], len: Int64): Int64` still typechecks, emits exactly `rs_checksum` and yields an adapter document with no descriptors. Fixture: `test-programs/suites/019-extern-rust/009-buffer-needs-adapter`. |
+| `lib/TypingPass.ml` | `is_transport_word_parameter` / `is_transport_i64_result` and the `rust_interop_transport` rejection are gone: `Bool`, `Int32`/`U32`, `F32`/`F64` parameters and results are admitted. The buffer-protocol shape check (`rust_ownership_shape`) still refuses aggregates, and `is_adapter_protocol_type` refuses the scalars the adapter ABI has no encoding for (`Int8`/`Int16`/`Nat8`/`Nat16`/`Index`/`ByteSize`) with `rust_adapter_unsupported` — those used to typecheck and then lower to an `<name>__adapter` symbol no wrapper could implement, so the failure surfaced as a JIT `can't resolve symbol` (and, because a JIT error is only printed while the C output is still produced, with exit 0). Fixture: `test-programs/suites/019-extern-rust/008-adapter-unsupported-scalar`. The same reasoning refuses a byte buffer in an *adapter-mediated* signature (`rust_adapter_buffer_unsupported`): the descriptor has no length/capacity/provenance layout yet, so `Compiler_cps` could not describe it. The word-native shape is unchanged — `rs_checksum(buf: Address[Nat8], len: Int64): Int64` still typechecks, emits exactly `rs_checksum` and yields an adapter document with no descriptors. Fixture: `test-programs/suites/019-extern-rust/009-buffer-needs-adapter`. **Superseded by U12's mediation** (see that section): a byte buffer now always emits `<name>__adapter` plus a descriptor, whatever the word widths. |
 | `lib/Compiler_cps.ml` | `foreign_needs_adapter` decides per `MForeignFunction` signature: if every parameter is `Int64`/`Nat64`/address/pointer and the result is `Int64`/`Nat64`, the call keeps the declared external symbol (unchanged word-native path); otherwise the lowered symbol is `<ext_name>__adapter`. Hence a float-register or narrow-integer call can only ever name the wrapper. |
 
 **Evidence (measured, emitted CPS).** A module declaring and calling
@@ -738,9 +738,9 @@ advisory run reports what it tolerated instead of hiding it.
 
 ### U12 (bounded start) — the buffer descriptor's conventions
 
-`umbrella/src/interface.rs` reads and validates an `abi buffer 1` block, so the
-buffer layout is a checked contract before any emitter writes one. What it
-fixes, and refuses anything else about:
+`umbrella/src/interface.rs` reads and validates an `abi buffer` block (version 1
+and version 2), so the buffer layout is a checked contract. What it fixes, and
+refuses anything else about:
 
 * `params <n>` — total parameter count; every index is a parameter index.
 * `lengths Nat64|Int64` — the length is a **separate 64-bit parameter**, named
@@ -757,15 +757,373 @@ fixes, and refuses anything else about:
   A different convention needs its own ABI version, and an absent `empty` line
   is an error rather than a default.
 * `returns` — a scalar, not `Unit`.
+* `scalars index:Type,…` — version 2 only: 64-bit integer words (`Int64` or
+  `Nat64`) that sit beside a buffer and are neither it nor its length. They are
+  carried unchanged (`w<i> as i64`), never read as a length. In version 2 every
+  parameter must be exactly one of a buffer, a buffer's length or a declared
+  scalar — an unexplained parameter has no type the wrapper could give it, so it
+  is refused. Version 1 keeps its published meaning (every non-buffer parameter
+  is a length) and is not tightened under its old number.
 
 `abi scalar` blocks in the same document are skipped, so one descriptor file
-can describe both kinds. **No emitter writes `abi buffer` blocks yet**: the CPS
-lowering refuses a buffer in an adapter-mediated signature
-(`rust_adapter_buffer_unsupported`), precisely because this layout has no word
-encoding. Fixing the reader first is what makes the layout a contract instead
-of a guess. Tests: `the buffer block round-trips through its canonical text`,
-`scalar and buffer blocks share one document`, and three refusal tests (mode,
+can describe both kinds.
+
+**The writer now exists, for the shape version 1 can describe.** A parameter
+that needs an adapter *and* carries a byte buffer is admitted only when every
+buffer is an `Address[Nat8]` (crosses `readwrite`) or a `Pointer[Nat8]`
+(crosses `read`) with its length as the immediately following `Nat64`/`Int64`
+parameter, the lengths share one type, and the result is a scalar. The direction
+comes from the pointer type, not from the `Rust_Ownership` annotation —
+`Monomorphize` drops the pragma before CPS lowering, and an address is mutable
+whether or not the callee says it only reads. `Compiler_cps.adapter_block`
+writes the block; `TypingPass.check_rust_ownership` applies the identical rule,
+so an admitted signature always has a descriptor and a refused one names no
+`<name>__adapter`. Version 2 extends that shape with word scalars, so a
+64-bit integer that measures no buffer is carried as a declared scalar instead
+of being refused: `stdlib/gpu/Jobs`'s
+`(context, buffer, offset, Address[Nat8], len)` calls compile as `abi buffer 2`
+with `scalars 0:Int64,1:Int64,2:Int64`. Anything else is refused there with a
+reason: a buffer with no length after it, a narrower integer, Bool, float or
+non-Nat8 pointer beside a buffer, mismatched length types, or a buffer result. No parameter type escapes that
+check: a byte buffer is always mediated, so `Address[Nat8]` + `Int64` → `Int64`
+— the shape that used to stay word-native — now emits a block and lowers to
+`<name>__adapter` as well.
+
+`umbrella::interface::render_buffer_wrapper` implements the block: the shim
+takes the same words as parameters, binds a length word once even when two
+buffers share it, refuses a length above `i64::MAX`, maps length 0 to a null
+pointer and panics on a non-zero length with a null pointer, then calls the
+target with `*const u8`/`*mut u8` and the declared length type. Buffer and
+scalar wrappers are rendered into one crate, because the JIT resolves
+`<name>__adapter` without knowing which descriptor produced it.
+
+Evidence: `test-programs/adapters/adapters.golden` is emitted from
+`rs_scalars.aum` and pinned byte-for-byte by `scripts/check-adapter-descriptors`
+(6 descriptors: `rs_count` read/Nat64→Nat32, `rs_fill` readwrite/Int64→Int32,
+`rs_stamp` readwrite/Int64→Int64 with `scalars 2:Int64` — the version 2 shape —
+and the three scalar ones), `umbrella/tests/interface.rs` parses and renders
+those blocks from the same document, and the unit tests here cover the
+round-trip, the mixed document, the wrapper's bindings, and the refusals (mode,
 length type, index/duplicate rules, empty convention, ABI version).
+
+**The wrapper now transports bytes, measured.**
+`umbrella/tests/buffer_roundtrip.rs` compiles the targets and the rendered
+wrappers into one `cdylib` and calls both through the real ABI (3 passed):
+
+* a 5-byte fill into an 8-byte allocation leaves the three bytes past the
+declared length at their canary, so the wrapper is shown to pass the *declared*
+extent rather than the allocation, and its result and bytes match the direct
+call;
+* a checksum over `[1, 0, 2, 0, 3]` equals the direct call's and differs from
+the checksum of `[1, 2, 3]`, so the NULs crossed as data (a `CString`-style
+path would stop at the first one);
+* the probe protocol is the empty convention in use: length 0 is passed as a
+null pointer and the target still answers the needed size, writing nothing;
+* a negative length and a non-zero length with a null pointer each abort
+(`SIGABRT`, message checked) in a re-executed child of the test binary — the
+wrapper refuses before the target is called, and the abort is why the check
+lives in a child.
+
+**A buffer call now crosses the JIT.** `umbrella/modules/BufferLive.aum` is a
+compiled Austral module that allocates a Nat8 buffer itself (`allocateBuffer`
+is the `au_calloc` intrinsic, a registered JIT symbol), passes it with a `Nat64`
+length to three `rs_*` targets and returns 170 only if the second call reads
+back exactly the four bytes the first wrote and the third returns that sum as an
+`Int64`. `the_jit_executes_a_buffer_call_from_a_compiled_module` runs it through
+the umbrella binary (`RESULT 170`, `--expect` checked) and requires the driver's
+"built and loaded 3 adapter wrapper(s)" line naming all three wrappers, so the
+chain is measured end to end: front-end names `rs_live_fill__adapter`, the
+driver generates and loads it, the JIT resolves the mediated call, and the
+wrapper marshals a pointer the *module* allocated.
+
+The oracle is inside that run rather than in a second one: the allocation is
+zeroed and the declared extent is 4 of 8, so `rs_live_fill` returns -1 when the
+byte past the declared extent is no longer zero. A wrapper that passed the
+allocation size would therefore produce RESULT 0, not 170.
+
+**The word-native bypass is closed.** A buffer signature whose words are all 64
+bits wide used to be lowered as a direct call: measured, `(Address[Nat8],
+Nat64) -> Int64` produced a CPS naming `rs_wide` and an adapter document with no
+block for it (consistent — the document only describes adapters the lowering
+will call — but the call then dereferenced a pointer the wrapper's guards had
+never seen; a null pointer with a non-zero length reached the target).
+`Compiler_cps.foreign_needs_adapter` and `TypingPass`'s mirrored admission rule
+now force mediation whenever a parameter is a buffer, so that shape emits
+`abi buffer 1` … `returns Int64` and the CPS names `<target>__adapter`. Two
+consequences are pinned rather than asserted: `Demo.aum`'s `rs_demo_checksum`
+moved with it and `umbrella/module.toml` now grants `rs_demo_checksum__adapter`
+(granting the native symbol would grant nothing, since no module can reach it),
+and the live module carries a third, all-64-bit target (`rs_live_wide`) whose
+only grant is `rs_live_wide__adapter` — a regression to the direct symbol is
+refused by the JIT gate (UK-4001) instead of passing quietly. That change
+needed no golden regeneration: both buffer cases already had scalar results
+narrower than 64 bits. (Version 2 later added a third buffer case, `rs_stamp`,
+for the word-scalar shape — see U12 above.)
+
+**Not yet carried:** there is no text/UTF-8 distinction and no owned result
+handle, and no capacity check beyond the declared length (the wrapper cannot see
+the caller's allocation).
+
+## U13 — the typed generational handle registry (bounded start)
+
+An owned Rust value cannot be a word: the module would hold an address the
+provider may have freed or reused, and neither side could tell. The first piece
+is the table that owns those values. `umbrella/src/handles.rs` keeps one entry
+per slot and `HandleRegistry<T>` hands out an opaque `Handle` — no integer, no
+public constructor — that names a slot and the *provider generation* of the
+slot's own state.
+
+Four things are checked on every `get`/`get_mut`/`take`/`destroy`, in this
+order, so the cheapest refusal does not depend on the value being live:
+
+* **owner** — `Owner::issued` tags the handle with a per-registry instance;
+  a handle from another instance (a second provider) is `ForeignOwner`.
+* **type** — `TypeTag::named` carries the object type; asking the registry for
+  a different `T` than the handle names is `ForeignType`, and a registry whose
+  entries are not the queried type cannot be indexed by it at all.
+* **provider generation** — a handle minted before the provider was rebuilt
+  (`StaleProvider`) is refused even when its slot is live again.
+* **slot generation** — destroying bumps the slot's generation, so the old
+  handle is `Stale` forever and a value stored later in that slot is not
+  reachable through it.
+
+**Retirement, not wrap.** The slot generation is bumped with `checked_add`.
+At `u32::MAX` the slot is retired instead of wrapping to 0, because a wrap would
+make a handle from `u32::MAX` generations ago indistinguishable from a fresh
+one; `insert` refuses with `Exhausted` only when every slot is retired. The
+unit test `a_slot_whose_generation_would_wrap_is_retired_not_reused` drives that
+path directly (a free slot is set to `u32::MAX`, one insert reuses it, one
+`take` retires it, and the next insert must take a different slot).
+
+**Destruction is exactly once.** `destroy` removes the value and drops it
+inline, `take` moves it out to the caller's `T`; both bump the generation, so
+the second attempt is `Stale` and never a second `drop`. `released` counts
+successful ends (`destroy` + `take`), `retired` counts slots retired at the
+generation ceiling, `issued` counts handles minted and `live` counts slots that
+still hold a value — the counters the Drop oracle in the integration test is
+compared against.
+
+Evidence: `cargo test --offline --lib handles` (1 white-box test) and
+`cargo test --offline --test handles` (8 behavioural tests over a `Tracked`
+drop-counter oracle): schema version, read through the handle, double destroy
+drops once, a reused slot does not resurrect, foreign owner, foreign type,
+stale provider generation, and `take` leaving the handle stale.
+
+**The wire form.** A handle crosses as two 64-bit words, packed without loss
+because every component is 32 bits: `word0 = owner << 32 | slot`, `word1 =
+provider generation << 32 | slot generation`. The pair `(0, 0)` is the null
+handle and is refused as `Malformed` rather than read as slot 0, and owner tags
+start at 1, so no live handle encodes to it. The words carry no type tag: the
+type is the wrapper's, because the generator numbers the registries in one
+adapter crate from 1, so a handle minted for one object type has an owner tag no
+other registry in that crate holds. That is what keeps "wrong type" a refusal
+even though the pair has no room for a type.
+
+**The registry lives in the bridge.** `safestos/cranelift/src/handles.rs` is the
+table; `umbrella/src/handles.rs` re-exports it. A generated wrapper is compiled
+with `austral_cranelift_bridge` as its only dependency, so a registry hosted in
+the umbrella crate could not be linked by the very code that must use it — and
+two copies of the table would be two tables. `HandleRegistry::new` is `const`,
+which is what lets a wrapper hold one in a `static Mutex` with no initialization
+step and no allocation until the first insert.
+
+**Allocation and free are counted separately.** `allocated` counts stored
+values and `freed` counts the values this table destroyed in place;
+`take` releases a slot but hands the value to the caller, so it is not a
+`freed`. That is what lets a test hold `allocated`, `freed`, `released` and the
+provider's own drop counter against each other: a value that left through
+`take` is dropped by the caller, and the oracle sees exactly that.
+
+**The generator.** An `abi handle 1` block names the type, the two provider
+symbols, the constructor's arity and — when the module names one — the
+provider's reader:
+
+```text
+schema 1
+abi handle 1
+symbol rs_widget__new
+target rs_widget
+type widget
+constructor rs_widget_ctor
+destructor rs_widget_dtor
+use rs_widget_read
+params 1
+```
+
+The `use` line is optional and sits between `destructor` and `params`, so a
+descriptor without a reader is byte-identical to the older form and a reader is
+never implied.
+
+The compiler writes that block itself: a `Foreign_Import` carrying a
+`Handle_Ownership` pragma names only the handle's *target*, and the CPS
+lowering derives `<target>__dispose` for the call and emits one `abi handle 1`
+block beside the scalar/buffer ones, in the same canonical document
+(`--emit-adapters`). The pragma is
+`Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor",
+Destructor => "avm_widget_dtor", Params => "2", Use => "avm_widget_read")`;
+the field is spelled `Object` because `Type` is a keyword, and `Use` is optional
+— it names the provider's reader and is what makes a `use` line, and so a
+`__use` wrapper, exist. It is validated against the import's signature on the
+typed AST: it needs a `Foreign_Import`, a plain-identifier target that is not
+already a wrapper name, a non-empty and distinct constructor/destructor pair,
+non-negative arity, and exactly the dispose ABI (two `Int64` words in, one
+`Int64` status word out). The annotation rides through monomorphization as the
+descriptor's facts, since the lowering — not the typing pass — writes adapters.
+A `Foreign_Import(External_Name => "avm_widget__use")` is what calls the
+reading wrapper; the lowering leaves that name alone, because the wrapper is a
+generated symbol, not a handle import.
+
+**The pragma's refusals are fixtures, not prose.** Both are typing-pass errors,
+so they fire before any descriptor is written and need no provider symbol to
+exist. `test-programs/suites/027-handle-pragma` runs them:
+
+* `000-dispose-signature` — the import the pragma annotates must have the
+dispose ABI, two `Int64` words in and one `Int64` out. An `Int32` first
+parameter is refused with "A `Handle_Ownership` import must have the dispose
+wrapper's signature…", because the call the lowering derives (and the words
+the registry accepts) are 64 bits wide.
+* `001-not-foreign` — the pragma describes a foreign import only. Putting it on
+a function with a body is refused with "The `Handle_Ownership` pragma can only
+annotate a foreign import declared with `Foreign_Import`…", so a plain Austral
+function cannot be given a destructor it never had.
+
+Both stderr transcripts are captured byte for byte, so a reworded diagnostic is
+a fixture update rather than a silent drift.
+
+**The wrapper ABI.** All four wrappers speak `i64` only and return a status
+word: `0` done, `1` refused. A refusal never writes the out slot, so a caller
+cannot mistake an old word for a fresh one, and the words stay live unless the
+wrapper is `__dispose`.
+
+| wrapper | signature | notes |
+| --- | --- | --- |
+| `__new` | `(w0..wN-1, *mut i64 out) -> i64` | `out` receives the two handle words; a null `out` refuses before the provider allocates |
+| `__use` | `(lo, hi, *mut i64 out) -> i64` | one provider word written through `out`; rendered only with a `Use` fact; does not consume the handle |
+| `__with` | `(lo, hi, extern "C" fn(*mut c_void) -> i64, *mut i64 out) -> i64` | the callback gets the provider's pointer while the table is locked; `out` gets its word. Rendered always; a module passes an ordinary Austral function of type `Fn[Pointer[T], Int64]`, whose code address the lowering takes |
+| `__dispose` | `(lo, hi) -> i64` | only a live pair reaches the destructor; every other case is `1` |
+
+The out slot is an `i64*`, so the module hands over a `Pointer[T]` obtained from
+a *record* borrow (`refMutToPointer(&!slot)`): a scalar borrow lowers to the
+constant address 0 and would be refused as a null `out`, which is why the
+slots are one-word records rather than bare `Int64`s.
+
+`HandleAdapter::parse_descriptors` numbers the registries from 1 and the number
+is the owner tag the words carry; the tag is not part of the text, because it is
+the generator's numbering inside one crate, not a fact about the type. The
+descriptor is refused unless `symbol` is exactly `<target>__new` (so the dispose
+symbol `<target>__dispose` is derived from the same name and a module cannot
+name a dispose for a type whose constructor it never named), unless the type is
+a plain identifier, unless the tag is non-zero, and unless constructor and
+destructor differ. `render_handle_wrapper` writes both wrappers into one module
+over one registry:
+
+* `__new(words…, out)` — the constructor's `params` 64-bit words, a status word,
+  and the handle's two words written through `out`. Status `0` is done, `1` is
+  refused; a null `out` is refused *before* the provider allocates, so a
+  mistaken caller cannot leak an allocation that has no handle.
+* `__dispose(lo, hi)` — the two words back through `destroy_words`: a null pair,
+  another registry's owner, a previous provider generation and a stale slot are
+  all `1`, and only a live pair reaches the destructor.
+* `__use(lo, hi, out)` — rendered only when the descriptor has a `use` line.
+  The same live pair is resolved in the same registry, the provider's reader
+  (`avm_widget_read`) turns its pointer into one `i64`, and `out` receives it.
+  A refusal (null `out`, stale words, another owner) returns `1` and leaves
+  `out` untouched, so a caller cannot read an old word as a fresh value, and
+  reading does not consume: the words stay live for `__dispose`.
+* `__with(lo, hi, callback, out)` — the scoped borrow, rendered for every
+  handle adapter because it needs nothing from the provider. The live pair is
+  resolved, the caller's `extern "C" fn(*mut c_void) -> i64` is handed the
+  provider's own pointer *while the table is locked*, and its word is written
+  to `out`. The borrow ends with the call: the value cannot be destroyed while
+  the callback holds it, and the module receives a word, never the pointer. A
+  null `out`, a null callback, a stale pair, another owner or a previous
+  generation is refused before the callback runs. The lock is not re-entrant,
+  so a callback that calls back into this registry would deadlock — the price
+  of a borrow the other wrappers cannot invalidate.
+* The registry's `PROVIDER_GENERATION` is the render's, not the descriptor's:
+  `render_handle_wrapper_at` writes the build's generation, `main.rs` takes the
+  next number for every build in the process, and generation 0 (the reserved
+  number) is refused at render time. A reload's table therefore refuses the
+  previous build's words as `StaleProvider` instead of resolving a slot that
+  now means a different value.
+* The constructor's pointer is wrapped in `ProviderValue`, whose `Drop` calls the
+  provider's destructor. The host never frees a provider's memory; a refused
+  insert drops the value there and then, so the provider is not leaked, and a
+  destroyed value is freed once because the registry never mints its words
+  again.
+
+**The module side is a linear type.** `umbrella/modules/WidgetHandle.aui`
+exports only `type Widget: Linear;` plus `adopt(lo, hi)`, `read(widget)`,
+`dispose(widget)` and a `main` that is the intended path; the record itself is the body's, so no client
+module can construct a `Widget` by hand. `adopt` is the construction seam (it
+takes the words a granted `__new` produced) and `dispose` destructures the
+record — which is the linear obligation discharged — and hands the words
+straight back to the dispose wrapper. The body declares no wrapper symbol:
+`pragma Foreign_Import(External_Name => "avm_widget");` names the target and
+`Handle_Ownership` names the provider facts (including `Use =>
+"avm_widget_read"`); the compiler derives `avm_widget__dispose` for the call
+and emits the block the generator renders. `read` borrows the record, passes
+its words and a local `Pointer[Word]` slot to the generated
+`avm_widget__use` (a pointer, not an `Address`: the wrapper writes one word
+through it — and a *record* borrow, because the lowering makes a scalar borrow
+the constant address 0), and returns the word the provider's reader produced
+or `-1` when the words were refused — a borrow, not a consume, which is why
+the same handle can still be disposed afterwards. `main` is the whole path,
+from source: `widgetNew(7, 9, refMutToPointer(&!pair))` writes the minted pair
+into a local record, `adopt` makes it the linear value, `read` borrows it,
+`dispose` hands it back once. Both constructor parameters are 64-bit scalars,
+so the call is word-native: measured, the compiled body contains
+`extern au_int64_t avm_widget__dispose(au_int64_t lo, au_int64_t hi);` and the
+direct call, `extern au_int64_t avm_widget__new(au_int64_t lo, au_int64_t hi,
+mono_15* out);` and its direct call, with no adapter, because there is no
+buffer and nothing to encode.
+`--emit-adapters` writes `test-programs/adapters/handles.golden`, which
+`scripts/check-adapter-descriptors` diffs byte for byte, and
+`umbrella/tests/interface.rs` parses with the same reader the build uses.
+
+Evidence: `cargo test --offline --lib handles` in the bridge (3 white-box
+tests: the retirement path, the word pair and the separated counters) and
+`cargo test --offline --lib --test handles` in the umbrella (63 lib tests plus
+the handles integration test: the registry and encoding cases, create/destroy,
+read, the scoped borrow, and a reload), The wrapper test compiles the provider and
+both generated modules into one `cdylib` and drives them through `dlsym`: a
+constructor returns `0` and a non-null pair, the first dispose returns `0` and
+the provider's drop counter moves once, the second returns `1` with the counter
+unchanged, another type's dispose refuses these words while its own still work,
+a slot reused after disposal hands out the same low word with a new generation
+and the old words are refused while the new value stays live, and a forged
+provider generation, a null `out` and the null pair are each refused without
+allocating. `test-programs/suites/025-linear-handles` runs three fixtures
+(`python3 test-programs/runner.py 025-linear-handles` → 3 PASS): adopt-then-
+dispose runs and exits 0, forgetting the handle is a linearity error ("is not
+consumed by the time of the return statement"), and disposing it twice is a linearity error ("has already been consumed"),
+and `test-programs/suites/027-handle-pragma` runs the pragma's two refusals
+(`python3 test-programs/runner.py 027-handle-pragma` → 2 PASS): a dispose
+import with an `Int32` word and the pragma on a non-foreign function.
+`./austral compile
+umbrella/modules/WidgetHandle.aui,umbrella/modules/WidgetHandle.aum
+--entrypoint=WidgetHandle:main --target-type=c` exits 0.
+
+**Not yet carried:** the module mints through `__new` (the bridge names
+`__embed` per arity — `__embed$<argc>` — so one module may carry embeds of
+several shapes, which is what the record out slot needed), reads through
+`__use`, lends through `__with` and disposes through `__dispose`. The
+callback is the module's own `onBorrow`, declared with the foreign import as
+`Fn[Pointer[Pair], Int64]`: the CPS lowering names the emitted function
+(`function_value_names`) and the JIT resolves a bare `Var` that is not a
+local to that function's **code address** (`func_addr`), which the call
+passes as the `au_fnptr_t` argument. Two limits stay visible: a function
+value resolves only to a function *in the same CPS module* (a cross-module
+function value would need an import with a signature the name alone does not
+carry), and `MFptrCall` is still a call by name, so a module cannot yet call
+through a function value it was given — it can only hand one over. The
+provider generation is not constant and is no longer exercised by
+a second render: `umbrella/src/adapters.rs` builds each crate at the next
+generation into a new artifact, and `tests/handles.rs` drives a real reload —
+build, `dlopen`, build again, `dlopen` — so the reloaded crate refuses the
+previous build's words while the previous crate still resolves its own. A
+provider that is rebuilt while a module runs is not hot-reloaded live, and
+borrows/views over an owned handle are U14's.
 
 **Still not carried:**
 Only literals, mediated calls, Float64 arithmetic and float comparisons carry a

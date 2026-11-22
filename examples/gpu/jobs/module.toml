@@ -14,11 +14,16 @@ kernel = [
     "rs_gpu_open",
     "rs_gpu_close",
     "rs_gpu_buffer_new",
-    "rs_gpu_buffer_write",
-    "rs_gpu_buffer_read",
     "rs_gpu_buffer_free",
     "rs_gpu_submit",
     "rs_gpu_poll",
-    "rs_gpu_result",
     "rs_gpu_cancel",
+    # The three calls that carry a byte buffer are mediated: a buffer is always
+    # routed through the generated wrapper, so the CPS names these symbols and
+    # the native `rs_gpu_buffer_write`/`_read`/`rs_gpu_result` are unreachable
+    # from a module. Their descriptors are `abi buffer 2` (the handles and the
+    # offset are 64-bit words beside the buffer, not lengths).
+    "rs_gpu_buffer_write__adapter",
+    "rs_gpu_buffer_read__adapter",
+    "rs_gpu_result__adapter",
 ]
