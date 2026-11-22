@@ -497,9 +497,194 @@ Local receipt/commitment/application separation is **not** evidence of
 Byzantine ordering; QuePaxa's own guarantees are unchanged and untested here.
 D06 owns durable *request* identity (a caller retrying across a crash), and D07
 owns crash atomicity — `settle` says "applied to this node", not "durable on
-disk". Classification of halts is by history shape only: the ledgers still
-report storage failures as domain diagnostics, so a future storage dependency
-inside application will need an explicit `Halt`.
+disk". Halt classification here is by history shape only; D07 adds the other
+kind (an infrastructure failure during application) via `Code::is_infrastructure`.
+
+## D06 — durable logical request identity and safe retention (2026-11-22)
+
+**New** U `unfer_consensus/tests/request_identity.rs`; U
+`unfer_consensus/src/{idempotency,node}.rs`; U `unfer_protocol/src/{codes,submission}.rs`;
+U `14e0a7a` + this patch.
+
+### Why a content key cannot answer a client
+
+The H7 guard (`IdempotencyStore`) deduplicates delivery: "did this content already
+apply?". A client asks something else after a timeout — "did *my request* apply?"
+A content key answers that only if the caller can reproduce the exact bytes, and
+two different callers asking for the same bytes are two actions the ledger must
+still be able to distinguish.
+
+### What is now named and durable
+
+| Type | Meaning |
+|---|---|
+| `RequestId` | `(deployment, principal, incarnation, sequence)` — the caller's own name for one action |
+| `ClientSequence` | the durable `(incarnation, sequence)` the client resumes from |
+| `AdmissionBook` | per-client retained window of `Admission { digest, outcome }` |
+| `AdmittedOutcome` | `Pending{submission}` / `Accepted{submission, slot}` / `Rejected(refusal)` |
+| `AdmissionVerdict` | `Fresh` / `Duplicate(outcome)` / `Conflict{admitted, offered}` / `BelowRetention{floor}` / `AtCapacity{capacity}` |
+
+The client persists the sequence **before** returning the id
+(`ClientRequests::next` → `RequestSequenceStore::save`); `FileSequenceStore`
+makes that durable with write + fsync + rename + directory fsync. A store failure
+does not advance the sequence, so the id that is eventually sent is the one that
+became durable — otherwise a crash between "allocated" and "sent" would burn an
+id, and the retry that followed would be a *different* action.
+
+Server side, `ConsensusNode::submit_request` is the admission point: the same id
+with the same bytes replays the recorded submission (or its recorded rejection),
+the same id with different bytes is UK-8101 and nothing is applied, an id at or
+below the retained floor is UK-8102, and a full book is UK-8103.
+
+### Retention is a floor, not a schedule
+
+`IdempotencyStore::prune_before` dropped guards on a schedule, which is safe only
+while nobody retries. Once a request id is forgotten the server cannot tell a
+retry from a first delivery, so the replacement is an **acknowledged floor**:
+`acknowledge(&id, through)` forgets the records and keeps the tombstone, and a
+request at or below the floor is refused (UK-8102) rather than applied a second
+time. Unacknowledged clients cannot force unbounded memory: the book has a
+capacity and answers `AtCapacity` (UK-8103) instead of evicting a record a
+client may still retry.
+
+### Witnesses
+
+| Witness | Asserts |
+|---|---|
+| `a_retry_with_the_same_bytes_replays_the_recorded_result` | duplicate returns the recorded `Accepted{submission, slot}` |
+| `a_retry_with_different_bytes_is_a_conflict` | `Conflict{admitted, offered}` and no second admission |
+| `below_the_retained_floor_a_retry_is_refused_not_reapplied` | `BelowRetention{floor: 3}`; sequence 4 is still fresh |
+| `unacknowledged_clients_hit_the_quota_instead_of_evicting` | `AtCapacity{2}`; acknowledging a floor frees room |
+| `independent_incarnations_are_distinct_sequence_spaces` | the same sequence in a new incarnation is a different request |
+| `a_client_store_failure_does_not_advance_the_sequence` | the retried id is sequence 2, the first that became durable |
+| `a_restarted_client_resumes_its_persisted_sequence` | the stored incarnation wins over the argument |
+| `a_file_backed_client_sequence_survives_a_reopen` | reopen continues at sequence 2 |
+| `a_retried_request_is_submitted_once_and_lands_in_one_slot` | one watermark, one slot, the same receipt twice |
+| `a_conflicting_retry_is_refused_and_applies_nothing` | UK-8101 and the watermark does not move |
+| `a_settled_rejection_is_replayed_to_the_retrying_client` | a cached refusal, not a second submission |
+| `different_request_ids_with_identical_bytes_are_distinct_actions` | two ids, two slots |
+| `a_request_below_the_acknowledged_floor_is_refused_after_restart_of_retention` | UK-8102; the retained neighbour still answers |
+
+```
+$ cargo test --locked --offline -p unfer_consensus --test request_identity  # 5 passed
+$ cargo test --locked --offline -p unfer_consensus --lib                   # 150 passed
+$ cargo test --locked --offline -p unfer_protocol                          # 353 + 4 + 51 + 3 passed
+$ cargo test --locked --offline -p unfer_identity                          # 7 + 1 passed
+$ cargo test --locked --offline -p unfer_data                              # 63 + 4 + 1 passed
+$ cargo test --locked --offline -p unfer_edge --features audit              # 89 + 1 passed
+```
+
+### Not claimed
+
+The book is **in memory** in D06 (`AdmissionBook` is `Serialize`, and D07 makes the
+bindings durable). Until the binding write succeeds, a retry after a crash is a
+fresh admission; what makes that safe rather than duplicating an effect is the
+ledger's own content-key guard plus D07's durable request records, not this
+table. Retention is enforced per client scope; nothing here bounds a client that
+keeps inventing incarnations, which is a quota/identity policy question rather
+than a consensus one.
+
+## D07 — one durable application transition and honest failure semantics (2026-11-22)
+
+**New** U `unfer_consensus/src/storage.rs`; U `unfer_consensus/src/{net,node}.rs`,
+U `unfer_ffi/src/durable/loro.rs` (separate patch `249c53c`); U `14e0a7a` + this
+patch.
+
+### The state that never existed
+
+`SharedLedger` persisted `bank`, `pending` and `committed_ids` by reading three
+separate locks in sequence. A crash between two of those reads published a
+snapshot the ledger never had; the worst case was a payload already removed from
+`pending` and not yet in `bank`, i.e. a lost transaction recorded as a clean
+snapshot. On top of that, `fs::write` + `rename` with no `fsync` can survive the
+rename and lose the bytes.
+
+Now all three live behind one `Mutex<LedgerState>`, the snapshot is taken under
+that lock, and the write is tmp → fsync → rename → directory fsync. A decision is
+acknowledged to the pump only after its snapshot is durable.
+
+### The log
+
+`storage::TransitionLog` frames every record as
+`| magic | version | length | crc32 | payload |` and the protocol for a record is
+**write the whole frame, sync, publish**. Two record kinds share one writer:
+
+* `TransitionRecord { slot, state_version, command_digest, outcome, dedup }` —
+  one applied slot: what was decided, and the exactly-once guard it installed;
+* `RequestRecord { id, digest, submission, outcome, slot }` — the client binding,
+  written when an outcome settles and **before** the caller is told.
+
+Recovery distinguishes the three cases the plan asks for:
+
+| Case | Behaviour |
+|---|---|
+| incomplete trailing frame | torn tail: truncated, and `torn_tail_bytes` reports it |
+| complete frame, bad magic/version/length/CRC | corruption: refused, file untouched |
+| complete frame written, `sync` failed | `StorageError::Uncertain` — never reported as "definitely not recorded" |
+
+### Recovery order and mismatched checkpoints
+
+`ConsensusNode::open` recovers the log, rehydrates the request bindings into the
+admission book, and turns the transition records into a **comparison script**:
+the next `sync()` replays the engine log and every already-recorded slot must
+reproduce the recorded command digest and outcome. A slot that reproduces a
+different decision is a mismatched checkpoint — the node halts with
+`HaltReason::Failed`/UK-5011 instead of merging two histories. A transition that
+cannot be written halts at that slot, so the watermark never passes an unrecorded
+entry. An outcome that cannot be recorded is reported as
+`Unknown(Unrecorded)`, never as a refusal.
+
+The consensus library persists its own runtime store separately and cannot
+commit it in the same transaction; the order is therefore "runtime store first,
+then this log, replay by slot", and execution is idempotent by slot. That is a
+recovery *order*, not an atomic cross-store commit, and it is documented as such
+in `storage.rs`.
+
+### Failure classification
+
+`ApplyFailure` splits an application error by code family (`Code::is_infrastructure`:
+UK-1010, UK-1011, UK-3002, UK-5000, UK-5011). A domain code is a verdict on the
+entry (record and advance); an infrastructure code means "this node could not
+tell" and halts. This is the classification D05 left as a documented gap.
+
+### Witnesses
+
+| Witness | Asserts |
+|---|---|
+| `records_survive_a_reopen` | 3 records, `last_slot` 2, no torn tail |
+| `a_torn_tail_is_discarded_and_the_log_stays_usable` | 1 record survives, `torn_tail_bytes > 0`, the log continues at slot 3 |
+| `a_complete_frame_with_a_bad_checksum_is_corruption_not_a_torn_tail` | `Corrupt` and the damaged bytes are left in place |
+| `an_uncertain_write_is_reported_as_uncertain` | `Uncertain`, and recovery still publishes the complete frame |
+| `a_write_failure_before_the_frame_leaves_nothing` | 1 record, no torn tail |
+| `slots_must_increase_and_request_slots_must_be_known` | repeated slot and a request naming an unknown slot are both `Corrupt` |
+| `a_partial_header_at_eof_is_torn` | 2 bytes are a torn tail, not corruption |
+| `a_recorded_transition_survives_a_restart_and_is_compared_not_reapplied` | state rebuilt by replay, supply 150, watermark 2 |
+| `a_mismatched_journal_halts_instead_of_merging_two_histories` | `Failed{slot 1}`, UK-5011, "journal recorded", watermark 0 |
+| `a_torn_transition_write_halts_at_that_slot` | halt at slot 1, watermark 0, the next sync also refuses |
+| `an_acknowledged_request_result_survives_a_restart` | the retry reuses the recorded submission, watermark 1 |
+| `an_unrecordable_request_result_is_reported_as_unrecorded_not_refused` | `Unknown(Unrecorded)`, no halt |
+| `a_storage_failure_is_a_halt_and_a_domain_error_is_a_refusal` | UK-5011 halts, UK-7002 refuses |
+
+```
+$ cargo test --locked --offline -p unfer_consensus --lib                        # 150 passed
+$ cargo test --locked --offline -p unfer_consensus --features network --test phase6_testnet  # 4 passed
+$ cargo test --locked --offline -p unfer_ffi                                    # 175 + 55 + 1 passed
+```
+
+`phase6_testnet` still drives a real 2-of-3 cluster through the consolidated
+snapshot, including the full-cluster restart, so the network path is exercised
+and not only compiled.
+
+### Not claimed
+
+This is not an atomic commit across the consensus library's runtime store and
+application state; the runtime store can be ahead and recovery replays by slot.
+`fsync` is only as good as the platform's block device, and neither fault
+injection nor the tests simulate a power cut — they inject the failure *at* each
+protocol boundary (`FaultPoint::BeforeWrite`/`HalfWrite`/`AfterWrite`), which is
+what the acceptance asks for. Retention quota is per admission book and does not
+bound a client that keeps inventing incarnations. The Loro snapshot patch makes
+that file durable; it does not claim the same transaction for other backends.
 
 ## Task status
 
@@ -511,4 +696,6 @@ inside application will need an explicit `Halt`.
 | D03 | verified within stated scope | capability RPC loopback-only at ingress; registry owner/grant checks per verb; the auth seam (A9) stays a named gap |
 | D04 | verified within stated scope | burn is validate-then-commit; four refusal fingerprints; `total_supply` no longer panics on overflow |
 | D05 | verified within stated scope | receipt/slot/watermark are distinct; a domain refusal advances the slot, a gap halts; identity and publishing settle before reporting |
-| D06–D26 | not started | M0 complete; D06 is next (durable request identity) |
+| D06 | verified within stated scope | a client-named request replays its settled result, conflicts are refused, retention is an acknowledged floor and a full book backpressures |
+| D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch |
+| D08–D26 | not started | D08 is next (scoped caller context, dynamic remote policy) |

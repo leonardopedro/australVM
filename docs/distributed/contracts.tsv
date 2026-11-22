@@ -13,3 +13,5 @@ C11	storage	U	unfer_data/src/store.rs	tested	docs/distributed/evidence/d02-unfer
 C12	capability	U	unfer_edge/src/caprpc.rs	tested	docs/distributed/evidence/d03-unfer_edge_audit.log
 C13	consensus	U	unfer_protocol/src/submission.rs	tested	docs/distributed/evidence/d05-unfer_protocol_lib.log
 C14	consensus	U	unfer_consensus/src/node.rs	tested	docs/distributed/evidence/d05-unfer_consensus_lib.log
+C15	consensus	U	unfer_consensus/src/idempotency.rs	tested	docs/distributed/evidence/d06-unfer_consensus_request_identity.log
+C16	consensus	U	unfer_consensus/src/storage.rs	tested	docs/distributed/evidence/d07-unfer_consensus_lib.log
