@@ -602,9 +602,10 @@ context memo 17.4 MB against 26.4 MB and 8.5 MB with interning on. The environme
 measurement — same cap, different tables, different verdict — so a floor quoted without it is
 not a floor.
 
-### 9.3 The 26 axioms: what the derivation uses and what MM0 could prove
+### 9.3 The axioms: what the derivation uses and what MM0 could prove
 
-`docs/cic.mm0` declares 11 axioms and `docs/cic_typing.mm0` 15. Two questions matter for the
+`docs/cic.mm0` declares 11 axioms and `docs/cic_typing.mm0` declared 15 before this audit — it
+declares 10 now, and the five that left are the subject of the last part of this section. Two questions matter for the
 trusted base: which of them a derivation actually *uses*, and which could stop being axioms.
 
 The first is measurable. The smoke row's `.mm1` header reports 1 929 299 rule applications, and
@@ -640,19 +641,48 @@ those rules:
 | `ty_varS` | irreducible: weakening needs `tsucc` to mean something, and it has no axioms |
 | `ty_pi`, `ty_abs`, `ty_app` | irreducible: they *are* the λΠ fragment |
 | `ty_deq` | irreducible: congruence of `tty` under type equality, and MM0 has no congruence schema |
-| `tdefeq_refl`, `tdefeq_symm`, `tdefeq_trans` | **provable** if `tdefeq` is a `def` alias of `teq`: each becomes an instance of the `teq_*` axiom. Verified by compiling `def tdefeq (a b: Term): Prop = $ teq a b $;` followed by the three statements — `mm0-rs` accepts them, and Prop-valued `def`s are already used in `mm0/pairing/full2.mm0` |
-| `tdefeq_iso` | **provable under the same alias**: it becomes exactly `net_isomorphism_step`, one application |
-| `tctx_deq_nil` | **provable** if `tctx_deq` is likewise aliased to `teq`, as `teq_refl tnil` |
+| `tdefeq_refl`, `tdefeq_symm`, `tdefeq_trans` | **eliminable, not provable**: at `def tdefeq (a b: Term): Prop = $ teq a b $;` these are literally `teq_refl`/`teq_symm`/`teq_trans`, so the theory can state them once (in cic.mm0) instead of twice. They cannot become *theorems* — see the toolchain note below |
+| `tdefeq_iso` | **eliminable under the same alias**: it *is* `net_isomorphism_step` |
+| `tctx_deq_nil` | **eliminable**: at `tctx_deq := teq` it is `teq_refl tnil` |
 | `tctx_deq_cons` | not provable, and the alias does not help: it needs congruence of `teq` under `tcons`, i.e. one axiom traded for another |
 | `tcert_witness` | not provable (`valid_iso` is opaque); *eliminable* by making the certificate the premise where it is used, which is what `scripts/lean-net-cert` already checks |
 | `ty_proj`, `ty_ctx` | irreducible: they state the field and context-conversion relations that are supplied as data |
 
-Tally: 5 axioms are exercised by this artifact, 5 of 26 become theorems if the two equality
-judgments are identified by definition (a design change — `tdefeq` is deliberately *wider* than
-`teq`, since a certificate decides it), 2 can be demoted to premises, and **19 are irreducible**:
-for each, its conclusion's head constant is not produced by any other rule, so it is independent
-of the rest — with the one exception above, `tdefeq_iso` versus `net_isomorphism_step`, which
-become the same statement once `tdefeq` is a `def`.
+**The alias is now applied, as eliminations.** `docs/cic_typing.mm0` defines `tdefeq` and
+`tctx_deq` as `teq`, and the five axioms above are gone rather than restated, so the file's
+trusted base is **10 axioms, not 15**. Nothing references the removed names (the artifacts
+declare their own per-instance axioms), and the typing rules that consume conversion —
+`ty_app`, `ty_deq`, `tctx_deq_cons`, `ty_ctx` — elaborate unchanged, because a `def` of the
+provable sort is accepted in a conclusion *and* in a hypothesis.
+
+**Why not theorems — measured, because the first answer here was wrong.** The obvious version,
+`theorem tdefeq_refl (a: Term): $ tdefeq a a $ = $ teq_refl a $;`, is *accepted by `mm0-rs`*
+(exit 0) but only as `sorry`: `warning: theorem … contains sorry`, and then `mm0-c` refuses the
+file — `at 125: 't1' uses sorry`, `error: some theorems used sorry`, exit 3. The rule
+underneath is not about proofs at all: in MM0 mode `mm0-rs` says `(MM0 mode) theorems should
+not have proofs` (proofs live in `.mm1`, as `mm0/gap_certificate.mm1` shows — that companion
+verifies, exit 0), and in *both* modes a proof obligation whose statement is headed by a `def`
+is rejected by `mm0-c` (`expecting a theorem`). A minimal theory isolates it: a def-headed
+axiom conclusion verifies (exit 0), a def-headed hypothesis verifies (exit 0), a def-headed
+theorem does not. The earlier note that Prop-valued `def`s are “already used in
+`mm0/pairing/full2.mm0`” was wrong twice over: that `def eq` appears in no statement, and the
+file does not compile under this toolchain (`def ifp missing value`).
+
+**Verified after the change.** `mm0-rs join docs/cic_typing.mm0` → 3 sorts, 30 term/def, 21
+ax/thm, `mm0-c` exit 0. The slice that proves the artifacts still fit: both theories with the
+`import` line dropped, the artifact's header and `def` block, and its first 2 000 axioms
+(215 224 418 B) → `mm0-rs` 2 146 term/def, 2 021 ax/thm in 2 m 19 s, `mm0-c` exit 0 — the
+466 416 `tdefeq`-headed statements of the real artifact are def conclusions and check. One
+harness trap: the slice boundary must be the artifact's first `^axiom` line, or the header
+block re-declares `ax_const_0` and the verifier reports a spurious `unify failure` at
+`ax_lev_0`.
+
+Tally, after the change: of the original 26 axioms, 5 are eliminated by definition (a design
+change — `tdefeq` is now exactly `teq`, so it is no longer *wider* than it), 5 are exercised by
+this artifact, 2 can be demoted to premises, and **14 of the remaining 21 are irreducible**:
+for each, its conclusion's head constant is not produced by any other rule, so it is
+independent of the rest. Nothing in the theory is now provable that was not before; the gain is
+the five axioms that are gone.
 
 ## Appendix — FOUNDATIONS and PROB modules
 
