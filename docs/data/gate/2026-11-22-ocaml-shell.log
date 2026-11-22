@@ -1,4 +1,3 @@
-building '/nix/store/bzvc901pmwlzrqihlbk32yrx6x0qxwb3-nix-shell-env.drv'...
 [pass] S29: UNFER_SYMBOLS table present
 [pass] S29: UNFER_SYMBOLS registers into the Cranelift JIT
 [pass] S29: per-module CPS compile consumes the same census
