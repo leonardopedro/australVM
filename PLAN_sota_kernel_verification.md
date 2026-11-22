@@ -417,13 +417,13 @@ compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
 **Re-measured 2026-11-22 on this x86_64 host, in all three shells and the bare
-`nix-shell -p python3` invocation, on `b8d628de` (the merges of `origin/master`
-`79b29839` and its Lean-typing follow-up, with the certificate and citation re-pin that the older merge's
+`nix-shell -p python3` invocation, on `7bb7b3ca` (the merges of `origin/master`
+`79b29839`, its Lean-typing follow-up and the capability-handle runtime, with the certificate and citation re-pin that the older merge's
 lowering forced, the `packages.mm0` the default and ocaml shells now carry, and
 the D00 line that names the sibling it resolved its rows against: the pulled
 D06/D07 records' two extra inventory rows and the merge's D08 and D09 rows are
-why it reads 18 contract rows rather than 14, and it ends
-`measured against unfer c68470c`):** `188 passed, 1 explained gap(s), 0 failed`
+why it reads 20 contract rows rather than 14, and it ends
+`measured against unfer c68470c (dirty)`):** `188 passed, 1 explained gap(s), 0 failed`
 under `nix develop "git+file://$PWD"`
 ([transcript](docs/data/gate/2026-11-22-default-shell.log)), `173 passed, 4
 explained gap(s), 0 failed` under `.#ocaml`

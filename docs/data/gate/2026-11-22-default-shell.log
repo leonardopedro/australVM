@@ -4,7 +4,7 @@
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
-[pass] D00 contracts: 19 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c (dirty)
+[pass] D00 contracts: 20 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c (dirty)
 [pass] D00: distributed execution record and contract inventory are well-formed
 [pass] D00 checker refuses: duplicate inventory id
 [pass] D00 checker refuses: unknown status
