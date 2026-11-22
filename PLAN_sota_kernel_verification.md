@@ -417,9 +417,9 @@ compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
 **Re-measured 2026-11-22 on this x86_64 host, in all three shells and the bare
-`nix-shell -p python3` invocation, on the tree where this branch's
-`toy-witness`/`logos2mm0` "cannot link here" guard meets the pulled
-`ab6d1074`:** `186 passed, 1 explained gap(s), 0 failed` under
+`nix-shell -p python3` invocation, on the merged tree `5d484b18` (this branch
+plus the pulled D06/D07 records, whose two extra inventory rows are why the D00
+line reads 16 contract rows rather than 14):** `186 passed, 1 explained gap(s), 0 failed` under
 `nix develop "git+file://$PWD"`
 ([transcript](docs/data/gate/2026-11-22-default-shell.log)), `171 passed, 4
 explained gap(s), 0 failed` under `.#ocaml`
