@@ -89,7 +89,25 @@ bridge: lib/BuiltInModules.ml | check-dune
 	@touch $(BRIDGE_SRC)
 	AUSTRAL_BRIDGE_DIR=$(CURDIR)/$(BRIDGE_CARGO_DIR) dune build lib/ bin/
 	cp _build/default/bin/austral.exe $(BIN)
+	@$(MAKE) --no-print-directory stage-bridge
 	@echo "--- Bridge rebuilt: $(CURDIR)/$(BRIDGE_CARGO_DIR)/libaustral_cranelift_bridge.so"
+
+# Deploy both derived copies of the release artifact.
+#
+# Two things read a *copy*, not the cargo output: `scripts/verify-invariants`
+# W5 compares the repository-root `.so` (the one the gate loads) with the release
+# artifact, and `test-locked` stages the artifact in $(BRIDGE_DIR) for the test
+# binaries. Both used to be deployed inside recipes that run *after* the drift
+# controls, but the controls run a full gate over the tree as an order-only
+# prerequisite — so any release rebuild left them looking at a stale root copy
+# and failing on a tree that was in fact current. Deploying here, from `bridge`
+# and from the controls' own prerequisites, makes "rebuilt" and "staged" the same
+# event instead of two the caller has to remember to order.
+.PHONY: stage-bridge
+stage-bridge: | check-bridge-fresh
+	@mkdir -p $(BRIDGE_DIR)
+	@cp -f $(BRIDGE_SRC) ./libaustral_cranelift_bridge.so
+	@cp -f $(BRIDGE_SRC) $(BRIDGE_DIR)/
 
 # X4(b): one entry point that works out how to load the bridge, instead of every
 # caller having to know.
@@ -165,7 +183,7 @@ check-census:
 	@bash scripts/check-census
 
 .PHONY: drift-controls
-drift-controls: | check-bridge-fresh
+drift-controls: | check-bridge-fresh stage-bridge
 	@echo "--- drift controls: one full gate run each, $(DRIFT_JOBS) at a time"
 	@bash scripts/w3-drift-controls -j $(DRIFT_JOBS) all
 	@printf '%s\n' $(READ_ONLY_CONTROLS) \
@@ -199,7 +217,7 @@ drift-controls: | check-bridge-fresh
 # runner exits 0 for a case it skipped — the same `[gap]` this target exists to
 # remove would otherwise read as a pass.
 .PHONY: drift-controls-all
-drift-controls-all: | check-bridge-fresh
+drift-controls-all: | check-bridge-fresh stage-bridge
 	@$(MAKE) --no-print-directory drift-controls
 	@if command -v why3 >/dev/null 2>&1; then \
 	  echo "liquid-golden: covered by the sweep above (this shell carries why3)"; \
@@ -230,9 +248,7 @@ test:
 	@flock --timeout 3600 $(TREE_LOCK) $(MAKE) --no-print-directory test-locked
 
 .PHONY: test-locked
-test-locked: $(BIN) drift-controls-all | check-bridge-fresh
-	@mkdir -p $(BRIDGE_DIR)
-	@cp -f $(BRIDGE_SRC) $(BRIDGE_DIR)/
+test-locked: $(BIN) drift-controls-all | check-bridge-fresh stage-bridge
 	@LD_LIBRARY_PATH=$(BRIDGE_DIR) dune build @runtest
 	@if LD_LIBRARY_PATH=$(BRIDGE_DIR) ./_build/default/test/JitTest.exe >/dev/null 2>&1; then \
 	  echo "loader: dev-shell loader can load the bridge (LD_LIBRARY_PATH)"; \

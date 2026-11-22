@@ -39,6 +39,11 @@ in-process via native `uk_*` symbols registered in the JIT.
   run `check-bridge-fresh`, which refuses to link when any bridge source
   (`src/*.rs`, `Cargo.toml`, `Cargo.lock`) is newer than the `.so` and tells
   you to run `make bridge`. Check it alone with `make check-bridge-fresh`.
+  `make bridge` also runs `make stage-bridge`, which deploys the two derived
+  copies the gates read — `./libaustral_cranelift_bridge.so` (what
+  `verify-invariants` W5 compares) and `$(HOME)/.local/lib/` (what the test
+  binaries load) — and `drift-controls`/`test-locked` take it as an order-only
+  prerequisite, so a fresh release build is never seen as stale by a control.
 - **Shell discipline (measured 2026-10-21).** Run every `dune` command
   inside `nix develop`, never a bare `nix-shell`. The two environments
   carry different glibcs (devshell 2.42, bare nix-shell 2.37 on this
