@@ -9,6 +9,7 @@ line is the summary the plan quotes.
 | file | command | tree | summary |
 |---|---|---|---|
 | [`2026-11-22-default-shell.log`](2026-11-22-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-22, `d8111a94`, on a clean tree | `186 passed, 1 explained gap(s), 0 failed` — the one gap is `W9.1`, which needs the lean shell |
+| [`2026-11-22-ocaml-shell.log`](2026-11-22-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-22, `d8111a94`, on a clean tree | `171 passed, 4 explained gap(s), 0 failed` — `W9.1` and the three `why3` checks |
 | [`2026-11-22-lean-shell.log`](2026-11-22-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `d8111a94`, on a clean tree | `166 passed, 9 explained gap(s), 0 failed` — `W9.1` passes here; `why3` is absent (3), the witness cannot be built (5), and the logos emitter cannot link, whose gap now quotes the sub-gate's own line |
 | [`2026-11-22-nix-shell-python3.log`](2026-11-22-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-22, same tree | `165 passed, 10 explained gap(s), 0 failed` — no `why3` (3 Liquid checks), no Lean shell (`W9.1` plus the five `toy-witness` comparisons), and `cargo` cannot link, so the two logos lines are one gap |
 | [`2026-11-21-w3-approval-state-drift-control.log`](2026-11-21-w3-approval-state-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-approval-state-drift-control` | 2026-11-21, `85a368eb` plus the drift-control transcript check and the certificate re-pin `1f8ce68f`'s CPS order forced | `w3-approval-state-drift-control: holds` — gate `165 passed, 3 explained gap(s), 5 failed`, the five being the lines the deleted copy feeds |
@@ -37,13 +38,15 @@ line is the summary the plan quotes.
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
 
-The 2026-11-22 trio re-runs the gate on the tree that adds
-`scripts/nixbench-fixtures` and §4.12's note: `devShells.default` reproduces the
-2026-11-21 summary exactly (`186`/`1`/`0`), the `lean` shell reproduces its
-2026-11-21 row (`166`/`9`/`0`), and the bare `nix-shell -p python3` invocation —
-the one `AGENTS.md` documents — reports `165`/`10`/`0`. All three are clean-tree
-runs, so unlike the 2026-11-21 rows they carry no `warning: Git tree '…' is
-dirty` line. The `lean` transcript was re-recorded on purpose after
+The 2026-11-22 set re-runs the gate on the tree that adds
+`scripts/nixbench-fixtures` and §4.12's note, once per shell, so every row in
+this set describes the same commit: `devShells.default` reproduces the 2026-11-21
+summary exactly (`186`/`1`/`0`), `.#ocaml` reproduces its row (`171`/`4`/`0`),
+the `lean` shell reproduces its row (`166`/`9`/`0`), and the bare
+`nix-shell -p python3` invocation — the one `AGENTS.md` documents — reports
+`165`/`10`/`0`. All four are clean-tree runs, so unlike the 2026-11-21 rows
+they carry no `warning: Git tree '…' is dirty` line; the diff from each
+2026-11-21 shell log is exactly that dropped line. The `lean` transcript was re-recorded on purpose after
 `scripts/logos2mm0` learned to separate "cannot link here" from a failing
 build: `verify-invariants` now takes its logos verdict from the sub-gate's own
 `[gap]` line, and the recorded gap is that line (`logos2mm0: 0 passed, 0 failed,
