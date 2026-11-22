@@ -641,6 +641,21 @@ what the run shows is that `_spool_eq` no longer kills the row and that sharing 
 memory pressure and lost a streaming `awk` to an OOM kill mid-run), and the 56 GB artifact is
 not `mm0-rs`-elaborated whole — §13.54's and §13.56's toolchain checks are on rows up to 2 GB.
 
+**What the 56 GB artifact does hand to the toolchain (measured 2026-11-22).** Its `.mm0` is
+56 000 443 775 B of which the `def` block is 52 093 369 268 B (1 020 lines, mean 51 MB, largest
+1 943 236 784 B), the axioms are 16 986 384 B (24 423 lines), and the row's `theorem` is one
+line of 3 886 477 377 B. A prefix slice is therefore closed but never small: the first `def`
+alone makes the smallest one 1 943 261 107 B, and `mm0-rs` does not elaborate that here — the
+kernel OOM-killed it three times (total-vm 18.6, 11.2, 19.9 GB) and a retry under
+`ulimit -v 20 GB` aborted at 19 989 504 kB after 50.5 s. What does elaborate is the axiom
+layer with the defs it names: a 378 205 914 B slice of both theories (imports stripped), the
+header and payload, 916 `def`s and 24 364 of the 24 423 axioms gives `mm0-rs` exit 0 in
+3 m 55.6 s (`3 sorts, 1223 term/def, 24385 ax/thm`, 13 799 368 kB peak RSS) and `mm0-c` exit 0
+in 2.9 s. That is 99.8 % of the row's axioms re-checked by the C verifier, with the `theorem`
+and 104 unreachable defs left out — the scope claim is the axiom-and-definition layer, not the
+final proof. `docs/lean4mm0.md` §13.57 has the table and the memory ratio (~36× the slice
+bytes; the ratio, not a bigger host, is what rules the whole file out).
+
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB
 LTP_CENSUS=1 LTP_DEDUP_NODES=1`. Re-running the same cap at 360 MiB *without*

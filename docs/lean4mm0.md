@@ -5101,3 +5101,54 @@ derivation — and `LTP_DEF_SHARE=0` still reproduces the pre-§13.54 bytes exac
 was re-run after these changes: 12 artifacts across 3 modes match
 `scripts/lean-typing-proof.golden.tsv`.
 
+### 13.57 The 56 GB artifact under the real toolchain: its axioms check, its `def` block does not
+
+§13.55's 56 GB artifact was recorded as *not* `mm0-rs`-elaborated, and the reason is
+structural rather than voluminous. Its layout, measured on the 56 000 443 775 B `.mm0`:
+
+| region | lines | bytes | share |
+| --- | ---: | ---: | ---: |
+| header + `term t_symN: nat;` payload | 278 | 6 221 | 0.00 % |
+| `def sdK: Term = $ … $;` block | 1 020 | 52 093 369 268 | 93.02 % |
+| axioms | 24 423 | 16 986 384 | 0.03 % |
+| blank/comment lines around them | — | 3 604 525 | 0.01 % |
+| the row's `theorem` line | 1 | 3 886 477 377 | 6.94 % |
+
+(The five rows sum to the file exactly.) So the file is 52 GB of shared subterm bodies — mean
+51 MB per `def`, the largest line 1 943 236 784 B, the largest axiom 223 425 B — and every
+axiom together is 17 MB. That is sharing doing exactly what §13.54
+asked of it, and it is also why a slice cannot be a prefix: `def` bodies may only name defs
+already emitted, so any prefix is closed, but the *first* `def` line alone is 1.94 GB. The
+smallest self-contained whole-line slice is header + payload + that one def, 1 943 261 107 B,
+and `mm0-rs` does not elaborate it here: the kernel killed it three times during the attempts
+(2026-11-22 21:03, 21:14, 21:42 CET, total-vm 18.6, 11.2 and 19.9 GB, `global_oom`), and a
+retry under `ulimit -v 20 GB` aborted with exit 134 after 50.5 s at a 19 989 504 kB peak, no
+`.mmb`. Those kills are measurements, not incidents: the host has 30 GiB and the elaborator
+needs more than 20 of them for 1.9 GB of `def` text.
+
+**What does elaborate: the axioms plus the defs they name.** A 378 205 914 B slice — both
+theories with their `import` lines stripped, the artifact's header and payload, the 916 `def`s
+the axioms reference (361 217 450 B) and 24 364 of the 24 423 axioms (16 964 141 B of the
+16 986 384), all in source order:
+
+| step | result |
+| --- | --- |
+| `mm0-rs compile slice.mm0 slice.mmb` | **OK**, exit 0, 3 m 55.6 s, peak RSS 13 799 368 kB, `3 sorts, 1223 term/def, 24385 ax/thm`, `.mmb` 6 230 976 B |
+| `mm0-c slice.mmb < slice.mm0` | **OK**, exit 0, 2.9 s, no output |
+
+That is 99.8 % of the artifact's axioms and 90 % of its defs re-elaborated and re-checked by
+the C verifier, on a row whose full artifact never enters either tool. The 59 axioms left out
+are the ones whose own closure of defs exceeds the 40 MB picker budget; the 104 defs left out
+are unreachable from any kept axiom; and the row's `theorem` is 3.9 GB on a single line, so
+it is skipped by line size before anything reads it. What is checked is therefore the axiom
+and definition layer of the row, not its final proof — the same scope §9.2 records for the
+2 000-axiom smoke slice.
+
+**The ratio is the number worth keeping.** 378 MB cost 13.8 GB of resident memory, ~36× the
+file; at that rate the 1.94 GB prefix slice wants ~70 GB and the whole artifact ~2 TB, which
+is arithmetic on the measured ratio, not a measurement. So the 56 GB artifact's status is
+unchanged — no host in this project can hand it to `mm0-rs` whole — and the thing that would
+change it is not a bigger machine but a wider sharing threshold (§13.54's floor is a byte
+threshold on *nodes*, not a cap on the biggest one: one def of 1.9 GB is many nodes' worth of
+text). That is a hypothesis this section does not test, because testing it means re-emitting
+the row.
