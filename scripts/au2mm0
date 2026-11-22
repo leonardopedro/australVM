@@ -522,6 +522,10 @@ BUDGETS: dict[str, dict] = {
     # W4: `assumed` is the count of hypotheses the certificate did not prove
     # (each one is used by substitution, and the artifact names it), and
     # `structural` grew by one when `uniform_state` joined the obligation set.
+    # `grounded` is one `cf_` fact per distinct literal combination the four
+    # proofs consume; every one of them appears in the `.mm1` (the least-used is
+    # referenced twice), so no dead axiom pads the count, and the split is what
+    # the proofs actually rest on rather than a number copied from a run.
     "flux1d": {"structural": 6, "grounded": 15, "certificates": 4,
                "assumed": 1},
 }
