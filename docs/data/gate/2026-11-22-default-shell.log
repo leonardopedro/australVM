@@ -4,7 +4,7 @@
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
-[pass] D00 contracts: 18 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c
+[pass] D00 contracts: 20 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c (dirty)
 [pass] D00: distributed execution record and contract inventory are well-formed
 [pass] D00 checker refuses: duplicate inventory id
 [pass] D00 checker refuses: unknown status
@@ -114,8 +114,32 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
   [detail] PC04 reversed operator (umeet→ujoin) is refused
 [pass] PC04 source→KernelIR reflection of the real clamp fixture
 [pass] PC04: source→KernelIR reflection of the clamp fixture
-[gap]  PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)
+  [detail] mm0/proof_chain/clamp_wgsl.mm0 re-emits byte-identically
+  [detail] mm0/proof_chain/clamp_wgsl.mm1 re-emits byte-identically
+  [detail] re-reflected: entry=clamp helper=scalar_entry param=p0:0 width=32 comparison=GreaterThan literal=100 branch=100 operator=umeet roles=read/read_write workgroup=64
+  [detail] reversed comparator refused: {"message":"WGSL comparison LessThan does not match the KernelIR comparison GreaterThan","status":"error"}
+  [detail] changed literal refused: {"message":"WGSL literal 101 does not match the KernelIR literal 100","status":"error"}
+  [detail] changed storage role refused: {"message":"memory-wrapper audit failed: input binding 0 is not read-only","status":"error"}
+  [detail] word+clamp_source+clamp_wgsl assembled and accepted
+  [detail] a reflected ujoin does not check the umeet proof
 [pass] PC05a: parsed-WGSL reflection of the clamp fixture
+  [detail] clamp_transport.mm0 re-emits byte-identically from clamp_wgsl.mm0
+  [detail] strict profile: wrapper=wrapper_admits, extents=extent_guard, bindings=binding_index, native=native_agrees; consumed: native
+  [detail] a changed shader moves the edge evidence (edge_sha256/wgsl_sha256) and leaves the theorem statements stable
+  [detail] a removed premise row is refused
+  [detail] a re-labelled premise is refused
+  [detail] an axiom is refused
+  [detail] a premise dropped from the statement is refused
+  [detail] a changed proof subject is refused
+  [detail] a changed recorded bound is refused
+  [detail] a premise concluded by a theorem is refused
+  [detail] a third theorem is refused
+  [detail] the assembled chain accepts the transported bound
+  [detail] dropping PC05a's bound proof refuses the transport
+  [detail] changing the proof subject refuses the transport
+  [detail] dropping the consumed premise from the statement refuses the transport
+  [detail] dropping the consumed premise from the proof refuses the transport
+[pass] PC05b: transported bound through the reflected edge
   [detail] isa-hypotheses: 4 pinned citation(s), 1 cited hypothesis/hypotheses (1 content-checked, 0 unchecked), 65 axiom(s) accounted for
 [pass] W8: an uncited or stale hypothesis is refused
 [pass] W8: an unchecked citation cannot be re-labelled as checked
@@ -363,4 +387,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 187 passed, 2 explained gap(s), 0 failed
+verify-invariants: 188 passed, 1 explained gap(s), 0 failed

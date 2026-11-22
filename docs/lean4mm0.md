@@ -4820,12 +4820,77 @@ extrapolation. `docs/mm0-setmm-coverage.md` §9.2 records both checks and the tr
 looks like a defect and is not (`mm0-rs compile` takes its output second positional;
 `-o` is accepted silently and writes nothing).
 
-**Why opt-in.** The artifact format is a contract — the golden file pins its bytes — and
-a `def` block changes what a reader of the certificate sees even when the content is the
-same. The knob is therefore the same shape as `LTP_ENC_MAX`: an env-gated probe whose
-unset path is byte-identical, until a re-record is a decision rather than a side effect.
+**Across the book, sampled by size.** The full book cannot be measured as one number: 19
+authored rows are marked `emit` in the sweep precisely because each exceeds the emitter's own
+10 GiB / 5 400 s budget, and those were not re-emitted. What was measured is a six-row sample
+spanning 7 → 666 943 rule applications, each row emitted twice — everything else held equal,
+`--spine`, the same env trio — and each pair re-elaborated (`mm0-rs compile`) and re-checked
+(`mm0-c` against the artifacts' own statements, theory in front of both):
 
-### 13.55 The tail's last megabyte: 360 MiB completes, and the bracket moves to (352, 356]
+| rules | row | `.mm0` default | `.mm0` shared | cut | defs | re-checked |
+| ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 7 | `ChapterSirkTrotterKato.StrongResolventConvergence` | 48 388 B | 48 531 B | 1.00× | 1 | both, `mm0-c` exit 0 |
+| 27 | `YangMillsHermite.idxD.eq_1` | 17 219 B | 17 269 B | 1.00× | 0 | both, `mm0-c` exit 0 |
+| 321 | `ChapterA3o.projAnti` | 83 807 B | 83 857 B | 1.00× | 0 | both, `mm0-c` exit 0 |
+| 4 777 | `ChapterSirkMultiShift.multiShiftSeq_succ` | 1 012 315 B | 1 013 710 B | 1.00× | 48 | both, `mm0-c` exit 0 |
+| 6 860 | `FarisLavine.essentiallySelfAdjointOn_of_farisLavine` | 67 199 500 B | 53 831 176 B | **1.25×** | 309 | both, `mm0-c` exit 0 |
+| 666 943 | `QuantumGravity3DGauge.ccr_poly` | 222 469 921 B | 167 243 432 B | **1.33×** | 2 262 | both (`135 856` ax/thm), `mm0-c` exit 0 |
+
+The cut is not monotone in anything the header states: below ~5 000 rules the `def` block
+costs 50–144 B and buys nothing, because a small row has no repeated large subterm — the
+threshold is a *floor* on body size, not a decision that sharing pays. Making it pay would
+take a second pass over a spool that is 100 GB at the ns row, which is why the knob is left
+honest about the small-row cost. The two rows that do pay are the ones the smoke row predicted:
+309 defs at 6 860 rules (1.25×) and 2 262 at 666 943 (1.33×), against 1 560 defs and 3.12× on
+the smoke row's 467 710 assumptions — the ratio tracks how much of a derivation's text is the
+same subterm repeated, not the row's rule count. The `.mm1` moves with the `.mm0` in every row
+(e.g. 67 340 212 → 53 971 888 B), never by a different factor.
+
+**Two defects the sweep found, both in shared mode only.** (1) `derived type is not the
+declared type`: the Π-spine peel joined binder domains into a wrap that is compared byte for
+byte with the spool, and a spool never interns (§13.54's third constraint) — so an interned
+domain put `sdK` in the wrap against its expansion on disk. `Enc.expanded()` now encodes the
+domain with `_ds_off` set. (2) `def sd2: Term = $ sd2 $;` (`mm0-rs`: `variables {sd2}
+missing from dependencies`): `Enc.enc` memoised every return value including a name, and
+`write_defs` read the body back out of that memo. A shared name is no longer memoised; the
+cached text is always the encoding. Both were invisible in the smoke row — its first-use
+order never repeats a binder domain and its def bodies were large enough that the memo was
+full — and both are now covered by the sample above. The fixes do not move the smoke row's
+bytes (re-measured after them: 334 175 929 B / 367 747 951 B, the golden values), which is
+the check that they changed a defect and not the format.
+
+**It is the default now, at a 1024 B threshold.** The artifact format is a contract and
+the golden file pins its bytes, so this was a re-record rather than a side effect:
+`LTP_DEF_SHARE=0` reproduces the pre-13.54 bytes exactly, any other value sets the
+threshold, and an empty value still reads as off. Six of the gate's twelve artifacts moved
+and six did not:
+
+| artifact | before | after |
+| --- | ---: | ---: |
+| `default/…_typing.mm0` | 1 041 771 375 B | 334 175 929 B |
+| `default/…_typing.mm1` | 1 075 343 397 B | 367 747 951 B |
+| `shared/…_typing.mm0` | 1 041 771 375 B | 334 175 929 B |
+| `shared/…_typing.mm1` | 1 075 343 397 B | 367 747 951 B |
+| `stop/…_axioms.tmp` | 119 011 463 B | 9 825 150 B |
+| `stop/…_stopped.mm0` | 154 877 865 B | 49 197 303 B |
+
+The `.mm0` and `.mm1` move together because both carry the same `def` block (a pair that
+disagreed about `sdK` would not elaborate), and the two sidecars in `default` and `stop`
+keep their bytes *and* their hashes — that is the check below, not a coincidence.
+
+**The sidecar had to be taught to expand.** The first re-record moved eight artifacts
+instead of six: the obligation JSON went 1 012 915 095 → 741 570 001 B because its `lhs`
+and `rhs` fields are the same term text the artifact spells, and the emitter shared them
+too — one line carried `"rhs": "sd5"` with no `def` block anywhere in a `.jsonl` that
+`scripts/lean-net-cert` reads on its own. A dangling name in the one file meant to be
+consumed standalone is not a compression, it is a defect, so `_put_json` now writes
+through `Enc.write_expanded` (the same rule `spool` already followed, §13.54's third
+constraint). With that the sidecar is byte-identical to its pre-13.54 self:
+sha256 `999d2bec…` for `default`, and the `stop` file back at 34 248 473 B. What the
+default now states is: the artifact carries `def`s, the sidecar carries none, and
+anything read outside the artifact is expanded.
+
+### 13.55 The tail's last megabyte: 360 MiB completes, and the floor lands at 357 MiB
 
 §13.52 left the floor of the ns row pinned to the *size of the tail's allocation*: the
 final copy of the spooled axioms into the artifact ran through
@@ -4872,11 +4937,83 @@ boundary, not a computation, so its 7 304 s is a slow failure and not a timing.
 355 MiB at 2 907 s (RSS 326 MB), 3 636 s — the same ~2 MiB of headroom over the peak that
 360 had, and both samplers agree on the peak. Its `.mm0` and `.mm1` are `cmp`-identical to
 `cap-432-dedup`, the same two byte counts as the 360 MiB run, so a 4 MiB narrower ceiling
-changes nothing about what is emitted. So the floor at the current emitter is
-**(352, 356] MiB** — down from §13.52's (360, 368], with both former failing caps now
-passing. The bracket is left at 4 MiB rather than bisected further: the next probe (354)
-buys 2 MiB of resolution for another ~60-minute run, and no consumer of this number
-places a cap within 2 MiB of the peak.
+changes nothing about what is emitted. So the bracket is **(352, 356] MiB**, down from
+§13.52's (360, 368], with both former failing caps now passing — and the probes that
+follow close it to a single quotable number, though not to a single byte.
+
+**The 354 MiB probe, and the bracket at (352, 354].** It completes: exit 0, peak VmSize
+353 MiB at 2 813 s (RSS 325 MB), 3 564 s, host OOM kills during the run 0 — the same
+~1 MiB of headroom over the peak that the passing caps above had. Its `.mm0`
+(102 543 367 789 B) and `.mm1` (102 547 674 107 B) are `cmp`-identical to
+`cap-432-dedup`, so the 2 MiB narrower ceiling changes nothing about what is emitted,
+and 3 564 s sits inside the 3 347–3 667 s band of the passing caps above, so nothing about
+this run is anomalous. With 352 still failing in
+`infer`'s `self.oblig.append(ax)` (§13.52's floor), the bracket at this point is
+**2 MiB: (352, 354]** — but read the next paragraph before quoting it, because the same
+cap run again in a batch shape fails.
+
+353 MiB is not a bisection point of its own: its single run belongs to the batch below,
+where it fails in `beta_ax` at a 351 MiB peak, the same shape as 354 and 355 there.
+
+**The bisection that says there is no megabyte to close.** Four caps were then run
+*concurrently* — 353, 354, 355, 356 MiB — under the same env as the table above, and
+**all four failed**: 353/354/355 in `beta_ax[key] = ax` (the `beta_ax` dict's growth) at
+peaks of 351 MiB, 3 469–3 491 s; 356 later and elsewhere, in `_spool_eq` at 5 334 s. The
+four runs of the *next* batch — 357, 358, 359 MiB and a 360 MiB re-run to hold the
+config — all completed: exit 0, peaks 356/357/358/359 MiB (cap − 1 every time), 3 667 /
+3 583 / 3 347 / 3 348 s, `.mm1` `cmp`-identical across them and `.mm0` at the same
+102 543 367 789 B.
+
+So 354 MiB and 356 MiB have each now both passed and failed under the same cap and the
+same env (§13.55's two single probes, above, versus this batch), and the bracket cannot
+be closed by more runs: what separates pass from fail at these caps is not a byte count
+but *when* a resizable structure's next growth lands relative to the ceiling. A passing
+run grows to cap − 1 and finishes; a failing one dies at the first jump it cannot place —
+2 MiB of contiguous dict entries for `beta_ax`, or the two ≤1 MiB slices that
+`_spool_eq`'s `a[:n] != b[:n]` copies to compare the spool (the same class of transient
+this section fixed in the copy path, one layer up). Adding a megabyte of ceiling moves the jump
+below the limit but does not remove the jump.
+
+**The quotable number is therefore 357 MiB**, stated as *the lowest ceiling under which
+this row has never been observed to fail* (4 for 4, artifacts byte-identical to
+`cap-432-dedup`), not as a threshold above which it is guaranteed to fit: **≤356 MiB is
+"sometimes fails"**. Quoting a floor of 354 would be quoting the luckiest run of a band;
+quoting 357 is the strongest claim the data support, and it is 3 MiB below the (352, 360]
+this section started from. A caller that needs determinism rather than a floor should cap
+at 384 MiB (§13.51), where the jump has 27 MiB of room.
+
+**The spool comparison, made piecewise — probed at 356 MiB with the shipped
+environment.** The paragraph above names `_spool_eq` as one of the jumps, and it is the one
+with no reason to exist: the function streams two chunk sequences with a carry offset, and
+the carry was a sliced *string* — `a[:n] != b[:n]` copied up to 1 MiB per side and
+`a[n:]` copied the remainder again, so a comparison of the spooled tail asked its address
+space for ~3 MiB at the moment it was nearest the ceiling. It now compares over offsets in
+`_EQ_WINDOW = 1 << 16` windows (`scripts/lean-typing-proof:1665`), so the largest
+allocation a comparison makes is 128 KiB regardless of how the two sides are chunked. The
+carry stays an offset, so the two streams may still split at different places — the
+algorithm is unchanged, only the copy is bounded.
+
+Probed at **356 MiB with the defaults** — `LTP_DEF_SHARE=1024 LTP_DEDUP_NODES=1` plus the
+same trio as the table above (`LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648
+LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2 MiB`): **exit 0**, peak VmSize **351 MiB at 1 895 s**
+(RSS 322 MB), 4 078 s. That is where this cap has failed twice before — in `beta_ax` at a
+351 MiB peak in the batch, and in `_spool_eq` at 5 334 s — so the comparison is no longer
+a failure mode at 356; it does not move the quotable floor, because 356 has still failed
+more often than it has passed and one pass is one sample. Two things the run does add:
+
+- **Sharing lowers the peak, not just the bytes.** 351 MiB against the 356 MiB peaks of the
+  share-off passes at 357–360 MiB, with the same env otherwise; the artifacts are
+  56 000 443 775 B (`.mm0`) and 56 004 750 096 B (`.mm1`) against 102 543 367 789 /
+  102 547 674 107 B — 1.83×, with 1 020 defs from a 1 KiB floor. So §13.54's cut is not only
+  disk: the text it stops writing also stops being held.
+- **The 4 078 s is not a timing.** The host had swap fully consumed and other work running
+  throughout (an OOM kill took a streaming `awk` during it), so the elapsed time is not
+  comparable to the 3 347–3 667 s band and no speedup or slowdown is claimed either way.
+
+This is the first ns-row artifact emitted with sharing on at full size, and it has **not**
+been elaborated by `mm0-rs` — the toolchain checks of §13.54 and §13.56 are on rows up to
+2 GB, and a 56 GB elaboration is hours, not a gate. What is measured here is the cap and
+the bytes, not a re-check of the proof.
 
 **One control worth keeping.** The first attempt at these two caps was launched without
 `LTP_DEDUP_NODES=1`, and both runs died at 921 s and 938 s with `MemoryError` inside

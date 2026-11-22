@@ -1,0 +1,4 @@
+# U11/U12 adapter descriptors, emitted by the compiler's CPS lowering.
+# Canonical form: fixed field order, one fact per line, descriptors
+# sorted by symbol, blocks separated by a blank line.
+# `umbrella/src/interface.rs` parses this text.

@@ -4,7 +4,7 @@
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
-[pass] D00 contracts: 19 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present
+[pass] D00 contracts: 19 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c
 [pass] D00: distributed execution record and contract inventory are well-formed
 [pass] D00 checker refuses: duplicate inventory id
 [pass] D00 checker refuses: unknown status
@@ -74,9 +74,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W5: the staleness note is silent when the artifact is newest, and names the newer binary
 [pass] W5: the binary note is silent when the binary is newest, and names the newer source
 [pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it
-      recorded=43540af1e5fe2fa46151c9bce9bfd8b44d6c6947ffe33dc6adbb8ce48eff46d3 bridge=d6141e8ac7992d1edd9a125eba9f5f5590a681c44a19f5d512d5f379dc07be56 mutated=cf11bcd7fff9af0a87fecfb5fc9ce5da46c1c4a63bd77785c8a6a67449ec24c7
-      staleness: — austral is newer (2026-11-22T17:10:43) than mm0/flux1d_certificate.mm0 (2026-11-22T15:36:50), so the recorded digests may describe an older compiler build; re-emit it: python3 scripts/au2mm0 emit examples/verified-kernel/flux1d/flux1d.obligations.json --code <cps>
-[FAIL] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
+[pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
 [gap]  W5: object digest not comparable (recorded arch=x86_64, this host is aarch64)
 [pass] W7: a certificate with a flipped coefficient is refused
   [detail] 6 sorts, 71 term/def, 91 ax/thm
@@ -117,6 +115,23 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] PC04: source→KernelIR reflection of the clamp fixture
 [gap]  PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)
 [pass] PC05a: parsed-WGSL reflection of the clamp fixture
+  [detail] clamp_transport.mm0 re-emits byte-identically from clamp_wgsl.mm0
+  [detail] strict profile: wrapper=wrapper_admits, extents=extent_guard, bindings=binding_index, native=native_agrees; consumed: native
+  [detail] a changed shader moves the edge evidence (edge_sha256/wgsl_sha256) and leaves the theorem statements stable
+  [detail] a removed premise row is refused
+  [detail] a re-labelled premise is refused
+  [detail] an axiom is refused
+  [detail] a premise dropped from the statement is refused
+  [detail] a changed proof subject is refused
+  [detail] a changed recorded bound is refused
+  [detail] a premise concluded by a theorem is refused
+  [detail] a third theorem is refused
+  [detail] the assembled chain accepts the transported bound
+  [detail] dropping PC05a's bound proof refuses the transport
+  [detail] changing the proof subject refuses the transport
+  [detail] dropping the consumed premise from the statement refuses the transport
+  [detail] dropping the consumed premise from the proof refuses the transport
+[pass] PC05b: transported bound through the reflected edge
   [detail] isa-hypotheses: 4 pinned citation(s), 1 cited hypothesis/hypotheses (1 content-checked, 0 unchecked), 65 axiom(s) accounted for
 [pass] W8: an uncited or stale hypothesis is refused
 [pass] W8: an unchecked citation cannot be re-labelled as checked
@@ -354,4 +369,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 177 passed, 4 explained gap(s), 1 failed
+verify-invariants: 179 passed, 4 explained gap(s), 0 failed

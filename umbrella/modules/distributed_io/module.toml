@@ -1,0 +1,22 @@
+# umbrella/modules/distributed_io/module.toml — D09 step 4.
+#
+# What this module is ALLOWED to call. Every verb is gated by name, exactly like
+# a `uk_*` call: `rs_cap_dir_open` and `rs_cap_write` are listed, `rs_cap_send`
+# is not — so this module can write inside its state directory and cannot reach
+# the network at all, even though the symbol exists in the bridge.
+#
+# Remove a grant and the JIT refuses the call with UK-4001 at compile time
+# (see `tests/distributed_io.rs`), which is the property the demo exists to show.
+
+[module]
+name = "DistributedIo"
+version = "0.1.0"
+archetypes = ["austral_cps"]
+archetype = "austral_cps"
+entry = "main"
+# The single peer this instance serves. An empty set is not "any peer": the
+# network capability then has nothing to address.
+node = "node-7"
+
+[grants]
+kernel = ["rs_cap_dir_open", "rs_cap_write"]

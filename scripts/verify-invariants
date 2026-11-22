@@ -737,8 +737,14 @@ PY
                     check "PC05a: parsed-WGSL reflection of the clamp fixture" true
                     ;;
                 3)
+                    # Exit 3 is "checked, replay skipped", and the script knows
+                    # *why* it skipped (no mm0-rs/mm0-c, no compiler, no
+                    # checker). Quote its line instead of assuming the mm0
+                    # half: a missing `avm-gpu` debug build is not a missing
+                    # toolchain, and the gap has to say which one it is.
                     grep -E '^  \[detail\]' "$_cert_tmp/pc05.log" >&2
-                    gap "PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)"
+                    _pc05_why="$(sed -n 's/^\[gap\] //p' "$_cert_tmp/pc05.log" | head -n 1)"
+                    gap "${_pc05_why:-PC05a: clamp_wgsl.mm0 not replayed (scripts/pc05-reflect exited 3 without a reason)}"
                     check "PC05a: parsed-WGSL reflection of the clamp fixture" true
                     ;;
                 *)
@@ -764,8 +770,12 @@ PY
                     check "PC05b: transported bound through the reflected edge" true
                     ;;
                 3)
+                    # Same as PC05a: the script's own `[gap]` names the missing
+                    # piece, so pass that through rather than always blaming the
+                    # MM0 toolchain.
                     grep -E '^  \[detail\]' "$_cert_tmp/pc05b.log" >&2
-                    gap "PC05b: clamp_transport.mm0 not replayed (no mm0-rs/mm0-c on PATH)"
+                    _pc05b_why="$(sed -n 's/^\[gap\] //p' "$_cert_tmp/pc05b.log" | head -n 1)"
+                    gap "${_pc05b_why:-PC05b: clamp_transport.mm0 not replayed (scripts/pc05b-transport exited 3 without a reason)}"
                     check "PC05b: transported bound through the reflected edge" true
                     ;;
                 *)

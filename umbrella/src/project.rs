@@ -93,6 +93,22 @@ pub struct TrustedArtifact {
     pub exports: Vec<String>,
 }
 
+/// D09: the capabilities the running instance gets. Stated in the document so a
+/// run names its own state directory and peers explicitly instead of inheriting
+/// an ambient root, and so a missing block means "no capabilities" rather than
+/// "whatever the host can reach".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Capabilities {
+    /// Directory the instance's directory capability is rooted at. A relative
+    /// path is resolved against the project document, never against the
+    /// developer's shell.
+    pub state_dir: PathBuf,
+    /// Exactly the peers the instance may address. Empty means none.
+    #[serde(default)]
+    pub peers: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
@@ -108,6 +124,10 @@ pub struct Project {
     /// D09: required whenever the project authorizes a build or a load.
     #[serde(default)]
     pub trusted: Option<TrustedArtifact>,
+    /// D09: the instance's capabilities. Absent means the run has none, and every
+    /// `rs_cap_*` verb refuses.
+    #[serde(default)]
+    pub capabilities: Option<Capabilities>,
     /// The features the caller asked cargo for. Not a document field: the
     /// command line supplies it, and the trust gate compares it with the pin.
     #[serde(skip)]
@@ -141,12 +161,14 @@ pub fn parse(path: &Path, text: &str) -> Result<Project, String> {
             "load",
             "grants",
             "trusted",
+            "capabilities",
         ],
         &mut unknown,
     );
     reject_unknown_in(&value, "module", &["name", "sources"], &mut unknown);
     reject_unknown_in(&value, "build", &["allowed", "crate"], &mut unknown);
     reject_unknown_in(&value, "load", &["allowed", "providers"], &mut unknown);
+    reject_unknown_in(&value, "capabilities", &["state_dir", "peers"], &mut unknown);
     reject_unknown_in(
         &value,
         "trusted",
@@ -232,6 +254,16 @@ fn validate(path: &Path, p: &Project) -> Result<(), String> {
              (lock_sha256, library_sha256) must be pinned before it can run"
                 .to_string(),
         );
+    }
+    if let Some(caps) = &p.capabilities {
+        if caps.state_dir.as_os_str().is_empty() {
+            problems.push("`capabilities.state_dir` is empty".to_string());
+        }
+        for (i, peer) in caps.peers.iter().enumerate() {
+            if peer.trim().is_empty() {
+                problems.push(format!("`capabilities.peers[{i}]` is empty"));
+            }
+        }
     }
     if let Some(t) = &p.trusted {
         for (field, value) in [
