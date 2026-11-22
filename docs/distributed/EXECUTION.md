@@ -849,22 +849,19 @@ an order-only prerequisite, so "rebuilt" and "staged" are one event.
 Measured: `make bridge` EXIT=0 with both copies byte-identical to the artifact
 (`cmp`), `make -n drift-controls` shows the two `cp -f` lines before
 `scripts/w3-drift-controls`, an emptied root copy is healed by `make
-stage-bridge`, and the gate is 177 passed / 3 explained gaps / 0 failed.
-`make test` itself (1.5 h of drift controls) was not re-run in full; the
-structural order is what changed, and it is what the above checks.
+stage-bridge`, and the gate is 178 passed / 4 explained gaps / 0 failed
+(`docs/distributed/evidence/d09-verify-invariants.log`). `make test` itself (1.5 h
+of drift controls) was not re-run in full; the structural order is what changed,
+and it is what the above checks.
 
-One tree-state caveat, recorded because the numbers above are otherwise read as
-"HEAD is green": those runs were taken on 2026-11-22 ~15:00, before this branch
-merged origin's compiler update (`lib/Compiler_cps.ml` +363 lines,
-`lib/CliEngine.ml`, `lib/gpu/*`, with a two-line certificate refresh). After that
-merge the gate reports one failure — W5 "the certificate's cps digest is the
-bridge's digest of the emitted bytes" — because `mm0/flux1d_certificate.mm0` was
-emitted before the last `lib/` change, so the recorded digest names an older
-compiler build. Re-emitting it belongs to that compiler change, not to D08/D09:
-nothing here touches CPS emission, and the certificate is a proof artifact whose
-refresh should carry the author's own measurement. The remaining gaps are the
-same explained ones (W5 object arch, W9.1 RV64, W9.3 Lean, plus PC05a/lean2mm0
-when the mm0 tools are not on `PATH`).
+That 178/4/0 is measured *after* this branch merged origin's compiler update
+(`lib/Compiler_cps.ml`, `lib/CliEngine.ml`, `lib/gpu/*`): while the merge was in
+flight the gate failed W5 "the certificate's cps digest is the bridge's digest of
+the emitted bytes", because `mm0/flux1d_certificate.mm0` had been emitted before
+the last `lib/` change. That compiler change's own follow-up re-emitted the
+certificate, and the failure is gone without anything here touching CPS
+emission. The four remaining gaps are the explained ones (W5 object arch, W9.1
+RV64, W9.3 Lean, and PC05a/lean2mm0 when the mm0 tools are not on `PATH`).
 
 ## D09 — trusted artifact identity and instance capabilities (2026-11-22, steps 1–3 of 4)
 
