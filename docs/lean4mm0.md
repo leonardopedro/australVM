@@ -4982,6 +4982,39 @@ quoting 357 is the strongest claim the data support, and it is 3 MiB below the (
 this section started from. A caller that needs determinism rather than a floor should cap
 at 384 MiB (§13.51), where the jump has 27 MiB of room.
 
+**The spool comparison, made piecewise — probed at 356 MiB with the shipped
+environment.** The paragraph above names `_spool_eq` as one of the jumps, and it is the one
+with no reason to exist: the function streams two chunk sequences with a carry offset, and
+the carry was a sliced *string* — `a[:n] != b[:n]` copied up to 1 MiB per side and
+`a[n:]` copied the remainder again, so a comparison of the spooled tail asked its address
+space for ~3 MiB at the moment it was nearest the ceiling. It now compares over offsets in
+`_EQ_WINDOW = 1 << 16` windows (`scripts/lean-typing-proof:1665`), so the largest
+allocation a comparison makes is 128 KiB regardless of how the two sides are chunked. The
+carry stays an offset, so the two streams may still split at different places — the
+algorithm is unchanged, only the copy is bounded.
+
+Probed at **356 MiB with the defaults** — `LTP_DEF_SHARE=1024 LTP_DEDUP_NODES=1` plus the
+same trio as the table above (`LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648
+LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2 MiB`): **exit 0**, peak VmSize **351 MiB at 1 895 s**
+(RSS 322 MB), 4 078 s. That is where this cap has failed twice before — in `beta_ax` at a
+351 MiB peak in the batch, and in `_spool_eq` at 5 334 s — so the comparison is no longer
+a failure mode at 356; it does not move the quotable floor, because 356 has still failed
+more often than it has passed and one pass is one sample. Two things the run does add:
+
+- **Sharing lowers the peak, not just the bytes.** 351 MiB against the 356 MiB peaks of the
+  share-off passes at 357–360 MiB, with the same env otherwise; the artifacts are
+  56 000 443 775 B (`.mm0`) and 56 004 750 096 B (`.mm1`) against 102 543 367 789 /
+  102 547 674 107 B — 1.83×, with 1 020 defs from a 1 KiB floor. So §13.54's cut is not only
+  disk: the text it stops writing also stops being held.
+- **The 4 078 s is not a timing.** The host had swap fully consumed and other work running
+  throughout (an OOM kill took a streaming `awk` during it), so the elapsed time is not
+  comparable to the 3 347–3 667 s band and no speedup or slowdown is claimed either way.
+
+This is the first ns-row artifact emitted with sharing on at full size, and it has **not**
+been elaborated by `mm0-rs` — the toolchain checks of §13.54 and §13.56 are on rows up to
+2 GB, and a 56 GB elaboration is hours, not a gate. What is measured here is the cap and
+the bytes, not a re-check of the proof.
+
 **One control worth keeping.** The first attempt at these two caps was launched without
 `LTP_DEDUP_NODES=1`, and both runs died at 921 s and 938 s with `MemoryError` inside
 `infer` at peaks of 358 and 363 MiB. That is not a regression from `_copy_spool`: without

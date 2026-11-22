@@ -619,6 +619,18 @@ place. The quotable floor is therefore **357 MiB — the lowest ceiling under wh
 never been observed to fail** — with "sometimes fails" at and below 356, and 384 MiB as the
 configuration to use when determinism is worth 27 MiB. §13.55 of `lean4mm0.md` has the table.
 
+The two jumps that produced those failures are both gone. §13.55's `sendfile` removal took the
+last copy's MiB out of the emitting path, and the spool comparison now runs over offsets in
+64 KiB windows instead of copying up to 3 MiB of slices per block. Probed at 356 MiB with the
+shipped defaults (`LTP_DEF_SHARE=1024 LTP_DEDUP_NODES=1`, same trio otherwise): exit 0, peak
+VmSize 351 MiB at 1 895 s, 4 078 s, `.mm0` 56 000 443 775 B and `.mm1` 56 004 750 096 B —
+1.83× under the 102 543 367 789 / 102 547 674 107 B the share-off passes emitted, from 1 020
+`def`s. One pass at a cap that has failed twice is one sample, so 357 stays the quotable floor;
+what the run shows is that `_spool_eq` no longer kills the row and that sharing lowers the peak
+(351 vs 356 MiB) as well as the file size. The 4 078 s is not a timing (the host was under
+memory pressure and lost a streaming `awk` to an OOM kill mid-run), and the 56 GB artifact is
+not `mm0-rs`-elaborated — §13.54's and §13.56's toolchain checks are on rows up to 2 GB.
+
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB
 LTP_CENSUS=1 LTP_DEDUP_NODES=1`. Re-running the same cap at 360 MiB *without*
