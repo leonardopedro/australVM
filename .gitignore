@@ -383,3 +383,6 @@ mm0/pilot/ported_stmt.mm0
 
 # make test tree lock
 .tree.lock
+
+
+/output
