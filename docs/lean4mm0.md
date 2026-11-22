@@ -4820,10 +4820,36 @@ extrapolation. `docs/mm0-setmm-coverage.md` §9.2 records both checks and the tr
 looks like a defect and is not (`mm0-rs compile` takes its output second positional;
 `-o` is accepted silently and writes nothing).
 
-**Why opt-in.** The artifact format is a contract — the golden file pins its bytes — and
-a `def` block changes what a reader of the certificate sees even when the content is the
-same. The knob is therefore the same shape as `LTP_ENC_MAX`: an env-gated probe whose
-unset path is byte-identical, until a re-record is a decision rather than a side effect.
+**It is the default now, at a 1024 B threshold.** The artifact format is a contract and
+the golden file pins its bytes, so this was a re-record rather than a side effect:
+`LTP_DEF_SHARE=0` reproduces the pre-13.54 bytes exactly, any other value sets the
+threshold, and an empty value still reads as off. Six of the gate's twelve artifacts moved
+and six did not:
+
+| artifact | before | after |
+| --- | ---: | ---: |
+| `default/…_typing.mm0` | 1 041 771 375 B | 334 175 929 B |
+| `default/…_typing.mm1` | 1 075 343 397 B | 367 747 951 B |
+| `shared/…_typing.mm0` | 1 041 771 375 B | 334 175 929 B |
+| `shared/…_typing.mm1` | 1 075 343 397 B | 367 747 951 B |
+| `stop/…_axioms.tmp` | 119 011 463 B | 9 825 150 B |
+| `stop/…_stopped.mm0` | 154 877 865 B | 49 197 303 B |
+
+The `.mm0` and `.mm1` move together because both carry the same `def` block (a pair that
+disagreed about `sdK` would not elaborate), and the two sidecars in `default` and `stop`
+keep their bytes *and* their hashes — that is the check below, not a coincidence.
+
+**The sidecar had to be taught to expand.** The first re-record moved eight artifacts
+instead of six: the obligation JSON went 1 012 915 095 → 741 570 001 B because its `lhs`
+and `rhs` fields are the same term text the artifact spells, and the emitter shared them
+too — one line carried `"rhs": "sd5"` with no `def` block anywhere in a `.jsonl` that
+`scripts/lean-net-cert` reads on its own. A dangling name in the one file meant to be
+consumed standalone is not a compression, it is a defect, so `_put_json` now writes
+through `Enc.write_expanded` (the same rule `spool` already followed, §13.54's third
+constraint). With that the sidecar is byte-identical to its pre-13.54 self:
+sha256 `999d2bec…` for `default`, and the `stop` file back at 34 248 473 B. What the
+default now states is: the artifact carries `def`s, the sidecar carries none, and
+anything read outside the artifact is expanded.
 
 ### 13.55 The tail's last megabyte: 360 MiB completes, and the floor lands at 357 MiB
 

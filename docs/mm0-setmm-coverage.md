@@ -527,11 +527,13 @@ rule applications. The emitter therefore interns repeated subterms and writes th
 `def`s at the top of the artifact — `def sdK: Term = $ … $;`, nullary and sort-checked, so a use
 site is three tokens instead of tens of kilobytes.
 
-It is **opt-in**, because the format is a promise (the byte-identity gate exists for exactly
-this): `LTP_DEF_SHARE=<min bytes>` turns it on and the threshold is the smallest body worth a
-`def`; unset, the emitter takes the byte-identical default path and
-`scripts/check-lean-typing-proof` confirms it — 12 artifacts across 3 modes still match
-`scripts/lean-typing-proof.golden.tsv`, so no recorded value moved.
+It is **the default since 2026-11-22, at a 1024 B threshold**, because the format is a promise
+the gate pins: the flip re-recorded 6 of the 12 artifacts (both `.mm0`/`.mm1` pairs and the two
+stop-mode files, table below) and left every sidecar hash untouched. `LTP_DEF_SHARE=0`
+reproduces the pre-flip bytes, and any other value sets the threshold. The first attempt at the
+flip moved 8 artifacts: the obligation JSON spelled `"rhs": "sd5"` with no `def` block in a file
+`scripts/lean-net-cert` reads standalone, so `_put_json` now writes through `Enc.write_expanded`
+— the sidecar is expanded text, the artifact carries the names.
 
 The interning rule is fixed by the artifact order, not by a heuristic pass: a node is a `def`
 candidate at its **first** use, decided by its expanded size; bodies are written in *reverse*
@@ -546,19 +548,21 @@ type … declared sd0”.
 Measured on the smoke row (`BookProof.Toolbox.ChapterFockPairPerturbation.ndjson`,
 `abs_re_inner_pairVec_le`):
 
-| artifact | default | `LTP_DEF_SHARE=1024` |
-|---|---|---|
-| `.mm0` | 1 041 771 375 B | **354 580 487 B** (2.94×) |
-| `.mm1` | 1 075 343 397 B | **388 152 509 B** (2.77×) |
-| sidecar (obligations) | 1 012 915 095 B | unchanged |
-| wall clock | 70.3 s | 68.3 s |
-| assumptions | 467 710 (1 279 constant types, 1 256 substitution) | **identical** |
-| defs emitted | — | 1 694 |
+| artifact | pre-13.54 | `LTP_DEF_SHARE=1024`, interning off | at the default (interning on) |
+|---|---|---|---|
+| `.mm0` | 1 041 771 375 B | **354 580 487 B** (2.94×) | **334 175 929 B** (3.12×) |
+| `.mm1` | 1 075 343 397 B | **388 152 509 B** (2.77×) | **367 747 951 B** (2.92×) |
+| sidecar (obligations) | 1 012 915 095 B | unchanged | unchanged (sha256 `999d2bec…`) |
+| wall clock | 70.3 s | 68.3 s | 64.4–70.9 s |
+| assumptions | 467 710 (1 279 constant types, 1 256 substitution) | **identical** | **identical** |
+| defs emitted | — | 1 694 | 1 560 |
 
 The size cut is real but the assumption count is untouched, which is the honest reading: sharing
-compresses the *text* of the derivation, not its obligations. Only 1 694 nodes clear a 1 KiB
-threshold and they account for the whole 66 % saving, matching the earlier headroom measurement on
-the three largest axioms.
+compresses the *text* of the derivation, not its obligations. Only 1 560–1 694 nodes clear a 1 KiB
+threshold and they account for the whole 66–68 % saving, matching the earlier headroom measurement
+on the three largest axioms. The two sharing layers compose rather than overlap: interning (§13.53)
+hands the encoder fewer distinct ids, so 1 560 nodes reach a first use instead of 1 694 and the
+20 MB between the last two columns is §13.53's contribution to the same command.
 
 **Content is unchanged.** Expanding every `sdK` back into its uses and dropping the `def` block
 gives 980 180 332 B of non-comment text on both sides, `cmp` clean against the default artifact.
