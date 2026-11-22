@@ -78,6 +78,9 @@ fn fake_front_end(dir: &Path, buffer: &[u8]) -> PathBuf {
 
 fn project_with_provider(dir: &Path, so: &Path) -> PathBuf {
     let path = dir.join("project.json");
+    // D09: a load authorization names the exact library bytes it approves, so the
+    // fixture pins the digest of the artifact it just built.
+    let library_sha256 = umbrella::trust::sha256_file(so).expect("hash the fixture library");
     std::fs::write(
         &path,
         serde_json::json!({
@@ -86,7 +89,13 @@ fn project_with_provider(dir: &Path, so: &Path) -> PathBuf {
             "module": {"name": "entry", "sources": ["unused.aum"]},
             "build": {"allowed": false},
             "load": {"allowed": true, "providers": [so]},
-            "grants": [{"symbol": "rs_probe"}]
+            "grants": [{"symbol": "rs_probe"}],
+            "trusted": {
+                "lock_sha256": "0".repeat(64),
+                "features": [],
+                "library_sha256": library_sha256,
+                "exports": ["stageprobe_version"]
+            }
         })
         .to_string(),
     )
