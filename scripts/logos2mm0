@@ -97,7 +97,23 @@ else
         gap "cargo absent (Rust toolchain not installed) — skipping"
         exit 0
     fi
-    if ! (cd "$unfer" && cargo build -q -p logos 2>&1); then
+    build_log="$(cd "$unfer" && cargo build -q -p logos 2>&1)"
+    build_rc=$?
+    if [ "$build_rc" -ne 0 ]; then
+        # A toolchain that cannot *link* is a property of this shell, not of the
+        # crate: the `lean` shell on 2026-11-21 carries the host's rustup shim,
+        # whose cc names a garbage-collected store path. That is "cannot check
+        # here" (exit 2, the convention `scripts/toy-witness` and
+        # `scripts/mm0-comparator` share) and says nothing about the fragment,
+        # so the gate reports a gap; a compile error stays a failure.
+        if printf '%s\n' "$build_log" \
+                | grep -qE 'collect2:|ld returned|error: linker|linker .* not found|crt1\.o|ld-wrapper\.sh: No such file'; then
+            gap "cargo cannot link in this shell — no working C toolchain for it, so the emitter cannot be built here:"
+            printf '%s\n' "$build_log" | grep -E 'ld returned|ld-wrapper|cannot find|collect2' | head -3 | sed 's/^/      /'
+            echo "logos2mm0: $PASSED passed, $FAILED failed, $GAPS gapped"
+            exit 2
+        fi
+        printf '%s\n' "$build_log"
         bad "cargo build -p logos (the emitter does not build)"
         exit 1
     fi

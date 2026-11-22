@@ -106,21 +106,28 @@ if ! grep -qF "$line" "$work/gate.log"; then
     fail "no '$line' in the run"
     exit 1
 fi
-detail="$ART(says '$new12…', staging '$old12…')"
-if ! grep -F '[detail] §W9.3 closure:' "$work/gate.log" | grep -qF "$detail"; then
+# As in the counts control, the source word follows the row's state.
+detail="$ART(says '$new12…', ... '$old12…')"
+if ! grep -F '[detail] §W9.3 closure:' "$work/gate.log" \
+        | grep -qE "$ART\\(says '$new12…', (staging|approved) '$old12…'\\)"; then
     grep -F '[detail] §W9.3 closure:' "$work/gate.log" | sed 's/^/  /' >&2
     fail "the detail does not name $ART with both digest prefixes"
     exit 1
 fi
-say "detail:    $detail"
+say "detail:    $(grep -F '[detail] §W9.3 closure:' "$work/gate.log" \
+    | grep -E "$ART\(says '$new12…', (staging|approved) '$old12…'\)" | head -1 | sed 's/^ *//')"
 
 # ── 4. everything else still passes ────────────────────────────────────────
+# Matched without the counts parenthetical the gate appends (`(4 row(s), N from
+# mm0/approved/)`): N follows the tree's approvals, and a control that retyped
+# it would go red the day an artifact is approved while the check it names is
+# still green.
 missing=""
 while IFS= read -r want; do
     grep -qF "$want" "$work/gate.log" || missing="$missing
   $want"
 done <<'WANT'
-[pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
+[pass] W9.3: the composition table's counts match the files it records
 [pass] W9.3: an approved copy that drops an axiom fails the composition counts
 [pass] W3: the plan's §W3 stmts column matches what each artifact holds
 [pass] W3: every §W3 emitter cell names a real command

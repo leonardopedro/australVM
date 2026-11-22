@@ -15,8 +15,11 @@ pub mod reference;
 pub mod run;
 pub mod schema;
 #[cfg(feature = "service")]
+pub mod coordinator;
+#[cfg(feature = "service")]
 pub mod service;
 pub mod validate;
+pub mod wgsl_reflect;
 pub mod wrapper;
 
 #[cfg(test)]

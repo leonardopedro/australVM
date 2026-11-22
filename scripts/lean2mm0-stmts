@@ -244,7 +244,14 @@ class Encoder:
 def generate(ndjson: Path, stem: str, only: set[str] | None = None) -> tuple[str, str]:
     if not CIC.exists():
         raise EncodeError(f"theory missing: {CIC}")
-    ex = Export(ndjson)
+    # `lazy=True` keeps the export's expression records on disk and indexes them
+    # by offset: an emit walks only the subgraph under the selected decls' types,
+    # so parsing every record of a Mathlib-sized export buys nothing and costs
+    # the whole file's dicts at once. Measured on the 783 MB RV64 memory export
+    # (2 roots, 54 053-decl closure): 8.99 GiB peak eager against a host with
+    # 10 GiB, which is what made the gate swap, against 0.46 GiB lazy with
+    # byte-identical output (113 s → 37 s, since the parse was the work).
+    ex = Export(ndjson, lazy=True)
     if not ex.decls:
         raise EncodeError(f"{ndjson} declares nothing")
     # An export contains the ROOTS' transitive dependency closure, not just the

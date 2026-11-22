@@ -273,7 +273,7 @@ let make_pragma name args =
           (match liquid_kind with
            | "Requires" | "Ensures" | "Invariant" | "Trusted" ->
               liquid_with_contract ()
-           | "Measure" | "Fold" ->
+           | "Measure" | "Fold" | "Descent" ->
               liquid_marker ()
            | _ ->
               Errors.unknown_pragma s)

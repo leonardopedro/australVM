@@ -1,0 +1,213 @@
+-- mm0-comparator v1 — approved statements for isa
+--
+-- Written by `scripts/mm0-comparator approve` and copied into a commit
+-- that touches only mm0/approved/: the diff is the human decision.
+-- `scripts/mm0-comparator check` refuses any statement, closure or
+-- theory mismatch against this file.
+-- artifact: isa
+-- closure-sha256: 27de0884e3408cd45800b07dd118f0fb2cd977ed15e868843c626dbeb32d0aed
+-- theory-sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+-- statements-sha256: 2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a
+
+provable sort Prop;
+sort l0;
+sort l1;
+sort l2;
+sort l3;
+delimiter $ ( ) $;
+term l4: l0;
+prefix l4: $0$ prec max;
+term l5: l0;
+prefix l5: $1$ prec max;
+term l6 (x y: l1): l1;
+term l7 (x y: l1): l1;
+term l8 (x: l1): l1;
+term l9 (x y: l1): Prop;
+axiom l10 (x: l1): $ l9 x x $;
+axiom l11 (x y: l1): $ l9 x y $ > $ l9 y x $;
+axiom l12 (x y z: l1): $ l9 x y $ > $ l9 y z $ > $ l9 x z $;
+axiom l13 (x y: l1): $ l9 (l6 x y) (l6 y x) $;
+axiom l14 (x y z: l1): $ l9 (l6 (l6 x y) z) (l6 x (l6 y z)) $;
+axiom l15 (x y z: l1): $ l9 (l7 (l7 x y) z) (l7 x (l7 y z)) $;
+axiom l16 (x y z: l1): $ l9 (l7 x (l6 y z)) (l6 (l7 x y) (l7 x z)) $;
+term l17 (s: l2) (i: l0): l1;
+term l18 (s: l2) (i: l0) (v: l1): l2;
+term l19 (i j: l0): Prop;
+axiom l20 (s: l2) (i: l0) (v: l1): $ l9 (l17 (l18 s i v) i) v $;
+axiom l21 (s: l2) (i j: l0) (v: l1):
+  $ l19 i j $ > $ l9 (l17 (l18 s i v) j) (l17 s j) $;
+term l22 (s: l2): Prop;
+term l23 (s: l2): Prop;
+sort l24;
+term l25 (i: l0) (t: l24): l24;
+term l26 (i: l0) (l: l24): Prop;
+term l27 (s: l2): l24;
+def l28 (s: l2) (i: l0): Prop = $ l26 i (l27 s) $;
+term l29 (s: l2) (dst a b: l0): l2;
+axiom l30 (s: l2) (dst a b: l0):
+  $ l9 (l17 (l29 s dst a b) dst) (l6 (l17 s a) (l17 s b)) $;
+term l31 (s: l2) (dst a b: l0): l2;
+axiom l32 (s: l2) (dst a b: l0):
+  $ l9 (l17 (l31 s dst a b) dst) (l6 (l17 s a) (l8 (l17 s b))) $;
+term l33 (s: l2) (dst a b: l0): l2;
+axiom l34 (s: l2) (dst a b: l0):
+  $ l9 (l17 (l33 s dst a b) dst) (l7 (l17 s a) (l17 s b)) $;
+term l35 (s: l2) (dst a: l0): l2;
+axiom l36 (s: l2) (dst a: l0):
+  $ l9 (l17 (l35 s dst a) dst) (l17 s a) $;
+term l37 (s: l2) (dst a b: l0): l2;
+axiom l38 (s: l2) (dst a b: l0):
+  $ l9 (l17 (l37 s dst a b) dst) (l6 (l17 s a) (l17 s b)) $;
+term l39 (s: l2) (dst a b: l0): l2;
+axiom l40 (s: l2) (dst a b: l0):
+  $ l9 (l17 (l39 s dst a b) dst) (l7 (l17 s a) (l17 s b)) $;
+term l41 (s: l2) (dst a b: l0): l2;
+axiom l42 (s: l2) (dst a b: l0):
+  $ l9 (l17 (l41 s dst a b) dst) (l6 (l17 s a) (l8 (l17 s b))) $;
+term l43 (i: l3): l0;
+term l44 (b: l0): l3;
+term l45 (a b: l3): Prop;
+term l46 (a b: l0): Prop;
+axiom l47 (a b c: l3): $ l45 a b $ > $ l45 b c $ > $ l45 a c $;
+axiom l48 (a b: l0): $ l46 a b $ > $ l45 (l44 a) (l44 b) $;
+term l49: l0;
+prefix l49: $2$ prec max;
+term l50: l0;
+prefix l50: $3$ prec max;
+term l51: l0;
+prefix l51: $4$ prec max;
+term l52: l0;
+prefix l52: $5$ prec max;
+term l53: l0;
+prefix l53: $6$ prec max;
+term l54: l0;
+prefix l54: $7$ prec max;
+term l55: l0;
+prefix l55: $8$ prec max;
+term l56: l0;
+prefix l56: $9$ prec max;
+term l57: l0;
+prefix l57: $10$ prec max;
+term l58: l0;
+prefix l58: $16$ prec max;
+term l59: l0;
+prefix l59: $17$ prec max;
+term l60: l0;
+prefix l60: $18$ prec max;
+term l61: l0;
+prefix l61: $19$ prec max;
+term l62: l0;
+prefix l62: $20$ prec max;
+term l63: l0;
+prefix l63: $21$ prec max;
+term l64: l0;
+prefix l64: $22$ prec max;
+term l65: l0;
+prefix l65: $23$ prec max;
+term l66: l0;
+prefix l66: $24$ prec max;
+term l67: l0;
+prefix l67: $25$ prec max;
+term l68: l0;
+prefix l68: $32$ prec max;
+term l69: l0;
+prefix l69: $33$ prec max;
+term l70: l0;
+prefix l70: $48$ prec max;
+term l71: l3;
+term l72: l3;
+term l73: l3;
+term l74: l3;
+term l75: l3;
+term l76: l3;
+term l77: l3;
+term l78: l3;
+term l79: l3;
+term l80: l3;
+term l81: l3;
+term l82: l3;
+term l83: l3;
+term l84: l3;
+term l85: l3;
+term l86: l3;
+term l87: l3;
+term l88: l3;
+term l89: l3;
+term l90: l3;
+term l91: l3;
+term l92: l3;
+term l93: l3;
+axiom l94: $ l46 (l43 l71) l5 $;
+axiom l95: $ l45 (l44 l5) l71 $;
+theorem l96: $ l45 (l44 (l43 l71)) l71 $;
+axiom l97: $ l46 (l43 l72) l49 $;
+axiom l98: $ l45 (l44 l49) l72 $;
+theorem l99: $ l45 (l44 (l43 l72)) l72 $;
+axiom l100: $ l46 (l43 l73) l50 $;
+axiom l101: $ l45 (l44 l50) l73 $;
+theorem l102: $ l45 (l44 (l43 l73)) l73 $;
+axiom l103: $ l46 (l43 l74) l51 $;
+axiom l104: $ l45 (l44 l51) l74 $;
+theorem l105: $ l45 (l44 (l43 l74)) l74 $;
+axiom l106: $ l46 (l43 l75) l52 $;
+axiom l107: $ l45 (l44 l52) l75 $;
+theorem l108: $ l45 (l44 (l43 l75)) l75 $;
+axiom l109: $ l46 (l43 l76) l53 $;
+axiom l110: $ l45 (l44 l53) l76 $;
+theorem l111: $ l45 (l44 (l43 l76)) l76 $;
+axiom l112: $ l46 (l43 l77) l54 $;
+axiom l113: $ l45 (l44 l54) l77 $;
+theorem l114: $ l45 (l44 (l43 l77)) l77 $;
+axiom l115: $ l46 (l43 l78) l55 $;
+axiom l116: $ l45 (l44 l55) l78 $;
+theorem l117: $ l45 (l44 (l43 l78)) l78 $;
+axiom l118: $ l46 (l43 l79) l56 $;
+axiom l119: $ l45 (l44 l56) l79 $;
+theorem l120: $ l45 (l44 (l43 l79)) l79 $;
+axiom l121: $ l46 (l43 l80) l57 $;
+axiom l122: $ l45 (l44 l57) l80 $;
+theorem l123: $ l45 (l44 (l43 l80)) l80 $;
+axiom l124: $ l46 (l43 l81) l58 $;
+axiom l125: $ l45 (l44 l58) l81 $;
+theorem l126: $ l45 (l44 (l43 l81)) l81 $;
+axiom l127: $ l46 (l43 l82) l59 $;
+axiom l128: $ l45 (l44 l59) l82 $;
+theorem l129: $ l45 (l44 (l43 l82)) l82 $;
+axiom l130: $ l46 (l43 l83) l60 $;
+axiom l131: $ l45 (l44 l60) l83 $;
+theorem l132: $ l45 (l44 (l43 l83)) l83 $;
+axiom l133: $ l46 (l43 l84) l61 $;
+axiom l134: $ l45 (l44 l61) l84 $;
+theorem l135: $ l45 (l44 (l43 l84)) l84 $;
+axiom l136: $ l46 (l43 l85) l62 $;
+axiom l137: $ l45 (l44 l62) l85 $;
+theorem l138: $ l45 (l44 (l43 l85)) l85 $;
+axiom l139: $ l46 (l43 l86) l63 $;
+axiom l140: $ l45 (l44 l63) l86 $;
+theorem l141: $ l45 (l44 (l43 l86)) l86 $;
+axiom l142: $ l46 (l43 l87) l64 $;
+axiom l143: $ l45 (l44 l64) l87 $;
+theorem l144: $ l45 (l44 (l43 l87)) l87 $;
+axiom l145: $ l46 (l43 l88) l65 $;
+axiom l146: $ l45 (l44 l65) l88 $;
+theorem l147: $ l45 (l44 (l43 l88)) l88 $;
+axiom l148: $ l46 (l43 l89) l66 $;
+axiom l149: $ l45 (l44 l66) l89 $;
+theorem l150: $ l45 (l44 (l43 l89)) l89 $;
+axiom l151: $ l46 (l43 l90) l67 $;
+axiom l152: $ l45 (l44 l67) l90 $;
+theorem l153: $ l45 (l44 (l43 l90)) l90 $;
+axiom l154: $ l46 (l43 l91) l68 $;
+axiom l155: $ l45 (l44 l68) l91 $;
+theorem l156: $ l45 (l44 (l43 l91)) l91 $;
+axiom l157: $ l46 (l43 l92) l69 $;
+axiom l158: $ l45 (l44 l69) l92 $;
+theorem l159: $ l45 (l44 (l43 l92)) l92 $;
+axiom l160: $ l46 (l43 l93) l70 $;
+axiom l161: $ l45 (l44 l70) l93 $;
+theorem l162: $ l45 (l44 (l43 l93)) l93 $;
+theorem l163 (s: l2) (dst a b: l0) (h1: $ l22 s $) (h2: $ l28 s a $) (h3: $ l28 s b $): $ l9 (l17 (l29 s dst a b) dst) (l17 (l37 s dst a b) dst) $;
+theorem l164 (s: l2) (dst a b: l0) (h1: $ l22 s $) (h2: $ l28 s a $) (h3: $ l28 s b $): $ l9 (l17 (l33 s dst a b) dst) (l17 (l39 s dst a b) dst) $;
+theorem l165 (s: l2) (dst a b: l0) (h1: $ l22 s $) (h2: $ l28 s a $) (h3: $ l28 s b $): $ l9 (l17 (l31 s dst a b) dst) (l17 (l41 s dst a b) dst) $;
+axiom l166 (s: l2) (i: l0):
+  $ l23 s $ > $ l22 s $ > $ l28 s i $;

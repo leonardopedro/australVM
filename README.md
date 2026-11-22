@@ -1,16 +1,18 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/leonardopedro/australVM)
 
-<!-- status: verified | tests: 161 dune / 18 suites + 108 safestos/pkg + 129 bridge cargo (excl. umbrella demo) | last_verified: 2026-10-25 -->
+<!-- status: verified | tests: 284 dune / 30 suites + 141 safestos/pkg + 167 bridge cargo (excl. umbrella demo) | last_verified: 2026-11-20 -->
 
 ## Verification
 
 The `status:` line above is a claim with a command behind it, not decoration:
 the commands in the fenced block below are the ones that printed those counts,
-with the date they were measured. No script re-reads the line itself — the gates
+with the date they were measured. No script re-reads the line itself. The gates
 this repo actually runs are `scripts/verify-invariants` (symbol census, symbol
-sync, the `AuthorizationEngine` default and the archetype surface) and
-`scripts/check-todo-ledger`; the counts move only when a suite grows, and are
-bumped by hand together with the run that measured them.
+sync, the `AuthorizationEngine` default and the archetype surface), in CI, and
+`scripts/check-todo-ledger` (code markers reviewed in `docs/TODO_LEDGER.md`),
+which passes but is run by hand — no workflow or make target invokes it. The
+counts move only when a suite grows, and are bumped by hand together with the
+run that measured them.
 
 Everything below runs through the flake devshell — `nix develop -c` supplies
 dune/ocaml/`python3`, which a bare NixOS shell does not have:
@@ -21,11 +23,11 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"   # Cranelift bridge 
 export UNFER_LOGOS_BIN=/path/to/unfer/target/debug/logos    # deltanet UNF gate
 
 dune build @install --profile release
-dune runtest --force          # 161 tests, 18 suites, all OK
-cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 108 tests, all OK
-cargo test --manifest-path safestos/cranelift/Cargo.toml         # 129 tests, all OK
+dune runtest --force          # 284 tests, 30 suites, all OK
+cargo test --manifest-path safestos/pkg/Cargo.toml --workspace   # 141 passed, 6 ignored, 0 failed
+cargo test --manifest-path safestos/cranelift/Cargo.toml         # 167 passed, 1 ignored, 0 failed
 ./run-examples.sh
-python3 test-programs/runner.py   # "All tests passed" (311 programs)
+python3 test-programs/runner.py   # "All tests passed" (331 programs)
 '
 ```
 
@@ -92,6 +94,11 @@ reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_
 for CPU, GPU and NPU representations. It follows Hydro's typed-IR/semantic-transfer
 pattern while recording actual compiler, instruction and opaque-device proof gaps.
 
+The [Bend–AustralVM integration plan](PLAN_bend_austral_integration.md) uses
+SafestOS, the CPS/Cranelift CPU backend and the same MM0 proof chain from both
+languages. The [parallel execution plan](docs/SAFESTOS_PARALLEL_PLAN.md) adds
+bounded fork/join, continuation optimizations and shared accelerator jobs.
+
 ## 🚀 Current Status: Phase 11 (Policy-Driven OS VM)
 The project has successfully integrated a multi-tier security model combining compile-time linear type checks with JIT-time Cedar policy enforcement.
 
@@ -103,7 +110,8 @@ The project has successfully integrated a multi-tier security model combining co
 
 ### Since Phase 11
 Phase 11 is the last *phased* milestone; newer work ships per-plan, and the
-`status:` line at the top is the machine-checked claim (`scripts/check-status`):
+`status:` line at the top is the measured claim, with the counts and the date
+the run that printed them:
 - **Valen-inspired group borrows** — parser + typechecker (`PLAN_valen.md` P1, 2026-10-16).
 - **`extern rust` interop, tier 1** — kernel-boundary gate with an `rs_*` namespace and `modhost authorize` (`PLAN_valen.md` §4 P2, 2026-10-17).
 - **`umbrella/` prototype** — mixed Austral/Rust module bundles; a plain subfolder since 2026-10-18 (`PLAN_valen.md` P3).

@@ -119,6 +119,9 @@ byte-identical with a fresh emission, so a stale artifact is a red test.
   outside this fragment.
 - Only the direct clamp shape is reflected; helpers are not (PC04's plan allows
   one helper only after the direct case).
-- The IR→WGSL edge is PC05; this file stops at KernelIR.
+- The IR→WGSL edge is PC05; this file stops at KernelIR. The parsed-WGSL side
+  of that edge is now reflected in [PARSED_WGSL.md](PARSED_WGSL.md), which
+  binds `wgsl_clamp` to this page's `ir_clamp`; the wrapper's roles and guard
+  are checked separately there.
 - Handing the reflected IR to the PC06 composition (so the plan inherits this
-  bound) still needs the WGSL/plan reflection, which PC05 supplies.
+  bound) still needs the plan-side reflection, which PC05 supplies.

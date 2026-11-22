@@ -97,9 +97,11 @@ the totality pass shipped as a flat `lib/Totality.ml` — see §2 and §4.8.
 | Capability gating (`EPERM` w/o `NetworkCap`) | blocked at type + OS level | **live build path**: `build --policy` on a policy that does not permit `Execute` exits 1 with `EPERM: capability denied for action Execute` and no builder process exists (a marker-writing stand-in compiler never runs; nothing is recorded in the store); the permit control reaches the compiler, so the refusal is Cedar's. A permitted build's compiler runs in the granted namespaces, where an outbound connect finds no route (`sandboxed_child_cannot_reach_outside`). **Live load path**: `avm-pkg load --policy` asks `Execute`, then one `Call:<symbol>` per declared import, against the cell's own table — a cell that may run but may not call `au_alloc` exits 1 with `EPERM: capability denied for action "Call:au_alloc"` before relocation, and the permit control links the image and runs it through the runner | pass (both paths; the loader's executor is named by the caller, §4.14) |
 | Language totality | 100 % of unbounded constructs rejected at compile time | **pass for the shipped v1 rule set** (while / call cycles / foreign, embed, fptr): rejected at compile time under `--pkg-totality=true` — red probe `BadDrv.aum` (`rule 1`) leaves `rotten` absent from plan.json, control without the flag compiles and records `unproven` | pass |
 
-Suite: `cargo test --workspace` → **137 passed, 0 failed, 6 ignored**, exit 0
-(2026-11-18; per crate: avm-cas 31 + the `bootstrap_recipes` binary (1
-passed, 1 ignored), avm-cli 22, avm-eval 22, avm-exec 14, avm-virtio 19,
+Suite: `cargo test --workspace` → **141 passed, 0 failed, 6 ignored**, exit 0
+(2026-11-21 re-run on this checkout; the 2026-11-18 run recorded 137 with
+the same six ignored — avm-cli gained one test and avm-exec three. Per
+crate: avm-cas 31 + the `bootstrap_recipes` binary (1
+passed, 1 ignored), avm-cli 23, avm-eval 22, avm-exec 17, avm-virtio 19,
 avm-vmm 28; the six ignored are the heavy/timing acceptances: hot-store
 ×4, the 5,000-node warm-eval, and the real-payload Bootstrap round trip,
 each exercised separately in release mode per the commands below). The CLI suite covers
@@ -118,6 +120,26 @@ refusal, the runtime-table link (and its hard error when the table is
 empty), and that the executor sees the image with a scrubbed environment;
 the CLI's two cover the same through `cmd_load`, including the "no
 `--policy` is a usage error" rule.
+
+**Re-run 2026-11-21.** The two gates above were re-run on this checkout
+(`nix develop "git+file://$PWD#ocaml" -c cargo test --workspace`): 141
+passed, 0 failed, 6 ignored, exit 0, and `avm-pkg hot-bench --require` on
+the release build exited 0 with `acquire_mean_ns` **79.2** (100,000
+acquisitions, 0 evictions, `acquire_under_1us`) and `fault_in_median_ms`
+**14.90** (12.80–20.21 over five, `fault_in_under_15ms`) for the 50 MB
+fault-in. Both rows still hold, but the fault-in row sat at 97 % of its
+15 ms bound and is 2.3× the 6.5 ms median the 2026-10-17 row records, so
+that figure is the dated measurement it says it is, not a current one. The
+six `#[ignore]`d acceptances also ran together in release mode
+(`--ignored --test-threads=1`, `AVM_HOT_DIR=/dev/shm`, exit 0): the
+2 GiB-over-1 GiB and 10 GiB-eviction zero-writeback rows, the hot-store
+latency pair, the 5,000-node warm evaluation and the real-payload bootstrap
+round trip; they print their numbers only under `--nocapture`, so the rows
+above keep their dated figures. The
+suite has to be run inside the dev shell on this host: the rustup `cc` shim
+points at a garbage-collected store path
+(`…-rustup-1.29.3/nix-support/ld-wrapper.sh`), so a bare `cargo test` fails
+at link time with exit 127 and never reaches a test binary.
 
 The four heavy hot-store acceptances ran together in **4.93 s** (release,
 `--test-threads=1`, `$AVM_HOT_DIR=/dev/shm`): 2 GiB mapped over a 1 GiB
@@ -203,7 +225,7 @@ Reproduce every number:
 ```sh
 ./examples/nix-pkg/run.sh          # Nix→AustralVM pairs: verify, package, execute
 cd safestos/pkg
-cargo test --workspace                                            # 137 passed / 6 ignored
+cargo test --workspace                                            # 141 passed / 6 ignored
 AVM_HOT_DIR=/dev/shm CARGO_NET_OFFLINE=true \
   cargo test --workspace --release -- --ignored --test-threads=1  # all heavy/timing acceptances (hot-store ×4 + warm-eval + bootstrap payloads)
 cargo test -p avm-cas  --release minor_edit   -- --nocapture      # 98.8 % dedup
@@ -215,9 +237,53 @@ AVM_HOT_DIR=/dev/shm cargo test -p avm-cas --release \
   -- --ignored fault_in_50mb --nocapture                            # 6.5 ms
 AVM_HOT_DIR=/dev/shm ./target/release/avm-pkg hot-bench             # both rows as JSON
 # Nix comparison (§4.12); target/nixbench is a generated, git-ignored dir:
+python3 scripts/nixbench-fixtures --storage                             # regenerate (not on PATH in a bare shell)
 ./target/release/avm-pkg eval target/nixbench/plan1000.json n999    # 4.3 ms
 nix-instantiate --eval --strict target/nixbench/graph1000.nix       # 36.7 ms
 ```
+
+**Re-run on the merged tree (2026-11-22).** Every command above was run
+again on `ec115e21` (the merge of `b3c78130` with `origin/master`), with
+`austral` rebuilt from the merged `lib/` first (`make all` under `nix
+develop "git+file://$PWD#ocaml"`) and the release bridge still
+`check-bridge-fresh`-clean. Results, all measured rather than carried
+forward:
+
+* `cargo test --workspace` — **141 passed, 6 ignored, 0 failed**
+  (31 + 1 + 23 + 22 + 17 + 19 + 28), unchanged.
+* `hot-bench --require` — exit 0, `acquire_mean_ns` **30.98** (0 evictions,
+  `acquire_under_1us: true`), `fault_in_median_ms` **6.4867**
+  (`fault_in_under_15ms: true`), inside the 30–51 ns and 6.5 ms rows.
+* `--ignored --test-threads=1` — all six acceptances `ok` (the four
+  hot-store rows in 4.65 s; `real_bootstrap_payloads_resolve_and_round_trip`
+  `ok` against `target/pkg-sources` + `target/pkg-store`), exit 0.
+* OCaml side: `make test` exit 0 — 163 test cases across 18 suites, plus
+  the drift controls, each failing on exactly the mutated row it targets
+  (`[FAIL] Phase D: …` / `holds`), with the real tree at 171 passed, 4
+  gap, 0 failed.
+* `./examples/nix-pkg/run.sh` — exit 0: **14 pairs, 13 equivalent, 1
+  different (`precedence`, the declared mismatch), 0 errors**; all 14 packaged
+cells execute to their expected values (`arith` 20 … `neg` −2), and the
+negative control (`41 -> 42` reported different) exits 1.
+* Bootstrap `put`s into a **fresh** store (`/tmp/avm-fresh-store`) printed
+  `55b85fce…e4da11`, `40532f98…bfcad3`, `bf28e188…9876d`, `3321eda4…04f1` —
+  the four digests pinned in `Bootstrap.aum`, still byte-identical.
+* The §3 `build` command reproduces `drv_hash b073a1cc…cef98` (the
+table's `hello` plan hash). Its output cell is now **11,160 bytes**
+(`1 chunk`) against the 6,632 bytes recorded 2026-11-17: the CPS/JIT path
+changed since (memory opcodes lowered from source, the `uk_*` kernel
+symbols registered), so the size row is a dated measurement, not a
+constant. The new cell stores and hydrates through the hot store
+(`get -o` wrote 11,160 bytes).
+* Nix comparison (§4.12), median of 7, this host idle: `avm-pkg eval`
+  **5 ms**, `nix-instantiate --eval --strict` **35 ms**, plain
+  `nix-instantiate` **51 ms** — the recorded 4.3 / 36.7 / 48.3 ms hold
+  within run-to-run noise, and the ratio is ~7–10×.
+* Storage row: ten 1 MiB versions differing in one byte, `avm-pkg put`
+  grew the store **1,504,379 bytes total** (first copy + 9 × 49.5 KiB),
+  `nix-store --add` produced **10,486,880 nar bytes** (one full nar each) —
+  ~7×, the direction the 2026-11-18 row recorded (then 78.6 KiB per
+  rebuild).
 
 **Offline-cache caveat (2026-11-17).** `CARGO_NET_OFFLINE=true` now fails
 before compiling anything: `ar_archive_writer v0.5.3` (a transitive
@@ -430,8 +496,20 @@ property: what one 1 MiB output version costs to keep. Nix's answer is one
 full nar per version (10,485,760 bytes; its store does not deduplicate
 file contents at chunk granularity), avm-pkg's is the first copy plus
 78.6 KiB per rebuild (chunk reuse). The generated inputs live in
-`target/nixbench/` and are not committed; the commands in §3 regenerate
-them.
+`target/nixbench/` and are not committed; `scripts/nixbench-fixtures`
+emits them byte-reproducibly from one description (same arguments, same
+bytes), and §3's commands *consume* them. `plan1000.json` is a
+1,000-entry `derivations` list, `n_i` depending on `n_{i-1}` (synthetic
+32-byte source digest = the index, `builder_symbol` `stdenv.build`);
+`graph1000.nix` is a `let` chain of the same depth ending in `n999`, so
+`nix-instantiate` writes the whole 1,000-path `.drv` closure (checked
+with `nix path-info -r`, 1,000); `--storage` adds `storage/v0.bin` …
+`v9.bin`, ten 1 MiB SplitMix64 payloads that differ in one distinct byte
+per version (same-byte flips would return v2 to v0 and halve what the
+stores must deduplicate). The 2026-11-22 re-run rebuilt both ad hoc from
+this description; the generator was committed afterwards and reproduces
+the eval fixtures byte-for-byte (the only difference from those ad-hoc
+files is the trailing newline `plan1000.json` was missing).
 
 **4.13 The live capability gate: what `--policy` actually enforces.**
 `avm-exec`'s runner was written before anything called it: its Cedar check,
@@ -749,7 +827,7 @@ No separate workflow was added (the spec adds none), but the existing
 `examples/nix-pkg/run.sh` against a bridge build (verify → package →
 round-trip → execute; §4.16) and an `avm-pkg` job — added after cross-project
 review round 4 found the engine's unit tests green and run by nobody. It
-runs `cargo test --workspace` (137 passed / 6 ignored, 7 binaries) and,
+runs `cargo test --workspace` (141 passed / 6 ignored, 7 binaries) and,
 since 2026-11-18, the two §3 hot-store rows as a smoke:
 `avm-pkg hot-bench --require` on a release build, which exits non-zero when
 either row regresses and attaches the measured report. Everything else in

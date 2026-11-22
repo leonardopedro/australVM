@@ -88,6 +88,41 @@ avm_stale_note() {
         "${art#"$repo_root"/}" "$(date -d "@$art_epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $art_epoch")"
 }
 
+# ── whether the loaded `austral` is the build of this tree ───────────────────
+# The artifact note above answers "is the certificate older than the binary?".
+# The mirror-image question has no answer from mtimes in a checked-out tree —
+# a checkout rewrites every artifact's mtime, so a *stale binary* (built before
+# a serializer change, then left in place while the sources were re-checked out)
+# makes the certificate look newest and the note stay silent. Measured
+# 2026-11-21: `./austral` 09:02 against `lib/CpsGen.ml` 14:12 made W5 fail with
+# `recorded=c10ca9a9… bridge=fa4e9b29…` and no explanation; `make all` alone
+# restored `recorded == bridge`, because the binary had been built before
+# `d11050fe Restore the natural function order in the CPS serializer`.
+#
+# The signal that does exist is the compiler's own: a source file or a dune
+# build output newer than the binary means the binary does not describe the
+# tree. Like the artifact note this is a diagnosis of a failure already seen,
+# never a skip, and it is controls-tested below.
+#
+#   avm_binary_stale_note <binary> <candidate>…   -> note, or nothing
+avm_binary_stale_note() {
+    local bin="$1" cand bin_epoch cand_epoch newest=0 newest_name=""
+    shift
+    bin_epoch="$(stat -c %Y "$bin" 2>/dev/null || echo 0)"
+    for cand in "$@"; do
+        [ -e "$cand" ] || continue
+        cand_epoch="$(stat -c %Y "$cand" 2>/dev/null || echo 0)"
+        if [ "$cand_epoch" -gt "$newest" ]; then
+            newest="$cand_epoch"
+            newest_name="$cand"
+        fi
+    done
+    [ "$newest" -gt "$bin_epoch" ] || return 0
+    printf ' — %s is newer (%s) than %s (%s): the binary predates this tree, so its digests describe an older compiler build; run: make all' \
+        "${newest_name#"$repo_root"/}" "$(date -d "@$newest" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $newest")" \
+        "${bin#"$repo_root"/}" "$(date -d "@$bin_epoch" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "epoch $bin_epoch")"
+}
+
 # Read-only relocation hooks, for drift controls only. Each names a *file or
 # directory to read* — never something to write, and never something that grants
 # an approval — so a control can drift one claim in a scratch copy and watch the
@@ -128,6 +163,26 @@ if [ -f "$repo_root/../unfer/scripts/gen_symbol_artifacts" ]; then
         python3 "$repo_root/../unfer/scripts/gen_symbol_artifacts" check
 else
     gap "H2: sibling unfer repo not present at ../unfer — skipping generator check"
+fi
+
+# --- D00: the distributed execution record and contract inventory ---
+# `scripts/check-distributed-contracts` validates docs/distributed/EXECUTION.md's
+# baseline block and docs/distributed/contracts.tsv: the exact headers, unique
+# ids, a known class/repo/status, and every referenced path and evidence file
+# (repo `U` paths resolve against ../unfer). `--selftest` mutates each rule and
+# requires the refusal, so the checker cannot pass by being unable to fail.
+# Structure only, by construction: a valid row says the record is well-formed,
+# never that a guarantee holds. The `U` rows need the sibling checkout, so its
+# absence is an explained gap here (as H2 above), not a failure of the record.
+if [ ! -f "$repo_root/scripts/check-distributed-contracts" ]; then
+    check "D00: distributed contract checker present" false
+elif [ ! -d "$repo_root/../unfer" ]; then
+    gap "D00: distributed contract inventory (sibling unfer repo not present at ../unfer, so its rows cannot be resolved)"
+else
+    check_py "D00: distributed execution record and contract inventory are well-formed" \
+        python3 "$repo_root/scripts/check-distributed-contracts"
+    check_py "D00: the distributed contract checker refuses every mutated record" \
+        python3 "$repo_root/scripts/check-distributed-contracts" --selftest
 fi
 
 # --- Phase D: the Lean4 -> DeltaNets -> MM0 certificate (docs/lean4mm0.md §5) ---
@@ -304,6 +359,21 @@ rm -rf "$_stale_probe"
 check "W5: the staleness note is silent when the artifact is newest, and names the newer binary" \
     test -n "$_stale_loud" -a -z "$_stale_quiet" -a "${_stale_loud#*binary}" != "$_stale_loud"
 
+# Same rule for the mirror question: a binary newest than every compiler source
+# says nothing; a binary older than one names that source. Without the quiet
+# half the note would be a constant, and a constant is not a diagnosis.
+_bin_probe="$(mktemp -d)"
+: > "$_bin_probe/austral"
+: > "$_bin_probe/CpsGen.ml"
+touch -d '2026-01-01 00:01:00' "$_bin_probe/CpsGen.ml"
+touch -d '2026-01-01 00:02:00' "$_bin_probe/austral"
+_bin_quiet="$(avm_binary_stale_note "$_bin_probe/austral" "$_bin_probe/CpsGen.ml")"
+touch -d '2026-01-01 00:03:00' "$_bin_probe/CpsGen.ml"
+_bin_loud="$(avm_binary_stale_note "$_bin_probe/austral" "$_bin_probe/CpsGen.ml")"
+rm -rf "$_bin_probe"
+check "W5: the binary note is silent when the binary is newest, and names the newer source" \
+    test -n "$_bin_loud" -a -z "$_bin_quiet" -a "${_bin_loud#*CpsGen.ml}" != "$_bin_loud"
+
 if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     _cert_tmp="$(mktemp -d)"
     _cert_code=""
@@ -370,6 +440,14 @@ if [ -f "$_flux_obl" ] && command -v python3 >/dev/null 2>&1; then
     # may describe an older compiler build", which is the mid-rebuild case.
     _stale_note="$(avm_stale_note "$repo_root/mm0/flux1d_certificate.mm0" \
         "$repo_root/austral" "$_bridge_so")"
+    # The other half of the same question, consulted only after a digest
+    # comparison has failed: the loaded binary may predate the tree itself (a
+    # serialiser change landed, the tree was re-checked out, `make all` was not
+    # re-run). `_build`'s executable is included because a `dune build` without
+    # the `cp` that `make all` does leaves exactly that gap.
+    _bin_note="$(avm_binary_stale_note "$repo_root/austral" \
+        "$repo_root"/lib/*.ml "$repo_root"/lib/*.mli "$repo_root"/bin/*.ml \
+        "$repo_root/_build/default/bin/austral.exe")"
     _cert_same() {
         case "$1" in
             _probe.c) cmp -s "$_cert_tmp/flux1d$1" "$repo_root/mm0/flux1d$1" ;;
@@ -435,6 +513,7 @@ PY
             else
                 echo "      recorded=$_fp_recorded bridge=$_fp_bridge mutated=$_fp_mut" >&2
                 [ -n "$_stale_note" ] && echo "      staleness:$_stale_note" >&2
+                [ -n "$_bin_note" ] && echo "      staleness:$_bin_note" >&2
                 check "W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes" false
             fi
             # The object half: recorded only when the bridge produced an object
@@ -455,6 +534,7 @@ PY
             else
                 echo "      recorded=$_obj_recorded bridge=$_obj" >&2
                 [ -n "$_stale_note" ] && echo "      staleness:$_stale_note" >&2
+                [ -n "$_bin_note" ] && echo "      staleness:$_bin_note" >&2
                 check "W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object ($_obj_arch)" false
             fi
         fi
@@ -638,6 +718,33 @@ PY
             gap "PC03: mm0/proof_chain/relation.mm0 not re-checked (no mm0 toolchain)"
             gap "PC06: mm0/proof_chain/gpu_plan.mm0 not re-checked (no mm0 toolchain)"
             gap "PC04: mm0/proof_chain/clamp_source.mm0 not re-checked (no mm0 toolchain)"
+        fi
+
+        # PC05a reflects the *parsed* WGSL the runtime validates. Only its MM0
+        # replay needs the toolchain, so the reflection, the byte-identity check
+        # and the three parsed-shader refusals run even here; exit 3 means
+        # "reflection checked, replay skipped" and is a gap, never a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc05=0
+            python3 "$repo_root/scripts/pc05-reflect" \
+                >"$_cert_tmp/pc05.log" 2>&1 || _pc05=$?
+            case $_pc05 in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/pc05.log" >&2
+                    check "PC05a: parsed-WGSL reflection of the clamp fixture" true
+                    ;;
+                3)
+                    grep -E '^  \[detail\]' "$_cert_tmp/pc05.log" >&2
+                    gap "PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)"
+                    check "PC05a: parsed-WGSL reflection of the clamp fixture" true
+                    ;;
+                *)
+                    cat "$_cert_tmp/pc05.log" >&2
+                    check "PC05a: parsed-WGSL reflection of the clamp fixture" false
+                    ;;
+            esac
+        else
+            gap "PC05a: parsed-WGSL reflection not checked (tooling absent: python3)"
         fi
 
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
@@ -858,6 +965,11 @@ PY
         # verdict is measured, not retyped. Exit 1 is the interesting case: it
         # means the shapes *agree* now, and the stronger correspondence must be
         # re-argued instead of silently kept.
+        # Exit 2 is "the evidence is unavailable": `mem-refines` reads the
+        # pinned sail-riscv-lean checkout, which a Nix GC can evict or a fresh
+        # clone may never have fetched. That is a missing input, not a verdict
+        # about the lowering, so it is reported as an explained gap — an
+        # evicted store path must not read as "the shapes now agree".
         if [[ -x "$repo_root/scripts/mem-refines" ]] \
             && command -v nix >/dev/null 2>&1; then
             "$repo_root/scripts/mem-refines" >"$_cert_tmp/mem.log" 2>&1
@@ -868,10 +980,8 @@ PY
                         | sed 's/^ *//')"
                     check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" true ;;
                 2)
-                    # Exit 2 is the script's "evidence missing" (no pinned model
-                    # source: nix cannot evaluate it here). A measurement that
-                    # did not happen is a gap, never a failure of the refutation.
-                    gap "W9.3: memory correspondence not measured ($(tail -1 "$_cert_tmp/mem.log" | sed 's/^ *//'))" ;;
+                    gap "W9.3: memory correspondence not measured ($(grep -m1 . "$_cert_tmp/mem.log" \
+                        | sed 's/^ *//'))" ;;
                 *)
                     tail -6 "$_cert_tmp/mem.log" >&2
                     check "W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE" false ;;
@@ -929,12 +1039,28 @@ PY
             if grep -qE '^(axiom|theorem) ' "$_proj"; then
                 echo "  [detail] store_projection.mm0 asserts what it has not proved" >&2
                 check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
-            elif grep -q '^term store_projects ' "$_proj" \
-                && grep -q '^term load_projects ' "$_proj" \
-                && grep -q '^-- certificate: \[gap\]' "$_proj"; then
+            elif ! grep -q '^term store_projects ' "$_proj" \
+                || ! grep -q '^term load_projects ' "$_proj"; then
+                echo "  [detail] missing a relation symbol" >&2
+                check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
+            # The certificate line follows the approval, exactly as `clif.mm0`'s
+            # does: `[gap]` while `mm0/approved/` holds no copy, and the copy's
+            # name once it does. An approval fixes the statement of record and
+            # never the claim, so "cites the approval" here may not replace the
+            # vocabulary — the two `term` lines above are what make the artifact
+            # a statement at all.
+            elif [ -e "$_appr_root/store_projection.stmts" ]; then
+                if grep -q '^-- certificate: \[gap\]' "$_proj" \
+                        || ! grep -q 'mm0/approved/store_projection.stmts' "$_proj"; then
+                    echo "  [detail] $_appr_root/store_projection.stmts exists — its certificate must name it, not a gap" >&2
+                    check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
+                else
+                    check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" true
+                fi
+            elif grep -q '^-- certificate: \[gap\]' "$_proj"; then
                 check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" true
             else
-                echo "  [detail] missing the relation symbol or the [gap] line" >&2
+                echo "  [detail] no store_projection approval, yet the certificate does not say [gap]" >&2
                 check "W9.3: the memory projection is stated as vocabulary, accepted by mm0-c" false
             fi
         else
@@ -1184,12 +1310,17 @@ MUTATIONS
                 || tail -5 "$_cert_tmp/witness.log" >&2
             check "W9.3: the toy's axioms hold in a concrete model (no counterexample)" false
         else
-            gap "W9.3: toy axioms not run against a concrete model (rustc not on PATH)"
+            gap "W9.3: toy axioms not run against a concrete model (the witness could not be built here)"
         fi
         # A new axiom must be *checked*, not just declared: the names the witness
         # proves are compared with the names the artifact carries, so adding an
         # axiom to the `.mm0` without teaching the model about it is red.
-        if [ -s "$_cert_tmp/witness.log" ]; then
+        # `_wit_rc -eq 0`, not a non-empty log: a witness that could not be built
+        # leaves a linker error there, and comparing against it would read as
+        # "the witness holds no axioms" — a content failure where none was
+        # measured (the `lean` shell, 2026-11-21).
+        _ax_file=""
+        if [ "$_wit_rc" -eq 0 ] && [ -s "$_cert_tmp/witness.log" ]; then
             _ax_file="$(sed -n 's/^axiom \([a-z0-9_]*\).*/\1/p' "$_toy" | sort)"
             _ax_wit="$(sed -n 's/^\[hold\]  *\([a-z0-9_]*\).*/\1/p' \
                 "$_cert_tmp/witness.log" | sort)"
@@ -1201,6 +1332,8 @@ MUTATIONS
                      "witness=[$(echo "$_ax_wit" | tr '\n' ' ')]" >&2
                 check "W9.3: the witness exercises every axiom the toy declares" false
             fi
+        else
+            gap "W9.3: the witness's axiom list not compared (the witness could not be built here)"
         fi
 
         # The enumeration's own regression: the same verdicts at a larger domain.
@@ -1216,9 +1349,9 @@ MUTATIONS
             "$repo_root/scripts/toy-witness" --domain 5 >"$_cert_tmp/witness-d5.log" 2>&1 \
                 || _w5_rc=$?
         fi
-        if [ "$_w5_rc" -eq 2 ]; then
-            gap "W9.3: the domain-5 regression not run (rustc not on PATH)"
-        elif [ "$_w5_rc" -eq 0 ] && [ -s "$_cert_tmp/witness.log" ] \
+        if [ "$_w5_rc" -eq 2 ] || [ "$_w5_rc" -lt 0 ]; then
+            gap "W9.3: the domain-5 regression not run (the witness could not be built here)"
+        elif [ "$_w5_rc" -eq 0 ] && [ "$_wit_rc" -eq 0 ] \
                 && grep -q '20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must' \
                     "$_cert_tmp/witness-d5.log" \
                 && [ "$(sed -n 's/^\[\(hold\|reject\|model\)\]  *\([a-z0-9_]*\).*/\1 \2/p' \
@@ -1249,7 +1382,9 @@ MUTATIONS
                 >"$_cert_tmp/leanwit.log" 2>&1 || _lean_rc=$?
             _lean_ax="$(sed -n 's/^lean-witness-axioms: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
             _lean_br="$(sed -n 's/^lean-witness-broken: //p' "$_cert_tmp/leanwit.log" | tr ',' '\n' | sort)"
-            if [ "$_lean_rc" -eq 0 ] && [ -n "$_lean_ax" ] && [ "$_lean_ax" = "$_ax_file" ]; then
+            if [ -z "$_ax_file" ]; then
+                gap "W9.3: the Lean axiom list not compared (the witness could not be built here)"
+            elif [ "$_lean_rc" -eq 0 ] && [ -n "$_lean_ax" ] && [ "$_lean_ax" = "$_ax_file" ]; then
                 echo "  [detail] $(grep -m1 '^lean-witness: ' "$_cert_tmp/leanwit.log")"
                 check "W9.3: a Lean development proves the same $(printf '%s\n' "$_lean_ax" | grep -c .) axioms" true
             else
@@ -1397,8 +1532,8 @@ PYSTRIP
                     check "W9.3: the no-sorry scan does not count banned words inside comments" false
                 fi
             fi
-            if [ ! -s "$_cert_tmp/witness.log" ]; then
-                gap "W9.3: rejected-candidate cross-check not run (rustc absent)"
+            if [ "$_wit_rc" -ne 0 ] || [ ! -s "$_cert_tmp/witness.log" ]; then
+                gap "W9.3: rejected-candidate cross-check not run (the witness could not be built here)"
             else
                 _rust_br="$(sed -n 's/^\[reject\]  *\([a-z0-9_]*\).*/\1/p' "$_cert_tmp/witness.log" | sort)"
                 if [ -n "$_lean_br" ] && [ "$_lean_br" = "$_rust_br" ]; then
@@ -1586,6 +1721,57 @@ w3_measure() {
 _plan_file="${AUSTRALVM_PLAN:-$repo_root/PLAN_sota_kernel_verification.md}"
 
 if [ -f "$repo_root/scripts/mm0-comparator" ]; then
+    # The emitter cell is checked *before* the state cell is read. `liquid_split`
+    # (2026-11-21) is why: it reached this gate as a row naming
+    # `scripts/liquid-split-mm0 check` while that script existed in no commit, and
+    # the failure that named the absent file arrived only after the checks that
+    # read the row's `state` — so the first line a reader met was "its artifact
+    # does not re-derive here", which reads like a broken generator rather than
+    # "the command it names is not in the tree". The table is the owner's next
+    # decision, so the command that would make it is what the row must be able
+    # to name. The full comparison against `EMITTERS` is below and unchanged;
+    # this is the existence half, and it runs first.
+    _w3_early="$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`mm0\/[A-Za-z0-9_]+\.mm0`[ \t]*\|/ {
+            path = $2; cell = $5
+            gsub(/^[ \t]+|[ \t]+$/, "", path)
+            gsub(/^[ \t]+|[ \t]+$/, "", cell)
+            sub(/^`mm0\//, "", path); sub(/\.mm0`$/, "", path)
+            print path "\t" cell
+        }' "$_plan_file")"
+    _w3_early_bad=""
+    _w3_early_n=0
+    while IFS="$(printf '\t')" read -r _s_stem _s_cell; do
+        [ -n "$_s_stem" ] || continue
+        _w3_early_n=$((_w3_early_n + 1))
+        case "$_s_cell" in
+            none*) ;;
+            '`'*'`'*)
+                _s_cmd="$(printf '%s' "$_s_cell" | sed -n 's/^`\([^`]*\)`.*/\1/p')"
+                _s_script="${_s_cmd%% *}"
+                if [ -z "$_s_script" ]; then
+                    _w3_early_bad="$_w3_early_bad $_s_stem(emitter cell has an empty command)"
+                elif [ ! -f "$repo_root/$_s_script" ]; then
+                    _w3_early_bad="$_w3_early_bad $_s_stem(names '$_s_script', which does not exist)"
+                elif [ ! -x "$repo_root/$_s_script" ]; then
+                    _w3_early_bad="$_w3_early_bad $_s_stem(names '$_s_script', which is not executable)"
+                fi
+                ;;
+            *)
+                _w3_early_bad="$_w3_early_bad $_s_stem(emitter cell names no command and does not say none)"
+                ;;
+        esac
+    done <<EOF
+$_w3_early
+EOF
+    if [ "$_w3_early_n" -eq 0 ]; then
+        check "W3: §W3 emitter cells not checked before their state (no row carries one)" false
+    elif [ -z "$_w3_early_bad" ]; then
+        check "W3: every §W3 row's emitter script exists before its state cell is read ($_w3_early_n row(s))" true
+    else
+        echo "  [detail] §W3 emitter scripts:${_w3_early_bad}" >&2
+        check "W3: every §W3 row's emitter script exists before its state cell is read" false
+    fi
     _w3_line=""
     _w3_pairs=""
     _w3_ok=""
@@ -1753,7 +1939,7 @@ EOF
     if [ "$_w3_rows" -gt 0 ] && [ -z "$_w3_bad" ]; then
         check "W3: the plan's §W3 stmts column matches what each artifact holds ($_w3_rows row(s), $_w3_appr_rows approved)" true
     elif [ "$_w3_rows" -eq 0 ]; then
-        gap "W3: the plan's §W3 stmts column not compared (no table row carries a count)"
+        check "W3: the plan's §W3 stmts column not compared (no table row carries a count)" false
     else
         echo "  [detail] §W3 table vs measured:${_w3_bad}" >&2
         check "W3: the plan's §W3 stmts column matches what each artifact holds" false
@@ -1811,12 +1997,22 @@ EOF
     # to flip the cell. The scratch copy is a staging; `mm0/approved/` is never
     # read into it or written.
     _w3r_ctl="$_cert_tmp/w3-row-control"
-    _w3r_stem="slot_layout"
+    # A row the table still marks pending: the third probe below puts a staged
+    # copy behind it and requires the table to be told to flip its cell, which
+    # only means anything while the row is not approved. Derived, so approving
+    # an artifact moves the probe to the next pending row instead of breaking it.
+    # Once *every* row is approved there is no pending one left, and that used to
+    # turn this control into a `[gap]` — its coverage disappearing exactly when
+    # the approvals all landed. An approved row is a valid subject: the stale-state
+    # half already models the owner's mistake against one, so fall back to it and
+    # the probes keep running instead of needing a pending row to exist.
+    _w3r_stem="$(printf '%s\n' $_w3_tab_pending | head -1)"
+    [ -n "$_w3r_stem" ] || _w3r_stem="$(printf '%s\n' $_w3_tab_appr | head -1)"
     _w3r_row="$(printf '%s\n' "$_w3_plan" | grep -x "$_w3r_stem=[0-9]*" | head -1)"
     if ! command -v python3 >/dev/null 2>&1; then
         gap "W3: the §W3 row check's approved-row control not run (no python3 here)"
     elif [ -z "$_w3r_row" ]; then
-        gap "W3: the §W3 row check's approved-row control not run (no $_w3r_stem row carries a count)"
+        check "W3: the §W3 row check's approved-row control not run (no §W3 row carries a count)" false
     else
         rm -rf "$_w3r_ctl"; mkdir -p "$_w3r_ctl"
         _w3r_staged="$_cert_tmp/approvals/$_w3r_stem.stmts"
@@ -1837,9 +2033,19 @@ EOF
             _w3r_ok="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
             rm -f "$_w3r_ctl/$_w3r_stem.stmts"
             _w3r_missing="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
-            _w3_tab_appr="$_w3r_saved_appr"
+            # The stale-state half is the edit an owner makes by mistake: the
+            # copy is committed, the cell still says pending. Approving every
+            # §W3 artifact makes the real cell say approved, so the probe *is*
+            # that mistake — the stem is taken out of the approved set for this
+            # one call instead of being assumed absent from it.
+            _w3r_stale_appr=""
+            for _w3r_tok in $_w3r_saved_appr; do
+                [ "$_w3r_tok" = "$_w3r_stem" ] || _w3r_stale_appr="$_w3r_stale_appr $_w3r_tok"
+            done
+            _w3_tab_appr="$_w3r_stale_appr"
             cp "$_w3r_staged" "$_w3r_ctl/$_w3r_stem.stmts"
             _w3r_stale="$(_w3_row_bad "$_w3r_stem" "${_w3r_row##*=}")"
+            _w3_tab_appr="$_w3r_saved_appr"
             _appr_root="$_w3r_saved_root"
             if [ -z "$_w3r_ok" ]; then
                 check "W3: an approved §W3 row passes when the approved copy holds what it says" true
@@ -1911,7 +2117,7 @@ EOF
     if ! command -v python3 >/dev/null 2>&1; then
         gap "W3: the §W3 statements-sha256 column not compared (no python3 here)"
     elif [ "$_w3_dig_n" -eq 0 ]; then
-        gap "W3: the §W3 statements-sha256 column not compared (no table row quotes one)"
+        check "W3: the §W3 statements-sha256 column not compared (no table row quotes one)" false
     elif [ -z "$_w3_dig_bad" ]; then
         check "W3: the plan's §W3 digest column matches the file it describes ($_w3_dig_n row(s), $_w3_dig_appr_n approved)" true
     else
@@ -2262,12 +2468,42 @@ EOF
     if [ -z "$_w3_reg" ]; then
         gap "W3: the plan's §W3 emitter column not compared (the comparator printed no registry)"
     elif [ "$_w3_emit_rows_n" -eq 0 ]; then
-        gap "W3: the plan's §W3 emitter column not compared (no table row carries one)"
+        check "W3: the plan's §W3 emitter column not compared (no table row carries one)" false
     elif [ -z "$_w3_emit_bad" ]; then
         check "W3: every §W3 emitter cell names a real command ($_w3_emit_rows_n row(s))" true
     else
         echo "  [detail] §W3 emitter column:${_w3_emit_bad}" >&2
         check "W3: every §W3 emitter cell names a real command" false
+    fi
+    # A row's every other column is a comparison *with* the artifact it names, so
+    # a row for a path the tree does not hold used to surface as a complaint about
+    # a count or a digest — true, but not the finding. This asks the table's own
+    # question: does the file a row points at exist? It reads every table in the
+    # plan, not only §W3's, and skips glob-shaped cells (`mm0/approved/*.stmts` is
+    # a pattern, not a path) so the answer stays about concrete files.
+    _tbl_rows=0
+    _tbl_missing=""
+    while IFS= read -r _tbl_path; do
+        [ -n "$_tbl_path" ] || continue
+        _tbl_rows=$((_tbl_rows + 1))
+        [ -e "$repo_root/$_tbl_path" ] \
+            || _tbl_missing="$_tbl_missing $_tbl_path(absent)"
+    done <<EOF
+$(awk -F'|' '
+        /^[ \t]*\|[ \t]*`[A-Za-z0-9_./-]+`[ \t]*\|/ {
+            p = $2
+            gsub(/^[ \t]+|[ \t]+$/, "", p)
+            gsub(/`/, "", p)
+            if (p ~ /^(mm0|docs|scripts|lib|examples|test|bin|safestos|standard|editor|umbrella|corpus|refi)\/[A-Za-z0-9_.\/-]+\.(mm0|mm1|md|rs|ml|mli|sh|py|aui|aum|toml|json|tbl|tsv|log)$/) print p
+        }' "$_plan_file" | sort -u)
+EOF
+    if [ "$_tbl_rows" -eq 0 ]; then
+        gap "Plan: the plan's table rows name files the tree holds (no path-shaped row found)"
+    elif [ -z "$_tbl_missing" ]; then
+        check "Plan: every file a plan table row names exists on disk ($_tbl_rows row(s))" true
+    else
+        echo "  [detail] table rows naming absent files:${_tbl_missing}" >&2
+        check "Plan: every file a plan table row names exists on disk" false
     fi
     # … and for an *approved* row the emitter cell is not merely a description. The
     # `stmts` and digest columns read the copy an owner committed, so on their own
@@ -2454,6 +2690,47 @@ EOF
         echo "  [detail] §W3 probe evidence:${_w3_probe_bad}" >&2
         check "W3: the recorded probe evidence still names live gate lines" false
     fi
+    # A control is an experiment, and its result is only re-readable if the run
+    # that produced it was kept. `docs/data/gate/README.md` is where those runs
+    # are kept — one row per transcript, its `command` column naming the control.
+    # So every drift control the plan names must have such a row. The suite's
+    # cases are separate experiments (one drifts the Liquid golden, another the
+    # certificate's citation digest), so a case the plan names by name needs a
+    # row of its own; `all` and flags (`--list`, `-j`) are not cases. The row only
+    # has to *name* the control: whether the file it links still resolves is
+    # `scripts/check-links`'s question, because asking it here would stop a
+    # control from recording the transcript this check demands. Executability is
+    # checked: a plan naming a control that is gone, or is not runnable, is
+    # evidence pointing at nothing.
+    _w3_ctl_table="$repo_root/docs/data/gate/README.md"
+    _w3_ctl_bad=""
+    _w3_ctl_n=0
+    _w3_ctl_inv="$( {
+        grep -oE 'scripts/[A-Za-z0-9_.-]*drift-control[A-Za-z0-9_.-]*' "$_plan_file"
+        grep -oE 'scripts/w3-drift-controls [a-z][a-z0-9-]*' "$_plan_file" \
+            | grep -v ' all$'
+    } | sort -u)"
+    while IFS= read -r _c_inv; do
+        case "$_c_inv" in '') continue ;; esac
+        _w3_ctl_n=$((_w3_ctl_n + 1))
+        _c_path="${_c_inv%% *}"
+        if [ ! -f "$repo_root/$_c_path" ] || [ ! -x "$repo_root/$_c_path" ]; then
+            _w3_ctl_bad="$_w3_ctl_bad $_c_inv(no such executable control)"
+        fi
+        if [ ! -f "$_w3_ctl_table" ] || ! grep -qF "$_c_inv" "$_w3_ctl_table"; then
+            _w3_ctl_bad="$_w3_ctl_bad $_c_inv(no recorded transcript row)"
+        fi
+    done <<EOF
+$_w3_ctl_inv
+EOF
+    if [ ! -f "$_w3_ctl_table" ]; then
+        gap "W3: the plan's drift controls not checked against the transcripts (docs/data/gate/README.md is absent)"
+    elif [ -z "$_w3_ctl_bad" ]; then
+        check "W3: every drift control the plan names has a recorded transcript ($_w3_ctl_n invocation(s))" true
+    else
+        echo "  [detail] §W3 drift controls:${_w3_ctl_bad}" >&2
+        check "W3: every drift control the plan names has a recorded transcript" false
+    fi
     # … and the state column has to say *why* the artifact is still unapproved,
     # not merely that it is. A bare `[gap]` is a status: it tells a reader the
     # gate is red without saying whether anyone is working on it, whether
@@ -2502,7 +2779,7 @@ EOF
 $_w3_state_rows
 EOF
     if [ "$_w3_state_rows_n" -eq 0 ]; then
-        gap "W3: the plan's §W3 state column not compared (no table row carries one)"
+        check "W3: the plan's §W3 state column not compared (no table row carries one)" false
     elif [ -z "$_w3_state_bad" ]; then
         check "W3: every §W3 state cell says whether the row is approved or still waiting on the owner ($_w3_state_rows_n row(s))" true
     else
@@ -2561,7 +2838,7 @@ EOF
         if [ "$_sa_rows_n" -gt 0 ] && [ -z "$_sa_names_bad" ]; then
             check "W3: stage-approvals' artifact list is the §W3 table's rows ($_sa_rows_n name(s))" true
         elif [ "$_sa_rows_n" -eq 0 ]; then
-            gap "W3: stage-approvals' artifact list not compared (no §W3 row carries a state)"
+            check "W3: stage-approvals' artifact list not compared (no §W3 row carries a state)" false
         else
             echo "  [detail] artifact lists:${_sa_names_bad}" >&2
             check "W3: stage-approvals' artifact list is the §W3 table's rows" false
@@ -2601,6 +2878,18 @@ EOF
         # the one as approved. That is the mechanism that lets an approval be a
         # single row edit instead of a row edit plus an array edit.
         _sa_first="${_sa_pending%% *}"
+        # The three controls below need one staging to copy into a scratch
+        # approved root. Their subject is the *script*, not the owner's pending
+        # list, so a fully approved §W3 table must not turn them into gaps: with
+        # nothing pending, one artifact is staged against an empty approved root
+        # (a first approval, by construction) and that copy drives the controls.
+        if [ -z "$_sa_first" ] && [ -n "$_sa_names" ]; then
+            _sa_first="${_sa_names%% *}"
+            mkdir -p "$_sa/empty"
+            bash "$repo_root/scripts/stage-approvals" "$_sa_first" --stat-only \
+                --root "$_sa/all" --approved-root "$_sa/empty" \
+                >"$_sa/first.log" 2>&1 || _sa_first=""
+        fi
         mkdir -p "$_sa/appr1"
         if [ -n "$_sa_first" ] && cp "$_sa/all/$_sa_first.stmts" "$_sa/appr1/" 2>/dev/null; then
             _sa_one=0
@@ -2682,8 +2971,28 @@ fi
 # end-to-end chain *and* its anchor — a tampered certificate must be rejected,
 # or "verified" means nothing.
 if [ -f "$repo_root/scripts/logos2mm0" ] && [ -f "$repo_root/../unfer/logos/mm0/claims.txt" ]; then
-    check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" \
-        bash "$repo_root/scripts/logos2mm0"
+    # `scripts/logos2mm0` is a sub-gate, and its own `[gap]` lines must not be
+    # laundered into this gate's `[pass]`: it exits 0 for "gapped" (no cargo, no
+    # mm0 toolchain, no dk fixtures) as well as for green, and 2 for "cannot
+    # check here" (the emitter cannot be *built* in a shell whose cargo has no
+    # working linker — the `lean` shell on 2026-11-21 is one). Each of those is
+    # a fact about this shell, not about the fragment, so it is a gap; only a run
+    # that gapped nothing and failed nothing is a pass.
+    _logos_rc=0
+    _logos_log="$(mktemp)"
+    bash "$repo_root/scripts/logos2mm0" >"$_logos_log" 2>&1 || _logos_rc=$?
+    cat "$_logos_log"
+    _logos_gaps="$(sed -n 's/^\[gap\]  *//p' "$_logos_log" | paste -sd'; ' -)"
+    if [ "$_logos_rc" -eq 2 ]; then
+        gap "logos mm0: the fragment gate could not run here (the emitter cannot be built in this shell)"
+    elif [ "$_logos_rc" -ne 0 ]; then
+        check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" false
+    elif [ -n "$_logos_gaps" ]; then
+        gap "logos mm0: the fragment gate could not run in full here ($_logos_gaps)"
+    else
+        check "logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)" true
+    fi
+    rm -f "$_logos_log"
 else
     gap "logos mm0: sibling unfer repo absent at ../unfer — skipping the fragment gate"
 fi
@@ -3139,66 +3448,6 @@ check "L11c: the split pilot has an end-to-end suite" \
 
 check "L11c: the split pilot's facts are checked to erase" \
     grep -q 'l11c_pilot_facts_are_erased' "$repo_root/test/LiquidErasureTest.ml"
-
-# --- GPU docs: the stdlib modules the status table says compile -----------------
-#
-# `docs/gpu/EXECUTION.md` records, per row, that a stdlib module compiles (G15
-# says `./austral compile stdlib/gpu/Jobs.aui,stdlib/gpu/Jobs.aum --target-type=tc`
-# exits 0). That is a claim about a file no suite compiles, so nothing enforced
-# it: a compiler change left the row asserting exit 0 while the module was
-# refused by the buffer-transport check, and the row's "4 fixtures PASS" rode
-# along false. This compiles every `stdlib/...` module the document names, so a
-# row cannot outlive the compiler it describes. A missing `austral` is a gap,
-# never a pass.
-_gpu_doc="$repo_root/docs/gpu/EXECUTION.md"
-_gpu_stems="$(
-    grep -oE 'stdlib/[A-Za-z0-9_/.-]+(\.(aui|aum)|\.\{aui,aum\})' "$_gpu_doc" 2>/dev/null \
-        | sed -E 's#\.\{aui,aum\}$##; s#\.(aui|aum)$##' \
-        | sort -u
-)"
-
-compile_stdlib_module() {
-    local stem="$1"
-    local srcs=""
-    local log status
-    if [ -f "$repo_root/$stem.aui" ]; then
-        srcs="$stem.aui"
-    fi
-    if [ -f "$repo_root/$stem.aum" ]; then
-        srcs="${srcs:+$srcs,}$stem.aum"
-    fi
-    if [ -z "$srcs" ]; then
-        echo "  [detail] $stem: the document names no source file that exists" >&2
-        return 1
-    fi
-    log="$(mktemp)"
-    ( cd "$repo_root" && \
-      LD_LIBRARY_PATH="$_bridge_dir:$repo_root${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-      "$repo_root/austral" compile "$srcs" --target-type=tc >"$log" 2>&1 )
-    status=$?
-    if [ "$status" -ne 0 ]; then
-        echo "  [detail] $stem ($srcs): exit $status" >&2
-        sed -n '1,14p' "$log" >&2
-    fi
-    rm -f "$log"
-    return "$status"
-}
-
-# A document that stops naming Jobs would make the loop below vacuous, and a
-# vacuous check is the failure mode this gate exists for.
-check "GPU docs: the status table still names stdlib/gpu/Jobs" \
-    bash -c "grep -qF 'stdlib/gpu/Jobs' '$_gpu_doc'"
-
-if ! printf '%s\n' "$_gpu_stems" | grep -q '^stdlib/'; then
-    check "GPU docs: the status table names a stdlib module to compile" false
-elif [ ! -x "$repo_root/austral" ]; then
-    gap "GPU docs: named stdlib modules compile (tooling absent: ./austral is not built)"
-else
-    while IFS= read -r _stem; do
-        [ -n "$_stem" ] || continue
-        check "GPU docs: $_stem compiles" compile_stdlib_module "$_stem"
-    done <<< "$_gpu_stems"
-fi
 
 # --- H12: agent notes (four implemented categories, one per non-trivial PR) ---
 check "H12: notes implemented dir has the four categories" \

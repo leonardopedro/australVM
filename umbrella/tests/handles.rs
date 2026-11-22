@@ -837,6 +837,7 @@ fn a_host_reload_builds_and_loads_the_next_generation() {
     // one instead of rendering into the previous crate.
     let first = umbrella::adapters::build_next(&adapters).expect("first build");
     umbrella::adapters::load(&first).expect("load the first adapter crate");
+
     assert_eq!(first.generation, 1, "the first build in a process is 1");
     let second = umbrella::adapters::build_next(&adapters).expect("reload build");
     umbrella::adapters::load(&second).expect("load the reloaded adapter crate");
@@ -905,8 +906,6 @@ static WAITING: AtomicI64 = AtomicI64::new(0);
 static RELEASED: AtomicI64 = AtomicI64::new(0);
 static HELD_LO: AtomicI64 = AtomicI64::new(0);
 static HELD_HI: AtomicI64 = AtomicI64::new(0);
-static HELD2_LO: AtomicI64 = AtomicI64::new(0);
-static HELD2_HI: AtomicI64 = AtomicI64::new(0);
 
 #[export_name = "avm_hot_ctor"]
 pub extern "C" fn hot_ctor(value: i64) -> *mut core::ffi::c_void {
@@ -974,23 +973,6 @@ pub unsafe extern "C" fn hot_recall(out: *mut i64) -> i64 {
     *out.add(1) = HELD_HI.load(Ordering::SeqCst);
     0
 }
-
-#[export_name = "avm_hot_remember2"]
-pub extern "C" fn hot_remember2(lo: i64, hi: i64) -> i64 {
-    HELD2_LO.store(lo, Ordering::SeqCst);
-    HELD2_HI.store(hi, Ordering::SeqCst);
-    0
-}
-
-#[export_name = "avm_hot_recall2"]
-pub unsafe extern "C" fn hot_recall2(out: *mut i64) -> i64 {
-    if out.is_null() {
-        return 1;
-    }
-    *out = HELD2_LO.load(Ordering::SeqCst);
-    *out.add(1) = HELD2_HI.load(Ordering::SeqCst);
-    0
-}
 "##;
 
 /// Build the live-reload provider into its own scratch directory. It is not
@@ -1018,6 +1000,32 @@ fn reload_provider() -> PathBuf {
     out
 }
 
+/// The same provider with its own symbol prefix: both reload tests map a
+/// provider `RTLD_GLOBAL`, and a shared `avm_hot_*` name would let one test's
+/// image answer the other's calls.
+fn live_provider() -> PathBuf {
+    let dir = scratch("live-provider");
+    let file = dir.join("lib.rs");
+    std::fs::write(&file, RELOAD_PROVIDER.replace("avm_hot_", "avm_live_"))
+        .expect("write provider");
+    let out = dir.join("liblive_provider.so");
+    let output = Command::new("rustc")
+        .arg("--crate-type=cdylib")
+        .arg("--edition=2021")
+        .arg("--crate-name=live_provider")
+        .arg("-o")
+        .arg(&out)
+        .arg(&file)
+        .output()
+        .expect("spawn rustc");
+    assert!(
+        output.status.success(),
+        "the live provider must compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    out
+}
+
 #[test]
 fn a_module_running_across_a_reload_sees_the_next_generation() {
     let front_end = Path::new(env!("CARGO_MANIFEST_DIR")).join("../austral");
@@ -1031,15 +1039,15 @@ fn a_module_running_across_a_reload_sees_the_next_generation() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../safestos/cranelift/target/release");
 
     // 1. The provider image, mapped globally before any wrapper crate.
-    let provider = reload_provider();
+    let provider = live_provider();
     umbrella::policy::dlopen(&provider).expect("load the provider globally");
     let provider_lib = Library::open(&provider);
-    let live = provider_lib.count_fn("avm_hot_live");
-    let drops = provider_lib.count_fn("avm_hot_drops");
-    let waiting = provider_lib.count_fn("avm_hot_waiting");
-    let release = provider_lib.count_fn("avm_hot_release");
+    let live = provider_lib.count_fn("avm_live_live");
+    let drops = provider_lib.count_fn("avm_live_drops");
+    let waiting = provider_lib.count_fn("avm_live_waiting");
+    let release = provider_lib.count_fn("avm_live_release");
     let recall: unsafe extern "C" fn(*mut i64) -> i64 =
-        unsafe { std::mem::transmute(provider_lib.symbol("avm_hot_recall")) };
+        unsafe { std::mem::transmute(provider_lib.symbol("avm_live_recall")) };
 
     // 2. The front-end over the real fixture module: CPS bytes plus the
     //    `abi handle 1` descriptor the generator renders.
@@ -1079,7 +1087,7 @@ fn a_module_running_across_a_reload_sees_the_next_generation() {
     let mut parsed = HandleAdapter::parse_descriptors(&descriptor_text).expect("parse descriptors");
     assert_eq!(parsed.len(), 1, "the fixture names one handle target");
     let adapter = parsed.remove(0);
-    assert_eq!(adapter.target, "avm_hot");
+    assert_eq!(adapter.target, "avm_live");
     let adapters = [GeneratedAdapter::Handle(&adapter)];
 
     // 3. The first generation, built and loaded after the provider.
@@ -1099,9 +1107,9 @@ fn a_module_running_across_a_reload_sees_the_next_generation() {
     assert!(!function.is_null(), "the module must compile once the wrappers are loaded");
 
     // 5. Run it on another thread, so the host can swap the generation while
-    //    the module is inside `avm_hot_wait`.
+    //    the module is inside `avm_live_wait`.
     let address = function as usize;
-    let run = std::thread::spawn(move || unsafe {
+    let run = std::thread::spawn(move || {
         austral_cranelift_bridge::execute_function(address as *const std::ffi::c_void)
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -1126,18 +1134,41 @@ fn a_module_running_across_a_reload_sees_the_next_generation() {
     assert_eq!(
         result, 0,
         "the module reports a wrong step (11 mint, 12 read, 13 gate, \
-         14 stale accepted, 15 second mint, 16 second dispose, 18 remember); \
-         provider live={}, drops={}",
+         14 stale accepted, 18 remember); provider live={}, drops={}, \
+         generations {}/{}",
         unsafe { live() },
-        unsafe { drops() }
+        unsafe { drops() },
+        first.generation,
+        second.generation
     );
 
-    // 7. Exactly the new generation's value was destroyed: the refusal of the
-    //    old words ran no destructor, and the old value is still alive.
+    // 7. The refusal ran no destructor and the old value is still owned; the
+    //    new generation has minted nothing yet.
     assert_eq!(unsafe { live() }, 1, "the pre-reload value is still owned");
-    assert_eq!(unsafe { drops() }, 1, "only the post-reload value was dropped");
+    assert_eq!(unsafe { drops() }, 0, "a refused dispose drops nothing");
 
-    // 8. The old value was not leaked: its own generation still resolves its
+    // 8. The forwarders the running module called now answer from the new
+    //    generation: the same addresses mint, read and dispose a handle whose
+    //    words name generation two.
+    let forwarding = Library::open(&first.path);
+    let mint = forwarding.new_fn("avm_live__new");
+    let read = forwarding.use_fn("avm_live__use");
+    let dispose = forwarding.dispose_fn("avm_live__dispose");
+    let mut fresh = [0i64; 2];
+    assert_eq!(unsafe { mint(9, fresh.as_mut_ptr()) }, 0, "post-reload mint");
+    assert_eq!(
+        (fresh[1] >> 32) as u32,
+        second.generation,
+        "the post-reload handle names the generation that minted it"
+    );
+    let mut word = [0i64; 2];
+    assert_eq!(unsafe { read(fresh[0], fresh[1], word.as_mut_ptr()) }, 0);
+    assert_eq!(word[0], 9, "the forwarder read the value the provider holds");
+    assert_eq!(unsafe { dispose(fresh[0], fresh[1]) }, 0);
+    assert_eq!(unsafe { live() }, 1);
+    assert_eq!(unsafe { drops() }, 1);
+
+    // 9. The old value was not leaked: its own generation still resolves its
     //    words, so the host frees it through the table that minted it.
     let mut words = [0i64; 2];
     assert_eq!(unsafe { recall(words.as_mut_ptr()) }, 0, "recall the words");

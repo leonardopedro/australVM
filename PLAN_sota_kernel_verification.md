@@ -118,7 +118,7 @@ Exact (grep/ls-verified for this plan):
 | proof-term derivation check | `scripts/lean-proof-scan`, `lean-typing-proof`, `lean-typing-check` | **exists** |
 | kernel obbligation oracle | `safestos/cranelift/.../netcert`, `uk_austral_defeq`, `scripts/lean-net-cert` | **exists** |
 | C backend | `--target-type=c` (`lib/CliParser.ml`) | **exists** |
-| symbolic (class-of-states) certificate | `mm0/flux1d_certificate.{mm0,mm1}` — 4 obligations over `docs/kernel_alg.mm0`, 15 grounded + 6 structural facts, one hypothesis eliminated by substitution, `mm0-rs` + `mm0-c` accept the `peq` chain | **exists** (flux1d; approval pending) |
+| symbolic (class-of-states) certificate | `mm0/flux1d_certificate.{mm0,mm1}` — 4 obligations over `docs/kernel_alg.mm0`, 15 grounded + 6 structural facts, one hypothesis eliminated by substitution, `mm0-rs` + `mm0-c` accept the `peq` chain | **exists** (flux1d; approved in `mm0/approved/` 2026-11-20) |
 | **kernel-spec surface (flux algebra) in Austral** | `examples/verified-kernel/flux1d/` (spec + execution side, obligations sidecar) | **partial** (no CPS-IR carrier yet) |
 | comparator: approved statement vs generated | `scripts/mm0-comparator` (diff + closure hash + theory hash, 3 negative controls) | **exists** (S1); `mm0/approved/` empty on purpose |
 | **`assumed=N` budget** | `-- assumed:` + `-- witness:` emitted by `au2mm0`, pinned in `BUDGETS` and gated; `lean-typing-check --assumed-json` for Lean artifacts | **exists** (flux1d: `assumed=1`; lean2mm0 gap below) |
@@ -403,12 +403,81 @@ $ LD_LIBRARY_PATH=… dune runtest                              # exit 0
 OK / OK / … (15 executable(s), 0 failures)
 ```
 
-The two gate numbers are the same 165 checks: the `lean` shell closes one gap the
-`ocaml` shell cannot (W9.1) and the rest stay explained. The block previously
-recorded `150 passed, 4 explained gap(s)`; the four §W3 approvals are still the
-owner's pending decision, and the other four of today's gaps are W5's object
-digest (not comparable in this shell) and the three Liquid golden checks (no
-prover reachable here) — reported as explained gaps, never as passes. Of the
+**Measured 2026-11-20 at `8b8eb323`, on an aarch64 host, after `make bridge`:**
+the `ocaml` shell reports `166 passed, 6 explained gap(s), 0 failed`
+([transcript](docs/data/gate/2026-11-20-ocaml-shell.log)) and the `lean` shell
+`175 passed, 4 explained gap(s), 0 failed`
+([transcript](docs/data/gate/2026-11-20-lean-shell.log)). The transcript block
+above is the branch this was merged from and reads `156 passed, 9 explained
+gap(s)`; the merge added checks and closed three of those gaps. In that `ocaml`
+shell the six gaps were the four §W3 approvals plus `W9.1: RV64 model not
+re-converted` and `W9.3: the Lean witness proofs not checked`, and the
+certificate printed `arch=aarch64` there, so its `W5 (checked)` object digest
+compared for real: the `[pass]` means the bytes the bridge compiled are the
+bytes the certificate pinned.
+
+**Re-measured 2026-11-22 on this x86_64 host, in all three shells and the bare
+`nix-shell -p python3` invocation, on the merged tree `5d484b18` (this branch
+plus the pulled D06/D07 records, whose two extra inventory rows are why the D00
+line reads 16 contract rows rather than 14):** `186 passed, 1 explained gap(s), 0 failed` under
+`nix develop "git+file://$PWD"`
+([transcript](docs/data/gate/2026-11-22-default-shell.log)), `171 passed, 4
+explained gap(s), 0 failed` under `.#ocaml`
+([transcript](docs/data/gate/2026-11-22-ocaml-shell.log)), `172 passed, 3
+explained gap(s), 0 failed` under `.#lean`
+([transcript](docs/data/gate/2026-11-22-lean-shell-rust.log)), and `165 passed,
+10 explained gap(s), 0 failed` where only `python3` comes from a shell
+([transcript](docs/data/gate/2026-11-22-nix-shell-python3.log)).
+None of those numbers is a correction of the ones above; each is a different
+shell over the same checks, and the differences close exactly. The five
+approvals closed their five `[gap] W3: <artifact> has no approved statements`
+lines and added one `[pass] W3: <artifact> matches its approved statements` line
+each, so no `w3-pending:` row remains and `w3-approved:` lists all thirteen.
+`.#ocaml` carries `lean` but not `why3`, so the 15 per-file Liquid passes of the
+default shell are the three `Liquid golden…`/`Liquid subset` gaps there — hence
+`171 + 15 = 186` and `4 − 3 = 1`. `.#lean` re-converts the RV64 model, turning
+`W9.1` into a pass, and since `ff53c29b` it also carries `pkgs.rustc`,
+`pkgs.cargo` and `pkgs.stdenv.cc`, so the five `scripts/toy-witness`
+comparisons and the `logos` emitter build there: `172 = 171 + 1` and
+`3 = 4 − 1`. Before that commit the shell's `rustc`/`cargo` were the host's
+rustup shims, whose `cc` names a garbage-collected store path, so those six
+checks could only be reported as gaps in the linker's own words; that run is
+kept as
+[`2026-11-22-lean-shell.log`](docs/data/gate/2026-11-22-lean-shell.log)
+(`166`/`9`/`0`) so the fix is evidence rather than an assertion. The bare shell
+has no C toolchain at all and remains `165`/`10`/`0`.
+Both scripts now treat a *linker* failure as exit 2, the convention
+`scripts/mm0-comparator` already used for an unprovisioned theory: the gate
+prints a gap with the linker's own line and never a pass, while a compile error
+in the crate stays a failure. The gate also reads the sub-gate's own verdict
+instead of its exit status alone: `scripts/logos2mm0` exits 0 for "gapped" (no
+cargo, no `mm0` toolchain, no `dk` fixtures, a missing Kopperman corpus) as well
+as for green, so a run that printed any `[gap]` line is now this gate's gap, with
+that line quoted, and only an all-pass run is its pass — see `[pass] logos mm0`
+in the `ocaml` and `lean` transcripts against `[gap]  logos mm0: the fragment
+gate could not run here` in the bare `nix-shell -p python3` one. A failing
+sub-check is still this gate's `[FAIL]`. The missing-toolchain cases those lists
+carry are the same ones the transcripts above record; nothing was reclassified
+as passing.
+The certificate on this host records `arch=x86_64` with `cps=c10ca9a9…` and
+`obj=b138fd6e…`; on a host whose certificate recorded the other arch, the same
+check normalises those two lines and reports the incomparable digest as a gap
+rather than a failure — see AGENTS.md's W5 note.
+
+One gap was shared by all three shells and was a coverage loss, not a shell fact:
+`[gap]  W3: the §W3 row check's approved-row control not run (no  row carries a
+count)`. With every §W3 row approved, the two controls `an approved §W3 row
+passes when the approved copy holds what it says` and `a §W3 row that disagrees
+with mm0/approved/ is refused` had no row left to pick, so they stopped running;
+the gate reported that as a gap, never as a pass. `5d7a0dea` closes it: the
+control now takes a pending row when the table has one and otherwise the first
+approved row, whose stale-state half already models the owner's mistake, so both
+probes run again, so today's three sums each carry those two passes and not that
+gap — which is why the trio above is not comparable, check for check, with the
+`174`/`183`/`176` reading taken at `3ad01bac`: that one predates both `5d7a0dea`
+and the three `D00`/`W5` checks the merge brings, and its own paragraphs say so.
+
+Of the
 figures quoted, only `clif2mm0` moved for a reason worth naming: the quoted 854
 is now **811 instructions** over the same 12 modules (869 on the branch this was
 merged from, before `ab9edf22` stopped initialising a cell for a borrow, which
@@ -416,10 +485,10 @@ the merged lowering includes), with the form set unchanged at 20 and the
 movement in counters only (one-argument `call` 35 → 50, two-argument `call`
 63 → 48, `store` 37 → 52), while the opcode census did not move at all (905
 reads, 23 of 23 opcodes) — so this is a CLIF-layer counter change, not a
-CPS-layer one. The `w3-pending`/`w3-approved` sizes and the certificate's
-statements are unchanged; its `-- code:` line was re-emitted for this host (see
-above), which is the intended relation: a lowering change the CLIF layer
-measures moves only the artifact that measures it.
+CPS-layer one. The `w3-approved` sizes and the certificate's statements are
+unchanged; its `-- code:` line was re-emitted for this host (see above), which is
+the intended relation: a lowering change the CLIF layer measures moves only the
+artifact that measures it.
 
 `make test` was not re-run as one target, because its first half is the 35-minute
 drift run quoted above; the two halves were measured separately instead, and
@@ -795,20 +864,44 @@ the artifact, so `mm0-c` checks them too.
   is an owner commit that touches only `mm0/approved/`, not something this
   plan writes for itself.
 
-  **Pending owner approvals (2026-11-15), one row each.** Each row is a separate
-  `[gap]` line in `verify-invariants`, so a partially-approved set shows up as a
-  shrinking count rather than a single unhelpful "W3 open": the four rows below
-  are the four `[gap] W3: <artifact> has no approved statements` lines in §3.5.
-  The `state` cell is the record of the decision, so approving is one edit — flip
-  that cell to `` `[pass]`, approved in `mm0/approved/` `` — and the gate reads
-  the rest off the two states (see the state-column paragraph below).
+  **Owner approvals (asked 2026-11-15, landed 2026-11-20), one row each.** Each
+  row was a separate `[gap]` line in `verify-invariants`, so a partially-approved
+  set showed up as a shrinking count rather than a single unhelpful "W3 open":
+  the four rows that round approved were the four `[gap] W3: <artifact> has no
+  approved statements` lines in §3.5 until the owner committed the statements
+  (a fifth row, `liquid_split`, is pending below and is the same shape). The `state`
+  cell is the record of the decision in both directions — setting it back to
+  `` `[gap]`, awaiting owner commit `` withdraws an approval, and the gate reads
+  the rest off the two states (see the state-column paragraph below). What an
+  approval lands is the statement of record, never a proof: `isa`'s 26 theorems
+  and the toy's 28 carry their proofs in their `.mm1`, `store_projection` has
+  none to carry, and `mm0/clif.mm0` cites the approval while still claiming
+  `0 theorems`.
 
   | artifact | what the approval holds out | stmts | emitter that owns it | state | statements-sha256 |
   |---|---|---|---|---|---|
-  | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | `2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a` |
-  | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[gap]`, awaiting owner commit | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
-  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, `-- certificate: [gap]` | 11 | none — states its own vocabulary | `[gap]`, awaiting owner commit; the claim itself stays `[gap]` (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
-  | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[gap]`, awaiting owner commit | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
+  | `mm0/isa.mm0` | the converted ISA model's declarations plus the 23 encdec instances and 3 step refinements | 193 | `scripts/isa-encdec check` — **registered** in `EMITTERS` | `[pass]`, approved in `mm0/approved/` | `2619b5ec9337db280718eb78055f8df76f7a700ae80a05b7fc6bd241db01359a` |
+  | `mm0/slot_layout.mm0` | the layout proof's definitions and statements | 23 | none — hand-written spec | `[pass]`, approved in `mm0/approved/` | `98dd6399e157800065a56b11a2d99f29724113ed42a5bc600e222efd220013c4` |
+  | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, a certificate naming the approval | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays unproved (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
+  | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[pass]`, approved in `mm0/approved/` | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
+  | `mm0/liquid_split.mm0` | L11d's split law: extent conservation, disjoint halves and non-interference of the halves' writes, all guarded by `ok_split`; 10 residual premises, 10 proved theorems, no `sorry` | 41 | `scripts/liquid-split-mm0 check` — **registered** in `EMITTERS` | `[pass]`, approved in `mm0/approved/` | `00aff128a87dd3e2d95b96e262713d4c081aba9489ec222b3153a63a58f96e5b` |
+
+  The fifth row is L11d's split law (`PLAN_liquid_types.md` L11d), which that
+  card asks to keep as a single reviewed held-out statement. `mm0/liquid_split.mm0`
+  states it for the MM0 profile: `take`/`drop` under the `ok_split` guard, with
+  conservation and disjointness as the residual premises and ten theorems
+  derived from them — the composition a split program relies on is
+  `split_one_write_per_half`, where a write to each half leaves the other half's
+  value readable. `scripts/liquid-split-mm0` owns the pair (both files are
+  generated from it, and `check` compiles them with `mm0-rs` and re-checks the
+  proofs with `mm0-c`), so the emitter cell follows the same rule as the rows
+  above. What the row does *not* claim is that the Austral split function
+  conserves extents: those are L11d's Why3 obligations, and the axioms here are
+  quoted so a reviewer can disagree with the premises instead of with a
+  derivation. The owner approved the 41 staged statements on 2026-11-21 (owner-
+  directed; `mm0/approved/liquid_split.stmts` is the statement of record, and the
+  approval holds out statements only — the ten proofs are in the `.mm1`, where
+  `mm0-c` re-checks them).
 
   The `stmts` column is **checked**, not remembered. `verify-invariants` runs
   `mm0-comparator approve --dry-run` for every artifact — pending *and* approved —
@@ -816,32 +909,45 @@ the artifact, so `mm0-c` checks them too.
 
   ```
   $ nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants \
-      | grep -E '^w3-(pending|approved):|the plan.s §W3'
-  w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
-  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
-  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (4 row(s), 0 approved)
-  [pass] W3: every pending §W3 row's artifact re-derives into a staging (4 row(s))
+      | grep -E '^w3-(pending|approved):| W3:|Plan:|W9.3: the composition'
+  [pass] W3: every §W3 row's emitter script exists before its state cell is read (5 row(s))
+  [pass] W3: flux1d_certificate matches its approved statements
+  [pass] W3: gap_certificate matches its approved statements
+  [pass] W3: isa matches its approved statements
+  [pass] W3: layout_certificate matches its approved statements
+  [pass] W3: linearity_certificate matches its approved statements
+  [pass] W3: linearity_certificate_spans matches its approved statements
+  [pass] W3: liquid_split matches its approved statements
+  [pass] W3: quasi_rh_7_8 matches its approved statements
+  [pass] W3: quasi_rh_certificate matches its approved statements
+  [pass] W3: service_isolation_certificate matches its approved statements
+  [pass] W3: slot_layout matches its approved statements
+  [pass] W3: store_projection matches its approved statements
+  [pass] W3: store_projection_toy matches its approved statements
+  w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) liquid_split(41 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+  [pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 5 approved)
+  [pass] W3: every pending §W3 row's artifact re-derives into a staging (0 row(s))
   [pass] W3: an approved §W3 row passes when the approved copy holds what it says
   [pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
-  [pass] W3: the plan's §W3 digest column matches the file it describes (4 row(s), 0 approved)
-  [detail] one altered statement: check refused it (unmodified staging: exit 0)
+  [pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 5 approved)
   [pass] W3: one altered statement makes the comparator refuse the approved copy
   [pass] W3: a quoted statements-sha256 that does not hash the statements is refused
-  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 0 from mm0/approved/)
-  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 0 from mm0/approved/)
-  [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
-  [pass] W9.3: an approved copy that drops an axiom fails the composition counts
-  [pass] W3: every §W3 emitter cell names a real command (4 row(s))
-  [pass] W3: every approved §W3 row's emitter still produces its approved copy (0 row(s))
+  [pass] W9.3: the composition table's counts match the files it records (4 row(s), 4 from mm0/approved/)
+  [pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 4 from mm0/approved/)
+  [pass] W3: every §W3 emitter cell names a real command (5 row(s))
+  [pass] Plan: every file a plan table row names exists on disk (5 row(s))
+  [pass] W3: every approved §W3 row's emitter still produces its approved copy (5 row(s))
   [pass] W3: an approved §W3 row whose emitter left the registry is refused
-  [pass] W3: the recorded probe evidence still names live gate lines (6 row(s))
-  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))
+  [pass] W3: the recorded probe evidence still names live gate lines (25 row(s))
+  [pass] W3: every drift control the plan names has a recorded transcript (9 invocation(s))
+  [pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
   [pass] W3: stage-approvals answers an unknown artifact name with exit 64
-  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (4 name(s))
-  [pass] W3: stage-approvals stages exactly §W3's 4 pending row(s) (exit 0)
+  [pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
+  [pass] W3: stage-approvals stages exactly §W3's 0 pending row(s) (exit 0)
   [pass] W3: stage-approvals stops staging an artifact once its approved copy exists
   [pass] W3: stage-approvals refuses a named artifact that is already approved
   [pass] W3: stage-approvals refuses an artifact that equals its approved copy
+  [pass] W3: comparator self-test (all three negative controls refuse)
   ```
 
   The `statements-sha256` column is checked the same way, because a quoted digest
@@ -992,15 +1098,12 @@ the artifact, so `mm0-c` checks them too.
 
   **The thirteen former `copy` rows.**
   `scripts/w3-drift-controls` is those thirteen controls under one entry point
-  (`<case>`, `--list`, or `all`), plus `cert-approved` for the certificate's
-  approved branch — fourteen cases, and `mm0-toolchain-gap` as the fifteenth:
-  it runs the *unmodified* gate with `mm0-rs`/`mm0-c` removed from `PATH` and
-  requires the four W9.3 measures to report `[gap]` and the run to exit 0, which
-  is what makes every other case runnable on a host that has no mm0 toolchain.
-  Each case builds a scratch copy, drifts one
-  claim in it, runs the whole gate with the read-only override that points at the
-  copy, and requires exit 1 with the expected `[FAIL]` line — and the `[pass]`
-  lines that must not move. Since 2026-11-19 that second half is universal
+  (`<case>`, `--list`, or `all`), plus `cert-approved` for the digest the
+  certificate's approval citation carries — fourteen cases. Each case builds a
+  scratch copy, drifts one claim in it, runs the whole gate with the read-only
+  override that points at the copy, and requires exit 1 with the expected
+  `[FAIL]` line — and the `[pass]` lines that must not move. Since 2026-11-19
+  that second half is universal
   rather than "where a second check reads the same copy": nine cases
   (`phase-d-theory-coverage`, `phase-d-imported-theory`,
   `phase-d-self-vocabulary`, `phase-d-measured-coverage`, `isa-hypothesis-pin`,
@@ -1017,8 +1120,15 @@ the artifact, so `mm0-c` checks them too.
   explained gap(s), 1 failed`, and `witness-axiom` at `137 passed, 8 explained
   gap(s), 3 failed`, the extra two being the count checks that read the same
   appended axiom. Each case's whole gate log is kept under
-  `$W3_DRIFT_LOGS` (default `/tmp/w3-drift-controls/<case>.log`); that log is
-  where the recorded totals come from. `make drift-controls` runs
+  `$W3_DRIFT_LOGS` (default `/tmp/w3-drift-controls`), one directory per
+  invocation and one per case inside it — `runs/<id>/<case>/01-g.log`, with the
+  case's printed report as `report.txt` beside it — and that log is where the
+  recorded totals come from. A run no longer overwrites its case's previous log:
+  the file per case name was how a red row lost the transcript that would have
+  explained it. The count is bounded — a run removes all but the newest
+  `W3_DRIFT_KEEP` (default 20) run directories, `0` disabling pruning — and the
+  run's summary lists, per case, the gate logs in its own directory, so the
+  transcript of a red case can be found from the summary alone. `make drift-controls` runs
   `scripts/w3-drift-controls all` and then the `*-drift-control` scripts, and
   `make test` depends on it — the Makefile states the cost, because every control
   is a full gate run (~4.5 min). A case cannot be made cheaper (the case *is* the gate
@@ -1028,12 +1138,25 @@ the artifact, so `mm0-c` checks them too.
   is set. The rows kept in the tree are `docs/data/w3/drift-timings.tsv`:
 
   ```
-  date	rev	jobs	requested	wall_s	per_case_s	held	outcome
-  2026-11-19	de8b11b2	1	14	3763	268	14/14	held
-  2026-11-19	de8b11b2	2	14	2649	189	14/14	held
+  date	rev	jobs	requested	wall_s	per_case_s	held	gap	outcome	cases	died
+  2026-11-19	de8b11b2	1	14	3763	268	14/14	0	held	all	?
+  2026-11-19	de8b11b2	2	14	2649	189	14/14	0	held	all	?
   ```
 
-  That is all 14 cases in those rows in **62m43s** at `-j 1` (268 s each) against **44m9s** at
+  `held` is `held/requested` and does not count a case the shell could not
+  exercise, so a run that reported `13 case(s) held, 1 not covered` records
+  `13/14` with `gap` = 1 instead of `14/14`; `cases` names what was asked for,
+  which is what ties a row to the run directory that holds that case's logs.
+  `died` names the cases that did not hold and left no gate transcript at all —
+  the subshell ended before `gate_run` wrote its first line, which is also what
+  a case killed by the host looks like (empty report, empty status, no log) —
+  so a `failed` row carries names instead of only a count. `-` there means every
+  case that ran reached the gate (a control that ran and lost its assertion is
+  not a death: its transcript is in its run directory), and `?` means the row
+  was written before the column existed. Rows written before `gap` and `cases`
+  cannot be attributed to a case, and are not the ledger's evidence for anything.
+
+  That is all 14 cases in **62m43s** at `-j 1` (268 s each) against **44m9s** at
   `-j 2` (189 s of wall clock per case, ~379 s of work, because two gate runs
   share the core) — 18m34s, 30%, off. The second core is worth 1.42x rather than
   2x because a single gate run is itself mostly serial, and every case still
@@ -1042,13 +1165,7 @@ the artifact, so `mm0-c` checks them too.
   read-only. Those two rows predate the recorder and were entered from the runs'
   own gate logs; every row after them is written by the run itself. Reproduce
   with `W3_DRIFT_RECORD=docs/data/w3/drift-timings.tsv bash
-  scripts/w3-drift-controls -j 12 all`, under `nix develop`. With
-  `mm0-toolchain-gap` added, the row written that way on 2026-11-21 over a
-  twelve-core host is
-  `2026-11-21\t4c7fce42\t12\t15\t452\t30\t14/15\theld` — 15 requested cases in
-  452s, 14 held and `liquid-golden` reported `[gap]` for the absent why3 (an
-  earlier unrecorded pass took 18m49s for the same 15). A skipped case is counted
-  apart from `held` in that row, so a `[gap]` cannot be recorded as a hold. The five read-only
+  scripts/w3-drift-controls -j 2 all`, under `nix develop`. The five read-only
   `*-drift-control` scripts are separate scripts and write no row of their own;
   measured the same way, they take 22m44s serial against 17m22s
   at `-P 2`, all five holding — so the two parallel halves together go from
@@ -1074,10 +1191,10 @@ the artifact, so `mm0-c` checks them too.
 
   **Which checks have no measured failure.** Every check in the gate was counted
   against the evidence, and the counter is `scripts/check-census` — the numbers
-  below are its output on this tree, not a hand count. Of 225 `check` statements,
-  137 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
+  below are its output on this tree, not a hand count. Of 243 `check` statements,
+  149 distinct texts remain once a trailing count parenthetical (`($n name(s))`,
   `($_w3_rows row(s), …)`, `(9 structural / 0 grounded)`) is dropped: it reports a
-  number, not a different claim. 22 of those 137 have a measured perturbed-tree
+  number, not a different claim. 25 of those 149 have a measured perturbed-tree
   run (`probes.tsv`, one whole-gate run each) and every one of the rest carries a
   row in the table below, so `scripts/check-census` reports 0 distinct texts with
   neither: no check in the gate is unread now, and there are no `copy` rows —
@@ -1136,8 +1253,10 @@ the artifact, so `mm0-c` checks them too.
   | `L11b: the conversion pin has a negative control` | none | the control script's existence; the gate cannot run it, because it needs `dune` |
   | `L11b: the conversion control mutates the rule LiquidIndex declares` | none | compares one source line in `LiquidIndex.ml` with the control's view of it |
   | `L11b: the conversion control re-checks the tree after restoring` | none | greps the control for its digest and restore steps |
+  | `D00: distributed contract checker present` | none | asserts the script exists and lists the checks it has; its subject is the tree |
   | `PC02: flipping clamp_upper's conclusion is refused` | control | a scratch `.mm1` with the conclusion flipped, refused on every run |
   | `PC02: word.mm0 + word.mm1 accepted, clamp bounds and map laws proved` | tool | runs `mm0-rs` + `mm0-c`; a missing toolchain is the failure mode observed so far |
+  | `W5: the binary note is silent when the binary is newest, and names the newer source` | control | a scratch source/binary pair is stamped both ways on every run and the note must be empty in one and name the newer source in the other |
   | `W5: the staleness note is silent when the artifact is newest, and names the newer binary` | control | a scratch artifact/binary pair is stamped both ways on every run and the note must be empty in one and name the file in the other |
   | `Liquid golden $name parses under Why3` | tool | needs `why3`; the `.mlw` copy is the driftable data |
   | `Liquid golden $name type-checks under Why3` | tool | needs `why3` |
@@ -1189,16 +1308,26 @@ the artifact, so `mm0-c` checks them too.
   | `W3: a §W3 row that disagrees with mm0/approved/ is refused` | control | runs the row function against a scratch approved root, missing copy then stale cell |
   | `W3: an approved §W3 row passes when the approved copy holds what it says` | control | the positive branch of the same scratch-approval probe |
   | `W3: an approved §W3 row whose emitter left the registry is refused` | control | drops `isa` from a scratch registry and requires the refusal |
+  | `W3: every §W3 row's emitter script exists before its state cell is read` | derived | stats the script each row's emitter cell names, before any state cell is read — a missing emitter must be the first thing a reader met (`liquid_split` arrived the other way round) |
   | `W3: every §W3 state cell says whether the row is approved or still waiting on the owner` | none | validates the plan's cells against the two allowed shapes; the red path is a plan edit |
   | `W3: one altered statement makes the comparator refuse the approved copy` | control | alters one statement in a scratch staging |
   | `W3: stage-approvals answers an unknown artifact name with exit 64` | control | runs `stage-approvals` with an unknown name against a scratch root |
   | `W3: stage-approvals refuses a named artifact that is already approved` | control | names an artifact that a scratch approved root already holds |
   | `W3: stage-approvals refuses an artifact that equals its approved copy` | control | stages a copy byte-identical to the one in a scratch approved root |
   | `W3: stage-approvals stages exactly §W3's $_sa_pending_n pending row(s)` | control | stages every pending row into a scratch root and counts the headings |
+  | `Plan: every file a plan table row names exists on disk` | derived | every table row whose first cell is a concrete path is compared with the tree; the red path is a plan edit that names a file before it lands |
+  | `W3: every drift control the plan names has a recorded transcript` | derived | each drift control the plan names is compared with its transcript row in `docs/data/gate/README.md`; the red path is a control added without the run that covers it |
   | `W3: stage-approvals stops staging an artifact once its approved copy exists` | control | stages into a scratch root that already holds one approved copy; that heading must be absent |
   | `W3: stage-approvals' artifact list is the §W3 table's rows` | derived | compares the script's artifact list with the §W3 rows it is generated from |
   | `W3: the plan's §W3 digest column matches the file it describes` | derived | recomputes each quoted digest from the file or approved copy the row names |
   | `W3: the recorded probe evidence still names live gate lines` | derived | re-reads `probes.tsv` and checks each row against the gate it cites |
+  | `W3: §W3 emitter cells not checked before their state (no row carries one)` | none | fires when the table carries no emitter cell at all — a defect in the plan, so the gate fails there instead of gapping |
+  | `W3: stage-approvals' artifact list not compared` | none | fires when no §W3 row carries a state — a defect in the plan, not a missing tool, so it fails |
+  | `W3: the §W3 row check's approved-row control not run` | none | fires when no §W3 row carries a count — a table defect, so the gate fails rather than gapping |
+  | `W3: the §W3 statements-sha256 column not compared (no table row quotes one)` | none | fires when no §W3 row quotes a digest — a table defect, so it fails |
+  | `W3: the plan's §W3 emitter column not compared (no table row carries one)` | none | fires when no §W3 row carries an emitter cell — a table defect, so it fails |
+  | `W3: the plan's §W3 state column not compared (no table row carries one)` | none | fires when no §W3 row carries a state cell — a table defect, so it fails |
+  | `W3: the plan's §W3 stmts column not compared (no table row carries a count)` | none | fires when no §W3 row carries a count — a table defect, so it fails |
   | `W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes` | derived | recomputes the CPS digest through the bridge and compares the recorded one; also mutates a CPS copy |
   | `W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object` | derived | recomputes the object digest through the bridge |
   | `W5 (checked): the bridge the gate loads is the release artifact it was built from` | derived | compares the repo-root copy against the one `make bridge` writes; a stale root copy measuring the kernel with an old bridge is the silent pass `scripts/obj-drift-control` found once |
@@ -1284,8 +1413,10 @@ the artifact, so `mm0-c` checks them too.
   the row. Everything downstream is then read off the two states: the `stmts`
   and digest columns are compared with the approved copy for approved rows and
   with a fresh staging for pending ones (the pass lines report the split:
-  `(4 row(s), 0 approved)` today), the `w3-pending:` line shortens and
-  `w3-approved:` grows without anyone editing a second list, and
+  `(5 row(s), 5 approved)` on the current tree), a pending row becomes an
+  approved one by shortening `w3-pending:` and growing `w3-approved:` — once
+  every row is approved the `w3-pending:` line is empty and is not printed at
+  all — without anyone editing a second list, and
   `scripts/stage-approvals` stops staging the artifact because its approved
   copy now exists. Half an approval is refused rather than half-made: a pending
   row whose approved copy *does* exist fails with `… exists — flip this row's
@@ -1685,7 +1816,7 @@ instructions the emitter produces for the certified fragment — the same mechan
 as `SYMBOL_REGISTRY`'s census, with an `ISA_REGISTRY` beside it:
 
 ```
-austral compile examples/verified-kernel/flux1d/flux1d.aum --use-cps-jit \
+austral compile examples/verified-kernel/flux1d/Flux1d.aum --use-cps-jit \
   --emit-cps=/tmp/flux1d.cps        # the IR the model must cover
 ./scripts/isa-census /tmp/flux1d.cps   # decoder vs artifact vs measured
 ```
@@ -2642,8 +2773,9 @@ row(s), 0 from mm0/approved/)` and `… closure digests match the files it
 records (4 row(s), 0 from mm0/approved/)`. The breakdown is not decoration: a
 row is **counted from `mm0/approved/<stem>.stmts`** once that file exists,
 because the row is a record of an approval and the approval is those bytes; a
-row still pending is counted from a fresh staging. `0 from mm0/approved/` today
-is the four approvals being un-made, and it moves on its own when one lands. If
+row still pending is counted from a fresh staging. The `N from mm0/approved/`
+figure counts the rows whose approved copies exist — all 4 on the current tree —
+and it moves on its own when one is approved or un-made. If
 the staged copy and the approved copy differ — an artifact edited after its
 approval — the row reports `staged bytes differ from the approved copy` instead
 of describing whichever copy was read, so a drift cannot keep the counts green.
@@ -2721,20 +2853,30 @@ citations still passing — one uncertified claim, one failure. Recorded as the
 `certification-claim` row of `docs/data/w3/probes.tsv`.
 
 The approved branch — an approval exists, so a `[gap]` line is the drift — is
-measured too, and it took moving one path: the check asked
-`$repo_root/mm0/approved/isa.stmts` directly, which no override could reach, so it
-now asks `$_appr_root/isa.stmts` — the directory `AUSTRALVM_APPROVED_ROOT` already
-names for the §W3 rows — and `scripts/w3-drift-controls cert-approved` creates a
-scratch approval and runs the gate against it. Measured 2026-11-18: exit 1,
-`verify-invariants: 124 passed, 17 explained gap(s), 7 failed`, `[FAIL] W9.3:
-certification state matches mm0/approved/`, detail `…/approved/isa.stmts exists —
-clif.mm0 must cite it, not a gap`. Seven failures, not one, and the row says why:
-a scratch approval is inconsistent with the rest of the tree *by construction* —
-it is not the approved bytes, so the §W3 stmts column, the pending re-derivation,
-the composition counts and closure digests, the toy's axiom count and the staging
-count all move with it. A consistent approval is the owner's commit; the control's
-claim is only that the certificate line stops saying `[gap]` when an approval
-exists, and that is what it asserts. The model's other self-claim is
+measured too, and until the owner's approvals landed it took moving one path: the
+check asked `$repo_root/mm0/approved/isa.stmts` directly, which no override could
+reach, so it now asks `$_appr_root/isa.stmts` — the directory
+`AUSTRALVM_APPROVED_ROOT` already names for the §W3 rows. Measured 2026-11-18 with
+a scratch approval: exit 1, `verify-invariants: 124 passed, 17 explained gap(s),
+7 failed`, `[FAIL] W9.3: certification state matches mm0/approved/`, detail
+`…/approved/isa.stmts exists — clif.mm0 must cite it, not a gap`. Seven failures,
+not one, and the row said why: a scratch approval is inconsistent with the rest of
+the tree *by construction* — it is not the approved bytes, so the §W3 stmts
+column, the pending re-derivation, the composition counts and closure digests, the
+toy's axiom count and the staging count all move with it. A consistent approval is
+the owner's commit, so once the four §W3 approvals landed that branch became the
+tree's own state, and `scripts/w93-certification-drift-control` measures it in
+both directions from a copy of `mm0/clif.mm0` (`[gap]` with no approval, an
+uncited approval with one). What no scratch approval could reach is the digest the
+citation carries: a model may name the approval and still pin bytes it no longer
+holds, which is how a citation rots. `scripts/w3-drift-controls cert-approved`
+flips one hex digit on the copy's `-- cites: mm0/approved/isa.stmts` line, the copy
+read through the existing read-only `AUSTRALVM_CLIF`. Measured 2026-11-20: exit 1,
+`verify-invariants: 178 passed, 0 explained gap(s), 1 failed`, `[FAIL] W9.3: the
+refinement's citations still match their artifacts`, detail `stale citations:
+mm0/approved/isa.stmts`, with the certificate line itself, the `Phase D` trust
+split and the §W3 state cells still passing — one rotted citation, one failure.
+The model's other self-claim is
 driftable the same way, and measured: a copy of `mm0/clif.mm0` whose `-- proves:
 0 theorems` line says `1`, run with `AUSTRALVM_CLIF` at the copy, turns
 `[FAIL] W9: the CLIF model still claims no theorem` and nothing else —
@@ -2830,9 +2972,14 @@ Two things this pins down that a count could not:
   place any of this is proved), and it does not upgrade `isa`'s encoder laws to
   facts about the compiler — they are the model's, cited as such.
 - **The counts are gate-pinned, the names are not.** `verify-invariants` prints
-  `w3-pending: isa(193 stmt) slot_layout(23 stmt) store_projection(11 stmt)
-  store_projection_toy(70 stmt)` every run, so a statement added to any of the
-  four moves that line and this table has to move with it; the closure digests
+  `w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt)
+  isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt)
+  linearity_certificate_spans(71 stmt) liquid_split(41 stmt) quasi_rh_7_8(3 stmt)
+  quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt)
+  slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)`
+  every run (all thirteen approved, so `w3-pending:` is empty and absent), so a
+  statement added to any artifact moves that line and this table has to move
+  with it; the closure digests
   above are the rule for the *names*, since the canonical form does not keep
   them. `scripts/check-links` will not catch a stale name in a list like this —
   the enforcement is that a re-approval changes the digest in this table, which
@@ -2883,8 +3030,9 @@ Without `--stat-only` it prints the full `git diff --no-index` for each artifact
 is the human decision" means in the comparator's own header: the names in the
 list above are gone from the file, so the only thing readable in the diff is the
 *shape* of each statement plus the digests. `mm0/approved/` is never written by
-this script, and `verify-invariants` keeps reporting the four `[gap] W3` lines,
-so staging cannot be mistaken for approval.
+this script, and `verify-invariants` reports a `[gap] W3: <artifact> has no
+approved statements` line for every artifact without an approved copy, so
+staging cannot be mistaken for approval.
 
 **Its own exit codes are gated, because a staging run that "worked" is not
 self-evident.** Three cases decide whether a person reading the output is being
@@ -2977,9 +3125,9 @@ What the commit has to be, and what changes with it:
   in §W3. That one edit is the whole of it: the `stmts` and digest cells are then
   compared with `mm0/approved/store_projection_toy.stmts` (they already hold those
   numbers), `w3-pending:` loses `store_projection_toy(70 stmt)`, the
-  `w3-approved:` report gains it, the four `[gap] W3: … has no approved
-  statements` lines in §3.5 become three, and the `row(s)` counts go on saying
-  four with `1 approved`. `scripts/stage-approvals` stops staging it on its own,
+  `w3-approved:` report gains it, the five `[gap] W3: … has no approved
+  statements` lines in §3.5 become four, and the `row(s)` counts go on saying
+  five with `1 approved`. `scripts/stage-approvals` stops staging it on its own,
   and no list anywhere else has to shrink — if one is left un-flipped (the copy
   committed, the cell still `[gap]`) the gate names the row and says `flip this
   row's state cell`; if the cell says approved and the copy is missing or holds a
@@ -3014,13 +3162,27 @@ What the commit has to be, and what changes with it:
 |---|---|---|
 | S1 | W0, W3 | `scripts/mm0-comparator` rejects all three negative controls; `lean2mm0 check` byte-identical — **met 2026-11-12** |
 | S2 | W1 | `examples/verified-kernel/flux1d` builds and runs — **met 2026-11-12**, and re-met 2026-11-13 through `--use-cps-jit`; `make test` — **met 2026-11-13** (161 tests, 18 suites, 0 failures on a clean `_build`); the obligation-carrier half is unblocked but unstarted, and the `netcert` acceptance is reassigned to W2 because `netcert` does not normalize arithmetic (W1, item 3) |
-| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approval pending |
+| S3 | W2 | `mm0/flux1d_certificate` passes `mm0-rs compile` + `mm0-c`; contains a free variable; budgets pinned — **met 2026-11-12**, and re-met 2026-11-13 with 4 obligations (`structural=6 grounded=15 certificates=4 assumed=1`); approved in `mm0/approved/` 2026-11-20 |
 | S4 | W2 (mutation), W4 | `au2mm0 selftest` trips both anchors; `assumed` pinned and gated — **met 2026-11-13** (4 anchors; `assumed=1` from `uniform_state`, witness `l=1 r=1`) |
 | S5 | W5, W6 | `code=` and `float-gap:` lines emitted and gated; claim-string check green — **met 2026-11-13**; both fingerprints **checked 2026-11-13** through the bridge (`97 passed`): `cps=cd65d0b4…` and `obj=ceed355c… arch=aarch64`, the latter gated only on a matching arch (a mismatch is a `[gap]`); the drift control (`scripts/obj-drift-control`) moves `obj=` under a semantics-preserving edit and the gate refuses it; probe measured `max relative deviation 0.000e+00`. **Re-pinned 2026-11-14** after the `sub`/`mul` lowering change: `cps=5dfcdfe8…`, `obj=ad3340b6… arch=aarch64`, statements unchanged (§3.5).**Re-pinned 2026-11-19** by the branch this was merged from, from an aarch64
 host: `cps=c10ca9a9…` (which is what this tree's compiler produces — the cps
 digest check is `[pass]` here), `obj=fac893da… arch=aarch64`, statements
 unchanged, so the object-digest comparison is the documented arch-mismatch
-`[gap]` on an x86_64 host |
+`[gap]` on an x86_64 host. **Re-pinned 2026-11-21** after `1f8ce68f` made
+`lib/CpsGen.ml` serialize functions in stored order (the `List.rev` in
+`serialize_functions` — the edit `scripts/obj-drift-control` reverses): the
+statements are byte-identical again and only the `-- code:` line moved,
+`cps=fa4e9b29…`, `obj=f0f80ace… arch=aarch64`. That re-pin was needed because
+the check compares against the `./austral` the tree built: the 2026-11-19
+numbers were still passing only against a `./austral` older than `1f8ce68f`,
+and rebuilding it turned the staleness into three `[FAIL]` lines. The citation
+pins moved with it, none of them touching approved statements: `mm0/isa.mm0`'s
+`-- cites: mm0/flux1d_certificate.mm0` digest, `mm0/isa.mm1` regenerated by
+`scripts/isa-encdec --write` (one source-digest line), `mm0/clif.mm0`
+re-emitted by `scripts/clif2mm0 --write`, and the `mm0/clif.mm0`/`mm0/isa.mm0`
+digests in `mm0/store_projection.mm0` and its toy together with the toy's pin
+on the projection (the `mm0/approved/` closure/statements digests were
+unchanged throughout, `scripts/mm0-comparator check isa` green) |
 | S6 | W7 | CNL corpus answers kernel-content questions with the expected verdicts, including one honest `unproved:` — **met for content 2026-11-13** (`theory: kernel` in `unfer/logos/mm0/claims.txt`: four citations + one `unproved:`); a question-answering layer over the corpus is not built, by the section's own warning |
 | S7 | — | scoreboard §1 re-measured end to end; this document updated with numbers — **met for W0–W7 2026-11-13 (§3.3)** |
 | S9 | W9 | an external ISA model converts and `mm0-c` accepts it; `mm0/clif.mm0` is emitted from the bridge's own CLIF; the CLIF→ISA refinement is accepted with content-checked hypotheses — **W9.2 met 2026-11-14**: `mm0/clif.mm0` is emitted by `scripts/clif2mm0` from `clif_dump`'s measurement of the 12-module corpus (**20 forms, 811 instructions**, re-measured after the arithmetic lowering, again after the `not` fix, and again when the CLIF counters moved in 2026-11-19 — the opcode census did not move; 23 of 23 CPS opcodes emitted, `UNREACHABLE_OPCODES` empty), accepted by `mm0-rs` + `mm0-c`, drift-gated with a negative control, and pinned to **0 theorems** because it models shape, not semantics; **W9.1 met 2026-11-14**: two pinned models convert and `mm0-c` accepts both — opencompl/riscv-lean at `ccdfd676` (83 `RV64.*` declarations → `mm0/statements/riscv_instructions.*`) and the Sail-generated `Lean_RV64D` at `11d8fa2` + `lean-sail` at `0794631` (`execute_LOAD`/`execute_STORE` → `mm0/statements/rv64_memory.*`, built by `packages.sail-riscv-lean` in ~28 min); the `ISA_REGISTRY` diff is closed in both directions (**15 mapped, 8 structural, 0 uncovered**), the table is checked against the artifacts it names, `check` re-converts both stems, `verify-invariants` runs it in the `lean` shell while reporting an explained `[gap]` elsewhere, and `.github/workflows/w9-isa-model.yml` runs it weekly (the memory stem's build is 28 min, so it is not a PR gate); the refinement's most tempting shortcut is **refuted and gated**: `scripts/mem-refines` shows the emitted `load`/`store` (1 operand/1 result, 2 operands/0 results) cannot be `execute_LOAD`/`execute_STORE` (5 and 4 arguments, returning `SailM ExecutionResult`, able to fault), and the surviving projection claim is stated with pinned citations in `mm0/store_projection.mm0` for both opcodes (`3 sorts, 8 term/def, 0 ax/thm`, no axiom, no theorem, `[gap]`) so only that weaker claim is left open, and its *shape* is proved on a toy model (`mm0/store_projection_toy.mm0` + `.mm1`: a three-cell memory whose capacity is characterised by four cases — refresh, free cell, evicting, keeping — 28 theorems from 20 cited axioms, at two widths, including a refresh keeping the other cell and its held-set proof, three distinct stores all readable and the fourth dropping the earliest, the fifth dropping the next, with an informal list model for consistency *that `scripts/toy-witness` executes* (every axiom checked over all three-cell memories on a four-atom domain — four because the eviction axiom needs four distinct addresses — and the six rejected axiom candidates each shown to fail), no `sorry`, gated to cite the current claim by digest — with a control that renames the claim and requires the pin to refuse — and to reuse its four transformer names, and mutation-tested in thirteen ways so no theorem survives its own axiom being falsified); and W9.3 is *stated* without being proved: `mm0/clif.mm0` declares `clif_step` as vocabulary (no axiom, no theorem), writes the obligation with five pinned citations, and carries `-- certificate: [gap]` until the owner's `isa` approval exists — a state `verify-invariants` mutation-tests; the direction and its non-goals are recorded in §4b |

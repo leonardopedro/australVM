@@ -1,5 +1,6 @@
-date	rev	jobs	requested	wall_s	per_case_s	held	outcome
-2026-11-19	de8b11b2	1	14	3763	268	14/14	held
-2026-11-19	de8b11b2	2	14	2649	189	14/14	held
-2026-11-19	0baac723	2	14	2641	188	14/14	held
-2026-11-21	4c7fce42	12	15	452	30	14/15	held
+date	rev	jobs	requested	wall_s	per_case_s	held	gap	outcome	cases	died
+2026-11-19	de8b11b2	1	14	3763	268	14/14	0	held	all	?
+2026-11-19	de8b11b2	2	14	2649	189	14/14	0	held	all	?
+2026-11-19	0baac723	2	14	2641	188	14/14	0	held	all	?
+2026-11-21	200fb13f	3	14	1538	109	14/14	0	held	phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage phase-d-imported-theory phase-d-self-vocabulary phase-d-measured-coverage isa-hypothesis-pin clif-vocabulary clif-citations witness-axiom memsafe-edge liquid-golden cert-approved w3-approved-row	-
+2026-11-21	4c7fce42	12	15	452	30	14/15	1	held	?	-

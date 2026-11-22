@@ -25,6 +25,16 @@
 //!  -10  a cancellation/receipt deadline expired while still quarantined
 //! ```
 //!
+//! Lock order (G15a) is part of the contract because two state locks are
+//! sometimes needed at once: a **job** (never while holding a buffer), then the
+//! **buffers** map, then a **buffer** state. A context (**entry**) lock is taken
+//! alone; `job_pending` is queried after a buffer state is released, and
+//! `rs_gpu_close` releases the entry lock before removing the handle. Publishing
+//! a terminal event and copying its words are one critical section under the
+//! job lock, so a receipt reader (which takes that same lock) never observes
+//! `COMPLETE` with the previous bytes still in the buffer, and two readers
+//! cannot both claim the single receipt.
+//!
 //! v2 (`SERVICE_VERSION = 2`) adds buffers and asynchronous jobs. v1
 //! (`rs_gpu_run`) keeps its v1 meaning. Completion is published by the worker
 //! that ran the request — on the device path from the queue's
@@ -82,6 +92,10 @@ struct Entry {
     generation: i64,
     next_sequence: i64,
     live_job: Option<i64>,
+    /// Set under the entry lock by `rs_gpu_close` before the handle leaves the
+    /// registry. A submission that already holds the entry therefore refuses
+    /// instead of starting a worker for a context that is closing.
+    closed: bool,
     /// Worker threads that ran this context's jobs. A completion is published
     /// from the device's work-done callback, so the job can be terminal while
     /// its worker still owns the device; `rs_gpu_close` joins these before it
@@ -116,6 +130,66 @@ fn next_handle() -> i64 {
 fn next_generation() -> i64 {
     static NEXT: AtomicI64 = AtomicI64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
+// Test-only handoff points.
+//
+// Each sits inside the critical section whose ordering the G15a tests pin, so a
+// test can hold a publisher, a receipt reader or a submitter at exactly the
+// window a race would need and assert what the other side observes. The hooks
+// are keyed by job (publish/result) or context (submit) identity, so a test's
+// hook cannot fire inside another test's job; nothing here is exported as a
+// symbol.
+// ---------------------------------------------------------------------------
+
+/// A test-only handoff point inside a service critical section.
+#[doc(hidden)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TestPoint {
+    /// `publish` holds the job lock and has not copied the words or set the
+    /// terminal state yet.
+    PublishBeforeCopy,
+    /// `rs_gpu_result` holds the job lock, has checked the receipt, and has not
+    /// written the caller's destination yet.
+    ResultBeforeCopy,
+    /// `begin_job` has a live context and a validated output buffer, and has not
+    /// admitted the job against the context yet.
+    SubmitBeforeAdmission,
+}
+
+type TestHook = Arc<dyn Fn() + Send + Sync>;
+
+fn test_hooks() -> &'static Mutex<Vec<(TestPoint, i64, TestHook)>> {
+    static HOOKS: OnceLock<Mutex<Vec<(TestPoint, i64, TestHook)>>> = OnceLock::new();
+    HOOKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Install (`Some`) or remove (`None`) the hook called at `point` for
+/// `identity` — the job handle for the publish/result points, the context
+/// handle for the submit point. Test-only and not an exported symbol.
+#[doc(hidden)]
+pub fn service_test_set_hook(point: TestPoint, identity: i64, hook: Option<TestHook>) {
+    if let Ok(mut hooks) = test_hooks().lock() {
+        hooks.retain(|(p, id, _)| !(*p == point && *id == identity));
+        if let Some(hook) = hook {
+            hooks.push((point, identity, hook));
+        }
+    }
+}
+
+fn run_test_hook(point: TestPoint, identity: i64) {
+    // Clone out from under the registry lock: a hook blocks by design, and it
+    // must not hold the registry while another thread installs a hook.
+    let hook = test_hooks().lock().ok().and_then(|hooks| {
+        hooks
+            .iter()
+            .find(|(p, id, _)| *p == point && *id == identity)
+            .map(|(_, _, hook)| hook.clone())
+    });
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 fn lookup(handle: i64) -> Result<Arc<Mutex<Entry>>, i64> {
@@ -182,6 +256,7 @@ fn open_path(path: &str, require_hardware: i64, adapter_index: i64) -> i64 {
         generation: next_generation(),
         next_sequence: 0,
         live_job: None,
+        closed: false,
         workers: Vec::new(),
     }));
     match contexts().lock() {
@@ -532,61 +607,64 @@ fn begin_job(context: i64, output: i64, n: i64, seed: i64, hold: bool) -> i64 {
         Ok(s) => s,
         Err(code) => return code,
     };
-    let (job_id, loaded_plan) = {
-        let mut e = match entry.lock() {
-            Ok(e) => e,
+    run_test_hook(TestPoint::SubmitBeforeAdmission, context);
+    let mut e = match entry.lock() {
+        Ok(e) => e,
+        Err(_) => return UNKNOWN_HANDLE,
+    };
+    // `rs_gpu_close` sets this under the same lock, before the handle leaves
+    // the registry, so a submission that already resolved the entry cannot
+    // start a worker for a context that is closing.
+    if e.closed {
+        return UNKNOWN_HANDLE;
+    }
+    if let Some(live) = e.live_job {
+        if job_pending(live) {
+            return BUSY;
+        }
+    }
+    let bytes = n as usize * ELEMENT_BYTES as usize;
+    {
+        let b = match state.lock() {
+            Ok(b) => b,
             Err(_) => return UNKNOWN_HANDLE,
         };
-        if let Some(live) = e.live_job {
-            if job_pending(live) {
-                return BUSY;
-            }
+        if b.bytes.len() != bytes {
+            return INVALID_ARGUMENT;
         }
-        let bytes = n as usize * ELEMENT_BYTES as usize;
-        {
-            let b = match state.lock() {
-                Ok(b) => b,
-                Err(_) => return UNKNOWN_HANDLE,
-            };
-            if b.bytes.len() != bytes {
-                return INVALID_ARGUMENT;
-            }
-        }
-        let job_id = next_handle();
-        let sequence = e.next_sequence;
-        e.next_sequence += 1;
-        e.live_job = Some(job_id);
-        let job = Job {
-            context,
-            generation: e.generation,
-            sequence,
-            output,
-            bytes,
-            state: JobState::Pending,
-            result_taken: false,
-            cancel_requested: None,
-        };
-        if jobs()
-            .lock()
-            .map(|mut map| map.insert(job_id, Arc::new(Mutex::new(job))))
-            .is_err()
-        {
-            return UNKNOWN_HANDLE;
-        }
-        if let Ok(mut b) = state.lock() {
-            b.owner = Some(job_id);
-        }
-        (
-            job_id,
-            (
-                e.loaded.clone_for_service(),
-                e.require_hardware,
-                e.adapter_index,
-            ),
-        )
+    }
+    let job_id = next_handle();
+    let sequence = e.next_sequence;
+    e.next_sequence += 1;
+    e.live_job = Some(job_id);
+    let job = Job {
+        context,
+        generation: e.generation,
+        sequence,
+        output,
+        bytes,
+        state: JobState::Pending,
+        result_taken: false,
+        cancel_requested: None,
     };
+    if jobs()
+        .lock()
+        .map(|mut map| map.insert(job_id, Arc::new(Mutex::new(job))))
+        .is_err()
+    {
+        return UNKNOWN_HANDLE;
+    }
+    if let Ok(mut b) = state.lock() {
+        b.owner = Some(job_id);
+    }
     if !hold {
-        let (loaded, require_hardware, adapter_index) = loaded_plan;
+        let loaded = e.loaded.clone_for_service();
+        let require_hardware = e.require_hardware;
+        let adapter_index = e.adapter_index;
+        // Spawn and register under the context lock. `rs_gpu_close` takes the
+        // worker list under that same lock, so this worker is either joined by
+        // the close or the close was refused while its job was pending; it
+        // cannot be pushed after the close has already returned.
         let worker = std::thread::spawn(move || {
             if cancel_requested(job_id) {
                 publish(job_id, JobState::Cancelled, &[]);
@@ -596,9 +674,7 @@ fn begin_job(context: i64, output: i64, n: i64, seed: i64, hold: bool) -> i64 {
             let inputs = synth_inputs(arity, n as usize, seed as i64 as u32);
             execute_job(job_id, &loaded, &inputs, require_hardware, adapter_index);
         });
-        if let Ok(mut e) = entry.lock() {
-            e.workers.push(worker);
-        }
+        e.workers.push(worker);
     }
     job_id
 }
@@ -677,27 +753,29 @@ fn cancel_requested(job: i64) -> bool {
 /// Publish the single terminal event for a job. Later or reordered events are
 /// ignored: the first terminal state is the one owner, and a completion is
 /// never overwritten by a cancellation or a loss.
-fn publish(job: i64, state: JobState, output: &[u32]) -> bool {
-    let job = match jobs().lock().ok().and_then(|m| m.get(&job).cloned()) {
+fn publish(job_id: i64, state: JobState, output: &[u32]) -> bool {
+    let job = match jobs().lock().ok().and_then(|m| m.get(&job_id).cloned()) {
         Some(j) => j,
         None => return false,
     };
-    let (output_handle, bytes) = {
-        let mut j = match job.lock() {
-            Ok(j) => j,
-            Err(_) => return false,
-        };
-        if j.state != JobState::Pending {
-            return false;
-        }
-        j.state = state;
-        (j.output, j.bytes)
+    let mut j = match job.lock() {
+        Ok(j) => j,
+        Err(_) => return false,
     };
+    if j.state != JobState::Pending {
+        return false;
+    }
+    // The words and the terminal transition are one critical section (G15a):
+    // a receipt reader takes this same lock before copying, so it can never
+    // observe `COMPLETE` while the buffer still holds the previous bytes.
+    // Lock order: job, then buffers map, then buffer state.
+    run_test_hook(TestPoint::PublishBeforeCopy, job_id);
+    let output_handle = j.output;
     let buffer = buffers().lock().ok().and_then(|m| m.get(&output_handle).cloned());
     if let Some(buffer) = buffer {
         if let Ok(mut b) = buffer.lock() {
             if state == JobState::Complete {
-                let written = output.len().min(bytes / ELEMENT_BYTES as usize);
+                let written = output.len().min(j.bytes / ELEMENT_BYTES as usize);
                 for (i, word) in output.iter().take(written).enumerate() {
                     let start = i * ELEMENT_BYTES as usize;
                     b.bytes[start..start + ELEMENT_BYTES as usize]
@@ -707,6 +785,7 @@ fn publish(job: i64, state: JobState, output: &[u32]) -> bool {
             b.owner = None;
         }
     }
+    j.state = state;
     true
 }
 
@@ -802,55 +881,57 @@ pub extern "C" fn rs_gpu_poll(context: i64, job: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn rs_gpu_result(
     context: i64,
-    job: i64,
+    job_id: i64,
     out_ptr: *mut u8,
     cap: i64,
 ) -> i64 {
     if cap < 0 || (cap > 0 && out_ptr.is_null()) {
         return INVALID_ARGUMENT;
     }
-    let job = match lookup_job(context, job) {
+    let job = match lookup_job(context, job_id) {
         Ok(j) => j,
         Err(code) => return code,
     };
-    let (state, taken, bytes, output) = {
-        let j = match job.lock() {
-            Ok(j) => j,
-            Err(_) => return UNKNOWN_HANDLE,
-        };
-        (j.state, j.result_taken, j.bytes, j.output)
+    // Checking the receipt, copying the words and consuming the receipt are one
+    // critical section (G15a). Splitting them let two readers both see an
+    // unclaimed receipt, and let a reader observe `COMPLETE` before the
+    // publisher had copied the words.
+    let mut j = match job.lock() {
+        Ok(j) => j,
+        Err(_) => return UNKNOWN_HANDLE,
     };
-    if state != JobState::Complete {
-        return match state {
-            JobState::Pending => BUSY,
-            JobState::Cancelled => STALE,
-            JobState::Failed(code) => code,
-            JobState::Complete => unreachable!(),
-        };
+    match j.state {
+        JobState::Pending => return BUSY,
+        JobState::Cancelled => return STALE,
+        JobState::Failed(code) => return code,
+        JobState::Complete => {}
     }
-    if taken {
+    if j.result_taken {
         return STALE;
     }
+    let bytes = j.bytes;
+    // Too small a destination is retryable: it does not consume the receipt.
     if cap < bytes as i64 {
         return LIMIT_REFUSED;
     }
-    let buffer = buffers().lock().ok().and_then(|m| m.get(&output).cloned());
+    run_test_hook(TestPoint::ResultBeforeCopy, job_id);
+    let buffer = buffers().lock().ok().and_then(|m| m.get(&j.output).cloned());
     let buffer = match buffer {
         Some(b) => b,
         None => return STALE,
     };
-    let b = match buffer.lock() {
-        Ok(b) => b,
-        Err(_) => return UNKNOWN_HANDLE,
-    };
-    if bytes > 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(b.bytes.as_ptr(), out_ptr, bytes);
+    {
+        let b = match buffer.lock() {
+            Ok(b) => b,
+            Err(_) => return UNKNOWN_HANDLE,
+        };
+        if bytes > 0 {
+            unsafe {
+                std::ptr::copy_nonoverlapping(b.bytes.as_ptr(), out_ptr, bytes);
+            }
         }
     }
-    if let Ok(mut j) = job.lock() {
-        j.result_taken = true;
-    }
+    j.result_taken = true;
     bytes as i64
 }
 
@@ -902,6 +983,9 @@ pub extern "C" fn rs_gpu_close(handle: i64) -> i64 {
                 return BUSY;
             }
         }
+        // Marked before the handle leaves the registry: a submission holding
+        // this entry then refuses instead of starting a worker (G15a).
+        e.closed = true;
         std::mem::take(&mut e.workers)
     };
     match contexts().lock() {

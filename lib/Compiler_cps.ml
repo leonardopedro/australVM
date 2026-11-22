@@ -787,7 +787,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
   | Mt.MTypecast (e, _) -> convert_expr e
   | Mt.MSizeOf ty -> IntLit (Int64.of_int (size_of_mono_ty ty))
   | Mt.MSlotAccessor (e, name, _) -> 
-      let recty = get_expr_type e in
+      (* The typer hands a field read through a borrow (`&Pair`) the borrow
+         temp's type, so unwrap it before resolving the offset — otherwise
+         every field of a borrowed record resolves to offset 0 and field two
+         reads field one's word. `__slot_get` already performs the load, so the
+         address it is given may be the borrow's; only the offset lookup needs
+         the pointee type. *)
+      let recty = match get_expr_type e with
+        | MonoPointer ty | MonoAddress ty
+        | MonoReadRef (ty, _) | MonoWriteRef (ty, _) -> ty
+        | ty -> ty
+      in
       let offset = match recty with
         | MonoNamedType id -> find_record_slot_offset id name
         | _ -> 0

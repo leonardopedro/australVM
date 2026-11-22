@@ -400,7 +400,7 @@ let to_mlw (c : t) : string =
       line "  (* %s : %s *)\n" e.cname
         (LiquidTypes.string_of_contract_kind e.ckind);
       match e.ckind with
-      | LiquidTypes.KMeasure | LiquidTypes.KFold -> ()
+      | LiquidTypes.KMeasure | LiquidTypes.KFold | LiquidTypes.KDescent -> ()
       | _ -> line "  (*   %s *)\n" e.csrc)
     c.contracts;
   line "\n";
@@ -1403,3 +1403,13 @@ let generate (m : typed_module) : t option =
         theory;
       }
   end
+(* ── a goal-only module (L11d.2) ───────────────────────────────────────────
+   The L11d.2 Why3 lane states the held-out split law as its own set of goals,
+   independently of a module's own contracts: the law's arithmetic is the same
+   for every launch plan, and only the module's spans differ. `empty_module`
+   plus `with_goals` lets that lane build the `.mlw` without inventing a fake
+   contract list, and `to_mlw` above needs no second code path. *)
+let empty_module ~(module_name : string) : t =
+  { module_name; contracts = []; goals = []; templates = []; theory = [] }
+
+let with_goals (c : t) (gs : goal list) : t = { c with goals = c.goals @ gs }

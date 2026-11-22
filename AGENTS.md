@@ -63,7 +63,8 @@ in-process via native `uk_*` symbols registered in the JIT.
   `dune` command can run at all. `nix develop .#ocaml` is the same nixpkgs and the
   same OCaml/rust/python inputs without why3/alt-ergo/z3; it is enough for
   `make all` and `make test` (measured: 161 tests, 18 suites, 0 failures on a
-  clean `_build`) and **not** enough for anything that must *prove* —
+  clean `_build` on 2026-11-13; re-measured 2026-11-20 as `284 tests` across
+  `30 suites`, all `OK`) and **not** enough for anything that must *prove* —
   `LiquidWhy3.prove` then takes its structured-skip path. Use `.#ocaml` to build,
   `default` to prove. Address the flake as `git+file://$PWD#ocaml`: a plain path
   makes nix copy the whole worktree (14 GB of `refi/target`) into the store
@@ -74,6 +75,13 @@ in-process via native `uk_*` symbols registered in the JIT.
   ```bash
   nix develop "git+file://$PWD#ocaml" -c make all     # or test / bridge
   ```
+
+  **Measured 2026-11-20 on an x86_64 host:** the default devShell builds here and
+  carries why3 1.8.2, z3 4.16.0 and alt-ergo 2.6.3, so `liquid-golden` is not a
+  gap in it — `scripts/w3-drift-controls liquid-golden` holds (258 s) and the
+  gate prints `174 passed, 5 explained gap(s), 0 failed`
+  (`docs/data/gate/2026-11-20-default-shell.log`), against `159 passed, 8
+  explained gap(s)` under `.#ocaml`, which ships no prover by design.
 
   `check-dune` (an order-only prerequisite of `$(BIN)` and `bridge`) refuses
   outside the shell and prints that command, because the alternative was a
@@ -155,6 +163,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `docs/TODO_LEDGER.md`; a ledger entry whose file no longer carries a
   marker is reported `[stale]` so it leaves with the work. Markdown
   historical status prose is out of scan scope by policy.
+- `scripts/check-distributed-contracts` — the D00 structural checker for
+  `docs/distributed/EXECUTION.md` (its baseline block) and
+  `docs/distributed/contracts.tsv` (the boundary inventory): exact headers,
+  unique ids, a known class/repo/status, and every referenced path and evidence
+  file present — `U` paths resolve against `../unfer`. `--selftest` mutates each
+  rule and requires the refusal. `verify-invariants` runs both, as two checks
+  (`D00:`), and reports the sibling-repo absence as an explained gap rather than
+  a red gate. A valid row says the record is well-formed; it never says the
+  guarantee holds.
 - `scripts/cps-fingerprint <cps>` — the bridge's own sha256 of the bytes
   (`austral_cps_fingerprint`); `--object <cps>` gives the digest of the
   cranelift-emitted code capture plus `arch=`. Not JIT symbols: no manifest
@@ -499,12 +516,16 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   detail `store_projection_toy(says '<row12>…', staging '<real12>…')`, the counts
   line and the approval control still passing. One full gate run.
 - `scripts/w93-certification-drift-control` — the §W9.3 control for the
-  refinement's certificate line: it copies `mm0/clif.mm0`, rewrites
-  `-- certificate: [gap]` to claim `mm0/approved/isa.stmts` (which does not
-  exist), and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
-  with `[FAIL] W9.3: certification state matches mm0/approved/`, the detail
-  `no isa approval, yet clif.mm0 does not say [gap]`, and the `clif_step`
-  vocabulary, pinned citations and §W3 lines unchanged. One full gate run.
+  refinement's certificate line: it copies `mm0/clif.mm0`, perturbs that one
+  line, and runs the gate with `AUSTRALVM_CLIF` at the copy, requiring exit 1
+  with `[FAIL] W9.3: certification state matches mm0/approved/` plus the
+  `clif_step` vocabulary, pinned citations and §W3 lines unchanged. The
+  perturbation follows the tree, because which direction is the trap depends on
+  the owner's decision: with no `mm0/approved/isa.stmts` the copy claims the
+  approval (required detail `no isa approval, yet clif.mm0 does not say [gap]`),
+  and once the approval exists the copy drops the citation it must carry
+  (required detail `isa.stmts exists — clif.mm0 must cite it, not a gap`). One
+  full gate run either way.
 - `scripts/w3-approval-state-drift-control` — the §W3 control for the state
   cell: it rewrites `isa`'s cell in a copy of the plan to `` `[pass]`, approved in
   `mm0/approved/` `` with no `mm0/approved/isa.stmts` behind it, and requires
@@ -554,7 +575,22 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   approval. Each run appends its own wall clock to
   `$W3_DRIFT_LOGS/timings.tsv` (and to `$W3_DRIFT_RECORD` when set); the rows
   kept in the tree are `docs/data/w3/drift-timings.tsv`, which the plan quotes
-  instead of a retyped number. `liquid-golden` is the one case conditional on
+  instead of a retyped number. Its columns are `date rev jobs requested wall_s
+  per_case_s held gap outcome cases died`: `held` reads `held/requested` and does
+  not count a case the shell could not exercise, `gap` is that count, `cases`
+  names what was asked for (`all` or the case name), and `died` names (comma
+  separated) the cases that ended before their gate wrote a byte — empty report
+  and empty status, so no transcript to attribute a red row to. `-` there means
+  no such case, `?` a row recorded before the column existed. `cases` is what
+  ties a row to
+  `$W3_DRIFT_LOGS/runs/<id>/<case>/` — one directory per invocation, one per case
+  inside it, holding that case's `01-g.log` and `report.txt`. The old
+  `$W3_DRIFT_LOGS/<case>.log` was overwritten by the case's next run, so a red
+  row could not be read back; nothing writes that path now. Retention is bounded
+  (`W3_DRIFT_KEEP`, default 20 run directories, newest kept; `0` disables
+  pruning), and a run's summary prints, per case, the log files under its own
+  `runs/<id>/<case>/`, so a red case in a `make test` transcript names its
+  transcript. `liquid-golden` is the one case conditional on
   the shell: the gate guards that check on `command -v why3` and reports it as
   an explained `[gap]` when the prover is absent, so the drifted copy has no
   `[FAIL]` to produce. The case then prints `[gap] liquid-golden: why3 not on
@@ -627,6 +663,18 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   on every run. The note is itself a comparison with a control:
   `[pass] W5: the staleness note is silent when the artifact is newest, and
   names the newer binary` stamps a scratch pair both ways.
+- The mirror case has its own note, learned 2026-11-21: a checkout rewrites the
+  artifact's mtime, so a `./austral` built before a serializer change looks
+  *older* than the certificate and the note above stays silent — the gate then
+  fails W5 with `recorded=c10ca9a9… bridge=fa4e9b29…` and explains nothing.
+  `avm_binary_stale_note` compares the loaded binary against `lib/*.ml`,
+  `lib/*.mli`, `bin/*.ml` and `_build/default/bin/austral.exe` and, only when a
+  digest comparison has already failed, prints `— lib/CpsGen.ml is newer (…) than
+  austral (…): the binary predates this tree, so its digests describe an older
+  compiler build; run: make all`. Measured on this aarch64 host: `make all`
+  alone restored `recorded == bridge`, because the pin was right and the binary
+  was not. Control: `[pass] W5: the binary note is silent when the binary is
+  newest, and names the newer source`.
 - `scripts/obj-drift-control` — the W5 negative control: a semantics-preserving
   emitter edit moves `code.obj`, the gate refuses the certificate, and the tree
   is  restored. It rebuilds the compiler twice, so it is not in
@@ -661,7 +709,9 @@ nix-shell -p python3 --run "bash scripts/verify-invariants"
 nix-shell -p python3 --run "python3 scripts/check-links"
 ```
 
-Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines.
+Unapproved artifacts are `[gap] W3: <artifact> has no approved statements` lines
+(none on 2026-11-20, when the four §W3 rows were approved, so `w3-pending:` is
+empty and only the `w3-approved:` line prints).
 The gate prints two measured-size lines: `w3-pending:` (what each unapproved
 artifact would hold out) and `w3-approved:` (what each approved one holds now, so
 a shrunk artifact is visible even though its statement diff is the enforcement).
@@ -724,4 +774,15 @@ is expected. Refresh with:
 
 ```bash
 nix run nixpkgs#git-cliff -- -o CHANGELOG.md
+```
+
+This checkout carries **no tags** (`git tag` is empty, upstream included), so
+the plain command above folds the six released sections (`[0.2.0]` … `[0.0.1]`)
+into `[Unreleased]` — git-cliff has no tag boundary to split on. Generate the
+unreleased section and keep the released ones as they stand instead:
+
+```bash
+nix run nixpkgs#git-cliff -- --unreleased -o /tmp/unreleased.md
+# then splice: /tmp/unreleased.md up to `## [0.2.0]`, and the released
+# sections verbatim from the committed CHANGELOG.md
 ```

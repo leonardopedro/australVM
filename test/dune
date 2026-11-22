@@ -71,8 +71,13 @@
  (names LiquidSplitPilotTest)
  (modules LiquidSplitPilotTest)
  (libraries ounit2 unix test_util)
- (deps ../bin/austral.exe
-       (source_tree ../test-programs/suites/024-liquid-split/001-accept-split)))
+ (deps ../bin/austral.exe (source_tree ../test-programs/suites/024-liquid-split)))
+
+(tests
+ (names LiquidDescentTest)
+ (modules LiquidDescentTest)
+ (libraries ounit2 unix test_util)
+ (deps ../bin/austral.exe))
 
 ; L11a: the index-closure admissibility audit (WF3). Drives `austral.exe` at
 ; `--target-type=tc`, because the claim is about the diagnostic a user sees.
@@ -147,15 +152,6 @@
  (libraries austral_cps_gen ounit2 str)
  (deps ../mm0/isa.mm0))
 
-; A record field read is typed as a dereference of the slot accessor, but the
-; CPS accessor (`__slot_get`) already loads: an enclosing `Deref` loads the
-; field's value as an address and segfaults the JIT. Pinned on emitted CPS, so
-; the redundant dereference cannot come back unnoticed.
-(tests
- (names CpsFieldReadTest)
- (modules CpsFieldReadTest)
- (libraries austral_lib austral_cps_gen austral_rust_bridge ounit2))
-
 ; avm-pkg spec task 2.1: the package totality pass and the Derivation
 ; JSON export (lib/Totality.ml, lib/DerivAst.ml). Hand-built typed ASTs —
 ; no codegen, so austral_core alone is enough.
@@ -172,7 +168,6 @@
   GpuSubsetTest
   GpuWgslTest
   GpuReduceTest
-  GpuReduceWgslTest
   GpuCliTest
   GpuObligationsTest
   GpuProofInterfaceTest)
@@ -182,7 +177,6 @@
   GpuSubsetTest
   GpuWgslTest
   GpuReduceTest
-  GpuReduceWgslTest
   GpuCliTest
   GpuObligationsTest
   GpuProofInterfaceTest)

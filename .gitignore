@@ -380,3 +380,9 @@ mm0/pilot/ported_stmt.mm0
 # The compiled set.mm library is 43 MB of pure build output; regenerate it with
 # `mm0-rs compile mm0/metamath/set.mm0 mm0/metamath/set.mmb`.
 /mm0/metamath/*.mmb
+
+# make test tree lock
+.tree.lock
+
+
+/output

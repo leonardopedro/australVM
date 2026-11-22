@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""nixbench-fixtures — generate the §4.12 Nix-comparison inputs.
+
+`PLAN_avm_pkg.md` §4.12 compares `avm-pkg eval` with `nix-instantiate` on the
+same 1,000-node dependency chain, and one 1 MiB payload stored ten times with
+one byte changed per version. The generated inputs are git-ignored, so without
+this script a re-run had to rebuild them from the shape described in the plan.
+They are now emitted from one description:
+
+  * `plan1000.json` — a `derivations` list of `n0` … `n999`, each `n_i`
+    depending on `n_{i-1}`, with a synthetic 32-byte source digest whose value
+    is the index and builder `stdenv.build`. This is the `avm-pkg eval` side.
+  * `graph1000.nix` — the same chain as `builtins.derivation`s (each taking the
+    previous `outPath` in its `src`), ending in a `let` body of `n999`. This is
+    the `nix-instantiate --eval --strict` / `nix-instantiate` side.
+  * with `--storage`, `storage/v0.bin` … `v9.bin` — ten 1 MiB deterministic
+    payloads, each differing from the previous in exactly one byte, for the
+    `avm-pkg put` vs `nix-store --add` deduplication row.
+
+The files are byte-reproducible: same arguments, same bytes.
+
+Usage:
+    python3 scripts/nixbench-fixtures [--out DIR] [--count N] [--storage]
+
+`--out` defaults to `target/nixbench`, the path the plan's commands consume.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+DEFAULT_OUT = Path("target/nixbench")
+DEFAULT_COUNT = 1000
+STORAGE_VERSIONS = 10
+STORAGE_SIZE = 1024 * 1024
+
+
+def plan(count: int) -> dict:
+    derivations = []
+    for i in range(count):
+        derivations.append(
+            {
+                "name": f"n{i}",
+                "version": "0.1.0",
+                "builder_symbol": "stdenv.build",
+                "dependencies": [] if i == 0 else [f"n{i - 1}"],
+                "sources": [f"{i:064x}"],
+                "env_vars": [],
+            }
+        )
+    return {"derivations": derivations}
+
+
+def graph(count: int) -> str:
+    lines = ["let"]
+    for i in range(count):
+        src = "" if i == 0 else f" src = n{i - 1};"
+        lines.append(
+            f'  n{i} = builtins.derivation {{ name = "n{i}"; '
+            f'system = builtins.currentSystem; builder = "/bin/sh"; '
+            f"args = [];{src} }};"
+        )
+    lines.append(f"in n{count - 1}")
+    return "\n".join(lines) + "\n"
+
+
+def storage_payloads(count: int) -> list[bytes]:
+    """`count` 1 MiB payloads, each one byte away from the previous one.
+
+    The bytes are a SplitMix64 byte stream, so the payload does not compress and
+    a content-addressed store cannot shrink it below a full copy by compression.
+    """
+    seed = 0x5EED_0F_A5_70_11_22
+    state = seed
+    out = bytearray()
+    stream = []
+    for _ in range(STORAGE_SIZE):
+        state = (state + 0x9E37_79B9_7F4A_7C15) & 0xFFFF_FFFF_FFFF_FFFF
+        z = state
+        z = ((z ^ (z >> 30)) * 0xBF58_476D_1CE4_E5B9) & 0xFFFF_FFFF_FFFF_FFFF
+        z = ((z ^ (z >> 27)) * 0x94D0_49BB_1331_11EB) & 0xFFFF_FFFF_FFFF_FFFF
+        stream.append((z ^ (z >> 31)) & 0xFF)
+    out.extend(stream)
+    payloads = [bytes(out)]
+    for i in range(1, count):
+        nxt = bytearray(payloads[-1])
+        # A distinct byte per version: flipping the same one every time would
+        # make v2 equal v0 and halve the contents the store has to deduplicate.
+        offset = (i * 104_729) % STORAGE_SIZE
+        nxt[offset] ^= 0x01
+        payloads.append(bytes(nxt))
+    return payloads
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Generate the §4.12 Nix-comparison fixtures."
+    )
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT,
+                    help=f"output directory (default: {DEFAULT_OUT})")
+    ap.add_argument("--count", type=int, default=DEFAULT_COUNT,
+                    help=f"nodes in the chain (default: {DEFAULT_COUNT})")
+    ap.add_argument("--storage", action="store_true",
+                    help=f"also write {STORAGE_VERSIONS} x 1 MiB payloads")
+    args = ap.parse_args(argv)
+
+    if args.count < 1:
+        ap.error("--count must be at least 1")
+
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    plan_path = args.out / "plan1000.json"
+    plan_path.write_text(json.dumps(plan(args.count), indent=1) + "\n")
+    print(f"wrote {plan_path} ({args.count} derivations)")
+
+    graph_path = args.out / "graph1000.nix"
+    graph_path.write_text(graph(args.count))
+    print(f"wrote {graph_path} (chain n0 -> n{args.count - 1})")
+
+    if args.storage:
+        store_dir = args.out / "storage"
+        store_dir.mkdir(exist_ok=True)
+        for i, payload in enumerate(storage_payloads(STORAGE_VERSIONS)):
+            path = store_dir / f"v{i}.bin"
+            path.write_bytes(payload)
+        print(
+            f"wrote {STORAGE_VERSIONS} x {STORAGE_SIZE} B payloads "
+            f"to {store_dir}"
+        )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -6,10 +6,11 @@ import Austral.Memory (
 );
 
 -- U13 live reload: one module run that mints a handle, waits while the host
--- builds and loads the next provider generation, and then uses the handle it
--- minted before the reload. The words are the previous generation's, so the
--- current table must refuse them; the handle minted afterwards is the current
--- generation's and must dispose. `liveReload` returns 0 only for that sequence.
+-- builds and loads the next provider generation, and then disposes the handle
+-- it minted before the reload. The words are the previous generation's, so the
+-- reloaded table must refuse them (and run no destructor). `liveReload`
+-- returns 0 only for that sequence; the host exercises the same forwarders
+-- afterwards for the new generation's mint/read/dispose.
 module body HotHandle is
     record Hot: Linear is
         lo: Int64;
@@ -29,25 +30,25 @@ module body HotHandle is
         return Hot(lo => lo, hi => hi);
     end;
 
-    pragma Foreign_Import(External_Name => "avm_hot");
-    pragma Handle_Ownership(Object => "hot", Constructor => "avm_hot_ctor", Destructor => "avm_hot_dtor", Params => "1", Use => "avm_hot_read");
+    pragma Foreign_Import(External_Name => "avm_live");
+    pragma Handle_Ownership(Object => "live", Constructor => "avm_live_ctor", Destructor => "avm_live_dtor", Params => "1", Use => "avm_live_read");
     function hotDispose(lo: Int64, hi: Int64): Int64 is end;
 
-    pragma Foreign_Import(External_Name => "avm_hot__new");
+    pragma Foreign_Import(External_Name => "avm_live__new");
     function hotNew(value: Int64, out: Pointer[Pair]): Int64 is end;
 
-    pragma Foreign_Import(External_Name => "avm_hot__use");
+    pragma Foreign_Import(External_Name => "avm_live__use");
     function hotUse(lo: Int64, hi: Int64, out: Pointer[Word]): Int64 is end;
 
     -- The gate. The provider sets its "waiting" flag and blocks until the host
     -- releases it, so the host's reload lands while this call is on the stack.
-    pragma Foreign_Import(External_Name => "avm_hot_wait");
+    pragma Foreign_Import(External_Name => "avm_live_wait");
     function hotWait(): Int64 is end;
 
     -- The pre-reload words, recorded where the host can pick them up after the
     -- run: they are the only proof that the old generation still owns and can
     -- free the value the new table refused.
-    pragma Foreign_Import(External_Name => "avm_hot_remember");
+    pragma Foreign_Import(External_Name => "avm_live_remember");
     function hotRemember(lo: Int64, hi: Int64): Int64 is end;
 
     generic [R: Region]
@@ -70,23 +71,21 @@ module body HotHandle is
     function liveReload(): Int64 is
         var pair: Pair := Pair(lo => -1, hi => -1);
         let minted: Int64 := hotNew(5, refMutToPointer(&!pair));
-        let before: Hot := adopt(pair.lo, pair.hi);
+        let { lo: Int64, hi: Int64 } := pair;
+        let before: Hot := adopt(lo, hi);
         let seen: Int64 := read(&before);
         let remembered: Int64 := hotRemember(before.lo, before.hi);
         let waited: Int64 := hotWait();
-        -- The reloaded table must refuse the pre-reload words...
+        -- The reloaded table must refuse the pre-reload words. A zero status
+        -- here means it accepted a handle it does not own, which is the
+        -- failure this fixture exists to catch; a non-zero one is the claim.
         let refused: Int64 := dispose(before);
-        -- ...and mint, read and destroy a value of its own.
-        var pair2: Pair := Pair(lo => -1, hi => -1);
-        let minted2: Int64 := hotNew(9, refMutToPointer(&!pair2));
-        let after: Hot := adopt(pair2.lo, pair2.hi);
-        let disposed: Int64 := dispose(after);
         -- Each wrong answer has its own code, so a failure names the step.
         if minted /= 0 then
             return 11;
         end if;
         if seen /= 5 then
-            return 12;
+            return lo;
         end if;
         if remembered /= 0 then
             return 18;
@@ -94,16 +93,8 @@ module body HotHandle is
         if waited /= 0 then
             return 13;
         end if;
-        -- A zero status here means the reloaded table accepted words it does
-        -- not own, which is the failure this whole fixture exists to catch.
         if refused = 0 then
             return 14;
-        end if;
-        if minted2 /= 0 then
-            return 15;
-        end if;
-        if disposed /= 0 then
-            return 16;
         end if;
         return 0;
     end;

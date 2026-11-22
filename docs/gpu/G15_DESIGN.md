@@ -267,6 +267,51 @@ and a mock success is never presented as hardware evidence.
 - `scripts/gpu-service-jit` continues to cover the v1 JIT path; it does not
   exercise the async lifecycle, and no gate was weakened to make G15 pass.
 
+## Host-state ordering (G15a)
+
+The v2 lifecycle is a small concurrent registry, so its interleavings are part
+of the contract rather than an implementation detail. Three windows were open
+and are now closed; each is pinned by a test that forces the order.
+
+1. **Publish is one critical section.** A job's terminal state and the words in
+   its output buffer are written under the job lock. A reader therefore never
+   observes `COMPLETE` before the bytes exist, and a poll never observes a
+   terminal state whose buffer still holds the previous result.
+2. **A receipt is claimed atomically.** `rs_gpu_result` checks the state, checks
+   `result_taken`, copies, and sets `result_taken` while holding the job lock.
+   Two concurrent readers get one success and one `STALE`. A destination that is
+   too small still returns `LIMIT_REFUSED` **without** consuming the receipt, so
+   the caller may retry with a larger one.
+3. **Close is serialized against admission.** `rs_gpu_close` sets `closed` on the
+   context under the entry lock before the handle leaves the registry, and
+   refuses with `BUSY` while a job is pending. A submission that already holds
+   the entry refuses with `UNKNOWN_HANDLE` instead of starting a worker; a
+   worker is spawned **and registered** under the entry lock, so a close cannot
+   join an empty worker list and then have a worker pushed onto a detached
+   context.
+
+Lock order, which the module header repeats: a **job** state lock (never while
+holding a buffer), then the **buffers** map, then a **buffer** state. A context
+(**entry**) lock is taken alone; `job_pending` is queried only after a buffer
+state guard is released, and `rs_gpu_close` drops the entry lock before removing
+the handle.
+
+The handoff hooks are test-only (`service_test_set_hook`, keyed by job or
+context identity so one test cannot fire inside another's job; not exported
+symbols). They sit inside the critical sections above and block the service
+thread until the other thread reports its outcome, which is why the tests fail
+against the old ordering on an assertion rather than on a timeout. Against the
+unfixed code the three pinned tests fail with, respectively, the pre-completion
+bytes (`[9,9,9,9]` where `[11,22,33,44]` was published), two successful claims
+of one receipt (`[16,16]`), and `INVALID_ARGUMENT` instead of `UNKNOWN_HANDLE`
+for a submission whose context closed under it.
+
+**Not covered:** no ThreadSanitizer or loom run and no machine-checked
+lock-order proof; the ordering is argued in prose plus these deterministic
+tests. `rs_gpu_poll` remains a non-blocking observation with no timeout of its
+own — a caller's deadline stays with the module, and no wait path releases an
+allocation early.
+
 ## Resolved questions
 
 1. `OwnedBuffer` carries bytes only; `new_buffer` still takes elements and

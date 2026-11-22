@@ -669,8 +669,8 @@ Rules:
 `LiquidConstraints` collects obligations; `LiquidWhy3` emits a single module
 `Liquid_<ModuleName>.mlw` containing:
 
-- the TRL prelude (`int.Int`, `real.Real`, `list` theory, `liquid.drv`
-  mapping — native ints, sibling of `unfer_ocaml.drv`);
+- the TRL prelude (`int.Int`, `real.Real`, `list` theory, `unfer_ocaml.drv`
+  mapping — native ints, the driver reused instead of adding a `liquid.drv`);
 - measure definitions and total-function definitions (Cycle A, §8.3);
 - one `goal g_<span-hash>` per obligation, named by the Austral source span
   of the construct that generated it (blame mapping, stage L5).
@@ -713,7 +713,7 @@ recursion over the list argument, justified by T2 (the fold terminates). No
 other definition is recursive (T1), so the emitted theory is a conservative
 defitional extension of the prelude. This is what allows the subset to extend
 Why3's environment (measures, lemmas, grant-lattice predicates) and, via
-`why3 extract -D liquid.drv`, to extend the checker itself (Cycle B) — see
+`why3 extract -D unfer_ocaml.drv`, to extend the checker itself (Cycle B) — see
 `PLAN_liquid_types.md` §3.
 
 ### 8.4 Golden pinning

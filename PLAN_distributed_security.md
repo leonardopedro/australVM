@@ -43,6 +43,25 @@ their implementation is not proved by this work.
 | Merge convergence | Proven laws for specifically registered metadata merges | Mergeable ownership, double-spend prevention or revocation under partition |
 | Progress | Separate theorem/test under stated quorum, fairness, delivery and storage assumptions | Bounded response time in an asynchronous partition |
 
+Two consequences are worth fixing before the tasks. **A guarantee proved over all
+schedules is a safety guarantee.** Hydro's own Lean development states the reason
+(`hydro_lean/internal/FIDELITY.md`, "Scope of the Runtime Model"): its denotation
+admits more behaviours than any schedule realizes, and the transfer it needs is
+machine ⊆ denotation, which makes a contract stronger and never unsound. The same
+direction leaves progress unproved, so the last row of the table is reachable
+only under D23's explicit fairness, delivery, quorum and storage assumptions —
+never as a corollary of "proved for every schedule". An absence of received
+messages is not a decision until a completeness frontier says so (D19).
+
+**A guarantee whose truth depends on batching needs a named premise.** Hydro's
+quorum API guarantees membership and the threshold under every batching, and its
+completeness only under an explicit usage cap on responses per key (its finding
+B3); the cap is a field of the contract, not a comment at the caller. The same
+holds here for any guarantee that depends on how arrivals are grouped — dedup
+windows, watermark completeness, "at most one vote per member per ballot". Each
+must be a named premise with a witness, which is what D19's registry and D24's
+assumption list carry. Deduplication at the sender does not discharge it.
+
 Postpone Byzantine consensus, dynamic membership, live ownership migration,
 cross-cluster transactions, arbitrary distributed shared memory, a new general
 dataflow DSL, a full Hydro port and a proof of Cranelift. These require separate
@@ -202,7 +221,8 @@ git diff --check
 Use the default prover shell, or an explicitly working prover environment, for
 required Why3 proofs. The `#ocaml` fallback can build but cannot certify missing
 prover results. Lean proofs use the existing version-matched exporter shell;
-do not enter a heavy Sail-model rebuild for an unrelated task. New untracked
+do not enter a heavy Sail-model rebuild for an unrelated task, and do not widen
+that shell to Hydro's Lean 4.33.1/Mathlib for a distributed task (D22). New untracked
 Nix inputs are not visible to a git flake until included in its source snapshot;
 prepare that snapshot explicitly, without committing unrelated changes.
 
@@ -664,13 +684,18 @@ cryptographic digest. Overlength/overflow inputs are refused before unsafe FFI.
 2. Expose opaque Rust marker/constructor APIs and matching Austral wrappers only
    for the contracts actually enforced. An unordered fold requires commutativity;
    arbitrary repeated deliveries require idempotence too. Consecutive-only
-   destuttering is insufficient for nonconsecutive request retries.
+   destuttering is insufficient for nonconsecutive request retries. A guarantee
+   that holds only under a usage cap or a batching rule takes that cap as an
+   explicit contract field with a witness (the `cqKeyCount … ≤ max` pattern in
+   Hydro's `Hydro/Std/Quorum.lean`), so a caller that cannot establish it does
+   not get the guarantee; a comment at the call site is not a premise.
 3. Add a registry census for every production send/receive/timer/retry/storage
    hook and simulator site. Changes require matching inventory and test/model
    coverage. The census catches missing sites, not semantic equivalence by itself.
 
-**Accept:** packet-count quorum, unproved unordered subtraction and promotion of
-an at-least-once channel to exactly-once fail the appropriate constructor/check.
+**Accept:** packet-count quorum, unproved unordered subtraction, a completeness
+or dedup guarantee stated without its usage cap, and promotion of an at-least-once
+channel to exactly-once fail the appropriate constructor/check.
 Counterexample: repeated votes from one authenticated member never form quorum.
 Nonmonotone decisions such as close/absence require an ordered close or explicit
 completeness frontier, never a local timeout interpreted as global knowledge.
@@ -727,14 +752,23 @@ project pinned to the existing exporter-compatible Lean version, and a build gat
 
 1. Write import-light definitions of the production transition vocabulary,
    node-local state, in-flight messages, crash/restore and explicit schedules.
-   Reuse finite lists and total steps; do not import all of Hydro Lean or upgrade
-   Mathlib/Lean as an incidental dependency. Document each source/model seam.
+   Reuse finite lists and total steps. Do not import Hydro Lean or take Mathlib as
+   an incidental dependency: this tree's exporter shell is Lean 4.30.0 and the
+   Hydro checkout is pinned at Lean 4.33.1 with Mathlib, so an import would force
+   a toolchain migration for a library whose value here is its discipline, not
+   its size. Mirror one module at a time. Document each source/model seam.
 2. Prove the selected invariant under every modeled step, including stutter,
    duplicate delivery, refusal, crash and recovery. Separate consensus agreement
    and cryptographic assumptions as named predicates/premises.
 3. Add headline axiom reports and reject sorryAx, native_decide/ofReduceBool,
    unreviewed axioms, unsafe/extern substitution and unaudited implementation
-   replacements. Tie the decision-site census to D19.
+   replacements. Tie the decision-site census to D19. Count the compiler seams
+   the way Hydro's gate does (`hydro_lean/internal/GATE.md` §4): a grep for
+   `implemented_by`/`@[extern]`/`native_decide`/`unsafe`/`ofReduceBool` that must
+   be empty, and every `@[csimp]` substitution carrying a kernel-checked
+   `f = fImpl` and a reviewed count. A green build whose theorems are about
+   definitions the compiler rewrote is the failure this catches and an axiom
+   report does not.
 
 **Accept:** clean build and non-vacuous executable witnesses, explicit theorem
 dependencies, all-run safety only for the stated model. A manual Rust/Austral
@@ -776,7 +810,11 @@ loader; **new** `docs/distributed/CLAIMS.md`, claim manifest and CI job.
    proof artifacts. Canonicalize serialization and verify every digest at load.
 2. Evidence class per claim is one of runtime-tested, finite-trace-certified,
    symbolic-invariant-proved or model-refinement-proved, with named assumptions
-   and gaps. A digest is identity evidence; it is not a proof of semantics.
+   and gaps. A model-refinement-proved claim also names the seams it relies on:
+   the substitution count with each `f = fImpl`, the empty-grep for
+   `implemented_by`/`@[extern]`/`native_decide`/`unsafe`, and the trusted
+   Rust-to-model mirror. A digest is identity evidence; it is not a proof of
+   semantics.
 3. Gate deployment by required class, signature and freshness. Mutate one field
    at a time: library byte, grant, schema, theorem premise, proof, target, runtime
    version or source; refuse or explicitly invalidate the affected evidence.
@@ -864,7 +902,17 @@ evidence of work performed.
 
 | Task/patch | Status | Source revisions + dirty inputs | Targeted checks/logs | Evidence class | Remaining assumptions/gaps |
 |---|---|---|---|---|---|
-| D00 | pending | — | — | — | Baseline not yet executed |
+| D00 | implemented with gaps | A `3ad01bac`+; U `b0aaa7c`, clean | [`docs/distributed/EXECUTION.md`](docs/distributed/EXECUTION.md), `scripts/check-distributed-contracts --selftest` | structural checker | The 2026-11-19 rows that were `gap` for a missing `cc` cache are re-measured on this aarch64 host; the suites still not run keep their named gap |
+| D01 | verified within stated scope | U `b0aaa7c` + this patch; A unchanged | `unfer_consensus --lib` 116 passed, `unfer_identity`, `phase6_testnet`, `unfer_data`; logs under `docs/distributed/evidence/` | runtime-tested | Identity authority is enforced at the ordered point; other op kinds still verify at ingress only, and unsigned key rotation is refused rather than implemented |
+| D02 | verified within stated scope | U `b0aaa7c` + this patch | `unfer_data --lib` 62, `--test integration` 4, `unfer_ffi --lib` 175; logs under `docs/distributed/evidence/` | runtime-tested (negative control for the old nonce) | Per-object key context and authenticated metadata; v1 envelopes refused, not migrated; publisher key distribution is D10/D11 |
+| D03 | verified within stated scope | U `b0aaa7c` + this patch | `unfer_edge --features audit` 89 + 1; `docs/distributed/evidence/d03-unfer_edge_audit.log` | runtime-tested | Capability RPC is loopback-only and every registry verb is owner-checked; the HTTP layer still has one principal (A9 auth seam) |
+| D04 | verified within stated scope | U `b0aaa7c` + this patch | `unfer_consensus --lib` 121; `docs/distributed/evidence/d04-unfer_consensus_lib.log` | runtime-tested | Burn is validate-then-commit and four ledgers pin whole-state refusal; crash atomicity remains D07's |
+| D05 | verified within stated scope | U `b0aaa7c` + this patch | `unfer_protocol --lib` 351, `unfer_consensus --lib` 129, `--features network --test phase6_testnet` 4, `unfer_identity` 7+1, `unfer_data --lib` 63; `docs/distributed/evidence/d05-*.log` | runtime-tested (real 2-of-3 QuePaxa cluster, including restart) | Receipts cannot be mistaken for slots; a domain refusal advances the slot and a gap halts; identity/publishing settle before reporting. Durable request identity is D06, crash atomicity D07 |
+| D06 | verified within stated scope | U `14e0a7a` + this patch | `unfer_consensus --test request_identity` 5, `--lib` 150, `unfer_protocol` 353+4+51+3, `unfer_identity` 7+1, `unfer_data` 63+4+1, `unfer_edge --features audit` 89+1; `docs/distributed/evidence/d06-*.log` | runtime-tested | One request id names one action: same bytes replays the settled result, different bytes is UK-8101, at-or-below the retained floor is UK-8102, a full book is UK-8103. The book is in memory; the bindings become durable in D07 |
+| D07 | verified within stated scope | U `14e0a7a`, `249c53c` + this patch | `unfer_consensus --lib` 150, `--features network --test phase6_testnet` 4, `unfer_ffi` 175+55+1; `docs/distributed/evidence/d07-*.log` | runtime-tested (fault injection at each crash-protocol boundary) | One framed, fsynced log; torn tail is truncated, a bad checksum is corruption, a failed sync is uncertain; replay compares recorded outcomes and halts on a mismatch. Not an atomic commit with QuePaxa's own runtime store |
+
+The D00 record is the ledger: every later task appends its row there with the
+command, exit, evidence path and the assumption it leaves behind.
 
 Allowed statuses: pending, in progress, implemented with gaps, verified within
 stated scope, owner statement approval pending. “Verified” requires a precise
@@ -894,6 +942,27 @@ process/trace semantics, quorum example, fidelity notes and gate. The detailed
 [reference map](docs/DISTRIBUTED_SECURITY_REVIEW.md#4-what-hydro-contributes)
 states which ideas transfer and where the reference's scope ends. Hydro's local
 LICENSE is Apache-2.0. This plan adapts design ideas; no source code is copied.
+
+**Re-checked against the checkout on 2026-11-21** (HEAD exactly
+`92e6451bb997872928384323481bc18b22ef850b`, tree clean, no `target/`, so nothing
+was built). Every path the review's §4 table cites exists; `hydro_lean` is 115
+`.lean` files and ~70k lines on Lean `v4.33.1`; the only library allowed to carry
+`sorry` is the tutorial-step library (`lakefile.toml`, `internal/GATE.md` §2).
+Four qualifications the plan's tasks now encode: the denotation is larger than
+what schedules realize, so proved-over-all-schedules is a safety statement only;
+the quorum contract's completeness holds under a usage cap, not universally
+(finding B3); the machine is a semantics of the combinators, not of the code
+`hydro_lang` generates, so the module-to-Rust mirror is review plus
+`#nondet_census`, not proof; and lossy transport, dynamic membership, adequacy
+and the benchmark are outside the model. Its findings B1–B6 (duplicate P1a
+replies forming a fake quorum, every-tick recommit and rebase, late responses at
+`min < max`, a payload at a collected slot, the checkpoint treated as executed,
+and the `count > f` skip) are the failure classes decisions 5 and 7 here are
+written against, found by falsification (`lake exe falsify`) rather than by
+proof. Hydro's gate is the model for D22 step 3 and D24 step 2: 140 headline
+axiom reports each within `[propext, Classical.choice, Quot.sound]`, `sorryAx`
+and `ofReduceBool` counts at 0, an empty grep for compiler seams, and nineteen
+`@[csimp]` substitutions each with a kernel-checked equation.
 
 Existing project plans remain authoritative for their own features:
 [Rust interop](PLAN_valen.md), [liquid types](PLAN_liquid_types.md),

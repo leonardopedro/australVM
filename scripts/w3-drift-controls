@@ -22,35 +22,52 @@
 # speed-up available — a case *is* one full gate run — and it is bounded by the
 # cores: this host has two.
 #
-# Measured 2026-11-18, the 14 cases then present, same tree, same `nix develop`:
+# Measured 2026-11-18, all 14 cases, same tree, same `nix develop`:
 #   -j 1  62m43s   (~269 s/case)
 #   -j 2  44m9s    (~379 s/case: two gate runs contend, so the second core is
 #                   worth 1.42x, not 2x — a gate run is not itself parallel)
 # i.e. 18m34s (30%) off the sequential wall clock, which is what `make
 # drift-controls` saves at the default `DRIFT_JOBS=$(nproc)`.
-# `mm0-toolchain-gap` is the 15th case (added 2026-11-20); measured alone at 128s
-# and 15/15 in 18m49s at -j 12 on a twelve-core host the same day.
 #
-# `w3-approved-row` is the one case whose subject is an *approved* §W3 row, and
-# no §W3 row is approved in this tree: it copies `mm0/approved/` into scratch and
-# weakens an approved axiom's text there. Nothing is approved by it — a control
-# that wrote `mm0/approved/` would be self-approval.
+# `w3-approved-row` is the one case whose subject is an *approved* §W3 row: it
+# copies `mm0/approved/` into scratch and weakens an approved axiom's text there.
+# Nothing is approved by it — a control that wrote `mm0/approved/` would be
+# self-approval. It derives the row it weakens from the approved root, so the
+# case follows the tree's approvals instead of naming one that later lands.
+# `cert-approved` has to pick its direction the same way: it asks whether the
+# tree approves `isa` and drifts the opposite way.
 #
 # Every run also records its own wall clock, so a timing in the plan is a quoted
 # data row and not a number someone retyped. The row goes to
 # `$W3_DRIFT_LOGS/timings.tsv` always, and to `$W3_DRIFT_RECORD` when it is set
 # (point that at `docs/data/w3/drift-timings.tsv` to keep the row in the tree).
 # Columns, tab separated, one row per run:
-#   date  rev  jobs  requested  wall_s  per_case_s  held  outcome
+#   date  rev  jobs  requested  wall_s  per_case_s  held  gap  outcome  cases  died
+# `held` is `held/requested` and does not count a case this shell could not
+# exercise — a `[gap]` is not a hold, so the column cannot read `14/14` for a run
+# whose summary said `13 case(s) held, 1 not covered`. `gap` is that count;
+# `cases` names what was asked for (`all`, or the case name(s)), which is what
+# ties a row to the run directory that holds its logs
+# (`$W3_DRIFT_LOGS/runs/<id>/<case>/`). `died` names (comma separated) the cases that did not hold
+# and left no gate transcript at all: their subshell ended before `gate_run`
+# wrote a byte (a killed case looks exactly like this — empty report, empty
+# status, no log), so the row would otherwise read `1/14 failed` and say nothing
+# about which case. `-` means every case that ran reached the gate; a case whose
+# gate ran and whose control did not hold is not in this column, because its
+# transcript is in its run directory. `?` marks a row recorded before the column
+# existed — it says nothing about that run either way.
+# (`$W3_DRIFT_LOGS/runs/<id>/<case>/`).
 #
 # One case is conditional on the shell: `liquid-golden` needs why3, because the
 # gate *guards* the pinned-golden check on `command -v why3` and reports it as an
 # explained `[gap]` when the prover is absent. Rather than fail (a false
 # negative) or pass (a false positive), the case reports `[gap] not covered in
-# this shell` and the summary counts it separately. In `nix develop .#ocaml` on
-# this aarch64 host that is the expected state — the `default` devShell carries
-# why3 but does not build (`alt-ergo`, see AGENTS.md) — so `make test` now runs
-# past `drift-controls` there with the gap named instead of stopping.
+# this shell` and the summary counts it separately. In `nix develop .#ocaml`
+# that is the expected state: the shell carries no prover by design, and the
+# `default` one does (measured 2026-11-20 on x86_64: `default` builds with
+# why3 1.8.2; on aarch64 it does not build at all, see AGENTS.md). So nothing
+# here fails, and `make drift-controls-all` re-runs this one case under the
+# default shell instead of leaving the gap to the caller.
 #
 # Usage: scripts/w3-drift-controls [-j N] [case|all]   (default -j 1, or
 #          $W3_DRIFT_JOBS; `make drift-controls` passes -j $(nproc))
@@ -77,11 +94,27 @@ command -v python3 >/dev/null 2>&1 || {
 
 # Each case keeps its whole gate log under $W3_DRIFT_LOGS: the recorded numbers
 # in the plan's probe table are read out of these, so they must outlive the run.
+# One directory per invocation and one per case inside it
+# (`$W3_DRIFT_LOGS/runs/20261120T113045Z-1234/<case>/01-g.log`, with the case's
+# printed report beside it): writing every case's log to
+# `$W3_DRIFT_LOGS/<case>.log` meant the next run of that case overwrote the
+# transcript, so a red row could not be read back afterwards. The count is
+# bounded: a run removes all but the newest `$W3_DRIFT_KEEP` (default 20) run
+# directories, so the logs of recent runs — what a red row needs — survive
+# without `/tmp` growing without limit. Every run ends by printing, per case,
+# the log files its own directory holds, so the summary `make test` leaves in the
+# transcript points at the transcript of a failing case.
 W3_DRIFT_LOGS="${W3_DRIFT_LOGS:-/tmp/w3-drift-controls}"
 W3_DRIFT_RECORD="${W3_DRIFT_RECORD:-}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$W3_DRIFT_LOGS"
+# Created when the first case starts, so `--list` and a bad case name leave no
+# directory behind.
+RUN_DIR="$W3_DRIFT_LOGS/runs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+# The logs are scratch, so their number is bounded: a run removes all but the
+# newest `$W3_DRIFT_KEEP` run directories, itself included. 0 keeps everything.
+W3_DRIFT_KEEP="${W3_DRIFT_KEEP:-20}"
 
 JOBS="${W3_DRIFT_JOBS:-1}"
 
@@ -90,9 +123,14 @@ JOBS="${W3_DRIFT_JOBS:-1}"
 # case never sees another case's files or the gate's `mktemp -d` results.
 gate_run() {   # log, then VAR=value … for the gate's environment
     local log="$1"; shift
-    local rc=0
+    local rc=0 dir n
     ( cd "$ROOT" && env "$@" bash scripts/verify-invariants ) >"$log" 2>&1 || rc=$?
-    cp "$log" "$W3_DRIFT_LOGS/$CASE.log"
+    # Kept per run: a case that runs the gate twice keeps both logs, numbered in
+    # the order they ran, instead of the second overwriting the first.
+    dir="$RUN_DIR/$CASE"
+    mkdir -p "$dir"
+    n=$(ls -1 "$dir" | wc -l)
+    cp "$log" "$dir/$(printf '%02d' $((n + 1)))-$(basename "$log").log"
     say "  gate: $(tail -1 "$log") (exit $rc)"
     return "$rc"
 }
@@ -102,10 +140,7 @@ expect_fail() {  # log, check text
 }
 expect_pass() {  # log, check text
     grep -qF "[pass] $1" "$2" || { fail "$CASE: $1 did not stay green"; return 1; }
-}
-expect_gap() {  # log, check text — `gap` prints `[gap]` followed by two spaces
-    grep -qF "[gap]  $1" "$2" || { fail "$CASE: $1 did not report a gap"; return 1; }
-    say "  [gap] $1"
+    say "  [pass] $1"   # silent-on-success would read like no assertion at all
 }
 expect_detail() {  # log, anchor, substring
     grep -F "$1" "$2" | grep -qF "$3" || {
@@ -114,6 +149,22 @@ expect_detail() {  # log, anchor, substring
         return 1
     }
     say "  detail: $3"
+}
+# Keep the newest `keep` run directories and remove the rest. Only names this
+# script writes (`<UTC stamp>-<pid>`) are candidates, so a directory or file put
+# in `runs/` by hand is never deleted. Two overlapping runs can prune each
+# other's directory; the window is wide enough (20 runs) that only a deliberate
+# -j run over more than that could reach one.
+prune_runs() {  # keep
+    local keep="$1" dirs n old
+    [ "$keep" -gt 0 ] || return 0
+    dirs=$(ls -1d "$W3_DRIFT_LOGS"/runs/[0-9]*-* 2>/dev/null | sort)
+    n=$(printf '%s\n' "$dirs" | grep -c .)
+    [ "$n" -gt "$keep" ] || return 0
+    old=$(printf '%s\n' "$dirs" | head -n "$((n - keep))")
+    printf '%s\n' "$old" | while IFS= read -r d; do
+        [ -n "$d" ] && rm -rf "$d" && say "retention: removed $(basename "$d")"
+    done
 }
 mm0_copy() {  # destination — always a fresh copy, so cases cannot stack drifts
     rm -rf "$1"
@@ -145,7 +196,7 @@ case_phase-d-theory-coverage() {
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "Phase D: slot_layout.mm0 states its theory coverage" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_phase-d-imported-theory() {
@@ -156,7 +207,7 @@ case_phase-d-imported-theory() {
     expect_fail "Phase D: slot_layout.mm0 only claims rules its theory declares" "$cw/g" &&
     expect_detail "claims used rules the theory does not declare:" "$cw/g" "tnope_not_declared" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_phase-d-self-vocabulary() {
@@ -165,7 +216,7 @@ case_phase-d-self-vocabulary() {
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "Phase D: store_projection.mm0 states its theory coverage" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_phase-d-measured-coverage() {
@@ -187,7 +238,7 @@ PY
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "Phase D: clif.mm0 states its measured coverage" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_isa-hypothesis-pin() {
@@ -204,7 +255,7 @@ PY
     gate_run "$cw/g" AUSTRALVM_MM0_DIR="$cw/mm0" || true
     expect_fail "W8: hypotheses are cited, pinned, and the unchecked count matches its pin" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_clif-vocabulary() {
@@ -240,7 +291,7 @@ case_witness-axiom() {
     # the witness's axiom list missing `toy_not_held` beside the count drift.
     expect_fail "W9.3: the witness exercises every axiom the toy declares" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_memsafe-edge() {
@@ -264,7 +315,7 @@ PY
     expect_fail "memsafe: fixtures exercise every automaton edge" "$cw/g" &&
     expect_detail "neither fixture reaches:" "$cw/g" "t_acq" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 case_liquid-golden() {
@@ -290,21 +341,42 @@ case_liquid-golden() {
 # the same read-only relocation `AUSTRALVM_APPROVED_ROOT` already provides.
 case_cert-approved() {
     mkdir -p "$cw/approved"
-    printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$cw/approved/isa.stmts"
-    gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
-    expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
-    expect_detail "isa.stmts exists" "$cw/g" "clif.mm0 must cite it, not a gap" &&
-    # The approval is inconsistent with everything else *by construction* — a
-    # consistent one is the owner's commit, not something a control may create —
-    # so six comparisons that read the approved copy also move. They are
-    # consequences of the same drift, and the row for this case says so.
-    expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
-    expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g" &&
+    # Two directions, because the check compares `clif.mm0`'s certificate line
+    # with the *approved root*: the drift is whatever the two disagree on. While
+    # the tree has no `isa` approval the file must say `[gap]`, so the drift is
+    # an approved root that grows one; once the owner approves `isa` the file
+    # cites the copy, so the drift is a root without it.
+    if [ -e "$ROOT/mm0/approved/isa.stmts" ]; then
+        gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+        expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
+        expect_detail "no isa approval, yet clif.mm0 does not say" "$cw/g" \
+            "yet clif.mm0 does not say [gap]"
+    else
+        printf '%s\n' '-- statements-sha256: 0' 'provable sort l0;' > "$cw/approved/isa.stmts"
+        gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
+        expect_fail "W9.3: certification state matches mm0/approved/" "$cw/g" &&
+        expect_detail "isa.stmts exists" "$cw/g" "clif.mm0 must cite it, not a gap"
+    fi &&
+    # An approved root that disagrees with the plan's rows is inconsistent with
+    # everything else *by construction* — a consistent root is the owner's
+    # commit, not something a control may create — so the comparisons that read
+    # the approved copy move too. They are consequences of the same drift, and
+    # the row for this case says a whole-root perturbation moves more than one
+    # line; which lines depends on the direction.
+    if [ -e "$ROOT/mm0/approved/isa.stmts" ]; then
+        expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
+        expect_fail "W3: the plan's §W3 digest column matches the file it describes" "$cw/g" &&
+        expect_fail "W3: every approved §W3 row's emitter still produces its approved copy" "$cw/g" &&
+        expect_fail "W3: stage-approvals stages exactly §W3's pending rows (exit 0)" "$cw/g"
+    else
+        expect_fail "W3: the plan's §W3 stmts column matches what each artifact holds" "$cw/g" &&
+        expect_fail "W9.3: the composition table's counts match the files it records" "$cw/g"
+    fi &&
     # The two lines below read neither the approved root nor clif.mm0, so they
     # are what says the run still worked: without them the expected failures
     # above would also be produced by a gate that had broken wholesale.
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 # The last `copy` row: `W3: $_stem matches its approved statements`. Its failing
@@ -330,55 +402,13 @@ PY
     gate_run "$cw/g" AUSTRALVM_APPROVED_ROOT="$cw/approved" || true
     expect_fail "W3: quasi_rh_7_8 matches its approved statements" "$cw/g" &&
     expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g" &&
-    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (4 row(s))" "$cw/g"
-}
-
-# The negative control for the gate's "absent tool is a gap" branch. The W9.3
-# measures need mm0-rs/mm0-c, so where they are missing the gate must report
-# `[gap]` rather than `[FAIL]` — otherwise the baseline is red for a tool and
-# every control above that needs a green unmutated run stops being runnable on
-# that host. This case runs the gate *unmodified* with the two commands taken out
-# of PATH and requires the four measures to be gaps and the run to exit 0. On a
-# host where they are already absent nothing is removed and the same lines are
-# asserted; where a directory provides them, its other tools (python3, …) are
-# re-exposed through a shim so the gate still works.
-case_mm0-toolchain-gap() {
-    local d f b shim="$cw/bin" stripped
-    local -a keep=()
-    mkdir -p "$shim"
-    local IFS=:
-    for d in $PATH; do
-        [ -n "$d" ] || continue
-        if [ -x "$d/mm0-rs" ] || [ -x "$d/mm0-c" ]; then
-            for f in "$d"/*; do
-                b="${f##*/}"
-                case "$b" in mm0-rs|mm0-c) continue ;; esac
-                [ -e "$shim/$b" ] || ln -s "$f" "$shim/$b" 2>/dev/null
-            done
-        else
-            keep+=("$d")
-        fi
-    done
-    unset IFS
-    if [ "${#keep[@]}" -gt 0 ]; then
-        stripped="$shim:$(IFS=:; printf '%s' "${keep[*]}")"
-    else
-        stripped="$shim"
-    fi
-    local rc=0
-    gate_run "$cw/g" PATH="$stripped" || rc=$?
-    [ "$rc" -eq 0 ] || { fail "$CASE: the gate exits $rc where a missing tool is a gap"; return 1; }
-    expect_gap "W9.3: the memory projection not checked (mm0-rs/mm0-c absent" "$cw/g" &&
-    expect_gap "W9.3: the toy projection's theorems not checked (mm0-rs/mm0-c absent" "$cw/g" &&
-    expect_gap "W9.3: the toy's shape figures not compared (no mm0-rs measurement here)" "$cw/g" &&
-    expect_gap "W9.3: the toy's proofs not mutation-tested (mm0-rs absent" "$cw/g" &&
-    expect_pass "Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)" "$cw/g"
+    expect_pass "W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))" "$cw/g"
 }
 
 CASES="phase-d-trust-split-gap phase-d-trust-split-layout phase-d-theory-coverage
 phase-d-imported-theory phase-d-self-vocabulary phase-d-measured-coverage
 isa-hypothesis-pin clif-vocabulary clif-citations witness-axiom memsafe-edge
-liquid-golden cert-approved w3-approved-row mm0-toolchain-gap"
+liquid-golden cert-approved w3-approved-row"
 
 # One case, in its own scratch dir and temporary root. Runs in a subshell: the
 # report lands in `$work/<case>/report` and the status in `$work/<case>/status`,
@@ -387,7 +417,7 @@ run_case() {
     local c="$1"
     CASE="$c"
     cw="$work/$c"
-    mkdir -p "$cw/tmp"
+    mkdir -p "$cw/tmp" "$RUN_DIR/$c"
     export TMPDIR="$cw/tmp"
     SECONDS=0
     local rc=0
@@ -403,19 +433,29 @@ run_case() {
 # The row a run writes about itself. `held` is what the run actually reported
 # holding out of what was asked for, so a case that fails still records its wall
 # clock — the time a red run costs is worth knowing too.
-record_timing() {  # held requested jobs seconds outcome
+record_timing() {  # held requested jobs seconds outcome gap cases died
     local held="$1" requested="$2" jobs="$3" secs="$4" outcome="$5"
+    local gap="${6:-0}" cases="${7:-}" died="${8:--}"
     local per=0 date rev row
     [ "$requested" -gt 0 ] && per=$((secs / requested))
     date="$(date -u +%F)"
     rev="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
-    row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s/%s\t%s' \
-        "$date" "$rev" "$jobs" "$requested" "$secs" "$per" "$held" "$requested" "$outcome")"
+    row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s' \
+        "$date" "$rev" "$jobs" "$requested" "$secs" "$per" "$held" "$requested" "$gap" "$outcome" "$cases" "$died")"
     printf '%s\n' "$row" >>"$W3_DRIFT_LOGS/timings.tsv"
     if [ -n "$W3_DRIFT_RECORD" ]; then
         printf '%s\n' "$row" >>"$W3_DRIFT_RECORD"
     fi
     say "timing: $held/$requested case(s) in ${secs}s at -j $jobs (${per}s each) — $W3_DRIFT_LOGS/timings.tsv"
+    # A row that only counts a death is the one thing a transcript cannot be
+    # consulted for, so the names go to stdout as well as to the ledger.
+    if [ "$died" != "-" ]; then
+        say "died before the gate ran: $died (no transcript; the case's own report is empty too)"
+    fi
+}
+
+gate_logs() {  # case — how many gate transcripts this case produced
+    ls -1 "$RUN_DIR/$1"/*.log 2>/dev/null | grep -c .
 }
 
 report_case() {  # print a finished case's report, return its status
@@ -424,12 +464,22 @@ report_case() {  # print a finished case's report, return its status
     say ""
     say "== $c (${secs}s)"
     cat "$cw/report" 2>/dev/null
+    # The report is the readable half of the log: keep it with the gate output so
+    # a red case can be re-read after the run ends.
+    [ -f "$cw/report" ] && cp "$cw/report" "$RUN_DIR/$c/report.txt"
     if [ -f "$cw/skipped" ]; then
         say "  [gap] not covered in this shell (named above)"
     elif [ "$rc" -eq 0 ]; then
         say "  holds"
+    elif [ "$(gate_logs "$c")" -eq 0 ]; then
+        # No transcript at all: the case's subshell ended before the gate wrote
+        # its first line. Named separately so it is not confused with a control
+        # that ran the gate and lost its assertion — and marked, so the row this
+        # run records can name it instead of counting it anonymously.
+        touch "$cw/died"
+        fail "$c: died before the gate ran, so nothing was measured — no log under: $RUN_DIR/$c"
     else
-        fail "$c: the control did not hold"
+        fail "$c: the control did not hold — logs: $RUN_DIR/$c"
     fi
     return "$rc"
 }
@@ -448,21 +498,37 @@ run_all() {  # case names on stdin
         if [ "$running" -ge "$JOBS" ]; then wait; running=0; fi
     done
     wait
-    local status=0 held=0
+    local status=0 held=0 gap=0 died=""
     for c in "${order[@]}"; do
-        # A skipped case exits 0 with exit 2 unavailable (it is inside a subshell),
-        # so it is told apart by its marker: counting it as held would make the
-        # recorded row claim a hold for a case this shell never ran.
         if report_case "$c"; then
-            [ -f "$work/$c/skipped" ] || held=$((held + 1))
+            # A skipped case returns 0 so the run continues, but it is not a
+            # hold: counting it as one is how a ledger row came to claim
+            # `14/14` for a run that reported `13 held, 1 not covered`.
+            if [ -f "$work/$c/skipped" ]; then
+                gap=$((gap + 1))
+            else
+                held=$((held + 1))
+            fi
         else
             status=1
+            [ -f "$work/$c/died" ] && died="$died${died:+,}$c"
         fi
     done
     # The wall clock belongs to the run, not to the caller: record it here, where
     # both entry points (all, one case) end up.
     record_timing "$held" "${#order[@]}" "$JOBS" "$SECONDS" \
-        "$([ "$status" -eq 0 ] && printf held || printf failed)"
+        "$([ "$status" -eq 0 ] && printf held || printf failed)" "$gap" \
+        "$(printf '%s' "${order[*]}")" "${died:--}"
+    # Which directory a case's transcript went to, printed here because `$work`
+    # (and the report it holds) is deleted when the run exits.
+    say "logs: $RUN_DIR (one directory per case, one file per gate run)"
+    printf '  %-29s %s\n' "case" "gate log(s) under runs/$(basename "$RUN_DIR")/"
+    local c logs
+    for c in "${order[@]}"; do
+        logs=$(ls -1 "$RUN_DIR/$c"/*.log 2>/dev/null | sed "s|^$RUN_DIR/$c/||" | tr '\n' ' ')
+        [ -n "$logs" ] || logs="(no gate run)"
+        printf '  %-29s %s\n' "$c" "${logs% }"
+    done
     return "$status"
 }
 
@@ -483,6 +549,8 @@ if [ "$what" = --list ]; then
 fi
 if [ "$what" = all ]; then
     SECONDS=0
+    mkdir -p "$RUN_DIR"
+    prune_runs "$W3_DRIFT_KEEP"
     printf '%s\n' $CASES | run_all || status=1
     say ""
     skipped=$(ls -1 "$work"/*/skipped 2>/dev/null | wc -l)
@@ -496,6 +564,8 @@ if [ "$what" = all ]; then
     fi
 elif declare -F "case_$what" >/dev/null; then
     SECONDS=0
+    mkdir -p "$RUN_DIR"
+    prune_runs "$W3_DRIFT_KEEP"
     printf '%s\n' "$what" | run_all || status=1
 else
     fail "no case named '$what' (known: $(printf '%s\n' $CASES | tr '\n' ' '))"

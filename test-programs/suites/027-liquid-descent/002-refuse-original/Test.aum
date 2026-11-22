@@ -1,0 +1,22 @@
+module body Test is
+    union List: Free is
+        case Nil;
+        case Cons is
+            head: Int64;
+            tail: List;
+    end;
+
+    pragma Liquid_Descent;
+    function length(xs: List): Int64 is
+        case xs of
+            when Nil do
+                return 0;
+            when Cons(head: Int64, tail: List) do
+                return length(xs);
+        end case;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

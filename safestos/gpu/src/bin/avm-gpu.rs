@@ -10,7 +10,7 @@ use std::path::Path;
 
 fn usage() -> i32 {
     eprintln!(
-        "usage:\n  avm-gpu validate BUNDLE\n  avm-gpu reference BUNDLE --inputs FILE\n  avm-gpu validate-reduce REDUCTION\n  avm-gpu reference-reduce REDUCTION --inputs FILE\n  avm-gpu probe [--require-hardware] [--list] [--adapter NAME | --adapter-index N]\n  avm-gpu run BUNDLE --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]\n  avm-gpu run-reduce REDUCTION --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]\n  avm-gpu compare-reduce REDUCTION --map BUNDLE --inputs FILE [--iterations N] [--require-hardware] [--adapter NAME | --adapter-index N]"
+        "usage:\n  avm-gpu validate BUNDLE\n  avm-gpu reference BUNDLE --inputs FILE\n  avm-gpu reflect-wgsl BUNDLE [--out DIR]\n  avm-gpu check-reflect BUNDLE --artifact FILE\n  avm-gpu validate-reduce REDUCTION\n  avm-gpu reference-reduce REDUCTION --inputs FILE\n  avm-gpu probe [--require-hardware] [--list] [--adapter NAME | --adapter-index N]\n  avm-gpu run BUNDLE --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]\n  avm-gpu run-reduce REDUCTION --inputs FILE [--require-hardware] [--adapter NAME | --adapter-index N]\n  avm-gpu compare-reduce REDUCTION --map BUNDLE --inputs FILE [--iterations N] [--require-hardware] [--adapter NAME | --adapter-index N]"
     );
     2
 }
@@ -717,6 +717,99 @@ fn parse_device_flags(args: &[String]) -> Result<DeviceFlags, String> {
     Ok((require, name, index, list, positional))
 }
 
+/// PC05a: reflect the parsed WGSL of a bundle's clamp into the word model and
+/// (with `--out`) emit the witness artifact. The wrapper audit runs first and
+/// separately: it is reported as its own fact, not folded into the reflection.
+fn reflect_wgsl_command(dir: &str, out: Option<&str>) -> i32 {
+    let loaded = match load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_bundle(&loaded) {
+        return fail(&e);
+    }
+    let wgsl = match avm_gpu::wgsl_reflect::reflect(&loaded.wgsl, loaded.bundle.input_arity) {
+        Ok(w) => w,
+        Err(e) => return fail(&e),
+    };
+    let ir = match avm_gpu::wgsl_reflect::reflect_ir(&loaded.bundle.kernel_ir) {
+        Ok(ir) => ir,
+        Err(e) => return fail(&e),
+    };
+    let joined = match avm_gpu::wgsl_reflect::witness(&wgsl, &ir) {
+        Ok(joined) => joined,
+        Err(e) => return fail(&e),
+    };
+    let (mm0, mm1) = avm_gpu::wgsl_reflect::render(
+        &joined,
+        &loaded.bundle.wgsl_sha256,
+        &loaded.bundle.ir_sha256,
+    );
+    if let Some(out) = out {
+        if let Err(e) = std::fs::create_dir_all(out) {
+            return fail(&format!("cannot create {out}: {e}"));
+        }
+        for (name, text) in [("clamp_wgsl.mm0", &mm0), ("clamp_wgsl.mm1", &mm1)] {
+            let path = Path::new(out).join(name);
+            if let Err(e) = std::fs::write(&path, text) {
+                return fail(&format!("cannot write {}: {e}", path.display()));
+            }
+        }
+    }
+    ok_json(serde_json::json!({
+        "status": "ok",
+        "operation": "reflect-wgsl",
+        "reflect": avm_gpu::wgsl_reflect::describe(&joined),
+        "wgsl_sha256": loaded.bundle.wgsl_sha256,
+        "ir_sha256": loaded.bundle.ir_sha256,
+        "wrapper_audit": "pass",
+        "artifact": out,
+    }));
+    0
+}
+
+/// Re-reflect the bundle and compare a committed artifact against it.
+fn check_reflect_command(dir: &str, artifact: &str) -> i32 {
+    let loaded = match load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return fail(&e),
+    };
+    if let Err(e) = validate::validate_bundle(&loaded) {
+        return fail(&e);
+    }
+    let fresh = match avm_gpu::wgsl_reflect::reflect(&loaded.wgsl, loaded.bundle.input_arity) {
+        Ok(w) => w,
+        Err(e) => return fail(&e),
+    };
+    let ir = match avm_gpu::wgsl_reflect::reflect_ir(&loaded.bundle.kernel_ir) {
+        Ok(ir) => ir,
+        Err(e) => return fail(&e),
+    };
+    let fresh = match avm_gpu::wgsl_reflect::witness(&fresh, &ir) {
+        Ok(joined) => joined,
+        Err(e) => return fail(&e),
+    };
+    let text = match std::fs::read_to_string(artifact) {
+        Ok(text) => text,
+        Err(e) => return fail(&format!("cannot read {artifact}: {e}")),
+    };
+    if let Err(e) = avm_gpu::wgsl_reflect::check_artifact(
+        &fresh,
+        &loaded.bundle.wgsl_sha256,
+        &loaded.bundle.ir_sha256,
+        &text,
+    ) {
+        return fail(&e);
+    }
+    ok_json(serde_json::json!({
+        "status": "ok",
+        "operation": "check-reflect",
+        "artifact": artifact,
+        "reflect": avm_gpu::wgsl_reflect::describe(&fresh),
+    }));
+    0
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let device_subcommand = matches!(
@@ -741,6 +834,13 @@ fn main() {
         Some("validate") if args.len() == 2 => validate_command(&args[1]),
         Some("reference") if args.len() == 4 && args[2] == "--inputs" => {
             reference_command(&args[1], &args[3])
+        }
+        Some("reflect-wgsl") if args.len() == 2 => reflect_wgsl_command(&args[1], None),
+        Some("reflect-wgsl") if args.len() == 4 && args[2] == "--out" => {
+            reflect_wgsl_command(&args[1], Some(&args[3]))
+        }
+        Some("check-reflect") if args.len() == 4 && args[2] == "--artifact" => {
+            check_reflect_command(&args[1], &args[3])
         }
         Some("validate-reduce") if args.len() == 2 => validate_reduce_command(&args[1]),
         Some("reference-reduce") if args.len() == 4 && args[2] == "--inputs" => {

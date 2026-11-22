@@ -2252,6 +2252,13 @@ suggested at the 315 MB point. Four artifacts were cleaned up and are marked
 estimated: their sizes (506, 586, 607, 1 024 MB) times the class's median
 9.36 B/node.
 
+The working directories behind the counts — `classify-work/` here and `round3/`
+from §13.28 — have since been reclaimed. Before they were deleted every count
+above was re-derived from the artifacts: all 17 measured rows reproduce the
+nodes in this table exactly, so the table is the record now. `emit-long/`, which
+still holds `comm_map_id`, was left in place, and `arena-probe.txt`'s two paths
+are transcripts of files that were inside the reclamation.
+
 At §13.19's measured 385 B/node, fitting 12 GiB is a per-node budget:
 
 | declaration | nodes | arena at 385 B/node | fits 12 GiB at | shrink |
@@ -4090,7 +4097,7 @@ not a smaller cap: `Enc.write(eid, sink)` already encodes a term into a sink wit
 building a string (§13.30), so the join disappears if `enc()`'s callers accept pieces
 instead of a `str`. That is measured in §13.45.
 
-### 13.45 `enc()` hands out pieces: the floor is 2 400 MiB, and the proof wrap is next
+### 13.45 `enc()` hands out pieces: the floor is 2 400 MiB
 
 §13.44 named the ceiling and the change that removes it: `Enc.enc` builds a term into an
 `EncBuf` as 1 MiB chunks, then `take()` does `"".join(self.chunks)` — chunks *and* result
@@ -4120,23 +4127,26 @@ the pieces are the same bytes in the same order, so the goldens are untouched.
 | cap | outcome | peak VmSize | notes |
 | ---: | --- | ---: | --- |
 | **2 400** | **exit 0, 3 323 s** | **2 358 MiB** (t = 3 150 s) | peak RSS 2 335 MiB; artifacts 102 543 367 789 / 102 547 674 107 B |
-| 2 352 | exit 1 at 3 945 s | 2 351 MiB | `MemoryError` at `proof = f"(ty_abs {proof})"`, past the walk, no artifact |
+| 2 352 | exit 1 at 3 945 s | 2 351 MiB | with the scalar proof wrap; `MemoryError` at `proof = f"(ty_abs {proof})"`, past the walk, no artifact — §13.46 passes this cap |
 
 So the floor moves **4 032 → 2 400 MiB** and the peak **4 015 → 2 358 MiB**: 1 632 MiB
 less cap for the same row, and the join that §13.44 measured at t = 73 s is simply not in
 the trace — at 189 s the run sits at 2 236 MiB where it used to touch 4 015 MiB. The
-2 352 MiB probe is the failing side of the floor, and it fails somewhere else entirely.
+2 352 MiB probe is the failing side of the floor, and it fails somewhere else entirely
+(§13.46 then removes that failure and passes at 2 352).
 
-**The new ceiling is the proof's binder wrap.** A closed goal wraps the body's proof once
-per binder, `proof = f"(ty_abs {proof})"` (`scripts/lean-typing-proof:1538`). That line
-runs while `body_ty`'s ~1.94 GB of chunks are still referenced (they are only released at
-`:1560`, after the piecewise check), so the wrap copies a multi-hundred-megabyte proof
-with the body type still resident — which is why 2 352 MiB runs 3 945 s and dies there
-rather than at 73 s. Removing it is the same shape of change as this one: the proof is
-only ever concatenated or compared, so it can be a sequence of pieces too (`(ty_abs `
-repeated, then the proof's pieces, then the parens) with `body_ty` deleted before the
-wrap. It is not done here and not claimed; §13.45's floor is what a measured run says,
-not what the next patch would allow.
+**Where 2 352 MiB died is not where the memory is.** The traceback pins the failure at
+`proof = f"(ty_abs {proof})"` (`scripts/lean-typing-proof:1538`), and this section first
+read that as the new ceiling. The artifacts say otherwise: `.mm1 − .mm0 = 4 306 318 B`, so
+the whole proof is ~4.3 MB and twelve copies of it are ~48 MB — the wrap is the allocation
+that hit the wall, not the wall. The wall is `body_ty` itself. `enc_parts(cur)` runs
+*before* the derivation (`:1400`) and its ~1.94 GB of chunks stay referenced for the whole
+walk, until `del body_ty` (`:1560`): every sample from t = 189 s on is that 1.94 GB plus
+the deriver's slowly growing state, with no drop anywhere — 2 236 MiB at 189 s, 2 320 at
+1 948 s, 2 358 at 3 150 s. So 2 352 MiB left ~0.5 MiB above what the process had already
+reached by t = 3 038 s, and the next allocation of any size was fatal. §13.46 measures the
+wrap as pieces anyway (the copies were O(n²) bytes for nothing) and reports what that does
+and does not buy.
 
 **What did not move.** The artifacts: sizes exactly as recorded, and the shared stream
 (9 154 545 B), naming (10 968 B), index (36 292 B) and manifest (359 B) are `cmp`-identical
@@ -4148,3 +4158,607 @@ no `cmp` of the big files is offered for this run.
 **The elapsed time is not a claim.** 3 323 s against §13.44's 3 385 s at 4 032 MiB is
 inside this host's variance (§13.43 saw 2 290 s and 3 583 s on identical output), and the
 patch removes an allocation, not work. Memory is the quantity measured here.
+
+### 13.46 The proof wrap is pieces too: the floor is 2 352 MiB
+
+§13.45's 2 352 MiB failure pointed at `proof = f"(ty_abs {proof})"`: each of the 12
+binders copied the whole proof, and the twelfth copy ran with `body_ty`'s 1.94 GB still
+resident. The copies are avoidable, so they are gone:
+
+```python
+proof = ["(ty_abs "] * len(binders) + [proof] + [")"] * len(binders)
+```
+
+`proof` is a piece list from the derivation on, and the only two consumers already iterate
+pieces — `_put` streams them into `type.tmp`, and the `.mm1` write emits ` =\n  '`,
+`_put(fh, proof)`, `;\n`. No join, no `''.join` of the wrapped form, so the 12 copies are
+never materialized.
+
+**Byte identity.** `scripts/check-lean-typing-proof` green, 12 artifacts across 3 modes,
+goldens not re-recorded.
+
+**The rerun.** Same row, same environment, `ulimit -v` in MiB, sampled every second:
+
+| cap | outcome | peak VmSize | notes |
+| ---: | --- | ---: | --- |
+| **2 352** | **exit 0, 4 144 s** | **2 351 MiB** (t = 3 078 s) | peak RSS 2 325 MiB; same six artifacts |
+| 2 304 | exit 1 at 2 054 s | 2 303 MiB (t = 902 s) | `MemoryError` inside the walk at `f"(ty_app …)"` (`:2760`), no artifact |
+
+The cap that failed with the scalar wrap (§13.45, `MemoryError` at 3 945 s) now passes at
+the same value, so the ns row's floor is **2 400 → ≤ 2 352 MiB**, a 48 MiB drop. That is
+the size of the thing removed — twelve copies of a 4 306 318 B proof ≈ 48 MB — so the
+change is real and small, exactly as §13.45's correction predicted. All six artifacts of
+the passing run come out at the recorded sizes: `.mm0` 102 543 367 789 B, `.mm1`
+102 547 674 107 B, stream 9 154 545 B, naming 10 968 B, index 36 292 B, manifest 359 B.
+
+One step lower brackets the gain: at 2 304 MiB the run dies at 2 054 s in the derivation
+itself, at `res, f"(ty_app {fproof} {aproof} {self.beta_ax[key]})"` (`:2760`) — not at the
+wrap and not at the write — so the floor is somewhere in **(2 304, 2 352] MiB**, and the
+failure has moved from after the walk back into it, next to the `body_ty` residency.
+
+**What still sets the floor.** `body_ty` is ~1.94 GB of chunks, built at `:1400` and held
+until `:1560`; at 2 352 MiB the run lives within ~1 MiB of the cap for the last third of
+the walk. Spooling `body_ty` to disk like the declared type (compare it there, then free
+it) is the next lever — §13.48 measures it.
+
+### 13.47 Running the ns row: the documented recipe
+
+The row every measurement from §13.36 on uses, written out so it need not be
+reconstructed from prose. Environment first, then the address-space cap in MiB
+(`ulimit -v` takes KiB; the probes above all used `cap * 1024`), then the command:
+
+```bash
+export LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000
+ulimit -v $(( 768 * 1024 ))           # 768 MiB of address space
+mkdir -p /some/out/dir
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Ns.ChapterNsOuterFockSingleTime.ndjson \
+  nsOuterFock_farisLavine_timeIndependent_singleTime \
+  /some/out/dir --spine
+```
+
+**Why 768 MiB.** It is twice the tightest cap now measured to pass — 512 MiB,
+peak 496 MiB (§13.48) — and less than a third of the 2 400 MiB this recipe
+carried before `body_ty` was spooled (§13.47's own measured run, taken with the
+floor at 2 352 MiB). 768 is not itself a probed cap: it sits between the 1 024
+MiB run that passed at the new emitter and the floor §13.48 brackets at
+(480, 512] MiB, and an address-space cap is monotone, so a run that fits 512
+fits 768 with 256 MiB to spare.
+
+**The recipe measured, not inherited.** This exact command, at the 2 400 MiB it
+carried before §13.48, was run with the wrapped emitter of §13.46 and 1 s
+sampling: **exit 0 in
+2 293 s**, peak VmSize **2 347 MiB** (at t = 1 996 s), peak RSS 2 324 MiB, 53 MiB of
+cap unused at the peak. All six artifacts came out at the recorded sizes and are
+byte-identical (`cmp`) to the 2 352 MiB run's: `.mm0` 102 543 367 789 B, `.mm1`
+102 547 674 107 B, stream 9 154 545 B, naming 10 968 B, index 36 292 B, manifest
+359 B. So that cap was measured headroom rather than an extrapolation from 2 352 —
+and the same command with the same environment is what §13.48 then re-measured at
+1 024, 512 and 480 MiB, with the six artifacts again byte-identical to that run's.
+The recipe above just takes the headroom the spool bought.
+
+This is the row every probe from §13.36 on runs, but not the only row this document
+follows. §13.49 gives the same treatment — measured peak, probed cap, copy-pastable
+block — to the other five rows the sections below cite.
+
+**What it costs.** 2 293 s in the 2 400 MiB run, against 3 323 s (§13.45, pre-wrap)
+and 4 144 s (§13.46, 2 352 MiB) for the same artifacts, and 2 320–2 408 s for
+§13.48's runs at 1 024, 576 and 512 MiB — the spread is host and I/O variance, not
+a code difference, and the fastest run is not evidence of a speedup.
+Output is ~205 GB: `.mm0` and `.mm1` at 102 543 367 789 / 102 547 674 107 B. On this
+host's compressed pool the finished directory measured **6.9 GB on disk** against
+its 205 GB apparent size; while the run is in flight it also holds `type.tmp`,
+`value.tmp` and `bodytype.tmp` (1.94 GB each, §13.48) plus the ~98.6 GB
+`axioms.tmp` spool, the four deleted before the run returns. Peak RSS on the
+passing runs is ~475 MiB (§13.48), so the cap is address space, not
+RAM-monitoring.
+
+**What it produces.** Six artifacts — `.mm0`, `.mm1`, the obligations stream,
+its index and manifest, and the naming file — at the sizes §13.46 records. The
+`--spine` derivation is what makes the `.mm1` nontrivial; without it the run writes
+the body assumed and is not the row this document is about.
+
+### 13.48 Spooling the body type: the floor is 512 MiB
+
+§13.46 ended with the body type as the thing setting the floor: `body_ty` was the
+goal's type, built in memory at `:1400` as ~1.94 GB of chunks and held until the
+artifacts were written. The declared type had already stopped living in memory —
+`enc.spool(cur, ty_path)` writes it to `type.tmp` and the derivation compares the
+two from disk (`_spool_eq`, §13.43). The body type is consumed the same way, so it
+is spooled the same way:
+
+```python
+bt_path = _bodyty_path(stem)                 # <stem>_bodytype.tmp
+bt_bytes = enc.spool(cur, bt_path)
+stats(f"body type spooled ({bt_bytes} B)")
+body_ty = bt_path
+```
+
+Nothing downstream joins it: `_put` streams `Path` pieces into the `.mm0` goal line
+and the `.mm1` write, and `_pieces` iterates them for `_spool_eq`. The one join left
+is the open-judgment axiom line of the body-assumed mode, which is a single axiom
+line either way. `_pieces` now accepts a bare `Path` where it expected a list,
+because a spooled term is exactly one piece. `bt_path` is unlinked beside `ty_path`
+and `val_path`, and on both stopped-run paths, so the files a run leaves behind are
+still the twelve the gate records — `_bodytype.tmp` is a temp, not a new artifact.
+
+**Byte identity.** `scripts/check-lean-typing-proof` green: 12 artifacts across 3
+modes, goldens not re-recorded. The gate does not cover the body-assumed mode, so
+that mode was checked separately: `HEAD`'s script and this one were run on
+`abs_re_inner_pairVec_le` from
+`mm0/exports/BookProof.Toolbox.ChapterFockPairPerturbation.ndjson` without `--spine`,
+and the two output directories are identical file for file (`diff -r` clean).
+
+**The probes.** Same row, same environment, same 1 s sampling, `ulimit -v` in MiB:
+
+| cap | outcome | peak VmSize | notes |
+| ---: | --- | ---: | --- |
+| 1 024 | exit 0, 2 408 s | 502 MiB (t = 2 092 s) | peak RSS 475 MiB |
+| 576 | exit 0, 2 401 s | 502 MiB (t = 2 089 s) | peak RSS 475 MiB |
+| **512** | **exit 0, 2 320 s** | **496 MiB** (t = 1 998 s) | peak RSS 469 MiB; 16 MiB spare |
+| 480 | exit 1 at 1 819 s | 479 MiB (t = 1 652 s) | `MemoryError` in `subst0`'s memo (`:2482`), no artifact |
+
+The floor is now **(416, 432] MiB** — §13.51 found the encoding memo's cap to be the
+remaining spendable table and measured the bracket down from the (480, 512] MiB this
+section established — against **(2 304, 2 352] MiB** before: the ns
+row needs at most 512 MiB of address space where it needed 2 400, a drop of ~1 840
+MiB, about 78 %. All six artifacts of the passing runs are byte-identical (`cmp`) to
+the 2 400 MiB reference run's: `.mm0` 102 543 367 789 B, `.mm1` 102 547 674 107 B,
+stream 9 154 545 B, naming 10 968 B, index 36 292 B, manifest 359 B.
+
+**The peak stopped depending on the cap.** 1 024 and 576 MiB peak at the same
+502 MiB, so what is resident is ~500 MiB of working set, not a limit the allocator is
+pressing against; the caps above 512 only add unused room. What remains resident is
+the export and the walk's own memo tables, and that is also where 480 MiB dies: the
+failure is no longer at the write or next to a giga-byte term but inside the
+derivation's substitution memo (`self._subst_memo[key] = out`), which `MEMO_MAX`
+bounds. That looked like the next lever if a lower floor was wanted; §13.50 measured
+it and found it null — the memos are 2.6 MB of the 469 MiB peak, and the bracket
+(480, 512] MiB stood at either memo size — and §13.51 moved the floor with the
+encoding memo instead, to (416, 432] MiB.
+
+**The cost of that.** The run needs ~3.9 GB more disk while it is in flight — a third
+1.94 GB spool beside `type.tmp` and `value.tmp`, all removed before a passing run
+returns. A failing run is unchanged in kind and worse in size: it has always left its
+spools behind (`type.tmp`, `value.tmp`, the partial `axioms.tmp`), and now leaves
+`bodytype.tmp` with them — 1.94 GB more on the crash path, which is 2 % of the ~89 GB
+that path already strands. A probe that fails is cleaned up by hand.
+
+### 13.49 The other rows this document follows, with their commands
+
+§13.47 wrote the `nsOuterFock…singleTime` row out because every probe from §13.36 on
+runs it. It is not the only row the document follows, and the recipe does not carry
+over verbatim: the environment is the same, but each row's cap and mode are its own.
+Each row below was run on this host with §13.47's environment, one-second sampling of
+`VmSize`/`VmRSS`, `LTP_CENSUS=1` for the split, once uncapped (8 GiB, to read the peak)
+and then at the cap written in its block. **Every cap below is a run that finished**,
+not an arithmetic headroom on the peak, and the peak column is what that uncapped run
+reached:
+
+| row | file under `mm0/exports/` | peak VmSize at 8 GiB | cap probed | wall clock at the cap | `.mm0` bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `dense_range_add_relBounded` | `BookProof.Toolbox.ChapterKatoRellichRelative.ndjson` | 1 812 MiB | 2 048 MiB | 126 s | 13 396 035 927 |
+| `equiv_pgLp` | `BookProof.Sm.ChapterSmComparisonEsa.ndjson` | 825 MiB | 1 024 MiB | 149 s | 4 354 934 901 |
+| `abs_re_inner_pairVec_le` | `BookProof.Toolbox.ChapterFockPairPerturbation.ndjson` | 532 MiB | 768 MiB | 29 s | 1 041 771 375 |
+| `brst_leakage_bound` | `BookProof.Sirk.ChapterSirkRestart.ndjson` | 219 MiB | 384 MiB | 6 s | 242 162 576 |
+| `multiShiftSeq_succ` | `BookProof.Sirk.ChapterSirkMultiShift.ndjson` | 19 MiB | 128 MiB | 1 s | 1 012 315 |
+
+The environment trio, unchanged across all five:
+
+```bash
+export LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000
+```
+
+`dense_range_add_relBounded` — the §13.31 row, the largest of these at 13.4 GB, and the
+one whose cost was the context rebuild at every leaf:
+
+```bash
+ulimit -v $(( 2048 * 1024 ))
+mkdir -p /some/out/dense
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Toolbox.ChapterKatoRellichRelative.ndjson \
+  dense_range_add_relBounded /some/out/dense --spine
+```
+
+`equiv_pgLp` — 4.35 GB of `.mm0`, the row §13.28's clock table names:
+
+```bash
+ulimit -v $(( 1024 * 1024 ))
+mkdir -p /some/out/equiv
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Sm.ChapterSmComparisonEsa.ndjson \
+  equiv_pgLp /some/out/equiv --spine
+```
+
+`abs_re_inner_pairVec_le` — the row `scripts/check-lean-typing-proof` uses for byte
+identity, and §13.31's gigabyte-scale `cmp`:
+
+```bash
+ulimit -v $(( 768 * 1024 ))
+mkdir -p /some/out/smoke
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Toolbox.ChapterFockPairPerturbation.ndjson \
+  abs_re_inner_pairVec_le /some/out/smoke --spine
+```
+
+`brst_leakage_bound` — 242 MB of `.mm0`, and the row whose uncapped emitter time §13.29
+records:
+
+```bash
+ulimit -v $(( 384 * 1024 ))
+mkdir -p /some/out/brst
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Sirk.ChapterSirkRestart.ndjson \
+  brst_leakage_bound /some/out/brst --spine
+```
+
+`multiShiftSeq_succ` — 1 MB, the smallest row the document follows; it is here because
+§13.30 and §13.31 use it for `cmp` checks, not because it is expensive:
+
+```bash
+ulimit -v $(( 128 * 1024 ))
+mkdir -p /some/out/multishift
+python3 scripts/lean-typing-proof \
+  mm0/exports/BookProof.Sirk.ChapterSirkMultiShift.ndjson \
+  multiShiftSeq_succ /some/out/multishift --spine
+```
+
+**Why these caps and not tighter ones.** Only the `nsOuterFock…singleTime` row has a
+probed floor (§13.48 brackets it at (480, 512] MiB). For these five rows the cap is a
+single passing measurement with the peak quoted beside it, so the slack is visible:
+`dense` peaks 186 MiB under its cap, `equiv` 182, the smoke row 237, `brst` 178,
+`multiShiftSeq_succ` 108. Dropping them closer to the peak is exactly the §13.48
+procedure, row by row; nothing here claims a floor.
+
+**What the split says about them.** The census's synthetic-node table dominates every
+one of these rows — 868 MB of it on `dense`, 220 MB on `equiv`, 77 MB on the smoke row —
+because each node of the export becomes a synthetic term before any proof is built. The
+two rewrite memos are small on all five (63 MB together on `dense`, 42 MB of that the
+substitution memo), and the context memo is 190 MB on `dense` only, which is the row
+where §13.31 measured 648 307 lookups for 163 distinct contexts. So the memos bound by
+`MEMO_MAX` are not what these rows need room for — that is the lever §13.50 measures on
+the row that does hit them.
+
+**What was checked and what was not.** Sizes are `ls -l` on the artifacts of the passing
+runs; wall clocks were taken while the §13.50 probe was also running, so they read slow
+rather than fast, and the peaks are the measurement that matters. Byte identity against
+the artifacts the document quotes was not re-established here: the `.mm0` byte counts in
+the table are this host's, and they match the numbers §13.31 and §13.30 record for
+`dense_range_add_relBounded` and `abs_re_inner_pairVec_le` exactly.
+
+### 13.50 The substitution memo is not the floor: `MEMO_MAX` measured
+
+§13.48 ended by naming the substitution memo as the next lever, since the 480 MiB
+failure was inside `subst0`'s memo write rather than in any of the spooled buffers.
+That lever was then measured instead of assumed. `MEMO_MAX` (the bound on both the
+substitution and the lift memo, default 1 000 000) is now overridable per run —
+`LTP_MEMO_MAX=…` — so the probe does not need an edit and every recorded artifact
+keeps the default's behaviour. Two runs at the ns row's bracket:
+
+| cap | `LTP_MEMO_MAX` | outcome | peak VmSize | wall clock |
+| ---: | ---: | --- | ---: | ---: |
+| 384 | 100 000 | exit 1 at 435 s | — | `MemoryError` in `infer`, the `ty_app` f-string (`:2786`) |
+| **512** | **100 000** | **exit 0, 2 344 s** | **497 MiB** (t = 2 025 s) | peak RSS 469 MiB |
+| 512 | default | exit 0, 2 320 s | 496 MiB (t = 1 998 s) | peak RSS 469 MiB (§13.48) |
+
+**The lever is null.** Ten times less memo does not buy the floor: 384 MiB still dies,
+now inside `infer` instead of `subst0`, and at 512 MiB the peak is the same 496–497 MiB
+byte for byte within one MiB — while the run costs 24 s (1.0 %) more, because the memo
+misses are recomputed. The bracket stays **(480, 512] MiB** at either memo size, and
+`MEMO_MAX` is left as a probe knob, not a lever.
+
+**Why nothing was left to win.** The 512 MiB census (memo at 100 000, so the memos are
+at their smallest) accounts for the peak:
+
+| component | MB |
+| --- | ---: |
+| export parse table | 71.6 |
+| synthetic nodes | 102.7 |
+| encoding memo | 67.1 |
+| context memo | 29.3 |
+| lift memo | 1.3 |
+| substitution memo | 1.3 |
+| largest proof | 4.3 |
+| peak RSS | 469 |
+
+The two rewrite memos together are 2.6 MB of 469 — 0.6 % of the footprint. The three
+tables that matter (export 71.6, synthetic nodes 102.7, encoding memo 67.1) are 241 MB
+and none of them is what `MEMO_MAX` bounds; the context memo, 29.3 MB, is the one that
+moves with the cap at all (190 MB on the `dense` row, §13.49). Shrinking the rewrite
+memo past 100 000 would trade more recomputation for no measurable peak, which is
+exactly what the 512 MiB pair shows.
+
+**What this costs in artifacts.** `.mm0`, `.mm1`, and the naming table are byte-identical
+between the two 512 MiB runs (`cmp`), so the emitted proof does not depend on the memo
+size. The obligation sidecar does: its index/manifest/part differ, 6 of the 580
+substitution records change (e.g. `ax_subst_574` is 70 731 characters with the memo at
+its default and 88 357 at 100 000 — the record re-inlines a subterm the memo was
+sharing), and the manifest's `bytes` field moves 9 154 545 → 9 381 765. So the knob is
+safe for the artifacts the document's checks compare, and *not* safe for a
+sidecar-level comparison against a recorded run — which is why it stays an environment
+variable that no default path sets.
+
+**What is still open.** The floor is now set by the export's own tables, so the next
+candidate levers are the synthetic-node table (102.7 MB) and the encoding memo
+(67.1 MB), neither of which has been probed. Nothing here claims a lower bracket.
+
+(Census caveat, added with §13.51: the 102.7 / 29.3 lines above come from the
+`LTP_MEMO_MAX=100 000` run, not from a default-memo run, so they are not comparable
+with a default census. The default-memo census on the same row reads 93.7 synthetic
+nodes and 18.5 context memo.)
+
+### 13.51 The encoding memo is the floor: `ENC_MEMO_BYTES` measured, bracket (416, 432]
+
+§13.50 left two candidates. Both were probed. One is a lever and moves the floor by
+**80 MiB**; the other has no knob at all, and the probe says why.
+
+**The encoding memo is the lever.** `ENC_MEMO_BYTES` (default `64 << 20`) bounds the
+cache of encoded strings keyed by expression id. A miss re-encodes the term — it costs
+time and changes nothing, because the encoding of a node is a pure function of the
+node. That is the property the substitution memo lacks: shrinking *that* memo changed
+6 of the 580 substitution records in the sidecar (§13.50), while this one cannot change
+any emitted byte. It is now overridable as `LTP_ENC_MAX`, the default untouched, so
+recorded artifacts keep the behaviour they were produced with.
+
+| cap | `LTP_ENC_MAX` | outcome | peak VmSize | peak RSS | wall clock |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 400 | 2 MB | exit 1 at 1 706 s | 399 MiB (t = 1 613 s) | 373 MiB | `MemoryError` in `mk` → `LazyExprs.__setitem__`, `extra[eid] = d` (`lean2mm0:351`) |
+| 416 | 2 MB | exit 1 at 2 244 s | 415 MiB (t = 1 794 s) | 388 MiB | `MemoryError` in `subst0`'s memo write (`:2499`) |
+| **432** | **2 MB** | **exit 0, 2 879 s** | **431 MiB** (t = 2 088 s) | 405 MiB | |
+| 448 | 2 MB | exit 0, 2 567 s | 440 MiB (t = 2 237 s) | 412 MiB | |
+| 480 | 2 MB | exit 0, 2 590 s | 442 MiB (t = 2 252 s) | 414 MiB | |
+| 480 | default | exit 1 at 1 819 s | 479 MiB (t = 1 652 s) | — | `MemoryError` in `subst0`'s memo write (`:2482`, §13.48) |
+| 512 | default | exit 0, 2 320 s | 496 MiB (t = 1 998 s) | 469 MiB | §13.48 |
+
+**The bracket moves from (480, 512] to (416, 432] MiB** — 80 MiB off the top of the
+bracket, 64 MiB off the bottom, for a 32× smaller encoding cap. It costs wall clock:
+2 590 s at 480 MiB against 2 320 s at
+512 MiB with the default, +270 s (+11.6 %), all of it re-encoding. The 432 MiB pass is
+slower still (2 879 s) because at that cap the run spends its peak phase pinned to its
+ceiling; compare wall clocks only within one cap, and treat the tight-cap ones as noisy.
+The 416 and 400 rows were run concurrently on the same host, so their clocks are not
+comparable to the rest — their peaks and failure sites are.
+
+**Artifacts are byte-identical, all six.** At 480, 448 and 432 MiB, `cmp` reports
+`.mm0`, `.mm1`, the naming table, and the three obligation-sidecar files identical to
+the 512 MiB default reference. The substitution-memo knob changed the sidecar; this one
+does not touch it, because a re-encoded string is the same string. So `LTP_ENC_MAX` is
+a safe probe knob — and still not a default change: the 11.6 % wall clock is real, and
+the default is what every recorded artifact was produced with.
+
+**The census, measured with the lever on** (identical at 432, 448 and 480): export parse
+table 71.6 MB, synthetic nodes 93.7, encoding memo 2.3, context memo 18.5, obligation
+list 0.3, lift memo 1.3, substitution memo 10.5, largest proof 4.3, 20 478 context
+lookups (20 392 hits), peak RSS 404–414. The encoding memo's 67.1 → 2.3 MB is the whole
+win; nothing else moves, which is why the floor lands where the cap stops being spent
+on cached strings. (A smoke row, `abs_re_inner_pairVec_le`, shows the same shape at
+small scale: peak 540 → 511 MiB, encoding memo 67.5 → 2.2 MB, synthetic nodes 76.7 and
+context memo 27.8 on either side of the change — the lever is exactly its own table and
+nothing else.)
+
+**The synthetic-node table has no knob, and the probe says so.** Two things were
+measured, and neither is an assumption:
+
+1. *It cannot be reduced from outside.* `ex.exprs.extra` is consulted by
+   `LazyExprs.__getitem__` before the export's own `_off` array, keyed by the id the
+   emitter mints for each synthesized node, and nothing ever deletes from it. Unlike
+   the encoding memo (a cache whose loss only costs time) and the rewrite memos (whose
+   bound only costs recomputation), dropping an entry here hands later readers a
+   different node — so no environment variable can bound it. At 400 MiB the failing
+   write is literally `extra[eid] = d` (`lean2mm0:351`), i.e. below 416 MiB this table
+   is what the run dies on.
+2. *Content deduplication is the only candidate, and the census understates it by ~2.4×.*
+   `LTP_CENSUS_DUPS` now reports distinct-by-content against minted entries. On the smoke
+   row (`abs_re_inner_pairVec_le`, 76.7 MB table): 170 592 minted, 119 643 distinct —
+   30 % of the table is the same node re-minted, one content 5 293 times. Scaling that
+   share to the ns row's 93.7 MB gives ~28 MB, and that is an arithmetic estimate, not a
+   measurement. It is also wrong in the safe direction: the census keys on
+   `hash(repr(rec))`, and a record's `repr` carries the **ids** of its children, so two
+   equal subtrees reached through different ids count as distinct. Real interning on that
+   same row merges the 170 592 mintings into **12 761** nodes, not 119 643 (§13.52), and
+   on the ns row it takes the table 93.7 → 26.4 MB. The estimate is kept here as the
+   record of what a census can and cannot see; the measurement is §13.52.
+
+**What is next.** The floor at (416, 432] MiB is now set by three live, id-addressed
+tables that the emitter never evicts (export 71.6 + synthetic 93.7 + encoding memo 2.3,
+plus the context memo at 18.5). Moving it further needs a change to how nodes are
+represented or retained, not another environment variable — and §13.52 does move it, to
+368 MiB (the floor brackets at (360, 368]), by interning the synthetic table.
+
+### 13.52 Interning the synthetic table: measured, neutral for the proof, not for the sidecar
+
+§13.51 called the synthetic-node table the part of the floor no environment variable
+could reach, and estimated content deduplication at ~28 MB. That estimate came from
+`LTP_CENSUS_DUPS`, whose key is `hash(repr(rec))` — and a node's `repr` carries the ids
+of its children, so the census counts equal subtrees reached through different ids as
+different nodes. Interning is transitive by construction: once the children have one id,
+the parents compare equal, and duplication collapses level by level. So the census was
+not a measurement of what deduplication can recover, and the probe below is.
+
+**The knob.** `LTP_DEDUP_NODES=1` makes `Deriver.mk` intern synthetic nodes by content:
+`repr(d)` is the key, an existing id is returned on a hit, otherwise the id is minted as
+before. Default off, so every default-mode artifact and the golden file stay what they
+were. The interning index is live memory and is inside every peak below; it is small here
+(tens of thousands of keys against a 90 MB table), unlike an index over *all* expressions.
+
+**The ns row.** Same command and env trio as §13.51, `LTP_ENC_MAX=2 MB`, with
+`LTP_DEDUP_NODES=1` added:
+
+| run | cap | exit | peak VmSize | peak RSS | synthetic nodes | context memo | subst memo | wall clock |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| §13.51, no dedup | 432 MiB | 0 | 431 MiB | 404 MB | 93.7 MB | 18.5 MB | 10.5 MB | 2 879 s |
+| dedup | 432 MiB | 0 | 361 MiB | 333 MB | 26.4 MB | 8.5 MB | 5.2 MB | 2 617 s* |
+| dedup | 416 MiB | 0 | 362 MiB | 331 MB | 26.4 MB | 8.5 MB | 5.2 MB | 2 617 s* |
+| dedup | 384 MiB | 0 | 363 MiB | 333 MB | 26.5 MB | 8.5 MB | 5.2 MB | 3 742 s† |
+| dedup | 368 MiB | 0 | 363 MiB | 334 MB | 26.5 MB | 8.5 MB | 5.2 MB | 3 761 s† |
+| dedup | 360 MiB | 1 | 357 MiB | 328 MB | — | — | — | 3 611 s† |
+| dedup | 352 MiB | 1 | 351 MiB | 323 MB | — | — | — | 4 524 s† |
+| dedup | 320 MiB | 1 | 319 MiB | 291 MB | — | — | — | 943 s† |
+
+†Not comparable to the others: these ran under host memory pressure and contention (see
+the clock note under the 384 MiB run). The 360 MiB row has no census because the census
+prints after the copy that failed.
+
+\*The two dedup runs ran concurrently, two cores, so their clocks are comparable to
+each other (2 615.1 s and 2 615.9 s of emitter time) and not to the single 2 879 s run;
+the probe measures memory, and does not claim a speedup. What it does measure is that
+416 MiB — the cap §13.51 recorded as a `subst0` memo failure — now completes, with 362 MiB
+of reservation at the peak instead of 431. So the bracket (416, 432] from §13.51 becomes
+*at most 416* on the passing side; the failing side below it is untested, and a 384 MiB
+probe is the next step rather than an assumption. That probe was then run, and it passes, together with the two caps below it.
+
+**384 MiB.** A third dedup run at a 384 MiB cap completes too: exit 0, peak 363 MiB
+`VmSize` at 3 582 s of 3 742 s, peak RSS 333 MB, and the same six files. Their spelling and
+their content are identical to the 416 MiB run — `cmp` reports `.mm0` (102 543 367 789 B),
+`.mm1` (102 547 674 107 B), naming, index and manifest identical, so the sidecar is again
+5 645 247 B with the same 580 records, `ax_subst_0` … `ax_subst_579`. 363 MiB is the highest
+peak of the four runs (416 and 432 both peaked at 361–362), which is the expected shape
+when the cap is close: the emitter's peak grows into the room it is given, by a few MiB,
+before it is refused.
+
+The clock is not comparable to the table: the run shared the host with a build, the kernel
+ran out of memory at 21:06 (swap fully consumed; it killed three Firefox content processes
+and an `ld.gold`), and this run's 3 742 s is 43 % longer than the 2 617 s dedup runs above
+at an unchanged emitter workload. The run's own peak stayed at ~330 MB throughout, so the
+memory the host ran out of was not this probe's; the sample series and the summary were
+written to completion, and the run was not what was killed. Operationally the lesson is
+only about scheduling: a memory probe and a build should not share a machine, because the
+probe's cap does not bound the rest of it.
+
+**The failing side: 368 passes, 360 dies.** Two more probes, the same command and env
+trio, ran concurrently at caps 368 and 360 MiB. 368 completes: exit 0, peak 363 MiB
+`VmSize` at 3 609 s of 3 761 s, peak RSS 334 MB. 360 does not: exit 1 at 3 611 s, peak
+357 MiB `VmSize`, peak RSS 328 MB. Both spent the same time in the derivation (3 609 s),
+so nothing earlier in the run changed — the difference is in the tail, and it is not a
+table.
+
+The traceback names where the room ran out:
+
+```
+File "scripts/lean-typing-proof", line 1660, in main
+  shutil.copyfileobj(spool, fh, 1 << 20)
+MemoryError
+```
+
+That is the final copy of the spooled axioms into the artifact, and the `1 << 20` is the
+copy buffer: under a 360 MiB address-space ceiling, a derivation that has already reached
+357 MiB cannot allocate one more MiB. So the floor of this row at the current emitter is
+set by the size of the last allocation, not by any of the live tables — with 368 MiB it
+fits with 5 MiB to spare.
+
+**352 and 320 MiB fail, and earlier in the run.** Two further probes at 352 and 320 MiB
+confirm the descending side, and they show it is not one wall:
+
+| cap | exit | peak VmSize | peak RSS | elapsed | where it ran out |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 352 MiB | 1 | 351 MiB | 323 MB | 4 524 s | `_spool_eq`, `yield block` (the tail comparison) |
+| 320 MiB | 1 | 319 MiB | 291 MB | 943 s | `infer`, building a `(ty_app …)` proof string |
+
+At 352 MiB the derivation completes and the run dies in its equality spool, as the 360 MiB
+run does in the artifact copy; at 320 MiB it dies in the derivation itself, at the
+fifteenth minute. Each failure is an allocation of a proof string or a copy block that no
+longer fits, so the last few MiB of this bracket are not about how many nodes are retained
+— 320 and 368 hold the same tables — but about how much room the tail's transient
+allocations need once the ceiling is close. The 352 MiB elapsed time is not a performance
+measurement: the process sat at its ceiling for its last twenty minutes, so the run is a
+slow failure, not a slow success.
+
+**The bracket.** The smallest cap that completes the row is 368 MiB, and 360 MiB fails, so
+the floor at the current emitter is **(360, 368] MiB**, down from §13.51's (416, 432] — a
+48 MiB reduction, with 363 MiB of reservation at the peak instead of 431. Below 360 the
+failure moves earlier in the run, which is what makes 368 rather than, say, 344 the
+interesting number: the tables are the same at both ends; only the transient room differs.
+
+Two tables move besides the one the knob names: context memo 18.5 → 8.5 MB and
+substitution memo 10.5 → 5.2 MB. Neither is interned — their entries are keyed by ids and
+values, and fewer distinct ids means fewer distinct keys to hold. Export parse 71.6,
+encoding memo 2.3, obligation list 0.3 and the largest proof are unchanged.
+
+**Byte identity, for the proof.** `cmp` reports `.mm0` (102 543 367 789 B), `.mm1`
+(102 547 674 107 B) and the naming table identical to `cap-432-enc2` — the no-dedup
+reference of §13.51 — and the 416 MiB run identical to the 432 MiB run in all six files.
+So for the proof artifacts, interning is neutral at the 432 MiB cap.
+
+**Not neutral for the obligation sidecar.** Its three files differ: `part-000.jsonl`
+9 154 545 → 5 645 247 B, `index.jsonl` 36 292 → 36 076 B, `manifest.json`'s byte counts
+with it. The difference is spelling, not content, and that was checked rather than
+asserted: both runs carry the same 580 substitution obligations, in the same order, with
+the same ids and kinds; expanding each record's node table and comparing the three terms
+`(b, x, r)` after expansion gives 580 of 580 identical triples, and 580 distinct triples
+on either side (no obligation was merged away). What shrinks is the node table the
+records are spelled against — 469 589 entries → 278 281 — and which index names an equal
+node: with interning, the redex `r` of a substitution obligation *is* the node the
+conclusion already used, where before it was a fresh copy of it.
+
+That matters because `scripts/lean-typing-proof.golden.tsv` records
+`shared/…_obligations.jsonl`: defaulting interning on would re-baseline the byte-identity
+gate for a spelling change, so the knob stays an env-gated probe like `LTP_ENC_MAX`, and
+the sidecar is the one place the two differ. §13.53 moves the sharing to the writer,
+where the difference disappears.
+
+**The smoke row, and why its ratio does not transfer.** `abs_re_inner_pairVec_le` at its
+768 MiB cap, with and without the knob (same env trio, `LTP_CENSUS` on): synthetic nodes
+76.8 → 6.2 MB, peak RSS 573 → 493 MB, wall 32.2 → 31.1 s, 170 592 mintings → 12 761
+nodes (92.5 % of the table was re-minting). The ns row recovers 72 %. Node-level
+duplication is a property of the derivation being replayed, not of the emitter, so the
+smoke ratio is not a scale factor — which is the same lesson the ~28 MB estimate carried,
+one level down.
+
+### 13.53 Sharing by content in the writer: the sidecar stops depending on interning
+
+§13.52 left one loose end: interning is neutral for the proof and changes the sidecar, and
+the sidecar is what `scripts/lean-typing-proof.golden.tsv` records, so the memory win
+could only be had by re-baselining the byte-identity gate on a spelling change. The
+spelling was never the point — the sharing table is keyed by *expression id*, so two ids
+holding structurally equal nodes are written twice, and whether interning collapsed those
+ids was the deriver's business leaking into a certificate.
+
+**The knob, and where it lives.** `LTP_SHARE_DEDUP=1` keys the shared table on the
+rendered entry instead of the id. Each entry is built only after its children's indices
+exist and those indices are already canonical, so the entry string *is* the node's
+content: equal subtrees reach the same index and the later id simply points at the
+earlier one. The cost is one dict lookup per node — no `repr` of a subtree, no second
+pass — and one dict per certificate, cleared in `_sh_reset` because a record's numbering
+restarts there. It is now the default (§13.53's last paragraph is that decision);
+`LTP_SHARE_DEDUP=0` still produces the pre-13.53 bytes, which is how the measurement
+below was taken and how the old line can be reproduced.
+
+**Measured on the smoke row** (`abs_re_inner_pairVec_le`, shared mode, the record the
+golden file pins):
+
+| run | sidecar | sha256 | `.mm0` | `.mm1` |
+| --- | ---: | --- | ---: | ---: |
+| control (`LTP_OBLIG_SHARE=1` only) | 10 349 935 B | `bf627caf…` | 1 041 771 375 B | 1 075 343 397 B |
+| `LTP_SHARE_DEDUP=1` | 4 258 753 B | `97d7337a…` | same | same |
+| `LTP_SHARE_DEDUP=1 LTP_DEDUP_NODES=1` | 4 258 753 B | `97d7337a…` | same | same |
+
+The control reproduces the golden line exactly, so the knob is off by default in the
+artifact and in the gate. Rows two and three are byte-identical to each other: that is
+the property §13.52 could not get — once the writer owns the spelling, id interning no
+longer moves this artifact at all, so the deriver can own its memory without owning the
+certificate.
+
+**More than interning recovered, and that is the diagnosis.** Interning alone gave
+5 289 891 B on this row (§13.52); keying on content gives 4 258 753 B, because an export's
+own ids can hold structurally equal nodes that `Deriver.mk` never mints and so never
+interned. It is the same duplication one level up, found by looking at the writer rather
+than the allocator.
+
+**Neutral, checked rather than asserted.** `scripts/oblig-expand` expands both the control
+and the content-shared stream to the historical record form: 1 012 915 095 B each, `cmp`
+identical — the same obligations, the same `(b, x, r)` terms, spelled against fewer table
+entries. (That expanded size is also `default/…_obligations.jsonl` in the golden file: the
+shared encoding expands to the unshared artifact, which is what makes the two modes one
+format.)
+
+**What the re-record cost: one line.** `check-lean-typing-proof --record` after flipping the
+default changed exactly one entry of `scripts/lean-typing-proof.golden.tsv` —
+`shared/abs_re_inner_pairVec_le_typing_obligations.jsonl`, 10 349 935 B `bf627caf…` →
+4 258 753 B `97d7337a…` — and nothing else in any mode, since `default` and `stop` write the
+expanded record and never reach `tree_share`. The eleven other artifacts, including both
+large `.mm0`/`.mm1` pairs, are unchanged, so the byte-identity gate is still pinning the
+proof itself: what moved is one sidecar's table bookkeeping, in the smaller direction, and
+the `[run]` lines show the same 1 041 771 375 / 1 075 343 397 B outputs as before. With
+this in place `LTP_DEDUP_NODES` can be defaulted on with no further byte change — the whole
+of §13.52's memory win on the ns row, for free.
+

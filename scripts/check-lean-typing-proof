@@ -79,11 +79,12 @@ def sha256(path: Path) -> str:
 def run_mode(name: str, env: dict[str, str], out: Path) -> dict[str, tuple[int, str]]:
     """Run one mode; return `artifact basename -> (bytes, sha256)`."""
     out.mkdir(parents=True, exist_ok=True)
-    e = dict(os.environ)
-    for k in ("LTP_OBLIG_SHARE", "LTP_STOP_RULES", "LTP_STOP_AT", "LTP_STOP_EMIT",
-              "LTP_PROBE_LOOKUP", "LTP_TRACE", "LTP_OBTRACE", "LTP_ENC_FASTESC",
-              "LTP_CHK_MEMO", "LTP_EXPRS_CACHE"):
-        e.pop(k, None)
+    # Every `LTP_*` switch goes, not a hand-written list of them: the emitter
+    # grows a knob most sections, and a mode is defined by what this function
+    # sets. A leaked `LTP_SHARE_DEDUP=0` used to make the `default` mode produce
+    # the pre-sharing bytes and fail the gate on an environment variable rather
+    # than on a diff (§13.53).
+    e = {k: v for k, v in os.environ.items() if not k.startswith("LTP_")}
     e.update(env)
     cmd = [sys.executable, str(EMITTER), str(EXPORT), TARGET, str(out), "--spine"]
     print(f"[run] {name}: {' '.join(cmd[1:])}", flush=True)

@@ -336,6 +336,10 @@ DEFAULT_SUITES: tuple[str, ...] = (
     # function that is not a foreign import). Both are fixtures with captured
     # stderr, so a reworded diagnostic is a fixture update.
     "027-handle-pragma",
+    # 027-liquid-descent: L11e's opt-in `Liquid_Descent` pragma — one measure
+    # printed by both the fold and the descent function, and two fixtures whose
+    # recursive call is refused (the original argument, a rebuilt value).
+    "027-liquid-descent",
 )
 
 

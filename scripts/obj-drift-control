@@ -28,6 +28,13 @@
 #
 # Usage: scripts/obj-drift-control     (needs dune + the JIT bridge; run under
 #                                      `nix develop` if dune is not on PATH)
+#        scripts/obj-drift-control --check-gate-log <file>
+#            Runs step 4's two green assertions against an existing gate log and
+#            exits — no dune, no patch. This is how the *failing* direction of
+#            those assertions is exercised: producing a log without one of the
+#            lines otherwise means patching `lib/CpsGen.ml` for the length of a
+#            gate run, and a commit made in that window captures the patch
+#            (commit 1f8ce68f did, and HEAD then carried `List.rev`).
 # Exit: 0 the control holds, 1 it does not, 2 could not run.
 set -uo pipefail
 
@@ -41,6 +48,35 @@ KERNEL_SRC="Flux1d.aui,Flux1d.aum"
 
 say()  { printf '%s\n' "$*"; }
 fail() { printf 'obj-drift-control: FAIL %s\n' "$*" >&2; }
+
+# The lines step 4 requires green. Kept as one list so that the gate run and
+# `--check-gate-log` exercise the same assertion rather than two copies of it.
+GREENS=(
+    "[pass] W3: every §W3 emitter cell names a real command"
+    "[pass] Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)"
+)
+require_greens() {  # log — sets `status`, prints each line that held
+    local want
+    for want in "${GREENS[@]}"; do
+        if ! grep -qF "$want" "$1"; then
+            fail "the run also lost an unrelated line: '$want'"
+            status=1
+        else
+            say "green:  $want"
+        fi
+    done
+}
+
+if [ "${1:-}" = --check-gate-log ]; then
+    log="${2:-}"
+    if [ -z "$log" ] || [ ! -f "$log" ]; then
+        fail "usage: obj-drift-control --check-gate-log <gate log>"
+        exit 2
+    fi
+    status=0
+    require_greens "$log"
+    exit "$status"
+fi
 
 for tool in dune; do
     command -v "$tool" >/dev/null 2>&1 || {
@@ -57,6 +93,19 @@ _bridge="$ROOT/libaustral_cranelift_bridge.so"
 if [ ! -x "$BIN" ] || [ ! -f "$_bridge" ]; then
     say "obj-drift-control: [gap] no ./austral or bridge .so — run 'make all' first"
     exit 2
+fi
+
+# One full test run at a time: `make test` holds this lock for the whole suite
+# and hands it over through AVM_TREE_LOCK_HELD, because this control rewrites
+# `lib/CpsGen.ml` and a gate running beside it would see the patch. Standalone
+# runs take the lock themselves. Inside a suite, re-acquiring it would deadlock.
+if [ "${AVM_TREE_LOCK_HELD:-0}" != 1 ]; then
+    exec 9>"$ROOT/.tree.lock"
+    flock -x -w 3600 9 || {
+        fail "could not take $ROOT/.tree.lock within 3600s (another make test is running)"
+        exit 2
+    }
+    export AVM_TREE_LOCK_HELD=1
 fi
 
 work="$(mktemp -d)"
@@ -167,15 +216,14 @@ fi
 # plan side and one from the mm0 side — because they exercise different readers
 # (the §W3 emitter registry and the trust-split pin) and neither reads the
 # certificate under test.
-for want in \
-    "[pass] W3: every §W3 emitter cell names a real command" \
-    "[pass] Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)"
-do
-    if ! grep -qF "$want" "$work/gate.log"; then
-        fail "the run also lost an unrelated line: '$want'"
-        status=1
-    fi
-done
+require_greens "$work/gate.log"
+# `make test` re-runs these assertions against the log this run produced, once
+# as-is and once with a line removed, so the failing direction is exercised on
+# real evidence every time instead of by patching the emitter and waiting out a
+# gate run. Exported here because `$work` is deleted on exit.
+if [ -n "${OBJ_DRIFT_GATE_LOG:-}" ]; then
+    cp "$work/gate.log" "$OBJ_DRIFT_GATE_LOG"
+fi
 
 # ── 5. restore and confirm the pinned digests come back ────────────────────
 restore

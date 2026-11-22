@@ -1,4 +1,469 @@
-error: failed to download `arbitrary v1.5.0`
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling libc v0.2.190
+   Compiling quote v1.0.47
+   Compiling syn v3.0.6
+   Compiling syn v2.0.119
+   Compiling serde_derive v1.0.229
+   Compiling bytemuck_derive v1.12.1
+   Compiling serde v1.0.229
+   Compiling either v1.19.0
+   Compiling bytemuck v1.25.2
+   Compiling zerocopy-derive v0.8.62
+   Compiling memchr v2.8.3
+   Compiling jobserver v0.1.35
+   Compiling cc v1.6.0
+   Compiling zerocopy v0.8.62
+   Compiling num-complex v0.4.6
+   Compiling getrandom v0.3.4
+   Compiling getrandom v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling rand_core v0.9.5
+   Compiling smallvec v1.16.2
+   Compiling strsim v0.11.1
+   Compiling rayon v1.12.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling rand v0.9.5
+   Compiling darling_core v0.20.11
+   Compiling rand_distr v0.5.1
+   Compiling parking_lot_core v0.9.12
+   Compiling lock_api v0.4.14
+   Compiling syn v1.0.109
+   Compiling parking_lot v0.12.5
+   Compiling darling_macro v0.20.11
+   Compiling darling v0.20.11
+   Compiling half v2.7.1
+   Compiling crypto-common v0.1.7
+   Compiling thiserror-impl v2.0.21
+   Compiling thiserror v2.0.21
+   Compiling serde_json v1.0.151
+   Compiling hashbrown v0.17.1
+   Compiling aho-corasick v1.1.5
+   Compiling thiserror-impl v1.0.69
+   Compiling thiserror v1.0.69
+   Compiling num-bigint v0.4.8
+   Compiling ahash v0.8.12
+   Compiling indexmap v2.14.2
+   Compiling num-rational v0.4.2
+   Compiling bytes v1.12.1
+   Compiling fixedbitset v0.5.7
+   Compiling tracing-core v0.1.36
+   Compiling getrandom v0.4.3
+   Compiling crossbeam-queue v0.3.14
+   Compiling regex-automata v0.4.18
+   Compiling digest v0.10.7
+   Compiling num v0.4.3
+   Compiling tracing-attributes v0.1.31
+   Compiling chrono v0.4.45
+   Compiling tracing v0.1.44
+   Compiling rand_chacha v0.3.1
+   Compiling oxiblas-core v0.2.2
+   Compiling dyn-stack v0.13.2
+   Compiling oxiblas-matrix v0.2.2
+   Compiling rand v0.8.8
+   Compiling pulp v0.21.5
+   Compiling cpufeatures v0.2.17
+   Compiling errno v0.3.14
+   Compiling tempfile v3.27.0
+   Compiling signal-hook-registry v1.4.8
+   Compiling keccak v0.1.6
+   Compiling oxiblas-blas v0.2.2
+   Compiling gemm-common v0.18.2
+   Compiling ndarray v0.17.2
+   Compiling regex v1.13.1
+   Compiling pulp v0.18.22
+   Compiling dyn-stack v0.10.0
+   Compiling oxiarc-core v0.2.8
+   Compiling tokio-macros v2.7.2
+   Compiling num_cpus v1.17.0
+   Compiling mio v1.2.4
+   Compiling socket2 v0.6.5
+   Compiling pkg-config v0.3.34
+   Compiling heck v0.5.0
+   Compiling string_cache v0.8.9
+   Compiling zstd-sys v2.1.1+zstd.1.5.7
+   Compiling tokio v1.51.5
+   Compiling gemm-common v0.17.1
+   Compiling rand v0.10.3
+   Compiling oxiblas-lapack v0.2.2
+   Compiling sha3 v0.10.9
+   Compiling lalrpop-util v0.22.2
+   Compiling petgraph v0.7.1
+   Compiling cached_proc_macro v0.27.0
+   Compiling scirs2-core v0.4.4
+   Compiling cmake v0.1.58
+   Compiling itertools v0.14.0
+   Compiling oxicode_derive v0.2.6
+   Compiling oxicode v0.2.6
+   Compiling lalrpop v0.22.2
+   Compiling cached v0.59.0
+   Compiling libz-ng-sys v1.1.30
+   Compiling crossbeam v0.8.5
+   Compiling oxiblas-ndarray v0.2.2
+   Compiling rand_distr v0.6.0
+   Compiling oxiarc-zstd v0.2.8
+   Compiling oxiarc-lz4 v0.2.8
+   Compiling ndarray-rand v0.16.0
+   Compiling uuid v1.27.0
+   Compiling rand_chacha v0.10.0
+   Compiling numeric_literals v0.2.0
+   Compiling psm v0.1.24
+   Compiling wide v1.7.1
+   Compiling thread_local v1.1.10
+   Compiling futures-core v0.3.34
+   Compiling ellip v1.2.2
+   Compiling toml_edit v0.25.17+spec-1.1.0
+   Compiling dirs-sys v0.5.0
+   Compiling mathhook-core v0.2.0
+   Compiling lambert_w v2.0.5
+   Compiling stacker v0.1.25
+   Compiling synstructure v0.14.0
+   Compiling arrayvec v0.7.8
+   Compiling zerofrom-derive v0.1.8
+   Compiling special v0.13.2
+   Compiling mathhook-macros v0.2.0
+   Compiling dirs v6.0.0
+   Compiling proc-macro-crate v3.5.0
+   Compiling gemm-f32 v0.18.2
+   Compiling sha2 v0.10.9
+   Compiling quanta v0.12.6
+   Compiling safe_arch v0.7.4
+   Compiling synstructure v0.13.2
+   Compiling futures-sink v0.3.34
+   Compiling serde_core v1.0.229
+   Compiling dashmap v6.2.1
+   Compiling egg v0.11.0
+   Compiling yoke-derive v0.7.5
+   Compiling wide v0.7.33
+   Compiling gemm-f16 v0.18.2
+   Compiling num_enum_derive v0.7.6
+   Compiling scirs2-autograd v0.4.4
+   Compiling scirs2-linalg v0.4.4
+   Compiling flate2 v1.1.10
+   Compiling zerofrom v0.1.8
+   Compiling gemm-f32 v0.17.1
+   Compiling gemm-c64 v0.18.2
+   Compiling gemm-f64 v0.18.2
+   Compiling gemm-c32 v0.18.2
+   Compiling heapless v0.7.17
+   Compiling quantrs2-symengine-pure v0.1.3
+   Compiling gemm v0.18.2
+   Compiling gemm-f16 v0.17.1
+   Compiling yoke v0.7.5
+   Compiling num_enum v0.7.6
+   Compiling simba v0.9.1
+   Compiling gemm-c64 v0.17.1
+   Compiling gemm-f64 v0.17.1
+   Compiling gemm-c32 v0.17.1
+   Compiling memmap2 v0.9.11
+   Compiling safetensors v0.4.5
+   Compiling hash32 v0.2.1
+   Compiling derive_builder_core v0.20.2
+   Compiling itertools v0.11.0
+   Compiling nalgebra-macros v0.3.0
+   Compiling zeroize_derive v1.5.0
+   Compiling displaydoc v0.2.7
+   Compiling ucd-trie v0.1.7
+   Compiling utf8parse v0.2.2
+   Compiling object v0.37.3
+   Compiling slab v0.4.12
+   Compiling anstyle-parse v1.0.0
+   Compiling ug v0.1.0
+   Compiling zip v1.1.4
+   Compiling zeroize v1.9.1
+   Compiling nalgebra v0.34.2
+   Compiling derive_builder_macro v0.20.2
+   Compiling gemm v0.17.1
+   Compiling futures-channel v0.3.34
+   Compiling http v1.5.0
+   Compiling trackable_derive v1.0.0
+   Compiling cobs v0.3.0
+   Compiling hash32 v0.3.1
+   Compiling memoffset v0.6.5
+   Compiling futures-macro v0.3.34
+   Compiling gimli v0.32.3
+   Compiling futures-task v0.3.34
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling heapless v0.9.3
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling lazy_static v1.5.1
+   Compiling httparse v1.10.1
+   Compiling rust_decimal v1.43.0
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
 
-Caused by:
-  attempting to make an HTTP request, but --offline was specified
+warning: `fock_sirk` (build script) generated 1 warning
+   Compiling zstd-safe v8.1.0
+   Compiling colorchoice v1.0.5
+   Compiling futures-io v0.3.34
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling zstd-safe v7.3.0
+   Compiling protobuf v2.28.0
+   Compiling anstream v1.0.0
+   Compiling futures-util v0.3.34
+   Compiling alloc-stdlib v0.2.4
+   Compiling addr2line v0.25.1
+   Compiling postcard v1.1.3
+   Compiling trackable v1.3.0
+   Compiling pest v2.9.3
+   Compiling neli-proc-macros v0.2.2
+   Compiling candle-core v0.8.4
+   Compiling curve25519-dalek v4.1.3
+   Compiling derive_builder v0.20.2
+   Compiling miniz_oxide v0.8.9
+   Compiling serde_columnar_derive v0.3.7
+   Compiling itertools v0.12.1
+   Compiling getset v0.1.7
+   Compiling derive_arbitrary v1.5.0
+   Compiling clap_lex v1.1.1
+   Compiling rustc-demangle v0.1.28
+   Compiling pingora-error v0.8.1
+   Compiling heapless v0.8.0
+   Compiling prometheus v0.13.4
+   Compiling append-only-bytes v0.1.12
+   Compiling loro-rle v1.6.0
+   Compiling pingora-http v0.8.1
+   Compiling backtrace v0.3.76
+   Compiling ed25519 v2.2.3
+   Compiling clap_builder v4.6.7
+   Compiling arbitrary v1.5.0
+   Compiling neli v0.7.4
+   Compiling cipher v0.4.4
+   Compiling serde_columnar v0.3.14
+   Compiling pest_meta v2.9.3
+   Compiling brotli-decompressor v2.5.1
+   Compiling futures-executor v0.3.34
+   Compiling tokio-util v0.7.20
+   Compiling tokio-stream v0.1.19
+   Compiling pingora-timeout v0.8.1
+   Compiling clap_derive v4.6.7
+   Compiling enum-as-inner v0.6.1
+   Compiling strum_macros v0.26.4
+   Compiling universal-hash v0.5.1
+   Compiling lru v0.16.4
+   Compiling num-bigint v0.5.1
+   Compiling bitmaps v2.1.0
+   Compiling im v15.1.0
+   Compiling indexmap v1.9.3
+   Compiling nonmax v0.5.5
+   Compiling base64 v0.22.1
+   Compiling heck v0.4.1
+   Compiling loro-thunderdome v0.6.2
+   Compiling ryu v1.0.23
+   Compiling unsafe-libyaml v0.2.11
+   Compiling percent-encoding v2.3.2
+   Compiling atomic-waker v1.1.2
+   Compiling arref v0.1.0
+   Compiling leb128 v0.2.7
+   Compiling twox-hash v2.1.5
+   Compiling lz4_flex v0.11.6
+   Compiling polyval v0.6.2
+   Compiling loro-common v1.16.0
+   Compiling generic-btree v0.10.7
+   Compiling h2 v0.4.20
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling enum-as-inner v0.5.1
+   Compiling nanoda_lib v0.4.22 (https://github.com/ammkrn/nanoda_lib#73573340)
+   Compiling sfv v0.10.4
+   Compiling sized-chunks v0.6.5
+   Compiling pingora-pool v0.8.1
+   Compiling daggy v0.8.1
+   Compiling strum v0.26.3
+   Compiling clap v4.6.7
+   Compiling tokio-test v0.4.6
+   Compiling zstd v0.13.3
+   Compiling futures v0.3.34
+   Compiling zstd v0.14.2
+   Compiling brotli v3.5.0
+   Compiling nix v0.24.3
+   Compiling pest_generator v2.9.3
+   Compiling local-ip-address v0.6.13
+   Compiling ed25519-dalek v2.2.0
+   Compiling cf-rustracing v1.2.1
+   Compiling thrift_codec v0.3.2
+   Compiling unfer_protocol v0.1.0 (/home/leo/Projects/unfer/unfer_protocol)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+   Compiling logos v0.1.0 (/home/leo/Projects/unfer/logos)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+   Compiling pingora-runtime v0.8.1
+   Compiling bstr v1.13.1
+   Compiling quick_cache v0.6.24
+   Compiling derivative v2.2.0
+   Compiling rand_xoshiro v0.6.0
+   Compiling rmp v0.8.15
+   Compiling async-trait v0.1.92
+   Compiling hostname v0.4.2
+   Compiling daemonize v0.5.0
+   Compiling yansi v1.0.1
+   Compiling hashbrown v0.12.3
+   Compiling unicase v2.10.0
+   Compiling xxhash-rust v0.8.19
+   Compiling diff v0.1.13
+   Compiling ensure-cov v0.1.0
+   Compiling openssl-probe v0.1.6
+   Compiling httpdate v1.0.3
+   Compiling pingora-core v0.8.1
+   Compiling loro-kv-store v1.16.0
+   Compiling pretty_assertions v1.4.1
+   Compiling cf-rustracing-jaeger v1.2.2
+   Compiling arctic v0.1.0 (/home/leo/Projects/dynamic-arctic)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+   Compiling rmp-serde v1.3.1
+   Compiling loro-delta v1.13.0
+   Compiling pest_derive v2.9.3
+   Compiling pingora-header-serde v0.8.1
+   Compiling ghash v0.5.1
+   Compiling ctr v0.9.2
+   Compiling aes v0.8.4
+   Compiling pingora-lru v0.8.1
+   Compiling loro_fractional_index v1.13.0
+   Compiling blake2 v0.10.6
+   Compiling aead v0.5.2
+   Compiling enum_dispatch v0.3.13
+   Compiling md5 v0.7.0
+   Compiling loro-internal v1.16.2
+   Compiling aes-gcm v0.10.3
+   Compiling pingora-cache v0.8.1
+   Compiling x25519-dalek v2.0.1
+   Compiling pingora-proxy v0.8.1
+   Compiling loro v1.16.2
+   Compiling sharded-slab v0.1.7
+   Compiling tracing-log v0.2.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling tracing-subscriber v0.3.23
+   Compiling pingora v0.8.1
+   Compiling mathhook v0.2.0
+   Compiling nested_fock_algebra v0.1.0 (/home/leo/Projects/unfer/nested_fock_algebra)
+warning: `nested_fock_algebra` (lib) generated 1 warning (1 duplicate)
+   Compiling fock_sirk v0.1.0 (/home/leo/Projects/unfer/fock_sirk)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling qfm v0.1.0 (/home/leo/Projects/unfer/qfm)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+   Compiling ode_sirk v0.1.0 (/home/leo/Projects/unfer/ode_sirk)
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+   Compiling prob_kernel v0.1.0 (/home/leo/Projects/unfer/prob_kernel)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+   Compiling unfer_consensus v0.1.0 (/home/leo/Projects/unfer/unfer_consensus)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+   Compiling unfer_data v0.1.0 (/home/leo/Projects/unfer/unfer_data)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (lib) generated 1 warning (1 duplicate)
+   Compiling unfer_ffi v0.1.0 (/home/leo/Projects/unfer/unfer_ffi)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+   Compiling unfer_edge v0.1.0 (/home/leo/Projects/unfer/unfer_edge)
+warning: `unfer_edge` (test "ops_e2e") generated 1 warning (1 duplicate)
+warning: `unfer_edge` (bin "unfer_edge" test) generated 1 warning (1 duplicate)
+warning: `unfer_edge` (bin "unfer_edge") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15m 23s
+     Running unittests src/main.rs (target/debug/deps/unfer_edge-d4d2d85cf77241f3)
+
+running 84 tests
+test admin::tests::admin_path_detection ... ok
+test admin::tests::patch_non_admin_403 ... ok
+test admin::tests::patch_refuses_hard_keys ... ok
+test admin::tests::patch_updates_soft_config ... ok
+test admin::tests::status_is_admin_gated ... ok
+test audit::tests::audit_list_body_roundtrips_entries ... ok
+test audit::tests::audit_path_detection ... ok
+test blueprint::tests::hex_transport_roundtrip ... ok
+test blueprint::tests::import_mints_and_seeds_content_gateway ... ok
+test caprpc::tests::method_returns_capability_stub ... ok
+test caprpc::tests::mint_and_invoke_granted_method ... ok
+test caprpc::tests::mint_invoke_revoke_lifecycle ... ok
+test caprpc::tests::promise_is_eager_and_resolvable ... ok
+test caprpc::tests::revoked_capability_is_refused ... ok
+test caprpc::tests::ungranted_method_is_refused ... ok
+test caprpc::tests::wrong_caller_is_refused ... ok
+test cells::tests::cid_path_parsing ... ok
+test cells::tests::resolve_non_cell_path_is_400 ... ok
+test cells::tests::resolve_present_and_absent_cells ... ok
+test config::tests::a_bad_flag_still_fails_even_in_init_mode ... ok
+test config::tests::a_bare_port_number_is_not_a_valid_listen_address ... ok
+test blueprint::tests::import_refuses_malformed_archive ... ok
+test config::tests::a_config_path_after_init_is_still_honoured ... ok
+test config::tests::a_config_path_before_init_is_also_honoured ... ok
+test config::tests::a_config_path_parses_in_both_spellings ... ok
+test config::tests::a_json_object_is_treated_as_absent_not_as_a_string ... ok
+test config::tests::a_json_scalar_is_read_even_when_it_is_not_a_string ... ok
+test config::tests::a_malformed_env_value_falls_back_to_the_file_layer ... ok
+test config::tests::a_malformed_value_falls_back_and_leaves_provenance_at_the_layer_below ... ok
+test config::tests::a_valueless_flag_is_an_error_not_a_silent_default ... ok
+test config::tests::an_unknown_flag_names_itself ... ok
+test config::tests::an_unknown_key_in_the_file_is_ignored_rather_than_fatal ... ok
+test config::tests::addresses_are_validated_before_pingora_sees_them ... ok
+test config::tests::both_flag_spellings_parse ... ok
+test config::tests::defaults_apply_when_nothing_else_is_supplied ... ok
+test config::tests::env_beats_file ... ok
+test config::tests::every_startup_key_is_either_soft_or_on_the_admin_refuse_list ... ok
+test config::tests::every_key_has_provenance_even_when_unset ... ok
+test config::tests::file_beats_default ... ok
+test config::tests::hard_patch_keys_agree_with_the_admin_refuse_list ... ok
+test config::tests::flag_beats_everything ... ok
+test config::tests::help_returns_usage_as_an_error_so_the_process_can_exit_non_zero ... ok
+test config::tests::init_is_its_own_invocation ... ok
+test config::tests::the_default_listen_is_loopback_because_there_is_no_wire_auth ... ok
+test config::tests::the_starter_config_is_byte_identical_for_the_same_answers ... ok
+test config::tests::the_full_ladder_is_ordered_on_one_key ... ok
+test config::tests::the_starter_config_mentions_every_key_and_its_env_var ... ok
+test config::tests::the_starter_config_round_trips_through_the_resolver ... ok
+test config::tests::version_json_reports_provenance_per_key ... ok
+test early_route_tests::a_malformed_envelope_is_400 ... ok
+test early_route_tests::a_clean_batch_is_accepted ... ok
+test early_route_tests::a_secret_in_a_submitted_message_is_not_echoed ... ok
+test early_route_tests::a_partial_accept_is_200_with_the_refusals_named ... ok
+test early_route_tests::an_unregistered_source_is_reported_as_a_health_signal ... ok
+test early_route_tests::capability_invoke_yields_the_remainder_and_requires_post ... ok
+test early_route_tests::everything_else_is_forwarded ... ok
+test early_route_tests::healthz_and_version_are_get_only ... ok
+test early_route_tests::ingest_is_post_only_and_local ... ok
+test early_route_tests::metrics_keeps_its_prometheus_format_switch ... ok
+test early_route_tests::version_json_names_the_service_and_a_version ... ok
+test early_route_tests::version_json_reports_which_configuration_layer_won ... ok
+test filter::tests::absent_screener_surfaces_notice_never_silent_pass ... ok
+test filter::tests::all_allowed_ops_pass ... ok
+test filter::tests::allowlist_has_no_duplicates ... ok
+test filter::tests::allowlist_matches_shared_registry ... ok
+test filter::tests::bad_json_gives_uk1001 ... ok
+test filter::tests::denied_op_gives_uk4001 ... ok
+test filter::tests::provenance_label_survives_validation ... ok
+test filter::tests::valid_request_passes ... ok
+test gate::tests::gate_path_detection ... ok
+test gate::tests::pending_approve_reject_console_roundtrip ... ok
+test gate::tests::reject_discards_and_frees_queue ... ok
+test gate::tests::reject_returns_unknown_handle_error ... ok
+test mask::tests::leaves_non_sensitive_fields_untouched ... ok
+test mask::tests::mask_body_redacts_agent_response_shape ... ok
+test mask::tests::mask_body_roundtrips_non_json_unchanged ... ok
+test mask::tests::redacts_nested_secret_field ... ok
+test mask::tests::redacts_secret_inside_array ... ok
+test mask::tests::redacts_top_level_secret_field ... ok
+test metrics::tests::metric_rows_never_panic_on_concurrent_record ... ok
+test metrics::tests::prometheus_text_lists_all_allowed_ops ... ok
+test metrics::tests::records_calls_and_errors ... ok
+test metrics::tests::spend_attribute_reports_denied_without_consuming_op_rows ... ok
+test early_route_tests::an_oversize_batch_is_400_rather_than_partially_applied ... ok
+
+test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/ops_e2e.rs (target/debug/deps/ops_e2e-b01ac12fabf0f210)
+
+running 1 test
+test the_ops_surface_answers_over_a_real_socket ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+EXIT=0

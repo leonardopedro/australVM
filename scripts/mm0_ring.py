@@ -445,7 +445,14 @@ class Prover:
         self._nest(d, target, subterm_at(d.term, target))
         atoms = self._sort_atoms(d, target, atoms)
         atoms = self._collapse_literals(d, target, atoms)
-        return read_elem(subterm_at(d.term, target))
+        # Read the pair back at `path`, not at `target`: for a single negative
+        # factor the `pneg` sits *above* `target` (`neg (mul pa pb)`), so
+        # reading the inner product loses the sign. `d.term` at `path` is the
+        # canonical product with that sign in place, and it is positive in the
+        # two cases that keep `target == path`, so one read is right for all
+        # three. L11d.2's `(off + k + (n - k)) * width` multiplies a sum whose
+        # last summand is negative, which is the first certificate to reach it.
+        return read_elem(subterm_at(d.term, path))
 
     # ── sums ─────────────────────────────────────────────────────────────
 
@@ -506,7 +513,17 @@ class Prover:
                 d.rewrite(p, lit(0), "(padd_neg)")
             else:
                 d.rewrite(p, lit(0), "(padd_neg)")
-                d.rewrite([1] * (i - 1), sum_node(seq[:i]), "(padd_zero)")
+                # The zero is the *tail* of a right-nested sum, so the law that
+                # removes it is `padd_zero` at the pair `add(e_{i-1}, 0)`, which
+                # leaves `e_{i-1}`. This used to rewrite that subterm to the
+                # whole prefix `sum_node(seq[:i])`, which duplicated every
+                # earlier summand: for `off + n + k + (-k)` it produced
+                # `2*off + n`. A cancellation at position 1 is invisible to the
+                # mistake (the prefix is the single element), which is why the
+                # existing certificates never showed it. L11d.2's byte identity
+                # cancels at position 2, so the normalizer is fixed here rather
+                # than routing around it.
+                d.rewrite([1] * (i - 1), elem_node(seq[i - 1]), "(padd_zero)")
             return
         e3 = (1 if net > 0 else -1, abs(net), e1[2])
         fact = self.combine_fact(e1, e2, e3)

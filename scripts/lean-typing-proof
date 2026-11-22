@@ -634,12 +634,16 @@ def peak_mb() -> int:
 # Cap on the de Bruijn rewrite memos. Both are pure functions of their key,
 # so dropping one only costs recomputation; at ~200 B/entry this bounds them
 # at a couple of hundred megabytes while a declaration's derivation touches
-# far fewer distinct (expression, shift) pairs than that.
-MEMO_MAX = 1_000_000
+# far fewer distinct (expression, shift) pairs than that. `LTP_MEMO_MAX`
+# overrides it, which is how the cap floor it sets is measured (§13.50); the
+# default is what every recorded artifact was produced with.
+MEMO_MAX = int(os.environ.get("LTP_MEMO_MAX") or 1_000_000)
 
 # Total size of the strings `Enc` caches; past it new encodings are simply not
-# cached (they are recomputed, never wrong).
-ENC_MEMO_BYTES = 64 << 20
+# cached (they are recomputed, never wrong). `LTP_ENC_MAX` overrides it, which is
+# how the cap's share of the floor is measured (§13.51); the default is what
+# every recorded artifact was produced with.
+ENC_MEMO_BYTES = int(os.environ.get("LTP_ENC_MAX") or (64 << 20))
 
 # Total size of the proof strings the `check` result memo holds. Proofs are
 # nested text, so this is a real budget: the same cap as the encoding memo would
@@ -997,6 +1001,22 @@ def census(ex, enc, d) -> None:
                   f"({d._ctx_hits} hits, {d._ctx_scan} entries scanned)",
                   file=sys.stderr, flush=True)
         print(f"[census]   {peak_mb():10d}  peak RSS (MB)", file=sys.stderr, flush=True)
+        if os.environ.get("LTP_CENSUS_DUPS") and hasattr(ex.exprs, "extra"):
+            # Is the synthetic table a *set* inflated by repeated minting, or are
+            # its entries distinct nodes? Hash-keyed so the counting itself does
+            # not hold a second copy of the table. Two biases, both noted: a hash
+            # collision merges two nodes into one bucket (overstates duplication),
+            # and `repr` depends on key order, so equal content inserted in a
+            # different order counts as distinct. Treat the result as an estimate.
+            seen: dict[int, int] = {}
+            for rec in ex.exprs.extra.values():
+                h = hash(repr(rec))
+                seen[h] = seen.get(h, 0) + 1
+            print(f"[census]   {len(seen):10d}  synthetic nodes, distinct by content "
+                  f"(of {len(ex.exprs.extra)} minted)", file=sys.stderr, flush=True)
+            if seen:
+                print(f"[census]   {max(seen.values()):10d}  most repetitions of one node",
+                      file=sys.stderr, flush=True)
     except Exception as exc:  # a census must never hide the real failure
         print(f"[census] failed: {type(exc).__name__}: {exc}", file=sys.stderr,
               flush=True)
@@ -1266,21 +1286,56 @@ def _nat_lit(n: int) -> str:
     return out
 
 
+def _copy_spool(fh, sp) -> None:
+    """Copy one spool file into an artifact without a user-space buffer.
+
+    `shutil.copyfileobj(sp, fh, 1 << 20)` allocates its whole `length` before
+    the first byte moves, so a run that is at a memory cap when it reaches this
+    copy dies *on the copy*, after minutes of writing that succeeded (§13.52:
+    the 360 MiB run's `MemoryError` is inside `copyfileobj`, at the axiom
+    concat of the 444 MB statement). The kernel's own copy allocates nothing.
+    Where `sendfile` is absent or refuses, the fallback is a sixteenth of the
+    old buffer — the same copy, at a smaller granularity.
+    """
+    fh.flush()
+    sendfile = getattr(os, "sendfile", None)
+    if sendfile is not None:
+        dst, src = fh.fileno(), sp.fileno()
+        while True:
+            try:
+                moved = sendfile(dst, src, None, 1 << 20)
+            except OSError:
+                break
+            if not moved:
+                return
+    shutil.copyfileobj(sp, fh, 1 << 16)
+
+
 def _put(fh, piece) -> None:
     """Write a statement piece: a str, or a spool file copied through.
 
     A `Path` piece is text already on disk because it was too large to keep in
-    memory; `copyfileobj` streams it into the artifact a megabyte at a time.
+    memory; it is streamed into the artifact instead of being read back.
     """
     if isinstance(piece, Path):
         with piece.open("r") as sp:
-            shutil.copyfileobj(sp, fh, 1 << 20)
+            _copy_spool(fh, sp)
     elif isinstance(piece, (list, tuple)):
         # An unjoined encoding (`Enc.enc_parts`): written chunk by chunk.
         for p in piece:
             _put(fh, p)
     else:
         fh.write(piece)
+
+
+def _bodyty_path(stem) -> Path:
+    """The body type's spool: a temp, removed on the way out (§13.48).
+
+    A stopped run removes it as well, so the set of files a run leaves behind is
+    the one the byte-identity gate records — the type, value and axiom spools
+    are part of that set, and this one is not.
+    """
+    return Path(str(stem) + "_bodytype.tmp")
 
 
 def _spool_head(path: Path, n: int) -> str:
@@ -1293,8 +1348,11 @@ def _pieces(parts, chunk: int = 1 << 20):
 
     A `Path` is read through like `_put` copies it through; a str is sliced. No
     piece is ever concatenated with another, so checking a 1.9 GB type against
-    its spool does not need a second 1.9 GB string (§13.43).
+    its spool does not need a second 1.9 GB string (§13.43). A single piece is
+    accepted where a list is, since a spooled term is one `Path` (§13.48).
     """
+    if isinstance(parts, (str, Path)):
+        parts = (parts,)
     for p in parts:
         if isinstance(p, Path):
             with p.open("r") as sp:
@@ -1395,9 +1453,16 @@ def main() -> int:
         binder_ty_eids.append(bte)
         binders.append(enc.enc(bte))
         cur = ex.exprs[cur]["forallE"]["body"]
-    # Pieces, not a string: the body type of this row is 1.94 GB, and joining it
-    # here is the allocation that set the row's cap floor (§13.44, §13.45).
-    body_ty = enc.enc_parts(cur)
+    # On disk, not in pieces: the body type of this row is 1.94 GB, and pieces
+    # of it stayed resident from here to the end of the walk — that residency,
+    # not the join it replaced, is what the cap floor is made of (§13.45,
+    # §13.46). Spooling it costs one streaming encode, the same bytes in the same
+    # order; `_put` and `_spool_eq` already read a `Path` piece, so what the
+    # artifact writes is unchanged.
+    bt_path = _bodyty_path(stem)
+    bt_bytes = enc.spool(cur, bt_path)
+    stats(f"body type spooled ({bt_bytes} B)")
+    body_ty = bt_path
 
 # A value may abstract over more binders than its type's Π spine shows: the
     # extra λs sit under a type that unfolds to a Π, and `Deriver.check` pays a
@@ -1497,7 +1562,8 @@ def main() -> int:
         # Open judgment: the axiom needs one line, so the pieces are joined here
         # and only here — this path is never the closed goal statement.
         axioms.append(
-            f"axiom ax_body: $ tty {inner_ctx} {body} {''.join(body_ty)} $;"
+            f"axiom ax_body: $ tty {inner_ctx} {body} "
+            f"{''.join(_pieces(body_ty))} $;"
         )
         _step_add(steps_hist, steps_order, "assume body typing")
         base_proof = "ax_body"
@@ -1534,8 +1600,12 @@ def main() -> int:
         # Wrap the body back out: one `ty_abs` per binder, nested, so the proof
         # term is a single expression (MM0 nests proofs in argument position
         # exactly like terms).
+        # Pieces, not copies. `proof = f"(ty_abs {proof})"` copied the whole
+        # proof once per binder — 12 copies of 4.3 MB on this row, and O(n²)
+        # bytes in general. The nesting only ever gets concatenated or written,
+        # so it is a list: `(ty_abs ` × n, the proof, `)` × n.
+        proof = ["(ty_abs "] * len(binders) + [proof] + [")"] * len(binders)
         for _ in binders:
-            proof = f"(ty_abs {proof})"
             _step_add(steps_hist, steps_order, "ty_abs")
         # No allocation of the wrapped type at all: the artifact writes the
         # spooled declared type, and the wrap exists only to say *which* text the
@@ -1604,7 +1674,7 @@ def main() -> int:
     tail0 = "\n-- ── the derivation ──\n"
     tail1 = "\n-- ── the derivation ──\npub "
     # Written in pieces: the prefix, the spooled assumptions copied through
-    # (`shutil.copyfileobj`, so their bytes are never in this process twice),
+    # (`_copy_spool`, so their bytes are never in this process twice),
     # then the tail. Concatenated in memory this is 444 MB of axiom text on
     # `adjoint_aeval`, before it is even a string.
     for suffix, tail in ((".mm0", tail0), (".mm1", tail1)):
@@ -1612,7 +1682,7 @@ def main() -> int:
             fh.write(pre)
             if ax_fh is not None:
                 with ax_path.open("r") as spool:
-                    shutil.copyfileobj(spool, fh, 1 << 20)
+                    _copy_spool(fh, spool)
             else:
                 fh.write("".join(a + "\n" for a in axioms))
             fh.write(tail)
@@ -1621,11 +1691,17 @@ def main() -> int:
             fh.write(" ")
             _put(fh, goal_ty)
             fh.write(" $")
-            fh.write(";\n" if suffix == ".mm0" else f" =\n  '{proof};\n")
+            if suffix == ".mm0":
+                fh.write(";\n")
+            else:
+                fh.write(" =\n  '")
+                _put(fh, proof)
+                fh.write(";\n")
     if ax_fh is not None:
         ax_path.unlink()
     ty_path.unlink()
     val_path.unlink()
+    bt_path.unlink()
     stats(f"artifacts written ({stem.with_suffix('.mm1').stat().st_size >> 20} MB)")
     # The conversion obligations, structurally: the interface the external
     # deltanet check consumes (`scripts/lean-net-cert`). Written even when empty
@@ -1722,7 +1798,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
         fh.write(header)
         if ax_fh is not None:
             with ax_path.open("r") as spool:
-                shutil.copyfileobj(spool, fh, 1 << 20)
+                _copy_spool(fh, spool)
         else:
             fh.write("".join(a + "\n" for a in axioms))
         fh.write("\n-- ── the goal, stated and not derived ──\n")
@@ -1741,6 +1817,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
         "header_bytes": len(header.encode()),
         "elapsed_s": round(time.monotonic() - _PROC_T0, 1),
     }
+    _bodyty_path(stem).unlink(missing_ok=True)
     sp = Path(str(stem) + "_stopped.json")
     sp.write_text(json.dumps(state, indent=1) + "\n")
     print(f"[stopped] {stop}: {d.rule_count} rules, {d.ax_count} axioms, "
@@ -1781,6 +1858,7 @@ def stop_walk(stop: StopWalk, d, ex, enc, oblig_sink, ax_fh, stem) -> int:
         "note": "the walk did not finish, so no .mm0/.mm1 was written: the "
                 "theory needs a proof of the goal and this run did not reach it",
     }
+    _bodyty_path(stem).unlink(missing_ok=True)
     path = Path(str(stem) + "_stopped.json")
     path.write_text(json.dumps(state, indent=1) + "\n")
     print(f"[stopped] {stop}: {d.rule_count} rules, {d.ax_count} axioms, "
@@ -1833,6 +1911,12 @@ class Deriver:
         self.ax_count = 0
         self.ax_bytes = 0
         self.ax_max = 0
+        # `LTP_DEDUP_NODES=1` interns synthetic nodes by content: two equal
+        # records share one id instead of one each. It is a probe, not a default:
+        # the index that makes it work costs memory too, and sharing ids can
+        # change any derivation step that compares two ids for identity, so the
+        # artifacts are what decides whether it is neutral (§13.52).
+        self._dedup: dict[str, int] = {} if os.environ.get("LTP_DEDUP_NODES") else None
         # Largest proof string returned so far (bytes); see `_check`.
         self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}
@@ -1913,6 +1997,18 @@ class Deriver:
         self._sh_idx = array.array("i", [-1]) * 1024
         self._sh_touched: list[int] = []
         self._sh_n = 0
+        # Sharing by content rather than by expression id (§13.53). The table
+        # is keyed by the id the export gave a subterm, so two ids that hold
+        # structurally equal nodes are written twice unless the *deriver*
+        # interns them first (`LTP_DEDUP_NODES`). A writer that keys on the
+        # rendered entry instead makes the record a function of the term alone,
+        # so interning stops changing this artifact and the deriver can own its
+        # memory without owning the certificate's spelling. Default on since the
+        # golden was re-recorded for it (§13.53: one line, 10 349 935 →
+        # 4 258 753 B); `LTP_SHARE_DEDUP=0` still reproduces the old bytes.
+        self._sh_seen: dict[str, int] | None = (
+            {} if self._share
+            and os.environ.get("LTP_SHARE_DEDUP", "1") == "1" else None)
         self._stop_rules = int(os.environ.get("LTP_STOP_RULES", "0") or 0)
         _stop_at = float(os.environ.get("LTP_STOP_AT", "0") or 0)
         self._stop_at = (time.monotonic() + _stop_at) if _stop_at else 0.0
@@ -2069,6 +2165,8 @@ class Deriver:
             idx[eid] = -1
         self._sh_touched.clear()
         self._sh_n = 0
+        if self._sh_seen is not None:
+            self._sh_seen.clear()
 
     def tree_share(self, eid: int, out) -> int:
         """Write `eid`'s node into the shared table and return its index.
@@ -2158,10 +2256,22 @@ class Deriver:
             else:
                 raise SystemExit(
                     f"tree_share: unhandled expression {sorted(e.keys())}")
+            seen = self._sh_seen
+            if seen is not None:
+                # Child indices are already canonical, so the rendered entry is
+                # the node's content: equal subtrees reach the same `got` and
+                # the later id simply points at the earlier index.
+                got = seen.get(ent)
+                if got is not None:
+                    idx[eid] = got
+                    self._sh_touched.append(eid)
+                    return got
             i = self._sh_n
             self._sh_n = i + 1
             idx[eid] = i
             self._sh_touched.append(eid)
+            if seen is not None:
+                seen[ent] = i
             if i:
                 write(", ")
             write(ent)
@@ -2245,9 +2355,16 @@ class Deriver:
 
     # ── export manipulation ──────────────────────────────────────────────
     def mk(self, d: dict) -> int:
+        if self._dedup is not None:
+            key = repr(d)
+            i = self._dedup.get(key)
+            if i is not None:
+                return i
         i = self.next_id
         self.next_id += 1
         self.ex.exprs[i] = d
+        if self._dedup is not None:
+            self._dedup[key] = i
         return i
 
     def ind_decl(self, nm: str) -> dict | None:
