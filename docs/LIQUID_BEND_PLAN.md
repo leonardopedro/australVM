@@ -178,6 +178,58 @@ extra assumption each fail an appropriate check. A missing prover is visible
 in the requested evidence lane. A Why3 verdict carries no MM0 discharge by
 itself.
 
+**Landed (L11d.2, 2026-11-20).** The split law is emitted from
+`examples/verified-kernel/liquid-split/split.obligations.json`, whose variables
+are the law's own (`off`, `n`, `k`, `width`): a launch plan binds them; the
+artifact never names a module. `scripts/liquid-split-mm0 emit` writes
+`mm0/liquid_split.{mm0,mm1}` (file sha256 `d0d91b2e…` / `4286b6a0…`), reusing
+`scripts/au2mm0`'s reflection/decision and `scripts/mm0_ring.py`'s proof chains,
+and records `12` certificates, `14` structural steps, `2` grounded coefficient
+facts, `3` premises (guard, domain, layout) and `1` residual (half-open-range
+disjointness). `check` re-emits byte-identically, replays with `mm0-rs 0.1.0`
+and `mm0-c` (both exit 0), and exercises nine drift controls (plus the
+artifact's own re-emit/replay): wrong offset, missing guard, extra premise, a
+subject digest that moves with the law but not with a binding, two different
+launch plans conforming to the one artifact, one plan with a one-element-late
+right half refused, and a stale recorded subject digest refused. `check --evidence <dump>`
+compares a compiler-produced evidence dump against the artifact's canonical
+variables.
+
+Evidence levels, kept separate by design: the `12` ring identities are
+**MM0-replayed** (`-- trust-split: structural=14 grounded=2 certificates=12`);
+the guard `k ≤ n` and the domain/layout premises are **declared and checked for
+presence**, not re-derived inside the ring theory; the order fact that touching
+half-open element ranges are disjoint is an **explicit residual**; the
+connection from an Austral module's spans to the law is **compiler evidence**,
+checked by `check --evidence` rather than folded into the artifact. The Why3
+lane emits scoped VCs from `LiquidConstraints` through the opt-in
+`AUSTRAL_LIQUID_SPLIT_VERIFY` / `AUSTRAL_LIQUID_SPLIT_DUMP` knobs and records
+`lane: why3 …` in the evidence. With why3 1.8.2 and alt-ergo 2.6.3 installed
+from this flake (`nix profile install "git+file://$PWD#why3"` and `#alt-ergo`,
+then `why3 config detect`), all `8` VCs are **Why3-valid** for the fixture;
+the `001-accept-split` evidence says `lane: why3 valid (8 goal(s))`. A missing
+engine is still a structured `[gap]` (the suite asserts it with a fake
+`WHY3_CLI`), and a Why3 `Proved` line never upgrades the MM0 artifact. Two
+latent bugs surfaced once the engine was real and are fixed in `LiquidWhy3`:
+`Util.run_command` gives the child only `PATH`, so why3 could not find
+`~/.why3.conf` and a prover-lookup failure read as a refusal; and `goals_in`
+looked for `"  goal"` after trimming, so a fully proved file reported
+`Proved 0`.
+
+The staged statements (`91`, sha256 `65214b34…`) are registered in §W3 as
+`[gap]`, awaiting an owner commit under `mm0/approved/`; nothing here approves
+them.
+
+Commands: `nix profile install "git+file://$PWD#why3"` / `#alt-ergo` / `#z3`
+(the last added as a flake package so the z3-backed golden check is
+installable without the devShell), then `why3 config detect`;
+`python3 scripts/liquid-split-mm0 selftest` (exit 0),
+`python3 scripts/liquid-split-mm0 check --evidence <dump>` (exit 0),
+`nix develop "git+file://$PWD#ocaml" -c dune runtest` (18 cases in
+`LiquidSplitPilot`, all passing; with why3 configured, the positive lane test
+asserts `lane: why3 valid (8 goal(s))` and the fake-`WHY3_CLI` test asserts the
+gap).
+
 ### L11e — Check direct structural descent against the existing fold
 
 **Depends on the scoped L11d interface.** Follow the existing L11e card.
@@ -192,6 +244,39 @@ on a rebuilt value without a decrease proof, and mutual or effectful recursion
 refuse. Record the evaluator's fuel and worst observed cost separately from
 the proof of termination. Lexicographic descent can follow after this rule is
 measured and proved for its stated fragment.
+
+**Landed (L11e, 2026-11-20).** The fragment is opt-in: `pragma Liquid_Descent`
+on a function promises one immutable inductive argument consumed as a proper
+constructor subterm in every self-call. `lib/liquid/LiquidDescent.ml` reads the
+typed tree (following the temporaries typing creates for a `case` scrutinee),
+resolves the recursive binder, and refuses a self-call on the original value,
+on a rebuilt value, outside such a case, or in a body with an effect
+(assignment, loop, mutable borrow). Mutual recursion remains L3's T1: the
+carve-out removes only the marked function's *self* edge from a body-local copy
+of the call graph. Fixing this exposed a latent bug in `LiquidCheck.totality`,
+which returned after the first contracted function and never checked the rest.
+
+`AUSTRAL_LIQUID_DESCENT_EVIDENCE=<path>` records the extracted rank sanity
+(`fuel([])=0`, `fuel([1;2;3])=3`, `weight([2;3])=5`), the index evaluator's
+`256`-step budget, the module's marked fold, and per-function self-call count
+and deepest case nesting. Those are **measurements**; the decreasingness proof
+stays in `lib/liquid/subset/liquid_measure.mlw` (`fuel_decreases_on_tail`), and
+the checker does not claim termination from syntax alone.
+
+Measured: `test/LiquidDescentTest.ml` (6 cases, all passing) admits the proper
+descent with evidence `descent: length arg=tail self-calls=1 case-depth=1
+verdict=held`, refuses original/rebuilt/effectful/mutual variants, and checks
+that the marker erases to identical CPS bytes. `test-programs/suites/027-liquid-descent`
+adds the CPU-path case (`001-agrees-with-fold`, fold and descent print the same
+measure) and two refusal fixtures. The recursive-union checker fixture cannot
+be emitted as C (its by-value tail is an incomplete C type), so its
+proper-subterm cases are checked at `--target-type=tc` and the executable
+correspondence uses the Int64 measure the fold combinator already uses.
+Lexicographic descent and a range-tree measure are **not** admitted yet.
+Rebuilding the compiler for this card moved the W5 code fingerprint in
+`mm0/flux1d_certificate.mm0`; re-emitting it required re-pinning the flux cite
+in `mm0/isa.mm0`/`mm0/clif.mm0` and, in turn, the isa/clif/store_projection
+cite digests. Those are generated header updates, not approvals.
 
 ### L12.1 — Generalize the split to explicit indexed families
 

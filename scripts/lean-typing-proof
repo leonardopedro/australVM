@@ -1286,15 +1286,40 @@ def _nat_lit(n: int) -> str:
     return out
 
 
+def _copy_spool(fh, sp) -> None:
+    """Copy one spool file into an artifact without a user-space buffer.
+
+    `shutil.copyfileobj(sp, fh, 1 << 20)` allocates its whole `length` before
+    the first byte moves, so a run that is at a memory cap when it reaches this
+    copy dies *on the copy*, after minutes of writing that succeeded (§13.52:
+    the 360 MiB run's `MemoryError` is inside `copyfileobj`, at the axiom
+    concat of the 444 MB statement). The kernel's own copy allocates nothing.
+    Where `sendfile` is absent or refuses, the fallback is a sixteenth of the
+    old buffer — the same copy, at a smaller granularity.
+    """
+    fh.flush()
+    sendfile = getattr(os, "sendfile", None)
+    if sendfile is not None:
+        dst, src = fh.fileno(), sp.fileno()
+        while True:
+            try:
+                moved = sendfile(dst, src, None, 1 << 20)
+            except OSError:
+                break
+            if not moved:
+                return
+    shutil.copyfileobj(sp, fh, 1 << 16)
+
+
 def _put(fh, piece) -> None:
     """Write a statement piece: a str, or a spool file copied through.
 
     A `Path` piece is text already on disk because it was too large to keep in
-    memory; `copyfileobj` streams it into the artifact a megabyte at a time.
+    memory; it is streamed into the artifact instead of being read back.
     """
     if isinstance(piece, Path):
         with piece.open("r") as sp:
-            shutil.copyfileobj(sp, fh, 1 << 20)
+            _copy_spool(fh, sp)
     elif isinstance(piece, (list, tuple)):
         # An unjoined encoding (`Enc.enc_parts`): written chunk by chunk.
         for p in piece:
@@ -1649,7 +1674,7 @@ def main() -> int:
     tail0 = "\n-- ── the derivation ──\n"
     tail1 = "\n-- ── the derivation ──\npub "
     # Written in pieces: the prefix, the spooled assumptions copied through
-    # (`shutil.copyfileobj`, so their bytes are never in this process twice),
+    # (`_copy_spool`, so their bytes are never in this process twice),
     # then the tail. Concatenated in memory this is 444 MB of axiom text on
     # `adjoint_aeval`, before it is even a string.
     for suffix, tail in ((".mm0", tail0), (".mm1", tail1)):
@@ -1657,7 +1682,7 @@ def main() -> int:
             fh.write(pre)
             if ax_fh is not None:
                 with ax_path.open("r") as spool:
-                    shutil.copyfileobj(spool, fh, 1 << 20)
+                    _copy_spool(fh, spool)
             else:
                 fh.write("".join(a + "\n" for a in axioms))
             fh.write(tail)
@@ -1773,7 +1798,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
         fh.write(header)
         if ax_fh is not None:
             with ax_path.open("r") as spool:
-                shutil.copyfileobj(spool, fh, 1 << 20)
+                _copy_spool(fh, spool)
         else:
             fh.write("".join(a + "\n" for a in axioms))
         fh.write("\n-- ── the goal, stated and not derived ──\n")
@@ -1978,11 +2003,12 @@ class Deriver:
         # interns them first (`LTP_DEDUP_NODES`). A writer that keys on the
         # rendered entry instead makes the record a function of the term alone,
         # so interning stops changing this artifact and the deriver can own its
-        # memory without owning the certificate's spelling. Default off: it
-        # shrinks a committed artifact, and that is a re-record, not a tweak.
+        # memory without owning the certificate's spelling. Default on since the
+        # golden was re-recorded for it (§13.53: one line, 10 349 935 →
+        # 4 258 753 B); `LTP_SHARE_DEDUP=0` still reproduces the old bytes.
         self._sh_seen: dict[str, int] | None = (
             {} if self._share
-            and os.environ.get("LTP_SHARE_DEDUP", "0") == "1" else None)
+            and os.environ.get("LTP_SHARE_DEDUP", "1") == "1" else None)
         self._stop_rules = int(os.environ.get("LTP_STOP_RULES", "0") or 0)
         _stop_at = float(os.environ.get("LTP_STOP_AT", "0") or 0)
         self._stop_at = (time.monotonic() + _stop_at) if _stop_at else 0.0

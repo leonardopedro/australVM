@@ -108,6 +108,7 @@ type contract_kind =
   | KTrusted
   | KMeasure
   | KFold
+  | KDescent
 
 let string_of_contract_kind = function
   | KRequires -> "Requires"
@@ -116,6 +117,7 @@ let string_of_contract_kind = function
   | KTrusted -> "Trusted"
   | KMeasure -> "Measure"
   | KFold -> "Fold"
+  | KDescent -> "Descent"
 
 let contract_kind_of_string = function
   | "Requires" -> Some KRequires
@@ -124,6 +126,7 @@ let contract_kind_of_string = function
   | "Trusted" -> Some KTrusted
   | "Measure" -> Some KMeasure
   | "Fold" -> Some KFold
+  | "Descent" -> Some KDescent
   | _ -> None
 
 (** A parsed contract: the kind it was written under, the whole contract

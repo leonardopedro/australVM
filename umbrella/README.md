@@ -5,6 +5,9 @@ with a [source review](../docs/UMBRELLA_PRODUCTION_REVIEW.md) and
 [acceptance matrix](../docs/umbrella/TEST_MATRIX.md). The current implementation
 is the prototype described below. Its `cap-std` integration is incomplete.
 
+The [three-language plan](../PLAN_umbrella_bend.md) extends Umbrella to standard
+Bend through the existing Rust provider and adapter workflow.
+
 PLAN_valen §5 **P3** — an australVM-as-a-service host that lives inside
 australVM as a plain subfolder (`australVM/umbrella`; integrated out of
 its old submodule form on 2026-10-18) and

@@ -486,6 +486,7 @@ let kind_name (k : LiquidTypes.contract_kind) : string =
   | LiquidTypes.KTrusted -> "Liquid_Trusted"
   | LiquidTypes.KMeasure -> "Liquid_Measure"
   | LiquidTypes.KFold -> "Liquid_Fold"
+  | LiquidTypes.KDescent -> "Liquid_Descent"
 
 (** Audit one contract. A parse failure yields `None`: `LiquidCheck` has
     already rejected it, and reporting the same defect twice as two different

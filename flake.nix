@@ -156,6 +156,14 @@
         # check` gap in scripts/verify-invariants closes with it.
         packages.alt-ergo = pkgsWhy3.alt-ergo;
 
+        # The prover behind `scripts/verify-invariants`' full validity check of
+        # `lib/liquid/golden/vc-fold-premises.mlw`. Exposed for the same reason
+        # as the two above: the devShell is all-or-nothing and unbuildable on
+        # this aarch64 host (alt-ergo), but z3 alone is a free cache fetch.
+        # Same channel as why3/alt-ergo, so driver and prover versions move
+        # together; `why3 config detect` records it in ~/.why3.conf.
+        packages.z3 = pkgsWhy3.z3;
+
         # The frozen MM0 toolchain — the Phase-D root of trust
         # (docs/lean4mm0.md §5, CI `phase-d` job): `mm0-rs` elaborates the
         # generated `.mm1` proofs into an `.mmb`, and `mm0-c` — one C file,

@@ -94,6 +94,11 @@ reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_
 for CPU, GPU and NPU representations. It follows Hydro's typed-IR/semantic-transfer
 pattern while recording actual compiler, instruction and opaque-device proof gaps.
 
+The [Bend–AustralVM integration plan](PLAN_bend_austral_integration.md) uses
+SafestOS, the CPS/Cranelift CPU backend and the same MM0 proof chain from both
+languages. The [parallel execution plan](docs/SAFESTOS_PARALLEL_PLAN.md) adds
+bounded fork/join, continuation optimizations and shared accelerator jobs.
+
 ## 🚀 Current Status: Phase 11 (Policy-Driven OS VM)
 The project has successfully integrated a multi-tier security model combining compile-time linear type checks with JIT-time Cedar policy enforcement.
 
