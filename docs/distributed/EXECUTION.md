@@ -866,9 +866,10 @@ refresh should carry the author's own measurement. The remaining gaps are the
 same explained ones (W5 object arch, W9.1 RV64, W9.3 Lean, plus PC05a/lean2mm0
 when the mm0 tools are not on `PATH`).
 
-## D09 — trusted artifact identity through umbrella (2026-11-22, step 1 of 4)
+## D09 — trusted artifact identity and instance capabilities (2026-11-22, steps 1–3 of 4)
 
-A `umbrella/src/{project,trust,main}.rs`; tests `umbrella/tests/{policy,cli,entry}.rs`.
+A `umbrella/src/{project,trust,main}.rs`, `safestos/cranelift/src/{capstd_mod,module,lib}.rs`;
+tests `umbrella/tests/{policy,cli,entry}.rs`, `safestos/cranelift/tests/capstd_tests.rs`.
 
 ### Why a pin, and why two of them
 
@@ -909,6 +910,41 @@ $ cargo test --lib           # 59 passed
 $ cargo test                 # EXIT=0 (6 integration binaries: 5+6+4+7+6+3 passed)
 ```
 
+### Capabilities: handles, not paths (steps 2–3)
+
+`ModuleHost::load` now constructs one `capstd_mod::caps::InstanceCaps` per
+instance and installs it under the instance id:
+
+* the **directory** capability is rooted at `<module-dir>/.state`, canonicalised
+  once at construction, so a symlinked state directory cannot widen it later;
+  absolute paths and any `..` component are refused before I/O, and a resolved
+  parent that escapes the root is refused too;
+* the **network** capability addresses exactly `[module] node` — the one peer the
+  instance serves (D08). No node means no peers, and a peer outside that set is
+  refused *before* anything is delivered, so the adapter has no way to dial an
+  arbitrary host;
+* a handle is an opaque `u64` issued to one module. Presenting it as another
+  module is refused, ids are never reused, and `close` ends the capability.
+
+The `rs_cap_*` boundary (registered in `RS_FFI_SYMBOLS`, so the manifest gate
+gates each verb by name like any other `rs_*` call) takes the caller from the
+current instance context rather than from an argument, refuses a revoked or
+replaced instance before looking at any handle, checks every length against a
+1 MiB bound, copies buffers in and out (nothing borrowed is retained), and wraps
+each call in `catch_unwind` — unwinding into JIT'd code is undefined, so a panic
+returns `-101` instead. A short output buffer reports the required length as a
+negative number, so a caller cannot mistake truncation for a full frame.
+
+| Witness | Asserts |
+|---|---|
+| `handles_are_instance_scoped_bounded_and_never_reach_a_denied_target` | relative read/write works; `..` and absolute paths refused; another module's handle refused; oversized write refused; unconfigured peer refused with **no sink line**; accepted frame is pending until settled; cancelled request never reaches the sink; closed handle is gone and ids are not reused |
+| `the_rs_boundary_uses_the_current_instance_and_refuses_a_stale_one` | no caller → `-1`; the installed instance's `rs_cap_dir_open`/`write`/`read` work; short buffer → negated length; absolute path → negative code; a revoked instance → `-3` before any handle |
+
+```
+$ cargo test --test capstd_tests   # 6 passed
+$ cargo test                       # EXIT=0 (lib 70, capstd 6, modhost_cli 42, module_tests 12)
+```
+
 ### Not claimed
 
 This is a digest pin, not a signature: it says the artifact is the one the
@@ -916,11 +952,17 @@ project approved, not who approved it or what the code does. `trusted.exports`
 is read from `nm -D --defined-only` — a host without `nm` is refused rather than
 passed — and it checks that a symbol exists, not its signature; C has no
 signature in the symbol table, so the ABI must still match by construction.
-Steps 2–4 of D09 are not started: the instance-rooted directory capability and
-the peer-restricted network capability, the bounded `send`/`query`/`wait`/`cancel`
-surface over the Rust protocol code, and the Austral positive/negative demo do
-not exist yet, so nothing here shows a module being *given* those handles.
-`untrusted-native` remains U26's tier and is still refused by preflight.
+
+The capability tier is the Tier 1 coupling this file opens with: a module that
+can call `std::fs` or `TcpStream` directly is *not* contained by refused paths or
+a peer allowlist, and hard isolation stays the VM tier's job. The transport that
+would settle a pending request is not here — `settle` is called by tests, and the
+sink is a file in the state directory, so what is proven is the boundary's
+refusals and ownership, not a live network path. Step 4's Austral
+positive/negative demo and the umbrella-side adapter that would *call* these verbs
+are not written: nothing yet compiles an Austral module against `rs_cap_*`, so
+the FFI surface is exercised from Rust, not from Austral. `untrusted-native`
+remains U26's tier and is still refused by preflight.
 
 ## Task status
 
@@ -935,5 +977,5 @@ not exist yet, so nothing here shows a module being *given* those handles.
 | D06 | verified within stated scope | a client-named request replays its settled result, conflicts are refused, retention is an acknowledged floor and a full book backpressures |
 | D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
 | D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; `call_from_peer` is the production receiver and checks against the peer the transport authenticated |
-| D09 | in progress (step 1 of 4) | `umbrella` pins the artifact identity — Cargo.lock digest and feature set before cargo runs, library digest and ABI exports before dlopen — and refuses a build/load authorization with no pin; capabilities (steps 2–3) and the Austral demo (step 4) are not started |
+| D09 | in progress (steps 1–3 of 4) | `umbrella` pins the artifact identity — Cargo.lock digest and feature set before cargo runs, library digest and ABI exports before dlopen; the host issues per-instance directory and single-peer network handles, and `rs_cap_*` bounds, copies and contains them. Step 4's Austral demo and umbrella adapter are not written |
 | D08–D26 | not started | D08 is next (scoped caller context, dynamic remote policy) |
