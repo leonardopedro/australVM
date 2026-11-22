@@ -853,6 +853,19 @@ stage-bridge`, and the gate is 177 passed / 3 explained gaps / 0 failed.
 `make test` itself (1.5 h of drift controls) was not re-run in full; the
 structural order is what changed, and it is what the above checks.
 
+One tree-state caveat, recorded because the numbers above are otherwise read as
+"HEAD is green": those runs were taken on 2026-11-22 ~15:00, before this branch
+merged origin's compiler update (`lib/Compiler_cps.ml` +363 lines,
+`lib/CliEngine.ml`, `lib/gpu/*`, with a two-line certificate refresh). After that
+merge the gate reports one failure — W5 "the certificate's cps digest is the
+bridge's digest of the emitted bytes" — because `mm0/flux1d_certificate.mm0` was
+emitted before the last `lib/` change, so the recorded digest names an older
+compiler build. Re-emitting it belongs to that compiler change, not to D08/D09:
+nothing here touches CPS emission, and the certificate is a proof artifact whose
+refresh should carry the author's own measurement. The remaining gaps are the
+same explained ones (W5 object arch, W9.1 RV64, W9.3 Lean, plus PC05a/lean2mm0
+when the mm0 tools are not on `PATH`).
+
 ## D09 — trusted artifact identity through umbrella (2026-11-22, step 1 of 4)
 
 A `umbrella/src/{project,trust,main}.rs`; tests `umbrella/tests/{policy,cli,entry}.rs`.
