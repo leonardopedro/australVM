@@ -1079,6 +1079,41 @@ pub(crate) const RS_FFI_SYMBOLS: &[KernelSymbol] = &[
         name: "rs_bundle_tag",
         addr: rsffi::rs_bundle_tag as *const u8,
     },
+    // D09: the capability boundary. The host issues handles; these five verbs
+    // are the only way a module reaches the instance state directory or its one
+    // configured peer, and each is gated by name like any other `rs_*` call.
+    KernelSymbol {
+        name: "rs_cap_dir_open",
+        addr: crate::capstd_mod::rs_cap_dir_open as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_net_open",
+        addr: crate::capstd_mod::rs_cap_net_open as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_close",
+        addr: crate::capstd_mod::rs_cap_close as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_write",
+        addr: crate::capstd_mod::rs_cap_write as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_read",
+        addr: crate::capstd_mod::rs_cap_read as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_send",
+        addr: crate::capstd_mod::rs_cap_send as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_query",
+        addr: crate::capstd_mod::rs_cap_query as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_cancel",
+        addr: crate::capstd_mod::rs_cap_cancel as *const u8,
+    },
 ];
 
 #[cfg(feature = "tier1-rs")]

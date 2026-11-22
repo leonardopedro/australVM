@@ -500,6 +500,26 @@ impl ModuleHost {
 
         match loaded {
             Ok((name, handle)) => {
+                // D09: the host builds this instance's capabilities — a directory
+                // rooted in its own state directory and the single peer it serves
+                // — and installs them under its identity. A module receives
+                // handles from here; it never receives a path it could re-root or
+                // a network capability that can dial an arbitrary host. A load
+                // that cannot get its capability set is a failed load.
+                let state_dir = module_dir.join(".state");
+                let peers: Vec<String> = handle.manifest.node.clone().into_iter().collect();
+                match crate::capstd_mod::caps::InstanceCaps::new(
+                    handle.manifest.name.clone(),
+                    &state_dir,
+                    peers,
+                ) {
+                    Ok(caps) => crate::capstd_mod::caps::install(instance, caps),
+                    Err(error) => {
+                        crate::auth::restore_manifest_engine(previous_grants);
+                        auth::revoke_instance(instance);
+                        return Err(format!("UK-4001: cannot construct capabilities: {error}"));
+                    }
+                }
                 self.modules.insert(name.clone(), handle);
                 Ok(self.modules.get(&name).unwrap())
             }
@@ -509,6 +529,7 @@ impl ModuleHost {
                 // identity never becomes live.
                 auth::restore_manifest_engine(previous_grants);
                 auth::revoke_instance(instance);
+                crate::capstd_mod::caps::uninstall(instance);
                 Err(error)
             }
         }

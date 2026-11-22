@@ -124,3 +124,173 @@ fn capstd_stub_returns_error() {
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("capstd feature not enabled"));
 }
+
+// ── D09: instance capabilities ──────────────────────────────────────────────
+//
+// The host builds one capability set per instance. These tests are the step-4
+// negatives: a denied peer produces no sink call, a path cannot leave the state
+// directory, a handle cannot be used by another module, and a cancelled request
+// never reaches the sink. One test function on purpose: the auth/capability
+// registries are process-global and `cargo test` runs functions in parallel.
+
+mod d09 {
+    use austral_cranelift_bridge::capstd_mod::caps::{InstanceCaps, Kind, MAX_FRAME};
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("d09_caps_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sink_lines(caps: &InstanceCaps) -> Vec<String> {
+        std::fs::read_to_string(caps.root().join("sink.log"))
+            .map(|text| text.lines().map(|l| l.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn handles_are_instance_scoped_bounded_and_never_reach_a_denied_target() {
+        let dir = scratch("main");
+        let caps = InstanceCaps::new("d09_mod", &dir, vec!["node-7".to_string()]).unwrap();
+
+        // A directory capability is rooted in the state dir: a relative path
+        // stays inside it, and the two ways out are refused before any I/O.
+        let dh = caps.open(Kind::Dir).unwrap();
+        assert_eq!(caps.write(dh, "d09_mod", "notes/a.txt", b"hello").unwrap(), 5);
+        assert_eq!(caps.read(dh, "d09_mod", "notes/a.txt").unwrap(), b"hello");
+        let escape = caps
+            .read(dh, "d09_mod", "../outside.txt")
+            .expect_err("`..` must not resolve");
+        assert!(escape.contains("escapes"), "got: {escape}");
+        let absolute = caps
+            .read(dh, "d09_mod", "/etc/hostname")
+            .expect_err("an absolute path must not resolve");
+        assert!(absolute.contains("absolute"), "got: {absolute}");
+
+        // The handle was issued to one module; a neighbour presenting the same
+        // number is refused, so a handle is a capability and not a guessable id.
+        let foreign = caps
+            .write(dh, "other_mod", "notes/a.txt", b"x")
+            .expect_err("another module may not use this handle");
+        assert!(foreign.contains("belongs to 'd09_mod'"), "got: {foreign}");
+
+        // A frame over the bound is refused rather than allocated.
+        let too_big = vec![0u8; MAX_FRAME + 1];
+        let over = caps
+            .write(dh, "d09_mod", "big.bin", &too_big)
+            .expect_err("an oversized write must be refused");
+        assert!(over.contains("exceeds"), "got: {over}");
+
+        // The net capability addresses exactly the configured peer. A denied
+        // peer is refused *before* delivery, so the sink sees nothing.
+        let nh = caps.open(Kind::Net).unwrap();
+        let denied = caps
+            .send(nh, "d09_mod", "node-8", b"ping")
+            .expect_err("an unconfigured peer must be refused");
+        assert!(denied.contains("not configured"), "got: {denied}");
+        assert!(sink_lines(&caps).is_empty(), "a denied send must not reach the sink");
+
+        // An accepted frame is pending until the transport settles it.
+        let id = caps.send(nh, "d09_mod", "node-7", b"ping").unwrap();
+        assert!(caps.query(nh, "d09_mod", id).unwrap().is_none());
+        caps.settle(nh, "transport", id, b"pong").unwrap();
+        assert_eq!(caps.query(nh, "d09_mod", id).unwrap().unwrap(), b"pong");
+        assert_eq!(sink_lines(&caps).len(), 1, "one delivery, one sink line");
+
+        // A cancelled request is dropped: it never reaches the sink and cannot be
+        // cancelled again after it settles.
+        let second = caps.send(nh, "d09_mod", "node-7", b"dropped").unwrap();
+        caps.cancel(nh, "d09_mod", second).unwrap();
+        let cancelled = caps
+            .query(nh, "d09_mod", second)
+            .expect_err("a cancelled request has no response");
+        assert!(cancelled.contains("cancelled"), "got: {cancelled}");
+        assert_eq!(
+            sink_lines(&caps).len(),
+            1,
+            "a cancelled send must not reach the sink"
+        );
+
+        // Closing the handle ends the capability; the number is not reused by a
+        // later open, so a stale id cannot be revived by a neighbour opening one.
+        caps.close(nh, "d09_mod").unwrap();
+        let by_id = caps.open(Kind::Net).unwrap();
+        assert!(by_id > nh, "handle ids are not reused");
+        assert!(caps.query(nh, "d09_mod", id).is_err(), "a closed handle is gone");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_rs_boundary_uses_the_current_instance_and_refuses_a_stale_one() {
+        use austral_cranelift_bridge::auth;
+        use austral_cranelift_bridge::capstd_mod::caps;
+
+        let dir = scratch("ffi");
+        let context = auth::bind_instance("d09_ffi", false);
+        caps::install(
+            context.instance,
+            InstanceCaps::new("d09_ffi", &dir, vec!["node-7".to_string()]).unwrap(),
+        );
+
+        // No caller on this thread yet: nothing to attribute a call to.
+        assert_eq!(austral_cranelift_bridge::capstd_mod::rs_cap_dir_open(), -1);
+
+        let handle = {
+            let _scope = auth::enter_caller(&context);
+            let handle = austral_cranelift_bridge::capstd_mod::rs_cap_dir_open();
+            assert!(handle > 0, "the host installed capabilities for this instance");
+            let path = "ffi.txt";
+            let written = unsafe {
+                austral_cranelift_bridge::capstd_mod::rs_cap_write(
+                    handle,
+                    path.as_ptr(),
+                    path.len() as i64,
+                    b"via ffi".as_ptr(),
+                    7,
+                )
+            };
+            assert_eq!(written, 7);
+
+            // A buffer that is too small reports the required length negatively,
+            // so a caller never mistakes a truncation for a full frame.
+            let out = [0u8; 2];
+            let short = unsafe {
+                austral_cranelift_bridge::capstd_mod::rs_cap_read(
+                    handle,
+                    path.as_ptr(),
+                    path.len() as i64,
+                    out.as_ptr() as *mut u8,
+                    out.len() as i64,
+                )
+            };
+            assert_eq!(short, -7, "required length, negated");
+
+            // An absolute path is refused at the boundary as a bad argument.
+            let absolute = "/etc/hostname";
+            let refused = unsafe {
+                austral_cranelift_bridge::capstd_mod::rs_cap_read(
+                    handle,
+                    absolute.as_ptr(),
+                    absolute.len() as i64,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            assert!(refused < 0);
+            handle
+        };
+
+        // Revoking the instance makes the capability unreachable even though the
+        // handle number is still in the table.
+        assert!(auth::revoke_instance(context.instance));
+        let stale = {
+            let _scope = auth::enter_caller(&context);
+            austral_cranelift_bridge::capstd_mod::rs_cap_close(handle)
+        };
+        assert_eq!(stale, -3, "a revoked instance is refused before any handle");
+        caps::uninstall(context.instance);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
