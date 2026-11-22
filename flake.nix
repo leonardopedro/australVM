@@ -467,12 +467,22 @@
           '';
         };
 
+        # A Rust toolchain and a C compiler are here so the gate's two Rust-built
+        # checks (`scripts/toy-witness`, `scripts/logos2mm0`) can link. Without
+        # them `rustc`/`cargo` resolve to the host's rustup shims, whose `cc` is
+        # the `nix-support/ld-wrapper.sh` of a rustup store path that has since
+        # been garbage-collected: `collect2: error: ld returned 127`, which the
+        # gate correctly reports as a gap but which is a property of this shell,
+        # not of the checks.
         devShells.lean = pkgs.mkShell {
           packages = [
             pkgs.lean4
             self.packages.${system}.lean4export
             self.packages.${system}.mm0
             pkgs.python3
+            pkgs.rustc
+            pkgs.cargo
+            pkgs.stdenv.cc
           ];
           RISCV_MODEL =
             "${self.packages.${system}.riscv-lean}/share/riscv-lean";
