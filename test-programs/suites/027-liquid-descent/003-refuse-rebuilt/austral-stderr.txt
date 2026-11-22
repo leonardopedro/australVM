@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "L11e: `length` is not a direct structural descent: it calls itself on a rebuilt value; there is no decrease proof for it. Opting in promises one recursive argument that is a proper constructor subterm in every self-call; remove the marker (L3 then refuses the cycle) or restructure the definition."
+    }
+  ],
+  "span": null,
+  "context": null
+}

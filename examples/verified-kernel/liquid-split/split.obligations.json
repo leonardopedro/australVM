@@ -1,0 +1,147 @@
+{
+  "stem": "liquid_split",
+  "law": "liquid-split.extent-conservation",
+  "owner": "L11d.1",
+  "note": "The source theorem L11d.1 holds out, in a *binding-independent* form: the variables are the law's own (`off`, `n`, `k`, `width`), never a module's record, field or declaration ids. A launch plan (a module) binds `off := <span>.off`, `n := <span>.len`, `k := <the parameter>` and `width := <its element_width>`; two plans that agree on the law therefore share this file and the certificate emitted from it, and only the binding record differs. scripts/liquid-split-mm0 checks an evidence dump against this file rather than this file against a module.",
+  "vars": ["off", "n", "k", "width"],
+  "premises": [
+    {
+      "kind": "guard",
+      "label": "k <= n",
+      "note": "The natural subtraction the source performs is the integer `n - k` only under this guard. The ring identity below holds for all integers, so the guard is not re-derived inside the ring theory: it is a premise of the source theorem, declared here and checked for presence."
+    },
+    {
+      "kind": "domain",
+      "label": "the extent [off, off+n) fits the validated allocation domain",
+      "note": "Supplied by the host's allocation bookkeeping; the certificate cannot see it."
+    },
+    {
+      "kind": "layout",
+      "label": "an element is `width` bytes, with width > 0 (layout premise)",
+      "note": "Supplied by the module declaration or by the host; the byte obligations are stated in terms of it."
+    }
+  ],
+  "residuals": [
+    {
+      "label": "half-open element ranges that touch are disjoint",
+      "statement": "left.off + left.len = right.off implies [left.off, left.off+left.len) and [right.off, right.off+right.len) share no element",
+      "because": "an order fact about naturals (x = y implies x <= y), not a polynomial identity; it is stated here instead of being silently assumed."
+    }
+  ],
+  "obligations": [
+    {
+      "name": "split_left_offset",
+      "statement": "left.off = off",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"var": "off"},
+      "rhs": {"var": "off"}
+    },
+    {
+      "name": "split_left_length",
+      "statement": "left.len = k",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"var": "k"},
+      "rhs": {"var": "k"}
+    },
+    {
+      "name": "split_right_offset",
+      "statement": "right.off = off + k",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "add", "args": [{"var": "off"}, {"var": "k"}]},
+      "rhs": {"op": "add", "args": [{"var": "off"}, {"var": "k"}]}
+    },
+    {
+      "name": "split_right_length",
+      "statement": "right.len = n - k",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "sub", "args": [{"var": "n"}, {"var": "k"}]},
+      "rhs": {"op": "sub", "args": [{"var": "n"}, {"var": "k"}]}
+    },
+    {
+      "name": "split_contiguous",
+      "statement": "left.off + left.len = right.off",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "add", "args": [{"var": "off"}, {"var": "k"}]},
+      "rhs": {"op": "add", "args": [{"var": "off"}, {"var": "k"}]}
+    },
+    {
+      "name": "split_conservation",
+      "statement": "left.len + right.len = n",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "add", "args": [
+        {"var": "k"},
+        {"op": "sub", "args": [{"var": "n"}, {"var": "k"}]}
+      ]},
+      "rhs": {"var": "n"}
+    },
+    {
+      "name": "split_byte_left",
+      "statement": "left.off * width = off * width",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "mul", "args": [{"var": "off"}, {"var": "width"}]},
+      "rhs": {"op": "mul", "args": [{"var": "off"}, {"var": "width"}]}
+    },
+    {
+      "name": "split_byte_right_start",
+      "statement": "right.off * width = (off + k) * width",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "mul", "args": [
+        {"op": "add", "args": [{"var": "off"}, {"var": "k"}]},
+        {"var": "width"}
+      ]},
+      "rhs": {"op": "add", "args": [
+        {"op": "mul", "args": [{"var": "off"}, {"var": "width"}]},
+        {"op": "mul", "args": [{"var": "k"}, {"var": "width"}]}
+      ]}
+    },
+    {
+      "name": "split_byte_right_end",
+      "statement": "(right.off + right.len) * width = (off + n) * width",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "mul", "args": [
+        {"op": "add", "args": [
+          {"op": "add", "args": [{"var": "off"}, {"var": "k"}]},
+          {"op": "sub", "args": [{"var": "n"}, {"var": "k"}]}
+        ]},
+        {"var": "width"}
+      ]},
+      "rhs": {"op": "mul", "args": [
+        {"op": "add", "args": [{"var": "off"}, {"var": "n"}]},
+        {"var": "width"}
+      ]}
+    },
+    {
+      "name": "split_byte_total",
+      "statement": "left.len * width + right.len * width = n * width",
+      "vars": ["off", "n", "k", "width"],
+      "lhs": {"op": "add", "args": [
+        {"op": "mul", "args": [{"var": "k"}, {"var": "width"}]},
+        {"op": "mul", "args": [
+          {"op": "sub", "args": [{"var": "n"}, {"var": "k"}]},
+          {"var": "width"}
+        ]}
+      ]},
+      "rhs": {"op": "mul", "args": [{"var": "n"}, {"var": "width"}]}
+    },
+    {
+      "name": "split_at_k_zero",
+      "statement": "k = 0: (off + 0) + (n - 0) = off + n",
+      "vars": ["off", "n"],
+      "lhs": {"op": "add", "args": [
+        {"op": "add", "args": [{"var": "off"}, {"int": 0}]},
+        {"op": "sub", "args": [{"var": "n"}, {"int": 0}]}
+      ]},
+      "rhs": {"op": "add", "args": [{"var": "off"}, {"var": "n"}]}
+    },
+    {
+      "name": "split_at_k_n",
+      "statement": "k = n: (off + n) + (n - n) = off + n",
+      "vars": ["off", "n"],
+      "lhs": {"op": "add", "args": [
+        {"op": "add", "args": [{"var": "off"}, {"var": "n"}]},
+        {"op": "sub", "args": [{"var": "n"}, {"var": "n"}]}
+      ]},
+      "rhs": {"op": "add", "args": [{"var": "off"}, {"var": "n"}]}
+    }
+  ]
+}
