@@ -51,10 +51,9 @@ module body HotHandle is
     pragma Foreign_Import(External_Name => "avm_live_remember");
     function hotRemember(lo: Int64, hi: Int64): Int64 is end;
 
-    generic [R: Region]
-    function read(hot: &[Hot, R]): Int64 is
+    function read(lo: Int64, hi: Int64): Int64 is
         var word: Word := Word(value => -1);
-        let status: Int64 := hotUse(hot->lo, hot->hi, refMutToPointer(&!word));
+        let status: Int64 := hotUse(lo, hi, refMutToPointer(&!word));
         if status = 0 then
             let { value: Int64 } := word;
             return value;
@@ -73,7 +72,7 @@ module body HotHandle is
         let minted: Int64 := hotNew(5, refMutToPointer(&!pair));
         let { lo: Int64, hi: Int64 } := pair;
         let before: Hot := adopt(lo, hi);
-        let seen: Int64 := read(&before);
+        let seen: Int64 := read(before.lo, before.hi);
         let remembered: Int64 := hotRemember(before.lo, before.hi);
         let waited: Int64 := hotWait();
         -- The reloaded table must refuse the pre-reload words. A zero status
@@ -85,7 +84,7 @@ module body HotHandle is
             return 11;
         end if;
         if seen /= 5 then
-            return lo;
+            return 12;
         end if;
         if remembered /= 0 then
             return 18;
