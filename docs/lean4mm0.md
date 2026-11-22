@@ -4825,7 +4825,7 @@ a `def` block changes what a reader of the certificate sees even when the conten
 same. The knob is therefore the same shape as `LTP_ENC_MAX`: an env-gated probe whose
 unset path is byte-identical, until a re-record is a decision rather than a side effect.
 
-### 13.55 The tail's last megabyte: 360 MiB completes, and the bracket moves to (352, 356]
+### 13.55 The tail's last megabyte: 360 MiB completes, and the floor lands at 357 MiB
 
 §13.52 left the floor of the ns row pinned to the *size of the tail's allocation*: the
 final copy of the spooled axioms into the artifact ran through
@@ -4872,11 +4872,50 @@ boundary, not a computation, so its 7 304 s is a slow failure and not a timing.
 355 MiB at 2 907 s (RSS 326 MB), 3 636 s — the same ~2 MiB of headroom over the peak that
 360 had, and both samplers agree on the peak. Its `.mm0` and `.mm1` are `cmp`-identical to
 `cap-432-dedup`, the same two byte counts as the 360 MiB run, so a 4 MiB narrower ceiling
-changes nothing about what is emitted. So the floor at the current emitter is
-**(352, 356] MiB** — down from §13.52's (360, 368], with both former failing caps now
-passing. The bracket is left at 4 MiB rather than bisected further: the next probe (354)
-buys 2 MiB of resolution for another ~60-minute run, and no consumer of this number
-places a cap within 2 MiB of the peak.
+changes nothing about what is emitted. So the bracket is **(352, 356] MiB**, down from
+§13.52's (360, 368], with both former failing caps now passing — and the probes that
+follow close it to a single quotable number, though not to a single byte.
+
+**The 354 MiB probe, and the bracket at (352, 354].** It completes: exit 0, peak VmSize
+353 MiB at 2 813 s (RSS 325 MB), 3 564 s, host OOM kills during the run 0 — the same
+~1 MiB of headroom over the peak that the passing caps above had. Its `.mm0`
+(102 543 367 789 B) and `.mm1` (102 547 674 107 B) are `cmp`-identical to
+`cap-432-dedup`, so the 2 MiB narrower ceiling changes nothing about what is emitted,
+and 3 564 s sits inside the 3 347–3 667 s band of the passing caps above, so nothing about
+this run is anomalous. With 352 still failing in
+`infer`'s `self.oblig.append(ax)` (§13.52's floor), the bracket at this point is
+**2 MiB: (352, 354]** — but read the next paragraph before quoting it, because the same
+cap run again in a batch shape fails.
+
+353 MiB is not a bisection point of its own: its single run belongs to the batch below,
+where it fails in `beta_ax` at a 351 MiB peak, the same shape as 354 and 355 there.
+
+**The bisection that says there is no megabyte to close.** Four caps were then run
+*concurrently* — 353, 354, 355, 356 MiB — under the same env as the table above, and
+**all four failed**: 353/354/355 in `beta_ax[key] = ax` (the `beta_ax` dict's growth) at
+peaks of 351 MiB, 3 469–3 491 s; 356 later and elsewhere, in `_spool_eq` at 5 334 s. The
+four runs of the *next* batch — 357, 358, 359 MiB and a 360 MiB re-run to hold the
+config — all completed: exit 0, peaks 356/357/358/359 MiB (cap − 1 every time), 3 667 /
+3 583 / 3 347 / 3 348 s, `.mm1` `cmp`-identical across them and `.mm0` at the same
+102 543 367 789 B.
+
+So 354 MiB and 356 MiB have each now both passed and failed under the same cap and the
+same env (§13.55's two single probes, above, versus this batch), and the bracket cannot
+be closed by more runs: what separates pass from fail at these caps is not a byte count
+but *when* a resizable structure's next growth lands relative to the ceiling. A passing
+run grows to cap − 1 and finishes; a failing one dies at the first jump it cannot place —
+2 MiB of contiguous dict entries for `beta_ax`, or the two ≤1 MiB slices that
+`_spool_eq`'s `a[:n] != b[:n]` copies to compare the spool (the same class of transient
+this section fixed in the copy path, one layer up). Adding a megabyte of ceiling moves the jump
+below the limit but does not remove the jump.
+
+**The quotable number is therefore 357 MiB**, stated as *the lowest ceiling under which
+this row has never been observed to fail* (4 for 4, artifacts byte-identical to
+`cap-432-dedup`), not as a threshold above which it is guaranteed to fit: **≤356 MiB is
+"sometimes fails"**. Quoting a floor of 354 would be quoting the luckiest run of a band;
+quoting 357 is the strongest claim the data support, and it is 3 MiB below the (352, 360]
+this section started from. A caller that needs determinism rather than a floor should cap
+at 384 MiB (§13.51), where the jump has 27 MiB of room.
 
 **One control worth keeping.** The first attempt at these two caps was launched without
 `LTP_DEDUP_NODES=1`, and both runs died at 921 s and 938 s with `MemoryError` inside

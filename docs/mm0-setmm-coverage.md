@@ -590,8 +590,16 @@ both worth recording because they look like defects in the artifact and are not:
 `lean4mm0.md` is the re-probe the `sendfile` tail copy asked for, and the answer is that 360 MiB *does*
 pass: 3 802 s, peak VmSize 356 MiB, exit 0, with the proof artifacts `cmp`-identical to the
 432 MiB reference. The bisection then run at 356 MiB also completes (3 636 s, peak 355 MiB,
-same `cmp`-identical artifacts), so the bracket is **(352, 356] MiB**; 352 MiB still dies in
-the axiom list.
+same `cmp`-identical artifacts), and the 354 MiB probe after it completes as well (3 564 s, peak
+353 MiB, same `cmp`-identical artifacts). 352 MiB still dies in the axiom list.
+
+**The floor is a band, not a byte count.** A concurrent four-way bisection then failed at 353, 354,
+355 and 356 MiB (`beta_ax` dict growth at 351 MiB peaks; `_spool_eq` at 5 334 s for 356) while
+357–360 MiB all passed 4 for 4, so 354 and 356 have each both passed and failed under the same cap
+and env. The passing runs reach cap − 1; the failing ones die at the first growth they cannot
+place. The quotable floor is therefore **357 MiB — the lowest ceiling under which this row has
+never been observed to fail** — with "sometimes fails" at and below 356, and 384 MiB as the
+configuration to use when determinism is worth 27 MiB. §13.55 of `lean4mm0.md` has the table.
 
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB
