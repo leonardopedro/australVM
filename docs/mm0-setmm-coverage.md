@@ -635,9 +635,12 @@ last copy's MiB out of the emitting path, and the spool comparison now runs over
 shipped defaults (`LTP_DEF_SHARE=1024 LTP_DEDUP_NODES=1`, same trio otherwise): exit 0, peak
 VmSize 351 MiB at 1 895 s, 4 078 s, `.mm0` 56 000 443 775 B and `.mm1` 56 004 750 096 B —
 1.83× under the 102 543 367 789 / 102 547 674 107 B the share-off passes emitted, from 1 020
-`def`s. One pass at a cap that has failed twice is one sample, so 357 stays the quotable floor;
-what the run shows is that `_spool_eq` no longer kills the row and that sharing lowers the peak
-(351 vs 356 MiB) as well as the file size. The 4 078 s is not a timing (the host was under
+`def`s. A second run with the identical cap, env and recipe repeats it — exit 0, peak VmSize
+354 MiB at 2 271 s, 3 643 s — and both artifacts `cmp`-identical to the first pair, so 356 MiB
+is reachable twice in a row and `_spool_eq` no longer kills the row. The quotable floor stays
+357 all the same: the cap has still been observed to fail at 353–356 and pass at 357–360, and
+two passes narrow the race without removing it. What the pair shows is that sharing lowers the
+peak (351–354 vs 356 MiB) as well as the file size. The 4 078 s is not a timing (the host was under
 memory pressure and lost a streaming `awk` to an OOM kill mid-run), and the 56 GB artifact is
 not `mm0-rs`-elaborated whole — §13.54's and §13.56's toolchain checks are on rows up to 2 GB.
 

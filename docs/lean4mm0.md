@@ -4998,8 +4998,14 @@ same trio as the table above (`LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648
 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2 MiB`): **exit 0**, peak VmSize **351 MiB at 1 895 s**
 (RSS 322 MB), 4 078 s. That is where this cap has failed twice before — in `beta_ax` at a
 351 MiB peak in the batch, and in `_spool_eq` at 5 334 s — so the comparison is no longer
-a failure mode at 356; it does not move the quotable floor, because 356 has still failed
-more often than it has passed and one pass is one sample. Two things the run does add:
+a failure mode at 356. A second run under the identical cap, env and recipe repeats it:
+**exit 0**, peak VmSize **354 MiB at 2 271 s** (RSS 324 MiB), 3 643 s, and both artifacts
+`cmp`-identical to the first pair (exit 0 on the 56 000 443 775 B `.mm0` and the
+56 004 750 096 B `.mm1`). Two consecutive passes still do not move the quotable floor — the
+cap has been observed to fail at 353–356 and pass at 357–360, so 357 remains the lowest
+ceiling never observed to fail, and what these two runs establish is narrower: with the
+shipped defaults and this environment, 356 MiB is reachable, repeatably, and the race that
+defeats it there is not `_spool_eq`. Two things the runs add:
 
 - **Sharing lowers the peak, not just the bytes.** 351 MiB against the 356 MiB peaks of the
   share-off passes at 357–360 MiB, with the same env otherwise; the artifacts are
@@ -5009,6 +5015,9 @@ more often than it has passed and one pass is one sample. Two things the run doe
 - **The 4 078 s is not a timing.** The host had swap fully consumed and other work running
   throughout (an OOM kill took a streaming `awk` during it), so the elapsed time is not
   comparable to the 3 347–3 667 s band and no speedup or slowdown is claimed either way.
+  The repeat ran on a quiet host and took 3 643 s, which is inside that band — consistent
+  with the reading that the first run's extra 400 s came from memory pressure, not from the
+  encoder, but two runs on different host states are not a timing either.
 
 This is the first ns-row artifact emitted with sharing on at full size, and it has **not**
 been elaborated by `mm0-rs` — the toolchain checks of §13.54 and §13.56 are on rows up to
