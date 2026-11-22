@@ -313,7 +313,7 @@ class EncBuf:
         self.sink = sink
         self.bytes = 0
         # Characters appended so far, flushed or not: one `_enc` call's size is
-        # a difference of this, which is what def-sharing measures (§13.54).
+        # a difference of this, which is what def-sharing measures (§13.55).
         self.chars = 0
 
     def _flush(self) -> None:
@@ -398,7 +398,7 @@ class Enc:
         # expansion of the export's DAG, so a shared type is paid once per path
         # — 465 020 of the smoke row's 467 710 axioms have a body it already
         # contains, and 67 % of a giant axiom's bytes is a sub-expression the
-        # same line already wrote (§13.54). A subterm whose expansion is at
+        # same line already wrote (§13.55). A subterm whose expansion is at
         # least this many bytes becomes one `def sdK: Term = $ … $;` and every
         # use is the name. Defs are notation: `mm0-rs` expands them, so `mm0-c`
         # checks the statements it checks today, and expanding the names back

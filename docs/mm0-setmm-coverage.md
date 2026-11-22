@@ -586,7 +586,7 @@ both worth recording because they look like defects in the artifact and are not:
   `error: too many bound variables (max 55)`. A harness that strips the artifact's
   `term t_symN: nat;` lines reproduces that error on the first two defs and nothing else.
 
-**Memory floor, re-probed.** §9.1 recorded 384 MiB as the floor for the 102 GB ns row; §13.54 of
+**Memory floor, re-probed.** §9.1 recorded 384 MiB as the floor for the 102 GB ns row; §13.55 of
 `lean4mm0.md` is the re-probe the `sendfile` tail copy asked for, and the answer is that 360 MiB *does*
 pass: 3 802 s, peak VmSize 356 MiB, exit 0, with the proof artifacts `cmp`-identical to the
 432 MiB reference. The bracket is (352, 360] MiB, and 352 MiB still dies in the axiom list.
@@ -594,7 +594,7 @@ pass: 3 802 s, peak VmSize 356 MiB, exit 0, with the proof artifacts `cmp`-ident
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB
 LTP_CENSUS=1 LTP_DEDUP_NODES=1`. Re-running the same cap at 360 MiB *without*
-`LTP_DEDUP_NODES=1` reproduces §13.54's known control instead of a floor: `MemoryError` in
+`LTP_DEDUP_NODES=1` reproduces §13.55's known control instead of a floor: `MemoryError` in
 `infer` after 926 s at a 342 MiB peak, with the census showing synthetic nodes 43.9 MB and the
 context memo 17.4 MB against 26.4 MB and 8.5 MB with interning on. The environment *is* the
 measurement — same cap, different tables, different verdict — so a floor quoted without it is
