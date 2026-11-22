@@ -5022,3 +5022,82 @@ interning the deriver is the 432 MiB configuration of §13.51, and it fails earl
 recorded because the env trio *is* part of the measurement — every cap in the table above
 holds the same tables, and only the room around them differs.
 
+### 13.56 The `emit` rows, re-measured; and def-sharing decided by repetition
+
+§13.54's sample is honest about what it excludes: 19 authored rows are marked `emit` in
+`docs/data/lean4mm0/census-own.tsv` because the sweep's runner capped them at 10 GiB and
+timed them out, and those were not re-emitted. This section re-emits the three smallest of
+them — smallest by export file, the only size a row that never finished has (22–24 MB of
+`mm0/exports/*.ndjson`) — with explicit budgets, and each is emitted twice:
+
+- `RLIMIT_AS` 23 GiB (the host has 30 GiB; the sweep's cap was 10), `RLIMIT_FSIZE` 60 GiB,
+  wall clock 5 400 s. A run killed by either limit is a result, recorded as the limit that
+  killed it. Peak RSS is `/usr/bin/time -v`'s maximum resident set size.
+
+| row | `.mm0` default | `.mm0` shared (1024 B) | cut | peak RSS | seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `ChapterSirkTruncation.transfer_defect_le_of_leakage` | 2 072 181 724 B | 517 138 880 B | **4.01×** | 362 MiB | 23 |
+| `KatoRellich.dense_range_add_relBounded` | 13 396 035 927 B | 4 763 834 183 B | **2.81×** | 1 048 MiB | 150 |
+| `EsaClosure.selfAdjointExtension_eq_adjoint` | 2 931 086 276 B | 627 173 071 B | **4.67×** | 413 MiB | 27 |
+
+**None of the three needed the raised budget.** Peaks of 362–1 048 MiB and 17–150 s are a
+tenth of the 10 GiB the census note names and a sixth of its 900 s, so what the
+census recorded is a property of the emitter *at the time of the sweep*, not of the row:
+§13.41–§13.54 removed the residency that exceeded it (the statement is spooled rather than
+held, comparisons are piecewise, the memo is bounded). Which of those changes moved each row
+under the cap is not separable from here — no run of the old emitter was kept per change —
+so what this section claims is only what it measured: today these rows fit in a fraction of
+the budget that once excluded them. The other 16 `emit` rows are **not** measured here; the
+budget above is the one to start from for them, and the runner is
+`~/.local/state/australVM-lean/emit-rows/run.sh`.
+
+**With def-sharing on, the same rows are where sharing finally pays.** 2.8–4.7× at 2–13 GB
+is the regime §13.54's sample could not reach: its two profitable rows were 1.25× and 1.33×
+at 67 MB and 222 MB, and the cut now grows with the row because the repeated subterms do.
+`mm0-rs` re-elaborates and `mm0-c` re-checks the `ChapterSirkTruncation` pair below; the
+other two rows are recorded as sizes only.
+
+**Def-sharing decided by repetition (`LTP_DEF_SHARE=profit`).** The 1024 B floor is a proxy:
+it asks how big a subterm is, when the question that decides the bytes is how often the
+artifact's text writes it. `profit` asks that question directly, in two runs. The first is
+this same program as a subprocess with `LTP_COUNT_ONLY=<table>`: sharing off, so every
+`_enc` call is one occurrence in the text, and every visited node records its expanded size.
+The table has one line per repeated expression — id, bytes, uses — and the second run interns
+exactly the nodes where `size × (uses − 1)` beats the `def` block they cost (a name plus
+`def ` / `: Term = $ ` / ` $;`, 32 B by default). Both knobs are environment variables
+(`LTP_DEF_SHARE_OVERHEAD`, `LTP_DEF_SHARE_USES`) because both are numbers, not arguments.
+
+| rules | row | `LTP_DEF_SHARE=0` | floor 1024 B | `profit` | defs | re-checked |
+| ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 7 | `ChapterSirkTrotterKato.StrongResolventConvergence` | 48 388 B | 48 531 B | 48 438 B | 0 | `mm0-c` exit 0 |
+| 27 | `YangMillsHermite.idxD.eq_1` | 17 219 B | 17 269 B | 17 537 B | 8 | `mm0-c` exit 0 |
+| 321 | `ChapterA3o.projAnti` | 83 807 B | 83 857 B | **81 150 B** | 115 | `mm0-c` exit 0 |
+| 4 777 | `ChapterSirkMultiShift.multiShiftSeq_succ` | 1 012 315 B | 1 013 710 B | **930 760 B** | 249 | `mm0-c` exit 0 |
+
+That is 1.03× and 1.09× where the floor mode was 1.00×, and it is reached without the floor's
+`def` block: the same two rows pay 115 and 249 defs where the floor mode picked 0 and 48.
+
+**Three defects the mode found in itself, all before it produced a valid artifact.** (1)
+*Phantom repetition.* The counting pass first counted every `_enc` call, including the ones
+that are not the artifact's text — `digest`'s type comparisons, `expanded`'s binder domains,
+the obligation sidecar — so a type compared five times looked five times written. On
+`YangMillsHermite.idxD.eq_1` that picked 14 defs and came out 416 B *worse* than unshared;
+the counts now exclude every path that sets `_ds_off` or runs inside `head`. (2) *Nesting.*
+Two uses of a small subterm can both sit inside one parent; once the parent is interned the
+second occurrence is a name in the parent's body, not text, so a two-use rule picks defs that
+are named once. With `LTP_DEF_SHARE_USES=2` that row's 11 defs cost a net 385 B; at 3 uses it
+picks 8 and costs 318 B, and only `size × (uses − 1) > overhead` keeps it from being worse.
+The floor is therefore still the default and `profit` is opt-in: it wins where the row
+repeats, and on a row with no large repeated body it is within 0.3 KB of doing nothing. (3)
+*A `def` body registering a payload constant after the header.* Profit mode decides from a
+table instead of measuring the node inline, and the measurement is what used to register
+every `t_symN` a body mentions; the artifact then failed with `mm0-rs`: `variables {t_sym21}
+missing from dependencies`. The def block is now written to a spool *before* the header is
+built and copied through by both artifacts, which is also one fewer encoder pass than the
+two direct writes it replaced.
+
+The floor stays the default — the golden file pins its bytes, and `profit` costs a second
+derivation — and `LTP_DEF_SHARE=0` still reproduces the pre-§13.54 bytes exactly. The gate
+was re-run after these changes: 12 artifacts across 3 modes match
+`scripts/lean-typing-proof.golden.tsv`.
+

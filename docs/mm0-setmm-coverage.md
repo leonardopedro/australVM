@@ -583,6 +583,16 @@ defects this sweep found (binder domains compared shared against an expanded spo
 memoising a `sdK` name so a `def` body read back as its own name) and their fixes, which leave
 the smoke row's bytes — and therefore this table's first row — unchanged.
 
+**The rows above the budget, and sharing decided by repetition.** §13.56 re-emits the three
+smallest of the 19 `emit` rows with explicit budgets and both modes, and they are where the
+cut is largest: 2 072 181 724 → 517 138 880 B (4.01×), 13 396 035 927 → 4 763 834 183 B
+(2.81×) and 2 931 086 276 → 627 173 071 B (4.67×), the first of the three re-elaborated and
+re-checked (`mm0-rs`, then `mm0-c` exit 0). None of them came close to needing the raised
+cap — peaks 362–1 048 MiB — so the census `emit` note describes the emitter as it was, not
+the rows. The same section adds `LTP_DEF_SHARE=profit`, which decides sharing from how often
+a subterm is written instead of from its size: 1.09× on the 4 777-rule row where the floor
+mode was 1.00×, and within 0.3 KB of doing nothing on the two smallest.
+
 **The real toolchain accepts the shared artifact.** Slice = both theories with their `import`
 lines stripped, then the artifact's header, `term t_symN: nat;` payload declarations, the whole
 def block and the first 2 000 axioms (215 219 297 B):
@@ -629,7 +639,7 @@ VmSize 351 MiB at 1 895 s, 4 078 s, `.mm0` 56 000 443 775 B and `.mm1` 56 004 75
 what the run shows is that `_spool_eq` no longer kills the row and that sharing lowers the peak
 (351 vs 356 MiB) as well as the file size. The 4 078 s is not a timing (the host was under
 memory pressure and lost a streaming `awk` to an OOM kill mid-run), and the 56 GB artifact is
-not `mm0-rs`-elaborated — §13.54's and §13.56's toolchain checks are on rows up to 2 GB.
+not `mm0-rs`-elaborated whole — §13.54's and §13.56's toolchain checks are on rows up to 2 GB.
 
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB

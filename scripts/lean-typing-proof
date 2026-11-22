@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -367,6 +368,58 @@ class EncBuf:
 REC_CACHE_MAX = 1 << 21
 
 
+def _share_mode(raw: str) -> tuple[str, int]:
+    """`LTP_DEF_SHARE` in, (mode, floor) out.
+
+    `0`/empty is off, a number is the size floor, `profit` is the repetition-
+    decided mode (§13.56). An unrecognised value is a mistake, not a mode: it
+    would silently emit unshared bytes under a name that promises sharing.
+    """
+    s = (raw or "").strip()
+    if s.lower() in ("profit", "auto"):
+        return "profit", 0
+    if not s or s == "0":
+        return "off", 0
+    return "floor", int(s)
+
+
+def _read_profit(path: Path) -> set[int]:
+    """Expression ids whose repetition pays for the `def` that declares them.
+
+    One line per candidate from the counting pass: `eid`, expanded bytes, uses.
+    The `def` costs its name plus `def ` / `: Term = $ ` / ` $;`; the default
+    32 B is generous for the names this writes (`sd12` is four bytes), and a
+    row where an overhead of 32 is wrong is a row that repeats a few bytes —
+    `LTP_DEF_SHARE_OVERHEAD` sets it instead of re-arguing the constant.
+
+    `size × (uses − 1)` is the bytes saved and the overhead is the bytes paid,
+    both *before* nesting: a use of a node inside a node that is itself interned
+    disappears from the text, so the second pass can pay a `def` it does not
+    reuse. That is a bounded waste (one overhead per over-picked node, and only
+    where the node sits entirely inside another pick), measured — not argued —
+    against the floor mode on the sample rows (§13.56).
+    """
+    over = int(os.environ.get("LTP_DEF_SHARE_OVERHEAD", "32") or 32)
+    # Three uses, not two. A node's uses are counted in the expanded text, so
+    # two of them can both sit inside one parent — and once the parent is
+    # interned the second occurrence is a name in the parent's `def` body, not
+    # text. Measured on `YangMillsHermite.idxD.eq_1` (27 rules): the 11 defs a
+    # two-use rule picked were each named once in the text and cost the def
+    # block, a net 385 B *loss* where the floor mode pays nothing (§13.56).
+    # A third use is the first one that cannot be explained by nesting, and it
+    # costs one true repeat: the same row picks none and matches the unshared
+    # bytes, and `ChapterSirkMultiShift.multiShiftSeq_succ` still gains.
+    need = int(os.environ.get("LTP_DEF_SHARE_USES", "3") or 3)
+    pick: set[int] = set()
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        eid, size, uses = (int(x) for x in line.split("\t"))
+        if uses >= need and size * (uses - 1) > over:
+            pick.add(eid)
+    return pick
+
+
 class _NullSink:
     """A sink that keeps nothing: measurement walks append into the void."""
 
@@ -410,7 +463,35 @@ class Enc:
         # (2.94× on the smoke row, 3.12× with §13.53's interning);
         # `LTP_DEF_SHARE=0` reproduces the pre-13.54 bytes and any other value
         # sets the threshold. An empty value reads as 0, as before.
-        self.ds_min = int(os.environ.get("LTP_DEF_SHARE", "1024") or 0)
+        # Three modes, one knob. `0` is off; `<bytes>` is the size floor above;
+        # `profit` decides by repetition (§13.56): a first pass runs the same
+        # derivation with everything expanded and counts, per expression, its
+        # expanded size and how many times the artifact's text mentions it, and
+        # the second pass interns exactly those whose `size × (uses − 1)` beats
+        # the `def` block they cost. The floor is a proxy for that arithmetic —
+        # it decides from one node's size what a whole artifact's repetition
+        # would have to say — and the two disagree in both directions: on a
+        # small row it pays the `def` block for nothing, and on a row whose big
+        # text is written once it pays it for a name no one reuses.
+        self.ds_mode, self.ds_min = _share_mode(os.environ.get("LTP_DEF_SHARE", "1024"))
+        # Count-only pass (`LTP_COUNT_ONLY=<path>`): the derivation runs with
+        # sharing off, so every `_enc` call is one occurrence of a node in the
+        # artifact's text; the table is what the profit pass decides from.
+        self.count_uses = bool(os.environ.get("LTP_COUNT_ONLY"))
+        self._uses: dict[int, int] = {}
+        # The second pass's decision, already made: expression ids to intern.
+        self._profit: set[int] = set()
+        set_path = os.environ.get("LTP_DEF_SHARE_SET")
+        if set_path:
+            self._profit = _read_profit(Path(set_path))
+        # The counting pass sizes every node it visits, but only counts the
+        # visits that are the artifact's own text: `digest`, `expanded`,
+        # `write_expanded` and `spool` expand terms into something that is not
+        # that text (a type comparison, the sidecar JSON), and counting those
+        # measured 14 `def`s on a 27-rule row where the floor mode pays for
+        # none — phantom repetition, and a net 416 B loss (§13.56).
+        self._sizing = self.count_uses
+        self._hd = 0
         self._ds_names: dict[int, str] = {}  # active substitutions
         self._ds_all: dict[int, str] = {}    # every interned node
         self._ds_order: list[int] = []       # first-use order
@@ -446,8 +527,8 @@ class Enc:
         # `FarisLavine.essentiallySelfAdjointOn_of_farisLavine` and
         # `ChapterSirkMultiShift.multiShiftSeq_succ`). The main text may take
         # the name, but nothing that wants the *text* of `eid` may see it.
-        shared = self.ds_min and not self._ds_off and eid in self._ds_all
-        if self._memo_bytes < ENC_MEMO_BYTES and not shared:
+        shared = self.ds_mode != "off" and not self._ds_off and eid in self._ds_all
+        if self._memo_bytes < ENC_MEMO_BYTES and not shared and not self.count_uses:
             self._memo[eid] = s
             self._memo_bytes += len(s)
         return s
@@ -476,6 +557,19 @@ class Enc:
         self._top(eid, buf)
         return buf.take_parts()
 
+    def _pick(self, eid: int) -> bool:
+        """Whether this first use of `eid` interns it.
+
+        Floor mode asks one question of one node — how big is it — which is the
+        only question a single pass can answer. Profit mode asks the artifact's
+        question, from the counting pass's table: does interning it save more
+        than the `def` that declares it? Both are answered here, in one place,
+        because the naming/`def` machinery downstream is identical.
+        """
+        if self.ds_mode == "profit":
+            return eid in self._profit
+        return self._ds_bytes(eid) >= self.ds_min
+
     def _ds_bytes(self, eid: int) -> int:
         """Expanded size of `eid`'s encoding, measured once per expression.
 
@@ -502,9 +596,27 @@ class Enc:
         that was interned before it, so its children's names are declared
         first and a body may use them. A body is encoded with only the names
         already declared, which means the file never refers forward.
+
+        A body can register a payload constant that nothing else in the run
+        encoded — profit mode decides from a table instead of measuring the
+        node with `_ds_bytes`, which is what used to register them — and the
+        header lists the constants *before* this block. So `main` writes the
+        block to a spool first (`write_defs_spool`) and copies it in afterwards;
+        this direct form stays for the stopped run, which has no header to
+        order around.
         """
         if not self._ds_order:
             return 0
+        return self._write_def_bodies(fh)
+
+    def write_defs_spool(self, path: Path) -> int:
+        """`write_defs` into a file, so the header can be built afterwards."""
+        if not self._ds_order:
+            return 0
+        with path.open("w") as fh:
+            return self._write_def_bodies(fh)
+
+    def _write_def_bodies(self, fh) -> int:
         fh.write("-- ── shared subterms: one expansion per interned `Term` ──\n")
         live: dict[int, str] = {}
         outer, outer_assign = self._ds_names, self._ds_assign
@@ -580,10 +692,13 @@ class Enc:
     def head(self, eid: int, n: int) -> str:
         """The first `n` characters of `eid`'s encoding, and no more."""
         buf = _Head(n)
+        self._hd += 1
         try:
             self._top(eid, buf)
         except _Head._Done:
             pass
+        finally:
+            self._hd -= 1
         return "".join(buf.parts)
 
     def expanded(self, eid: int) -> str:
@@ -653,11 +768,19 @@ class Enc:
         `nsOuterFock…singleTime`); the token sequence, and therefore every
         byte written, is identical.
         """
+        if self.count_uses and not self._ds_off and not self._hd:
+            # One `_enc` call is one occurrence of `eid` in the artifact's text.
+            # The memo below would collapse the *second* and later encodings of
+            # a small node into the first one's text, so the counts are taken
+            # before it and the memo is not consulted at all in this pass.
+            # `_ds_off` is what the non-text paths set; `_hd` is `head`, whose
+            # encode is a label's prefix and stops before it is one.
+            self._uses[eid] = self._uses.get(eid, 0) + 1
         s = self._memo.get(eid)
-        if s is not None:
+        if s is not None and not self.count_uses:
             out.append(s)
             return
-        if self.ds_min and not self._ds_off:
+        if self.ds_mode != "off" and not self._ds_off:
             # Main text sees every name ever assigned; a `def` body sees only
             # the ones already declared before it, so it cannot refer forward.
             tbl = self._ds_all if self._ds_assign else self._ds_names
@@ -669,7 +792,7 @@ class Enc:
             # expression then encodes to the same text whenever it is asked
             # for, which is what lets the declared type on disk stay
             # comparable with the wrap the derivation builds (§13.42).
-            if self._ds_assign and self._ds_bytes(eid) >= self.ds_min:
+            if self._ds_assign and self._pick(eid):
                 nm = f"sd{len(self._ds_order)}"
                 self._ds_all[eid] = nm  # and every later use of `eid` reuses it
                 self._ds_order.append(eid)
@@ -678,7 +801,7 @@ class Enc:
         mark = out.tokens
         mark_c = out.chars
         self._enc_tokens(eid, out)
-        if self._ds_off:
+        if self._ds_off or self._sizing:
             # Only an inline encode knows the expanded size: with a name in
             # place the difference would be the length of the name.
             self._ds_size.setdefault(eid, out.chars - mark_c)
@@ -688,7 +811,8 @@ class Enc:
         # materialising it at an inner level is the cost this change removes.
         # Without this the encoder would recompute shared subtrees from scratch
         # (measured: 12 min and climbing on a row that takes 200 s with it).
-        if out.tokens - mark <= 64 and self._memo_bytes < ENC_MEMO_BYTES:
+        if (not self.count_uses and out.tokens - mark <= 64
+                and self._memo_bytes < ENC_MEMO_BYTES):
             # Encode it a second time, into a buffer of its own: a few tokens
             # copy for nothing, and the parent's tokens stay where they are
             # instead of being spliced out of a half-built chunk list.
@@ -1594,6 +1718,26 @@ def main() -> int:
     spine = "--spine" in sys.argv
     defer = "--defer-subst" in sys.argv
     export_path, want, out_dir = Path(argv[0]), argv[1], Path(argv[2])
+    # Profit mode is two runs (§13.56): the first counts what the artifact's
+    # text repeats, the second emits with that answer instead of a size floor.
+    # The counting run is this same program end to end — as a subprocess, not a
+    # loop here, because this function's state (the naming tables, the export,
+    # the deriver) is not written to be re-entered, and a second entry that
+    # silently disagreed about a `t_symN` number would corrupt the artifact.
+    if (_share_mode(os.environ.get("LTP_DEF_SHARE", "1024"))[0] == "profit"
+            and not os.environ.get("LTP_DEF_SHARE_SET")):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        table = out_dir / "_uses.tsv"
+        env = dict(os.environ, LTP_DEF_SHARE="0", LTP_COUNT_ONLY=str(table))
+        env.pop("LTP_DEF_SHARE_SET", None)
+        stats("profit mode: counting pass")
+        rc = subprocess.call([sys.executable, str(Path(__file__).resolve())]
+                             + sys.argv[1:], env=env)
+        if rc != 0:
+            table.unlink(missing_ok=True)
+            raise SystemExit(f"profit mode: the counting pass failed (rc={rc})")
+        os.environ["LTP_DEF_SHARE_SET"] = str(table)
+        stats(f"profit mode: {len(_read_profit(table))} expression(s) pay for a def")
     t0 = time.time()
     # Lazily: one declaration reaches a few thousand expressions of a chapter's
     # millions, and materialising the rest cost more memory than the whole
@@ -1603,6 +1747,10 @@ def main() -> int:
     # The typing derivation writes variables as the theory names them (succ
     # chains); the statement-only artifact keeps the corpus' flat index form.
     enc = Enc(ex, succ_idx=spine)
+    # The counting pass's table has been read into `Enc`; it is a temp, and the
+    # artifact directory is a set of files a caller diffs.
+    if os.environ.get("LTP_DEF_SHARE_SET"):
+        Path(os.environ["LTP_DEF_SHARE_SET"]).unlink(missing_ok=True)
     target = next(
         (nm for nm, (_k, rec, _i) in ex.decls.items() if want in nm and "value" in rec), None
     )
@@ -1820,6 +1968,14 @@ def main() -> int:
         del body_ty
         goal_ctx, goal_term, goal_ty = "tnil", val_path, ty_path
 
+    # The def block, written *before* the header: a body can be the first place
+    # a payload constant is encoded (profit mode interns nodes it never measured
+    # inline), and the header lists every constant. Same bytes, same order — the
+    # block is a spool that both artifacts copy through instead of encoding it
+    # twice.
+    defs_path = Path(str(stem) + "_defs.tmp")
+    enc.write_defs_spool(defs_path)
+
     head = [
         "-- Generated by emit-typing-proof.py (prototype) — DO NOT EDIT.",
         f"-- Source export : {export_path.name}",
@@ -1832,12 +1988,13 @@ def main() -> int:
         f"-- Assumptions   : {ax_total} ({const_axioms} constant types, "
         f"{subst_obligations} substitution obligations)"
     ]
-    if enc.ds_min:
+    if enc.ds_mode != "off":
         # Only in this mode: the default artifact's header is a byte-for-byte
         # contract (`lean-typing-proof.golden.tsv`), so nothing is added to it
         # when sharing is off.
+        how = f"{enc.ds_min} B" if enc.ds_mode == "floor" else "profit"
         head.append(f"-- Shared subterms : {len(enc._ds_order)} defs, "
-                    f"LTP_DEF_SHARE={enc.ds_min} B")
+                    f"LTP_DEF_SHARE={how}")
     nat_decls = [f"term {n}: nat;" for n in NATS]
     # Everything before the assumptions, in the order and with the separators the
     # one-shot `"\n".join(out)` produced. The assumptions themselves come next,
@@ -1867,6 +2024,23 @@ def main() -> int:
     # The proof theorem must be `pub`: a private theorem's proof commands are
     # dropped from the `.mmb`, so mm0-c reaches the declaration with the command
     # stream already at End and refuses it (measured on a 4-axiom mini theory).
+    if enc.count_uses:
+        # What the counting pass leaves behind: every expression the artifact's
+        # text mentions more than once, with the expanded size a `def` would
+        # save and how many times it is mentioned. Everything else in this run
+        # existed to produce that text, and none of it is written out.
+        table = Path(os.environ["LTP_COUNT_ONLY"])
+        with table.open("w") as fh:
+            for eid, n in enc._uses.items():
+                sz = enc._ds_size.get(eid, 0)
+                if n >= 2 and sz:
+                    fh.write(f"{eid}\t{sz}\t{n}\n")
+        repeated = sum(1 for n in enc._uses.values() if n > 1)
+        stats(f"uses counted: {len(enc._uses)} expression(s), {repeated} repeated")
+        for p in (ax_path, ty_path, val_path, bt_path):
+            p.unlink(missing_ok=True)
+        return 0
+
     tail0 = "\n-- ── the derivation ──\n"
     tail1 = "\n-- ── the derivation ──\npub "
     # Written in pieces: the prefix, the spooled assumptions copied through
@@ -1879,7 +2053,9 @@ def main() -> int:
             # The names the spool below already uses are declared here, once,
             # and both artifacts get the same block: a `.mm0`/`.mm1` pair that
             # disagreed about `sdK` would not elaborate.
-            enc.write_defs(fh)
+            if defs_path.exists():
+                with defs_path.open("r") as sp:
+                    _copy_spool(fh, sp)
             if ax_fh is not None:
                 with ax_path.open("r") as spool:
                     _copy_spool(fh, spool)
@@ -1897,6 +2073,7 @@ def main() -> int:
                 fh.write(" =\n  '")
                 _put(fh, proof)
                 fh.write(";\n")
+    defs_path.unlink(missing_ok=True)
     if ax_fh is not None:
         ax_path.unlink()
     ty_path.unlink()
