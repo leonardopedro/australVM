@@ -16,6 +16,11 @@ Checks:
     `id command exit evidence`, unique IDs, an integer or `gap` exit, and an
     existing evidence file per row.
 
+On success it reports which `../unfer` checkout the `U` rows were resolved
+against (short revision, `(dirty)` when the working tree has changes), so a
+gate transcript records the sibling it measured rather than leaving drift to
+be inferred.
+
 `--selftest` runs the same validation over mutated copies (duplicate ID,
 unknown status, missing file, duplicate baseline row, missing baseline
 evidence, malformed header) and requires each to be refused, so a comparison
@@ -29,6 +34,7 @@ Exit codes: 0 valid, 1 problems, 2 usage.
 """
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -76,6 +82,34 @@ def parse_tsv(text, columns):
 def resolve(repo, relative):
     base = ROOT if repo == "A" else ROOT.parent / "unfer"
     return base / relative
+
+
+def sibling_revision():
+    """Which `../unfer` checkout the `U` rows were resolved against.
+
+    The summary line names it so a transcript says what it measured: an
+    unpinned sibling means the same contract row can validate against
+    different trees, and that drift should be visible, not inferred. A dirty
+    checkout is marked, because the revision alone then does not describe the
+    bytes. git missing or `../unfer` not a checkout is reported as unknown —
+    this is context for the reading, never a check that can fail the record.
+    """
+    base = ROOT.parent / "unfer"
+
+    def run(*args):
+        return subprocess.run(
+            ["git", "-C", str(base), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    try:
+        revision = run("rev-parse", "--short", "HEAD").strip()
+        dirty = bool(run("status", "--porcelain").strip())
+    except (OSError, subprocess.CalledProcessError):
+        return "unfer revision unknown"
+    return f"unfer {revision}" + (" (dirty)" if dirty else "")
 
 
 def validate_inventory(rows):
@@ -267,7 +301,7 @@ def main():
     print(
         f"[pass] D00 contracts: {len(inventory)} contract row(s), "
         f"{len(baseline)} baseline row(s) ({gaps} named gap(s)), all paths and "
-        "evidence files present"
+        f"evidence files present, measured against {sibling_revision()}"
     )
     return 0
 
