@@ -1,0 +1,292 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> unfer_consensus/src/storage.rs:230:13
+    |
+230 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_data` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (lib) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (lib test) generated 1 warning (1 duplicate)
+warning: `unfer_ffi` (test "ffi") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running unittests src/lib.rs (target/debug/deps/unfer_ffi-53dc1526e6bce786)
+
+running 175 tests
+test durable::tests::jsonl_fork_at_frontier_honors_byte_cutoff ... ok
+test durable::tests::jsonl_fork_at_unknown_frontier_fails_closed ... ok
+test durable::tests::concurrent_flushes_share_one_serialized_drain ... ok
+test durable::tests::jsonl_inmemory_stores_are_isolated_and_forkable ... ok
+test durable::tests::jsonl_fork_survives_restart ... ok
+test durable::tests::jsonl_torn_final_line_reported ... ok
+test durable::tests::jsonl_round_trip ... ok
+test durable::tests::loro_corrupt_snapshot_recovers_visibly ... ok
+test durable::tests::loro_flush_coalesces_when_clean ... ok
+test durable::tests::loro_fork_at_frontier_inherits_history ... ok
+test durable::tests::loro_round_trip_in_memory ... ok
+test durable::tests::loro_round_trip_persisted ... ok
+test event_log::tests::a_caught_up_consumer_reports_no_gap ... ok
+test event_log::tests::a_resumed_consumer_never_replays_what_it_already_saw ... ok
+test event_log::tests::cursor_zero_replays_the_retained_log ... ok
+test event_log::tests::cursors_are_strictly_increasing_and_never_reused ... ok
+test event_log::tests::events_carry_the_handle_they_came_from ... ok
+test event_log::tests::events_since_returns_only_what_is_newer ... ok
+test event_log::tests::max_caps_the_batch_without_losing_order ... ok
+test event_log::tests::the_empty_log_answers_empty_rather_than_panicking ... ok
+test event_log::tests::the_log_reports_the_gap_it_created_rather_than_hiding_it ... ok
+test event_log::tests::two_consumers_each_see_every_event_exactly_once ... ok
+test handles::auction_ledger_tests::open_bid_close_roundtrip ... ok
+test durable::tests::loro_fork_of_restarted_parent_is_deterministic ... ok
+test handles::buffer_proptests::unknown_handles_never_mispelled ... ok
+test handles::cert_ledger_tests::double_spend_rejected ... ok
+test handles::cert_ledger_tests::mint_requires_authority ... ok
+test handles::cert_ledger_tests::mint_transfer_burn_roundtrip ... ok
+test handles::meter_tests::budget_below_rate_limit_is_the_gate ... ok
+test handles::meter_tests::consumes_within_budget_then_denies ... ok
+test handles::meter_tests::principals_are_isolated ... ok
+test handles::meter_tests::rate_limit_denies_independently_of_budget ... ok
+test handles::meter_tests::status_is_read_only ... ok
+test handles::secret_vault_tests::live_secret_blocks_snapshot_export ... ok
+test handles::secret_vault_tests::non_owner_is_denied ... ok
+test handles::secret_vault_tests::put_get_roundtrip_under_owner ... ok
+test handles::secret_vault_tests::revoke_invalidates_handle ... ok
+test handles::sensitive_latch_tests::latch_is_sticky_until_cleared ... ok
+test handles::sensitive_latch_tests::principals_are_independent ... ok
+test handles::spawn_pace_tests::a_refusal_reports_how_long_to_wait ... ok
+test handles::spawn_pace_tests::a_refused_spawn_does_not_extend_the_lockout ... ok
+test handles::spawn_pace_tests::a_spawn_burst_is_refused_by_the_pacer ... ok
+test handles::spawn_pace_tests::an_unset_or_unparseable_interval_means_disabled ... ok
+test handles::spawn_pace_tests::clearing_the_pacer_lets_the_next_spawn_through ... ok
+test handles::spawn_pace_tests::disabling_pacing_lets_everything_through_again ... ok
+test handles::spawn_pace_tests::pacing_is_per_principal ... ok
+test handles::spawn_pace_tests::retry_after_is_none_when_nothing_was_spawned ... ok
+test handles::spawn_pace_tests::zero_means_no_pacing_at_all ... ok
+test spawn_pacing_tests::a_grant_refusal_is_reported_as_a_grant_problem_not_as_pacing ... ok
+test spawn_pacing_tests::a_pacing_refusal_is_audited ... ok
+test spawn_pacing_tests::a_spawn_burst_is_refused_with_rate_limited_at_the_chokepoint ... ok
+test tests::a_director_may_not_hold_maintainer_either ... ok
+test tests::a_reviewer_may_not_hold_the_integrator_preset ... ok
+test tests::a_worker_may_not_hold_the_maintainer_preset_and_it_is_audited ... ok
+test tests::action_apply_resolves_and_merges_applied_result ... ok
+test tests::action_list_get_filtered_by_observer_grants ... ok
+test tests::action_list_returns_all_records ... ok
+test tests::action_pending_event_broadcasts_to_subscriptions ... ok
+test tests::action_pending_event_respects_type_filter ... ok
+test tests::action_record_carries_caller_tag ... ok
+test tests::action_reject_marks_rejected_and_blocks_reapply ... ok
+test tests::action_revert_requires_approved ... ok
+test tests::action_submit_bad_json_returns_neg1001 ... ok
+test tests::action_submit_queues_pending_record_with_provisional_result ... ok
+test tests::action_unknown_handle_returns_neg4004 ... ok
+test tests::agent_grants_returns_bounded_set ... ok
+test tests::agent_kill_lifecycle ... ok
+test tests::agent_spawn_bounded_and_list ... ok
+test tests::agent_spawn_refuses_an_unknown_preset ... ok
+test tests::agent_spawn_requires_grants_or_a_preset ... ok
+test tests::an_explicit_grant_set_still_works ... ok
+test tests::an_ordinary_worker_preset_is_accepted_and_recorded ... ok
+test tests::an_unknown_role_is_refused_rather_than_defaulted ... ok
+test tests::auction_close_probe_keeps_lot_open_for_retry ... ok
+test tests::auction_close_too_small_buffer_keeps_lot_open ... ok
+test tests::auction_ffi_open_bid_close_roundtrip ... ok
+test tests::auction_ffi_open_requires_seller_and_unique_lot ... ok
+test tests::audit_and_owner_log_survive_restart ... ok
+test tests::audit_append_list_clear_roundtrip ... ok
+test tests::audit_append_rejects_malformed_entry ... ok
+test tests::audit_default_caller_is_hook ... ok
+test tests::audit_list_filtered_by_observer_grants ... ok
+test tests::audit_trail_never_persists_fixture_secret ... ok
+test tests::bad_handle_returns_neg1004 ... ok
+test tests::bad_json_returns_neg1001 ... ok
+test tests::blueprint_export_bad_handle ... ok
+test tests::blueprint_export_gadget_probe_is_retryable_and_delivers_complete_json ... ok
+test tests::blueprint_export_instantiate_roundtrip ... ok
+test tests::blueprint_get_and_cell_and_unknown_id ... ok
+test tests::blueprint_import_probe_does_not_register ... ok
+test tests::blueprint_import_register_list_export_gadget_two_sessions ... ok
+test tests::blueprint_import_rejects_tampered_cell ... ok
+test tests::blueprint_instantiate_rejects_bad_magic ... ok
+test tests::blueprint_instantiate_rejects_cell_without_session ... ok
+test tests::cert_ffi_double_spend_rejected ... ok
+test tests::cert_ffi_mint_refuses_non_authority ... ok
+test tests::cert_ffi_mint_request_oracle_anchor ... ok
+test tests::cert_ffi_mint_transfer_burn_roundtrip ... ok
+test tests::certificate_issued_is_durable_and_replayable ... ok
+test tests::condition_enqueues_event ... ok
+test tests::conflicting_effect_annotation_cannot_bypass_approval_lane ... ok
+test tests::corrupt_snapshot_surfaces_in_startup_log_status_and_consult ... ok
+test tests::create_free_happy_path ... ok
+test tests::events_poll_tests::a_consumer_that_fell_behind_is_told_it_has_a_gap ... ok
+test tests::events_poll_tests::a_malformed_body_is_rejected_with_a_diagnostic ... ok
+test tests::events_poll_tests::a_poll_only_returns_events_for_the_model_asked_about ... ok
+test tests::events_poll_tests::a_poll_returns_events_and_advances_the_cursor ... ok
+test tests::events_poll_tests::an_empty_body_replays_the_retained_log ... ok
+test tests::events_poll_tests::max_caps_the_batch_and_says_so ... ok
+test tests::events_poll_tests::polling_from_the_last_cursor_returns_nothing_and_repeats_no_event ... ok
+test tests::events_poll_tests::the_hard_ceiling_cannot_be_lifted_by_a_hostile_max ... ok
+test tests::evolve_enqueues_event ... ok
+test tests::gatekeeper_approve_resolves_pending_and_lands_in_stream ... ok
+test tests::gatekeeper_reject_keeps_pending_out_of_applied ... ok
+test tests::interrupted_apply_surfaces_unknown_outcome_uk_1010 ... ok
+test tests::introduce_grants_resource_and_use_is_direct ... ok
+test tests::memory_tests::a_bad_handle_is_refused ... ok
+test tests::memory_tests::a_bearer_token_never_crosses_the_boundary ... ok
+test tests::memory_tests::a_failed_call_leaves_the_previous_result_cleared ... ok
+test tests::memory_tests::a_malformed_body_is_refused ... ok
+test tests::memory_tests::a_read_respects_its_budget ... ok
+test tests::memory_tests::a_secret_is_redacted_on_the_way_in ... ok
+test tests::memory_tests::a_short_memory_reads_back_whole ... ok
+test tests::memory_tests::an_absurd_budget_is_clamped_rather_than_honoured ... ok
+test tests::memory_tests::an_empty_query_is_not_an_error ... ok
+test tests::memory_tests::an_empty_store_reads_empty_and_clean ... ok
+test tests::memory_tests::append_and_read_emit_observable_events ... ok
+test tests::memory_tests::overflow_switches_to_retrieval_and_says_so ... ok
+test handles::buffer_proptests::buffer_roundtrip_never_panics ... ok
+test tests::mutate_kind_effect_requires_pending_approval ... ok
+test tests::observability_context_threads_into_audit_entries ... ok
+test tests::observe_kind_effect_never_queues ... ok
+test tests::owner_logger_writes_dot_component_lines ... ok
+test tests::panic_inside_ffi_entry_records_payload ... ok
+test tests::poll_bad_handle_returns_neg1004 ... ok
+test tests::memory_tests::retrieval_is_deterministic_across_calls ... ok
+test tests::poll_with_too_small_buffer_keeps_event_for_retry ... ok
+test tests::posture_get_set_roundtrip ... ok
+test tests::posture_set_is_console_only ... ok
+test tests::posture_set_rejects_unknown_posture ... ok
+test tests::promoted_skill_resists_non_promoted_replacement ... ok
+test tests::queue_drops_oldest_when_full ... ok
+test tests::registry_vetted_is_console_only ... ok
+test tests::report_issue_bound_appends_sanitized_line ... ok
+test tests::report_issue_is_noop_without_error_report_binding ... ok
+test tests::request_queues_for_approval_and_audits ... ok
+test tests::resolved_checkpoint_failure_surfaces_unknown_outcome ... ok
+test tests::session_compact_ffi_roundtrip ... ok
+test tests::session_evolve_append_failure_surfaces_uk1010_at_ffi ... ok
+test tests::set_caller_rejects_malformed_json ... ok
+test tests::session_fork_ffi_roundtrip ... ok
+test tests::set_prior_enqueues_event ... ok
+test tests::skill_pack_import_registers_git_pack ... ok
+test tests::skill_register_list_get_roundtrip ... ok
+test tests::subscribe_bad_handle_returns_neg1004 ... ok
+test tests::snapshot_restore_roundtrip ... ok
+test tests::subscribe_filters_by_event_type ... ok
+test tests::subscribe_with_unknown_type_fails_visibly ... ok
+test tests::summarize_tests::a_failed_call_leaves_the_previous_result_cleared ... ok
+test tests::summarize_tests::a_human_surface_gets_the_summary_and_not_the_trace ... ok
+test tests::summarize_tests::a_malformed_body_and_a_bad_handle_are_refused ... ok
+test tests::summarize_tests::a_missing_channel_defaults_to_console ... ok
+test tests::summarize_tests::a_summary_carries_its_provenance_and_budget ... ok
+test tests::summarize_tests::an_empty_trace_summarizes_to_nothing_and_reports_no_loss ... ok
+test tests::summarize_tests::an_unknown_channel_is_refused_rather_than_defaulted ... ok
+test tests::summarize_tests::no_sentence_in_the_summary_is_absent_from_the_trace ... ok
+test tests::summarize_tests::summarizing_is_observable ... ok
+test tests::summarize_tests::summarizing_this_sessions_own_log_is_read_only ... ok
+test tests::summarize_tests::the_full_trace_stays_retrievable_after_summarizing ... ok
+test tests::timeout_declaration_composes_with_meter_denial_point ... ok
+test tests::un_introduced_resource_call_is_4401 ... ok
+test tests::t6_emitted_certificates_are_durably_recorded_end_to_end ... ok
+test tests::unvetted_console_clearing_flag_leaves_queue_intact ... ok
+test tests::version_returns_one ... ok
+test tests::vetted_mutate_effect_auto_applies ... ok
+
+test result: ok. 175 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.19s
+
+     Running tests/ffi.rs (target/debug/deps/ffi-a95b7f3dd10204c3)
+
+running 55 tests
+test a_miss_is_not_a_zero_weight ... ok
+test abi_header_declares_every_extern_symbol ... ok
+test austral_defeq_bad_side_is_4805_and_clears_result ... ok
+test austral_unf_closed_and_open ... ok
+test austral_defeq_equivalent_and_not ... ok
+test austral_unf_module_main_reduces ... ok
+test bad_handle_on_free_returns_1004 ... ok
+test austral_unf_unparseable_is_4804 ... ok
+test bad_handle_returns_1004 ... ok
+test bad_json_returns_1001 ... ok
+test bayesian_update_via_ffi_bad_obs_dim_returns_1001 ... ok
+test bayesian_update_via_ffi ... ok
+test bayesian_update_via_ffi_hmc_opts_zero_leapfrog_returns_1001 ... ok
+test bayesian_update_via_ffi_hmc_opts_negative_step_size_returns_1001 ... ok
+test bayesian_update_via_ffi_on_non_qfm_returns_5000 ... ok
+test belief_propagation_via_ffi_bad_obs_dim_returns_1001 ... ok
+test bayesian_update_via_ffi_zero_observations ... ok
+test belief_propagation_via_ffi_on_non_qfm_returns_5000 ... ok
+test belief_propagation_via_ffi_opts_negative_step_size_returns_1001 ... ok
+test belief_propagation_via_ffi_opts_max_iter_zero_returns_1001 ... ok
+test belief_propagation_via_ffi_zero_observations ... ok
+test belief_propagation_via_ffi_returns_finite_image ... ok
+test buffer_protocol_returns_needed_size ... ok
+test condition_then_probability_is_one ... ok
+test double_free_returns_1004 ... ok
+test durable_status_returns_live_json ... ok
+test engram_rejects_a_bad_handle ... ok
+test engram_rejects_a_malformed_key_and_a_non_finite_weight ... ok
+test engram_operations_emit_observable_events ... ok
+test engram_store_replaces_so_reingesting_is_idempotent ... ok
+test evolve_missing_t_returns_1001 ... ok
+test engram_store_then_lookup_round_trips_the_weight ... ok
+test happy_path_create_evolve_probability_free ... ok
+test failed_op_leaves_result_channel_empty ... ok
+test last_error_cleared_by_info_call ... ok
+test last_error_is_cleared_by_a_subsequent_successful_call ... ok
+test logos_compile_transitive_to_unf ... ok
+test init_succeeds ... ok
+test negative_len_returns_1001 ... ok
+test null_pointer_with_nonzero_len_returns_1001 ... ok
+test logos_compile_unparseable_is_4803 ... ok
+test proof_verify_invalid_reduces_to_false ... ok
+test proof_verify_valid_reduces_to_true ... ok
+test proof_verify_malformed_export_is_4802 ... ok
+test qfm_tomo_via_ffi_bad_query_dim_returns_1001 ... ok
+test qfm_tomo_via_ffi ... ok
+test set_prior_resets_state ... ok
+test symbolic_simplify_canonicalizes ... ok
+test symbolic_simplify_empty_expression_is_4902 ... ok
+test unknown_builtin_returns_1002 ... ok
+test version_returns_positive ... ok
+test symbolic_simplify_zero_detection ... ok
+test whyml_emit_produces_the_authorization_gate ... ok
+test whyml_emit_unknown_symbol_is_4904 ... ok
+test zero_probability_condition_returns_2003 ... ok
+
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.89s
+
+   Doc-tests unfer_ffi
+
+running 1 test
+test unfer_ffi/src/lib.rs - uk_version (line 176) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 9.22s; merged doctests compilation took 9.19s
+EXIT=0
