@@ -564,10 +564,13 @@ client may still retry.
 | `a_settled_rejection_is_replayed_to_the_retrying_client` | a cached refusal, not a second submission |
 | `different_request_ids_with_identical_bytes_are_distinct_actions` | two ids, two slots |
 | `a_request_below_the_acknowledged_floor_is_refused_after_restart_of_retention` | UK-8102; the retained neighbour still answers |
+| `a_client_cannot_exhaust_memory_by_inventing_incarnations` | the third incarnation of a two-incarnation principal is refused; retiring frees exactly one |
+| `the_scope_budget_is_counted_separately_from_open_records` | two empty windows fill the scope budget, and retiring frees one |
+| `a_client_that_invents_incarnations_is_bounded_and_can_retire_a_run` | at the node: UK-8103, another principal unaffected, retire then accepted |
 
 ```
-$ cargo test --locked --offline -p unfer_consensus --test request_identity  # 5 passed
-$ cargo test --locked --offline -p unfer_consensus --lib                   # 150 passed
+$ cargo test --locked --offline -p unfer_consensus --test request_identity  # 6 passed
+$ cargo test --locked --offline -p unfer_consensus --lib                   # 152 passed
 $ cargo test --locked --offline -p unfer_protocol                          # 353 + 4 + 51 + 3 passed
 $ cargo test --locked --offline -p unfer_identity                          # 7 + 1 passed
 $ cargo test --locked --offline -p unfer_data                              # 63 + 4 + 1 passed
@@ -580,9 +583,20 @@ The book is **in memory** in D06 (`AdmissionBook` is `Serialize`, and D07 makes 
 bindings durable). Until the binding write succeeds, a retry after a crash is a
 fresh admission; what makes that safe rather than duplicating an effect is the
 ledger's own content-key guard plus D07's durable request records, not this
-table. Retention is enforced per client scope; nothing here bounds a client that
-keeps inventing incarnations, which is a quota/identity policy question rather
-than a consensus one.
+table.
+
+A client that keeps inventing incarnations used to buy a fresh admission
+namespace per request, and each namespace is a retained window that outlives its
+records (the floor is the only thing that makes a forgotten id safe to refuse).
+Windows are therefore bounded twice: `DEFAULT_INCARNATIONS_PER_PRINCIPAL` per
+`(deployment, principal)` and `DEFAULT_ADMISSION_SCOPES` globally, with a
+`retire_incarnation` call as the only way to regain headroom. Retirement is the
+client's declaration that it will never retry under that run, because the window
+takes its floor with it — so a client that retires a run it might still retry
+loses the protection, and a client that does not retire is refused at the limit
+rather than served indefinitely. The bound is policy, not a proof about client
+behaviour: this is still one node's memory, and the numbers are constants, not a
+negotiated quota.
 
 ## D07 — one durable application transition and honest failure semantics (2026-11-22)
 
@@ -666,7 +680,7 @@ tell" and halts. This is the classification D05 left as a documented gap.
 | `a_storage_failure_is_a_halt_and_a_domain_error_is_a_refusal` | UK-5011 halts, UK-7002 refuses |
 
 ```
-$ cargo test --locked --offline -p unfer_consensus --lib                        # 150 passed
+$ cargo test --locked --offline -p unfer_consensus --lib                        # 152 passed
 $ cargo test --locked --offline -p unfer_consensus --features network --test phase6_testnet  # 4 passed
 $ cargo test --locked --offline -p unfer_ffi                                    # 175 + 55 + 1 passed
 ```
@@ -679,12 +693,128 @@ and not only compiled.
 
 This is not an atomic commit across the consensus library's runtime store and
 application state; the runtime store can be ahead and recovery replays by slot.
-`fsync` is only as good as the platform's block device, and neither fault
-injection nor the tests simulate a power cut — they inject the failure *at* each
-protocol boundary (`FaultPoint::BeforeWrite`/`HalfWrite`/`AfterWrite`), which is
-what the acceptance asks for. Retention quota is per admission book and does not
-bound a client that keeps inventing incarnations. The Loro snapshot patch makes
-that file durable; it does not claim the same transaction for other backends.
+`fsync` is only as good as the platform's block device. The unit tests inject the
+failure *at* each protocol boundary (`FaultPoint::BeforeWrite`/`HalfWrite`/
+`AfterWrite`); `tests/power_cut.rs` additionally kills a real child process
+(`SIGKILL`) that is appending to a journal on `/dev/shm`, which is what proves
+the recovery path sees bytes left by a process that never got to clean up:
+
+| Witness | Asserts |
+|---|---|
+| `a_killed_writer_leaves_a_journal_that_recovers_and_continues` | five rounds, each recovered prefix is contiguous from slot 1, and the log accepts the next append |
+| `a_half_frame_from_a_dead_process_is_discarded_not_reported_as_corruption` | an aborted writer's partial frame is a torn tail, not corruption |
+
+Measured: round recoveries of 17, 12, 52, 24 and 92 transitions with 0 torn tail
+bytes — the kill lands between appends far more often than inside one, which is
+why the half-frame case is forced explicitly instead of hoped for. `/dev/shm` is
+tmpfs, so `sync_data` is a no-op there: this test verifies the framing, ordering
+and truncation protocol under abrupt death, not that a disk honoured an fsync.
+Durability against media loss rests on the syscall sequence, not on this test.
+The Loro snapshot patch makes that file durable; it does not claim the same
+transaction for other backends.
+
+## D08 — scope caller context and enforce dynamic remote policy (2026-11-22)
+
+A `safestos/cranelift/src/{auth,module,cps}.rs`; bridge release rebuilt.
+
+### The authority that belonged to whoever loaded last
+
+The JIT gate answered "who is calling?" with two process globals: a single
+`DEPLOYMENT_PRINCIPAL` string and a single installed `AuthorizationEngine`.
+`ModuleHost::load` set both, so with two modules loaded:
+
+* every call was attributed to the module whose manifest loaded **last**, so
+  module A borrowed module B's grants and A's own grants vanished the moment B
+  loaded (the engine was *replaced*, not merged);
+* a module that failed to compile left the new engine — and the new principal —
+  installed, so a failed load was also a policy change;
+* there was no way to say "this compiled module no longer has authority": the
+  grant was a property of the process, not of the instance.
+
+### An identity instead of a global
+
+`auth::InstanceContext` is bound once per load and is immutable: `instance` (an
+allocated id, never reused), `module` (the manifest name grants are keyed by),
+`delegator` (the user, when a host supplies one), `node` (the remote endpoint, in
+a **separate** field), `epoch`, and `strict`. The loader
+
+1. binds the identity, merges the module's grants into the live engine (instead
+   of swapping it in over the other modules'),
+2. enters that identity's caller scope for the compile, so `check_call_permission`
+   attributes every gated call to *this* module, and
+3. on failure restores the previous engine and revokes the identity it just
+   bound.
+
+Liveness is a registry lookup (`instance` + `epoch`): `revoke_instance` removes
+an entry and `rebind_instance` moves the epoch, and both make an
+already-compiled module's authority stop working without touching its code.
+`ModuleHost::call` checks liveness before the function pointer — which is where
+a revocation can be enforced, since compiled code does not re-check itself.
+`ModuleHost::swap` compiles the replacement under the current identity, then
+rebinds it: the pre-swap context is retired, and a swap that fails leaves both
+the old code and the old identity live. The process-global deployment principal
+is deliberately **not** set by `load` any more: loading a module must not
+redefine the authority of code compiled outside it. `safestos_load_auth_manifest`
+still sets it for the legacy OCaml path, and UK-4001's wording is unchanged.
+
+### Strict profile: a prefix is not a grant
+
+`[module] profile = "strict"` makes the gate require the callee to be a
+**declared ABI symbol** as well as granted. The declaration set is derived from
+the same tables the JIT builder registers (`UNFER_SYMBOLS`, `ZENODO_SYMBOLS`,
+`RS_FFI_SYMBOLS`, plus the `au_*`/`__*` builtins), so a symbol the JIT can
+resolve is a symbol the profile can name, and a name a manifest invented cannot
+become a call even if it is in the grant list. An unknown profile value is a
+error, not a silent downgrade, and a hot-swap may not change the profile (that is
+a re-load).
+
+### The receiver side of the boundary
+
+`auth::check_remote_use(from_peer, context, action, resource)` takes the peer
+identity the transport authenticated **separately** from the context it is
+checking, and requires `context.node == from_peer`: a token cannot certify its
+own node. It then checks liveness at the receiver and the grant at the receiver's
+own policy, so a stale copy of the sender's grants buys nothing.
+
+### Witnesses
+
+| Witness | Asserts |
+|---|---|
+| `d08_instances_are_isolated_revocable_and_retired_by_swap` | A and B keep disjoint grants and identities; a failed load leaves both intact; a revoked instance cannot be called while its neighbour can; a swap retires the old context and a refused swap changes nothing |
+| `d08_strict_profile_is_explicit_and_cannot_be_swapped_away` | strictness reaches the loaded identity, an unknown profile is refused, and a hot-swap to a laxer manifest is rejected |
+| `an_instance_context_is_the_authority_and_a_stale_one_is_refused` | the JIT gate uses the scope, not the global principal; revocation and rebinding both refuse; a strict module refuses a *granted but undeclared* symbol; spoofed peer and node-less contexts are refused |
+
+```
+$ cargo test --lib                # 66 passed
+$ cargo test --test module_tests  # 11 passed
+$ cargo test --test cps_tests     # 14 passed
+$ cargo test                      # 19 suites, 0 failures (modhost_cli 41, 1 ignored)
+$ nix develop "git+file://#ocaml" -c make bridge   # release .so rebuilt, EXIT=0
+$ bash scripts/verify-invariants  # 177 passed, 3 explained gap(s), 0 failed
+$ nix develop "git+file://#ocaml" -c dune build @runtest  # EXIT=0
+```
+
+### Not claimed
+
+Revocation is enforced at the **host** boundary and at the receiver of a
+remote/distributed call, not inside the JIT-compiled function body: the gate is
+a compile-time decision, and an already-running function is not interrupted.
+`check_remote_use` is exercised by tests but has no in-repo service consuming it
+in production yet (a distributed receiver is D11/D17), so what is proven is the
+wrapper's semantics, not that some service calls it.
+
+The A-side compiler integration (dune `@runtest`, with the rebuilt release
+artifact on `LD_LIBRARY_PATH`) passes; it asserts that the bridge still loads and
+the compiler suites are unmoved, not that the OCaml path exercises the new
+identity. `make test` itself was run and stopped inside its `drift-controls`
+stage, because those controls run a full gate over the tree *before*
+`test-locked` copies the release `.so` to `./libaustral_cranelift_bridge.so`, so
+the W5 "bridge is the artifact it was built from" check failed on a copy that
+any bridge rebuild makes stale. Copying the artifact and re-running the gate
+gives the 177/3/0 above, and `dune build @runtest` directly gives EXIT=0: the
+stop is this repo's ordering, not this change, but it is left recorded rather
+than papered over. Legacy native calls outside `uk_*`/`uz_*`/`rs_*` are not
+generalized into this result.
 
 ## Task status
 
@@ -697,5 +827,6 @@ that file durable; it does not claim the same transaction for other backends.
 | D04 | verified within stated scope | burn is validate-then-commit; four refusal fingerprints; `total_supply` no longer panics on overflow |
 | D05 | verified within stated scope | receipt/slot/watermark are distinct; a domain refusal advances the slot, a gap halts; identity and publishing settle before reporting |
 | D06 | verified within stated scope | a client-named request replays its settled result, conflicts are refused, retention is an acknowledged floor and a full book backpressures |
-| D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch |
+| D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
+| D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; receiver checks peer-derived context |
 | D08–D26 | not started | D08 is next (scoped caller context, dynamic remote policy) |

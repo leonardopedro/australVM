@@ -519,6 +519,139 @@ rewrite system handed over from another system is a trusted component, and λΠ-
 conversion would have to be trusted in exactly the same way. **Verdict: worse on every
 axis that is measurable, and unavailable on the one that is not.**
 
+### 9.2 Certificate size: shared subterms (measured 2026-11-22)
+
+The 1 GB per lemma of §9.1 is repetitive, not deep: on the smoke row 467 710 assumptions carry
+only 2 690 distinct bodies, and a handful of very large terms are repeated across thousands of
+rule applications. The emitter therefore interns repeated subterms and writes them once as MM0
+`def`s at the top of the artifact — `def sdK: Term = $ … $;`, nullary and sort-checked, so a use
+site is three tokens instead of tens of kilobytes.
+
+It is **opt-in**, because the format is a promise (the byte-identity gate exists for exactly
+this): `LTP_DEF_SHARE=<min bytes>` turns it on and the threshold is the smallest body worth a
+`def`; unset, the emitter takes the byte-identical default path and
+`scripts/check-lean-typing-proof` confirms it — 12 artifacts across 3 modes still match
+`scripts/lean-typing-proof.golden.tsv`, so no recorded value moved.
+
+The interning rule is fixed by the artifact order, not by a heuristic pass: a node is a `def`
+candidate at its **first** use, decided by its expanded size; bodies are written in *reverse*
+first-use order while a `live` set holds the names already emitted, so no body can refer
+forward; and `digest()` — the emitter's own hash deciding when two nodes share a `ty_deq`
+obligation — keeps hashing the *expanded* text, otherwise interning would split 7 923 formerly
+identical conversions into extra assumptions. The spool path (`Enc.spool`, which compares an
+on-disk declared type byte-for-byte) disables interning outright: a reconstructed wrap can never
+carry the whole type's name, so `_spool_eq` would fail with “derived type is not the declared
+type … declared sd0”.
+
+Measured on the smoke row (`BookProof.Toolbox.ChapterFockPairPerturbation.ndjson`,
+`abs_re_inner_pairVec_le`):
+
+| artifact | default | `LTP_DEF_SHARE=1024` |
+|---|---|---|
+| `.mm0` | 1 041 771 375 B | **354 580 487 B** (2.94×) |
+| `.mm1` | 1 075 343 397 B | **388 152 509 B** (2.77×) |
+| sidecar (obligations) | 1 012 915 095 B | unchanged |
+| wall clock | 70.3 s | 68.3 s |
+| assumptions | 467 710 (1 279 constant types, 1 256 substitution) | **identical** |
+| defs emitted | — | 1 694 |
+
+The size cut is real but the assumption count is untouched, which is the honest reading: sharing
+compresses the *text* of the derivation, not its obligations. Only 1 694 nodes clear a 1 KiB
+threshold and they account for the whole 66 % saving, matching the earlier headroom measurement on
+the three largest axioms.
+
+**Content is unchanged.** Expanding every `sdK` back into its uses and dropping the `def` block
+gives 980 180 332 B of non-comment text on both sides, `cmp` clean against the default artifact.
+(Comment lines are excluded from that comparison by necessity: they render truncated text, so a
+truncated line that happens to contain a name expands to thousands of characters.)
+
+**The real toolchain accepts the shared artifact.** Slice = both theories with their `import`
+lines stripped, then the artifact's header, `term t_symN: nat;` payload declarations, the whole
+def block and the first 2 000 axioms (215 219 297 B):
+
+| step | result |
+|---|---|
+| `mm0-rs compile slice.mm1 slice.mmb` | **OK**, 2 m 19.7 s, 1 887 232 B `.mmb`, `3 sorts, 2146 term/def, 2026 ax/thm` |
+| `mm0-c slice.mmb < slice.mm0` | **OK**, exit 0, 1.6 s |
+
+The full artifact was *not* elaborated: 2 000 axioms cost 140 s, so 467 710 extrapolate to hours,
+and this run reports measurements, not projections. Two traps found while setting the slice up,
+both worth recording because they look like defects in the artifact and are not:
+
+- `mm0-rs compile` takes its output as the **second positional** argument; `-o out.mmb` is accepted
+  silently, writes nothing, and the empty `.mmb` then makes `mm0-c` fail with
+  `Unable to memory map file`.
+- Inside a `def` body every atom must be a *constant in scope*; an atom the toolchain does not
+  know becomes a metavariable, and a body with more than 55 of them is rejected with
+  `error: too many bound variables (max 55)`. A harness that strips the artifact's
+  `term t_symN: nat;` lines reproduces that error on the first two defs and nothing else.
+
+**Memory floor, re-probed.** §9.1 recorded 384 MiB as the floor for the 102 GB ns row; §13.55 of
+`lean4mm0.md` is the re-probe the `sendfile` tail copy asked for, and the answer is that 360 MiB *does*
+pass: 3 802 s, peak VmSize 356 MiB, exit 0, with the proof artifacts `cmp`-identical to the
+432 MiB reference. The bracket is (352, 360] MiB, and 352 MiB still dies in the axiom list.
+
+The re-probe only says that with its environment, which is why the number is quoted with it:
+`LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB
+LTP_CENSUS=1 LTP_DEDUP_NODES=1`. Re-running the same cap at 360 MiB *without*
+`LTP_DEDUP_NODES=1` reproduces §13.55's known control instead of a floor: `MemoryError` in
+`infer` after 926 s at a 342 MiB peak, with the census showing synthetic nodes 43.9 MB and the
+context memo 17.4 MB against 26.4 MB and 8.5 MB with interning on. The environment *is* the
+measurement — same cap, different tables, different verdict — so a floor quoted without it is
+not a floor.
+
+### 9.3 The 26 axioms: what the derivation uses and what MM0 could prove
+
+`docs/cic.mm0` declares 11 axioms and `docs/cic_typing.mm0` 15. Two questions matter for the
+trusted base: which of them a derivation actually *uses*, and which could stop being axioms.
+
+The first is measurable. The smoke row's `.mm1` header reports 1 929 299 rule applications, and
+counting rule names in the proofs gives:
+
+| axiom | uses in `abs_re_inner_pairVec_le` |
+|---|---|
+| `ty_app` | 629 783 |
+| `ty_deq` | 465 159 (343 865 universe-level + 121 295) |
+| `ty_abs` | 204 571 |
+| `ty_var0` | 8 974 |
+| `ty_varS` | 3 691 |
+| the other 21 | **0** |
+
+So the trusted base *exercised* by this artifact is five rules. The other 21 are inert here (they
+serve other rows and the statement side), and the 467 710 per-instance assumptions — constant
+types and `ty_deq` conversions — are where the actual weight sits.
+
+The second question is answered per axiom. MM0 has no datatypes, no recursion, no induction and no
+structural congruence schema; `tsubst`, `teval`, `valid_iso`, `tfield` and `tctx_deq` are opaque
+constructors, and `tsucc`/`tzero` carry no axioms at all, so nothing about them is derivable. Under
+those rules:
+
+| axiom | verdict |
+|---|---|
+| `teq_refl`, `teq_symm`, `teq_trans` | irreducible as written: `teq` is declared opaque, so these are the only rules that conclude it. They *would* be theorems if `teq` were defined (Leibniz-style) instead of declared — a change of theory, not a proof obligation |
+| `tsubst_beta`, `teq_subst` | irreducible: `tsubst` has no definition to unfold, and congruence has no schema |
+| `teq_app` | irreducible: same congruence argument |
+| `fold_nil`, `fold_cons`, `era_collapse` | irreducible: rewrite rules of the net are the content, not consequences |
+| `prim_eval` | not provable, but *eliminable*: the emitter only needs ground instances, so the schema can become per-instance premises instead of a theory axiom |
+| `net_isomorphism_step` | irreducible by design: the single place where an externally checked certificate enters, and `valid_iso` is opaque, so no derivation can reach it |
+| `ty_var0` | irreducible: the only rule that reads a context entry |
+| `ty_varS` | irreducible: weakening needs `tsucc` to mean something, and it has no axioms |
+| `ty_pi`, `ty_abs`, `ty_app` | irreducible: they *are* the λΠ fragment |
+| `ty_deq` | irreducible: congruence of `tty` under type equality, and MM0 has no congruence schema |
+| `tdefeq_refl`, `tdefeq_symm`, `tdefeq_trans` | **provable** if `tdefeq` is a `def` alias of `teq`: each becomes an instance of the `teq_*` axiom. Verified by compiling `def tdefeq (a b: Term): Prop = $ teq a b $;` followed by the three statements — `mm0-rs` accepts them, and Prop-valued `def`s are already used in `mm0/pairing/full2.mm0` |
+| `tdefeq_iso` | **provable under the same alias**: it becomes exactly `net_isomorphism_step`, one application |
+| `tctx_deq_nil` | **provable** if `tctx_deq` is likewise aliased to `teq`, as `teq_refl tnil` |
+| `tctx_deq_cons` | not provable, and the alias does not help: it needs congruence of `teq` under `tcons`, i.e. one axiom traded for another |
+| `tcert_witness` | not provable (`valid_iso` is opaque); *eliminable* by making the certificate the premise where it is used, which is what `scripts/lean-net-cert` already checks |
+| `ty_proj`, `ty_ctx` | irreducible: they state the field and context-conversion relations that are supplied as data |
+
+Tally: 5 axioms are exercised by this artifact, 5 of 26 become theorems if the two equality
+judgments are identified by definition (a design change — `tdefeq` is deliberately *wider* than
+`teq`, since a certificate decides it), 2 can be demoted to premises, and **19 are irreducible**:
+for each, its conclusion's head constant is not produced by any other rule, so it is independent
+of the rest — with the one exception above, `tdefeq_iso` versus `net_isomorphism_step`, which
+become the same statement once `tdefeq` is a `def`.
+
 ## Appendix — FOUNDATIONS and PROB modules
 
 `name decls` pairs; zero-declaration entries are import aggregators or scratch files.

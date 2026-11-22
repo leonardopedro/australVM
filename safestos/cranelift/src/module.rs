@@ -52,6 +52,11 @@ pub struct ModuleManifest {
     pub memory_max_bytes: Option<u64>,
     /// S19 (F18): `[gatekeeper] mode` — side-effect provisioning for gatekeeper modules.
     pub gatekeeper_mode: GatekeeperMode,
+    /// D08: `[module] profile = "strict"`. In the strict profile a gated call is
+    /// admitted only when the symbol is a declared ABI registry entry *and* the
+    /// manifest grants it; no prefix is an ambient grant. Absent or any other
+    /// value means the historical (grant-list) profile.
+    pub strict: bool,
 }
 
 impl ModuleManifest {
@@ -156,6 +161,19 @@ impl ModuleManifest {
             .and_then(|m| m.as_str())
             .map(GatekeeperMode::from_toml)
             .unwrap_or_default();
+        // An unknown profile is not silently downgraded to the permissive one: a
+        // manifest that asks for a posture this loader does not implement is an
+        // error, because silently ignoring it would disable exactly the check the
+        // author asked for.
+        let strict = match module.get("profile").and_then(|p| p.as_str()) {
+            None | Some("default") => false,
+            Some("strict") => true,
+            Some(other) => {
+                return Err(format!(
+                    "[module] profile must be \"default\" or \"strict\", got {other:?}"
+                ))
+            }
+        };
         let fs_grants = v
             .get("grants")
             .and_then(|g| g.get("fs"))
@@ -202,6 +220,7 @@ impl ModuleManifest {
             max_ms,
             memory_max_bytes,
             gatekeeper_mode,
+            strict,
         })
     }
 }
@@ -259,6 +278,10 @@ pub struct ModuleHandle {
     pub manifest: ModuleManifest,
     pub runtime: IrRuntime,
     pub call_count: u64,
+    /// D08: this instance's immutable authority identity, bound at load. The
+    /// host checks it before every call, so a revoked or replaced instance stops
+    /// being callable even though its compiled code is still in memory.
+    pub context: auth::InstanceContext,
 }
 
 impl ModuleHandle {
@@ -372,64 +395,107 @@ impl ModuleHost {
 
         let engine = ManifestAuthEngine::from_toml_str(&toml_str)
             .map_err(|e| format!("manifest auth error: {e}"))?;
-        auth::set_auth_engine(Box::new(engine));
-        auth::set_deployment_principal(manifest.name.clone());
 
-        // H8: resolve the runtime archetype through the registered harness
-        // resolver (approval + org floor + fallback); reject the unapproved one
-        // (UK-4001 family) instead of silently falling back.
-        let resolved_archetype = self.resolve_runtime_choice(&manifest)?;
-        if resolved_archetype != manifest.archetype {
-            return Err(format!(
-                "UK-4001: archetype '{}' resolved to '{}' which the loader does not map; \
-                 add an adapter for the resolved profile",
-                manifest.archetype, resolved_archetype
-            ));
-        }
+        // D08: this module gets its own immutable identity and its grants are
+        // merged with the modules already loaded, not swapped in over them. The
+        // compile below runs inside this identity's caller scope, so the JIT gate
+        // attributes each `uk_*` call to *this* module rather than to whichever
+        // manifest happened to load last. The process-global deployment
+        // principal is deliberately left alone: loading a module must not
+        // redefine the authority of code compiled outside it.
+        let context = auth::bind_instance(manifest.name.clone(), manifest.strict);
+        let previous_grants = auth::install_module_grants(engine);
 
-        // ECMAScript archetype: serve the module's JS via a workerd sidecar (S1) instead of
-        // compiling a CPS binary into Cranelift IR.
-        if manifest.archetype == "ecmascript" {
-            #[cfg(feature = "ecmascript")]
-            {
-                let paths = crate::ecma::WorkerdPaths::from_env()?;
-                let staging = module_dir.join(".unfer-ecma");
-                let sidecar =
-                    crate::ecma::EcmaSidecar::spawn(module_dir, &staging, &manifest, &paths)?;
-                let name = manifest.name.clone();
-                let handle = ModuleHandle {
-                    manifest,
-                    runtime: IrRuntime::Ecma(sidecar),
-                    call_count: 0,
-                };
-                self.modules.insert(name.clone(), handle);
-                return Ok(self.modules.get(&name).unwrap());
+        let instance = context.instance;
+        let loaded = {
+            let _scope = auth::enter_caller(&context);
+            // H8: resolve the runtime archetype through the registered harness
+            // resolver (approval + org floor + fallback); reject the unapproved one
+            // (UK-4001 family) instead of silently falling back.
+            match self.resolve_runtime_choice(&manifest) {
+                Err(e) => Err(e),
+                Ok(resolved) if resolved != manifest.archetype => Err(format!(
+                    "UK-4001: archetype '{}' resolved to '{resolved}' which the loader does not \
+                     map; add an adapter for the resolved profile",
+                    manifest.archetype
+                )),
+                Ok(_) if manifest.archetype == "ecmascript" => {
+                    // ECMAScript archetype: serve the module's JS via a workerd
+                    // sidecar (S1) instead of compiling a CPS binary into Cranelift IR.
+                    #[cfg(feature = "ecmascript")]
+                    {
+                        let paths = crate::ecma::WorkerdPaths::from_env();
+                        match paths {
+                            Ok(paths) => {
+                                let staging = module_dir.join(".unfer-ecma");
+                                crate::ecma::EcmaSidecar::spawn(
+                                    module_dir,
+                                    &staging,
+                                    &manifest,
+                                    &paths,
+                                )
+                                .map(|sidecar| {
+                                    let name = manifest.name.clone();
+                                    (
+                                        name,
+                                        ModuleHandle {
+                                            manifest,
+                                            runtime: IrRuntime::Ecma(sidecar),
+                                            call_count: 0,
+                                            context,
+                                        },
+                                    )
+                                })
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    #[cfg(not(feature = "ecmascript"))]
+                    {
+                        Err(
+                            "archetype 'ecmascript' requires the 'ecmascript' feature \
+                             (workerd sidecar)"
+                                .to_string(),
+                        )
+                    }
+                }
+                Ok(_) => std::fs::read(&cps_path)
+                    .map_err(|e| format!("cannot read {}: {e}", cps_path.display()))
+                    .and_then(|cps_data| {
+                        compile_cps_binary(&cps_data).map(|functions| (cps_data, functions))
+                    })
+                    .map(|(cps_data, functions)| {
+                        let name = manifest.name.clone();
+                        (
+                            name,
+                            ModuleHandle {
+                                manifest,
+                                runtime: IrRuntime::Jit {
+                                    functions,
+                                    cps_data,
+                                },
+                                call_count: 0,
+                                context,
+                            },
+                        )
+                    })
             }
-            #[cfg(not(feature = "ecmascript"))]
-            {
-                return Err(
-                    "archetype 'ecmascript' requires the 'ecmascript' feature (workerd sidecar)"
-                        .to_string(),
-                );
-            }
-        }
-
-        let cps_data = std::fs::read(&cps_path)
-            .map_err(|e| format!("cannot read {}: {e}", cps_path.display()))?;
-
-        let functions = compile_cps_binary(&cps_data)?;
-
-        let name = manifest.name.clone();
-        let handle = ModuleHandle {
-            manifest,
-            runtime: IrRuntime::Jit {
-                functions,
-                cps_data,
-            },
-            call_count: 0,
         };
-        self.modules.insert(name.clone(), handle);
-        Ok(self.modules.get(&name).unwrap())
+
+        match loaded {
+            Ok((name, handle)) => {
+                self.modules.insert(name.clone(), handle);
+                Ok(self.modules.get(&name).unwrap())
+            }
+            Err(error) => {
+                // A failed load must leave the previous authority exactly as it
+                // was: the grants this manifest added are rolled back and its
+                // identity never becomes live.
+                auth::restore_manifest_engine(previous_grants);
+                auth::revoke_instance(instance);
+                Err(error)
+            }
+        }
     }
 
     pub fn call(
@@ -438,6 +504,23 @@ impl ModuleHost {
         entrypoint: &str,
         args: &[i64],
     ) -> Result<i64, String> {
+        // D08: authority is checked at the host boundary before every call. The
+        // compiled code cannot re-check itself, so this is where a revocation or
+        // a hot-swap is enforced for a module that is already in memory.
+        let context = {
+            let handle = self
+                .modules
+                .get(module_name)
+                .ok_or_else(|| format!("module '{module_name}' not loaded"))?;
+            if let Some(refusal) = auth::context_refusal(&handle.context) {
+                return Err(refusal);
+            }
+            handle.context.clone()
+        };
+        // Entered for the call so any gated helper invoked from compiled code (and
+        // any nested host call) sees this module's identity, not a neighbour's.
+        let _scope = auth::enter_caller(&context);
+
         // Resolve the runtime backend once; the ECMAScript path routes i64 args to the
         // sidecar's JSON RPC, otherwise we invoke the JIT function pointer directly.
         let is_ecma = {
@@ -583,49 +666,81 @@ impl ModuleHost {
             }
         }
 
+        // D08: a hot-swap may not relax the authority profile either. The new
+        // binary keeps the identity it was loaded under, so a manifest that asks
+        // for a different profile is a re-load, not a swap.
+        if new_manifest.strict != old_handle.manifest.strict {
+            return Err(
+                "UK-4001 swap rejected: the replacement changes the module's authority profile \
+                 (unload and load it again instead)"
+                    .to_string(),
+            );
+        }
+
         let new_cps_data = std::fs::read(&cps_path)
             .map_err(|e| format!("cannot read {}: {e}", cps_path.display()))?;
 
         let engine = ManifestAuthEngine::from_toml_str(&toml_str)
             .map_err(|e| format!("manifest auth error: {e}"))?;
-        auth::set_auth_engine(Box::new(engine));
-        auth::set_deployment_principal(new_manifest.name.clone());
-
-        let handle = if new_manifest.archetype == "ecmascript" {
-            #[cfg(feature = "ecmascript")]
-            {
-                let paths = crate::ecma::WorkerdPaths::from_env()?;
-                let staging = new_module_dir.join(".unfer-ecma");
-                let sidecar = crate::ecma::EcmaSidecar::spawn(
-                    new_module_dir,
-                    &staging,
-                    &new_manifest,
-                    &paths,
-                )?;
-                ModuleHandle {
-                    manifest: new_manifest,
-                    runtime: IrRuntime::Ecma(sidecar),
-                    call_count: 0,
+        // D08: the replacement compiles under the module's *current* identity
+        // (same name, same profile), so the gate sees this module's grants. On a
+        // failed swap the grants are rolled back and the old handle — and its
+        // live identity — stay in place.
+        let current_context = old_handle.context.clone();
+        let previous_grants = auth::install_module_grants(engine);
+        let built = {
+            let _scope = auth::enter_caller(&current_context);
+            if new_manifest.archetype == "ecmascript" {
+                #[cfg(feature = "ecmascript")]
+                {
+                    crate::ecma::WorkerdPaths::from_env().and_then(|paths| {
+                        let staging = new_module_dir.join(".unfer-ecma");
+                        crate::ecma::EcmaSidecar::spawn(
+                            new_module_dir,
+                            &staging,
+                            &new_manifest,
+                            &paths,
+                        )
+                        .map(|sidecar| ModuleHandle {
+                            manifest: new_manifest,
+                            runtime: IrRuntime::Ecma(sidecar),
+                            call_count: 0,
+                            context: current_context.clone(),
+                        })
+                    })
                 }
-            }
-            #[cfg(not(feature = "ecmascript"))]
-            {
-                return Err(
-                    "archetype 'ecmascript' requires the 'ecmascript' feature (workerd sidecar)"
-                        .to_string(),
-                );
-            }
-        } else {
-            let functions = compile_cps_binary(&new_cps_data)?;
-            ModuleHandle {
-                manifest: new_manifest,
-                runtime: IrRuntime::Jit {
-                    functions,
-                    cps_data: new_cps_data,
-                },
-                call_count: 0,
+                #[cfg(not(feature = "ecmascript"))]
+                {
+                    Err(
+                        "archetype 'ecmascript' requires the 'ecmascript' feature (workerd \
+                         sidecar)"
+                            .to_string(),
+                    )
+                }
+            } else {
+                compile_cps_binary(&new_cps_data).map(|functions| ModuleHandle {
+                    manifest: new_manifest,
+                    runtime: IrRuntime::Jit {
+                        functions,
+                        cps_data: new_cps_data,
+                    },
+                    call_count: 0,
+                    context: current_context.clone(),
+                })
             }
         };
+
+        let mut handle = match built {
+            Ok(handle) => handle,
+            Err(error) => {
+                auth::restore_manifest_engine(previous_grants);
+                return Err(error);
+            }
+        };
+        // The swap really happened: the old identity stops being live, so a
+        // request that was already past its check under the previous code cannot
+        // present that authority again.
+        handle.context = auth::rebind_instance(&current_context, handle.manifest.name.clone());
         self.modules.insert(module_name.to_string(), handle);
         Ok(())
     }

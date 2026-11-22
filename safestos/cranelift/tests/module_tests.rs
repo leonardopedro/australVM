@@ -236,3 +236,192 @@ fn loaded_modules_lists_all() {
     let _ = std::fs::remove_dir_all(&dir_a);
     let _ = std::fs::remove_dir_all(&dir_b);
 }
+
+// ── D08: scoped caller context and dynamic remote policy ─────────────
+
+/// Body that tail-calls a 0-arg import (same encoding as the cps tests).
+fn body_call_import(name: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.push(0x07); // tail context
+    body.push(0x04); // App
+    write_str(&mut body, name);
+    write_u32(&mut body, 0);
+    body
+}
+
+/// One test for the whole D08 story on purpose: the authorization engine and the
+/// instance registry are process-global, and `cargo test` runs test functions in
+/// parallel. Splitting these would make them race each other's auth state through
+/// no fault of the code under test.
+#[test]
+fn d08_instances_are_isolated_revocable_and_retired_by_swap() {
+    use austral_cranelift_bridge::auth;
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let stamp = std::process::id();
+    let dir_a = std::env::temp_dir().join(format!("d08_a_{stamp}"));
+    let dir_b = std::env::temp_dir().join(format!("d08_b_{stamp}"));
+    let dir_c = std::env::temp_dir().join(format!("d08_c_{stamp}"));
+    let dir_a2 = std::env::temp_dir().join(format!("d08_a2_{stamp}"));
+    for dir in [&dir_a, &dir_b, &dir_c, &dir_a2] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // A and B both *call* uk_version; only A is granted it. B's body is a
+    // constant, so B loads fine with a disjoint grant set.
+    make_module_dir(&dir_a, "d08_alpha", &["uk_version"], &cps_v1_with_name("run", &body_call_import("uk_version")));
+    make_module_dir(&dir_b, "d08_beta", &["uk_evolve"], &cps_v1_with_name("run", &body_return_const(7)));
+    // C calls uk_evolve and is not granted it: its load must fail.
+    make_module_dir(&dir_c, "d08_gamma", &[], &cps_v1_with_name("run", &body_call_import("uk_evolve")));
+    make_module_dir(&dir_a2, "d08_alpha", &["uk_version"], &cps_v1_with_name("run", &body_return_const(11)));
+
+    let mut host = ModuleHost::new();
+    {
+        let alpha = host.load(&dir_a).unwrap();
+        assert_eq!(alpha.manifest.name, "d08_alpha");
+        let alpha_context = alpha.context.clone();
+        assert!(auth::is_live(&alpha_context));
+
+        let beta = host.load(&dir_b).unwrap();
+        let beta_context = beta.context.clone();
+        // Two modules, two identities: loading B did not redefine A.
+        assert_ne!(alpha_context.instance, beta_context.instance);
+        assert!(auth::is_live(&alpha_context), "A stays live after B loads");
+        assert!(
+            auth::check_instance_call(&alpha_context, "uk_version").is_ok(),
+            "A keeps its own grant after B is loaded"
+        );
+        assert!(
+            auth::check_instance_call(&alpha_context, "uk_evolve").is_err(),
+            "A never borrows B's grant"
+        );
+        assert!(
+            auth::check_instance_call(&beta_context, "uk_evolve").is_ok(),
+            "B keeps its own grant"
+        );
+        assert!(
+            auth::check_instance_call(&beta_context, "uk_version").is_err(),
+            "B never borrows A's grant"
+        );
+
+        // A failed load is not a policy change: C asks for a symbol it is not
+        // granted, so its compile is refused, and the modules already loaded are
+        // untouched (their grants and their identities both).
+        let refusal = match host.load(&dir_c) {
+            Ok(_) => panic!("an ungranted kernel call must fail the load"),
+            Err(error) => error,
+        };
+        assert!(refusal.contains("UK-4001"), "got: {refusal}");
+        assert_eq!(host.loaded_modules().len(), 2, "C was never installed");
+        assert!(auth::is_live(&alpha_context));
+        assert!(
+            auth::check_instance_call(&alpha_context, "uk_version").is_ok(),
+            "the failed load did not roll back A's grants"
+        );
+        assert_eq!(
+            host.call("d08_alpha", "run", &[]).unwrap(),
+            host.call("d08_alpha", "run", &[]).unwrap()
+        );
+
+        // Revocation is enforced at the host boundary, where the call is made.
+        assert!(auth::revoke_instance(alpha_context.instance));
+        let refused = host
+            .call("d08_alpha", "run", &[])
+            .expect_err("a revoked instance cannot be called");
+        assert!(refused.contains("no longer live"), "got: {refused}");
+        assert!(host.call("d08_beta", "run", &[]).is_ok(), "B is unaffected");
+
+        // A hot-swap replaces the code and retires the identity behind the old
+        // code: a caller still holding that identity is refused from then on.
+        let before_swap = host.get("d08_beta").unwrap().context.clone();
+        // beta cannot swap to alpha's dir (name mismatch); it swaps to a matching
+        // one built next.
+        let dir_beta2 = std::env::temp_dir().join(format!("d08_beta2_{stamp}"));
+        let _ = std::fs::remove_dir_all(&dir_beta2);
+        make_module_dir(&dir_beta2, "d08_beta", &["uk_evolve"], &cps_v1_with_name("run", &body_return_const(9)));
+        host.swap("d08_beta", &dir_beta2).expect("same grants, same profile");
+        let after_swap = host.get("d08_beta").unwrap().context.clone();
+        assert_eq!(after_swap.instance, before_swap.instance);
+        assert_ne!(after_swap.epoch, before_swap.epoch, "the epoch moved");
+        assert!(!auth::is_live(&before_swap), "the pre-swap identity is retired");
+        assert!(auth::is_live(&after_swap));
+        assert_eq!(host.call("d08_beta", "run", &[]).unwrap(), 9);
+        let _ = std::fs::remove_dir_all(&dir_beta2);
+
+        // A swap that fails leaves the previous identity live and the previous
+        // code callable.
+        let identity = host.get("d08_beta").unwrap().context.clone();
+        let bad = std::env::temp_dir().join(format!("d08_bad_{stamp}"));
+        let _ = std::fs::remove_dir_all(&bad);
+        // Escalation is refused before any compilation.
+        make_module_dir(&bad, "d08_beta", &["uk_evolve", "uk_version"], &cps_v1_with_name("run", &body_return_const(1)));
+        assert!(host.swap("d08_beta", &bad).is_err());
+        assert!(auth::is_live(&identity), "a refused swap changes nothing");
+        assert_eq!(host.call("d08_beta", "run", &[]).unwrap(), 9);
+        let _ = std::fs::remove_dir_all(&bad);
+    }
+
+    for dir in [&dir_a, &dir_b, &dir_c, &dir_a2] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// D08 strict profile through the loader: a manifest asking for it is parsed,
+/// an unknown profile is refused rather than silently downgraded, and a hot-swap
+/// may not relax it.
+#[test]
+fn d08_strict_profile_is_explicit_and_cannot_be_swapped_away() {
+    use austral_cranelift_bridge::module::{ModuleHost, ModuleManifest};
+
+    let strict = ModuleManifest::from_toml_str(
+        "[module]\nname = \"strict_mod\"\nprofile = \"strict\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
+    )
+    .expect("strict profile parses");
+    assert!(strict.strict);
+    assert!(!ModuleManifest::from_toml_str("[module]\nname = \"plain\"\n").unwrap().strict);
+    assert!(
+        ModuleManifest::from_toml_str("  [module]\nname = \"odd\"\nprofile = \"paranoid\"\n").is_err(),
+        "an unknown profile must not be silently downgraded"
+    );
+
+    let stamp = std::process::id();
+    let dir_strict = std::env::temp_dir().join(format!("d08_strict_{stamp}"));
+    let dir_lax = std::env::temp_dir().join(format!("d08_lax_{stamp}"));
+    for dir in [&dir_strict, &dir_lax] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    std::fs::create_dir_all(&dir_strict).unwrap();
+    std::fs::write(
+        dir_strict.join("module.toml"),
+        "[module]\nname = \"d08_strictmod\"\nversion = \"0.1.0\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\nprofile = \"strict\"\nentry = \"run\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir_strict.join("module.cps"),
+        cps_v1_with_name("run", &body_return_const(3)),
+    )
+    .unwrap();
+    // Same module name, same grants, no profile: a swap would relax the posture.
+    std::fs::create_dir_all(&dir_lax).unwrap();
+    std::fs::write(
+        dir_lax.join("module.toml"),
+        "[module]\nname = \"d08_strictmod\"\nversion = \"0.1.0\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\nentry = \"run\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir_lax.join("module.cps"),
+        cps_v1_with_name("run", &body_return_const(4)),
+    )
+    .unwrap();
+
+    let mut host = ModuleHost::new();
+    let loaded = host.load(&dir_strict).unwrap();
+    assert!(loaded.context.strict, "the loaded identity carries the profile");
+    let refusal = host
+        .swap("d08_strictmod", &dir_lax)
+        .expect_err("a swap may not relax the authority profile");
+    assert!(refusal.contains("authority profile"), "got: {refusal}");
+    assert_eq!(host.call("d08_strictmod", "run", &[]).unwrap(), 3);
+    let _ = std::fs::remove_dir_all(&dir_strict);
+    let _ = std::fs::remove_dir_all(&dir_lax);
+}
