@@ -2045,12 +2045,16 @@ class Deriver:
         self.ax_count = 0
         self.ax_bytes = 0
         self.ax_max = 0
-        # `LTP_DEDUP_NODES=1` interns synthetic nodes by content: two equal
-        # records share one id instead of one each. It is a probe, not a default:
-        # the index that makes it work costs memory too, and sharing ids can
-        # change any derivation step that compares two ids for identity, so the
-        # artifacts are what decides whether it is neutral (§13.52).
-        self._dedup: dict[str, int] = {} if os.environ.get("LTP_DEDUP_NODES") else None
+        # Interns synthetic nodes by content: two equal records share one id
+        # instead of one each, which is 92.5 % of the table on the smoke row and
+        # 72 % on the ns row (§13.52). It is the default since §13.53 gave the
+        # writer content-keyed sharing: interning no longer moves any artifact
+        # (`LTP_SHARE_DEDUP` makes the sidecar a function of the term alone), so
+        # the deriver can own its memory without owning the certificate's
+        # spelling. `LTP_DEDUP_NODES=0` reproduces the pre-13.53 deriver, which
+        # is the 432 MiB configuration §13.51 measured.
+        self._dedup: dict[str, int] | None = (
+            {} if os.environ.get("LTP_DEDUP_NODES", "1") == "1" else None)
         # Largest proof string returned so far (bytes); see `_check`.
         self._proof_bytes = 0
         self.const_ax: dict[tuple[str, str], str] = {}
