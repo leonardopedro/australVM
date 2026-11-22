@@ -237,6 +237,7 @@ AVM_HOT_DIR=/dev/shm cargo test -p avm-cas --release \
   -- --ignored fault_in_50mb --nocapture                            # 6.5 ms
 AVM_HOT_DIR=/dev/shm ./target/release/avm-pkg hot-bench             # both rows as JSON
 # Nix comparison (§4.12); target/nixbench is a generated, git-ignored dir:
+python3 scripts/nixbench-fixtures --storage                             # regenerate (not on PATH in a bare shell)
 ./target/release/avm-pkg eval target/nixbench/plan1000.json n999    # 4.3 ms
 nix-instantiate --eval --strict target/nixbench/graph1000.nix       # 36.7 ms
 ```
@@ -495,15 +496,20 @@ property: what one 1 MiB output version costs to keep. Nix's answer is one
 full nar per version (10,485,760 bytes; its store does not deduplicate
 file contents at chunk granularity), avm-pkg's is the first copy plus
 78.6 KiB per rebuild (chunk reuse). The generated inputs live in
-`target/nixbench/` and are not committed, and no generator is committed
-either — §3's commands *consume* them. Their shape is pinned here instead:
-`plan1000.json` is a 1,000-entry `derivations` list, `n_i` depending on
-`n_{i-1}` (synthetic 32-byte source digests, `builder_symbol`
-`stdenv.build`); `graph1000.nix` is a `let` chain of the same depth ending
-in `n999`, so `nix-instantiate` writes the whole 1,000-path `.drv` closure
-(checked with `nix path-info -r`, 1,000). The 2026-11-22 re-run rebuilt
-both ad hoc from that description; two runs therefore share the shape, not
-the bytes.
+`target/nixbench/` and are not committed; `scripts/nixbench-fixtures`
+emits them byte-reproducibly from one description (same arguments, same
+bytes), and §3's commands *consume* them. `plan1000.json` is a
+1,000-entry `derivations` list, `n_i` depending on `n_{i-1}` (synthetic
+32-byte source digest = the index, `builder_symbol` `stdenv.build`);
+`graph1000.nix` is a `let` chain of the same depth ending in `n999`, so
+`nix-instantiate` writes the whole 1,000-path `.drv` closure (checked
+with `nix path-info -r`, 1,000); `--storage` adds `storage/v0.bin` …
+`v9.bin`, ten 1 MiB SplitMix64 payloads that differ in one distinct byte
+per version (same-byte flips would return v2 to v0 and halve what the
+stores must deduplicate). The 2026-11-22 re-run rebuilt both ad hoc from
+this description; the generator was committed afterwards and reproduces
+the eval fixtures byte-for-byte (the only difference from those ad-hoc
+files is the trailing newline `plan1000.json` was missing).
 
 **4.13 The live capability gate: what `--policy` actually enforces.**
 `avm-exec`'s runner was written before anything called it: its Cedar check,
