@@ -1,0 +1,110 @@
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Pointer,
+    refMutToPointer
+);
+
+-- U13 live reload: one module run that mints a handle, waits while the host
+-- builds and loads the next provider generation, and then uses the handle it
+-- minted before the reload. The words are the previous generation's, so the
+-- current table must refuse them; the handle minted afterwards is the current
+-- generation's and must dispose. `liveReload` returns 0 only for that sequence.
+module body HotHandle is
+    record Hot: Linear is
+        lo: Int64;
+        hi: Int64;
+    end;
+
+    record Word: Free is
+        value: Int64;
+    end;
+
+    record Pair: Free is
+        lo: Int64;
+        hi: Int64;
+    end;
+
+    function adopt(lo: Int64, hi: Int64): Hot is
+        return Hot(lo => lo, hi => hi);
+    end;
+
+    pragma Foreign_Import(External_Name => "avm_hot");
+    pragma Handle_Ownership(Object => "hot", Constructor => "avm_hot_ctor", Destructor => "avm_hot_dtor", Params => "1", Use => "avm_hot_read");
+    function hotDispose(lo: Int64, hi: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "avm_hot__new");
+    function hotNew(value: Int64, out: Pointer[Pair]): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "avm_hot__use");
+    function hotUse(lo: Int64, hi: Int64, out: Pointer[Word]): Int64 is end;
+
+    -- The gate. The provider sets its "waiting" flag and blocks until the host
+    -- releases it, so the host's reload lands while this call is on the stack.
+    pragma Foreign_Import(External_Name => "avm_hot_wait");
+    function hotWait(): Int64 is end;
+
+    -- The pre-reload words, recorded where the host can pick them up after the
+    -- run: they are the only proof that the old generation still owns and can
+    -- free the value the new table refused.
+    pragma Foreign_Import(External_Name => "avm_hot_remember");
+    function hotRemember(lo: Int64, hi: Int64): Int64 is end;
+
+    generic [R: Region]
+    function read(hot: &[Hot, R]): Int64 is
+        var word: Word := Word(value => -1);
+        let status: Int64 := hotUse(hot->lo, hot->hi, refMutToPointer(&!word));
+        if status = 0 then
+            let { value: Int64 } := word;
+            return value;
+        else
+            return -1;
+        end if;
+    end;
+
+    function dispose(hot: Hot): Int64 is
+        let { lo: Int64, hi: Int64 } := hot;
+        return hotDispose(lo, hi);
+    end;
+
+    function liveReload(): Int64 is
+        var pair: Pair := Pair(lo => -1, hi => -1);
+        let minted: Int64 := hotNew(5, refMutToPointer(&!pair));
+        let before: Hot := adopt(pair.lo, pair.hi);
+        let seen: Int64 := read(&before);
+        let remembered: Int64 := hotRemember(before.lo, before.hi);
+        let waited: Int64 := hotWait();
+        -- The reloaded table must refuse the pre-reload words...
+        let refused: Int64 := dispose(before);
+        -- ...and mint, read and destroy a value of its own.
+        var pair2: Pair := Pair(lo => -1, hi => -1);
+        let minted2: Int64 := hotNew(9, refMutToPointer(&!pair2));
+        let after: Hot := adopt(pair2.lo, pair2.hi);
+        let disposed: Int64 := dispose(after);
+        -- Each wrong answer has its own code, so a failure names the step.
+        if minted /= 0 then
+            return 11;
+        end if;
+        if seen /= 5 then
+            return 12;
+        end if;
+        if remembered /= 0 then
+            return 18;
+        end if;
+        if waited /= 0 then
+            return 13;
+        end if;
+        -- A zero status here means the reloaded table accepted words it does
+        -- not own, which is the failure this whole fixture exists to catch.
+        if refused = 0 then
+            return 14;
+        end if;
+        if minted2 /= 0 then
+            return 15;
+        end if;
+        if disposed /= 0 then
+            return 16;
+        end if;
+        return 0;
+    end;
+end module body.
