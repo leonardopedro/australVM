@@ -449,8 +449,20 @@ fn instance_registry() -> &'static RwLock<HashMap<u64, InstanceContext>> {
 /// Bind a fresh immutable instance identity. The context returned is the one the
 /// host attaches to the compiled module; nothing else can change its module.
 pub fn bind_instance(module: impl Into<String>, strict: bool) -> InstanceContext {
+    bind_instance_for_node(module, strict, None)
+}
+
+/// Bind a fresh identity for a module that serves a remote node (`[module]
+/// node = "…"`). The `node` recorded here is the one a receiver compares with
+/// the peer its transport authenticated: it is configuration, never something
+/// the calling peer supplies about itself.
+pub fn bind_instance_for_node(
+    module: impl Into<String>,
+    strict: bool,
+    node: Option<String>,
+) -> InstanceContext {
     let id = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
-    let context = InstanceContext::local(id, module, strict);
+    let context = InstanceContext::local(id, module, strict).delegated(None, node);
     instance_registry()
         .write()
         .unwrap_or_else(|e| e.into_inner())

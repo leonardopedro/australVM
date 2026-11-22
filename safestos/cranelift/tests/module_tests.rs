@@ -50,6 +50,25 @@ fn make_module_dir(dir: &Path, name: &str, grants: &[&str], cps_data: &[u8]) {
     std::fs::write(dir.join("module.cps"), cps_data).unwrap();
 }
 
+/// A module that serves a remote node (`[module] node`). The receiver compares
+/// that declared node with the peer its transport authenticated.
+fn make_remote_module_dir(
+    dir: &Path,
+    name: &str,
+    node: &str,
+    grants: &[&str],
+    cps_data: &[u8],
+) {
+    std::fs::create_dir_all(dir).unwrap();
+    let grants_toml: Vec<String> = grants.iter().map(|g| format!("    \"{g}\",")).collect();
+    let toml = format!(
+        "[module]\nname = \"{name}\"\nversion = \"0.1.0\"\narchetypes = [\"austral_cps\"]\narchetype = \"austral_cps\"\nentry = \"run\"\nnode = \"{node}\"\n\n[grants]\nkernel = [\n{}\n]\n",
+        grants_toml.join("\n")
+    );
+    std::fs::write(dir.join("module.toml"), toml).unwrap();
+    std::fs::write(dir.join("module.cps"), cps_data).unwrap();
+}
+
 #[test]
 fn manifest_parses_correctly() {
     use austral_cranelift_bridge::module::ModuleManifest;
@@ -362,6 +381,86 @@ fn d08_instances_are_isolated_revocable_and_retired_by_swap() {
     }
 
     for dir in [&dir_a, &dir_b, &dir_c, &dir_a2] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The receiver side of the distributed boundary: `call_from_peer` is the only
+/// host entry point that takes a peer identity, and it dispatches only when the
+/// loaded instance declares that node, is live, and is granted the entrypoint.
+#[test]
+fn d08_a_remote_call_is_served_only_for_the_declared_peer() {
+    use austral_cranelift_bridge::auth;
+    use austral_cranelift_bridge::module::ModuleHost;
+
+    let stamp = std::process::id();
+    let remote = std::env::temp_dir().join(format!("d08_remote_{stamp}"));
+    let ungranted = std::env::temp_dir().join(format!("d08_ungranted_{stamp}"));
+    let local = std::env::temp_dir().join(format!("d08_local_{stamp}"));
+    let moved = std::env::temp_dir().join(format!("d08_moved_{stamp}"));
+    for dir in [&remote, &ungranted, &local, &moved] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // The served entrypoint is granted by name: a receiver never infers a grant
+    // from the fact that the module compiled.
+    make_remote_module_dir(&remote, "d08_remote", "node-7", &["run"], &cps_v1_with_name("run", &body_return_const(42)));
+    // Serves a node but is not granted the entrypoint it exposes.
+    make_remote_module_dir(&ungranted, "d08_ungranted", "node-7", &[], &cps_v1_with_name("run", &body_return_const(43)));
+    make_module_dir(&local, "d08_local", &["run"], &cps_v1_with_name("run", &body_return_const(44)));
+    // Same module name, a different node: a re-load, not a swap.
+    make_remote_module_dir(&moved, "d08_remote", "node-8", &["run"], &cps_v1_with_name("run", &body_return_const(45)));
+
+    let mut host = ModuleHost::new();
+    let context = {
+        let handle = host.load(&remote).unwrap();
+        assert_eq!(handle.context.node.as_deref(), Some("node-7"));
+        handle.context.clone()
+    };
+    host.load(&ungranted).unwrap();
+    host.load(&local).unwrap();
+
+    // The peer the transport authenticated matches the declared node.
+    assert_eq!(
+        host.call_from_peer("node-7", "d08_remote", "run", &[]).unwrap(),
+        42
+    );
+
+    // A context cannot certify its own node: the same request from another
+    // authenticated peer is refused before any grant is consulted.
+    let spoofed = host
+        .call_from_peer("node-8", "d08_remote", "run", &[])
+        .expect_err("a peer that is not the declared node must be refused");
+    assert!(spoofed.contains("cannot certify its own node"), "got: {spoofed}");
+
+    // A local module has no remote authority to lend.
+    let local_refusal = host
+        .call_from_peer("node-7", "d08_local", "run", &[])
+        .expect_err("a local module cannot serve a remote call");
+    assert!(local_refusal.contains("names no remote node"), "got: {local_refusal}");
+
+    // Serving the node is not serving the entrypoint: the grant is checked here,
+    // at the receiver, against the receiver's own policy.
+    let ungranted_refusal = host
+        .call_from_peer("node-7", "d08_ungranted", "run", &[])
+        .expect_err("an ungranted entrypoint must be refused");
+    assert!(ungranted_refusal.contains("not granted"), "got: {ungranted_refusal}");
+
+    // Revocation reaches remote calls too, because they go through the host.
+    assert!(auth::revoke_instance(context.instance));
+    let revoked = host
+        .call_from_peer("node-7", "d08_remote", "run", &[])
+        .expect_err("a revoked instance cannot serve a remote call");
+    assert!(revoked.contains("no longer live"), "got: {revoked}");
+
+    // A swap may not point the same instance at a different node.
+    let swap_refusal = match host.swap("d08_remote", &moved) {
+        Ok(()) => panic!("a swap that changes the served node must be refused"),
+        Err(error) => error,
+    };
+    assert!(swap_refusal.contains("served node"), "got: {swap_refusal}");
+
+    for dir in [&remote, &ungranted, &local, &moved] {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
