@@ -115,7 +115,10 @@ let rec offsets_stmt (s: CpsGen.cps_stmt) : int64 list =
      @ offsets_stmt default
   | CpsGen.Block (a, b) -> offsets_stmt a @ offsets_stmt b
 
-let lowered_offsets ~prefix functions =
+(* Exactly one CPS function under `prefix`, so an assertion names a single
+   lowering: two matches would otherwise let a fixture pass by inspecting the
+   wrong instance. *)
+let instance ~prefix functions =
   let (env, mono) = source_module functions in
   ignore env;
   let (funcs, _) = Compiler_cps.compile_module_cps mono in
@@ -128,7 +131,7 @@ let lowered_offsets ~prefix functions =
       funcs
   in
   match matches with
-  | [ f ] -> List.sort compare (offsets_stmt f.CpsGen.body)
+  | [ f ] -> f
   | [] ->
      assert_failure
        ("no CPS function whose name starts with " ^ prefix ^ "; have: "
@@ -138,6 +141,16 @@ let lowered_offsets ~prefix functions =
        (Printf.sprintf "%d CPS functions start with %s; the fixture is ambiguous"
           (List.length matches) prefix)
 
+let lowered_offsets ~prefix functions =
+  List.sort compare (offsets_stmt (instance ~prefix functions).CpsGen.body)
+
+(* The same offsets in emission order rather than sorted. `Sub` emits its left
+   operand first, so `p->hi - p->lo` must read 8 and then 0: the sorted fixture
+   cannot tell that from a lowering that gave the two fields each other's
+   offset, which is exactly the bug a borrow's unwrap caused. *)
+let lowered_offsets_in_order ~prefix functions =
+  offsets_stmt (instance ~prefix functions).CpsGen.body
+
 let assert_offsets ~prefix ~offsets functions =
   let actual = lowered_offsets ~prefix functions in
   if actual <> offsets then
@@ -146,6 +159,18 @@ let assert_offsets ~prefix ~offsets functions =
          "%s reads field offset(s) [%s], expected [%s] — a borrow's pointee \
           type is what `find_record_slot_offset` must be given, and its miss \
           path is offset 0"
+         prefix
+         (String.concat "; " (List.map Int64.to_string actual))
+         (String.concat "; " (List.map Int64.to_string offsets)))
+
+let assert_offsets_in_order ~prefix ~offsets functions =
+  let actual = lowered_offsets_in_order ~prefix functions in
+  if actual <> offsets then
+    assert_failure
+      (Printf.sprintf
+         "%s reads field offset(s) [%s] in emission order, expected [%s] — \
+          the order is the expression's, so a field given the other's offset \
+          is visible here even when the set of offsets is right"
          prefix
          (String.concat "; " (List.map Int64.to_string actual))
          (String.concat "; " (List.map Int64.to_string offsets)))
@@ -231,6 +256,21 @@ let test_generic_borrow_reads_both_fields_at_their_own_offsets _ =
       \    return readBoth(&p);\n\
        end;" ]
 
+(* Both fields in one expression, in the order they are read. This is the
+   end-to-end shape of the offset-0 bug: `p->hi - p->lo` through a nested
+   borrow lowered to `0 - 0`, and the sorted fixture above would have accepted
+   `8; 0` and `0; 8` alike. *)
+let test_generic_borrow_two_fields_keep_their_offsets _ =
+  assert_offsets_in_order ~prefix:"monomorph_" ~offsets:[ 8L; 0L ]
+    [ "generic [R: Region]\n\
+      \    function readSpread(p: &[Pair, R]): Int64 is\n\
+      \        return p->hi - p->lo;\n\
+      \    end;";
+      "function caller(): Int64 is\n\
+      \    let p: Pair := Pair(lo => 1, hi => 2);\n\
+      \    return readSpread(&p);\n\
+       end;" ]
+
 let suite =
   "CpsFieldRead" >::: [
       "a field read emits one load" >:: test_one_field_read_is_one_load;
@@ -241,6 +281,8 @@ let suite =
       >:: test_generic_borrow_reads_the_second_field_at_its_own_offset;
       "a generic borrow reads both fields at their own offsets"
       >:: test_generic_borrow_reads_both_fields_at_their_own_offsets;
+      "a generic borrow keeps each field's offset in one expression"
+      >:: test_generic_borrow_two_fields_keep_their_offsets;
     ]
 
 let () = run_test_tt_main suite
