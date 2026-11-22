@@ -115,6 +115,23 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] PC04: source→KernelIR reflection of the clamp fixture
 [gap]  PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)
 [pass] PC05a: parsed-WGSL reflection of the clamp fixture
+  [detail] clamp_transport.mm0 re-emits byte-identically from clamp_wgsl.mm0
+  [detail] strict profile: wrapper=wrapper_admits, extents=extent_guard, bindings=binding_index, native=native_agrees; consumed: native
+  [detail] a changed shader moves the edge evidence (edge_sha256/wgsl_sha256) and leaves the theorem statements stable
+  [detail] a removed premise row is refused
+  [detail] a re-labelled premise is refused
+  [detail] an axiom is refused
+  [detail] a premise dropped from the statement is refused
+  [detail] a changed proof subject is refused
+  [detail] a changed recorded bound is refused
+  [detail] a premise concluded by a theorem is refused
+  [detail] a third theorem is refused
+  [detail] the assembled chain accepts the transported bound
+  [detail] dropping PC05a's bound proof refuses the transport
+  [detail] changing the proof subject refuses the transport
+  [detail] dropping the consumed premise from the statement refuses the transport
+  [detail] dropping the consumed premise from the proof refuses the transport
+[pass] PC05b: transported bound through the reflected edge
   [detail] isa-hypotheses: 4 pinned citation(s), 1 cited hypothesis/hypotheses (1 content-checked, 0 unchecked), 65 axiom(s) accounted for
 [pass] W8: an uncited or stale hypothesis is refused
 [pass] W8: an unchecked citation cannot be re-labelled as checked
@@ -352,4 +369,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 178 passed, 4 explained gap(s), 0 failed
+verify-invariants: 179 passed, 4 explained gap(s), 0 failed

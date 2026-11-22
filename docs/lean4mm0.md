@@ -4820,6 +4820,45 @@ extrapolation. `docs/mm0-setmm-coverage.md` §9.2 records both checks and the tr
 looks like a defect and is not (`mm0-rs compile` takes its output second positional;
 `-o` is accepted silently and writes nothing).
 
+**Across the book, sampled by size.** The full book cannot be measured as one number: 19
+authored rows are marked `emit` in the sweep precisely because each exceeds the emitter's own
+10 GiB / 5 400 s budget, and those were not re-emitted. What was measured is a six-row sample
+spanning 7 → 666 943 rule applications, each row emitted twice — everything else held equal,
+`--spine`, the same env trio — and each pair re-elaborated (`mm0-rs compile`) and re-checked
+(`mm0-c` against the artifacts' own statements, theory in front of both):
+
+| rules | row | `.mm0` default | `.mm0` shared | cut | defs | re-checked |
+| ---: | --- | ---: | ---: | ---: | ---: | --- |
+| 7 | `ChapterSirkTrotterKato.StrongResolventConvergence` | 48 388 B | 48 531 B | 1.00× | 1 | both, `mm0-c` exit 0 |
+| 27 | `YangMillsHermite.idxD.eq_1` | 17 219 B | 17 269 B | 1.00× | 0 | both, `mm0-c` exit 0 |
+| 321 | `ChapterA3o.projAnti` | 83 807 B | 83 857 B | 1.00× | 0 | both, `mm0-c` exit 0 |
+| 4 777 | `ChapterSirkMultiShift.multiShiftSeq_succ` | 1 012 315 B | 1 013 710 B | 1.00× | 48 | both, `mm0-c` exit 0 |
+| 6 860 | `FarisLavine.essentiallySelfAdjointOn_of_farisLavine` | 67 199 500 B | 53 831 176 B | **1.25×** | 309 | both, `mm0-c` exit 0 |
+| 666 943 | `QuantumGravity3DGauge.ccr_poly` | 222 469 921 B | 167 243 432 B | **1.33×** | 2 262 | both (`135 856` ax/thm), `mm0-c` exit 0 |
+
+The cut is not monotone in anything the header states: below ~5 000 rules the `def` block
+costs 50–144 B and buys nothing, because a small row has no repeated large subterm — the
+threshold is a *floor* on body size, not a decision that sharing pays. Making it pay would
+take a second pass over a spool that is 100 GB at the ns row, which is why the knob is left
+honest about the small-row cost. The two rows that do pay are the ones the smoke row predicted:
+309 defs at 6 860 rules (1.25×) and 2 262 at 666 943 (1.33×), against 1 560 defs and 3.12× on
+the smoke row's 467 710 assumptions — the ratio tracks how much of a derivation's text is the
+same subterm repeated, not the row's rule count. The `.mm1` moves with the `.mm0` in every row
+(e.g. 67 340 212 → 53 971 888 B), never by a different factor.
+
+**Two defects the sweep found, both in shared mode only.** (1) `derived type is not the
+declared type`: the Π-spine peel joined binder domains into a wrap that is compared byte for
+byte with the spool, and a spool never interns (§13.54's third constraint) — so an interned
+domain put `sdK` in the wrap against its expansion on disk. `Enc.expanded()` now encodes the
+domain with `_ds_off` set. (2) `def sd2: Term = $ sd2 $;` (`mm0-rs`: `variables {sd2}
+missing from dependencies`): `Enc.enc` memoised every return value including a name, and
+`write_defs` read the body back out of that memo. A shared name is no longer memoised; the
+cached text is always the encoding. Both were invisible in the smoke row — its first-use
+order never repeats a binder domain and its def bodies were large enough that the memo was
+full — and both are now covered by the sample above. The fixes do not move the smoke row's
+bytes (re-measured after them: 334 175 929 B / 367 747 951 B, the golden values), which is
+the check that they changed a defect and not the format.
+
 **It is the default now, at a 1024 B threshold.** The artifact format is a contract and
 the golden file pins its bytes, so this was a re-record rather than a side effect:
 `LTP_DEF_SHARE=0` reproduces the pre-13.54 bytes exactly, any other value sets the

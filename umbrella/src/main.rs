@@ -596,6 +596,62 @@ fn main() {
         Err(e) => die(e),
     };
     eprintln!("umbrella: entry `{}` compiled, executing", cli.entry);
+    // D09: capabilities are constructed from the document, not from the shell's
+    // ambient access. A relative `state_dir` is resolved against the project
+    // document's own directory, so a checkout with a different layout cannot
+    // silently root the instance somewhere else.
+    if let Some((doc, _)) = &planned {
+        if let Some(caps) = &doc.capabilities {
+            let project_dir = cli
+                .project
+                .as_ref()
+                .and_then(|p| p.parent())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let state_dir = if caps.state_dir.is_absolute() {
+                caps.state_dir.clone()
+            } else {
+                project_dir.join(&caps.state_dir)
+            };
+            let instance = austral_cranelift_bridge::auth::bind_instance_for_node(
+                doc.module.name.clone(),
+                false,
+                caps.peers.first().cloned(),
+            );
+            match austral_cranelift_bridge::capstd_mod::caps::InstanceCaps::new(
+                doc.module.name.clone(),
+                &state_dir,
+                caps.peers.clone(),
+            ) {
+                Ok(set) => {
+                    austral_cranelift_bridge::capstd_mod::caps::install(instance.instance, set);
+                    eprintln!(
+                        "umbrella: instance {} at {} with peers {:?}",
+                        doc.module.name,
+                        state_dir.display(),
+                        caps.peers
+                    );
+                    // The compiled entry runs inside this identity, so every gated
+                    // call and every capability verb is attributed to *this*
+                    // instance rather than to whatever loaded last.
+                    let _scope = austral_cranelift_bridge::auth::enter_caller(&instance);
+                    let result = execute_function(f);
+                    if json_mode() {
+                        event(serde_json::json!({"event": "done", "result": result}));
+                    } else {
+                        println!("RESULT {result}");
+                    }
+                    if let Some(want) = cli.expect {
+                        if result != want {
+                            die(format!("expected {want}, got {result}"));
+                        }
+                        eprintln!("umbrella: matches --expect {want}");
+                    }
+                    return;
+                }
+                Err(e) => die(format!("cannot construct capabilities: {e}")),
+            }
+        }
+    }
     let result = execute_function(f);
     if json_mode() {
         event(serde_json::json!({"event": "done", "result": result}));

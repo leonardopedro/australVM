@@ -1,0 +1,78 @@
+-- umbrella/modules/distributed_io/DistributedIo.aum — D09 step 4.
+--
+-- A module that touches the filesystem only through the capability handles the
+-- host issued. Each extern below is an `rs_cap_*` verb: the handle is opaque,
+-- the path is relative to the instance state directory, and the authority to
+-- call any of them is the manifest grant in module.toml — not something this
+-- file can assert.
+--
+-- Trust assumptions, stated so a reader does not have to infer them:
+--
+--   * The buffer verbs pass their two addresses as 64-bit words, so the call
+--     lowers to the symbol itself rather than to a generated adapter wrapper,
+--     and the host is the only place the pointer and length are checked.
+--   * `rs_cap_dir_open` returns a handle for the *calling* instance (D08), not a
+--     path; a negative return is a refusal, never a usable handle.
+--   * `rs_cap_write` writes at most the bytes given, under the state directory;
+--     `..` and absolute paths are refused by the host, so this module cannot
+--     name a path outside its own state.
+--   * The host contains a *misbehaving* module only at the VM tier: a module
+--     that calls `std::fs` directly is outside this coupling entirely. What the
+--     capability buys is that this module's ordinary path needs a grant.
+--
+-- This is Tier 1 coupling, not isolation.
+
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address
+);
+
+module body DistributedIo is
+    pragma Foreign_Import(External_Name => "rs_cap_dir_open");
+    pragma Rust_Ownership(Params => "", Return => "owned");
+    function rs_cap_dir_open(): Int64 is
+    end;
+
+    -- The buffer verbs take their two addresses as 64-bit words: that is the
+    -- ABI the host's `rs_cap_*` implementation reads (pointer + length, both
+    -- checked there), and it keeps the call on the direct symbol instead of a
+    -- generated adapter wrapper.
+    pragma Foreign_Import(External_Name => "rs_cap_write");
+    pragma Rust_Ownership(Params => "owned, owned, owned, owned, owned", Return => "owned");
+    function rs_cap_write(
+        handle: Int64,
+        path_ptr: Int64,
+        path_len: Int64,
+        data_ptr: Int64,
+        data_len: Int64
+    ): Int64 is
+    end;
+
+    -- Entry invoked by the host (`--call compute`). Returns the byte count the
+    -- capability accepted, or the refusal code the verb produced (negative),
+    -- which is why a refused run cannot look like a run that wrote bytes.
+    function compute(): Int64 is
+        let handle: Int64 := rs_cap_dir_open();
+        let path: Span[Nat8, Static] := "note.txt";
+        let payload: Span[Nat8, Static] := "hello from distributed_io";
+        let path_ptr: Int64 := @embed(Int64, "$1.data", path);
+        let path_len: Int64 := @embed(Int64, "$1.size", path);
+        let payload_ptr: Int64 := @embed(Int64, "$1.data", payload);
+        let payload_len: Int64 := @embed(Int64, "$1.size", payload);
+        return rs_cap_write(handle, path_ptr, path_len, payload_ptr, payload_len);
+    end;
+
+    -- `main` is the compiler's entrypoint (it must return `ExitCode`), and it
+    -- calls `compute` so the write is reachable from the program the host runs.
+    -- A refused capability makes `compute` return a negative code, which is a
+    -- failed exit rather than a silent success.
+    function main(): ExitCode is
+        let written: Int64 := compute();
+        if written >= 0 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

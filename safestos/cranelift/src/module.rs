@@ -1076,6 +1076,17 @@ fn compile_cps_binary(data: &[u8]) -> Result<HashMap<String, usize>, String> {
             builder.symbol(sym.name, sym.addr);
         }
     }
+    // `rs_*` was reachable only from the compiler's own builder, so a hosted
+    // module calling an `rs_*` symbol failed to resolve (`can't resolve symbol`)
+    // even when the manifest granted it. The D09 capability verbs are `rs_*`, so
+    // this is where the host has to know them; registration is not permission —
+    // the manifest gate still decides by name.
+    #[cfg(feature = "tier1-rs")]
+    {
+        for sym in crate::RS_FFI_SYMBOLS {
+            builder.symbol(sym.name, sym.addr);
+        }
+    }
 
     let mut jit = JITModule::new(builder);
     let module: CpsModule = crate::cps::compile_cps_to_clif(&mut jit, data)?;

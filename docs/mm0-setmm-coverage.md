@@ -569,6 +569,20 @@ gives 980 180 332 B of non-comment text on both sides, `cmp` clean against the d
 (Comment lines are excluded from that comparison by necessity: they render truncated text, so a
 truncated line that happens to contain a name expands to thousands of characters.)
 
+**Across the book, sampled by size.** Six rows spanning 7 → 666 943 rule applications, each
+emitted twice (default and shared, everything else held equal) and each pair re-elaborated and
+re-checked: 48 388 → 48 531 B (7 rules, 1 def), 17 219 → 17 269 B (27), 83 807 → 83 857 B (321),
+1 012 315 → 1 013 710 B (4 777, 48 defs), **67 199 500 → 53 831 176 B** (6 860, 309 defs, 1.25×)
+and **222 469 921 → 167 243 432 B** (666 943, 2 262 defs, 1.33×; `mm0-rs` `3 sorts, 331
+term/def, 135 856 ax/thm`, `mm0-c` exit 0). Every pair passes both tools, so the cut costs
+nothing in checkability. Below ~5 000 rules the `def` block is a net 50–144 B, which is the
+honest price of a size floor rather than a profitability test, and the 19 authored rows that the
+sweep marks `emit` — all over the emitter's 10 GiB / 5 400 s budget — were **not** re-emitted, so
+this is a sample and not a book-wide total. `docs/lean4mm0.md` §13.54 also records the two
+defects this sweep found (binder domains compared shared against an expanded spool; `Enc.enc`
+memoising a `sdK` name so a `def` body read back as its own name) and their fixes, which leave
+the smoke row's bytes — and therefore this table's first row — unchanged.
+
 **The real toolchain accepts the shared artifact.** Slice = both theories with their `import`
 lines stripped, then the artifact's header, `term t_symN: nat;` payload declarations, the whole
 def block and the first 2 000 axioms (215 219 297 B):
