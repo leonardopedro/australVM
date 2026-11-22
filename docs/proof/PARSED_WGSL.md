@@ -95,6 +95,17 @@ artifact whose digest *matches* its own mutated text is refused too.
 
 ## Regenerating and checking
 
+`scripts/pc05-reflect` needs three things, and it names whichever is missing
+before skipping anything (exit 3, which the gate reports as a `[gap]` with that
+same line):
+
+- the compiler, at `_build/default/bin/austral.exe` (`dune build bin/`);
+- `safestos/gpu`'s debug checker, at
+  `safestos/gpu/target/debug/avm-gpu` (`cargo build --bin avm-gpu`);
+- `mm0-rs` and `mm0-c` for the replay, which `devShells.default`, `.ocaml` and
+  `.lean` all carry as the flake's `packages.mm0` — outside those shells,
+  `nix build "git+file://$PWD#mm0"` and put its `bin/` on `PATH`.
+
 ```bash
 # Emit from a fresh bundle (the gate uses this path).
 ./_build/default/bin/austral.exe compile \

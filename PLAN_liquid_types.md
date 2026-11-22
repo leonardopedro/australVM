@@ -430,7 +430,7 @@ the hot-swap path, and the liquid acceptance tests. See the L1 section for
 the two places the plan's text was wrong about the existing code.
 
 Build note: the toolchain is the repo's own `flake.nix` devShell
-(`nix develop`) — no opam needed. It resolves OCaml 5.4.1 + dune 3.23.1 and
+(`nix develop`) — no opam needed. It resolves OCaml 5.5.2 + dune 3.23.1 and
 all six OCaml libraries; `make bridge` must run first because the checked-in
 `libaustral_cranelift_bridge.so` goes stale. Verification loop:
 `make bridge && dune build lib/ bin/ test/ && LD_LIBRARY_PATH=$HOME/.local/lib

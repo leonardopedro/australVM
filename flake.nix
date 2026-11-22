@@ -10,10 +10,28 @@
 
   inputs.utils.url = "github:numtide/flake-utils";
 
-  outputs = { self, nixpkgs, utils }:
+  # The Lean toolchain the RV64 model is written against, pinned separately
+  # from the channel. nixos-unstable has moved to Lean 4.35, whose compiler
+  # refuses `LeanRV64D.Defs.instruction` — "tag for constructor '…VIMCTYPE' is
+  # too big, this is a limitation of the current runtime" (`LeanMaxCtorTag` is
+  # 243 and that constructor's index is past it with a boxed field) — while
+  # opencompl/sail-riscv-lean still targets `leanprover/lean4:v4.29.0` and has
+  # not ported the model. This input is the revision of this channel that ships
+  # Lean 4.30.0, so the rest of the flake can move without moving the model.
+  # b3756f02f9c1ea1 is the channel revision this repo locked before the bump;
+  # the same revision gives the same Lean store path, so the model and the
+  # exporter stay cached. `packages.lean4export`'s tag must equal this Lean's
+  # version (docs/lean4mm0.md §5).
+  inputs.nixpkgs-lean.url =
+    "github:NixOS/nixpkgs/34ab99075ac4f7e40cf037eef32cb1c360bb85e9";
+
+  outputs = { self, nixpkgs, nixpkgs-lean, utils }:
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        # Lean 4.30.0 from the pinned channel; see the `nixpkgs-lean` input for
+        # why it does not follow `nixpkgs`.
+        lean = (import nixpkgs-lean { inherit system; }).lean4;
         # Why3 toolchain, imported from this same channel so `pkgs.why3` is the
         # *same store path* ../unfer resolves (see the note on the input below).
         # `allowUnfree` is scoped to this import and only because alt-ergo is
@@ -273,17 +291,17 @@
         #     nix build .#lean4export       # just the exporter
         #
         # `lean` and `lean4export` are the *same* upstream version by
-        # construction: `lean4export`'s tag matches `pkgs.lean4.version` as this
-        # flake pins it (4.30.0 from this input's nixos-unstable, not the
-        # registry's newer 4.35.0), because an exporter that disagrees with the
-        # elaborator's format produces NDJSON the consumer cannot read, and it
-        # fails far from the cause. Bumping the nixpkgs input renames the tag
-        # here too — the `lean4export` build is what tells you.
-        packages.lean = pkgs.lean4;
+        # construction: `lean4export`'s tag matches `lean.version` as this flake
+        # pins it (4.30.0 from `nixpkgs-lean`, not the channel's 4.35.0), because
+        # an exporter that disagrees with the elaborator's format produces
+        # NDJSON the consumer cannot read, and it fails far from the cause.
+        # Moving `nixpkgs-lean` renames the tag here too — the `lean4export`
+        # build is what tells you.
+        packages.lean = lean;
 
         packages.lean4export = pkgs.stdenv.mkDerivation {
           pname = "lean4export";
-          version = pkgs.lean4.version;
+          version = lean.version;
           src = pkgs.fetchFromGitHub {
             owner = "leanprover";
             repo = "lean4export";
@@ -295,12 +313,12 @@
             # still says v4.30.0, so this is a stale pin, not new content.
             hash = "sha256-kg0XW1HTJplBHznI4FM9KxSZIuQ/5P0IILp3FjDRXJA=";
           };
-          nativeBuildInputs = [ pkgs.lean4 ];
+          nativeBuildInputs = [ lean ];
           # `lake` reads `lean-toolchain` and, under elan, would insist on
           # fetching exactly that release. Here the toolchain is the one in the
           # store, so the pin is redundant and only makes lake look for a
           # download it cannot perform; removing it builds against
-          # `pkgs.lean4`, which is the same version the file names.
+          # `lean`, which is the same version the file names.
           postPatch = ''
             rm -f lean-toolchain
           '';
@@ -434,7 +452,7 @@
             rev = "11d8fa212a60c05dcc9fe5db925dd4d06dad65b5";
             hash = "sha256-Je5Se3dhdHdEccb5b9ssLndIaCNZu2wBSjFXXjfJSpM=";
           };
-          nativeBuildInputs = [ pkgs.lean4 ];
+          nativeBuildInputs = [ lean ];
           dontConfigure = true;
           buildPhase = ''
             runHook preBuild
@@ -486,7 +504,7 @@
         # not of the checks.
         devShells.lean = pkgs.mkShell {
           packages = [
-            pkgs.lean4
+            lean
             self.packages.${system}.lean4export
             self.packages.${system}.mm0
             pkgs.python3

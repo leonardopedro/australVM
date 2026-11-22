@@ -679,7 +679,7 @@ took three separate faults, and only the last is in this repo:
    is unbuildable, taking the OCaml toolchain down with it (this host is
    `aarch64-linux`; the failure reproduced with 36 GB free, so it is not the disk
    that a first attempt blamed). `devShells.ocaml` is now the same nixpkgs minus
-   why3/alt-ergo/z3: `dune 3.23.1`, `OCaml 5.4.1`.
+   why3/alt-ergo/z3: `dune 3.23.1`, `OCaml 5.5.2`.
 2. Two `dune`-independent hangups: `builtins.getFlake` on this working tree copies
    it into the store (`refi/target` alone is 14 GB), so the flake is addressed as
    `git+file://$PWD#ocaml`; and 30 GB of `unfer/target/debug` plus 21 GB of a

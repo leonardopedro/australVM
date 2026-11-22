@@ -73,7 +73,7 @@ in-process via native `uk_*` symbols registered in the JIT.
   `LiquidWhy3.prove` then takes its structured-skip path. Use `.#ocaml` to build,
   `default` to prove. Address the flake as `git+file://$PWD#ocaml`: a plain path
   makes nix copy the whole worktree (14 GB of `refi/target`) into the store
-  before it starts. `dune` itself (3.23.1 with OCaml 5.4.1, measured 2026-11-14)
+  before it starts. `dune` itself (3.23.1 with OCaml 5.5.2, measured 2026-11-22)
   exists only inside that shell — the host has none — so every `make` target
   that needs it is reached through the shell:
 
@@ -252,8 +252,14 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
 - Lean 4 is not on the host either; it comes from the flake's `lean` shell
   (`nix develop "git+file://$PWD#lean" -c …`): Lean 4.30.0, Lake 5.0.0 and a
   locally built `lean4export` (tag v4.30.0, NDJSON format 3.1.0). Keep lean's
-  version and the exporter's tag equal — the pin is `pkgs.lean4.version` from
-  this input's nixpkgs, not the registry's newer release. `lean4export <Mod>`
+  version and the exporter's tag equal — the pin is `lean` in `flake.nix`,
+  which comes from the separate `nixpkgs-lean` input at Lean 4.30.0, not the
+  channel's 4.35.0: the pinned Sail model does not compile under 4.35, whose
+  compiler refuses `LeanRV64D.Defs.instruction` with "tag for constructor
+  '…VIMCTYPE' is too big" (`LeanMaxCtorTag` is 243), and
+  opencompl/sail-riscv-lean still targets `leanprover/lean4:v4.29.0`. Moving
+  that input is what moves Lean, and the exporter's tag moves with it.
+  `lean4export <Mod>`
   writes NDJSON to stdout (`LEAN_PATH=<dir> lean4export <Mod> > out.ndjson`);
   giving it a second positional argument panics, because argv after the module
   names is a *constant* list, not an output path.

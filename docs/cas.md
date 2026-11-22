@@ -353,7 +353,7 @@ vc-projection 1.
   `PATH` from the profile, so `scripts/verify-invariants` closes its two Why3
   gaps with no hand-assembled store paths.
 - The OCaml builds above still run with the devShell's store paths assembled
-  by hand — OCaml 5.4.1 + dune 3.23.1 + menhir from `/nix/store`, with
+  by hand — OCaml 5.5.2 + dune 3.23.1 + menhir from `/nix/store`, with
   `OCAMLPATH` and `CAML_LD_LIBRARY_PATH` pointing at each `site-lib` and
   `site-lib/stublibs` — because `nix develop` cannot complete while alt-ergo
   fails.
