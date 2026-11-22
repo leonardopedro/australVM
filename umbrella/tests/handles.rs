@@ -259,6 +259,7 @@ fn scratch(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch");
+    install_scratch_cleanup();
     dir
 }
 
@@ -287,6 +288,60 @@ fn bridge_rlib() -> PathBuf {
             target.display()
         )
     })
+}
+
+/// Remove this process's scratch directories when the test binary exits.
+///
+/// Each one holds a debug cdylib of the whole bridge — a wrapper crate is
+/// ~585 MB — so a handful of runs leaves gigabytes behind, and once the disk
+/// fills, every later `rustc` stalls and a plain test run looks hung. The
+/// directories are `umbrella-handles-<pid>-*` (this file) and
+/// `umbrella-adapters-<pid>-*` (`umbrella::adapters::build_next`), both named
+/// for the process that made them, so the pid prefix is the whole selection.
+extern "C" fn remove_scratch_dirs() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let pid = std::process::id();
+    let prefixes = [
+        format!("umbrella-handles-{pid}-"),
+        format!("umbrella-adapters-{pid}-"),
+    ];
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if prefixes.iter().any(|p| name.to_string_lossy().starts_with(p)) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Register [`remove_scratch_dirs`] once. `atexit` runs it on the harness's
+/// normal exit, which is the path a green run takes; a killed process can
+/// still leave a directory, which the pid prefix keeps from confusing the next.
+fn install_scratch_cleanup() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| unsafe {
+        libc::atexit(remove_scratch_dirs);
+    });
+}
+
+/// One native build at a time.
+///
+/// Every fixture below that needs a provider or a generated wrapper crate
+/// links the whole bridge rlib into a fresh cdylib, and a debug link of that
+/// rlib peaks around 1.7 GB. Six of them at once on this class of host (12
+/// cores, 15 GB) put the machine at a load of ~90 and no build finishes, which
+/// is what made this file require `--test-threads=1`. The tests themselves are
+/// independent — the *link step* is what contends — so only the builds are
+/// serialized and the tests still run concurrently.
+fn native_build_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    install_scratch_cleanup();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn handle_adapter(
@@ -396,19 +451,22 @@ fn compiled_library() -> PathBuf {
             let deps = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/deps");
             let rlib = bridge_rlib();
             let out = dir.join("libhandles.so");
-            let output = Command::new("rustc")
-                .arg("--crate-type=cdylib")
-                .arg("--edition=2021")
-                .arg("--crate-name=handle_wrappers")
-                .arg("-L")
-                .arg(format!("dependency={}", deps.display()))
-                .arg("--extern")
-                .arg(format!("austral_cranelift_bridge={}", rlib.display()))
-                .arg("-o")
-                .arg(&out)
-                .arg(&file)
-                .output()
-                .expect("spawn rustc");
+            let output = {
+                let _build = native_build_lock();
+                Command::new("rustc")
+                    .arg("--crate-type=cdylib")
+                    .arg("--edition=2021")
+                    .arg("--crate-name=handle_wrappers")
+                    .arg("-L")
+                    .arg(format!("dependency={}", deps.display()))
+                    .arg("--extern")
+                    .arg(format!("austral_cranelift_bridge={}", rlib.display()))
+                    .arg("-o")
+                    .arg(&out)
+                    .arg(&file)
+                    .output()
+                    .expect("spawn rustc")
+            };
             assert!(
                 output.status.success(),
                 "the provider and its generated wrappers must compile:\n{}",
@@ -815,15 +873,18 @@ fn hot_provider() -> PathBuf {
     let file = dir.join("lib.rs");
     std::fs::write(&file, HOT_PROVIDER).expect("write provider");
     let out = dir.join("libhot_provider.so");
-    let output = Command::new("rustc")
-        .arg("--crate-type=cdylib")
-        .arg("--edition=2021")
-        .arg("--crate-name=hot_provider")
-        .arg("-o")
-        .arg(&out)
-        .arg(&file)
-        .output()
-        .expect("spawn rustc");
+    let output = {
+        let _build = native_build_lock();
+        Command::new("rustc")
+            .arg("--crate-type=cdylib")
+            .arg("--edition=2021")
+            .arg("--crate-name=hot_provider")
+            .arg("-o")
+            .arg(&out)
+            .arg(&file)
+            .output()
+            .expect("spawn rustc")
+    };
     assert!(
         output.status.success(),
         "the provider must compile:\n{}",
@@ -843,16 +904,28 @@ fn a_host_reload_builds_and_loads_the_next_generation() {
     // The host's own build path, twice: each call renders at the next provider
     // generation and writes a new artifact, and the reload *loads* the second
     // one instead of rendering into the previous crate.
-    let first = umbrella::adapters::build_next(&adapters).expect("first build");
+    let first = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next(&adapters).expect("first build")
+    };
     umbrella::adapters::load(&first).expect("load the first adapter crate");
 
     assert!(first.generation >= 1, "generation 0 is reserved");
-    let second = umbrella::adapters::build_next(&adapters).expect("reload build");
+    let second = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next(&adapters).expect("reload build")
+    };
     umbrella::adapters::load(&second).expect("load the reloaded adapter crate");
-    assert_eq!(
-        second.generation,
-        first.generation + 1,
-        "a reload is the next build, not a second render of the same one"
+    // Compared by order, not by adjacency: the generation counter is shared by
+    // every test in this binary, so another test's build can land between the
+    // two here when the suite runs in parallel, and `first + 1` would then
+    // describe the scheduler rather than the reload.
+    assert!(
+        second.generation > first.generation,
+        "a reload is a later build, not a second render of the same one \
+         ({} then {})",
+        first.generation,
+        second.generation
     );
     assert_ne!(
         first.path, second.path,
@@ -991,15 +1064,18 @@ fn reload_provider() -> PathBuf {
     let file = dir.join("lib.rs");
     std::fs::write(&file, RELOAD_PROVIDER).expect("write provider");
     let out = dir.join("libreload_provider.so");
-    let output = Command::new("rustc")
-        .arg("--crate-type=cdylib")
-        .arg("--edition=2021")
-        .arg("--crate-name=reload_provider")
-        .arg("-o")
-        .arg(&out)
-        .arg(&file)
-        .output()
-        .expect("spawn rustc");
+    let output = {
+        let _build = native_build_lock();
+        Command::new("rustc")
+            .arg("--crate-type=cdylib")
+            .arg("--edition=2021")
+            .arg("--crate-name=reload_provider")
+            .arg("-o")
+            .arg(&out)
+            .arg(&file)
+            .output()
+            .expect("spawn rustc")
+    };
     assert!(
         output.status.success(),
         "the reload provider must compile:\n{}",
@@ -1017,15 +1093,18 @@ fn live_provider() -> PathBuf {
     std::fs::write(&file, RELOAD_PROVIDER.replace("avm_hot_", "avm_live_"))
         .expect("write provider");
     let out = dir.join("liblive_provider.so");
-    let output = Command::new("rustc")
-        .arg("--crate-type=cdylib")
-        .arg("--edition=2021")
-        .arg("--crate-name=live_provider")
-        .arg("-o")
-        .arg(&out)
-        .arg(&file)
-        .output()
-        .expect("spawn rustc");
+    let output = {
+        let _build = native_build_lock();
+        Command::new("rustc")
+            .arg("--crate-type=cdylib")
+            .arg("--edition=2021")
+            .arg("--crate-name=live_provider")
+            .arg("-o")
+            .arg(&out)
+            .arg(&file)
+            .output()
+            .expect("spawn rustc")
+    };
     assert!(
         output.status.success(),
         "the live provider must compile:\n{}",
@@ -1099,7 +1178,10 @@ fn a_module_running_across_a_reload_sees_the_next_generation() {
     let adapters = [GeneratedAdapter::Handle(&adapter)];
 
     // 3. The first generation, built and loaded after the provider.
-    let first = umbrella::adapters::build_next(&adapters).expect("first build");
+    let first = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next(&adapters).expect("first build")
+    };
     umbrella::adapters::load(&first).expect("load the first adapter crate");
 
     // 4. Compile the module with the gate open and the wrappers resolvable.
@@ -1131,9 +1213,14 @@ fn a_module_running_across_a_reload_sees_the_next_generation() {
 
     // 6. The reload: next generation, loaded, and the live forwarders bound to
     //    it. The module was compiled against generation one, and keeps working.
-    let second = umbrella::adapters::build_next(&adapters).expect("reload build");
+    let second = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next(&adapters).expect("reload build")
+    };
     umbrella::adapters::load(&second).expect("load the reloaded adapter crate");
-    assert_eq!(second.generation, first.generation + 1);
+    // Order, not adjacency: the counter is process-global and tests run in
+    // parallel, so a neighbouring test's build may sit between these two.
+    assert!(second.generation > first.generation);
     assert_ne!(first.path, second.path);
     umbrella::adapters::bind(&first.path, &second, &adapter).expect("bind the reload");
     unsafe { release() };
@@ -1201,23 +1288,32 @@ fn a_forwarder_reaches_the_generation_it_was_bound_to() {
     let file = dir.join("lib.rs");
     std::fs::write(&file, RELOAD_PROVIDER).expect("write provider");
     let provider = dir.join("libbinding_provider.so");
-    let output = Command::new("rustc")
-        .arg("--crate-type=cdylib")
-        .arg("--edition=2021")
-        .arg("--crate-name=binding_provider")
-        .arg("-o")
-        .arg(&provider)
-        .arg(&file)
-        .output()
-        .expect("spawn rustc");
+    let output = {
+        let _build = native_build_lock();
+        Command::new("rustc")
+            .arg("--crate-type=cdylib")
+            .arg("--edition=2021")
+            .arg("--crate-name=binding_provider")
+            .arg("-o")
+            .arg(&provider)
+            .arg(&file)
+            .output()
+            .expect("spawn rustc")
+    };
     assert!(output.status.success(), "provider build");
     umbrella::policy::dlopen(&provider).expect("load provider");
 
     let adapter = handle_adapter("avm_hot", "hot", 1, Some("avm_hot_read"));
     let adapters = [GeneratedAdapter::Handle(&adapter)];
-    let first = umbrella::adapters::build_next(&adapters).expect("first build");
+    let first = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next(&adapters).expect("first build")
+    };
     umbrella::adapters::load(&first).expect("load first");
-    let second = umbrella::adapters::build_next(&adapters).expect("second build");
+    let second = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next(&adapters).expect("second build")
+    };
     umbrella::adapters::load(&second).expect("load second");
 
     let first_lib = Library::open(&first.path);
