@@ -459,6 +459,66 @@ So the honest architecture is the one already in the tree: the Lean development 
 re-derivation in set.mm's language, closed-form, verified by `mm0-c` alone. What the
 Lean side buys is the statement list and the proof obligation, not the proof term.
 
+### 9.1 Re-measured 2026-11-22: the direct route runs, the Dedukti route still does not
+
+The first row of the table above has aged badly, and it is worth saying so plainly:
+**Lean 4 → MM0 directly is now the route in the tree**, as a proof translation and not a
+statement port. `scripts/lean-typing-proof` reads the nanoda-checked `lean4export` NDJSON
+and emits an MM0 *derivation* in the typing judgment of `docs/cic_typing.mm0`
+(`tty ctx term type`), which `mm0-rs` elaborates and `mm0-c` re-checks. What the row got
+right survives: MM0 has no term-level map for CIC, so the derivation goes through an
+encoding — the delta-net agent signature of `docs/cic.mm0` (11 axioms) plus the typing
+rules of `docs/cic_typing.mm0` (15 axioms, 152 lines) — rather than through a term-level
+translation. The objection that matters is therefore not "is there a map" but "how big
+is the trusted base, and is it checked".
+
+Measured today on this host:
+
+| measurement | value |
+|---|---|
+| `scripts/lean2mm0 check` (statement side) | **OK**, generated MM0/MM1 in sync with the pinned exports |
+| `scripts/check-lean-typing-proof` (proof side) | **OK**, 12 artifacts across 3 modes match the golden |
+| smoke row `abs_re_inner_pairVec_le`, default mode | 1 041 771 375 B `.mm0`, 1 075 343 397 B `.mm1`, 1 012 915 095 B sidecar, 70.6 s |
+| same row, `LTP_OBLIG_SHARE=1` | identical `.mm0`/`.mm1`, sidecar 4 258 753 B, 31.4 s |
+| largest row measured (`nsOuterFock…singleTime`) | 102 543 367 789 B `.mm0`, 2 617–3 762 s, peak 356–363 MiB |
+| trusted base | 11 + 15 named axioms in the two theories; per artifact, 467 710 assumptions, of which 1 279 are constant types and 1 256 substitution conversions |
+
+The ratios are the real finding: a one-gigabyte certificate for a three-binder lemma, and
+a hundred-gigabyte one for the largest theorem, with the count of assumptions in the same
+order as the term count. That is what an encoding of CIC into a first-order theory costs,
+and it is the thing to attack next (§13.25–13.53 in `lean4mm0.md` are all that attack),
+not the choice of intermediate language.
+
+**The Dedukti/LambdaPi route, re-checked.** Nothing has changed in the tooling, and the
+in-repo position is unchanged: no Lean → Dedukti translator exists (the ecosystem's front
+ends are Rocq, HOL-Light, Isabelle, Agda, Matita, PVS; Lean appears only as an output
+target), and no `*.dk`/`*.lp` file exists in `australVM/`. The one Dedukti-shaped
+component in the workspace is `unfer/logos/src/mm0/dk.rs` — 979 lines consuming
+`symbol`/`rule`/`thm`/`def`/`type` and emitting `logos_math.mm0` theorems whose rewrite
+rules are re-proved rather than assumed. Read for what it would contribute, it settles
+the question by its own fragment: the mapped symbols are `zero`, `succ`, `plus`, `times`
+and `eq`, the file's two fixtures are 15-line arithmetic files, and it documents that it
+"is not a λΠ kernel" — a `thm` whose proof is not `refl`/citation/`sym`/`trans` is
+refused by name. A Lean export lowered to `dk` first would land in a front end that
+cannot express dependent types at all.
+
+So the comparison is not close, and not because Dedukti is a poor system:
+
+| axis | Lean 4 → MM0 directly (in tree) | Lean 4 → Dedukti → MM0 |
+|---|---|---|
+| front end | exists (`lean2mm0` + `lean-typing-proof`, 5 288 lines) | would have to be written; none exists upstream |
+| back end into MM0 | exists, `mm0-c`-checked, 26 axioms total | would have to be written; the existing `dk` path covers Peano arithmetic |
+| what the intermediate system adds | nothing — the encoding is explicit in the two theories | a second reduction engine's conversion, i.e. a *larger* trusted base |
+| checked by | `mm0-c` alone, on an artifact anyone can re-run | `mm0-c` on an encoding, plus Dedukti's own checker for the steps before it |
+| cost | 1 GB / lemma, 102 GB / largest theorem | the same encoding, plus a translation layer whose proofs still need the same grounding |
+
+A Dedukti hop cannot shrink the certificate, because the size comes from unfolding CIC
+terms into a first-order encoding, not from the syntax chosen to carry them. It also
+cannot improve the trust story: `dk.rs` re-proves its rewrite rules precisely because a
+rewrite system handed over from another system is a trusted component, and λΠ-modulo
+conversion would have to be trusted in exactly the same way. **Verdict: worse on every
+axis that is measurable, and unavailable on the one that is not.**
+
 ## Appendix — FOUNDATIONS and PROB modules
 
 `name decls` pairs; zero-declaration entries are import aggregators or scratch files.
