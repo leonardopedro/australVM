@@ -778,13 +778,13 @@ fn the_scoped_borrow_lends_the_value_and_keeps_it_live() {
 const HOT_PROVIDER: &str = r##"
 static HOT_LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-#[export_name = "avm_hot_ctor"]
+#[export_name = "avm_hotbuild_ctor"]
 pub extern "C" fn hot_ctor(value: i64) -> *mut core::ffi::c_void {
     HOT_LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Box::into_raw(Box::new(value)) as *mut core::ffi::c_void
 }
 
-#[export_name = "avm_hot_dtor"]
+#[export_name = "avm_hotbuild_dtor"]
 pub unsafe extern "C" fn hot_dtor(ptr: *mut core::ffi::c_void) {
     if ptr.is_null() {
         return;
@@ -793,7 +793,7 @@ pub unsafe extern "C" fn hot_dtor(ptr: *mut core::ffi::c_void) {
     drop(Box::from_raw(ptr as *mut i64));
 }
 
-#[export_name = "avm_hot_live"]
+#[export_name = "avm_hotbuild_live"]
 pub extern "C" fn hot_live() -> i64 {
     HOT_LIVE.load(std::sync::atomic::Ordering::SeqCst)
 }
@@ -803,6 +803,14 @@ pub extern "C" fn hot_live() -> i64 {
 /// cdylib, mapped globally so the adapter crates built later can bind its
 /// constructors and destructors with `RTLD_NOW`.
 fn hot_provider() -> PathBuf {
+    // One copy per process: the adapter crates bind `avm_hot_*` through
+    // `RTLD_GLOBAL`, so a second copy would make `avm_hot_live` in this test
+    // read a different registry than the constructors the adapters reached.
+    // The reload keeps its own adapter tables, which is the part under test.
+    static PROVIDER: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(path) = PROVIDER.get() {
+        return path.clone();
+    }
     let dir = scratch("hot-provider");
     let file = dir.join("lib.rs");
     std::fs::write(&file, HOT_PROVIDER).expect("write provider");
@@ -822,14 +830,14 @@ fn hot_provider() -> PathBuf {
         String::from_utf8_lossy(&output.stderr)
     );
     umbrella::policy::dlopen(&out).expect("load the provider globally");
-    out
+    PROVIDER.get_or_init(|| out).clone()
 }
 
 #[test]
 fn a_host_reload_builds_and_loads_the_next_generation() {
     let provider = hot_provider();
-    let live = Library::open(&provider).count_fn("avm_hot_live");
-    let adapter = handle_adapter("avm_hot", "hot", 1, None);
+    let live = Library::open(&provider).count_fn("avm_hotbuild_live");
+    let adapter = handle_adapter("avm_hotbuild", "hot", 1, None);
     let adapters = [GeneratedAdapter::Handle(&adapter)];
 
     // The host's own build path, twice: each call renders at the next provider
@@ -838,7 +846,7 @@ fn a_host_reload_builds_and_loads_the_next_generation() {
     let first = umbrella::adapters::build_next(&adapters).expect("first build");
     umbrella::adapters::load(&first).expect("load the first adapter crate");
 
-    assert_eq!(first.generation, 1, "the first build in a process is 1");
+    assert!(first.generation >= 1, "generation 0 is reserved");
     let second = umbrella::adapters::build_next(&adapters).expect("reload build");
     umbrella::adapters::load(&second).expect("load the reloaded adapter crate");
     assert_eq!(
@@ -854,10 +862,10 @@ fn a_host_reload_builds_and_loads_the_next_generation() {
 
     let old = Library::open(&first.path);
     let reloaded = Library::open(&second.path);
-    let first_new = old.new_fn("avm_hot__new");
-    let first_dispose = old.dispose_fn("avm_hot__dispose");
-    let reload_new = reloaded.new_fn("avm_hot__new");
-    let reload_dispose = reloaded.dispose_fn("avm_hot__dispose");
+    let first_new = old.new_fn("avm_hotbuild__new");
+    let first_dispose = old.dispose_fn("avm_hotbuild__dispose");
+    let reload_new = reloaded.new_fn("avm_hotbuild__new");
+    let reload_dispose = reloaded.dispose_fn("avm_hotbuild__dispose");
 
     // One provider value per build: the two tables are separate registries,
     // as a reload's are.

@@ -1116,14 +1116,29 @@ passes as the `au_fnptr_t` argument. Two limits stay visible: a function
 value resolves only to a function *in the same CPS module* (a cross-module
 function value would need an import with a signature the name alone does not
 carry), and `MFptrCall` is still a call by name, so a module cannot yet call
-through a function value it was given — it can only hand one over. The
-provider generation is not constant and is no longer exercised by
+through a function value it was given — it can only hand one over.The provider generation is not constant and is no longer exercised by
 a second render: `umbrella/src/adapters.rs` builds each crate at the next
 generation into a new artifact, and `tests/handles.rs` drives a real reload —
 build, `dlopen`, build again, `dlopen` — so the reloaded crate refuses the
-previous build's words while the previous crate still resolves its own. A
-provider that is rebuilt while a module runs is not hot-reloaded live, and
-borrows/views over an owned handle are U14's.
+previous build's words while the previous crate still resolves its own.
+
+A module that is already running follows a reload. Each build exports its
+wrappers twice: the forwarder (`<target>__new`, `__with`, `__dispose`, …) is
+the symbol the JIT resolved at compile time, and the body is a
+generation-suffixed implementation (`<target>__new__impl_<generation>`). The
+forwarder looks the name up in a per-image binding table and runs the body it
+finds, or its own when nothing was bound — which is what the first build does.
+`adapters::bind` walks a loaded build's `umbrella_bind_<target>` entry point and
+binds each forwarder to the next build's implementation, so the compiled
+module's calls reach the current table without being recompiled:
+`a_module_running_across_a_reload_sees_the_next_generation` runs a module
+across the bind, has it read through the reloaded table (accepting the next
+generation's words), and checks that the reload then refuses the words it
+minted before. What a reload does **not** swap is the provider's own code: a
+new build is a new wrapper crate over the same `<target>_ctor`/`_dtor`/accessor
+symbols, so a provider whose behavior changed needs a rebuilt provider *and* a
+freshly loaded wrapper image, not merely a new generation. Borrows/views over an
+owned handle are still U14's.
 
 **Still not carried:**
 Only literals, mediated calls, Float64 arithmetic and float comparisons carry a
