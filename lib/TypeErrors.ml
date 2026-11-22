@@ -370,11 +370,11 @@ let rust_adapter_buffer_unsupported ~subject ~ty =
     Text subject;
     Text " has type ";
     Type ty;
-    Text ", which cannot cross the extern rust boundary in this signature: buffer transport version 1 carries a Nat8 byte buffer as an ";
+    Text ", which cannot cross the extern rust boundary in this signature: buffer transport versions 1 and 2 carry a Nat8 byte buffer as an ";
     Code "Address[Nat8]";
     Text " or ";
     Code "Pointer[Nat8]";
-    Text " parameter with its length as the next parameter, and a scalar result. A buffer result, a span, or a pointer to anything but Nat8 bytes is a different protocol, which needs its own version and its own tests. Keep the result word-native instead (Int64/Nat64 — those calls name the declared symbol and build no adapter)."
+    Text " parameter with its length as the next parameter, version 2 also carries 64-bit integer words, and the result is a scalar. A buffer result, a span, or a pointer to anything but Nat8 bytes is a different protocol, which needs its own version and its own tests. Keep the result word-native instead (Int64/Nat64 — those calls name the declared symbol and build no adapter)."
   ]
 
 let rust_adapter_buffer_needs_length ~name ~ty =
@@ -392,20 +392,13 @@ let rust_adapter_buffer_needs_length ~name ~ty =
     Text " parameter directly after the buffer."
   ]
 
-let rust_adapter_buffer_length_unpaired ~name =
-  austral_raise DeclarationError [
-    Text "The parameter ";
-    Code name;
-    Text " is a 64-bit integer in a signature that carries a byte buffer, but it does not directly follow a buffer, so it does not measure one. Buffer transport version 1 takes each length to be the parameter immediately after its buffer, and a length with no buffer has no extent to describe."
-  ]
-
 let rust_adapter_buffer_scalar_beside ~name ~ty =
   austral_raise DeclarationError [
     Text "The parameter ";
     Code name;
     Text " has type ";
     Type ty;
-    Text " in a signature that carries a byte buffer. Buffer transport version 1 describes a signature as Nat8 byte buffers, the 64-bit length after each one, and a scalar result; it has no per-parameter type list, so a scalar or a non-Nat8 pointer beside a buffer cannot be described and its wrapper cannot be generated."
+    Text " in a signature that carries a byte buffer. Buffer transport version 2 describes a signature as Nat8 byte buffers, the 64-bit length after each one, 64-bit integer words, and a scalar result. A narrower integer, Bool, float or non-Nat8 pointer beside a buffer would need marshalling the descriptor has no per-parameter type for, so its wrapper cannot be generated."
   ]
 
 let rust_adapter_buffer_length_types ~first ~second =

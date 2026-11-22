@@ -163,12 +163,27 @@ let mono_ty_show (ty: mono_ty): string = MonoType.show_mono_ty ty
    `read`. Either way the buffer's length is the parameter immediately after
    it, a 64-bit integer, and the descriptor states both indices. Version 1 of
    the buffer transport carries buffers, their lengths and a scalar result;
-   anything else is refused here rather than described by a guess. *)
+   version 2 adds 64-bit integer words beside a buffer (the GPU service's
+   `(context, buffer, offset, address, length)` calls). Anything else is
+   refused here rather than described by a guess. *)
 type buffer_parameter = {
   bp_mode: string;
   bp_index: int;
   bp_length: int;
 }
+
+(* A 64-bit integer word that is not a buffer's length. Version 2 names it in
+   the descriptor's `scalars` line, so a wrapper cannot mistake it for a
+   length: the two are the same width and only the line tells them apart. *)
+type scalar_parameter = {
+  sp_index: int;
+  sp_name: string;
+}
+
+let buffer_length_name (ty: mono_ty): string =
+  match ty with
+  | MonoInteger (Signed, Width64) -> "Int64"
+  | _ -> "Nat64"
 
 let is_nat8 (ty: mono_ty): bool =
   match ty with
@@ -191,7 +206,7 @@ let buffer_mode_of (ty: mono_ty): string option =
    TypingPass.check_rust_ownership: an admitted buffer signature always has a
    descriptor, and a refused one never names an adapter. *)
 let buffer_layout (req: adapter_requirement)
-  : (buffer_parameter list * mono_ty, string) result =
+  : (buffer_parameter list * scalar_parameter list * mono_ty, string) result =
   let params = Array.of_list req.ar_params in
   let n = Array.length params in
   let problem what =
@@ -204,7 +219,7 @@ let buffer_layout (req: adapter_requirement)
                 directly after the buffer"
                i (mono_ty_show ty))
   in
-  let rec go i acc lengths =
+  let rec go i acc scalars lengths =
     if i >= n then
       match List.rev lengths with
       | [] -> problem "the signature names no byte buffer"
@@ -216,7 +231,7 @@ let buffer_layout (req: adapter_requirement)
                        `lengths` type, so every length parameter must have the same \
                        64-bit integer type"
                       (mono_ty_show first) (mono_ty_show other))
-         | None -> Ok (List.rev acc, first))
+         | None -> Ok (List.rev acc, List.rev scalars, first))
     else
       let ty = params.(i) in
       match buffer_mode_of ty with
@@ -226,28 +241,26 @@ let buffer_layout (req: adapter_requirement)
         else
           go (i + 2)
             ({ bp_mode = mode; bp_index = i; bp_length = i + 1 } :: acc)
+            scalars
             (params.(i + 1) :: lengths)
       | None ->
         if is_length_type ty then
-          problem (Printf.sprintf
-                     "parameter %d is a 64-bit integer but not the length of a \
-                      preceding buffer; every length parameter directly follows \
-                      the buffer it measures"
-                     i)
+          (* Version 2: a 64-bit integer that does not measure a buffer is a
+             word the wrapper passes through unchanged. The descriptor names
+             it, so the wrapper never treats it as a length. *)
+          go (i + 1)
+            acc
+            ({ sp_index = i; sp_name = buffer_length_name ty } :: scalars)
+            lengths
         else
           problem (Printf.sprintf
                      "parameter %d (%s) is neither one of the signature's Nat8 \
-                      buffers nor a buffer's length; buffer transport version 1 \
-                      carries byte buffers, their 64-bit lengths and a scalar \
-                      result only"
+                      buffers, a buffer's 64-bit length, nor a 64-bit integer \
+                      word; buffer transport version 2 carries byte buffers, \
+                      their lengths, 64-bit words and a scalar result only"
                      i (mono_ty_show ty))
   in
-  go 0 [] []
-
-let buffer_length_name (ty: mono_ty): string =
-  match ty with
-  | MonoInteger (Signed, Width64) -> "Int64"
-  | _ -> "Nat64"
+  go 0 [] [] []
 
 (* One descriptor block, canonical field order. Buffered signatures become
    `abi buffer 1` blocks; scalar-only ones keep their U11 `abi scalar 1` form. *)
@@ -265,7 +278,7 @@ let adapter_block (req: adapter_requirement): (string, string) result =
   if List.exists is_buffer_param req.ar_params then
     match buffer_layout req with
     | Error e -> Error e
-    | Ok (buffers, length_ty) ->
+    | Ok (buffers, scalars, length_ty) ->
       (match scalar_result () with
        | Error e -> Error e
        | Ok returns ->
@@ -275,11 +288,31 @@ let adapter_block (req: adapter_requirement): (string, string) result =
                 (fun b -> Printf.sprintf "%s:%d:%d" b.bp_mode b.bp_index b.bp_length)
                 buffers)
          in
-         Ok (Printf.sprintf
-               "schema 1\nabi buffer 1\nsymbol %s\ntarget %s\nparams %d\n\
-                lengths %s\nbuffers %s\nempty null-len0\nreturns %s\n"
-               req.ar_symbol req.ar_target (List.length req.ar_params)
-               (buffer_length_name length_ty) buffers returns))
+         (* Version 2 only when a word actually sits beside a buffer, so every
+            signature version 1 describes keeps its byte-identical block. *)
+         let abi_version = if scalars = [] then 1 else 2 in
+         let scalars_line =
+           match scalars with
+           | [] -> []
+           | _ ->
+             [ "scalars "
+               ^ String.concat ","
+                   (List.map
+                      (fun s -> Printf.sprintf "%d:%s" s.sp_index s.sp_name)
+                      scalars) ]
+         in
+         Ok (String.concat "\n"
+               ([ "schema 1";
+                  Printf.sprintf "abi buffer %d" abi_version;
+                  Printf.sprintf "symbol %s" req.ar_symbol;
+                  Printf.sprintf "target %s" req.ar_target;
+                  Printf.sprintf "params %d" (List.length req.ar_params);
+                  Printf.sprintf "lengths %s" (buffer_length_name length_ty);
+                  Printf.sprintf "buffers %s" buffers ]
+                @ scalars_line
+                @ [ "empty null-len0";
+                    Printf.sprintf "returns %s" returns ])
+              ^ "\n"))
   else
     match scalar_result () with
     | Error e -> Error e

@@ -3140,6 +3140,66 @@ check "L11c: the split pilot has an end-to-end suite" \
 check "L11c: the split pilot's facts are checked to erase" \
     grep -q 'l11c_pilot_facts_are_erased' "$repo_root/test/LiquidErasureTest.ml"
 
+# --- GPU docs: the stdlib modules the status table says compile -----------------
+#
+# `docs/gpu/EXECUTION.md` records, per row, that a stdlib module compiles (G15
+# says `./austral compile stdlib/gpu/Jobs.aui,stdlib/gpu/Jobs.aum --target-type=tc`
+# exits 0). That is a claim about a file no suite compiles, so nothing enforced
+# it: a compiler change left the row asserting exit 0 while the module was
+# refused by the buffer-transport check, and the row's "4 fixtures PASS" rode
+# along false. This compiles every `stdlib/...` module the document names, so a
+# row cannot outlive the compiler it describes. A missing `austral` is a gap,
+# never a pass.
+_gpu_doc="$repo_root/docs/gpu/EXECUTION.md"
+_gpu_stems="$(
+    grep -oE 'stdlib/[A-Za-z0-9_/.-]+(\.(aui|aum)|\.\{aui,aum\})' "$_gpu_doc" 2>/dev/null \
+        | sed -E 's#\.\{aui,aum\}$##; s#\.(aui|aum)$##' \
+        | sort -u
+)"
+
+compile_stdlib_module() {
+    local stem="$1"
+    local srcs=""
+    local log status
+    if [ -f "$repo_root/$stem.aui" ]; then
+        srcs="$stem.aui"
+    fi
+    if [ -f "$repo_root/$stem.aum" ]; then
+        srcs="${srcs:+$srcs,}$stem.aum"
+    fi
+    if [ -z "$srcs" ]; then
+        echo "  [detail] $stem: the document names no source file that exists" >&2
+        return 1
+    fi
+    log="$(mktemp)"
+    ( cd "$repo_root" && \
+      LD_LIBRARY_PATH="$_bridge_dir:$repo_root${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+      "$repo_root/austral" compile "$srcs" --target-type=tc >"$log" 2>&1 )
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "  [detail] $stem ($srcs): exit $status" >&2
+        sed -n '1,14p' "$log" >&2
+    fi
+    rm -f "$log"
+    return "$status"
+}
+
+# A document that stops naming Jobs would make the loop below vacuous, and a
+# vacuous check is the failure mode this gate exists for.
+check "GPU docs: the status table still names stdlib/gpu/Jobs" \
+    bash -c "grep -qF 'stdlib/gpu/Jobs' '$_gpu_doc'"
+
+if ! printf '%s\n' "$_gpu_stems" | grep -q '^stdlib/'; then
+    check "GPU docs: the status table names a stdlib module to compile" false
+elif [ ! -x "$repo_root/austral" ]; then
+    gap "GPU docs: named stdlib modules compile (tooling absent: ./austral is not built)"
+else
+    while IFS= read -r _stem; do
+        [ -n "$_stem" ] || continue
+        check "GPU docs: $_stem compiles" compile_stdlib_module "$_stem"
+    done <<< "$_gpu_stems"
+fi
+
 # --- H12: agent notes (four implemented categories, one per non-trivial PR) ---
 check "H12: notes implemented dir has the four categories" \
     test -d "$repo_root/.agents/notes/implemented/architecture" \

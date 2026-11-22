@@ -269,15 +269,23 @@ impl Adapter {
 //   * capacity is the length: a write buffer's length is what the caller
 //     granted, never what the callee would like to have.
 //
-// The emitter does not produce `abi buffer` blocks yet — the CPS lowering
-// refuses a buffer in an adapter-mediated signature (`rust_adapter_buffer_unsupported`),
-// because this layout has no word encoding. Fixing the reader first is what
-// makes the layout a contract instead of a guess: whatever the emitter writes
-// later is already checked here.
+// The emitter writes these blocks: `lib/Compiler_cps.ml` `adapter_block`,
+// admitted by the identical rule in `lib/TypingPass.ml`. Whatever it writes is
+// checked here before a wrapper is generated.
+//
+// Version 2 adds 64-bit integer *words* beside a buffer — the GPU service's
+// `(context, buffer, offset, address, length)` shape, where the handles and the
+// offset are not lengths. They are carried as `scalars`, named by index, so a
+// wrapper reads a length only from a parameter a `buffers` entry names. A
+// version-1 block keeps its old meaning exactly (every non-buffer parameter is
+// a length), which is why the emitter writes version 1 unless a word is present.
 
-/// ABI version of the buffer transport described below. Separate from the
-/// scalar one: a buffer wrapper and a scalar wrapper are not interchangeable.
-pub const BUFFER_ABI_VERSION: u32 = 1;
+/// ABI version of the buffer transport this build writes. It also *reads*
+/// every version up to this one: version 1 is still a valid description, and
+/// refusing it would break a descriptor that is still correct. Separate from
+/// the scalar ABI: a buffer wrapper and a scalar wrapper are not
+/// interchangeable.
+pub const BUFFER_ABI_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferMode {
@@ -354,20 +362,32 @@ pub struct BufferParam {
     pub length: usize,
 }
 
+/// One 64-bit integer word beside a buffer: which parameter it is, and its
+/// type. Version 2 only; the pointer and length parameters are named by
+/// `buffers` instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScalarParam {
+    pub index: usize,
+    pub ty: Scalar,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BufferAdapter {
     pub schema: u32,
     pub abi_version: u32,
     pub symbol: String,
     pub target: String,
-    /// How many parameters the wrapper takes in total (addresses, lengths and
-    /// scalars together); buffer entries index into this list.
+    /// How many parameters the wrapper takes in total (buffers, lengths and
+    /// scalars together); the three lines below index into this list.
     pub params: usize,
     /// The type of every length parameter. 32-bit lengths are refused: a
     /// buffer larger than 4 GiB must not wrap, and the transport word is 64-bit
     /// anyway.
     pub lengths: Scalar,
     pub buffers: Vec<BufferParam>,
+    /// Words carried unchanged beside the buffers. Empty for version 1, whose
+    /// non-buffer parameters are all lengths.
+    pub scalars: Vec<ScalarParam>,
     pub empty: EmptyConvention,
     pub returns: Scalar,
 }
@@ -380,12 +400,19 @@ impl BufferAdapter {
                 self.schema
             ));
         }
-        if self.abi_version != BUFFER_ABI_VERSION {
+        if self.abi_version == 0 || self.abi_version > BUFFER_ABI_VERSION {
             return Err(format!(
-                "descriptor claims buffer transport version {}, this build knows \
-                 {BUFFER_ABI_VERSION}; a buffer wrapper generated for another \
-                 transport must not be used",
+                "descriptor claims buffer transport version {}, this build knows 1 \
+                 through {BUFFER_ABI_VERSION}; a buffer wrapper generated for \
+                 another transport must not be used",
                 self.abi_version
+            ));
+        }
+        if self.abi_version == 1 && !self.scalars.is_empty() {
+            return Err(format!(
+                "`{}` declares `scalars` in a buffer transport version 1 block; a \
+                 64-bit word beside a buffer is version {BUFFER_ABI_VERSION}",
+                self.symbol
             ));
         }
         if self.symbol.is_empty() || self.target.is_empty() {
@@ -452,6 +479,57 @@ impl BufferAdapter {
                 ));
             }
         }
+        // Version 2: every parameter is exactly one of a buffer, a buffer's
+        // length, or a declared word. A parameter nothing names is a parameter
+        // the wrapper would have to guess a type for, so it is refused here.
+        // Version 1 keeps its published meaning (every non-buffer parameter is
+        // a length), because a format we still accept is not tightened under
+        // its old number.
+        let mut claimed: Vec<Option<&'static str>> = vec![None; self.params];
+        for buffer in &self.buffers {
+            claimed[buffer.buffer] = Some("a buffer");
+            claimed[buffer.length] = Some("a length");
+        }
+        for scalar in &self.scalars {
+            if scalar.index >= self.params {
+                return Err(format!(
+                    "`{}` names parameter {} as a scalar: it declares {} \
+                     parameter(s), numbered 0..{}",
+                    self.symbol,
+                    scalar.index,
+                    self.params,
+                    self.params.saturating_sub(1)
+                ));
+            }
+            if !matches!(scalar.ty, Scalar::I64 | Scalar::U64) {
+                return Err(format!(
+                    "`{}` declares parameter {} as a {} scalar; a word beside a \
+                     buffer is a 64-bit integer (Int64 or Nat64), because any \
+                     narrower value needs marshalling the buffer descriptor has \
+                     no field for",
+                    self.symbol,
+                    scalar.index,
+                    scalar.ty.name()
+                ));
+            }
+            if let Some(what) = claimed[scalar.index] {
+                return Err(format!(
+                    "`{}` names parameter {} twice: it is both a scalar and {}",
+                    self.symbol, scalar.index, what
+                ));
+            }
+            claimed[scalar.index] = Some("a scalar");
+        }
+        if self.abi_version >= 2 {
+            if let Some(index) = claimed.iter().position(|what| what.is_none()) {
+                return Err(format!(
+                    "`{}` leaves parameter {} unexplained: every parameter is a \
+                     buffer, a buffer's length, or a declared scalar, because the \
+                     wrapper has no type to give anything else",
+                    self.symbol, index
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -464,9 +542,21 @@ impl BufferAdapter {
             .map(|b| format!("{}:{}:{}", b.mode.name(), b.buffer, b.length))
             .collect::<Vec<_>>()
             .join(",");
+        let scalars = if self.scalars.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "scalars {}\n",
+                self.scalars
+                    .iter()
+                    .map(|s| format!("{}:{}", s.index, s.ty.name()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        };
         format!(
             "schema {}\nabi buffer {}\nsymbol {}\ntarget {}\nparams {}\nlengths {}\n\
-             buffers {}\nempty {}\nreturns {}\n",
+             buffers {}\n{}empty {}\nreturns {}\n",
             self.schema,
             self.abi_version,
             self.symbol,
@@ -474,6 +564,7 @@ impl BufferAdapter {
             self.params,
             self.lengths.name(),
             buffers,
+            scalars,
             self.empty.name(),
             self.returns.name()
         )
@@ -525,6 +616,7 @@ impl BufferAdapter {
         let mut params = None;
         let mut lengths = None;
         let mut buffers: Option<Vec<BufferParam>> = None;
+        let mut scalars: Option<Vec<ScalarParam>> = None;
         let mut empty = None;
         let mut returns = None;
         for line in text.lines() {
@@ -586,6 +678,21 @@ impl BufferAdapter {
                     }
                     buffers = Some(parsed);
                 }
+                "scalars" => {
+                    let mut parsed = Vec::new();
+                    for entry in value.split(',').filter(|s| !s.is_empty()) {
+                        let (index, ty) = entry.split_once(':').ok_or_else(|| {
+                            format!("scalar entry `{entry}` is not `index:Type`")
+                        })?;
+                        parsed.push(ScalarParam {
+                            index: index.parse::<usize>().map_err(|_| {
+                                format!("scalar entry `{entry}`: index `{index}` is not a number")
+                            })?,
+                            ty: Scalar::parse(ty)?,
+                        });
+                    }
+                    scalars = Some(parsed);
+                }
                 "empty" => empty = Some(EmptyConvention::parse(value)?),
                 "returns" => returns = Some(Scalar::parse(value)?),
                 other => return Err(format!("unknown buffer descriptor field `{other}`")),
@@ -601,6 +708,7 @@ impl BufferAdapter {
             params: params.ok_or("descriptor has no `params` line")?,
             lengths: lengths.ok_or("descriptor has no `lengths` line")?,
             buffers: buffers.ok_or("descriptor has no `buffers` line")?,
+            scalars: scalars.unwrap_or_default(),
             empty: empty.ok_or("descriptor has no `empty` line")?,
             returns: returns.ok_or("descriptor has no `returns` line")?,
         };
@@ -742,10 +850,11 @@ pub fn render_wrapper(adapter: &Adapter) -> Result<String, String> {
 /// Render the Rust wrapper an `abi buffer` descriptor calls for.
 ///
 /// The wrapper takes the same number of 64-bit words as the signature has
-/// parameters: a buffer word is the host pointer, a length word is the length.
+/// parameters: a buffer word is the host pointer, a length word is the length,
+/// and a scalar word (version 2) is carried unchanged at its declared type.
 /// Buffer transport version 1 defines a buffered signature as Nat8 buffers,
-/// their 64-bit lengths and a scalar result, so the result is the only value
-/// the wrapper encodes. Every buffer is checked before the call: length 0 is
+/// their 64-bit lengths and a scalar result; version 2 adds 64-bit words. The
+/// result is the only value the wrapper encodes. Every buffer is checked before the call: length 0 is
 /// the empty buffer and only then may the pointer be null; a non-zero length
 /// with a null pointer, or a length that does not fit a signed 64-bit extent,
 /// panics. Capacity is the declared length — the wrapper can check that a
@@ -772,6 +881,8 @@ pub fn render_buffer_wrapper(adapter: &BufferAdapter) -> Result<String, String> 
     let length_ty = rust_scalar(adapter.lengths);
     let buffer_at: std::collections::HashMap<usize, &BufferParam> =
         adapter.buffers.iter().map(|b| (b.buffer, b)).collect();
+    let scalar_at: std::collections::HashMap<usize, Scalar> =
+        adapter.scalars.iter().map(|s| (s.index, s.ty)).collect();
     let pointer_ty = |mode: BufferMode| match mode {
         BufferMode::Read => "*const u8",
         BufferMode::Write | BufferMode::ReadWrite => "*mut u8",
@@ -783,7 +894,10 @@ pub fn render_buffer_wrapper(adapter: &BufferAdapter) -> Result<String, String> 
     let native: Vec<String> = (0..adapter.params)
         .map(|i| match buffer_at.get(&i) {
             Some(buffer) => format!("buf{i}: {}", pointer_ty(buffer.mode)),
-            None => format!("len{i}: {length_ty}"),
+            None => match scalar_at.get(&i) {
+                Some(ty) => format!("s{i}: {}", rust_scalar(*ty)),
+                None => format!("len{i}: {length_ty}"),
+            },
         })
         .collect();
     let _ = writeln!(
@@ -824,7 +938,10 @@ pub fn render_buffer_wrapper(adapter: &BufferAdapter) -> Result<String, String> 
     let args: Vec<String> = (0..adapter.params)
         .map(|i| match buffer_at.get(&i) {
             Some(buffer) => format!("buf{}", buffer.buffer),
-            None => format!("len{i}"),
+            None => match scalar_at.get(&i) {
+                Some(ty) => format!("w{i} as {}", rust_scalar(*ty)),
+                None => format!("len{i}"),
+            },
         })
         .collect();
     let _ = writeln!(
@@ -900,6 +1017,35 @@ impl HandleAdapter {
     /// provider symbol of its own: the callback is the caller's.
     pub fn with_symbol(&self) -> String {
         format!("{}__with", self.target)
+    }
+
+    /// The host's binding point, rendered into this adapter's wrapper module.
+    /// The build the JIT resolved answers it; a reload calls it with the next
+    /// build's implementation for the same forwarder.
+    pub fn bind_symbol(&self) -> String {
+        let suffix: String = self
+            .target
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        format!("umbrella_bind_{suffix}")
+    }
+
+    /// Every forwarder this adapter renders, in the order the wrappers appear.
+    pub fn forwarded_symbols(&self) -> Vec<String> {
+        let mut symbols = vec![self.symbol.clone()];
+        if self.use_symbol.is_some() {
+            symbols.push(self.use_symbol());
+        }
+        symbols.push(self.with_symbol());
+        symbols.push(self.dispose_symbol());
+        symbols
+    }
+
+    /// The export name of the implementation a generation renders for
+    /// `forwarder`. Unique per build, so two generations can be mapped at once.
+    pub fn implementation_symbol(forwarder: &str, generation: u32) -> String {
+        format!("{forwarder}__impl_{generation}")
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -1222,6 +1368,60 @@ pub fn render_handle_wrapper_at(
          static REGISTRY: std::sync::Mutex<HandleRegistry<ProviderValue>> =\n    std::sync::Mutex::new(HandleRegistry::new(\n        Owner::issued({}),\n        TypeTag::named(\"{}\"),\n        PROVIDER_GENERATION,\n    ));\n\n",
         adapter.owner, adapter.type_name
     ));
+    // The live-reload seam. These forwarders are the symbols the JIT resolved
+    // when it compiled the module, so a reload must not rename them: the host
+    // binds them to the next build's implementations instead, and every later
+    // call through the compiled module reaches the current table. A slot that
+    // was never bound runs this build's own body, which is what the first
+    // build does.
+    let bind_symbol = adapter.bind_symbol();
+    let dispatch_symbols = adapter.forwarded_symbols();
+    out.push_str(&format!(
+        "// The reload's indirection: the forwarders below stay the symbols the JIT\n\
+         // resolved, and a reload binds them to the next build's implementation.\n\
+         mod dispatch {{\n    \
+         use std::sync::Mutex;\n\n    \
+         static BINDINGS: Mutex<Vec<(&'static str, usize)>> = Mutex::new(Vec::new());\n\n    \
+         pub fn lookup(name: &str) -> Option<usize> {{\n        \
+         let table = match BINDINGS.lock() {{\n            Ok(table) => table,\n            \
+         Err(poisoned) => poisoned.into_inner(),\n        }};\n        \
+         // Last binding wins, so a second reload supersedes the first.\n        \
+         table.iter().rev().find(|(n, _)| *n == name).map(|(_, p)| *p)\n    }}\n\n    \
+         pub fn set(name: &'static str, ptr: usize) {{\n        \
+         match BINDINGS.lock() {{\n            Ok(mut table) => table.push((name, ptr)),\n            \
+         Err(poisoned) => poisoned.into_inner().push((name, ptr)),\n        }}\n    }}\n}}\n\n\
+         // The host's binding point for this adapter: it names a forwarder this\n\
+         // build rendered and the implementation a later build exports. An\n\
+         // unknown name is refused — binding something nothing calls would look\n\
+         // like a reload.\n\
+         #[no_mangle]\npub extern \"C\" fn {bind_symbol}(\n    \
+         name: *const u8,\n    len: usize,\n    ptr: *mut core::ffi::c_void,\n) -> i64 {{\n    \
+         if name.is_null() || ptr.is_null() || len == 0 {{\n        return 1;\n    }}\n    \
+         let bytes = unsafe {{ std::slice::from_raw_parts(name, len) }};\n    \
+         let Ok(text) = std::str::from_utf8(bytes) else {{\n        return 1;\n    }};\n    \
+         match text {{\n{}\n        _ => 1,\n    }}\n}}\n\n",
+        dispatch_symbols
+            .iter()
+            .map(|symbol| format!(
+                "        \"{symbol}\" => {{\n            dispatch::set(\"{symbol}\", ptr as usize);\n            0\n        }}"
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ));
+    // A wrapper is two functions: the generation-suffixed implementation and
+    // the forwarder that finds it. `symbol` is the forwarder (the name the JIT
+    // resolved), `impl_name` the local Rust name of the body.
+    let forwarder = |symbol: &str, impl_name: &str, named: &str, types: &str, args: &str| {
+        format!(
+            "#[no_mangle]\npub extern \"C\" fn {symbol}({named}) -> i64 {{\n    \
+             // Until a reload binds this slot, the build's own body answers.\n    \
+             match dispatch::lookup(\"{symbol}\") {{\n        \
+             Some(target) => {{\n            \
+             let f: extern \"C\" fn({types}) -> i64 = unsafe {{ std::mem::transmute(target) }};\n            \
+             f({args})\n        }}\n        \
+             None => {impl_name}({args}),\n    }}\n}}\n\n"
+        )
+    };
     let mut args = String::new();
     let mut params = words.join(", ");
     if !params.is_empty() {
@@ -1231,18 +1431,39 @@ pub fn render_handle_wrapper_at(
     for i in 0..adapter.params {
         args.push_str(&format!("w{i}, "));
     }
+    let symbol = adapter.symbol.clone();
+    let new_impl = format!("{}__impl", adapter.symbol);
+    let mut fn_types: Vec<String> = (0..adapter.params).map(|_| "i64".to_string()).collect();
+    fn_types.push("*mut i64".to_string());
+    let new_call: Vec<String> = (0..adapter.params)
+        .map(|i| format!("w{i}"))
+        .chain(["out".to_string()])
+        .collect();
     out.push_str(&format!(
-        "#[no_mangle]\npub extern \"C\" fn {}({params}) -> i64 {{\n\
+        "#[export_name = \"{symbol}__impl_{generation}\"]\nextern \"C\" fn {new_impl}({params}) -> i64 {{\n\
          \x20   if out.is_null() {{\n        return 1;\n    }}\n\
          \x20   let raw = unsafe {{ {}({args}) }};\n\
          \x20   if raw.is_null() {{\n        return 1;\n    }}\n\
          \x20   let mut table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
          \x20   match table.insert(ProviderValue::new(raw, {})) {{\n        Ok(handle) => {{\n            let (lo, hi) = handle.to_words();\n            unsafe {{\n                *out = lo as i64;\n                *out.add(1) = hi as i64;\n            }}\n            0\n        }}\n        // The refused value is dropped here, so its destructor runs once and\n        // the provider is not leaked by a table that refused it.\n        Err(_) => 1,\n    }}\n}}\n\n",
-        adapter.symbol, adapter.constructor, adapter.destructor
+        adapter.constructor, adapter.destructor
     ));
+    out.push_str(&forwarder(
+        &symbol,
+        &new_impl,
+        &params,
+        &fn_types.join(", "),
+        &new_call.join(", "),
+    ));
+    let use_symbol = adapter.use_symbol();
+    let use_impl = format!("{use_symbol}__impl");
+    let with_symbol = adapter.with_symbol();
+    let with_impl = format!("{with_symbol}__impl");
+    let dispose_symbol = adapter.dispose_symbol();
+    let dispose_impl = format!("{dispose_symbol}__impl");
     if let Some(accessor) = &adapter.use_symbol {
         out.push_str(&format!(
-            "#[no_mangle]\npub extern \"C\" fn {}(lo: i64, hi: i64, out: *mut i64) -> i64 {{\n\
+            "#[export_name = \"{use_symbol}__impl_{generation}\"]\nextern \"C\" fn {use_impl}(lo: i64, hi: i64, out: *mut i64) -> i64 {{\n\
              \x20   if out.is_null() {{\n        return 1;\n    }}\n\
              \x20   let table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
              \x20   let handle = match table.handle_from_words(lo as u64, hi as u64) {{\n        Ok(handle) => handle,\n        Err(_) => return 1,\n    }};\n\
@@ -1253,11 +1474,18 @@ pub fn render_handle_wrapper_at(
              \x20   let value = unsafe {{ {}(ptr) }};\n\
              \x20   unsafe {{\n        *out = value;\n    }}\n\
              \x20   0\n}}\n\n",
-            adapter.use_symbol(), accessor
+            accessor
+        ));
+        out.push_str(&forwarder(
+            &use_symbol,
+            &use_impl,
+            "lo: i64, hi: i64, out: *mut i64",
+            "i64, i64, *mut i64",
+            "lo, hi, out",
         ));
     }
     out.push_str(&format!(
-        "#[no_mangle]\npub extern \"C\" fn {}(lo: i64, hi: i64,\n\
+        "#[export_name = \"{with_symbol}__impl_{generation}\"]\nextern \"C\" fn {with_impl}(lo: i64, hi: i64,\n\
          \x20   callback: Option<unsafe extern \"C\" fn(ptr: *mut core::ffi::c_void) -> i64>,\n\
          \x20   out: *mut i64,\n\
          ) -> i64 {{\n\
@@ -1275,13 +1503,25 @@ pub fn render_handle_wrapper_at(
          \x20   let value = unsafe {{ callback(ptr) }};\n\
          \x20   unsafe {{\n        *out = value;\n    }}\n\
          \x20   0\n}}\n\n",
-        adapter.with_symbol()
+    ));
+    out.push_str(&forwarder(
+        &with_symbol,
+        &with_impl,
+        "lo: i64, hi: i64, callback: Option<unsafe extern \"C\" fn(ptr: *mut core::ffi::c_void) -> i64>, out: *mut i64",
+        "i64, i64, Option<unsafe extern \"C\" fn(*mut core::ffi::c_void) -> i64>, *mut i64",
+        "lo, hi, callback, out",
     ));
     out.push_str(&format!(
-        "#[no_mangle]\npub extern \"C\" fn {}(lo: i64, hi: i64) -> i64 {{\n\
+        "#[export_name = \"{dispose_symbol}__impl_{generation}\"]\nextern \"C\" fn {dispose_impl}(lo: i64, hi: i64) -> i64 {{\n\
          \x20   let mut table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
          \x20   match table.destroy_words(lo as u64, hi as u64) {{\n        Ok(()) => 0,\n        Err(_) => 1,\n    }}\n}}\n",
-        adapter.dispose_symbol()
+    ));
+    out.push_str(&forwarder(
+        &dispose_symbol,
+        &dispose_impl,
+        "lo: i64, hi: i64",
+        "i64, i64",
+        "lo, hi",
     ));
     Ok(out)
 }
@@ -1571,15 +1811,92 @@ mod tests {
         let err = parse_buffer(&buffer_text("read:0:2", "Nat64", "ptr-only")).unwrap_err();
         assert!(err.contains("null-len0"), "{err}");
         let err = parse_buffer(
-            &buffer_text("read:0:2", "Nat64", "null-len0").replace("abi buffer 1", "abi buffer 2"),
+            &buffer_text("read:0:2", "Nat64", "null-len0").replace("abi buffer 1", "abi buffer 3"),
         )
         .unwrap_err();
-        assert!(err.contains("buffer transport version 2"), "{err}");
+        assert!(err.contains("buffer transport version 3"), "{err}");
         let err = parse_buffer(
             &buffer_text("read:0:2", "Nat64", "null-len0").replace("empty null-len0\n", ""),
         )
         .unwrap_err();
         assert!(err.contains("no `empty` line"), "{err}");
+    }
+
+    // ── U12 version 2: word scalars beside a buffer ────────────────────────
+
+    fn buffer_scalar_text() -> String {
+        "schema 1\nabi buffer 2\nsymbol rs_gpu_write__adapter\ntarget rs_gpu_write\n\
+         params 5\nlengths Int64\nbuffers readwrite:3:4\n\
+         scalars 0:Int64,1:Int64,2:Int64\nempty null-len0\nreturns Int64\n"
+            .to_string()
+    }
+
+    #[test]
+    fn a_version_2_block_round_trips_with_its_scalars() {
+        let text = buffer_scalar_text();
+        let adapters = parse_buffer(&text).expect("parse");
+        assert_eq!(adapters.len(), 1);
+        let adapter = &adapters[0];
+        assert_eq!(adapter.abi_version, 2);
+        assert_eq!(
+            adapter.scalars,
+            vec![
+                ScalarParam {
+                    index: 0,
+                    ty: Scalar::I64
+                },
+                ScalarParam {
+                    index: 1,
+                    ty: Scalar::I64
+                },
+                ScalarParam {
+                    index: 2,
+                    ty: Scalar::I64
+                },
+            ]
+        );
+        assert_eq!(adapter.descriptor_text(), text);
+    }
+
+    #[test]
+    fn a_scalar_is_passed_through_and_never_read_as_a_length() {
+        let text = buffer_scalar_text();
+        let adapter = &parse_buffer(&text).expect("parse")[0];
+        let wrapper = render_buffer_wrapper(adapter).expect("wrapper");
+        assert!(
+            wrapper.contains("fn rs_gpu_write(s0: i64, s1: i64, s2: i64, buf3: *mut u8, len4: i64) -> i64;"),
+            "{wrapper}"
+        );
+        assert!(
+            wrapper.contains("unsafe { rs_gpu_write(w0 as i64, w1 as i64, w2 as i64, buf3, len4) }"),
+            "{wrapper}"
+        );
+        assert!(
+            !wrapper.contains("let len0") && !wrapper.contains("w0 < 0"),
+            "a scalar must not acquire a length check: {wrapper}"
+        );
+        assert!(wrapper.contains("let len4 = w4 as i64;"), "{wrapper}");
+    }
+
+    #[test]
+    fn a_scalar_in_a_version_1_block_is_refused() {
+        let text = buffer_scalar_text().replace("abi buffer 2", "abi buffer 1");
+        let err = parse_buffer(&text).unwrap_err();
+        assert!(err.contains("version 2"), "{err}");
+    }
+
+    #[test]
+    fn every_version_2_parameter_must_be_accounted_for() {
+        let text = buffer_scalar_text().replace("scalars 0:Int64,1:Int64,2:Int64", "scalars 0:Int64");
+        let err = parse_buffer(&text).unwrap_err();
+        assert!(err.contains("leaves parameter 1 unexplained"), "{err}");
+    }
+
+    #[test]
+    fn a_narrow_scalar_beside_a_buffer_is_refused() {
+        let text = buffer_scalar_text().replace("scalars 0:Int64,1:Int64,2:Int64", "scalars 0:Int32,1:Int64,2:Int64");
+        let err = parse_buffer(&text).unwrap_err();
+        assert!(err.contains("64-bit integer"), "{err}");
     }
 
     // ── U13: the handle descriptor ──────────────────────────────────────────

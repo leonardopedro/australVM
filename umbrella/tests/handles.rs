@@ -890,3 +890,316 @@ fn a_host_reload_builds_and_loads_the_next_generation() {
     assert_eq!(unsafe { reload_dispose(after[0], after[1]) }, 0);
     assert_eq!(unsafe { live() }, 0);
 }
+
+// The provider for the live-reload test. Its own image is loaded once, before
+// any wrapper crate, so the wrapper crates' `RTLD_NOW` binding finds these
+// symbols. `wait`/`waiting`/`release` are the host-module gate; `remember`/
+// `recall` carry the pre-reload handle words out to the host.
+const RELOAD_PROVIDER: &str = r##"
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, Instant};
+
+static LIVE: AtomicI64 = AtomicI64::new(0);
+static DROPS: AtomicI64 = AtomicI64::new(0);
+static WAITING: AtomicI64 = AtomicI64::new(0);
+static RELEASED: AtomicI64 = AtomicI64::new(0);
+static HELD_LO: AtomicI64 = AtomicI64::new(0);
+static HELD_HI: AtomicI64 = AtomicI64::new(0);
+static HELD2_LO: AtomicI64 = AtomicI64::new(0);
+static HELD2_HI: AtomicI64 = AtomicI64::new(0);
+
+#[export_name = "avm_hot_ctor"]
+pub extern "C" fn hot_ctor(value: i64) -> *mut core::ffi::c_void {
+    LIVE.fetch_add(1, Ordering::SeqCst);
+    Box::into_raw(Box::new(value)) as *mut core::ffi::c_void
+}
+
+#[export_name = "avm_hot_dtor"]
+pub unsafe extern "C" fn hot_dtor(ptr: *mut core::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    LIVE.fetch_sub(1, Ordering::SeqCst);
+    DROPS.fetch_add(1, Ordering::SeqCst);
+    drop(Box::from_raw(ptr as *mut i64));
+}
+
+#[export_name = "avm_hot_read"]
+pub unsafe extern "C" fn hot_read(ptr: *mut core::ffi::c_void) -> i64 {
+    if ptr.is_null() { -1 } else { *(ptr as *mut i64) }
+}
+
+#[export_name = "avm_hot_live"]
+pub extern "C" fn hot_live() -> i64 { LIVE.load(Ordering::SeqCst) }
+
+#[export_name = "avm_hot_drops"]
+pub extern "C" fn hot_drops() -> i64 { DROPS.load(Ordering::SeqCst) }
+
+#[export_name = "avm_hot_wait"]
+pub extern "C" fn hot_wait() -> i64 {
+    WAITING.store(1, Ordering::SeqCst);
+    let start = Instant::now();
+    while RELEASED.load(Ordering::SeqCst) == 0 {
+        if start.elapsed() > Duration::from_secs(30) {
+            WAITING.store(0, Ordering::SeqCst);
+            return 1;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    0
+}
+
+#[export_name = "avm_hot_waiting"]
+pub extern "C" fn hot_waiting() -> i64 { WAITING.load(Ordering::SeqCst) }
+
+#[export_name = "avm_hot_release"]
+pub extern "C" fn hot_release() -> i64 {
+    RELEASED.store(1, Ordering::SeqCst);
+    0
+}
+
+#[export_name = "avm_hot_remember"]
+pub extern "C" fn hot_remember(lo: i64, hi: i64) -> i64 {
+    HELD_LO.store(lo, Ordering::SeqCst);
+    HELD_HI.store(hi, Ordering::SeqCst);
+    0
+}
+
+#[export_name = "avm_hot_recall"]
+pub unsafe extern "C" fn hot_recall(out: *mut i64) -> i64 {
+    if out.is_null() {
+        return 1;
+    }
+    *out = HELD_LO.load(Ordering::SeqCst);
+    *out.add(1) = HELD_HI.load(Ordering::SeqCst);
+    0
+}
+
+#[export_name = "avm_hot_remember2"]
+pub extern "C" fn hot_remember2(lo: i64, hi: i64) -> i64 {
+    HELD2_LO.store(lo, Ordering::SeqCst);
+    HELD2_HI.store(hi, Ordering::SeqCst);
+    0
+}
+
+#[export_name = "avm_hot_recall2"]
+pub unsafe extern "C" fn hot_recall2(out: *mut i64) -> i64 {
+    if out.is_null() {
+        return 1;
+    }
+    *out = HELD2_LO.load(Ordering::SeqCst);
+    *out.add(1) = HELD2_HI.load(Ordering::SeqCst);
+    0
+}
+"##;
+
+/// Build the live-reload provider into its own scratch directory. It is not
+/// loaded here: the test maps it globally first, because a wrapper crate's
+/// `RTLD_NOW` has to find its constructor at load time.
+fn reload_provider() -> PathBuf {
+    let dir = scratch("reload-provider");
+    let file = dir.join("lib.rs");
+    std::fs::write(&file, RELOAD_PROVIDER).expect("write provider");
+    let out = dir.join("libreload_provider.so");
+    let output = Command::new("rustc")
+        .arg("--crate-type=cdylib")
+        .arg("--edition=2021")
+        .arg("--crate-name=reload_provider")
+        .arg("-o")
+        .arg(&out)
+        .arg(&file)
+        .output()
+        .expect("spawn rustc");
+    assert!(
+        output.status.success(),
+        "the reload provider must compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    out
+}
+
+#[test]
+fn a_module_running_across_a_reload_sees_the_next_generation() {
+    let front_end = Path::new(env!("CARGO_MANIFEST_DIR")).join("../austral");
+    assert!(
+        front_end.exists(),
+        "the live reload test needs the dune-built front-end at {}; \
+         build it with `nix develop \"git+file://$PWD#ocaml\" -c make all`",
+        front_end.display()
+    );
+    let bridge_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../safestos/cranelift/target/release");
+
+    // 1. The provider image, mapped globally before any wrapper crate.
+    let provider = reload_provider();
+    umbrella::policy::dlopen(&provider).expect("load the provider globally");
+    let provider_lib = Library::open(&provider);
+    let live = provider_lib.count_fn("avm_hot_live");
+    let drops = provider_lib.count_fn("avm_hot_drops");
+    let waiting = provider_lib.count_fn("avm_hot_waiting");
+    let release = provider_lib.count_fn("avm_hot_release");
+    let recall: unsafe extern "C" fn(*mut i64) -> i64 =
+        unsafe { std::mem::transmute(provider_lib.symbol("avm_hot_recall")) };
+
+    // 2. The front-end over the real fixture module: CPS bytes plus the
+    //    `abi handle 1` descriptor the generator renders.
+    let dir = scratch("reload-front-end");
+    let cps_path = dir.join("HotHandle.cps");
+    let adapters_path = dir.join("HotHandle.adapters");
+    let mut command = Command::new(&front_end);
+    command
+        .arg("compile")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("modules/HotHandle.aum"))
+        .arg("--use-cps-jit")
+        .arg("--allow-all")
+        .arg("--target-type=tc")
+        .arg(format!("--emit-cps={}", cps_path.display()))
+        .arg(format!("--emit-adapters={}", adapters_path.display()))
+        // The front-end's own JIT attempt runs before the wrappers exist; the
+        // test compiles the CPS itself with them loaded.
+        .env("CPS_JIT_ADVISORY", "1");
+    if bridge_dir.join("libaustral_cranelift_bridge.so").exists() {
+        let existing = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+        let joined = if existing.is_empty() {
+            bridge_dir.display().to_string()
+        } else {
+            format!("{}:{}", bridge_dir.display(), existing.to_string_lossy())
+        };
+        command.env("LD_LIBRARY_PATH", joined);
+    }
+    let out = command.output().expect("run the front-end");
+    assert!(
+        out.status.success(),
+        "the front-end must typecheck the fixture:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cps = std::fs::read(&cps_path).expect("read CPS");
+    let descriptor_text = std::fs::read_to_string(&adapters_path).expect("read descriptors");
+    let mut parsed = HandleAdapter::parse_descriptors(&descriptor_text).expect("parse descriptors");
+    assert_eq!(parsed.len(), 1, "the fixture names one handle target");
+    let adapter = parsed.remove(0);
+    assert_eq!(adapter.target, "avm_hot");
+    let adapters = [GeneratedAdapter::Handle(&adapter)];
+
+    // 3. The first generation, built and loaded after the provider.
+    let first = umbrella::adapters::build_next(&adapters).expect("first build");
+    umbrella::adapters::load(&first).expect("load the first adapter crate");
+
+    // 4. Compile the module with the gate open and the wrappers resolvable.
+    austral_cranelift_bridge::auth::set_allow_all();
+    let entry = b"liveReload";
+    let function = austral_cranelift_bridge::compile_entry_i64(
+        cps.as_ptr(),
+        cps.len(),
+        entry.as_ptr(),
+        entry.len(),
+        0,
+    );
+    assert!(!function.is_null(), "the module must compile once the wrappers are loaded");
+
+    // 5. Run it on another thread, so the host can swap the generation while
+    //    the module is inside `avm_hot_wait`.
+    let address = function as usize;
+    let run = std::thread::spawn(move || unsafe {
+        austral_cranelift_bridge::execute_function(address as *const std::ffi::c_void)
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while unsafe { waiting() } == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the module never reached the reload gate"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    // 6. The reload: next generation, loaded, and the live forwarders bound to
+    //    it. The module was compiled against generation one, and keeps working.
+    let second = umbrella::adapters::build_next(&adapters).expect("reload build");
+    umbrella::adapters::load(&second).expect("load the reloaded adapter crate");
+    assert_eq!(second.generation, first.generation + 1);
+    assert_ne!(first.path, second.path);
+    umbrella::adapters::bind(&first.path, &second, &adapter).expect("bind the reload");
+    unsafe { release() };
+
+    let result = run.join().expect("the module thread must not panic");
+    assert_eq!(
+        result, 0,
+        "the module reports a wrong step (11 mint, 12 read, 13 gate, \
+         14 stale accepted, 15 second mint, 16 second dispose, 18 remember); \
+         provider live={}, drops={}",
+        unsafe { live() },
+        unsafe { drops() }
+    );
+
+    // 7. Exactly the new generation's value was destroyed: the refusal of the
+    //    old words ran no destructor, and the old value is still alive.
+    assert_eq!(unsafe { live() }, 1, "the pre-reload value is still owned");
+    assert_eq!(unsafe { drops() }, 1, "only the post-reload value was dropped");
+
+    // 8. The old value was not leaked: its own generation still resolves its
+    //    words, so the host frees it through the table that minted it.
+    let mut words = [0i64; 2];
+    assert_eq!(unsafe { recall(words.as_mut_ptr()) }, 0, "recall the words");
+    assert_ne!(words, [0, 0], "the fixture recorded a real handle");
+    let first_lib = Library::open(&first.path);
+    let first_dispose = first_lib.dispose_fn(&HandleAdapter::implementation_symbol(
+        &adapter.dispose_symbol(),
+        first.generation,
+    ));
+    assert_eq!(
+        unsafe { first_dispose(words[0], words[1]) },
+        0,
+        "the previous crate still resolves the words its table minted"
+    );
+    assert_eq!(unsafe { live() }, 0);
+    assert_eq!(unsafe { drops() }, 2);
+}
+
+#[test]
+fn a_forwarder_reaches_the_generation_it_was_bound_to() {
+    let dir = scratch("binding-provider");
+    let file = dir.join("lib.rs");
+    std::fs::write(&file, RELOAD_PROVIDER).expect("write provider");
+    let provider = dir.join("libbinding_provider.so");
+    let output = Command::new("rustc")
+        .arg("--crate-type=cdylib")
+        .arg("--edition=2021")
+        .arg("--crate-name=binding_provider")
+        .arg("-o")
+        .arg(&provider)
+        .arg(&file)
+        .output()
+        .expect("spawn rustc");
+    assert!(output.status.success(), "provider build");
+    umbrella::policy::dlopen(&provider).expect("load provider");
+
+    let adapter = handle_adapter("avm_hot", "hot", 1, Some("avm_hot_read"));
+    let adapters = [GeneratedAdapter::Handle(&adapter)];
+    let first = umbrella::adapters::build_next(&adapters).expect("first build");
+    umbrella::adapters::load(&first).expect("load first");
+    let second = umbrella::adapters::build_next(&adapters).expect("second build");
+    umbrella::adapters::load(&second).expect("load second");
+
+    let first_lib = Library::open(&first.path);
+    let new = first_lib.new_fn("avm_hot__new");
+    let dispose = first_lib.dispose_fn("avm_hot__dispose");
+    let mut before = [0i64; 2];
+    assert_eq!(unsafe { new(5, before.as_mut_ptr()) }, 0);
+    assert_eq!((before[1] >> 32) as u32, first.generation);
+
+    umbrella::adapters::bind(&first.path, &second, &adapter).expect("bind");
+    let mut after = [0i64; 2];
+    assert_eq!(unsafe { new(9, after.as_mut_ptr()) }, 0);
+    assert_eq!(
+        (after[1] >> 32) as u32,
+        second.generation,
+        "the forwarder now reaches the bound build's table"
+    );
+    assert_ne!(
+        unsafe { dispose(before[0], before[1]) },
+        0,
+        "the bound table refuses the previous generation's words"
+    );
+    assert_eq!(unsafe { dispose(after[0], after[1]) }, 0);
+}

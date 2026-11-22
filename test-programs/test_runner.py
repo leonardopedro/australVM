@@ -62,6 +62,20 @@ class SuiteListTest(unittest.TestCase):
         self.assertIn("999-ghost", message)
         self.assertIn("no directory", message)
 
+    def test_the_pool_is_bounded_by_the_selection_and_the_machine(self) -> None:
+        # `ProcessPoolExecutor()` defaults to one worker per CPU, which is what
+        # exhausted memory on a full run. The bound is a real cap, not a hint.
+        self.assertEqual(runner.worker_count([]), 1)
+        self.assertLessEqual(
+            runner.worker_count(list(range(1000))), runner.MAX_WORKERS
+        )
+        self.assertLessEqual(
+            runner.worker_count([object()] * 1000), os.cpu_count() or 1
+        )
+        self.assertEqual(
+            runner.worker_count([object()] * 3), min(3, os.cpu_count() or 1)
+        )
+
     def test_a_wired_but_empty_suite_is_not_a_disagreement(self) -> None:
         with tempfile.TemporaryDirectory() as suites_dir:
             os.makedirs(os.path.join(suites_dir, "998-empty"))

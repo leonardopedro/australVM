@@ -738,9 +738,9 @@ advisory run reports what it tolerated instead of hiding it.
 
 ### U12 (bounded start) — the buffer descriptor's conventions
 
-`umbrella/src/interface.rs` reads and validates an `abi buffer 1` block, so the
-buffer layout is a checked contract before any emitter writes one. What it
-fixes, and refuses anything else about:
+`umbrella/src/interface.rs` reads and validates an `abi buffer` block (version 1
+and version 2), so the buffer layout is a checked contract. What it fixes, and
+refuses anything else about:
 
 * `params <n>` — total parameter count; every index is a parameter index.
 * `lengths Nat64|Int64` — the length is a **separate 64-bit parameter**, named
@@ -757,6 +757,13 @@ fixes, and refuses anything else about:
   A different convention needs its own ABI version, and an absent `empty` line
   is an error rather than a default.
 * `returns` — a scalar, not `Unit`.
+* `scalars index:Type,…` — version 2 only: 64-bit integer words (`Int64` or
+  `Nat64`) that sit beside a buffer and are neither it nor its length. They are
+  carried unchanged (`w<i> as i64`), never read as a length. In version 2 every
+  parameter must be exactly one of a buffer, a buffer's length or a declared
+  scalar — an unexplained parameter has no type the wrapper could give it, so it
+  is refused. Version 1 keeps its published meaning (every non-buffer parameter
+  is a length) and is not tightened under its old number.
 
 `abi scalar` blocks in the same document are skipped, so one descriptor file
 can describe both kinds.
@@ -771,10 +778,13 @@ comes from the pointer type, not from the `Rust_Ownership` annotation —
 whether or not the callee says it only reads. `Compiler_cps.adapter_block`
 writes the block; `TypingPass.check_rust_ownership` applies the identical rule,
 so an admitted signature always has a descriptor and a refused one names no
-`<name>__adapter`. Anything else is refused there with a reason: a buffer with
-no length after it, a 64-bit parameter that measures no buffer, a scalar or
-non-Nat8 pointer beside a buffer (version 1 has no per-parameter type list),
-mismatched length types, or a buffer result. No parameter type escapes that
+`<name>__adapter`. Version 2 extends that shape with word scalars, so a
+64-bit integer that measures no buffer is carried as a declared scalar instead
+of being refused: `stdlib/gpu/Jobs`'s
+`(context, buffer, offset, Address[Nat8], len)` calls compile as `abi buffer 2`
+with `scalars 0:Int64,1:Int64,2:Int64`. Anything else is refused there with a
+reason: a buffer with no length after it, a narrower integer, Bool, float or
+non-Nat8 pointer beside a buffer, mismatched length types, or a buffer result. No parameter type escapes that
 check: a byte buffer is always mediated, so `Address[Nat8]` + `Int64` → `Int64`
 — the shape that used to stay word-native — now emits a block and lowers to
 `<name>__adapter` as well.
@@ -789,7 +799,8 @@ scalar wrappers are rendered into one crate, because the JIT resolves
 
 Evidence: `test-programs/adapters/adapters.golden` is emitted from
 `rs_scalars.aum` and pinned byte-for-byte by `scripts/check-adapter-descriptors`
-(5 descriptors: `rs_count` read/Nat64→Nat32, `rs_fill` readwrite/Int64→Int32,
+(6 descriptors: `rs_count` read/Nat64→Nat32, `rs_fill` readwrite/Int64→Int32,
+`rs_stamp` readwrite/Int64→Int64 with `scalars 2:Int64` — the version 2 shape —
 and the three scalar ones), `umbrella/tests/interface.rs` parses and renders
 those blocks from the same document, and the unit tests here cover the
 round-trip, the mixed document, the wrapper's bindings, and the refusals (mode,
@@ -844,9 +855,10 @@ moved with it and `umbrella/module.toml` now grants `rs_demo_checksum__adapter`
 (granting the native symbol would grant nothing, since no module can reach it),
 and the live module carries a third, all-64-bit target (`rs_live_wide`) whose
 only grant is `rs_live_wide__adapter` — a regression to the direct symbol is
-refused by the JIT gate (UK-4001) instead of passing quietly. The descriptor
-golden is unchanged (its two buffer cases already had scalar results narrower
-than 64 bits).
+refused by the JIT gate (UK-4001) instead of passing quietly. That change
+needed no golden regeneration: both buffer cases already had scalar results
+narrower than 64 bits. (Version 2 later added a third buffer case, `rs_stamp`,
+for the word-scalar shape — see U12 above.)
 
 **Not yet carried:** there is no text/UTF-8 distinction and no owned result
 handle, and no capacity check beyond the declared length (the wrapper cannot see

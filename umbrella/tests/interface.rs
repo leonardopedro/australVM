@@ -11,8 +11,8 @@ use std::process::Command;
 
 use umbrella::interface::{
     render_buffer_wrapper, render_handle_wrapper, render_wrapper, Adapter, BufferAdapter,
-    HandleAdapter, Scalar, ADAPTER_ABI_VERSION, BUFFER_ABI_VERSION, DESCRIPTOR_SCHEMA,
-    HANDLE_ABI_VERSION,
+    HandleAdapter, Scalar, ScalarParam, ADAPTER_ABI_VERSION, BUFFER_ABI_VERSION,
+    DESCRIPTOR_SCHEMA, HANDLE_ABI_VERSION,
 };
 
 fn fixtures() -> PathBuf {
@@ -208,13 +208,17 @@ fn the_compilers_emitted_descriptors_parse_here() {
     // generator's reader are pinned together for buffers too.
     let buffers = BufferAdapter::parse_descriptors(&text).expect("the buffer blocks parse");
     let symbols: Vec<&str> = buffers.iter().map(|a| a.symbol.as_str()).collect();
-    assert_eq!(symbols, vec!["rs_count__adapter", "rs_fill__adapter"]);
+    assert_eq!(
+        symbols,
+        vec!["rs_count__adapter", "rs_fill__adapter", "rs_stamp__adapter"]
+    );
     for adapter in &buffers {
         adapter
             .validate()
             .expect("the compiler emits valid buffer descriptors");
-        assert_eq!(adapter.abi_version, BUFFER_ABI_VERSION);
-        assert_eq!(adapter.params, 2);
+        // The first two blocks are version 1 and stay byte-identical; only a
+        // signature with a word beside the buffer is written as version 2.
+        assert!(adapter.abi_version <= BUFFER_ABI_VERSION);
         assert_eq!(adapter.empty.name(), "null-len0");
         let wrapper = render_buffer_wrapper(adapter).expect("buffer wrapper");
         assert!(
@@ -230,6 +234,26 @@ fn the_compilers_emitted_descriptors_parse_here() {
     assert_eq!(buffers[1].buffers[0].mode.name(), "readwrite");
     assert_eq!(buffers[1].lengths, Scalar::I64);
     assert_eq!(buffers[1].returns, Scalar::I32);
+    assert_eq!(buffers[0].params, 2);
+    assert_eq!(buffers[1].params, 2);
+    assert!(buffers[0].scalars.is_empty());
+
+    // Version 2 carries `tag` beside the buffer: the block names it, so the
+    // wrapper passes it through instead of reading it as a second length.
+    let stamp = &buffers[2];
+    assert_eq!(stamp.abi_version, 2);
+    assert_eq!(stamp.params, 3);
+    assert_eq!(
+        stamp.scalars,
+        vec![ScalarParam {
+            index: 2,
+            ty: Scalar::I64
+        }]
+    );
+    let wrapper = render_buffer_wrapper(stamp).expect("version 2 wrapper");
+    assert!(wrapper.contains("s2: i64"), "{wrapper}");
+    assert!(wrapper.contains("w2 as i64"), "{wrapper}");
+    assert!(!wrapper.contains("let len2"), "{wrapper}");
 
     // U13: the same pair of goldens covers an owned-value handle. The module
     // writes only the handle's *target*; the lowering derives the dispose

@@ -2,9 +2,11 @@
 -- adapter wrapper, so compiling it with --emit-adapters must produce exactly
 -- `adapters.golden`. The two word-native shapes below must produce nothing:
 -- they keep their declared symbol and call the native function directly.
--- The last two are the buffer shapes of version 1: a Nat8 buffer and the
--- 64-bit length right after it, with a scalar result — `Pointer[Nat8]` crosses
--- as `read`, `Address[Nat8]` as `readwrite`.
+-- Then the buffer shapes: a Nat8 buffer and the 64-bit length right after
+-- it, with a scalar result — `Pointer[Nat8]` crosses as `read`,
+-- `Address[Nat8]` as `readwrite`. `rs_stamp` is version 2: a 64-bit word (`tag`)
+-- sits beside the buffer, so the block names it in a `scalars` line and the
+-- wrapper passes it through instead of reading it as a length.
 pragma Unsafe_Module;
 
 import Austral.Memory (Address, Pointer);
@@ -38,6 +40,11 @@ module body Adapters is
     pragma Foreign_Import(External_Name => "rs_fill");
     pragma Rust_Ownership(Params => "borrowed, borrowed", Return => "owned");
     function rs_fill(bytes: Address[Nat8], len: Int64): Int32 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_stamp");
+    pragma Rust_Ownership(Params => "borrowed, borrowed, borrowed", Return => "owned");
+    function rs_stamp(bytes: Address[Nat8], len: Int64, tag: Int64): Int64 is
     end;
 
     function main(): ExitCode is

@@ -18,6 +18,15 @@ from concurrent.futures import ProcessPoolExecutor, Future
 # The `test-programs/` directory.
 DIR: str = "test-programs/"
 
+# How many tests may compile at once.
+#
+# `ProcessPoolExecutor()` defaults to one worker per CPU. Each worker runs the
+# compiler (and several fixtures also run the JIT), and a full default run on a
+# 12-core host with 12 GB of RAM exhausted memory: more compiling at once is
+# not the same as finishing sooner. A full run does not need more than this,
+# and `worker_count` caps it further on a smaller host or a smaller selection.
+MAX_WORKERS: int = 4
+
 # `./austral` links the cranelift bridge as a shared library. Callers used to
 # have to export `LD_LIBRARY_PATH` themselves; without it every fixture died at
 # the loader with `libaustral_cranelift_bridge.so: cannot open shared object
@@ -987,11 +996,16 @@ def run_all_tests(
     return run_tests_parallel(filtered, replace_stderr)
 
 
+def worker_count(tests: list[Test]) -> int:
+    """Workers for `tests`: never more than the tests, `MAX_WORKERS`, or the CPUs."""
+    return max(1, min(len(tests), MAX_WORKERS, os.cpu_count() or 1))
+
+
 def run_tests_parallel(
     tests: list[Test],
     replace_stderr: bool,
 ) -> list[TestResult]:
-    with ProcessPoolExecutor() as executor:
+    with ProcessPoolExecutor(max_workers=worker_count(tests)) as executor:
         futures: list[Future[TestResult | None]] = [
             executor.submit(run_test, test, replace_stderr)
             for test in tests

@@ -119,3 +119,59 @@ pub fn build_next(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<Adapte
 pub fn load(built: &AdapterCrate) -> Result<(), String> {
     crate::policy::dlopen(&built.path).map(|_| ())
 }
+
+/// Resolve one symbol from one mapped image. `dlsym` here is scoped to the
+/// image, not `RTLD_DEFAULT`: two generations export the same forwarder names,
+/// and the reload needs the implementation from a *named* build.
+fn resolve(image: *mut libc::c_void, symbol: &str) -> Result<*mut libc::c_void, String> {
+    let name = std::ffi::CString::new(symbol).map_err(|e| format!("{symbol}: {e}"))?;
+    let ptr = unsafe { libc::dlsym(image, name.as_ptr()) };
+    if ptr.is_null() {
+        return Err(format!("`{symbol}` is not exported by the mapped build"));
+    }
+    Ok(ptr)
+}
+
+/// Point a loaded build's forwarders at another build's implementations: the
+/// live reload's last step. `forwarding` is the image the module's compiled
+/// calls target (the first build loaded); `implementations` is the build that
+/// just loaded. Both stay mapped — the forwarders still frame the call, and
+/// the previous generation's values keep the destructor their own table names.
+///
+/// This is what lets a reload reach a module that is *already running*: the
+/// JIT baked the forwarder addresses when it compiled, so nothing here
+/// recompiles or renames; it swaps the body behind those addresses.
+pub fn bind(
+    forwarding: &Path,
+    implementations: &AdapterCrate,
+    adapter: &interface::HandleAdapter,
+) -> Result<(), String> {
+    let forwarding_image = crate::policy::dlopen(forwarding)?;
+    let implementations_image = crate::policy::dlopen(&implementations.path)?;
+    let bind_symbol = resolve(forwarding_image.as_ptr(), &adapter.bind_symbol())?;
+    // SAFETY: the generated signature is `(name: *const u8, len: usize,
+    // ptr: *mut c_void) -> i64`, and the image's own export produced it.
+    let bind: unsafe extern "C" fn(*const u8, usize, *mut libc::c_void) -> i64 =
+        unsafe { std::mem::transmute(bind_symbol) };
+    for forwarder in adapter.forwarded_symbols() {
+        let implementation_symbol =
+            interface::HandleAdapter::implementation_symbol(&forwarder, implementations.generation);
+        let implementation = resolve(implementations_image.as_ptr(), &implementation_symbol)?;
+        // SAFETY: the name bytes live for the call; the implementation
+        // pointer is this build's export of the same forwarder's signature.
+        let status = unsafe {
+            bind(
+                forwarder.as_ptr(),
+                forwarder.len(),
+                implementation.cast::<libc::c_void>(),
+            )
+        };
+        if status != 0 {
+            return Err(format!(
+                "`{}` refused to bind `{forwarder}` to `{implementation_symbol}` (status {status})",
+                adapter.bind_symbol()
+            ));
+        }
+    }
+    Ok(())
+}

@@ -38,6 +38,17 @@ params Float64,Int64
 returns Float64
 
 schema 1
+abi buffer 2
+symbol rs_stamp__adapter
+target rs_stamp
+params 3
+lengths Int64
+buffers readwrite:0:1
+scalars 2:Int64
+empty null-len0
+returns Int64
+
+schema 1
 abi scalar 1
 symbol rs_toggle__adapter
 target rs_toggle

@@ -680,8 +680,9 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
   if not (is_adapter_protocol_type rt) then
     Errors.rust_adapter_unsupported ~ty:rt;
   (* U11 step 3 / U12: an adapter-mediated call may carry a byte buffer only in
-     the shape `abi buffer 1` describes — Nat8 buffers, each immediately
-     followed by its 64-bit length, with a scalar result. That is exactly what
+     the shape `abi buffer` describes — Nat8 buffers, each immediately followed
+     by its 64-bit length, with a scalar result, and (version 2) 64-bit integer
+     words alongside them. That is exactly what
      `Compiler_cps.adapter_descriptors_text` writes and what
      `umbrella/src/interface.rs` can implement as `<name>__adapter`; a shape
      admitted here but not describable there would name a wrapper that cannot
@@ -725,7 +726,11 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
               scan rest'
             | _ -> Errors.rust_adapter_buffer_needs_length ~name ~ty
           else if is_length_type ty then
-            Errors.rust_adapter_buffer_length_unpaired ~name
+            (* Version 2: a 64-bit integer that does not measure a buffer is a
+               word the wrapper passes through unchanged. `buffer_layout` names
+               it in the descriptor's `scalars` line, so the wrapper never
+               mistakes it for a length. *)
+            scan rest
           else
             Errors.rust_adapter_buffer_scalar_beside ~name ~ty
       in

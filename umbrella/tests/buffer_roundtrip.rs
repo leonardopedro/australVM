@@ -88,6 +88,7 @@ fn fill_adapter() -> BufferAdapter {
             buffer: 0,
             length: 1,
         }],
+        scalars: vec![],
         empty: EmptyConvention::NullLen0,
         returns: Scalar::I32,
     }
@@ -106,6 +107,7 @@ fn checksum_adapter() -> BufferAdapter {
             buffer: 0,
             length: 1,
         }],
+        scalars: vec![],
         empty: EmptyConvention::NullLen0,
         returns: Scalar::I64,
     }
@@ -124,6 +126,7 @@ fn probe_adapter() -> BufferAdapter {
             buffer: 0,
             length: 1,
         }],
+        scalars: vec![],
         empty: EmptyConvention::NullLen0,
         returns: Scalar::I64,
     }
