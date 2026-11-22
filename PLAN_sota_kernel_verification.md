@@ -417,7 +417,7 @@ compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
 **Re-measured 2026-11-22 on this x86_64 host, in all three shells and the bare
-`nix-shell -p python3` invocation, on `2ea08fcc` (the merges of `origin/master`
+`nix-shell -p python3` invocation, on `b8d628de` (the merges of `origin/master`
 `79b29839` and its Lean-typing follow-up, with the certificate and citation re-pin that the older merge's
 lowering forced, the `packages.mm0` the default and ocaml shells now carry, and
 the D00 line that names the sibling it resolved its rows against: the pulled

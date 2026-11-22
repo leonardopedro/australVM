@@ -281,6 +281,7 @@ logos CNL → DeltaNet → MM0 gate
 [gap]  cargo cannot link in this shell — no working C toolchain for it, so the emitter cannot be built here:
         = note: /home/leo/.rustup/toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld: line 5: /nix/store/b5rxg3fjf23qax03mqw8pbv14gqn12sr-rustup-1.29.3/nix-support/ld-wrapper.sh: No such file or directory
                 collect2: error: ld returned 127 exit status
+        = note: /home/leo/.rustup/toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld: line 5: /nix/store/b5rxg3fjf23qax03mqw8pbv14gqn12sr-rustup-1.29.3/nix-support/ld-wrapper.sh: No such file or directory
 logos2mm0: 0 passed, 0 failed, 1 gapped
 [gap]  logos mm0: the fragment gate could not run here (the emitter cannot be built in this shell)
 [pass] memsafe: theory, emitter, both fixtures, ledgers and certificates present
