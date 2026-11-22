@@ -1,0 +1,336 @@
+[pass] S29: UNFER_SYMBOLS table present
+[pass] S29: UNFER_SYMBOLS registers into the Cranelift JIT
+[pass] S29: per-module CPS compile consumes the same census
+[pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
+OK: 92 uk_ + 5 uz_ census artifacts in sync.
+[pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
+[pass] D00 contracts: 14 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present
+[pass] D00: distributed execution record and contract inventory are well-formed
+[pass] D00 checker refuses: duplicate inventory id
+[pass] D00 checker refuses: unknown status
+[pass] D00 checker refuses: missing path
+[pass] D00 checker refuses: missing evidence
+[pass] D00 checker refuses: duplicate baseline id
+[pass] D00 checker refuses: malformed header
+[pass] D00 selftest: 6 mutation control(s) refused
+[pass] D00: the distributed contract checker refuses every mutated record
+[pass] Phase D: lean2mm0 emitter present
+[pass] Phase D: generated certificate artifacts present
+lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports
+[pass] Phase D: generated MM0/MM1 in sync with the pinned lean4export
+[pass] Phase D: gap_certificate pins its trust split (9 structural / 0 grounded)
+[pass] Phase D: layout_certificate pins its trust split (3 structural / 5 grounded)
+[pass] Phase D: clif.mm0 states its measured coverage (20 form(s))
+[pass] Phase D: flux1d_certificate.mm0 only claims rules its theory declares
+[pass] Phase D: gap_certificate.mm0 only claims rules its theory declares
+[pass] Phase D: isa.mm0 only claims rules its theory declares
+[pass] Phase D: layout_certificate.mm0 only claims rules its theory declares
+[pass] Phase D: linearity_certificate.mm0 only claims rules its theory declares
+[pass] Phase D: linearity_certificate_spans.mm0 only claims rules its theory declares
+[pass] Phase D: liquid_split.mm0 declares its own vocabulary (no imported theory)
+[pass] Phase D: quasi_rh_7_8.mm0 only claims rules its theory declares
+[pass] Phase D: quasi_rh_certificate.mm0 only claims rules its theory declares
+[pass] Phase D: service_isolation_certificate.mm0 only claims rules its theory declares
+[pass] Phase D: slot_layout.mm0 only claims rules its theory declares
+[pass] Phase D: store_projection.mm0 declares its own vocabulary (no imported theory)
+[pass] Phase D: store_projection_toy.mm0 only claims rules its theory declares
+lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports
+lean2mm0 selftest: unmutated generation is clean and matches the committed artifacts
+lean2mm0 selftest: 'kernel' tamper refused (gap_certificate) — read_gap_verified: Lean-side evaluation is False, not `true` (the evaluator disagrees with the k
+lean2mm0 selftest: 'kernel' tamper refused (layout_certificate) — bijective_verified: Lean-side evaluation is False, not `true` (the evaluator disagrees with the 
+lean2mm0 selftest: 'kernel' tamper refused (quasi_rh_certificate) — read_bound_verified: Lean-side evaluation is False, not `true` (the evaluator disagrees with the
+lean2mm0 selftest: 'net' tamper refused (gap_certificate) — read_gap_verified: net reduction is False, not `true` (encoding disagrees with the evaluator)
+lean2mm0 selftest: 'net' tamper refused (layout_certificate) — bijective_verified: net reduction is False, not `true` (encoding disagrees with the evaluator)
+lean2mm0 selftest: 'net' tamper refused (quasi_rh_certificate) — read_bound_verified: net reduction is False, not `true` (encoding disagrees with the evaluator)
+lean2mm0 selftest: 'bound' tamper refused (quasi_rh_7_8) — seven-eighths identity failed: 8×8750 != 6×10000 (the emitted fraction is not the Lean bound)
+lean2mm0 selftest: 'shape' tamper refused (quasi_rh_7_8) — structure mismatch: hypothesis head is LTlt, expected LEle
+lean2mm0 selftest: OK — all four anchors refuse tampered input (kernel rfl, evaluator vs net, statement shape, seven-eighths bound)
+[pass] Phase D: emitter self-test (both trust anchors refuse tampered input)
+lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports
+lean2mm0 check: OK — generated MM0/MM1 in sync with the pinned exports
+lean2mm0 selftest: unmutated generation is clean and matches the committed artifacts
+lean2mm0 selftest: 'kernel' tamper refused (gap_certificate) — read_gap_verified: Lean-side evaluation is False, not `true` (the evaluator disagrees with the k
+lean2mm0 selftest: 'kernel' tamper refused (layout_certificate) — bijective_verified: Lean-side evaluation is False, not `true` (the evaluator disagrees with the 
+lean2mm0 selftest: 'kernel' tamper refused (quasi_rh_certificate) — read_bound_verified: Lean-side evaluation is False, not `true` (the evaluator disagrees with the
+lean2mm0 selftest: 'net' tamper refused (gap_certificate) — read_gap_verified: net reduction is False, not `true` (encoding disagrees with the evaluator)
+lean2mm0 selftest: 'net' tamper refused (layout_certificate) — bijective_verified: net reduction is False, not `true` (encoding disagrees with the evaluator)
+lean2mm0 selftest: 'net' tamper refused (quasi_rh_certificate) — read_bound_verified: net reduction is False, not `true` (encoding disagrees with the evaluator)
+lean2mm0 selftest: 'bound' tamper refused (quasi_rh_7_8) — seven-eighths identity failed: 8×8750 != 6×10000 (the emitted fraction is not the Lean bound)
+lean2mm0 selftest: 'shape' tamper refused (quasi_rh_7_8) — structure mismatch: hypothesis head is LTlt, expected LEle
+lean2mm0 selftest: OK — all four anchors refuse tampered input (kernel rfl, evaluator vs net, statement shape, seven-eighths bound)
+lean2mm0 verify: label contract grounded — all 13 set.mm0 labels exist with the expected sorts
+lean2mm0 verify: mm0-rs compile OK (quasi_rh_7_8) — 3 sorts, 1479 term/def, 50031 ax/thm
+lean2mm0 verify: mm0-c OK (quasi_rh_7_8) — the root of trust accepts the axiom and every imported set.mm proof
+lean2mm0 verify: negative anchor OK — mm0-rs refuses the corrupted set.mmu proof (idi's proof → ax_1, set.mmu:8)
+lean2mm0 verify: mm0-rs compile OK (gap_certificate) — 3 sorts, 46 term/def, 39 ax/thm
+lean2mm0 verify: mm0-c OK (gap_certificate) — the root of trust accepts the proofs
+lean2mm0 verify: mm0-rs compile OK (layout_certificate) — 3 sorts, 34 term/def, 24 ax/thm
+lean2mm0 verify: mm0-c OK (layout_certificate) — the root of trust accepts the proofs
+lean2mm0 verify: mm0-rs compile OK (quasi_rh_certificate) — 3 sorts, 44 term/def, 35 ax/thm
+lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts the proofs
+[pass] Phase D: mm0-rs elaborates and mm0-c re-verifies the certificate
+  [detail] 4 sorts, 20 term/def, 44 ax/thm
+[pass] W2: docs/kernel_alg.mm0 accepted by mm0-rs + mm0-c
+[pass] W5 (checked): the bridge the gate loads is the release artifact it was built from
+[pass] W5: the staleness note is silent when the artifact is newest, and names the newer binary
+[pass] W5: the binary note is silent when the binary is newest, and names the newer source
+[pass] W2/W5/W6: flux1d certificate and probe re-emit byte-identically and mm0 re-accepts it
+[pass] W5 (checked): the certificate's cps digest is the bridge's digest of the emitted bytes
+[pass] W5 (checked): the certificate's obj digest is the bridge's digest of the emitted object (x86_64)
+[pass] W7: a certificate with a flipped coefficient is refused
+  [detail] 6 sorts, 71 term/def, 91 ax/thm
+[pass] W8: mm0/isa.mm0 + isa.mm1 accepted by mm0-rs + mm0-c, no sorry
+  [detail] 4 sorts, 8 term/def, 9 ax/thm
+[pass] W8: mm0/slot_layout.mm0 + .mm1 accepted, in_bounds_alloc proved
+[pass] W8: the allocation-monotonicity proof depends on its direction
+  [detail] isa-encdec: 23/23 encdec instances proved from the table, 3 step refinement(s) proved; mm0/isa.mm0 and mm0/isa.mm1 are current
+[pass] W8: encdec table and its proofs are current
+[pass] W8: a table entry moved off its byte breaks its proof
+  [detail] 3 sorts, 10 term/def, 19 ax/thm — PC02 word.mm0
+[pass] PC02: word.mm0 + word.mm1 accepted, clamp bounds and map laws proved
+[pass] PC02: flipping clamp_upper's conclusion is refused
+[detail] lattice laws checked at 10010 words
+[detail] clamp bounds checked at 10010 words
+[pass] PC02 finite interpretation controls
+[pass] PC02: finite word/map interpretation controls
+  [detail] 3 sorts, 14 term/def, 27 ax/thm — PC03 assembled word+relation
+  [detail] PC03 compose_conditional: 3 premise(s), 1 pending edge premise (ule i u100)
+  [detail] PC03 compose_discharged: 2 premise(s), 0 pending edge premise
+  [detail] PC03 finite witness: x=5, i=101, y=101 has edge_ir_tgt but no bound, so the pending premise is load-bearing
+[pass] PC03 relation composition, discharge and premise controls
+[pass] PC03: composition, discharge and premise controls
+  [detail] 3 sorts, 19 term/def, 29 ax/thm — PC06 assembled word+relation+gpu_plan
+  [detail] PC06 reuse: compose_bound at the clamp clause, the plan (n) and the plan at u256
+  [detail] PC06 residual obligations (not discharged by MM0):
+    O1: generated flat index is representable [Why3 goal index_representable (separate route, not MM0)]
+    O2: guard implies the element/index bound [Why3 goal guard_implies_bound; consumed as plan_write_bound's hb]
+    O3: active distinct invocations write distinct indices [Why3 goal distinct_active_writes + runtime distinct invocation ids]
+    O4: every input binding has extent n [runtime premise recorded in the manifest (trusted at bind time)]
+    O5: the fresh output does not alias an input [runtime allocation premise (trusted; no alias construction in v1)]
+  [detail] PC06 plan-record control: statements-only passes, `-- proves: 1 theorems` is refused
+[pass] PC06 composition applied to the GPU plan; residuals stated
+[pass] PC06: GPU plan composition and residual obligations
+  [detail] 3 sorts, 11 term/def, 21 ax/thm — PC04 assembled word+clamp_source
+  [detail] PC04 reversed operator (umeet→ujoin) is refused
+[pass] PC04 source→KernelIR reflection of the real clamp fixture
+[pass] PC04: source→KernelIR reflection of the clamp fixture
+  [detail] isa-hypotheses: 4 pinned citation(s), 1 cited hypothesis/hypotheses (1 content-checked, 0 unchecked), 65 axiom(s) accounted for
+[pass] W8: an uncited or stale hypothesis is refused
+[pass] W8: an unchecked citation cannot be re-labelled as checked
+[pass] W8: scripts/isa-census covers the emitted opcodes
+        used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x06 sub, 0x07 return, 0x08 if, 0x14 cmp_eq, 0x16 and, 0x18 mul, 0x20 deref
+      isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, 23 opcode(s) declared in /home/leo/Projects/australVM/mm0/isa.mm0
+[pass] W8: the corpus census covers every opcode the examples emit
+[pass] W8: isa-census refuses a model opcode the decoder rejects
+  [detail] 5 sorts, 23 term/def, 0 ax/thm
+[pass] W9: mm0/clif.mm0 + .mm1 accepted by mm0-rs + mm0-c
+[pass] W9: the CLIF model still claims no theorem
+[pass] W9.3: clif_step is vocabulary — declared, stated, never axiomatized
+[pass] W9.3: the refinement's citations still match their artifacts (6 pinned)
+[pass] W9.3: certification state matches mm0/approved/
+  [detail] clif2mm0: OK — 20 form(s), 811 instruction(s) over the corpus, 0 theorems
+[pass] W9: mm0/clif.mm0 is what the corpus lowering measures
+[pass] W9: a form the lowering does not emit is refused
+[gap]  W9.1: RV64 model not re-converted (needs the lean shell: run make w9)
+  [detail] REFUTED as stated: load store
+[pass] W9.3: load/store are refuted as the model's execute_LOAD/execute_STORE
+[pass] U11: the CPS lowering's adapter descriptors match the golden
+  [detail] 3 sorts, 8 term/def, 0 ax/thm
+[pass] W9.3: the memory projection is stated as vocabulary, accepted by mm0-c
+[pass] W9.3: the projection's citations still match their artifacts (3 pinned)
+[pass] W9.3: the toy model proves the stated projection, not a neighbour
+[pass] W9.3: the toy's citation digest refuses a changed claim
+  [detail] 3 sorts, 18 term/def, 48 ax/thm
+[pass] W9.3: the toy projection's theorems check without sorry
+[pass] W9.3: the toy's theorem and axiom counts agree with the plan and AGENTS (28 theorem(s), 20 axiom(s))
+[pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
+  [detail] mutations refused: toy_jit_store_visible(refused), toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused), toy_jit_fourth_store_drops_oldest(refused), toy_jit_recent_cells_readable(refused), toy_jit_third_store_kept(refused), toy_jit_refresh_keeps_other_cell(refused), toy_jit_refresh_keeps_other_cell(refused), toy_jit_two_cells_preserved(refused), toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused), toy_width4_load_after_wide_store(refused), toy_width4_store_load_roundtrip(refused)
+[pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
+[gap]  W9.3: toy axioms not run against a concrete model (the witness could not be built here)
+[gap]  W9.3: the witness's axiom list not compared (the witness could not be built here)
+[gap]  W9.3: the domain-5 regression not run (the witness could not be built here)
+[gap]  W9.3: the Lean axiom list not compared (the witness could not be built here)
+[pass] W9.3: the Lean development proves the toy's 28 theorems too
+[pass] W9.3: every Lean declaration rests on Lean's standard foundation only (48 audited)
+[pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
+  [detail] injected sorry at line 810: lean accepted the file (exit 0), the scan refused it
+[pass] W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts
+[pass] W9.3: the no-sorry scan does not count banned words inside comments
+[gap]  W9.3: rejected-candidate cross-check not run (the witness could not be built here)
+  [detail] lean mutations refused: put-no-truncation(refused@199), drop-keeps-written-address(refused@133), notfull-weakened-to-four(refused@236), narrow4-becomes-identity(refused@606), keep-order-becomes-put(refused@360)
+[pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
+  [detail] flux1d probe: 4 identit(ies), 1000 states, max relative deviation 0.000e+00
+[pass] W6: generated C probe compiles and passes at tolerance 1e-8
+[pass] W6: no certificate claims a float path is proved
+au2mm0 selftest: sign flip refused; division refused as a gap; false obligation not emitted; new assumption refused; OK
+[pass] W2/W4: au2mm0 self-test (weakened scheme, division, false obligation and unpinned assumption all refused)
+[pass] W1: Flux1d compiles through the CPS JIT and its four obligations hold at the example state
+au2mm0: Flux1d (/home/leo/Projects/australVM/examples/verified-kernel/flux1d/flux1d.obligations.json)
+  [ok]   consistency: numFlux u u = flux u (lhs-rhs = 0 over 1 variable(s))
+  [ok]   conservation: delta a b + delta b c + delta c a = 0 (lhs-rhs = 0 over 3 variable(s))
+  [ok]   symmetry: delta l r + delta r l = 0 (lhs-rhs = 0 over 2 variable(s))
+  [ok]   uniform_state: l = r => delta l r = 0 (lhs-rhs = 0 over 2 variable(s) under 1 hypothesis/hypotheses (l = r (a uniform interface)), witness l=1 r=1)
+au2mm0: 4 obligation(s), 0 failure(s), 0 gap(s)
+[pass] W2: au2mm0 decides Flux1d's four obligations (both routes agree, hypothesis eliminated by substitution)
+[pass] W3: every §W3 row's emitter script exists before its state cell is read (5 row(s))
+[note] flux1d_certificate: no emitter registered — compared as committed
+[ok]   flux1d_certificate: 100 statements, closure 01ba7608ce71eaea…, theory e3b0c44298fc1c14…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: flux1d_certificate matches its approved statements
+[ok]   gap_certificate: 107 statements, closure bf0e2abafa886385…, theory f906599cee3197ce…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: gap_certificate matches its approved statements
+[ok]   isa: 193 statements, closure 27de0884e3408cd4…, theory e3b0c44298fc1c14…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: isa matches its approved statements
+[ok]   layout_certificate: 69 statements, closure 9e8383b802d5d53b…, theory f906599cee3197ce…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: layout_certificate matches its approved statements
+[ok]   linearity_certificate: 67 statements, closure 9db09b2537685489…, theory ef6e46e2c30e023b…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: linearity_certificate matches its approved statements
+[ok]   linearity_certificate_spans: 71 statements, closure 709158f38732cc22…, theory ef6e46e2c30e023b…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: linearity_certificate_spans matches its approved statements
+[ok]   liquid_split: 41 statements, closure 4db6a19f97b333b4…, theory e3b0c44298fc1c14…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: liquid_split matches its approved statements
+[ok]   quasi_rh_7_8: 3 statements, closure 48dbc45a6738318c…, theory a5f1603ca493b374…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: quasi_rh_7_8 matches its approved statements
+[ok]   quasi_rh_certificate: 99 statements, closure a6da3a01b616af44…, theory f906599cee3197ce…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: quasi_rh_certificate matches its approved statements
+[ok]   service_isolation_certificate: 44 statements, closure b496c7466a94ce7b…, theory 47243fbc7b7f5a58…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: service_isolation_certificate matches its approved statements
+[note] slot_layout: no emitter registered — compared as committed
+[ok]   slot_layout: 23 statements, closure 2be35aa287735ea5…, theory e3b0c44298fc1c14…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: slot_layout matches its approved statements
+[note] store_projection: no emitter registered — compared as committed
+[ok]   store_projection: 11 statements, closure 26699dbc9a27c1c4…, theory e3b0c44298fc1c14…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: store_projection matches its approved statements
+[note] store_projection_toy: no emitter registered — compared as committed
+[ok]   store_projection_toy: 70 statements, closure 09842af888889954…, theory e3b0c44298fc1c14…
+mm0-comparator: 1 approved, 0 gap(s)
+[pass] W3: store_projection_toy matches its approved statements
+w3-approved: flux1d_certificate(100 stmt) gap_certificate(107 stmt) isa(193 stmt) layout_certificate(69 stmt) linearity_certificate(67 stmt) linearity_certificate_spans(71 stmt) liquid_split(41 stmt) quasi_rh_7_8(3 stmt) quasi_rh_certificate(99 stmt) service_isolation_certificate(44 stmt) slot_layout(23 stmt) store_projection(11 stmt) store_projection_toy(70 stmt)
+[pass] W3: the plan's §W3 stmts column matches what each artifact holds (5 row(s), 5 approved)
+[pass] W3: every pending §W3 row's artifact re-derives into a staging (0 row(s))
+[pass] W3: an approved §W3 row passes when the approved copy holds what it says
+[pass] W3: a §W3 row that disagrees with mm0/approved/ is refused
+[pass] W3: the plan's §W3 digest column matches the file it describes (5 row(s), 5 approved)
+mutated line 16
+  [detail] one altered statement: check refused it (unmodified staging: exit 0)
+[pass] W3: one altered statement makes the comparator refuse the approved copy
+[pass] W3: a quoted statements-sha256 that does not hash the statements is refused
+[pass] W9.3: the composition table's counts match the files it records (4 row(s), 4 from mm0/approved/)
+[pass] W9.3: the composition table's closure digests match the files it records (4 row(s), 4 from mm0/approved/)
+[pass] W9.3: every field word a composition cell names has a literal comparison (8 word(s))
+dropped line 25
+  [detail] one axiom dropped from the approval: store_projection_toy(stmts cell 70, approved 69) store_projection_toy(says 20 axioms, approved 19) store_projection_toy(declarations 69, approved 68)
+[pass] W9.3: an approved copy that drops an axiom fails the composition counts
+[pass] W3: every §W3 emitter cell names a real command (5 row(s))
+[pass] Plan: every file a plan table row names exists on disk (5 row(s))
+[pass] W3: every approved §W3 row's emitter still produces its approved copy (5 row(s))
+[pass] W3: an approved §W3 row whose emitter left the registry is refused
+[pass] W3: the recorded probe evidence still names live gate lines (25 row(s))
+[pass] W3: every drift control the plan names has a recorded transcript (9 invocation(s))
+[pass] W3: every §W3 state cell says whether the row is approved or still waiting on the owner (5 row(s))
+[pass] W3: stage-approvals answers an unknown artifact name with exit 64
+[pass] W3: stage-approvals' artifact list is the §W3 table's rows (5 name(s))
+[pass] W3: stage-approvals stages exactly §W3's 0 pending row(s) (exit 0)
+[pass] W3: stage-approvals stops staging an artifact once its approved copy exists
+[pass] W3: stage-approvals refuses a named artifact that is already approved
+[pass] W3: stage-approvals refuses an artifact that equals its approved copy
+mm0-comparator selftest: clean approval accepted (gap_certificate)
+mm0-comparator selftest: changed numeral refused — statement diff fired
+mm0-comparator selftest: weakened theory refused — theory hash fired
+mm0-comparator selftest: tampered approval refused — the approved file is what gets read
+mm0-comparator selftest: OK — all three negative controls refuse
+[pass] W3: comparator self-test (all three negative controls refuse)
+logos CNL → DeltaNet → MM0 gate
+[gap]  cargo cannot link in this shell — no working C toolchain for it, so the emitter cannot be built here:
+        = note: /home/leo/.rustup/toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld: line 5: /nix/store/b5rxg3fjf23qax03mqw8pbv14gqn12sr-rustup-1.29.3/nix-support/ld-wrapper.sh: No such file or directory
+                collect2: error: ld returned 127 exit status
+logos2mm0: 0 passed, 0 failed, 1 gapped
+[gap]  logos mm0: the fragment gate could not run here (the emitter cannot be built in this shell)
+[pass] memsafe: theory, emitter, both fixtures, ledgers and certificates present
+[pass] memsafe: certificate + ledger emitter present and executable
+ledger2mm0 check: OK — certificates are in sync with the pinned ledger and theory
+[pass] memsafe: certificates in sync with the pinned ledgers and theory
+[pass] memsafe: linearity_certificate pins its trust split (17 derived / 0 grounded)
+[pass] memsafe: linearity_certificate_spans pins its trust split (19 derived / 0 grounded)
+[pass] memsafe: fixtures exercise every automaton edge
+ledger2mm0 check: OK — certificates are in sync with the pinned ledger and theory
+ledger2mm0 selftest: unmutated generation is clean and matches the committed certificates
+ledger2mm0 selftest: tampered trace refused (linearity_certificate) — timeline ends in st_owned, not st_idle: the value is still owned at function exit
+ledger2mm0 selftest: tampered trace refused (linearity_certificate_spans) — timeline ends in st_owned, not st_idle: the value is still owned at function exit
+ledger2mm0 selftest: OK — the automaton refuses a trace whose resource is never released
+[pass] memsafe: emitter self-test (audit refuses an unreleased resource)
+[pass] memsafe: linearity_ledger in sync with its fixture and the checker
+[pass] memsafe: linearity_ledger_spans in sync with its fixture and the checker
+ledger2mm0 check: OK — certificates are in sync with the pinned ledger and theory
+ledger2mm0 check: OK — certificates are in sync with the pinned ledger and theory
+ledger2mm0 selftest: unmutated generation is clean and matches the committed certificates
+ledger2mm0 selftest: tampered trace refused (linearity_certificate) — timeline ends in st_owned, not st_idle: the value is still owned at function exit
+ledger2mm0 selftest: tampered trace refused (linearity_certificate_spans) — timeline ends in st_owned, not st_idle: the value is still owned at function exit
+ledger2mm0 selftest: OK — the automaton refuses a trace whose resource is never released
+ledger2mm0 verify: mm0-rs compile OK (linearity_certificate) — 4 sorts, 33 term/def, 29 ax/thm
+ledger2mm0 verify: mm0-c OK (linearity_certificate) — the root of trust accepts every transition
+ledger2mm0 verify: mutated timeline rejected (linearity_certificate) — [1m[91merror[0m: [1mfailed to unify:
+ledger2mm0 verify: mm0-rs compile OK (linearity_certificate_spans) — 4 sorts, 35 term/def, 31 ax/thm
+ledger2mm0 verify: mm0-c OK (linearity_certificate_spans) — the root of trust accepts every transition
+ledger2mm0 verify: mutated timeline rejected (linearity_certificate_spans) — [1m[91merror[0m: [1mfailed to unify:
+[pass] memsafe: mm0-rs + mm0-c verify both certificates, and reject mutated ones
+[pass] service-isolation: pins, theory and both certificate halves present
+[pass] service-isolation: emitter present and executable
+service_iso2mm0 check: OK — certificate is in sync with the pinned service measurements and theory
+[pass] service-isolation: certificate in sync with the pinned measurements and theory
+[pass] service-isolation: trust split is structural-only (2 derived / 0 grounded)
+service_iso2mm0 check: OK — certificate is in sync with the pinned service measurements and theory
+service_iso2mm0 selftest: unmutated generation matches the committed certificate
+service_iso2mm0 selftest: equal state roots refused — mm0web and refi measure the same state_root ('/home/leo/Projects/verifieduniquealiases/out
+service_iso2mm0 selftest: OK — an equal pair is refused, never axiomatized as separated
+[pass] service-isolation: emitter self-test (an equal pair is refused, never axiomatized)
+service_iso2mm0 check: OK — certificate is in sync with the pinned service measurements and theory
+service_iso2mm0 verify: mm0-rs compile OK, mm0-c accepts — every separation is a rule application
+service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned constant is refused
+[pass] service-isolation: mm0-rs + mm0-c verify the theorems, and reject a mutated proof
+[pass] S28: AuthorizationEngine trait present
+[pass] S28: DenyAll is the default (fail-closed)
+[pass] S28: check() refuses without an installed engine
+[pass] H8: austral_cps default archetype declared
+[pass] H8: ecmascript archetype runtime branch present
+[pass] H8: manifest parser reads the archetype key
+[pass] H8: tidepool (Haskell effects) backend module exists
+[pass] H8: cap-std Rust backend module exists
+[pass] S30: cadabra2-cli subprocess, not a dependency
+[pass] S21: ZENODO_SYMBOLS (uz_*) registered separately
+[gap]  Liquid golden Why3 parse check (why3 not on PATH)
+[gap]  Liquid golden vc-fold-premises.mlw full z3 validity (why3 not on PATH)
+[gap]  Liquid subset extraction check (why3 not on PATH)
+[pass] L10 Cycle B: liquid_measure tenant registered in Vm_plugin.boot
+[pass] L10 Cycle B: liquid_measure is a distinct tenant from liquid
+[pass] L10 Cycle B: LiquidMeasure is the extracted module, listed in dune
+[pass] L11a: LiquidIndexClosure is a module of austral_liquid
+[pass] L11a: the liquid pass runs the index-closure audit before emitting
+[pass] L11a: the index-closure audit has its own test suite
+[pass] L11b: LiquidIndex is a module of austral_liquid
+[pass] L11b: the sorted index language has its own test suite
+[pass] L11b: the sorted index test does not drive the compiler
+[pass] L11a: the ordering pin has a negative control
+[pass] L11a: the ordering control moves the copy through the gate's own hook
+[pass] L11b: the conversion pin has a negative control
+[pass] L11b: the conversion control mutates the rule LiquidIndex declares
+[pass] L11b: the conversion control re-checks the tree after restoring
+[pass] L11c: LiquidSplitPilot is a module of austral_liquid
+[pass] L11c: the split pilot runs before the .mlw is emitted
+[pass] L11c: the split pilot has its own test suite
+[pass] L11c: the split pilot has an end-to-end suite
+[pass] L11c: the split pilot's facts are checked to erase
+[pass] H12: notes implemented dir has the four categories
+
+verify-invariants: 165 passed, 10 explained gap(s), 0 failed

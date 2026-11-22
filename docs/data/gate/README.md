@@ -8,6 +8,8 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
+| [`2026-11-22-default-shell.log`](2026-11-22-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-22, `d8111a94`, on a clean tree | `186 passed, 1 explained gap(s), 0 failed` — the one gap is `W9.1`, which needs the lean shell |
+| [`2026-11-22-nix-shell-python3.log`](2026-11-22-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-22, same tree | `165 passed, 10 explained gap(s), 0 failed` — no `why3` (3 Liquid checks), no Lean shell (`W9.1` plus the five `toy-witness` comparisons), and `cargo` cannot link, so the two logos lines are one gap |
 | [`2026-11-21-w3-approval-state-drift-control.log`](2026-11-21-w3-approval-state-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-approval-state-drift-control` | 2026-11-21, `85a368eb` plus the drift-control transcript check and the certificate re-pin `1f8ce68f`'s CPS order forced | `w3-approval-state-drift-control: holds` — gate `165 passed, 3 explained gap(s), 5 failed`, the five being the lines the deleted copy feeds |
 | [`2026-11-21-w3-emitter-drift-control.log`](2026-11-21-w3-emitter-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-emitter-drift-control` | 2026-11-21, same tree as the row above | `w3-emitter-drift-control: holds` — gate `168 passed, 2 explained gap(s), 3 failed`, one drifted emitter cell and isa's approved copy with it |
 | [`2026-11-21-w3-drift-controls-cert-approved.log`](2026-11-21-w3-drift-controls-cert-approved.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls cert-approved` | 2026-11-21, same tree | `cert-approved: holds` — gate `170 passed, 2 explained gap(s), 1 failed`, the refinement's citations |
@@ -33,6 +35,21 @@ line is the summary the plan quotes.
 | [`2026-11-19-ocaml-shell.log`](2026-11-19-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-19, after the W5 object re-pin and the bridge-copy check | `165 passed, 6 explained gap(s), 0 failed` |
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
+
+The 2026-11-22 pair re-runs the gate on the tree that adds
+`scripts/nixbench-fixtures` and §4.12's note, and it covers only the two shells
+that were actually recorded there: `devShells.default` reproduces the
+2026-11-21 summary exactly (`186`/`1`/`0`), and the bare `nix-shell -p python3`
+invocation — the one `AGENTS.md` documents — reports `165`/`10`/`0`. Both are
+clean-tree runs, so unlike the 2026-11-21 rows they carry no `warning: Git tree
+'…' is dirty` line. The footer is authoritative, not a `grep`: the bare log has
+177 `[pass]` lines because subprocesses print their own, and the logos block
+emits two `[gap]` lines for one gap, so the quoted figures are the footer's
+`165`/`10`. Under `.#ocaml` or `.#lean` the 2026-11-21 rows remain the latest
+recordings for those shells. The arithmetic closes from the 2026-11-21 `ocaml`
+row (`171`/`4`/`0`): `W9.1` is already one of those gaps, the bare shell cannot
+build the witness (five more gaps) or the logos emitter (one more), so
+`171 − 5 − 1 = 165` and `4 + 5 + 1 = 10`.
 
 The 2026-11-21 trio re-records the tree where `b3c78130` and the pulled
 `ab6d1074` meet, whose five §W3 rows are all approved. Two earlier recordings of
