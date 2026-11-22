@@ -13,11 +13,21 @@
 --    *not* a CIC checker: universes are not stratified, inductive families and
 --    recursors have no eliminators, and `tdefeq` is a relation supplied by
 --    premises, not decided here.
---  * `tdefeq` is deliberately a premise-carrying relation. Its real decision
---    procedure in this project is the deltanet reducer: two types are
---    convertible when their nets are isomorphic (`valid_iso` in cic.mm0), and
---    `tdefeq_iso` is the bridge to that certificate. A translator therefore
---    discharges conversion by *emitting a witness*, not by trusting a solver.
+--  * `tdefeq` is a *definition*: it is `teq` of cic.mm0, so it is never
+--    decided here — the decision procedure in this project is the deltanet
+--    reducer, and two types are convertible when their nets are isomorphic
+--    (`valid_iso` in cic.mm0). `tdefeq_iso` is the bridge to that certificate,
+--    and it is a theorem rather than an axiom (it *is* `net_isomorphism_step`).
+--    A translator therefore discharges conversion by *emitting a witness*, not
+--    by trusting a solver. Likewise `tctx_deq` is `teq` on the context spine.
+--
+-- Five axioms are the imported `teq` rules at these definitions and are gone:
+-- `tdefeq_refl`, `tdefeq_symm`, `tdefeq_trans`, `tdefeq_iso`, `tctx_deq_nil`
+-- are `teq_refl`, `teq_symm`, `teq_trans`, `net_isomorphism_step`, and
+-- `teq_refl tnil`. The trusted base of this file is therefore 10 axioms, not
+-- 15, and the comments at each definition record what the identification
+-- costs. They are eliminations rather than theorems because this toolchain
+-- refuses a proof obligation headed by a `def` (see “Conversion of types”).
 --  * Every rule states its premises with `>` (hypothesis binders). MM0 has no
 --    internal modus ponens, so a `->`-inside-formula axiom could never be
 --    applied — see the phase-D note in cic.mm0.
@@ -52,7 +62,19 @@ term tzero: nat;                   -- the head index 0 as a declared constant:
 term tty (c t a: Term): Prop;
 
 -- `tdefeq a b`: the types `a` and `b` are convertible.
-term tdefeq (a b: Term): Prop;
+--
+-- It is a *definition*, not a declared relation: conversion here is the net
+-- equality `teq` of cic.mm0, which is what the deltanet reducer decides (via
+-- `valid_iso` for the certificate path). Defining it makes the three
+-- reflexivity/symmetry/transitivity rules and the witness bridge theorems
+-- instead of axioms — four axioms leave the trusted base — and every existing
+-- use site elaborates unchanged, since a `def` is transparent.
+--
+-- The cost, stated: `tdefeq` used to be a relation the theory could be *wider*
+-- than `teq` on. It is now exactly `teq`, so a derivation that needed a
+-- conversion `teq` cannot supply must go through `tdefeq_iso` and a witness,
+-- which is the only route the translator ever used.
+def tdefeq (a b: Term): Prop = $ teq a b $;
 
 -- ── Context ──────────────────────────────────────────────────────────────
 
@@ -84,9 +106,19 @@ axiom ty_app (c f x a b r: Term):
 
 -- ── Conversion of types ──────────────────────────────────────────────────
 
-axiom tdefeq_refl (a: Term): $ tdefeq a a $;
-axiom tdefeq_symm (a b: Term): $ tdefeq a b $ > $ tdefeq b a $;
-axiom tdefeq_trans (a b c: Term): $ tdefeq a b $ > $ tdefeq b c $ > $ tdefeq a c $;
+-- The three laws are the `teq` congruence axioms of cic.mm0 at the alias —
+-- literally the same statements — so they are not restated here: `teq_refl`,
+-- `teq_symm` and `teq_trans` are the rules, and a consumer that would have
+-- named `tdefeq_refl` names `teq_refl` instead.
+--
+-- They cannot be *theorems* in this toolchain, which is worth stating because
+-- it looks like a bookkeeping choice and is not: `mm0-c` accepts a `def` of
+-- the provable sort in an axiom's conclusion and in a hypothesis (both
+-- measured, exit 0), but a proof obligation headed by a `def` is rejected
+-- (`expecting a theorem`), and `mm0-rs` silently downgrades it to `sorry`
+-- (warning `theorem … contains sorry`, then `mm0-c`: `some theorems used
+-- sorry`, exit 3). So the five axioms below are *eliminated* at the alias,
+-- not proved: eliminating them is the strongest form the toolchain allows.
 
 -- Conversion is used on terms, not just on their types: a term of a
 -- convertible type is a term of the other type.
@@ -98,8 +130,8 @@ axiom ty_deq (c t a b: Term):
 -- `deltanet::unf::isomorphism_witness`; the kernel-side check of the pairing
 -- is `IsomorphismWitness::verifies`, so MM0 records the entailment and the
 -- certificate does the deciding.
-axiom tdefeq_iso (a b cert: Term):
-  $ valid_iso a b cert $ > $ tdefeq a b $;
+-- Under the alias this is exactly `net_isomorphism_step` of cic.mm0, so it is
+-- not restated: the bridge to the certificate is that one rule, named there.
 
 -- ── Substitution certificates (external deltanet check) ────────────────────
 --
@@ -139,11 +171,19 @@ axiom ty_proj (c s a f: Term) (i: nat):
 -- Contexts are syntactic here (`tcons`-chains), and `ty_var0`/`ty_varS` read
 -- entries verbatim, so a derivation whose context entry is a *reference* to a
 -- Π cannot be used where the Π itself is required. Definitionally equal
--- contexts are interchangeable in the calculus, so the relation is stated:
--- entrywise conversion under the same spine.
-term tctx_deq (c d: Term): Prop;
+-- contexts are interchangeable in the calculus. The relation is defined as
+-- `teq` on the spine, like `tdefeq`, so the empty case is a theorem; the cons
+-- rule stays an axiom, because congruence of `teq` under `tcons` is content
+-- (`teq_app` gives it for `tapp`, and nothing gives it for a list spine).
+--
+-- The cost is the same shape as `tdefeq`'s and sharper: aliasing to `teq`
+-- makes `ty_ctx` demand equality of the whole spine rather than entrywise
+-- conversion, so a context that differs only in a convertible entry no longer
+-- transfers. No emitted derivation uses `ty_ctx`, and the entrywise version is
+-- recoverable as a definition over an entry relation whenever a row needs it.
+def tctx_deq (c d: Term): Prop = $ teq c d $;
 
-axiom tctx_deq_nil: $ tctx_deq tnil tnil $;
+-- The empty case is `teq_refl tnil`, so it is not an axiom either.
 
 axiom tctx_deq_cons (a b c d: Term):
   $ tdefeq a b $ > $ tctx_deq c d $ > $ tctx_deq (tcons a c) (tcons b d) $;

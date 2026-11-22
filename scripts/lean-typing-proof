@@ -230,23 +230,27 @@ def _write_str(out, s: str) -> int:
     return n
 
 
-def _put_piece(out, enc, piece) -> int:
+def _put_piece(out, enc, piece, expanded: bool = False) -> int:
     """Write one statement piece to `out`, returning its size in bytes.
 
     A piece is plain text, `("enc", eid)` for an encoded term, or
     `("tsubst", b, x)` for the deferred substitution both the axiom line and
-    the certificate's `lhs` spell out.
+    the certificate's `lhs` spell out. `expanded` writes the term with
+    `LTP_DEF_SHARE` off, for a stream that has no `def` block of its own: the
+    sidecar JSON is read on its own, so a `sdK` name in it is a dangling
+    reference (§13.54).
     """
     if isinstance(piece, str):
         return _write_str(out, piece)
+    write = enc.write_expanded if expanded else enc.write
     n = 0
     if piece[0] == "enc":
-        return enc.write(piece[1], out)
+        return write(piece[1], out)
     if piece[0] == "tsubst":
         out.write("(tsubst ")
-        n = 9 + enc.write(piece[1], out)
+        n = 9 + write(piece[1], out)
         out.write(" ")
-        n += 1 + enc.write(piece[2], out)
+        n += 1 + write(piece[2], out)
         out.write(")")
         return n + 1
     raise SystemExit(f"unknown piece {piece[0]!r}")
@@ -258,7 +262,7 @@ def _put_json(out, enc, piece) -> None:
         _json_write_str(out, piece)
         return
     w = _JsonStr(out)
-    _put_piece(w, enc, piece)
+    _put_piece(w, enc, piece, expanded=True)
     w.close()
 
 
@@ -402,8 +406,11 @@ class Enc:
         # least this many bytes becomes one `def sdK: Term = $ … $;` and every
         # use is the name. Defs are notation: `mm0-rs` expands them, so `mm0-c`
         # checks the statements it checks today, and expanding the names back
-        # reproduces the shared-mode bytes exactly.
-        self.ds_min = int(os.environ.get("LTP_DEF_SHARE", "0") or 0)
+        # reproduces the shared-mode bytes exactly. On by default since §13.54
+        # (2.94× on the smoke row, 3.12× with §13.53's interning);
+        # `LTP_DEF_SHARE=0` reproduces the pre-13.54 bytes and any other value
+        # sets the threshold. An empty value reads as 0, as before.
+        self.ds_min = int(os.environ.get("LTP_DEF_SHARE", "1024") or 0)
         self._ds_names: dict[int, str] = {}  # active substitutions
         self._ds_all: dict[int, str] = {}    # every interned node
         self._ds_order: list[int] = []       # first-use order
@@ -432,7 +439,15 @@ class Enc:
         buf = EncBuf()
         self._enc(eid, buf)
         s = buf.take()
-        if self._memo_bytes < ENC_MEMO_BYTES:
+        # A name is not an encoding. Once `eid` is interned, this call returns
+        # the three bytes `sdK`, and caching that under `eid` made `write_defs`
+        # read its own name back as the body: `def sd2: Term = $ sd2 $;`
+        # (`mm0-rs`: "variables {sd2} missing from dependencies"; measured on
+        # `FarisLavine.essentiallySelfAdjointOn_of_farisLavine` and
+        # `ChapterSirkMultiShift.multiShiftSeq_succ`). The main text may take
+        # the name, but nothing that wants the *text* of `eid` may see it.
+        shared = self.ds_min and not self._ds_off and eid in self._ds_all
+        if self._memo_bytes < ENC_MEMO_BYTES and not shared:
             self._memo[eid] = s
             self._memo_bytes += len(s)
         return s
@@ -570,6 +585,38 @@ class Enc:
         except _Head._Done:
             pass
         return "".join(buf.parts)
+
+    def expanded(self, eid: int) -> str:
+        """`eid`'s encoding as expanded text, whatever `LTP_DEF_SHARE` says.
+
+        The texts compared with a spool are expanded by construction (a spool
+        never interns, see `spool`), so anything joined into the same
+        comparison has to be expanded too. Binder domains are: they appear
+        both in the theorem's declared type (spooled) and in the wrap this run
+        builds to check it. Encoded with sharing on, an interned domain put
+        `sdK` in the wrap against its expansion on disk, and the check refused
+        a correct derivation (`derived type is not the declared type`, measured
+        on `FarisLavine.essentiallySelfAdjointOn_of_farisLavine` and
+        `ChapterSirkMultiShift.multiShiftSeq_succ`).
+        """
+        self._ds_off += 1
+        try:
+            return self.enc(eid)
+        finally:
+            self._ds_off -= 1
+
+    def write_expanded(self, eid: int, sink) -> int:
+        """`write` with sharing off, for text that leaves the artifact.
+
+        The sidecar JSON spells the same terms the artifact does, but it is
+        read without the `.mm0`'s `def` block, so a name in it would refer to
+        nothing. Same rule as `spool`: what is emitted elsewhere is expanded.
+        """
+        self._ds_off += 1
+        try:
+            return self.write(eid, sink)
+        finally:
+            self._ds_off -= 1
 
     def spool(self, eid: int, path: Path) -> int:
         """Write `eid`'s encoding to `path`, never holding it as one string.
@@ -1488,25 +1535,47 @@ def _pieces(parts, chunk: int = 1 << 20):
                 yield p[i:i + chunk]
 
 
+# How much of a spool block `_spool_eq` compares at a time. The copies a
+# comparison makes (`a[i:j]`, two of them) are bounded by this, not by the 1 MiB
+# read the block came from, so the check needs ~128 KiB of room, not ~3 MiB.
+_EQ_WINDOW = 1 << 16
+
+
 def _spool_eq(path: Path, parts) -> bool:
     """Whether `path`'s text is exactly `parts` joined, holding neither whole.
 
     Compares two chunk streams with a carry, so the two sides may split at
-    different offsets (the file reads 1 MiB, a piece may end anywhere).
+    different offsets (the file reads 1 MiB, a piece may end anywhere). The
+    carry is an offset into the current block, not a sliced string: `a[:n] !=
+    b[:n]` copied up to 2 MiB per chunk and `a[n:]` again, which is the same
+    kind of transient §13.55 removed from the copy path — at a ceiling of 356
+    MiB it was where the ns row died (`MemoryError`, §13.55). Comparisons run
+    in `_EQ_WINDOW` windows, so the copy a comparison makes is bounded by the
+    window rather than by the chunk.
     """
     left, right = iter(_pieces((path,))), iter(_pieces(parts))
-    a = b = ""
+    a, b = next(left, ""), next(right, "")
+    ai = bi = 0
     while True:
-        if not a:
+        if ai >= len(a):          # this block is spent; ask for the next
             a = next(left, "")
-        if not b:
+            ai = 0
+        if bi >= len(b):
             b = next(right, "")
-        if not a or not b:
-            return a == b
-        n = min(len(a), len(b))
-        if a[:n] != b[:n]:
+            bi = 0
+        if not a and not b:       # both streams ended together
+            return True
+        if not a or not b:        # one ended, the other still has text
             return False
-        a, b = a[n:], b[n:]
+        n = min(len(a) - ai, len(b) - bi)
+        k = 0
+        while k < n:
+            j = min(k + _EQ_WINDOW, n)
+            if a[ai + k:ai + j] != b[bi + k:bi + j]:
+                return False
+            k = j
+        ai += n
+        bi += n
 
 
 def spine(ex, eid):
@@ -1570,7 +1639,9 @@ def main() -> int:
     while "forallE" in ex.exprs[cur]:
         bte = ex.exprs[cur]["forallE"]["type"]
         binder_ty_eids.append(bte)
-        binders.append(enc.enc(bte))
+        # Expanded, not shared: `binders` is joined with the spooled body type
+        # to reproduce the declared type (see `Enc.expanded`).
+        binders.append(enc.expanded(bte))
         cur = ex.exprs[cur]["forallE"]["body"]
     # On disk, not in pieces: the body type of this row is 1.94 GB, and pieces
     # of it stayed resident from here to the end of the walk — that residency,
