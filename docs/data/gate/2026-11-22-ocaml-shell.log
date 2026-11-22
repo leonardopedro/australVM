@@ -4,7 +4,7 @@
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
-[pass] D00 contracts: 17 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c
+[pass] D00 contracts: 18 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c
 [pass] D00: distributed execution record and contract inventory are well-formed
 [pass] D00 checker refuses: duplicate inventory id
 [pass] D00 checker refuses: unknown status
@@ -114,12 +114,14 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
   [detail] PC04 reversed operator (umeet→ujoin) is refused
 [pass] PC04 source→KernelIR reflection of the real clamp fixture
 [pass] PC04: source→KernelIR reflection of the clamp fixture
+[gap]  PC05a: clamp_wgsl.mm0 not replayed (no mm0-rs/mm0-c on PATH)
+[pass] PC05a: parsed-WGSL reflection of the clamp fixture
   [detail] isa-hypotheses: 4 pinned citation(s), 1 cited hypothesis/hypotheses (1 content-checked, 0 unchecked), 65 axiom(s) accounted for
 [pass] W8: an uncited or stale hypothesis is refused
 [pass] W8: an unchecked citation cannot be re-labelled as checked
 [pass] W8: scripts/isa-census covers the emitted opcodes
-        used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x06 sub, 0x07 return, 0x08 if, 0x14 cmp_eq, 0x16 and, 0x18 mul, 0x20 deref
-      isa-census: 12 modules — 905 opcode read(s), 23 distinct, 23 declared, 23 opcode(s) declared in /home/leo/Projects/australVM/mm0/isa.mm0
+        used: 0x01 int_lit, 0x02 var, 0x03 let, 0x04 app, 0x06 sub, 0x07 return, 0x08 if, 0x14 cmp_eq, 0x16 and, 0x18 mul
+      isa-census: 12 modules — 852 opcode read(s), 23 distinct, 23 declared, 23 opcode(s) declared in /home/leo/Projects/australVM/mm0/isa.mm0
 [pass] W8: the corpus census covers every opcode the examples emit
 [pass] W8: isa-census refuses a model opcode the decoder rejects
   [detail] 5 sorts, 23 term/def, 0 ax/thm
@@ -128,7 +130,7 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W9.3: clif_step is vocabulary — declared, stated, never axiomatized
 [pass] W9.3: the refinement's citations still match their artifacts (6 pinned)
 [pass] W9.3: certification state matches mm0/approved/
-  [detail] clif2mm0: OK — 20 form(s), 811 instruction(s) over the corpus, 0 theorems
+  [detail] clif2mm0: OK — 20 form(s), 758 instruction(s) over the corpus, 0 theorems
 [pass] W9: mm0/clif.mm0 is what the corpus lowering measures
 [pass] W9: a form the lowering does not emit is refused
 [gap]  W9.1: RV64 model not re-converted (needs the lean shell: run make w9)
@@ -349,4 +351,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 171 passed, 4 explained gap(s), 0 failed
+verify-invariants: 172 passed, 5 explained gap(s), 0 failed
