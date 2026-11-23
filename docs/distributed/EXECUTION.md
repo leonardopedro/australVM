@@ -1000,6 +1000,110 @@ schema tests, but no test drives it through a real run — the demo's witness is
 `modhost`. `untrusted-native` remains U26's tier and is still refused by
 preflight.
 
+## D10 — canonical replicated commands and domain-separated signatures (2026-11-23, steps 1a–2 of 3)
+
+U **new** `unfer_protocol/src/distributed.rs`, `unfer_protocol/src/lib.rs`;
+tests `unfer_protocol/tests/distributed_wire.rs`.
+
+### Why the value had to change
+
+QuePaxa agrees on a `u64`. The command itself waits in `net.rs`'s
+`LedgerSnapshot::pending`, so a committed id names a `BTreeMap` entry on *this*
+process: a restarted peer, or a peer that never saw the submission, holds the
+slot and not the work. `ReplicatedValue` replaces that value with the command's
+bytes and gives "nothing here" its own variant instead of the reserved id
+`NOOP_VALUE = u64::MAX` — no integer is carved out of the command space, and
+there is no process-local id left to resolve.
+
+### The frame
+
+```text
+magic(4) = "UFDC" | version(u16 BE) | kind(u8) | body_len(u32 BE) | body
+kind 0 (noop):    body_len = 0
+kind 1 (command): body = schema(u16 BE, never 0) | payload
+```
+
+Every byte has one encoding: fixed widths, big-endian integers, no map, no
+float, no `serde_json` rendering to disagree about. `body_len` is checked
+against `MAX_BODY_BYTES` (1 MiB payload + the schema tag) from the header alone,
+before a buffer is reserved, so a 4 GiB claim costs a refused decode and not an
+allocation.
+
+| Rule | Refusal |
+|---|---|
+| wrong magic / version / kind | `BadMagic` / `UnsupportedVersion` / `UnknownKind` (the version is never guessed at) |
+| declared body larger than the bound | `BodyTooLong`, measured from the header |
+| no-op with bytes, command without a schema tag, schema 0 | `NoopWithBody` / `CommandBodyTooShort` / `ZeroSchema` |
+| fewer bytes than declared, at any prefix | `Truncated { needed, had }` |
+| a second frame behind the first, one byte of junk | `TrailingGarbage` (but `decode_frame` returns the first frame and its length, so a stream reads both) |
+| more unfinished bytes than one frame can carry | `BufferTooLong` on the streaming decoder |
+
+`FrameDecoder::push` takes arbitrary chunks and returns every complete frame in
+order, so partial and coalesced frames are the same code path.
+
+### The signature domain
+
+A signature covers `"unfer/distributed/command/v1"`, then
+`len(u16) | field` for **deployment, audience, schema, context**, then
+`len(u32) | frame`. Each element is length-tagged rather than delimiter-joined,
+so moving a byte across a field boundary changes the preimage (a test moves one
+byte from `deployment` into `audience` and asserts the two preimages differ).
+`SignatureVersion::Legacy` is the pre-D10 layout — `sha256(frame)`, no domain —
+kept so already-signed history still verifies; nothing new may use it.
+
+### The dependency's own limits (measured from `rust-quepaxa` 0.1.0)
+
+| Limit | Value | Where |
+|---|---|---|
+| wire version | `WIRE_VERSION: u16 = 4` | `network/wire.rs:7` |
+| deployment identity | `DeploymentId([u8; 16])` | `network/wire.rs:10` |
+| transport RPC frame | `DEFAULT_MAX_FRAME = 8 MiB`, length-prefixed `u32`, empty frame refused | `network/transport.rs:26`, `:590`, `:625` |
+| recorder/runtime snapshots | postcard, `StorageEnvelope` version-tagged | `network/codec.rs:125` |
+| submission journal (ours) | `MAX_JOURNAL_BYTES = 16 MiB` | `unfer_consensus/src/net.rs:52` |
+| batch ceilings (dependency defaults) | `max_batches_per_request`, `max_batch_bytes = 4 MiB`, `max_fetch_ids` | `network/batch.rs:278-287` |
+
+This wire's `MAX_FRAME_BYTES` is 1 MiB + 13 bytes, inside the transport's 8 MiB
+frame, so one replicated command is one RPC frame with nothing to fragment at
+the transport layer.
+
+### Witnesses (`unfer_protocol/tests/distributed_wire.rs`, 12)
+
+| Witness | Asserts |
+|---|---|
+| `both_decoders_accept_the_golden_vectors_and_re_encode_them` | a second decoder written independently of the module (explicit cursor) agrees with `decode_exact` on every pinned vector, and re-encoding reproduces the bytes |
+| `the_golden_vectors_use_every_declared_width` | the vectors pin the magic, the version and a header-only no-op |
+| `every_split_point_of_every_vector_streams_to_the_same_value` | every two-chunk split *and* byte-at-a-time streaming yield the same value, with nothing left buffered |
+| `coalesced_frames_decode_in_order` | three frames in one push and in 3-byte chunks decode to the same sequence |
+| `every_truncation_is_refused_and_names_what_it_needs` | every prefix is `Truncated`, and a truncated tail makes `finish()` refuse |
+| `trailing_garbage_is_refused_and_two_frames_are_not_one` | one junk byte is refused; two frames are two frames |
+| `an_oversized_body_is_refused_from_the_header_alone` | `MAX_BODY_BYTES + 1` and `u32::MAX` are refused before any payload exists |
+| `malformed_headers_are_refused_by_the_rule_they_break` | bad magic, version, kind, no-op-with-body, short body, schema 0 |
+| `a_command_is_bounded_at_construction_and_at_decode` | exactly-at-the-bound round-trips; one byte more is refused; an empty payload is legal |
+| `a_frame_for_another_deployment_audience_schema_or_context_has_another_preimage` | all four domain fields separate |
+| `domain_separation_is_length_tagged_not_delimited` | a shifted field boundary changes the preimage; an over-long field is refused by name |
+| `the_legacy_version_is_sha256_of_the_frame_alone` | legacy is `sha256(frame)` and ignores the domain; the new version differs from it |
+
+```
+$ cargo test -p unfer_protocol --offline   # EXIT=0: lib 353, cell_tool 4,
+                                           # distributed_wire 12, protocol 51, doctests 3
+$ cargo check -p unfer_consensus --offline # EXIT=0
+```
+
+Evidence: `docs/distributed/evidence/d10-unfer_protocol_tests.log`,
+`d10-unfer_consensus_check.log`.
+
+### What is not done yet (D10 steps 1b and 3)
+
+* `net.rs` still agrees on the `u64` and still applies from the shared pending
+  map — the new value type is not yet what QuePaxa replicates. Removing the map
+  is the next patch, and it is what makes a surviving node able to replay work
+  it never had locally (D11's acceptance).
+* `signing.rs` still signs `sha256(serde_json(...))`; the new preimage is not
+  wired into `sign_transaction`/`verify_transaction` yet, so no existing
+  signature changes meaning. The wire bytes are canonical but the signature
+  over them is still the legacy layout until that patch lands.
+* no live transport carries these frames (D11/D17).
+
 ## Task status
 
 | Task | Status | Note |
@@ -1014,4 +1118,5 @@ preflight.
 | D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
 | D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; `call_from_peer` is the production receiver and checks against the peer the transport authenticated |
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
-| D08–D26 | not started | D08 is next (scoped caller context, dynamic remote policy) |
+| D10 | in progress (steps 1a–2 of 3) | canonical versioned frame + explicit no-op + domain-separated preimages in `unfer_protocol::distributed`, 12 wire tests (`unfer_protocol` 353+4+12+51+3, `unfer_consensus` check EXIT=0); `docs/distributed/evidence/d10-*.log` | unit-tested | The replicated value can now carry the command, bounded and canonical, but `net.rs` does not yet agree on it (shared pending map still in place) and `signing.rs` still signs the legacy JSON hash. Recorded dependency limits: QuePaxa wire v4, 8 MiB transport frame, 16 MiB journal, 4 MiB batch default |
+| D11–D26 | not started | D11 is next once D10's `net.rs` patch lands (independent node processes) |
