@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""G21a: run the published NVIDIA artifact on the actual device.
+
+`PLAN_gpu_kernels.md` G21a asks for the emitted PTX to be *run*, not only
+lowered: the recorded ABI checked against a real driver and device, the kernel
+launched at extent 65, and its output compared with the KernelIR reference
+evaluator.
+
+The device side belongs to the GPU crate: `safestos/gpu/src/nvlaunch.rs`
+(dlopen'd CUDA Driver API, `--features nvidia`) owns the plan — PTX target
+against the device's capability, five u64 words per memref, extent and arity,
+block size — and `avm-nvlaunch launch` performs the upload, launch, sync and
+readback. It is deliberately not a proof and is not built by default.
+
+What this script adds is the chain around it, which the crate cannot do alone:
+it publishes a G20b MLIR bundle for the *device's own chip* (PTX is not
+backward-compatible) and a WGSL bundle from the same source, runs the launch,
+and compares the readback with `avm-gpu reference` — the KernelIR evaluator,
+not a retyped expectation. It also requires the named refusals to fire
+(wrong extent, wrong arity, a PTX target newer than the device).
+
+Exit: 0 launched and agreed with every control refused; 1 disagreement or a
+control that was not refused; 3 not runnable here (no device, no compiler, no
+`avm-nvlaunch`, no `avm-gpu`).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+COMPILER = ROOT / "_build/default/bin/austral.exe"
+GPU_BIN = ROOT / "safestos/gpu/target/release/avm-gpu"
+LAUNCH_BIN = ROOT / "safestos/gpu/target/release/avm-nvlaunch"
+FIXTURE = ("examples/gpu/pointwise/Pointwise.aui",
+           "examples/gpu/pointwise/Pointwise.aum")
+ENTRY = "Pointwise:clamp"
+EXTENT = 65
+
+
+def gap(message: str) -> int:
+    print(f"[gap] G21a: {message}")
+    return 3
+
+
+def fail(message: str) -> int:
+    print(f"[FAIL] G21a: {message}")
+    return 1
+
+
+def run(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+
+def mlir_opt() -> str | None:
+    configured = os.environ.get("AUSTRAL_MLIR_OPT")
+    if configured and Path(configured).exists():
+        return configured
+    found = shutil.which("mlir-opt")
+    if found:
+        return found
+    for store in sorted(Path("/nix/store").glob("*mlir-1*")):
+        candidate = store / "bin" / "mlir-opt"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def publish(kind: str, output: Path, chip: str) -> None:
+    env = dict(os.environ)
+    env.setdefault("LD_LIBRARY_PATH",
+                   str(ROOT / "safestos/cranelift/target/release"))
+    aui, aum = (str(ROOT / p) for p in FIXTURE)
+    args = [str(COMPILER), "compile", f"{aui},{aum}", f"--target-type={kind}",
+            f"--entrypoint={ENTRY}", f"--output={output}"]
+    if kind == "wgsl":
+        args.append("--gpu-numeric-profile=u32-modular-v1")
+        env.setdefault("AUSTRAL_GPU_CHECKER", str(GPU_BIN))
+    else:
+        args += [f"--gpu-static-elements={EXTENT}", f"--gpu-chip={chip}"]
+        tool = mlir_opt()
+        if tool is None:
+            raise RuntimeError("no mlir-opt: set AUSTRAL_MLIR_OPT or install LLVM")
+        env.setdefault("AUSTRAL_MLIR_OPT", tool)
+    out = run(args, env=env)
+    if out.returncode != 0:
+        raise RuntimeError(f"the {kind} compile refused:\n"
+                           f"{(out.stderr or out.stdout).strip()}")
+    if not output.exists():
+        raise RuntimeError(f"the {kind} compile published nothing at {output}")
+
+
+def inputs_file(path: Path, values: list[int]) -> None:
+    path.write_text(json.dumps({"inputs": [values, [0] * len(values)]}))
+
+
+def launch(bundle: Path, inputs: Path, *extra: str) -> subprocess.CompletedProcess:
+    return run([str(LAUNCH_BIN), "launch", str(bundle),
+                "--ptx", str(bundle / "kernel.ptx"),
+                "--inputs", str(inputs), *extra])
+
+
+def reference(wgsl_bundle: Path, values: list[int], work: Path) -> list[int]:
+    path = work / "reference-in.json"
+    path.write_text(json.dumps({"inputs": [values]}))
+    out = run([str(GPU_BIN), "reference", str(wgsl_bundle),
+               "--inputs", str(path)])
+    if out.returncode != 0:
+        raise RuntimeError(f"the reference evaluator refused:\n"
+                           f"{(out.stderr or out.stdout).strip()}")
+    return [int(v) for v in json.loads(out.stdout)["output"]]
+
+
+def check() -> int:
+    if not COMPILER.exists():
+        return gap(f"the compiler is not built at {COMPILER.relative_to(ROOT)}")
+    if not GPU_BIN.exists():
+        return gap("avm-gpu is not built (cargo build --release --manifest-path "
+                   "safestos/gpu/Cargo.toml --bin avm-gpu)")
+    if not LAUNCH_BIN.exists():
+        return gap("avm-nvlaunch is not built (cargo build --release --features "
+                   "nvidia --manifest-path safestos/gpu/Cargo.toml "
+                   "--bin avm-nvlaunch)")
+    probe = run([str(LAUNCH_BIN), "probe"])
+    if probe.returncode == 77:
+        detail = probe.stderr.strip() or probe.stdout.strip()
+        return gap(f"no device or driver is available ({detail})")
+    if probe.returncode != 0:
+        return fail(f"the device probe failed: {probe.stderr.strip()}")
+    device = json.loads(probe.stdout)
+    chip = device["chip"]
+    print(f"  [detail] G21a device: {device['device']}, capability "
+          f"{device['capability']} ({chip}), driver API "
+          f"{device['driver_version']}")
+    work = Path(tempfile.mkdtemp(prefix="avm-g21a-"))
+    try:
+        bundle = work / "mlir"
+        wgsl = work / "wgsl"
+        try:
+            publish("mlir", bundle, chip)
+            publish("wgsl", wgsl, chip)
+        except RuntimeError as exc:
+            return fail(str(exc))
+        meta = json.loads((bundle / "bundle.json").read_text())
+        if meta["lowering"]["target"] != chip:
+            return fail(f"the bundle records {meta['lowering']['target']}, "
+                        f"the device is {chip}")
+        values = [(i * 7 + 40) % 1000 for i in range(EXTENT)]
+        request = work / "inputs.json"
+        inputs_file(request, values)
+        result = launch(bundle, request)
+        if result.returncode == 77:
+            return gap(f"the launch reports no device ({result.stderr.strip()})")
+        if result.returncode != 0:
+            return fail(f"the launch refused or failed: "
+                        f"{result.stderr.strip() or result.stdout.strip()}")
+        launched = json.loads(result.stdout)
+        if launched.get("status") != "ok":
+            return fail(f"the launch reported {launched.get('status')!r}")
+        # The kernel writes the *last* buffer; earlier ones are its inputs.
+        output = [int(v) for v in launched["output"][-1]]
+        expected = reference(wgsl, values, work)
+        if output != expected:
+            index = next(i for i, (a, b) in enumerate(zip(output, expected))
+                         if a != b)
+            return fail(f"the device disagrees with the KernelIR reference at "
+                        f"index {index}: device {output[index]}, "
+                        f"reference {expected[index]}")
+        changed = sum(1 for a, b in zip(values, output) if a != b)
+        if changed == 0:
+            return fail("the launch changed nothing: the input never exercised "
+                        "the clamp")
+        print(f"  [detail] G21a ABI: {meta['input_arity']} input memref(s) + "
+              f"output, {launched['ptx_params']} u64 word(s), PTX target "
+              f"{chip}, extent {launched['extent']}, "
+              f"{launched['grid']}×{launched['block']} threads")
+        print(f"  [detail] G21a launch: {output[:4]}…, {changed} element(s) "
+              f"changed by the clamp")
+
+        # The refusals G21a asks for, in order and *before* a result is
+        # trusted: a wrong extent, a wrong arity and a PTX target newer than
+        # the device. Each must exit non-zero with a `refused` status.
+        controls = [
+            ("a wrong extent", ("--extent", str(EXTENT - 1))),
+            ("a wrong arity", ("--arity", "2")),
+        ]
+        for label, extra in controls:
+            refused = launch(bundle, request, *extra)
+            if refused.returncode == 0:
+                return fail(f"control not refused: {label}")
+            try:
+                status = json.loads(refused.stderr or refused.stdout).get("status")
+            except json.JSONDecodeError:
+                status = None
+            if status != "refused":
+                return fail(f"control {label} failed without a refusal: "
+                            f"{refused.stderr.strip()[:200]}")
+            print(f"  [pass] G21a control refused: {label}")
+
+        newer = work / "newer.ptx"
+        text = (bundle / "kernel.ptx").read_text()
+        newer.write_text(text.replace(f".target {chip}", ".target sm_90", 1))
+        ahead = run([str(LAUNCH_BIN), "launch", str(bundle),
+                     "--ptx", str(newer), "--inputs", str(request)])
+        if ahead.returncode == 0:
+            return fail("control not refused: a PTX targeting a newer chip")
+        try:
+            ahead_json = json.loads(ahead.stderr or ahead.stdout)
+        except json.JSONDecodeError:
+            ahead_json = {}
+        if ahead_json.get("status") != "refused":
+            return fail("control 'a newer PTX target' failed without a refusal: "
+                        f"{ahead.stderr.strip()[:200]}")
+        print("  [pass] G21a control refused: a PTX target newer than the "
+              f"device (driver verdict: "
+              f"{ahead_json.get('driver_verdict', '?')})")
+
+        print(f"  [pass] G21a: the emitted PTX ran on {device['device']} and "
+              f"agreed with the KernelIR reference at extent {EXTENT}")
+        return 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] not in ("check",):
+        print(f"[gap] G21a: unknown mode {sys.argv[1]!r} (only `check`)")
+        return 3
+    return check()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

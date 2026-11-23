@@ -957,6 +957,57 @@ PY
             gap "G20b: the MLIR bundle not checked (tooling absent: python3)"
         fi
 
+        # G21a launches the published artifact on a real device: the compiler
+        # publishes it for the device's own chip (`--gpu-chip`, since PTX is not
+        # backward-compatible), the PTX is loaded and launched through the CUDA
+        # Driver API, and the 65 words are compared to the crate's KernelIR
+        # reference. A wrong extent, a wrong arity and a target newer than the
+        # device must each be refused before the driver launches. Exit 3 (no
+        # device, no compiler build, no launcher binary) is the `[gap]`, never a
+        # pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _g21a=0
+            python3 "$repo_root/scripts/gpu/launch" check >"$_cert_tmp/g21a.log" 2>&1 || _g21a=$?
+            if [ $_g21a -eq 0 ]; then
+                grep -E '^  \[detail\]|^  \[pass\]' "$_cert_tmp/g21a.log" >&2
+                check "G21a: the published artifact runs on the device and agrees with the oracle" true
+            elif [ $_g21a -eq 3 ]; then
+                cat "$_cert_tmp/g21a.log" >&2
+                gap "G21a: the launch not attempted (no CUDA device or no mlir-opt here)"
+            else
+                cat "$_cert_tmp/g21a.log" >&2
+                check "G21a: the published artifact runs on the device and agrees with the oracle" false
+            fi
+        else
+            gap "G21a: the launch not checked (tooling absent: python3)"
+        fi
+
+        # G21a loads the emitted PTX on an actual device: preflight the ABI
+        # against the device's chip, launch at extent 65, and compare with the
+        # KernelIR reference evaluator. Without a device (or a driver library,
+        # the compiler, or avm-gpu) the script exits 3 and this is a `[gap]`.
+        if command -v python3 >/dev/null 2>&1; then
+            _g21a=0
+            python3 "$repo_root/scripts/gpu/launch" check \
+                >"$_cert_tmp/g21a.log" 2>&1 || _g21a=$?
+            case $_g21a in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/g21a.log" >&2
+                    check "G21a: the emitted PTX ran on the device and agreed with the KernelIR reference" true
+                    ;;
+                3)
+                    cat "$_cert_tmp/g21a.log" >&2
+                    gap "G21a: the device launch not checked (no device, driver library, compiler or avm-gpu here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/g21a.log" >&2
+                    check "G21a: the emitted PTX ran on the device and agreed with the KernelIR reference" false
+                    ;;
+            esac
+        else
+            gap "G21a: the device launch not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then

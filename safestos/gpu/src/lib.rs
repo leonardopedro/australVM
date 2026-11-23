@@ -7,6 +7,7 @@
 pub mod artifact;
 #[cfg(feature = "device")]
 pub mod device;
+pub mod nvlaunch;
 pub mod reduce;
 pub mod reduce_artifact;
 pub mod reduce_audit;

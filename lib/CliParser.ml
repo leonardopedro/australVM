@@ -155,6 +155,20 @@ module Errors = struct
       Text " is WGSL-only in v1)."
     ]
 
+  let invalid_gpu_chip (raw: string) =
+    austral_raise CliError [
+      Code "--gpu-chip";
+      Text " must name an NVIDIA compute capability such as ";
+      Code "sm_70";
+      Text " or ";
+      Code "sm_61";
+      Text "; got ";
+      Code raw;
+      Text ". The chip is recorded in the bundle's lowering identity, because PTX
+             targets one virtual ISA and a module built for a newer chip cannot be
+             loaded on an older device."
+    ]
+
   let invalid_static_extent (raw: string) =
     austral_raise CliError [
       Code "--gpu-static-elements";
@@ -222,6 +236,7 @@ type target =
       output_dir: string;
       entrypoint: entrypoint;
       extent: int;
+      chip: string;
     }
 [@@deriving eq]
 
@@ -369,11 +384,19 @@ let parse_mlir_target (arglist: arglist): (arglist * target) =
         | _ -> Errors.invalid_static_extent raw)
     | None -> (arglist, 65)
   in
+  let (arglist, chip) =
+    match pop_value_flag arglist "gpu-chip" with
+    | Some (arglist, raw) ->
+       let chip = String.trim raw in
+       if Gpu_mlir_bundle.valid_chip chip then (arglist, chip)
+       else Errors.invalid_gpu_chip raw
+    | None -> (arglist, Gpu_mlir_bundle.target)
+  in
   match pop_value_flag arglist "entrypoint" with
   | Some (arglist, entrypoint) ->
      let (arglist, output_dir) = get_output arglist in
      (arglist, MlirBundle { output_dir; entrypoint = parse_entrypoint entrypoint;
-                            extent })
+                            extent; chip })
   | None ->
      (match pop_bool_flag arglist "no-entrypoint" with
       | Some _ -> Errors.no_entrypoint_wrong_gpu_target ()

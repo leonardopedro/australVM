@@ -86,14 +86,18 @@ module attributes {austral.extent = 65 : i64, austral.numeric_profile =
         attributes {gpu.known_block_size = array<i32: 64, 1, 1>} {
       %c_extent = arith.constant 65 : index
       %tid = gpu.thread_id x
-      %in_bounds = arith.cmpi ult, %tid, %c_extent : index
+      %bid = gpu.block_id x
+      %bdim = gpu.block_dim x
+      %bid_base = arith.muli %bid, %bdim : index
+      %gid = arith.addi %bid_base, %tid : index
+      %in_bounds = arith.cmpi ult, %gid, %c_extent : index
       scf.if %in_bounds {
-        %arg0_v = memref.load %arg0[%tid] : memref<65xi32>
+        %arg0_v = memref.load %arg0[%gid] : memref<65xi32>
         %v0 = arith.constant 100 : i32
         %v1 = arith.cmpi ugt, %arg0_v, %v0 : i32
         %v3 = scf.if %v1 -> (i32) { ... scf.yield %v2 : i32 }
                else { scf.yield %arg0_v : i32 }
-        memref.store %v3, %arg1[%tid] : memref<65xi32>
+        memref.store %v3, %arg1[%gid] : memref<65xi32>
       }
       gpu.return
     }
@@ -104,8 +108,11 @@ module attributes {austral.extent = 65 : i64, austral.numeric_profile =
 The rules G20a fixes are applied in the emitter, not deferred to a pass:
 `Nat32` is signless `i32` with **unsigned** predicates everywhere (`ugt` above);
 modular arithmetic carries no `nuw`/`nsw`; indices are `index` with an explicit
-`ult` guard that dominates the load and the store; the extent is a parameter and
-must be positive. `Gpu_mlir.validate` is a *structural* check (balanced regions,
+`ult` guard that dominates the load and the store; the indexed element is the
+**global** id (`block_id * block_dim + thread_id`), because `gpu.thread_id` is
+block-local and a second block would otherwise rewrite the first block's
+elements — G21a measured exactly that at extent 65 with 64 threads; the extent
+is a parameter and must be positive. `Gpu_mlir.validate` is a *structural* check (balanced regions,
 every `%value` defined before use, one `gpu.func`, no signed predicate, no wrap
 flag) — it is not `mlir-opt`, and the header says `abi: g19a-pending` rather
 than claiming a verified interface.
@@ -113,8 +120,9 @@ than claiming a verified interface.
 Refusals are named: a helper call, a non-`u32-modular-v1` profile, a
 non-positive extent, and a body that returns from only one branch of an `if` are
 all `Invalid_argument`s carrying the reason. Eleven tests in
-`test/GpuMlirTest.ml` hold the encoding, the refusals, the validator's own
-negative controls, and G20a's mutation requirement — swapping subtraction
+`test/GpuMlirTest.ml` hold the encoding (including the global index), the
+refusals, the validator's own negative controls, and G20a's mutation
+requirement — swapping subtraction
 operands and reversing the comparison each change the lowered body.
 
 ## Controls

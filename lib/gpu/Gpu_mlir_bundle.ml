@@ -31,8 +31,30 @@ let sha256_hex = Gpu_ir.sha256_hex
     reader can reproduce it. *)
 let target = "sm_70"
 
-let pipeline =
-  "--gpu-lower-to-nvvm-pipeline=cubin-format=isa cubin-chip=" ^ target
+(** The chip is part of the lowering identity: PTX targets one virtual ISA, and
+    a module built for a newer chip cannot be loaded on an older device. The
+    default stays `sm_70` so every record written before G21a keeps its
+    meaning; `--gpu-chip` names another one and the record carries it. *)
+let valid_chip (chip: string): bool =
+  let n = String.length chip in
+  if n < 5 || String.sub chip 0 3 <> "sm_" then false
+  else begin
+    let body = String.sub chip 3 (n - 3) in
+    let body_len = String.length body in
+    let digits =
+      if body.[body_len - 1] >= 'a' && body.[body_len - 1] <= 'f' then
+        String.sub body 0 (body_len - 1)
+      else body
+    in
+    let len = String.length digits in
+    len >= 2 && len <= 3
+    && String.for_all (fun c -> c >= '0' && c <= '9') digits
+  end
+
+let pipeline_for (chip: string): string =
+  "--gpu-lower-to-nvvm-pipeline=cubin-format=isa cubin-chip=" ^ chip
+
+let pipeline = pipeline_for target
 
 (* ------------------------------------------------------------------ *)
 (* Reading a lowered module                                             *)
@@ -163,13 +185,13 @@ let param_layout = "one memref -> 5 x .u64: alloc ptr, aligned ptr, offset, size
 
 (** Every way the lowered ABI disagrees with the recorded kernel. An empty list
     is agreement, not proof of a correct launch. *)
-let abi_mismatches ~(arity: int) (f: ptx_facts): string list =
+let abi_mismatches ~(arity: int) ~(chip: string) (f: ptx_facts): string list =
   let problems = ref [] in
   let add s = problems := s :: !problems in
   if f.ptx_entry <> "main" then
     add (Printf.sprintf "entry is %s, expected main" f.ptx_entry);
-  if f.ptx_target <> target then
-    add (Printf.sprintf "target is %s, expected %s" f.ptx_target target);
+  if f.ptx_target <> chip then
+    add (Printf.sprintf "target is %s, expected %s" f.ptx_target chip);
   if f.ptx_address_size <> "64" then
     add (Printf.sprintf "address size is %s, expected 64" f.ptx_address_size);
   if f.ptx_params <> expected_params ~arity then
@@ -381,11 +403,16 @@ let verify_dir (dir: string): (t * string list, string list) result =
            if Sys.file_exists path then Some (read_file path) else None
         | None -> None
       in
+      let chip =
+        match member "lowering" json |> fun l -> member "target" l with
+        | `String s -> s
+        | _ -> note "the lowering target is missing"; ""
+      in
       (match ptx with
        | None -> ()
        | Some text ->
           let facts = ptx_facts text in
-          List.iter note (abi_mismatches ~arity facts));
+          List.iter note (abi_mismatches ~arity ~chip facts));
       if !problems <> [] then Error (List.rev !problems)
       else begin
         (* Rebuild the record from the files when everything agrees, so callers
@@ -419,8 +446,10 @@ let verify_dir (dir: string): (t * string list, string list) result =
         let entry = match member "entry" json |> to_string_opt with Some e -> e | None -> "" in
         let profile = match member "numeric_profile" json |> to_string_opt with
           | Some p -> p | None -> "" in
-        if lowering.pipeline <> pipeline then
-          Error [ Printf.sprintf "the recorded pipeline is not the pinned one (%s)" pipeline ]
+        if lowering.pipeline <> pipeline_for lowering.target then
+          Error [ Printf.sprintf
+                    "the recorded pipeline is not the one its target names (%s)"
+                    (pipeline_for lowering.target) ]
         else
           Ok ({ entry; input_arity = arity; extent; numeric_profile = profile;
                 sources;

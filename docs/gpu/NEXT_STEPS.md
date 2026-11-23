@@ -390,6 +390,34 @@ ISA. PC09/PC10 track MLIR pass preservation and native instructions separately.
 preflight evidence with hardware execution still open. Compare only matching
 workload and transfer paths. Keep the new toolchain optional.
 
+**Status:** genuine hardware results on this host (GTX 1060 Max-Q, capability
+6.1, driver 580.119.02). `--target-type=mlir --gpu-chip=sm_61` publishes an
+artifact whose `bundle.json` names the chip, and `scripts/gpu/launch check`
+publishes it from `examples/gpu/pointwise`, publishes the WGSL bundle of the
+same source, and the device side (`safestos/gpu/src/nvlaunch.rs`, an optional
+`--features nvidia` binary that dlopens the CUDA Driver API rather than
+linking it) preflights before launching: PTX `.target` against the device's
+capability (PTX is not backward-compatible), the `.param .u64` count against
+`input_arity` at five words per memref, extent and arity against the record,
+and a block size the device accepts. `avm-nvlaunch launch` uploads the
+buffers, launches one block of `extent` threads, synchronises and reads back;
+`scripts/gpu/launch` publishes the artifacts for the device's own chip and
+compares that readback with `avm-gpu reference` on the WGSL bundle — the
+KernelIR evaluator, not a retyped expectation. It prints the measured identity
+(`10 u64 word(s)`, `1×65 threads`, `56 element(s) changed`), and requires
+three refusals: a wrong extent, a wrong arity, and a PTX whose `.target` is
+newer than the device (the refused module gets the driver's own verdict,
+`CUDA_ERROR_INVALID_PTX`, so the refusal is measured rather than assumed). The
+launch exposed a real emitter bug: `gpu.thread_id` is block-local, so at
+extent 65 a second block rewrote 0–63 and index 64 was never written; the
+element index is now `block_id * block_dim + thread_id` (re-captured and
+pinned by PC09/G19a).
+Not claimed: this is one device and one input pattern; the PTX is a virtual
+ISA, so nothing here is a preservation proof or an instruction-level
+certificate (PC09/PC10), the ABI header stays `g19a-pending`, and hardware
+results are not reproduced in CI (the gate reports a `[gap]` where no device
+is visible).
+
 ## Proof reuse for the first scalar shader
 
 ### PC05a — Reflect actual parsed WGSL for one clamp

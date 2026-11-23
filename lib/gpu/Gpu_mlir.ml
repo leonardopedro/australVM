@@ -292,12 +292,21 @@ let render ~(extent: int) (kernel: Gpu_ir.kernel): string =
   let env = { params = List.init arity (fun i -> Printf.sprintf "%%arg%d_v" i);
               locals = []; next = 0; depth = 3; region = 0; result = None; buf } in
   emit env (Printf.sprintf "%%c_extent = arith.constant %s : index" extent);
+  (* `gpu.thread_id` is block-local, so the element index is the global one:
+     block_id * block_dim + thread_id. Using the block-local id would make a
+     second block rewrite the first block's elements whenever the extent is
+     larger than the declared block size (G21a measured this at extent 65
+     with 64 threads: index 64 was never written). *)
   emit env "%tid = gpu.thread_id x";
-  emit env "%in_bounds = arith.cmpi ult, %tid, %c_extent : index";
+  emit env "%bid = gpu.block_id x";
+  emit env "%bdim = gpu.block_dim x";
+  emit env "%bid_base = arith.muli %bid, %bdim : index";
+  emit env "%gid = arith.addi %bid_base, %tid : index";
+  emit env "%in_bounds = arith.cmpi ult, %gid, %c_extent : index";
   emit env "scf.if %in_bounds {";
   env.depth <- env.depth + 1;
   for i = 0 to arity - 1 do
-    emit env (Printf.sprintf "%%arg%d_v = memref.load %%arg%d[%%tid] : %s"
+    emit env (Printf.sprintf "%%arg%d_v = memref.load %%arg%d[%%gid] : %s"
                 i i memref)
   done;
   render_stmt env kernel.Gpu_ir.body;
@@ -306,7 +315,7 @@ let render ~(extent: int) (kernel: Gpu_ir.kernel): string =
     | Some (v, _) -> v
     | None -> fail "Gpu_mlir: the kernel body has no return"
   in
-  emit env (Printf.sprintf "memref.store %s, %%arg%d[%%tid] : %s"
+  emit env (Printf.sprintf "memref.store %s, %%arg%d[%%gid] : %s"
               result arity memref);
   env.depth <- env.depth - 1;
   emit env "}";

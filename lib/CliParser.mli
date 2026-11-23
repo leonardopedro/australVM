@@ -43,10 +43,13 @@ type target =
       output_dir: string;
       entrypoint: entrypoint;
       extent: int;
+      chip: string;
     }
   (** Publish a versioned MLIR bundle directory: canonical KernelIR, emitted
       module, lowered PTX and the chained digests in `bundle.json`. The static
-      extent is explicit (`--gpu-static-elements`, default 65). *)
+      extent is explicit (`--gpu-static-elements`, default 65) and the target
+      chip is explicit (`--gpu-chip`, default `sm_70`), because the PTX targets
+      one virtual ISA. *)
 [@@deriving eq]
 
 type error_reporting_mode =

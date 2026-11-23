@@ -168,7 +168,10 @@ and compile_help_lines (): string list =
     "";
     "Options:";
     "    --help          Print this text.";
-    "    --target-type   One of `exe`, `tc`, `c`, `wgsl`. Default is `exe`.";
+    "    --target-type   One of `exe`, `tc`, `c`, `wgsl`, `mlir`. Default is `exe`.";
+    "    --gpu-chip      With `--target-type=mlir`, the PTX target chip (e.g.";
+    "                    `sm_70`, the default, or `sm_61`). PTX is not";
+    "                    forward-compatible, so the chip is recorded.";
     "    --gpu-numeric-profile  With `--target-type=wgsl`, the kernel's numeric";
     "                    contract: `u32-modular-v1` (default) or `wgsl-f32-v1`";
     "                    (Float32 add/subtract/multiply only).";
@@ -320,8 +323,8 @@ and exec_target (mods: module_source list) (target: target): unit =
   | WgslBundle { output_dir; entrypoint; numeric_profile; source_profile; gpu_operation; } ->
      exec_compile_to_wgsl mods output_dir entrypoint numeric_profile
        source_profile gpu_operation
-  | MlirBundle { output_dir; entrypoint; extent; } ->
-     exec_compile_to_mlir mods output_dir entrypoint extent
+  | MlirBundle { output_dir; entrypoint; extent; chip; } ->
+     exec_compile_to_mlir mods output_dir entrypoint extent chip
 
 (* Handle one JIT-server command line. Never raises: a command whose
    handling throws (e.g. a swap of a nonexistent module) is reported as
@@ -699,7 +702,7 @@ and run_tool (tool: string) (args: string list): (int * string) =
     (code, combined))
 
 and exec_compile_to_mlir (mods: module_source list) (output_dir: string)
-    (entrypoint: entrypoint) (extent: int): unit =
+    (entrypoint: entrypoint) (extent: int) (chip: string): unit =
   let (Entrypoint (entry_module, entry_name)) = entrypoint in
   if Sys.file_exists output_dir then
     err (Printf.sprintf
@@ -801,7 +804,7 @@ and exec_compile_to_mlir (mods: module_source list) (output_dir: string)
                 Nothing was published." verify_code (String.trim verify_out));
       (* 2. lower: the pinned pipeline, one argv element for its options. *)
       let (lower_code, lowered) =
-        run_tool tool [mlir_path; Gpu_mlir_bundle.pipeline]
+        run_tool tool [mlir_path; Gpu_mlir_bundle.pipeline_for chip]
       in
       if lower_code <> 0 then
         err (Printf.sprintf
@@ -816,7 +819,8 @@ and exec_compile_to_mlir (mods: module_source list) (output_dir: string)
                 must emit PTX text."
       in
       let facts = Gpu_mlir_bundle.ptx_facts ptx in
-      (match Gpu_mlir_bundle.abi_mismatches ~arity:kernel.Gpu_ir.input_arity facts with
+      (match Gpu_mlir_bundle.abi_mismatches ~arity:kernel.Gpu_ir.input_arity
+               ~chip facts with
        | [] -> ()
        | problems ->
           err (Printf.sprintf
@@ -844,8 +848,8 @@ and exec_compile_to_mlir (mods: module_source list) (output_dir: string)
       let record =
         Gpu_mlir_bundle.make ~entry:(Identifier.ident_string entry_name)
           ~extent ~sources ~kernel ~mlir ~ptx
-          ~lowering:{ Gpu_mlir_bundle.target = Gpu_mlir_bundle.target;
-                      pipeline = Gpu_mlir_bundle.pipeline;
+          ~lowering:{ Gpu_mlir_bundle.target = chip;
+                      pipeline = Gpu_mlir_bundle.pipeline_for chip;
                       toolchain;
                       ptxas = "not used: cubin-format=isa stops at PTX text" }
       in

@@ -53,12 +53,15 @@ let test_identity_and_guard _ =
        mlir);
   assert_bool "explicit static extent"
     (contains ~needle:"memref<65xi32>" mlir);
+  assert_bool "the element index is block_id * block_dim + thread_id"
+    (contains ~needle:"%bid_base = arith.muli %bid, %bdim : index" mlir
+     && contains ~needle:"%gid = arith.addi %bid_base, %tid : index" mlir);
   assert_bool "tail guard is unsigned index arithmetic"
-    (contains ~needle:"arith.cmpi ult, %tid, %c_extent : index" mlir);
+    (contains ~needle:"arith.cmpi ult, %gid, %c_extent : index" mlir);
   assert_bool "one load per input"
-    (contains ~needle:"%arg0_v = memref.load %arg0[%tid]" mlir);
+    (contains ~needle:"%arg0_v = memref.load %arg0[%gid]" mlir);
   assert_bool "one store to the output"
-    (contains ~needle:"memref.store %v3, %arg1[%tid]" mlir);
+    (contains ~needle:"memref.store %v3, %arg1[%gid]" mlir);
   assert_bool "the guard opens the only access region"
     (contains ~needle:"scf.if %in_bounds {" mlir)
 

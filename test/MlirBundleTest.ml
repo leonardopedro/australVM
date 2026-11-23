@@ -43,7 +43,7 @@ let test_abi_accepts_one_memref _ =
       ptx_param_types = ["u64"];
       ptx_address_space = "generic -> global (cvta.to.global)" }
   in
-  assert_equal [] (Gpu_mlir_bundle.abi_mismatches ~arity:1 facts);
+  assert_equal [] (Gpu_mlir_bundle.abi_mismatches ~arity:1 ~chip:"sm_70" facts);
   assert_equal 10 (Gpu_mlir_bundle.expected_params ~arity:1)
 
 let test_abi_refuses_each_disagreement _ =
@@ -61,7 +61,8 @@ let test_abi_refuses_each_disagreement _ =
       ("no conversion", { base with Gpu_mlir_bundle.ptx_address_space = "none" }) ]
   in
   List.iter (fun (label, facts) ->
-    assert_bool label (Gpu_mlir_bundle.abi_mismatches ~arity:1 facts <> []))
+    assert_bool label
+      (Gpu_mlir_bundle.abi_mismatches ~arity:1 ~chip:"sm_70" facts <> []))
     mutations
 
 (* A complete synthetic published set, written to a temp dir. *)
@@ -162,6 +163,21 @@ let test_verify_refuses_a_foreign_pipeline _ =
     | Ok _ -> assert_failure "a non-pinned pipeline was accepted"
     | Error _ -> ())
 
+let test_chip_is_part_of_the_identity _ =
+  assert_bool "the default pipeline names the default chip"
+    (Gpu_mlir_bundle.contains (Gpu_mlir_bundle.pipeline_for "sm_70")
+       "cubin-chip=sm_70");
+  assert_bool "another chip is threaded into the pipeline"
+    (Gpu_mlir_bundle.contains (Gpu_mlir_bundle.pipeline_for "sm_61")
+       "cubin-chip=sm_61");
+  List.iter (fun chip ->
+    assert_bool ("a chip is accepted: " ^ chip) (Gpu_mlir_bundle.valid_chip chip))
+    ["sm_61"; "sm_70"; "sm_90"; "sm_90a"];
+  List.iter (fun chip ->
+    assert_bool ("a malformed chip is refused: " ^ chip)
+      (not (Gpu_mlir_bundle.valid_chip chip)))
+    ["sm_"; "sm"; "sm_7x"; "s70"; "sm_" ^ String.make 8 '9']
+
 (* ---------------------------------------------------------------- *)
 (* CLI                                                               *)
 (* ---------------------------------------------------------------- *)
@@ -218,6 +234,7 @@ let suite =
     "verify refuses tampered ptx" >:: test_verify_refuses_tampered_ptx;
     "verify refuses re-hashed kernelir" >:: test_verify_refuses_rehashed_kernelir;
     "verify refuses a foreign pipeline" >:: test_verify_refuses_a_foreign_pipeline;
+    "chip is part of the identity" >:: test_chip_is_part_of_the_identity;
     "cli shape" >:: test_mlir_target_shape;
     "cli explicit extent" >:: test_mlir_extent_is_explicit;
     "cli refuses non-positive extent" >:: test_mlir_refuses_non_positive_extent;
