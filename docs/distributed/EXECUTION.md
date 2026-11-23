@@ -1384,6 +1384,91 @@ report lines), `d12-suites.log`, `d12-traces/`.
 * Wall-clock timers are not modelled: the harness has no time, only steps, which
   is why the trace's classes are content, scheduling and fuel and not "deadline".
 
+## D13 — abrupt-crash and storage-recovery fault matrix (2026-11-23, steps 1–3 of 3)
+
+**New** `unfer_consensus/tests/crash_matrix.rs` (eleven cases),
+`unfer_consensus/tests/support/mod.rs` (the process fixture D11 and D13 share;
+`tests/independent_nodes.rs` now uses it, with the same assertions),
+`scripts/distributed-recovery` and `docs/distributed/evidence/d13-recovery.tsv`.
+
+### Two kinds of evidence, deliberately kept apart
+
+| Kind | How it is produced | What it can claim |
+|---|---|---|
+| Deterministic boundary | the D07 journal fault points (`BeforeWrite`, `HalfWrite`, `AfterWrite`), plus a real `chmod` and a real corrupt byte | repeatable statements about the crash protocol at an exact point |
+| Process crash | three `unfer_node` processes over TLS, `SIGKILL` at chosen offsets, restarted on the same directory | what a killed process does with files the kernel already has |
+
+Neither is a power-loss measurement. A `SIGKILL` returns nothing from the page
+cache that a disk with a volatile write cache might lose; no case here claims
+otherwise, and the plan's D13 distinction is preserved rather than blurred.
+
+### The six boundaries, and what each case measured
+
+| Plan boundary | Case | Measured outcome |
+|---|---|---|
+| before admission persistence | `fail-before-write` | applied **0**, halt `UK-5011`, `journal_error` set; restart applies slot 1 **once** (`applied=1 identities=1`) |
+| during the frame write | `fail-half-write` | **119** torn bytes on disk, recovery discards them (`applied=0`), then applies once |
+| after persistence, before reply | `fail-after-write` | uncertain sync halts; either the frame survived or it did not — `identities=1` in both worlds, never two |
+| after commit, before apply | `process/kill-mid-submit` ×5 | kill at 0/2/5/10/20 ms into a submission; every retry settled, `slots` grew by **exactly one** in all five |
+| after apply, before the snapshot | `process/slow-replica-snapshot` | a killed replica's snapshot read `1:` while the survivors had `3:` — the snapshot is written independently of the commit |
+| while a snapshot is published | `corrupt-record`, `conflicting-checkpoint` | a corrupt record is refused (`record checksum does not match its payload`), never replaced by an empty log; a journal that disagrees with the decided log halts at the named slot |
+
+Additional matrix rows, because they belong to the same protocol:
+
+* `permission` — the journal made read-only for this user: the next open is
+  refused with `Permission denied`, so a node cannot start on a log it cannot
+  write. A mode change *while the writer is open* does not stop it, because
+  access is fixed at open: that is recorded as the property of this design, not
+  as a passing test. Given the journal back, `applied=2 identities=2`.
+* `refusal` — a refused entry (UK-6003 on replay) is durable, advances the
+  slot, and is replayed rather than re-decided: `applied=2 identities=1`.
+* `journal-format` — the framing the matrix relies on: one record of 189 bytes
+  recovers as `records=1 last_slot=1 torn=0`.
+
+### Quorum, and what a minority cannot do
+
+With two of three processes killed, a submission to the survivor **failed**
+(`submit_ok=false`) and the committed count did not move (`slots=1->1`). Healing
+the two replicas and retrying the same request identity produced exactly one
+slot (`2:…`), identical on all three. No coordinated write happened without a
+quorum, in either the refusal or the retry.
+
+### Slow replica, restated as a recovery claim
+
+Node 3 stopped while two more decisions were taken: its snapshot still read
+`1:` against the survivors' `3:`. Restarted on the same directory it read `1:`
+again — the log it did have, never an empty substitute — and after one further
+decision it held the **whole** log `4:…`, equal to its peers. So the catch-up
+D11 measured is also the repair path here, and the lag is a real, stated
+property: a replica's snapshot trails its commits, and it is the cluster that
+brings it back, not its own poll loop.
+
+```text
+$ cargo test -p unfer_consensus --offline --features network --test crash_matrix
+11 passed (8 deterministic, 3 process), 0 failed
+$ scripts/distributed-recovery --check
+distributed-recovery: fixture matches (23 case line(s), 0 gap(s))
+```
+
+Evidence: `docs/distributed/evidence/d13-recovery.tsv` (one line per case, with
+the values this host measured), `d13-crash_matrix.log` (the full run, including
+each assertion's output). `scripts/distributed-recovery` regenerates the fixture
+and `--check` compares the *shape* of the run — which cases ran and what each
+claimed — never the digests, which belong to one run.
+
+### What this is not
+
+* Not a power-loss claim, and not a filesystem-model claim: both need a storage
+  model this task does not build (D13's second paragraph names them).
+* The consensus engine's behaviour under partition is an assumption the harness
+  supplies (a submission without a quorum is refused by the transport); only the
+  *application* side is measured.
+* Catch-up still needs a decision after the restart; an idle cluster leaves a
+  rejoined replica behind, as D11 recorded.
+* The kill offsets are chosen, not exhaustive: five points around a submission
+  are not every interleaving, and the deterministic cases cover the boundaries
+  the offsets cannot place exactly.
+
 ## Task status
 
 | Task | Status | Note |
@@ -1401,4 +1486,4 @@ report lines), `d12-suites.log`, `d12-traces/`.
 | D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
 | D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
 | D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 2 requests, 8 actions, depth 4) executed 617 of 4681 prefixes, pruned 278, found no violation; 32 seeded walks of 12 steps reached 22 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault is handed to D13 |
-| D13–D26 | not started | D13 is next: the abrupt-crash and storage-recovery fault matrix over the node processes |
+| D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (23 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`. Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it |\n| D14–D26 | not started | D14 is next: upgrade scheduled jobs to ordered fencing |

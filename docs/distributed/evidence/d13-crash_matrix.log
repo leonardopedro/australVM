@@ -1,0 +1,78 @@
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> unfer_consensus/src/storage.rs:234:13
+    |
+234 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_consensus` (test "crash_matrix") generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (bin "unfer_node") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/crash_matrix.rs (target/debug/deps/crash_matrix-d06af449983d5f6f)
+
+running 11 tests
+test a_conflicting_checkpoint_halts_instead_of_merging_two_histories ... D13	conflicting-checkpoint	halted=UK-1010 UnknownOutcome: could not apply slot 1 (UK-5011: could not record slot 1 durably: corrupt log at offset 0: slot 1: the journal recorded command 3e1d98f7afd40ee82c22d813c2566fdc3d59b8b4935c630743935e80836705f3 but the engine log has a55ad6631bc7da91a7b8f76aa5041b59c0aa4592c5383e10d8babd4dc8597aa5); the node halted so its state cannot drift from the committed prefix
+ok
+test a_corrupt_committed_record_is_refused_not_replaced_by_empty_state ... D13	corrupt-record	refused=corrupt log at offset 0: record checksum does not match its payload
+ok
+test a_refused_operation_is_durable_and_not_retried ... D13	refusal	refused_code=Some(Code(6003)) applied=2 identities=1
+ok
+test a_torn_frame_is_discarded_and_the_slot_applies_once ... D13	fail-half-write	torn_bytes=120 recovered_applied=0 then applied=1
+ok
+test a_write_failure_before_the_frame_leaves_nothing_and_applies_once ... D13	fail-before-write	applied=0 halted=UK-1010 could not apply slot 1 (UK-5011: could not record slot 1 durably: storage write failed: injected: before write); the node halted so its state cannot drift from the committed prefix journal_error=set
+D13	fail-before-write/restart	applied=1 identities=1
+ok
+test an_uncertain_sync_is_either_durable_or_replayed_but_never_double_applied ... D13	fail-after-write	recovered_applied=0 final_applied=1 identities=1
+ok
+test an_unreadable_journal_refuses_to_open_instead_of_starting_empty ... D13	permission	open refused: Permission denied (os error 13)
+D13	permission/restored	applied=2 identities=2
+ok
+test processes::a_slow_replica_catches_up_and_its_journal_is_never_empty ... D13	process/slow-replica-snapshot	replica3=0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 survivors=3:fbaa8836a96e1fc9ba0891a59d2347b35dcb0b94422bd36c9c568dccaaa3499e
+D13	process/slow-replica-recovered	replica3=0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+D13	process/slow-replica-caught-up	replica3=4:e07ef2e84e694a5af9944c41ad4e047695871f961b0c392b39b26fb936669d40
+ok
+test processes::an_acknowledged_operation_survives_a_kill_and_a_retry_applies_once ... D13	process/acknowledged	digest=1:eb815a84152fce7f05cdddb9b6e5a6bc44df8d2ea3fcde8252910d2031b9b09a
+D13	process/acknowledged-after-kill	digest=1:eb815a84152fce7f05cdddb9b6e5a6bc44df8d2ea3fcde8252910d2031b9b09a
+D13	process/kill-mid-submit	delay_ms=0 attempt_ok=false slots=1->2
+D13	process/kill-mid-submit	delay_ms=2 attempt_ok=false slots=2->3
+D13	process/kill-mid-submit	delay_ms=5 attempt_ok=false slots=3->4
+D13	process/kill-mid-submit	delay_ms=10 attempt_ok=false slots=4->5
+D13	process/kill-mid-submit	delay_ms=20 attempt_ok=false slots=5->6
+ok
+test processes::no_coordinated_write_without_quorum ... D13	process/no-quorum	submit_ok=false slots=1->1 base=1:526a42ae8a266fd2f6c19bed6b0bb032d11ec25168fa84e5da2c6d9ae740e6d5
+D13	process/quorum-healed	digest=2:7e2d8a67ba37df975ac2900d3d31684a7058883e953f435d60e8508ed693684a
+ok
+test the_journal_format_is_what_recovery_reads ... D13	journal-format	bytes=189 records=1 last_slot=1 torn=0
+ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.85s
+

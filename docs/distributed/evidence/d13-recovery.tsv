@@ -1,0 +1,25 @@
+# D13 recovery matrix, measured 2026-11-23T14:30:58Z on aarch64
+# command: cargo test -p unfer_consensus --features network --test crash_matrix
+case	outcome
+conflicting-checkpoint	halted=UK-1010 UnknownOutcome: could not apply slot 1 (UK-5011: could not record slot 1 durably: corrupt log at offset 0: slot 1: the journal recorded command 4dabc9370b7ac509f62d15a2d3dec942596dd7d65fff81d44721c1e47a1fdcb8 but the engine log has aae18ae072bfc04f37929147dd2e90683b3e05d6eb6ef1e9a43b8c6311612cc4); the node halted so its state cannot drift from the committed prefix
+corrupt-record	refused=corrupt log at offset 0: record checksum does not match its payload
+fail-after-write	recovered_applied=0 final_applied=1 identities=1
+fail-before-write	applied=0 halted=UK-1010 could not apply slot 1 (UK-5011: could not record slot 1 durably: storage write failed: injected: before write); the node halted so its state cannot drift from the committed prefix journal_error=set
+fail-before-write/restart	applied=1 identities=1
+fail-half-write	torn_bytes=117 recovered_applied=0 then applied=1
+journal-format	bytes=189 records=1 last_slot=1 torn=0
+permission	open refused: Permission denied (os error 13)
+permission/restored	applied=2 identities=2
+process/acknowledged-after-kill	digest=1:ae122fbf24e52af1148a8614fc4e00e28ccf11949a9077332104f4e70fc78b09
+process/acknowledged	digest=1:ae122fbf24e52af1148a8614fc4e00e28ccf11949a9077332104f4e70fc78b09
+process/kill-mid-submit	delay_ms=0 attempt_ok=false slots=1->2
+process/kill-mid-submit	delay_ms=10 attempt_ok=false slots=4->5
+process/kill-mid-submit	delay_ms=20 attempt_ok=false slots=5->6
+process/kill-mid-submit	delay_ms=2 attempt_ok=false slots=2->3
+process/kill-mid-submit	delay_ms=5 attempt_ok=false slots=3->4
+process/no-quorum	submit_ok=false slots=1->1 base=1:e0a271466f27030812db538fff82f54fda1b9b1441674199293bd69c4b2acec5
+process/quorum-healed	digest=2:c444c2a4711f29fa1a3254f375148d93a1e254d4ecdb7044feaa9c5e0a0f84f6
+process/slow-replica-caught-up	replica3=4:19abac4207336702b5c599e8030d2002a067912017420288eb6fcc3d962d411e
+process/slow-replica-recovered	replica3=1:6d21e4de98868962c322e60e1ea2a65d78060a63f7df5cff1b56fe93741b5c2d
+process/slow-replica-snapshot	replica3=1:6d21e4de98868962c322e60e1ea2a65d78060a63f7df5cff1b56fe93741b5c2d survivors=3:0bbed775cbf967f85636b69f4698a14e6842ecab557729aaed8b49ae6cc3de51
+refusal	refused_code=Some(Code(6003)) applied=2 identities=1
