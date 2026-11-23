@@ -60,7 +60,12 @@ err() { printf '\033[0;31m[FAIL]\033[0m %s\n' "$*" >&2; }
 
 SRC=${RISCV_MEMORY_SRC:-}
 if [[ -z $SRC ]]; then
-    SRC=$(nix eval --raw "$AVM#sail-riscv-lean.src" 2>/dev/null || true)
+    # `git+file:` addresses the flake without copying the worktree into the
+    # store (AGENTS.md): a plain path here copies the multi-GB build trees
+    # first, which is slow enough to look like a missing model — the gate then
+    # reported `[gap] memory correspondence not measured` on a tree where the
+    # script succeeds when run on its own (measured 2026-11-23).
+    SRC=$(nix eval --raw "git+file://$AVM#sail-riscv-lean.src" 2>/dev/null || true)
 fi
 INSTS=${SRC:+$SRC/LeanRV64D/InstsEnd.lean}
 if [[ -z $INSTS || ! -f $INSTS ]]; then
