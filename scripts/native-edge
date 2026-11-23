@@ -406,7 +406,7 @@ def toolchain() -> tuple[str, str] | None:
     return str(austral), str(cell)
 
 
-def build_capture(work: Path, clif_dump: bool) -> dict:
+def build_capture(work: Path, clif_dump: bool, decode_insns: bool = True) -> dict:
     tools = toolchain()
     if tools is None:
         raise DecodeError("no `austral`/`cps2cell` — the capture cannot be "
@@ -433,8 +433,12 @@ def build_capture(work: Path, clif_dump: bool) -> dict:
     if made.returncode != 0:
         raise DecodeError("cps2cell refused the CPS: " + made.stderr.strip())
     parsed = parse_avce(avce_path.read_bytes())
+    # `decode_insns=False` is for the arch probe below: the closed form table is
+    # x86_64's, so decoding a fragment this host compiled for another arch would
+    # report a decoder gap where the real finding is "not re-derivable here".
     for fn in parsed["functions"]:
-        fn["insns"] = decode(bytes.fromhex(fn["bytes"]), fn["relocs"])
+        if decode_insns:
+            fn["insns"] = decode(bytes.fromhex(fn["bytes"]), fn["relocs"])
     parsed["cps_sha256"] = sha256(cps.read_bytes())
     parsed["avce_sha256"] = sha256(avce_path.read_bytes())
     parsed["clif"] = []
@@ -464,6 +468,7 @@ def build_capture(work: Path, clif_dump: bool) -> dict:
 
 def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
     ok = True
+    rederived = False
     try:
         capture = read_capture_toml(capture_path.read_text())
     except Exception as exc:  # noqa: BLE001 - any parse error is the finding
@@ -526,19 +531,33 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
             "the recorded bytes are decoded and pinned, not regenerated")
     else:
         try:
-            fresh = build_capture(work, clif_dump=True)
+            probe = build_capture(work, clif_dump=False, decode_insns=False)
         except DecodeError as exc:
             fail("the fixture still captures", str(exc))
             ok = False
         else:
-            if capture_bytes(fresh) != capture_path.read_bytes():
-                fail("the capture re-derives byte-identically from the fixture")
-                ok = False
-            if capture["cps_sha256"] == fresh["cps_sha256"] and \
-                    capture["avce_sha256"] != fresh["avce_sha256"]:
-                fail("the same CPS produces the same capture",
-                     "cps_sha256 agrees but avce_sha256 does not")
-                ok = False
+            if probe["arch"] != capture["arch"]:
+                gap("the capture was not re-derived here (this host compiles "
+                    f"{probe['arch']}, the recorded fragment is "
+                    f"{capture['arch']}, and the closed form table is "
+                    f"{capture['arch']}'s)")
+            else:
+                try:
+                    fresh = build_capture(work, clif_dump=True)
+                except DecodeError as exc:
+                    fail("the fixture still captures", str(exc))
+                    ok = False
+                else:
+                    rederived = True
+                    if capture_bytes(fresh) != capture_path.read_bytes():
+                        fail("the capture re-derives byte-identically from the "
+                             "fixture")
+                        ok = False
+                    if capture["cps_sha256"] == fresh["cps_sha256"] and \
+                            capture["avce_sha256"] != fresh["avce_sha256"]:
+                        fail("the same CPS produces the same capture",
+                             "cps_sha256 agrees but avce_sha256 does not")
+                        ok = False
 
     # (4) replay the stated edge: well-formedness only, never a proof.
     if not (shutil.which("mm0-rs") and shutil.which("mm0-c")):
@@ -569,8 +588,12 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
     if ok:
         gap("no x86_64 instruction model is available, so the fragment's edge "
             "is stated and pinned, not proved")
-        print("[pass] PC08: the captured host fragment decodes, re-derives and "
-              "is pinned by its stated edge")
+        if rederived:
+            print("[pass] PC08: the captured host fragment decodes, re-derives "
+                  "and is pinned by its stated edge")
+        else:
+            print("[pass] PC08: the captured host fragment decodes and is "
+                  "pinned by its stated edge")
         return 0
     return 1
 
