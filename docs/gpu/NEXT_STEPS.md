@@ -441,6 +441,23 @@ and on G21a's launch record. **Files:** a SASS listing/attribution artifact, a
 decoder input pinned like the MLIR toolchain, and its own gate in
 `scripts/gpu/boundary`.
 
+**Landed 2026-11-23 (the listing and the localised control, not the decoder).**
+`safestos/gpu/src/target.rs` gains `listing`/`word_diff` and `avm-target` gains
+`words` and `diff`: every `.text.*` section is split into its 16-byte encoding
+words (the width every target this repo links for uses), a section that is not a
+whole number of words is refused by name, and the listing's digest is a function
+of the words and their offsets. `scripts/gpu/boundary` records, per capture,
+`sass_words`, `word_bytes` and `listing_sha256`, and requires
+`words × word_bytes == sass_bytes` — so the count is measured against the
+section table rather than taken from it. Measured on the GTX 1060: each cubin's
+`.text.main` is 24 words covering all 384 bytes, and the operand-order edit moves
+**exactly one** word, `.text.main@272` (index 17), which the record now stores
+and `check` compares — a tampered offset or listing digest fails. What this does
+not do is name the opcode or claim the PTX line wrote that word: it localises the
+*mutation*, not the instruction. `cudaPackages.cuda_nvdisasm` is unfree here, so
+step 1 below is still open, and steps 3's attribution to named PTX instructions
+waits for it.
+
 PC10 stops at identification: the record says these bytes are an
 ELF64/`EM_CUDA` container with 384 bytes of `.text` and a digest, and refuses
 an operand-order edit because it links to *different bytes* — not because
@@ -475,8 +492,10 @@ that this PTX line produced*, with the PTX→SASS semantic relation left a named
 `[gap]` and pointed at whatever ISA model a later card builds.
 
 **Exit.** A pinned decoder and its version recorded; a listing per captured
-cubin whose coverage is checked; an attribution table for `difference` that the
-operand-order and memory-bound mutations move; and a `[gap]` naming the missing
+cubin whose coverage is checked *(landed: word-level, digest-pinned)*; an
+attribution table for `difference` that the operand-order and memory-bound
+mutations move *(landed for the operand edit: one word at `.text.main@272`; the
+memory-bound edit still only refuses the blob)*; and a `[gap]` naming the missing
 PTX→SASS semantics. Without a decoder the card is a `[gap]` everywhere, never a
 pass — the same convention as G21a's hardware line.
 

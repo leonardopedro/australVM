@@ -111,6 +111,26 @@ def require_refused(label: str, code: int, body: dict, needle: str) -> None:
     print(f"  [pass] PC10 control refused: {label}")
 
 
+def words_of(blob: Path) -> dict:
+    """The instruction-word listing of a native blob (PC10b's first step).
+
+    `avm-target words` splits every `.text.*` section into 16-byte encoding
+    words and refuses one that is not a whole number of them. It lists, it does
+    not decode: no opcode or operand is named here.
+    """
+    code, body = run([str(TARGET_BIN), "words", str(blob)])
+    if code != 0:
+        raise RuntimeError(f"{blob.name} has no instruction-word listing: {body}")
+    return body["listing"]
+
+
+def word_changes(before: Path, after: Path) -> list[dict]:
+    code, body = run([str(TARGET_BIN), "diff", str(before), str(after)])
+    if code != 0:
+        raise RuntimeError(f"the word diff of {before.name}/{after.name} failed: {body}")
+    return body["changed"]
+
+
 def swap_operands(ptx: str) -> tuple[str, str]:
     """Swap the two register sources of the first two-operand add/sub.
 
@@ -148,14 +168,15 @@ def record_text(device: dict, captures: list[dict]) -> str:
         f'chip = "{device["chip"]}"',
         f'driver_version = {device["driver_version"]}',
         'captured_by = "avm-target capture (cuLinkCreate/cuLinkAddData PTX -> cubin)"',
-        'limits = "container identification only: no SASS decode, no operand/memory/ABI semantics"',
+        'limits = "container identification and a 128-bit instruction-word listing only: no SASS decode, no operand/memory/ABI semantics"',
         "",
     ]
     for c in captures:
         lines.append("[[capture]]")
         for key in ("entry", "extent", "input_arity", "workgroup", "block",
-                    "grid", "ptx_params", "ptx_sha256", "cubin_sha256", "size",                                 "sass_bytes", "sections", "policy",
-                    "operand_mutation", "memory_mutation", "abi_mutation"):
+                    "grid", "ptx_params", "ptx_sha256", "cubin_sha256", "size",                                 "sass_bytes", "sections", "word_bytes", "sass_words",
+                    "listing_sha256", "policy", "operand_mutation",
+                    "operand_changed_word", "memory_mutation", "abi_mutation"):
             value = c[key]
             if isinstance(value, bool):
                 lines.append(f"{key} = {'true' if value else 'false'}")
@@ -192,8 +213,9 @@ def check_record(device: dict, captures: list[dict]) -> int:
             problems.append(f"the record has no capture for {key}")
             continue
         for field in ("input_arity", "workgroup", "block", "grid", "ptx_params",
-                      "ptx_sha256", "cubin_sha256",                    "size", "sass_bytes", "sections", "policy", "operand_mutation",
-                      "memory_mutation", "abi_mutation"):
+                      "ptx_sha256", "cubin_sha256",                    "size", "sass_bytes", "sections", "word_bytes", "sass_words",
+                      "listing_sha256", "policy", "operand_mutation",
+                      "operand_changed_word", "memory_mutation", "abi_mutation"):
             if row.get(field) != c[field]:
                 problems.append(f"{key}: {field} is {c[field]!r}, the record "
                                 f"says {row.get(field)!r}")
@@ -255,6 +277,19 @@ def check_boundary(write: bool) -> int:
                       f"{body['size']} bytes, {body['sass_bytes']} SASS bytes, "
                       f"{body['sections']} section(s), "
                       f"{body['artifact_sha256'][:12]}…")
+                listed = words_of(out / "native.cubin")
+                if listed["word_bytes"] != 16:
+                    raise RuntimeError(f"{entry}: word width is "
+                                       f"{listed['word_bytes']}, not 16")
+                if listed["words"] * listed["word_bytes"] != body["sass_bytes"]:
+                    raise RuntimeError(
+                        f"{entry}: the listing covers "
+                        f"{listed['words'] * listed['word_bytes']} of "
+                        f"{body['sass_bytes']} SASS bytes")
+                print(f"  [pass] PC10 word listing: {entry} at {extent} -> "
+                      f"{listed['words']} instruction word(s) covering all "
+                      f"{body['sass_bytes']} SASS bytes "
+                      f"({listed['listing_sha256'][:12]}…)")
 
                 # A virtual artifact cannot stand in for the native one.
                 ptx_claim = out / "ptx.json"
@@ -284,8 +319,13 @@ def check_boundary(write: bool) -> int:
                     "size": body["size"],
                     "sass_bytes": body["sass_bytes"],
                     "sections": body["sections"],
+                    "word_bytes": listed["word_bytes"],
+                    "sass_words": listed["words"],
+                    "listing_sha256": listed["listing_sha256"],
                     "policy": "native",
                     "operand_mutation": "refused",
+                    "operand_changed_word": "n/a: a swapped commutative add "
+                                            "links the same bytes",
                     "memory_mutation": "refused",
                     "abi_mutation": "refused",
                 })
@@ -319,6 +359,19 @@ def check_boundary(write: bool) -> int:
                                   "--blob", str(out / "native.cubin"))
             require_refused(f"difference: an operand-order edit ({what}) is not "
                             f"the recorded blob", code, verdict, "not the same bytes")
+            # ... and the edit is local: it moves exactly one instruction word,
+            # which the listing can name even though it cannot name the opcode.
+            changes = word_changes(order_out / "native.cubin",
+                                   out / "native.cubin")
+            if len(changes) != 1:
+                raise RuntimeError(
+                    f"the operand-order edit moved {len(changes)} instruction "
+                    f"word(s), not one: {changes}")
+            word = f"{changes[0]['section']}@{changes[0]['offset']}"
+            captures[0]["operand_changed_word"] = word
+            print(f"  [pass] PC10 word attribution: the operand edit moves "
+                  f"exactly one instruction word ({word}, index "
+                  f"{changes[0]['index']})")
 
             # 2. Memory bound: the same entry at another extent bakes a different
             #    guard, so the linked bytes differ and the 65-extent record must

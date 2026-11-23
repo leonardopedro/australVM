@@ -30,6 +30,13 @@ use serde::{Deserialize, Serialize};
 /// The `e_machine` value CUDA executables carry.
 pub const EM_CUDA: u16 = 190;
 
+/// SASS instruction encoding width. Every target this repo links for (Maxwell
+/// through Ampere, `sm_50`–`sm_86`) uses one 128-bit encoding word per
+/// instruction, so a `.text.*` section decomposes into whole 16-byte words. The
+/// number is a fact about those encodings, not a decoded field: nothing here
+/// names an opcode (see [`LIMITS`]).
+pub const WORD_BYTES: usize = 16;
+
 /// What this boundary does and does not establish, quoted in outputs so a
 /// reader never has to infer it.
 pub const LIMITS: &str = "identifies the native container (ELF64/EM_CUDA, .text.* byte count, digests); \
@@ -160,6 +167,8 @@ pub enum Refusal {
     /// A native record must carry the virtual subject it was linked from.
     NoSubject,
     UnknownTier { text: String },
+    /// A `.text.*` section that is not a whole number of instruction words.
+    UnevenText { section: String, size: usize },
 }
 
 impl std::fmt::Display for Refusal {
@@ -199,6 +208,12 @@ impl std::fmt::Display for Refusal {
                 f,
                 "unknown tier {text:?} (expected wgsl, spirv, ptx or native)"
             ),
+            Refusal::UnevenText { section, size } => write!(
+                f,
+                "`{section}` is {size} byte(s), not a whole number of {}-byte instruction \
+                 words: the section is not an instruction stream this module can list",
+                WORD_BYTES
+            ),
         }
     }
 }
@@ -220,6 +235,175 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     format!("{:x}", h.finalize())
+}
+
+/// One `.text.*` section as a sequence of instruction words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedSection {
+    pub name: String,
+    /// File offset of the section, so a word's offset is absolute and stable.
+    pub offset: usize,
+    pub size: usize,
+    pub words: usize,
+}
+
+/// The instruction words of a native container: the bytes the device executes,
+/// listed rather than decoded.
+///
+/// This is what PC10b's first deliverable can be without a disassembler: the
+/// listing accounts for every byte of every `.text.*` section, so a section that
+/// is not a whole number of instruction words is refused rather than rounded,
+/// and the digest makes the listing itself the recorded subject. Opcode names,
+/// operands and the PTX→SASS relation are *not* here — see [`LIMITS`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Listing {
+    pub word_bytes: usize,
+    pub words: usize,
+    pub listing_sha256: String,
+    pub sections: Vec<ListedSection>,
+}
+
+/// One word that differs between two containers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WordChange {
+    pub section: String,
+    pub index: usize,
+    /// Offset from the section start, in bytes (`index * WORD_BYTES`).
+    pub offset: usize,
+    pub before: String,
+    pub after: String,
+}
+
+/// The `.text.*` sections of a container, as (name, file offset, size).
+fn text_sections(bytes: &[u8]) -> Result<Vec<(String, usize, usize)>, Refusal> {
+    let bad = |reason: String| Refusal::Unidentifiable { reason };
+    if bytes.len() < 64 || &bytes[..4] != b"\x7fELF" {
+        return Err(bad("no ELF magic".to_string()));
+    }
+    let shoff = read_u64(bytes, 40).ok_or_else(|| bad("truncated ELF header".to_string()))? as usize;
+    let shentsize = read_u16(bytes, 58).ok_or_else(|| bad("truncated ELF header".to_string()))? as usize;
+    let shnum = read_u16(bytes, 60).ok_or_else(|| bad("truncated ELF header".to_string()))? as usize;
+    let shstrndx = read_u16(bytes, 62).ok_or_else(|| bad("truncated ELF header".to_string()))? as usize;
+    if shentsize < 64 || shnum == 0 {
+        return Err(bad("no section table".to_string()));
+    }
+    let section = |index: usize| -> Option<(u32, u32, usize, usize)> {
+        let base = shoff.checked_add(index.checked_mul(shentsize)?)?;
+        let name = read_u32(bytes, base)?;
+        let kind = read_u32(bytes, base + 4)?;
+        let offset = read_u64(bytes, base + 24)? as usize;
+        let size = read_u64(bytes, base + 32)? as usize;
+        Some((name, kind, offset, size))
+    };
+    let names = section(shstrndx).ok_or_else(|| bad("no section-name table".to_string()))?;
+    let names = bytes
+        .get(names.2..names.2.checked_add(names.3).ok_or_else(|| bad("truncated names".to_string()))?)
+        .ok_or_else(|| bad("truncated section-name table".to_string()))?;
+    let name_at = |offset: u32| -> String {
+        let rest = match names.get(offset as usize..) {
+            Some(r) => r,
+            None => return String::new(),
+        };
+        let end = rest.iter().position(|b| *b == 0).unwrap_or(rest.len());
+        String::from_utf8_lossy(&rest[..end]).into_owned()
+    };
+    let mut out = Vec::new();
+    for index in 0..shnum {
+        let (name, kind, offset, size) = match section(index) {
+            Some(s) => s,
+            None => break,
+        };
+        if kind != 1 || size == 0 {
+            continue;
+        }
+        let name = name_at(name);
+        if bytes.get(offset..offset.saturating_add(size)).is_none() {
+            return Err(bad(format!("section {name:?} runs past the file")));
+        }
+        if name.starts_with(".text") {
+            out.push((name, offset, size));
+        }
+    }
+    Ok(out)
+}
+
+/// List the instruction words of a native container, refusing a `.text.*` that
+/// is not a whole number of words.
+///
+/// The listing digest is sha256 over one line per word, `"<offset> <hex>"` in
+/// section order, so the digest is a function of the bytes *and* of the layout
+/// the listing claims.
+pub fn listing(bytes: &[u8]) -> Result<Listing, Refusal> {
+    let sections = text_sections(bytes)?;
+    let mut lines = String::new();
+    let mut words = 0usize;
+    let mut listed = Vec::new();
+    for (name, offset, size) in sections {
+        if size % WORD_BYTES != 0 {
+            return Err(Refusal::UnevenText { section: name, size });
+        }
+        let count = size / WORD_BYTES;
+        for index in 0..count {
+            let at = offset + index * WORD_BYTES;
+            let word = &bytes[at..at + WORD_BYTES];
+            let hex: String = word.iter().map(|b| format!("{b:02x}")).collect();
+            lines.push_str(&format!("{at:08x} {hex}\n"));
+        }
+        words += count;
+        listed.push(ListedSection { name, offset, size, words: count });
+    }
+    if words == 0 {
+        return Err(Refusal::Unidentifiable {
+            reason: "the container holds no `.text.*` bytes to execute".to_string(),
+        });
+    }
+    Ok(Listing {
+        word_bytes: WORD_BYTES,
+        words,
+        listing_sha256: sha256_hex(lines.as_bytes()),
+        sections: listed,
+    })
+}
+
+/// The words that differ between two containers, in section and word order.
+///
+/// This is how a mutation control becomes local: "the operand edit changed the
+/// word at section offset N" is a claim about these bytes, not a size. It says
+/// nothing about what that word computes.
+pub fn word_diff(before: &[u8], after: &[u8]) -> Result<Vec<WordChange>, Refusal> {
+    let a = text_sections(before)?;
+    let b = text_sections(after)?;
+    if a.len() != b.len() {
+        return Err(Refusal::BlobDrift {
+            field: "text section count".to_string(),
+            recorded: a.len().to_string(),
+            got: b.len().to_string(),
+        });
+    }
+    let mut out = Vec::new();
+    for ((name, ao, asize), (name_b, bo, bsize)) in a.iter().zip(b.iter()) {
+        if name != name_b || asize != bsize {
+            return Err(Refusal::BlobDrift {
+                field: format!("section {name}"),
+                recorded: format!("{name_b} {bsize}"),
+                got: format!("{asize}"),
+            });
+        }
+        for index in 0..asize / WORD_BYTES {
+            let x = &before[ao + index * WORD_BYTES..ao + (index + 1) * WORD_BYTES];
+            let y = &after[bo + index * WORD_BYTES..bo + (index + 1) * WORD_BYTES];
+            if x != y {
+                out.push(WordChange {
+                    section: name.clone(),
+                    index,
+                    offset: index * WORD_BYTES,
+                    before: x.iter().map(|v| format!("{v:02x}")).collect(),
+                    after: y.iter().map(|v| format!("{v:02x}")).collect(),
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Identify the native container: ELF64 little-endian, `EM_CUDA`, a section
@@ -612,6 +796,46 @@ mod tests {
             record.verify(Tier::Native, Some(&bytes)),
             Err(Refusal::NoSubject)
         ));
+    }
+
+    #[test]
+    fn a_listing_decomposes_text_into_instruction_words() {
+        let bytes = container(&[0u8; 32]);
+        let listed = listing(&bytes).unwrap();
+        assert_eq!(listed.word_bytes, WORD_BYTES);
+        assert_eq!(listed.words, 2);
+        assert_eq!(listed.sections[0].words, 2);
+        assert_eq!(listed.sections[0].size, 32);
+        // The digest is a function of the words, so different text differs.
+        assert_ne!(listed.listing_sha256, listing(&container(&[1u8; 32])).unwrap().listing_sha256);
+    }
+
+    #[test]
+    fn a_text_section_that_is_not_whole_words_is_refused() {
+        let bytes = container(&[0u8; 20]);
+        assert!(matches!(
+            listing(&bytes),
+            Err(Refusal::UnevenText { ref section, size: 20 }) if section == ".text"
+        ));
+    }
+
+    #[test]
+    fn a_word_diff_localises_a_one_word_change() {
+        let mut text = [0u8; 32];
+        text[17] = 9;
+        let changes = word_diff(&container(&[0u8; 32]), &container(&text)).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].section, ".text");
+        assert_eq!(changes[0].index, 1);
+        assert_eq!(changes[0].offset, WORD_BYTES);
+        assert_eq!(changes[0].before, "00".repeat(WORD_BYTES));
+        assert_eq!(changes[0].after, "00".to_string() + "09" + &"00".repeat(14));
+    }
+
+    #[test]
+    fn identical_text_has_no_word_changes() {
+        let bytes = container(&[7u8; 32]);
+        assert!(word_diff(&bytes, &bytes).unwrap().is_empty());
     }
 
     #[test]

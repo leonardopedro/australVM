@@ -4,6 +4,8 @@
 //! avm-target claim BUNDLE --tier TIER --out FILE [--gap TEXT]
 //! avm-target capture BUNDLE --out DIR [--device N]
 //! avm-target identify FILE
+//! avm-target words FILE
+//! avm-target diff BEFORE AFTER
 //! avm-target check RECORD [--policy TIER] [--blob FILE] [--ptx FILE]
 //! avm-target link PTX --out DIR [--device N]
 //! ```
@@ -32,6 +34,8 @@ fn usage() -> i32 {
         "usage:\n  avm-target claim BUNDLE --tier TIER --out FILE [--gap TEXT]\n  \
          avm-target capture BUNDLE --out DIR [--device N]\n  \
          avm-target identify FILE\n  \
+         avm-target words FILE\n  \
+         avm-target diff BEFORE AFTER\n  \
          avm-target check RECORD [--policy TIER] [--blob FILE] [--ptx FILE]\n  \
          avm-target link PTX --out DIR [--device N]"
     );
@@ -394,6 +398,54 @@ fn identify(args: &[String]) -> i32 {
     }
 }
 
+/// `words FILE` — the `.text.*` instruction words, listed not decoded.
+fn words(args: &[String]) -> i32 {
+    let Some(path) = args.first() else {
+        return usage();
+    };
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return uncaptured(&format!("cannot read {path}: {e}")),
+    };
+    match target::listing(&bytes) {
+        Ok(listed) => {
+            println!(
+                "{}",
+                serde_json::json!({ "status": "ok", "listing": listed, "limits": target::LIMITS })
+            );
+            0
+        }
+        Err(r) => refuse(&r),
+    }
+}
+
+/// `diff BEFORE AFTER` — which instruction words differ, and where.
+fn diff(args: &[String]) -> i32 {
+    let (Some(before), Some(after)) = (args.first(), args.get(1)) else {
+        return usage();
+    };
+    let read = |path: &String| std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"));
+    let (a, b) = match (read(before), read(after)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return uncaptured(&e),
+    };
+    match target::word_diff(&a, &b) {
+        Ok(changes) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "ok",
+                    "word_bytes": target::WORD_BYTES,
+                    "changed": changes,
+                    "limits": target::LIMITS,
+                })
+            );
+            0
+        }
+        Err(r) => refuse(&r),
+    }
+}
+
 fn check(args: &[String]) -> i32 {
     let Some(path) = args.first() else {
         return usage();
@@ -497,6 +549,8 @@ fn main() {
         Some("claim") => claim(&args[2..]),
         Some("capture") => capture(&args[2..]),
         Some("identify") => identify(&args[2..]),
+        Some("words") => words(&args[2..]),
+        Some("diff") => diff(&args[2..]),
         Some("check") => check(&args[2..]),
         Some("link") => link(&args[2..]),
         _ => usage(),
