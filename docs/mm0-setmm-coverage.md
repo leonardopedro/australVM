@@ -664,6 +664,15 @@ with 1 345 defs instead of 1 020 and a *larger* first body (3 999 411 320 B) —
 first body is fully expanded at any floor — while the 40 MB slice it yields is 1.6 % smaller
 and still peaks at 13 695 160 kB. §13.58 measures both floors.
 
+Splitting the bodies from the *inside* does bound them: `LTP_DEF_BODY_MAX` (§13.59) re-expands
+any body at or over its threshold and interns that body's own children, and the 56 GB row
+re-emitted at floor 64 with a 1 GiB threshold is 48 835 924 012 B (−12.1 %) with 1 727 defs and
+a largest body of **1 799 565 507 B** instead of 3 999 411 320 B. The 40 MB slice of it keeps
+all 1 727 defs in 371 968 196 B (`skipped_big=0`) and `mm0-rs compile` accepts it — exit 0,
+4 m 18.6 s, `3 sorts, 1563 term/def, 24386 ax/thm`. The pass is off by default below 1 GiB
+bodies and is byte-identical when off; what it does not yet do is recurse past its first
+split, because sizes recorded during a naming walk are not the fully expanded ones (§13.59).
+
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB
 LTP_CENSUS=1 LTP_DEDUP_NODES=1`. Re-running the same cap at 360 MiB *without*
