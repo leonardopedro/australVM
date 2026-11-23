@@ -1000,7 +1000,7 @@ schema tests, but no test drives it through a real run — the demo's witness is
 `modhost`. `untrusted-native` remains U26's tier and is still refused by
 preflight.
 
-## D10 — canonical replicated commands and domain-separated signatures (2026-11-23, steps 1a–2 of 3)
+## D10 — canonical replicated commands and domain-separated signatures (2026-11-23, steps 1a–3 of 3)
 
 U **new** `unfer_protocol/src/distributed.rs`, `unfer_protocol/src/lib.rs`;
 tests `unfer_protocol/tests/distributed_wire.rs`.
@@ -1092,17 +1092,95 @@ $ cargo check -p unfer_consensus --offline # EXIT=0
 Evidence: `docs/distributed/evidence/d10-unfer_protocol_tests.log`,
 `d10-unfer_consensus_check.log`.
 
-### What is not done yet (D10 steps 1b and 3)
+### The replicated value is what `net.rs` agrees on (step 3a)
 
-* `net.rs` still agrees on the `u64` and still applies from the shared pending
-  map — the new value type is not yet what QuePaxa replicates. Removing the map
-  is the next patch, and it is what makes a surviving node able to replay work
-  it never had locally (D11's acceptance).
-* `signing.rs` still signs `sha256(serde_json(...))`; the new preimage is not
-  wired into `sign_transaction`/`verify_transaction` yet, so no existing
-  signature changes meaning. The wire bytes are canonical but the signature
-  over them is still the legacy layout until that patch lands.
-* no live transport carries these frames (D11/D17).
+U `unfer_consensus/src/net.rs`.
+
+`NOOP_VALUE = u64::MAX` is gone. `NetworkCluster::build` names its gap filler
+with `.with_noop_value(ReplicatedValue::Noop)`, and the submission channel, the
+`StateMachine<ReplicatedValue>` impl and the pump all carry the value.
+
+A submission becomes a value whose payload is `id(u64 BE) |
+canonical_json(ConsensusTransaction)` under `LEDGER_TX_SCHEMA = 1`
+(`encode_ledger_value`/`decode_ledger_value`). The reservation id travels
+*inside* the payload, so a decision is self-describing: `append` learns which
+submission it applied from the bytes, and needs no map to look it up.
+
+| Before | Now |
+|---|---|
+| `append(Vec<u64>)`, looked up in `LedgerSnapshot::pending` | `append(Vec<ReplicatedValue>)`, decoded from the value |
+| a peer that never held the payload holds the slot and not the work | any replica applies the decision from its own bytes |
+| `pending` doubles as payload store and durability record | `outbox` is **only** this node's pre-proposal durability; it is drained by the decision and never read to apply one |
+| unknown id: silently skipped | unknown schema, short payload, undecodable bytes: refused by name, nothing committed |
+
+The renamed field keeps `#[serde(alias = "pending")]`, so a pre-D10 snapshot
+loads with its queued submissions in the outbox and re-proposes them instead of
+dropping work it had already acknowledged. `append` also removes an applied id
+from the outbox and de-duplicates by committed id, which is what makes a
+re-delivered decision (or the second replica sharing one ledger) a no-op.
+
+Witnesses in `net.rs`: a committed value applies on a ledger that never queued
+it (and its receipt answers with the slot the payload landed at); the outbox is
+drained by the decision and is not needed to apply it; an unknown schema, a
+payload shorter than its id and undecodable bytes are each refused with nothing
+committed; a no-op decision commits nothing and is not an error.
+
+```
+$ cargo test -p unfer_consensus --offline --features network --lib          # 162 passed
+$ cargo test -p unfer_consensus --offline --features network --test phase6_testnet
+                                                                            # 4 passed
+$ cargo test -p unfer_consensus --offline --features network --test request_identity
+                                                                            # 6 passed
+$ cargo test -p unfer_consensus --offline --features network --test power_cut
+                                                                            # 4 passed
+```
+
+Evidence: `docs/distributed/evidence/d10-net-lib.log`,
+`d10-net-phase6_testnet.log`, `d10-net-request_identity.log`,
+`d10-net-power_cut.log`.
+
+### Step 3b: `signing.rs` signs the domain-separated preimage
+
+U `unfer_consensus/src/signing.rs`. `canonical_frame` is now the unsigned
+canonical JSON on its own; `canonical_bytes` is `sha256(frame)` over it,
+byte-for-byte what it was.
+
+| Piece | Behaviour |
+|---|---|
+| `CONSENSUS_SIGNING_DOMAIN` | `deployment = "unfer"`, `audience = "unfer-consensus"`, `schema = "consensus-transaction"`, `context = "consensus"` |
+| `sign_transaction` | signs `signing_preimage(domain, canonical_frame(tx))` — the domain-separated layout |
+| `sign_transaction_legacy` | still produces `sha256(frame)`; kept only to witness or reproduce pre-D10 history |
+| `accepted_messages` | `[domain-separated, legacy]`, tried in that order |
+| `verify_transaction` / `verify_transaction_in` | accept either preimage, so signatures made before this patch keep verifying |
+| `verify_identity_op_as` | same dual acceptance, so a *new* identity op still authenticates at the ordered point against the stored key |
+| `verify_arctic_threshold` | same dual acceptance; the aggregate signatures the test helpers build cover `canonical_bytes`, so they verify through the legacy branch |
+
+Witnesses added: a legacy signature still verifies (and equals the legacy
+signer byte for byte); a new signature is *not* the legacy one, equals the
+domain-separated signer, verifies in its own domain, and is refused when the
+deployment, audience, schema or context is changed to anything else; altered
+bytes are refused under both layouts.
+
+The operation's `signature` field is 64 bytes and carries no version tag, so
+verification cannot know which layout a signature used and must try both. That
+is why legacy acceptance is a *compatibility window*, not a permanent rule:
+retiring it needs a deployment-wide signal that no pre-D10 signature remains,
+and until then a legacy signature over any frame that also verifies as a
+domain-separated one is accepted (the domain-separated one is checked first).
+
+```
+$ cargo test -p unfer_consensus --offline --features network --lib   # 162 passed (9 signing)
+$ cargo check -p unfer_identity -p unfer_taler -p unfer_data --offline # EXIT=0
+```
+
+Evidence: `docs/distributed/evidence/d10-net-lib.log`,
+`d10-consumers_check.log`.
+
+### What is not done yet
+
+* no live transport carries these frames yet (D11/D17).
+* `Legacy` signature acceptance cannot be retired until a deployment-wide
+  cutover signal exists; today the verifier tries both layouts.
 
 ## Task status
 
@@ -1118,5 +1196,5 @@ Evidence: `docs/distributed/evidence/d10-unfer_protocol_tests.log`,
 | D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
 | D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; `call_from_peer` is the production receiver and checks against the peer the transport authenticated |
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
-| D10 | in progress (steps 1a–2 of 3) | canonical versioned frame + explicit no-op + domain-separated preimages in `unfer_protocol::distributed`, 12 wire tests (`unfer_protocol` 353+4+12+51+3, `unfer_consensus` check EXIT=0); `docs/distributed/evidence/d10-*.log` | unit-tested | The replicated value can now carry the command, bounded and canonical, but `net.rs` does not yet agree on it (shared pending map still in place) and `signing.rs` still signs the legacy JSON hash. Recorded dependency limits: QuePaxa wire v4, 8 MiB transport frame, 16 MiB journal, 4 MiB batch default |
-| D11–D26 | not started | D11 is next once D10's `net.rs` patch lands (independent node processes) |
+| D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log` | measured | Gaps: no live transport carries these frames (D11/D17); legacy signature acceptance cannot be retired without a cutover signal, and the 64-byte signature field has no version tag, so both layouts are tried (domain-separated first). Recorded dependency limits: QuePaxa wire v4, 8 MiB transport frame, 16 MiB journal, 4 MiB batch default |
+| D11–D26 | not started | D11 is next: independent node processes over the wired command value |

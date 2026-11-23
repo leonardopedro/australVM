@@ -21,3 +21,5 @@ C19	runtime	A	safestos/cranelift/src/capstd_mod.rs	tested	docs/distributed/evide
 C20	runtime	A	umbrella/modules/distributed_io/DistributedIo.aum	tested	docs/distributed/evidence/d09-distributed_io_demo.log
 C21	codec	U	unfer_protocol/src/distributed.rs	tested	docs/distributed/evidence/d10-unfer_protocol_tests.log
 C22	codec	U	unfer_protocol/tests/distributed_wire.rs	tested	docs/distributed/evidence/d10-unfer_protocol_tests.log
+C23	consensus	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d10-net-lib.log
+C24	identity	U	unfer_consensus/src/signing.rs	tested	docs/distributed/evidence/d10-net-lib.log
