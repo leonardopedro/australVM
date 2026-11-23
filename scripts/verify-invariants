@@ -1146,6 +1146,44 @@ PY
             gap "PC11: the NPU branch not checked (tooling absent: python3)"
         fi
 
+        # G16b's `wgsl-f32-v1` profile: the checker compiles the fixture twice,
+        # compares the KernelIR reference bit for bit against an independent
+        # binary32 oracle, requires each refusal to name what it refused, and
+        # mutates a scratch bundle's profile to prove the validator looks. The
+        # device half is its own `[gap]` line when no adapter runs the kernel;
+        # a missing compiler or checker is a `[gap]` too (the script says which).
+        if command -v python3 >/dev/null 2>&1; then
+            _g16b=0
+            python3 "$repo_root/scripts/gpu-f32-profile" \
+                >"$_cert_tmp/g16b.log" 2>&1 || _g16b=$?
+            case $_g16b in
+                0)
+                    grep -E '^\[pass\] G16b|^\[gap\] G16b' "$_cert_tmp/g16b.log" >&2
+                    if grep -q '^\[pass\] G16b: wgsl-f32-v1 CPU/profile checks' \
+                            "$_cert_tmp/g16b.log"; then
+                        check "G16b: the wgsl-f32-v1 profile is checked end to end" true
+                    else
+                        cat "$_cert_tmp/g16b.log" >&2
+                        check "G16b: the wgsl-f32-v1 profile is checked end to end" false
+                    fi
+                    ;;
+                1)
+                    cat "$_cert_tmp/g16b.log" >&2
+                    if grep -q '^\[gap\] G16b: ' "$_cert_tmp/g16b.log"; then
+                        gap "G16b: the wgsl-f32-v1 profile not checked (no compiler or GPU checker here)"
+                    else
+                        check "G16b: the wgsl-f32-v1 profile is checked end to end" false
+                    fi
+                    ;;
+                *)
+                    cat "$_cert_tmp/g16b.log" >&2
+                    check "G16b: the wgsl-f32-v1 profile is checked end to end" false
+                    ;;
+            esac
+        else
+            gap "G16b: the wgsl-f32-v1 profile not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then

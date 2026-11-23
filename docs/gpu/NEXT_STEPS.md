@@ -678,6 +678,25 @@ Float32 and reproduce typed literals without widening.
 f32 from f64 rounding. A user-defined operation of the same name remains
 outside the intrinsic list. The existing v1 profile still denies Float32.
 
+**Status:** landed. `TrappingArithmetic(Float32)`'s add/subtract/multiply are
+resolved in `lib/gpu/Gpu_intrinsics.ml` by the instance declaration and its
+method IDs, never by a method's text, and the C backend executes
+`test-programs/suites/025-gpu-f32/001-affine-f32` with the golden
+`program-stdout.txt` (`python3 test-programs/runner.py 025-gpu-f32` → 1 PASS):
+the Float32 rows read `16777216.000000` and `0.000000` where the Float64 rows of
+the *same source* read `16777217.000000` and `1.000000`, so a pass that widened
+to binary64 would fail the case instead of rounding quietly. Intrinsic identity
+is pinned for f32 in both directions by `test/GpuSubsetTest.ml`: a user
+definition *named* `trappingAdd` does not capture the call — the frontend
+resolves it to the canonical method, the local definition stays unreachable (no
+helper is emitted), and the entry lowers to `F32Add`; a user operation under
+its own name (`scale`) stays a helper `Call` and never gains intrinsic status.
+`test_refuses_trapping_arithmetic` pins the last exit clause: the default
+`u32-modular-v1` profile still refuses `trappingAdd` on `Nat32`, and the
+f32 profile refuses Float64, division and non-Float32 results (G16b's
+checker). Not claimed: the C fixture is the oracle for *source* arithmetic
+only; nothing here relates f32 to a device.
+
 ### G16b — Add the opt-in Float32 GPU profile
 
 **Files.** One profile contract, `Gpu_ir.ml`, `Gpu_wgsl.ml`, Rust schema and
@@ -692,6 +711,28 @@ profile. Use the specification's numeric rules to justify the comparison.
 reference and include cancellation-sensitive, boundary and exceptional inputs.
 Refuse Float64, wrong element representation and unsupported operations. Use
 the original v1 suite to guard against numeric reinterpretation.
+
+**Status:** the CPU/profile half is landed and gated; the device half is a
+`[gap]` on this host. `scripts/gpu-f32-profile` compiles `axpy` and `cancel` of
+`examples/gpu/f32-affine` under `--gpu-numeric-profile=wgsl-f32-v1`, validates
+each bundle (`profile=wgsl-f32-v1`, `element=f32`, `ir=e7b526eeb585` /
+`35dbf7e74c38`), compares the KernelIR reference bit for bit against an
+independent Python binary32 oracle that rounds after every operation (so a
+widening to f64 cannot pass: at 2^24 the two disagree) on 4 `axpy` + 3 `cancel`
+bounded normal inputs including the cancellation-sensitive `2^24 → 0`, and
+requires six refusals to name what they refused: Float64, `trappingDivide`,
+a Nat32 result under the profile, Float32 under `u32-modular-v1`, an unknown
+profile, and a scratch bundle whose `numeric_profile` disagrees with its
+KernelIR. Measured now: ten `[pass]` lines and one `[gap]` (device), exit 0;
+`scripts/verify-invariants` prints `[pass] G16b: the wgsl-f32-v1 profile is
+checked end to end`. `--require-hardware` exits 77 with this checkout's
+`avm-gpu` because that binary was built without `--features device`; the Intel
+UHD Graphics 630 run recorded in `EXECUTION.md` (max 1 ULP of the oracle,
+budget 2) came from a device-enabled build and was not re-measured here.
+Not claimed: no per-bundle MM0/Why3 obligation for f32; contraction is
+permitted rather than eliminated (the profile records it and the ULP budget
+covers it); float comparisons, division, float→int conversion and Float64 stay
+refused.
 
 ### G18 — Integrate one unfer scale operation
 
