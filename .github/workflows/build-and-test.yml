@@ -365,7 +365,14 @@ jobs:
         run: |
           git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
           git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
-          git clone --depth 1 --branch main https://github.com/leonardopedro/dnx.git ../dnx
+          # `dnx-verify` is not on dnx's `main` — the path returns 404 there and
+          # the crate lives on `feat/dnx-verify` (measured 2026-11-23), so a
+          # clone of main fails this job at `cargo build -p dnx-verify` with
+          # "package ID specification did not match any packages". Pin the
+          # commit the example was verified against instead of tracking a
+          # branch: this job should measure australVM, not dnx's tip.
+          git clone --filter=blob:none https://github.com/leonardopedro/dnx.git ../dnx
+          git -C ../dnx checkout 51f2fd75aa0a559a6f34c158c1e59d3d69b41350
 
       - name: install nix
         uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
