@@ -866,6 +866,73 @@ PY
             gap "PC08: the captured host fragment not checked (tooling absent: python3)"
         fi
 
+        # PC09 declares the MLIR stage boundary. The emitter (G20a) and a
+        # pinned toolchain round trip (G19a) exist, but no MLIR semantics does,
+        # so the record pins the KernelIR the chain already trusts, lists every
+        # pass of the route, and counts the uncaptured ones — the `[gap]` —
+        # instead of letting them vanish. Its
+        # selftest mutates a comparison predicate, a pass option, the route, a
+        # captured row, the KernelIR digest and the captured count.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc09=0
+            python3 "$repo_root/scripts/mlir-chain" check \
+                >"$_cert_tmp/pc09.log" 2>&1 || _pc09=$?
+            if [ $_pc09 -eq 0 ]; then
+                grep -E '^  \[detail\]' "$_cert_tmp/pc09.log" >&2
+                check "PC09: the declared MLIR stage boundary is current" true
+            else
+                cat "$_cert_tmp/pc09.log" >&2
+                check "PC09: the declared MLIR stage boundary is current" false
+            fi
+            _pc09s=0
+            python3 "$repo_root/scripts/mlir-chain" selftest \
+                >"$_cert_tmp/pc09-selftest.log" 2>&1 || _pc09s=$?
+            if [ $_pc09s -eq 0 ]; then
+                check "PC09: the MLIR boundary's controls refuse" true
+            else
+                cat "$_cert_tmp/pc09-selftest.log" >&2
+                check "PC09: the MLIR boundary's controls refuse" false
+            fi
+        else
+            gap "PC09: the declared MLIR stage boundary not checked (tooling absent: python3)"
+        fi
+
+        # G19a pins one MLIR toolchain round trip: `mlir-opt` verifies the
+        # handwritten smoke fixture and the G20a-emitted clamp module, the
+        # pinned `gpu-lower-to-nvvm` pipeline lowers them to PTX `sm_70`, and
+        # the probe records versions, commands, parameter layout and digests.
+        # Exit 3 (no MLIR/LLVM here) is a `[gap]`, never a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _g19a=0
+            python3 "$repo_root/scripts/gpu/mlir-probe" check \
+                >"$_cert_tmp/g19a.log" 2>&1 || _g19a=$?
+            case $_g19a in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/g19a.log" >&2
+                    check "G19a: the recorded MLIR round trip reproduces" true
+                    ;;
+                3)
+                    cat "$_cert_tmp/g19a.log" >&2
+                    gap "G19a: the recorded MLIR round trip not checked (MLIR/LLVM absent)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/g19a.log" >&2
+                    check "G19a: the recorded MLIR round trip reproduces" false
+                    ;;
+            esac
+            _g19as=0
+            python3 "$repo_root/scripts/gpu/mlir-probe" selftest \
+                >"$_cert_tmp/g19a-selftest.log" 2>&1 || _g19as=$?
+            if [ $_g19as -eq 0 ]; then
+                check "G19a: the toolchain probe's controls refuse" true
+            else
+                cat "$_cert_tmp/g19a-selftest.log" >&2
+                check "G19a: the toolchain probe's controls refuse" false
+            fi
+        else
+            gap "G19a: the MLIR round trip not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then

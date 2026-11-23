@@ -1,0 +1,56 @@
+# toolchain.toml — G19a's recorded MLIR round trip (generated).
+#
+# Written by `scripts/gpu/mlir-probe record`; `check` re-runs every stage
+# and refuses a version, command, target or digest that differs. The
+# probe is not part of the default GPU lane: nothing in the compiler
+# invokes it, and the CPU-only build never needs MLIR installed.
+
+[[tool]]
+name = "mlir-opt"
+version = "LLVM version 19.1.7"
+path = "/nix/store/wl6jvhflvza9dcmcb1h8fzvgys8p9viv-mlir-19.1.7/bin/mlir-opt"
+[[tool]]
+name = "mlir-translate"
+version = "LLVM version 19.1.7"
+path = "/nix/store/wl6jvhflvza9dcmcb1h8fzvgys8p9viv-mlir-19.1.7/bin/mlir-translate"
+[[tool]]
+name = "llc"
+version = "LLVM version 19.1.7"
+path = "/nix/store/fyrs18ngsq841rvqggbqys6bqf7w77cc-llvm-19.1.7/bin/llc"
+
+[pipeline]
+target = "sm_70"
+command = "--gpu-lower-to-nvvm-pipeline=cubin-format=isa cubin-chip=sm_70"
+stages = "verify -> lower (gpu-lower-to-nvvm, cubin-format=isa) -> extract PTX"
+ptxas = "not used: cubin-format=isa stops at PTX text"
+data_layout = "measured from the PTX: .address_size 64, all .param .u64"
+
+[[subject]]
+stem = "copy_smoke"
+origin = "handwritten"
+source = "mm0/proof_chain/mlir/smoke.mlir"
+source_sha256 = "e0488fb1ad41742b2a546e6af56fa8717b217a6a4239bc8c989ad9643fe82670"
+ptx = "mm0/proof_chain/mlir/ir/smoke.ptx"
+ptx_sha256 = "68c98185b446b9aa08001583f57d332aa910a76e6db5a12caec1ce5e40d9fe79"
+entry = "copy"
+ptx_target = "sm_70"
+address_size = 64
+params = 10
+param_types = "u64"
+param_layout = "one memref -> 5 x .u64: alloc ptr, aligned ptr, offset, size, stride"
+address_space = "generic -> global (cvta.to.global)"
+
+[[subject]]
+stem = "clamp"
+origin = "g20a-emitted"
+source = "mm0/proof_chain/mlir/ir/clamp.mlir"
+source_sha256 = "b749a06eb0a0e7fa61113005529f0222caa5ee4a72b864bc015bf1e87009d71c"
+ptx = "mm0/proof_chain/mlir/ir/clamp.ptx"
+ptx_sha256 = "ff2ce58a3b0e74a5aaa76780f62740cba2dced8a67e13f9fe6e5f9f551abcee7"
+entry = "main"
+ptx_target = "sm_70"
+address_size = 64
+params = 10
+param_types = "u64"
+param_layout = "one memref -> 5 x .u64: alloc ptr, aligned ptr, offset, size, stride"
+address_space = "generic -> global (cvta.to.global)"

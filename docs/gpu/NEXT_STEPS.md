@@ -261,6 +261,22 @@ record if the tool emits environment-dependent metadata. Record commands,
 target, address-space conversion, data layout, output file and parameter
 layout. No changes to the OCaml-only or default GPU lane.
 
+**Status:** met on this host, from nixpkgs rather than a new devshell:
+`llvmPackages_19.mlir` (19.1.7) and `llvmPackages_19.llvm` (19.1.7).
+`scripts/gpu/mlir-probe record` runs three stages on two subjects — the
+handwritten `mm0/proof_chain/mlir/smoke.mlir` (kept separate from source
+compilation) and the module G20a emits for `clamp` — and writes
+`mm0/proof_chain/mlir/toolchain.toml`: the three tool versions, the target
+(`sm_70`), the exact pipeline string, and per subject the source digest, the PTX
+file and digest, the entry name, the 10-parameter layout (one `memref<65xi32>`
+→ 5 × `.u64`: alloc ptr, aligned ptr, offset, size, stride) and the
+address-space conversion (`generic → global` via `cvta.to.global`).
+`--gpu-lower-to-nvvm-pipeline=cubin-format=isa cubin-chip=sm_70` stops at PTX
+text, so no `ptxas` or CUDA toolkit is needed. `check` re-runs every stage and
+refuses a changed version, target, pipeline or PTX digest (four controls); a
+host without MLIR reports a `[gap]`. The default GPU lane is untouched: nothing
+in `Compiler` calls the probe, and `make all` never needs MLIR.
+
 ### G20a — Generate verified MLIR for existing scalar semantics
 
 **Files.** Proposed `lib/gpu/Gpu_mlir.ml` and focused emitter tests.
@@ -275,6 +291,23 @@ interface/ABI. Widen successively to the current v1 helper and operation corpus.
 **Exit.** Pinned MLIR verification and lowering accept the real source-derived
 fixtures. Swapping subtraction operands and reversing a comparison produce
 different lowered bodies. Unknown IR cases produce a named refusal.
+
+**Status:** the emitter exists (`lib/gpu/Gpu_mlir.ml`, `gpu_proof dump-mlir`,
+`test/GpuMlirTest.ml`): signless `i32` with unsigned predicates, no wrap flags,
+an explicit static extent, a dominating `ult` tail guard, and named refusals for
+helper calls, non-v1 profiles, a non-positive extent and one-armed returns.
+Eleven tests cover the encoding, the refusals, the structural validator's own
+negative controls, and the mutation requirement (swapping `modularSubtract`
+operands or reversing `clamp`'s comparison changes the body).
+**Pinned MLIR verification and lowering happen in the G19a lane, not here:**
+the module is captured byte-for-byte (`mm0/proof_chain/mlir/ir/clamp.mlir`,
+recorded in `stage.toml` as `kernelir-to-mlir = captured`), and
+`scripts/gpu/mlir-probe` verifies that exact file with LLVM 19.1.7 and lowers it
+to `sm_70` PTX (`mm0/proof_chain/mlir/toolchain.toml`). What is not claimed is
+preservation: no MLIR semantics exists, so the ABI header still says
+`g19a-pending`, and the interface is exercised rather than proved. Widening to
+the helper corpus is also unbuilt: a kernel with a helper is a named refusal,
+not a silent inline.
 
 ### G20b — Publish a separate versioned MLIR artifact
 

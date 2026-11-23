@@ -1,0 +1,22 @@
+module body ArithFragment is
+    -- PC08's second captured fragment: the same shape as NativeFragment, but
+    -- the arithmetic is *inlined*. `Int64` subtraction and multiplication are
+    -- lowered by `Compiler_cps.trapping_arith_op` to the bridge's `sub`/`mul`
+    -- opcodes (0x06/0x18), so the captured code carries real ALU instructions
+    -- and a trap branch instead of a call to `trappingSubtract`. Nothing here
+    -- is executed by the proof tooling; `main` is the entrypoint only so the
+    -- fixture compiles and the constants are visible in its caller.
+    function sub(x: Int64, y: Int64): Int64 is
+        return (x - y);
+    end;
+
+    function mul(x: Int64, y: Int64): Int64 is
+        return (x * y);
+    end;
+
+    function main(): ExitCode is
+        let a: Int64 := sub(9, 4);
+        let b: Int64 := mul(a, 3);
+        return ExitSuccess();
+    end;
+end module body.

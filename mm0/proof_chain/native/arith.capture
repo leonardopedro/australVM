@@ -1,0 +1,271 @@
+# native/arith.capture — PC08's captured host fragment (generated).
+#
+# Written by `scripts/native-edge capture`; every run of
+# `scripts/native-edge` re-decodes the recorded bytes and refuses a file
+# that disagrees, so this is evidence, not a hint. Nothing here is
+# executed: the bytes are the ones the bridge compiled, read back through
+# the same `CaptureModule` the JIT path uses (`cps2cell`).
+[meta]
+arch = "x86_64"
+source = "examples/native-fragment/ArithFragment.aum"
+module = "ArithFragment"
+subject = "sub"
+cps_sha256 = "a35b02de9d4954b1bbd84232d4e4cae27318dbd418f71899644ced353d92316f"
+avce_sha256 = "57152966cb505c7a6b102416e6cd53b65078025c4e30f6548e79a8a404e3dbb9"
+clif = ["inst ssub_overflow 2 2 i64,i64 -> i64,i8", "inst brif 1 0 i8 -> none", "inst call 2 1 i64,i64 -> i64", "inst jump 0 0 none -> none", "inst return 1 0 i64 -> none"]
+[[import]]
+name = "Austral.Pervasive::trappingMultiply"
+[[import]]
+name = "Austral.Pervasive::trappingSubtract"
+[[import]]
+name = "au_alloc"
+[[function]]
+name = "sub"
+bytes = "554889e54883ec104c8924244989fc4c2be6410f90c04584c00f85080000004c89e0e91000000049b9000000000000000041ffd14c89e04c8b24244883c4104889ec5dc3"
+[[function.reloc]]
+offset = 41
+addend = 0
+kind = "Abs8"
+symbol = "Austral.Pervasive::trappingSubtract"
+[[function.insn]]
+offset = 0
+bytes = "55"
+form = "push rbp"
+[[function.insn]]
+offset = 1
+bytes = "4889e5"
+form = "mov rbp, rsp"
+[[function.insn]]
+offset = 4
+bytes = "4883ec10"
+form = "sub rsp, 0x10"
+[[function.insn]]
+offset = 8
+bytes = "4c892424"
+form = "mov [rsp], r12"
+[[function.insn]]
+offset = 12
+bytes = "4989fc"
+form = "mov r12, rdi"
+[[function.insn]]
+offset = 15
+bytes = "4c2be6"
+form = "sub r12, rsi"
+[[function.insn]]
+offset = 18
+bytes = "410f90c0"
+form = "seto r8b"
+[[function.insn]]
+offset = 22
+bytes = "4584c0"
+form = "test r8b, r8b"
+[[function.insn]]
+offset = 25
+bytes = "0f8508000000"
+form = "jne rel32 0x8"
+[[function.insn]]
+offset = 31
+bytes = "4c89e0"
+form = "mov rax, r12"
+[[function.insn]]
+offset = 34
+bytes = "e910000000"
+form = "jmp rel32 0x10"
+[[function.insn]]
+offset = 39
+bytes = "49b90000000000000000"
+form = "movabs r9, imm64 @Austral.Pervasive::trappingSubtract"
+[[function.insn]]
+offset = 49
+bytes = "41ffd1"
+form = "call r9"
+[[function.insn]]
+offset = 52
+bytes = "4c89e0"
+form = "mov rax, r12"
+[[function.insn]]
+offset = 55
+bytes = "4c8b2424"
+form = "mov r12, [rsp]"
+[[function.insn]]
+offset = 59
+bytes = "4883c410"
+form = "add rsp, 0x10"
+[[function.insn]]
+offset = 63
+bytes = "4889ec"
+form = "mov rsp, rbp"
+[[function.insn]]
+offset = 66
+bytes = "5d"
+form = "pop rbp"
+[[function.insn]]
+offset = 67
+bytes = "c3"
+form = "ret"
+[[function]]
+name = "mul"
+bytes = "554889e54883ec104c8924244889f848f7ee4989c4410f90c04584c00f85080000004c89e0e91000000049b9000000000000000041ffd14c89e04c8b24244883c4104889ec5dc3"
+[[function.reloc]]
+offset = 44
+addend = 0
+kind = "Abs8"
+symbol = "Austral.Pervasive::trappingMultiply"
+[[function.insn]]
+offset = 0
+bytes = "55"
+form = "push rbp"
+[[function.insn]]
+offset = 1
+bytes = "4889e5"
+form = "mov rbp, rsp"
+[[function.insn]]
+offset = 4
+bytes = "4883ec10"
+form = "sub rsp, 0x10"
+[[function.insn]]
+offset = 8
+bytes = "4c892424"
+form = "mov [rsp], r12"
+[[function.insn]]
+offset = 12
+bytes = "4889f8"
+form = "mov rax, rdi"
+[[function.insn]]
+offset = 15
+bytes = "48f7ee"
+form = "imul rsi"
+[[function.insn]]
+offset = 18
+bytes = "4989c4"
+form = "mov r12, rax"
+[[function.insn]]
+offset = 21
+bytes = "410f90c0"
+form = "seto r8b"
+[[function.insn]]
+offset = 25
+bytes = "4584c0"
+form = "test r8b, r8b"
+[[function.insn]]
+offset = 28
+bytes = "0f8508000000"
+form = "jne rel32 0x8"
+[[function.insn]]
+offset = 34
+bytes = "4c89e0"
+form = "mov rax, r12"
+[[function.insn]]
+offset = 37
+bytes = "e910000000"
+form = "jmp rel32 0x10"
+[[function.insn]]
+offset = 42
+bytes = "49b90000000000000000"
+form = "movabs r9, imm64 @Austral.Pervasive::trappingMultiply"
+[[function.insn]]
+offset = 52
+bytes = "41ffd1"
+form = "call r9"
+[[function.insn]]
+offset = 55
+bytes = "4c89e0"
+form = "mov rax, r12"
+[[function.insn]]
+offset = 58
+bytes = "4c8b2424"
+form = "mov r12, [rsp]"
+[[function.insn]]
+offset = 62
+bytes = "4883c410"
+form = "add rsp, 0x10"
+[[function.insn]]
+offset = 66
+bytes = "4889ec"
+form = "mov rsp, rbp"
+[[function.insn]]
+offset = 69
+bytes = "5d"
+form = "pop rbp"
+[[function.insn]]
+offset = 70
+bytes = "c3"
+form = "ret"
+[[function]]
+name = "main"
+bytes = "554889e5bf09000000be04000000e800000000be030000004889c7e800000000bf0800000049b8000000000000000041ffd048c700010000004889ec5dc3"
+[[function.reloc]]
+offset = 15
+addend = -4
+kind = "X86CallPCRel4"
+symbol = "sub"
+[[function.reloc]]
+offset = 28
+addend = -4
+kind = "X86CallPCRel4"
+symbol = "mul"
+[[function.reloc]]
+offset = 39
+addend = 0
+kind = "Abs8"
+symbol = "au_alloc"
+[[function.insn]]
+offset = 0
+bytes = "55"
+form = "push rbp"
+[[function.insn]]
+offset = 1
+bytes = "4889e5"
+form = "mov rbp, rsp"
+[[function.insn]]
+offset = 4
+bytes = "bf09000000"
+form = "mov edi, imm32 0x9"
+[[function.insn]]
+offset = 9
+bytes = "be04000000"
+form = "mov esi, imm32 0x4"
+[[function.insn]]
+offset = 14
+bytes = "e800000000"
+form = "call rel32 @sub"
+[[function.insn]]
+offset = 19
+bytes = "be03000000"
+form = "mov esi, imm32 0x3"
+[[function.insn]]
+offset = 24
+bytes = "4889c7"
+form = "mov rdi, rax"
+[[function.insn]]
+offset = 27
+bytes = "e800000000"
+form = "call rel32 @mul"
+[[function.insn]]
+offset = 32
+bytes = "bf08000000"
+form = "mov edi, imm32 0x8"
+[[function.insn]]
+offset = 37
+bytes = "49b80000000000000000"
+form = "movabs r8, imm64 @au_alloc"
+[[function.insn]]
+offset = 47
+bytes = "41ffd0"
+form = "call r8"
+[[function.insn]]
+offset = 50
+bytes = "48c70001000000"
+form = "mov qword [rax], imm32 0x1"
+[[function.insn]]
+offset = 57
+bytes = "4889ec"
+form = "mov rsp, rbp"
+[[function.insn]]
+offset = 60
+bytes = "5d"
+form = "pop rbp"
+[[function.insn]]
+offset = 61
+bytes = "c3"
+form = "ret"

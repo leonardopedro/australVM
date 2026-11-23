@@ -4,8 +4,8 @@
 (library
  (name austral_gpu)
  (public_name austral.austral_gpu)
- (synopsis "Typed KernelIR and WGSL bundle emission for Austral GPU kernels")
- (libraries austral_core yojson digestif zarith)
+ (synopsis "Typed KernelIR with WGSL and MLIR emission for Austral GPU kernels")
+ (libraries austral_core yojson digestif zarith str)
  (wrapped false)
  (flags :standard -w -39-50)
  (modules
@@ -14,6 +14,7 @@
   Gpu_intrinsics
   Gpu_subset
   Gpu_wgsl
+  Gpu_mlir
   Gpu_reduce
   Gpu_reduce_wgsl
   Gpu_proof_interface

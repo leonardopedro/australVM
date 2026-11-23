@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+"""PC09: the declared MLIR stage boundary, pinned and stale-evidence-refusing.
+
+What exists, and what this can honestly be
+------------------------------------------
+`PLAN_proof_chain.md` PC09 asks for captured pre/post IR for every selected pass
+of `Austral → KernelIR → MLIR → device IR`, with dialect semantics, legalizations,
+canonicalization and target options in the subject identity, and a refusal of
+stale evidence when a comparison predicate or a pass option changes.
+
+The emitter exists (`G20a`: `lib/gpu/Gpu_mlir.ml`), and `G19a` pinned a real
+MLIR toolchain round trip (`scripts/gpu/mlir-probe`, LLVM 19.1.7) that verifies
+and lowers the emitted `clamp.mlir` to `sm_70` PTX. What is still absent is MLIR
+*semantics*: no pass-local relation is stated or proved, so the MLIR side is
+captured and exercised, not certified. The artifact is therefore a *boundary
+record*, not a certificate:
+
+  `mm0/proof_chain/mlir/stage.toml` names the subject (the `clamp` KernelIR that
+  PC04 reflects and PC07 composes), pins the options that belong to the subject
+  identity, and declares every pass of the intended route with either a measured
+  pre/post pair (`captured`) or an explicit `uncaptured` state and why.
+
+`check` re-derives the identity from the artifact the rest of the chain already
+trusts: the `-- reflect:` line and `-- ir_sha256=` in
+`mm0/proof_chain/clamp_source.mm0`. The record must agree with that file, must
+list exactly the route's passes (`DECLARED_PASSES` — the single source of truth,
+so an uncaptured optimization cannot disappear by editing the record), and must
+match the pinned options (`DECLARED_OPTIONS`). A `captured` row is only accepted
+when its pre/post files exist under `mm0/proof_chain/mlir/ir/` and hash to the
+recorded digests; a forged `captured` row fails. When `G19a`'s toolchain record
+is present, the captured module must also be the file that record verified and
+lowered.
+
+Nothing here is a proof, and the modes say so: `capture is not preservation`
+stays a `[gap]` while any pass is captured, and every uncaptured pass is counted
+in a second one. The record exists so the gap is *specific and enforced*, not
+prose — the rows that must become `captured` are named and counted.
+
+Exit: 0 the record is current and the gap is reported; 1 stale or invalid
+evidence; 3 not checkable here (missing python3 is handled by the caller).
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+RECORD = ROOT / "mm0/proof_chain/mlir/stage.toml"
+TOOLCHAIN = ROOT / "mm0/proof_chain/mlir/toolchain.toml"
+SOURCE_ARTIFACT = ROOT / "mm0/proof_chain/clamp_source.mm0"
+CAPTURE_DIR = ROOT / "mm0/proof_chain/mlir/ir"
+
+#: Every pass of the declared route, in order. This is the single source of
+#: truth: a record that omits one, renames one, or adds one fails, which is how
+#: an uncaptured optimization cannot fall out of the chain by editing the record.
+DECLARED_PASSES = [
+    "kernelir-to-mlir",
+    "mlir-canonicalize",
+    "convert-gpu-to-nvvm",
+]
+
+#: The target options that are part of the subject identity (PC09's "dialect
+#: semantics, legalizations, canonicalization and target options"). Pinned here
+#: for the same reason as the passes: the record may not quietly restate them.
+DECLARED_OPTIONS = {
+    "numeric_profile": "u32-modular-v1",
+    "extents": "static",
+    "fast_math": "forbidden",
+    "fusion": "forbidden",
+    "shared_memory": "forbidden",
+    "target": "mlir-gpu-dialect (no native lowering declared)",
+}
+
+
+def fail(message: str, detail: str = "") -> None:
+    print(f"[FAIL] PC09: {message}" + (f": {detail}" if detail else ""))
+    exit_code[0] = 1
+
+
+def gap(message: str) -> None:
+    print(f"[gap] PC09: {message}")
+
+
+exit_code = [0]
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def source_identity(artifact: Path) -> dict:
+    """The pre-MLIR identity, read from the artifact the chain already trusts."""
+    text = artifact.read_text()
+    reflect = re.search(r"^-- reflect: (.+)$", text, re.M)
+    digest = re.search(r"^-- ir_sha256=([0-9a-f]{64})$", text, re.M)
+    if not reflect or not digest:
+        raise ValueError(f"{artifact} carries no reflect line / ir_sha256")
+    fields = dict(part.split("=", 1) for part in reflect.group(1).split(" "))
+    return {"fields": fields, "ir_sha256": digest.group(1)}
+
+
+def read_record(path: Path) -> dict:
+    import tomllib
+
+    data = tomllib.loads(path.read_text())
+    return {
+        "subject": data["subject"],
+        "passes": data.get("pass", []),
+        "options": data.get("option", []),
+    }
+
+
+def check(record_path: Path, artifact: Path) -> int:
+    try:
+        record = read_record(record_path)
+    except Exception as exc:  # noqa: BLE001 - any parse error is the finding
+        fail("the stage record parses", f"{record_path}: {exc}")
+        return exit_code[0]
+    try:
+        ident = source_identity(artifact)
+    except Exception as exc:  # noqa: BLE001
+        fail("the pre-MLIR identity is readable", str(exc))
+        return exit_code[0]
+
+    subject = record["subject"]
+
+    # (1) the subject is the KernelIR the chain already pins, not a restatement.
+    if subject.get("kernel_ir_sha256") != ident["ir_sha256"]:
+        fail("the record pins the KernelIR that PC04 reflects",
+             f"record says {subject.get('kernel_ir_sha256')!r}, "
+             f"{artifact.name} says {ident['ir_sha256']!r}")
+    if subject.get("comparison") != ident["fields"].get("comparison"):
+        fail("the record's comparison predicate is the reflected one",
+             f"record says {subject.get('comparison')!r}, the reflection says "
+             f"{ident['fields'].get('comparison')!r}")
+    if subject.get("entry") != ident["fields"].get("entry"):
+        fail("the record's entry is the reflected one",
+             f"record {subject.get('entry')!r} vs "
+             f"{ident['fields'].get('entry')!r}")
+
+    # (2) the options are exactly the declared identity inputs.
+    options = {}
+    for row in record["options"]:
+        if set(row) != {"name", "value"}:
+            fail("every option row is (name, value)", f"{row}")
+            continue
+        if row["name"] in options:
+            fail("no option is declared twice", row["name"])
+        options[row["name"]] = row["value"]
+    for name, value in DECLARED_OPTIONS.items():
+        if options.get(name) != value:
+            fail("the record declares the pinned target options",
+                 f"{name}: record {options.get(name)!r}, pinned {value!r}")
+    for name in options:
+        if name not in DECLARED_OPTIONS:
+            fail("the record declares no unknown option", name)
+
+    # (3) every declared pass is present once, and its state is honest.
+    declared = [p["name"] for p in record["passes"]]
+    if declared != DECLARED_PASSES:
+        fail("the record lists exactly the declared route",
+             f"record {declared}, declared {DECLARED_PASSES}")
+    captured = 0
+    seen = set()
+    for row in record["passes"]:
+        name = row.get("name")
+        if name in seen:
+            fail("no pass is declared twice", str(name))
+        seen.add(name)
+        state = row.get("state")
+        if state == "captured":
+            captured += 1
+            sides = (("pre", "the input the pass consumed"),
+                     ("post", "the IR the pass emitted"))
+            for side, what in sides:
+                digest = str(row.get(side + "_sha256", ""))
+                if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    fail("a captured pass records both sides' digests",
+                         f"{name}: {side}_sha256 is not a sha256")
+                if not row.get(side + "_file"):
+                    fail("a captured pass names both IR files",
+                         f"{name}: {side}_file is missing — {what} must be "
+                         "a file this tree can re-read")
+                path = CAPTURE_DIR / str(row[side + "_file"])
+                if not path.exists():
+                    fail("a captured pass's IR files exist",
+                         f"{name}: {path.relative_to(ROOT)} is missing — {what} "
+                         "is not capturable without the artifact")
+                elif sha256(path.read_bytes()) != digest:
+                    fail("a captured pass's IR hashes to its recorded digest",
+                         f"{name}: {path.relative_to(ROOT)} does not hash to "
+                         f"its {side}_sha256")
+        elif state == "uncaptured":
+            if not row.get("detail"):
+                fail("an uncaptured pass says what is missing", str(name))
+        else:
+            fail("a pass is either captured or explicitly uncaptured",
+                 f"{name}: state {state!r}")
+    if subject.get("captured_passes") != captured:
+        fail("the subject's captured count matches its pass rows",
+             f"says {subject.get('captured_passes')!r}, found {captured}")
+
+    # (4) the captured post artifact is the one G19a verified and lowered. The
+    #     toolchain record is G19a's; this is the link between the two cards, so
+    #     "captured" here means the bytes a pinned toolchain accepted, not just
+    #     bytes on disk.
+    if TOOLCHAIN.exists():
+        import tomllib
+
+        tool = tomllib.loads(TOOLCHAIN.read_text())
+        subjects = {row["stem"]: row for row in tool.get("subject", [])}
+        row = subjects.get("clamp")
+        if row is None:
+            gap("the toolchain record does not cover the clamp module")
+        else:
+            post = CAPTURE_DIR / "clamp.mlir"
+            if post.exists() and row.get("source_sha256") != sha256(post.read_bytes()):
+                fail("the verified/lowered module is the captured one",
+                     "stage.toml's clamp.mlir is not the file G19a recorded")
+            ptx = ROOT / row.get("ptx", "")
+            if not ptx.exists():
+                fail("the recorded PTX still exists", row.get("ptx", ""))
+            elif sha256(ptx.read_bytes()) != row.get("ptx_sha256"):
+                fail("the recorded PTX hashes to its digest", row.get("ptx", ""))
+            else:
+                print(f"  [detail] PC09 toolchain: clamp.mlir is the module G19a "
+                      f"verified and lowered to {row.get('ptx_target')} "
+                      f"({row.get('params')} param(s))")
+    else:
+        gap("no G19a toolchain record: the captured module is not attested as "
+            "verified or lowered by a pinned toolchain")
+
+    uncaptured = len(DECLARED_PASSES) - captured
+    print(f"  [detail] PC09 stage: kernelir {ident['ir_sha256'][:12]}…, "
+          f"{len(DECLARED_PASSES)} declared pass(es), {captured} captured, "
+          f"{uncaptured} uncaptured")
+    for row in record["passes"]:
+        print(f"  [detail] PC09 pass {row['name']}: {row.get('state')}")
+    if captured:
+        gap(f"{captured} pass(es) captured, but capture is not preservation: "
+            "no MLIR semantics is available, so no pass-local relation is "
+            "proved and the chain is cut after the captured IR")
+    if uncaptured:
+        gap("the route is declared and pinned, so the uncaptured passes are "
+            "listed rather than assumed; the edge to a device IR is open")
+    else:
+        fail("an all-captured record still needs its pass proofs",
+             "capture is not a preservation proof (see PC09's acceptance)")
+    print("[pass] PC09: the declared MLIR stage boundary is current and its "
+          "uncaptured passes are counted")
+    return exit_code[0]
+
+
+# ── capture ──────────────────────────────────────────────────────────────────
+
+
+FIXTURE = ("examples/gpu/pointwise/Pointwise.aui",
+           "examples/gpu/pointwise/Pointwise.aum")
+
+
+def gpu_binary() -> str:
+    import os
+
+    return os.environ.get("GPU_PROOF_BIN") or str(
+        ROOT / "_build/default/bin/gpu_proof.exe")
+
+
+def capture(record_path: Path, extent: int) -> int:
+    """Emit the pre/post IR of one pass and record their digests.
+
+    The pre side is the canonical KernelIR text (`dump-ir`), the post side is
+    the module `Gpu_mlir.render` produces (`dump-mlir`). Both are written under
+    `mm0/proof_chain/mlir/ir/` and pinned in the record, so `check` re-reads
+    exactly the bytes the pass record claims. Capture is not preservation: the
+    record says so in the row's own `detail`.
+    """
+    import os
+    import subprocess
+
+    binary = gpu_binary()
+    if not Path(binary).exists():
+        gap(f"the pass was not captured: {binary} is not built "
+            "(dune build bin/gpu_proof.exe)")
+        return 3
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = str(ROOT) + ":" + env.get("LD_LIBRARY_PATH", "")
+    aui, aum = (str(ROOT / p) for p in FIXTURE)
+    entry = read_record(record_path)["subject"]["entry"]
+    pre = subprocess.run([binary, "dump-ir", aui, aum, entry],
+                         capture_output=True, text=True, env=env)
+    post = subprocess.run([binary, "dump-mlir", aui, aum, entry,
+                           "--extent", str(extent)],
+                          capture_output=True, text=True, env=env)
+    for name, run in (("dump-ir", pre), ("dump-mlir", post)):
+        if run.returncode != 0:
+            fail(f"{name} failed", (run.stderr or run.stdout).strip()[:300])
+            return exit_code[0]
+    CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+    pre_path = CAPTURE_DIR / "clamp.kernelir"
+    post_path = CAPTURE_DIR / "clamp.mlir"
+    pre_path.write_text(pre.stdout)
+    post_path.write_text(post.stdout)
+    pre_sha, post_sha = (sha256(p.read_bytes()) for p in (pre_path, post_path))
+
+    text = record_path.read_text()
+    block = re.compile(
+        r'\[\[pass\]\]\nname = "kernelir-to-mlir"\n'
+        r'(?:[a-z_]+ = .*\n)+', re.M)
+    replacement = (
+        '[[pass]]\nname = "kernelir-to-mlir"\n'
+        'state = "captured"\n'
+        f'pre_file = "clamp.kernelir"\npre_sha256 = "{pre_sha}"\n'
+        f'post_file = "clamp.mlir"\npost_sha256 = "{post_sha}"\n'
+        'detail = "Gpu_mlir.render ~extent:65 of the reflected KernelIR: '
+        'captured byte-for-byte, not proved (no MLIR semantics)"\n')
+    if not block.search(text):
+        fail("the record has a kernelir-to-mlir pass row to update")
+        return exit_code[0]
+    text = block.sub(replacement, text, count=1)
+    total = len(DECLARED_PASSES)
+    text = re.sub(r'captured_passes = \d+', f'captured_passes = {total}',
+                  text, count=1)
+    # `captured_passes` in the record means "of the declared route": with the
+    # emitter in place that is one, not every pass — recompute from the rows.
+    states = re.findall(r'^state = "(\w+)"$', text, re.M)
+    text = re.sub(r'captured_passes = \d+',
+                  f'captured_passes = {states.count("captured")}', text, count=1)
+    record_path.write_text(text)
+    print(f"  [detail] PC09 capture: wrote {pre_path.relative_to(ROOT)} "
+          f"({len(pre.stdout.splitlines())} line(s)) and "
+          f"{post_path.relative_to(ROOT)} ({len(post.stdout.splitlines())} line(s))")
+    return exit_code[0]
+
+
+# ── controls ─────────────────────────────────────────────────────────────────
+
+
+def selftest(record_path: Path, work: Path) -> int:
+    """Each control mutates one evidence cell and requires a refusal."""
+    record_text = record_path.read_text()
+    artifact_text = SOURCE_ARTIFACT.read_text()
+
+    def run(record: str, artifact: str, label: str, needle: str) -> None:
+        base = work / "control"
+        base.mkdir(exist_ok=True)
+        rec = base / "stage.toml"
+        art = base / "clamp_source.mm0"
+        rec.write_text(record)
+        art.write_text(artifact)
+        out = subprocess.run([sys.executable, __file__, "check",
+                              "--record", str(rec), "--artifact", str(art)],
+                             capture_output=True, text=True)
+        combined = out.stdout + out.stderr
+        if out.returncode != 1 or needle not in combined:
+            fail(f"control: {label} is refused",
+                 f"exit {out.returncode}, output {combined.strip()[:300]!r}")
+        else:
+            print(f"  [pass] PC09 control refused: {label}")
+
+    # 1. a changed comparison predicate in the KernelIR the chain reflects.
+    run(record_text,
+        artifact_text.replace("comparison=GreaterThan", "comparison=LessThan", 1),
+        "a changed comparison predicate", "comparison predicate is the reflected one")
+
+    # 2. a changed pass option.
+    run(record_text.replace('value = "forbidden"', 'value = "allowed"', 1),
+        artifact_text, "a changed pass option", "pinned target options")
+
+    # 3. an uncaptured pass dropped from the route.
+    run(re.sub(r'\[\[pass\]\]\nname = "mlir-canonicalize".*?\n\n',
+               "", record_text, count=1, flags=re.S),
+        artifact_text, "an uncaptured pass dropped", "exactly the declared route")
+
+    # 4. an uncaptured pass forged as captured, with no IR to show.
+    forged = re.sub(
+        r'(\[\[pass\]\]\nname = "mlir-canonicalize"\n)state = "uncaptured"\n'
+        r'detail = "[^"]*"\n',
+        r'\1state = "captured"\npre_file = "forged.kernelir"\n'
+        'post_file = "forged.mlir"\npre_sha256 = "' + "0" * 64 + '"\n'
+        'post_sha256 = "' + "1" * 64 + '"\n',
+        record_text, count=1)
+    run(forged, artifact_text, "a forged captured pass", "is missing")
+
+    # 5. a stale KernelIR digest in the record.
+    run(re.sub(r'kernel_ir_sha256 = "[0-9a-f]{64}"',
+               'kernel_ir_sha256 = "' + "1" * 64 + '"', record_text, count=1),
+        artifact_text, "a stale KernelIR digest", "pins the KernelIR that PC04 reflects")
+
+    # 6. the record's captured count restated (the real value is derived from
+    #    the pass rows, so any other number must be refused).
+    run(re.sub(r'captured_passes = \d+', 'captured_passes = 2', record_text, count=1),
+        artifact_text, "a restated captured count", "captured count matches")
+
+    if exit_code[0] == 0:
+        print("[pass] PC09 selftest: 6 controls behave")
+    return exit_code[0]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("mode", nargs="?", default="check",
+                    choices=["check", "selftest", "capture"])
+    ap.add_argument("--record", default=str(RECORD))
+    ap.add_argument("--artifact", default=str(SOURCE_ARTIFACT))
+    ap.add_argument("--extent", type=int, default=65)
+    args = ap.parse_args()
+    with tempfile.TemporaryDirectory(prefix="pc09-") as tmp:
+        if args.mode == "selftest":
+            return selftest(Path(args.record), Path(tmp))
+        if args.mode == "capture":
+            return capture(Path(args.record), args.extent)
+        return check(Path(args.record), Path(args.artifact))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

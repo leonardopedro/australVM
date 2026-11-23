@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""G19a: pin and record one MLIR toolchain round trip.
+
+What this does
+--------------
+For each subject — the handwritten `mm0/proof_chain/mlir/smoke.mlir` and the
+module G20a emits for the reflected `clamp` KernelIR — this runs the same three
+stages and records what actually happened:
+
+  1. **verify**   `mlir-opt <in>` — parse and verify, no transforms;
+  2. **lower**    `mlir-opt --nvvm-attach-target{chip=sm_70}
+                  --gpu-lower-to-nvvm-pipeline{cubin-format=isa}` — kernel
+                  outlining, memref/arith/scf/cf → LLVM, gpu → NVVM, and the
+                  NVPTX backend writing PTX *assembly* (no `ptxas`, no CUDA
+                  toolkit needed);
+  3. **extract**  the PTX text out of the `gpu.binary` assembly string into
+                  `mm0/proof_chain/mlir/ir/<stem>.ptx`, and measure the
+                  parameter layout and address-space conversion from it.
+
+`record` writes `mm0/proof_chain/mlir/toolchain.toml`; `check` re-runs every
+stage and refuses a tool version, pipeline string, target or artifact digest
+that differs from the record. The record is the evidence; the digests are what
+tie it to the bytes.
+
+What this is not
+----------------
+- Not a GPU execution. Nothing is dispatched and no hardware is touched; PTX is
+  text, and `cubin-format=isa` deliberately stops before `ptxas`.
+- Not a correctness claim about the kernels. Verification says the module is
+  well-formed MLIR, and lowering says the pinned pipeline accepts it — PC09's
+  own text is explicit that a verifier success is not an equivalence proof.
+- Not part of the default GPU lane: nothing here runs from the compiler, and
+  `make all` / the CPU-only build never invoke it.
+
+The target (`sm_70`) and the pipeline string are *pipeline identity*: they are
+passed by this probe, recorded, and refused if they change, rather than baked
+into the emitter (G20a's output stays independent of a toolchain).
+
+Exit: 0 recorded/verified; 1 a stage failed or the record is stale; 3 the
+toolchain is absent (a `[gap]`, naming the missing stage).
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+RECORD = ROOT / "mm0/proof_chain/mlir/toolchain.toml"
+CAPTURE_DIR = ROOT / "mm0/proof_chain/mlir/ir"
+
+CHIP = "sm_70"
+#: One argv element: pass-pipeline options are space-separated, and the shell
+#: must not split them (measured: comma-separated options are rejected as an
+#: invalid cubin format).
+PIPELINE = (f"--gpu-lower-to-nvvm-pipeline=cubin-format=isa "
+            f"cubin-chip={CHIP}")
+
+SUBJECTS = [
+    # (stem, input, how the input is identified)
+    ("copy_smoke", ROOT / "mm0/proof_chain/mlir/smoke.mlir", "handwritten"),
+    ("clamp", CAPTURE_DIR / "clamp.mlir", "g20a-emitted"),
+]
+
+status = [0]
+
+
+def fail(message: str, detail: str = "") -> None:
+    print(f"[FAIL] G19a: {message}" + (f": {detail}" if detail else ""))
+    status[0] = 1
+
+
+def gap(message: str) -> None:
+    print(f"[gap] G19a: {message}")
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def toolchain() -> dict | None:
+    """The three binaries, from the environment, PATH, or the flake's store."""
+    def find(name: str, env: str, pattern: str) -> str | None:
+        if os.environ.get(env):
+            candidate = Path(os.environ[env]) / name
+            if candidate.exists():
+                return str(candidate)
+        found = shutil.which(name)
+        if found:
+            return found
+        for store in sorted(Path("/nix/store").glob(pattern)):
+            candidate = store / "bin" / name
+            if candidate.exists():
+                return str(candidate)
+        return None
+
+    mlir_opt = find("mlir-opt", "MLIR_BIN", "*mlir-1*")
+    mlir_translate = find("mlir-translate", "MLIR_BIN", "*mlir-1*")
+    llc = find("llc", "LLVM_BIN", "*llvm-1*")
+    if not (mlir_opt and mlir_translate and llc):
+        return None
+    return {"mlir-opt": mlir_opt, "mlir-translate": mlir_translate, "llc": llc}
+
+
+def versions(tools: dict) -> dict:
+    out = {}
+    for name, path in tools.items():
+        run = subprocess.run([path, "--version"], capture_output=True, text=True)
+        first = (run.stdout or run.stderr).strip().splitlines()
+        line = next((l.strip() for l in first if "version" in l.lower()), "")
+        out[name] = {"path": path, "version": line or "unknown"}
+    return out
+
+
+def unescape_assembly(text: str) -> str:
+    """MLIR prints a gpu.object's assembly as a quoted string with `\\NN`."""
+    def repl(m: re.Match[str]) -> str:
+        return chr(int(m.group(1), 16))
+    return re.sub(r"\\([0-9A-Fa-f]{2})", repl, text)
+
+
+def stages(tools: dict, source: Path, work: Path) -> dict:
+    """Run verify → lower → extract. Returns the measured facts."""
+    result: dict = {"source": str(source.relative_to(ROOT)),
+                    "source_sha256": sha256(source.read_bytes())}
+
+    verify = subprocess.run([tools["mlir-opt"], str(source)],
+                            capture_output=True, text=True)
+    result["verify"] = {"command": f"mlir-opt {result['source']}",
+                        "exit": verify.returncode}
+    if verify.returncode != 0:
+        result["failed_stage"] = "verify"
+        result["error"] = (verify.stderr or verify.stdout).strip()[:600]
+        return result
+
+    lowered = subprocess.run([tools["mlir-opt"], str(source), PIPELINE],
+                             capture_output=True, text=True)
+    result["lower"] = {"command": f"mlir-opt {result['source']} {PIPELINE}",
+                       "exit": lowered.returncode}
+    if lowered.returncode != 0:
+        result["failed_stage"] = "lower"
+        result["error"] = (lowered.stderr or lowered.stdout).strip()[:600]
+        return result
+
+    m = re.search(r'assembly = "((?:[^"\\]|\\.)*)"', lowered.stdout)
+    if not m:
+        result["failed_stage"] = "extract"
+        result["error"] = "no gpu.object assembly string in the lowered module"
+        return result
+    ptx = unescape_assembly(m.group(1))
+    if "\0" in ptx:
+        ptx = ptx.replace("\0", "")
+    ptx_path = CAPTURE_DIR / f"{source.stem}.ptx"
+    ptx_path.write_text(ptx)
+    result["extract"] = {
+        "command": f"gpu.object assembly → {ptx_path.relative_to(ROOT)}",
+        "exit": 0,
+        "file": str(ptx_path.relative_to(ROOT)),
+        "sha256": sha256(ptx_path.read_bytes()),
+    }
+
+    params = re.findall(r"^\s*\.param \.(\w+) ", ptx, re.M)
+    entry = re.search(r"^\s*\.visible \.entry (\w+)\(", ptx, re.M)
+    target = re.search(r"^\.target (\S+)", ptx, re.M)
+    address_size = re.search(r"^\.address_size (\d+)", ptx, re.M)
+    result["abi"] = {
+        "entry": entry.group(1) if entry else "?",
+        "target": target.group(1) if target else "?",
+        "address_size": address_size.group(1) if address_size else "?",
+        "params": len(params),
+        "param_types": sorted(set(params)),
+        # memrefs lower to {alloc ptr, aligned ptr, offset, size, stride}
+        "param_layout": ("one memref -> 5 x .u64: alloc ptr, aligned ptr, "
+                         "offset, size, stride" if params and params[0] == "u64"
+                         else "unexpected"),
+        "address_space": ("generic -> global (cvta.to.global)"
+                          if "cvta.to.global" in ptx else "no conversion seen"),
+    }
+    return result
+
+
+def record(tools: dict) -> int:
+    measured = []
+    for stem, source, origin in SUBJECTS:
+        if not source.exists():
+            fail("the subject exists", f"{source.relative_to(ROOT)} "
+                                       f"({origin}) — run the emitter/capture first")
+            continue
+        result = stages(tools, source, Path("."))
+        result["stem"] = stem
+        result["origin"] = origin
+        if "failed_stage" in result:
+            fail(f"{stem}: the {result['failed_stage']} stage failed",
+                 result.get("error", ""))
+            continue
+        measured.append(result)
+    if status[0] != 0:
+        return status[0]
+
+    vers = versions(tools)
+    lines = [
+        "# toolchain.toml — G19a's recorded MLIR round trip (generated).",
+        "#",
+        "# Written by `scripts/gpu/mlir-probe record`; `check` re-runs every stage",
+        "# and refuses a version, command, target or digest that differs. The",
+        "# probe is not part of the default GPU lane: nothing in the compiler",
+        "# invokes it, and the CPU-only build never needs MLIR installed.",
+        "",
+    ]
+    for name, info in vers.items():
+        lines += ["[[tool]]", f'name = "{name}"',
+                  f'version = "{info["version"]}"',
+                  f'path = "{info["path"]}"']
+    lines += [
+        "",
+        "[pipeline]",
+        f'target = "{CHIP}"',
+        f'command = "{PIPELINE}"',
+        'stages = "verify -> lower (gpu-lower-to-nvvm, cubin-format=isa) -> extract PTX"',
+        'ptxas = "not used: cubin-format=isa stops at PTX text"',
+        'data_layout = "measured from the PTX: .address_size 64, all .param .u64"',
+        "",
+    ]
+    for r in measured:
+        lines += [
+            "[[subject]]",
+            f'stem = "{r["stem"]}"',
+            f'origin = "{r["origin"]}"',
+            f'source = "{r["source"]}"',
+            f'source_sha256 = "{r["source_sha256"]}"',
+            f'ptx = "{r["extract"]["file"]}"',
+            f'ptx_sha256 = "{r["extract"]["sha256"]}"',
+            f'entry = "{r["abi"]["entry"]}"',
+            f'ptx_target = "{r["abi"]["target"]}"',
+            f'address_size = {r["abi"]["address_size"]}',
+            f'params = {r["abi"]["params"]}',
+            f'param_types = "{",".join(r["abi"]["param_types"])}"',
+            f'param_layout = "{r["abi"]["param_layout"]}"',
+            f'address_space = "{r["abi"]["address_space"]}"',
+            "",
+        ]
+    RECORD.write_text("\n".join(lines))
+    print(f"  [detail] G19a record: wrote {RECORD.relative_to(ROOT)} "
+          f"({len(measured)} subject(s))")
+    for r in measured:
+        print(f"  [detail] G19a {r['stem']}: {r['abi']['target']} "
+              f"{r['abi']['entry']}({r['abi']['params']} x "
+              f"{'/'.join(r['abi']['param_types'])}) — "
+              f"{r['extract']['file']} sha256={r['extract']['sha256'][:12]}…")
+    return status[0]
+
+
+def read_record() -> dict:
+    import tomllib
+
+    return tomllib.loads(RECORD.read_text())
+
+
+def check(tools: dict | None) -> int:
+    if not RECORD.exists():
+        fail("the toolchain record exists", str(RECORD.relative_to(ROOT)))
+        return status[0]
+    record_data = read_record()
+    if tools is None:
+        gap("no MLIR/LLVM toolchain here: the record is pinned but its stages "
+            "were not re-run")
+        print("[pass] G19a: the recorded MLIR round trip is pinned (not re-run "
+              "here)")
+        return 0
+    vers = versions(tools)
+    for row in record_data.get("tool", []):
+        name = row["name"]
+        if name not in vers:
+            fail(f"the recorded tool {name} is present")
+        elif vers[name]["version"] != row["version"]:
+            fail(f"{name} is the recorded version",
+                 f"record {row['version']!r}, here {vers[name]['version']!r}")
+    pipeline = record_data.get("pipeline", {})
+    if pipeline.get("target") != CHIP:
+        fail("the pipeline still names the recorded target",
+             f"record {pipeline.get('target')!r}, probe {CHIP!r}")
+    if pipeline.get("command") != PIPELINE:
+        fail("the pipeline command is the recorded one")
+
+    for row in record_data.get("subject", []):
+        source = ROOT / row["source"]
+        if not source.exists():
+            fail("the recorded subject still exists", row["source"])
+            continue
+        if sha256(source.read_bytes()) != row["source_sha256"]:
+            fail("the subject is the one that was lowered", row["source"])
+            continue
+        result = stages(tools, source, Path("."))
+        if "failed_stage" in result:
+            fail(f"{row['stem']}: the {result['failed_stage']} stage still runs",
+                 result.get("error", ""))
+            continue
+        if result["extract"]["sha256"] != row["ptx_sha256"]:
+            fail("the lowered PTX reproduces byte-identically", row["stem"])
+        for key in ("entry", "target", "address_size", "params", "param_types"):
+            pass
+        if result["abi"]["entry"] != row["entry"]:
+            fail("the PTX entry name is unchanged", row["stem"])
+        if result["abi"]["target"] != row["ptx_target"]:
+            fail("the PTX target is unchanged", row["stem"])
+        if result["abi"]["params"] != row["params"]:
+            fail("the parameter count is unchanged", row["stem"])
+        print(f"  [detail] G19a {row['stem']}: verified and lowered to "
+              f"{row['ptx_target']} ({row['params']} x {row['param_types']})")
+    if status[0] == 0:
+        print("[pass] G19a: the recorded MLIR round trip reproduces byte-for-byte")
+    return status[0]
+
+
+def selftest(tools: dict | None) -> int:
+    if tools is None:
+        gap("the probe's controls were not run (no MLIR/LLVM toolchain)")
+        return 0
+    import tempfile
+
+    base = Path(tempfile.mkdtemp(prefix="g19a-"))
+    record_text = RECORD.read_text()
+
+    def run(record: str, label: str, needle: str) -> None:
+        backup = RECORD.read_text()
+        try:
+            RECORD.write_text(record)
+            out = subprocess.run([sys.executable, __file__, "check"],
+                                 capture_output=True, text=True)
+        finally:
+            RECORD.write_text(backup)
+        combined = out.stdout + out.stderr
+        if out.returncode != 1 or needle not in combined:
+            fail(f"control: {label} is refused",
+                 f"exit {out.returncode}, output {combined.strip()[:300]!r}")
+        else:
+            print(f"  [pass] G19a control refused: {label}")
+
+    run(re.sub(r'^target = "sm_70"$', 'target = "sm_90"', record_text,
+               count=1, flags=re.M),
+        "a changed target", "still names the recorded target")
+    run(re.sub(r'^version = "LLVM[^"]*"$',
+               'version = "LLVM (http://llvm.org/): LLVM version 0.0.0"',
+               record_text, count=1, flags=re.M),
+        "a changed tool version", "is the recorded version")
+    run(re.sub(r'^command = "--gpu-lower-to-nvvm-pipeline[^"]*"$',
+               'command = "--gpu-lower-to-nvvm-pipeline=cubin-format=isa '
+               'cubin-chip=sm_90"', record_text, count=1, flags=re.M),
+        "a changed pipeline", "pipeline command is the recorded one")
+    run(re.sub(r'^ptx_sha256 = "[0-9a-f]{64}"$',
+               'ptx_sha256 = "' + "0" * 64 + '"', record_text, count=1, flags=re.M),
+        "a changed PTX digest", "reproduces byte-identically")
+    if status[0] == 0:
+        print("[pass] G19a selftest: 4 controls behave")
+    return status[0]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("mode", nargs="?", default="check",
+                    choices=["record", "check", "selftest"])
+    ap.parse_args()
+    mode = sys.argv[1] if len(sys.argv) > 1 else "check"
+    tools = toolchain()
+    if mode == "record":
+        if tools is None:
+            gap("no MLIR/LLVM toolchain: nothing recorded (mlir-opt, "
+                "mlir-translate and llc are all needed)")
+            return 3
+        return record(tools)
+    if mode == "selftest":
+        return selftest(tools)
+    return check(tools)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -10,8 +10,10 @@ real clamp body and its KernelIR into a proved bound
 (`mm0/proof_chain/clamp_source.mm0`, `docs/proof/SOURCE_IR.md`); PC07 is the
 first whole-chain gate (`mm0/proof_chain/chain.toml`, `docs/proof/CHAIN_GATE.md`);
 PC08 captures one real host fragment and states its edge, open, because no
-x86_64 model exists (`mm0/proof_chain/native/add.capture`,
-`docs/proof/NATIVE_EDGE.md`); PC00, PC01, PC05 and PC09–PC15 are pending.** This is an extension of
+x86_64 model exists (`mm0/proof_chain/native/*.capture`,
+`docs/proof/NATIVE_EDGE.md`), and PC09's MLIR stage boundary is declared with its
+uncaptured passes counted (`mm0/proof_chain/mlir/stage.toml`,
+`docs/proof/MLIR_CHAIN.md`); PC00, PC01 and PC05, and PC10–PC15 are pending.** This is an extension of
 [PLAN_gpu_kernels.md](PLAN_gpu_kernels.md) for the owner's requested proof reuse
 across Austral, intermediate representations, and CPU/GPU/NPU instructions.
 The [design contract](docs/PROOF_CHAIN.md) specifies the semantics, obligation
@@ -371,25 +373,43 @@ claim with an accurate target cut. Change an instruction operand/immediate or
 relocation and the relation fails. An unavailable decoder/model produces an
 explicit open edge, not a successful native profile.
 
-**Status:** partial, by the card's own third sentence. `examples/native-fragment`
-is compiled on the CPS path and captured through the bridge's `cps2cell`, so
-`mm0/proof_chain/native/add.capture` holds the machine code the JIT would run
-for `add` (22 bytes, 7 instructions, one `Abs8` relocation to
-`Austral.Pervasive::trappingAdd`) and for its caller `main` (48 bytes, the
-immediates `3`/`4` and the intra-capture call). `scripts/native-edge` re-decodes
-those bytes with a closed 13-form x86_64 table (an unknown byte is refused, and
-a relocation must land on an immediate of matching width), re-derives the capture
-byte-identically from the fixture when a toolchain is present, and holds the
-generated statement `mm0/proof_chain/native_add.mm0` to it. The edge is **open**:
+**Status:** partial, by the card's own third sentence. Two fixtures are
+compiled on the CPS path and captured through the bridge's `cps2cell`:
+`native/add.capture` holds the machine code the JIT would run for `add` (22
+bytes, 7 instructions, one `Abs8` relocation to `trappingAdd`) and its caller
+`main`; `native/arith.capture` holds `sub` (68 bytes, 19 instructions) and `mul`
+(71 bytes), whose arithmetic is *inlined* by `trapping_arith_op` — `sub r12,
+rsi`, `imul rsi`, `seto r8b` and a trap branch falling back to
+`trappingSubtract`/`trappingMultiply` — plus their caller's immediates `9`/`4`/`3`.
+`scripts/native-edge` re-decodes each capture with a closed per-fragment x86_64
+table (13 and 28 forms; an unknown byte is refused, and a relocation must land on
+an immediate of matching width), re-derives each capture byte-identically from
+its fixture when a toolchain is present, and holds the generated statements
+`native_add.mm0`/`native_arith.mm0` to them. The edges are **open**:
 there is no x86_64 instruction semantics in this repository (the converted
 models are RV64, which `docs/PROOF_CHAIN.md` records cannot certify other
 targets), so the artifact states `native_add_edge` with `-- certificate: [gap]`,
 no `axiom` and no `theorem`, and the gate prints the gap rather than a profile.
-Eight controls each refuse: a changed argument immediate, a changed relocation
-target, a flipped instruction byte, a truncated body, a relabelled arch, a
-hand-edited statement, an edge relabelled a certificate, and an added axiom.
-Closing it needs a reviewed x86_64 model, an ABI-level simulation and a model of
-`trappingAdd`; none of those is invented here.
+Ten controls per fragment each refuse: a changed argument immediate, a changed
+relocation target, a flipped instruction byte, a truncated body, a relabelled
+arch, a hand-edited statement, an edge relabelled a certificate, an added axiom,
+a **reviewed x86_64 model appearing** (`MODEL_SOURCES`: `$X86_MODEL` or
+`mm0/statements/x86_instructions.mm0`), and a changed *cited* model whose pin is
+stale. The model itself is now real, not deferred:
+`mm0/proof_chain/native/X86Arith.lean` cites the Intel SDM for `SUB`, `IMUL` and
+`SETO` and proves seventeen theorems on a toy machine state — the inline value
+and the clear overflow flag for in-range arguments, the guarded path returning
+that value, the out-of-range cases setting OF (so
+`guarded_sub_overflows_to_the_trap` shows the fragment leaving for
+`trappingSubtract`), the `imul` truncation, and the SysV frame as an abstract
+discipline, including `run_fragment_in_range`/`run_fragment_overflows`, which
+state the edge from entry to `ret`. `scripts/native-edge check`
+runs `lean` on it, pins its sha256 into both stated edges, and refuses a capture
+whose ALU form has no semantics in `MODELED`. The `[gap]` is now named: the
+arithmetic core and the frame discipline are proved; stack addresses and bytes,
+the ABI's memory and the trap call are not. Closing the rest needs those in the
+same model (and a bitvector word type); none of that is invented here. The sibling `../Bend` checkout was searched
+and is not an ISA model: it emits C/Metal/CUDA, so nothing was converted from it.
 
 ### PC09 — Track and certify selected MLIR lowering steps
 
@@ -409,6 +429,35 @@ cannot disappear from the chain because the previous and next files have hashes.
 **Accept:** actual Austral→KernelIR→MLIR→selected device-IR claim composes, with
 all unchecked passes listed. Mutate a comparison predicate or pass option and
 stale/invalid evidence is refused.
+
+**Status:** started, with the first pass now **captured**. The pre-MLIR side is
+the `clamp` KernelIR PC04 reflects and PC07 composes (`ir_sha256 =
+48caf04e…`, predicate `GreaterThan`, `u32-modular-v1`). `G20a` is built:
+`lib/gpu/Gpu_mlir.ml` renders that same KernelIR to a `gpu`/`arith`/`memref`/
+`scf` module (signless `i32`, unsigned predicates, no wrap flags, explicit
+static extent, dominating `ult` guard), `gpu_proof dump-mlir` writes it, and
+eleven tests hold the encoding, the named refusals (helper call, non-v1 profile,
+non-positive extent, one-armed return) and the mutation requirement. The
+capture is byte-pinned: `mm0/proof_chain/mlir/ir/clamp.kernelir` and
+`clamp.mlir`, with `kernelir-to-mlir = captured` in
+`mm0/proof_chain/mlir/stage.toml`. `G19a` is met on this host: `scripts/gpu/mlir-probe` pins `mlir-opt`/`llvm`
+19.1.7 and runs verify → `--gpu-lower-to-nvvm-pipeline=cubin-format=isa
+cubin-chip=sm_70` → PTX for both the handwritten smoke fixture and the emitted
+`clamp` module, recording versions, target, pipeline, parameter layout and
+digests in `mm0/proof_chain/mlir/toolchain.toml` (four controls; a `[gap]` when
+no MLIR is installed). So the captured `clamp.mlir` is *verified and lowered* to
+`sm_70` PTX (`mm0/proof_chain/mlir/ir/clamp.ptx`, guard visible as
+`setp.gt.u32`), not merely captured, and `scripts/mlir-chain check` attests that
+the file it records is that same module. `mlir-canonicalize` and
+`convert-gpu-to-nvvm` still stay `uncaptured` as *PC09 passes*: the bundled
+pipeline is not a pass-local relation and no MLIR semantics is available, so no
+preservation is proved and the checker prints both the
+capture-is-not-preservation `[gap]` and the uncaptured-pass `[gap]` beside its
+`[pass]`. `scripts/mlir-chain` also
+re-derives the subject from `clamp_source.mm0`, requires exactly the pinned route
+and options, and rejects a captured row whose IR is missing or does not hash;
+six controls refuse (comparison predicate, pass option, dropped pass, forged
+capture, stale digest, restated count).
 
 ### PC10 — Make GPU virtual/native boundaries enforceable
 

@@ -1,0 +1,68 @@
+# mm0/proof_chain/mlir/stage.toml — PC09's declared MLIR stage boundary.
+#
+# The pre-MLIR side of `Austral → KernelIR → MLIR → device IR` exists and is
+# pinned by PC04/PC07 (`clamp_source.mm0` reflects this KernelIR and PC07
+# composes it). The emitter is `G20a` (`lib/gpu/Gpu_mlir.ml`), and `G19a` pins a
+# real LLVM 19.1.7 round trip that verifies and lowers the emitted module to
+# `sm_70` PTX. MLIR *semantics* is still absent: no pass-local relation is
+# stated or proved. So this record declares the route, pins the subject
+# identity, and marks each pass either captured (with a measured pre/post pair)
+# or explicitly uncaptured.
+#
+# `scripts/mlir-chain check` re-derives the subject from
+# `mm0/proof_chain/clamp_source.mm0`, requires exactly the route's passes and
+# the pinned options, and refuses a `captured` row whose IR file is missing.
+# It prints `[gap] PC09: no MLIR capture exists` while any pass is uncaptured:
+# a declared boundary is not a preservation proof.
+
+[subject]
+module = "clamp"
+entry = "clamp"
+comparison = "GreaterThan"
+kernel_ir_sha256 = "48caf04ea1714fba539ab596cd83d4f7ab537f3eea7837a5b129ccbecb9d8288"
+source_artifact = "mm0/proof_chain/clamp_source.mm0"
+dialect_profile = "none — no MLIR dialect semantics is declared"
+captured_passes = 1
+
+[[option]]
+name = "numeric_profile"
+value = "u32-modular-v1"
+
+[[option]]
+name = "extents"
+value = "static"
+
+[[option]]
+name = "fast_math"
+value = "forbidden"
+
+[[option]]
+name = "fusion"
+value = "forbidden"
+
+[[option]]
+name = "shared_memory"
+value = "forbidden"
+
+[[option]]
+name = "target"
+value = "mlir-gpu-dialect (no native lowering declared)"
+
+[[pass]]
+name = "kernelir-to-mlir"
+state = "captured"
+pre_file = "clamp.kernelir"
+pre_sha256 = "52d01cfaade3df43f28ad9e017b07b97d123f498563fb3a22c0cc075864db5a5"
+post_file = "clamp.mlir"
+post_sha256 = "b749a06eb0a0e7fa61113005529f0222caa5ee4a72b864bc015bf1e87009d71c"
+detail = "Gpu_mlir.render ~extent:65 of the reflected KernelIR: captured byte-for-byte, not proved (no MLIR semantics)"
+
+[[pass]]
+name = "mlir-canonicalize"
+state = "uncaptured"
+detail = "the toolchain is pinned (G19a), but no canonicalization run is captured and no pass-local relation is stated or proved"
+
+[[pass]]
+name = "convert-gpu-to-nvvm"
+state = "uncaptured"
+detail = "G19a lowers clamp.mlir to sm_70 PTX through this pipeline, but the run is not captured as a pass pre/post pair and no pass-local relation is proved"

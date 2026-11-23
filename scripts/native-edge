@@ -1,34 +1,50 @@
 #!/usr/bin/env python3
-"""PC08: one captured native fragment, decoded and pinned — the edge, stated.
+"""PC08: captured native fragments, decoded and pinned — the edges, stated.
 
 What this does, and what it deliberately does not
 -------------------------------------------------
-`capture` compiles the committed fixture `examples/native-fragment/NativeFragment.aum`
-on the CPS path, hands the CPS to the bridge's own `cps2cell` (the same
-`compile_cps_to_clif` the JIT runs), and records in
-`mm0/proof_chain/native/add.capture` the *machine code that was actually
-emitted* for the fragment: architecture, the CPS bytes it came from, each
-defined function's text, its relocation records and its imports. `check`
-re-decodes those bytes with a table of the instruction forms this fragment
-really contains and refuses anything the table does not cover — an unknown byte
-is an explicit open edge, never a skipped instruction.
+`capture` compiles a committed fixture on the CPS path, hands the CPS to the
+bridge's own `cps2cell` (the same `compile_cps_to_clif` the JIT runs), and
+records in `mm0/proof_chain/native/<fragment>.capture` the *machine code that
+was actually emitted*: architecture, the CPS bytes it came from, each defined
+function's text, its relocation records and its imports. `check` re-decodes
+those bytes with a table of the instruction forms that fragment really contains
+and refuses anything the table does not cover — an unknown byte is an explicit
+open edge, never a skipped instruction.
 
-Then it holds the stated MM0 edge `mm0/proof_chain/native_add.mm0` to that
-capture: the artifact is *generated* from the capture, so a changed immediate, a
-moved relocation, a different arch or a different CPS input is a byte
-disagreement with the committed artifact.
+Two fragments are captured, and the difference between them is the point:
+
+  `add`    (`NativeFragment.aum`) — `Int64` addition is a *call* to the
+           imported `trappingAdd`, so the captured code is the SysV shim around
+           one external call. The captured arithmetic is outside the fragment.
+  `arith`  (`ArithFragment.aum`) — `Int64` subtraction and multiplication are
+           *inlined* by `Compiler_cps.trapping_arith_op` into the bridge's
+           `sub`/`mul` opcodes, so the captured code carries the ALU instruction
+           (`sub r12, rsi`, `imul rsi`), the overflow flag (`seto`) and a trap
+           branch that falls back to `trappingSubtract`/`trappingMultiply`.
+
+Then it holds each stated MM0 edge (`mm0/proof_chain/native_<fragment>.mm0`) to
+its capture: the artifact is *generated* from the capture, so a changed
+immediate, a moved relocation, a different arch or a different CPS input is a
+byte disagreement with the committed artifact.
 
 What is not here: a proof. There is no x86_64 instruction model in this repo
 (the RV64 conversions are RV64, and `docs/PROOF_CHAIN.md` records that they
-cannot certify AArch64/x86_64 output), so the simulation obligation is *stated
+cannot certify AArch64/x86_64 output), so each simulation obligation is *stated
 and cited* with `-- certificate: [gap]` and no `axiom`/`theorem`. `mm0-rs`
-accepting the file means "the obligation is well-formed", not "it holds". That
-is `PLAN_proof_chain.md` PC08's own fallback: "an unavailable decoder/model
+accepting a file means "the obligation is well-formed", not "it holds". That is
+`PLAN_proof_chain.md` PC08's own fallback: "an unavailable decoder/model
 produces an explicit open edge, not a successful native profile."
 
-Exit: 0 the capture, decode, statement and replay agree (with the open edge
-reported as a `[gap]`); 1 a disagreement; 3 the capture could not be re-derived
-here (no `austral`/`cps2cell`), also a `[gap]` and not a pass.
+`MODEL_SOURCES` is the hinge that keeps that honest: it names the places a
+reviewed x86_64 instruction semantics *would* appear (an `$X86_MODEL` pin, a
+converted artifact under `mm0/statements/`). While none exists the edge is a
+`[gap]`; the moment one does, `check` fails and demands the edge be proved
+instead of stated. A model cannot arrive and leave this artifact green.
+
+Exit: 0 the captures, decodes, statements and replays agree (with each open
+edge reported as a `[gap]`); 1 a disagreement; 3 a capture could not be
+re-derived here (no `austral`/`cps2cell`), also a `[gap]` and not a pass.
 """
 
 from __future__ import annotations
@@ -43,41 +59,144 @@ import struct
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CAPTURE = ROOT / "mm0/proof_chain/native/add.capture"
-MM0 = ROOT / "mm0/proof_chain/native_add.mm0"
-SOURCE_DIR = ROOT / "examples/native-fragment"
-SOURCE = "NativeFragment.aum"
-MODULE = "NativeFragment"
+
 CLIF = ROOT / "mm0/clif.mm0"
 ISA = ROOT / "mm0/isa.mm0"
 
-#: The one fragment this card certifies (states) — `add`, called from `main`
-#: with constant arguments. `main` is recorded too: it is where the immediates
-#: (3, 4) and the intra-capture call live, so an operand change there is visible.
-SUBJECT = "add"
+#: The cited arithmetic model (Intel SDM sections in its header) and its proof
+#: of the fragment's inline core. Pinned into every stated edge, so a model that
+#: changes is a stale citation rather than a silent change of meaning.
+MODEL = ROOT / "mm0/proof_chain/native/X86Arith.lean"
 
-#: x86_64 forms this fragment is allowed to contain, with the operand width an
-#: immediate carries. The table is *closed*: `decode` refuses a byte it does not
-#: match, so a new codegen form becomes a visible failure rather than an
-#: unexamined instruction inside a "captured" fragment.
-FORMS: list[tuple[bytes, str, int]] = [
-    (b"\x55", "push rbp", 0),
-    (b"\x48\x89\xe5", "mov rbp, rsp", 0),
-    (b"\x48\x89\xec", "mov rsp, rbp", 0),
-    (b"\x49\xb8", "movabs r8, imm64", 8),
-    (b"\x41\xff\xd0", "call r8", 0),
-    (b"\x5d", "pop rbp", 0),
-    (b"\xc3", "ret", 0),
-    (b"\xbf", "mov edi, imm32", 4),
-    (b"\xbe", "mov esi, imm32", 4),
-    (b"\xe8", "call rel32", 4),
-    (b"\x48\xbe", "movabs rsi, imm64", 8),
-    (b"\xff\xd6", "call rsi", 0),
-    (b"\x48\xc7\x00", "mov qword [rax], imm32", 4),
+#: Instruction forms that compute or flag a *value*: these need the model. A
+#: frame adjustment (`sub rsp, 0x10`) is not one — it moves the stack pointer,
+#: not the kernel's arithmetic.
+ALU_FORMS = {"sub", "add", "imul", "mul", "seto"}
+
+#: Places a *reviewed x86_64 instruction semantics* would appear. While none of
+#: them resolves, PC08's host edges are `[gap]`s by construction; if one does,
+#: `check` fails, because a stated edge with a model beside it is no longer the
+#: honest artifact — it has to be proved. (Checked by `model_sources()`.)
+MODEL_SOURCES = [
+    ("$X86_MODEL", "an x86_64 model pinned by the environment, as the RV64 "
+     "conversions are pinned by `$RISCV_MODEL`"),
+    ("mm0/statements/x86_instructions.mm0", "a converted x86_64 instruction "
+     "artifact beside the RV64 ones"),
 ]
+
+
+@dataclass
+class Fragment:
+    """One captured host fragment: where it comes from, what it asserts."""
+
+    key: str                       # also the capture/statement stem
+    source: str                    # fixture file under examples/native-fragment
+    module: str
+    subject: str                   # the function the stated edge is about
+    #: what the edge is *intended* to mean, in the artifact's own prose
+    claim: str
+    #: the CPS arith term the fragment's body names
+    arith_term: str
+    #: one sentence on where the arithmetic lives (inline vs imported call)
+    arith_note: str
+    #: x86_64 forms this fragment may contain: (bytes, mnemonic, imm width)
+    forms: list[tuple[bytes, str, int]] = field(default_factory=list)
+
+    @property
+    def capture_path(self) -> Path:
+        return ROOT / f"mm0/proof_chain/native/{self.key}.capture"
+
+    @property
+    def statement_path(self) -> Path:
+        return ROOT / f"mm0/proof_chain/native_{self.key}.mm0"
+
+
+# ── the fragments ────────────────────────────────────────────────────────────
+
+#: `add`: the arithmetic is an imported call, so this fragment's machine code is
+#: the shim and the claim ends at the external boundary.
+ADD = Fragment(
+    key="add",
+    source="NativeFragment.aum",
+    module="NativeFragment",
+    subject="add",
+    claim=("the captured instructions, executed from the SysV entry state with "
+           "the two 64-bit arguments, return the value `add`'s CPS body "
+           "computes"),
+    arith_term="trapping_add",
+    arith_note=("`Int64` addition stays a call to the imported `trappingAdd`, so "
+                "this fragment's edge ends at that external call"),
+    forms=[
+        (b"\x55", "push rbp", 0),
+        (b"\x48\x89\xe5", "mov rbp, rsp", 0),
+        (b"\x48\x89\xec", "mov rsp, rbp", 0),
+        (b"\x49\xb8", "movabs r8, imm64", 8),
+        (b"\x41\xff\xd0", "call r8", 0),
+        (b"\x5d", "pop rbp", 0),
+        (b"\xc3", "ret", 0),
+        (b"\xbf", "mov edi, imm32", 4),
+        (b"\xbe", "mov esi, imm32", 4),
+        (b"\xe8", "call rel32", 4),
+        (b"\x48\xbe", "movabs rsi, imm64", 8),
+        (b"\xff\xd6", "call rsi", 0),
+        (b"\x48\xc7\x00", "mov qword [rax], imm32", 4),
+    ],
+)
+
+#: `arith`: subtraction and multiplication are inlined opcodes, so the machine
+#: code contains the ALU operation and its overflow trap — the shape a future
+#: instruction semantics could actually be written against.
+ARITH = Fragment(
+    key="arith",
+    source="ArithFragment.aum",
+    module="ArithFragment",
+    subject="sub",
+    claim=("the captured instructions, executed from the SysV entry state with "
+           "the two 64-bit arguments, return the difference the `sub` opcode "
+           "computes, and trap where it traps"),
+    arith_term="sub_arith",
+    arith_note=("`Int64` subtraction and multiplication are inlined by "
+                "`trapping_arith_op` into the `sub`/`mul` opcodes, so the "
+                "arithmetic is inside this fragment and only the overflow trap "
+                "falls back to `trappingSubtract`"),
+    forms=[
+        (b"\x55", "push rbp", 0),
+        (b"\x48\x89\xe5", "mov rbp, rsp", 0),
+        (b"\x48\x83\xec\x10", "sub rsp, 0x10", 0),
+        (b"\x4c\x89\x24\x24", "mov [rsp], r12", 0),
+        (b"\x4c\x8b\x24\x24", "mov r12, [rsp]", 0),
+        (b"\x48\x83\xc4\x10", "add rsp, 0x10", 0),
+        (b"\x49\x89\xfc", "mov r12, rdi", 0),
+        (b"\x4c\x2b\xe6", "sub r12, rsi", 0),
+        (b"\x48\x89\xf8", "mov rax, rdi", 0),
+        (b"\x48\xf7\xee", "imul rsi", 0),
+        (b"\x49\x89\xc4", "mov r12, rax", 0),
+        (b"\x4c\x89\xe0", "mov rax, r12", 0),
+        (b"\x41\x0f\x90\xc0", "seto r8b", 0),
+        (b"\x45\x84\xc0", "test r8b, r8b", 0),
+        (b"\x0f\x85", "jne rel32", 4),
+        (b"\xe9", "jmp rel32", 4),
+        (b"\x49\xb9", "movabs r9, imm64", 8),
+        (b"\x41\xff\xd1", "call r9", 0),
+        (b"\x48\x89\xec", "mov rsp, rbp", 0),
+        (b"\x5d", "pop rbp", 0),
+        (b"\xc3", "ret", 0),
+        # the caller `main` of this fixture
+        (b"\xbf", "mov edi, imm32", 4),
+        (b"\xbe", "mov esi, imm32", 4),
+        (b"\xe8", "call rel32", 4),
+        (b"\x48\x89\xc7", "mov rdi, rax", 0),
+        (b"\x49\xb8", "movabs r8, imm64", 8),
+        (b"\x41\xff\xd0", "call r8", 0),
+        (b"\x48\xc7\x00", "mov qword [rax], imm32", 4),
+    ],
+)
+
+FRAGMENTS: list[Fragment] = [ADD, ARITH]
 
 RELOC_WIDTHS = {"Abs8": 8, "X86CallPCRel4": 4}
 
@@ -101,7 +220,8 @@ class DecodeError(Exception):
     pass
 
 
-def decode(code: bytes, relocs: list[dict]) -> list[dict]:
+def decode(code: bytes, relocs: list[dict],
+           forms: list[tuple[bytes, str, int]]) -> list[dict]:
     """Decode `code` into the table's forms, refusing any byte it cannot name.
 
     A relocation's patch site must land exactly on an instruction boundary that
@@ -114,13 +234,14 @@ def decode(code: bytes, relocs: list[dict]) -> list[dict]:
     out: list[dict] = []
     pc = 0
     while pc < len(code):
-        for form, mnemonic, width in FORMS:
+        for form, mnemonic, width in forms:
             if code.startswith(form, pc) and \
                     (width == 0 or pc + len(form) + width <= len(code)):
                 start = pc
                 pc += len(form)
                 operand = ""
                 reloc = sites.get(pc) if width else None
+                imm_at = pc if width else -1
                 if width:
                     raw = code[pc:pc + width]
                     pc += width
@@ -132,21 +253,22 @@ def decode(code: bytes, relocs: list[dict]) -> list[dict]:
                                 f"{want} byte(s), the instruction carries {width}")
                         operand = "@" + reloc["symbol"]
                     else:
-                        operand = "0x" + raw[::-1].hex().lstrip("0") or "0x0"
+                        value = int.from_bytes(raw, "little")
+                        operand = f"0x{value:x}"
                 elif pc in sites:
                     raise DecodeError(
                         f"reloc at {pc} is not at an immediate of any instruction")
                 out.append({"offset": start, "bytes": code[start:pc].hex(),
                             "form": mnemonic + (f" {operand}" if operand else ""),
-                            "reloc": reloc["symbol"] if reloc else ""})
+                            "reloc": reloc["symbol"] if reloc else "",
+                            "imm_at": imm_at})
                 break
         else:
             raise DecodeError(
                 f"byte 0x{code[pc]:02x} at offset {pc} is not a form in the "
                 f"table (the fragment's decoder does not cover it)")
-    leftover = [o for o in sites if o not in
-                {i["offset"] + len(bytes.fromhex(i["bytes"])) -
-                 (RELOC_WIDTHS.get(sites[o]["kind"], 0)) for i in out}]
+    covered = {i["imm_at"] for i in out if i["imm_at"] >= 0}
+    leftover = [o for o in sites if o not in covered]
     if leftover:
         raise DecodeError(f"reloc offset(s) {leftover} match no instruction")
     return out
@@ -206,11 +328,11 @@ def parse_avce(data: bytes) -> dict:
 # ── capture file <-> rendered MM0 ────────────────────────────────────────────
 
 
-def capture_bytes(capture: dict) -> bytes:
+def capture_bytes(frag: Fragment, capture: dict) -> bytes:
     """The capture as committed text. Rendering is deterministic on purpose:
     `check` compares this text byte-for-byte with the file on disk."""
     lines = [
-        "# native/add.capture — PC08's captured host fragment (generated).",
+        f"# native/{frag.key}.capture — PC08's captured host fragment (generated).",
         "#",
         "# Written by `scripts/native-edge capture`; every run of",
         "# `scripts/native-edge` re-decodes the recorded bytes and refuses a file",
@@ -219,9 +341,9 @@ def capture_bytes(capture: dict) -> bytes:
         "# the same `CaptureModule` the JIT path uses (`cps2cell`).",
         "[meta]",
         f'arch = "{capture["arch"]}"',
-        f'source = "examples/native-fragment/{SOURCE}"',
-        f'module = "{MODULE}"',
-        f'subject = "{SUBJECT}"',
+        f'source = "examples/native-fragment/{frag.source}"',
+        f'module = "{frag.module}"',
+        f'subject = "{frag.subject}"',
         f'cps_sha256 = "{capture["cps_sha256"]}"',
         f'avce_sha256 = "{capture["avce_sha256"]}"',
         f'clif = {json.dumps(capture["clif"])}',
@@ -277,32 +399,68 @@ def read_capture_toml(text: str) -> dict:
             "functions": functions}
 
 
-def render_mm0(capture: dict, digests: dict) -> bytes:
+def model_forms(model: Path) -> set[str]:
+    """The instruction forms the Lean model declares it covers."""
+    if not model.exists():
+        return set()
+    text = model.read_text()
+    m = re.search(r"def MODELED : List String := \[(.*?)\]", text, re.S)
+    if not m:
+        return set()
+    return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+
+def lean_binary() -> str | None:
+    for candidate in (os.environ.get("LEAN_BIN"), shutil.which("lean")):
+        if candidate and Path(candidate).exists():
+            return candidate
+    # the flake's lean store path, so a bare `lean`-less shell can still check
+    # the model without entering a devshell that builds the Sail models
+    for store in sorted(Path("/nix/store").glob("*lean4-4.30.0")):
+        binary = store / "bin/lean"
+        if binary.exists():
+            return str(binary)
+    return None
+
+
+def render_mm0(frag: Fragment, capture: dict, digests: dict) -> bytes:
     """The stated edge, generated from the capture so it cannot drift from it."""
-    subject = next(f for f in capture["functions"] if f["name"] == SUBJECT)
-    other = [f for f in capture["functions"] if f["name"] != SUBJECT]
+    subject = next(f for f in capture["functions"] if f["name"] == frag.subject)
+    other = [f for f in capture["functions"] if f["name"] != frag.subject]
+    modeled = model_forms(MODEL)
+    unmodelled = sorted(
+        {insn["form"].split(" ")[0] for insn in subject["insns"]
+         if insn["form"].split(" ")[0] in ALU_FORMS
+         and insn["form"].split(" ")[0] not in modeled}
+        | {insn["form"].split(" ")[0] for insn in subject["insns"]
+           if insn["form"].split(" ")[0] not in ALU_FORMS})
     lines = [
-        "-- native_add.mm0 — PC08's host fragment: the edge, stated and pinned.",
+        f"-- native_{frag.key}.mm0 — PC08's host fragment: the edge, stated and pinned.",
         "--",
         "-- GENERATED by `scripts/native-edge capture` from",
-        "-- `mm0/proof_chain/native/add.capture`. Do not edit by hand: every run",
-        "-- of `scripts/native-edge` re-decodes the capture and compares this file",
-        "-- byte-for-byte, so a hand edit is a `[FAIL]`, not a new claim.",
+        f"-- `mm0/proof_chain/native/{frag.key}.capture`. Do not edit by hand: every",
+        "-- run of `scripts/native-edge` re-decodes the capture and compares this",
+        "-- file byte-for-byte, so a hand edit is a `[FAIL]`, not a new claim.",
         "--",
         "-- TARGET CUT. The fragment is one bounded scalar function of the",
-        "-- committed module `examples/native-fragment/NativeFragment.aum`:",
+        f"-- committed module `examples/native-fragment/{frag.source}`:",
         "--",
-        f"--     source        {MODULE}.add (Int64, Int64) -> Int64",
-        f"--     CPS           opcodes of `isa.mm0` (call 2->1, return 1->0)",
+        f"--     source        {frag.module}.{frag.subject} (Int64, Int64) -> Int64",
+        f"--     CPS           opcodes of `isa.mm0` ({len(capture['clif'])} CLIF form(s))",
         f"--     CLIF          {capture['clif'][0] if capture['clif'] else 'unrecorded'}",
         f"--     host          {capture['arch']}, {len(subject['bytes']) // 2} bytes,",
         f"--                   {len(subject['relocs'])} relocation(s)",
         "--",
         "-- The host edge is the only layer this file states, and it is the layer",
-        "-- with no model: there is no x86_64 semantics in this repository (the",
-        "-- conversions in `mm0/statements/` are RV64, and `docs/PROOF_CHAIN.md`",
-        "-- records that RV64 statements cannot certify other targets). So the",
-        "-- simulation obligation is stated, cited and left open.",
+        "-- with no complete model: the arithmetic core and the SysV frame's",
+        "-- discipline are specified and proved in",
+        "-- `mm0/proof_chain/native/X86Arith.lean`, but nothing here models stack",
+        "-- addresses, the ABI's memory or the trap call, and the repository's only",
+        "-- converted instruction models are RV64 — `docs/PROOF_CHAIN.md` records",
+        "-- that they cannot certify this target. So the simulation obligation is",
+        "-- stated, cited and left open.",
+        "--",
+        f"-- {frag.arith_note}.",
         "--",
         f"-- The decoded subject fragment ({len(subject['insns'])} instruction(s)):",
     ]
@@ -326,21 +484,20 @@ def render_mm0(capture: dict, digests: dict) -> bytes:
                 f"addend={r['addend']} -> {r['symbol']}")
     lines += [
         "--",
-        "-- Imports are the external boundary this fragment calls into; the",
-        "-- arithmetic itself is `trappingAdd`, so the edge ends at that call:",
+        "-- Imports are the external boundary this fragment calls into:",
     ]
     for name in capture["imports"]:
         lines.append(f"-- import {name}")
     lines += [
         "--",
-        "-- WHAT IS CLAIMED. In the vocabulary below, `native_add_edge x y` is",
+        "-- WHAT IS CLAIMED. In the vocabulary below, "
+        f"`native_{frag.subject}_edge x y` is",
         "-- intended to mean",
         "--",
-        "--     value (run x86_add (entry x y)) = trapping_add x y",
+        f"--     value (x86_{frag.subject} (entry x y)) = {frag.arith_term} x y",
         "--",
-        "-- i.e. the captured instructions, executed from the SysV entry state",
-        "-- with the two 64-bit arguments, return the value `add`'s CPS body",
-        "-- computes. The equality is *not* stated: MM0 has no built-in equality",
+        f"-- i.e. {frag.claim}.",
+        "-- The equality is *not* stated: MM0 has no built-in equality",
         "-- and importing one would claim a theory this artifact has not earned.",
         "-- The relation is named; what it means is the sentence above, where a",
         "-- reviewer can disagree with it.",
@@ -355,14 +512,31 @@ def render_mm0(capture: dict, digests: dict) -> bytes:
         "-- Citations are by content: the shape layer, the opcode layer and the",
         "-- capture this file was generated from. A stale digest means the",
         "-- comment describes files that have changed, and the gate fails.",
-        f"-- cites: mm0/proof_chain/native/add.capture sha256={digests['capture']}",
+        f"-- cites: mm0/proof_chain/native/{frag.key}.capture sha256={digests['capture']}",
         f"-- cites: mm0/clif.mm0 sha256={digests['clif']}",
         f"-- cites: mm0/isa.mm0 sha256={digests['isa']}",
         "--",
-        "-- certificate: [gap] — stated, cited, unproved. There is no x86_64",
-        "-- instruction model in this repo, so this edge is open by construction;",
-        "-- `scripts/native-edge` reports it as a `[gap]` and pins the decoded",
-        "-- bytes, relocations and declination so it cannot silently change.",
+        "-- MODEL. The arithmetic core is specified and *proved* in",
+        f"-- `mm0/proof_chain/native/X86Arith.lean` (sha256={digests['model']}),",
+        "-- which cites the Intel SDM for `SUB`, `IMUL` and `SETO` and proves, on a",
+        "-- toy machine state: the inline value for in-range arguments, the clear",
+        "-- overflow flag in range, the out-of-range case reaching the trap, the",
+        "-- `imul` truncation, and the frame discipline from entry to `ret`. It",
+        "-- does not model stack addresses, the ABI's memory or",
+        "-- `trappingSubtract` — which is exactly why the edge above stays open.",
+        "--",
+        "-- Instruction form(s) not covered by the arithmetic model (the frame",
+        "-- discipline — push/pop/mov/ret — is modelled abstractly in `Frame`,",
+        "-- and the trap call is deliberately outside the fragment): "
+        + ", ".join(unmodelled) + ".",
+        f"-- model: mm0/proof_chain/native/X86Arith.lean sha256={digests['model']}",
+        "--",
+        "-- certificate: [gap] — stated, cited, unproved. The arithmetic core and",
+        "-- the frame discipline are modelled in `X86Arith.lean`, but the",
+        "-- address-level ABI, memory and the trap call are not, so this edge is",
+        "-- open; `scripts/native-edge` reports it as a `[gap]`, fails if another",
+        "-- model appears (`MODEL_SOURCES`), and pins the decoded bytes, relocations",
+        "-- and declination so it cannot silently change.",
         "--",
         "-- theory: self-declared vocabulary (see `mm0/store_projection.mm0`).",
         "sort St;                        -- machine state (registers + stack), uninterpreted",
@@ -373,16 +547,16 @@ def render_mm0(capture: dict, digests: dict) -> bytes:
         "-- and `ret` leaves the result in rax. Both are *named*, not modelled.",
         "term entry (x y: Val): St;",
         "-- The decoded instructions of the subject fragment, as one step function.",
-        "term x86_add (s: St): St;",
+        f"term x86_{frag.subject} (s: St): St;",
         "-- What the fragment's code leaves in the return register.",
         "term value (s: St): Val;",
-        "-- The CPS body's arithmetic: `add` calls the imported `trappingAdd`.",
-        "term trapping_add (x y: Val): Val;",
+        f"-- The CPS body's arithmetic: {frag.arith_note.split(',')[0]}.",
+        f"term {frag.arith_term} (x y: Val): Val;",
         "",
         "-- The obligation itself: uninterpreted for the reason above — naming the",
         "-- claim is this layer's job; deciding it is the model's, and there is no",
         "-- x86_64 model here.",
-        "term native_add_edge (x y: Val): Prop;",
+        f"term native_{frag.subject}_edge (x y: Val): Prop;",
     ]
     return ("\n".join(lines) + "\n").encode()
 
@@ -406,7 +580,7 @@ def toolchain() -> tuple[str, str] | None:
     return str(austral), str(cell)
 
 
-def build_capture(work: Path, clif_dump: bool) -> dict:
+def build_capture(frag: Fragment, work: Path, clif_dump: bool) -> dict:
     tools = toolchain()
     if tools is None:
         raise DecodeError("no `austral`/`cps2cell` — the capture cannot be "
@@ -418,23 +592,24 @@ def build_capture(work: Path, clif_dump: bool) -> dict:
     bridge_dir = ROOT / "safestos/cranelift/target/release"
     env = dict(os.environ)
     env["LD_LIBRARY_PATH"] = f"{ROOT}:{bridge_dir}:" + env.get("LD_LIBRARY_PATH", "")
-    cps = work / "native.cps"
+    cps = work / f"{frag.key}.cps"
     run = subprocess.run(
-        [austral, "compile", SOURCE, f"--entrypoint={MODULE}:main",
+        [austral, "compile", frag.source, f"--entrypoint={frag.module}:main",
          "--use-cps-jit", "--allow-all", "--target-type=c",
          f"--emit-cps={cps}", f"--output={work / 'native.c'}"],
-        cwd=SOURCE_DIR, env=env, capture_output=True, text=True)
+        cwd=ROOT / "examples/native-fragment", env=env,
+        capture_output=True, text=True)
     if not cps.exists():
         raise DecodeError("the fixture did not compile to CPS: " +
                           (run.stderr or run.stdout).strip().splitlines()[-1])
-    avce_path = work / "native.avce"
+    avce_path = work / f"{frag.key}.avce"
     made = subprocess.run([cell, str(cps), str(avce_path)],
                           capture_output=True, text=True)
     if made.returncode != 0:
         raise DecodeError("cps2cell refused the CPS: " + made.stderr.strip())
     parsed = parse_avce(avce_path.read_bytes())
     for fn in parsed["functions"]:
-        fn["insns"] = decode(bytes.fromhex(fn["bytes"]), fn["relocs"])
+        fn["insns"] = decode(bytes.fromhex(fn["bytes"]), fn["relocs"], frag.forms)
     parsed["cps_sha256"] = sha256(cps.read_bytes())
     parsed["avce_sha256"] = sha256(avce_path.read_bytes())
     parsed["clif"] = []
@@ -442,7 +617,8 @@ def build_capture(work: Path, clif_dump: bool) -> dict:
         dumper = shutil.which("clif_dump") or \
             str(ROOT / "safestos/cranelift/target/release/clif_dump")
         if Path(dumper).exists():
-            dumped = subprocess.run([dumper, str(cps)], capture_output=True, text=True)
+            dumped = subprocess.run([dumper, str(cps)], capture_output=True,
+                                    text=True)
             # `clif_dump` prints a function's instruction forms *before* its
             # `func <name> <count>` line, so the shape is buffered and flushed
             # when the name arrives.
@@ -452,7 +628,7 @@ def build_capture(work: Path, clif_dump: bool) -> dict:
                     pending.append(line)
                     continue
                 m = re.match(r"^func (\S+) (\d+)$", line)
-                if m and m.group(1) == SUBJECT:
+                if m and m.group(1) == frag.subject:
                     parsed["clif"] = list(pending)
                 if m:
                     pending = []
@@ -462,8 +638,24 @@ def build_capture(work: Path, clif_dump: bool) -> dict:
 # ── check ────────────────────────────────────────────────────────────────────
 
 
-def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
+def model_sources() -> list[tuple[str, str]]:
+    """The reviewed x86_64 model sources that would close this edge, resolved."""
+    found = []
+    env = os.environ.get("X86_MODEL")
+    if env:
+        found.append((env, MODEL_SOURCES[0][1]))
+    path = ROOT / MODEL_SOURCES[1][0]
+    if path.exists():
+        found.append((str(path), MODEL_SOURCES[1][1]))
+    return found
+
+
+def check(frag: Fragment, work: Path,
+          capture_path=None, mm0_path=None, model_path=None) -> int:
     ok = True
+    capture_path = capture_path or frag.capture_path
+    mm0_path = mm0_path or frag.statement_path
+    model = Path(model_path) if model_path else MODEL
     try:
         capture = read_capture_toml(capture_path.read_text())
     except Exception as exc:  # noqa: BLE001 - any parse error is the finding
@@ -474,8 +666,8 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
         fail("the capture is a native x86_64 fragment",
              f"arch is {capture['arch']!r}")
         ok = False
-    if capture["subject"] != SUBJECT or \
-            SUBJECT not in [f["name"] for f in capture["functions"]]:
+    if capture["subject"] != frag.subject or \
+            frag.subject not in [f["name"] for f in capture["functions"]]:
         fail("the capture holds the declared subject function",
              f"subject {capture['subject']!r}, functions "
              f"{[f['name'] for f in capture['functions']]}")
@@ -484,7 +676,7 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
     # (1) decode the recorded bytes again; the recorded rows are not trusted.
     for fn in capture["functions"]:
         try:
-            insns = decode(bytes.fromhex(fn["bytes"]), fn["relocs"])
+            insns = decode(bytes.fromhex(fn["bytes"]), fn["relocs"], frag.forms)
         except DecodeError as exc:
             fail("every recorded byte is a form in the table",
                  f"{fn['name']}: {exc}")
@@ -499,9 +691,9 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
 
     # (2) the stated edge is exactly what this capture generates.
     digests = {"capture": sha256(capture_path.read_bytes())}
-    for key, path in (("clif", CLIF), ("isa", ISA)):
+    for key, path in (("clif", CLIF), ("isa", ISA), ("model", MODEL)):
         digests[key] = sha256(path.read_bytes()) if path.exists() else "absent"
-    want = render_mm0(capture, digests)
+    want = render_mm0(frag, capture, digests)
     have = mm0_path.read_bytes() if mm0_path.exists() else b""
     if want != have:
         first = next((i for i, (a, b) in enumerate(zip(want, have)) if a != b),
@@ -519,37 +711,99 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
         fail("the edge is marked [gap], not a certificate")
         ok = False
 
-    # (3) re-derive from the sources when this host can; otherwise a gap.
+    # (3) the cited model: pinned, covering every ALU form in the capture, and —
+    # when this host has Lean — rechecked rather than trusted.
+    pin = re.search(r"^-- model: (\S+) sha256=([0-9a-f]{64})$", text, re.M)
+    if not pin:
+        fail("the edge pins the cited instruction model")
+        ok = False
+    elif not model.exists():
+        fail("the cited instruction model exists", pin.group(1))
+        ok = False
+    elif sha256(model.read_bytes()) != pin.group(2):
+        fail("the cited instruction model is the one the edge was generated from",
+             f"{pin.group(1)} has changed since the edge was written")
+        ok = False
+    else:
+        subject = next((f for f in capture["functions"]
+                        if f["name"] == frag.subject), None)
+        needed = set()
+        for insn in (subject["insns"] if subject else []):
+            parts = insn["form"].split(" ")
+            mnemonic = parts[0]
+            target = parts[1].rstrip(",") if len(parts) > 1 else ""
+            # a frame adjustment moves the stack pointer, not the kernel value
+            if mnemonic in ALU_FORMS and target not in ("rsp", "rbp"):
+                needed.add(mnemonic)
+        missing = sorted(needed - model_forms(model))
+        if missing:
+            fail("every ALU form in the capture has a semantics in the model",
+                 f"{', '.join(missing)} has no definition in the cited model")
+            ok = False
+        lean = lean_binary()
+        if lean is None:
+            gap("the instruction model was not rechecked here (no lean); its pin "
+                "is checked, its proofs are not")
+        else:
+            run = subprocess.run([lean, str(model)], capture_output=True, text=True)
+            combined = run.stdout + run.stderr
+            if run.returncode != 0 or "error:" in combined:
+                fail("the cited instruction model still checks",
+                     combined.strip().splitlines()[-1] if combined.strip()
+                     else "lean failed")
+                ok = False
+            else:
+                body = model.read_text()
+                # code only: the header discusses `sorry`/`axiom` on purpose
+                code = re.sub(r"/-.*?-/" , "", body, flags=re.S)
+                code = re.sub(r"--[^\n]*", "", code)
+                if re.search(r"\b(sorry|admit|axiom)\b", code):
+                    fail("the cited instruction model assumes nothing",
+                         "it contains sorry/admit/axiom")
+                    ok = False
+                listed = set(re.findall(r"theorem ([a-z_]+)", code))
+                declared = re.findall(r'"([a-z_]+)"',
+                                      body.split("def THEOREMS")[-1].split("]")[0])
+                stale = sorted(set(declared) - listed)
+                if stale:
+                    fail("every theorem the model declares exists in it",
+                         f"missing {stale}")
+                    ok = False
+                print(f"  [detail] PC08 model: {model.name} rechecked by lean "
+                      f"({len(declared)} theorem(s)); covers "
+                      f"{', '.join(sorted(model_forms(model)))}")
+
+    # (4) re-derive from the sources when this host can; otherwise a gap.
     tools = toolchain()
     if tools is None:
         gap("the capture was not re-derived here (no `austral`/`cps2cell`); "
-            "the recorded bytes are decoded and pinned, not regenerated")
+                  "the recorded bytes are decoded and pinned, not regenerated")
     else:
         try:
-            fresh = build_capture(work, clif_dump=True)
+            fresh_capture = build_capture(frag, work, clif_dump=True)
         except DecodeError as exc:
             fail("the fixture still captures", str(exc))
             ok = False
         else:
-            if capture_bytes(fresh) != capture_path.read_bytes():
+            if capture_bytes(frag, fresh_capture) != capture_path.read_bytes():
                 fail("the capture re-derives byte-identically from the fixture")
                 ok = False
-            if capture["cps_sha256"] == fresh["cps_sha256"] and \
-                    capture["avce_sha256"] != fresh["avce_sha256"]:
+            if capture["cps_sha256"] == fresh_capture["cps_sha256"] and \
+                    capture["avce_sha256"] != fresh_capture["avce_sha256"]:
                 fail("the same CPS produces the same capture",
                      "cps_sha256 agrees but avce_sha256 does not")
                 ok = False
 
     # (4) replay the stated edge: well-formedness only, never a proof.
     if not (shutil.which("mm0-rs") and shutil.which("mm0-c")):
-        gap("native_add.mm0 not replayed (no mm0-rs/mm0-c on PATH)")
+        gap(f"native_{frag.key}.mm0 not replayed (no mm0-rs/mm0-c on PATH)")
     else:
-        mmb = work / "native_add.mmb"
+        mmb = work / f"native_{frag.key}.mmb"
         compiled = subprocess.run(["mm0-rs", "compile", str(mm0_path), str(mmb)],
                                   capture_output=True, text=True)
         if compiled.returncode != 0:
-            fail("native_add.mm0 compiles", (compiled.stderr or
-                                            compiled.stdout).strip()[:400])
+            fail(f"native_{frag.key}.mm0 compiles",
+                 (compiled.stderr or compiled.stdout).strip()[:400])
             ok = False
         else:
             checked = subprocess.run(["mm0-c", str(mmb)],
@@ -559,18 +813,45 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
                      checked.stderr.decode(errors="replace").strip()[-400:])
                 ok = False
 
-    subject = next((f for f in capture["functions"] if f["name"] == SUBJECT), None)
+    # (5) the open edge is only honest while no reviewed model exists.
+    models = model_sources()
+    if models:
+        fail("no reviewed x86_64 model is available, so the edge may be "
+                   "stated rather than proved",
+             "a model source now resolves: " +
+             ", ".join(path for path, _ in models) +
+             " — this edge has to be proved now, not stated")
+        ok = False
+
+    subject = next((f for f in capture["functions"] if f["name"] == frag.subject), None)
     if subject is not None:
-        print(f"  [detail] PC08 fragment: {SUBJECT} — "
+        print(f"  [detail] PC08 fragment: {frag.key} ({frag.subject}) — "
               f"{len(subject['bytes']) // 2} byte(s), "
               f"{len(subject['insns'])} instruction(s), "
               f"{len(subject['relocs'])} relocation(s), arch {capture['arch']}")
         print(f"  [detail] PC08 imports: {', '.join(capture['imports'])}")
+        # the arithmetic itself, not the stack adjustment: an ALU op on a
+        # computed register rather than on `rsp`/`rbp`.
+        inline = [i["form"] for i in subject["insns"]
+                  if i["form"].split(" ")[0] in ("sub", "imul", "add", "mul")
+                  and i["form"].split(" ")[1].rstrip(",") not in ("rsp", "rbp")]
+        if inline:
+            print(f"  [detail] PC08 inlined arithmetic: {', '.join(inline)}")
     if ok:
-        gap("no x86_64 instruction model is available, so the fragment's edge "
-            "is stated and pinned, not proved")
-        print("[pass] PC08: the captured host fragment decodes, re-derives and "
-              "is pinned by its stated edge")
+        alu = sorted({i["form"].split(" ")[0] for i in subject["insns"]
+                      if i["form"].split(" ")[0] in ALU_FORMS
+                      and i["form"].split(" ")[1].rstrip(",") not in ("rsp", "rbp")})
+        if alu:
+            gap("the arithmetic core of the `" + frag.key + "` fragment ("
+                + ", ".join(alu) + ") is modelled and proved, but its "
+                "stack addresses, ABI and trap call are not, so the fragment's "
+                "edge stays open")
+        else:
+            gap("the `" + frag.key + "` fragment's arithmetic is external and "
+                "its ABI/call edge is unmodelled, so its edge is stated and "
+                "pinned, not proved")
+        print(f"[pass] PC08: the captured `{frag.key}` fragment decodes, "
+              "re-derives and is pinned by its stated edge")
         return 0
     return 1
 
@@ -578,21 +859,30 @@ def check(capture_path: Path, mm0_path: Path, work: Path) -> int:
 # ── controls ─────────────────────────────────────────────────────────────────
 
 
-def selftest(capture_path: Path, mm0_path: Path, work: Path) -> int:
+def selftest(frag: Fragment, work: Path,
+             capture_path=None, mm0_path=None) -> int:
     ok = True
+    capture_path = capture_path or frag.capture_path
+    mm0_path = mm0_path or frag.statement_path
     capture_text = capture_path.read_text()
     mm0_text = mm0_path.read_text()
 
-    def run(capture: str, stated: str, label: str, needle: str) -> None:
+    model: Path | None = None
+
+    def run(capture: str, stated: str, label: str, needle: str,
+            model_file: Path | None = None) -> None:
         nonlocal ok
-        base = work / "control"
+        model = model_file
+        base = work / f"control-{frag.key}"
         base.mkdir(exist_ok=True)
-        cap = base / "add.capture"
-        art = base / "native_add.mm0"
+        cap = base / f"{frag.key}.capture"
+        art = base / f"native_{frag.key}.mm0"
         cap.write_text(capture)
         art.write_text(stated)
         out = subprocess.run([sys.executable, __file__, "check",
-                              "--capture", str(cap), "--mm0", str(art)],
+                              "--fragment", frag.key,
+                              "--capture", str(cap), "--mm0", str(art)]
+                             + (["--model", str(model)] if model else []),
                              capture_output=True, text=True)
         combined = out.stdout + out.stderr
         if out.returncode != 1 or needle not in combined:
@@ -600,24 +890,38 @@ def selftest(capture_path: Path, mm0_path: Path, work: Path) -> int:
             fail(f"control: {label} is refused",
                  f"exit {out.returncode}, output {combined.strip()[:300]!r}")
         else:
-            print(f"  [pass] PC08 control refused: {label}")
+            print(f"  [pass] PC08 control refused ({frag.key}): {label}")
 
-    # 1. a changed immediate in the caller: the argv for `add` stops being (3,4).
-    run(capture_text.replace('form = "mov edi, imm32 0x3"',
-                             'form = "mov edi, imm32 0x5"', 1),
-        mm0_text, "a changed argument immediate", "match a fresh decode")
+    subject = next(f for f in read_capture_toml(capture_text)["functions"]
+                   if f["name"] == frag.subject)
+    first_dir = next((i["form"].split(" ")[0] for i in subject["insns"]), "")
+    # the operand whose mutation must be caught: whichever immediate the caller
+    # passes first, or the first ALU operand of an inlined fragment.
+    imm = re.search(r'form = "(mov \w+, imm32 0x[0-9a-f]+)"', capture_text)
+    alu = next((i for i in subject["insns"]
+                if i["form"].split(" ")[0] in ("sub", "imul", "add", "mul")), None)
 
-    # 2. a changed relocation target: the call no longer resolves to `add`.
-    run(capture_text.replace('symbol = "add"', 'symbol = "main"', 1),
-        mm0_text, "a changed relocation target", "match a fresh decode")
+    # 1. a changed immediate: an argument stops being what the caller passes.
+    if imm:
+        changed = imm.group(1).rsplit("0x", 1)[0] + "0x5"
+        run(capture_text.replace(imm.group(1), changed, 1), mm0_text,
+            "a changed argument immediate", "match a fresh decode")
+
+    # 2. a changed relocation target.
+    target = next((r["symbol"] for f in read_capture_toml(capture_text)["functions"]
+                   for r in f["relocs"]), None)
+    if target:
+        run(capture_text.replace(f'symbol = "{target}"', 'symbol = "main"', 1),
+            mm0_text, "a changed relocation target", "match a fresh decode")
 
     # 3. a flipped instruction byte with the recording left alone.
-    run(re.sub(r'bytes = "554889e5', 'bytes = "564889e5', capture_text, count=1),
+    run(re.sub(r'bytes = "([0-9a-f]{2})', lambda m: 'bytes = "%02x' %
+               (int(m.group(1), 16) ^ 0x02), capture_text, count=1),
         mm0_text, "a flipped instruction byte", "is not a form in the table")
 
     # 4. a truncated body: the last instruction is cut off.
-    run(re.sub(r'bytes = "([0-9a-f]{2,})"', lambda m: f'bytes = "{m.group(1)[:-2]}"',
-               capture_text, count=1),
+    run(re.sub(r'bytes = "([0-9a-f]{2,})"',
+               lambda m: f'bytes = "{m.group(1)[:-2]}"', capture_text, count=1),
         mm0_text, "a truncated function body", "match a fresh decode")
 
     # 5. a different arch claimed for the same bytes.
@@ -626,7 +930,7 @@ def selftest(capture_path: Path, mm0_path: Path, work: Path) -> int:
 
     # 6. the stated edge edited away from what the capture generates.
     run(capture_text,
-        mm0_text.replace("value (run x86_add", "value (run x86_sub", 1),
+        mm0_text.replace(f"x86_{frag.subject}", "x86_other", 1),
         "a hand-edited statement", "generated from the capture")
 
     # 7. the edge re-labelled as a certificate.
@@ -636,11 +940,53 @@ def selftest(capture_path: Path, mm0_path: Path, work: Path) -> int:
 
     # 8. an axiom added to the edge (it would be an unearned semantics).
     run(capture_text,
-        mm0_text + "\naxiom native_add_holds (x y: Val): $ native_add_edge x y $;\n",
+        mm0_text + f"\naxiom native_{frag.subject}_holds (x y: Val): "
+        f"$ native_{frag.subject}_edge x y $;\n",
         "an axiom added to the edge", "no axiom and no theorem")
 
+    # 9. a model appearing: the stated edge must stop being acceptable.
+    model_dir = work / f"model-{frag.key}"
+    model_dir.mkdir(exist_ok=True)
+    fake = model_dir / "x86_instructions.mm0"
+    fake.write_text("-- a reviewed model appeared\n")
+    env = dict(os.environ, X86_MODEL=str(fake))
+    out = subprocess.run([sys.executable, __file__, "check",
+                          "--fragment", frag.key],
+                         capture_output=True, text=True, env=env)
+    combined = out.stdout + out.stderr
+    if out.returncode != 1 or "has to be proved now" not in combined:
+        ok = False
+        fail("control: a reviewed x86_64 model is refused",
+             f"exit {out.returncode}, output {combined.strip()[:300]!r}")
+    else:
+        print(f"  [pass] PC08 control refused ({frag.key}): "
+              "a reviewed x86_64 model appearing")
+
+    # 10. the cited model's bytes changed: the pin in the edge is stale.
+    stale_model = work / f"model-{frag.key}-stale.lean"
+    stale_model.write_text(MODEL.read_text() + "\n-- an edit\n")
+    run(capture_text, mm0_text, "a changed cited model",
+        "is the one the edge was generated from", model_file=stale_model)
+
+    # 11. coverage is a positive fact, not only a refusal: the model must
+    #     declare every ALU form both captures execute (the same rule `check`
+    #     enforces; stated here so a shrinking model is visible in the selftest).
+    modeled = model_forms(MODEL)
+    for other in FRAGMENTS:
+        capture_other = read_capture_toml(other.capture_path.read_text())
+        subject_other = next((f for f in capture_other["functions"]
+                              if f["name"] == other.subject), None)
+        for insn in (subject_other["insns"] if subject_other else []):
+            parts = insn["form"].split(" ")
+            if parts[0] in ALU_FORMS and len(parts) > 1 and \
+                    parts[1].rstrip(",") not in ("rsp", "rbp") \
+                    and parts[0] not in modeled:
+                ok = False
+                fail("control: every captured ALU form is modelled",
+                     f"{other.key}: {parts[0]} is not in the cited model")
+
     if ok:
-        print("[pass] PC08 selftest: 8 controls behave")
+        print(f"[pass] PC08 selftest ({frag.key}): 10 controls behave")
         return 0
     return 1
 
@@ -652,32 +998,48 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", nargs="?", default="check",
                     choices=["check", "capture", "selftest"])
-    ap.add_argument("--capture", default=str(CAPTURE))
-    ap.add_argument("--mm0", default=str(MM0))
+    ap.add_argument("--fragment", choices=[f.key for f in FRAGMENTS],
+                    help="default: every fragment")
+    ap.add_argument("--capture", help="override the capture path (controls)")
+    ap.add_argument("--mm0", help="override the statement path (controls)")
+    ap.add_argument("--model", help="override the cited model (controls)")
     args = ap.parse_args()
-    capture_path = Path(args.capture)
-    mm0_path = Path(args.mm0)
 
+    selected = [f for f in FRAGMENTS
+                if args.fragment is None or f.key == args.fragment]
+    if args.capture or args.mm0:
+        if len(selected) != 1:
+            print("[FAIL] PC08: --capture/--mm0 name one fragment")
+            return 1
+        selected = [selected[0]]
+
+    status = 0
     with tempfile.TemporaryDirectory(prefix="pc08-") as tmp:
         work = Path(tmp)
-        if args.mode == "capture":
-            try:
-                capture = build_capture(work, clif_dump=True)
-            except DecodeError as exc:
-                gap(f"the capture was not rebuilt: {exc}")
-                return 3
-            capture_path.write_bytes(capture_bytes(capture))
-            digests = {"capture": sha256(capture_path.read_bytes())}
-            for key, path in (("clif", CLIF), ("isa", ISA)):
-                digests[key] = sha256(path.read_bytes()) if path.exists() else "absent"
-            mm0_path.write_bytes(render_mm0(capture, digests))
-            print(f"  [detail] PC08 capture: wrote "
-                  f"{capture_path.relative_to(ROOT)} and "
-                  f"{mm0_path.relative_to(ROOT)}")
-            return 0
-        if args.mode == "selftest":
-            return selftest(capture_path, mm0_path, work)
-        return check(capture_path, mm0_path, work)
+        for frag in selected:
+            cap = Path(args.capture) if args.capture else frag.capture_path
+            art = Path(args.mm0) if args.mm0 else frag.statement_path
+            if args.mode == "capture":
+                try:
+                    capture = build_capture(frag, work, clif_dump=True)
+                except DecodeError as exc:
+                    gap(f"the capture was not rebuilt: {exc}")
+                    status = status or 3
+                    continue
+                cap.write_bytes(capture_bytes(frag, capture))
+                digests = {"capture": sha256(cap.read_bytes())}
+                for key, path in (("clif", CLIF), ("isa", ISA), ("model", MODEL)):
+                    digests[key] = sha256(path.read_bytes()) \
+                        if path.exists() else "absent"
+                art.write_bytes(render_mm0(frag, capture, digests))
+                print(f"  [detail] PC08 capture: wrote "
+                      f"{cap.relative_to(ROOT)} and {art.relative_to(ROOT)}")
+                continue
+            if args.mode == "selftest":
+                status = status or selftest(frag, work, cap, art)
+                continue
+            status = status or check(frag, work, cap, art, args.model)
+    return status
 
 
 if __name__ == "__main__":

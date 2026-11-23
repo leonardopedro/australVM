@@ -97,6 +97,19 @@ let () =
      let (env, mono) = compiled ~aui ~aum in
      let kernel = Gpu_subset.build ~entry env mono in
      print_endline (Gpu_ir.canonical_bytes kernel)
+  | [_; "dump-mlir"; aui; aum; entry; "--extent"; extent] ->
+     let extent =
+       match int_of_string_opt extent with
+       | Some n -> n
+       | None -> failwith ("--extent expects an integer, got " ^ extent)
+     in
+     let (env, mono) = compiled ~aui ~aum in
+     let kernel = Gpu_subset.build ~entry env mono in
+     print_string (Gpu_mlir.render ~extent kernel)
+  | [_; "dump-mlir"; aui; aum; entry] ->
+     let (env, mono) = compiled ~aui ~aum in
+     let kernel = Gpu_subset.build ~entry env mono in
+     print_string (Gpu_mlir.render ~extent:65 kernel)
   | [_; "describe"; aui; aum; entry] ->
      let (r, _) = emitted ~aui ~aum ~entry ~tamper:None in
      print_endline (Gpu_proof_interface.describe r)
@@ -105,5 +118,6 @@ let () =
        "usage: gpu_proof (emit <aui> <aum> <entry> <outdir> | \
         emit <aui> <aum> <entry> <outdir> --tamper ir-param|ir-compare | \
         check <aui> <aum> <entry> <artifact.mm0> | \
-        describe <aui> <aum> <entry> | dump-ir <aui> <aum> <entry>)";
+        describe <aui> <aum> <entry> | dump-ir <aui> <aum> <entry> | \
+        dump-mlir <aui> <aum> <entry> [--extent N])";
      exit 2
