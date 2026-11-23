@@ -80,6 +80,7 @@ required=(
     process/slow-replica-snapshot
     process/slow-replica-recovered
     process/slow-replica-caught-up
+    process/slow-replica-idle-catch-up
 )
 missing=0
 for case_name in "${required[@]}"; do

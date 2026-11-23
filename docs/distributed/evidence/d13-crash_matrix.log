@@ -40,13 +40,13 @@ warning: `unfer_consensus` (bin "unfer_node") generated 1 warning (1 duplicate)
      Running tests/crash_matrix.rs (target/debug/deps/crash_matrix-d06af449983d5f6f)
 
 running 11 tests
-test a_conflicting_checkpoint_halts_instead_of_merging_two_histories ... D13	conflicting-checkpoint	halted=UK-1010 UnknownOutcome: could not apply slot 1 (UK-5011: could not record slot 1 durably: corrupt log at offset 0: slot 1: the journal recorded command 3e1d98f7afd40ee82c22d813c2566fdc3d59b8b4935c630743935e80836705f3 but the engine log has a55ad6631bc7da91a7b8f76aa5041b59c0aa4592c5383e10d8babd4dc8597aa5); the node halted so its state cannot drift from the committed prefix
+test a_conflicting_checkpoint_halts_instead_of_merging_two_histories ... D13	conflicting-checkpoint	halted=UK-1010 UnknownOutcome: could not apply slot 1 (UK-5011: could not record slot 1 durably: corrupt log at offset 0: slot 1: the journal recorded command 100350b9139c0fec492259851cb73f6dc644a6da7286e3052bd84dde603cd334 but the engine log has 0d4f7725f6b4ea9e338841615da4fe97fa8edb47c3c9844cefbb61d5434793f2); the node halted so its state cannot drift from the committed prefix
 ok
 test a_corrupt_committed_record_is_refused_not_replaced_by_empty_state ... D13	corrupt-record	refused=corrupt log at offset 0: record checksum does not match its payload
 ok
 test a_refused_operation_is_durable_and_not_retried ... D13	refusal	refused_code=Some(Code(6003)) applied=2 identities=1
 ok
-test a_torn_frame_is_discarded_and_the_slot_applies_once ... D13	fail-half-write	torn_bytes=120 recovered_applied=0 then applied=1
+test a_torn_frame_is_discarded_and_the_slot_applies_once ... D13	fail-half-write	torn_bytes=119 recovered_applied=0 then applied=1
 ok
 test a_write_failure_before_the_frame_leaves_nothing_and_applies_once ... D13	fail-before-write	applied=0 halted=UK-1010 could not apply slot 1 (UK-5011: could not record slot 1 durably: storage write failed: injected: before write); the node halted so its state cannot drift from the committed prefix journal_error=set
 D13	fail-before-write/restart	applied=1 identities=1
@@ -56,23 +56,24 @@ ok
 test an_unreadable_journal_refuses_to_open_instead_of_starting_empty ... D13	permission	open refused: Permission denied (os error 13)
 D13	permission/restored	applied=2 identities=2
 ok
-test processes::a_slow_replica_catches_up_and_its_journal_is_never_empty ... D13	process/slow-replica-snapshot	replica3=0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 survivors=3:fbaa8836a96e1fc9ba0891a59d2347b35dcb0b94422bd36c9c568dccaaa3499e
-D13	process/slow-replica-recovered	replica3=0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-D13	process/slow-replica-caught-up	replica3=4:e07ef2e84e694a5af9944c41ad4e047695871f961b0c392b39b26fb936669d40
+test processes::a_slow_replica_catches_up_and_its_journal_is_never_empty ... D13	process/slow-replica-snapshot	replica3=1:b3f1877cab4114d289f8dda89de60c8f7c2ed7339eaab7ee612dc6baf36cc2ac survivors=3:d788e7948d375480728ec4cbe162d1d1a262a339f700ad5844a3216c53677c76
+D13	process/slow-replica-recovered	replica3=1:b3f1877cab4114d289f8dda89de60c8f7c2ed7339eaab7ee612dc6baf36cc2ac
+D13	process/slow-replica-idle-catch-up	replica3=3:d788e7948d375480728ec4cbe162d1d1a262a339f700ad5844a3216c53677c76
+D13	process/slow-replica-caught-up	replica3=4:a15a3f6bcd7f2f9778817e5ac6da5307b8f9f2632c64179791c16e547dd04ca8
 ok
-test processes::an_acknowledged_operation_survives_a_kill_and_a_retry_applies_once ... D13	process/acknowledged	digest=1:eb815a84152fce7f05cdddb9b6e5a6bc44df8d2ea3fcde8252910d2031b9b09a
-D13	process/acknowledged-after-kill	digest=1:eb815a84152fce7f05cdddb9b6e5a6bc44df8d2ea3fcde8252910d2031b9b09a
+test processes::an_acknowledged_operation_survives_a_kill_and_a_retry_applies_once ... D13	process/acknowledged	digest=1:e18ee8cedc3804375d92a24ae027b76cac8d8f7eaf356c88c9ad4be13c8521c4
+D13	process/acknowledged-after-kill	digest=1:e18ee8cedc3804375d92a24ae027b76cac8d8f7eaf356c88c9ad4be13c8521c4
 D13	process/kill-mid-submit	delay_ms=0 attempt_ok=false slots=1->2
 D13	process/kill-mid-submit	delay_ms=2 attempt_ok=false slots=2->3
 D13	process/kill-mid-submit	delay_ms=5 attempt_ok=false slots=3->4
 D13	process/kill-mid-submit	delay_ms=10 attempt_ok=false slots=4->5
 D13	process/kill-mid-submit	delay_ms=20 attempt_ok=false slots=5->6
 ok
-test processes::no_coordinated_write_without_quorum ... D13	process/no-quorum	submit_ok=false slots=1->1 base=1:526a42ae8a266fd2f6c19bed6b0bb032d11ec25168fa84e5da2c6d9ae740e6d5
-D13	process/quorum-healed	digest=2:7e2d8a67ba37df975ac2900d3d31684a7058883e953f435d60e8508ed693684a
+test processes::no_coordinated_write_without_quorum ... D13	process/no-quorum	submit_ok=false slots=1->1 base=1:ccf8c6467764d62c378461f508a08ab1606aefb8f9195658a0f70cafe974dea8
+D13	process/quorum-healed	digest=2:5d0b9f7aa70318888ad086e70cc05349ed6afaeea34ec9ffbc4cdaa84506d8cb
 ok
 test the_journal_format_is_what_recovery_reads ... D13	journal-format	bytes=189 records=1 last_slot=1 torn=0
 ok
 
-test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.85s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.16s
 

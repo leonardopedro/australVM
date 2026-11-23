@@ -1254,11 +1254,12 @@ Evidence: `docs/distributed/evidence/d11-lib.log`,
 
 ### What is measured, and what is not
 
-* **Catch-up needs a decision.** The dependency informs a replica of decisions it
-  missed (`InformDecisions`) when the cluster next decides; nothing in this
-  layer polls a peer, so a node restarted while the cluster is idle stays behind
-  until the next decision. That is the measured behaviour, not a claim of
-  idle-time recovery.
+* **Catch-up needs a decision — superseded, see the follow-up below.** As
+  measured here, the dependency informs a replica of decisions it missed
+  (`InformDecisions`) only when the cluster next decides, so a node restarted
+  while the cluster was idle stayed behind until then. The follow-up below
+  removes that dependency on a new decision; this paragraph is kept as the
+  measurement it was, not as current behaviour.
 * **No checkpoint export/import was needed**, so none was added: the recorder
   and runtime snapshots plus the informed decisions reconstruct the log, and the
   digest equality in the test is what proves it.
@@ -1269,6 +1270,35 @@ Evidence: `docs/distributed/evidence/d11-lib.log`,
 * **The harness is not a deployment.** `NetworkCluster` still runs two replicas
   over one directory and one ledger on purpose; it is a labelled fixture, so the
   failure modes it tests stay reproducible in one test binary.
+
+### Follow-up (2026-11-23): an idle cluster pushes, a rejoined replica no longer waits
+
+The gap above was that catch-up rode on the next decision. It no longer does:
+
+* every replica runs a `catch_up_loop` (`net.rs`) beside its server. Every
+  `CATCH_UP_INTERVAL` (200 ms) it takes its own committed head and asks each peer
+  `Status(head)`. A status probe answers "do you have this slot", so the peer's
+  frontier is found by **binary search** between what is already known and `head`
+  — a peer behind by one slot costs the same probes as a peer behind by a
+  million.
+* it then sends the missing decisions through the transport's own
+  `InformDecisions` request, in batches of `CATCH_UP_BATCH` (256). The peer's
+  recorder records them and its state machine applies them in slot order, exactly
+  as it would a live decision, so its ledger advances and persists.
+* the decisions come from the shared `NetworkConsensusHandler` the replica
+  already applies with (one `Arc`, `SharedSubmissionHandler`), not from a second
+  copy that could disagree with it. Nothing new is submitted, and the cluster
+  stays idle.
+
+Measured: after a replica was stopped, two decisions taken without it, and the
+process restarted, it reached the survivors' digest **3:…** with **no further
+submission** (`tests/independent_nodes.rs`), and `process/slow-replica-idle-catch-up`
+records the same for the process fixture. The crash matrix's slow-replica case is
+now an idle-catch-up assertion, not a "submit once more" one.
+
+Limits: this is the peers doing the looking, so a node whose peers are *all* down
+still waits for one to return (there is nothing to push it); and the probe/push
+cadence is a timer, measured 200–400 ms on this host, not an event.
 * SIGKILL is used here only to stop a process, not to inject a storage fault;
   the crash matrix over these processes is D13.
 
@@ -1437,17 +1467,18 @@ quorum, in either the refusal or the retry.
 
 Node 3 stopped while two more decisions were taken: its snapshot still read
 `1:` against the survivors' `3:`. Restarted on the same directory it read `1:`
-again — the log it did have, never an empty substitute — and after one further
-decision it held the **whole** log `4:…`, equal to its peers. So the catch-up
-D11 measured is also the repair path here, and the lag is a real, stated
-property: a replica's snapshot trails its commits, and it is the cluster that
-brings it back, not its own poll loop.
+again — the log it did have, never an empty substitute — and then, with the
+cluster still idle, its peers pushed the two missed decisions and it held the
+**whole** log `3:…`, equal to theirs (`process/slow-replica-idle-catch-up`). One
+further decision then moved all three to `4:…`. The lag is a real, stated
+property — a replica's snapshot trails its commits — and the repair comes from
+its peers, not from a new decision and not from its own poll loop.
 
 ```text
 $ cargo test -p unfer_consensus --offline --features network --test crash_matrix
 11 passed (8 deterministic, 3 process), 0 failed
 $ scripts/distributed-recovery --check
-distributed-recovery: fixture matches (23 case line(s), 0 gap(s))
+distributed-recovery: fixture matches (24 case line(s), 0 gap(s))
 ```
 
 Evidence: `docs/distributed/evidence/d13-recovery.tsv` (one line per case, with
@@ -1463,8 +1494,10 @@ claimed — never the digests, which belong to one run.
 * The consensus engine's behaviour under partition is an assumption the harness
   supplies (a submission without a quorum is refused by the transport); only the
   *application* side is measured.
-* Catch-up still needs a decision after the restart; an idle cluster leaves a
-  rejoined replica behind, as D11 recorded.
+* Catch-up no longer needs a decision — the idle-push follow-up in D11's section
+  is what made the slow-replica case here pass without a new submission — but it
+  does need a live peer: if every peer of a rejoined replica is down, only the
+  next decision will move it.
 * The kill offsets are chosen, not exhaustive: five points around a submission
   are not every interleaving, and the deterministic cases cover the boundaries
   the offsets cannot place exactly.
@@ -1486,4 +1519,5 @@ claimed — never the digests, which belong to one run.
 | D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
 | D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
 | D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 2 requests, 8 actions, depth 4) executed 617 of 4681 prefixes, pruned 278, found no violation; 32 seeded walks of 12 steps reached 22 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault is handed to D13 |
-| D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (23 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`. Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it |\n| D14–D26 | not started | D14 is next: upgrade scheduled jobs to ordered fencing |
+| D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (24 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`. Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it, though the idle-push follow-up in D11's section now repairs a rejoined replica without a new decision |
+| D14–D26 | not started | D14 is next: upgrade scheduled jobs to ordered fencing |
