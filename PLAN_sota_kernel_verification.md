@@ -417,20 +417,20 @@ compared for real: the `[pass]` means the bytes the bridge compiled are the
 bytes the certificate pinned.
 
 **Re-measured 2026-11-22 on this x86_64 host, in all three shells and the bare
-`nix-shell -p python3` invocation, on `7bb7b3ca` (the merges of `origin/master`
+`nix-shell -p python3` invocation, on `892b83bc` (the merges of `origin/master`
 `79b29839`, its Lean-typing follow-up and the capability-handle runtime, with the certificate and citation re-pin that the older merge's
 lowering forced, the `packages.mm0` the default and ocaml shells now carry, and
 the D00 line that names the sibling it resolved its rows against: the pulled
 D06/D07 records' two extra inventory rows and the merge's D08 and D09 rows are
 why it reads 20 contract rows rather than 14, and it ends
-`measured against unfer c68470c (dirty)`):** `188 passed, 1 explained gap(s), 0 failed`
+`measured against unfer ad3ed80`):** `192 passed, 1 explained gap(s), 0 failed`
 under `nix develop "git+file://$PWD"`
-([transcript](docs/data/gate/2026-11-22-default-shell.log)), `173 passed, 4
+([transcript](docs/data/gate/2026-11-22-default-shell.log)), `177 passed, 4
 explained gap(s), 0 failed` under `.#ocaml`
-([transcript](docs/data/gate/2026-11-22-ocaml-shell.log)), `174 passed, 3
+([transcript](docs/data/gate/2026-11-22-ocaml-shell.log)), `178 passed, 3
 explained gap(s), 0 failed` under `.#lean`
-([transcript](docs/data/gate/2026-11-22-lean-shell-rust.log)), and `167 passed,
-10 explained gap(s), 0 failed` where only `python3` comes from a shell
+([transcript](docs/data/gate/2026-11-22-lean-shell-rust.log)), and `177 passed,
+4 explained gap(s), 0 failed` where only `python3` comes from a shell
 ([transcript](docs/data/gate/2026-11-22-nix-shell-python3.log)).
 None of those numbers is a correction of the ones above; each is a different
 shell over the same checks, and the differences close exactly. The five
@@ -439,11 +439,17 @@ lines and added one `[pass] W3: <artifact> matches its approved statements` line
 each, so no `w3-pending:` row remains and `w3-approved:` lists all thirteen.
 `.#ocaml` carries `lean` but not `why3`, so the 15 per-file Liquid passes of the
 default shell are the three `Liquid golden…`/`Liquid subset` gaps there — hence
-`173 = 188 − 15` and `4 = 1 + 3`. `.#lean` re-converts the RV64 model, turning
+`177 = 192 − 15` and `4 = 1 + 3`. `.#lean` re-converts the RV64 model, turning
 `W9.1` into a pass, and since `ff53c29b` it also carries `pkgs.rustc`,
 `pkgs.cargo` and `pkgs.stdenv.cc`, so the five `scripts/toy-witness`
-comparisons and the `logos` emitter build there: `174 = 173 + 1` and
-`3 = 4 − 1`. Both `PC05` replays pass in every shell: `devShells.default`,
+comparisons and the `logos` emitter build there: `178 = 177 + 1` and
+`3 = 4 − 1`. The bare invocation now closes the same six: this host's profile
+carries `lean` 4.28.0 and a linking `rustc`, so its count equals `.#ocaml`'s and
+only the three `why3` checks and `W9.1` gap. Four checks landed after the
+earlier recordings and moved every column by the same amount — the two `PC07`
+lines (the frozen chain replays; its controls refuse and report separately) and
+the two `PC08` lines (the captured host fragment decodes and is pinned; the
+native edge's controls refuse). Both `PC05` replays pass in every shell: `devShells.default`,
 `.ocaml` and `.lean` carry `packages.mm0`, and `safestos/gpu`'s debug `avm-gpu`
 is built, so the `[gap]  PC05a` lines in the `395c74c3` transcripts describe a
 missing checker and toolchain, not a failing correspondence — and the gate now
