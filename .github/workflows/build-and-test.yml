@@ -139,8 +139,16 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
 
+      # `rustflags: ""`: this action defaults RUSTFLAGS to `-D warnings`, and a
+      # path dependency's warnings are compiled here too — `fock_sirk`'s dead
+      # `neg` and an `unused_mut` in `unfer_consensus` then fail every cargo
+      # build with exit 101, in repositories this one cannot edit. The deny
+      # belongs on this crate alone, which is what the `clippy (deny warnings)`
+      # job's own `-- -D warnings` does.
       - name: Install Rust toolchain (bridge)
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       # The artifact checks need the compiler and the bridge, not just the
       # sources: `make bridge` builds the release `.so` and then `austral`.
@@ -171,8 +179,12 @@ jobs:
       - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
 
+      # `rustflags: ""` — see the sibling-warning note in the verify-invariants
+      # job; without it the unfer path deps' warnings are errors here.
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Cache cranelift / unfer_ffi build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # actions/cache@v4
@@ -264,6 +276,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Cache avm-pkg build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # actions/cache@v4
@@ -329,8 +343,11 @@ jobs:
       - name: make bridge (compiler + JIT bridge + cps2cell)
         run: nix develop -c bash -c 'make bridge'
 
+      # `rustflags: ""` — see the sibling-warning note in verify-invariants.
       - name: Install Rust toolchain (dnx-verify + avm-pkg)
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659  # actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
 
       - name: Build dnx-verify
         run: cargo build --release -p dnx-verify
