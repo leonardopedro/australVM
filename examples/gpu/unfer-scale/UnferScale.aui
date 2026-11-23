@@ -1,0 +1,18 @@
+-- G18: the source half of the unfer amplitude-scale integration.
+--
+-- The admitted operation is the amplitude scale the SIRK solver applies when
+-- it combines basis states (`QuantumState::scale_and_add`): every amplitude
+-- multiplied by the same real factor. The factor is a source literal here
+-- because the v1 bundle ABI carries arrays, not scalars; 2.5 is exactly
+-- representable in both binary32 and binary64 (2.5 = 5/4), so an f32 product
+-- of an f32 amplitude is exactly the f64 product of that amplitude rounded
+-- once — which is what makes the bit-for-bit comparison in
+-- `fock_sirk/examples/austral_pointwise.rs` meaningful instead of a tolerance
+-- argument.
+--
+-- Float32 and `wgsl-f32-v1` are deliberate: unfer's solver state is f64, so the
+-- host converts explicitly and the loss of precision is a named, measured step
+-- rather than a silent reinterpretation.
+module UnferScale is
+    function scale(x: Float32): Float32;
+end module.

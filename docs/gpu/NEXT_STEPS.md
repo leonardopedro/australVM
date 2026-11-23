@@ -743,6 +743,31 @@ Use a named CPU oracle and the same unfer values for GPU comparison. Time
 explicit copies and cold/warm execution separately. Unfer's default Cargo build
 and solver stay on their existing paths during this experiment.
 
+**Status:** landed on this host as an optional integration; see
+[UNFER_SCALE.md](UNFER_SCALE.md). The operation is the amplitude scale behind
+`QuantumState::scale_and_add`, the kernel is `examples/gpu/unfer-scale` (one
+`trappingMultiply(x, 2.5)` under `wgsl-f32-v1`), and the host is
+`fock_sirk/examples/austral_pointwise.rs` behind that crate's optional
+`austral-gpu` feature with an optional path dependency on `avm-gpu` (no unfer or
+JIT dependency, so no cycle). `python3 scripts/gpu/unfer-scale` compiles the
+bundle, builds the feature-off and feature-on configurations, runs the example
+on a physical adapter, and requires the GPU result to equal unfer's own f64
+arithmetic cast to binary32 bit for bit: `[pass] G18 oracle: 6 value(s) of 3
+complex amplitude(s) match … on Intel(R) UHD Graphics 630 (CFL GT2)` (cold
+`prepare`/`upload`/`submit`/`readback` and the warm submission total are printed
+separately). Two controls refuse: a `u32-modular-v1` bundle (the compiler refuses
+Float32 for that profile, and the example refuses a non-f32 bundle) and a
+3.0-scaled kernel against the 2.5 oracle (mismatch count 5, so the comparison is
+live). Measured: submission dominates (≈ 98 ms over 8 submissions versus
+0.0049 ms of f64 oracle for six values), so the integration *hurts* end-to-end
+time at this size and no solver replacement is proposed; narrowing the f64
+amplitudes to f32 before the multiply changed 1 of 6 rounded results relative to
+scaling in f64 and casting once, and that difference is reported rather than
+hidden. The transfer is an explicit copy each way (not zero-copy). The default
+`cargo build -p fock_sirk` is unchanged, and `scripts/verify-invariants` pins the
+`[pass] G18` line, reporting `[gap]` when the sibling `../unfer`, cargo or a
+physical adapter is absent.
+
 ### G15a — Close host-state hazards before widening dispatch
 
 **Landed 2026-11-22.** `service.rs` publishes a completion and its words in one

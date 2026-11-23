@@ -1,0 +1,12 @@
+-- G18: the body of the unfer amplitude-scale kernel.
+--
+-- `scale` is the whole operation: one canonical
+-- `TrappingArithmetic(Float32)` multiply per element. It is admitted by the
+-- `wgsl-f32-v1` profile, so the GPU subset checks it exactly like any other
+-- f32 kernel and the bundle carries the same KernelIR the CPU reference
+-- evaluates.
+module body UnferScale is
+    function scale(x: Float32): Float32 is
+        return trappingMultiply(x, 2.5);
+    end;
+end module body.

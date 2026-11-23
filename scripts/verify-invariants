@@ -1184,6 +1184,40 @@ PY
             gap "G16b: the wgsl-f32-v1 profile not checked (tooling absent: python3)"
         fi
 
+        # G18: one unfer workload on an Austral-authored kernel. The unfer
+        # checkout is a sibling (the plan's G18 card names `fock_sirk` there), so
+        # a missing checkout, compiler, cargo or physical adapter is a `[gap]`,
+        # never a pass — and the control run needs an adapter to be meaningful.
+        if command -v python3 >/dev/null 2>&1 && [ -x "$repo_root/scripts/gpu/unfer-scale" ]; then
+            _g18=0
+            python3 "$repo_root/scripts/gpu/unfer-scale" \
+                >"$_cert_tmp/g18.log" 2>&1 || _g18=$?
+            case $_g18 in
+                0)
+                    grep -E '^  \[pass\] G18|^  \[detail\] G18' "$_cert_tmp/g18.log" >&2
+                    if grep -q '^  \[pass\] G18: an unfer amplitude scale runs' \
+                            "$_cert_tmp/g18.log" \
+                            && grep -q '^  \[pass\] G18 control refused: a kernel scaled by 3.0' \
+                                "$_cert_tmp/g18.log"; then
+                        check "G18: an unfer amplitude scale runs on the Austral kernel and its control refuses" true
+                    else
+                        cat "$_cert_tmp/g18.log" >&2
+                        check "G18: an unfer amplitude scale runs on the Austral kernel and its control refuses" false
+                    fi
+                    ;;
+                3|77)
+                    cat "$_cert_tmp/g18.log" >&2
+                    gap "G18: the unfer integration not run (no unfer checkout, cargo, or physical adapter here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/g18.log" >&2
+                    check "G18: an unfer amplitude scale runs on the Austral kernel and its control refuses" false
+                    ;;
+            esac
+        else
+            gap "G18: the unfer integration not run (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then
