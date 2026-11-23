@@ -220,7 +220,8 @@ jobs:
         # The failing test's name and message are only in the job log (admin
         # rights); quote the tail as annotations. Same for ci.yml's suite.
         run: |
-          out=$(cargo test --features test-stubs -p austral_cranelift_bridge 2>&1); status=$?
+          status=0
+          out=$(cargo test --features test-stubs -p austral_cranelift_bridge 2>&1) || status=$?
           printf '%s\n' "$out"
           if [ "$status" -ne 0 ]; then
             printf '%s\n' "$out" | grep -E '^(---- |test .* FAILED|error)' -A 4 | tail -40 | while IFS= read -r line; do
@@ -329,7 +330,8 @@ jobs:
           # `--require` names the regressed row and attaches the report, but
           # the job log needs admin rights: quote those lines as annotations so
           # a red run arrives with the measured numbers.
-          out=$(./target/release/avm-pkg hot-bench --require 2>&1); status=$?
+          status=0
+          out=$(./target/release/avm-pkg hot-bench --require 2>&1) || status=$?
           printf '%s\n' "$out"
           if [ "$status" -ne 0 ]; then
             printf '%s\n' "$out" | tail -3 | while IFS= read -r line; do

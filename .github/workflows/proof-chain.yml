@@ -97,7 +97,8 @@ jobs:
       # this job that is a broken setup, so it is treated as a failure.
       - name: check (replay + declaration)
         run: |
-          out=$(python3 scripts/proof-chain check 2>&1); status=$?
+          status=0
+          out=$(python3 scripts/proof-chain check 2>&1) || status=$?
           if [ "$status" -ne 0 ]; then
             printf '%s\n' "$out" | tail -30 | while IFS= read -r line; do
               echo "::error title=proof-chain check::$line"
@@ -108,9 +109,10 @@ jobs:
 
       - name: report (conditional theorem)
         run: |
-          out=$(python3 scripts/proof-chain report)
-          echo "$out"
-          if ! grep -q "verdict: conditional" <<<"$out"; then
+          status=0
+          out=$(python3 scripts/proof-chain report 2>&1) || status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ] || ! grep -q "verdict: conditional" <<<"$out"; then
             printf '%s\n' "$out" | tail -10 | while IFS= read -r line; do
               echo "::error title=proof-chain report::$line"
             done
@@ -119,7 +121,8 @@ jobs:
 
       - name: selftest (ten refusals)
         run: |
-          out=$(python3 scripts/proof-chain selftest 2>&1); status=$?
+          status=0
+          out=$(python3 scripts/proof-chain selftest 2>&1) || status=$?
           if [ "$status" -ne 0 ]; then
             printf '%s\n' "$out" | tail -30 | while IFS= read -r line; do
               echo "::error title=proof-chain selftest::$line"
