@@ -1,7 +1,9 @@
 //! D09 step 4: the Austral demo, end to end through the manifest gate.
 //!
 //! `umbrella/modules/distributed_io/module.cps` is the CPS the ordinary
-//! front-end emits for `DistributedIo.aum` (`gen_cps.sh` regenerates it). The
+//! front-end emits for `DistributedIo.aum` (`gen_cps.sh` regenerates it). It is
+//! committed (with an exception in `umbrella/.gitignore`) so this test runs on a
+//! fresh checkout, where the OCaml compiler that emits it has not been built. The
 //! module calls `rs_cap_dir_open` and `rs_cap_write`: capability verbs that do
 //! not exist in the module's own memory, only as host-issued handles.
 //!
