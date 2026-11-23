@@ -5248,6 +5248,25 @@ the elaborated term text, which is exactly what def-sharing hides from the file 
 elaborator pay back: the two-floor table above shows a 1.6 % smaller slice costing the same
 memory, and the ratio is a property of this artifact's mix, not of the tool's appetite.
 
+**The constant, one def at a time.** The ratio was also measured with the *use count*
+under control, because "36× of the file" could have been a one-off property of how the
+artifact happens to mix big and small statements. Appending N renamed copies of the
+largest statement in the 68 979 345 B slice (223 425 B, one `axiom` line) to the
+unchanged file and compiling gives:
+
+| copies | file bytes | peak RSS | kB added per copy |
+| ---: | ---: | ---: | ---: |
+| 0 | 68 979 345 | 2 490 772 kB | — |
+| 8 | 70 766 673 | 2 567 228 kB | 9 557 |
+| 32 | 76 128 679 | 2 762 072 kB | 8 119 (8 → 32) |
+
+The slope is 8.1–9.6 MB of resident state per 223 425 B statement, i.e. **37–39× the
+statement's own bytes per use**, and a straight line through the three points
+(8 395 kB per copy, 38.5×) fits them to within the run-to-run noise: every extra
+mention of the same def costs the same again, which is what "re-expanded, not
+shared" means. The 36.1× on the whole slice is the same number averaged over
+statements of very different sizes; nothing in it is a threshold or a fixed overhead.
+
 No flag bounds it. `mm0-rs compile --help` offers `-n/--no-proofs`, `-s/--strip`,
 `--cache[=…]`, `-q`, `-W` and `-o/--output`; on this artifact `-n` is a no-op, because these
 are axioms, not theorems — no proof body exists to skip, and on the 68 979 345 B slice the
@@ -5255,3 +5274,73 @@ are axioms, not theorems — no proof body exists to skip, and on the 68 979 345
 file, `--cache` writes sibling `.mm1`s, and `-q`/`-W`/`-o` are diagnostics and output naming:
 none of them touches the per-term state. The only lever is smaller input, which is why
 §13.57's slice exists and why the floor is the wrong knob for it.
+
+### 13.59 Splitting a body from the inside: `LTP_DEF_BODY_MAX`, 4.0 GB → 1.8 GB
+
+§13.58 showed the floor cannot help: it names subterms that repeat, and a body that is one
+long spine of unrepeated applications has nothing to repeat. The writer's own comment names
+the gap — "a body is written with `_ds_assign` off, so the walk that writes it cannot introduce
+a name: everything inside a body is spelled out." Splitting therefore has to be decided
+*inside* the body, not by the table that decides which bodies exist.
+
+**The mechanism.** `Enc._split_bodies()`, called at the top of `_write_def_bodies`, walks the
+worklist `_ds_order` and, for every node whose measured expansion is at least
+`LTP_DEF_BODY_MAX` (default 1 GiB; `0` disables the pass), re-expands that node with
+`_ds_assign` on and `_ds_size`-sizing on, so the pass's `_pick` interns the node's own
+children. New names are appended to `_ds_order`; `_write_def_bodies` reverses that list, so a
+child found inside body *B* is written before *B*. The worklist is a `while` over the growing
+list, so nesting is followed as far as the sizes allow. Two details made the first three
+attempts no-ops and are worth the record: the node's own entry has to be popped from `_ds_all`
+(a name answers a walk at once — "a name is not an encoding"), and its `_memo` entry has to be
+popped too, because `_enc` checks the memo *before* the table, and that entry held the node's
+name.
+
+Floor mode only. Profit mode decides from a table that counts uses in text where bodies were
+fully expanded; a second rule there would make the two disagree silently.
+
+**Off by default, in the exact sense.** `LTP_DEF_BODY_MAX=0` on the Sirk row reproduces the
+pre-change artifact byte for byte (`cmp`), and at the default 1 GiB the row's output is
+byte-identical to the pre-change script: no body in it reaches 1 GiB, so nothing is visited.
+The pass costs one extra expansion per oversized body and nothing else.
+
+**Measured, with the threshold low enough to see it.** `BookProof.ChapterSirkTruncation` /
+`transfer_defect_le_of_leakage`, three settings:
+
+| `LTP_DEF_BODY_MAX` | file bytes | `def` lines | largest `def` |
+| ---: | ---: | ---: | ---: |
+| 0 (pass off) | 270 780 117 | 2 012 | 12 198 961 |
+| 8 | 98 573 436 | 14 652 | 519 725 |
+| 1 GiB (default) | 270 780 117 | 2 012 | 12 198 961 |
+
+At a threshold of 8 B the file falls 2.75× and the largest body 23.5×, so the mechanism does
+split bodies the floor cannot reach. `scripts/mm0-slice` on that artifact: 48 653 292 B, and
+`mm0-rs compile` on it exits 0 with `3 sorts, 14924 term/def, 245932 ax/thm` in 11.3 s — the
+split artifact is a well-formed theory, not just smaller text.
+
+**On the 56 GB row.** Re-emitted at floor 64 with `LTP_DEF_SHARE=64`, `LTP_DEDUP_NODES=1`,
+`LTP_DEF_BODY_MAX=1073741824`, cap 4 096 MiB: exit 0, 2 996 s (the floor-64 run without the
+pass: 3 148 s), peak RSS 329 MiB.
+
+| | file bytes | `def` lines | largest `def` line | `def`s over 4 GiB | over 1 GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| floor 64, no pass | 55 544 970 829 | 1 345 | 3 999 411 320 | 0 | 1 |
+| floor 64 + split | 48 835 924 012 | 1 727 | 1 799 565 507 | 0 | 1 |
+
+The request was a largest body under 4 GB: 3 999 411 320 → 1 799 565 507 B, and the file comes
+down 12.1 % as a side effect, because naming a subtree once is the same trade the floor makes.
+`scripts/mm0-slice` on it keeps all 1 727 defs (`skipped_big=0`) in 371 968 196 B, and
+`mm0-rs compile` on that slice exits 0 in 4 m 18.6 s with `3 sorts, 1563 term/def, 24386
+ax/thm` — the split points are where `mm0-rs` accepts them.
+
+**What the pass does not do: recurse past its own first split.** The one body still over 1 GiB
+(`sd1610`, 1 799 565 507 B) contains **zero** `(Term …)` references, so the pass named nothing
+inside it, and at `LTP_DEF_BODY_MAX=8` the Sirk row's largest body still lands at 519 725 B
+rather than near 8. The cause is in `_ds_bytes`: sizes recorded with `setdefault` are measured
+during a walk that is *also* assigning names, so a node's recorded size is its text with
+whatever children were already named at that moment, not its fully expanded text — and a
+child whose recorded size comes out below the threshold is never a candidate. A correct
+recursion needs sizes from a no-naming pass (new names discovered during a naming pass are
+untrustworthy by construction), or token spans recorded during one probe expansion so that a
+body's whole subtree is sized in linear time. That is the next change, not this one; the
+pass as it stands is monotone (it only ever makes bodies smaller), off by default, and
+sufficient for the 4 GB bound it was asked for.

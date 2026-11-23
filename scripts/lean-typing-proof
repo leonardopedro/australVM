@@ -498,6 +498,16 @@ class Enc:
         self._ds_size: dict[int, int] = {}   # expanded bytes, memoised
         self._ds_off = 0                     # >0: measuring or writing a body
         self._ds_assign = True               # main text interns, bodies do not
+        # Body splitting (`LTP_DEF_BODY_MAX=<bytes>`, 0 off): an interned body
+        # over this many bytes is re-walked with interning on, so its own
+        # large subtrees become `def`s written *before* it. A `def` body is a
+        # tree expansion like the main text, and the floor's answer for the
+        # main text — any node at least `LTP_DEF_SHARE` bytes becomes a name —
+        # is the answer inside a body too. Without this a single 1.94 GB body
+        # is one unbreakable line whatever the floor says (§13.58: the largest
+        # ns-row body grew to 4.0 GB at floor 64 and no floor can split it).
+        self.ds_body_max = int(os.environ.get("LTP_DEF_BODY_MAX", str(1 << 30)) or 0)
+        self._ds_skip: int | None = None   # body being split, not itself a pick
 
     def sort(self, e) -> str:
         # A universe is a *term*: its exported level id becomes one constant, so
@@ -616,7 +626,59 @@ class Enc:
         with path.open("w") as fh:
             return self._write_def_bodies(fh)
 
+    def _split_bodies(self) -> int:
+        """Intern large subtrees *inside* interned bodies, before writing any.
+
+        A body is written with `_ds_assign` off, so the walk that writes it
+        cannot introduce a name: everything inside a body is spelled out. The
+        floor mode already decides by size alone, so the same question asked
+        of a body's own nodes splits a body the floor cannot reach.
+
+        This runs as a measuring pass over each oversized body before the
+        block is written, because a name has to be declared *before* the body
+        that uses it. New names are appended to `_ds_order`, and
+        `_write_def_bodies` reverses that list — so a node found inside body B
+        is written before B, and a node found inside that one before it. The
+        worklist walks the growing list, so nesting is followed to the bottom.
+
+        Profit mode is left alone: its table counts uses in the artifact's
+        text where bodies were fully expanded, and a second decision rule here
+        would make the two disagree silently.
+        """
+        if self.ds_mode != "floor" or not self.ds_body_max:
+            return 0
+        added = 0
+        i = 0
+        while i < len(self._ds_order):
+            eid = self._ds_order[i]
+            i += 1
+            if self._ds_size.get(eid, 0) < self.ds_body_max:
+                continue
+            before = len(self._ds_order)
+            assign, sizing, skip = self._ds_assign, self._sizing, self._ds_skip
+            self._ds_assign, self._sizing, self._ds_skip = True, True, eid
+            # The node's own name would answer the walk at once ("a name is not
+            # an encoding", above), and `_pick` would hand it a second name.
+            # The `_memo` entry is that same name — `enc` refuses to cache one,
+            # but `_enc`'s memo check runs before its table lookup, so an entry
+            # written by an earlier pass answers here instead of the body.
+            own = self._ds_all.pop(eid, None)
+            stale = self._memo.pop(eid, None)
+            if stale is not None:
+                self._memo_bytes -= len(stale)
+            try:
+                buf = EncBuf(_NullSink())
+                self._top(eid, buf)
+                buf._flush()
+            finally:
+                if own is not None:
+                    self._ds_all[eid] = own
+                self._ds_assign, self._sizing, self._ds_skip = assign, sizing, skip
+            added += len(self._ds_order) - before
+        return added
+
     def _write_def_bodies(self, fh) -> int:
+        self._split_bodies()
         fh.write("-- ── shared subterms: one expansion per interned `Term` ──\n")
         live: dict[int, str] = {}
         outer, outer_assign = self._ds_names, self._ds_assign
@@ -792,7 +854,7 @@ class Enc:
             # expression then encodes to the same text whenever it is asked
             # for, which is what lets the declared type on disk stay
             # comparable with the wrap the derivation builds (§13.42).
-            if self._ds_assign and self._pick(eid):
+            if self._ds_assign and eid != self._ds_skip and self._pick(eid):
                 nm = f"sd{len(self._ds_order)}"
                 self._ds_all[eid] = nm  # and every later use of `eid` reuses it
                 self._ds_order.append(eid)
