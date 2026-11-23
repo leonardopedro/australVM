@@ -54,10 +54,36 @@ jobs:
       # `git+file:` addresses the flake without copying the worktree into the
       # store (the repo carries multi-GB build directories that a plain path
       # would copy before anything starts).
-      - name: mm0 and python3
+      # One command per step: a failure here has to name the command that
+      # failed, and step-level conclusions are what this repository can read
+      # back from the jobs API (job logs need admin rights). Every step repeats
+      # the same four lines on failure — quote the tail as an `::error::`
+      # annotation, which the API does serve — so a red job arrives with its
+      # reason instead of only an exit code.
+      - name: mm0 toolchain
         run: |
-          MM0=$(nix build "git+file://$PWD#mm0" --no-link --print-out-paths | tail -1)
-          PY=$(nix build nixpkgs#python3 --no-link --print-out-paths | tail -1)
+          set -x
+          if ! out=$(nix build "git+file://$PWD#mm0" --no-link --print-out-paths 2>"$RUNNER_TEMP/mm0.err"); then
+            tail -30 "$RUNNER_TEMP/mm0.err" | while IFS= read -r line; do
+              echo "::error title=mm0 build::$line"
+            done
+            exit 1
+          fi
+          echo "MM0=$(tail -1 <<<"$out")" >> "$GITHUB_ENV"
+
+      - name: python3
+        run: |
+          set -x
+          if ! out=$(nix build nixpkgs#python3 --no-link --print-out-paths 2>"$RUNNER_TEMP/python3.err"); then
+            tail -30 "$RUNNER_TEMP/python3.err" | while IFS= read -r line; do
+              echo "::error title=python3 build::$line"
+            done
+            exit 1
+          fi
+          echo "PY=$(tail -1 <<<"$out")" >> "$GITHUB_ENV"
+
+      - name: the three tools resolve on PATH
+        run: |
           echo "PATH=$MM0/bin:$PY/bin:$PATH" >> "$GITHUB_ENV"
           command -v mm0-rs
           command -v mm0-c
@@ -66,13 +92,34 @@ jobs:
       # `check` exits 3 (a gap, never a pass) when either tool is missing; in
       # this job that is a broken setup, so it is treated as a failure.
       - name: check (replay + declaration)
-        run: python3 scripts/proof-chain check
+        run: |
+          out=$(python3 scripts/proof-chain check 2>&1); status=$?
+          if [ "$status" -ne 0 ]; then
+            printf '%s\n' "$out" | tail -30 | while IFS= read -r line; do
+              echo "::error title=proof-chain check::$line"
+            done
+            exit "$status"
+          fi
+          printf '%s\n' "$out"
 
       - name: report (conditional theorem)
         run: |
           out=$(python3 scripts/proof-chain report)
           echo "$out"
-          grep -q "verdict: conditional" <<<"$out"
+          if ! grep -q "verdict: conditional" <<<"$out"; then
+            printf '%s\n' "$out" | tail -10 | while IFS= read -r line; do
+              echo "::error title=proof-chain report::$line"
+            done
+            exit 1
+          fi
 
       - name: selftest (ten refusals)
-        run: python3 scripts/proof-chain selftest
+        run: |
+          out=$(python3 scripts/proof-chain selftest 2>&1); status=$?
+          if [ "$status" -ne 0 ]; then
+            printf '%s\n' "$out" | tail -30 | while IFS= read -r line; do
+              echo "::error title=proof-chain selftest::$line"
+            done
+            exit "$status"
+          fi
+          printf '%s\n' "$out"

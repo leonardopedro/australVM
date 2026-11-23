@@ -182,12 +182,23 @@ jobs:
       - name: lean2mm0 verify (drift + mm0-rs + mm0-c, certificates + set.mm statement)
         run: |
           set -o pipefail
-          python3 scripts/lean2mm0 verify 2>&1 | tee "$RUNNER_TEMP/lean2mm0-verify.log"
+          status=0
+          python3 scripts/lean2mm0 verify 2>&1 | tee "$RUNNER_TEMP/lean2mm0-verify.log" || status=$?
           # The statement path must have actually run — labelled grounding and
           # the corrupted-proof refusal both print only when it did, never on
           # the `[gap]` branch.
-          grep -q 'label contract grounded' "$RUNNER_TEMP/lean2mm0-verify.log"
-          grep -q 'negative anchor OK' "$RUNNER_TEMP/lean2mm0-verify.log"
+          if [ "$status" -eq 0 ]; then
+            grep -q 'label contract grounded' "$RUNNER_TEMP/lean2mm0-verify.log" || status=1
+            grep -q 'negative anchor OK' "$RUNNER_TEMP/lean2mm0-verify.log" || status=1
+          fi
+          # Job logs need admin rights; annotations do not, so a red verify
+          # arrives with its own lines instead of just "exit code 1".
+          if [ "$status" -ne 0 ]; then
+            tail -30 "$RUNNER_TEMP/lean2mm0-verify.log" | while IFS= read -r line; do
+              echo "::error title=lean2mm0 verify::$line"
+            done
+            exit "$status"
+          fi
       # Same root of trust, different subject: the memsafe linearity
       # certificate is derived (no grounded class), so this runs the full
       # verify — drift, mm0-rs elaboration, mm0-c re-verification, and the
