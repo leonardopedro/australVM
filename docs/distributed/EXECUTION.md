@@ -1346,11 +1346,21 @@ the same state fingerprint, which the replay test asserts, including that a
 |---|---|
 | Clients | 2 (each with its own keypair, DID and durable request sequence) |
 | Replicas | 3 (each with its own directory, journal and engine view) |
-| Requests | 2 — an authorized mint (applies) and a mint by the non-authority client (refused by the node itself, slot advances) |
-| Action alphabet | 8 fixed actions (2 admits, 1 retry, 3 delivers, 1 partition, 1 crash) |
-| Depth | 4 |
-| Unpruned state space | 4681 prefixes; the search executed **617**, pruned **278** as equivalent, reached **262** leaves, and found **no violation** |
-| Seeded walks (past the bound) | 32 runs × 12 steps, **22 distinct** final states, no violation |
+| Requests | 3 — an authorized mint (applies), a mint by the non-authority client (refused by the node itself, slot advances), and an identity create (applies through a second ledger) |
+| Action alphabet | 9 fixed actions (3 admits, 1 retry, 3 delivers, 1 partition, 1 crash) |
+| Depth | **4** in the default run, **5** in the `#[ignore]`d deep run |
+| Unpruned state space | 7381 / 66430 prefixes for depth 4 / 5 |
+| Executed, pruned, leaves | depth 4: **1342** executed, **545** pruned as equivalent, **648** leaves; depth 5: **6904**, **2898**, **3239** |
+| Violations | **none** at either depth |
+| Runtime | depth 4 **55 s**, depth 5 **325 s** on this aarch64 host (`d12-schedules.log`) |
+| Seeded walks (past the bound) | 32 runs × 12 steps, **30 distinct** final states, no violation |
+
+The depth-5 run is `a_deep_search_to_depth_five_finds_no_violation`, `#[ignore]`d
+because it takes minutes — not because its numbers are optional: they are the
+ones in this table, and the command is in `d12-schedules.log`. The cost is per
+prefix, not per entry: each prefix starts three real replicas with real journals
+(~40 ms), which is why the depth-5 search costs 325 s for 6904 prefixes and why
+it is a reported bound rather than a default test.
 
 Pruning is by `Sim::state_key` — decided log, per-replica watermark, liveness and
 state digest. Two prefixes with the same key are treated as admitting the same
@@ -1426,8 +1436,9 @@ report lines), `d12-suites.log`, `d12-traces/`.
 
 ### What this is not
 
-* A bounded search is not an all-run proof: 617 prefixes of 4681, depth 4,
-  alphabet 8, and the 32 walks are the whole claim.
+* A bounded search is not an all-run proof: 1342 prefixes of 7381 at depth 4 and
+  6904 of 66430 at depth 5, alphabet 9, plus the 32 walks — that is the whole
+  claim.
 * The consensus engine is an assumption. Nothing here says anything about
   QuePaxa's ordering or liveness.
 * No real transport, filesystem or OS scheduler is involved; `FaultPoint` is the
@@ -1543,6 +1554,6 @@ claimed — never the digests, which belong to one run.
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
 | D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
 | D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
-| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 2 requests, 8 actions, depth 4) executed 617 of 4681 prefixes, pruned 278, found no violation; 32 seeded walks of 12 steps reached 22 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault was handed to D13 and is now fenced (see the follow-up in this section) |
+| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 3 requests, 9 actions) executed 1342 of 7381 prefixes at depth 4 (545 pruned, 648 leaves, 55 s) and 6904 of 66430 at depth 5 (2898 pruned, 3239 leaves, 325 s), finding no violation at either depth; 32 seeded walks of 12 steps reached 30 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault was handed to D13 and is now fenced (see the follow-up in this section) |
 | D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (24 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`; the D12 follow-up adds the halted-state fence (`d13-halted-state-fence.log`). Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it, though the idle-push follow-up in D11's section now repairs a rejoined replica without a new decision |
 | D14–D26 | not started | D14 is next: upgrade scheduled jobs to ordered fencing |

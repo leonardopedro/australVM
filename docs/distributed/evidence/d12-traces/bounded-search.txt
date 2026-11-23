@@ -1,1 +1,1 @@
-depth=4 alphabet=8 unpruned=4681 prefixes=617 pruned=278 leaves=262 counterexample=none
+depth=4 alphabet=9 unpruned=7381 prefixes=1342 pruned=545 leaves=648 counterexample=none
