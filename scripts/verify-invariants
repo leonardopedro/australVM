@@ -1052,26 +1052,54 @@ PY
                 >"$_cert_tmp/pc10.log" 2>&1 || _pc10=$?
             case $_pc10 in
                 0)
-                    grep -E '^  \[detail\]' "$_cert_tmp/pc10.log" >&2
+                    grep -E '^  \[detail\]|^  \[pass\] PC10 word ' \
+                        "$_cert_tmp/pc10.log" >&2
                     if grep -q '^  \[pass\] PC10 record: ' "$_cert_tmp/pc10.log"; then
                         check "PC10: only captured native bytes satisfy a native policy, and the virtual/mutated artifacts are refused" true
                     else
                         cat "$_cert_tmp/pc10.log" >&2
                         check "PC10: every native capture is the one the record holds" false
                     fi
+                    # PC10b's listing is not a comment in the child's output: it
+                    # must appear once per recorded capture, and both mutation
+                    # controls must land on a named instruction word. A capture
+                    # that stopped being listed, or an attribution that turned
+                    # into "different bytes", is a red gate.
+                    _pc10b_words="$(grep -c '^  \[pass\] PC10 word listing: ' \
+                        "$_cert_tmp/pc10.log" || true)"
+                    _pc10b_rows="$(grep -c '^\[\[capture\]\]' \
+                        "$repo_root/mm0/proof_chain/nvidia/native.toml" 2>/dev/null || echo 0)"
+                    if [ "$_pc10b_words" -ge 1 ] \
+                            && [ "$_pc10b_words" -eq "$_pc10b_rows" ]; then
+                        check "PC10b: every native capture's instruction words cover its SASS bytes" true
+                    else
+                        check "PC10b: every native capture's instruction words cover its SASS bytes" false
+                    fi
+                    if grep -q '^  \[pass\] PC10 word attribution: the operand edit moves exactly one instruction word' \
+                            "$_cert_tmp/pc10.log" \
+                            && grep -q '^  \[pass\] PC10 word attribution: the extent-[0-9]* bound moves' \
+                                "$_cert_tmp/pc10.log"; then
+                        check "PC10b: the operand edit and the other-extent bound each move a localised instruction word" true
+                    else
+                        check "PC10b: the operand edit and the other-extent bound each move a localised instruction word" false
+                    fi
                     ;;
                 3)
                     cat "$_cert_tmp/pc10.log" >&2
                     gap "PC10: the virtual/native boundary not checked (no device, driver library, compiler or avm-target here)"
+                    gap "PC10b: the instruction-word listing not checked (no device, driver library, compiler or avm-target here)"
                     ;;
                 *)
                     cat "$_cert_tmp/pc10.log" >&2
                     check "PC10: only captured native bytes satisfy a native policy, and the virtual/mutated artifacts are refused" false
                     check "PC10: every native capture is the one the record holds" false
+                    check "PC10b: every native capture's instruction words cover its SASS bytes" false
+                    check "PC10b: the operand edit and the other-extent bound each move a localised instruction word" false
                     ;;
             esac
         else
             gap "PC10: the virtual/native boundary not checked (tooling absent: python3)"
+            gap "PC10b: the instruction-word listing not checked (tooling absent: python3)"
         fi
 
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
