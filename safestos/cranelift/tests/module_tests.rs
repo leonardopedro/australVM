@@ -52,13 +52,7 @@ fn make_module_dir(dir: &Path, name: &str, grants: &[&str], cps_data: &[u8]) {
 
 /// A module that serves a remote node (`[module] node`). The receiver compares
 /// that declared node with the peer its transport authenticated.
-fn make_remote_module_dir(
-    dir: &Path,
-    name: &str,
-    node: &str,
-    grants: &[&str],
-    cps_data: &[u8],
-) {
+fn make_remote_module_dir(dir: &Path, name: &str, node: &str, grants: &[&str], cps_data: &[u8]) {
     std::fs::create_dir_all(dir).unwrap();
     let grants_toml: Vec<String> = grants.iter().map(|g| format!("    \"{g}\",")).collect();
     let toml = format!(
@@ -288,11 +282,31 @@ fn d08_instances_are_isolated_revocable_and_retired_by_swap() {
 
     // A and B both *call* uk_version; only A is granted it. B's body is a
     // constant, so B loads fine with a disjoint grant set.
-    make_module_dir(&dir_a, "d08_alpha", &["uk_version"], &cps_v1_with_name("run", &body_call_import("uk_version")));
-    make_module_dir(&dir_b, "d08_beta", &["uk_evolve"], &cps_v1_with_name("run", &body_return_const(7)));
+    make_module_dir(
+        &dir_a,
+        "d08_alpha",
+        &["uk_version"],
+        &cps_v1_with_name("run", &body_call_import("uk_version")),
+    );
+    make_module_dir(
+        &dir_b,
+        "d08_beta",
+        &["uk_evolve"],
+        &cps_v1_with_name("run", &body_return_const(7)),
+    );
     // C calls uk_evolve and is not granted it: its load must fail.
-    make_module_dir(&dir_c, "d08_gamma", &[], &cps_v1_with_name("run", &body_call_import("uk_evolve")));
-    make_module_dir(&dir_a2, "d08_alpha", &["uk_version"], &cps_v1_with_name("run", &body_return_const(11)));
+    make_module_dir(
+        &dir_c,
+        "d08_gamma",
+        &[],
+        &cps_v1_with_name("run", &body_call_import("uk_evolve")),
+    );
+    make_module_dir(
+        &dir_a2,
+        "d08_alpha",
+        &["uk_version"],
+        &cps_v1_with_name("run", &body_return_const(11)),
+    );
 
     let mut host = ModuleHost::new();
     {
@@ -357,12 +371,21 @@ fn d08_instances_are_isolated_revocable_and_retired_by_swap() {
         // one built next.
         let dir_beta2 = std::env::temp_dir().join(format!("d08_beta2_{stamp}"));
         let _ = std::fs::remove_dir_all(&dir_beta2);
-        make_module_dir(&dir_beta2, "d08_beta", &["uk_evolve"], &cps_v1_with_name("run", &body_return_const(9)));
-        host.swap("d08_beta", &dir_beta2).expect("same grants, same profile");
+        make_module_dir(
+            &dir_beta2,
+            "d08_beta",
+            &["uk_evolve"],
+            &cps_v1_with_name("run", &body_return_const(9)),
+        );
+        host.swap("d08_beta", &dir_beta2)
+            .expect("same grants, same profile");
         let after_swap = host.get("d08_beta").unwrap().context.clone();
         assert_eq!(after_swap.instance, before_swap.instance);
         assert_ne!(after_swap.epoch, before_swap.epoch, "the epoch moved");
-        assert!(!auth::is_live(&before_swap), "the pre-swap identity is retired");
+        assert!(
+            !auth::is_live(&before_swap),
+            "the pre-swap identity is retired"
+        );
         assert!(auth::is_live(&after_swap));
         assert_eq!(host.call("d08_beta", "run", &[]).unwrap(), 9);
         let _ = std::fs::remove_dir_all(&dir_beta2);
@@ -373,7 +396,12 @@ fn d08_instances_are_isolated_revocable_and_retired_by_swap() {
         let bad = std::env::temp_dir().join(format!("d08_bad_{stamp}"));
         let _ = std::fs::remove_dir_all(&bad);
         // Escalation is refused before any compilation.
-        make_module_dir(&bad, "d08_beta", &["uk_evolve", "uk_version"], &cps_v1_with_name("run", &body_return_const(1)));
+        make_module_dir(
+            &bad,
+            "d08_beta",
+            &["uk_evolve", "uk_version"],
+            &cps_v1_with_name("run", &body_return_const(1)),
+        );
         assert!(host.swap("d08_beta", &bad).is_err());
         assert!(auth::is_live(&identity), "a refused swap changes nothing");
         assert_eq!(host.call("d08_beta", "run", &[]).unwrap(), 9);
@@ -404,12 +432,35 @@ fn d08_a_remote_call_is_served_only_for_the_declared_peer() {
 
     // The served entrypoint is granted by name: a receiver never infers a grant
     // from the fact that the module compiled.
-    make_remote_module_dir(&remote, "d08_remote", "node-7", &["run"], &cps_v1_with_name("run", &body_return_const(42)));
+    make_remote_module_dir(
+        &remote,
+        "d08_remote",
+        "node-7",
+        &["run"],
+        &cps_v1_with_name("run", &body_return_const(42)),
+    );
     // Serves a node but is not granted the entrypoint it exposes.
-    make_remote_module_dir(&ungranted, "d08_ungranted", "node-7", &[], &cps_v1_with_name("run", &body_return_const(43)));
-    make_module_dir(&local, "d08_local", &["run"], &cps_v1_with_name("run", &body_return_const(44)));
+    make_remote_module_dir(
+        &ungranted,
+        "d08_ungranted",
+        "node-7",
+        &[],
+        &cps_v1_with_name("run", &body_return_const(43)),
+    );
+    make_module_dir(
+        &local,
+        "d08_local",
+        &["run"],
+        &cps_v1_with_name("run", &body_return_const(44)),
+    );
     // Same module name, a different node: a re-load, not a swap.
-    make_remote_module_dir(&moved, "d08_remote", "node-8", &["run"], &cps_v1_with_name("run", &body_return_const(45)));
+    make_remote_module_dir(
+        &moved,
+        "d08_remote",
+        "node-8",
+        &["run"],
+        &cps_v1_with_name("run", &body_return_const(45)),
+    );
 
     let mut host = ModuleHost::new();
     let context = {
@@ -422,7 +473,8 @@ fn d08_a_remote_call_is_served_only_for_the_declared_peer() {
 
     // The peer the transport authenticated matches the declared node.
     assert_eq!(
-        host.call_from_peer("node-7", "d08_remote", "run", &[]).unwrap(),
+        host.call_from_peer("node-7", "d08_remote", "run", &[])
+            .unwrap(),
         42
     );
 
@@ -431,20 +483,29 @@ fn d08_a_remote_call_is_served_only_for_the_declared_peer() {
     let spoofed = host
         .call_from_peer("node-8", "d08_remote", "run", &[])
         .expect_err("a peer that is not the declared node must be refused");
-    assert!(spoofed.contains("cannot certify its own node"), "got: {spoofed}");
+    assert!(
+        spoofed.contains("cannot certify its own node"),
+        "got: {spoofed}"
+    );
 
     // A local module has no remote authority to lend.
     let local_refusal = host
         .call_from_peer("node-7", "d08_local", "run", &[])
         .expect_err("a local module cannot serve a remote call");
-    assert!(local_refusal.contains("names no remote node"), "got: {local_refusal}");
+    assert!(
+        local_refusal.contains("names no remote node"),
+        "got: {local_refusal}"
+    );
 
     // Serving the node is not serving the entrypoint: the grant is checked here,
     // at the receiver, against the receiver's own policy.
     let ungranted_refusal = host
         .call_from_peer("node-7", "d08_ungranted", "run", &[])
         .expect_err("an ungranted entrypoint must be refused");
-    assert!(ungranted_refusal.contains("not granted"), "got: {ungranted_refusal}");
+    assert!(
+        ungranted_refusal.contains("not granted"),
+        "got: {ungranted_refusal}"
+    );
 
     // Revocation reaches remote calls too, because they go through the host.
     assert!(auth::revoke_instance(context.instance));
@@ -477,9 +538,14 @@ fn d08_strict_profile_is_explicit_and_cannot_be_swapped_away() {
     )
     .expect("strict profile parses");
     assert!(strict.strict);
-    assert!(!ModuleManifest::from_toml_str("[module]\nname = \"plain\"\n").unwrap().strict);
     assert!(
-        ModuleManifest::from_toml_str("  [module]\nname = \"odd\"\nprofile = \"paranoid\"\n").is_err(),
+        !ModuleManifest::from_toml_str("[module]\nname = \"plain\"\n")
+            .unwrap()
+            .strict
+    );
+    assert!(
+        ModuleManifest::from_toml_str("  [module]\nname = \"odd\"\nprofile = \"paranoid\"\n")
+            .is_err(),
         "an unknown profile must not be silently downgraded"
     );
 
@@ -515,7 +581,10 @@ fn d08_strict_profile_is_explicit_and_cannot_be_swapped_away() {
 
     let mut host = ModuleHost::new();
     let loaded = host.load(&dir_strict).unwrap();
-    assert!(loaded.context.strict, "the loaded identity carries the profile");
+    assert!(
+        loaded.context.strict,
+        "the loaded identity carries the profile"
+    );
     let refusal = host
         .swap("d08_strictmod", &dir_lax)
         .expect_err("a swap may not relax the authority profile");

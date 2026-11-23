@@ -215,7 +215,9 @@ pub mod caps {
                 ));
             }
             if entry.kind != want {
-                return Err(format!("capability handle {handle} is not a {want:?} handle"));
+                return Err(format!(
+                    "capability handle {handle} is not a {want:?} handle"
+                ));
             }
             f(entry)
         }
@@ -227,7 +229,9 @@ pub mod caps {
                 return Err("empty path".to_string());
             }
             if relative.starts_with('/') {
-                return Err(format!("absolute path '{relative}' is not under the state dir"));
+                return Err(format!(
+                    "absolute path '{relative}' is not under the state dir"
+                ));
             }
             if relative.split('/').any(|part| part == "..") {
                 return Err(format!("path '{relative}' escapes the state dir"));
@@ -248,9 +252,18 @@ pub mod caps {
             Ok(joined)
         }
 
-        pub fn write(&self, handle: u64, caller: &str, relative: &str, data: &[u8]) -> Result<u64, String> {
+        pub fn write(
+            &self,
+            handle: u64,
+            caller: &str,
+            relative: &str,
+            data: &[u8],
+        ) -> Result<u64, String> {
             if data.len() > MAX_FRAME {
-                return Err(format!("write of {} bytes exceeds the {MAX_FRAME}-byte limit", data.len()));
+                return Err(format!(
+                    "write of {} bytes exceeds the {MAX_FRAME}-byte limit",
+                    data.len()
+                ));
             }
             self.with_handle(handle, caller, Kind::Dir, |_| {
                 let path = self.resolve(relative)?;
@@ -325,7 +338,13 @@ pub mod caps {
         /// Called by the transport, not by the module: a caller presenting its
         /// own request id would otherwise be able to answer itself. That is why
         /// there is no `caller` argument to check here.
-        pub fn settle(&self, handle: u64, _caller: &str, id: u64, response: &[u8]) -> Result<(), String> {
+        pub fn settle(
+            &self,
+            handle: u64,
+            _caller: &str,
+            id: u64,
+            response: &[u8],
+        ) -> Result<(), String> {
             let delivered = {
                 let mut table = self.table.lock().unwrap_or_else(|e| e.into_inner());
                 let entry = table
@@ -366,10 +385,14 @@ pub mod caps {
         }
 
         pub fn query(&self, handle: u64, caller: &str, id: u64) -> Result<Option<Vec<u8>>, String> {
-            self.with_handle(handle, caller, Kind::Net, |entry| match entry.pending.get(&id) {
-                None => Err(format!("no pending request {id}")),
-                Some(request) if request.cancelled => Err(format!("request {id} was cancelled")),
-                Some(request) => Ok(request.response.clone()),
+            self.with_handle(handle, caller, Kind::Net, |entry| {
+                match entry.pending.get(&id) {
+                    None => Err(format!("no pending request {id}")),
+                    Some(request) if request.cancelled => {
+                        Err(format!("request {id} was cancelled"))
+                    }
+                    Some(request) => Ok(request.response.clone()),
+                }
             })
         }
 
@@ -396,15 +419,17 @@ pub mod caps {
         /// is retried behind the caller's back, so a dropped request cannot become
         /// an unobserved effect.
         pub fn cancel(&self, handle: u64, caller: &str, id: u64) -> Result<(), String> {
-            self.with_handle(handle, caller, Kind::Net, |entry| match entry.pending.get_mut(&id) {
-                None => Err(format!("no pending request {id}")),
-                Some(request) if request.response.is_some() => {
-                    Err(format!("request {id} already settled and cannot be cancelled"))
-                }
-                Some(request) => {
-                    request.cancelled = true;
-                    request.payload.clear();
-                    Ok(())
+            self.with_handle(handle, caller, Kind::Net, |entry| {
+                match entry.pending.get_mut(&id) {
+                    None => Err(format!("no pending request {id}")),
+                    Some(request) if request.response.is_some() => Err(format!(
+                        "request {id} already settled and cannot be cancelled"
+                    )),
+                    Some(request) => {
+                        request.cancelled = true;
+                        request.payload.clear();
+                        Ok(())
+                    }
                 }
             })
         }
@@ -622,15 +647,13 @@ pub unsafe extern "C" fn rs_cap_read(
     contained(|| {
         let (caps, caller) = current()?;
         let path = text(path_ptr, path_len)?;
-        let data = caps
-            .read(handle as u64, &caller, &path)
-            .map_err(|e| {
-                if e.contains("over the") {
-                    CAP_ERR_TOO_LONG
-                } else {
-                    CAP_ERR_REFUSED
-                }
-            })?;
+        let data = caps.read(handle as u64, &caller, &path).map_err(|e| {
+            if e.contains("over the") {
+                CAP_ERR_TOO_LONG
+            } else {
+                CAP_ERR_REFUSED
+            }
+        })?;
         Ok(copy_out(&data, out_ptr, out_cap))
     })
 }
@@ -678,7 +701,10 @@ pub unsafe extern "C" fn rs_cap_send(
 pub unsafe extern "C" fn rs_cap_query(handle: i64, id: i64, out_ptr: *mut u8, out_cap: i64) -> i64 {
     contained(|| {
         let (caps, caller) = current()?;
-        match caps.query(handle as u64, &caller, id as u64).map_err(|_| CAP_ERR_REFUSED)? {
+        match caps
+            .query(handle as u64, &caller, id as u64)
+            .map_err(|_| CAP_ERR_REFUSED)?
+        {
             // Not settled yet is 0, distinct from an empty response (-0 is still 0),
             // so a caller polls rather than mis-reading a pending request.
             None => Ok(0),

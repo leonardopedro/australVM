@@ -429,8 +429,13 @@ impl InstanceContext {
     pub fn label(&self) -> String {
         match (&self.delegator, &self.node) {
             (None, None) => format!("{}#{}@{}", self.module, self.instance, self.epoch),
-            (Some(user), None) => format!("{}#{}@{} for {user}", self.module, self.instance, self.epoch),
-            (None, Some(node)) => format!("{}#{}@{} at {node}", self.module, self.instance, self.epoch),
+            (Some(user), None) => format!(
+                "{}#{}@{} for {user}",
+                self.module, self.instance, self.epoch
+            ),
+            (None, Some(node)) => {
+                format!("{}#{}@{} at {node}", self.module, self.instance, self.epoch)
+            }
             (Some(user), Some(node)) => format!(
                 "{}#{}@{} for {user} at {node}",
                 self.module, self.instance, self.epoch
@@ -616,7 +621,9 @@ pub fn strict_profile() -> bool {
 /// Declare an ABI symbol beyond the built-in tables (a host-provided adapter).
 pub fn declare_abi_symbol(name: &str) {
     let mut guard = declared_abi().write().unwrap_or_else(|e| e.into_inner());
-    guard.get_or_insert_with(HashSet::new).insert(name.to_string());
+    guard
+        .get_or_insert_with(HashSet::new)
+        .insert(name.to_string());
 }
 
 /// Whether `name` is a declared ABI symbol.

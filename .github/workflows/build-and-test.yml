@@ -316,7 +316,17 @@ jobs:
       - name: Hot-store latency smoke (acquire < 1 µs, 50 MiB fault-in < 15 ms)
         run: |
           cargo build --release -p avm-cli
-          ./target/release/avm-pkg hot-bench --require
+          # `--require` names the regressed row and attaches the report, but
+          # the job log needs admin rights: quote those lines as annotations so
+          # a red run arrives with the measured numbers.
+          out=$(./target/release/avm-pkg hot-bench --require 2>&1); status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            printf '%s\n' "$out" | tail -3 | while IFS= read -r line; do
+              echo "::error title=hot-bench::$line"
+            done
+            exit "$status"
+          fi
         working-directory: safestos/pkg
 
   # ── Nix → AustralVM translations end to end (examples/nix-pkg) ─────
