@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# D13: run the crash/recovery matrix and save its boundary outcomes.
+#
+# The matrix lives in the unfer repository next to the code it exercises
+# (`unfer_consensus/tests/crash_matrix.rs`). This script is the gate and the
+# fixture writer: it runs the suite, keeps the full log, extracts the
+# machine-readable `D13<TAB>case<TAB>outcome` lines the test emits, and fails if
+# a case the record claims did not run.
+#
+#   scripts/distributed-recovery              # run, write the fixture, report
+#   scripts/distributed-recovery --check      # run, compare with the saved fixture
+#   UNFER_DIR=/path/to/unfer scripts/distributed-recovery
+#
+# The cases are measurements on this host. A `permission` gap line means this
+# user (or filesystem) cannot build that case; it is reported, never counted as a
+# pass.
+
+set -uo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+unfer_dir=${UNFER_DIR:-$repo_root/../unfer}
+evidence_dir=$repo_root/docs/distributed/evidence
+fixture=$evidence_dir/d13-recovery.tsv
+log=$evidence_dir/d13-crash_matrix.log
+mode=${1:-}
+
+if [[ ! -d $unfer_dir/unfer_consensus ]]; then
+    echo "distributed-recovery: no unfer checkout at $unfer_dir (set UNFER_DIR)" >&2
+    exit 2
+fi
+
+mkdir -p "$evidence_dir"
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+echo "distributed-recovery: cargo test -p unfer_consensus --features network --test crash_matrix" >&2
+(
+    cd "$unfer_dir" || exit 2
+    CARGO_INCREMENTAL=0 cargo test -p unfer_consensus --offline --features network \
+        --test crash_matrix -- --nocapture --test-threads=1
+) >"$tmp" 2>&1
+status=$?
+
+# `--check` must not rewrite what it is checking: the evidence log is only
+# refreshed by a run that also refreshes the fixture.
+if [[ $mode != --check ]]; then
+    cat "$tmp" >"$log"
+fi
+
+# The suite's own result line is the primary gate: a failing assertion must fail
+# this script even if every boundary line was printed.
+if [[ $status -ne 0 ]] || ! grep -q 'test result: ok' "$tmp"; then
+    tail -40 "$tmp" >&2
+    echo "distributed-recovery: the crash matrix failed (log: ${log})" >&2
+    exit 1
+fi
+
+{
+    printf '# D13 recovery matrix, measured %s on %s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(uname -m)"
+    printf '# command: cargo test -p unfer_consensus --features network --test crash_matrix\n'
+    printf 'case\toutcome\n'
+    # libtest prints `test <name> ... ` before the test's first stdout line, so
+    # the marker is extracted by pattern rather than by line start.
+    grep -ao $'D13\t.*' "$tmp" | sed $'s/^D13\t//' | sort || true
+} >"$tmp.tsv"
+
+required=(
+    fail-before-write
+    fail-before-write/restart
+    fail-half-write
+    fail-after-write
+    corrupt-record
+    permission
+    permission/restored
+    refusal
+    journal-format
+    conflicting-checkpoint
+    process/acknowledged
+    process/acknowledged-after-kill
+    process/kill-mid-submit
+    process/no-quorum
+    process/quorum-healed
+    process/slow-replica-snapshot
+    process/slow-replica-recovered
+    process/slow-replica-caught-up
+    process/slow-replica-idle-catch-up
+)
+missing=0
+for case_name in "${required[@]}"; do
+    if ! awk -F'\t' -v want="$case_name" 'NR > 2 && $1 == want { found = 1 } END { exit !found }' "$tmp.tsv"; then
+        echo "distributed-recovery: missing case: $case_name" >&2
+        missing=1
+    fi
+done
+
+# Kill-mid-submit is run once per delay; the fixture must show more than one.
+delays=$(awk -F'\t' 'NR > 2 && $1 == "process/kill-mid-submit" { n++ } END { print n + 0 }' "$tmp.tsv")
+if (( delays < 2 )); then
+    echo "distributed-recovery: kill-mid-submit ran $delays point(s), expected several" >&2
+    missing=1
+fi
+
+gaps=$(awk -F'\t' 'NR > 2 && $2 ~ /^gap:/ { n++ } END { print n + 0 }' "$tmp.tsv")
+# The digests and byte counts in an outcome are values of one run, not properties
+# of the matrix: a replay reproduces the *shape* (which cases ran, and which
+# claim each made) and never the numbers. `--check` compares that shape.
+shape() {
+    awk -F'\t' 'NR > 2 {
+        split($2, parts, "=")
+        printf "%s\t%s\n", $1, parts[1]
+    }' "$1" | sed -E 's#/tmp/[^ ]*#<path>#g' | sort
+}
+
+if [[ $mode == --check ]]; then
+    if [[ ! -f $fixture ]]; then
+        echo "distributed-recovery: no saved fixture at $fixture" >&2
+        exit 1
+    fi
+    if ! diff -u <(shape "$fixture") <(shape "$tmp.tsv"); then
+        echo "distributed-recovery: the cases or their outcomes differ from the saved fixture" >&2
+        exit 1
+    fi
+    echo "distributed-recovery: fixture matches ($(($(wc -l <"$tmp.tsv") - 2)) case line(s), $gaps gap(s))"
+    exit "$missing"
+fi
+
+mv "$tmp.tsv" "$fixture"
+echo "distributed-recovery: $(($(wc -l <"$fixture") - 2)) case line(s), $gaps gap(s); wrote $fixture"
+if (( missing )); then
+    exit 1
+fi

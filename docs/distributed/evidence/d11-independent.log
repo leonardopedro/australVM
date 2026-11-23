@@ -1,8 +1,5 @@
-# D11: three independent node processes commit identically and a killed node catches up
-# measured 2026-11-23T13:13:03Z on aarch64, toolchain:
-rustc 1.99.0 (b940084d7 2026-09-28)
-cargo 1.99.0 (5f94df478 2026-08-27)
-
+# D11: three independent node processes, idle catch-up after a kill
+# measured 2026-11-23T14:51:07Z on aarch64
 $ cargo test -p unfer_consensus --offline --features network --test independent_nodes -- --nocapture
 warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
   |
@@ -29,11 +26,10 @@ warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
 warning: `logos` (lib) generated 1 warning (1 duplicate)
 warning: `arctic` (lib) generated 1 warning (1 duplicate)
 warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
-   Compiling unfer_consensus v0.1.0 (/home/leo/Projects/unfer/unfer_consensus)
 warning: variable does not need to be mutable
-   --> unfer_consensus/src/storage.rs:230:13
+   --> unfer_consensus/src/storage.rs:234:13
     |
-230 |         let mut file = OpenOptions::new()
+234 |         let mut file = OpenOptions::new()
     |             ----^^^^
     |             |
     |             help: remove this `mut`
@@ -43,14 +39,14 @@ warning: variable does not need to be mutable
 warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
 warning: `unfer_consensus` (test "independent_nodes") generated 1 warning (1 duplicate)
 warning: `unfer_consensus` (bin "unfer_node") generated 1 warning (1 duplicate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.36s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
      Running tests/independent_nodes.rs (target/debug/deps/independent_nodes-2ba64896af0aff17)
 
 running 1 test
-survivors: 4:6b0e9fc5587e3a10c3444f4603f881804655fcb60747f51f30d2313194269edd; rejoined: 3:d5a73df93aaa4164f87b4e5dece41734aa49b04537b42fc7bd04a554227b61fc
+caught up while idle: 3:6a00ccdc12900a71c2b982eb06352f99f0d0558e979daf5a7ce57d7370811a84
+survivors: 4:f6aa2ca8cc25392a047b02bcfbb5ba69d6c46a30f15bb92f3dd42d7a17b0d16f; rejoined: 4:f6aa2ca8cc25392a047b02bcfbb5ba69d6c46a30f15bb92f3dd42d7a17b0d16f
 test three_processes_commit_identically_and_one_catches_up_after_a_kill ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
-
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
 
 EXIT=0
