@@ -1063,6 +1063,10 @@ fn compile_cps_binary(data: &[u8]) -> Result<HashMap<String, usize>, String> {
     builder.symbol("__record_new", au_exit as *const u8);
     builder.symbol("__slot_get", au_exit as *const u8);
     crate::register_float_symbols(&mut builder);
+    // CPS-lowered Int64 `+ - * /` call the Austral.Pervasive::trapping*
+    // helpers by name; without them a module using arithmetic cannot
+    // finalize (the compiler's own JIT path already registers them).
+    crate::register_trapping_symbols(&mut builder);
 
     #[cfg(feature = "unfer-kernel")]
     {
