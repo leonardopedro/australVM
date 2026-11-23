@@ -41,13 +41,17 @@ echo "distributed-recovery: cargo test -p unfer_consensus --features network --t
 ) >"$tmp" 2>&1
 status=$?
 
-cat "$tmp" >"$log"
+# `--check` must not rewrite what it is checking: the evidence log is only
+# refreshed by a run that also refreshes the fixture.
+if [[ $mode != --check ]]; then
+    cat "$tmp" >"$log"
+fi
 
 # The suite's own result line is the primary gate: a failing assertion must fail
 # this script even if every boundary line was printed.
 if [[ $status -ne 0 ]] || ! grep -q 'test result: ok' "$tmp"; then
     tail -40 "$tmp" >&2
-    echo "distributed-recovery: the crash matrix failed (see $log)" >&2
+    echo "distributed-recovery: the crash matrix failed (log: ${log})" >&2
     exit 1
 fi
 
