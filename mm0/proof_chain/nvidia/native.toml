@@ -31,6 +31,7 @@ policy = "native"
 operand_mutation = "refused"
 operand_changed_word = ".text.main@272"
 memory_mutation = "refused"
+memory_changed_words = "n/a: only add is captured at two extents"
 abi_mutation = "refused"
 
 [[capture]]
@@ -53,4 +54,5 @@ policy = "native"
 operand_mutation = "refused"
 operand_changed_word = "n/a: a swapped commutative add links the same bytes"
 memory_mutation = "refused"
+memory_changed_words = ".text.main@144"
 abi_mutation = "refused"

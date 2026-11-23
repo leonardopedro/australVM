@@ -450,9 +450,11 @@ of the words and their offsets. `scripts/gpu/boundary` records, per capture,
 `sass_words`, `word_bytes` and `listing_sha256`, and requires
 `words × word_bytes == sass_bytes` — so the count is measured against the
 section table rather than taken from it. Measured on the GTX 1060: each cubin's
-`.text.main` is 24 words covering all 384 bytes, and the operand-order edit moves
-**exactly one** word, `.text.main@272` (index 17), which the record now stores
-and `check` compares — a tampered offset or listing digest fails. What this does
+`.text.main` is 24 words covering all 384 bytes, and both mutations are now
+localised: the operand-order edit moves **exactly one** word, `.text.main@272`
+(index 17), and the extent-66 memory bound moves exactly one word,
+`.text.main@144` — different words, both stored in the record and both compared
+by `check`, so a tampered offset or listing digest fails. What this does
 not do is name the opcode or claim the PTX line wrote that word: it localises the
 *mutation*, not the instruction. `cudaPackages.cuda_nvdisasm` is unfree here, so
 step 1 below is still open, and steps 3's attribution to named PTX instructions
@@ -494,8 +496,8 @@ that this PTX line produced*, with the PTX→SASS semantic relation left a named
 **Exit.** A pinned decoder and its version recorded; a listing per captured
 cubin whose coverage is checked *(landed: word-level, digest-pinned)*; an
 attribution table for `difference` that the operand-order and memory-bound
-mutations move *(landed for the operand edit: one word at `.text.main@272`; the
-memory-bound edit still only refuses the blob)*; and a `[gap]` naming the missing
+mutations move *(landed: one word each, `.text.main@272` for the operand edit
+and `.text.main@144` for the extent-66 bound)*; and a `[gap]` naming the missing
 PTX→SASS semantics. Without a decoder the card is a `[gap]` everywhere, never a
 pass — the same convention as G21a's hardware line.
 

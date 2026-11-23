@@ -176,7 +176,8 @@ def record_text(device: dict, captures: list[dict]) -> str:
         for key in ("entry", "extent", "input_arity", "workgroup", "block",
                     "grid", "ptx_params", "ptx_sha256", "cubin_sha256", "size",                                 "sass_bytes", "sections", "word_bytes", "sass_words",
                     "listing_sha256", "policy", "operand_mutation",
-                    "operand_changed_word", "memory_mutation", "abi_mutation"):
+                    "operand_changed_word", "memory_mutation",
+                    "memory_changed_words", "abi_mutation"):
             value = c[key]
             if isinstance(value, bool):
                 lines.append(f"{key} = {'true' if value else 'false'}")
@@ -215,7 +216,8 @@ def check_record(device: dict, captures: list[dict]) -> int:
         for field in ("input_arity", "workgroup", "block", "grid", "ptx_params",
                       "ptx_sha256", "cubin_sha256",                    "size", "sass_bytes", "sections", "word_bytes", "sass_words",
                       "listing_sha256", "policy", "operand_mutation",
-                      "operand_changed_word", "memory_mutation", "abi_mutation"):
+                      "operand_changed_word", "memory_mutation",
+                      "memory_changed_words", "abi_mutation"):
             if row.get(field) != c[field]:
                 problems.append(f"{key}: {field} is {c[field]!r}, the record "
                                 f"says {row.get(field)!r}")
@@ -327,6 +329,8 @@ def check_boundary(write: bool) -> int:
                     "operand_changed_word": "n/a: a swapped commutative add "
                                             "links the same bytes",
                     "memory_mutation": "refused",
+                    "memory_changed_words": "n/a: only add is captured at two "
+                                            "extents",
                     "abi_mutation": "refused",
                 })
 
@@ -386,6 +390,17 @@ def check_boundary(write: bool) -> int:
                                   "--blob", str(out / "native.cubin"))
             require_refused(f"add: an extent-{MEMORY_EXTENT} memory bound is not "
                             f"the extent-65 record", code, verdict, "not the same bytes")
+            # ... and the bound is local too: the words that moved are recorded,
+            # so a changed guard is a named set of instruction words rather than
+            # "somewhere in 384 bytes".
+            moved = word_changes(base_out / "native.cubin",
+                                 out / "native.cubin")
+            if not moved:
+                raise RuntimeError("extent 66 differs in no instruction word")
+            at = ",".join(f"{c['section']}@{c['offset']}" for c in moved)
+            captures[1]["memory_changed_words"] = at
+            print(f"  [pass] PC10 word attribution: the extent-{MEMORY_EXTENT} "
+                  f"bound moves {len(moved)} instruction word(s) ({at})")
 
             # 3. ABI: mutate the recorded parameter count; capture must refuse
             #    before linking, naming the PTX count.
