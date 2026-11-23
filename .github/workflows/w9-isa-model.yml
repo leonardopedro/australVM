@@ -29,6 +29,16 @@ on:
   # narrow: the models and the pinned `flake.lock` are what the weekly run
   # exists to watch, and a flake bump is exactly the change that must not start
   # a 28-minute build on every PR.
+  # `push` carries the same filter for the same reason: a pull request event
+  # covers a change that arrives as one, but a direct commit to `master` does
+  # not produce one, and the point is that the job runs where its own machinery
+  # changed. This is what verifies the cache-key fix itself: the commit that
+  # puts these triggers in place is a change to this file, so it runs the job.
+  push:
+    paths:
+      - '.github/workflows/w9-isa-model.yml'
+      - 'scripts/rv64-model-mm0'
+      - 'scripts/mem-refines'
   pull_request:
     paths:
       - '.github/workflows/w9-isa-model.yml'
