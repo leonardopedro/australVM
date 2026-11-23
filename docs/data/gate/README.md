@@ -204,6 +204,27 @@ and `174 passed` under `.#lean`). That is the expected relation: a plan-only
 edit does not change the check list, and a re-pinned digest does not either — a
 new check does, and its line is in both logs.
 
+## A `cancelled` CI job is not a failing one
+
+These transcripts are produced locally, but the same counts are what CI's
+`verify-invariants` job re-derives, so the two can be read side by side — with
+one trap. GitHub cancels a run's still-running jobs when a new push supersedes
+it, and `nix-pkg` is by far the longest job in `Build and Test` (it builds the
+bridge, then runs the OCaml suite under `make test`). Measured 2026-11-23: on
+three consecutive commits it read `cancelled` in the `OCaml suite (build,
+typecheck, tests)` step, each time within a minute of a new upstream commit,
+while `avm-pkg`, `verify-invariants` and `build-and-test-linux` in the same run
+had already reported `success`. It then completed `success` on the first commit
+that stayed the branch tip for an hour.
+
+So read the line in this order: a job that reads `cancelled` says nothing about
+the check it was running — it was cut, not failed, and a job that reports
+`failure` (or `timed_out`) is the only one that carries a verdict about the
+tree. The authoritative signal for a commit is the run whose jobs all reached
+`success`; the commit before a cancellation is not evidence either way, and
+re-reading its annotation finds none, because a cancellation writes no
+annotation at all.
+
 The scripts are unedited stdout, so they contain absolute paths, temp-dir names
 and Nix store hashes from the recording host. The two gate transcripts open with
 Nix's `warning: Git tree '…' is dirty` because each measured the tree of the

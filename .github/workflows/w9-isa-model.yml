@@ -21,6 +21,19 @@ on:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
+  # The exclusion above is about ordinary changes. A pull request that changes
+  # what this job *is* — the workflow, or the two scripts `make w9` drives —
+  # gets it run there, because otherwise a broken cache key or a stale converter
+  # is discovered up to a week later (the comma-joined key fixed on 2026-11-23
+  # could not be verified until the next Monday). The path list is deliberately
+  # narrow: the models and the pinned `flake.lock` are what the weekly run
+  # exists to watch, and a flake bump is exactly the change that must not start
+  # a 28-minute build on every PR.
+  pull_request:
+    paths:
+      - '.github/workflows/w9-isa-model.yml'
+      - 'scripts/rv64-model-mm0'
+      - 'scripts/mem-refines'
 
 jobs:
   convert:

@@ -3575,6 +3575,51 @@ check "H12: notes implemented dir has the four categories" \
     && test -d "$repo_root/.agents/notes/implemented/testing" \
     && test -d "$repo_root/.agents/notes/implemented/process"
 
+# --- CI: the cache restore prefixes are a list of lines, never commas ---------
+# `nix-community/cache-nix-action` reads `restore-prefixes-first-match` as a
+# newline-separated list and *rejects* the key when it contains commas. That
+# failure lands in the cache step of a job, before any check the job exists
+# for: the W9.1 weekly workflow failed there on 2026-11-23 ("Key Validation
+# Error: nix-isa-Linux-X64-,nix-isa- cannot contain commas", run 45231031440),
+# and with job logs unreadable without admin rights the only signal was "step
+# 4 failed". Every other workflow happened to pass a single prefix, which is
+# why only that one broke. The scan covers both spellings — an inline value and
+# a block scalar (`|`) whose body lines are the list.
+_ci_prefix_scan="$(awk '
+    function indent(s) { match(s, /^[ \t]*/); return RLENGTH }
+    FNR == 1 { inblock = 0 }
+    {
+        line = $0
+        sub(/\r$/, "", line)
+        if (inblock) {
+            if (line ~ /^[ \t]*$/) next
+            if (indent(line) > base) {
+                if (index(line, ",")) printf "bad %s:%d\n", FILENAME, FNR
+                next
+            }
+            inblock = 0
+        }
+        if (match(line, /^[ \t]*restore-prefixes-first-match:/)) {
+            keys++
+            val = substr(line, RLENGTH + 1)
+            sub(/^[ \t]+/, "", val)
+            sub(/[ \t]+$/, "", val)
+            if (val ~ /^[|>]/) { inblock = 1; base = indent(line); next }
+            if (index(val, ",")) printf "bad %s:%d\n", FILENAME, FNR
+        }
+    }
+    END { printf "count %d\n", keys }
+' "$repo_root"/.github/workflows/*.yml)"
+_ci_bad="$(printf '%s\n' "$_ci_prefix_scan" | sed -n 's/^bad //p')"
+_ci_keys="$(printf '%s\n' "$_ci_prefix_scan" | sed -n 's/^count //p')"
+if [ -n "$_ci_bad" ]; then
+    while IFS= read -r _ci_line; do
+        echo "  cache restore prefix list with a comma: $_ci_line"
+    done <<<"$_ci_bad"
+fi
+check "CI: every cache restore prefix list is newline-separated ($_ci_keys key(s), none with a comma)" \
+    test -n "$_ci_keys" -a -z "$_ci_bad"
+
 echo
 echo "verify-invariants: $PASSED passed, $GAPS explained gap(s), $FAILED failed"
 if [ "$FAILED" -gt 0 ]; then
