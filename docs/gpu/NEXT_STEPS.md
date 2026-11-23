@@ -433,6 +433,53 @@ level certificate (PC09/PC10), the ABI header stays `g19a-pending`, and
 hardware results are not reproduced in CI (the gate reports a `[gap]` where no
 device is visible).
 
+### PC10b — Relate the NVVM/PTX output to the instructions the device ran
+
+**Depends on** PC10 as landed (`safestos/gpu/src/target.rs`,
+`avm-target capture`, `scripts/gpu/boundary`, `mm0/proof_chain/nvidia/native.toml`)
+and on G21a's launch record. **Files:** a SASS listing/attribution artifact, a
+decoder input pinned like the MLIR toolchain, and its own gate in
+`scripts/gpu/boundary`.
+
+PC10 stops at identification: the record says these bytes are an
+ELF64/`EM_CUDA` container with 384 bytes of `.text` and a digest, and refuses
+an operand-order edit because it links to *different bytes* — not because
+anything knows what those bytes compute. This card is the next step PC10's own
+text asks for, and only this far: turn the recorded `.text` into a **listing**
+whose coverage is checked, and attribute listing entries to the PTX the driver
+consumed, so "the device ran these instructions" is a claim about decoded
+bytes rather than a size.
+
+1. **A decoder, pinned.** `nvdisasm`/`cuobjdump` are not on this host (no CUDA
+toolkit), so either a flake input pins a toolkit version and records it beside
+`mlir-opt` in the toolchain record, or an SM 6.1 decoder for the fragment's
+opcode subset is written in-repo with its own tests. The choice and its version
+belong in the record: a listing from an unrecorded disassembler is not evidence.
+2. **Coverage, not prose.** For each captured cubin, the listing must account
+for every byte of every `.text.*` section: instruction offsets contiguous from
+the section start, the last instruction's end equal to the section size, and a
+digest of the listing itself. A listing that skips bytes is refused, because a
+decoder that silently drops an instruction is the failure mode here.
+3. **Attribution.** For the small fragment `difference` already links
+(`sub.s32 %r6, %r4, %r5; st.global` at extent 65), record which listing entry
+came from which PTX instruction, and extend the existing mutations: the
+operand-order edit must change the *attributed* SASS entry's operands (not just
+the blob digest), and the extent-66 capture must show its memory bound at the
+attributed load/store. An attribution that survives the mutation control is
+what makes it a relation rather than a comment.
+4. **A named semantics gap, not a semantics proof.** No public SASS model exists
+the way `riscv-lean`/Sail models RV64D, and PC10's text forbids using
+disassembly text as a semantics proof. So the card's exit is a decode-fidelity
+record: *this listing is the recorded bytes, and this entry is the instruction
+that this PTX line produced*, with the PTX→SASS semantic relation left a named
+`[gap]` and pointed at whatever ISA model a later card builds.
+
+**Exit.** A pinned decoder and its version recorded; a listing per captured
+cubin whose coverage is checked; an attribution table for `difference` that the
+operand-order and memory-bound mutations move; and a `[gap]` naming the missing
+PTX→SASS semantics. Without a decoder the card is a `[gap]` everywhere, never a
+pass — the same convention as G21a's hardware line.
+
 ## Proof reuse for the first scalar shader
 
 ### PC05a — Reflect actual parsed WGSL for one clamp
