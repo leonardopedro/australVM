@@ -2,12 +2,14 @@
 --
 -- PC09 asks for captured pre/post IR for every selected pass of
 -- `Austral → KernelIR → MLIR → device IR` *and* a relation at each boundary.
--- The captures exist: `mm0/proof_chain/mlir/stage.toml` records four captured
--- boundaries (its fifth row, `nvvm-to-ptx`, stays uncaptured on purpose).
--- What this file adds is the other half — one named obligation per captured
--- boundary, so "capture is not preservation" stops being a sentence and becomes
--- a list of statements that a proof could later discharge, or that a reviewer
--- can reject one at a time.
+-- The captures exist: `mm0/proof_chain/mlir/stage.toml` records seventeen
+-- captured rows — the two head passes, the lowering segment's fourteen passes
+-- *individually* (each from the pipeline's own `--mlir-print-ir-after-all`
+-- dump), and the conversion — plus one uncaptured row, `nvvm-to-ptx`, on
+-- purpose. What this file adds is the other half — one named obligation per
+-- captured row, so "capture is not preservation" stops being a sentence and
+-- becomes a list of statements that a proof could later discharge, or that a
+-- reviewer can reject one at a time.
 --
 -- There is still no MLIR semantics in this repository: no dialect has an
 -- interpretation here, so the relations below are *uninterpreted* and nothing
@@ -43,9 +45,10 @@
 --
 -- What this file is NOT:
 --   * not a certificate — see "no axiom, no theorem" above;
---   * not a statement about the *interior* of `mlir-lower-to-nvvm-input`, whose
---     fourteen passes are captured only at their endpoints (one obligation for
---     the segment, not fourteen);
+--   * not a statement about *whether* a pass changed the IR: several of the
+--     fourteen after-dumps are byte-identical to the one before them (the five
+--     cited at seg08…seg13 among them), so their obligations are reflexive on
+--     this module — an observation about `clamp`, not a proof of the pass;
 --   * not a statement about the five uncaptured passes after the conversion, or
 --     about the PTX they produce (G19a pins that PTX; PC10 owns instructions);
 --   * not a refinement of *any* other layer: it says nothing about KernelIR
@@ -59,10 +62,23 @@
 --
 -- Citations are by content, so a digest here means "this claim is about these
 -- bytes": the record, and each module that appears as a boundary endpoint.
--- cites: mm0/proof_chain/mlir/stage.toml sha256=02aecc733ff97d537f69b41a782fb536480b7e251ead59e7b3ee8d565b0c24e8
+-- cites: mm0/proof_chain/mlir/stage.toml sha256=d83556276f9a4f6b6347873d03931fd74697091a02398cab6aa33b1e23452c15
 -- cites: mm0/proof_chain/mlir/ir/clamp.kernelir sha256=52d01cfaade3df43f28ad9e017b07b97d123f498563fb3a22c0cc075864db5a5
 -- cites: mm0/proof_chain/mlir/ir/clamp.mlir sha256=e17b0a0b6b4ab20dc8d0be93c58fb51f9e7c0535ba3c93961381c1bab1abbd58
 -- cites: mm0/proof_chain/mlir/ir/clamp.canonical.mlir sha256=5acf98dc750edcb131ed4aacadfdabc31c69948c0c5992e93518f4e2cb8c19c8
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg01.mlir sha256=7534017e7d10d257305b2450e4617ca866ba51b7eed6e6086ec60f9bd6d3ef89
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg02.mlir sha256=7534017e7d10d257305b2450e4617ca866ba51b7eed6e6086ec60f9bd6d3ef89
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg03.mlir sha256=98a0e1e648c2207ba245a1b1738d877dae0bad707cfda5b246bab39a80297509
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg04.mlir sha256=413ca28c86126868833a8c5066f5e53f308a22dc98bda5e72b0cdff4e1b3a4d8
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg05.mlir sha256=413ca28c86126868833a8c5066f5e53f308a22dc98bda5e72b0cdff4e1b3a4d8
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg06.mlir sha256=e15ed7c23652999f5d00d60e2529a2f8c2afdd2d2fb314f253a5c46ac6675096
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg07.mlir sha256=5619f928e3c236c9359b7cb78f0a74c3efcc72ab532244c0ddb96dd545e25d8f
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg08.mlir sha256=5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg09.mlir sha256=5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg10.mlir sha256=5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg11.mlir sha256=5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg12.mlir sha256=5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6
+-- cites: mm0/proof_chain/mlir/ir/clamp.seg13.mlir sha256=5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6
 -- cites: mm0/proof_chain/mlir/ir/clamp.pre-nvvm.mlir sha256=34d0edabddd0fdd8c223428ee1342741366aa44be14bc3a08e7d110eab698ad9
 -- cites: mm0/proof_chain/mlir/ir/clamp.post-nvvm.mlir sha256=7b71782b5d407e7a095c648bd874ab58896f3c15d55d2d8a1e101ea546d07340
 --
@@ -74,7 +90,20 @@
 -- `stage.toml` records for it; `claims` refuses a mismatch in either direction.
 -- obligation: kernelir-to-mlir pre=clamp.kernelir post=clamp.mlir
 -- obligation: mlir-canonicalize pre=clamp.mlir post=clamp.canonical.mlir
--- obligation: mlir-lower-to-nvvm-input pre=clamp.canonical.mlir post=clamp.pre-nvvm.mlir
+-- obligation: convert-nvgpu-to-nvvm pre=clamp.canonical.mlir post=clamp.seg01.mlir
+-- obligation: gpu-kernel-outlining pre=clamp.seg01.mlir post=clamp.seg02.mlir
+-- obligation: convert-vector-to-scf pre=clamp.seg02.mlir post=clamp.seg03.mlir
+-- obligation: convert-scf-to-cf pre=clamp.seg03.mlir post=clamp.seg04.mlir
+-- obligation: convert-nvvm-to-llvm pre=clamp.seg04.mlir post=clamp.seg05.mlir
+-- obligation: convert-func-to-llvm pre=clamp.seg05.mlir post=clamp.seg06.mlir
+-- obligation: expand-strided-metadata pre=clamp.seg06.mlir post=clamp.seg07.mlir
+-- obligation: nvvm-attach-target pre=clamp.seg07.mlir post=clamp.seg08.mlir
+-- obligation: lower-affine pre=clamp.seg08.mlir post=clamp.seg09.mlir
+-- obligation: convert-arith-to-llvm pre=clamp.seg09.mlir post=clamp.seg10.mlir
+-- obligation: convert-index-to-llvm pre=clamp.seg10.mlir post=clamp.seg11.mlir
+-- obligation: canonicalize pre=clamp.seg11.mlir post=clamp.seg12.mlir
+-- obligation: cse pre=clamp.seg12.mlir post=clamp.seg13.mlir
+-- obligation: strip-debuginfo pre=clamp.seg13.mlir post=clamp.pre-nvvm.mlir
 -- obligation: convert-gpu-to-nvvm pre=clamp.pre-nvvm.mlir post=clamp.post-nvvm.mlir
 
 -- theory: self-declared vocabulary — the sorts and terms below are this
@@ -98,5 +127,10 @@ term denotes (m: Mod) (i: Idx) (v: Val): Prop;
 -- family). Each is intended as the ∀/↔ statement in the header.
 term kernelir_to_mlir_preserves (a b: Mod): Prop;
 term mlir_canonicalize_preserves (a b: Mod): Prop;
-term mlir_lower_to_nvvm_input_preserves (a b: Mod): Prop;
+-- The segment's fourteen passes share one relation, indexed by the pass's
+-- position in the route (MM0 has no string-indexed terms); the obligation list
+-- above says which position is which pass. The four identity-carrying passes
+-- make some of these claims reflexive — `denotes a i v ↔ denotes a i v` — which
+-- is a fact about this module's IR, not about the pass.
+term mlir_segment_pass_preserves (p: Idx) (a b: Mod): Prop;
 term convert_gpu_to_nvvm_preserves (a b: Mod): Prop;

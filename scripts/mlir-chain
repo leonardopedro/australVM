@@ -93,21 +93,31 @@ NVVM_SEGMENT_PASSES = [
 #: all-captured, and an all-captured route is a failure here — capture is not
 #: preservation, so a chain with no open edge would be claiming more than it
 #: has.
+#: Measured with `--mlir-print-ir-after-all` on the pinned pipeline (2026-11-23),
+#: not retyped: the conversion is followed by these nine passes, the last three
+#: of which come from the nested lowering of `gpu-module-to-binary`. The five
+#: an earlier version of this list named were the same head; the tail was
+#: undercounted, and this is the measurement that says so.
 NVVM_TAIL_PASSES = [
     "canonicalize",
     "cse",
     "reconcile-unrealized-casts",
     "gpu-to-llvm",
     "gpu-module-to-binary",
+    "convert-math-to-llvm",
+    "canonicalize",
+    "cse",
+    "reconcile-unrealized-casts",
 ]
 
-DECLARED_PASSES = [
-    "kernelir-to-mlir",
-    "mlir-canonicalize",
-    "mlir-lower-to-nvvm-input",
-    "convert-gpu-to-nvvm",
-    "nvvm-to-ptx",
-]
+#: The whole route, in the order the pinned pipeline runs it. The segment's
+#: fourteen passes are rows of their own (each captured from the pipeline's own
+#: after-dump), so no captured row stands for more than one pass any more.
+DECLARED_PASSES = (
+    ["kernelir-to-mlir", "mlir-canonicalize"]
+    + NVVM_SEGMENT_PASSES
+    + ["convert-gpu-to-nvvm", "nvvm-to-ptx"]
+)
 
 #: The target options that are part of the subject identity (PC09's "dialect
 #: semantics, legalizations, canonicalization and target options"). Pinned here
@@ -613,6 +623,33 @@ def capture_nvvm(record_path: Path) -> int:
              f"{str(recorded.get('ptx_sha256'))[:12]}…")
         return exit_code[0]
 
+    # The segment's fourteen passes, each from its own after-dump: one run with
+    # `--mlir-print-ir-after-all` prints the IR after *every* pass, so the
+    # interior of the segment is captured rather than named. The first fourteen
+    # headers must be the declared passes in order, and the fifteenth is the
+    # conversion whose pair the run above already gave us — measured, not
+    # assumed, and a pipeline that grows a pass fails here.
+    segment = subprocess.run(
+        [tool, pipeline, "--mlir-print-ir-after-all", str(source)],
+        capture_output=True, text=True)
+    if segment.returncode != 0:
+        fail("the pinned pipeline accepts the captured module for the segment",
+             (segment.stderr or segment.stdout).strip()[:300])
+        return exit_code[0]
+    all_header = re.compile(
+        r'^// -----// IR Dump After (.*?) \((.*?)\) //----- //\n', re.M)
+    parts = all_header.split(segment.stderr)
+    names = parts[2::3]
+    bodies = parts[3::3]
+    if not names or names[:15] != NVVM_SEGMENT_PASSES + ["convert-gpu-to-nvvm"]:
+        fail("the pinned pipeline runs the declared passes in order",
+             f"measured {names[:15]}")
+        return exit_code[0]
+    if bodies[13] != before or bodies[14] != after:
+        fail("the after-dumps agree with the before/after pair this run took",
+             "the segment's last side is not the conversion's pre side")
+        return exit_code[0]
+
     CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
     pre_path = CAPTURE_DIR / "clamp.pre-nvvm.mlir"
     post_path = CAPTURE_DIR / "clamp.post-nvvm.mlir"
@@ -620,6 +657,16 @@ def capture_nvvm(record_path: Path) -> int:
     post_path.write_text(after)
     pre_sha = sha256(before.encode())
     post_sha = sha256(after.encode())
+    segment_files = []
+    for index, body in enumerate(bodies[:14], 1):
+        # The last segment output *is* the conversion's pre side, so it keeps
+        # that name: the chain is by file name as well as digest.
+        if index == len(NVVM_SEGMENT_PASSES):
+            segment_files.append(("clamp.pre-nvvm.mlir", pre_sha))
+            continue
+        name = f"clamp.seg{index:02d}.mlir"
+        (CAPTURE_DIR / name).write_text(body)
+        segment_files.append((name, sha256(body.encode())))
 
     # The two earlier rows stay as they are; the route after them is rewritten
     # from the bytes just captured, so a stale row cannot survive a capture.
@@ -634,13 +681,21 @@ def capture_nvvm(record_path: Path) -> int:
     if not second_post:
         fail("the canonicalize row records both sides")
         return exit_code[0]
-    segment = captured_row(
-        "mlir-lower-to-nvvm-input", second_post.group(1), second_post.group(2),
-        "clamp.pre-nvvm.mlir", pre_sha,
-        "the pinned pipeline's passes before `convert-gpu-to-nvvm` ("
-        + ", ".join(NVVM_SEGMENT_PASSES)
-        + "), captured as one segment: its endpoints are real pipeline bytes, "
-        "its interior is not individually pinned, and it is not proved")
+    segment_rows = []
+    pre_name, pre_digest = second_post.group(1), second_post.group(2)
+    for index, (pass_name, (file_name, digest)) in enumerate(
+            zip(NVVM_SEGMENT_PASSES, segment_files), 1):
+        segment_rows.append(captured_row(
+            pass_name, pre_name, pre_digest, file_name, digest,
+            f"the pinned pipeline's own after-dump for pass {index} of the "
+            "segment (measured with `--mlir-print-ir-after-all`, not "
+            "re-derived); captured, not proved"))
+        pre_name, pre_digest = file_name, digest
+    if (pre_name, pre_digest) != ("clamp.pre-nvvm.mlir", pre_sha):
+        fail("the segment's last after-dump is the conversion's pre side",
+             f"segment ends at {pre_name}, the pair starts at "
+             "clamp.pre-nvvm.mlir")
+        return exit_code[0]
     convert = captured_row(
         "convert-gpu-to-nvvm", "clamp.pre-nvvm.mlir", pre_sha,
         "clamp.post-nvvm.mlir", post_sha,
@@ -653,8 +708,10 @@ def capture_nvvm(record_path: Path) -> int:
                      "proved for them or for the pair above")
     tail = (f'[[pass]]\nname = "nvvm-to-ptx"\nstate = "uncaptured"\n'
             f'detail = "{tail_detail}"\n')
-    captured = 4
-    body = "\n".join([r.rstrip("\n") for r in rows] + [segment, convert, tail])
+    captured = 2 + len(segment_rows) + 1
+    body = "\n".join([r.rstrip("\n") for r in rows]
+                     + [r.rstrip("\n") for r in segment_rows]
+                     + [convert, tail])
     prefix = re.sub(r'captured_passes = \d+', f'captured_passes = {captured}',
                     prefix, count=1)
     record_path.write_text(prefix + body + "\n")
@@ -662,6 +719,9 @@ def capture_nvvm(record_path: Path) -> int:
           f"({len(before.splitlines())} line(s)) and "
           f"{post_path.relative_to(ROOT)} ({len(after.splitlines())} line(s)); "
           f"the run's PTX is the recorded one")
+    print(f"  [detail] PC09 capture: {len(segment_rows)} segment pass(es) as "
+          "their own rows, from the pipeline's after-dumps ("
+          + ", ".join(NVVM_SEGMENT_PASSES) + ")")
     return exit_code[0]
 
 

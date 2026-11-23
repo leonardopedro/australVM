@@ -32,7 +32,7 @@ pre/post bytes, (d) counts the uncaptured ones, and (e) refuses stale evidence.
   extents, `fast_math`, `fusion`, `shared_memory`, target. These are pinned in
   the checker (`DECLARED_OPTIONS`), not just restated in the record, so editing a
   record cell is a refusal.
-- `[[pass]]` — five rows, in route order:
+- `[[pass]]` — eighteen rows, in route order:
   - `kernelir-to-mlir` is `state = "captured"` with
     `pre_file = "clamp.kernelir"`, `post_file = "clamp.mlir"` and both sha256
     digests under `mm0/proof_chain/mlir/ir/`;
@@ -40,19 +40,29 @@ pre/post bytes, (d) counts the uncaptured ones, and (e) refuses stale evidence.
     pass's post artifact and its post side is `clamp.canonical.mlir` from
     `mlir-opt --canonicalize` (the rewrite is visible: `scf.if` becomes
     `arith.select`);
-  - `mlir-lower-to-nvvm-input` captures the pinned pipeline's *segment* before
-    the conversion, whose post side is `clamp.pre-nvvm.mlir`; the row names the
-    fourteen passes the segment contains (`convert-nvgpu-to-nvvm` …
-    `strip-debuginfo`) and says its interior is not individually pinned;
+  - the segment before the conversion is fourteen rows of its own, one per
+    pass (`convert-nvgpu-to-nvvm` … `strip-debuginfo`), chained
+    `clamp.canonical.mlir` → `clamp.seg01.mlir` → … → `clamp.seg13.mlir` →
+    `clamp.pre-nvvm.mlir`. They come from the pipeline's own
+    `--mlir-print-ir-after-all` dumps, so the interior is captured rather than
+    named: `capture-nvvm` requires the first fifteen dump headers to be those
+    fourteen passes and then the conversion, and requires the last two
+    after-dumps to equal the before/after pair byte for byte. Several of the
+    after-dumps are identical to their predecessor (the conversions that leave
+    `clamp` unchanged), which is measured, not assumed;
   - `convert-gpu-to-nvvm` is captured from the pipeline's own
     `--mlir-print-ir-before/after=convert-gpu-to-nvvm` pair
     (`clamp.pre-nvvm.mlir` → `clamp.post-nvvm.mlir`); the one run that produced
     it must also have lowered to the PTX G19a pinned, so the pair is *that*
     lowering and not a similarly shaped one;
-  - `nvvm-to-ptx` stays `uncaptured` with the concrete reason: the five passes
-    after the conversion (`canonicalize`, `cse`,
-    `reconcile-unrealized-casts`, `gpu-to-llvm`, `gpu-module-to-binary`) are
-    listed, and G19a pins only the PTX they produce.
+  - `nvvm-to-ptx` stays `uncaptured` with the concrete reason: the nine passes
+    the same measurement found after the conversion (`canonicalize`, `cse`,
+    `reconcile-unrealized-casts`, `gpu-to-llvm`, `gpu-module-to-binary`, then
+    `convert-math-to-llvm`, `canonicalize`, `cse`,
+    `reconcile-unrealized-casts` again, from the nested lowering of the binary)
+    are listed, and G19a pins only the PTX they produce. The five an earlier
+    version named were the head of that list; the tail was undercounted until
+    `--mlir-print-ir-after-all` measured it.
 
 The pass list is pinned in `DECLARED_PASSES`, so an uncaptured optimization
 cannot fall out of the chain by deleting its row — the failure PC09's own text
@@ -240,7 +250,7 @@ MLIR installed.
 
 ## What is not claimed, and what comes next
 
-- **No preservation proof.** Four passes are captured, so nothing here says
+- **No preservation proof.** Seventeen rows are captured, so nothing here says
   the emitted, canonicalized or NVVM-converted `MLIR` computes the same
   function as the `KernelIR` it came from. `check` fails rather than passes if
   every row claims `captured` while the pass proofs are still absent — which is
@@ -253,10 +263,13 @@ because the *interface* is not proved, only exercised.
 - **No dialect semantics.** The record says the dialect profile is absent; it
   does not describe one.
 - **Stated, not proved.** `mm0/mlir_pass.mm0` now holds the other half of PC09:
-  one obligation per captured boundary (`kernelir_to_mlir_preserves`,
-  `mlir_canonicalize_preserves`, `mlir_lower_to_nvvm_input_preserves`,
+  one obligation per captured row over four relations
+  (`kernelir_to_mlir_preserves`, `mlir_canonicalize_preserves`,
+  `mlir_segment_pass_preserves p` — indexed by the pass's position in the
+  route, since MM0 has no string-indexed terms — and
   `convert_gpu_to_nvvm_preserves`), each about two files named by the record,
-  with the record and every endpoint cited by digest. `scripts/mlir-chain
+  with the record and every one of the nineteen endpoint files cited by digest.
+  Seventeen obligations, none proved. `scripts/mlir-chain
   claims` refuses a capture with no statement, a statement with no capture, an
   obligation whose endpoint is not the record's file, a stale citation, and an
   `axiom`/`theorem` (five controls in `selftest`). The artifact is
@@ -265,11 +278,10 @@ because the *interface* is not proved, only exercised.
   not a matter of reading: `mm0-rs` elaborates it and `mm0-c` accepts the
   `.mmb` against the spec (`4 sorts, 5 term/def, 0 ax/thm`, pinned), and
   `verify-invariants` refuses an `axiom`/`theorem` in it directly.
-- **Next, in order:** prove those four obligations, reusing PC03's composition
-  and PC04's algorithm theorem. That needs a reviewed semantics for the
-  `gpu`/`nvvm`/`arith`/`cf` dialects, which this repository does not have; the
-  stated form is what a prover would be pointed at. The chain from
-  `clamp.canonical.mlir` to the conversion's pre side is one segment, so
-  discharging it also means opening its fourteen passes into fourteen
-  obligations — the next narrowing step, and the one that would turn
-  `mlir-lower-to-nvvm-input` from a segment into a route.
+- **Next, in order:** prove those seventeen obligations, reusing PC03's
+  composition and PC04's algorithm theorem. That needs a reviewed semantics for
+  the `gpu`/`nvvm`/`arith`/`cf` dialects, which this repository does not have;
+  the stated form is what a prover would be pointed at. The route is now one
+  obligation per row, so a prover can be pointed at a single pass rather than a
+  segment; the open edge is no longer "fourteen passes in one claim" but "no
+  dialect semantics to state the claim in".
