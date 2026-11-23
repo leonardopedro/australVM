@@ -506,6 +506,34 @@ policy. An inaccessible native blob is reported as uncaptured. Any claimed
 native fragment is linked to actual bytes with operand/memory/ABI mutation
 controls. Final hardware behavior remains relative to its stated ISA model.
 
+**Status:** implemented for the NVIDIA branch, with the native-lowering edge
+still a named gap. `safestos/gpu/src/target.rs` makes the boundary a total order
+(`wgsl < spirv < ptx < native`) and a record (tier, digest of the bytes at that
+tier, ABI, and for native the PTX subject, device and blob facts); `verify`
+refuses a record below the policy, a native record with no bytes (an
+*uncaptured* blob), bytes whose digest is not the recorded one, and a container
+that no longer identifies as what was recorded. `avm-target capture` links the
+published PTX with the driver's own linker (`cuLinkCreate`/`cuLinkAddData`) and
+`target::identify` reads the result as an ELF64/`EM_CUDA` container: format,
+`e_machine`, the `.text.*` byte count and per-section digests — identification,
+not disassembly, and the record carries that limit. `scripts/gpu/boundary`
+captures `difference` and `add` at extent 65 (2600-byte container, 384 bytes of
+SASS each), records them in `mm0/proof_chain/nvidia/native.toml`, and requires:
+a `ptx` claim that names the same bytes is refused `--policy native` (and
+satisfies `--policy ptx`); an operand-order edit to `sub.s32 %r6, %r4, %r5`
+links to different bytes the record refuses; the same entry at extent 66 (a
+different baked memory bound) likewise; a bundle whose recorded `abi.params`
+was raised by one descriptor is refused before linking; and an absent blob is
+reported *uncaptured* (exit 3), never verified. Measured while building it: a
+commutative `add` with its operands swapped links to the *same* cubin (ptxas
+canonicalises it), which is why the operand control uses `sub`. `check` holds a
+fresh capture to the record field by field, so a driver change is visible drift.
+What is not established: the native-lowering relation (PTX → SASS semantics),
+any operand/memory/ABI *preservation* — the mutation controls show the record's
+subject is these bytes, not that the bytes mean the PTX — and the SPIR-V tier
+has a policy slot but no producer. One device and driver are measured
+(GTX 1060 Max-Q, `sm_61`, driver API 13000).
+
 ### PC11 — Define the first NPU proof branch and its opaque cut
 
 **Depends:** PC01,PC02,PC07. **Files:** `docs/proof/NPU_PROFILE.md`, isolated

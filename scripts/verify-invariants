@@ -1040,6 +1040,40 @@ PY
             gap "G21a: the device launch not checked (tooling absent: python3)"
         fi
 
+        # PC10 makes the virtual/native boundary a policy: a PTX claim cannot
+        # satisfy `--policy native`, a native capture is identified from the
+        # driver's own linked bytes, and an operand-order edit, a different
+        # extent (memory bound) and a mutated recorded ABI are each refused.
+        # The captures are held to `mm0/proof_chain/nvidia/native.toml`. Exit 3
+        # (no device, driver, compiler or avm-target) is a `[gap]`.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc10=0
+            python3 "$repo_root/scripts/gpu/boundary" check \
+                >"$_cert_tmp/pc10.log" 2>&1 || _pc10=$?
+            case $_pc10 in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/pc10.log" >&2
+                    if grep -q '^  \[pass\] PC10 record: ' "$_cert_tmp/pc10.log"; then
+                        check "PC10: only captured native bytes satisfy a native policy, and the virtual/mutated artifacts are refused" true
+                    else
+                        cat "$_cert_tmp/pc10.log" >&2
+                        check "PC10: every native capture is the one the record holds" false
+                    fi
+                    ;;
+                3)
+                    cat "$_cert_tmp/pc10.log" >&2
+                    gap "PC10: the virtual/native boundary not checked (no device, driver library, compiler or avm-target here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/pc10.log" >&2
+                    check "PC10: only captured native bytes satisfy a native policy, and the virtual/mutated artifacts are refused" false
+                    check "PC10: every native capture is the one the record holds" false
+                    ;;
+            esac
+        else
+            gap "PC10: the virtual/native boundary not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then

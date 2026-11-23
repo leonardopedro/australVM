@@ -25,6 +25,13 @@ name = "avm-nvlaunch"
 path = "src/bin/avm-nvlaunch.rs"
 required-features = ["nvidia"]
 
+# PC10: the virtual/native boundary. `claim` and `identify` are CPU-only, so
+# this binary is built by default; `capture` needs the same optional `nvidia`
+# driver path as `avm-nvlaunch` and reports an unavailable driver otherwise.
+[[bin]]
+name = "avm-target"
+path = "src/bin/avm-target.rs"
+
 [dependencies]
 naga = { version = "=29.0.4", features = ["wgsl-in"] }
 serde = { version = "1", features = ["derive"] }

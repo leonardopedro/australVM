@@ -15,6 +15,7 @@ pub mod reduce_run;
 pub mod reference;
 pub mod run;
 pub mod schema;
+pub mod target;
 #[cfg(feature = "service")]
 pub mod coordinator;
 #[cfg(feature = "service")]

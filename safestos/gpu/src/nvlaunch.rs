@@ -333,8 +333,11 @@ pub mod driver {
     type CuModule = *mut c_void;
     type CuFunction = *mut c_void;
     type CuDevicePtr = u64;
+    type CuLinkState = *mut c_void;
 
     const CUDA_SUCCESS: CuResult = 0;
+    /// `CU_JIT_INPUT_PTX`, the `cuLinkAddData` kind for PTX text.
+    const CU_JIT_INPUT_PTX: c_int = 1;
 
     extern "C" {
         fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -381,6 +384,19 @@ pub mod driver {
         ) -> CuResult,
         sync: unsafe extern "C" fn() -> CuResult,
         error_name: unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult,
+        link_create: unsafe extern "C" fn(c_int, *mut c_int, *mut *mut c_void, *mut CuLinkState) -> CuResult,
+        link_add: unsafe extern "C" fn(
+            CuLinkState,
+            c_int,
+            *const c_void,
+            usize,
+            *const c_char,
+            c_int,
+            *mut c_int,
+            *mut *mut c_void,
+        ) -> CuResult,
+        link_complete: unsafe extern "C" fn(CuLinkState, *mut *mut c_void, *mut usize) -> CuResult,
+        link_destroy: unsafe extern "C" fn(CuLinkState) -> CuResult,
         context: CuContext,
         pub device: Device,
     }
@@ -438,6 +454,45 @@ pub mod driver {
             let sync: unsafe extern "C" fn() -> CuResult = sym!("cuCtxSynchronize", _);
             let error_name: unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult =
                 sym!("cuGetErrorName", _);
+            let link_create: unsafe extern "C" fn(
+                c_int,
+                *mut c_int,
+                *mut *mut c_void,
+                *mut CuLinkState,
+            ) -> CuResult = sym!("cuLinkCreate_v2", _);
+            let link_add: unsafe extern "C" fn(
+                CuLinkState,
+                c_int,
+                *const c_void,
+                usize,
+                *const c_char,
+                c_int,
+                *mut c_int,
+                *mut *mut c_void,
+            ) -> CuResult = sym!("cuLinkAddData_v2", _);
+            // `cuLinkComplete`/`cuLinkDestroy` are unversioned in the driver
+            // library (only create/add carry `_v2`). Try the versioned name
+            // first so a driver that adds one is still resolved.
+            macro_rules! sym_any {
+                ($name:literal, $fallback:literal, $ty:ty) => {{
+                    let mut found: *mut c_void = std::ptr::null_mut();
+                    for name in [$name, $fallback] {
+                        let c = CString::new(name).unwrap();
+                        found = unsafe { dlsym(handle, c.as_ptr()) };
+                        if !found.is_null() {
+                            break;
+                        }
+                    }
+                    if found.is_null() {
+                        return Err(format!("{path} exports neither {} nor {}", $name, $fallback));
+                    }
+                    unsafe { std::mem::transmute::<*mut c_void, $ty>(found) }
+                }};
+            }
+            let link_complete: unsafe extern "C" fn(CuLinkState, *mut *mut c_void, *mut usize) -> CuResult =
+                sym_any!("cuLinkComplete_v2", "cuLinkComplete", _);
+            let link_destroy: unsafe extern "C" fn(CuLinkState) -> CuResult =
+                sym_any!("cuLinkDestroy_v2", "cuLinkDestroy", _);
 
             let mut driver = Driver {
                 handle,
@@ -459,6 +514,10 @@ pub mod driver {
                 launch,
                 sync,
                 error_name,
+                link_create,
+                link_add,
+                link_complete,
+                link_destroy,
                 context: ptr::null_mut(),
                 device: Device {
                     name: String::new(),
@@ -529,6 +588,48 @@ pub mod driver {
                 let got = (self.function_get)(&mut function, module, entry.as_ptr());
                 let _ = (self.module_unload)(module);
                 self.check(got, "cuModuleGetFunction")
+            }
+        }
+
+        /// Link the PTX text into a native executable for this device and
+        /// return the container bytes. This is the capture PC10 asks for: the
+        /// driver's own translator produced these bytes for this device, and
+        /// [`crate::target::identify`] checks that what came back is a CUDA
+        /// ELF with executable text in it.
+        pub fn link(&self, ptx: &str) -> Result<Vec<u8>, String> {
+            let ptx_c = CString::new(ptx).map_err(|_| "the PTX text contains NUL".to_string())?;
+            let name = CString::new("austral.ptx").unwrap();
+            unsafe {
+                let mut state: CuLinkState = ptr::null_mut();
+                self.check((self.link_create)(0, ptr::null_mut(), ptr::null_mut(), &mut state), "cuLinkCreate")?;
+                let added = (self.link_add)(
+                    state,
+                    CU_JIT_INPUT_PTX,
+                    ptx_c.as_ptr() as *const c_void,
+                    ptx.len() + 1,
+                    name.as_ptr(),
+                    0,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                );
+                if let Err(e) = self.check(added, "cuLinkAddData") {
+                    let _ = (self.link_destroy)(state);
+                    return Err(e);
+                }
+                let mut image: *mut c_void = ptr::null_mut();
+                let mut size = 0usize;
+                let done = (self.link_complete)(state, &mut image, &mut size);
+                if let Err(e) = self.check(done, "cuLinkComplete") {
+                    let _ = (self.link_destroy)(state);
+                    return Err(e);
+                }
+                if image.is_null() || size == 0 {
+                    let _ = (self.link_destroy)(state);
+                    return Err("cuLinkComplete returned an empty image".to_string());
+                }
+                let bytes = std::slice::from_raw_parts(image as *const u8, size).to_vec();
+                let _ = (self.link_destroy)(state);
+                Ok(bytes)
             }
         }
 
