@@ -67,11 +67,15 @@ jobs:
 
       - name: GPU source gate
         run: |
-          # Which field or control failed is only visible in the gate's own
-          # output, and job logs need admin rights: capture it and quote the
-          # tail as annotations.
-          set +e
-          out=$(nix develop -c bash -c '
+          # Which field or control failed is only visible in the gate's output,
+          # and job logs need admin rights: capture it and quote the tail as
+          # annotations.
+          #
+          # The script goes into a file rather than `bash -c '...'`: its
+          # comments contain apostrophes, which close a single-quoted argument,
+          # so the step was a shell syntax error (`unexpected EOF`, exit 2) on
+          # every run instead of a measurement (2026-11-23).
+          cat > "$RUNNER_TEMP/gpu-source-gate.sh" <<'SCRIPT'
             set -o pipefail
             export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release
             python3 scripts/check-gpu source | tee "$RUNNER_TEMP/gpu-source.log"
@@ -110,8 +114,9 @@ jobs:
               exit 1
             fi
             grep -q "bounded-fold-v1" "$refusal"
-          ' 2>&1)
-          status=$?
+          SCRIPT
+          status=0
+          out=$(nix develop -c bash "$RUNNER_TEMP/gpu-source-gate.sh" 2>&1) || status=$?
           printf '%s\n' "$out"
           if [ "$status" -ne 0 ]; then
             printf '%s\n' "$out" | tail -40 | while IFS= read -r line; do

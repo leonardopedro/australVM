@@ -1354,11 +1354,25 @@ mod a10_live_grant_tests {
     use super::check_call_permission;
     use crate::auth;
 
+    /// The installed engine and the deployment principal are process-global,
+    /// and cargo runs the tests in this binary in parallel. Two tests here
+    /// install engines, so without a lock they swap each other's engine
+    /// mid-assertion: that passed on a many-core development host and failed on
+    /// a two-core CI runner (2026-11-23). Every test that installs an engine
+    /// takes this first; it is poisoning-tolerant because a test that panics
+    /// holding it must not fail the next one.
+    static AUTH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn auth_lock() -> std::sync::MutexGuard<'static, ()> {
+        AUTH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// D08: one test for all context scenarios, because the installed engine is
     /// process-global and this binary's tests run in parallel — a second test
     /// mutating it would race this one through no fault of either.
     #[test]
     fn an_instance_context_is_the_authority_and_a_stale_one_is_refused() {
+        let _auth = auth_lock();
         let engine = auth::ManifestAuthEngine::from_toml_str(
             "[module]\nname = \"d08_a\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
         )
@@ -1486,6 +1500,7 @@ mod a10_live_grant_tests {
     /// binary would race each other's engines.
     #[test]
     fn live_jit_denies_uk_calls_the_module_manifest_does_not_grant() {
+        let _auth = auth_lock();
         let engine = auth::ManifestAuthEngine::from_toml_str(
             "[module]\nname = \"a10_widget\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
         )
