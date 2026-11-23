@@ -501,6 +501,83 @@ and `.text.main@144` for the extent-66 bound)*; and a `[gap]` naming the missing
 PTX→SASS semantics. Without a decoder the card is a `[gap]` everywhere, never a
 pass — the same convention as G21a's hardware line.
 
+### PC11 — Define the first NPU proof branch and its opaque cut
+
+**Depends on** PC01/PC02 (word and map semantics) and PC07 (the whole-chain
+fixture). **Files:** `docs/proof/NPU_PROFILE.md`, `mm0/proof_chain/npu/`
+(target and operator/command inventories), `mm0/proof_chain/npu_operator.mm0`,
+`examples/npu/`, and one checker (`scripts/npu-profile`) — an isolated branch,
+not a generic NPU backend.
+
+A GPU branch has a virtual ISA to fall back on; an NPU branch does not. The
+whole point of this card is to pick a target where *that* is visible and priced,
+rather than to claim inference results as proof.
+
+**Target, named once.** AMD XDNA (Ryzen AI): AIE-ML compute tiles, ERT runtime,
+`amdxdna` kernel driver. It is chosen because its stack splits cleanly into what
+is inspectable and what is not: the compilers are open (IRON on `mlir-aie` for
+the array, Peano on `llvm-aie` for one tile), the application binaries are
+documented (an overlay plus a ctrlcode of `XAie_TxnOpcode`, including
+`XAIE_IO_BLOCKWRITE` for DMA), and the compute tiles are VLIW processors whose
+instruction semantics exist only as an architecture manual (AM020) with no
+machine-checkable model. Nothing on this host is an NPU (`host_measured =
+false`): no `/dev/accel`, no `xrt-smi`, no Peano, no IRON, so every `declared`
+row below is a `[gap]`, never evidence.
+
+**One operator.** A signed 8-bit quantised dot product, `A[4x4 i8] x B[4x4 i8]
+-> C[4x4 s32]`, mapped from one admitted Austral step (`dot4`, eight `Int32`
+parameters, four products and three adds read out of the `.aui`/`.aum` text, not
+retyped). The numeric profile is `int8_sym_exact_s32`: zero point 0, unit scales,
+exact widening, no requantization — so the arithmetic claim is “the i8 products
+sign-extend exactly and accumulate in s32”, which is a property a reviewer can
+state, not an approximation excuse.
+
+**The inventory, as four inspectable stages and two declared plus two opaque:**
+
+| stage | state | subject |
+|---|---|---|
+| operator | inspectable | the admitted step and the tensor descriptor it maps to |
+| quantization | inspectable | `int8_sym_exact_s32`: zero point, scales, widening, no requantization |
+| layout | inspectable | row-major operands and output, per-element and accumulator widths |
+| dma-command | inspectable | the declared command list (`XAIE_IO_BLOCKWRITE`, host→L2 and L2→host) |
+| compiler-ir | declared | IRON/Peano IR: open compilers, no artifact on this host |
+| overlay | declared | the xclbin identity: a format, not a semantics |
+| compute-tile ISA | **opaque** | AIE-ML VLIW instructions, AM020 only |
+| firmware | **opaque** | vendor-signed firmware and ERT scheduling |
+
+**The cut, stated so it cannot be softened.** `operator → binary/firmware` is
+unproved and stays unproved: the operator's meaning is a statement about integers
+this repository can check, the ctrlcode and overlay are formats it can hash, and
+between them sits a vendor compiler and a VLIW ISA with no model. Consequently:
+
+- a DMA certificate, a well-formed command list, or a successful inference run
+  **cannot** satisfy native-instruction-required policy;
+- the SRAM gate's 256 KiB cap contributes its narrow size property and nothing
+  more — it does not discharge the edge;
+- the inspectable stages may be checked exhaustively (every byte count re-derived
+  from dtype and shape, every offset from the declared layout, the numeric bound
+  by exhausting the i8 range, the sixteen stores disjoint and covering `C`), and
+  that is a claim about *this repository's description*, not about the hardware.
+
+`mm0/proof_chain/npu_operator.mm0` states one obligation per stage over an
+uninterpreted vocabulary, with `-- certificate: [gap]` and no `axiom`/`theorem`,
+and `scripts/npu-profile check` is the gate that holds it to the inventory both
+ways: every stage has exactly one obligation and no obligation names an
+undeclared stage; an `opaque` row must name its prerequisite; an `inspectable`
+row must be one of the four subjects above. Until that checker and
+`docs/proof/NPU_PROFILE.md` are in the tree *and the gate runs them*, the
+inventory is declared data that nothing reads — a file that no gate opens is not
+evidence.
+
+**Exit.** An honest target-specific proof inventory, at least one concrete
+inspectable claim (the command list and the numeric bound are the candidates),
+and a named opaque prerequisite for each unproved edge — with every
+machine-derived figure reproducible from the files rather than copied. If the
+target cannot expose the required semantics, this branch's native proof stays
+blocked on that prerequisite while the higher claims stay reusable elsewhere in
+the chain; that outcome is acceptable and must be written down, not worked
+around.
+
 ## Proof reuse for the first scalar shader
 
 ### PC05a — Reflect actual parsed WGSL for one clamp
