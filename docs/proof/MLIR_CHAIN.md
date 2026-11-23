@@ -32,13 +32,27 @@ pre/post bytes, (d) counts the uncaptured ones, and (e) refuses stale evidence.
   extents, `fast_math`, `fusion`, `shared_memory`, target. These are pinned in
   the checker (`DECLARED_OPTIONS`), not just restated in the record, so editing a
   record cell is a refusal.
-- `[[pass]]` — `kernelir-to-mlir` is `state = "captured"` with
-  `pre_file = "clamp.kernelir"`, `post_file = "clamp.mlir"` and both sha256
-  digests under `mm0/proof_chain/mlir/ir/`; so is `mlir-canonicalize`, whose
-  pre side is exactly the previous pass's post artifact and whose post side is
-  `clamp.canonical.mlir` from `mlir-opt --canonicalize` (the rewrite is
-  visible: `scf.if` becomes `arith.select`); `convert-gpu-to-nvvm` stays
-  `uncaptured` with the concrete reason.
+- `[[pass]]` — five rows, in route order:
+  - `kernelir-to-mlir` is `state = "captured"` with
+    `pre_file = "clamp.kernelir"`, `post_file = "clamp.mlir"` and both sha256
+    digests under `mm0/proof_chain/mlir/ir/`;
+  - `mlir-canonicalize` is captured too, its pre side is exactly the previous
+    pass's post artifact and its post side is `clamp.canonical.mlir` from
+    `mlir-opt --canonicalize` (the rewrite is visible: `scf.if` becomes
+    `arith.select`);
+  - `mlir-lower-to-nvvm-input` captures the pinned pipeline's *segment* before
+    the conversion, whose post side is `clamp.pre-nvvm.mlir`; the row names the
+    fourteen passes the segment contains (`convert-nvgpu-to-nvvm` …
+    `strip-debuginfo`) and says its interior is not individually pinned;
+  - `convert-gpu-to-nvvm` is captured from the pipeline's own
+    `--mlir-print-ir-before/after=convert-gpu-to-nvvm` pair
+    (`clamp.pre-nvvm.mlir` → `clamp.post-nvvm.mlir`); the one run that produced
+    it must also have lowered to the PTX G19a pinned, so the pair is *that*
+    lowering and not a similarly shaped one;
+  - `nvvm-to-ptx` stays `uncaptured` with the concrete reason: the five passes
+    after the conversion (`canonicalize`, `cse`,
+    `reconcile-unrealized-casts`, `gpu-to-llvm`, `gpu-module-to-binary`) are
+    listed, and G19a pins only the PTX they produce.
 
 The pass list is pinned in `DECLARED_PASSES`, so an uncaptured optimization
 cannot fall out of the chain by deleting its row — the failure PC09's own text
@@ -71,7 +85,11 @@ counted in a second `[gap]`. Both are true at once: the *record* is current, the
 `python3 scripts/mlir-chain capture-canonicalize`, which resolves `mlir-opt`
 from the G19a record (or `PATH`), refuses to start unless the pre side is the
 recorded `kernelir-to-mlir` output, and rewrites the row from the produced
-bytes. Without `mlir-opt` it exits 3 and the row stays `uncaptured`.
+bytes. `python3 scripts/mlir-chain capture-nvvm` replaces the last three rows
+from one run of the pinned pipeline: the segment's post, the conversion's pair,
+and the uncaptured tail. It refuses a run whose embedded `gpu.object` assembly
+does not unescape to G19a's PTX digest. Without `mlir-opt` either command exits
+3 and the rows stay as they are.
 
 ## The emitted MLIR (G20a)
 
@@ -222,17 +240,21 @@ MLIR installed.
 
 ## What is not claimed, and what comes next
 
-- **No preservation proof.** Two passes are captured, so nothing here says the
-  emitted or canonicalized `MLIR` computes the same function as the `KernelIR`
-  it came from. `check` fails rather than passes if every row claims `captured`
-  while the pass proofs are still absent.
+- **No preservation proof.** Four passes are captured, so nothing here says
+  the emitted, canonicalized or NVVM-converted `MLIR` computes the same
+  function as the `KernelIR` it came from. `check` fails rather than passes if
+  every row claims `captured` while the pass proofs are still absent — which is
+  why `nvvm-to-ptx` stays uncaptured with its passes named rather than
+  captured and unproved.
 - **Verified and lowered, not executed.** `mlir-opt` accepts the module and
 the pinned pipeline emits `sm_70` PTX for it (G19a), but nothing is dispatched
 and no GPU claim is made; the emitter's header still says `abi: g19a-pending`
 because the *interface* is not proved, only exercised.
 - **No dialect semantics.** The record says the dialect profile is absent; it
   does not describe one.
-- **Next, in order:** capture `convert-gpu-to-nvvm` as a pre/post pair, and
-  state and (if a reviewed MLIR semantics is available) prove the pass-local
-  relations — reusing PC03's composition and PC04's algorithm theorem, which is
-  what PC09 asks for.
+- **Next, in order:** state and (if a reviewed MLIR semantics is available)
+  prove the pass-local relations for the four captured boundaries — reusing
+  PC03's composition and PC04's algorithm theorem, which is what PC09 asks for.
+  The chain from `clamp.canonical.mlir` to the conversion's pre side is one
+  segment: proving it needs each of its fourteen passes stated, which is the
+  next narrowing step.

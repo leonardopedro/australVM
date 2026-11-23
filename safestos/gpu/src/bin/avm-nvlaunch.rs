@@ -73,6 +73,7 @@ struct Recorded {
     arity: usize,
     extent: usize,
     params: usize,
+    workgroup: usize,
 }
 
 fn read_bundle(dir: &str) -> Result<Recorded, String> {
@@ -90,7 +91,12 @@ fn read_bundle(dir: &str) -> Result<Recorded, String> {
         .and_then(|a| a.get("params"))
         .and_then(|x| x.as_u64())
         .ok_or("bundle.json has no abi.params")? as usize;
-    Ok(Recorded { arity, extent, params })
+    let workgroup = v
+        .get("workgroup")
+        .and_then(|x| x.as_u64())
+        .ok_or("bundle.json has no workgroup (the block size the module declares)")?
+        as usize;
+    Ok(Recorded { arity, extent, params, workgroup })
 }
 
 fn read_words(path: &str) -> Result<Vec<Vec<u32>>, String> {
@@ -125,6 +131,7 @@ fn launch(args: &[String], device: i32) -> i32 {
     let mut inputs = None;
     let mut extent = None;
     let mut arity = None;
+    let mut block = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -147,6 +154,13 @@ fn launch(args: &[String], device: i32) -> i32 {
                 match args[i + 1].parse::<usize>() {
                     Ok(n) => arity = Some(n),
                     Err(_) => return json_error("--arity must be a non-negative integer"),
+                }
+                i += 2;
+            }
+            "--block" if i + 1 < args.len() => {
+                match args[i + 1].parse::<usize>() {
+                    Ok(n) => block = Some(n),
+                    Err(_) => return json_error("--block must be a non-negative integer"),
                 }
                 i += 2;
             }
@@ -190,6 +204,8 @@ fn launch(args: &[String], device: i32) -> i32 {
         recorded_extent,
         requested_extent,
         requested_arity,
+        recorded.workgroup,
+        block,
         Some(driver.device.capability),
     ) {
         Ok(p) => p,
@@ -262,6 +278,7 @@ fn launch(args: &[String], device: i32) -> i32 {
             "extent": plan.extent,
             "block": plan.block,
             "grid": plan.grid,
+            "workgroup": recorded.workgroup,
             "output": launched,
         })
     );
@@ -276,7 +293,10 @@ fn refusal_code(r: &Refusal) -> &'static str {
         Refusal::ParamCount { .. } => "wrong-param-count",
         Refusal::ExtentMismatch { .. } => "extent-mismatch",
         Refusal::ExtentZero => "zero-extent",
-        Refusal::ExtentExceedsBlock { .. } => "extent-exceeds-block",
+        Refusal::BlockZero => "block-zero",
+        Refusal::BlockTooLarge { .. } => "block-too-large",
+        Refusal::GridTooLarge { .. } => "grid-too-large",
+        Refusal::NeedsBlockIndex { .. } => "needs-block-index",
         Refusal::NoAddressConversion => "no-address-conversion",
         Refusal::TargetNewerThanDevice { .. } => "target-newer-than-device",
         Refusal::TargetUnreadable { .. } => "target-unreadable",

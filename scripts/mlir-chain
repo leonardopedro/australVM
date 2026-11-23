@@ -59,10 +59,46 @@ CAPTURE_DIR = ROOT / "mm0/proof_chain/mlir/ir"
 #: Every pass of the declared route, in order. This is the single source of
 #: truth: a record that omits one, renames one, or adds one fails, which is how
 #: an uncaptured optimization cannot fall out of the chain by editing the record.
+#: The pinned pipeline's own passes, in the order it runs them, up to (not
+#: including) `convert-gpu-to-nvvm`. The capture reads them as one *segment*:
+#: its endpoints are bytes the pipeline really had, its interior is not
+#: individually pinned, and the record says so.
+NVVM_SEGMENT_PASSES = [
+    "convert-nvgpu-to-nvvm",
+    "gpu-kernel-outlining",
+    "convert-vector-to-scf",
+    "convert-scf-to-cf",
+    "convert-nvvm-to-llvm",
+    "convert-func-to-llvm",
+    "expand-strided-metadata",
+    "nvvm-attach-target",
+    "lower-affine",
+    "convert-arith-to-llvm",
+    "convert-index-to-llvm",
+    "canonicalize",
+    "cse",
+    "strip-debuginfo",
+]
+
+#: The passes after `convert-gpu-to-nvvm`, left uncaptured on purpose: the PTX
+#: they produce is pinned by G19a, but capturing them would make the route
+#: all-captured, and an all-captured route is a failure here — capture is not
+#: preservation, so a chain with no open edge would be claiming more than it
+#: has.
+NVVM_TAIL_PASSES = [
+    "canonicalize",
+    "cse",
+    "reconcile-unrealized-casts",
+    "gpu-to-llvm",
+    "gpu-module-to-binary",
+]
+
 DECLARED_PASSES = [
     "kernelir-to-mlir",
     "mlir-canonicalize",
+    "mlir-lower-to-nvvm-input",
     "convert-gpu-to-nvvm",
+    "nvvm-to-ptx",
 ]
 
 #: The target options that are part of the subject identity (PC09's "dialect
@@ -343,6 +379,170 @@ def capture_canonicalize(record_path: Path) -> int:
     return exit_code[0]
 
 
+# ── capture-nvvm ───────────────────────────────────────────────────────────
+
+
+def unescape_assembly(text: str) -> bytes:
+    """MLIR prints a `gpu.object` assembly as a quoted string with `\\NN`."""
+    out = bytearray()
+    i = 0
+    while i < len(text):
+        if text[i] == "\\" and i + 2 < len(text):
+            code = int(text[i + 1:i + 3], 16)
+            if code:
+                out.append(code)
+            i += 3
+        else:
+            out.append(ord(text[i]))
+            i += 1
+    return bytes(out)
+
+
+def captured_row(name: str, pre_file: str, pre_sha: str,
+                 post_file: str, post_sha: str, detail: str) -> str:
+    return (f'[[pass]]\nname = "{name}"\nstate = "captured"\n'
+            f'pre_file = "{pre_file}"\npre_sha256 = "{pre_sha}"\n'
+            f'post_file = "{post_file}"\npost_sha256 = "{post_sha}"\n'
+            f'detail = "{detail}"\n')
+
+
+def capture_nvvm(record_path: Path) -> int:
+    """Capture `convert-gpu-to-nvvm`'s real pre/post from the pinned pipeline.
+
+    The pair comes from `--mlir-print-ir-before/after=convert-gpu-to-nvvm` in
+    one run of the *pinned* pipeline on the captured canonical module, so both
+    sides are bytes the pipeline itself had, not a re-derivation. The run's
+    `gpu.object` assembly must unescape to the PTX G19a recorded for this
+    module, which is what makes this pair that lowering rather than a similarly
+    shaped one.
+
+    The passes before this one are captured as a single segment row: its post
+    is exactly this pair's pre, so the digest chain is intact, and the row names
+    the passes it contains so the interior is visible rather than implied.
+    """
+    import tomllib
+
+    tool = mlir_opt()
+    if tool is None:
+        gap("convert-gpu-to-nvvm was not captured: no mlir-opt on this host")
+        return 3
+    if not TOOLCHAIN.exists():
+        gap("convert-gpu-to-nvvm was not captured: no G19a toolchain record")
+        return 3
+    toolchain = tomllib.loads(TOOLCHAIN.read_text())
+    pipeline = toolchain.get("pipeline", {}).get("command")
+    if not pipeline:
+        fail("the toolchain record names the lowering pipeline")
+        return exit_code[0]
+    subjects = {row.get("stem"): row for row in toolchain.get("subject", [])}
+    recorded = subjects.get("clamp")
+    if not recorded:
+        fail("the toolchain record covers the clamp module")
+        return exit_code[0]
+    source = CAPTURE_DIR / "clamp.mlir"
+    if not source.exists():
+        fail("the captured canonical module exists", str(source))
+        return exit_code[0]
+    run = subprocess.run(
+        [tool, pipeline,
+         "--mlir-print-ir-before=convert-gpu-to-nvvm",
+         "--mlir-print-ir-after=convert-gpu-to-nvvm",
+         str(source)],
+        capture_output=True, text=True)
+    if run.returncode != 0:
+        fail("the pinned pipeline accepts the captured module",
+             (run.stderr or run.stdout).strip()[:300])
+        return exit_code[0]
+    header = re.compile(r'^// -----// IR Dump (Before|After) .*?//----- //\n',
+                        re.M)
+    parts = header.split(run.stderr)
+    labels = parts[1::2]
+    bodies = parts[2::2]
+    if labels != ["Before", "After"]:
+        fail("the pipeline prints exactly one before/after pair for "
+             "convert-gpu-to-nvvm",
+             f"found dumps {labels}")
+        return exit_code[0]
+    before, after = bodies[0], bodies[1]
+    if not before.strip() or not after.strip():
+        fail("both sides of the captured pair carry a module")
+        return exit_code[0]
+    if "gpu.module" not in before or "gpu.func" not in before:
+        fail("the captured pre side still has the gpu module and its kernel",
+             before.strip().splitlines()[0][:120] if before.strip() else "empty")
+        return exit_code[0]
+    if "nvvm.kernel" in before or "llvm.func" in before:
+        fail("the captured pre side is before the NVVM conversion, not after it")
+        return exit_code[0]
+
+    # The run must be *this* lowering: its embedded PTX is G19a's PTX.
+    out = run.stdout
+    at = out.rfind('assembly = "')
+    if at < 0:
+        fail("the pipeline run carries a gpu.object assembly")
+        return exit_code[0]
+    start = at + len('assembly = "')
+    end = out.find('"', start)
+    ptx = unescape_assembly(out[start:end])
+    ptx_sha = sha256(ptx)
+    if ptx_sha != recorded.get("ptx_sha256"):
+        fail("the captured run lowered to the PTX G19a recorded",
+             f"run hashed {ptx_sha[:12]}…, G19a records "
+             f"{str(recorded.get('ptx_sha256'))[:12]}…")
+        return exit_code[0]
+
+    CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+    pre_path = CAPTURE_DIR / "clamp.pre-nvvm.mlir"
+    post_path = CAPTURE_DIR / "clamp.post-nvvm.mlir"
+    pre_path.write_text(before)
+    post_path.write_text(after)
+    pre_sha = sha256(before.encode())
+    post_sha = sha256(after.encode())
+
+    # The two earlier rows stay as they are; the route after them is rewritten
+    # from the bytes just captured, so a stale row cannot survive a capture.
+    text = record_path.read_text()
+    prefix = text.split("[[pass]]", 1)[0]
+    rows = re.findall(r'\[\[pass\]\]\n(?:[a-z0-9_]+ = .*\n)+', text)[:2]
+    if len(rows) != 2:
+        fail("the record still has its two earlier pass rows")
+        return exit_code[0]
+    second_post = re.search(r'post_file = "([^"]+)"\npost_sha256 = "([0-9a-f]{64})"',
+                            rows[1])
+    if not second_post:
+        fail("the canonicalize row records both sides")
+        return exit_code[0]
+    segment = captured_row(
+        "mlir-lower-to-nvvm-input", second_post.group(1), second_post.group(2),
+        "clamp.pre-nvvm.mlir", pre_sha,
+        "the pinned pipeline's passes before `convert-gpu-to-nvvm` ("
+        + ", ".join(NVVM_SEGMENT_PASSES)
+        + "), captured as one segment: its endpoints are real pipeline bytes, "
+        "its interior is not individually pinned, and it is not proved")
+    convert = captured_row(
+        "convert-gpu-to-nvvm", "clamp.pre-nvvm.mlir", pre_sha,
+        "clamp.post-nvvm.mlir", post_sha,
+        "the pinned pipeline's own pre/post at this pass, read from its "
+        "before/after dumps; the run's gpu.object assembly unescapes to the "
+        "PTX G19a recorded, so this is that lowering; captured, not proved")
+    tail_detail = (", ".join(NVVM_TAIL_PASSES)
+                   + " follow; G19a pins the PTX they produce, but these "
+                     "passes are not captured and no pass-local relation is "
+                     "proved for them or for the pair above")
+    tail = (f'[[pass]]\nname = "nvvm-to-ptx"\nstate = "uncaptured"\n'
+            f'detail = "{tail_detail}"\n')
+    captured = 4
+    body = "\n".join([r.rstrip("\n") for r in rows] + [segment, convert, tail])
+    prefix = re.sub(r'captured_passes = \d+', f'captured_passes = {captured}',
+                    prefix, count=1)
+    record_path.write_text(prefix + body + "\n")
+    print(f"  [detail] PC09 capture: wrote {pre_path.relative_to(ROOT)} "
+          f"({len(before.splitlines())} line(s)) and "
+          f"{post_path.relative_to(ROOT)} ({len(after.splitlines())} line(s)); "
+          f"the run's PTX is the recorded one")
+    return exit_code[0]
+
+
 # ── capture ──────────────────────────────────────────────────────────────────
 
 
@@ -513,7 +713,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", nargs="?", default="check",
                     choices=["check", "selftest", "capture",
-                             "capture-canonicalize"])
+                             "capture-canonicalize", "capture-nvvm"])
     ap.add_argument("--record", default=str(RECORD))
     ap.add_argument("--artifact", default=str(SOURCE_ARTIFACT))
     ap.add_argument("--extent", type=int, default=65)
@@ -525,6 +725,8 @@ def main() -> int:
             return capture(Path(args.record), args.extent)
         if args.mode == "capture-canonicalize":
             return capture_canonicalize(Path(args.record))
+        if args.mode == "capture-nvvm":
+            return capture_nvvm(Path(args.record))
         return check(Path(args.record), Path(args.artifact))
 
 

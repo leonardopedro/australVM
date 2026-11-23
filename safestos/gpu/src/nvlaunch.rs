@@ -17,11 +17,12 @@
 //!
 //! What the emitted kernel is: one thread per element, indexed by the global
 //! id (`block_id * block_dim + thread_id`, since G21a; it used to be the
-//! block-local `tid.x`) and guarded by `gid > extent - 1`. The plan still pins
-//! `block = extent` and `grid = 1`: one block whose size *is* the extent is the
-//! simplest launch this checker can measure, and it refuses an extent no block
-//! can hold. A larger extent would need a grid, which is untested here even
-//! though the global index now permits it.
+//! block-local `tid.x`) and guarded by `gid > extent - 1`. The plan launches
+//! the block the module declared (`gpu.known_block_size`, recorded in the
+//! bundle as `workgroup`) and `grid = ceil(extent / block)` blocks, refusing a
+//! grid over a PTX that never reads `%ctaid` — a multi-block launch of an
+//! artifact written for one block would silently compute the first block's
+//! elements over and over. A `--block` override is checked, never inferred.
 
 /// The published ABI names its kernel `main` (the MLIR entry is renamed by the
 /// NVVM lowering, and the bundle records that).
@@ -37,6 +38,9 @@ pub struct Facts {
     pub target_chip: String,
     pub address_size: u32,
     pub converts_pointers: bool,
+    /// The module derives its element index from the block id, i.e. it is safe
+    /// to launch with more than one block.
+    pub uses_block_id: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +64,17 @@ pub enum Refusal {
         requested: usize,
     },
     ExtentZero,
-    ExtentExceedsBlock {
+    BlockZero,
+    BlockTooLarge {
+        block: usize,
+    },
+    GridTooLarge {
+        extent: usize,
+        block: usize,
+    },
+    /// More than one block, but the PTX never reads `%ctaid`, so every block
+    /// would compute the same block-local indices.
+    NeedsBlockIndex {
         extent: usize,
         block: usize,
     },
@@ -99,10 +113,20 @@ impl std::fmt::Display for Refusal {
                  open past the buffer and a larger one would skip elements"
             ),
             Refusal::ExtentZero => write!(f, "the extent must be positive"),
-            Refusal::ExtentExceedsBlock { extent, block } => write!(
+            Refusal::BlockZero => write!(f, "the block must be positive"),
+            Refusal::BlockTooLarge { block } => write!(
                 f,
-                "extent {extent} exceeds one block ({block}); this checker launches one \
-                 block, and a grid for a larger extent is not measured here"
+                "the block is {block}; no device accepts a block above {MAX_BLOCK}"
+            ),
+            Refusal::GridTooLarge { extent, block } => write!(
+                f,
+                "extent {extent} at block {block} needs more blocks than the grid \
+                 dimension holds"
+            ),
+            Refusal::NeedsBlockIndex { extent, block } => write!(
+                f,
+                "extent {extent} at block {block} needs a grid, but the PTX never reads \
+                 `%ctaid`: every block would compute the same element indices"
             ),
             Refusal::NoAddressConversion => write!(
                 f,
@@ -130,6 +154,7 @@ pub fn ptx_facts(text: &str) -> Result<Facts, String> {
     let mut params = 0usize;
     let mut in_entry = false;
     let mut converts_pointers = false;
+    let mut uses_block_id = false;
     for line in text.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix(".target ") {
@@ -150,6 +175,9 @@ pub fn ptx_facts(text: &str) -> Result<Facts, String> {
         if t.starts_with("cvta.to.global") {
             converts_pointers = true;
         }
+        if t.contains("%ctaid") {
+            uses_block_id = true;
+        }
     }
     Ok(Facts {
         entry: entry.ok_or_else(|| "the PTX declares no .entry".to_string())?,
@@ -157,6 +185,7 @@ pub fn ptx_facts(text: &str) -> Result<Facts, String> {
         target_chip: target_chip.ok_or_else(|| "the PTX declares no .target".to_string())?,
         address_size: address_size.ok_or_else(|| "the PTX declares no .address_size".to_string())?,
         converts_pointers,
+        uses_block_id,
     })
 }
 
@@ -193,6 +222,9 @@ impl Plan {
 /// Check the artifact and the requested launch against each other, and the
 /// target against the device. Pure: every refusal is a statement about the
 /// inputs, and none of them needs a driver to evaluate.
+/// The largest grid the x dimension holds (CUDA's `maxGridSize[0]`).
+pub const MAX_GRID: usize = 2_147_483_647;
+
 pub fn plan(
     facts: &Facts,
     recorded_params: usize,
@@ -200,6 +232,8 @@ pub fn plan(
     recorded_extent: usize,
     requested_extent: usize,
     requested_arity: usize,
+    recorded_block: usize,
+    requested_block: Option<usize>,
     device: Option<(i32, i32)>,
 ) -> Result<Plan, Refusal> {
     if facts.entry != ENTRY {
@@ -233,12 +267,6 @@ pub fn plan(
             requested: requested_extent,
         });
     }
-    if requested_extent > MAX_BLOCK {
-        return Err(Refusal::ExtentExceedsBlock {
-            extent: requested_extent,
-            block: MAX_BLOCK,
-        });
-    }
     if !facts.converts_pointers {
         return Err(Refusal::NoAddressConversion);
     }
@@ -254,11 +282,35 @@ pub fn plan(
             });
         }
     }
+    // The block is the one the module declared (its `gpu.known_block_size`),
+    // or a smaller override. A larger block than the module declared is only
+    // accepted when it is explicitly requested, because the emitter's guard is
+    // the global index and the declaration is a promise about the workgroup.
+    let block = requested_block.unwrap_or(recorded_block.min(requested_extent));
+    if block == 0 {
+        return Err(Refusal::BlockZero);
+    }
+    if block > MAX_BLOCK {
+        return Err(Refusal::BlockTooLarge { block });
+    }
+    let grid = requested_extent.div_ceil(block);
+    if grid > MAX_GRID {
+        return Err(Refusal::GridTooLarge {
+            extent: requested_extent,
+            block,
+        });
+    }
+    if grid > 1 && !facts.uses_block_id {
+        return Err(Refusal::NeedsBlockIndex {
+            extent: requested_extent,
+            block,
+        });
+    }
     let descriptors = (recorded_params / 5).max(1);
     Ok(Plan {
         extent: requested_extent,
-        block: requested_extent,
-        grid: 1,
+        block,
+        grid,
         descriptors,
         words_per_descriptor: 5,
     })
@@ -635,59 +687,97 @@ mod tests {
         assert_eq!(capability_of("compute_70"), None);
     }
 
+    /// The emitter's current shape: `ctaid.x * ntid.x + tid.x`.
+    fn global_ptx() -> String {
+        clamp_ptx().replace(
+            "ld.param.u64 %rd1, [main_param_1];",
+            "mov.u32 %r1, %ctaid.x;\n\tmov.u32 %r2, %ntid.x;",
+        )
+    }
+
     #[test]
-    fn a_checked_plan_is_one_block_matching_the_guard() {
-        let f = ptx_facts(&clamp_ptx()).unwrap();
-        let p = plan(&f, 10, 1, 65, 65, 1, Some((7, 5))).unwrap();
-        assert_eq!((p.grid, p.block, p.extent), (1, 65, 65));
+    fn a_checked_plan_covers_the_extent_with_blocks() {
+        let f = ptx_facts(&global_ptx()).unwrap();
+        // Extent 65 at the declared 64-thread block is two blocks: the case the
+        // emitter got wrong before G21a.
+        let p = plan(&f, 10, 1, 65, 65, 1, 64, None, Some((7, 5))).unwrap();
+        assert_eq!((p.grid, p.block, p.extent), (2, 64, 65));
         assert_eq!(p.params(), 10);
+        let one = plan(&f, 10, 1, 64, 64, 1, 64, None, None).unwrap();
+        assert_eq!((one.grid, one.block), (1, 64));
+        let split = plan(&f, 10, 1, 64, 64, 1, 64, Some(32), None).unwrap();
+        assert_eq!((split.grid, split.block), (2, 32));
+        assert_eq!(split.grid * split.block >= 64, true);
+    }
+
+    #[test]
+    fn a_global_index_module_is_recognised() {
+        let f = ptx_facts(&global_ptx()).unwrap();
+        assert!(f.uses_block_id);
+        assert!(!ptx_facts(&clamp_ptx()).unwrap().uses_block_id);
+    }
+
+    #[test]
+    fn a_grid_over_a_block_local_module_is_refused() {
+        // One block is fine for either shape; a grid is only fine when the PTX
+        // reads `%ctaid`.
+        let local = ptx_facts(&clamp_ptx()).unwrap();
+        assert!(plan(&local, 10, 1, 65, 65, 1, 65, None, None).is_ok());
+        assert!(matches!(
+            plan(&local, 10, 1, 65, 65, 1, 64, None, None),
+            Err(Refusal::NeedsBlockIndex { extent: 65, block: 64 })
+        ));
     }
 
     #[test]
     fn every_mismatch_is_named_before_the_driver() {
-        let f = ptx_facts(&clamp_ptx()).unwrap();
+        let f = ptx_facts(&global_ptx()).unwrap();
         assert!(matches!(
-            plan(&f, 10, 1, 65, 0, 1, None),
+            plan(&f, 10, 1, 65, 0, 1, 64, None, None),
             Err(Refusal::ExtentZero)
         ));
         assert!(matches!(
-            plan(&f, 10, 1, 65, 64, 1, None),
+            plan(&f, 10, 1, 65, 64, 1, 64, None, None),
             Err(Refusal::ExtentMismatch { recorded: 65, requested: 64 })
         ));
         assert!(matches!(
-            plan(&f, 10, 1, 2000, 2000, 1, None),
-            Err(Refusal::ExtentExceedsBlock { .. })
-        ));
-        assert!(matches!(
-            plan(&f, 10, 1, 65, 65, 2, None),
+            plan(&f, 10, 1, 65, 65, 2, 64, None, None),
             Err(Refusal::Arity { expected: 1, got: 2 })
         ));
         assert!(matches!(
-            plan(&f, 15, 2, 65, 65, 2, None),
+            plan(&f, 15, 2, 65, 65, 2, 64, None, None),
             Err(Refusal::ParamCount { recorded: 15, ptx: 10 })
         ));
         assert!(matches!(
-            plan(&f, 10, 1, 65, 65, 1, Some((6, 1))),
+            plan(&f, 10, 1, 65, 65, 1, 64, None, Some((6, 1))),
             Err(Refusal::TargetNewerThanDevice { .. })
         ));
-        assert!(plan(&f, 10, 1, 65, 65, 1, Some((7, 5))).is_ok());
+        assert!(matches!(
+            plan(&f, 10, 1, 65, 65, 1, 64, Some(2048), None),
+            Err(Refusal::BlockTooLarge { block: 2048 })
+        ));
+        assert!(matches!(
+            plan(&f, 10, 1, 65, 65, 1, 64, Some(0), None),
+            Err(Refusal::BlockZero)
+        ));
+        assert!(plan(&f, 10, 1, 65, 65, 1, 64, None, Some((7, 5))).is_ok());
     }
 
     #[test]
     fn a_module_without_address_conversion_is_refused() {
-        let f = ptx_facts(&clamp_ptx().replace("cvta.to.global.u64 %rd2, %rd1;", "")).unwrap();
+        let f = ptx_facts(&global_ptx().replace("cvta.to.global.u64 %rd2, %rd1;", "")).unwrap();
         assert!(matches!(
-            plan(&f, 10, 1, 65, 65, 1, None),
+            plan(&f, 10, 1, 65, 65, 1, 64, None, None),
             Err(Refusal::NoAddressConversion)
         ));
     }
 
     #[test]
     fn a_missing_entry_is_refused() {
-        let mut f = ptx_facts(&clamp_ptx()).unwrap();
+        let mut f = ptx_facts(&global_ptx()).unwrap();
         f.entry = "clamp".to_string();
         assert!(matches!(
-            plan(&f, 10, 1, 65, 65, 1, None),
+            plan(&f, 10, 1, 65, 65, 1, 64, None, None),
             Err(Refusal::EntryMissing { .. })
         ));
     }

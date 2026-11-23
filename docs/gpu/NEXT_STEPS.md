@@ -400,23 +400,38 @@ linking it) preflights before launching: PTX `.target` against the device's
 capability (PTX is not backward-compatible), the `.param .u64` count against
 `input_arity` at five words per memref, extent and arity against the record,
 and a block size the device accepts. `avm-nvlaunch launch` uploads the
-buffers, launches one block of `extent` threads, synchronises and reads back;
+buffers, launches blocks of the module's declared size (64, so two blocks at
+extent 65), synchronises and reads back;
 `scripts/gpu/launch` publishes the artifacts for the device's own chip and
 compares that readback with `avm-gpu reference` on the WGSL bundle — the
-KernelIR evaluator, not a retyped expectation. It prints the measured identity
-(`10 u64 word(s)`, `1×65 threads`, `56 element(s) changed`), and requires
-three refusals: a wrong extent, a wrong arity, and a PTX whose `.target` is
-newer than the device (the refused module gets the driver's own verdict,
-`CUDA_ERROR_INVALID_PTX`, so the refusal is measured rather than assumed). The
-launch exposed a real emitter bug: `gpu.thread_id` is block-local, so at
-extent 65 a second block rewrote 0–63 and index 64 was never written; the
-element index is now `block_id * block_dim + thread_id` (re-captured and
-pinned by PC09/G19a).
-Not claimed: this is one device and one input pattern; the PTX is a virtual
-ISA, so nothing here is a preservation proof or an instruction-level
-certificate (PC09/PC10), the ABI header stays `g19a-pending`, and hardware
-results are not reproduced in CI (the gate reports a `[gap]` where no device
-is visible).
+KernelIR evaluator, not a retyped expectation. The launch exposed a real
+emitter bug: `gpu.thread_id` is block-local, so at extent 65 a second block
+rewrote 0–63 and index 64 was never written; the element index is now
+`block_id * block_dim + thread_id` (re-captured and pinned by PC09/G19a).
+The same run expands to the v1 corpus the card asks for: every `Pointwise`
+entry that has a direct scalar body — 12 of the 14, unary and two-operand, so
+the one- and two-memref ABI shapes are both measured — is published for the
+device's chip, launched at extent 65, once again at 1025 (17 blocks) and once
+with `--block 32` (an uneven 3-block grid), and compared with `avm-gpu
+reference`. Fourteen launches, `[detail] … geometries measured: 2x64, 3x32,
+17x64`. Each launch is recorded in `mm0/proof_chain/nvidia/launch.toml`
+(device, geometry, ABI words, PTX/KernelIR/output digests, changed elements)
+and `check` refuses a run that differs from that record, so a changed emitter,
+ABI or chip is a finding rather than a silent refresh. Five refusals are
+required: a wrong extent, a wrong arity, a block size no device accepts, a PTX
+whose `.target` is newer than the device (the refused module gets the driver's
+own verdict, `CUDA_ERROR_INVALID_PTX`, so the refusal is measured rather than
+assumed), and the two helper-calling entries `addConstant`/`polynomial`,
+which MLIR refuses by name (`helper call is not lowered yet`) before any
+bundle is published. Every launch also agrees with the C backend's own
+`expected` column in `examples/gpu/pointwise/corpus.tsv`, repeated to the
+launch extent — a second oracle independent of the KernelIR evaluator; a table
+cell altered by one fails at that index.
+Not claimed: this is one device; the PTX
+is a virtual ISA, so nothing here is a preservation proof or an instruction-
+level certificate (PC09/PC10), the ABI header stays `g19a-pending`, and
+hardware results are not reproduced in CI (the gate reports a `[gap]` where no
+device is visible).
 
 ## Proof reuse for the first scalar shader
 

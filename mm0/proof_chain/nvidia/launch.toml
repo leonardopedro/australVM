@@ -1,0 +1,264 @@
+# G21a: the launches this host measured.
+# Written by scripts/gpu/launch --write; never hand-edited.
+# The v1 corpus has 14 entries; `addConstant` and `polynomial` call a
+# helper, which the MLIR emitter refuses (G20a), so 12 are launched.
+
+[device]
+name = "NVIDIA GeForce GTX 1060 with Max-Q Design"
+capability = "6.1"
+driver_version = 13000
+chip = "sm_61"
+launcher = "avm-nvlaunch launch"
+
+[[launch]]
+entry = "identity"
+extent = 65
+input_arity = 1
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 10
+chip = "sm_61"
+changed = 0
+ptx_sha256 = "ae27c7a42bc0519a6eb9275df6ce66796820d8992fb81969c92b93e6a9d9c7e4"
+kernelir_sha256 = "3bf86ed8139c0d95806c46d6e27b598c7b1129d079dd31fd13de38161bebcf14"
+output_sha256 = "14bf6b5096b289932919c1ccbb19e9a01b4ee2654c09ffc33e03364dafbaba87"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 6
+table_agrees = true
+
+[[launch]]
+entry = "clamp"
+extent = 65
+input_arity = 1
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 10
+chip = "sm_61"
+changed = 43
+ptx_sha256 = "9f921307ef7d04352bf4cf3be03e1d9f03bc91eda533a961e0c0d3605b6adc3a"
+kernelir_sha256 = "48caf04ea1714fba539ab596cd83d4f7ab537f3eea7837a5b129ccbecb9d8288"
+output_sha256 = "84db1137e4194841a4200a2b313d0de212ff16e5b95d374be366cde0bdaf6eb0"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 6
+table_agrees = true
+
+[[launch]]
+entry = "invert"
+extent = 65
+input_arity = 1
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 10
+chip = "sm_61"
+changed = 65
+ptx_sha256 = "ae22f2d66a48aefb0ca929763b6c726234f1ad1d68e231b406344ec22442b70a"
+kernelir_sha256 = "db8dc8329a3f98e43e1098b47fc4166935eb29ae5b5fd66366179594b7afd234"
+output_sha256 = "1246f63adc264ffcfa1ff0fdd8962ac6b74b6d335e30db30c2277070d5165253"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 6
+table_agrees = true
+
+[[launch]]
+entry = "twice"
+extent = 65
+input_arity = 1
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 10
+chip = "sm_61"
+changed = 54
+ptx_sha256 = "185149f1b36f64a8d530e641ef046b3429c5d5a51f5e78b0d0388d591a904346"
+kernelir_sha256 = "c17e210c48cb0b84b737c4ade0b2a217531fa467811b4ef9a3e936ebbd6d1065"
+output_sha256 = "861be56acf251fd2ad5d66eeac817e2bddb6c29a5f27c5788118a941b0e9fc74"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 6
+table_agrees = true
+
+[[launch]]
+entry = "minimum"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 32
+ptx_sha256 = "96aef2e65d2ac19423967a4fc7d02f5968e0dad780b436161c9348d0c5da7163"
+kernelir_sha256 = "d1bf9c65304dd9e67a469a7dd5ab0541f9f89daddb04ae1fa4d533b39efe366e"
+output_sha256 = "0905f52f02c5741238b5a431e3c0ed503e23376f8b83e13b60c8f3288ba2bf91"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "difference"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 55
+ptx_sha256 = "d4124ae3fa58e7029db9c6bd001719186a0419e9ebbabea342c7d4b4616861d5"
+kernelir_sha256 = "22e234db1204f1e3b5301c941f495e97569bf3391cdf2da96a593a7c61fc1424"
+output_sha256 = "f41e362a8c9c21d8af5306ff7c76d25f5b69ef09b02c48ea1dc9a2f648e3b988"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "add"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 55
+ptx_sha256 = "87de70fe0eb68c9461f0f0a2f1dab000061ad40755337d47d8ee330e8db36f7f"
+kernelir_sha256 = "491674a4b4aebd914d6b19a854132f30a44911bc6c350e8935a4ccc6056045e8"
+output_sha256 = "6fabceb5d15cdb2de7a21bca80221c95f2ff8394411cac536e5b8de6431ee59c"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "multiply"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 50
+ptx_sha256 = "8f31d83fd3b490f7563f3961268f9522a11b0fb444ecedbb919f4af3cd0126ad"
+kernelir_sha256 = "ba6a142fc5e67c399ca87af86ffb0fe832db916e12a7f2f9fe9c339119b6253a"
+output_sha256 = "89571e22d93ce9e84a1a0ded91d37086b59c09e8919527e176b42ae6fdea8c68"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "bitAnd"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 50
+ptx_sha256 = "80c7cdbb89082cff4a520dd7bc7c7a690f40f43e24ae55a86393fd2ca4d01e03"
+kernelir_sha256 = "d5ae40f2f82d2411fbc71c0c2ff5bc205389a6c87e0d961515c539a72f108d05"
+output_sha256 = "897dd912ce94e72decc19d75d650804a9dfd774116e26d43a630de09302b03bd"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "bitOr"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 50
+ptx_sha256 = "a98adf16c1d71548358fbf1e4e49d6c3c9b6cba5db19ca98697778d35595d994"
+kernelir_sha256 = "e5fd895c91b853855d345fd8fee0ef02dac74d7f9bcfbd123230398ca04a3362"
+output_sha256 = "3fb8c1725edd2888815c934d4e94cc970d090fab27e39cab7306513b611a95c4"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "bitXor"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 55
+ptx_sha256 = "29a9d634941c222d4416425c04737640d4837c6323b12b163b4c1e03116369ea"
+kernelir_sha256 = "544569a50a85f541703b0f14a6b8986a7dc575e7fdcb6f5b932f70bbb24dd444"
+output_sha256 = "1889dd6184b703d9586717ed05b8486f34ee61eb74cb475ce31729556b259df6"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "mask"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+chip = "sm_61"
+changed = 35
+ptx_sha256 = "926fad77df7b09289775ee3ca98c4045df338f5284893cf66e9855978fd7b17c"
+kernelir_sha256 = "db56ca89f6400aae573f288e27b8129a132d72387f6777bfe5f40ab4457d2074"
+output_sha256 = "1694fa0d0986dd12b6a1f70ebfd1dbea869fe6af08836b43ab9f2f04c56ceda1"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "add"
+extent = 1025
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 17
+ptx_params = 15
+chip = "sm_61"
+changed = 878
+ptx_sha256 = "222588559b2fc3ad301e887874d68186eff3bb9d18af7bf3e17e92e2499c8899"
+kernelir_sha256 = "491674a4b4aebd914d6b19a854132f30a44911bc6c350e8935a4ccc6056045e8"
+output_sha256 = "cb3fda961d8acd302bcd45302700e988a28a78757dab4516a558c73e698de7d8"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+
+[[launch]]
+entry = "add"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 32
+grid = 3
+ptx_params = 15
+chip = "sm_61"
+changed = 55
+ptx_sha256 = "87de70fe0eb68c9461f0f0a2f1dab000061ad40755337d47d8ee330e8db36f7f"
+kernelir_sha256 = "491674a4b4aebd914d6b19a854132f30a44911bc6c350e8935a4ccc6056045e8"
+output_sha256 = "6fabceb5d15cdb2de7a21bca80221c95f2ff8394411cac536e5b8de6431ee59c"
+oracle = "avm-gpu reference (KernelIR evaluator, u32-modular-v1)"
+oracle_agrees = true
+table_cases = 14
+table_agrees = true
+block_override = 32

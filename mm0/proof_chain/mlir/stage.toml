@@ -22,7 +22,7 @@ comparison = "GreaterThan"
 kernel_ir_sha256 = "48caf04ea1714fba539ab596cd83d4f7ab537f3eea7837a5b129ccbecb9d8288"
 source_artifact = "mm0/proof_chain/clamp_source.mm0"
 dialect_profile = "none — no MLIR dialect semantics is declared"
-captured_passes = 2
+captured_passes = 4
 
 [[option]]
 name = "numeric_profile"
@@ -56,7 +56,6 @@ pre_sha256 = "52d01cfaade3df43f28ad9e017b07b97d123f498563fb3a22c0cc075864db5a5"
 post_file = "clamp.mlir"
 post_sha256 = "e17b0a0b6b4ab20dc8d0be93c58fb51f9e7c0535ba3c93961381c1bab1abbd58"
 detail = "Gpu_mlir.render ~extent:65 of the reflected KernelIR: captured byte-for-byte, not proved (no MLIR semantics)"
-
 [[pass]]
 name = "mlir-canonicalize"
 state = "captured"
@@ -65,8 +64,26 @@ pre_sha256 = "e17b0a0b6b4ab20dc8d0be93c58fb51f9e7c0535ba3c93961381c1bab1abbd58"
 post_file = "clamp.canonical.mlir"
 post_sha256 = "5acf98dc750edcb131ed4aacadfdabc31c69948c0c5992e93518f4e2cb8c19c8"
 detail = "mlir-opt --canonicalize of the captured module: captured byte-for-byte, not proved (no MLIR semantics)"
+[[pass]]
+name = "mlir-lower-to-nvvm-input"
+state = "captured"
+pre_file = "clamp.canonical.mlir"
+pre_sha256 = "5acf98dc750edcb131ed4aacadfdabc31c69948c0c5992e93518f4e2cb8c19c8"
+post_file = "clamp.pre-nvvm.mlir"
+post_sha256 = "34d0edabddd0fdd8c223428ee1342741366aa44be14bc3a08e7d110eab698ad9"
+detail = "the pinned pipeline's passes before `convert-gpu-to-nvvm` (convert-nvgpu-to-nvvm, gpu-kernel-outlining, convert-vector-to-scf, convert-scf-to-cf, convert-nvvm-to-llvm, convert-func-to-llvm, expand-strided-metadata, nvvm-attach-target, lower-affine, convert-arith-to-llvm, convert-index-to-llvm, canonicalize, cse, strip-debuginfo), captured as one segment: its endpoints are real pipeline bytes, its interior is not individually pinned, and it is not proved"
 
 [[pass]]
 name = "convert-gpu-to-nvvm"
+state = "captured"
+pre_file = "clamp.pre-nvvm.mlir"
+pre_sha256 = "34d0edabddd0fdd8c223428ee1342741366aa44be14bc3a08e7d110eab698ad9"
+post_file = "clamp.post-nvvm.mlir"
+post_sha256 = "7b71782b5d407e7a095c648bd874ab58896f3c15d55d2d8a1e101ea546d07340"
+detail = "the pinned pipeline's own pre/post at this pass, read from its before/after dumps; the run's gpu.object assembly unescapes to the PTX G19a recorded, so this is that lowering; captured, not proved"
+
+[[pass]]
+name = "nvvm-to-ptx"
 state = "uncaptured"
-detail = "G19a lowers clamp.mlir to sm_70 PTX through this pipeline, but the run is not captured as a pass pre/post pair and no pass-local relation is proved"
+detail = "canonicalize, cse, reconcile-unrealized-casts, gpu-to-llvm, gpu-module-to-binary follow; G19a pins the PTX they produce, but these passes are not captured and no pass-local relation is proved for them or for the pair above"
+

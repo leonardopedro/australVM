@@ -219,6 +219,11 @@ type t = {
   entry: string;
   input_arity: int;
   extent: int;
+  (* The block size the module declares (`gpu.known_block_size`), which is the
+     workgroup the memory plan chose. A launch may use a smaller block and a
+     grid; it may not silently use a larger one, so the runner reads this
+     rather than picking a block from the extent. *)
+  workgroup: int;
   numeric_profile: string;
   sources: Gpu_bundle.source list;
   numeric_contract: Yojson.Safe.t;
@@ -249,6 +254,7 @@ let to_yojson (b: t): Yojson.Safe.t =
       "entry", `String b.entry;
       "input_arity", `Int b.input_arity;
       "extent", `Int b.extent;
+      "workgroup", `Int b.workgroup;
       "numeric_profile", `String b.numeric_profile;
       "sources", `List (List.map (fun (s: Gpu_bundle.source) ->
                              `Assoc [ "path", `String s.Gpu_bundle.path;
@@ -285,6 +291,7 @@ let make ~(entry: string) ~(extent: int) ~(sources: Gpu_bundle.source list)
     ~(lowering: lowering): t =
   let ir_sha256 = Gpu_ir.semantic_sha256 kernel in
   { entry; input_arity = kernel.Gpu_ir.input_arity; extent;
+    workgroup = kernel.Gpu_ir.memory.Gpu_ir.workgroup_size;
     numeric_profile = Gpu_ir.profile_name kernel.Gpu_ir.numeric_profile;
     sources; numeric_contract = Gpu_bundle.numeric_contract kernel; ir_sha256;
     mlir_sha256 = sha256_hex mlir; ptx_sha256 = sha256_hex ptx;
@@ -443,6 +450,25 @@ let verify_dir (dir: string): (t * string list, string list) result =
             ptxas = (match member "ptxas" lowering_json |> to_string_opt with Some s -> s | None -> "") }
         in
         let extent = match member "extent" json |> to_int_opt with Some e -> e | None -> 0 in
+        let workgroup =
+          match member "workgroup" json |> to_int_opt with
+          | Some w when w >= 1 && w <= 1024 -> w
+          | Some w ->
+             note (Printf.sprintf
+                     "the recorded workgroup is %d; no device accepts a block \
+                      outside 1..1024" w);
+             0
+          | None -> note "workgroup is missing"; 0 in
+        let declared =
+          Printf.sprintf "gpu.known_block_size = array<i32: %d, 1, 1>" workgroup in
+        (match mlir_recorded with
+         | Some (mlir_file, _) when workgroup >= 1 ->
+            let mlir_text = read_file (Filename.concat dir mlir_file) in
+            if not (contains mlir_text declared) then
+              note (Printf.sprintf
+                      "%s declares no `%s`, so the recorded workgroup is not \
+                       the one the module was built with" mlir_file declared)
+         | _ -> ());
         let entry = match member "entry" json |> to_string_opt with Some e -> e | None -> "" in
         let profile = match member "numeric_profile" json |> to_string_opt with
           | Some p -> p | None -> "" in
@@ -451,7 +477,8 @@ let verify_dir (dir: string): (t * string list, string list) result =
                     "the recorded pipeline is not the one its target names (%s)"
                     (pipeline_for lowering.target) ]
         else
-          Ok ({ entry; input_arity = arity; extent; numeric_profile = profile;
+          Ok ({ entry; input_arity = arity; extent; workgroup;
+                numeric_profile = profile;
                 sources;
                 numeric_contract =
                   (match member "numeric_contract" json with
