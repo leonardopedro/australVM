@@ -573,6 +573,13 @@ pub extern "C" fn rs_cap_close(handle: i64) -> i64 {
     })
 }
 
+/// Write `data` under a directory capability at `path`.
+///
+/// # Safety
+///
+/// `path_ptr` must be null or point to `path_len` readable bytes, and
+/// `data_ptr` to `data_len` readable bytes; both regions must stay alive and
+/// unmodified across the call.
 #[no_mangle]
 pub unsafe extern "C" fn rs_cap_write(
     handle: i64,
@@ -597,6 +604,13 @@ pub unsafe extern "C" fn rs_cap_write(
     })
 }
 
+/// Read a file under a directory capability into the caller's buffer.
+///
+/// # Safety
+///
+/// `path_ptr` must be null or point to `path_len` readable bytes. `out_ptr`
+/// must be null or point to `out_cap` writable bytes, and the caller must keep
+/// that buffer alive and exclusive for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn rs_cap_read(
     handle: i64,
@@ -621,6 +635,13 @@ pub unsafe extern "C" fn rs_cap_read(
     })
 }
 
+/// Send `data` to a peer capability.
+///
+/// # Safety
+///
+/// `peer_ptr` must be null or point to `peer_len` readable bytes, and
+/// `data_ptr` to `data_len` readable bytes; both regions must stay alive and
+/// unmodified across the call.
 #[no_mangle]
 pub unsafe extern "C" fn rs_cap_send(
     handle: i64,
@@ -647,15 +668,21 @@ pub unsafe extern "C" fn rs_cap_send(
     })
 }
 
+/// Collect a settled response into the caller's buffer, 0 while it is pending.
+///
+/// # Safety
+///
+/// `out_ptr` must be null or point to `out_cap` writable bytes, and the caller
+/// must keep that buffer alive and exclusive for the duration of the call.
 #[no_mangle]
-pub extern "C" fn rs_cap_query(handle: i64, id: i64, out_ptr: *mut u8, out_cap: i64) -> i64 {
+pub unsafe extern "C" fn rs_cap_query(handle: i64, id: i64, out_ptr: *mut u8, out_cap: i64) -> i64 {
     contained(|| {
         let (caps, caller) = current()?;
         match caps.query(handle as u64, &caller, id as u64).map_err(|_| CAP_ERR_REFUSED)? {
             // Not settled yet is 0, distinct from an empty response (-0 is still 0),
             // so a caller polls rather than mis-reading a pending request.
             None => Ok(0),
-            Some(response) => unsafe { Ok(copy_out(&response, out_ptr, out_cap)) },
+            Some(response) => Ok(copy_out(&response, out_ptr, out_cap)),
         }
     })
 }

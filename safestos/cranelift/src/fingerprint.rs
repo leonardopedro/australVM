@@ -28,8 +28,14 @@ use sha2::{Digest, Sha256};
 ///
 /// The returned string is owned by the bridge: free it with
 /// [`crate::cranelift_free_string`].
+///
+/// # Safety
+///
+/// `bytes` must be null or point to at least `len` readable bytes, and the
+/// caller must keep that region alive and unmodified for the duration of the
+/// call. A null `bytes` is refused before any dereference.
 #[no_mangle]
-pub extern "C" fn austral_cps_fingerprint(bytes: *const u8, len: usize) -> *mut c_char {
+pub unsafe extern "C" fn austral_cps_fingerprint(bytes: *const u8, len: usize) -> *mut c_char {
     if bytes.is_null() {
         return std::ptr::null_mut();
     }
@@ -67,8 +73,14 @@ pub extern "C" fn austral_cps_fingerprint(bytes: *const u8, len: usize) -> *mut 
 ///
 /// Returns NULL when the module does not compile (there is then no object to
 /// fingerprint, and the artifact must fall back to `obj=unrecorded`).
+///
+/// # Safety
+///
+/// `bytes` must be null or point to at least `len` readable bytes, which must
+/// stay alive and unmodified across the call. A null `bytes` is refused
+/// before any dereference.
 #[no_mangle]
-pub extern "C" fn austral_object_fingerprint(bytes: *const u8, len: usize) -> *mut c_char {
+pub unsafe extern "C" fn austral_object_fingerprint(bytes: *const u8, len: usize) -> *mut c_char {
     if bytes.is_null() {
         return std::ptr::null_mut();
     }
@@ -84,7 +96,7 @@ pub extern "C" fn austral_object_fingerprint(bytes: *const u8, len: usize) -> *m
         return std::ptr::null_mut();
     }
     let object = cap.encode_avce();
-    austral_cps_fingerprint(object.as_ptr(), object.len())
+    unsafe { austral_cps_fingerprint(object.as_ptr(), object.len()) }
 }
 
 /// Host architecture the object digest was taken on (`x86_64`, `aarch64`, …).
@@ -108,7 +120,7 @@ mod tests {
     /// against a value that is public rather than against itself.
     #[test]
     fn empty_input_matches_the_published_digest() {
-        let out = austral_cps_fingerprint(b"".as_ptr(), 0);
+        let out = unsafe { austral_cps_fingerprint(b"".as_ptr(), 0) };
         assert!(!out.is_null());
         let s = unsafe { CString::from_raw(out) }
             .to_string_lossy()
@@ -121,8 +133,8 @@ mod tests {
 
     #[test]
     fn a_single_flipped_byte_changes_the_digest() {
-        let a = austral_cps_fingerprint(b"cps".as_ptr(), 3);
-        let b = austral_cps_fingerprint(b"cpT".as_ptr(), 3);
+        let a = unsafe { austral_cps_fingerprint(b"cps".as_ptr(), 3) };
+        let b = unsafe { austral_cps_fingerprint(b"cpT".as_ptr(), 3) };
         let a = unsafe { CString::from_raw(a) }
             .to_string_lossy()
             .to_string();
@@ -134,8 +146,8 @@ mod tests {
 
     #[test]
     fn null_bytes_is_refused_not_dereferenced() {
-        assert!(austral_cps_fingerprint(std::ptr::null(), 0).is_null());
-        assert!(austral_object_fingerprint(std::ptr::null(), 0).is_null());
+        assert!(unsafe { austral_cps_fingerprint(std::ptr::null(), 0) }.is_null());
+        assert!(unsafe { austral_object_fingerprint(std::ptr::null(), 0) }.is_null());
     }
 
     /// The minimal valid v2 module: magic, module name, one function returning
@@ -166,7 +178,7 @@ mod tests {
     #[test]
     fn the_object_digest_is_well_formed_and_arch_named() {
         let ir = tiny_cps();
-        let a = austral_object_fingerprint(ir.as_ptr(), ir.len());
+        let a = unsafe { austral_object_fingerprint(ir.as_ptr(), ir.len()) };
         assert!(!a.is_null(), "tiny CPS failed to compile");
         let a = unsafe { CString::from_raw(a) }
             .to_string_lossy()
@@ -177,7 +189,7 @@ mod tests {
         let mut other = ir.clone();
         let last = other.len() - 1;
         other[last] ^= 0x01; // a different literal in the body
-        let b = austral_object_fingerprint(other.as_ptr(), other.len());
+        let b = unsafe { austral_object_fingerprint(other.as_ptr(), other.len()) };
         if !b.is_null() {
             let b = unsafe { CString::from_raw(b) }
                 .to_string_lossy()

@@ -33,7 +33,7 @@ fn err() -> String {
 
 fn encode(ty: u32, payload: u64) -> Result<u64, String> {
     let mut out = u64::MAX;
-    let rc = au_scalar_encode(ty, payload, &mut out);
+    let rc = unsafe { au_scalar_encode(ty, payload, &mut out) };
     if rc == 0 {
         Ok(out)
     } else {
@@ -44,7 +44,7 @@ fn encode(ty: u32, payload: u64) -> Result<u64, String> {
 
 fn decode(ty: u32, word: u64) -> Result<u64, String> {
     let mut out = u64::MAX;
-    let rc = au_scalar_decode(ty, word, &mut out);
+    let rc = unsafe { au_scalar_decode(ty, word, &mut out) };
     if rc == 0 {
         Ok(out)
     } else {
@@ -122,9 +122,9 @@ fn floats_cross_as_bit_patterns_and_refuse_garbage() {
 fn unit_and_null_outputs_are_refused() {
     assert!(encode(UNIT, 0).is_err());
     assert!(decode(UNIT, 0).is_err());
-    let rc = au_scalar_encode(I64, 1, std::ptr::null_mut());
+    let rc = unsafe { au_scalar_encode(I64, 1, std::ptr::null_mut()) };
     assert_eq!(rc, 1);
     assert!(err().contains("null output pointer"), "{}", err());
-    let rc = au_scalar_decode(I64, 1, std::ptr::null_mut());
+    let rc = unsafe { au_scalar_decode(I64, 1, std::ptr::null_mut()) };
     assert_eq!(rc, 1);
 }
