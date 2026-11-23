@@ -1,0 +1,287 @@
+# D12: the existing suites after the scheduler's production seams
+# measured 2026-11-23T14:01:56Z on aarch64
+$ cargo test -p unfer_consensus --offline --features network
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+   Compiling unfer_consensus v0.1.0 (/home/leo/Projects/unfer/unfer_consensus)
+warning: variable does not need to be mutable
+   --> unfer_consensus/src/storage.rs:234:13
+    |
+234 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_consensus` (test "request_identity") generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (lib test) generated 2 warnings (2 duplicates)
+warning: `unfer_consensus` (test "distributed_schedules") generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (test "phase6_testnet") generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (test "power_cut") generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (bin "unfer_node") generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (bin "unfer_node" test) generated 1 warning (1 duplicate)
+warning: `unfer_consensus` (test "independent_nodes") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 05s
+     Running unittests src/lib.rs (target/debug/deps/unfer_consensus-8d20f28ffe3e0aea)
+
+running 167 tests
+test attribution::tests::exclusivity_blocks_concurrent_offers ... ok
+test attribution::tests::full_lifecycle_offer_approve_badge_revoke ... ok
+test attribution::tests::offer_validations ... ok
+test attribution::tests::refusal_preserves_state ... ok
+test auction::tests::double_close_and_reopen_are_rejected ... ok
+test attribution::tests::same_log_same_root_different_log_different_root ... ok
+test auction::tests::floor_rejects_low_bids_and_unknown_lot_rejects_bids ... ok
+test auction::tests::no_bids_close_closes_the_lot_without_a_winner ... ok
+test auction::tests::quantity_limited_to_carbon_lot_amount ... ok
+test auction::tests::refusal_preserves_state ... ok
+test auction::tests::replay_is_deterministic_across_instances ... ok
+test auction::tests::tie_breaks_to_earliest_seq ... ok
+test auction::tests::self_bid_and_non_seller_are_rejected ... ok
+test auction::tests::unified_auction_picks_highest_price ... ok
+test certs::proptests::threshold_authority_rejects_non_threshold_ledger ... ok
+test certs::proptests::threshold_mint_authority_accepts_t_of_n_sig ... ok
+test certs::proptests::threshold_mint_authority_rejects_small_coalition ... ok
+test certs::proptests::threshold_mint_authority_rejects_wrong_message ... ok
+test certs::proptests::threshold_mint_replay_converges ... ok
+test certs::tests::burn_refusal_preserves_state ... ok
+test certs::tests::burn_retires_value ... ok
+test certs::tests::conservation_violation_rejected ... ok
+test certs::tests::double_spend_rejected ... ok
+test certs::tests::duplicate_input_rejected ... ok
+test certs::tests::duplicate_output_rejected ... ok
+test certs::tests::mint_is_idempotent_per_commitment ... ok
+test certs::tests::mint_requires_authority ... ok
+test certs::tests::owner_mismatch_rejected ... ok
+test certs::tests::root_changes_on_apply ... ok
+test certs::tests::smt_insert_remove_roundtrip ... ok
+test certs::tests::transfer_conserves_value ... ok
+test certs::tests::transfer_split_outputs ... ok
+test engine::tests::empty_log_returns_nothing ... ok
+test engine::tests::get_log_filters_by_seq ... ok
+test engine::tests::local_receipt_is_its_own_slot ... ok
+test engine::tests::submit_assigns_monotonic_seq ... ok
+test escrow::tests::hold_interposes_until_settled ... ok
+test escrow::tests::refund_returns_to_the_buyer ... ok
+test escrow::tests::release_delivers_to_the_seller ... ok
+test escrow::tests::replay_reproduces_the_escrow_mirror ... ok
+test escrow::tests::unknown_or_non_holding_escrow_is_refused ... ok
+test idempotency::tests::a_client_cannot_exhaust_memory_by_inventing_incarnations ... ok
+test idempotency::tests::a_client_store_failure_does_not_advance_the_sequence ... ok
+test idempotency::tests::a_file_backed_client_sequence_survives_a_reopen ... ok
+test idempotency::tests::a_restarted_client_resumes_its_persisted_sequence ... ok
+test idempotency::tests::a_retry_with_different_bytes_is_a_conflict ... ok
+test idempotency::tests::a_retry_with_the_same_bytes_replays_the_recorded_result ... ok
+test idempotency::tests::below_the_retained_floor_a_retry_is_refused_not_reapplied ... ok
+test idempotency::tests::failed_f_is_not_committed ... ok
+test idempotency::tests::identical_transfer_bytes_map_to_one_key ... ok
+test idempotency::tests::independent_incarnations_are_distinct_sequence_spaces ... ok
+test idempotency::tests::once_runs_f_only_on_first_delivery ... ok
+test idempotency::tests::prune_before_keeps_recent_guards ... ok
+test idempotency::tests::the_scope_budget_is_counted_separately_from_open_records ... ok
+test idempotency::tests::unacknowledged_clients_hit_the_quota_instead_of_evicting ... ok
+test identity::tests::attacker_revoke_under_its_own_key_is_refused ... ok
+test identity::tests::attacker_update_under_its_own_key_is_refused ... ok
+test identity::tests::create_and_resolve ... ok
+test identity::tests::create_cannot_claim_another_dids_name ... ok
+test identity::tests::duplicate_create_fails ... ok
+test identity::tests::resolve_document_has_correct_structure ... ok
+test identity::tests::revoke_hides_from_resolve ... ok
+test identity::tests::stale_revoke_is_refused ... ok
+test identity::tests::stale_update_fails ... ok
+test identity::tests::unknown_did_returns_none ... ok
+test identity::tests::unsigned_create_is_refused ... ok
+test identity::tests::update_increments_seq ... ok
+test jobs::tests::authz_fail_disables_job ... ok
+test jobs::tests::claim_fire_mark_fired_roundtrip ... ok
+test jobs::tests::double_claim_is_refused ... ok
+test jobs::tests::failed_fire_is_unqueued_and_retried ... ok
+test jobs::tests::stale_claim_cannot_mark_fired_twice ... ok
+test lease::tests::clock_regression_never_fires ... ok
+test lease::tests::exactly_one_leader_per_tick ... ok
+test lease::tests::leader_rotates_round_robin ... ok
+test lease::tests::lost_lease_stops_firing ... ok
+test lease::tests::zero_participants_fail_closed ... ok
+test mathbond::tests::bond_ids_distinguish_terms ... ok
+test mathbond::tests::early_settle_rejected ... ok
+test mathbond::tests::invalid_proof_rejected_bond_stays_funded ... ok
+test mathbond::tests::issue_and_invest_lifecycle ... ok
+test mathbond::tests::issue_validates_terms ... ok
+test mathbond::tests::maturity_refund_lifecycle ... ok
+test mathbond::tests::non_researcher_proof_rejected ... ok
+test mathbond::tests::overfunding_rejected ... ok
+test mathbond::tests::premature_mature_rejected ... ok
+test mathbond::tests::proof_oversize_rejected ... ok
+test mathbond::tests::refusal_preserves_state ... ok
+test mathbond::tests::replay_is_deterministic ... ok
+test mathbond::tests::report_matches_state ... ok
+test mathbond::tests::triggered_bond_settles ... ok
+test mathbond::tests::unknown_bond_rejected ... ok
+test mathbond::tests::valid_proof_triggers_bond ... ok
+test mathbond_market::tests::buy_grants_price_adjusted_tokens_and_roundtrip_conserves ... ok
+test mathbond_market::tests::buy_moves_price ... ok
+test mathbond_market::tests::claim_before_resolve_rejected ... ok
+test mathbond_market::tests::claim_pays_winning_tokens_and_lp_fees ... ok
+test mathbond_market::tests::double_resolve_rejected ... ok
+test mathbond_market::tests::lp_gets_reserve_when_no_one_held_winning_tokens ... ok
+test mathbond_market::tests::never_outcome_wins_on_maturity ... ok
+test mathbond_market::tests::open_and_add_liquidity ... ok
+test mathbond_market::tests::open_pool_requires_terminal_never_outcome ... ok
+test mathbond_market::tests::refusal_preserves_state ... ok
+test mathbond_market::tests::remove_liquidity_pays_fees_and_keeps_invariant ... ok
+test mathbond_market::tests::replay_is_deterministic ... ok
+test mathbond_market::tests::resolve_makes_loser_worthless ... ok
+test mathbond_market::tests::sell_cannot_drain_the_pool ... ok
+test mathbond_market::tests::trigger_signal_selects_the_window ... ok
+test mathbond_market::tests::unknown_pool_rejected ... ok
+test net::tests::a_committed_value_applies_on_a_ledger_that_never_queued_it ... ok
+test net::tests::a_noop_decision_commits_nothing_and_is_not_an_error ... ok
+test net::tests::a_state_dir_must_be_absolute_and_exclusive ... ok
+test net::tests::a_value_of_an_unknown_schema_or_undecodable_payload_is_refused ... ok
+test net::tests::a_zero_deployment_id_is_refused ... ok
+test net::tests::an_undeclared_client_is_refused ... ok
+test net::tests::append_is_idempotent_across_replicas_sharing_one_ledger ... ok
+test net::tests::corrupt_ledger_file_fails_loudly_at_load ... ok
+test net::tests::ledger_file_round_trips_committed_and_queued_state ... ok
+test net::tests::members_must_be_consecutive_replicas_from_one ... ok
+test net::tests::the_outbox_is_drained_by_the_decision_and_is_not_needed_to_apply_it ... ok
+test net::tests::two_replicas_cannot_share_an_address ... ok
+test node::tests::a_gap_in_committed_history_halts_without_applying_anything_past_it ... ok
+test node::tests::a_mismatched_journal_halts_instead_of_merging_two_histories ... ok
+test node::tests::a_receipt_bounded_wait_reports_unknown_not_success ... ok
+test node::tests::a_recorded_transition_survives_a_restart_and_is_compared_not_reapplied ... ok
+test node::tests::a_refused_entry_between_two_good_ones_does_not_wedge_the_suffix ... ok
+test node::tests::a_refused_entry_leaves_the_ledger_fingerprint_unchanged ... ok
+test node::tests::a_storage_failure_is_a_halt_and_a_domain_error_is_a_refusal ... ok
+test node::tests::a_tampered_entry_is_refused_on_replay ... ok
+test node::tests::a_torn_transition_write_halts_at_that_slot ... ok
+test node::tests::an_acknowledged_request_result_survives_a_restart ... ok
+test node::tests::an_unrecordable_request_result_is_reported_as_unrecorded_not_refused ... ok
+test node::tests::certificate_ledger_roundtrip_via_consensus ... ok
+test node::tests::double_submitted_transfer_applies_once_and_conservation_holds ... ok
+test node::tests::failed_fire_is_unqueued_and_retried ... ok
+test node::tests::five_nodes_converge_on_certificate_root ... ok
+test node::tests::incremental_sync ... ok
+test node::tests::invalid_signature_rejected ... ok
+test node::tests::market_resolve_forgery_rejected ... ok
+test node::tests::mathbond_market_consensus_roundtrip ... ok
+test node::tests::refused_certificate_op_advances_the_slot_with_a_typed_outcome ... ok
+test node::tests::session_op_dispatch_locks_to_shared_consensus_ops ... ok
+test node::tests::settle_applies_the_entry_it_reports_as_committed ... ok
+test node::tests::settle_reports_a_refusal_rather_than_committed ... ok
+test node::tests::submit_and_sync_content ... ok
+test node::tests::submit_and_sync_identity ... ok
+test node::tests::threshold_mint_rejects_forged_sig_at_submit ... ok
+test node::tests::threshold_mint_submit_syncs_through_the_gate ... ok
+test node::tests::two_nodes_converge ... ok
+test node::tests::two_nodes_single_leader_fires_per_tick ... ok
+test signing::tests::a_domain_separated_signature_is_bound_to_its_domain ... ok
+test signing::tests::a_legacy_signature_still_verifies ... ok
+test signing::tests::altered_bytes_are_refused_under_both_layouts ... ok
+test signing::tests::canonical_bytes_zeroes_signature ... ok
+test signing::tests::did_format_is_correct ... ok
+test signing::tests::keypair_generates_unique_keys ... ok
+test signing::tests::sign_and_verify_identity_op ... ok
+test signing::tests::tampered_signature_fails_verification ... ok
+test signing::tests::wrong_key_fails_verification ... ok
+test storage::tests::a_complete_frame_with_a_bad_checksum_is_corruption_not_a_torn_tail ... ok
+test storage::tests::a_partial_header_at_eof_is_torn ... ok
+test storage::tests::a_torn_tail_is_discarded_and_the_log_stays_usable ... ok
+test storage::tests::a_write_failure_before_the_frame_leaves_nothing ... ok
+test storage::tests::an_uncertain_write_is_reported_as_uncertain ... ok
+test storage::tests::records_survive_a_reopen ... ok
+test storage::tests::slots_must_increase_and_request_slots_must_be_known ... ok
+test certs::proptests::fuzz_transfers_never_break_conservation_or_double_spend ... ok
+
+test result: ok. 167 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.72s
+
+     Running unittests src/bin/unfer_node.rs (target/debug/deps/unfer_node-00d8349929c1702d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/distributed_schedules.rs (target/debug/deps/distributed_schedules-931a73caaf73799e)
+
+running 7 tests
+test a_duplicated_grant_applies_once ... ok
+test a_storage_failure_halts_instead_of_skipping ... ok
+test every_guard_is_witnessed_by_a_minimal_schedule ... ok
+test seeded_random_walks_find_no_violation ... ok
+test the_domain_applies_and_refuses_as_specified ... ok
+test the_same_trace_produces_the_same_state ... ok
+test a_bounded_exhaustive_search_finds_no_violation ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.18s
+
+     Running tests/independent_nodes.rs (target/debug/deps/independent_nodes-2ba64896af0aff17)
+
+running 1 test
+test three_processes_commit_identically_and_one_catches_up_after_a_kill ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+     Running tests/phase6_testnet.rs (target/debug/deps/phase6_testnet-31077acddc20a086)
+
+running 4 tests
+test phase6_oracle_client_audits_provenance_from_the_cluster ... ok
+test phase6_nodes_survive_full_cluster_restart ... ok
+test phase6_secondary_market_escrow_lands_on_the_consensus_log ... ok
+test phase6_testnet_backs_consensus_node_with_certificate_ops ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+     Running tests/power_cut.rs (target/debug/deps/power_cut-4933f00d8dbaef46)
+
+running 4 tests
+test a_killed_writer_leaves_a_journal_that_recovers_and_continues ... ok
+test child_writer ... ok
+test the_child_is_this_binary ... ok
+test a_half_frame_from_a_dead_process_is_discarded_not_reported_as_corruption ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/request_identity.rs (target/debug/deps/request_identity-4aba12f296d45be8)
+
+running 6 tests
+test a_conflicting_retry_is_refused_and_applies_nothing ... ok
+test a_client_that_invents_incarnations_is_bounded_and_can_retire_a_run ... ok
+test a_request_below_the_acknowledged_floor_is_refused_after_restart_of_retention ... ok
+test a_settled_rejection_is_replayed_to_the_retrying_client ... ok
+test a_retried_request_is_submitted_once_and_lands_in_one_slot ... ok
+test different_request_ids_with_identical_bytes_are_distinct_actions ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+   Doc-tests unfer_consensus
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT=0

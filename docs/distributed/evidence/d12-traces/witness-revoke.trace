@@ -1,0 +1,4 @@
+guard=Revoke original=8 minimized=4
+  seed=23 steps=4 actions=[admit:0/0:identity-create admit:0/0:identity-revoke deliver:0 deliver:2] choices=[Content:content.request=2 Content:content.request=3 Scheduling:sched.deliver=0 Scheduling:sched.deliver=2 Fuel:fuel.depth=4]
+  outcome: a replica that was down for create and revoke replays both in log order: revoked=Some(true), applied=2, digest 2:221b71e0be2bfe249560ae77e18783478ded1d1a878a7e1e04015f9535ea4894 vs peer 2:221b71e0be2bfe249560ae77e18783478ded1d1a878a7e1e04015f9535ea4894
+  fingerprint: 13754d9f641b4033e8629bc2de7c67c9c9a79399c2bdb33dce62fb983b8b5750

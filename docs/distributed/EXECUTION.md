@@ -1272,6 +1272,118 @@ Evidence: `docs/distributed/evidence/d11-lib.log`,
 * SIGKILL is used here only to stop a process, not to inject a storage fault;
   the crash matrix over these processes is D13.
 
+## D12 — deterministic fault scheduler over the production transition core (2026-11-23, steps 1–3 of 3)
+
+**New** `unfer_consensus/src/sim.rs` and
+`unfer_consensus/tests/distributed_schedules.rs`; `unfer_consensus/src/lib.rs`
+(publishes the module), `src/storage.rs` and `src/node.rs` (two test seams, see
+below).
+
+### The node is real; the environment is scheduled (step 1)
+
+The harness does not reimplement the node. Each replica is a `ConsensusNode`
+over its own real `TransitionLog`, and the things a test cannot control from
+outside become explicit inputs:
+
+| Input a process really gets | How the harness supplies it |
+|---|---|
+| which committed decisions this replica has learned | `EngineView::horizon`: `get_log` reveals only slots up to it |
+| whether it can reach the quorum to propose | `EngineView::writable`: a partitioned replica's `submit` is refused by the engine, not by the node |
+| what the next journal append returns | `TransitionLog::inject` via `ConsensusNode::inject_storage_fault` (`BeforeWrite`), which is the existing D07 fault point, re-compiled for the library so an integration test can arm it |
+| whether the process is running | `Crash` drops the node; `Restore` re-opens it over the same directory **and the same engine view**, so a restore-then-deliver is a catch-up |
+| duplicate and reordered requests | `Retry` re-sends the same request id and the same signed payload; `Deliver` is per replica, so replicas apply the same log at different times |
+
+The consensus engine is an assumption in this harness, stated rather than
+tested: one `Cluster` holds the decided log, and the harness decides who has
+learned what. Application order is an input. Ordering correctness is D11's
+QuePaxa dependency, not this task's claim.
+
+### Nondeterminism is registered (step 2)
+
+Every choice is recorded in a `Trace` with a class and a stable site id, and the
+classes are kept apart because a failure in one is a different claim:
+`Content` (which request, and whether it is a fresh or duplicated encoding — a
+bad client), `Scheduling` (deliver/partition/crash/restore — a bad host), and
+`Fuel` (how many steps a bounded run may take — a truncated run mistaken for a
+pass, so a run that stops on the bound says so). The generator is SplitMix64, not
+OS entropy: the same seed and the same action list reproduce the same trace and
+the same state fingerprint, which the replay test asserts, including that a
+*different* seed changes nothing when the action list is fixed.
+
+### The fixed domain, its bounds, and what pruning means (step 3)
+
+| Bound | Value |
+|---|---|
+| Clients | 2 (each with its own keypair, DID and durable request sequence) |
+| Replicas | 3 (each with its own directory, journal and engine view) |
+| Requests | 2 — an authorized mint (applies) and a mint by the non-authority client (refused by the node itself, slot advances) |
+| Action alphabet | 8 fixed actions (2 admits, 1 retry, 3 delivers, 1 partition, 1 crash) |
+| Depth | 4 |
+| Unpruned state space | 4681 prefixes; the search executed **617**, pruned **278** as equivalent, reached **262** leaves, and found **no violation** |
+| Seeded walks (past the bound) | 32 runs × 12 steps, **22 distinct** final states, no violation |
+
+Pruning is by `Sim::state_key` — decided log, per-replica watermark, liveness and
+state digest. Two prefixes with the same key are treated as admitting the same
+continuations, which holds only because the transition core is deterministic and
+every input beyond that key is an action in the trace. Retention pruning and a
+lost journal would break the equivalence; this domain does neither, and that is
+why the bound is a bound and not a proof.
+
+### The four guards, minimized
+
+Each guard is a schedule that a design missing the guard would fail. The
+schedule is minimized (one-removal-per-pass, repeated) and the minimized form is
+re-run, so the recorded witness is the shortest one the harness found:
+
+| Guard | Script → minimal | What the production core did on the minimal schedule |
+|---|---|---|
+| dedup | 3 → **3** | two committed entries for one mint (`2` slots), one application: supply **100**, both replicas applied 2 of 2 |
+| rejection | 3 → **2** | unauthorized mint refused at slot 1 (**UK-7001**), watermark **1**, not halted, supply 0 |
+| restart | 7 → **4** | a replica restarted over its journal applied 2 of 2 slots and holds the peer's digest `2:204b0b8d…` |
+| revoke | 8 → **4** | a replica that was down for create *and* revoke replays both in log order: revoked, applied 2, digest `2:221b71e0…` equal to its peer |
+
+`saves`: the traces are written to `docs/distributed/evidence/d12-traces/` (one
+`.trace` per guard, plus `bounded-search.txt` and `witnesses.txt`). The
+`UNFER_D12_TRACES` variable is what puts them there, so the evidence is
+regenerated rather than copied by hand.
+
+### What the harness observed and the docs must not smooth over
+
+A storage failure at slot 1 leaves the replica **halted with watermark 0** while
+its in-memory certificate ledger already shows the evaluated mint (supply 100,
+applied 0, UK-5011, `journal_error` set). Nothing is acknowledged and the
+watermark does not move, but the memory view of a halted node is not a state
+anyone may read — and D11's `SharedLedger` is a second path that applies
+transitions, so whether a live halted node can be served from it is a real
+question, recorded here and handed to D13 rather than answered by assumption.
+The test then proves the durable path does not double-count: crash, restore, and
+the slot applies exactly once.
+
+```text
+$ cargo test -p unfer_consensus --offline --features network
+unittests src/lib.rs          167 passed
+tests/distributed_schedules.rs 7 passed
+tests/independent_nodes.rs     1 passed
+tests/phase6_testnet.rs        4 passed
+tests/power_cut.rs             4 passed
+tests/request_identity.rs      6 passed
+                                                            EXIT=0
+```
+
+Evidence: `docs/distributed/evidence/d12-schedules.log` (the run above with its
+report lines), `d12-suites.log`, `d12-traces/`.
+
+### What this is not
+
+* A bounded search is not an all-run proof: 617 prefixes of 4681, depth 4,
+  alphabet 8, and the 32 walks are the whole claim.
+* The consensus engine is an assumption. Nothing here says anything about
+  QuePaxa's ordering or liveness.
+* No real transport, filesystem or OS scheduler is involved; `FaultPoint` is the
+  existing D07 injection point, not a new fault model.
+* Wall-clock timers are not modelled: the harness has no time, only steps, which
+  is why the trace's classes are content, scheduling and fuel and not "deadline".
+
 ## Task status
 
 | Task | Status | Note |
@@ -1288,4 +1400,5 @@ Evidence: `docs/distributed/evidence/d11-lib.log`,
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
 | D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
 | D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
-| D12–D26 | not started | D12 is next: a deterministic fault scheduler over the production transition core |
+| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 2 requests, 8 actions, depth 4) executed 617 of 4681 prefixes, pruned 278, found no violation; 32 seeded walks of 12 steps reached 22 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault is handed to D13 |
+| D13–D26 | not started | D13 is next: the abrupt-crash and storage-recovery fault matrix over the node processes |

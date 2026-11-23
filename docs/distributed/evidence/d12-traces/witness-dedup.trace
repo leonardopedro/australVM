@@ -1,0 +1,4 @@
+guard=Dedup original=3 minimized=3
+  seed=23 steps=3 actions=[admit:0/0:mint-authorised retry:0/1 deliver:0] choices=[Content:content.request=0 Content:content.retry=1 Scheduling:sched.deliver=0 Fuel:fuel.depth=3]
+  outcome: two committed entries for one mint (slots 2), one application: supply is 100 and both replicas applied 2 of 2 slot(s)
+  fingerprint: 57eda116e7f246c22d63a863d840ac581d916a3b39777361778bdde1730ff3ad
