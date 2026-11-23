@@ -1102,6 +1102,50 @@ PY
             gap "PC10b: the instruction-word listing not checked (tooling absent: python3)"
         fi
 
+        # PC11 defines the first NPU branch: one target, one operator, one
+        # opaque cut. The inventory is data and the obligations are MM0, so
+        # `scripts/npu-profile` is the only thing that makes either a claim: it
+        # re-derives the command list's byte counts and offsets from the
+        # declared shape and layout, checks the accumulation bound over the i8
+        # range, reads the admitted step out of the `.aui`/`.aum` and compiles
+        # it, holds every stage to exactly one stated obligation, and refuses
+        # ten mutations of those facts. Exit 3 (no compiler here) is a `[gap]`.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc11=0
+            python3 "$repo_root/scripts/npu-profile" check \
+                >"$_cert_tmp/pc11.log" 2>&1 || _pc11=$?
+            case $_pc11 in
+                0)
+                    grep -E '^  \[detail\]|^  \[pass\] PC11 (replay|operator|layout|dma-command|quantization|obligations|opaque)' \
+                        "$_cert_tmp/pc11.log" >&2
+                    if grep -q '^  \[pass\] PC11: the operator/layout/DMA-command stages are inspectable' \
+                            "$_cert_tmp/pc11.log"; then
+                        check "PC11: the NPU branch's inspectable stages are checked and its opaque cut is named" true
+                    else
+                        cat "$_cert_tmp/pc11.log" >&2
+                        check "PC11: the NPU branch's inspectable stages are checked and its opaque cut is named" false
+                    fi
+                    if grep -q '^  \[pass\] PC11 controls: ' "$_cert_tmp/pc11.log"; then
+                        check "PC11: the NPU inventory's controls refuse" true
+                    else
+                        cat "$_cert_tmp/pc11.log" >&2
+                        check "PC11: the NPU inventory's controls refuse" false
+                    fi
+                    ;;
+                3)
+                    cat "$_cert_tmp/pc11.log" >&2
+                    gap "PC11: the NPU branch not checked (no compiler here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/pc11.log" >&2
+                    check "PC11: the NPU branch's inspectable stages are checked and its opaque cut is named" false
+                    check "PC11: the NPU inventory's controls refuse" false
+                    ;;
+            esac
+        else
+            gap "PC11: the NPU branch not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then

@@ -545,6 +545,19 @@ state, not an approximation excuse.
 | compute-tile ISA | **opaque** | AIE-ML VLIW instructions, AM020 only |
 | firmware | **opaque** | vendor-signed firmware and ERT scheduling |
 
+**Landed 2026-11-23.** `scripts/npu-profile check` now makes the inventory a
+claim instead of data: it re-derives every byte count from dtype and shape,
+every offset from the declared layout, the sixteen stores' partition of `C`,
+the cap from `lib/npu_dma_gate.ml`, and the accumulation bound over the i8
+range; it reads `dot4`'s arity, types and product count out of the
+`.aui`/`.aum` and compiles the module with `--target-type=c`; it holds each of
+the nine stages to exactly one stated obligation in
+`mm0/proof_chain/npu_operator.mm0` (replayed by `mm0-rs`/`mm0-c` when present,
+a `[gap]` otherwise); and ten mutations of those facts must be refused.
+`docs/proof/NPU_PROFILE.md` is the profile document. The cut below is unchanged
+by any of that: the checker inspects this repository's description, not the
+tile.
+
 **The cut, stated so it cannot be softened.** `operator → binary/firmware` is
 unproved and stays unproved: the operator's meaning is a statement about integers
 this repository can check, the ctrlcode and overlay are formats it can hash, and

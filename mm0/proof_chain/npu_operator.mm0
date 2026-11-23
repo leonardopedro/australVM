@@ -1,0 +1,129 @@
+-- npu_operator.mm0 — PC11's NPU stage obligations, stated and cited.
+--
+-- PC11 asks for the first NPU proof branch to be *defined*: one target, one
+-- operator, an honest inventory of which stages expose semantics, and MM0
+-- obligations for the inspectable operator/layout/DMA-command stages. The
+-- inventory is `mm0/proof_chain/npu/target.toml`; the operator, its
+-- quantization profile and its command list are
+-- `mm0/proof_chain/npu/quantdot.toml`; the admitted Austral computation is
+-- `examples/npu/QuantDot.aui`/`.aum`. This file adds the other half — one named
+-- obligation per stage, so "the native edge is unproved" stops being a
+-- sentence and becomes a list a reviewer can reject one row at a time.
+--
+-- The target is AMD XDNA (Ryzen AI). Its compiler is open (IRON on top of
+-- Peano), its application binaries are documented (an overlay plus a ctrlcode
+-- of `XAie_TxnOpcode`), and its compute tiles are AIE-ML VLIW processors whose
+-- semantics exist only as an architecture manual (AM020). That is exactly the
+-- shape the card expects: the operator/layout/DMA-command stages are
+-- *inspectable data* this repository holds and checks, while the
+-- operator → binary/firmware edge is named and left open.
+--
+-- WHAT IS CHECKED, AND WHERE. `scripts/npu-profile check`:
+--
+--   * every stage of `target.toml` has exactly one obligation here, and no
+--     obligation names a stage the inventory does not declare — so a new stage
+--     cannot arrive without its statement, and a statement cannot outlive its
+--     row;
+--   * every `inspectable` stage's subject is one of the card's four (operator,
+--     quantization, layout, DMA command), and every `opaque` stage names its
+--     prerequisite, so "opaque" cannot be a word used to skip a question;
+--   * the command list of `quantdot.toml` is checked concretely: byte counts
+--     re-derived from dtype and shape, L2 offsets from the buffers before
+--     them, every operand and store offset from the declared row-major layout,
+--     the 16 stores' disjointness and coverage of C, every command inside its
+--     buffer and the SRAM gate's 256 KiB cap, and the numeric bound by
+--     exhausting the i8 range — measured, not asserted;
+--   * the admitted side is real: the step, its arity, its `Int32` operands and
+--     `Int32` result and its four products are read out of the `.aui`/`.aum`
+--     text, and the module is compiled by the repository's own compiler. No
+--     compiler → `[gap]` (exit 3), never a pass;
+--   * every `-- cites:` digest below is the current content of the file it
+--     names;
+--   * this file carries no `axiom` and no `theorem`: a stated obligation is not
+--     an admitted one, and `verify-invariants` fails if either appears.
+--
+-- The intended meaning, written here where a reviewer can disagree with it.
+-- For the tile's output index `i` (one of the 16 `(row, col)` pairs), let
+-- `step_i(a, b)` be `dot4` applied to A's row and B's column:
+--
+--   op_denotes o i v        means   step_i is the operator's value: v
+--   layout_places t i off   means   output i occupies byte `off` of C, and A's
+--                                   row / B's column elements occupy the
+--                                   declared operand byte offsets
+--   command_moves c src dst means   command c moves exactly `bytes(c)` from
+--                                   `src` into `dst` at `offset(c)`
+--
+-- The first two are *checked on the declared fixture* (16 of 16), the third is
+-- checked as a list against the buffers and the cap. What is not stated, and
+-- cannot be here, is that AIE-ML execution realizes `op_denotes`:
+--
+--   aie_executes elf o      means   the tile ELF computes the operator
+--   ctrlcode_effects cc c   means   the ctrlcode performs command c
+--   fw_schedules fw cc      means   the firmware runs the ctrlcode as declared
+--
+-- Those three relations are the opaque cut. They are uninterpreted, nothing in
+-- this file says any of them holds, and no artifact in this repository could
+-- discharge them: AM020 is prose and the firmware is a signed vendor blob.
+--
+-- What this file is NOT:
+--   * not a certificate — see "no axiom, no theorem" above;
+--   * not a DMA certificate: a command list that fits the cap says nothing
+--     about what the hardware does with it, and "a DMA certificate or a
+--     successful inference test cannot satisfy native-instruction-required
+--     policy" is the card's own sentence;
+--   * not a numeric bridge: the exact-accumulation bound is re-derived and
+--     checked here, but relating `s32` accumulation to a real-number model is
+--     PC12's;
+--   * not a generic NPU backend: one target, one operator, one layout.
+--
+--   The `[gap]` is the honest state: nine stages stated, four checked
+--   concretely, five unproved, three of those opaque by construction.
+--
+-- cites: mm0/proof_chain/npu/target.toml sha256=ddc88c60113764cde1a49c1e36f0e85f4b94c868eac876cb4bc7e23c756e651d
+-- cites: mm0/proof_chain/npu/quantdot.toml sha256=431f201371ab966ad3acb57c615c0a603023a61dbe6d4b1dfc880f4cccf029ff
+-- cites: examples/npu/QuantDot.aui sha256=2453f657f101d4a386f4f8e4d564c018112405c54c108d7a14fc8ee079bfe410
+-- cites: examples/npu/QuantDot.aum sha256=e42a14641fdd07470142684c433eec7498650e61c2454b090cb428c8bbb587bb
+-- cites: lib/npu_dma_gate.ml sha256=89ff0df88c6b334187eab7455dfc803bb7ba6f5fef7278a69b60c91f23d88673
+--
+-- certificate: [gap] — one stated obligation per stage, no proof. No
+--   `mm0/approved/npu_operator.stmts` exists, so this is not a W3 statement of
+--   record either; `scripts/verify-invariants` reports it as unapproved.
+--
+-- The obligations, in route order. Each names its state exactly as
+-- `target.toml` declares it; `check` refuses a mismatch in either direction.
+-- obligation: operator state=inspectable step=dot4 shape=4x4x4
+-- obligation: quantization state=inspectable profile=int8_sym_exact_s32
+-- obligation: layout state=inspectable map=row-major outputs=16
+-- obligation: dma-command state=inspectable opcode=XAIE_IO_BLOCKWRITE commands=3
+-- obligation: compiler-ir state=declared compiler=iron,peano
+-- obligation: overlay state=declared identity=xdna-array-overlay
+-- obligation: ctrlcode state=declared semantics=XAie_TxnOpcode
+-- obligation: compute-tile-isa state=opaque identity=aie-ml-vliw
+-- obligation: firmware state=opaque identity=amdxdna-signed-firmware
+
+-- theory: self-declared vocabulary — the sorts and terms below are this
+-- artifact's whole theory; no rule is imported from another MM0 file, and the
+-- semantics the claims are *about* lives in the cited files, not here.
+--
+-- `provable sort Prop` is how this repository's MM0 files get a proposition
+-- sort (see `mm0/store_projection.mm0`); without it `: Prop` is "sort not found".
+sort Op;                        -- one operator, uninterpreted
+sort Idx;                       -- an output index of the tile
+sort Val;                       -- an accumulated s32 value
+sort Tile;                      -- the declared 4x4x4 tile descriptor
+sort Cmd;                       -- one DMA command
+sort Blob;                      -- an artifact: overlay, ctrlcode, firmware ELF
+provable sort Prop;
+
+-- The inspectable side. `op_denotes` is intended as "the operator computes v at
+-- i"; the fixture's 16 checks are its concrete instances, not a proof of it.
+term op_denotes (o: Op) (i: Idx) (v: Val): Prop;
+term layout_places (t: Tile) (i: Idx) (off: Val): Prop;
+term command_moves (c: Cmd) (src dst: Blob): Prop;
+
+-- The opaque side. Uninterpreted, with no axiom and no theorem about them: the
+-- tile ELF's execution, the ctrlcode's effect and the firmware's scheduling are
+-- exactly the operator -> binary/firmware edge PC11 names and cannot cross.
+term aie_executes (elf: Blob) (o: Op): Prop;
+term ctrlcode_effects (cc: Blob) (c: Cmd): Prop;
+term fw_schedules (fw: Blob) (cc: Blob): Prop;

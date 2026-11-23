@@ -1,0 +1,603 @@
+#!/usr/bin/env python3
+"""PC11: the first NPU proof branch — one target, one operator, one opaque cut.
+
+`PLAN_proof_chain.md` PC11 asks for one actual target/runtime and one supported
+tensor operation, an honest inventory of which stages expose semantics, MM0
+obligations for the inspectable operator/layout/DMA-command stages, and — when
+the vendor compiler emits an opaque artifact — its identity plus an explicit
+unproved operator→binary/firmware edge.
+
+The target is AMD XDNA (Ryzen AI). This script checks the branch, it does not
+create it:
+
+  * `mm0/proof_chain/npu/target.toml` is a *complete* inventory: every stage has
+    a state in {inspectable, declared, opaque}, an `opaque` stage names the
+    prerequisite it is blocked on, an `inspectable` stage is one of the card's
+    four, and the 256 KiB command cap is read out of `lib/npu_dma_gate.ml`
+    rather than restated;
+  * `mm0/proof_chain/npu/quantdot.toml` is the operator/quantization/command
+    fixture, and its numbers are *re-derived*: byte counts from dtype and
+    shape, L2 offsets from the buffers before them, all 16 outputs' operand and
+    store offsets from the declared row-major layout, the stores' disjointness
+    and coverage of the output buffer, every command against its buffer and the
+    cap, and the accumulation bound by exhausting the i8 range;
+  * the admitted Austral computation is real: `QuantDot:dot4`'s arity, operand
+    and result types and its four products are read out of the interface and
+    body text, and the module is compiled by the repository's own compiler
+    (no compiler is a `[gap]`, exit 3, never a pass);
+  * `mm0/proof_chain/npu_operator.mm0` states exactly one obligation per stage,
+    agrees with the inventory about every stage's state, cites the current
+    bytes of the five artifacts it is about, admits nothing (no `axiom`, no
+    `theorem`), and is replayed by `mm0-rs` + `mm0-c` when they are installed;
+  * eight controls must be refused, so none of the above is a check that cannot
+    fail — see `controls()`.
+
+The last line is deliberately modest: the *inspectable* stages are inspected,
+and the native edge is named and unproved. "A DMA certificate or a successful
+inference test cannot satisfy native-instruction-required policy" is the card's
+own sentence, and `[pass] PC11` means the inventory is honest, not that an NPU
+computed anything.
+
+Exit codes: 0 checked, 1 refused, 2 usage, 3 not checked (no compiler or no
+mm0 toolchain on this host).
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TARGET = ROOT / "mm0/proof_chain/npu/target.toml"
+FIXTURE = ROOT / "mm0/proof_chain/npu/quantdot.toml"
+ARTIFACT = ROOT / "mm0/proof_chain/npu_operator.mm0"
+CAP_SOURCE = ROOT / "lib/npu_dma_gate.ml"
+COMPILER = ROOT / "_build/default/bin/austral.exe"
+BRIDGE = ROOT / "safestos/cranelift/target/release"
+
+INSPECTABLE = {"operator", "quantization", "layout", "dma-command"}
+STATES = {"inspectable", "declared", "opaque"}
+SIZES = {"i8": 1, "s32": 4}
+CITES = [
+    "mm0/proof_chain/npu/target.toml",
+    "mm0/proof_chain/npu/quantdot.toml",
+    "examples/npu/QuantDot.aui",
+    "examples/npu/QuantDot.aum",
+    "lib/npu_dma_gate.ml",
+]
+
+
+class Refusal(Exception):
+    """A check that failed. The message is the finding."""
+
+
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def show(path: Path) -> str:
+    """A path for messages: repo-relative when it is inside the tree, else its
+    own name. The controls copy files to a temporary directory to mutate them,
+    and a refusal must not raise while formatting its own message."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def load(path: Path) -> dict:
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except FileNotFoundError:
+        raise Refusal(f"{show(path)} is missing")
+    except tomllib.TOMLDecodeError as exc:
+        raise Refusal(f"{show(path)} does not parse: {exc}")
+
+
+def keys(table: dict, required: set, where: str) -> None:
+    missing = required - set(table)
+    extra = set(table) - required
+    if missing:
+        raise Refusal(f"{where} is missing {sorted(missing)}")
+    if extra:
+        raise Refusal(f"{where} has undeclared field(s) {sorted(extra)}")
+
+
+# ── the target inventory ──────────────────────────────────────────────────
+
+
+def check_inventory(path: Path, cap_source: Path) -> dict:
+    doc = load(path)
+    keys(doc, {
+        "schema", "target", "target_long", "compiler", "runtime", "device_family",
+        "command_cap_bytes", "command_cap_source", "host_measured", "host_state",
+        "stage", "citations",
+    }, "the inventory")
+    if doc["schema"] != "austral.npu.target.v1":
+        raise Refusal(f"the inventory schema is {doc['schema']!r}, not austral.npu.target.v1")
+    if doc["target"] != "amd-xdna":
+        raise Refusal(f"the target is {doc['target']!r}; PC11 names the AMD XDNA branch")
+
+    # The cap is not restated: it is the SRAM gate's own constant.
+    text = cap_source.read_text()
+    m = re.search(r"MAX_NPU_SRAM\s*=\s*(\d+)", text)
+    if not m:
+        raise Refusal(f"{show(cap_source)} no longer declares MAX_NPU_SRAM")
+    if doc["command_cap_bytes"] != int(m.group(1)):
+        raise Refusal(
+            f"the inventory's cap is {doc['command_cap_bytes']}, but "
+            f"{show(cap_source)} says MAX_NPU_SRAM = {m.group(1)}")
+
+    stages = doc["stage"]
+    if not stages:
+        raise Refusal("the inventory declares no stage")
+    names = [s.get("name") for s in stages]
+    if len(set(names)) != len(names):
+        raise Refusal("the inventory declares a stage twice")
+    for stage in stages:
+        where = f"stage {stage.get('name')!r}"
+        name = stage.get("name")
+        if not isinstance(name, str) or not name:
+            raise Refusal("a stage has no name")
+        keys(stage, {"name", "state", "subject", "note"} |
+             ({"identity"} if stage.get("identity") else set()) |
+             ({"artifact"} if "artifact" in stage else set()) |
+             ({"prerequisite"} if "prerequisite" in stage else set()), where)
+        if stage["state"] not in STATES:
+            raise Refusal(f"{where} has state {stage['state']!r}, not one of {sorted(STATES)}")
+        if stage["state"] == "inspectable" and name not in INSPECTABLE:
+            raise Refusal(
+                f"{where} claims to be inspectable, but the card's inspectable "
+                f"stages are {sorted(INSPECTABLE)}")
+        if stage["state"] == "opaque":
+            if not stage.get("prerequisite"):
+                raise Refusal(f"{where} is opaque and names no prerequisite")
+            if not stage.get("identity"):
+                raise Refusal(f"{where} is opaque and names no identity")
+        if stage["state"] == "declared" and not stage.get("artifact"):
+            raise Refusal(f"{where} is declared and names no artifact")
+    cites = doc["citations"]
+    if len(cites) < 4:
+        raise Refusal(f"the inventory cites {len(cites)} source(s); at least four are expected")
+    for cite in cites:
+        keys(cite, {"url", "establishes"}, "a citation")
+        if not cite["url"].startswith("https://") or not cite["establishes"].strip():
+            raise Refusal(f"citation {cite['url']!r} is not a https URL with an established claim")
+    if doc["host_measured"]:
+        raise Refusal(
+            "the inventory says host_measured = true; no NPU, XRT, Peano or IRON "
+            "exists on this host, so nothing here may be recorded as measured")
+    print(f"  [detail] PC11 target: {doc['target_long']}")
+    counts = {s: sum(1 for r in stages if r['state'] == s) for s in STATES}
+    print(f"  [detail] PC11 inventory: {len(stages)} stage(s): "
+          f"{counts['inspectable']} inspectable, {counts['declared']} declared, "
+          f"{counts['opaque']} opaque")
+    return doc
+
+
+# ── the admitted Austral computation ──────────────────────────────────────
+
+
+def check_admitted(fixture: dict) -> str:
+    admitted = fixture["admitted"]
+    interface = ROOT / admitted["interface"]
+    body = ROOT / admitted["body"]
+    for path in (interface, body):
+        if not path.exists():
+            raise Refusal(f"the admitted source {show(path)} is missing")
+    text = interface.read_text()
+    step = admitted["step"]
+    m = re.search(rf"function\s+{re.escape(step)}\s*\(([^)]*)\)\s*:\s*(\w+)\s*;", text)
+    if not m:
+        raise Refusal(f"{admitted['interface']} declares no `function {step}(...) : T;`")
+    params = [p.split(":")[-1].strip() for p in m.group(1).split(",") if p.strip()]
+    result = m.group(2)
+    if len(params) != admitted["params"]:
+        raise Refusal(
+            f"{step} takes {len(params)} parameter(s), the fixture says {admitted['params']}")
+    wrong = {p for p in params if p != admitted["param_type"]}
+    if wrong:
+        raise Refusal(f"{step}'s parameter type(s) {sorted(wrong)} are not {admitted['param_type']}")
+    if result != admitted["result_type"]:
+        raise Refusal(f"{step} returns {result}, the fixture says {admitted['result_type']}")
+    if re.search(rf"module\s+{re.escape(admitted['module'])}\s+is", text) is None:
+        raise Refusal(f"{admitted['interface']} does not declare module {admitted['module']}")
+
+    body_text = body.read_text()
+    m = re.search(rf"function\s+{re.escape(step)}\b.*?\n    end;", body_text, re.S)
+    if not m:
+        raise Refusal(f"{admitted['body']} has no body for {step}")
+    code = "\n".join(line.split("--")[0] for line in m.group(0).splitlines())
+    products = code.count("*")
+    adds = code.count("+")
+    if products != admitted["multiplies"]:
+        raise Refusal(f"{step} computes {products} product(s), the fixture says {admitted['multiplies']}")
+    if adds != admitted["adds"]:
+        raise Refusal(f"{step} adds {adds} time(s), the fixture says {admitted['adds']}")
+
+    if not COMPILER.exists():
+        raise Gap(f"{admitted['interface']},{admitted['body']} not compiled (no {COMPILER.relative_to(ROOT)})")
+    out = Path(tempfile.mkdtemp(prefix="pc11-admit-")) / "quantdot"
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = f"{ROOT}:{BRIDGE}:" + env.get("LD_LIBRARY_PATH", "")
+    proc = subprocess.run(
+        [str(COMPILER), "compile", f"{interface},{body}", "--target-type=c",
+         f"--entrypoint={admitted['module']}:main", f"--output={out}"],
+        capture_output=True, text=True, env=env)
+    if proc.returncode != 0:
+        raise Refusal(f"the compiler refuses {admitted['interface']},{admitted['body']}: "
+                      f"{proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else 'no message'}")
+    print(f"  [pass] PC11 operator: {admitted['module']}:{step} admitted "
+          f"({len(params)} {admitted['param_type']} -> {result}, {products} product(s)) and compiled")
+    return f"{admitted['module']}:{step}"
+
+
+class Gap(Exception):
+    """Not checkable here. Never a pass."""
+
+
+# ── the fixture's arithmetic: the concrete inspectable claim ──────────────
+
+
+def check_fixture(fixture: dict, cap: int) -> None:
+    keys(fixture, {"schema", "operator", "tile_op", "admitted", "shape", "layout",
+                   "numeric", "buffer", "tile", "dma", "premise"}, "the fixture")
+    if fixture["schema"] != "austral.npu.operator.v1":
+        raise Refusal(f"the fixture schema is {fixture['schema']!r}, not austral.npu.operator.v1")
+    shape, layout, numeric = fixture["shape"], fixture["layout"], fixture["numeric"]
+    tile = fixture["tile"]
+    keys(shape, {"m", "k", "n"}, "[shape]")
+    keys(layout, {"operands", "output", "element_bytes", "accumulator_bytes"}, "[layout]")
+    keys(numeric, {"profile", "zero_point", "scale_a", "scale_b", "element_min",
+                   "element_max", "product_min", "product_max", "accumulator_min",
+                   "accumulator_max", "widening", "requantization"}, "[numeric]")
+    keys(tile, {"rows", "cols"}, "[tile]")
+    if (shape["m"], shape["k"], shape["n"]) != (tile["rows"], tile["k"] if "k" in tile else shape["k"], tile["cols"]):
+        raise Refusal("[shape] and [tile] disagree")
+    if shape["m"] != tile["rows"] or shape["n"] != tile["cols"]:
+        raise Refusal("[shape]'s output rows/cols are not the tile's")
+    if layout["element_bytes"] != SIZES["i8"] or layout["accumulator_bytes"] != SIZES["s32"]:
+        raise Refusal("[layout]'s element/accumulator widths are not i8/s32")
+    for name, want in (("operands", "row-major"), ("output", "row-major")):
+        if layout[name] != want:
+            raise Refusal(
+                f"[layout].{name} is {layout[name]!r}; this branch reflects only "
+                f"the {want} shape — a different layout needs its own offsets and "
+                f"its own tile map, so it cannot reuse this fixture")
+
+    buffers = fixture["buffer"]
+    if not buffers:
+        raise Refusal("the fixture declares no buffer")
+    by_name = {}
+    expected_offset = 0
+    for buf in buffers:
+        keys(buf, {"name", "role", "dtype", "rows", "cols", "bytes", "l2_offset"},
+             f"buffer {buf.get('name')!r}")
+        if buf["name"] in by_name:
+            raise Refusal(f"buffer {buf['name']!r} is declared twice")
+        if buf["dtype"] not in SIZES:
+            raise Refusal(f"buffer {buf['name']!r} has dtype {buf['dtype']!r}")
+        want = buf["rows"] * buf["cols"] * SIZES[buf["dtype"]]
+        if buf["bytes"] != want:
+            raise Refusal(f"buffer {buf['name']!r} says {buf['bytes']} bytes; "
+                          f"{buf['rows']}x{buf['cols']} {buf['dtype']} is {want}")
+        if buf["l2_offset"] != expected_offset:
+            raise Refusal(f"buffer {buf['name']!r} starts at L2 offset "
+                          f"{buf['l2_offset']}, not {expected_offset} (the buffers must pack)")
+        expected_offset += buf["bytes"]
+        by_name[buf["name"]] = buf
+    total = expected_offset
+    if total > cap:
+        raise Refusal(f"the tile needs {total} byte(s) of L2, over the {cap}-byte cap")
+    if (shape["m"], shape["k"], shape["n"]) != (buffers[0]["rows"], shape["k"], buffers[0]["cols"]):
+        raise Refusal("the operator shape is not the first buffer's shape")
+
+    # The 16 outputs: operands inside A and B, stores a partition of C.
+    a, b, c = by_name["A"], by_name["B"], by_name["C"]
+    if (a["role"], b["role"], c["role"]) != ("input", "input", "output"):
+        raise Refusal("A and B must be inputs and C the output")
+    stores = []
+    for r in range(shape["m"]):
+        for col in range(shape["n"]):
+            for j in range(shape["k"]):
+                for buf, off in ((a, r * a["cols"] + j), (b, j * b["cols"] + col)):
+                    if not 0 <= off < buf["bytes"]:
+                        raise Refusal(
+                            f"operation ({r},{col}) reads byte {off} of {buf['name']}, "
+                            f"outside its {buf['bytes']} byte(s)")
+            stores.append((r * shape["n"] + col) * SIZES[c["dtype"]])
+    if len(stores) != shape["m"] * shape["n"] or sorted(stores) != list(
+            range(0, c["bytes"], SIZES[c["dtype"]])):
+        raise Refusal("the 16 stores do not partition C: the tile map is not the layout")
+    print(f"  [pass] PC11 layout: {len(stores)} of {shape['m'] * shape['n']} output(s) "
+          f"and their operands lie inside {c['bytes']}-byte C, row-major, as a partition")
+
+    commands = fixture["dma"]
+    if not commands:
+        raise Refusal("the fixture declares no DMA command")
+    for cmd in commands:
+        keys(cmd, {"opcode", "direction", "buffer", "offset", "bytes"},
+             f"DMA command for {cmd.get('buffer')!r}")
+        buf = by_name.get(cmd["buffer"])
+        if buf is None:
+            raise Refusal(f"DMA command names unknown buffer {cmd['buffer']!r}")
+        if cmd["opcode"] != "XAIE_IO_BLOCKWRITE":
+            raise Refusal(f"DMA command uses {cmd['opcode']!r}, not XAIE_IO_BLOCKWRITE")
+        if cmd["bytes"] != buf["bytes"]:
+            raise Refusal(f"the DMA command for {buf['name']} moves {cmd['bytes']} byte(s), "
+                          f"the buffer holds {buf['bytes']}")
+        if cmd["offset"] != 0:
+            raise Refusal(f"the DMA command for {buf['name']} starts at host offset "
+                          f"{cmd['offset']}; the fixture's buffers are whole-buffer moves")
+        want = "l2-to-host" if buf["role"] == "output" else "host-to-l2"
+        if cmd["direction"] != want:
+            raise Refusal(f"the DMA command for {buf['name']} is {cmd['direction']!r}, not {want}")
+        if buf["l2_offset"] + cmd["bytes"] > cap:
+            raise Refusal(f"the DMA command for {buf['name']} ends at "
+                          f"{buf['l2_offset'] + cmd['bytes']}, over the {cap}-byte cap")
+    moved = {(b2["byte"] if False else b2["bytes"]) for b2 in buffers}
+    if len({(buf["l2_offset"], buf["bytes"]) for buf in buffers}) != len(buffers):
+        raise Refusal("two buffers overlap in L2")
+    print(f"  [pass] PC11 dma-command: {len(commands)} XAIE_IO_BLOCKWRITE command(s), "
+          f"{total} byte(s) of L2, inside the {cap}-byte SRAM gate")
+
+    # The numeric contract is re-derived, not read.
+    lo, hi = numeric["element_min"], numeric["element_max"]
+    if (lo, hi) != (-128, 127):
+        raise Refusal(f"the i8 range is {lo}..{hi}")
+    products = [x * y for x in range(lo, hi + 1) for y in range(lo, hi + 1)]
+    if (min(products), max(products)) != (numeric["product_min"], numeric["product_max"]):
+        raise Refusal(f"the product range is {min(products)}..{max(products)}, "
+                      f"not {numeric['product_min']}..{numeric['product_max']}")
+    k = shape["k"]
+    want = (k * min(products), k * max(products))
+    if want != (numeric["accumulator_min"], numeric["accumulator_max"]):
+        raise Refusal(f"the {k}-term accumulator range is {want[0]}..{want[1]}, "
+                      f"not {numeric['accumulator_min']}..{numeric['accumulator_max']}")
+    if numeric["widening"] != "exact" or numeric["requantization"] != "none":
+        raise Refusal("this profile is exact and does no requantisation; the fixture says otherwise")
+    print(f"  [pass] PC11 quantization: bound {want[0]}..{want[1]} re-derived from "
+          f"the i8 range and k={k}")
+
+    premises = {p["name"]: p for p in fixture["premise"]}
+    keys({p["name"]: p for p in fixture["premise"]}, {"widening", "overlay", "native"},
+         "the premise register")
+    for name, premise in premises.items():
+        keys(premise, {"name", "text"}, f"premise {name!r}")
+        if not premise["text"].strip():
+            raise Refusal(f"premise {name!r} has no text")
+
+
+# ── the stated obligations ────────────────────────────────────────────────
+
+
+def parse_obligations(text: str) -> dict:
+    rows = {}
+    for line in text.splitlines():
+        m = re.match(r"^-- obligation: (\S+) state=(\S+)", line)
+        if m:
+            if m.group(1) in rows:
+                raise Refusal(f"obligation {m.group(1)!r} is stated twice")
+            rows[m.group(1)] = m.group(2)
+    return rows
+
+
+def check_artifact(path: Path, inventory: dict) -> None:
+    text = path.read_text()
+    if re.search(r"^(axiom|theorem)\s", text, re.M):
+        raise Refusal(f"{show(path)} admits something (axiom/theorem); "
+                      "a stated obligation is not an admitted one")
+    if "-- certificate: [gap]" not in text:
+        raise Refusal(f"{show(path)} does not say its certificate is a gap")
+    stages = {s["name"]: s["state"] for s in inventory["stage"]}
+    stated = parse_obligations(text)
+    for name, state in stated.items():
+        if name not in stages:
+            raise Refusal(f"obligation {name!r} names a stage the inventory does not declare")
+        if stages[name] != state:
+            raise Refusal(f"obligation {name!r} says state={state}, the inventory says "
+                          f"{stages[name]!r}")
+    for name in stages:
+        if name not in stated:
+            raise Refusal(f"stage {name!r} has no obligation in {show(path)}")
+    cites = re.findall(r"^-- cites: (\S+) sha256=([0-9a-f]{64})$", text, re.M)
+    if [c[0] for c in cites] != CITES:
+        raise Refusal(f"{show(path)} cites {[c[0] for c in cites]}, "
+                      f"not the five PC11 artifacts {CITES}")
+    for name, digest in cites:
+        file = ROOT / name
+        if not file.exists():
+            raise Refusal(f"cited artifact {name} is missing")
+        if sha(file) != digest:
+            raise Refusal(f"cited artifact {name} has sha256 {sha(file)[:12]}…, "
+                          f"the artifact pins {digest[:12]}…")
+    print(f"  [pass] PC11 obligations: {len(stated)} stage(s) have one stated obligation "
+          f"each, and every cite is current")
+
+
+def replay(path: Path) -> None:
+    rs, c = shutil.which("mm0-rs"), shutil.which("mm0-c")
+    if not rs or not c:
+        raise Gap(f"{show(path)} not replayed (no mm0-rs/mm0-c on PATH)")
+    with tempfile.TemporaryDirectory(prefix="pc11-mm0-") as tmp:
+        mmb = Path(tmp) / "npu_operator.mmb"
+        proc = subprocess.run([rs, "compile", str(path), str(mmb)],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise Refusal(f"mm0-rs refuses {show(path)}: "
+                          f"{proc.stderr.strip().splitlines()[-1:] or 'no message'}")
+        with path.open("rb") as stream:
+            proc = subprocess.run([c, str(mmb)], stdin=stream,
+                                  capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise Refusal(f"mm0-c refuses {show(path)}: "
+                          f"{proc.stderr.strip().splitlines()[-1:] or 'no message'}")
+        shape = re.search(r"(\d+) sorts, (\d+) term/def, (\d+) ax/thm", proc.stdout)
+    print(f"  [pass] PC11 replay: mm0-rs and mm0-c accept {show(path)}"
+          + (f" ({shape.group(1)} sorts, {shape.group(2)} term/def, {shape.group(3)} ax/thm)"
+             if shape else ""))
+
+
+# ── controls ──────────────────────────────────────────────────────────────
+
+
+def controls(fixture: dict, inventory: dict) -> None:
+    """Each mutation of one declared fact must be refused by the same checks.
+
+    A control that cannot fail is not a control: every mutated copy is fed to
+    the `check` entry point of this same script, which must exit 1 and name the
+    fact it refuses.
+    """
+    base = Path(tempfile.mkdtemp(prefix="pc11-controls-"))
+    text = FIXTURE.read_text()
+    inv_text = TARGET.read_text()
+
+    def run(fixture_mutated: str | None, inventory_mutated: str | None,
+            label: str, needle: str) -> None:
+        # `--no-controls` is load-bearing: without it every refusal probe would
+        # re-run the controls and spawn probes of its own, without bound.
+        args = [sys.executable, str(Path(__file__).resolve()), "check",
+                "--no-controls"]
+        work = base / re.sub(r"\W+", "-", label)
+        work.mkdir()
+        if fixture_mutated is not None:
+            path = work / "quantdot.toml"
+            path.write_text(fixture_mutated)
+            args += ["--fixture", str(path)]
+        if inventory_mutated is not None:
+            path = work / "target.toml"
+            path.write_text(inventory_mutated)
+            args += ["--inventory", str(path)]
+        proc = subprocess.run(args, capture_output=True, text=True)
+        if proc.returncode == 0:
+            raise Refusal(f"control {label!r} was not refused")
+        if needle not in proc.stdout:
+            raise Refusal(f"control {label!r} was refused for the wrong reason: "
+                          f"{(proc.stdout.strip().splitlines() or ['(no output)'])[-1]}")
+        print(f"  [pass] PC11 control refused: {label}")
+
+    run(text.replace("m = 4\nk = 4", "m = 5\nk = 4", 1),
+        None, "a 5-row shape the 4-row tile cannot cover", "shape")
+    run(text.replace('operands = "row-major"', 'operands = "column-major"', 1),
+        None, "a column-major layout reused", "column-major")
+    run(text.replace('buffer = "A"\noffset = 0\nbytes = 16',
+                     'buffer = "A"\noffset = 0\nbytes = 20', 1),
+        None, "a DMA command that overruns its buffer", "DMA command")
+    run(text.replace("accumulator_max = 65536", "accumulator_max = 65535", 1),
+        None, "an accumulation bound that is off by one", "accumulator range is")
+    run(text.replace("params = 8", "params = 6", 1),
+        None, "an admitted arity the interface does not have", "parameter")
+    run(None,
+        inv_text.replace('name = "compute-tile-isa"\nstate = "opaque"',
+                         'name = "compute-tile-isa"\nstate = "inspectable"', 1),
+        "an opaque stage relabelled inspectable", "inspectable")
+    # Remove the firmware stage's `prerequisite` line, whatever its prose says:
+    # matching the whole block would make this control a no-op the moment one
+    # sentence of the note changed, and a mutation that does not apply is a
+    # failure, not a pass.
+    no_prereq = re.sub(
+        r'(name = "firmware"\n(?:[a-z_]+ = .*\n)*?)prerequisite = .*\n',
+        r'\1', inv_text, count=1)
+    if no_prereq == inv_text:
+        raise Refusal("the control 'an opaque stage with no prerequisite' did not apply")
+    run(None, no_prereq, "an opaque stage with no prerequisite", "prerequisite")
+    run(text.replace(
+        'direction = "l2-to-host"\nbuffer = "C"',
+        'direction = "host-to-l2"\nbuffer = "C"', 1),
+        None, "an output moved the wrong way", "l2-to-host")
+
+    # A stale cite: the artifact pins the old fixture bytes.
+    work = base / "stale-cite"
+    work.mkdir()
+    artifact = work / "npu_operator.mm0"
+    artifact.write_text(ARTIFACT.read_text().replace(
+        "sha256=431f201371ab966ad3acb57c615c0a603023a61dbe6d4b1dfc880f4cccf029ff",
+        "sha256=431f201371ab966ad3acb57c615c0a603023a61dbe6d4b1dfc880f4cccf029fe", 1))
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "check",
+         "--no-controls", "--artifact", str(artifact)],
+        capture_output=True, text=True)
+    if proc.returncode == 0 or "pins" not in proc.stdout:
+        raise Refusal(f"control 'a stale citation' was not refused ({proc.returncode})")
+    print("  [pass] PC11 control refused: a stale citation of the fixture")
+
+    # A stage with no obligation.
+    work = base / "no-obligation"
+    work.mkdir()
+    artifact = work / "npu_operator.mm0"
+    artifact.write_text(re.sub(r"^-- obligation: firmware .*\n", "", ARTIFACT.read_text(), flags=re.M))
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "check",
+         "--no-controls", "--artifact", str(artifact)],
+        capture_output=True, text=True)
+    if proc.returncode == 0 or "no obligation" not in proc.stdout:
+        raise Refusal(f"control 'a stage with no obligation' was not refused ({proc.returncode})")
+    print("  [pass] PC11 control refused: a stage with no stated obligation")
+
+
+# ── entry point ───────────────────────────────────────────────────────────
+
+
+def main(argv: list[str]) -> int:
+    global TARGET, FIXTURE, ARTIFACT, CAP_SOURCE
+    args = list(argv[1:])
+    if any(a in ("-h", "--help") for a in args):
+        print(__doc__.split("Exit codes:")[0].strip())
+        return 0
+    # `check` is the default (and documented) mode; the controls pass it too.
+    if args and args[0] == "check":
+        args.pop(0)
+    no_controls = False
+    while args:
+        flag = args.pop(0)
+        if flag == "--no-controls":
+            no_controls = True
+        elif flag in ("--inventory", "--fixture", "--artifact") and args:
+            path = Path(args.pop(0)).resolve()
+            if flag == "--inventory":
+                TARGET = path
+            elif flag == "--fixture":
+                FIXTURE = path
+            else:
+                ARTIFACT = path
+        else:
+            print(f"[FAIL] PC11: unknown argument {flag!r} (use `check`, `--inventory`, "
+                  f"`--fixture`, `--artifact`)", file=sys.stderr)
+            return 2
+    try:
+        cap_doc = load(TARGET)
+        inventory = check_inventory(TARGET, CAP_SOURCE)
+        cap = int(cap_doc["command_cap_bytes"])
+        fixture = load(FIXTURE)
+        check_admitted(fixture)
+        check_fixture(fixture, cap)
+        check_artifact(ARTIFACT, inventory)
+        try:
+            replay(ARTIFACT)
+        except Gap as exc:
+            print(f"[gap] PC11: {exc}")
+        print("  [pass] PC11 opaque cut: compute-tile-isa and firmware are named, "
+              "with their prerequisites; the operator -> binary/firmware edge is unproved")
+        print("  [pass] PC11: the operator/layout/DMA-command stages are inspectable and "
+              "checked against the admitted computation; the native edge is named, not claimed")
+        if not no_controls:
+            controls(fixture, inventory)
+            print("  [pass] PC11 controls: 10 mutations, each refused")
+        return 0
+    except Gap as exc:
+        print(f"[gap] PC11: {exc}")
+        return 3
+    except Refusal as exc:
+        print(f"[FAIL] PC11: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    import hashlib  # noqa: E402  (module-level sha() uses it; imported here keeps the doc first)
+
+    sys.exit(main(sys.argv))
