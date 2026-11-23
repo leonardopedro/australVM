@@ -5,6 +5,15 @@ on:
     branches:
       - master
 
+# `make bridge` defaults to `cargo build --offline` (see the Makefile: on the
+# development host a crates.io index refresh never completes). A CI runner has
+# no warm registry on a cold cache, so offline resolution fails there with
+# "no matching package named `cap-std` found" and takes every job that builds
+# the bridge down with it. An empty CARGO_FLAGS is set, not unset — `?=` in the
+# Makefile must see it defined.
+env:
+  CARGO_FLAGS: ""
+
 jobs:
   # ── Upstream OCaml CI, migrated from nix-shell (23.05) to the flake ─
   # The fork links the cranelift JIT bridge (.so, DT_NEEDED, no rpath) into
@@ -129,6 +138,13 @@ jobs:
       # path dep at ../../../unfer) is cloned with plain git.
       - name: Checkout unfer as sibling (path dep)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+
+      # `arctic` is an optional dependency of the bridge, but cargo resolves
+      # every path dependency in the manifest whether the feature is on or not,
+      # so a missing `../dynamic-arctic` fails the build with "no matching
+      # package named `arctic` found" before any crate is compiled.
+      - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
 
       - name: install nix
         uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30

@@ -19,6 +19,12 @@
 # Rust ABI.
 name: GPU gates
 
+# `make bridge` defaults to `cargo build --offline` (see the Makefile); a fresh
+# CI runner has no warm registry, so the bridge build has to be allowed to
+# fetch. Empty, not unset: the Makefile's `?=` must see it defined.
+env:
+  CARGO_FLAGS: ""
+
 on:
   pull_request:
   push:
