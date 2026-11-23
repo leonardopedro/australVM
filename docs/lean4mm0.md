@@ -560,8 +560,14 @@ of re-axiomatizing it:
 
   ```
   mm0-from-mm from-mm mm0/metamath/set.mm -o mm0/metamath/set.mm0 mm0/metamath/set.mmu
-  sed -i 's/^(pub //' mm0/metamath/set.mmu    # mm0-rs's reader takes no `pub ` prefix
+  sed -i 's/^(pub /( /' mm0/metamath/set.mmu   # mm0-rs's reader takes no `pub ` keyword
   ```
+
+  The substitution keeps the parenthesis: a theorem line in the generated
+  `.mmu` reads `(pub theorem idi …)`, and stripping the whole `(pub ` marker
+  leaves `theorem idi …`, which the reader rejects with `expected '(' or EOF`
+  at the first one — the theory then contributes no declaration at all, and
+  the statement layer fails much later with `term 'wne' not declared`.
 
   (`from-mm`'s spec output is deterministic — regeneration is
   byte-identical — and `set.mm0` is ~21 MB, should committing it ever be
