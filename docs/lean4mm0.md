@@ -5138,7 +5138,9 @@ needs more than 20 of them for 1.9 GB of `def` text.
 **What does elaborate: the axioms plus the defs they name.** A 378 205 914 B slice — both
 theories with their `import` lines stripped, the artifact's header and payload, the 916 `def`s
 the axioms reference (361 217 450 B) and 24 364 of the 24 423 axioms (16 964 141 B of the
-16 986 384), all in source order:
+16 986 384), all in source order. The slice is built by `scripts/mm0-slice`, which takes the
+artifact, the output path and the per-axiom budget, and reproduces the file below byte for
+byte (`sha256 16097230…`, checked after the fact):
 
 | step | result |
 | --- | --- |
@@ -5147,7 +5149,7 @@ the axioms reference (361 217 450 B) and 24 364 of the 24 423 axioms (16 964 141
 
 That is 99.8 % of the artifact's axioms and 90 % of its defs re-elaborated and re-checked by
 the C verifier, on a row whose full artifact never enters either tool. The 59 axioms left out
-are the ones whose own closure of defs exceeds the 40 MB picker budget; the 104 defs left out
+are the ones whose own closure of defs exceeds the 40 MB budget; the 104 defs left out
 are unreachable from any kept axiom; and the row's `theorem` is 3.9 GB on a single line, so
 it is skipped by line size before anything reads it. What is checked is therefore the axiom
 and definition layer of the row, not its final proof — the same scope §9.2 records for the
@@ -5159,5 +5161,91 @@ is arithmetic on the measured ratio, not a measurement. So the 56 GB artifact's 
 unchanged — no host in this project can hand it to `mm0-rs` whole — and the thing that would
 change it is not a bigger machine but a wider sharing threshold (§13.54's floor is a byte
 threshold on *nodes*, not a cap on the biggest one: one def of 1.9 GB is many nodes' worth of
-text). That is a hypothesis this section does not test, because testing it means re-emitting
-the row.
+text). That was a hypothesis this section did not test, because testing it means re-emitting
+the row; §13.58 does, and the answer is no.
+
+### 13.58 A smaller sharing floor does not split the biggest body: measured, twice
+
+The hypothesis §13.57 left open is that the sharing floor, a byte threshold on a node's
+expanded size, could be lowered until the 1.9 GB body broke apart and the `def` block became
+something `mm0-rs` could hold. It cannot, and the reason is one line of the writer: the floor
+decides *whether* a subterm is given a name, and a subterm whose expansion happens once is
+never a candidate. "Smaller floor" therefore means "more names for things that already
+repeated", never "split the unrepeated".
+
+**The row with the resolution to see it: 270 MB, five floors.** §13.46's
+`BookProof.ChapterSirkTruncation` row, re-emitted at floors 1024, 256, 64, 16 and 0 (0 = no
+sharing at all), same trio and `--spine`:
+
+| `LTP_DEF_SHARE` | file bytes | `def` lines | `def` bytes | largest `def` line |
+| ---: | ---: | ---: | ---: | ---: |
+| 1024 | 270 780 117 | 2 012 | 190 627 989 | 12 198 961 |
+| 256 | 262 741 067 | 2 589 | 190 817 642 | 12 198 961 |
+| 64 | 252 517 183 | 3 120 | 187 806 774 | 12 198 961 |
+| 16 | 251 555 911 | 3 240 | 187 808 910 | 12 198 961 |
+| 0 | 2 072 181 724 | 0 | 0 | — |
+
+Two invariants. The `def` block's byte total moves 190.6 → 187.8 MB (1.5 % for a 64× floor
+change, and not monotonically: floor 256 is *larger* than floor 1024, because 577 extra
+headers buy back nothing). And the largest `def` line is 12 198 961 B at every floor — the
+same body, whole, because none of its subterms repeats. The file still shrinks 7.1 %, all of
+it in the axioms and the theorem, which name defs and so get shorter as names replace text.
+(The row's longest line at every floor is not a `def` at all but its 28 064 112 B `theorem`.)
+
+**The 56 GB row at floor 1024 and floor 64.** The ns row re-emitted with
+`LTP_DEF_SHARE=64` in the unit's environment, `LTP_DEDUP_NODES=1`, cap 4 096 MiB, exit 0,
+3 148 s, peak 351 MiB (the floor-1024 run: 3 226 s, peak 351 MiB):
+
+| floor | file bytes | `def` lines | `def` block bytes | largest `def` line | 40 MB slice | slice `mm0-rs` peak |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1024 | 56 000 443 775 | 1 020 | 52 093 369 268 | 1 943 236 784 | 378 205 914 | 13 799 368 kB |
+| 64 | 55 544 970 829 | 1 345 | 51 645 395 466 | 3 999 411 320 | 371 994 145 | 13 695 160 kB |
+
+The file comes down 0.81 %, the block 0.86 %, the defs go up a third — and the largest body
+*grows* 2.06×, to 3 999 411 320 B. That is not noise. The writer emits bodies in reverse
+first-use order, so the first body it writes has nothing live to name and is fully expanded:
+which node that is depends on the naming, so the floor changes *which* unstripped body the
+file opens with, not how unstripped it is. The biggest single term in the row's proof is at
+least 4 GB, and the smallest closed slice is still header + payload + that first body, now
+1 943 261 107 B and unchanged — the same slice `mm0-rs` aborted on under a 20 GB cap in
+§13.57, so re-emitting at floor 64 changes nothing about whether the `def` block fits.
+
+**And the checkable part does not grow either.** `scripts/mm0-slice` on the floor-64
+artifact, 40 MB budget: 371 994 145 B, 1 235 defs (361 269 970 B), 24 365 axioms
+(10 699 854 B — down from 16 964 141, because with more names the axioms are shorter), 59
+skipped by cost. `mm0-rs compile` on it: exit 0, 3 m 53.6 s, 13 695 160 kB, `3 sorts, 1542
+term/def, 24386 ax/thm`, `.mmb` 5 310 544 B. The slice is 1.6 % smaller and costs the same
+13.7 GB. Sharing the axiom layer harder shrinks its text without shrinking what elaborating
+it costs.
+
+**One more run of the emitter, for free.** The first attempt at this re-emission was launched
+without the variable in the unit's environment and so ran at the driver's default 1024: it
+produced exactly 56 000 443 775 B again. That is a third run at the same settings with the
+same byte count, and it confirms what §13.55 recorded from `cmp` — the emitter is
+deterministic at a fixed floor and cap.
+
+**Why `mm0-rs` wants ~36× the bytes, and what bounds it.** Measured on four inputs:
+
+| input | bytes | `mm0-rs` peak RSS | ratio | wall clock |
+| --- | ---: | ---: | ---: | ---: |
+| 40 MB-budget slice, floor 1024 | 378 205 914 | 13 799 368 kB | 36.5× | 3 m 55.6 s |
+| 4 MB-budget slice, floor 1024 | 68 979 345 | 2 489 800 kB | 36.1× | 37.8 s |
+| same slice, `-n/--no-proofs` | 68 979 345 | 2 490 084 kB | 36.1× | 37.6 s |
+| 40 MB-budget slice, floor 64 | 371 994 145 | 13 695 160 kB | 36.8× | 3 m 53.6 s |
+
+The ratio is flat across a 5.5× input range, so the cost is not a phase spike: sampling
+`/proc/<pid>/status` every second through the 68 979 345 B run shows RSS climbing monotonically,
+562 MiB at 3 s to 2 406 MiB at 36 s, i.e. state accumulating over the whole file and still
+held at exit. It is not bytes as such either: the same theories padded with `--` comment
+lines to 90 018 102 B elaborate in 0.15 s at 119 448 kB (1.3×). What the 36× is a multiple of is
+the elaborated term text, which is exactly what def-sharing hides from the file and makes the
+elaborator pay back: the two-floor table above shows a 1.6 % smaller slice costing the same
+memory, and the ratio is a property of this artifact's mix, not of the tool's appetite.
+
+No flag bounds it. `mm0-rs compile --help` offers `-n/--no-proofs`, `-s/--strip`,
+`--cache[=…]`, `-q`, `-W` and `-o/--output`; on this artifact `-n` is a no-op, because these
+are axioms, not theorems — no proof body exists to skip, and on the 68 979 345 B slice the
+`.mmb` it writes is byte-identical (6 079 192 B both ways) for 284 kB more peak. `-s` strips data from the output
+file, `--cache` writes sibling `.mm1`s, and `-q`/`-W`/`-o` are diagnostics and output naming:
+none of them touches the per-term state. The only lever is smaller input, which is why
+§13.57's slice exists and why the floor is the wrong knob for it.

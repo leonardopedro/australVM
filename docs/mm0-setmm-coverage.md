@@ -652,12 +652,17 @@ alone makes the smallest one 1 943 261 107 B, and `mm0-rs` does not elaborate th
 kernel OOM-killed it three times (total-vm 18.6, 11.2, 19.9 GB) and a retry under
 `ulimit -v 20 GB` aborted at 19 989 504 kB after 50.5 s. What does elaborate is the axiom
 layer with the defs it names: a 378 205 914 B slice of both theories (imports stripped), the
-header and payload, 916 `def`s and 24 364 of the 24 423 axioms gives `mm0-rs` exit 0 in
+header and payload, 916 `def`s and 24 364 of the 24 423 axioms (built by `scripts/mm0-slice`,
+which reproduces it byte for byte) gives `mm0-rs` exit 0 in
 3 m 55.6 s (`3 sorts, 1223 term/def, 24385 ax/thm`, 13 799 368 kB peak RSS) and `mm0-c` exit 0
 in 2.9 s. That is 99.8 % of the row's axioms re-checked by the C verifier, with the `theorem`
 and 104 unreachable defs left out — the scope claim is the axiom-and-definition layer, not the
 final proof. `docs/lean4mm0.md` §13.57 has the table and the memory ratio (~36× the slice
-bytes; the ratio, not a bigger host, is what rules the whole file out).
+bytes; the ratio, not a bigger host, is what rules the whole file out). A smaller def-sharing
+floor is not a way in: the row re-emitted at `LTP_DEF_SHARE=64` is 55 544 970 829 B (−0.81 %),
+with 1 345 defs instead of 1 020 and a *larger* first body (3 999 411 320 B) — the writer's
+first body is fully expanded at any floor — while the 40 MB slice it yields is 1.6 % smaller
+and still peaks at 13 695 160 kB. §13.58 measures both floors.
 
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB

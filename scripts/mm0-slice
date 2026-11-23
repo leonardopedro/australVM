@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""mm0-slice — take a checkable slice out of a very large typing artifact.
+
+A def-shared artifact is mostly `def sdK: Term = $ … $;` bodies: on the 56 GB
+ns row that block is 93 % of the file, mean 51 MB per def, largest line
+1.94 GB. `mm0-rs` needs ~36x the input's size in resident memory, so no slice
+can start at the biggest def. What it *can* check is the axiom layer: keep the
+axioms that are cheap — each small, and its closure of defs under a budget —
+and emit exactly those, in source order.
+
+Why a subset is closed:
+  * a def body names only defs emitted before it (`write_defs` writes bodies in
+    reverse first-use order), so the def set is a DAG ordered by position;
+  * taking an axiom and the transitive closure of the defs it names therefore
+    yields a file with no forward reference;
+  * theories are prepended with their `import` lines stripped — `mm0-rs` would
+    otherwise try to open `cic.mm0` relative to the slice;
+  * the header's `term t_symN: nat;` payload lines are kept: they are the
+    constants the axioms mention.
+
+Everything works on absolute offsets into one mmap. A slice of a 56 GB file is
+a copy of ~400 MB, never of 52 GB, and naming a body does not materialise it.
+
+Measured on the ns row's `.mm0` (docs/lean4mm0.md §13.57): a 40 MB budget
+keeps 916 defs (361 217 450 B) and 24 364 of the 24 423 axioms (16 964 141 B)
+in 378 205 914 B; `mm0-rs` elaborates it in 3 m 55.6 s at 13.8 GB RSS and
+`mm0-c` re-checks it in 2.9 s, both exit 0. The row's own `theorem` line is
+3.9 GB: it does not start with `axiom`, so it is left out before it is read.
+
+The slice is a property of the artifact, not of its proof: the 59 axioms left
+out are the ones whose def closure exceeds the budget, and the defs left out
+are unreachable from any kept axiom. That is a weaker check than the whole
+file, and it is the check this host can run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import mmap
+import os
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+THEORIES = (ROOT / "docs/cic.mm0", ROOT / "docs/cic_typing.mm0")
+
+NAME_RE = re.compile(rb"sd(\d+)")
+
+
+def refs_in(buf: bytes | mmap.mmap) -> set[bytes]:
+    return {b"sd" + mt.group(1) for mt in NAME_RE.finditer(buf)}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("artifact", type=Path, help="the .mm0 to slice")
+    ap.add_argument("output", type=Path, help="the slice to write")
+    ap.add_argument("--budget", type=int, default=40 << 20,
+                    help="bytes of defs one kept axiom may pull in (default 40 MiB)")
+    ap.add_argument("--max-line", type=int, default=40 << 20,
+                    help="skip an axiom line larger than this (default 40 MiB)")
+    args = ap.parse_args()
+
+    size = os.path.getsize(args.artifact)
+    src = args.artifact.open("rb")
+    m = mmap.mmap(src.fileno(), 0, access=mmap.ACCESS_READ)
+
+    first_def = m.find(b"def ")
+    if first_def < 0:
+        print(f"{args.artifact}: no def block", file=sys.stderr)
+        return 2
+    first_ax = m.find(b"\naxiom")
+    if first_ax < 0:
+        first_ax = size - 1
+    first_ax += 1
+    payload = m[:first_def]
+
+    # name -> (offset, length), then def -> the defs its body names. The block
+    # is not pure defs: the emitter separates it from the axiom block with a
+    # `-- <decl>` comment line (measured: one, `-- And.intro`), and a comment
+    # is skipped rather than read as a header.
+    defs: dict[bytes, tuple[int, int]] = {}
+    i = first_def
+    while i < first_ax:
+        j = m.find(b"\n", i)
+        if j < 0 or j >= first_ax:
+            j = first_ax - 1
+        head = m[i:i + 24]
+        colon = head.find(b":")
+        if head.startswith(b"def ") and colon > 4:
+            defs[head[4:colon]] = (i, j + 1 - i)
+        elif not head.startswith(b"--"):
+            print(f"{args.artifact}: unexpected line at offset {i}", file=sys.stderr)
+            return 2
+        i = j + 1
+    edges = {name: refs_in(m[off:off + ln]) - {name} for name, (off, ln) in defs.items()}
+
+    def closure(names: set[bytes]) -> set[bytes]:
+        seen: set[bytes] = set()
+        stack = list(names)
+        while stack:
+            n = stack.pop()
+            if n in seen or n not in defs:
+                continue
+            seen.add(n)
+            stack.extend(edges[n])
+        return seen
+
+    kept: list[tuple[int, int, set[bytes]]] = []
+    skipped_big = skipped_cost = 0
+    # A comment line between axioms (`-- And.intro` heads a group) is not an
+    # axiom and is not kept: the slice's axioms come from several groups, and a
+    # comment naming a declaration the slice does not contain would mislead a
+    # reader without changing what checks.
+    i = first_ax
+    while i < size:
+        j = m.find(b"\n", i)
+        if j < 0:
+            j = size - 1
+        ln = j + 1 - i
+        if m[i:i + 5] == b"axiom":
+            if ln > args.max_line:
+                skipped_big += 1
+            else:
+                line = m[i:j + 1]
+                need = closure(refs_in(line))
+                if sum(defs[n][1] for n in need) > args.budget:
+                    skipped_cost += 1
+                else:
+                    kept.append((i, ln, need))
+        i = j + 1
+
+    used: set[bytes] = set()
+    for _, _, need in kept:
+        used |= need
+
+    with args.output.open("wb") as w:
+        for theory in THEORIES:
+            for line in theory.read_bytes().splitlines(keepends=True):
+                if not line.startswith(b"import "):
+                    w.write(line)
+        w.write(payload)
+        for name in sorted(used, key=lambda n: defs[n][0]):
+            off, ln = defs[name]
+            w.write(m[off:off + ln])
+        for off, ln, _ in kept:
+            w.write(m[off:off + ln])
+        total = w.tell()
+
+    m.close()
+    src.close()
+    print(f"defs={len(defs)} kept_axioms={len(kept)} skipped_big={skipped_big} "
+          f"skipped_cost={skipped_cost} used_defs={len(used)} "
+          f"def_bytes={sum(defs[n][1] for n in used)} "
+          f"ax_bytes={sum(ln for _, ln, _ in kept)} slice_bytes={total}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
