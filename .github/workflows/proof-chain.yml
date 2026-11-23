@@ -84,7 +84,11 @@ jobs:
 
       - name: the three tools resolve on PATH
         run: |
-          echo "PATH=$MM0/bin:$PY/bin:$PATH" >> "$GITHUB_ENV"
+          # `$GITHUB_ENV` applies to the steps *after* this one, so the three
+          # checks below need the export as well — without it each command-v
+          # ran against the unmodified PATH and this step failed on day one.
+          export PATH="$MM0/bin:$PY/bin:$PATH"
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
           command -v mm0-rs
           command -v mm0-c
           command -v python3
