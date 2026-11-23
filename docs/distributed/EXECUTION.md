@@ -1383,11 +1383,32 @@ A storage failure at slot 1 leaves the replica **halted with watermark 0** while
 its in-memory certificate ledger already shows the evaluated mint (supply 100,
 applied 0, UK-5011, `journal_error` set). Nothing is acknowledged and the
 watermark does not move, but the memory view of a halted node is not a state
-anyone may read — and D11's `SharedLedger` is a second path that applies
-transitions, so whether a live halted node can be served from it is a real
-question, recorded here and handed to D13 rather than answered by assumption.
-The test then proves the durable path does not double-count: crash, restore, and
-the slot applies exactly once.
+anyone may read. The test then proves the durable path does not double-count:
+crash, restore, and the slot applies exactly once.
+
+**Follow-up (2026-11-23): that memory can no longer be served.** The question was
+whether D11's `SharedLedger` — the other applying path — could serve state a node
+had evaluated but not recorded. Two findings, both now fixed rather than argued:
+
+* the ledger had the **same** divergence: `append` extended the in-memory bank
+  and the id → slot map and only then wrote `ledger.json`, so a failed snapshot
+  left slot *n* readable through `committed()`, `committed_since()` and
+  `receipt()` while the file did not have it. `append` now rolls the bank, the
+  map and the outbox back to the durable prefix when the snapshot fails, and
+  `allocate` drops a reservation it could not persist. Measured:
+  `a_decision_that_cannot_be_persisted_is_not_served` (read-only state dir →
+  `committed() == 0`, receipt `Unknown`, retry commits once) and
+  `a_reservation_that_cannot_be_persisted_is_not_kept`.
+* a `ConsensusNode` still exposes its memory through plain accessors, which cannot
+  fail on their own. It now has `servable()` — an error while halted or while the
+  last journal write failed — and the one serving surface in this workspace,
+  `DataPublisher::resolve`, checks it: on a halted node the memory still holds the
+  content (`node.content(&cid)` is `Some`) and `resolve` returns `None`
+  (`a_halted_node_does_not_serve_its_in_memory_state`).
+
+So the answer to the question asked is: not any more. A stopped node's memory is
+reachable only by code that ignores the refusal, and both surfaces that a caller
+could serve from now refuse.
 
 ```text
 $ cargo test -p unfer_consensus --offline --features network
@@ -1454,6 +1475,10 @@ Additional matrix rows, because they belong to the same protocol:
   slot, and is replayed rather than re-decided: `applied=2 identities=1`.
 * `journal-format` — the framing the matrix relies on: one record of 189 bytes
   recovers as `records=1 last_slot=1 torn=0`.
+* `halted-state-fence` (follow-up to D12) — the ledger path of the matrix now
+  serves only what it persisted: a snapshot that fails rolls the in-memory bank,
+  id map and outbox back, and a `ConsensusNode` exposes `servable()` so a halted
+  node's evaluation is not served (`docs/distributed/evidence/d13-halted-state-fence.log`).
 
 ### Quorum, and what a minority cannot do
 
@@ -1518,6 +1543,6 @@ claimed — never the digests, which belong to one run.
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
 | D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
 | D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
-| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 2 requests, 8 actions, depth 4) executed 617 of 4681 prefixes, pruned 278, found no violation; 32 seeded walks of 12 steps reached 22 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault is handed to D13 |
-| D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (24 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`. Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it, though the idle-push follow-up in D11's section now repairs a rejoined replica without a new decision |
+| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 2 requests, 8 actions, depth 4) executed 617 of 4681 prefixes, pruned 278, found no violation; 32 seeded walks of 12 steps reached 22 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault was handed to D13 and is now fenced (see the follow-up in this section) |
+| D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (24 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`; the D12 follow-up adds the halted-state fence (`d13-halted-state-fence.log`). Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it, though the idle-push follow-up in D11's section now repairs a rejoined replica without a new decision |
 | D14–D26 | not started | D14 is next: upgrade scheduled jobs to ordered fencing |
