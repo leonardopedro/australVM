@@ -55,6 +55,14 @@ RECORD = ROOT / "mm0/proof_chain/mlir/stage.toml"
 TOOLCHAIN = ROOT / "mm0/proof_chain/mlir/toolchain.toml"
 SOURCE_ARTIFACT = ROOT / "mm0/proof_chain/clamp_source.mm0"
 CAPTURE_DIR = ROOT / "mm0/proof_chain/mlir/ir"
+CLAIMS = ROOT / "mm0/mlir_pass.mm0"
+
+#: One stated obligation per captured boundary: the pass name and the record's
+#: own two file names. `claims` requires these to agree with `stage.toml` in
+#: both directions, so a capture without a statement (or a statement without a
+#: capture) is a finding. The endpoints' digests are carried by the `-- cites:`
+#: lines, which must be the current content of the files they name.
+OBLIGATION = "-- obligation: "
 
 #: Every pass of the declared route, in order. This is the single source of
 #: truth: a record that omits one, renames one, or adds one fails, which is how
@@ -305,6 +313,120 @@ def check(record_path: Path, artifact: Path) -> int:
              "capture is not a preservation proof (see PC09's acceptance)")
     print("[pass] PC09: the declared MLIR stage boundary is current and its "
           "uncaptured passes are counted")
+    return exit_code[0]
+
+
+def parse_claims(path: Path):
+    """The obligations and citations an MM0 claims artifact declares."""
+    obligations = []
+    cites = []
+    for lineno, line in enumerate(path.read_text().splitlines(), 1):
+        if line.startswith(OBLIGATION):
+            row = {"line": lineno}
+            for field in line[len(OBLIGATION):].split():
+                if "=" not in field:
+                    row["name"] = field
+                else:
+                    key, value = field.split("=", 1)
+                    row[key] = value
+            obligations.append(row)
+        elif line.startswith("-- cites: "):
+            m = re.fullmatch(r"-- cites: (\S+) sha256=([0-9a-f]{64})", line)
+            if not m:
+                raise ValueError(f"{path.name}:{lineno}: malformed citation {line!r}")
+            cites.append((m.group(1), m.group(2)))
+    return obligations, cites
+
+
+def claims(claims_path: Path, record_path: Path) -> int:
+    """PC09's boundary obligations: stated once per capture, and current.
+
+    This decides nothing about MLIR semantics — it decides that the statements
+    exist and are about the bytes the record now holds. It refuses:
+      * an obligation with missing fields or a duplicate name;
+      * an obligation whose pass the record does not capture, and a captured
+        pass with no obligation;
+      * an obligation whose endpoints are not that pass's recorded files;
+      * a citation whose digest is not the file's current content, and a
+        boundary endpoint the artifact never cites;
+      * an `axiom` or a `theorem` in the artifact (a stated claim is not an
+        admitted one), and a missing `-- certificate: [gap]` marker.
+    """
+    try:
+        obligations, cites = parse_claims(claims_path)
+    except Exception as exc:  # noqa: BLE001 - any parse error is the finding
+        fail("the claims artifact parses", f"{claims_path.name}: {exc}")
+        return exit_code[0]
+    try:
+        record = read_record(record_path)
+    except Exception as exc:  # noqa: BLE001
+        fail("the stage record parses for the claim check", f"{record_path}: {exc}")
+        return exit_code[0]
+
+    text = claims_path.read_text()
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if line.startswith(("axiom ", "theorem ")):
+            fail("the claims artifact admits nothing",
+                 f"{claims_path.name}:{lineno}: {line.split()[0]} — a stated "
+                 "obligation is not an admitted one")
+    if "-- certificate: [gap]" not in text:
+        fail("the claims artifact says its certificate is a gap")
+
+    captured = {row["name"]: row for row in record["passes"]
+                if row.get("state") == "captured"}
+    stated = {}
+    for row in obligations:
+        name = row.get("name")
+        if not name or "pre" not in row or "post" not in row:
+            fail("an obligation names its pass and both endpoints",
+                 f"{claims_path.name}:{row['line']}")
+            continue
+        if name in stated:
+            fail("no pass is stated twice", name)
+        stated[name] = row
+
+    for name in stated:
+        if name not in captured:
+            fail("every stated obligation is about a captured pass",
+                 f"{name} is not captured in {record_path.name}")
+    for name, row in captured.items():
+        if name not in stated:
+            fail("every captured pass has a stated obligation",
+                 f"{name} is captured but not stated in {claims_path.name}")
+        else:
+            for side in ("pre", "post"):
+                if stated[name].get(side) != row.get(side + "_file"):
+                    fail("an obligation's endpoint is the record's file",
+                         f"{name}: {side} {stated[name].get(side)!r} vs "
+                         f"record {row.get(side + '_file')!r}")
+
+    cited = {}
+    for rel, digest in cites:
+        path = ROOT / rel
+        if not path.exists():
+            fail("a cited file exists", rel)
+            continue
+        if sha256(path.read_bytes()) != digest:
+            fail("a cited file hashes to its digest", rel)
+        cited[rel] = digest
+    wanted = {str(record_path.relative_to(ROOT))}
+    for row in captured.values():
+        for side in ("pre", "post"):
+            wanted.add(str((CAPTURE_DIR / str(row.get(side + "_file")))
+                           .relative_to(ROOT)))
+    for rel in sorted(wanted - set(cited)):
+        fail("every boundary endpoint is cited", rel)
+
+    print(f"  [detail] PC09 claims: {len(stated)} obligation(s) over "
+          f"{len(captured)} captured pass(es), {len(cited)} citation(s) current")
+    for row in obligations:
+        print(f"  [detail] PC09 obligation {row.get('name')}: "
+              f"{row.get('pre')} → {row.get('post')}")
+    if stated:
+        gap(f"{len(stated)} pass-boundary obligation(s) stated and cited, none "
+            "proved: no MLIR dialect semantics exists in this repository")
+    print("[pass] PC09: every captured boundary has a stated obligation and no "
+          "obligation outlives its capture")
     return exit_code[0]
 
 
@@ -709,18 +831,80 @@ def selftest(record_path: Path, work: Path) -> int:
     return exit_code[0]
 
 
+def claims_selftest(claims_path: Path, record_path: Path, work: Path) -> int:
+    """The claims artifact's controls: each mutation of one statement must fail."""
+    controls = 0
+    claims_text = claims_path.read_text()
+    record_text = record_path.read_text()
+
+    def run(claims_mutated: str, label: str, needle: str) -> None:
+        nonlocal controls
+        base = work / "claims-control"
+        base.mkdir(exist_ok=True)
+        rec = base / "stage.toml"
+        art = base / "mlir_pass.mm0"
+        rec.write_text(record_text)
+        art.write_text(claims_mutated)
+        out = subprocess.run([sys.executable, __file__, "claims",
+                              "--claims", str(art), "--record", str(rec)],
+                             capture_output=True, text=True)
+        combined = out.stdout + out.stderr
+        if out.returncode != 1 or needle not in combined:
+            fail(f"claims control: {label} is refused",
+                 f"exit {out.returncode}, output {combined.strip()[:300]!r}")
+        else:
+            print(f"  [pass] PC09 claims control refused: {label}")
+        controls += 1
+
+    # 1. an obligation whose post endpoint is not the recorded file.
+    run(claims_text.replace("pre=clamp.mlir post=clamp.canonical.mlir",
+                            "pre=clamp.mlir post=clamp.mlir", 1),
+        "an obligation pointing at the wrong endpoint",
+        "endpoint is the record's file")
+
+    # 2. a captured pass whose obligation was deleted.
+    run(re.sub(r"^-- obligation: mlir-canonicalize .*\n", "", claims_text,
+               count=1, flags=re.M),
+        "a capture with no stated obligation",
+        "captured but not stated")
+
+    # 3. an obligation for a pass the record leaves uncaptured.
+    run(claims_text.rstrip("\n")
+        + "\n-- obligation: nvvm-to-ptx pre=clamp.post-nvvm.mlir post=clamp.ptx\n",
+        "an obligation with no capture", "is not captured")
+
+    # 4. a stale citation digest (the claim would describe other bytes).
+    run(re.sub(r"(-- cites: mm0/proof_chain/mlir/ir/clamp\.mlir sha256=)[0-9a-f]{64}",
+               r"\g<1>" + "2" * 64, claims_text, count=1),
+        "a stale citation", "hashes to its digest")
+
+    # 5. an artifact that admits its own claim as an axiom.
+    run(claims_text.rstrip("\n")
+        + "\naxiom kernelir_to_mlir_holds: $ kernelir_to_mlir_preserves a b $;\n",
+        "an admitted claim", "admits nothing")
+
+    print(f"[pass] PC09 claims control: {controls} control(s) behave")
+    return exit_code[0]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", nargs="?", default="check",
                     choices=["check", "selftest", "capture",
-                             "capture-canonicalize", "capture-nvvm"])
+                             "capture-canonicalize", "capture-nvvm", "claims"])
     ap.add_argument("--record", default=str(RECORD))
     ap.add_argument("--artifact", default=str(SOURCE_ARTIFACT))
+    ap.add_argument("--claims", default=str(CLAIMS))
     ap.add_argument("--extent", type=int, default=65)
     args = ap.parse_args()
     with tempfile.TemporaryDirectory(prefix="pc09-") as tmp:
         if args.mode == "selftest":
-            return selftest(Path(args.record), Path(tmp))
+            rc = selftest(Path(args.record), Path(tmp))
+            if rc == 0:
+                rc = claims_selftest(Path(args.claims), Path(args.record), Path(tmp))
+            return rc
+        if args.mode == "claims":
+            return claims(Path(args.claims), Path(args.record))
         if args.mode == "capture":
             return capture(Path(args.record), args.extent)
         if args.mode == "capture-canonicalize":

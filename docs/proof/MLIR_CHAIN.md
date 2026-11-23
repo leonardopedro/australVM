@@ -252,9 +252,24 @@ and no GPU claim is made; the emitter's header still says `abi: g19a-pending`
 because the *interface* is not proved, only exercised.
 - **No dialect semantics.** The record says the dialect profile is absent; it
   does not describe one.
-- **Next, in order:** state and (if a reviewed MLIR semantics is available)
-  prove the pass-local relations for the four captured boundaries — reusing
-  PC03's composition and PC04's algorithm theorem, which is what PC09 asks for.
-  The chain from `clamp.canonical.mlir` to the conversion's pre side is one
-  segment: proving it needs each of its fourteen passes stated, which is the
-  next narrowing step.
+- **Stated, not proved.** `mm0/mlir_pass.mm0` now holds the other half of PC09:
+  one obligation per captured boundary (`kernelir_to_mlir_preserves`,
+  `mlir_canonicalize_preserves`, `mlir_lower_to_nvvm_input_preserves`,
+  `convert_gpu_to_nvvm_preserves`), each about two files named by the record,
+  with the record and every endpoint cited by digest. `scripts/mlir-chain
+  claims` refuses a capture with no statement, a statement with no capture, an
+  obligation whose endpoint is not the record's file, a stale citation, and an
+  `axiom`/`theorem` (five controls in `selftest`). The artifact is
+  declaration-only: no `axiom`, no `theorem`, `-- certificate: [gap]`, and it
+  is deliberately outside W3 (no `.mm1`, no statements to approve). Its shape is
+  not a matter of reading: `mm0-rs` elaborates it and `mm0-c` accepts the
+  `.mmb` against the spec (`4 sorts, 5 term/def, 0 ax/thm`, pinned), and
+  `verify-invariants` refuses an `axiom`/`theorem` in it directly.
+- **Next, in order:** prove those four obligations, reusing PC03's composition
+  and PC04's algorithm theorem. That needs a reviewed semantics for the
+  `gpu`/`nvvm`/`arith`/`cf` dialects, which this repository does not have; the
+  stated form is what a prover would be pointed at. The chain from
+  `clamp.canonical.mlir` to the conversion's pre side is one segment, so
+  discharging it also means opening its fourteen passes into fourteen
+  obligations — the next narrowing step, and the one that would turn
+  `mlir-lower-to-nvvm-input` from a segment into a route.

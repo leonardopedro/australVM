@@ -1,0 +1,102 @@
+-- mlir_pass.mm0 — PC09's pass-boundary obligations, stated and cited.
+--
+-- PC09 asks for captured pre/post IR for every selected pass of
+-- `Austral → KernelIR → MLIR → device IR` *and* a relation at each boundary.
+-- The captures exist: `mm0/proof_chain/mlir/stage.toml` records four captured
+-- boundaries (its fifth row, `nvvm-to-ptx`, stays uncaptured on purpose).
+-- What this file adds is the other half — one named obligation per captured
+-- boundary, so "capture is not preservation" stops being a sentence and becomes
+-- a list of statements that a proof could later discharge, or that a reviewer
+-- can reject one at a time.
+--
+-- There is still no MLIR semantics in this repository: no dialect has an
+-- interpretation here, so the relations below are *uninterpreted* and nothing
+-- in this file says any of them holds. `scripts/mlir-chain claims` is what this
+-- file is checked against, and it only checks shape and freshness:
+--
+--   * every captured pass row of `stage.toml` has exactly one obligation here,
+--     and no obligation names a pass the record does not capture — so a new
+--     capture cannot arrive without its statement, and a statement cannot
+--     outlive its capture;
+--   * each obligation's `pre=` / `post=` are the record's own `pre_file` /
+--     `post_file` for that pass, so the endpoints are the bytes the record
+--     hashes, not a paraphrase;
+--   * every `-- cites:` digest is the current content of the file it names, so
+--     a changed MLIR endpoint or record fails this file rather than silently
+--     leaving it describing the previous route;
+--   * the file carries no `axiom` and no `theorem` (checked by both this
+--     script and `scripts/verify-invariants`), because a stated obligation is
+--     not an admitted one.
+--
+-- The intended meaning, written here where a reviewer can disagree with it:
+-- for a boundary `p` with pre module `a` and post module `b`,
+--
+--     p_preserves a b    means    ∀ i v,  denotes a i v  ↔  denotes b i v
+--
+-- i.e. the post module computes exactly the values the pre module computed, at
+-- every observation index. That is the relation each pass of this route has to
+-- satisfy; it is deliberately *strong* (it forbids a pass that merely refines
+-- definedness, for instance). The equivalences themselves are not stated: MM0
+-- has no built-in equality and defining one would import a theory this artifact
+-- has not earned, exactly as in `mm0/store_projection.mm0`. What is pinned here
+-- is which pair of files each claim is about.
+--
+-- What this file is NOT:
+--   * not a certificate — see "no axiom, no theorem" above;
+--   * not a statement about the *interior* of `mlir-lower-to-nvvm-input`, whose
+--     fourteen passes are captured only at their endpoints (one obligation for
+--     the segment, not fourteen);
+--   * not a statement about the five uncaptured passes after the conversion, or
+--     about the PTX they produce (G19a pins that PTX; PC10 owns instructions);
+--   * not a refinement of *any* other layer: it says nothing about KernelIR
+--     (`mm0/` PC04), the WGSL path (PC05), or the device.
+--
+-- The `[gap]` is the honest state: four obligations are written down, cited and
+-- bound to the current captures, and none is proved. Discharging them needs a
+-- semantics for the `gpu`/`nvvm`/`arith`/`cf` dialects in a prover this repo
+-- can replay (the Lean side of `mm0/toy_witness/` is the shape that would take),
+-- which does not exist yet.
+--
+-- Citations are by content, so a digest here means "this claim is about these
+-- bytes": the record, and each module that appears as a boundary endpoint.
+-- cites: mm0/proof_chain/mlir/stage.toml sha256=02aecc733ff97d537f69b41a782fb536480b7e251ead59e7b3ee8d565b0c24e8
+-- cites: mm0/proof_chain/mlir/ir/clamp.kernelir sha256=52d01cfaade3df43f28ad9e017b07b97d123f498563fb3a22c0cc075864db5a5
+-- cites: mm0/proof_chain/mlir/ir/clamp.mlir sha256=e17b0a0b6b4ab20dc8d0be93c58fb51f9e7c0535ba3c93961381c1bab1abbd58
+-- cites: mm0/proof_chain/mlir/ir/clamp.canonical.mlir sha256=5acf98dc750edcb131ed4aacadfdabc31c69948c0c5992e93518f4e2cb8c19c8
+-- cites: mm0/proof_chain/mlir/ir/clamp.pre-nvvm.mlir sha256=34d0edabddd0fdd8c223428ee1342741366aa44be14bc3a08e7d110eab698ad9
+-- cites: mm0/proof_chain/mlir/ir/clamp.post-nvvm.mlir sha256=7b71782b5d407e7a095c648bd874ab58896f3c15d55d2d8a1e101ea546d07340
+--
+-- certificate: [gap] — one stated obligation per captured boundary, no proof.
+--   No `mm0/approved/mlir_pass.stmts` exists, so this is not even a W3 statement
+--   of record yet; `scripts/verify-invariants` reports it as unapproved.
+--
+-- The obligations, in route order. Each names the pass, and the two files
+-- `stage.toml` records for it; `claims` refuses a mismatch in either direction.
+-- obligation: kernelir-to-mlir pre=clamp.kernelir post=clamp.mlir
+-- obligation: mlir-canonicalize pre=clamp.mlir post=clamp.canonical.mlir
+-- obligation: mlir-lower-to-nvvm-input pre=clamp.canonical.mlir post=clamp.pre-nvvm.mlir
+-- obligation: convert-gpu-to-nvvm pre=clamp.pre-nvvm.mlir post=clamp.post-nvvm.mlir
+
+-- theory: self-declared vocabulary — the sorts and terms below are this
+-- artifact's whole theory; no rule is imported from another MM0 file, and the
+-- semantics the claims are *about* lives in the cited modules, not here.
+--
+-- `provable sort Prop` is how this repo's MM0 files get a proposition sort
+-- (see `mm0/store_projection.mm0`); without it `: Prop` is "sort not found".
+sort Mod;                       -- one MLIR module, uninterpreted
+sort Val;                       -- the values a module computes, uninterpreted
+sort Idx;                       -- observation indices, uninterpreted
+provable sort Prop;
+
+-- `denotes m i v` is intended as "module `m`, observed at `i`, computes `v`".
+-- Uninterpreted: naming the observation is this layer's job, defining it is the
+-- dialect semantics' job, which this repository does not have.
+term denotes (m: Mod) (i: Idx) (v: Val): Prop;
+
+-- One relation per captured boundary, named after its pass (MM0 has no
+-- string-indexed relation, so the four are separate terms rather than one
+-- family). Each is intended as the ∀/↔ statement in the header.
+term kernelir_to_mlir_preserves (a b: Mod): Prop;
+term mlir_canonicalize_preserves (a b: Mod): Prop;
+term mlir_lower_to_nvvm_input_preserves (a b: Mod): Prop;
+term convert_gpu_to_nvvm_preserves (a b: Mod): Prop;

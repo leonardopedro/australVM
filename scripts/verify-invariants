@@ -884,6 +884,20 @@ PY
                 cat "$_cert_tmp/pc09.log" >&2
                 check "PC09: the declared MLIR stage boundary is current" false
             fi
+            # … and every captured boundary has a *stated* obligation, bound to
+            # the record's own file names and digests. A capture without a
+            # statement, a statement without a capture, and a stale citation
+            # are all findings — the gap it reports is "stated, none proved".
+            _pc09c=0
+            python3 "$repo_root/scripts/mlir-chain" claims \
+                >"$_cert_tmp/pc09-claims.log" 2>&1 || _pc09c=$?
+            if [ $_pc09c -eq 0 ]; then
+                grep -E '^  \[detail\]|^  \[gap\]|^\[gap\] PC09' "$_cert_tmp/pc09-claims.log" >&2
+                check "PC09: every captured boundary has a stated obligation" true
+            else
+                cat "$_cert_tmp/pc09-claims.log" >&2
+                check "PC09: every captured boundary has a stated obligation" false
+            fi
             _pc09s=0
             python3 "$repo_root/scripts/mlir-chain" selftest \
                 >"$_cert_tmp/pc09-selftest.log" 2>&1 || _pc09s=$?
@@ -892,6 +906,41 @@ PY
             else
                 cat "$_cert_tmp/pc09-selftest.log" >&2
                 check "PC09: the MLIR boundary's controls refuse" false
+            fi
+            # The claims artifact is MM0, so its *shape* is decided by the same
+            # tools W8 uses, not by the reviewer's eye. It declares only sorts
+            # and terms: no `axiom`, no `theorem`, so `mm0-rs` must elaborate it
+            # and `mm0-c` must accept the resulting `.mmb` against the spec.
+            # The size line is pinned, so a claim (or a sort) that vanishes is a
+            # red gate rather than a smaller file that still parses.
+            if grep -qE '^(axiom|theorem) ' "$repo_root/mm0/mlir_pass.mm0"; then
+                check "PC09: the claims artifact admits no axiom or theorem" false
+            else
+                check "PC09: the claims artifact admits no axiom or theorem" true
+            fi
+            if command -v mm0-rs >/dev/null 2>&1 \
+                    && command -v mm0-c >/dev/null 2>&1; then
+                _p09c=0
+                mm0-rs compile "$repo_root/mm0/mlir_pass.mm0" \
+                    "$_cert_tmp/mlir_pass.mmb" \
+                    >"$_cert_tmp/pc09-mm0-rs.log" 2>&1 || _p09c=$?
+                if [ $_p09c -eq 0 ]; then
+                    _p09c=0
+                    mm0-c "$_cert_tmp/mlir_pass.mmb" \
+                        <"$repo_root/mm0/mlir_pass.mm0" \
+                        >"$_cert_tmp/pc09-mm0-c.log" 2>&1 || _p09c=$?
+                fi
+                if [ $_p09c -eq 0 ] \
+                        && grep -q '^4 sorts, 5 term/def, 0 ax/thm$' \
+                            "$_cert_tmp/pc09-mm0-rs.log"; then
+                    cat "$_cert_tmp/pc09-mm0-rs.log" >&2
+                    check "PC09: mlir_pass.mm0 elaborates and mm0-c accepts it" true
+                else
+                    cat "$_cert_tmp/pc09-mm0-rs.log" "$_cert_tmp/pc09-mm0-c.log" >&2 2>/dev/null
+                    check "PC09: mlir_pass.mm0 elaborates and mm0-c accepts it" false
+                fi
+            else
+                gap "PC09: mlir_pass.mm0's shape not checked (no mm0-rs/mm0-c here)"
             fi
         else
             gap "PC09: the declared MLIR stage boundary not checked (tooling absent: python3)"
