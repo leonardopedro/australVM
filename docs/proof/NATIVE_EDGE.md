@@ -125,6 +125,25 @@ MM0=$(nix build "git+file://$PWD#mm0" --no-link --print-out-paths)
 PATH="$MM0/bin:$PATH" python3 scripts/native-edge check
 ```
 
+## The x86_64 re-derivation is an explained gap, not a pass
+
+`capture`/`check` re-derive the fragment by compiling it on the host. That needs
+a host whose backend emits x86_64, and every route was checked on 2026-11-23:
+
+| Route | State |
+|---|---|
+| this host | aarch64 (`uname -m`), so `cps2cell` emits `arch aarch64` and the closed x86_64 table refuses it; `check` probes the arch before decoding and reports `[gap] PC08: the capture was not re-derived here (this host compiles aarch64 …)` |
+| a second host | none reachable; no x86_64 machine or runner is configured for this workspace |
+| `rustup` cross | only `aarch64-unknown-linux-gnu` and `x86_64-linux-android` are installed — neither runs an x86_64 Linux binary here |
+| emulation | `podman` is present but the re-derivation runs the *OCaml compiler* (`austral`, `cps2cell`), which would have to be built for x86_64 first; no such build exists |
+| CI | `.github/workflows/*.yml` never invokes `scripts/native-edge`, so no job ever re-derives it (ubuntu-latest would have the right arch, but it does not run this script) |
+
+So the decode-and-pin half is a measured pass on this host, and the
+byte-identical re-derivation is an explained gap. Closing it needs either an
+x86_64 host running `python3 scripts/native-edge check`, or a CI job that does
+the same on `ubuntu-latest` — the script itself already distinguishes the two
+outcomes and never reports one as the other.
+
 ## What this is not, and what would close it
 
 - **Not a native profile.** The simulation obligation is open; the fragment is
