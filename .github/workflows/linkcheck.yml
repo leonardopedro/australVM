@@ -18,5 +18,16 @@ jobs:
       # the link names.
       - name: workspace-root ATTRIBUTION (mirrored)
         run: curl -fsSL https://raw.githubusercontent.com/leonardopedro/emthin/main/workspace-backup/ATTRIBUTION.md -o ../ATTRIBUTION.md
+      # The plans and GPU reviews link into the sibling repositories
+      # (`../unfer/docs/GPU.md`, `../timepiece/Book/SolovayTensor.lean`, …).
+      # Those references are part of the contract where the workspace exists,
+      # so materialize the siblings here too instead of skipping the links:
+      # a lone checkout reports fifteen of them missing. `actions/checkout`
+      # refuses paths outside $GITHUB_WORKSPACE, so plain git, as in
+      # build-and-test.yml.
+      - name: Checkout unfer as sibling
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
+      - name: Checkout timepiece as sibling
+        run: git clone --depth 1 --branch main https://github.com/leonardopedro/timepiece.git ../timepiece
       - name: check-links
         run: python3 scripts/check-links
