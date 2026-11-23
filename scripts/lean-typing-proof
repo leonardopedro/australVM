@@ -508,6 +508,8 @@ class Enc:
         # ns-row body grew to 4.0 GB at floor 64 and no floor can split it).
         self.ds_body_max = int(os.environ.get("LTP_DEF_BODY_MAX", str(1 << 30)) or 0)
         self._ds_skip: int | None = None   # body being split, not itself a pick
+        self._ds_walk = False              # splitting a body: see `_enc`'s memo
+        self._dcache: dict[int, tuple[int, ...]] = {}   # naming DAG, by `_def_order`
 
     def sort(self, e) -> str:
         # A universe is a *term*: its exported level id becomes one constant, so
@@ -586,10 +588,19 @@ class Enc:
         The walk records every node it visits (`_enc` does that while `_ds_off`
         is set), so measuring a subtree also sizes its parts and the whole
         certificate costs one extra expansion, not one per node.
+
+        It is a *no-naming* walk in both senses: `_ds_off` keeps the encoder
+        from substituting a name for a child, and `_ds_walk` keeps it from
+        returning a memoised text. Both matter. A memo entry may be a
+        shared-mode text (a name where a child was interned), and it is a
+        finished expansion, so a `setdefault` would never run for it — which is
+        how a 519 KB body measured 0 B and was never a split candidate (§13.60).
         """
         n = self._ds_size.get(eid)
         if n is not None:
             return n
+        outer_walk = self._ds_walk
+        self._ds_walk = True
         self._ds_off += 1
         try:
             buf = EncBuf(_NullSink())
@@ -597,15 +608,16 @@ class Enc:
             buf._flush()
         finally:
             self._ds_off -= 1
+            self._ds_walk = outer_walk
         return self._ds_size.get(eid, 0)
 
     def write_defs(self, fh) -> int:
         """Write one `def` per interned subterm, before any use of it.
 
-        Reverse first-use order: a node is always first used inside the node
-        that was interned before it, so its children's names are declared
-        first and a body may use them. A body is encoded with only the names
-        already declared, which means the file never refers forward.
+        Dependency order (`_def_order`): a body is written after every interned
+        subtree of it, so it names them instead of spelling them out, and the
+        file never refers forward. A body is encoded with only the names
+        already declared.
 
         A body can register a payload constant that nothing else in the run
         encoded — profit mode decides from a table instead of measuring the
@@ -636,10 +648,22 @@ class Enc:
 
         This runs as a measuring pass over each oversized body before the
         block is written, because a name has to be declared *before* the body
-        that uses it. New names are appended to `_ds_order`, and
-        `_write_def_bodies` reverses that list — so a node found inside body B
-        is written before B, and a node found inside that one before it. The
+        that uses it. New names are appended to `_ds_order`; `_def_order` emits
+        them after the subtrees they name, so a node found inside body B is
+        written before B, and a node found inside that one before it. The
         worklist walks the growing list, so nesting is followed to the bottom.
+
+        Two things make that recursion reach the bottom. The walk sets
+        `_ds_walk`, which makes `_enc` ignore the text memo: a memoised
+        expansion would otherwise answer for the node and no `_pick` would be
+        asked (§13.60 — this was the whole of the "does not recurse" defect,
+        not the sizes). And every node the walk meets is sized by `_pick`'s
+        `_ds_bytes`, whose naming-free probe records the *expanded* size of the
+        node and of everything under it, so a child added here is a candidate
+        with a real size when the worklist reaches it. The walk itself leaves
+        `_sizing` off: a walk that substitutes names can only record the size
+        its text happens to have, and `setdefault` would keep that number
+        forever — the second half of the same defect.
 
         Profit mode is left alone: its table counts uses in the artifact's
         text where bodies were fully expanded, and a second decision rule here
@@ -655,8 +679,10 @@ class Enc:
             if self._ds_size.get(eid, 0) < self.ds_body_max:
                 continue
             before = len(self._ds_order)
-            assign, sizing, skip = self._ds_assign, self._sizing, self._ds_skip
-            self._ds_assign, self._sizing, self._ds_skip = True, True, eid
+            assign, sizing, skip, walk = (self._ds_assign, self._sizing,
+                                         self._ds_skip, self._ds_walk)
+            self._ds_assign, self._sizing, self._ds_skip = True, False, eid
+            self._ds_walk = True
             # The node's own name would answer the walk at once ("a name is not
             # an encoding", above), and `_pick` would hand it a second name.
             # The `_memo` entry is that same name — `enc` refuses to cache one,
@@ -674,17 +700,99 @@ class Enc:
                 if own is not None:
                     self._ds_all[eid] = own
                 self._ds_assign, self._sizing, self._ds_skip = assign, sizing, skip
+                self._ds_walk = walk
             added += len(self._ds_order) - before
         return added
 
+    @staticmethod
+    def _child_eids(e: dict) -> tuple[int, ...]:
+        """The sub-expressions `_enc_tokens` encodes for `e`, in its branches."""
+        if "app" in e:
+            a = e["app"]
+            return (a["fn"], a["arg"])
+        if "forallE" in e:
+            f = e["forallE"]
+            return (f["type"], f["body"])
+        if "lam" in e:
+            return (e["lam"]["body"],)
+        if "letE" in e:
+            le = e["letE"]
+            return (le["body"], le["value"])
+        if "proj" in e:
+            return (e["proj"]["struct"],)
+        if "mdata" in e:
+            return (e["mdata"]["expr"],)
+        if "tsubst" in e:
+            t = e["tsubst"]
+            return (t["b"], t["x"])
+        return ()
+
+    def _named_children(self, eid: int) -> tuple[int, ...]:
+        """The interned terms `eid`'s body can stand on: its naming DAG edges.
+
+        The nearest named expressions under `eid`, found through everything
+        that is not named itself: a body is written as those names in place and
+        the unnamed walk between them spelled out.
+        """
+        hit = self._dcache.get(eid)
+        if hit is not None:
+            return hit
+        found: list[int] = []
+        seen = {eid}
+        stack = list(self._child_eids(self.exprs[eid]))
+        while stack:
+            x = stack.pop()
+            if x in seen:
+                continue
+            seen.add(x)
+            if x in self._ds_all:
+                found.append(x)
+                continue
+            stack.extend(self._child_eids(self.exprs[x]))
+        out = tuple(found)
+        self._dcache[eid] = out
+        return out
+
+    def _def_order(self) -> list[int]:
+        """Interned terms in dependency order: a body's names are declared first.
+
+        Reverse first-use order almost gives this — a subtree interned while
+        another body was being written gets a higher index, so it lands earlier
+        in the file — but a subtree the *main text* had already interned (the
+        parts of a declared type, say) keeps its low index and is therefore
+        written afterwards. A body could not name it and spelled it out again,
+        which is what held `sd5167` at 519 726 B with every part of it already
+        interned (§13.60). A depth-first post-order over the naming DAG puts
+        both cases in order, so each body is written after everything it may
+        reference and every interned subtree of it is one name.
+        """
+        order: list[int] = []
+        done: set[int] = set()
+        for root in reversed(self._ds_order):
+            stack = [(root, False)]
+            while stack:
+                eid, expanded = stack.pop()
+                if expanded:
+                    order.append(eid)
+                    continue
+                if eid in done:
+                    continue
+                done.add(eid)
+                stack.append((eid, True))
+                for c in self._named_children(eid):
+                    if c not in done:
+                        stack.append((c, False))
+        return order
+
     def _write_def_bodies(self, fh) -> int:
         self._split_bodies()
+        self._dcache = {}
         fh.write("-- ── shared subterms: one expansion per interned `Term` ──\n")
         live: dict[int, str] = {}
         outer, outer_assign = self._ds_names, self._ds_assign
         self._ds_assign = False
         try:
-            for eid in reversed(self._ds_order):
+            for eid in self._def_order():
                 self._ds_names = live
                 fh.write(f"def {self._ds_all[eid]}: Term = $ ")
                 buf = EncBuf(fh)
@@ -838,8 +946,28 @@ class Enc:
             # `_ds_off` is what the non-text paths set; `_hd` is `head`, whose
             # encode is a label's prefix and stops before it is one.
             self._uses[eid] = self._uses.get(eid, 0) + 1
+        if (self.ds_mode != "off" and not self._ds_off and not self._ds_assign
+                and not self.count_uses):
+            # A body being written names a declared subtree rather than
+            # repeating its text, even when that text is sitting in the memo:
+            # the memo is checked first for the main text, so without this a
+            # body that the split pass had just cut down to names was written
+            # back out at full expanded size (§13.60 — measured: `sd5167`
+            # measured 1 254 413 B, 4 103 names were declared inside it, and
+            # the body still came out 519 701 B).
+            nm = self._ds_names.get(eid)
+            if nm is not None:
+                out.append(nm)
+                return
         s = self._memo.get(eid)
-        if s is not None and not self.count_uses:
+        if s is not None and not self.count_uses and not self._ds_walk:
+            # A split walk (`_split_bodies`) must not take this short cut: the
+            # cached string is a finished expansion, so the walk that is
+            # deciding what to intern would copy it out and never ask about
+            # `eid` at all. The result was measured, not argued (§13.60): the
+            # bodies that stayed megabytes long were exactly the expressions
+            # `enc()` had already materialised for a declared type, `picks=0`
+            # on a 3.7 MB `forallE` whose own children measured 1.8 MB.
             out.append(s)
             return
         if self.ds_mode != "off" and not self._ds_off:

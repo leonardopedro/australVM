@@ -10,7 +10,7 @@ and emit exactly those, in source order.
 
 Why a subset is closed:
   * a def body names only defs emitted before it (`write_defs` writes bodies in
-    reverse first-use order), so the def set is a DAG ordered by position;
+    dependency order, `_def_order`), so the def set is a DAG ordered by position;
   * taking an axiom and the transitive closure of the defs it names therefore
     yields a file with no forward reference;
   * theories are prepended with their `import` lines stripped — `mm0-rs` would

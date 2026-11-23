@@ -4,9 +4,11 @@
 The emitter's compiler-side rewrites are all justified by one property: the
 artifacts do not move. Every section from §13.30 on claims it and proves it with
 a `cmp` against a copy — by hand, once, in prose. This gate makes the claim a
-check instead: it runs the emitter on one export in its three modes (expanded,
-shared, stopped) and compares every artifact's size and sha256 with the recorded
-values.
+check instead: it runs the emitter on one export in its four modes (expanded,
+shared, stopped, body-splitting turned off) and compares every artifact's size
+and sha256 with the recorded values. The last mode is not recorded: its bytes
+must equal the `default` mode's, because no body in this export is over the
+floor, and that is compared directly (§13.60).
 
     scripts/check-lean-typing-proof            # compare
     scripts/check-lean-typing-proof --record    # re-record after an intended change
@@ -43,7 +45,13 @@ STOP_RULES = 120_000
 
 # The stopped run reports its state as an outcome, not a failure (`stop_walk`):
 # the theory is what the finished run would prove, and this one did not finish.
-EXIT_OK = {"default": {0}, "shared": {0}, "stop": {3, 0}}
+EXIT_OK = {"default": {0}, "shared": {0}, "stop": {3, 0}, "body-off": {0}}
+
+# The split pass is inert unless a body is over the floor, and no body in this
+# export is: `LTP_DEF_BODY_MAX=0` must reproduce the `default` bytes exactly.
+# That is compared directly, not through the golden file, so a failure names the
+# property instead of a hash (§13.60).
+INERT = "body-off"
 
 # `_stopped.json` records the elapsed time, so it can never be byte-stable; it is
 # compared as a presence check instead.
@@ -65,6 +73,7 @@ def modes() -> list[tuple[str, dict[str, str]]]:
         ("default", {}),
         ("shared", {"LTP_OBLIG_SHARE": "1"}),
         ("stop", {"LTP_STOP_RULES": str(STOP_RULES), "LTP_STOP_EMIT": "1"}),
+        (INERT, {"LTP_DEF_BODY_MAX": "0"}),
     ]
 
 
@@ -126,9 +135,24 @@ def main(argv: list[str]) -> int:
             for art, (size, digest) in run_mode(name, env, work).items():
                 got[f"{name}/{art}"] = (size, digest)
         finally:
-            # One mode at a time: a shared-mode run is 2.4 GB and the default
-            # one 3.1 GB, which is more than a small /tmp holds together.
+            # One mode at a time: a run's artifacts are over a gigabyte (the
+            # obligation stream dominates), more than a small /tmp holds.
             shutil.rmtree(work, ignore_errors=True)
+
+    # The inert run is a property check against `default`, so it is compared
+    # here and then dropped: its bytes are exactly the default's and recording
+    # them twice would only make the golden file say so twice.
+    off = {k.split("/", 1)[1]: v for k, v in got.items() if k.startswith(INERT + "/")}
+    base = {k.split("/", 1)[1]: v for k, v in got.items() if k.startswith("default/")}
+    inert_bad = 0
+    for art in sorted(set(off) | set(base)):
+        if off.get(art) == base.get(art):
+            continue
+        w, g = base.get(art), off.get(art)
+        print(f"[inert]   {art}: LTP_DEF_BODY_MAX=0 changed the artifact — "
+              f"default {w}, body-off {g}")
+        inert_bad += 1
+    got = {k: v for k, v in got.items() if not k.startswith(INERT + "/")}
 
     if record:
         lines = ["# generator: scripts/check-lean-typing-proof --record",
@@ -139,7 +163,7 @@ def main(argv: list[str]) -> int:
               f"{GOLDEN.relative_to(ROOT)}")
         return 0
 
-    bad = 0
+    bad = inert_bad
     for key in sorted(set(want) | set(got)):
         if key not in got:
             print(f"[missing] {key}: recorded but not produced")
@@ -158,7 +182,8 @@ def main(argv: list[str]) -> int:
               "was meant to move them, re-record with --record in the same commit")
         return 1
     print(f"check-lean-typing-proof: OK — {len(got)} artifact(s) across "
-          f"{len(modes())} modes match {GOLDEN.name}")
+          f"{len(modes())} modes match {GOLDEN.name}, and the split pass is "
+          "byte-inert when its floor is off")
     return 0
 
 

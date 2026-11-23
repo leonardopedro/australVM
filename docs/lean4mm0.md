@@ -5344,3 +5344,96 @@ untrustworthy by construction), or token spans recorded during one probe expansi
 body's whole subtree is sized in linear time. That is the next change, not this one; the
 pass as it stands is monotone (it only ever makes bodies smaller), off by default, and
 sufficient for the 4 GB bound it was asked for.
+
+### 13.60 A body could not name what was already interned: the `def` block's order
+
+§13.59 ended on a measured anomaly: at a threshold of 8 B the Sirk row's largest body was
+still 519 725 B, and the pass that was supposed to split it had named nothing inside it. The
+diagnosis written there — `_ds_bytes` recording sizes with `setdefault` during a walk that was
+*also* naming — was half the story, and the wrong half to act on first. Re-measured one body
+at a time, the split walk turned out to be doing exactly what it was told; the body could not
+use the names it was given. **The `def` block was written in an order that forbade it.**
+
+**The trace, on `sd5167` (519 726 B).** Instrumented copy at `LTP_DEF_BODY_MAX=8`:
+
+| what | value |
+| --- | ---: |
+| measured size of the body (`_ds_size`) | 1 254 413 |
+| its argument's `_ds_size` | 1 254 388 |
+| the argument's name | `sd1956` |
+| that name's index in `_ds_order` | 1 956 |
+| `sd5167`'s index | 5 167 |
+| was `sd1956` declared when `sd5167` was written? | **no** |
+
+`_write_def_bodies` walked `_ds_order` in reverse first-use order: a subtree interned *while a
+later body was written* has a higher index and so lands earlier in the file, which is why the
+order works at all. But a subtree the **main text** had already interned — the parts of a
+declared type, say — keeps its low index and is therefore written *after* the body that wants
+it. `sd1956` is 1 254 388 B of `Term` that `sd5167` was spelling out in full, and the writer
+had no choice: a `def` may only name what is already declared. Every body in the block was
+paying this, and the split pass could not fix it by naming more — the names were already
+there.
+
+**The fix is the order, not the splitting.** `Enc._def_order()` walks the naming DAG
+(`_named_children`: the nearest interned expressions under a node, found through everything
+that is not interned) depth-first and emits each node after its children, so every body is
+written after everything it may reference. New names the split pass appends are ordinary nodes
+in that DAG and need no special case. `_write_def_bodies` iterates that order instead of
+`reversed(_ds_order)`. The rest of §13.59's machinery stays: `_ds_walk` keeps `_enc` from
+answering a split walk out of the text memo (still load-bearing — see the table), and
+`_ds_bytes` sizes every node the walk passes.
+
+**Sirk row, `BookProof.ChapterSirkTruncation` / `transfer_defect_le_of_leakage`,** with
+`LTP_DEF_SHARE=1024 LTP_DEDUP_NODES=1 LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648
+LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2097152`:
+
+| emitter | file bytes | `def` lines | `def` bytes | largest `def` | wall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| before §13.59 (HEAD) | 270 780 117 | 2 012 | 190 627 999 | 12 198 961 | 16.9 s |
+| §13.59 pass, `LTP_DEF_BODY_MAX=8` | 98 124 028 | 14 851 | 17 971 909 | 519 726 | 14.0 s |
+| ordered writer, pass at default 1 GiB | 129 051 148 | 2 012 | 48 899 030 | 1 443 664 | 14.5 s |
+| ordered writer, `LTP_DEF_BODY_MAX=0` | 129 051 148 | 2 012 | 48 899 030 | 1 443 664 | 14.5 s |
+| ordered writer, `LTP_DEF_BODY_MAX=8` | 84 722 867 | 14 851 | 4 570 748 | **2 007** | 13.9 s |
+
+The `def` block falls 190.6 → 48.9 MB and the file 52 % with no extra names and no time
+cost — the same artifacts, without the duplicated text. At an 8 B floor the largest body is
+2 007 B, not 519 726 B: the pass now reaches the floor. 2 007 B is not 8 B because a body made
+of `(tvar (tsucc (tsucc …)))` indices is a leaf chain — its subterms are not expressions, so
+naming cannot cut it. That is the floor's limit, and the row bottoms out there.
+
+**Two of the three candidate causes, measured and dismissed.**
+
+| variant | file bytes | `def` lines | largest `def` |
+| --- | ---: | ---: | ---: |
+| ordered writer, `_def_order` only | 129 051 148 | 2 012 | 1 443 664 |
+| … plus names before the memo in a body write | 129 051 148 | 2 012 | 1 443 664 |
+| … plus `_ds_walk`, floor 8 | 84 722 867 | 14 851 | **2 007** |
+| `_ds_walk` removed, floor 8 | 85 141 098 | 14 652 | 117 968 |
+
+The name-before-memo lookup in `_enc` is byte-neutral on this row (kept as a guard: it can
+still matter for a node whose text was memoised before it was interned), and dropping
+`_ds_walk` costs a 59× larger body and 199 fewer names, so §13.59's memo bypass is what makes
+the recursion descend.
+
+**No forward references.** A scan of the artifact's 2 012 `def` lines, in file order,
+collecting every `sdN` a body mentions: **0** references to a name not yet declared. The
+ordering is a valid topological order, not just a permutation.
+
+**The byte-identity gate now pins the inert case.** `scripts/check-lean-typing-proof` has a
+fourth mode, `body-off` (`LTP_DEF_BODY_MAX=0`), compared *directly* against `default` rather
+than through the golden file, so a failure names the property. On
+`BookProof.Toolbox.ChapterFockPairPerturbation` / `abs_re_inner_pairVec_le` the two modes are
+identical, and the golden file's artifacts were re-recorded for the ordering change in the
+same commit:
+
+| artifact | before | after |
+| --- | ---: | ---: |
+| `…_typing.mm0` | 334 175 929 | 181 124 846 |
+| `…_typing.mm1` | 367 747 951 | 214 696 868 |
+| `…_typing_obligations.jsonl` (default) | 1 012 915 095 | 1 012 915 095, same sha256 |
+| `…_typing_stopped.mm0` (stop mode) | 49 197 303 | 47 951 039 |
+
+The obligations' sha256 is unchanged, and so is the `naming.json`: the proof and the naming
+decisions are the same, only the spelling of the `def` block moved. `scripts/mm0-slice`'s
+docstring said bodies come in reverse first-use order — it now says dependency order, since
+that is the property it relies on ("a def body names only defs emitted before it").
