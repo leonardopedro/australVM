@@ -933,6 +933,30 @@ PY
             gap "G19a: the MLIR round trip not checked (tooling absent: python3)"
         fi
 
+        # G20b publishes a versioned MLIR artifact: canonical KernelIR, emitted
+        # MLIR, lowered PTX and a `bundle.json` whose derivatives chain by
+        # digest. The script compiles the fixture through both GPU targets,
+        # requires their KernelIR identity to agree, verifies the published
+        # set, and makes each named refusal fire. Exit 3 (no compiler or no
+        # mlir-opt) is the `[gap]`, never a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _g20b=0
+            python3 "$repo_root/scripts/mlir-bundle" \
+                >"$_cert_tmp/g20b.log" 2>&1 || _g20b=$?
+            if [ $_g20b -eq 0 ]; then
+                grep -E '^  \[detail\]' "$_cert_tmp/g20b.log" >&2
+                check "G20b: the published MLIR artifact is chained and repeatable" true
+            elif [ $_g20b -eq 3 ]; then
+                cat "$_cert_tmp/g20b.log" >&2
+                gap "G20b: the MLIR bundle not checked (no compiler or mlir-opt here)"
+            else
+                cat "$_cert_tmp/g20b.log" >&2
+                check "G20b: the published MLIR artifact is chained and repeatable" false
+            fi
+        else
+            gap "G20b: the MLIR bundle not checked (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then

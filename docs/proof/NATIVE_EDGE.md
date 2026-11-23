@@ -5,14 +5,16 @@ the first native layer under it: two real host fragments — one whose arithmeti
 is an imported call, one whose arithmetic is inlined — captured from the same
 compilation the JIT runs, decoded, and pinned.
 
-It does **not** close the edge, and the reason is measured rather than assumed:
-this repository has no x86_64 instruction semantics. The conversions in
+It does **not** close the edge. The only converted instruction models in
 `mm0/statements/` are RV64 (Sail), and [PROOF_CHAIN.md](../PROOF_CHAIN.md)
-already records that RV64 statements cannot certify AArch64 or x86_64 output. So
-what PC08 can honestly deliver is the plan's own fallback — "an unavailable
-decoder/model produces an explicit open edge, not a successful native profile" —
-with the capture and the statement of record pinned so that nothing about the
-fragment can change silently.
+already records that RV64 statements cannot certify AArch64 or x86_64 output.
+What this repository does have is a scoped x86_64 model for the arithmetic
+fragment's actual instruction set (`X86Arith.lean`: `SUB`, `IMUL`, `SETO`, the
+stack pointer discipline and the `call`/`ret` wiring), so the gap is now a named
+layer — the stack's byte contents and the trap callee's body — rather than
+"no semantics". The capture and the statement of record stay pinned so that nothing
+about the fragment can change silently, and the stated edge remains a `[gap]`
+because the model is not a full ISA or ABI proof.
 
 ## The first fragment: the arithmetic is a call
 
@@ -124,7 +126,7 @@ There is no `axiom` and no `theorem` in the file, and the gate refuses either:
 
 ## The cited arithmetic model (and its limits)
 
-`mm0/proof_chain/native/X86Arith.lean` is the model PC08 was missing, scoped to
+`mm0/proof_chain/native/X86Arith.lean` is the scoped model PC08 needed, covering
 what the `arith` fragment actually executes. Its header cites the Intel SDM by
 section text — `SUB` (Vol. 2B: `DEST := DEST - SRC`, OF on signed overflow),
 `IMUL` (Vol. 2B, two-operand: product truncated, OF when the full product does
@@ -140,21 +142,26 @@ hold mathematical `Int`s, not bits):
 | `sub_out_of_range_flag_set` | `-2^63 - 1` sets OF: the guard is load-bearing |
 | `guarded_sub_overflows_to_the_trap` | out of range, the fragment leaves for `trappingSubtract` (`none`) |
 | `mul_out_of_range_flag_set` | `2^62 * 4` sets OF |
+| `imul_low_is_truncation` / `imul_low_agrees_when_it_fits` | `imul`'s destination is the product modulo 2^64, and the product itself when it fits |
+| `imul_truncation_witness` / `imul_truncation_differs` | the truncation is visible exactly where the guard fires |
+| `push_pop_restores_rbp` / `push_pop_restores_stack` / `push_pop_restores_rsp` | the prologue's slot discipline restores the frame pointer, its slots and its stack address |
+| `pop_keeps_value` | the epilogue's pop does not disturb `rax` |
+| `saved_r12_roundtrip` | the callee-saved `r12` survives its store/restore pair |
+| `call_ret_roundtrip` | `call` and `ret` move `rsp` by exactly one slot |
+| `prologue_epilogue_balance` | opening and closing 16 bytes of frame storage leaves `rsp` where it entered |
+| `run_fragment_in_range` | from the callee's entry to `ret`, the value returned is `x - y` |
+| `run_fragment_restores_caller_stack` / `run_fragment_restores_rbp` | after `ret` the caller's `rsp` is one slot up (the popped return address) and its `rbp` is restored |
+| `run_fragment_overflows` | out of range, the fragment leaves for the trap (`none` in the trap-free model) |
+| `run_fragment_calls_the_trap` | out of range, the fallback is called with the original `rdi`/`rsi` and its result left in `rax` — with the callee a theorem parameter, not an axiom |
 
-Seventeen theorems in all, no `sorry`, no `axiom`, no oracle. Nine more cover
-the rest of the model: the `imul` truncation (`imul_low_is_truncation`,
-`imul_low_agrees_when_it_fits`, `imul_truncation_witness`,
-`imul_truncation_differs`) and the SysV frame as an abstract discipline
-(`push_pop_restores_rbp`, `push_pop_restores_stack`, `pop_keeps_value`) — the
-last two being the fragment's edge from entry to `ret`, arithmetic and frame
-included (`run_fragment_in_range`, `run_fragment_overflows`). `scripts/native-edge check`
+Twenty-four theorems in all, no `sorry`, no `axiom`, no oracle. `scripts/native-edge check`
 runs `lean` on the file (falling back to the flake's store path, so it does not
 need the devshell that builds the Sail models), pins its sha256 in both stated
 edges, and refuses a capture whose ALU form has no definition in `MODELED` — a
 new instruction cannot appear without semantics. The `[gap]` is therefore
-narrower and named: the arithmetic and the frame discipline are proved, stack
-addresses and bytes, the ABI's memory and the trap call are not, so the
-fragment's edge is still open.
+narrower and named: the arithmetic, the stack-pointer discipline and the
+`call`/`ret` wiring are proved; the stack's byte contents, the ABI's memory
+model and the trap callee's body are not, so the fragment's edge is still open.
 
 ## Controls
 
@@ -209,11 +216,11 @@ PATH="$MM0/bin:$PATH" python3 scripts/native-edge check
   `trappingAdd`, so its proof would still end at an external boundary. `arith`
   removes that for the non-overflow case and leaves one split to argue: the
   trap path is the imported method.
-- **What would close the rest:** the same Lean model extended from its abstract
-  frame to real stack addresses and bytes and to the `call`/`ret` ABI (and a
-  bitvector word type), plus a model of `trappingSubtract`. The arithmetic core
-  and the frame discipline themselves are no longer guessed: they are
-  `X86Arith.lean`.
+- **What would close the rest:** the same Lean model extended from stack
+  addresses to byte-addressed memory (so a saved slot's *value* is read back,
+  not only its pointer), and a model of `trappingSubtract`'s body. The
+  arithmetic core, the pointer discipline and the `call`/`ret` wiring are no
+  longer guessed: they are `X86Arith.lean`.
 - **What would close it:** a reviewed x86_64 semantics (or a conversion of one,
   like the RV64 ones under `mm0/statements/`), a simulation from machine states
   to CPS states across the ABI, and a model of `trappingAdd` for the trap path.

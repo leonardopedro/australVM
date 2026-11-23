@@ -179,6 +179,7 @@
   GpuSubsetTest
   GpuWgslTest
   GpuMlirTest
+  MlirBundleTest
   GpuReduceTest
   GpuCliTest
   GpuObligationsTest
@@ -189,6 +190,7 @@
   GpuSubsetTest
   GpuWgslTest
   GpuMlirTest
+  MlirBundleTest
   GpuReduceTest
   GpuCliTest
   GpuObligationsTest

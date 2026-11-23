@@ -15,6 +15,7 @@
   Gpu_subset
   Gpu_wgsl
   Gpu_mlir
+  Gpu_mlir_bundle
   Gpu_reduce
   Gpu_reduce_wgsl
   Gpu_proof_interface

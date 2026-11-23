@@ -17,8 +17,9 @@
 -- The host edge is the only layer this file states, and it is the layer
 -- with no complete model: the arithmetic core and the SysV frame's
 -- discipline are specified and proved in
--- `mm0/proof_chain/native/X86Arith.lean`, but nothing here models stack
--- addresses, the ABI's memory or the trap call, and the repository's only
+-- `mm0/proof_chain/native/X86Arith.lean` — including the stack-pointer
+-- discipline and the `call`/`ret` wiring — but nothing here models the
+-- stack's byte contents or the trap callee's body, and the repository's only
 -- converted instruction models are RV64 — `docs/PROOF_CHAIN.md` records
 -- that they cannot certify this target. So the simulation obligation is
 -- stated, cited and left open.
@@ -125,23 +126,25 @@
 -- cites: mm0/isa.mm0 sha256=4c3c28bc0002aad445d2c98713127e108af93f43f3f12fdc99b851051253a74b
 --
 -- MODEL. The arithmetic core is specified and *proved* in
--- `mm0/proof_chain/native/X86Arith.lean` (sha256=db55d05c0ebbb1fbe2b9f75a3a1acc8737ff1218cc5b81084c676eed803166cf),
+-- `mm0/proof_chain/native/X86Arith.lean` (sha256=a2ff52767659f5683da0584457ef06f004c86ca1aa60156422b2798deb0b9d13),
 -- which cites the Intel SDM for `SUB`, `IMUL` and `SETO` and proves, on a
 -- toy machine state: the inline value for in-range arguments, the clear
 -- overflow flag in range, the out-of-range case reaching the trap, the
--- `imul` truncation, and the frame discipline from entry to `ret`. It
--- does not model stack addresses, the ABI's memory or
--- `trappingSubtract` — which is exactly why the edge above stays open.
+-- `imul` truncation, the frame's stack addresses and the `call`/`ret`
+-- wiring (the trap callee is a parameter, not invented). It does not
+-- model the stack's byte contents or `trappingSubtract` — which is
+-- exactly why the edge above stays open.
 --
 -- Instruction form(s) not covered by the arithmetic model (the frame
 -- discipline — push/pop/mov/ret — is modelled abstractly in `Frame`,
 -- and the trap call is deliberately outside the fragment): add, call, jmp, jne, mov, movabs, pop, push, ret, test.
--- model: mm0/proof_chain/native/X86Arith.lean sha256=db55d05c0ebbb1fbe2b9f75a3a1acc8737ff1218cc5b81084c676eed803166cf
+-- model: mm0/proof_chain/native/X86Arith.lean sha256=a2ff52767659f5683da0584457ef06f004c86ca1aa60156422b2798deb0b9d13
 --
--- certificate: [gap] — stated, cited, unproved. The arithmetic core and
--- the frame discipline are modelled in `X86Arith.lean`, but the
--- address-level ABI, memory and the trap call are not, so this edge is
--- open; `scripts/native-edge` reports it as a `[gap]`, fails if another
+-- certificate: [gap] — stated, cited, unproved. The arithmetic core,
+-- stack addresses and the `call`/`ret` wiring are modelled in
+-- `X86Arith.lean`, but the stack's byte contents and the trap callee's
+-- body are not, so this edge is open; `scripts/native-edge` reports it as
+-- a `[gap]`, fails if another
 -- model appears (`MODEL_SOURCES`), and pins the decoded bytes, relocations
 -- and declination so it cannot silently change.
 --

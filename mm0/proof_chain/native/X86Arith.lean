@@ -213,94 +213,190 @@ theorem imul_truncation_differs :
   rw [imul_truncation_witness]
   decide
 
-/-! ## The SysV frame: prologue, epilogue and `ret`
+/-! ## The SysV frame: stack addresses, prologue/epilogue and `call`/`ret`
 
 The fragment is not only arithmetic: the capture opens with `push rbp` /
 `mov rbp, rsp` / `sub rsp, 0x10`, saves `r12`, and closes with the epilogue
-(`mov rax, r12`, restore `r12`, `mov rsp, rbp`, `pop rbp`, `ret`). Those are
-modelled here as an abstract frame — a stack of saved slots, a frame pointer and
-a stack pointer as levels, not addresses — which is what is needed to state the
-edge *from entry to `ret`* rather than only "after the arithmetic".
+(`mov rax, r12`, restore `r12`, `mov rsp, rbp`, `pop rbp`, `ret`). This section
+models those as *addresses*: each slot is eight bytes, `rsp` moves by that much
+per push/pop, and the frame pointer is the address `mov rbp, rsp` records. The
+stack's *contents* are still a list (no byte-addressed memory), so what is
+proved is the pointer discipline and the register saves, not the loaded bytes.
+
+The call/`ret` ABI is here too: `call` pushes the return address and `ret` pops
+it, so the fragment's entry state is the callee's (`rsp` points at the return
+slot). On the `jne` path the fallback is a real `call` to the CPS body's
+`trappingSubtract`; its body is not invented — the called function is a
+parameter, and what is proved is that the call is made with `rdi`/`rsi` and its
+result left in `rax`.
 -/
 
-/-- A call frame: the registers, the saved slots (most recent first), and the
-frame/stack pointers as abstract levels. No addresses and no memory contents:
-this models the discipline, not the stack bytes. -/
+/-- A call frame: the registers, the saved slots (most recent first), the frame
+and stack pointers as stack addresses, and the callee-saved `r12` the fragment
+stores. No byte-addressed memory: this models the discipline, not the stack
+bytes. -/
 structure Frame where
   regs : State
   rbp : Word
   rsp : Word
   stack : List Word
+  saved12 : Word
 
-/-- The state at the fragment's entry, with an empty frame. (Named rather than
-    namespaced as `Frame.entry` so it does not shadow the register-state
-    `entry` it wraps.) -/
-def entryFrame (x y : Word) : Frame :=
-  { regs := entry x y, rbp := 0, rsp := 0, stack := [] }
+/-- One stack slot: eight bytes. -/
+def slotBytes : Word := 8
 
-/-- `push rbp`. -/
-def pushRbp (f : Frame) : Frame := { f with stack := f.rbp :: f.stack }
+/-- The state at the fragment's entry (the callee's view: `rsp` addresses the
+return slot), with an empty frame. (Named rather than namespaced as
+`Frame.entry` so it does not shadow the register-state `entry` it wraps.) -/
+def entryFrame (x y base : Word) : Frame :=
+  { regs := entry x y, rbp := base, rsp := base, stack := [], saved12 := 0 }
 
-/-- `pop rbp`. -/
+/-- `push rbp`: one slot below `rsp`, holding the caller's frame pointer. -/
+def pushRbp (f : Frame) : Frame :=
+  { f with rsp := f.rsp - slotBytes, stack := f.rbp :: f.stack }
+
+/-- `pop rbp`: read the slot and release it. -/
 def popRbp (f : Frame) : Frame :=
   match f.stack with
-  | b :: rest => { f with rbp := b, stack := rest }
-  | [] => f
+  | b :: rest => { f with rbp := b, rsp := f.rsp + slotBytes, stack := rest }
+  | [] => { f with rsp := f.rsp + slotBytes }
 
-/-- `sub rsp, 0x10`: one level of frame storage, abstractly. -/
-def openFrame (f : Frame) : Frame := { f with rsp := f.rsp + 16 }
+/-- `mov rbp, rsp`: the frame pointer becomes the current stack address. -/
+def movRbpRsp (f : Frame) : Frame := { f with rbp := f.rsp }
 
-/-- `add rsp, 0x10` / `mov rsp, rbp`. -/
+/-- `sub rsp, 0x10`: two slots of frame storage below the frame pointer. -/
+def openFrame (f : Frame) : Frame := { f with rsp := f.rsp - 2 * slotBytes }
+
+/-- `add rsp, 0x10` / `mov rsp, rbp`: discard the frame storage. -/
 def closeFrame (f : Frame) : Frame := { f with rsp := f.rbp }
+
+/-- `mov [rsp], r12` — the callee-saved register the fragment stores. -/
+def saveR12 (f : Frame) : Frame := { f with saved12 := f.regs.r12 }
+
+/-- `mov r12, [rsp]` — the matching restore. -/
+def restoreR12 (f : Frame) : Frame :=
+  { f with regs := { f.regs with r12 := f.saved12 } }
+
+/-- `call`: push the eight-byte return address. The callee sees `rsp` after it. -/
+def call (f : Frame) : Frame := { f with rsp := f.rsp - slotBytes }
+
+/-- `ret`: pop the return address. -/
+def ret (f : Frame) : Frame := { f with rsp := f.rsp + slotBytes }
 
 /-- The prologue's stack discipline restores the frame pointer exactly. -/
 theorem push_pop_restores_rbp (f : Frame) : (popRbp (pushRbp f)).rbp = f.rbp := rfl
 
-/-- ... and leaves the remaining saved slots untouched. -/
+/-- ... leaves the remaining saved slots untouched ... -/
 theorem push_pop_restores_stack (f : Frame) :
-    (popRbp (pushRbp f)).stack = f.stack := rfl
+    (popRbp (pushRbp f)).stack = f.stack := by
+  simp [pushRbp, popRbp]
+
+/-- ... and restores the stack address it started from. -/
+theorem push_pop_restores_rsp (f : Frame) :
+    (popRbp (pushRbp f)).rsp = f.rsp := by
+  simp [pushRbp, popRbp, slotBytes]
 
 /-- The epilogue's pop does not touch the return value. -/
 theorem pop_keeps_value (f : Frame) : value (popRbp f).regs = value f.regs := by
   unfold popRbp value
   split <;> rfl
 
-/-- The whole captured fragment, entry to `ret`: prologue, the guarded
-arithmetic, and the epilogue. `none` is the `trappingSubtract` call on the
-`jne` path, which this model deliberately leaves outside the fragment. -/
-def runFragment (f : Frame) : Option Word :=
-  let f1 := openFrame (pushRbp f)
-  let s1 := movR12Rdi f1.regs
-  let s2 := subR12Rsi s1
-  if s2.of then none
-  else
-    let f2 := { f1 with regs := movRaxR12 s2 }
-    let f3 := closeFrame f2
-    some (value (popRbp f3).regs)
+/-- The callee-saved register survives its store/restore pair. -/
+theorem saved_r12_roundtrip (f : Frame) :
+    (restoreR12 (saveR12 f)).regs.r12 = f.regs.r12 := by
+  simp [restoreR12, saveR12]
 
-/-- **The fragment's edge, in range**: from the SysV entry to `ret`, the value
-returned is the difference — prologue and epilogue included. -/
-theorem run_fragment_in_range (x y : Word) (h : inRange (x - y)) :
-    runFragment (entryFrame x y) = some (x - y) := by
+/-- A `call`/`ret` pair returns the stack pointer to the caller's frame. -/
+theorem call_ret_roundtrip (f : Frame) : (ret (call f)).rsp = f.rsp := by
+  simp [call, ret, slotBytes]
+
+/-- The prologue/epilogue discipline balances: after `pop rbp`, `rsp` is the
+    same address the fragment entered with, though the frame storage was opened
+    and closed at real addresses below it. -/
+theorem prologue_epilogue_balance (f : Frame) :
+    (popRbp (closeFrame (openFrame (movRbpRsp (pushRbp f))))).rsp = f.rsp := by
+  simp [pushRbp, movRbpRsp, openFrame, closeFrame, popRbp, slotBytes]
+
+/-- The fragment's epilogue and `ret`, from the same entry frame: the frame
+result is what the stack-pointer and callee-saved proofs are about. -/
+def runFragmentEpilogue (f : Frame) : Frame :=
+  let f1 := saveR12 (openFrame (movRbpRsp (pushRbp f)))
+  let s2 := subR12Rsi (movR12Rdi f1.regs)
+  let f2 := { f1 with regs := movRaxR12 s2 }
+  ret (popRbp (restoreR12 (closeFrame f2)))
+
+/-- The whole captured fragment, entry to `ret`, with its stack addresses:
+prologue, `r12` save, the guarded arithmetic, and the epilogue including `ret`.
+`none` is the `trappingSubtract` call on the `jne` path, which
+`runFragmentWith` models through a parameter. -/
+def runFragment (f : Frame) : Option Word :=
+  let f1 := saveR12 (openFrame (movRbpRsp (pushRbp f)))
+  if (subR12Rsi (movR12Rdi f1.regs)).of then none
+  else some (value (runFragmentEpilogue f).regs)
+
+/-- The same fragment with the fallback `call` modelled: `trap` is the callee,
+passed in rather than assumed, so what is proved is that the call is made with
+the SysV arguments `rdi`/`rsi` and its result left in `rax`. -/
+def runFragmentWith (trap : Word → Word → Word) (f : Frame) : Option Word :=
+  let f1 := saveR12 (openFrame (movRbpRsp (pushRbp f)))
+  if (subR12Rsi (movR12Rdi f1.regs)).of then
+    some (trap f.regs.rdi f.regs.rsi)
+  else some (value (runFragmentEpilogue f).regs)
+
+/-- **The fragment's edge, in range**: from the callee's SysV entry to `ret`,
+the value returned is the difference — prologue, `r12` save and epilogue
+included. -/
+theorem run_fragment_in_range (x y base : Word) (h : inRange (x - y)) :
+    runFragment (entryFrame x y base) = some (x - y) := by
   have hf : fits (x - y) = true := by
     dsimp [fits]
     exact decide_eq_true h
-  simp [runFragment, entryFrame, openFrame, pushRbp, movR12Rdi, subR12Rsi,
-        movRaxR12, closeFrame, popRbp, entry, value, hf]
+  simp [runFragment, runFragmentEpilogue, entryFrame, openFrame, pushRbp,
+        movRbpRsp, saveR12, movR12Rdi, subR12Rsi, movRaxR12, closeFrame,
+        restoreR12, popRbp, ret, entry, value, hf]
+
+/-- **The stack is left as the caller expects**: `ret` has popped the return
+slot, so the callee's `rsp` finishes one slot above its entry address. -/
+theorem run_fragment_restores_caller_stack (x y base : Word) :
+    (runFragmentEpilogue (entryFrame x y base)).rsp = base + slotBytes := by
+  simp [runFragmentEpilogue, entryFrame, pushRbp, movRbpRsp, openFrame,
+        saveR12, movR12Rdi, subR12Rsi, movRaxR12, closeFrame, restoreR12,
+        popRbp, ret, slotBytes]
+
+/-- ... and the callee-saved frame pointer is the caller's again. -/
+theorem run_fragment_restores_rbp (x y base : Word) :
+    (runFragmentEpilogue (entryFrame x y base)).rbp = base := by
+  simp [runFragmentEpilogue, entryFrame, pushRbp, movRbpRsp, openFrame,
+        saveR12, closeFrame, restoreR12, popRbp, ret]
 
 /-- **The fragment's edge, out of range**: the same path reaches the `jne`, and
 the value is produced by `trappingSubtract` — outside the fragment, so the model
 says `none` rather than inventing it. -/
-theorem run_fragment_overflows :
-    runFragment (entryFrame (-twoPow63) 1) = none := by
+theorem run_fragment_overflows (base : Word) :
+    runFragment (entryFrame (-twoPow63) 1 base) = none := by
   have h : ¬ inRange ((-twoPow63) - 1) := by
     unfold inRange twoPow63
     omega
   have hf : fits ((-twoPow63) - 1) = false := by
     dsimp [fits]
     exact decide_eq_false h
-  simp [runFragment, entryFrame, openFrame, pushRbp, movR12Rdi, subR12Rsi,
-        entry, hf]
+  simp [runFragment, entryFrame, openFrame, pushRbp, movRbpRsp, saveR12,
+        movR12Rdi, subR12Rsi, entry, hf]
+
+/-- **The fallback call, modelled**: out of range, the fragment really calls the
+fallback, with the original `rdi`/`rsi` arguments, and returns whatever that
+callee returns. `trap` is a parameter, so no external body is assumed — what is
+proved is the ABI wiring, not `trappingSubtract`'s arithmetic. -/
+theorem run_fragment_calls_the_trap (trap : Word → Word → Word) (base : Word) :
+    runFragmentWith trap (entryFrame (-twoPow63) 1 base) = some (trap (-twoPow63) 1) := by
+  have h : ¬ inRange ((-twoPow63) - 1) := by
+    unfold inRange twoPow63
+    omega
+  have hf : fits ((-twoPow63) - 1) = false := by
+    dsimp [fits]
+    exact decide_eq_false h
+  simp [runFragmentWith, entryFrame, openFrame, pushRbp, movRbpRsp, saveR12,
+        movR12Rdi, subR12Rsi, entry, hf]
 
 /-- The theorems the capture's stated edge rests on, as one list so a checker
     can name them without parsing prose. -/
@@ -319,9 +415,16 @@ def THEOREMS : List String :=
   , "imul_truncation_differs"
   , "push_pop_restores_rbp"
   , "push_pop_restores_stack"
+  , "push_pop_restores_rsp"
   , "pop_keeps_value"
+  , "saved_r12_roundtrip"
+  , "call_ret_roundtrip"
+  , "prologue_epilogue_balance"
   , "run_fragment_in_range"
+  , "run_fragment_restores_caller_stack"
+  , "run_fragment_restores_rbp"
   , "run_fragment_overflows"
+  , "run_fragment_calls_the_trap"
   ]
 
 /-- The instruction forms this model covers, keyed exactly as the capture

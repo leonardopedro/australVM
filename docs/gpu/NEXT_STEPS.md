@@ -326,6 +326,52 @@ and reproduce its KernelIR identity. Refuse a tampered lower artifact,
 conflicting target options and an invalid static extent. The default CPU tools
 still operate without MLIR installed.
 
+**Status:** built on this host. `--target-type=mlir --entrypoint=… --output=DIR
+[--gpu-static-elements=N]` builds the same checked KernelIR as the WGSL lane,
+renders it (G20a), has `mlir-opt` verify it, lowers it with the pinned pipeline
+to `sm_70` PTX, and publishes four chained files: `kernel.kernelir`,
+`kernel.mlir`, `kernel.ptx`, `bundle.json`. The metadata records source and
+builtin provenance digest, the three derivative digests with their predecessors,
+the toolchain string (`LLVM version 19.1.7`), the target, the exact pipeline, the
+parameter layout and the numeric contract. Publication is atomic (a staging
+directory renamed only after the set checks itself) and refuses a pre-existing
+destination.
+
+`scripts/mlir-bundle` compiles the same fixture through WGSL and MLIR and
+requires their KernelIR identities and bytes to agree, verifies each published
+set, and fires every refusal the card names: a tampered lower artifact, a
+conflicting numeric profile, a WGSL-only staged reduction, a zero/negative
+static extent, a missing `mlir-opt`, and a nonexistent tool override. It also
+compiles a CPU target with the toolchain absent, so the default tools are shown
+not to depend on MLIR.
+Without `mlir-opt` the whole check is a `[gap]`; the CPU and WGSL targets never
+consult it.
+
+**Status:** implemented. `austral compile SRC --target-type=mlir
+--entrypoint=M:f --gpu-static-elements=65 --output=DIR` publishes four files —
+`kernel.kernelir` (canonical bytes), `kernel.mlir` (`Gpu_mlir.render` of exactly
+those bytes), `kernel.ptx` (the pinned G19a pipeline's lowering) and
+`bundle.json`, whose `derivatives` array chains the three digests with their
+predecessor and producer. Publication is staged: `mlir-opt` verifies the
+module, lowers it, the PTX ABI is checked against the kernel's arity (five
+`.u64` per memref), the set is re-read by `Gpu_mlir_bundle.verify_dir` itself,
+and only then is the directory renamed into place. A failed step publishes
+nothing. Refusals are named before work: a non-`u32-modular-v1` profile, a
+`--gpu-operation` (WGSL-only), a non-positive or non-integer
+`--gpu-static-elements`, an existing output directory, and a missing
+`mlir-opt` (with `AUSTRAL_MLIR_OPT` accepted only when that path exists). The
+verifier additionally requires `kernel.mlir`'s own `// kernelir-sha256:`
+header to name the recorded IR, so re-hashing a forged `.kernelir` does not
+repair the pair, and it re-derives the ABI from the PTX bytes rather than
+trusting `bundle.json`. `test/MlirBundleTest.ml` (13 tests) pins the extraction,
+the ABI expectations, the chain's tamper refusals and the CLI shape;
+`scripts/mlir-bundle` runs the end to end: two MLIR publications byte-identical,
+the WGSL bundle of the same fixture agreeing on `48caf04e…`, the published set
+re-verified, and six controls refusing — including a CPU `--target-type=c`
+fixture still compiling with no MLIR on `PATH`. Not claimed: the ABI header
+remains `g19a-pending` (exercised, not proved), the bundle records host-absolute
+source paths, and no MLIR semantics or preservation proof exists (PC09).
+
 ### G21a — Launch an actual source-generated NVIDIA artifact
 
 **Files.** Optional CUDA runner in the isolated GPU crate, device tests and

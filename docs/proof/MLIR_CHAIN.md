@@ -16,8 +16,8 @@ consumer of `Gpu_ir.kernel`, beside `Gpu_wgsl`, and `gpu_proof dump-mlir`
 writes the module for the reflected `clamp` subject. `G19a`'s pinned toolchain
 round trip verifies it and lowers it to `sm_70` PTX (see below), but no MLIR
 *semantics* is declared, so the module is captured and exercised, not
-certified: `G20b` remains unbuilt. The record therefore stays a **boundary
-record** that (a) pins the pre-MLIR subject to the identity the chain already
+certified. G20b publishes the versioned artifact (below), but publication is
+not preservation either. The record therefore stays a **boundary record** that (a) pins the pre-MLIR subject to the identity the chain already
 trusts, (b) names every pass of the route, (c) records the captured pass's
 pre/post bytes, (d) counts the uncaptured ones, and (e) refuses stale evidence.
 
@@ -34,8 +34,11 @@ pre/post bytes, (d) counts the uncaptured ones, and (e) refuses stale evidence.
   record cell is a refusal.
 - `[[pass]]` — `kernelir-to-mlir` is `state = "captured"` with
   `pre_file = "clamp.kernelir"`, `post_file = "clamp.mlir"` and both sha256
-  digests under `mm0/proof_chain/mlir/ir/`; `mlir-canonicalize` and
-  `convert-gpu-to-nvvm` stay `uncaptured` with the concrete reason.
+  digests under `mm0/proof_chain/mlir/ir/`; so is `mlir-canonicalize`, whose
+  pre side is exactly the previous pass's post artifact and whose post side is
+  `clamp.canonical.mlir` from `mlir-opt --canonicalize` (the rewrite is
+  visible: `scf.if` becomes `arith.select`); `convert-gpu-to-nvvm` stays
+  `uncaptured` with the concrete reason.
 
 The pass list is pinned in `DECLARED_PASSES`, so an uncaptured optimization
 cannot fall out of the chain by deleting its row — the failure PC09's own text
@@ -53,13 +56,22 @@ names.
    `captured` (both IR files exist and hash to their own recorded digest) or
    `uncaptured` (with a reason) — a forged `captured` row fails because its IR
    files do not exist;
-4. the subject's `captured_passes` cell equals the number of captured rows.
+4. the subject's `captured_passes` cell equals the number of captured rows;
+5. adjacent captured rows chain: a captured pass's `pre_file`/`pre_sha256` must
+   be its predecessor's `post_file`/`post_sha256`, so two blocks that each hash
+   correctly cannot describe different routes.
 
 Capturing a pass moves it to `captured` but never to *proved*: while a pass is
 captured the checker prints `[gap] PC09: N pass(es) captured, but capture is not
 preservation: no MLIR semantics is available`, and every uncaptured pass is
 counted in a second `[gap]`. Both are true at once: the *record* is current, the
 *preservation claim* is not made.
+
+`mlir-canonicalize` is re-captured with
+`python3 scripts/mlir-chain capture-canonicalize`, which resolves `mlir-opt`
+from the G19a record (or `PATH`), refuses to start unless the pre side is the
+recorded `kernelir-to-mlir` output, and rewrites the row from the produced
+bytes. Without `mlir-opt` it exits 3 and the row stays `uncaptured`.
 
 ## The emitted MLIR (G20a)
 
@@ -107,7 +119,7 @@ operands and reversing the comparison each change the lowered body.
 
 ## Controls
 
-`scripts/mlir-chain selftest` — six, each mutating one evidence cell:
+`scripts/mlir-chain selftest` — seven, each mutating one evidence cell:
 
 | control | refused by |
 |---|---|
@@ -118,9 +130,33 @@ operands and reversing the comparison each change the lowered body.
 | a stale `kernel_ir_sha256` | it must equal the reflected digest |
 | a restated `captured_passes` count | it must equal the captured rows |
 | a captured row whose IR is missing or does not hash | both sides are re-read and hashed (the forged-row control exercises it) |
+| a captured pass whose pre side is not its predecessor's post | the digest chain compares the two rows' `pre`/`post` fields |
 
 The first two are PC09's own acceptance test: "Mutate a comparison predicate or
 pass option and stale/invalid evidence is refused."
+
+## The published bundle (G20b)
+
+`austral compile <aui>,<aum> --target-type=mlir --entrypoint=M:f
+--gpu-static-elements=65 --output=DIR` publishes a versioned artifact whose
+files chain by digest: `kernel.kernelir` (the canonical `Gpu_ir` bytes),
+`kernel.mlir` (the same KernelIR rendered), `kernel.ptx` (the G19a pipeline's
+lowering of that module) and `bundle.json` (the `derivatives` array with each
+stage's `sha256`, `predecessor` and `produced_by`, plus the source captures,
+the numeric contract, the lowering identity and the measured PTX ABI).
+Publication stages under `DIR.staging-<pid>`, runs `mlir-opt`, extracts the PTX,
+checks the ABI (five `.u64` per memref operand), verifies the set with
+`Gpu_mlir_bundle.verify_dir`, and only then renames it into place.
+
+`gpu_proof verify-mlir-bundle DIR` re-hashes each file, requires the MLIR
+module's own `// kernelir-sha256:` header to name the recorded IR (so a forged
+`kernel.kernelir` with a recomputed JSON digest still fails), re-derives the
+ABI from the PTX, and refuses any pipeline other than the pinned one.
+`scripts/mlir-bundle` exercises the end to end: two MLIR publications
+byte-identical, the WGSL bundle of the same fixture agreeing on
+`48caf04e…`, and the named refusals (tampered PTX, conflicting options, invalid
+extent, missing toolchain). The ABI header stays `g19a-pending`: publication
+says the bytes are consistent, never that the interface is proved.
 
 ## The toolchain round trip (G19a)
 
@@ -148,20 +184,47 @@ PTX digest (four controls in `selftest`). `scripts/mlir-chain check` uses the
 same record to attest that `clamp.mlir` — the module PC09 marks `captured` — is
 the file the pinned toolchain verified and lowered.
 
+## The published artifact (G20b)
+
+`austral compile --target-type=mlir` publishes the same KernelIR through the
+compiler's own frontend, so the WGSL and MLIR lanes cannot disagree about their
+input:
+
+| file | content | bound to |
+|---|---|---|
+| `kernel.kernelir` | `Gpu_ir.canonical_bytes` | the source + builtin digests in `bundle.json` |
+| `kernel.mlir` | `Gpu_mlir.render`, carrying `// kernelir-sha256:` | `kernel.kernelir` |
+| `kernel.ptx` | the pinned pipeline's `sm_70` output | `kernel.mlir` |
+| `bundle.json` | digests, toolchain, target, pipeline, ABI, numeric contract | all three |
+
+The check is not a hash table: `gpu_proof verify-mlir-bundle` re-hashes each
+file **and** requires the module's own header digest to equal the recorded IR
+digest, so re-hashing a forged `kernel.kernelir` in `bundle.json` does not
+rescue the pair. It also re-derives the ABI from the PTX (one `memref` per
+operand → five `.u64`, so ten for `clamp`) and refuses a different target, width,
+entry or missing `cvta.to.global`.
+
+`scripts/mlir-bundle` compiles the fixture through WGSL and MLIR, requires the
+published KernelIR identity and bytes to equal the WGSL bundle's, publishes the
+MLIR set twice for byte identity, and fires every refusal the card names: a
+tampered lower artifact, a conflicting numeric profile, a reduction on this
+target, a non-positive static extent, a missing `mlir-opt`, a nonexistent tool
+override — plus the positive control that a CPU target still compiles with no
+MLIR installed.
+
 ## What is not claimed, and what comes next
 
-- **No preservation proof.** One pass is captured, so nothing here says the
-  emitted `MLIR` computes the same function as the `KernelIR` it came from.
-  `check` fails rather than passes if every row claims `captured` while the pass
-  proofs are still absent.
+- **No preservation proof.** Two passes are captured, so nothing here says the
+  emitted or canonicalized `MLIR` computes the same function as the `KernelIR`
+  it came from. `check` fails rather than passes if every row claims `captured`
+  while the pass proofs are still absent.
 - **Verified and lowered, not executed.** `mlir-opt` accepts the module and
 the pinned pipeline emits `sm_70` PTX for it (G19a), but nothing is dispatched
 and no GPU claim is made; the emitter's header still says `abi: g19a-pending`
 because the *interface* is not proved, only exercised.
 - **No dialect semantics.** The record says the dialect profile is absent; it
   does not describe one.
-- **Next, in order:** `G20b` (the versioned MLIR artifact); then move
-  `mlir-canonicalize` and `convert-gpu-to-nvvm` to `captured`, and state and (if
-  a reviewed MLIR semantics is available) prove the pass-local relations —
-  reusing PC03's composition and PC04's algorithm theorem, which is what PC09
-  asks for.
+- **Next, in order:** capture `convert-gpu-to-nvvm` as a pre/post pair, and
+  state and (if a reviewed MLIR semantics is available) prove the pass-local
+  relations — reusing PC03's composition and PC04's algorithm theorem, which is
+  what PC09 asks for.

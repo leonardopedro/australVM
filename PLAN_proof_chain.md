@@ -397,18 +397,22 @@ a **reviewed x86_64 model appearing** (`MODEL_SOURCES`: `$X86_MODEL` or
 `mm0/statements/x86_instructions.mm0`), and a changed *cited* model whose pin is
 stale. The model itself is now real, not deferred:
 `mm0/proof_chain/native/X86Arith.lean` cites the Intel SDM for `SUB`, `IMUL` and
-`SETO` and proves seventeen theorems on a toy machine state — the inline value
+`SETO` and proves twenty-four theorems on a toy machine state — the inline value
 and the clear overflow flag for in-range arguments, the guarded path returning
-that value, the out-of-range cases setting OF (so
-`guarded_sub_overflows_to_the_trap` shows the fragment leaving for
-`trappingSubtract`), the `imul` truncation, and the SysV frame as an abstract
-discipline, including `run_fragment_in_range`/`run_fragment_overflows`, which
-state the edge from entry to `ret`. `scripts/native-edge check`
+that value, the out-of-range cases setting OF, the `imul` truncation, the SysV
+frame at real stack addresses (`push`/`pop`/`sub rsp`/`mov rbp,rsp`, the
+callee-saved `r12`, `call`/`ret` each moving `rsp` one slot), and the edge from
+entry to `ret` (`run_fragment_in_range`, `run_fragment_restores_caller_stack`,
+`run_fragment_restores_rbp`, `run_fragment_overflows`). The fallback is wired
+in `run_fragment_calls_the_trap`: the callee is a theorem parameter, so
+`trappingSubtract`'s body is not assumed, but the call's `rdi`/`rsi` arguments
+and its `rax` result are proved. `scripts/native-edge check`
 runs `lean` on it, pins its sha256 into both stated edges, and refuses a capture
 whose ALU form has no semantics in `MODELED`. The `[gap]` is now named: the
-arithmetic core and the frame discipline are proved; stack addresses and bytes,
-the ABI's memory and the trap call are not. Closing the rest needs those in the
-same model (and a bitvector word type); none of that is invented here. The sibling `../Bend` checkout was searched
+arithmetic core, the stack-pointer discipline and the `call`/`ret` wiring are
+proved; the stack's byte contents, the ABI's memory model and the trap callee's
+body are not. Closing the rest needs those in the same model (and a bitvector
+word type); none of that is invented here. The sibling `../Bend` checkout was searched
 and is not an ISA model: it emits C/Metal/CUDA, so nothing was converted from it.
 
 ### PC09 — Track and certify selected MLIR lowering steps
@@ -448,16 +452,37 @@ digests in `mm0/proof_chain/mlir/toolchain.toml` (four controls; a `[gap]` when
 no MLIR is installed). So the captured `clamp.mlir` is *verified and lowered* to
 `sm_70` PTX (`mm0/proof_chain/mlir/ir/clamp.ptx`, guard visible as
 `setp.gt.u32`), not merely captured, and `scripts/mlir-chain check` attests that
-the file it records is that same module. `mlir-canonicalize` and
-`convert-gpu-to-nvvm` still stay `uncaptured` as *PC09 passes*: the bundled
-pipeline is not a pass-local relation and no MLIR semantics is available, so no
+the file it records is that same module. `mlir-canonicalize` is captured as a
+real pass now: `scripts/mlir-chain capture-canonicalize` runs `mlir-opt
+--canonicalize` on the captured module (the `scf.if` becomes `arith.select`)
+and pins both sides, which must chain by digest to `kernelir-to-mlir`'s output.
+`convert-gpu-to-nvvm` stays `uncaptured` as a *PC09 pass*: the bundled pipeline
+is not a pass-local relation and no MLIR semantics is available, so no
 preservation is proved and the checker prints both the
 capture-is-not-preservation `[gap]` and the uncaptured-pass `[gap]` beside its
 `[pass]`. `scripts/mlir-chain` also
 re-derives the subject from `clamp_source.mm0`, requires exactly the pinned route
-and options, and rejects a captured row whose IR is missing or does not hash;
-six controls refuse (comparison predicate, pass option, dropped pass, forged
-capture, stale digest, restated count).
+and options, rejects a captured row whose IR is missing or does not hash, and
+refuses a captured pass whose pre side is not its predecessor's post; seven
+controls refuse (comparison predicate, pass option, dropped pass, forged
+capture, stale digest, restated count, an unchained capture).
+
+`G20b` is built: `--target-type=mlir` publishes `kernel.kernelir`,
+`kernel.mlir`, `kernel.ptx` and `bundle.json` through the compiler's own
+frontend, with the chain `kernelir → mlir → ptx` plus toolchain, target,
+pipeline, ABI and the numeric contract. `gpu_proof verify-mlir-bundle` re-hashes
+each derivative, requires the emitter's own header digest to match the recorded
+IR (a re-hashed forgery does not rescue the pair), and re-derives the ABI from
+the PTX. `scripts/mlir-bundle` compiles the fixture through WGSL and MLIR and
+requires their KernelIR identity and bytes to agree, publishes the MLIR set
+twice for byte identity, and fires each refusal (tampered derivative,
+conflicting profile, reduction, non-positive extent, missing `mlir-opt`,
+nonexistent override) beside the positive control that a CPU target still
+compiles without MLIR. What this buys the proof chain is a *subject*: PC09's
+captured module now has a compiler-produced sibling with a checkable provenance
+chain, and the compiler's PTX was measured equal to the G19a probe's capture. It
+does not buy preservation — no MLIR semantics is declared, so
+`mlir-canonicalize` and `convert-gpu-to-nvvm` stay unproved.
 
 ### PC10 — Make GPU virtual/native boundaries enforceable
 

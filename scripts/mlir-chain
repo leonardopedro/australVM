@@ -206,6 +206,21 @@ def check(record_path: Path, artifact: Path) -> int:
         fail("the subject's captured count matches its pass rows",
              f"says {subject.get('captured_passes')!r}, found {captured}")
 
+    # (3b) a captured pass starts from its predecessor's output: the digest
+    # chain is what keeps two blocks that each hash correctly from describing
+    # different routes. An uncaptured pass breaks the chain (its output is not
+    # in hand), so chaining resumes only across adjacent captured rows.
+    prev = None
+    for row in record["passes"]:
+        if row.get("state") != "captured":
+            prev = None
+            continue
+        if prev is not None and (row.get("pre_file") != prev.get("post_file")
+                                 or row.get("pre_sha256") != prev.get("post_sha256")):
+            fail("a captured pass consumes its predecessor's output",
+                 f"{row['name']} does not start from {prev['name']}'s post IR")
+        prev = row
+
     # (4) the captured post artifact is the one G19a verified and lowered. The
     #     toolchain record is G19a's; this is the link between the two cards, so
     #     "captured" here means the bytes a pinned toolchain accepted, not just
@@ -254,6 +269,77 @@ def check(record_path: Path, artifact: Path) -> int:
              "capture is not a preservation proof (see PC09's acceptance)")
     print("[pass] PC09: the declared MLIR stage boundary is current and its "
           "uncaptured passes are counted")
+    return exit_code[0]
+
+
+def mlir_opt() -> str | None:
+    """The `mlir-opt` the G19a record (or PATH) names, if this host has one."""
+    import shutil
+    import tomllib
+
+    if TOOLCHAIN.exists():
+        tool = tomllib.loads(TOOLCHAIN.read_text())
+        for row in tool.get("tool", []):
+            if row.get("name") == "mlir-opt" and Path(row.get("path", "")).exists():
+                return row["path"]
+    return shutil.which("mlir-opt")
+
+
+def capture_canonicalize(record_path: Path) -> int:
+    """Run the pinned canonicalizer on the captured module and record both sides.
+
+    The pre side is the `kernelir-to-mlir` post artifact (the record's digest
+    must still name it), the post side is `mlir-opt --canonicalize` output.
+    Both are pinned, so `check` re-reads exactly the bytes the pass claims.
+    This is capture, not preservation: no MLIR semantics exists here.
+    """
+    tool = mlir_opt()
+    if tool is None:
+        gap("the canonicalize pass was not captured: no mlir-opt on this host")
+        return 3
+    record = read_record(record_path)
+    first = next((p for p in record["passes"]
+                  if p.get("name") == "kernelir-to-mlir"), None)
+    if first is None or first.get("state") != "captured":
+        fail("the canonicalize pass starts from a captured kernelir-to-mlir")
+        return exit_code[0]
+    pre_path = CAPTURE_DIR / str(first.get("post_file", ""))
+    if not pre_path.exists() or sha256(pre_path.read_bytes()) != first.get("post_sha256"):
+        fail("the kernelir-to-mlir post artifact is the one the record pins",
+             str(pre_path))
+        return exit_code[0]
+    run = subprocess.run([tool, "--canonicalize", str(pre_path)],
+                         capture_output=True, text=True)
+    if run.returncode != 0:
+        fail("mlir-opt --canonicalize accepts the captured module",
+             (run.stderr or run.stdout).strip()[:300])
+        return exit_code[0]
+    post_path = CAPTURE_DIR / "clamp.canonical.mlir"
+    post_path.write_text(run.stdout)
+    pre_sha = first["post_sha256"]
+    post_sha = sha256(post_path.read_bytes())
+
+    text = record_path.read_text()
+    block = re.compile(r'\[\[pass\]\]\nname = "mlir-canonicalize"\n'
+                       r'(?:[a-z0-9_]+ = .*\n)+', re.M)
+    replacement = (
+        '[[pass]]\nname = "mlir-canonicalize"\n'
+        'state = "captured"\n'
+        f'pre_file = "{first["post_file"]}"\npre_sha256 = "{pre_sha}"\n'
+        f'post_file = "clamp.canonical.mlir"\npost_sha256 = "{post_sha}"\n'
+        'detail = "mlir-opt --canonicalize of the captured module: '
+        'captured byte-for-byte, not proved (no MLIR semantics)"\n')
+    if not block.search(text):
+        fail("the record has an mlir-canonicalize pass row to update")
+        return exit_code[0]
+    text = block.sub(replacement, text, count=1)
+    states = re.findall(r'^state = "(\w+)"$', text, re.M)
+    text = re.sub(r'captured_passes = \d+',
+                  f'captured_passes = {states.count("captured")}', text, count=1)
+    record_path.write_text(text)
+    print(f"  [detail] PC09 capture: wrote {post_path.relative_to(ROOT)} "
+          f"({len(run.stdout.splitlines())} line(s)) with "
+          f"{Path(tool).name}")
     return exit_code[0]
 
 
@@ -311,7 +397,7 @@ def capture(record_path: Path, extent: int) -> int:
     text = record_path.read_text()
     block = re.compile(
         r'\[\[pass\]\]\nname = "kernelir-to-mlir"\n'
-        r'(?:[a-z_]+ = .*\n)+', re.M)
+        r'(?:[a-z0-9_]+ = .*\n)+', re.M)
     replacement = (
         '[[pass]]\nname = "kernelir-to-mlir"\n'
         'state = "captured"\n'
@@ -377,13 +463,11 @@ def selftest(record_path: Path, work: Path) -> int:
                "", record_text, count=1, flags=re.S),
         artifact_text, "an uncaptured pass dropped", "exactly the declared route")
 
-    # 4. an uncaptured pass forged as captured, with no IR to show.
+    # 4. a captured pass whose post artifact is not there to hash.
     forged = re.sub(
-        r'(\[\[pass\]\]\nname = "mlir-canonicalize"\n)state = "uncaptured"\n'
-        r'detail = "[^"]*"\n',
-        r'\1state = "captured"\npre_file = "forged.kernelir"\n'
-        'post_file = "forged.mlir"\npre_sha256 = "' + "0" * 64 + '"\n'
-        'post_sha256 = "' + "1" * 64 + '"\n',
+        r'(name = "mlir-canonicalize"\n(?:[a-z0-9_]+ = .*\n)*?post_file = )'
+        r'"[^"]*"\n(post_sha256 = )"[0-9a-f]{64}"\n',
+        r'\1"forged.mlir"\n\2"' + "0" * 64 + '"\n',
         record_text, count=1)
     run(forged, artifact_text, "a forged captured pass", "is missing")
 
@@ -392,20 +476,44 @@ def selftest(record_path: Path, work: Path) -> int:
                'kernel_ir_sha256 = "' + "1" * 64 + '"', record_text, count=1),
         artifact_text, "a stale KernelIR digest", "pins the KernelIR that PC04 reflects")
 
+    controls = 5
+
     # 6. the record's captured count restated (the real value is derived from
     #    the pass rows, so any other number must be refused).
-    run(re.sub(r'captured_passes = \d+', 'captured_passes = 2', record_text, count=1),
+    count = len(re.findall(r'^state = "captured"$', record_text, re.M))
+    run(re.sub(r'captured_passes = \d+',
+               f'captured_passes = {count + 1}', record_text, count=1),
         artifact_text, "a restated captured count", "captured count matches")
+    controls += 1
+
+    # 7. a captured pass that does not start from its predecessor's output:
+    #    both sides hash correctly, but they describe different bytes, so the
+    #    digest chain must refuse it. Only meaningful once the second pass is
+    #    captured; the row carries both sides then.
+    if re.search(r'name = "mlir-canonicalize"\nstate = "captured"', record_text):
+        first_pre = re.search(
+            r'name = "kernelir-to-mlir"\n(?:[a-z0-9_]+ = .*\n)*?'
+            r'pre_sha256 = "([0-9a-f]{64})"', record_text)
+        unchained = re.sub(
+            r'(name = "mlir-canonicalize"\n(?:[a-z0-9_]+ = .*\n)*?)'
+            r'pre_file = "[^"]*"\npre_sha256 = "[0-9a-f]{64}"\n',
+            r'\1pre_file = "clamp.kernelir"\npre_sha256 = "'
+            + first_pre.group(1) + '"\n', record_text, count=1)
+        run(unchained, artifact_text,
+            "a captured pass not chained to its predecessor",
+            "consumes its predecessor's output")
+        controls += 1
 
     if exit_code[0] == 0:
-        print("[pass] PC09 selftest: 6 controls behave")
+        print(f"[pass] PC09 selftest: {controls} controls behave")
     return exit_code[0]
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", nargs="?", default="check",
-                    choices=["check", "selftest", "capture"])
+                    choices=["check", "selftest", "capture",
+                             "capture-canonicalize"])
     ap.add_argument("--record", default=str(RECORD))
     ap.add_argument("--artifact", default=str(SOURCE_ARTIFACT))
     ap.add_argument("--extent", type=int, default=65)
@@ -415,6 +523,8 @@ def main() -> int:
             return selftest(Path(args.record), Path(tmp))
         if args.mode == "capture":
             return capture(Path(args.record), args.extent)
+        if args.mode == "capture-canonicalize":
+            return capture_canonicalize(Path(args.record))
         return check(Path(args.record), Path(args.artifact))
 
 

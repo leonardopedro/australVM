@@ -454,8 +454,9 @@ def render_mm0(frag: Fragment, capture: dict, digests: dict) -> bytes:
         "-- The host edge is the only layer this file states, and it is the layer",
         "-- with no complete model: the arithmetic core and the SysV frame's",
         "-- discipline are specified and proved in",
-        "-- `mm0/proof_chain/native/X86Arith.lean`, but nothing here models stack",
-        "-- addresses, the ABI's memory or the trap call, and the repository's only",
+        "-- `mm0/proof_chain/native/X86Arith.lean` — including the stack-pointer",
+        "-- discipline and the `call`/`ret` wiring — but nothing here models the",
+        "-- stack's byte contents or the trap callee's body, and the repository's only",
         "-- converted instruction models are RV64 — `docs/PROOF_CHAIN.md` records",
         "-- that they cannot certify this target. So the simulation obligation is",
         "-- stated, cited and left open.",
@@ -521,9 +522,10 @@ def render_mm0(frag: Fragment, capture: dict, digests: dict) -> bytes:
         "-- which cites the Intel SDM for `SUB`, `IMUL` and `SETO` and proves, on a",
         "-- toy machine state: the inline value for in-range arguments, the clear",
         "-- overflow flag in range, the out-of-range case reaching the trap, the",
-        "-- `imul` truncation, and the frame discipline from entry to `ret`. It",
-        "-- does not model stack addresses, the ABI's memory or",
-        "-- `trappingSubtract` — which is exactly why the edge above stays open.",
+        "-- `imul` truncation, the frame's stack addresses and the `call`/`ret`",
+        "-- wiring (the trap callee is a parameter, not invented). It does not",
+        "-- model the stack's byte contents or `trappingSubtract` — which is",
+        "-- exactly why the edge above stays open.",
         "--",
         "-- Instruction form(s) not covered by the arithmetic model (the frame",
         "-- discipline — push/pop/mov/ret — is modelled abstractly in `Frame`,",
@@ -531,10 +533,11 @@ def render_mm0(frag: Fragment, capture: dict, digests: dict) -> bytes:
         + ", ".join(unmodelled) + ".",
         f"-- model: mm0/proof_chain/native/X86Arith.lean sha256={digests['model']}",
         "--",
-        "-- certificate: [gap] — stated, cited, unproved. The arithmetic core and",
-        "-- the frame discipline are modelled in `X86Arith.lean`, but the",
-        "-- address-level ABI, memory and the trap call are not, so this edge is",
-        "-- open; `scripts/native-edge` reports it as a `[gap]`, fails if another",
+        "-- certificate: [gap] — stated, cited, unproved. The arithmetic core,",
+        "-- stack addresses and the `call`/`ret` wiring are modelled in",
+        "-- `X86Arith.lean`, but the stack's byte contents and the trap callee's",
+        "-- body are not, so this edge is open; `scripts/native-edge` reports it as",
+        "-- a `[gap]`, fails if another",
         "-- model appears (`MODEL_SOURCES`), and pins the decoded bytes, relocations",
         "-- and declination so it cannot silently change.",
         "--",
@@ -761,8 +764,8 @@ def check(frag: Fragment, work: Path,
                     fail("the cited instruction model assumes nothing",
                          "it contains sorry/admit/axiom")
                     ok = False
-                listed = set(re.findall(r"theorem ([a-z_]+)", code))
-                declared = re.findall(r'"([a-z_]+)"',
+                listed = set(re.findall(r"theorem ([A-Za-z0-9_]+)", code))
+                declared = re.findall(r'"([A-Za-z0-9_]+)"',
                                       body.split("def THEOREMS")[-1].split("]")[0])
                 stale = sorted(set(declared) - listed)
                 if stale:
@@ -843,9 +846,10 @@ def check(frag: Fragment, work: Path,
                       and i["form"].split(" ")[1].rstrip(",") not in ("rsp", "rbp")})
         if alu:
             gap("the arithmetic core of the `" + frag.key + "` fragment ("
-                + ", ".join(alu) + ") is modelled and proved, but its "
-                "stack addresses, ABI and trap call are not, so the fragment's "
-                "edge stays open")
+                + ", ".join(alu) + ") and its stack-pointer/`call`/`ret` "
+                "discipline are modelled and proved, but its stack bytes and "
+                "the trap callee's body are not, so the fragment's edge stays "
+                "open")
         else:
             gap("the `" + frag.key + "` fragment's arithmetic is external and "
                 "its ABI/call edge is unmodelled, so its edge is stated and "
