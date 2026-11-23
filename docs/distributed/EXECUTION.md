@@ -1182,6 +1182,96 @@ Evidence: `docs/distributed/evidence/d10-net-lib.log`,
 * `Legacy` signature acceptance cannot be retired until a deployment-wide
   cutover signal exists; today the verifier tries both layouts.
 
+## D11 — one replica per process (2026-11-23, steps 1–3 of 3)
+
+U `unfer_consensus/src/net.rs`; **new** `unfer_consensus/src/bin/unfer_node.rs`,
+`unfer_consensus/tests/independent_nodes.rs` and the fixture configs that test
+writes; `unfer_consensus/Cargo.toml` (bin + test targets, both
+`required-features = ["network"]`).
+
+### Startup belongs to a process, not to a harness (step 1)
+
+| Piece | What it decides |
+|---|---|
+| `DeploymentConfig` | deployment id, lane, members (replica, address, certificate), accepted clients. Validated **before anything binds**: id non-zero, ≥2 members, replicas `1..=n` in order, addresses distinct, no certificate shared between two roles, client ids non-zero, unique and declared |
+| `NodeConfig` | which replica this process is, its own certificate **and key** (the key the deployment file never carries), an absolute `state_dir`, the RPC timeout |
+| `StateDirLock` | an exclusive lock on `<state_dir>/node.lock`, held for the process's lifetime. A second process pointed at a live directory fails with `locked by another node process`; the kernel releases it on a kill, so a restart is not blocked |
+| `SharedLedger::open` | a ledger with **no** submission pump. A standalone node receives complete values over TLS, so `allocate` refuses with a named error instead of queueing into a pump that is not there |
+| `start_node` / `start_replica` | one startup path for a server, recorder, runtime and state machine. `NetworkCluster` is now the in-process harness: two `start_replica` calls over one shared ledger and directory, plus the local pump |
+
+`unfer_node` has three commands. `serve --config node.json [--ready ready.json]`
+starts a node, publishes the address it actually bound (so a config may ask for
+port 0) and stops on SIGINT/SIGTERM. `submit --config client.json --to ADDR
+--id N --tx tx.json` is a **client**: it frames the value itself (`id` inside
+the payload, D10) and prints the outcome as JSON. `digest --config node.json`
+reads a node's durable committed log without taking its lock, which is how the
+test compares what two processes applied.
+
+Configuration is JSON with hex DER inside the file. That is deliberate: a
+fixture is self-contained, so two processes never resolve a shared path — which
+is exactly the shared state D11 forbids.
+
+### Three processes, disjoint state, identical digests (step 2)
+
+The test starts three processes with three state directories, three
+certificates and three ports, submits one transaction through node 1 and one
+through node 2, then compares `digest` output:
+
+| Check | Measured |
+|---|---|
+| each process publishes the port it was configured with | 3/3 |
+| digests after two commits | all three equal |
+| each directory holds only its own `node-<id>` and its own `ledger.json` | yes; no sibling replica's state |
+| a second `serve` on a live state directory | refused: `locked by another node process` |
+| a client config for deployment 2 submitting into deployment 1 | refused, non-zero exit |
+| the in-process harness still passes its suites | `phase6_testnet` 4, `request_identity` 6, `power_cut` 4 |
+
+### Stop one node, catch up on restart (step 3)
+
+1. Kill node 3 (SIGKILL), submit a third transaction through node 2. Both
+   survivors commit it; node 3's digest still reads `2:…` — a stopped process
+   does not apply what it missed.
+2. Restart node 3 on the same directory, address and identity: it rebinds the
+   port, and is one commit behind (`3:d5a7…` against the survivors' `4:…` once
+   the fourth decision lands).
+3. Submit a fourth transaction through node 1. The rejoined node converges on
+   the survivors' digest `4:6b0e9fc5…`, which is the digest of the **whole**
+   log — so it applied the decision it missed while it was down, not just the
+   new slot.
+
+```
+$ cargo test -p unfer_consensus --offline --features network --lib        # 167 passed
+$ cargo test -p unfer_consensus --offline --features network --test independent_nodes
+                                                                           # 1 passed
+$ cargo test -p unfer_consensus --offline --features network --test phase6_testnet   # 4
+$ cargo test -p unfer_consensus --offline --features network --test request_identity # 6
+$ cargo test -p unfer_consensus --offline --features network --test power_cut        # 4
+```
+
+Evidence: `docs/distributed/evidence/d11-lib.log`,
+`d11-independent.log` (its stderr line carries both digests),
+`d11-phase6_testnet.log`, `d11-request_identity.log`, `d11-power_cut.log`.
+
+### What is measured, and what is not
+
+* **Catch-up needs a decision.** The dependency informs a replica of decisions it
+  missed (`InformDecisions`) when the cluster next decides; nothing in this
+  layer polls a peer, so a node restarted while the cluster is idle stays behind
+  until the next decision. That is the measured behaviour, not a claim of
+  idle-time recovery.
+* **No checkpoint export/import was needed**, so none was added: the recorder
+  and runtime snapshots plus the informed decisions reconstruct the log, and the
+  digest equality in the test is what proves it.
+* **Five configuration refusals are unit witnesses** in `net.rs`: zero
+  deployment id, members not consecutive from 1, two replicas on one address, a
+  relative state directory, and an occupied one (lock). A sixth — a client the
+  deployment does not declare — covers the client side.
+* **The harness is not a deployment.** `NetworkCluster` still runs two replicas
+  over one directory and one ledger on purpose; it is a labelled fixture, so the
+  failure modes it tests stay reproducible in one test binary.
+* SIGKILL is used here only to stop a process, not to inject a storage fault;
+  the crash matrix over these processes is D13.
+
 ## Task status
 
 | Task | Status | Note |
@@ -1196,5 +1286,6 @@ Evidence: `docs/distributed/evidence/d10-net-lib.log`,
 | D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
 | D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; `call_from_peer` is the production receiver and checks against the peer the transport authenticated |
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
-| D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log` | measured | Gaps: no live transport carries these frames (D11/D17); legacy signature acceptance cannot be retired without a cutover signal, and the 64-byte signature field has no version tag, so both layouts are tried (domain-separated first). Recorded dependency limits: QuePaxa wire v4, 8 MiB transport frame, 16 MiB journal, 4 MiB batch default |
-| D11–D26 | not started | D11 is next: independent node processes over the wired command value |
+| D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
+| D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
+| D12–D26 | not started | D12 is next: a deterministic fault scheduler over the production transition core |

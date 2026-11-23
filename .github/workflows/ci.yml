@@ -85,6 +85,32 @@ jobs:
             python3 scripts/ledger2mm0 selftest && \
             python3 scripts/service_iso2mm0 check && \
             python3 scripts/service_iso2mm0 selftest'
+      # PC08 (docs/proof/NATIVE_EDGE.md): the native fragment's byte-identical
+      # re-derivation needs a backend that emits x86_64 — the capture IS an
+      # x86_64 fragment, and the aarch64 dev host can only decode and pin it.
+      # This job is the x86_64 host, and it has already built the tree's own
+      # `austral` and the bridge's `cps2cell`, so `check` re-derives the capture
+      # for real instead of reporting an explained gap; `selftest` then runs the
+      # eight refusal controls. The mm0 toolchain is built first because the
+      # stated edge is replayed with it — a replay that silently skipped would
+      # turn into a `[gap]` line and make the pass weaker than it looks.
+      #
+      # The script's own contract is that the bytes are identical: a codegen
+      # change shows up here as drift, on the architecture it describes, rather
+      # than as a silent difference between hosts.
+      - name: Build the mm0 toolchain (PC08 edge replay)
+        run: |
+          git clone https://github.com/digama0/mm0.git ../mm0
+          git -C ../mm0 checkout 0d414c0bfdaaeb7fea571895127abc1fa5a3d956
+          cargo install --path ../mm0/mm0-rs --root "$HOME/.local"
+          gcc ../mm0/mm0-c/main.c -O2 -o "$HOME/.local/bin/mm0-c"
+      - name: PC08 native fragment gate (x86_64 re-derivation + mm0 replay)
+        run: |
+          nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; \
+            export PATH="$HOME/.local/bin:$PATH"; \
+            dune build bin/ && cp -f _build/default/bin/austral.exe ./austral && \
+            python3 scripts/native-edge check && \
+            python3 scripts/native-edge selftest'
 
   lint:
     name: clippy (deny warnings)

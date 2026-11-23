@@ -23,3 +23,5 @@ C21	codec	U	unfer_protocol/src/distributed.rs	tested	docs/distributed/evidence/d
 C22	codec	U	unfer_protocol/tests/distributed_wire.rs	tested	docs/distributed/evidence/d10-unfer_protocol_tests.log
 C23	consensus	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d10-net-lib.log
 C24	identity	U	unfer_consensus/src/signing.rs	tested	docs/distributed/evidence/d10-net-lib.log
+C25	consensus	U	unfer_consensus/src/bin/unfer_node.rs	tested	docs/distributed/evidence/d11-independent.log
+C26	consensus	U	unfer_consensus/tests/independent_nodes.rs	tested	docs/distributed/evidence/d11-independent.log

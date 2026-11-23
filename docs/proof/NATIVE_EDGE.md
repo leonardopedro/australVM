@@ -136,13 +136,15 @@ a host whose backend emits x86_64, and every route was checked on 2026-11-23:
 | a second host | none reachable; no x86_64 machine or runner is configured for this workspace |
 | `rustup` cross | only `aarch64-unknown-linux-gnu` and `x86_64-linux-android` are installed — neither runs an x86_64 Linux binary here |
 | emulation | `podman` is present but the re-derivation runs the *OCaml compiler* (`austral`, `cps2cell`), which would have to be built for x86_64 first; no such build exists |
-| CI | `.github/workflows/*.yml` never invokes `scripts/native-edge`, so no job ever re-derives it (ubuntu-latest would have the right arch, but it does not run this script) |
+| CI | `ubuntu-latest` is the only reachable x86_64 host: `.github/workflows/ci.yml` `test` job builds the tree's `austral` and `cps2cell`, builds the mm0 toolchain, and runs `python3 scripts/native-edge check` + `selftest`, so the re-derivation and the edge replay are measured there (this row used to say no job invoked the script) |
 
 So the decode-and-pin half is a measured pass on this host, and the
-byte-identical re-derivation is an explained gap. Closing it needs either an
-x86_64 host running `python3 scripts/native-edge check`, or a CI job that does
-the same on `ubuntu-latest` — the script itself already distinguishes the two
-outcomes and never reports one as the other.
+byte-identical re-derivation is measured on the CI runner instead: the `test`
+job in `.github/workflows/ci.yml` builds `austral` + `cps2cell` + the mm0
+toolchain and runs `check` and `selftest`, which is the x86_64 half of this
+gate. On this aarch64 host `check` reports the gap by name and never as a pass;
+locally the full run still needs an x86_64 host running
+`python3 scripts/native-edge check`.
 
 ## What this is not, and what would close it
 
