@@ -1941,9 +1941,13 @@ def main() -> int:
     # artifact directory is a set of files a caller diffs.
     if os.environ.get("LTP_DEF_SHARE_SET"):
         Path(os.environ["LTP_DEF_SHARE_SET"]).unlink(missing_ok=True)
-    target = next(
-        (nm for nm, (_k, rec, _i) in ex.decls.items() if want in nm and "value" in rec), None
-    )
+    named = [nm for nm, (_k, rec, _i) in ex.decls.items()
+             if want in nm and "value" in rec]
+    # An exact name beats a substring, in declaration order otherwise: a
+    # corollary's name is a prefix of its own `_of` milestone
+    # (`ConLeche.Model.no_proof_of_Empty_pure` vs `…_pure_of`), so the whole
+    # name has to be spellable without matching the milestone first.
+    target = want if want in named else (named[0] if named else None)
     if target is None:
         raise SystemExit(f"no declaration with a value matching {want!r}")
     kind, rec, _ = ex.decls[target]
