@@ -371,7 +371,16 @@ jobs:
   # `rustc` and sets LD_LIBRARY_PATH itself).
   nix-pkg:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Unlike jit-stack this job carries no cranelift target cache, so
+    # `make bridge` compiles the bridge from source and that step is where the
+    # cost varies: 17.6 min on `3e63054b`, 24.9 min on `6c8591b3` (measured
+    # 2026-11-23/24). The OCaml suite is a steady ~31 min and
+    # `verify-invariants` ~2. A 60-minute bound left 5.4 minutes of margin on
+    # the green run and then cut this job mid-suite on the slow end (started
+    # 08:34:14Z, cancelled 09:34:33Z) — a `cancelled` conclusion that was a
+    # timeout, not a superseded run. 90 minutes is the slow bridge build plus
+    # the suite plus slack; a genuinely hung step still stops at 90.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout australVM
