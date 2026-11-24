@@ -423,6 +423,29 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
 
+      # The same target directories jit-stack caches: `make bridge` is one
+      # `cargo build --release` of `safestos/cranelift`, and its path deps into
+      # ../unfer and ../dynamic-arctic compile into that same target dir, so
+      # these two paths are the whole bridge build.
+      #
+      # Its own key, not jit-stack's: this step runs under the devshell's rustc
+      # while jit-stack builds with the toolchain action, and cargo's
+      # fingerprints include the compiler version, so artifacts from the other
+      # toolchain are recompiled anyway. `nix-pkg-jit-` is therefore tried first
+      # and `jit-` only as a fallback for the shared `../unfer/target` side. A
+      # shared key would also make the two jobs race to save one entry, and the
+      # loser's save is discarded.
+      - name: Cache cranelift / unfer_ffi build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/safestos/cranelift/target
+            ${{ github.workspace }}/../unfer/target
+          key: nix-pkg-jit-${{ runner.os }}-${{ hashFiles('safestos/cranelift/Cargo.lock', 'safestos/cranelift/**/*.rs', 'safestos/cranelift/Cargo.toml') }}
+          restore-keys: |
+            nix-pkg-jit-${{ runner.os }}-
+            jit-${{ runner.os }}-
+
       # Builds the bridge .so and cps2cell, then the `austral` binary
       # against them (the script needs both).
       - name: make bridge (compiler + JIT bridge + cps2cell)
