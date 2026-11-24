@@ -1,0 +1,110 @@
+# D14: ordered job fencing — only the current fence settles a job or mutates its
+# protected resource. Measured 2026-11-24T08:45:27Z on aarch64.
+# unfer a3db4f5 (ordered fencing)
+rustc 1.99.0 (b940084d7 2026-09-28)
+cargo 1.99.0 (5f94df478 2026-08-27)
+
+$ cargo test -p unfer_consensus --test ordered_fencing
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> unfer_consensus/src/storage.rs:254:13
+    |
+254 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus` to apply 1 suggestion)
+warning: `unfer_consensus` (test "ordered_fencing") generated 1 warning (1 duplicate)
+
+running 8 tests
+test a_fenced_sink_enforces_order_without_asking_the_node ... ok
+test claim_and_settle_replay_are_refused ... ok
+test delayed_old_completion_is_refused ... ok
+test fence_transitions_are_durable_and_recover_last_wins ... ok
+test generation_overflow_advances_the_epoch ... ok
+test restart_rebuilds_fences_and_job_state ... ok
+test stale_release_of_a_newer_claim_is_refused ... ok
+test two_partitioned_workers_cannot_both_lead ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+EXIT=0
+
+$ cargo test -p unfer_consensus --lib -- jobs fence
+warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
+  |
+  = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
+  = help: you might have meant: `fp16`
+
+warning: `nested_fock_algebra` (lib) generated 1 warning
+warning: `fock_sirk` (build script) generated 1 warning (1 duplicate)
+warning: method `neg` is never used
+   --> fock_sirk/src/certificate.rs:611:8
+    |
+589 | impl DoubleDouble {
+    | ----------------- method in this implementation
+...
+611 |     fn neg(self) -> Self {
+    |        ^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fock_sirk` (lib) generated 2 warnings (1 duplicate)
+warning: `unfer_protocol` (lib) generated 1 warning (1 duplicate)
+warning: `qfm` (lib) generated 1 warning (1 duplicate)
+warning: `ode_sirk` (lib) generated 1 warning (1 duplicate)
+warning: `logos` (lib) generated 1 warning (1 duplicate)
+warning: `arctic` (lib) generated 1 warning (1 duplicate)
+warning: `prob_kernel` (lib) generated 1 warning (1 duplicate)
+warning: variable does not need to be mutable
+   --> unfer_consensus/src/storage.rs:254:13
+    |
+254 |         let mut file = OpenOptions::new()
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `unfer_consensus` (lib test) generated 2 warnings (1 duplicate) (run `cargo fix --lib -p unfer_consensus --tests` to apply 1 suggestion)
+
+running 8 tests
+test jobs::tests::authz_fail_disables_job ... ok
+test jobs::tests::claim_fire_mark_fired_roundtrip ... ok
+test jobs::tests::double_claim_is_refused ... ok
+test jobs::tests::exhausted_fence_space_is_refused_not_wrapped ... ok
+test jobs::tests::fences_are_strictly_ordered_per_resource ... ok
+test jobs::tests::failed_fire_is_unqueued_and_retried ... ok
+test jobs::tests::stale_claim_cannot_mark_fired_twice ... ok
+test jobs::tests::generation_overflow_advances_the_epoch_instead_of_wrapping ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 150 filtered out; finished in 0.01s
+
+EXIT=0

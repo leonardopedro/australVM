@@ -217,10 +217,26 @@ while `avm-pkg`, `verify-invariants` and `build-and-test-linux` in the same run
 had already reported `success`. It then completed `success` on the first commit
 that stayed the branch tip for an hour.
 
+There is a second way to get the same word, and it is a real finding: a job cut
+by its own `timeout-minutes` also reports `cancelled`, with no annotation.
+Measured 2026-11-24 on `6c8591b3`: `nix-pkg` started 08:34:14Z and read
+`cancelled` at 09:34:33Z — exactly 60:19 of job time, in the same step, with
+`make bridge` having taken 24.9 minutes that run against 17.6 on the previous
+green one. The next commit's run had started at 09:07, 27 minutes earlier, so
+this was not a supersede either — `Build and Test` had no `concurrency:` group
+and three runs on `master` were in flight at once, which is where the extra
+seven minutes went. That is the bound being too tight, not the tree being wrong;
+the fix was to raise it (90 minutes, with the measured split in the job's
+comment) and to give the workflow its concurrency group, so the slow job stops
+competing with a copy of itself. The two cases separate by duration: a
+superseded job dies within seconds of a newer push, a timed-out one dies on its
+bound to the minute.
+
 So read the line in this order: a job that reads `cancelled` says nothing about
 the check it was running — it was cut, not failed, and a job that reports
 `failure` (or `timed_out`) is the only one that carries a verdict about the
-tree. The authoritative signal for a commit is the run whose jobs all reached
+tree. The one `cancelled` line that does carry a finding is the job that sat on
+its own timeout. The authoritative signal for a commit is the run whose jobs all reached
 `success`; the commit before a cancellation is not evidence either way, and
 re-reading its annotation finds none, because a cancellation writes no
 annotation at all.

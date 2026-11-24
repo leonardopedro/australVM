@@ -1,0 +1,1 @@
+depth=6 alphabet=9 unpruned=597871 prefixes=33769 pruned=14617 leaves=15400 counterexample=none
