@@ -14,6 +14,19 @@ on:
 env:
   CARGO_FLAGS: ""
 
+# One run per tree, newest wins. Without this, every push that lands while a
+# previous `Build and Test` is still going starts a second run beside it, and
+# the long jobs (both build the bridge from source on a 2-core runner) then
+# contend for the same runners: measured 2026-11-24, three runs on `master`
+# (08:34, 08:48, 09:07) were in flight together, and `nix-pkg`'s `make bridge`
+# step took 24.9 min where the same step took 17.6 min on a quiet branch — which
+# is what pushed it past its timeout. Cancelling the superseded run is correct
+# here: the verdict that matters is the newest commit's, and a `cancelled` job
+# carries no verdict about the tree (see `docs/data/gate/README.md`).
+concurrency:
+  group: build-and-test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Upstream OCaml CI, migrated from nix-shell (23.05) to the flake ─
   # The fork links the cranelift JIT bridge (.so, DT_NEEDED, no rpath) into
