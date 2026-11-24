@@ -241,7 +241,10 @@ job's `failure` is a verdict about the bound, not about the tree: the previous
 green run had spent 39.9 of those 40 minutes on the same step. One side effect
 is worth knowing for caching: a step timeout ends the job before the cache
 action's post step, which then reads `skipped`, so a run that dies this way
-leaves no cache entry behind.
+leaves no cache entry behind. Measured either way: `ee68fe46` reports `Post
+Cache cranelift / unfer_ffi build` as `skipped`, while `0da4a26a` — same job,
+same step, the suite inside its new bound — reports it as `success`, and that is
+the run whose entry a later one can restore.
 
 So read the line in this order: a job that reads `cancelled` says nothing about
 the check it was running — it was cut, not failed, and a job that reports
