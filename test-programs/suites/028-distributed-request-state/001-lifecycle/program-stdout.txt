@@ -1,0 +1,12 @@
+idle-submit state=1 code=1
+pending-retry state=1 code=1
+pending-cancel-wait state=1 code=1
+pending-wrong-request state=1 code=4
+pending-wrong-digest state=3 code=3
+pending-matching state=2 code=2
+restart-resume state=2 code=2
+applied-repeat state=2 code=2
+applied-submit state=2 code=4
+rejected-matching state=3 code=3
+idle-response state=0 code=4
+bound-matching state=2 code=2

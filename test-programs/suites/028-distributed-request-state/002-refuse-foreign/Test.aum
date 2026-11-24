@@ -1,0 +1,17 @@
+pragma Unsafe_Module;
+
+module body Test is
+    pragma Foreign_Import(External_Name => "putchar");
+    function Put_Character(character: Nat8): Int32 is
+    end;
+
+    pragma Liquid_Requires(Contract => "true");
+    function impure(n: Int64): Int64 is
+        let written: Int32 := Put_Character(65);
+        return n;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

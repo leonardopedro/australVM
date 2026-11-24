@@ -1,0 +1,109 @@
+module body Example.Distributed.RequestState is
+    -- State tags are part of the measured output, not an internal encoding.
+    function tag(state: RequestState): Int32 is
+        case state of
+            when Idle do
+                return 0;
+            when Pending(held_request: Int64, held_digest: Int64) do
+                return 1;
+            when Applied(held_request: Int64, held_digest: Int64) do
+                return 2;
+            when Rejected(held_request: Int64, held_digest: Int64) do
+                return 3;
+        end case;
+    end;
+
+    function report(label: Span[Nat8, Static], transition: Transition): Unit is
+        print(label);
+        print(" state=");
+        print(tag(transition.next));
+        print(" code=");
+        printLn(transition.code);
+        return nil;
+    end;
+
+    -- The total transition. It never runs the request; it only decides what
+    -- the next state is. A cancellation is a local decision to stop waiting,
+    -- so the request remains Pending: cancellation is not rollback.
+    function step(state: RequestState, event: RequestEvent): Transition is
+        case state of
+            when Idle do
+                case event of
+                    when Submit(request: Int64, digest: Int64) do
+                        return Transition(next => Pending(held_request => request, held_digest => digest), code => 1);
+                    when MatchingResponse(request: Int64, digest: Int64) do
+                        return Transition(next => Idle(), code => 4);
+                    when Retry do
+                        return Transition(next => Idle(), code => 4);
+                    when CancelWait do
+                        return Transition(next => Idle(), code => 4);
+                end case;
+            when Pending(held_request: Int64, held_digest: Int64) do
+                case event of
+                    when Submit(request: Int64, digest: Int64) do
+                        return Transition(next => Pending(held_request => held_request, held_digest => held_digest), code => 4);
+                    when MatchingResponse(request: Int64, digest: Int64) do
+                        if request = held_request then
+                            if digest = held_digest then
+                                return Transition(next => Applied(held_request => held_request, held_digest => held_digest), code => 2);
+                            else
+                                return Transition(next => Rejected(held_request => held_request, held_digest => held_digest), code => 3);
+                            end if;
+                        else
+                            return Transition(next => Pending(held_request => held_request, held_digest => held_digest), code => 4);
+                        end if;
+                    when Retry do
+                        return Transition(next => Pending(held_request => held_request, held_digest => held_digest), code => 1);
+                    when CancelWait do
+                        return Transition(next => Pending(held_request => held_request, held_digest => held_digest), code => 1);
+                end case;
+            when Applied(held_request: Int64, held_digest: Int64) do
+                case event of
+                    when Submit(request: Int64, digest: Int64) do
+                        return Transition(next => Applied(held_request => held_request, held_digest => held_digest), code => 4);
+                    when MatchingResponse(request: Int64, digest: Int64) do
+                        return Transition(next => Applied(held_request => held_request, held_digest => held_digest), code => 2);
+                    when Retry do
+                        return Transition(next => Applied(held_request => held_request, held_digest => held_digest), code => 2);
+                    when CancelWait do
+                        return Transition(next => Applied(held_request => held_request, held_digest => held_digest), code => 2);
+                end case;
+            when Rejected(held_request: Int64, held_digest: Int64) do
+                case event of
+                    when Submit(request: Int64, digest: Int64) do
+                        return Transition(next => Rejected(held_request => held_request, held_digest => held_digest), code => 3);
+                    when MatchingResponse(request: Int64, digest: Int64) do
+                        return Transition(next => Rejected(held_request => held_request, held_digest => held_digest), code => 3);
+                    when Retry do
+                        return Transition(next => Rejected(held_request => held_request, held_digest => held_digest), code => 3);
+                    when CancelWait do
+                        return Transition(next => Rejected(held_request => held_request, held_digest => held_digest), code => 3);
+                end case;
+        end case;
+    end;
+
+    function main(): ExitCode is
+        let pending: RequestState := Pending(held_request => 7, held_digest => 11);
+        let applied: RequestState := Applied(held_request => 7, held_digest => 11);
+        let rejected: RequestState := Rejected(held_request => 7, held_digest => 11);
+        let bound: RequestState := Pending(held_request => maximum_int64, held_digest => maximum_int64);
+        -- A restarted process rebuilds this from the durable request identity and
+        -- digest; the continuation must depend on nothing else.
+        let restored: RequestState := Pending(held_request => 7, held_digest => 11);
+
+        report("idle-submit", step(Idle(), Submit(request => 7, digest => 11)));
+        report("pending-retry", step(pending, Retry()));
+        report("pending-cancel-wait", step(pending, CancelWait()));
+        report("pending-wrong-request", step(pending, MatchingResponse(request => 8, digest => 11)));
+        report("pending-wrong-digest", step(pending, MatchingResponse(request => 7, digest => 12)));
+        report("pending-matching", step(pending, MatchingResponse(request => 7, digest => 11)));
+        report("restart-resume", step(restored, MatchingResponse(request => 7, digest => 11)));
+        report("applied-repeat", step(applied, MatchingResponse(request => 7, digest => 11)));
+        report("applied-submit", step(applied, Submit(request => 9, digest => 13)));
+        report("rejected-matching", step(rejected, MatchingResponse(request => 7, digest => 11)));
+        report("idle-response", step(Idle(), MatchingResponse(request => 7, digest => 11)));
+        report("bound-matching", step(bound, MatchingResponse(request => maximum_int64, digest => maximum_int64)));
+
+        return ExitSuccess();
+    end;
+end module body.

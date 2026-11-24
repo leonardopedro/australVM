@@ -1,0 +1,43 @@
+# D16 — one total Austral distributed transition
+# Measured 2026-11-24 on australVM with the prebuilt ./austral and bridge.
+
+$ bash scripts/check-request-state
+check-request-state: 12 vectors agree
+check-request-state: RequestState.aum sha256=ed591b032f54cba0dfc4a4ff4d45cdc4e63ed5d01e94906d29f6c3c83de185a7
+check-request-state: RequestState.aui sha256=0573cae46336d60a07ec04af643c0fcaf9c79917e10980d6f3385863cf77ce9d
+check-request-state: RequestStateReference.rs sha256=d3ac603434712b7e092f7bc1dd6f7f08bf44b9542875cdea66e2868e42d3beca
+
+# The same vectors through the CPS JIT (stdout):
+idle-submit state=1 code=1
+pending-retry state=1 code=1
+pending-cancel-wait state=1 code=1
+pending-wrong-request state=1 code=4
+pending-wrong-digest state=3 code=3
+pending-matching state=2 code=2
+restart-resume state=2 code=2
+applied-repeat state=2 code=2
+applied-submit state=2 code=4
+rejected-matching state=3 code=3
+idle-response state=0 code=4
+bound-matching state=2 code=2
+
+$ python3 test-programs/runner.py 028
+Collecting...
+Running...
+028-distributed-request-state                  001-lifecycle                                  PASS
+028-distributed-request-state                  001-lifecycle/copy                             PASS
+028-distributed-request-state                  002-refuse-foreign                             PASS
+028-distributed-request-state                  003-refuse-loop                                PASS
+028-distributed-request-state                  004-refuse-recursion                           PASS
+
+All tests passed
+
+# What the refusals pin:
+#   002: T4 — a contracted function calls a foreign import.
+#   003: T2 — a contracted function uses while.
+#   004: T1 — a contracted function is in a call cycle.
+# The lifecycle fixture carries a Liquid_Requires contract, so it is inside the
+# same totality gate; it is accepted and executed through the JIT.
+#
+# Trust boundary: this measures Rust/Austral correspondence on the fixed
+# vectors and the gate's refusals. Compiler correctness is not proved here.

@@ -340,6 +340,11 @@ DEFAULT_SUITES: tuple[str, ...] = (
     # printed by both the fold and the descent function, and two fixtures whose
     # recursive call is refused (the original argument, a rebuilt value).
     "027-liquid-descent",
+    # 028-distributed-request-state: D16's first total transition. The lifecycle
+    # runs through the CPS JIT and is diffed against the Rust reference by
+    # `scripts/check-request-state`; the other three fixtures pin the totality
+    # gate's refusals (foreign call, loop, recursion).
+    "028-distributed-request-state",
 )
 
 
