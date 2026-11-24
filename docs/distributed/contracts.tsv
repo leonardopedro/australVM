@@ -31,3 +31,7 @@ C29	consensus	U	unfer_consensus/tests/crash_matrix.rs	tested	docs/distributed/ev
 C30	storage	U	unfer_consensus/tests/support/mod.rs	tested	docs/distributed/evidence/d13-crash_matrix.log
 C31	runtime	A	scripts/distributed-recovery	tested	docs/distributed/evidence/d13-recovery.tsv
 C32	storage	U	unfer_data/src/publisher.rs	tested	docs/distributed/evidence/d13-halted-state-fence.log
+C33	consensus	U	unfer_consensus/src/jobs.rs	tested	docs/distributed/evidence/d14-fencing.log
+C34	storage	U	unfer_consensus/src/storage.rs	tested	docs/distributed/evidence/d14-fencing.log
+C35	consensus	U	unfer_consensus/tests/ordered_fencing.rs	tested	docs/distributed/evidence/d14-fencing.log
+C36	runtime	U	.github/workflows/deep-schedules.yml	tested	docs/distributed/evidence/d12-schedules.log

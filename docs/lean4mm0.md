@@ -5437,3 +5437,103 @@ The obligations' sha256 is unchanged, and so is the `naming.json`: the proof and
 decisions are the same, only the spelling of the `def` block moved. `scripts/mm0-slice`'s
 docstring said bodies come in reverse first-use order — it now says dependency order, since
 that is the property it relies on ("a def body names only defs emitted before it").
+
+### 13.61 The 56 GB row re-emitted, and the checker that could not read its own artifact
+
+§13.60 changed the order of the `def` block, which changes every artifact. Two things were
+left open there: what the change does to the only row that actually reaches the `def`-body
+floor, and whether the artifacts still *check*. The second turned up a defect — not in the
+emitter, in the tool that re-derives a derivation rule by rule.
+
+**The `nsOuterFock…singleTime` row, at the floor it was split at.** `BookProof.Ns.ChapterNsOuterFockSingleTime`,
+cap 4 096 MiB, `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000
+LTP_ENC_MAX=2097152 LTP_DEDUP_NODES=1`:
+
+| emitter, `LTP_DEF_BODY_MAX` | `LTP_DEF_SHARE` | file bytes | `def` lines | `def` bytes | largest `def` | wall | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| before §13.60, 1 GiB | 64 | 48 835 924 012 | 1 727 | — | 1 799 565 507 | 2 996 s | 329 MiB |
+| ordered writer, 1 GiB | 64 | **44 539 075 751** | 1 734 | 40 639 498 654 | **1 067 870 716** | 3 259 s | 329 MiB |
+| ordered writer, 1 GiB | 1024 | 44 539 075 751 | 1 734 | 40 639 498 654 | 1 067 870 716 | 3 266 s | 325 MiB |
+| ordered writer, 64 MiB | 64 | **9 007 611 844** | 3 505 | 5 108 036 494 | **56 033 412** | 2 443 s | 287 MiB |
+
+Three things to read off it. The file falls 8.8 % and the largest body 41 %, at the same floor
+and the same number of names — the ordering fix, with nothing else changed. `LTP_DEF_SHARE`
+64 and 1024 now produce **byte-identical** output at this floor (both 44 539 075 751 B), which
+was not true before: the old writer's duplication made the body's own text depend on what the
+floor had interned elsewhere. And at a 64 MiB floor the row's bodies are all under it —
+56 033 412 B is the largest, 3 505 names — for 9.0 GB, 5× smaller than at 1 GiB and *faster*
+(2 443 s), because writing one name instead of 40 GB of repeated text is the same trade the
+floor makes.
+
+The wall time is 8.8 % *up* on the row (2 996 s → 3 259 s): `_def_order` walks the naming DAG
+and caches its edges (`_dcache`, cleared before the write), and that walk is over the same
+2 000 000-odd interned nodes the block holds. §13.60's Sirk row shows the same walk at 14.5 s
+against 16.9 s before — a *saving* there, because the block itself got smaller. Both are the
+same substitution: the row that names a lot pays more for the walk than it saves in text.
+
+**No forward references, again, at both floors.** The same file-order scan as §13.60 on the
+44.5 GB artifact (1 734 `def` lines) and on the 9.0 GB one (3 505): **0** references to a name
+not yet declared, both.
+
+**What `mm0-rs` can take of it.** `scripts/mm0-slice` on the 44.5 GB artifact, two budgets:
+
+| budget | slice bytes | `def`s kept | axioms kept | `mm0-rs compile` |
+| ---: | ---: | ---: | ---: | --- |
+| 40 MB | 2 718 604 | 0 | 6 209 | exit 0, 0.48 s, 105 256 kB |
+| 400 MB | 5 853 127 | 163 | 15 143 | exit 0, 1.01 s, 220 916 kB |
+| 400 MB, on the 9.0 GB artifact | 4 479 096 | 156 | 10 832 | exit 0, 0.74 s, 169 948 kB |
+
+So the ordered `def` block is a well-formed theory that `mm0-rs` accepts wherever a slice can
+reach it — but a slice above 400 MB is where the budget stops paying: the axioms left out are
+the ones whose closure contains a body of hundreds of megabytes, and a body that size is
+outside this host however it is spelled (§13.57's 36× ratio). The whole artifact was offered to
+`mm0-rs` twice and is still not takable:
+
+| artifact given to `mm0-rs` | outcome |
+| --- | --- |
+| 129 MB ordering-fixed `.mm0` + theory (167 MB `.mm1`, 2 012 `def`s) | OOM-killed by the kernel after **64 min 51 s**, 16.6 GB RSS + 4.1 GB swap, still in `elab` |
+| the same row at an 8 B floor (123 MB `.mm1`, 14 851 `def`s) | OOM-killed at the 24 GB cgroup cap after **2 min 43 s**, still in `elab` |
+
+The second row is the interesting one and it is not a retraction of §13.60: the deeper split
+made the *file* smaller and made `mm0-rs` blow up 24× sooner. What `mm0-rs` pays for is the
+elaborated term text, and a `def` is expanded at each of its uses — naming a subtree moves the
+bytes from the file to the elaborator's state, which is where §13.57's ratio lives. Def-sharing
+is worth it for the file, not for the checker; the two budgets are different and this is the
+measurement that separates them.
+
+**The defect: `scripts/lean-typing-check` could not read a def-shared artifact.** Handed the
+ordering-fixed Sirk derivation it reported:
+
+```
+FAIL  thm_transfer_defect_le_of_leakage
+  at      … .ty_app premise 1.ty_abs premise 1
+  reason  ax_const_0 proves a different statement
+  class   sd5 != ?15_a
+checked 1 theorem(s): 0 re-derived, 1 broken
+rules shared with MM0: 20/2705414 rule application(s) (0.0%)
+```
+
+`ax_const_0`'s statement is `tty (tcons sd5 (tcons sd4 …)) …` and `def sd5: Term = $ (tapp (tapp
+(tapp (tentity t_sym19) …` — the axiom is right and the checker was reading a `def` name as an
+atom. MM0 *unfolds* a `def` during unification; the tool parsed `def`s not at all, so every
+premise that wanted a structure met a name and the re-derivation died at its first premise.
+That made the tool unusable on the emitter's own default output (`LTP_DEF_SHARE` has been on
+since §13.54) — the artifacts it was written to attribute were exactly the ones it could not
+read.
+
+The fix reads the `def` block as a table (`def sdK: Term = $ … $;`, one line each) and unfolds
+a name only where the two sides already disagree, so the common case is still one comparison.
+Measured on `BookProof.Sirk.ChapterSirkMultiShift` / `multiShiftSeq_succ` (788 KB `.mm0`,
+850 KB `.mm1`, 92 nat/symbol and 70 symbols, 604 axioms):
+
+| checker | verdict | rules shared with MM0 |
+| --- | --- | --- |
+| before | 0 re-derived, **1 broken** (`sd0 != (tpi ?33_a ?33_b)`) | 33/4 777 (0.7 %) |
+| after | **1 re-derived, 0 broken** | **4 777/4 777 (100 %)** |
+
+1 440 premises are reported assumed, which is the number the artifact's own leaves give: the
+re-derivation is sound given them, and it now actually shares the whole proof instead of a
+prefix. On the 167 MB Sirk derivation the fixed checker runs past a 10-minute timeout — it used
+to exit in seconds by failing at node 40, so this is the tool meeting the whole proof for the
+first time, not a regression in it. That cost is the honest state of it: the attribution is
+complete at hundreds of kilobytes and unfinished at 167 MB.

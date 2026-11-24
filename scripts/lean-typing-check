@@ -23,6 +23,12 @@ discharged by a local `axiom` (a leaf the emitter assumed, a constant's type, a
 conversion, a field fact) is reported as **assumed**, counted separately: the
 checker's job is to prove the *derivation* sound given those, not to invent them.
 
+The artifact's `def` block is read and *unfolded* wherever a name meets a
+structure, because that is what MM0 does with a `def`: without it a def-shared
+artifact (`LTP_DEF_SHARE`, the default) failed at the first premise of the first
+axiom with `sd0 != (tpi ?33_a ?33_b)`, attributing a missing unfold to the
+derivation (§13.61).
+
 Each re-derivation also reports how much of the derivation it actually shares
 with MM0: the rule applications in the artifact's own proof term, and how many of
 them the check re-applied. `shared < total` means the check stopped short and the
@@ -202,6 +208,32 @@ class Mismatch(Exception):
         super().__init__(f"{show(got)} vs {show(expected)}")
 
 
+# `def` names, by name: MM0's `def`s are definitions, so the checker has to
+# unfold them the way the elaborator does. Without this an artifact emitted with
+# def-sharing (`LTP_DEF_SHARE`, on by default since §13.54) could not be checked
+# at all: a rule whose premise demands `(tcons …)` met the *name* `sd5` and the
+# first premise of the first axiom failed with `sd5 != ?15_a`, which reads like a
+# broken derivation and is a missing unfold. Filled by `load_artifact`.
+DEFS: dict[str, object] = {}
+DEF_LINE = re.compile(r"^def\s+([\w']+)\s*:\s*Term\s*=\s*\$(.*)\$;\s*$", re.M)
+
+
+def force(t):
+    """`t` with a `def` name unfolded to its body, and nothing else changed.
+
+    Returns `t` itself when there is nothing to unfold, so a caller can tell the
+    two cases apart by identity and avoid re-unifying what it just compared.
+    """
+    seen = 0
+    while isinstance(t, str):
+        body = DEFS.get(t)
+        if body is None or seen > 1_000:   # a `def` chain, not a cycle
+            return t
+        t = body
+        seen += 1
+    return t
+
+
 def resolve(t, subst):
     if isinstance(t, str):
         return subst.get(t, t)
@@ -238,6 +270,13 @@ def unify(pattern, actual, subst) -> bool:
                 return unify(pattern, subst[actual], subst)
             return bind(actual, pattern)
         if pattern != actual:
+            # A `def` name is a definition, not an atom: MM0 unfolds it to meet
+            # whatever the other side demands. Only the name that can unfold is
+            # replaced, and only when the two sides already disagree, so the
+            # common case (two equal terms) costs one comparison.
+            p, a = force(pattern), force(actual)
+            if p is not pattern or a is not actual:
+                return unify(p, a, subst)
             raise Mismatch(pattern, actual)
         return True
     if isinstance(actual, str):
@@ -245,6 +284,9 @@ def unify(pattern, actual, subst) -> bool:
             if actual in subst:
                 return unify(pattern, subst[actual], subst)
             return bind(actual, pattern)
+        a = force(actual)
+        if a is not actual:
+            return unify(pattern, a, subst)
         raise Mismatch(instantiate(pattern, subst), actual)
     if pattern[0] != actual[0] or len(pattern) != len(actual):
         raise Mismatch(instantiate(pattern, subst), actual)
@@ -365,7 +407,21 @@ PROOF = re.compile(r"=\s*'(.*)$", re.S)
 
 
 def load_artifact(path: Path):
+    """(axioms, theorems) of an artifact, plus its `def` block in `DEFS`.
+
+    The `def` block is read as a table of definitions, not skipped: a body is
+    one line (`def sdK: Term = $ … $;`), so the table is exact, and the checker
+    needs it to unfold a name where MM0 would. Reading it was the whole defect
+    on a def-shared artifact — the first axiom's first premise compared `sd5`
+    with a structure and reported `sd5 != ?15_a`.
+    """
     text = strip_comments(path.read_text())
+    DEFS.clear()
+    for m in DEF_LINE.finditer(text):
+        # A def body is a *term*, and `parse_formula` reads MM0's `head arg …`
+        # form (the leading `(` of `(tapp …)` is an error there), so it is parsed
+        # as the single argument of a wrapper and the wrapper dropped.
+        DEFS[m.group(1)] = parse_formula("defbody " + m.group(2))[1]
     facts: dict[str, tuple] = {}
     for m in ART_AXIOM.finditer(text):
         forms = FORMULA.findall(m.group(2))
