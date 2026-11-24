@@ -7,6 +7,7 @@
 pub mod artifact;
 #[cfg(feature = "device")]
 pub mod device;
+pub mod nvlaunch;
 pub mod reduce;
 pub mod reduce_artifact;
 pub mod reduce_audit;
@@ -14,6 +15,7 @@ pub mod reduce_run;
 pub mod reference;
 pub mod run;
 pub mod schema;
+pub mod target;
 #[cfg(feature = "service")]
 pub mod coordinator;
 #[cfg(feature = "service")]

@@ -1,0 +1,463 @@
+#!/usr/bin/env python3
+"""PC10: make the GPU virtual/native boundary enforceable, and measure it.
+
+`PLAN_proof_chain.md` PC10 asks for three things this script can check on the
+actual device:
+
+* a **strict target policy** — a PTX-only or WGSL-only artifact cannot satisfy a
+  certificate that requires a native fragment. The tiers are a total order
+  (`wgsl < spirv < ptx < native`) and `avm-target check --policy native` refuses
+  anything below `native`, naming the consequence;
+* **native capture** — `avm-target capture` links the published PTX with the
+  driver's own linker, identifies the resulting ELF64/`EM_CUDA` container
+  (format, `e_machine`, `.text.*` byte count, per-section digests) and records
+  the device and ABI it was produced for. An inaccessible blob is reported as
+  *uncaptured*, never as a pass. Identification is a container check, not a
+  SASS decoder: what the instructions compute is explicitly *not* established
+  (the record carries that limit);
+* **mutation controls** that link actual bytes and require the record to refuse
+  them — an operand-order edit in the PTX, the same entry compiled at a
+  different extent (a different memory bound), and a mutated recorded ABI.
+
+The native record is `mm0/proof_chain/nvidia/native.toml`. `check` (the default)
+compares a fresh capture with it field by field, so a driver or device change is
+visible rather than silent; `--write` refreshes it on the host that measured it.
+
+Exit: 0 every policy, capture and control held; 1 a check or control failed;
+3 not runnable here (no device, no compiler, no binary).
+"""
+
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import json
+import re
+import shutil
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+# The G21a driver owns compilation and the job shape; it has no `.py` suffix,
+# so it is loaded by path rather than imported by name.
+_loader = importlib.machinery.SourceFileLoader(
+    "launch", str(Path(__file__).resolve().parent / "launch"))
+launch = importlib.util.module_from_spec(
+    importlib.util.spec_from_loader("launch", _loader))
+_loader.exec_module(launch)
+
+ROOT = launch.ROOT
+TARGET_BIN = ROOT / "safestos/gpu/target/release/avm-target"
+PROBE_BIN = ROOT / "safestos/gpu/target/release/avm-nvlaunch"
+RECORD = ROOT / "mm0/proof_chain/nvidia/native.toml"
+# One unary and one binary entry: the operand-order control needs a two-operand
+# arithmetic instruction, and `add` is the entry whose bytes G21a already ran.
+ENTRIES = [("difference", 65), ("add", 65)]
+MEMORY_EXTENT = 66
+
+
+def gap(message: str) -> int:
+    print(f"[gap] PC10: {message}")
+    return 3
+
+
+def fail(message: str) -> int:
+    print(f"[FAIL] PC10: {message}")
+    return 1
+
+
+def run(cmd: list[str]) -> tuple[int, dict | str]:
+    done = launch.run(cmd)
+    text = (done.stdout or done.stderr).strip()
+    try:
+        return done.returncode, json.loads(text)
+    except json.JSONDecodeError:
+        return done.returncode, text
+
+
+def capture(bundle: Path, out: Path) -> dict:
+    code, body = run([str(TARGET_BIN), "capture", str(bundle), "--out", str(out)])
+    if code == 77:
+        raise SystemExit(gap(f"the driver is unavailable: {body}"))
+    if code != 0:
+        raise RuntimeError(f"capture of {bundle.name} failed ({code}): {body}")
+    return body
+
+
+def check(record: Path, *extra: str) -> tuple[int, dict]:
+    code, body = run([str(TARGET_BIN), "check", str(record), *extra])
+    if not isinstance(body, dict):
+        raise RuntimeError(f"check of {record.name} printed no JSON: {body!r}")
+    return code, body
+
+
+def claim(job: launch.Job, out: Path) -> dict:
+    code, body = run([str(TARGET_BIN), "claim", str(job.mlir), "--tier", "ptx",
+                      "--out", str(out), "--gap",
+                      "the lowering stops at PTX text (bundle: cubin-format=isa)"])
+    if code != 0:
+        raise RuntimeError(f"the PTX claim for {job.entry} was refused: {body}")
+    return body
+
+
+def require_refused(label: str, code: int, body: dict, needle: str) -> None:
+    if code == 0:
+        raise RuntimeError(f"control not refused: {label}")
+    refusal = str(body.get("refusal", body.get("message", "")))
+    if needle not in refusal:
+        raise RuntimeError(f"control {label} was refused for the wrong reason: "
+                           f"{refusal!r} does not mention {needle!r}")
+    print(f"  [pass] PC10 control refused: {label}")
+
+
+def words_of(blob: Path) -> dict:
+    """The instruction-word listing of a native blob (PC10b's first step).
+
+    `avm-target words` splits every `.text.*` section into 16-byte encoding
+    words and refuses one that is not a whole number of them. It lists, it does
+    not decode: no opcode or operand is named here.
+    """
+    code, body = run([str(TARGET_BIN), "words", str(blob)])
+    if code != 0:
+        raise RuntimeError(f"{blob.name} has no instruction-word listing: {body}")
+    return body["listing"]
+
+
+def word_changes(before: Path, after: Path) -> list[dict]:
+    code, body = run([str(TARGET_BIN), "diff", str(before), str(after)])
+    if code != 0:
+        raise RuntimeError(f"the word diff of {before.name}/{after.name} failed: {body}")
+    return body["changed"]
+
+
+def swap_operands(ptx: str) -> tuple[str, str]:
+    """Swap the two register sources of the first two-operand add/sub.
+
+    This is an *operand-order* edit to the virtual artifact: the linked bytes
+    change, and a record that names the original must not accept them. It is a
+    sensitivity control on the capture's subject, not a semantics proof — the
+    SASS is not decoded.
+    """
+    # The value computation is the last such instruction in the emitted body
+    # (the ones before it index the buffers).
+    found = None
+    for line in ptx.splitlines():
+        m = re.match(r"^(\s*(?:add|sub)\.(?:u32|s32)\s+)(%\w+),\s*(%\w+),\s*(%\w+);$",
+                     line)
+        if m:
+            found = (line, m.groups())
+    if found is None:
+        raise RuntimeError("no two-operand add/sub in the PTX: the operand-order "
+                           "control has nothing to mutate")
+    line, (before, dest, left, right) = found
+    swapped = f"{before}{dest}, {right}, {left};"
+    return ptx.replace(line, swapped, 1), f"{dest}: {left}/{right} swapped"
+
+
+def record_text(device: dict, captures: list[dict]) -> str:
+    lines = [
+        "# PC10: the native captures this host measured.",
+        "# Written by scripts/gpu/boundary --write; never hand-edited.",
+        "# A cubin digest is the driver's output for this device and driver, so",
+        "# a driver change is a record drift, not a silent refresh.",
+        "",
+        "[device]",
+        f'name = "{device["device"]}"',
+        f'capability = "{device["capability"]}"',
+        f'chip = "{device["chip"]}"',
+        f'driver_version = {device["driver_version"]}',
+        'captured_by = "avm-target capture (cuLinkCreate/cuLinkAddData PTX -> cubin)"',
+        'limits = "container identification and a 128-bit instruction-word listing only: no SASS decode, no operand/memory/ABI semantics"',
+        "",
+    ]
+    for c in captures:
+        lines.append("[[capture]]")
+        for key in ("entry", "extent", "input_arity", "workgroup", "block",
+                    "grid", "ptx_params", "ptx_sha256", "cubin_sha256", "size",                                 "sass_bytes", "sections", "word_bytes", "sass_words",
+                    "listing_sha256", "policy", "operand_mutation",
+                    "operand_changed_word", "memory_mutation",
+                    "memory_changed_words", "abi_mutation"):
+            value = c[key]
+            if isinstance(value, bool):
+                lines.append(f"{key} = {'true' if value else 'false'}")
+            elif isinstance(value, int):
+                lines.append(f"{key} = {value}")
+            else:
+                lines.append(f'{key} = "{value}"')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def check_record(device: dict, captures: list[dict]) -> int:
+    if not RECORD.exists():
+        return fail(f"no native record at {RECORD.relative_to(ROOT)}; run "
+                    f"`python3 scripts/gpu/boundary --write` on the device")
+    recorded = tomllib.loads(RECORD.read_text())
+    problems = []
+    known = recorded.get("device", {})
+    for key, value in (("name", device["device"]),
+                       ("capability", device["capability"]),
+                       ("chip", device["chip"]),
+                       ("driver_version", device["driver_version"])):
+        if known.get(key) != value:
+            problems.append(f"device {key} is {value!r}, the record says "
+                            f"{known.get(key)!r} (a different device or driver "
+                            f"produces different native bytes)")
+    rows = {(r["entry"], r["extent"]): r for r in recorded.get("capture", [])}
+    seen = set()
+    for c in captures:
+        key = (c["entry"], c["extent"])
+        seen.add(key)
+        row = rows.get(key)
+        if row is None:
+            problems.append(f"the record has no capture for {key}")
+            continue
+        for field in ("input_arity", "workgroup", "block", "grid", "ptx_params",
+                      "ptx_sha256", "cubin_sha256",                    "size", "sass_bytes", "sections", "word_bytes", "sass_words",
+                      "listing_sha256", "policy", "operand_mutation",
+                      "operand_changed_word", "memory_mutation",
+                      "memory_changed_words", "abi_mutation"):
+            if row.get(field) != c[field]:
+                problems.append(f"{key}: {field} is {c[field]!r}, the record "
+                                f"says {row.get(field)!r}")
+    for key in rows:
+        if key not in seen:
+            problems.append(f"the record has a capture not measured now: {key}")
+    if problems:
+        for p in problems:
+            print(f"  [FAIL] PC10 record: {p}")
+        return 1
+    print(f"  [pass] PC10 record: {len(captures)} native capture(s) match "
+          f"{RECORD.relative_to(ROOT)}")
+    return 0
+
+
+def check_boundary(write: bool) -> int:
+    if not launch.COMPILER.exists():
+        return gap(f"the compiler is not built at {launch.COMPILER.relative_to(ROOT)}")
+    if not TARGET_BIN.exists():
+        return gap("avm-target is not built (cargo build --release --features "
+                   "nvidia --manifest-path safestos/gpu/Cargo.toml --bin avm-target)")
+    if not PROBE_BIN.exists():
+        return gap("avm-nvlaunch is not built (cargo build --release --features "
+                   "nvidia --manifest-path safestos/gpu/Cargo.toml --bin avm-nvlaunch)")
+    probe = launch.run([str(PROBE_BIN), "probe"])
+    if probe.returncode == 77:
+        return gap(f"no device or driver is available "
+                   f"({(probe.stderr or probe.stdout).strip()})")
+    if probe.returncode != 0:
+        return fail(f"the device probe failed: {probe.stderr.strip()}")
+    device = json.loads(probe.stdout)
+    print(f"  [detail] PC10 device: {device['device']}, capability "
+          f"{device['capability']} ({device['chip']}), driver API "
+          f"{device['driver_version']}")
+
+    work = Path(tempfile.mkdtemp(prefix="avm-pc10-"))
+    try:
+        captures = []
+        try:
+            jobs: dict[tuple[str, int], launch.Job] = {}
+            for entry, extent in ENTRIES:
+                job = launch.Job(work, entry, extent, device["chip"])
+                job.publish("mlir", job.mlir)
+                jobs[(entry, extent)] = job
+
+            for (entry, extent), job in jobs.items():
+                out = work / f"{entry}-{extent}-native"
+                body = capture(job.mlir, out)
+                if body.get("tier") != "native" or int(body.get("sass_bytes", 0)) <= 0:
+                    raise RuntimeError(f"{entry} captured no executable text: {body}")
+                # The record must satisfy the policy it claims, with the PTX it
+                # names as its subject.
+                code, verdict = check(out / "native.json", "--policy", "native",
+                                      "--ptx", str(job.mlir / "kernel.ptx"))
+                if code != 0 or verdict.get("status") != "ok":
+                    raise RuntimeError(f"{entry}'s capture does not satisfy a "
+                                       f"native policy: {verdict}")
+                print(f"  [pass] PC10 native capture: {entry} at {extent} -> "
+                      f"{body['size']} bytes, {body['sass_bytes']} SASS bytes, "
+                      f"{body['sections']} section(s), "
+                      f"{body['artifact_sha256'][:12]}…")
+                listed = words_of(out / "native.cubin")
+                if listed["word_bytes"] != 16:
+                    raise RuntimeError(f"{entry}: word width is "
+                                       f"{listed['word_bytes']}, not 16")
+                if listed["words"] * listed["word_bytes"] != body["sass_bytes"]:
+                    raise RuntimeError(
+                        f"{entry}: the listing covers "
+                        f"{listed['words'] * listed['word_bytes']} of "
+                        f"{body['sass_bytes']} SASS bytes")
+                print(f"  [pass] PC10 word listing: {entry} at {extent} -> "
+                      f"{listed['words']} instruction word(s) covering all "
+                      f"{body['sass_bytes']} SASS bytes "
+                      f"({listed['listing_sha256'][:12]}…)")
+
+                # A virtual artifact cannot stand in for the native one.
+                ptx_claim = out / "ptx.json"
+                claim(job, ptx_claim)
+                code, body2 = check(ptx_claim, "--policy", "native",
+                                    "--ptx", str(job.mlir / "kernel.ptx"))
+                require_refused(f"{entry}: a ptx claim under --policy native",
+                                code, body2, "cannot satisfy a native policy")
+                # ... while the same claim satisfies a ptx policy.
+                code, body3 = check(ptx_claim, "--policy", "ptx",
+                                    "--ptx", str(job.mlir / "kernel.ptx"))
+                if code != 0:
+                    raise RuntimeError(f"a ptx claim was refused a ptx policy: {body3}")
+
+                meta = json.loads((job.mlir / "bundle.json").read_text())
+                captures.append({
+                    "entry": entry, "extent": extent,
+                    "input_arity": meta["input_arity"],
+                    "workgroup": meta["workgroup"],
+                    "block": json.loads(
+                        (out / "native.json").read_text())["abi"]["block"],
+                    "grid": json.loads(
+                        (out / "native.json").read_text())["abi"]["grid"],
+                    "ptx_params": meta["abi"]["params"],
+                    "ptx_sha256": body3["artifact_sha256"],
+                    "cubin_sha256": body["artifact_sha256"],
+                    "size": body["size"],
+                    "sass_bytes": body["sass_bytes"],
+                    "sections": body["sections"],
+                    "word_bytes": listed["word_bytes"],
+                    "sass_words": listed["words"],
+                    "listing_sha256": listed["listing_sha256"],
+                    "policy": "native",
+                    "operand_mutation": "refused",
+                    "operand_changed_word": "n/a: a swapped commutative add "
+                                            "links the same bytes",
+                    "memory_mutation": "refused",
+                    "memory_changed_words": "n/a: only add is captured at two "
+                                            "extents",
+                    "abi_mutation": "refused",
+                })
+
+            base = jobs[("add", 65)]
+            base_out = work / "add-65-native"
+            base_digest = captures[1]["cubin_sha256"]
+            # The operand-order control uses `difference` (`sub`): the linker
+            # canonicalises a commutative `add`'s operands, so the same bytes
+            # come back (measured here, and worth knowing), while `sub` keeps
+            # the order it is given.
+            order = jobs[("difference", 65)]
+            order_out = work / "difference-65-native"
+            order_digest = captures[0]["cubin_sha256"]
+
+            # 1. Operand order: link the edited PTX and require the record to
+            #    refuse those bytes.
+            ptx = (order.mlir / "kernel.ptx").read_text()
+            edited, what = swap_operands(ptx)
+            mutated = work / "operand.ptx"
+            mutated.write_text(edited)
+            out = work / "operand-native"
+            code, body = run([str(TARGET_BIN), "link", str(mutated),
+                              "--out", str(out)])
+            if code != 0:
+                raise RuntimeError(f"the operand-order mutation did not link: {body}")
+            if body["artifact_sha256"] == order_digest:
+                raise RuntimeError("the operand-order mutation linked to the same "
+                                   "bytes as the original")
+            code, verdict = check(order_out / "native.json", "--policy", "native",
+                                  "--blob", str(out / "native.cubin"))
+            require_refused(f"difference: an operand-order edit ({what}) is not "
+                            f"the recorded blob", code, verdict, "not the same bytes")
+            # ... and the edit is local: it moves exactly one instruction word,
+            # which the listing can name even though it cannot name the opcode.
+            changes = word_changes(order_out / "native.cubin",
+                                   out / "native.cubin")
+            if len(changes) != 1:
+                raise RuntimeError(
+                    f"the operand-order edit moved {len(changes)} instruction "
+                    f"word(s), not one: {changes}")
+            word = f"{changes[0]['section']}@{changes[0]['offset']}"
+            captures[0]["operand_changed_word"] = word
+            print(f"  [pass] PC10 word attribution: the operand edit moves "
+                  f"exactly one instruction word ({word}, index "
+                  f"{changes[0]['index']})")
+
+            # 2. Memory bound: the same entry at another extent bakes a different
+            #    guard, so the linked bytes differ and the 65-extent record must
+            #    refuse them.
+            other = launch.Job(work, "add", MEMORY_EXTENT, device["chip"])
+            other.publish("mlir", other.mlir)
+            out = work / "memory-native"
+            body = capture(other.mlir, out)
+            if body["artifact_sha256"] == base_digest:
+                raise RuntimeError("extent 66 linked to the same bytes as extent 65")
+            code, verdict = check(base_out / "native.json", "--policy", "native",
+                                  "--blob", str(out / "native.cubin"))
+            require_refused(f"add: an extent-{MEMORY_EXTENT} memory bound is not "
+                            f"the extent-65 record", code, verdict, "not the same bytes")
+            # ... and the bound is local too: the words that moved are recorded,
+            # so a changed guard is a named set of instruction words rather than
+            # "somewhere in 384 bytes".
+            moved = word_changes(base_out / "native.cubin",
+                                 out / "native.cubin")
+            if not moved:
+                raise RuntimeError("extent 66 differs in no instruction word")
+            at = ",".join(f"{c['section']}@{c['offset']}" for c in moved)
+            captures[1]["memory_changed_words"] = at
+            print(f"  [pass] PC10 word attribution: the extent-{MEMORY_EXTENT} "
+                  f"bound moves {len(moved)} instruction word(s) ({at})")
+
+            # 3. ABI: mutate the recorded parameter count; capture must refuse
+            #    before linking, naming the PTX count.
+            tampered = work / "abi-bundle"
+            tampered.mkdir()
+            for f in ("bundle.json", "kernel.ptx"):
+                shutil.copy(base.mlir / f, tampered / f)
+            meta = json.loads((tampered / "bundle.json").read_text())
+            meta["abi"]["params"] = meta["abi"]["params"] + 5
+            (tampered / "bundle.json").write_text(json.dumps(meta))
+            code, body = run([str(TARGET_BIN), "capture", str(tampered),
+                              "--out", str(work / "abi-native")])
+            if code == 0:
+                raise RuntimeError("an ABI-mutated bundle was captured")
+            require_refused("add: a recorded ABI with one extra descriptor",
+                            code, body, "parameter")
+
+            # 4. An inaccessible blob is uncaptured, not a pass.
+            code, verdict = check(base_out / "native.json", "--policy", "native",
+                                  "--blob", str(work / "absent.cubin"))
+            if code != 3 or verdict.get("status") != "uncaptured":
+                raise RuntimeError(f"an absent blob was not reported uncaptured: "
+                                   f"{code} {verdict}")
+            print("  [pass] PC10 uncaptured: an absent native blob is reported "
+                  "uncaptured, not verified")
+        except RuntimeError as exc:
+            return fail(str(exc))
+        except SystemExit as exc:
+            return int(exc.code)
+
+        if write:
+            RECORD.parent.mkdir(parents=True, exist_ok=True)
+            RECORD.write_text(record_text(device, captures))
+            print(f"  [pass] PC10 wrote {RECORD.relative_to(ROOT)}")
+            return 0
+        status = check_record(device, captures)
+        if status != 0:
+            return status
+        total = sum(c["sass_bytes"] for c in captures)
+        print(f"  [pass] PC10: {len(captures)} native capture(s) on "
+              f"{device['device']} ({device['chip']}), {total} bytes of SASS "
+              f"identified; a ptx artifact cannot satisfy a native policy and "
+              f"the operand/memory/ABI mutations are refused")
+        return 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    unknown = [a for a in args if a not in ("check", "--write")]
+    if unknown:
+        print(f"[gap] PC10: unknown argument(s) {unknown} (use `check` or "
+              f"`--write`)")
+        return 3
+    return check_boundary("--write" in args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

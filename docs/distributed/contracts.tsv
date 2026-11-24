@@ -2,7 +2,7 @@ id	class	repo	path	status	evidence
 C01	identity	U	unfer_consensus/src/signing.rs	tested	docs/distributed/evidence/d01-unfer_consensus_lib.log
 C02	identity	U	unfer_identity/src/lib.rs	tested	docs/distributed/evidence/d01-unfer_identity.log
 C03	codec	U	unfer_protocol/src/durable.rs	pending	-
-C04	storage	U	unfer_consensus/src/net.rs	pending	-
+C04	storage	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d13-halted-state-fence.log
 C05	capability	U	unfer_edge/src/caprpc.rs	pending	-
 C06	consensus	U	unfer_consensus/src/node.rs	pending	-
 C07	runtime	A	safestos/cranelift/src/auth.rs	tested	docs/distributed/evidence/d08-austral_cranelift_tests.log
@@ -21,3 +21,13 @@ C19	runtime	A	safestos/cranelift/src/capstd_mod.rs	tested	docs/distributed/evide
 C20	runtime	A	umbrella/modules/distributed_io/DistributedIo.aum	tested	docs/distributed/evidence/d09-distributed_io_demo.log
 C21	codec	U	unfer_protocol/src/distributed.rs	tested	docs/distributed/evidence/d10-unfer_protocol_tests.log
 C22	codec	U	unfer_protocol/tests/distributed_wire.rs	tested	docs/distributed/evidence/d10-unfer_protocol_tests.log
+C23	consensus	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d10-net-lib.log
+C24	identity	U	unfer_consensus/src/signing.rs	tested	docs/distributed/evidence/d10-net-lib.log
+C25	consensus	U	unfer_consensus/src/bin/unfer_node.rs	tested	docs/distributed/evidence/d11-independent.log
+C26	consensus	U	unfer_consensus/tests/independent_nodes.rs	tested	docs/distributed/evidence/d11-independent.log
+C27	consensus	U	unfer_consensus/src/sim.rs	tested	docs/distributed/evidence/d12-schedules.log
+C28	consensus	U	unfer_consensus/tests/distributed_schedules.rs	tested	docs/distributed/evidence/d12-schedules.log
+C29	consensus	U	unfer_consensus/tests/crash_matrix.rs	tested	docs/distributed/evidence/d13-recovery.tsv
+C30	storage	U	unfer_consensus/tests/support/mod.rs	tested	docs/distributed/evidence/d13-crash_matrix.log
+C31	runtime	A	scripts/distributed-recovery	tested	docs/distributed/evidence/d13-recovery.tsv
+C32	storage	U	unfer_data/src/publisher.rs	tested	docs/distributed/evidence/d13-halted-state-fence.log

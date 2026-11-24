@@ -92,24 +92,30 @@ let rec exec (cmd: cmd): unit =
   | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_adapters_path; pkg_totality; emit_derivations; emit_linearity_ledger } ->
      validate_jit_server_target jit_server target;
      (match target with
-      | WgslBundle _ ->
-         (* The GPU target is not a JIT/hot-swap target and has no package or
+      | WgslBundle _ | MlirBundle _ ->
+         (* The GPU targets are not JIT/hot-swap targets and have no package or
             proof side exports in v1. Refuse the combination before compilation
             instead of ignoring the flag. *)
+         let target_name =
+           match target with WgslBundle _ -> "wgsl" | _ -> "mlir" in
          if use_cps_jit || jit_server then
-           err "--target-type=wgsl is incompatible with --use-cps-jit/--jit-server: \
-                the GPU target does not lower through CLIF.";
+           err (Printf.sprintf
+                  "--target-type=%s is incompatible with --use-cps-jit/--jit-server: \
+                   the GPU target does not lower through CLIF." target_name);
          if emit_cps_path <> None then
-           err "--target-type=wgsl is incompatible with --emit-cps.";
+           err (Printf.sprintf "--target-type=%s is incompatible with --emit-cps." target_name);
          if emit_adapters_path <> None then
-           err "--target-type=wgsl is incompatible with --emit-adapters.";
+           err (Printf.sprintf "--target-type=%s is incompatible with --emit-adapters." target_name);
          if pkg_totality || emit_derivations <> None then
-           err "--target-type=wgsl is incompatible with package/totality exports.";
+           err (Printf.sprintf
+                  "--target-type=%s is incompatible with package/totality exports." target_name);
          if emit_linearity_ledger <> None then
-           err "--target-type=wgsl is incompatible with --emit-linearity-ledger.";
+           err (Printf.sprintf
+                  "--target-type=%s is incompatible with --emit-linearity-ledger." target_name);
          if allow_all || auth_manifest <> None then
-           err "--target-type=wgsl does not use the JIT authorization engine; \
-                --allow-all/--auth-manifest are JIT options."
+           err (Printf.sprintf
+                  "--target-type=%s does not use the JIT authorization engine; \
+                   --allow-all/--auth-manifest are JIT options." target_name)
       | _ -> ());
      Compiler.use_cps_jit := use_cps_jit;
      Compiler.jit_server_mode := jit_server;
@@ -162,7 +168,10 @@ and compile_help_lines (): string list =
     "";
     "Options:";
     "    --help          Print this text.";
-    "    --target-type   One of `exe`, `tc`, `c`, `wgsl`. Default is `exe`.";
+    "    --target-type   One of `exe`, `tc`, `c`, `wgsl`, `mlir`. Default is `exe`.";
+    "    --gpu-chip      With `--target-type=mlir`, the PTX target chip (e.g.";
+    "                    `sm_70`, the default, or `sm_61`). PTX is not";
+    "                    forward-compatible, so the chip is recorded.";
     "    --gpu-numeric-profile  With `--target-type=wgsl`, the kernel's numeric";
     "                    contract: `u32-modular-v1` (default) or `wgsl-f32-v1`";
     "                    (Float32 add/subtract/multiply only).";
@@ -314,6 +323,8 @@ and exec_target (mods: module_source list) (target: target): unit =
   | WgslBundle { output_dir; entrypoint; numeric_profile; source_profile; gpu_operation; } ->
      exec_compile_to_wgsl mods output_dir entrypoint numeric_profile
        source_profile gpu_operation
+  | MlirBundle { output_dir; entrypoint; extent; chip; } ->
+     exec_compile_to_mlir mods output_dir entrypoint extent chip
 
 (* Handle one JIT-server command line. Never raises: a command whose
    handling throws (e.g. a swap of a nonexistent module) is reported as
@@ -627,3 +638,235 @@ and exec_compile_to_wgsl (mods: module_source list) (output_dir: string)
       Printf.eprintf "GPU %s published to %s\n%!"
         (if gpu_operation = None then "bundle" else "reduction bundle")
         output_dir)
+
+(* -------------------------------------------------------------------------- *)
+(* MLIR bundle target (PLAN_gpu_kernels.md G20b)                                *)
+(* -------------------------------------------------------------------------- *)
+
+and mlir_opt_path (): string option =
+  match Sys.getenv_opt "AUSTRAL_MLIR_OPT" with
+  | Some path when String.trim path <> "" && Sys.file_exists (String.trim path) ->
+     Some (String.trim path)
+  | _ ->
+     let rec search = function
+       | [] -> None
+       | dir :: rest ->
+          let candidate = Filename.concat dir "mlir-opt" in
+          if Sys.file_exists candidate then Some candidate else search rest
+     in
+     search (String.split_on_char ':' (try Sys.getenv "PATH" with Not_found -> ""))
+
+(* Run one tool with an argument vector, no shell, bounded wait. Returns the
+   exit status and stdout; stderr goes to a temp file and is appended so a
+   pipeline failure reports the compiler's own message. *)
+and run_tool (tool: string) (args: string list): (int * string) =
+  let out_path = Filename.temp_file "avm-tool-out-" ".txt"
+  and err_path = Filename.temp_file "avm-tool-err-" ".txt" in
+  let cleanup () =
+    (try Sys.remove out_path with Sys_error _ -> ());
+    (try Sys.remove err_path with Sys_error _ -> ())
+  in
+  Fun.protect ~finally:cleanup (fun () ->
+    let fd_out = Unix.openfile out_path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600
+    and fd_err = Unix.openfile err_path [Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC] 0o600 in
+    let argv = Array.of_list (tool :: args) in
+    let pid = Unix.create_process tool argv Unix.stdin fd_out fd_err in
+    Unix.close fd_out;
+    Unix.close fd_err;
+    let deadline = Unix.gettimeofday () +. 120.0 in
+    let rec wait () =
+      let (done_pid, status) = Unix.waitpid [Unix.WNOHANG] pid in
+      if done_pid <> 0 then status
+      else if Unix.gettimeofday () > deadline then begin
+        (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+        let _ = Unix.waitpid [] pid in
+        err (Printf.sprintf "%s timed out after 120s" tool)
+      end else begin
+        Unix.sleepf 0.02;
+        wait ()
+      end
+    in
+    let status = wait () in
+    let read path =
+      let ic = open_in_bin path in
+      let n = in_channel_length ic in
+      let s = really_input_string ic n in
+      close_in ic;
+      s
+    in
+    let combined = read out_path ^ read err_path in
+    let code = match status with
+      | Unix.WEXITED c -> c
+      | Unix.WSIGNALED _ | Unix.WSTOPPED _ -> 1
+    in
+    (code, combined))
+
+and exec_compile_to_mlir (mods: module_source list) (output_dir: string)
+    (entrypoint: entrypoint) (extent: int) (chip: string): unit =
+  let (Entrypoint (entry_module, entry_name)) = entrypoint in
+  if Sys.file_exists output_dir then
+    err (Printf.sprintf
+           "Refusing to publish an MLIR bundle: destination %s already exists. \
+            Remove it or choose a new --output path." output_dir);
+  (* The same checked frontend as the WGSL target: one KernelIR, two consumers. *)
+  let compiler = Compiler.empty_compiler in
+  let prepared_selected = ref None in
+  let _ =
+    List.fold_left
+      (fun (env: Env.env) (source: module_source) ->
+        let (env, prepared) = Compiler.prepare_module env source in
+        if Identifier.mod_name_string prepared.Compiler.prepared_name
+           = Identifier.mod_name_string entry_module then
+          prepared_selected := Some prepared;
+        env)
+      (Compiler.cenv compiler) mods
+  in
+  let prepared =
+    match !prepared_selected with
+    | Some p -> p
+    | None ->
+       err (Printf.sprintf
+              "Entry module %s is not among the supplied sources."
+              (Identifier.mod_name_string entry_module))
+  in
+  let kernel =
+    try
+      Gpu_subset.build ~entry:(Identifier.ident_string entry_name)
+        prepared.Compiler.prepared_env prepared.Compiler.prepared_mono
+    with Gpu_subset.Refused msg ->
+      err ("GPU subset refused the module: " ^ msg)
+  in
+  (* Refuse before publication, with the emitter's own words. `render` also
+     refuses a non-positive extent and a non-integer profile; the parser has
+     already refused both, so this is the second line of defence. *)
+  let mlir =
+    try Gpu_mlir.render ~extent kernel
+    with Invalid_argument msg -> err ("MLIR emission refused: " ^ msg)
+  in
+  (* `validate` raises on the first structural disagreement and otherwise
+     returns its counts; the shape is a guard here, not a claim. *)
+  let _counts =
+    try Gpu_mlir.validate mlir
+    with Invalid_argument msg ->
+      err ("Internal error: the emitted module failed its own structural \
+            check: " ^ msg)
+  in
+  let tool =
+    match mlir_opt_path () with
+    | Some path -> path
+    | None ->
+       err
+         "The MLIR bundle target needs `mlir-opt`, but no AUSTRAL_MLIR_OPT path \
+          and no mlir-opt on PATH were found. Install an LLVM/MLIR release \
+          (this repo measures 19.1.7 from nixpkgs `llvmPackages_19.mlir`) and \
+          set AUSTRAL_MLIR_OPT, or use --target-type=wgsl for a toolchain-free \
+          artifact."
+  in
+  let (version_code, version) = run_tool tool ["--version"] in
+  (* `mlir-opt --version` prints the LLVM banner and then the version; the
+     recorded identity keeps both, because "LLVM (http://llvm.org/)" alone
+     would not say which release verified the module. *)
+  let toolchain =
+    if version_code = 0 then
+      let lines =
+        String.split_on_char '\n' (String.trim version)
+        |> List.map String.trim
+        |> List.filter (fun l -> l <> "")
+      in
+      (match lines with
+       | first :: second :: _ -> first ^ " " ^ second
+       | [only] -> only
+       | [] -> "mlir-opt (version unavailable)")
+    else "mlir-opt (version unavailable)"
+  in
+  let staging = Printf.sprintf "%s.staging-%d" output_dir (Unix.getpid ()) in
+  if Sys.file_exists staging then
+    err (Printf.sprintf "Refusing to reuse an existing staging directory %s." staging);
+  let published = ref false in
+  Fun.protect
+    ~finally:(fun () ->
+      if not !published then begin
+        List.iter (fun name ->
+          try Sys.remove (Filename.concat staging name) with Sys_error _ -> ())
+          [ Gpu_mlir_bundle.file_json; Gpu_mlir_bundle.file_kernelir;
+            Gpu_mlir_bundle.file_mlir; Gpu_mlir_bundle.file_ptx ];
+        (try Unix.rmdir staging with Unix.Unix_error _ -> ())
+      end)
+    (fun () ->
+      Unix.mkdir staging 0o755;
+      let mlir_path = Filename.concat staging Gpu_mlir_bundle.file_mlir in
+      write_string_to_file mlir_path mlir;
+      (* 1. verify: `mlir-opt <module>` parses, verifies and prints it. *)
+      let (verify_code, verify_out) = run_tool tool [mlir_path] in
+      if verify_code <> 0 then
+        err (Printf.sprintf
+               "mlir-opt refused the emitted module (exit %d):\n%s\n\
+                Nothing was published." verify_code (String.trim verify_out));
+      (* 2. lower: the pinned pipeline, one argv element for its options. *)
+      let (lower_code, lowered) =
+        run_tool tool [mlir_path; Gpu_mlir_bundle.pipeline_for chip]
+      in
+      if lower_code <> 0 then
+        err (Printf.sprintf
+               "mlir-opt failed to lower the module (exit %d):\n%s\n\
+                Nothing was published." lower_code (String.trim lowered));
+      (* 3. extract: the PTX bytes the pipeline embedded. *)
+      let ptx =
+        match Gpu_mlir_bundle.extract_assembly lowered with
+        | Some ptx -> ptx
+        | None ->
+           err "The lowering produced no gpu.object assembly; the pinned pipeline \
+                must emit PTX text."
+      in
+      let facts = Gpu_mlir_bundle.ptx_facts ptx in
+      (match Gpu_mlir_bundle.abi_mismatches ~arity:kernel.Gpu_ir.input_arity
+               ~chip facts with
+       | [] -> ()
+       | problems ->
+          err (Printf.sprintf
+                 "The lowered ABI does not match the recorded kernel:\n  %s\n\
+                  Nothing was published." (String.concat "\n  " problems)));
+      (* 4. bind: the derivative digests are computed from the bytes written. *)
+      write_string_to_file
+        (Filename.concat staging Gpu_mlir_bundle.file_kernelir)
+        (Gpu_ir.canonical_bytes kernel);
+      write_string_to_file
+        (Filename.concat staging Gpu_mlir_bundle.file_ptx) ptx;
+      let sources =
+        List.map
+          (fun (source: module_source) ->
+            match source with
+            | TwoFileModuleSource { int_filename; int_code; body_filename; body_code } ->
+               [ Gpu_bundle.digest_source ~path:int_filename int_code;
+                 Gpu_bundle.digest_source ~path:body_filename body_code ]
+            | BodyModuleSource { body_filename; body_code } ->
+               [ Gpu_bundle.digest_source ~path:body_filename body_code ])
+          mods
+        |> List.concat
+      in
+      let sources = sources @ Gpu_bundle.builtin_sources () in
+      let record =
+        Gpu_mlir_bundle.make ~entry:(Identifier.ident_string entry_name)
+          ~extent ~sources ~kernel ~mlir ~ptx
+          ~lowering:{ Gpu_mlir_bundle.target = chip;
+                      pipeline = Gpu_mlir_bundle.pipeline_for chip;
+                      toolchain;
+                      ptxas = "not used: cubin-format=isa stops at PTX text" }
+      in
+      write_string_to_file
+        (Filename.concat staging Gpu_mlir_bundle.file_json)
+        (Gpu_mlir_bundle.render record);
+      (* 5. check the set as a reader would, before it becomes visible. *)
+      (match Gpu_mlir_bundle.verify_dir staging with
+       | Ok _ -> ()
+       | Error problems ->
+          err (Printf.sprintf
+                 "The staged MLIR bundle failed its own consistency check:\n  %s\n\
+                  Nothing was published." (String.concat "\n  " problems)));
+      Unix.rename staging output_dir;
+      published := true;
+      Printf.eprintf
+        "MLIR bundle published to %s (KernelIR %s…, %s, %d x u64 params)\n%!"
+        output_dir (String.sub record.Gpu_mlir_bundle.ir_sha256 0 12)
+        record.Gpu_mlir_bundle.lowering.target
+        record.Gpu_mlir_bundle.abi.Gpu_mlir_bundle.ptx_params)

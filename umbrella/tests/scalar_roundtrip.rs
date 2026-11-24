@@ -20,7 +20,7 @@ mod support;
 
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use austral_cranelift_bridge::adapters::{decode, encode, ScalarType, ScalarValue};
 use umbrella::interface::{render_wrapper, Adapter, Scalar};
@@ -406,8 +406,30 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
     .expect("manifest");
 
     let module = Path::new(env!("CARGO_MANIFEST_DIR")).join("modules/AdapterLive.aum");
+    // The CLI builds adapter crates under `$TMPDIR/umbrella-adapters-<pid>-<gen>`
+    // — roughly 585 MB each — and must remove them on exit; this test pins that
+    // cleanup so a subprocess CLI cannot leak a directory per run. The child pid is
+    // captured so the check names exactly the
+    // directories this run minted, not the test binary's own or a concurrent
+    // run's.
+    fn adapters_scratch_for(pid: u32) -> Vec<PathBuf> {
+        let prefix = format!("umbrella-adapters-{pid}-");
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with(&prefix))
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
     let run = |expect: i64| {
-        Command::new(env!("CARGO_BIN_EXE_umbrella"))
+        let child = Command::new(env!("CARGO_BIN_EXE_umbrella"))
             .arg("--austral")
             .arg(&front_end)
             .arg("--cratedir")
@@ -420,8 +442,19 @@ fn the_jit_executes_an_austral_module_through_the_generated_adapters() {
             .arg("--expect")
             .arg(expect.to_string())
             .arg(&module)
-            .output()
-            .expect("run umbrella")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run umbrella");
+        let pid = child.id();
+        let out = child.wait_with_output().expect("wait for umbrella");
+        let leftovers = adapters_scratch_for(pid);
+        assert!(
+            leftovers.is_empty(),
+            "the CLI must remove its adapter scratch directory on exit; \
+             pid {pid} left {leftovers:?}"
+        );
+        out
     };
 
     let out = run(EXPECTED);

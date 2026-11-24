@@ -1,0 +1,126 @@
+# quantdot.toml — PC11's one operator: a signed 8-bit quantised dot product.
+#
+# This file is the isolated operator / quantization / command schema the card
+# asks for, instantiated once. It is *declared* data, and `scripts/npu-profile`
+# checks it three ways:
+#
+#   1. against the admitted Austral computation (`examples/npu/QuantDot.aui`):
+#      the step name, arity, operand type and result type are read out of the
+#      interface text, and the body's four products are counted;
+#   2. against itself: every byte count is re-derived from dtype and shape,
+#      every L2 offset from the buffers before it, every operand and output
+#      offset from the layout, and the numeric bound by exhausting the i8 range;
+#   3. against the target inventory (`target.toml`): the cap is the SRAM gate's
+#      constant, and the DMA opcode is the one the kernel documentation names.
+#
+# What it does not do: there is no NPU backend, no compiled overlay, no
+# ctrlcode. The commands below are the *declared* command list, which is the
+# inspectable stage. Mapping it to `XAie_TxnOpcode` bytes and to a tile ELF is
+# `declared` in `target.toml`; the hardware's meaning is `opaque`.
+
+schema = "austral.npu.operator.v1"
+operator = "quant_dot"
+tile_op = "A[4x4 i8] x B[4x4 i8] -> C[4x4 s32]"
+
+[admitted]
+module = "QuantDot"
+interface = "examples/npu/QuantDot.aui"
+body = "examples/npu/QuantDot.aum"
+step = "dot4"
+params = 8
+param_type = "Int32"
+result_type = "Int32"
+multiplies = 4
+adds = 3
+
+[shape]
+m = 4
+k = 4
+n = 4
+
+[layout]
+operands = "row-major"
+output = "row-major"
+element_bytes = 1
+accumulator_bytes = 4
+
+[numeric]
+profile = "int8_sym_exact_s32"
+zero_point = 0
+scale_a = 1
+scale_b = 1
+element_min = -128
+element_max = 127
+product_min = -16256
+product_max = 16384
+accumulator_min = -65024
+accumulator_max = 65536
+widening = "exact"
+requantization = "none"
+
+[[buffer]]
+name = "A"
+role = "input"
+dtype = "i8"
+rows = 4
+cols = 4
+bytes = 16
+l2_offset = 0
+
+[[buffer]]
+name = "B"
+role = "input"
+dtype = "i8"
+rows = 4
+cols = 4
+bytes = 16
+l2_offset = 16
+
+[[buffer]]
+name = "C"
+role = "output"
+dtype = "s32"
+rows = 4
+cols = 4
+bytes = 64
+l2_offset = 32
+
+[tile]
+rows = 4
+cols = 4
+
+[[dma]]
+opcode = "XAIE_IO_BLOCKWRITE"
+direction = "host-to-l2"
+buffer = "A"
+offset = 0
+bytes = 16
+
+[[dma]]
+opcode = "XAIE_IO_BLOCKWRITE"
+direction = "host-to-l2"
+buffer = "B"
+offset = 0
+bytes = 16
+
+[[dma]]
+opcode = "XAIE_IO_BLOCKWRITE"
+direction = "l2-to-host"
+buffer = "C"
+offset = 0
+bytes = 64
+
+# Residual premises of the mapping, stated where a reviewer can reject them one
+# at a time. Each is consumed by the corresponding obligation in
+# `mm0/proof_chain/npu_operator.mm0`; none is discharged here.
+[[premise]]
+name = "widening"
+text = "the loader sign-extends each i8 operand to Int32 exactly, so `dot4` on widened values is the operator's inner step"
+
+[[premise]]
+name = "overlay"
+text = "IRON lowers this descriptor's layout and command list to the overlay and ctrlcode the kernel documentation describes"
+
+[[premise]]
+name = "native"
+text = "the AIE-ML tile executes the overlay's instruction stream with the arithmetic semantics of the numeric profile"

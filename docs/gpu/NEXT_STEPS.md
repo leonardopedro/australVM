@@ -261,6 +261,22 @@ record if the tool emits environment-dependent metadata. Record commands,
 target, address-space conversion, data layout, output file and parameter
 layout. No changes to the OCaml-only or default GPU lane.
 
+**Status:** met on this host, from nixpkgs rather than a new devshell:
+`llvmPackages_19.mlir` (19.1.7) and `llvmPackages_19.llvm` (19.1.7).
+`scripts/gpu/mlir-probe record` runs three stages on two subjects — the
+handwritten `mm0/proof_chain/mlir/smoke.mlir` (kept separate from source
+compilation) and the module G20a emits for `clamp` — and writes
+`mm0/proof_chain/mlir/toolchain.toml`: the three tool versions, the target
+(`sm_70`), the exact pipeline string, and per subject the source digest, the PTX
+file and digest, the entry name, the 10-parameter layout (one `memref<65xi32>`
+→ 5 × `.u64`: alloc ptr, aligned ptr, offset, size, stride) and the
+address-space conversion (`generic → global` via `cvta.to.global`).
+`--gpu-lower-to-nvvm-pipeline=cubin-format=isa cubin-chip=sm_70` stops at PTX
+text, so no `ptxas` or CUDA toolkit is needed. `check` re-runs every stage and
+refuses a changed version, target, pipeline or PTX digest (four controls); a
+host without MLIR reports a `[gap]`. The default GPU lane is untouched: nothing
+in `Compiler` calls the probe, and `make all` never needs MLIR.
+
 ### G20a — Generate verified MLIR for existing scalar semantics
 
 **Files.** Proposed `lib/gpu/Gpu_mlir.ml` and focused emitter tests.
@@ -275,6 +291,23 @@ interface/ABI. Widen successively to the current v1 helper and operation corpus.
 **Exit.** Pinned MLIR verification and lowering accept the real source-derived
 fixtures. Swapping subtraction operands and reversing a comparison produce
 different lowered bodies. Unknown IR cases produce a named refusal.
+
+**Status:** the emitter exists (`lib/gpu/Gpu_mlir.ml`, `gpu_proof dump-mlir`,
+`test/GpuMlirTest.ml`): signless `i32` with unsigned predicates, no wrap flags,
+an explicit static extent, a dominating `ult` tail guard, and named refusals for
+helper calls, non-v1 profiles, a non-positive extent and one-armed returns.
+Eleven tests cover the encoding, the refusals, the structural validator's own
+negative controls, and the mutation requirement (swapping `modularSubtract`
+operands or reversing `clamp`'s comparison changes the body).
+**Pinned MLIR verification and lowering happen in the G19a lane, not here:**
+the module is captured byte-for-byte (`mm0/proof_chain/mlir/ir/clamp.mlir`,
+recorded in `stage.toml` as `kernelir-to-mlir = captured`), and
+`scripts/gpu/mlir-probe` verifies that exact file with LLVM 19.1.7 and lowers it
+to `sm_70` PTX (`mm0/proof_chain/mlir/toolchain.toml`). What is not claimed is
+preservation: no MLIR semantics exists, so the ABI header still says
+`g19a-pending`, and the interface is exercised rather than proved. Widening to
+the helper corpus is also unbuilt: a kernel with a helper is a named refusal,
+not a silent inline.
 
 ### G20b — Publish a separate versioned MLIR artifact
 
@@ -293,6 +326,52 @@ and reproduce its KernelIR identity. Refuse a tampered lower artifact,
 conflicting target options and an invalid static extent. The default CPU tools
 still operate without MLIR installed.
 
+**Status:** built on this host. `--target-type=mlir --entrypoint=… --output=DIR
+[--gpu-static-elements=N]` builds the same checked KernelIR as the WGSL lane,
+renders it (G20a), has `mlir-opt` verify it, lowers it with the pinned pipeline
+to `sm_70` PTX, and publishes four chained files: `kernel.kernelir`,
+`kernel.mlir`, `kernel.ptx`, `bundle.json`. The metadata records source and
+builtin provenance digest, the three derivative digests with their predecessors,
+the toolchain string (`LLVM version 19.1.7`), the target, the exact pipeline, the
+parameter layout and the numeric contract. Publication is atomic (a staging
+directory renamed only after the set checks itself) and refuses a pre-existing
+destination.
+
+`scripts/mlir-bundle` compiles the same fixture through WGSL and MLIR and
+requires their KernelIR identities and bytes to agree, verifies each published
+set, and fires every refusal the card names: a tampered lower artifact, a
+conflicting numeric profile, a WGSL-only staged reduction, a zero/negative
+static extent, a missing `mlir-opt`, and a nonexistent tool override. It also
+compiles a CPU target with the toolchain absent, so the default tools are shown
+not to depend on MLIR.
+Without `mlir-opt` the whole check is a `[gap]`; the CPU and WGSL targets never
+consult it.
+
+**Status:** implemented. `austral compile SRC --target-type=mlir
+--entrypoint=M:f --gpu-static-elements=65 --output=DIR` publishes four files —
+`kernel.kernelir` (canonical bytes), `kernel.mlir` (`Gpu_mlir.render` of exactly
+those bytes), `kernel.ptx` (the pinned G19a pipeline's lowering) and
+`bundle.json`, whose `derivatives` array chains the three digests with their
+predecessor and producer. Publication is staged: `mlir-opt` verifies the
+module, lowers it, the PTX ABI is checked against the kernel's arity (five
+`.u64` per memref), the set is re-read by `Gpu_mlir_bundle.verify_dir` itself,
+and only then is the directory renamed into place. A failed step publishes
+nothing. Refusals are named before work: a non-`u32-modular-v1` profile, a
+`--gpu-operation` (WGSL-only), a non-positive or non-integer
+`--gpu-static-elements`, an existing output directory, and a missing
+`mlir-opt` (with `AUSTRAL_MLIR_OPT` accepted only when that path exists). The
+verifier additionally requires `kernel.mlir`'s own `// kernelir-sha256:`
+header to name the recorded IR, so re-hashing a forged `.kernelir` does not
+repair the pair, and it re-derives the ABI from the PTX bytes rather than
+trusting `bundle.json`. `test/MlirBundleTest.ml` (13 tests) pins the extraction,
+the ABI expectations, the chain's tamper refusals and the CLI shape;
+`scripts/mlir-bundle` runs the end to end: two MLIR publications byte-identical,
+the WGSL bundle of the same fixture agreeing on `48caf04e…`, the published set
+re-verified, and six controls refusing — including a CPU `--target-type=c`
+fixture still compiling with no MLIR on `PATH`. Not claimed: the ABI header
+remains `g19a-pending` (exercised, not proved), the bundle records host-absolute
+source paths, and no MLIR semantics or preservation proof exists (PC09).
+
 ### G21a — Launch an actual source-generated NVIDIA artifact
 
 **Files.** Optional CUDA runner in the isolated GPU crate, device tests and
@@ -310,6 +389,207 @@ ISA. PC09/PC10 track MLIR pass preservation and native instructions separately.
 **Exit.** Genuine hardware results and ABI record, or lower-artifact and
 preflight evidence with hardware execution still open. Compare only matching
 workload and transfer paths. Keep the new toolchain optional.
+
+**Status:** genuine hardware results on this host (GTX 1060 Max-Q, capability
+6.1, driver 580.119.02). `--target-type=mlir --gpu-chip=sm_61` publishes an
+artifact whose `bundle.json` names the chip, and `scripts/gpu/launch check`
+publishes it from `examples/gpu/pointwise`, publishes the WGSL bundle of the
+same source, and the device side (`safestos/gpu/src/nvlaunch.rs`, an optional
+`--features nvidia` binary that dlopens the CUDA Driver API rather than
+linking it) preflights before launching: PTX `.target` against the device's
+capability (PTX is not backward-compatible), the `.param .u64` count against
+`input_arity` at five words per memref, extent and arity against the record,
+and a block size the device accepts. `avm-nvlaunch launch` uploads the
+buffers, launches blocks of the module's declared size (64, so two blocks at
+extent 65), synchronises and reads back;
+`scripts/gpu/launch` publishes the artifacts for the device's own chip and
+compares that readback with `avm-gpu reference` on the WGSL bundle — the
+KernelIR evaluator, not a retyped expectation. The launch exposed a real
+emitter bug: `gpu.thread_id` is block-local, so at extent 65 a second block
+rewrote 0–63 and index 64 was never written; the element index is now
+`block_id * block_dim + thread_id` (re-captured and pinned by PC09/G19a).
+The same run expands to the v1 corpus the card asks for: every `Pointwise`
+entry that has a direct scalar body — 12 of the 14, unary and two-operand, so
+the one- and two-memref ABI shapes are both measured — is published for the
+device's chip, launched at extent 65, once again at 1025 (17 blocks) and once
+with `--block 32` (an uneven 3-block grid), and compared with `avm-gpu
+reference`. Fourteen launches, `[detail] … geometries measured: 2x64, 3x32,
+17x64`. Each launch is recorded in `mm0/proof_chain/nvidia/launch.toml`
+(device, geometry, ABI words, PTX/KernelIR/output digests, changed elements)
+and `check` refuses a run that differs from that record, so a changed emitter,
+ABI or chip is a finding rather than a silent refresh. Five refusals are
+required: a wrong extent, a wrong arity, a block size no device accepts, a PTX
+whose `.target` is newer than the device (the refused module gets the driver's
+own verdict, `CUDA_ERROR_INVALID_PTX`, so the refusal is measured rather than
+assumed), and the two helper-calling entries `addConstant`/`polynomial`,
+which MLIR refuses by name (`helper call is not lowered yet`) before any
+bundle is published. Every launch also agrees with the C backend's own
+`expected` column in `examples/gpu/pointwise/corpus.tsv`, repeated to the
+launch extent — a second oracle independent of the KernelIR evaluator; a table
+cell altered by one fails at that index.
+Not claimed: this is one device; the PTX
+is a virtual ISA, so nothing here is a preservation proof or an instruction-
+level certificate (PC09/PC10), the ABI header stays `g19a-pending`, and
+hardware results are not reproduced in CI (the gate reports a `[gap]` where no
+device is visible).
+
+### PC10b — Relate the NVVM/PTX output to the instructions the device ran
+
+**Depends on** PC10 as landed (`safestos/gpu/src/target.rs`,
+`avm-target capture`, `scripts/gpu/boundary`, `mm0/proof_chain/nvidia/native.toml`)
+and on G21a's launch record. **Files:** a SASS listing/attribution artifact, a
+decoder input pinned like the MLIR toolchain, and its own gate in
+`scripts/gpu/boundary`.
+
+**Landed 2026-11-23 (the listing and the localised control, not the decoder).**
+`safestos/gpu/src/target.rs` gains `listing`/`word_diff` and `avm-target` gains
+`words` and `diff`: every `.text.*` section is split into its 16-byte encoding
+words (the width every target this repo links for uses), a section that is not a
+whole number of words is refused by name, and the listing's digest is a function
+of the words and their offsets. `scripts/gpu/boundary` records, per capture,
+`sass_words`, `word_bytes` and `listing_sha256`, and requires
+`words × word_bytes == sass_bytes` — so the count is measured against the
+section table rather than taken from it. Measured on the GTX 1060: each cubin's
+`.text.main` is 24 words covering all 384 bytes, and both mutations are now
+localised: the operand-order edit moves **exactly one** word, `.text.main@272`
+(index 17), and the extent-66 memory bound moves exactly one word,
+`.text.main@144` — different words, both stored in the record and both compared
+by `check`, so a tampered offset or listing digest fails. What this does
+not do is name the opcode or claim the PTX line wrote that word: it localises the
+*mutation*, not the instruction. `cudaPackages.cuda_nvdisasm` is unfree here, so
+step 1 below is still open, and steps 3's attribution to named PTX instructions
+waits for it.
+
+PC10 stops at identification: the record says these bytes are an
+ELF64/`EM_CUDA` container with 384 bytes of `.text` and a digest, and refuses
+an operand-order edit because it links to *different bytes* — not because
+anything knows what those bytes compute. This card is the next step PC10's own
+text asks for, and only this far: turn the recorded `.text` into a **listing**
+whose coverage is checked, and attribute listing entries to the PTX the driver
+consumed, so "the device ran these instructions" is a claim about decoded
+bytes rather than a size.
+
+1. **A decoder, pinned.** `nvdisasm`/`cuobjdump` are not on this host (no CUDA
+toolkit), so either a flake input pins a toolkit version and records it beside
+`mlir-opt` in the toolchain record, or an SM 6.1 decoder for the fragment's
+opcode subset is written in-repo with its own tests. The choice and its version
+belong in the record: a listing from an unrecorded disassembler is not evidence.
+2. **Coverage, not prose.** For each captured cubin, the listing must account
+for every byte of every `.text.*` section: instruction offsets contiguous from
+the section start, the last instruction's end equal to the section size, and a
+digest of the listing itself. A listing that skips bytes is refused, because a
+decoder that silently drops an instruction is the failure mode here.
+3. **Attribution.** For the small fragment `difference` already links
+(`sub.s32 %r6, %r4, %r5; st.global` at extent 65), record which listing entry
+came from which PTX instruction, and extend the existing mutations: the
+operand-order edit must change the *attributed* SASS entry's operands (not just
+the blob digest), and the extent-66 capture must show its memory bound at the
+attributed load/store. An attribution that survives the mutation control is
+what makes it a relation rather than a comment.
+4. **A named semantics gap, not a semantics proof.** No public SASS model exists
+the way `riscv-lean`/Sail models RV64D, and PC10's text forbids using
+disassembly text as a semantics proof. So the card's exit is a decode-fidelity
+record: *this listing is the recorded bytes, and this entry is the instruction
+that this PTX line produced*, with the PTX→SASS semantic relation left a named
+`[gap]` and pointed at whatever ISA model a later card builds.
+
+**Exit.** A pinned decoder and its version recorded; a listing per captured
+cubin whose coverage is checked *(landed: word-level, digest-pinned)*; an
+attribution table for `difference` that the operand-order and memory-bound
+mutations move *(landed: one word each, `.text.main@272` for the operand edit
+and `.text.main@144` for the extent-66 bound)*; and a `[gap]` naming the missing
+PTX→SASS semantics. Without a decoder the card is a `[gap]` everywhere, never a
+pass — the same convention as G21a's hardware line.
+
+### PC11 — Define the first NPU proof branch and its opaque cut
+
+**Depends on** PC01/PC02 (word and map semantics) and PC07 (the whole-chain
+fixture). **Files:** `docs/proof/NPU_PROFILE.md`, `mm0/proof_chain/npu/`
+(target and operator/command inventories), `mm0/proof_chain/npu_operator.mm0`,
+`examples/npu/`, and one checker (`scripts/npu-profile`) — an isolated branch,
+not a generic NPU backend.
+
+A GPU branch has a virtual ISA to fall back on; an NPU branch does not. The
+whole point of this card is to pick a target where *that* is visible and priced,
+rather than to claim inference results as proof.
+
+**Target, named once.** AMD XDNA (Ryzen AI): AIE-ML compute tiles, ERT runtime,
+`amdxdna` kernel driver. It is chosen because its stack splits cleanly into what
+is inspectable and what is not: the compilers are open (IRON on `mlir-aie` for
+the array, Peano on `llvm-aie` for one tile), the application binaries are
+documented (an overlay plus a ctrlcode of `XAie_TxnOpcode`, including
+`XAIE_IO_BLOCKWRITE` for DMA), and the compute tiles are VLIW processors whose
+instruction semantics exist only as an architecture manual (AM020) with no
+machine-checkable model. Nothing on this host is an NPU (`host_measured =
+false`): no `/dev/accel`, no `xrt-smi`, no Peano, no IRON, so every `declared`
+row below is a `[gap]`, never evidence.
+
+**One operator.** A signed 8-bit quantised dot product, `A[4x4 i8] x B[4x4 i8]
+-> C[4x4 s32]`, mapped from one admitted Austral step (`dot4`, eight `Int32`
+parameters, four products and three adds read out of the `.aui`/`.aum` text, not
+retyped). The numeric profile is `int8_sym_exact_s32`: zero point 0, unit scales,
+exact widening, no requantization — so the arithmetic claim is “the i8 products
+sign-extend exactly and accumulate in s32”, which is a property a reviewer can
+state, not an approximation excuse.
+
+**The inventory, as four inspectable stages and two declared plus two opaque:**
+
+| stage | state | subject |
+|---|---|---|
+| operator | inspectable | the admitted step and the tensor descriptor it maps to |
+| quantization | inspectable | `int8_sym_exact_s32`: zero point, scales, widening, no requantization |
+| layout | inspectable | row-major operands and output, per-element and accumulator widths |
+| dma-command | inspectable | the declared command list (`XAIE_IO_BLOCKWRITE`, host→L2 and L2→host) |
+| compiler-ir | declared | IRON/Peano IR: open compilers, no artifact on this host |
+| overlay | declared | the xclbin identity: a format, not a semantics |
+| compute-tile ISA | **opaque** | AIE-ML VLIW instructions, AM020 only |
+| firmware | **opaque** | vendor-signed firmware and ERT scheduling |
+
+**Landed 2026-11-23.** `scripts/npu-profile check` now makes the inventory a
+claim instead of data: it re-derives every byte count from dtype and shape,
+every offset from the declared layout, the sixteen stores' partition of `C`,
+the cap from `lib/npu_dma_gate.ml`, and the accumulation bound over the i8
+range; it reads `dot4`'s arity, types and product count out of the
+`.aui`/`.aum` and compiles the module with `--target-type=c`; it holds each of
+the nine stages to exactly one stated obligation in
+`mm0/proof_chain/npu_operator.mm0` (replayed by `mm0-rs`/`mm0-c` when present,
+a `[gap]` otherwise); and ten mutations of those facts must be refused.
+`docs/proof/NPU_PROFILE.md` is the profile document. The cut below is unchanged
+by any of that: the checker inspects this repository's description, not the
+tile.
+
+**The cut, stated so it cannot be softened.** `operator → binary/firmware` is
+unproved and stays unproved: the operator's meaning is a statement about integers
+this repository can check, the ctrlcode and overlay are formats it can hash, and
+between them sits a vendor compiler and a VLIW ISA with no model. Consequently:
+
+- a DMA certificate, a well-formed command list, or a successful inference run
+  **cannot** satisfy native-instruction-required policy;
+- the SRAM gate's 256 KiB cap contributes its narrow size property and nothing
+  more — it does not discharge the edge;
+- the inspectable stages may be checked exhaustively (every byte count re-derived
+  from dtype and shape, every offset from the declared layout, the numeric bound
+  by exhausting the i8 range, the sixteen stores disjoint and covering `C`), and
+  that is a claim about *this repository's description*, not about the hardware.
+
+`mm0/proof_chain/npu_operator.mm0` states one obligation per stage over an
+uninterpreted vocabulary, with `-- certificate: [gap]` and no `axiom`/`theorem`,
+and `scripts/npu-profile check` is the gate that holds it to the inventory both
+ways: every stage has exactly one obligation and no obligation names an
+undeclared stage; an `opaque` row must name its prerequisite; an `inspectable`
+row must be one of the four subjects above. Until that checker and
+`docs/proof/NPU_PROFILE.md` are in the tree *and the gate runs them*, the
+inventory is declared data that nothing reads — a file that no gate opens is not
+evidence.
+
+**Exit.** An honest target-specific proof inventory, at least one concrete
+inspectable claim (the command list and the numeric bound are the candidates),
+and a named opaque prerequisite for each unproved edge — with every
+machine-derived figure reproducible from the files rather than copied. If the
+target cannot expose the required semantics, this branch's native proof stays
+blocked on that prerequisite while the higher claims stay reusable elsewhere in
+the chain; that outcome is acceptable and must be written down, not worked
+around.
 
 ## Proof reuse for the first scalar shader
 
@@ -398,6 +678,25 @@ Float32 and reproduce typed literals without widening.
 f32 from f64 rounding. A user-defined operation of the same name remains
 outside the intrinsic list. The existing v1 profile still denies Float32.
 
+**Status:** landed. `TrappingArithmetic(Float32)`'s add/subtract/multiply are
+resolved in `lib/gpu/Gpu_intrinsics.ml` by the instance declaration and its
+method IDs, never by a method's text, and the C backend executes
+`test-programs/suites/025-gpu-f32/001-affine-f32` with the golden
+`program-stdout.txt` (`python3 test-programs/runner.py 025-gpu-f32` → 1 PASS):
+the Float32 rows read `16777216.000000` and `0.000000` where the Float64 rows of
+the *same source* read `16777217.000000` and `1.000000`, so a pass that widened
+to binary64 would fail the case instead of rounding quietly. Intrinsic identity
+is pinned for f32 in both directions by `test/GpuSubsetTest.ml`: a user
+definition *named* `trappingAdd` does not capture the call — the frontend
+resolves it to the canonical method, the local definition stays unreachable (no
+helper is emitted), and the entry lowers to `F32Add`; a user operation under
+its own name (`scale`) stays a helper `Call` and never gains intrinsic status.
+`test_refuses_trapping_arithmetic` pins the last exit clause: the default
+`u32-modular-v1` profile still refuses `trappingAdd` on `Nat32`, and the
+f32 profile refuses Float64, division and non-Float32 results (G16b's
+checker). Not claimed: the C fixture is the oracle for *source* arithmetic
+only; nothing here relates f32 to a device.
+
 ### G16b — Add the opt-in Float32 GPU profile
 
 **Files.** One profile contract, `Gpu_ir.ml`, `Gpu_wgsl.ml`, Rust schema and
@@ -413,6 +712,28 @@ reference and include cancellation-sensitive, boundary and exceptional inputs.
 Refuse Float64, wrong element representation and unsupported operations. Use
 the original v1 suite to guard against numeric reinterpretation.
 
+**Status:** the CPU/profile half is landed and gated; the device half is a
+`[gap]` on this host. `scripts/gpu-f32-profile` compiles `axpy` and `cancel` of
+`examples/gpu/f32-affine` under `--gpu-numeric-profile=wgsl-f32-v1`, validates
+each bundle (`profile=wgsl-f32-v1`, `element=f32`, `ir=e7b526eeb585` /
+`35dbf7e74c38`), compares the KernelIR reference bit for bit against an
+independent Python binary32 oracle that rounds after every operation (so a
+widening to f64 cannot pass: at 2^24 the two disagree) on 4 `axpy` + 3 `cancel`
+bounded normal inputs including the cancellation-sensitive `2^24 → 0`, and
+requires six refusals to name what they refused: Float64, `trappingDivide`,
+a Nat32 result under the profile, Float32 under `u32-modular-v1`, an unknown
+profile, and a scratch bundle whose `numeric_profile` disagrees with its
+KernelIR. Measured now: ten `[pass]` lines and one `[gap]` (device), exit 0;
+`scripts/verify-invariants` prints `[pass] G16b: the wgsl-f32-v1 profile is
+checked end to end`. `--require-hardware` exits 77 with this checkout's
+`avm-gpu` because that binary was built without `--features device`; the Intel
+UHD Graphics 630 run recorded in `EXECUTION.md` (max 1 ULP of the oracle,
+budget 2) came from a device-enabled build and was not re-measured here.
+Not claimed: no per-bundle MM0/Why3 obligation for f32; contraction is
+permitted rather than eliminated (the profile records it and the ULP budget
+covers it); float comparisons, division, float→int conversion and Float64 stay
+refused.
+
 ### G18 — Integrate one unfer scale operation
 
 Select one scale operation already used in `TensorState`. Read the destination
@@ -421,6 +742,31 @@ the [parent card](../../PLAN_gpu_kernels.md#g18--exercise-one-existing-unfer-wor
 Use a named CPU oracle and the same unfer values for GPU comparison. Time
 explicit copies and cold/warm execution separately. Unfer's default Cargo build
 and solver stay on their existing paths during this experiment.
+
+**Status:** landed on this host as an optional integration; see
+[UNFER_SCALE.md](UNFER_SCALE.md). The operation is the amplitude scale behind
+`QuantumState::scale_and_add`, the kernel is `examples/gpu/unfer-scale` (one
+`trappingMultiply(x, 2.5)` under `wgsl-f32-v1`), and the host is
+`fock_sirk/examples/austral_pointwise.rs` behind that crate's optional
+`austral-gpu` feature with an optional path dependency on `avm-gpu` (no unfer or
+JIT dependency, so no cycle). `python3 scripts/gpu/unfer-scale` compiles the
+bundle, builds the feature-off and feature-on configurations, runs the example
+on a physical adapter, and requires the GPU result to equal unfer's own f64
+arithmetic cast to binary32 bit for bit: `[pass] G18 oracle: 6 value(s) of 3
+complex amplitude(s) match … on Intel(R) UHD Graphics 630 (CFL GT2)` (cold
+`prepare`/`upload`/`submit`/`readback` and the warm submission total are printed
+separately). Two controls refuse: a `u32-modular-v1` bundle (the compiler refuses
+Float32 for that profile, and the example refuses a non-f32 bundle) and a
+3.0-scaled kernel against the 2.5 oracle (mismatch count 5, so the comparison is
+live). Measured: submission dominates (≈ 98 ms over 8 submissions versus
+0.0049 ms of f64 oracle for six values), so the integration *hurts* end-to-end
+time at this size and no solver replacement is proposed; narrowing the f64
+amplitudes to f32 before the multiply changed 1 of 6 rounded results relative to
+scaling in f64 and casting once, and that difference is reported rather than
+hidden. The transfer is an explicit copy each way (not zero-copy). The default
+`cargo build -p fock_sirk` is unchanged, and `scripts/verify-invariants` pins the
+`[pass] G18` line, reporting `[gap]` when the sibling `../unfer`, cargo or a
+physical adapter is absent.
 
 ### G15a — Close host-state hazards before widening dispatch
 

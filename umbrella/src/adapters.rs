@@ -101,10 +101,46 @@ pub fn build_at(
     })
 }
 
+/// Prefix of every scratch directory this process mints. The pid is in the
+/// name, so a cleanup only ever removes directories its own process created.
+fn scratch_prefix() -> String {
+    format!("umbrella-adapters-{}-", std::process::id())
+}
+
+/// Remove this process's scratch directories when it exits.
+///
+/// Each generation is a whole cdylib build (~585 MB), and a binary that builds
+/// adapters and then exits — the CLI, most visibly when a test spawns it as a
+/// subprocess — would otherwise leave one behind per generation. Registering
+/// from the library, rather than in each binary, is what keeps the naming and
+/// the cleanup in one place. `atexit` runs on the normal exit *and* on
+/// `std::process::exit`; a SIGKILLed process can still leak, which is why the
+/// pid scoping matters.
+fn register_scratch_cleanup() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| unsafe {
+        libc::atexit(remove_scratch_dirs);
+    });
+}
+
+extern "C" fn remove_scratch_dirs() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    let prefix = scratch_prefix();
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Build the next provider generation into a fresh directory. The generation is
 /// process-wide, so the crate a reload builds refuses the handles the previous
 /// one minted.
 pub fn build_next(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<AdapterCrate, String> {
+    register_scratch_cleanup();
     let generation = interface::next_provider_generation();
     let dir = std::env::temp_dir().join(format!(
         "umbrella-adapters-{}-{generation}",

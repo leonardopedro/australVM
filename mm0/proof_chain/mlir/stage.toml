@@ -1,0 +1,192 @@
+# mm0/proof_chain/mlir/stage.toml — PC09's declared MLIR stage boundary.
+#
+# The pre-MLIR side of `Austral → KernelIR → MLIR → device IR` exists and is
+# pinned by PC04/PC07 (`clamp_source.mm0` reflects this KernelIR and PC07
+# composes it). The emitter is `G20a` (`lib/gpu/Gpu_mlir.ml`), and `G19a` pins a
+# real LLVM 19.1.7 round trip that verifies and lowers the emitted module to
+# `sm_70` PTX. MLIR *semantics* is still absent: no pass-local relation is
+# stated or proved. So this record declares the route, pins the subject
+# identity, and marks each pass either captured (with a measured pre/post pair)
+# or explicitly uncaptured.
+#
+# `scripts/mlir-chain check` re-derives the subject from
+# `mm0/proof_chain/clamp_source.mm0`, requires exactly the route's passes and
+# the pinned options, and refuses a `captured` row whose IR file is missing.
+# It prints `[gap] PC09: no MLIR capture exists` while any pass is uncaptured:
+# a declared boundary is not a preservation proof.
+
+[subject]
+module = "clamp"
+entry = "clamp"
+comparison = "GreaterThan"
+kernel_ir_sha256 = "48caf04ea1714fba539ab596cd83d4f7ab537f3eea7837a5b129ccbecb9d8288"
+source_artifact = "mm0/proof_chain/clamp_source.mm0"
+dialect_profile = "none — no MLIR dialect semantics is declared"
+captured_passes = 17
+
+[[option]]
+name = "numeric_profile"
+value = "u32-modular-v1"
+
+[[option]]
+name = "extents"
+value = "static"
+
+[[option]]
+name = "fast_math"
+value = "forbidden"
+
+[[option]]
+name = "fusion"
+value = "forbidden"
+
+[[option]]
+name = "shared_memory"
+value = "forbidden"
+
+[[option]]
+name = "target"
+value = "mlir-gpu-dialect (no native lowering declared)"
+
+[[pass]]
+name = "kernelir-to-mlir"
+state = "captured"
+pre_file = "clamp.kernelir"
+pre_sha256 = "52d01cfaade3df43f28ad9e017b07b97d123f498563fb3a22c0cc075864db5a5"
+post_file = "clamp.mlir"
+post_sha256 = "e17b0a0b6b4ab20dc8d0be93c58fb51f9e7c0535ba3c93961381c1bab1abbd58"
+detail = "Gpu_mlir.render ~extent:65 of the reflected KernelIR: captured byte-for-byte, not proved (no MLIR semantics)"
+[[pass]]
+name = "mlir-canonicalize"
+state = "captured"
+pre_file = "clamp.mlir"
+pre_sha256 = "e17b0a0b6b4ab20dc8d0be93c58fb51f9e7c0535ba3c93961381c1bab1abbd58"
+post_file = "clamp.canonical.mlir"
+post_sha256 = "5acf98dc750edcb131ed4aacadfdabc31c69948c0c5992e93518f4e2cb8c19c8"
+detail = "mlir-opt --canonicalize of the captured module: captured byte-for-byte, not proved (no MLIR semantics)"
+[[pass]]
+name = "convert-nvgpu-to-nvvm"
+state = "captured"
+pre_file = "clamp.canonical.mlir"
+pre_sha256 = "5acf98dc750edcb131ed4aacadfdabc31c69948c0c5992e93518f4e2cb8c19c8"
+post_file = "clamp.seg01.mlir"
+post_sha256 = "7534017e7d10d257305b2450e4617ca866ba51b7eed6e6086ec60f9bd6d3ef89"
+detail = "the pinned pipeline's own after-dump for pass 1 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "gpu-kernel-outlining"
+state = "captured"
+pre_file = "clamp.seg01.mlir"
+pre_sha256 = "7534017e7d10d257305b2450e4617ca866ba51b7eed6e6086ec60f9bd6d3ef89"
+post_file = "clamp.seg02.mlir"
+post_sha256 = "7534017e7d10d257305b2450e4617ca866ba51b7eed6e6086ec60f9bd6d3ef89"
+detail = "the pinned pipeline's own after-dump for pass 2 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "convert-vector-to-scf"
+state = "captured"
+pre_file = "clamp.seg02.mlir"
+pre_sha256 = "7534017e7d10d257305b2450e4617ca866ba51b7eed6e6086ec60f9bd6d3ef89"
+post_file = "clamp.seg03.mlir"
+post_sha256 = "98a0e1e648c2207ba245a1b1738d877dae0bad707cfda5b246bab39a80297509"
+detail = "the pinned pipeline's own after-dump for pass 3 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "convert-scf-to-cf"
+state = "captured"
+pre_file = "clamp.seg03.mlir"
+pre_sha256 = "98a0e1e648c2207ba245a1b1738d877dae0bad707cfda5b246bab39a80297509"
+post_file = "clamp.seg04.mlir"
+post_sha256 = "413ca28c86126868833a8c5066f5e53f308a22dc98bda5e72b0cdff4e1b3a4d8"
+detail = "the pinned pipeline's own after-dump for pass 4 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "convert-nvvm-to-llvm"
+state = "captured"
+pre_file = "clamp.seg04.mlir"
+pre_sha256 = "413ca28c86126868833a8c5066f5e53f308a22dc98bda5e72b0cdff4e1b3a4d8"
+post_file = "clamp.seg05.mlir"
+post_sha256 = "413ca28c86126868833a8c5066f5e53f308a22dc98bda5e72b0cdff4e1b3a4d8"
+detail = "the pinned pipeline's own after-dump for pass 5 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "convert-func-to-llvm"
+state = "captured"
+pre_file = "clamp.seg05.mlir"
+pre_sha256 = "413ca28c86126868833a8c5066f5e53f308a22dc98bda5e72b0cdff4e1b3a4d8"
+post_file = "clamp.seg06.mlir"
+post_sha256 = "e15ed7c23652999f5d00d60e2529a2f8c2afdd2d2fb314f253a5c46ac6675096"
+detail = "the pinned pipeline's own after-dump for pass 6 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "expand-strided-metadata"
+state = "captured"
+pre_file = "clamp.seg06.mlir"
+pre_sha256 = "e15ed7c23652999f5d00d60e2529a2f8c2afdd2d2fb314f253a5c46ac6675096"
+post_file = "clamp.seg07.mlir"
+post_sha256 = "5619f928e3c236c9359b7cb78f0a74c3efcc72ab532244c0ddb96dd545e25d8f"
+detail = "the pinned pipeline's own after-dump for pass 7 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "nvvm-attach-target"
+state = "captured"
+pre_file = "clamp.seg07.mlir"
+pre_sha256 = "5619f928e3c236c9359b7cb78f0a74c3efcc72ab532244c0ddb96dd545e25d8f"
+post_file = "clamp.seg08.mlir"
+post_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+detail = "the pinned pipeline's own after-dump for pass 8 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "lower-affine"
+state = "captured"
+pre_file = "clamp.seg08.mlir"
+pre_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+post_file = "clamp.seg09.mlir"
+post_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+detail = "the pinned pipeline's own after-dump for pass 9 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "convert-arith-to-llvm"
+state = "captured"
+pre_file = "clamp.seg09.mlir"
+pre_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+post_file = "clamp.seg10.mlir"
+post_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+detail = "the pinned pipeline's own after-dump for pass 10 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "convert-index-to-llvm"
+state = "captured"
+pre_file = "clamp.seg10.mlir"
+pre_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+post_file = "clamp.seg11.mlir"
+post_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+detail = "the pinned pipeline's own after-dump for pass 11 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "canonicalize"
+state = "captured"
+pre_file = "clamp.seg11.mlir"
+pre_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+post_file = "clamp.seg12.mlir"
+post_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+detail = "the pinned pipeline's own after-dump for pass 12 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "cse"
+state = "captured"
+pre_file = "clamp.seg12.mlir"
+pre_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+post_file = "clamp.seg13.mlir"
+post_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+detail = "the pinned pipeline's own after-dump for pass 13 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "strip-debuginfo"
+state = "captured"
+pre_file = "clamp.seg13.mlir"
+pre_sha256 = "5dc117b7f57863e696830577005d5cda91997bd3e423917b2fecba546a00fed6"
+post_file = "clamp.pre-nvvm.mlir"
+post_sha256 = "34d0edabddd0fdd8c223428ee1342741366aa44be14bc3a08e7d110eab698ad9"
+detail = "the pinned pipeline's own after-dump for pass 14 of the segment (measured with `--mlir-print-ir-after-all`, not re-derived); captured, not proved"
+[[pass]]
+name = "convert-gpu-to-nvvm"
+state = "captured"
+pre_file = "clamp.pre-nvvm.mlir"
+pre_sha256 = "34d0edabddd0fdd8c223428ee1342741366aa44be14bc3a08e7d110eab698ad9"
+post_file = "clamp.post-nvvm.mlir"
+post_sha256 = "7b71782b5d407e7a095c648bd874ab58896f3c15d55d2d8a1e101ea546d07340"
+detail = "the pinned pipeline's own pre/post at this pass, read from its before/after dumps; the run's gpu.object assembly unescapes to the PTX G19a recorded, so this is that lowering; captured, not proved"
+
+[[pass]]
+name = "nvvm-to-ptx"
+state = "uncaptured"
+detail = "canonicalize, cse, reconcile-unrealized-casts, gpu-to-llvm, gpu-module-to-binary, convert-math-to-llvm, canonicalize, cse, reconcile-unrealized-casts follow; G19a pins the PTX they produce, but these passes are not captured and no pass-local relation is proved for them or for the pair above"
+

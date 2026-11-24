@@ -1,0 +1,33 @@
+-- QuantDot — scalar reference for the PC11 operator's inner step.
+--
+-- `dot4` is written as an explicit four-term sum so the reference is the
+-- computation the operator schema names: no loops, no vector type, no
+-- accumulator policy hidden in a helper. Int32 arithmetic is exact here
+-- because every operand is in [-128, 127] (the numeric contract in
+-- QuantDot.aui); the bound is stated, not established, by this file.
+
+module body QuantDot is
+    function dot4(a0: Int32, a1: Int32, a2: Int32, a3: Int32,
+                  b0: Int32, b1: Int32, b2: Int32, b3: Int32): Int32 is
+        let p0: Int32 := a0 * b0;
+        let p1: Int32 := a1 * b1;
+        let p2: Int32 := a2 * b2;
+        let p3: Int32 := a3 * b3;
+        let s0: Int32 := p0 + p1;
+        let s1: Int32 := p2 + p3;
+        return s0 + s1;
+    end;
+
+    -- The compiler needs an entrypoint, and the admitted unit is `dot4`: this
+    -- `main` is a single witness call (1*1 + 1*1 + 1*1 + 1*1), not a tile
+    -- driver. Nothing here runs on an NPU.
+    function main(): ExitCode is
+        let one: Int32 := 1;
+        let value: Int32 := dot4(one, one, one, one, one, one, one, one);
+        if value = 4 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

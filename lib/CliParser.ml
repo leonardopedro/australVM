@@ -68,6 +68,8 @@ module Errors = struct
       Code "c";
       Text ", and ";
       Code "wgsl";
+      Text ", and ";
+      Code "mlir";
       Text "."
     ]
 
@@ -133,6 +135,48 @@ module Errors = struct
       Text ": the operation selects the staged reduction the GPU target emits."
     ]
 
+  let mlir_profile_unsupported (profile: string) =
+    austral_raise CliError [
+      Code "--target-type=mlir";
+      Text " lowers the integer profile only; ";
+      Code profile;
+      Text " is not lowered to MLIR (G20a covers ";
+      Code "u32-modular-v1";
+      Text ")."
+    ]
+
+  let mlir_operation_unsupported (operation: string) =
+    austral_raise CliError [
+      Code "--gpu-operation";
+      Text " selects a staged reduction, which ";
+      Code "--target-type=mlir";
+      Text " does not emit yet (";
+      Code operation;
+      Text " is WGSL-only in v1)."
+    ]
+
+  let invalid_gpu_chip (raw: string) =
+    austral_raise CliError [
+      Code "--gpu-chip";
+      Text " must name an NVIDIA compute capability such as ";
+      Code "sm_70";
+      Text " or ";
+      Code "sm_61";
+      Text "; got ";
+      Code raw;
+      Text ". The chip is recorded in the bundle's lowering identity, because PTX
+             targets one virtual ISA and a module built for a newer chip cannot be
+             loaded on an older device."
+    ]
+
+  let invalid_static_extent (raw: string) =
+    austral_raise CliError [
+      Code "--gpu-static-elements";
+      Text " must be a positive integer; got ";
+      Code raw;
+      Text ". The extent is the static element count the kernel's memory plan             declares, so it is never inferred and never zero."
+    ]
+
   let invalid_bool_flag_value (name: string) (value: string) =
     austral_raise CliError [
       Text "Invalid value for ";
@@ -183,6 +227,16 @@ type target =
       (* `None` is the pointwise map wrapper; `Some "map-sum-u32"` selects the
          staged fixed reduction (G22b), which has its own artifact. *)
       gpu_operation: string option;
+    }
+  (** Publish a versioned MLIR bundle directory (G20b): canonical KernelIR,
+      emitted module, lowered PTX and the chained digests in `bundle.json`.
+      The static extent is explicit (`--gpu-static-elements`), because the
+      memory plan is a property of the launch, not of the source. *)
+  | MlirBundle of {
+      output_dir: string;
+      entrypoint: entrypoint;
+      extent: int;
+      chip: string;
     }
 [@@deriving eq]
 
@@ -313,11 +367,46 @@ let parse_wgsl_target (arglist: arglist): (arglist * target) =
       | Some _ -> Errors.no_entrypoint_wrong_gpu_target ()
       | None -> Errors.missing_entrypoint ())
 
+let parse_mlir_target (arglist: arglist): (arglist * target) =
+  let (arglist, numeric_profile) = parse_numeric_profile arglist in
+  (match numeric_profile with
+   | Gpu_ir.U32ModularV1 -> ()
+   | other ->
+      Errors.mlir_profile_unsupported (Gpu_ir.profile_name other));
+  (match pop_value_flag arglist "gpu-operation" with
+   | Some (_arglist, operation) -> Errors.mlir_operation_unsupported operation
+   | None -> ());
+  let (arglist, extent) =
+    match pop_value_flag arglist "gpu-static-elements" with
+    | Some (arglist, raw) ->
+       (match int_of_string_opt (String.trim raw) with
+        | Some n when n > 0 -> (arglist, n)
+        | _ -> Errors.invalid_static_extent raw)
+    | None -> (arglist, 65)
+  in
+  let (arglist, chip) =
+    match pop_value_flag arglist "gpu-chip" with
+    | Some (arglist, raw) ->
+       let chip = String.trim raw in
+       if Gpu_mlir_bundle.valid_chip chip then (arglist, chip)
+       else Errors.invalid_gpu_chip raw
+    | None -> (arglist, Gpu_mlir_bundle.target)
+  in
+  match pop_value_flag arglist "entrypoint" with
+  | Some (arglist, entrypoint) ->
+     let (arglist, output_dir) = get_output arglist in
+     (arglist, MlirBundle { output_dir; entrypoint = parse_entrypoint entrypoint;
+                            extent; chip })
+  | None ->
+     (match pop_bool_flag arglist "no-entrypoint" with
+      | Some _ -> Errors.no_entrypoint_wrong_gpu_target ()
+      | None -> Errors.missing_entrypoint ())
+
 let parse_target_type (arglist: arglist): (arglist * target) =
   match pop_value_flag arglist "target-type" with
   | Some (arglist, target_value) ->
      (* An explicit target type was passed. *)
-     if target_value <> "wgsl" then
+     if target_value <> "wgsl" && target_value <> "mlir" then
        (match pop_value_flag arglist "gpu-numeric-profile" with
         | Some _ -> Errors.numeric_profile_without_gpu ()
         | None -> ());
@@ -339,6 +428,9 @@ let parse_target_type (arglist: arglist): (arglist * target) =
       | "wgsl" ->
          (* Build a WGSL bundle directory. *)
          parse_wgsl_target arglist
+      | "mlir" ->
+         (* Publish a versioned MLIR bundle directory (G20b). *)
+         parse_mlir_target arglist
       | "tc" ->
          (* Typecheck. *)
          (arglist, TypeCheck)

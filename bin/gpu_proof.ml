@@ -97,6 +97,38 @@ let () =
      let (env, mono) = compiled ~aui ~aum in
      let kernel = Gpu_subset.build ~entry env mono in
      print_endline (Gpu_ir.canonical_bytes kernel)
+  | [_; "dump-mlir"; aui; aum; entry; "--extent"; extent] ->
+     let extent =
+       match int_of_string_opt extent with
+       | Some n -> n
+       | None -> failwith ("--extent expects an integer, got " ^ extent)
+     in
+     let (env, mono) = compiled ~aui ~aum in
+     let kernel = Gpu_subset.build ~entry env mono in
+     print_string (Gpu_mlir.render ~extent kernel)
+  | [_; "dump-mlir"; aui; aum; entry] ->
+     let (env, mono) = compiled ~aui ~aum in
+     let kernel = Gpu_subset.build ~entry env mono in
+     print_string (Gpu_mlir.render ~extent:65 kernel)
+  | [_; "ir-sha256"; aui; aum; entry] ->
+     let (env, mono) = compiled ~aui ~aum in
+     let kernel = Gpu_subset.build ~entry env mono in
+     print_endline (Gpu_ir.semantic_sha256 kernel)
+  | [_; "verify-mlir-bundle"; dir] ->
+     (match Gpu_mlir_bundle.verify_dir dir with
+      | Ok (b, warnings) ->
+         List.iter (fun w -> prerr_endline ("  [detail] " ^ w)) warnings;
+         Printf.printf
+           "  [detail] G20b: %s = %s…, %s → %s, %d param(s), toolchain %s\n"
+           b.Gpu_mlir_bundle.entry b.Gpu_mlir_bundle.ir_sha256
+           b.Gpu_mlir_bundle.mlir_sha256 b.Gpu_mlir_bundle.ptx_sha256
+           b.Gpu_mlir_bundle.abi.Gpu_mlir_bundle.ptx_params
+           b.Gpu_mlir_bundle.lowering.Gpu_mlir_bundle.toolchain;
+         print_endline "[pass] G20b: the published MLIR artifact's digests and ABI agree"
+      | Error problems ->
+         List.iter (fun p -> prerr_endline ("  [detail] " ^ p)) problems;
+         print_endline "[FAIL] G20b: the published MLIR artifact is inconsistent";
+         exit 1)
   | [_; "describe"; aui; aum; entry] ->
      let (r, _) = emitted ~aui ~aum ~entry ~tamper:None in
      print_endline (Gpu_proof_interface.describe r)
@@ -105,5 +137,7 @@ let () =
        "usage: gpu_proof (emit <aui> <aum> <entry> <outdir> | \
         emit <aui> <aum> <entry> <outdir> --tamper ir-param|ir-compare | \
         check <aui> <aum> <entry> <artifact.mm0> | \
-        describe <aui> <aum> <entry> | dump-ir <aui> <aum> <entry>)";
+        describe <aui> <aum> <entry> | dump-ir <aui> <aum> <entry> | \
+        ir-sha256 <aui> <aum> <entry> | verify-mlir-bundle <dir> | \
+        dump-mlir <aui> <aum> <entry> [--extent N])";
      exit 2

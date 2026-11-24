@@ -21,6 +21,29 @@ on:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
+  # The exclusion above is about ordinary changes. A pull request that changes
+  # what this job *is* — the workflow, or the two scripts `make w9` drives —
+  # gets it run there, because otherwise a broken cache key or a stale converter
+  # is discovered up to a week later (the comma-joined key fixed on 2026-11-23
+  # could not be verified until the next Monday). The path list is deliberately
+  # narrow: the models and the pinned `flake.lock` are what the weekly run
+  # exists to watch, and a flake bump is exactly the change that must not start
+  # a 28-minute build on every PR.
+  # `push` carries the same filter for the same reason: a pull request event
+  # covers a change that arrives as one, but a direct commit to `master` does
+  # not produce one, and the point is that the job runs where its own machinery
+  # changed. This is what verifies the cache-key fix itself: the commit that
+  # puts these triggers in place is a change to this file, so it runs the job.
+  push:
+    paths:
+      - '.github/workflows/w9-isa-model.yml'
+      - 'scripts/rv64-model-mm0'
+      - 'scripts/mem-refines'
+  pull_request:
+    paths:
+      - '.github/workflows/w9-isa-model.yml'
+      - 'scripts/rv64-model-mm0'
+      - 'scripts/mem-refines'
 
 jobs:
   convert:
@@ -44,7 +67,13 @@ jobs:
         uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6 # nix-community/cache-nix-action@v6
         with:
           primary-key: nix-isa-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
-          restore-prefixes-first-match: nix-isa-${{ runner.os }}-${{ runner.arch }}-,nix-isa-
+          # One prefix per line: the action rejects a comma-separated list
+          # ("Key Validation Error: nix-isa-Linux-X64-,nix-isa- cannot contain
+          # commas", 2026-11-23 — the run failed in this step, before either
+          # conversion ran).
+          restore-prefixes-first-match: |
+            nix-isa-${{ runner.os }}-${{ runner.arch }}-
+            nix-isa-
 
       # Disk: the two NDJSON exports peak at ~1.1 GB and `mm0/exports/` is
       # gitignored, so they land in the workspace, not the checkout diff;

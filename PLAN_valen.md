@@ -38,6 +38,31 @@ not copy source). Nothing from Valen's tree is vendored here. If that ever
 changes, Apache-2.0 permits it with the licence notice retained — and the
 ledger row must say so in the same commit (policy 4).
 
+### Local reference clones (2026-11-23)
+
+Two checkouts beside this tree are the reference for the umbrella's rust side;
+they are read, never built into anything here (§4, §7):
+
+- **`../Valen`** — `valen-lang/valen` at `b2aa19bd`. The two ideas live in
+  `src/typing/borrow_checker/` (`kind_g.rs`, `group_expr.rs`, `templata_g.rs` —
+  group borrowing, §3) and `src/instantiating/rust_interop/bifrost/`
+  (`extern_abi.rs`, `layout_of.rs`, `per_instance_mir/` — the patched-rustc
+  route, §4 Tier 2 / §6). For the umbrella the load-bearing file is
+  `bifrost/extern_abi.rs`: `compute_extern_abi` asks rustc
+  (`fn_abi_of_instance`) and translates `PassMode`
+  (`Direct`/`DirectPtr`/`DirectInt(bits)`/`Pair`/`Indirect`/`Ignore`) instead of
+  inferring an ABI from source-level types. `umbrella/src/interface.rs`
+  (`render_wrapper`) and `safestos/cranelift/src/adapters.rs`
+  (`encode`/`decode`) reach the same discipline the cheap way — a declared
+  `u64`-word vocabulary — and that file is the map of where it stops: a value
+  whose `PassMode` is `Pair` or `Indirect` is exactly what the word ABI cannot
+  express, which is why tier 1 stays inside the buffer/scalar protocol.
+- **`../rust`** — `rust-lang/rust` at `5debe6a1244` on `main`, **not** the
+  fork's `per-instance-mir` branch (the clone has no such branch). The bifrost
+  code can therefore be read here but not compiled against this toolchain, so
+  no experiment in this tree may be made to depend on it; that is §4's "not
+  adopted" holding in practice rather than by prose.
+
 ## §1 Why this lands on australVM specifically
 
 Austral already has two of the three properties Valen optimises for:

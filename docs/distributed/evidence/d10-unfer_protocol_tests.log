@@ -1,48 +1,103 @@
-# D10: canonical wire codec and domain-separated signatures (unfer_protocol)
-# measured 2026-11-23T08:16:11Z on aarch64, toolchain:
+# D10 wire codec
+# measured 2026-11-23T11:17:28Z on aarch64, toolchain:
 rustc 1.99.0 (b940084d7 2026-09-28)
 cargo 1.99.0 (5f94df478 2026-08-27)
 
 $ cargo test -p unfer_protocol --offline
+   Compiling libc v0.2.190
+   Compiling cfg-if v1.0.5
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+   Compiling version_check v0.9.5
+   Compiling generic-array v0.14.7
+   Compiling getrandom v0.3.4
+   Compiling typenum v1.20.1
+   Compiling syn v3.0.6
+   Compiling serde_core v1.0.229
+   Compiling zerocopy v0.8.62
+   Compiling crc32fast v1.5.2
+   Compiling zmij v1.0.23
+   Compiling rustix v1.1.5
+   Compiling getrandom v0.4.3
+   Compiling rand_core v0.9.5
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling bitflags v2.13.2
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling autocfg v1.5.1
+   Compiling serde_json v1.0.151
+   Compiling linux-raw-sys v0.12.1
+   Compiling thiserror v2.0.21
+   Compiling serde v1.0.229
+   Compiling num-traits v0.2.19
+   Compiling miniz_oxide v0.9.1
+   Compiling digest v0.10.7
+   Compiling thiserror-impl v2.0.21
+   Compiling serde_derive v1.0.229
+   Compiling cpufeatures v0.2.17
+   Compiling itoa v1.0.18
+   Compiling once_cell v1.21.4
+   Compiling memchr v2.8.3
+   Compiling fastrand v2.5.0
+   Compiling tempfile v3.27.0
+   Compiling sha2 v0.10.9
+   Compiling ppv-lite86 v0.2.21
+   Compiling flate2 v1.1.10
+   Compiling wait-timeout v0.2.1
+   Compiling quick-error v1.2.3
+   Compiling fnv v1.0.7
+   Compiling bit-vec v0.8.0
+   Compiling hex v0.4.3
+   Compiling bit-set v0.8.0
+   Compiling rusty-fork v0.3.1
+   Compiling rand_chacha v0.9.0
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.5
+   Compiling unarray v0.1.4
+   Compiling regex-syntax v0.8.11
+   Compiling unfer_protocol v0.1.0 (/home/leo/Projects/unfer/unfer_protocol)
 warning: unknown and unstable feature specified for `-Ctarget-feature`: `fullfp16`
   |
   = note: it is still passed through to the codegen backend, but use of this feature might be unsound and the behavior of this feature can change in the future
   = help: you might have meant: `fp16`
 
+   Compiling proptest v1.11.0
 warning: `unfer_protocol` (lib) generated 1 warning
+warning: `unfer_protocol` (bin "cell_tool" test) generated 1 warning (1 duplicate)
 warning: `unfer_protocol` (test "distributed_wire") generated 1 warning (1 duplicate)
 warning: `unfer_protocol` (bin "cell_tool") generated 1 warning (1 duplicate)
 warning: `unfer_protocol` (test "protocol") generated 1 warning (1 duplicate)
-warning: `unfer_protocol` (bin "cell_tool" test) generated 1 warning (1 duplicate)
 warning: `unfer_protocol` (lib test) generated 1 warning (1 duplicate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.23s
      Running unittests src/lib.rs (target/debug/deps/unfer_protocol-76f461d596f970e0)
 
 running 353 tests
-test archive::tests::cell_build_parse_roundtrip ... ok
 test archive::tests::cell_parse_rejects_absolute_path ... ok
 test archive::tests::cell_parse_rejects_bad_magic ... ok
+test archive::tests::cell_build_parse_roundtrip ... ok
 test archive::tests::cell_parse_rejects_corrupted_gzip ... ok
 test archive::tests::cell_parse_rejects_truncated_input ... ok
 test archive::tests::cell_roundtrip_is_lossless_for_empty_module ... ok
 test archive::tests::cell_parse_rejects_unsupported_version ... ok
 test board::durable_tests::a_corrupt_log_is_refused_rather_than_half_loaded ... ok
+test archive::tests::cell_without_session_reports_none ... ok
 test board::durable_tests::a_first_run_opens_empty_at_cursor_one ... ok
 test board::durable_tests::a_partial_flush_does_not_re_append_what_landed ... ok
-test board::durable_tests::a_reserved_cursor_in_the_stream_is_a_hole_not_corruption ... ok
-test archive::tests::cell_without_session_reports_none ... ok
 test board::durable_tests::a_restored_board_continues_the_cursor_rather_than_resetting_it ... ok
-test board::durable_tests::a_write_survives_a_failing_append_and_the_loss_is_visible ... ok
+test board::durable_tests::a_reserved_cursor_in_the_stream_is_a_hole_not_corruption ... ok
 test board::durable_tests::a_rewound_cursor_is_refused_rather_than_half_loaded ... ok
+test board::durable_tests::a_write_survives_a_failing_append_and_the_loss_is_visible ... ok
 test board::durable_tests::flushing_twice_does_not_duplicate ... ok
 test board::durable_tests::the_board_survives_a_restart ... ok
-test board::durable_tests::the_durable_log_never_holds_what_the_board_redacted ... ok
 test board::redaction_idempotence_tests::a_mark_glued_to_the_next_separator_does_not_redact_twice ... ok
+test board::durable_tests::the_durable_log_never_holds_what_the_board_redacted ... ok
 test board::redaction_idempotence_tests::a_mark_prefixing_a_sensitive_key_still_redacts ... ok
-test board::redaction_idempotence_tests::every_scrubber_shape_settles_after_one_pass ... ok
 test board::redaction_panic_tests::a_known_prefix_redacts_even_inside_prose ... ok
 test board::redaction_panic_tests::a_prefix_ending_in_a_delimiter_never_slices_backwards ... ok
 test board::redaction_panic_tests::adjacent_separators_inside_one_value_do_not_panic ... ok
+test board::redaction_idempotence_tests::every_scrubber_shape_settles_after_one_pass ... ok
 test board::redaction_panic_tests::the_secret_is_still_removed_in_the_overlapping_cases ... ok
 test board::redaction_panic_tests::two_adjacent_token_prefixes_do_not_panic ... ok
 test board::snapshot_tests::a_gap_in_the_cursor_run_is_refused ... ok
@@ -50,11 +105,11 @@ test board::snapshot_tests::a_non_json_line_is_refused_with_its_line_number ... 
 test board::snapshot_tests::a_redacted_secret_is_not_reintroduced_by_a_snapshot ... ok
 test board::snapshot_tests::a_snapshot_round_trips ... ok
 test board::snapshot_tests::an_empty_snapshot_is_an_empty_board ... ok
+test board::snapshot_tests::an_oversized_snapshot_is_trimmed_and_counted ... ok
 test board::redaction_panic_tests::redaction_growth_is_linear_and_bounded ... ok
 test board::snapshot_tests::appending_after_a_restore_continues_the_sequence ... ok
 test board::snapshot_tests::blank_lines_are_tolerated ... ok
 test board::snapshot_tests::the_cursor_counter_survives_so_the_next_write_does_not_collide ... ok
-test board::snapshot_tests::an_oversized_snapshot_is_trimmed_and_counted ... ok
 test board::tests::a_bare_long_hex_run_is_left_alone ... ok
 test board::tests::a_bearer_token_in_free_text_is_redacted ... ok
 test board::tests::a_caught_up_reader_is_never_told_it_has_a_gap ... ok
@@ -75,27 +130,27 @@ test board::tests::and_binds_tighter_than_or ... ok
 test board::tests::claim_and_patch_summary_are_mutating_and_the_rest_are_not ... ok
 test board::tests::comma_is_or ... ok
 test board::tests::cursors_start_at_one_and_increase_by_one ... ok
-test board::snapshot_tests::the_dropped_count_travels_with_the_snapshot ... ok
 test board::tests::detail_is_capped_independently_of_text ... ok
 test board::tests::detail_is_redacted_too ... ok
+test board::tests::dropping_is_oldest_first_and_preserves_order ... ok
 test board::tests::every_kind_has_exactly_one_effect_kind_and_the_map_is_total ... ok
 test board::tests::grep_is_case_insensitive ... ok
 test board::tests::grep_results_come_back_oldest_first ... ok
-test board::tests::grep_searches_detail_as_well_as_text ... ok
+test board::snapshot_tests::the_dropped_count_travels_with_the_snapshot ... ok
 test board::tests::kind_parsing_is_forgiving_about_case_and_the_patch_spelling ... ok
 test board::tests::kinds_serialize_as_the_documented_upper_case ... ok
-test board::tests::known_token_prefixes_are_redacted_wherever_they_appear ... ok
+test board::tests::grep_searches_detail_as_well_as_text ... ok
 test board::tests::ordinary_board_content_is_never_redacted ... ok
-test board::tests::oversized_text_is_truncated_and_the_result_stays_within_the_cap ... ok
+test board::tests::known_token_prefixes_are_redacted_wherever_they_appear ... ok
 test board::tests::redact_is_idempotent ... ok
+test board::tests::oversized_text_is_truncated_and_the_result_stays_within_the_cap ... ok
 test board::tests::redaction_happens_before_truncation ... ok
 test board::tests::redaction_is_case_insensitive_for_the_bearer_scheme ... ok
 test board::tests::redaction_keeps_the_rest_of_the_sentence ... ok
 test board::tests::tail_beyond_the_ending_is_the_whole_board_not_an_error ... ok
-test board::tests::tail_returns_the_newest_n_in_order ... ok
 test board::tests::tail_zero_is_empty_not_a_panic ... ok
+test board::tests::tail_returns_the_newest_n_in_order ... ok
 test board::tests::text_at_exactly_the_cap_is_untouched ... ok
-test board::tests::dropping_is_oldest_first_and_preserves_order ... ok
 test board::tests::the_key_word_itself_survives_so_the_entry_stays_readable ... ok
 test board::tests::the_mutating_kinds_are_exactly_the_ones_that_commit ... ok
 test board::tests::truncation_respects_char_boundaries ... ok
@@ -130,6 +185,7 @@ test coop::tests::an_overlapping_claim_is_still_recorded_on_the_board ... ok
 test coop::tests::an_overlapping_claim_reports_the_existing_holder ... ok
 test coop::tests::an_unanswered_request_does_not_make_the_requester_a_reviewer ... ok
 test coop::tests::conflicting_reports_the_current_holder_for_a_scope ... ok
+test coop::tests::a_board_that_dropped_entries_still_reports_its_bounds ... ok
 test coop::tests::disjoint_claims_do_not_collide ... ok
 test coop::tests::disjoint_scopes_do_not_overlap ... ok
 test coop::tests::dm_dropped_is_zero_for_a_healthy_queue ... ok
@@ -139,8 +195,8 @@ test coop::tests::higher_priority_messages_come_first_and_ties_keep_arrival_orde
 test coop::tests::identical_scopes_overlap ... ok
 test coop::tests::one_segment_glob_edge_cases ... ok
 test coop::tests::prefix_overlap_respects_segment_boundaries ... ok
-test coop::tests::re_escalating_one_negotiation_does_not_spam_the_lane ... ok
 test coop::tests::reading_the_inbox_does_not_consume_it ... ok
+test coop::tests::re_escalating_one_negotiation_does_not_spam_the_lane ... ok
 test coop::tests::scopes_are_trimmed_and_separators_normalized ... ok
 test coop::tests::segment_matching_is_what_keeps_a_star_inside_its_directory ... ok
 test coop::tests::taking_an_empty_inbox_is_empty_not_an_error ... ok
@@ -155,8 +211,8 @@ test decide::tests::answers_round_trip_through_json ... ok
 test decide::tests::p_ood_is_omitted_from_json_when_absent ... ok
 test decide::tests::questions_round_trip_through_json ... ok
 test decide::tests::the_engine_version_is_always_carried ... ok
-test evidence::tests::a_accepted_summary_names_its_files_and_idea_in_the_entry ... ok
 test evidence::tests::a_cited_run_that_was_never_recorded_is_refused ... ok
+test evidence::tests::a_accepted_summary_names_its_files_and_idea_in_the_entry ... ok
 test evidence::tests::a_failing_gate_run_is_still_evidence_just_not_of_correctness ... ok
 test evidence::tests::a_gate_run_after_the_change_is_accepted ... ok
 test evidence::tests::a_gate_run_at_the_exact_change_cursor_is_stale ... ok
@@ -167,12 +223,11 @@ test evidence::tests::a_refused_summary_is_still_recorded_on_the_board ... ok
 test evidence::tests::a_summary_naming_no_files_is_refused ... ok
 test evidence::tests::a_summary_stating_no_idea_is_refused ... ok
 test evidence::tests::an_unknown_id_is_simply_absent ... ok
-test evidence::tests::an_unknown_verdict_is_refused_like_a_failure ... ok
 test evidence::tests::every_refusal_explains_itself_in_a_sentence ... ok
-test coop::tests::a_board_that_dropped_entries_still_reports_its_bounds ... ok
-test evidence::tests::freshness_fails_closed_when_the_base_is_gone ... ok
-test evidence::tests::last_change_cursor_ignores_a_workers_own_summaries ... ok
+test evidence::tests::an_unknown_verdict_is_refused_like_a_failure ... ok
 test evidence::tests::ids_are_unique_and_monotonic ... ok
+test evidence::tests::last_change_cursor_ignores_a_workers_own_summaries ... ok
+test evidence::tests::last_change_cursor_is_per_worker ... ok
 test evidence::tests::one_workers_stale_run_does_not_invalidate_anothers_fresh_one ... ok
 test evidence::tests::only_pass_counts_as_evidence ... ok
 test evidence::tests::re_running_the_gate_after_the_change_makes_the_same_summary_acceptable ... ok
@@ -186,11 +241,10 @@ test harness::tests::scope_override_selects_approved_archetype ... ok
 test harness::tests::unapproved_requested_is_rejected_non_retryably ... ok
 test ingest::handler_tests::a_clean_batch_is_accepted_and_acknowledged_by_dedup_key ... ok
 test ingest::handler_tests::a_malformed_body_is_refused_rather_than_treated_as_empty ... ok
+test evidence::tests::freshness_fails_closed_when_the_base_is_gone ... ok
 test ingest::handler_tests::a_secret_in_a_submitted_message_is_never_in_the_ack ... ok
-test evidence::tests::last_change_cursor_is_per_worker ... ok
 test ingest::handler_tests::an_empty_batch_is_legal_and_accepted ... ok
 test ingest::handler_tests::one_bad_message_does_not_lose_the_good_ones ... ok
-test ingest::handler_tests::a_whole_batch_is_refused_when_it_exceeds_the_cap ... ok
 test ingest::handler_tests::the_ack_round_trips ... ok
 test ingest::handler_tests::the_rejection_index_points_at_the_offending_message ... ok
 test ingest::handler_tests::unknown_sources_surface_as_a_health_signal ... ok
@@ -198,6 +252,7 @@ test ingest::tests::a_batch_round_trips ... ok
 test ingest::tests::a_bearer_token_in_text_is_redacted ... ok
 test ingest::tests::a_blank_required_field_is_named_in_the_error ... ok
 test ingest::tests::a_good_batch_validates ... ok
+test ingest::handler_tests::a_whole_batch_is_refused_when_it_exceeds_the_cap ... ok
 test ingest::tests::a_minimal_message_round_trips_through_json ... ok
 test ingest::tests::a_required_field_that_is_absent_is_an_error_not_a_default ... ok
 test ingest::tests::a_secret_in_a_sender_or_channel_is_redacted_too ... ok
@@ -373,7 +428,7 @@ test types::mint_request_tests::to_mint_kind_roundtrip_serde ... ok
 test types::mint_request_tests::valid_unfccc_source_accepted ... ok
 test ingest::tests::the_fuzz_properties_hold_over_a_generated_corpus ... ok
 
-test result: ok. 353 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+test result: ok. 353 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.74s
 
      Running unittests src/bin/cell_tool.rs (target/debug/deps/cell_tool-a63abc2df0f687b7)
 
@@ -383,7 +438,7 @@ test tests::unpack_refuses_a_blueprint_without_module_toml ... ok
 test tests::unpack_refuses_paths_that_escape_the_output_directory ... ok
 test tests::pack_unpack_verify_round_trips_byte_exactly ... ok
 
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
 
      Running tests/distributed_wire.rs (target/debug/deps/distributed_wire-91a290b4821487d5)
 
@@ -411,12 +466,12 @@ test bp_opts_max_iter_zero_returns_hint ... ok
 test bp_opts_step_size_nan_returns_hint ... ok
 test bp_opts_step_size_zero_returns_hint ... ok
 test code_display_uses_uk_prefix ... ok
-test code_uniqueness ... ok
 test diagnostic_display ... ok
 test diagnostic_new_looks_up_name ... ok
+test code_uniqueness ... ok
 test every_const_code_is_registered ... ok
-test fuzz_agent_request_never_panics ... ok
 test fuzz_agent_response_never_panics ... ok
+test fuzz_agent_request_never_panics ... ok
 test fuzz_belief_propagation_request_never_panics ... ok
 test fuzz_event_predicate_never_panics ... ok
 test hmc_opts_default_is_valid ... ok
@@ -458,7 +513,7 @@ test round_trip_solver_spec ... ok
 test round_trip_term_spec ... ok
 test fuzz_model_spec_never_panics ... ok
 
-test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
 
    Doc-tests unfer_protocol
 
@@ -469,5 +524,6 @@ test unfer_protocol/src/submission.rs - submission (line 16) ... ok
 
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-all doctests ran in 0.70s; merged doctests compilation took 0.69s
+all doctests ran in 0.60s; merged doctests compilation took 0.59s
+
 EXIT=0

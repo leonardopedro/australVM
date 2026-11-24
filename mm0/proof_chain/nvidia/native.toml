@@ -1,0 +1,58 @@
+# PC10: the native captures this host measured.
+# Written by scripts/gpu/boundary --write; never hand-edited.
+# A cubin digest is the driver's output for this device and driver, so
+# a driver change is a record drift, not a silent refresh.
+
+[device]
+name = "NVIDIA GeForce GTX 1060 with Max-Q Design"
+capability = "6.1"
+chip = "sm_61"
+driver_version = 13000
+captured_by = "avm-target capture (cuLinkCreate/cuLinkAddData PTX -> cubin)"
+limits = "container identification and a 128-bit instruction-word listing only: no SASS decode, no operand/memory/ABI semantics"
+
+[[capture]]
+entry = "difference"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+ptx_sha256 = "d4124ae3fa58e7029db9c6bd001719186a0419e9ebbabea342c7d4b4616861d5"
+cubin_sha256 = "b27eb0d73be4581416f167c73ead80df485aa75b85acbc46bb7d681f586d9afb"
+size = 2600
+sass_bytes = 384
+sections = 2
+word_bytes = 16
+sass_words = 24
+listing_sha256 = "9f13715ecb713ddaf8297b3f5eb391aaba6ff3e04afa201256704057a6a9e82f"
+policy = "native"
+operand_mutation = "refused"
+operand_changed_word = ".text.main@272"
+memory_mutation = "refused"
+memory_changed_words = "n/a: only add is captured at two extents"
+abi_mutation = "refused"
+
+[[capture]]
+entry = "add"
+extent = 65
+input_arity = 2
+workgroup = 64
+block = 64
+grid = 2
+ptx_params = 15
+ptx_sha256 = "87de70fe0eb68c9461f0f0a2f1dab000061ad40755337d47d8ee330e8db36f7f"
+cubin_sha256 = "731b25f1a248006351198c7f17460ab6e356b878a6f79257b1d4680cccef54fa"
+size = 2600
+sass_bytes = 384
+sections = 2
+word_bytes = 16
+sass_words = 24
+listing_sha256 = "2020aa0aa177f0bc42ecdf0f8bf95a9948e9f1c20b874afc11fc8ef365b4b563"
+policy = "native"
+operand_mutation = "refused"
+operand_changed_word = "n/a: a swapped commutative add links the same bytes"
+memory_mutation = "refused"
+memory_changed_words = ".text.main@144"
+abi_mutation = "refused"

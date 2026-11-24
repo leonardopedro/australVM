@@ -8,6 +8,10 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
+| [`2026-11-23-default-shell.log`](2026-11-23-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-23, `0b2d0c3d`, on a clean tree against `unfer` at its `main` (`67feb84`) | `192 passed, 1 explained gap(s), 0 failed` — the same count as 2026-11-22; the only line that moved is D00, which now reads 24 contract rows (the D10 rows upstream added) and ends `measured against unfer 67feb84` |
+| [`2026-11-23-ocaml-shell.log`](2026-11-23-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-23, `0b2d0c3d`, on a clean tree, same sibling | `177 passed, 4 explained gap(s), 0 failed` — `192 − 15` Liquid passes become three `why3` gaps; only the D00 line differs from the 2026-11-22 run |
+| [`2026-11-23-lean-shell-rust.log`](2026-11-23-lean-shell-rust.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-23, `0b2d0c3d`, on a clean tree, same sibling | `178 passed, 3 explained gap(s), 0 failed` — `W9.1` passes here (`177 + 1`, `4 − 1`); only the D00 line differs |
+| [`2026-11-23-nix-shell-python3.log`](2026-11-23-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-23, `0b2d0c3d`, on a clean tree, same sibling | `177 passed, 4 explained gap(s), 0 failed` — no `why3` and no RV64 re-conversion; only the D00 line differs |
 | [`2026-11-22-default-shell.log`](2026-11-22-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-22, `892b83bc` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `192 passed, 1 explained gap(s), 0 failed` — only `W9.1`, which needs the lean shell; `PC05a`/`PC05b` replay here because this shell carries `packages.mm0` and `safestos/gpu`'s debug `avm-gpu` is built |
 | [`2026-11-22-ocaml-shell.log`](2026-11-22-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-22, `892b83bc` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `177 passed, 4 explained gap(s), 0 failed` — `W9.1` and the three `why3` checks (`177 = 192 − 15`, `4 = 1 + 3`) |
 | [`2026-11-22-lean-shell-rust.log`](2026-11-22-lean-shell-rust.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `892b83bc` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree — the shell with `pkgs.rustc`, `pkgs.cargo` and `pkgs.stdenv.cc` | `178 passed, 3 explained gap(s), 0 failed` — `W9.1` passes (`178 = 177 + 1`) and the three `why3` checks remain; the five `toy-witness` comparisons and `[pass] logos mm0` run here |
@@ -199,6 +203,27 @@ both times, then once more after the bridge-copy check was added (`165 passed`,
 and `174 passed` under `.#lean`). That is the expected relation: a plan-only
 edit does not change the check list, and a re-pinned digest does not either — a
 new check does, and its line is in both logs.
+
+## A `cancelled` CI job is not a failing one
+
+These transcripts are produced locally, but the same counts are what CI's
+`verify-invariants` job re-derives, so the two can be read side by side — with
+one trap. GitHub cancels a run's still-running jobs when a new push supersedes
+it, and `nix-pkg` is by far the longest job in `Build and Test` (it builds the
+bridge, then runs the OCaml suite under `make test`). Measured 2026-11-23: on
+three consecutive commits it read `cancelled` in the `OCaml suite (build,
+typecheck, tests)` step, each time within a minute of a new upstream commit,
+while `avm-pkg`, `verify-invariants` and `build-and-test-linux` in the same run
+had already reported `success`. It then completed `success` on the first commit
+that stayed the branch tip for an hour.
+
+So read the line in this order: a job that reads `cancelled` says nothing about
+the check it was running — it was cut, not failed, and a job that reports
+`failure` (or `timed_out`) is the only one that carries a verdict about the
+tree. The authoritative signal for a commit is the run whose jobs all reached
+`success`; the commit before a cancellation is not evidence either way, and
+re-reading its annotation finds none, because a cancellation writes no
+annotation at all.
 
 The scripts are unedited stdout, so they contain absolute paths, temp-dir names
 and Nix store hashes from the recording host. The two gate transcripts open with

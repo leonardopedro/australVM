@@ -1,0 +1,24 @@
+-- QuantDot — the admitted Austral computation PC11 maps onto one NPU
+-- operator.
+--
+-- The operator is a signed 8-bit quantised dot product: `dot4` is the inner
+-- step of a 4x4x4 `quant_dot` tile (A 4x4 i8, B 4x4 i8, C 4x4 s32), and it is
+-- the *only* part of that tile the compiler is asked to admit here. The tile's
+-- unrolling is declared in `mm0/proof_chain/npu/quantdot.toml`, not compiled,
+-- and `scripts/npu-profile` refuses a declaration that disagrees with this
+-- signature or with the constants below.
+--
+-- Numeric contract (declared, not proved; the numeric bridges are PC12's):
+-- operands are i8 in [-128, 127], the products are exact in i32, and the sum
+-- of four products lies in [-65024, 65536]. Each operand arrives here already
+-- sign-extended to `Int32`: the widening is the loader's, is exact, and is one
+-- of the residual premises the mapping records.
+--
+-- There is no NPU backend behind this module and none is implied: it compiles
+-- to the ordinary backends like any other example.
+
+module QuantDot is
+    function dot4(a0: Int32, a1: Int32, a2: Int32, a3: Int32,
+                  b0: Int32, b1: Int32, b2: Int32, b3: Int32): Int32;
+    function main(): ExitCode;
+end module.

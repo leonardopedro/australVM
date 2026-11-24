@@ -866,6 +866,358 @@ PY
             gap "PC08: the captured host fragment not checked (tooling absent: python3)"
         fi
 
+        # PC09 declares the MLIR stage boundary. The emitter (G20a) and a
+        # pinned toolchain round trip (G19a) exist, but no MLIR semantics does,
+        # so the record pins the KernelIR the chain already trusts, lists every
+        # pass of the route, and counts the uncaptured ones — the `[gap]` —
+        # instead of letting them vanish. Its
+        # selftest mutates a comparison predicate, a pass option, the route, a
+        # captured row, the KernelIR digest and the captured count.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc09=0
+            python3 "$repo_root/scripts/mlir-chain" check \
+                >"$_cert_tmp/pc09.log" 2>&1 || _pc09=$?
+            if [ $_pc09 -eq 0 ]; then
+                grep -E '^  \[detail\]' "$_cert_tmp/pc09.log" >&2
+                check "PC09: the declared MLIR stage boundary is current" true
+            else
+                cat "$_cert_tmp/pc09.log" >&2
+                check "PC09: the declared MLIR stage boundary is current" false
+            fi
+            # … and every captured boundary has a *stated* obligation, bound to
+            # the record's own file names and digests. A capture without a
+            # statement, a statement without a capture, and a stale citation
+            # are all findings — the gap it reports is "stated, none proved".
+            _pc09c=0
+            python3 "$repo_root/scripts/mlir-chain" claims \
+                >"$_cert_tmp/pc09-claims.log" 2>&1 || _pc09c=$?
+            if [ $_pc09c -eq 0 ]; then
+                grep -E '^  \[detail\]|^  \[gap\]|^\[gap\] PC09' "$_cert_tmp/pc09-claims.log" >&2
+                check "PC09: every captured boundary has a stated obligation" true
+            else
+                cat "$_cert_tmp/pc09-claims.log" >&2
+                check "PC09: every captured boundary has a stated obligation" false
+            fi
+            _pc09s=0
+            python3 "$repo_root/scripts/mlir-chain" selftest \
+                >"$_cert_tmp/pc09-selftest.log" 2>&1 || _pc09s=$?
+            if [ $_pc09s -eq 0 ]; then
+                check "PC09: the MLIR boundary's controls refuse" true
+            else
+                cat "$_cert_tmp/pc09-selftest.log" >&2
+                check "PC09: the MLIR boundary's controls refuse" false
+            fi
+            # The claims artifact is MM0, so its *shape* is decided by the same
+            # tools W8 uses, not by the reviewer's eye. It declares only sorts
+            # and terms: no `axiom`, no `theorem`, so `mm0-rs` must elaborate it
+            # and `mm0-c` must accept the resulting `.mmb` against the spec.
+            # The size line is pinned, so a claim (or a sort) that vanishes is a
+            # red gate rather than a smaller file that still parses.
+            if grep -qE '^(axiom|theorem) ' "$repo_root/mm0/mlir_pass.mm0"; then
+                check "PC09: the claims artifact admits no axiom or theorem" false
+            else
+                check "PC09: the claims artifact admits no axiom or theorem" true
+            fi
+            if command -v mm0-rs >/dev/null 2>&1 \
+                    && command -v mm0-c >/dev/null 2>&1; then
+                _p09c=0
+                mm0-rs compile "$repo_root/mm0/mlir_pass.mm0" \
+                    "$_cert_tmp/mlir_pass.mmb" \
+                    >"$_cert_tmp/pc09-mm0-rs.log" 2>&1 || _p09c=$?
+                if [ $_p09c -eq 0 ]; then
+                    _p09c=0
+                    mm0-c "$_cert_tmp/mlir_pass.mmb" \
+                        <"$repo_root/mm0/mlir_pass.mm0" \
+                        >"$_cert_tmp/pc09-mm0-c.log" 2>&1 || _p09c=$?
+                fi
+                if [ $_p09c -eq 0 ] \
+                        && grep -q '^4 sorts, 5 term/def, 0 ax/thm$' \
+                            "$_cert_tmp/pc09-mm0-rs.log"; then
+                    cat "$_cert_tmp/pc09-mm0-rs.log" >&2
+                    check "PC09: mlir_pass.mm0 elaborates and mm0-c accepts it" true
+                else
+                    cat "$_cert_tmp/pc09-mm0-rs.log" "$_cert_tmp/pc09-mm0-c.log" >&2 2>/dev/null
+                    check "PC09: mlir_pass.mm0 elaborates and mm0-c accepts it" false
+                fi
+            else
+                gap "PC09: mlir_pass.mm0's shape not checked (no mm0-rs/mm0-c here)"
+            fi
+        else
+            gap "PC09: the declared MLIR stage boundary not checked (tooling absent: python3)"
+        fi
+
+        # G19a pins one MLIR toolchain round trip: `mlir-opt` verifies the
+        # handwritten smoke fixture and the G20a-emitted clamp module, the
+        # pinned `gpu-lower-to-nvvm` pipeline lowers them to PTX `sm_70`, and
+        # the probe records versions, commands, parameter layout and digests.
+        # Exit 3 (no MLIR/LLVM here) is a `[gap]`, never a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _g19a=0
+            python3 "$repo_root/scripts/gpu/mlir-probe" check \
+                >"$_cert_tmp/g19a.log" 2>&1 || _g19a=$?
+            case $_g19a in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/g19a.log" >&2
+                    check "G19a: the recorded MLIR round trip reproduces" true
+                    ;;
+                3)
+                    cat "$_cert_tmp/g19a.log" >&2
+                    gap "G19a: the recorded MLIR round trip not checked (MLIR/LLVM absent)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/g19a.log" >&2
+                    check "G19a: the recorded MLIR round trip reproduces" false
+                    ;;
+            esac
+            _g19as=0
+            python3 "$repo_root/scripts/gpu/mlir-probe" selftest \
+                >"$_cert_tmp/g19a-selftest.log" 2>&1 || _g19as=$?
+            if [ $_g19as -eq 0 ]; then
+                check "G19a: the toolchain probe's controls refuse" true
+            else
+                cat "$_cert_tmp/g19a-selftest.log" >&2
+                check "G19a: the toolchain probe's controls refuse" false
+            fi
+        else
+            gap "G19a: the MLIR round trip not checked (tooling absent: python3)"
+        fi
+
+        # G20b publishes a versioned MLIR artifact: canonical KernelIR, emitted
+        # MLIR, lowered PTX and a `bundle.json` whose derivatives chain by
+        # digest. The script compiles the fixture through both GPU targets,
+        # requires their KernelIR identity to agree, verifies the published
+        # set, and makes each named refusal fire. Exit 3 (no compiler or no
+        # mlir-opt) is the `[gap]`, never a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _g20b=0
+            python3 "$repo_root/scripts/mlir-bundle" \
+                >"$_cert_tmp/g20b.log" 2>&1 || _g20b=$?
+            if [ $_g20b -eq 0 ]; then
+                grep -E '^  \[detail\]' "$_cert_tmp/g20b.log" >&2
+                check "G20b: the published MLIR artifact is chained and repeatable" true
+            elif [ $_g20b -eq 3 ]; then
+                cat "$_cert_tmp/g20b.log" >&2
+                gap "G20b: the MLIR bundle not checked (no compiler or mlir-opt here)"
+            else
+                cat "$_cert_tmp/g20b.log" >&2
+                check "G20b: the published MLIR artifact is chained and repeatable" false
+            fi
+        else
+            gap "G20b: the MLIR bundle not checked (tooling absent: python3)"
+        fi
+
+        # G21a loads the emitted PTX on an actual device: preflight the ABI
+        # against the device's chip, launch the v1 corpus (12 entries, 65 / 65
+        # under a block override / 1025), compare with the KernelIR reference
+        # evaluator, and hold each launch to its record in
+        # `mm0/proof_chain/nvidia/launch.toml`. Without a device (or a driver
+        # library, the compiler, or avm-gpu) the script exits 3, a `[gap]`.
+        if command -v python3 >/dev/null 2>&1; then
+            _g21a=0
+            python3 "$repo_root/scripts/gpu/launch" check \
+                >"$_cert_tmp/g21a.log" 2>&1 || _g21a=$?
+            case $_g21a in
+                0)
+                    grep -E '^  \[detail\]' "$_cert_tmp/g21a.log" >&2
+                    if grep -q '^  \[pass\] G21a record: ' "$_cert_tmp/g21a.log"; then
+                        check "G21a: the emitted PTX ran on the device for the launchable v1 corpus (12 of 14 entries) and agreed with the KernelIR reference" true
+                    else
+                        cat "$_cert_tmp/g21a.log" >&2
+                        check "G21a: every measured launch is the one the record holds" false
+                    fi
+                    ;;
+                3)
+                    cat "$_cert_tmp/g21a.log" >&2
+                    gap "G21a: the device launch not checked (no device, driver library, compiler or avm-gpu here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/g21a.log" >&2
+                    check "G21a: the emitted PTX ran on the device for the launchable v1 corpus (12 of 14 entries) and agreed with the KernelIR reference" false
+                    check "G21a: every measured launch is the one the record holds" false
+                    ;;
+            esac
+        else
+            gap "G21a: the device launch not checked (tooling absent: python3)"
+        fi
+
+        # PC10 makes the virtual/native boundary a policy: a PTX claim cannot
+        # satisfy `--policy native`, a native capture is identified from the
+        # driver's own linked bytes, and an operand-order edit, a different
+        # extent (memory bound) and a mutated recorded ABI are each refused.
+        # The captures are held to `mm0/proof_chain/nvidia/native.toml`. Exit 3
+        # (no device, driver, compiler or avm-target) is a `[gap]`.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc10=0
+            python3 "$repo_root/scripts/gpu/boundary" check \
+                >"$_cert_tmp/pc10.log" 2>&1 || _pc10=$?
+            case $_pc10 in
+                0)
+                    grep -E '^  \[detail\]|^  \[pass\] PC10 word ' \
+                        "$_cert_tmp/pc10.log" >&2
+                    if grep -q '^  \[pass\] PC10 record: ' "$_cert_tmp/pc10.log"; then
+                        check "PC10: only captured native bytes satisfy a native policy, and the virtual/mutated artifacts are refused" true
+                    else
+                        cat "$_cert_tmp/pc10.log" >&2
+                        check "PC10: every native capture is the one the record holds" false
+                    fi
+                    # PC10b's listing is not a comment in the child's output: it
+                    # must appear once per recorded capture, and both mutation
+                    # controls must land on a named instruction word. A capture
+                    # that stopped being listed, or an attribution that turned
+                    # into "different bytes", is a red gate.
+                    _pc10b_words="$(grep -c '^  \[pass\] PC10 word listing: ' \
+                        "$_cert_tmp/pc10.log" || true)"
+                    _pc10b_rows="$(grep -c '^\[\[capture\]\]' \
+                        "$repo_root/mm0/proof_chain/nvidia/native.toml" 2>/dev/null || echo 0)"
+                    if [ "$_pc10b_words" -ge 1 ] \
+                            && [ "$_pc10b_words" -eq "$_pc10b_rows" ]; then
+                        check "PC10b: every native capture's instruction words cover its SASS bytes" true
+                    else
+                        check "PC10b: every native capture's instruction words cover its SASS bytes" false
+                    fi
+                    if grep -q '^  \[pass\] PC10 word attribution: the operand edit moves exactly one instruction word' \
+                            "$_cert_tmp/pc10.log" \
+                            && grep -q '^  \[pass\] PC10 word attribution: the extent-[0-9]* bound moves' \
+                                "$_cert_tmp/pc10.log"; then
+                        check "PC10b: the operand edit and the other-extent bound each move a localised instruction word" true
+                    else
+                        check "PC10b: the operand edit and the other-extent bound each move a localised instruction word" false
+                    fi
+                    ;;
+                3)
+                    cat "$_cert_tmp/pc10.log" >&2
+                    gap "PC10: the virtual/native boundary not checked (no device, driver library, compiler or avm-target here)"
+                    gap "PC10b: the instruction-word listing not checked (no device, driver library, compiler or avm-target here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/pc10.log" >&2
+                    check "PC10: only captured native bytes satisfy a native policy, and the virtual/mutated artifacts are refused" false
+                    check "PC10: every native capture is the one the record holds" false
+                    check "PC10b: every native capture's instruction words cover its SASS bytes" false
+                    check "PC10b: the operand edit and the other-extent bound each move a localised instruction word" false
+                    ;;
+            esac
+        else
+            gap "PC10: the virtual/native boundary not checked (tooling absent: python3)"
+            gap "PC10b: the instruction-word listing not checked (tooling absent: python3)"
+        fi
+
+        # PC11 defines the first NPU branch: one target, one operator, one
+        # opaque cut. The inventory is data and the obligations are MM0, so
+        # `scripts/npu-profile` is the only thing that makes either a claim: it
+        # re-derives the command list's byte counts and offsets from the
+        # declared shape and layout, checks the accumulation bound over the i8
+        # range, reads the admitted step out of the `.aui`/`.aum` and compiles
+        # it, holds every stage to exactly one stated obligation, and refuses
+        # ten mutations of those facts. Exit 3 (no compiler here) is a `[gap]`.
+        if command -v python3 >/dev/null 2>&1; then
+            _pc11=0
+            python3 "$repo_root/scripts/npu-profile" check \
+                >"$_cert_tmp/pc11.log" 2>&1 || _pc11=$?
+            case $_pc11 in
+                0)
+                    grep -E '^  \[detail\]|^  \[pass\] PC11 (replay|operator|layout|dma-command|quantization|obligations|opaque)' \
+                        "$_cert_tmp/pc11.log" >&2
+                    if grep -q '^  \[pass\] PC11: the operator/layout/DMA-command stages are inspectable' \
+                            "$_cert_tmp/pc11.log"; then
+                        check "PC11: the NPU branch's inspectable stages are checked and its opaque cut is named" true
+                    else
+                        cat "$_cert_tmp/pc11.log" >&2
+                        check "PC11: the NPU branch's inspectable stages are checked and its opaque cut is named" false
+                    fi
+                    if grep -q '^  \[pass\] PC11 controls: ' "$_cert_tmp/pc11.log"; then
+                        check "PC11: the NPU inventory's controls refuse" true
+                    else
+                        cat "$_cert_tmp/pc11.log" >&2
+                        check "PC11: the NPU inventory's controls refuse" false
+                    fi
+                    ;;
+                3)
+                    cat "$_cert_tmp/pc11.log" >&2
+                    gap "PC11: the NPU branch not checked (no compiler here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/pc11.log" >&2
+                    check "PC11: the NPU branch's inspectable stages are checked and its opaque cut is named" false
+                    check "PC11: the NPU inventory's controls refuse" false
+                    ;;
+            esac
+        else
+            gap "PC11: the NPU branch not checked (tooling absent: python3)"
+        fi
+
+        # G16b's `wgsl-f32-v1` profile: the checker compiles the fixture twice,
+        # compares the KernelIR reference bit for bit against an independent
+        # binary32 oracle, requires each refusal to name what it refused, and
+        # mutates a scratch bundle's profile to prove the validator looks. The
+        # device half is its own `[gap]` line when no adapter runs the kernel;
+        # a missing compiler or checker is a `[gap]` too (the script says which).
+        if command -v python3 >/dev/null 2>&1; then
+            _g16b=0
+            python3 "$repo_root/scripts/gpu-f32-profile" \
+                >"$_cert_tmp/g16b.log" 2>&1 || _g16b=$?
+            case $_g16b in
+                0)
+                    grep -E '^\[pass\] G16b|^\[gap\] G16b' "$_cert_tmp/g16b.log" >&2
+                    if grep -q '^\[pass\] G16b: wgsl-f32-v1 CPU/profile checks' \
+                            "$_cert_tmp/g16b.log"; then
+                        check "G16b: the wgsl-f32-v1 profile is checked end to end" true
+                    else
+                        cat "$_cert_tmp/g16b.log" >&2
+                        check "G16b: the wgsl-f32-v1 profile is checked end to end" false
+                    fi
+                    ;;
+                1)
+                    cat "$_cert_tmp/g16b.log" >&2
+                    if grep -q '^\[gap\] G16b: ' "$_cert_tmp/g16b.log"; then
+                        gap "G16b: the wgsl-f32-v1 profile not checked (no compiler or GPU checker here)"
+                    else
+                        check "G16b: the wgsl-f32-v1 profile is checked end to end" false
+                    fi
+                    ;;
+                *)
+                    cat "$_cert_tmp/g16b.log" >&2
+                    check "G16b: the wgsl-f32-v1 profile is checked end to end" false
+                    ;;
+            esac
+        else
+            gap "G16b: the wgsl-f32-v1 profile not checked (tooling absent: python3)"
+        fi
+
+        # G18: one unfer workload on an Austral-authored kernel. The unfer
+        # checkout is a sibling (the plan's G18 card names `fock_sirk` there), so
+        # a missing checkout, compiler, cargo or physical adapter is a `[gap]`,
+        # never a pass — and the control run needs an adapter to be meaningful.
+        if command -v python3 >/dev/null 2>&1 && [ -x "$repo_root/scripts/gpu/unfer-scale" ]; then
+            _g18=0
+            python3 "$repo_root/scripts/gpu/unfer-scale" \
+                >"$_cert_tmp/g18.log" 2>&1 || _g18=$?
+            case $_g18 in
+                0)
+                    grep -E '^  \[pass\] G18|^  \[detail\] G18' "$_cert_tmp/g18.log" >&2
+                    if grep -q '^  \[pass\] G18: an unfer amplitude scale runs' \
+                            "$_cert_tmp/g18.log" \
+                            && grep -q '^  \[pass\] G18 control refused: a kernel scaled by 3.0' \
+                                "$_cert_tmp/g18.log"; then
+                        check "G18: an unfer amplitude scale runs on the Austral kernel and its control refuses" true
+                    else
+                        cat "$_cert_tmp/g18.log" >&2
+                        check "G18: an unfer amplitude scale runs on the Austral kernel and its control refuses" false
+                    fi
+                    ;;
+                3|77)
+                    cat "$_cert_tmp/g18.log" >&2
+                    gap "G18: the unfer integration not run (no unfer checkout, cargo, or physical adapter here)"
+                    ;;
+                *)
+                    cat "$_cert_tmp/g18.log" >&2
+                    check "G18: an unfer amplitude scale runs on the Austral kernel and its control refuses" false
+                    ;;
+            esac
+        else
+            gap "G18: the unfer integration not run (tooling absent: python3)"
+        fi
+
         if [ -x "$repo_root/scripts/isa-hypotheses" ] || [ -f "$repo_root/scripts/isa-hypotheses" ]; then
             if python3 "$repo_root/scripts/isa-hypotheses" "$_mm0/isa.mm0" \
                     >"$_cert_tmp/hyp.log" 2>&1; then
@@ -3574,6 +3926,51 @@ check "H12: notes implemented dir has the four categories" \
     && test -d "$repo_root/.agents/notes/implemented/feature" \
     && test -d "$repo_root/.agents/notes/implemented/testing" \
     && test -d "$repo_root/.agents/notes/implemented/process"
+
+# --- CI: the cache restore prefixes are a list of lines, never commas ---------
+# `nix-community/cache-nix-action` reads `restore-prefixes-first-match` as a
+# newline-separated list and *rejects* the key when it contains commas. That
+# failure lands in the cache step of a job, before any check the job exists
+# for: the W9.1 weekly workflow failed there on 2026-11-23 ("Key Validation
+# Error: nix-isa-Linux-X64-,nix-isa- cannot contain commas", run 45231031440),
+# and with job logs unreadable without admin rights the only signal was "step
+# 4 failed". Every other workflow happened to pass a single prefix, which is
+# why only that one broke. The scan covers both spellings — an inline value and
+# a block scalar (`|`) whose body lines are the list.
+_ci_prefix_scan="$(awk '
+    function indent(s) { match(s, /^[ \t]*/); return RLENGTH }
+    FNR == 1 { inblock = 0 }
+    {
+        line = $0
+        sub(/\r$/, "", line)
+        if (inblock) {
+            if (line ~ /^[ \t]*$/) next
+            if (indent(line) > base) {
+                if (index(line, ",")) printf "bad %s:%d\n", FILENAME, FNR
+                next
+            }
+            inblock = 0
+        }
+        if (match(line, /^[ \t]*restore-prefixes-first-match:/)) {
+            keys++
+            val = substr(line, RLENGTH + 1)
+            sub(/^[ \t]+/, "", val)
+            sub(/[ \t]+$/, "", val)
+            if (val ~ /^[|>]/) { inblock = 1; base = indent(line); next }
+            if (index(val, ",")) printf "bad %s:%d\n", FILENAME, FNR
+        }
+    }
+    END { printf "count %d\n", keys }
+' "$repo_root"/.github/workflows/*.yml)"
+_ci_bad="$(printf '%s\n' "$_ci_prefix_scan" | sed -n 's/^bad //p')"
+_ci_keys="$(printf '%s\n' "$_ci_prefix_scan" | sed -n 's/^count //p')"
+if [ -n "$_ci_bad" ]; then
+    while IFS= read -r _ci_line; do
+        echo "  cache restore prefix list with a comma: $_ci_line"
+    done <<<"$_ci_bad"
+fi
+check "CI: every cache restore prefix list is newline-separated ($_ci_keys key(s), none with a comma)" \
+    test -n "$_ci_keys" -a -z "$_ci_bad"
 
 echo
 echo "verify-invariants: $PASSED passed, $GAPS explained gap(s), $FAILED failed"

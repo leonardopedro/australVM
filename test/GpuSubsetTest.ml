@@ -131,6 +131,45 @@ let test_local_helper_is_not_an_intrinsic _ =
      assert_failure "a local helper gained intrinsic status"
   | _ -> assert_failure "local helper did not lower as a helper call"
 
+(* G16a: intrinsic identity is the resolved method ID, never a textual name.
+   These two tests pin both directions for f32. A *same-named* user definition
+   at module scope does not capture the call: the frontend resolves
+   `trappingAdd` to the canonical `TrappingArithmetic(Float32)` method, the
+   local definition stays unreachable (no helper is emitted), and the entry
+   lowers to `F32Add`. A user operation under its own name stays a helper call.
+   So a user cannot mint an intrinsic by naming a function after one, and a
+   name that *is* canonical still has to resolve to the instance method. *)
+let test_f32_namesake_is_not_an_intrinsic _ =
+  let p = inline ~name:"Namesake"
+      [ "function trappingAdd(a: Float32, b: Float32): Float32 is\n        return a;\n    end;";
+        "function entry(x: Float32): Float32 is\n        return trappingAdd(x, x);\n    end;" ] in
+  let k =
+    Gpu_subset.build ~profile:Gpu_ir.WgslF32V1 ~entry:"entry" (fst p) (snd p)
+  in
+  let describe body =
+    match body with
+    | Gpu_ir.Return (Gpu_ir.Intrinsic (i, _)) ->
+       "intrinsic " ^ Gpu_ir.show_intrinsic i
+    | Gpu_ir.Return (Gpu_ir.Call (_, _)) -> "call"
+    | _ -> "other" in
+  assert_equal ~printer:string_of_int 0 (List.length k.Gpu_ir.helpers);
+  assert_equal ~printer:(fun s -> s) "intrinsic f32Add"
+    (describe k.Gpu_ir.body)
+
+let test_f32_user_operation_is_not_an_intrinsic _ =
+  let p = inline ~name:"F32Local"
+      [ "function scale(a: Float32): Float32 is\n        return trappingMultiply(a, 2.0);\n    end;";
+        "function entry(x: Float32): Float32 is\n        return scale(x);\n    end;" ] in
+  let k =
+    Gpu_subset.build ~profile:Gpu_ir.WgslF32V1 ~entry:"entry" (fst p) (snd p)
+  in
+  assert_equal ~printer:string_of_int 1 (List.length k.Gpu_ir.helpers);
+  match k.Gpu_ir.body with
+  | Gpu_ir.Return (Gpu_ir.Call (0, [ Gpu_ir.Param 0 ])) -> ()
+  | Gpu_ir.Return (Gpu_ir.Intrinsic _) ->
+     assert_failure "a user-defined f32 operation gained intrinsic status"
+  | _ -> assert_failure "the f32 helper did not lower as a helper call"
+
 (* -------------------------------------------------------------------------- *)
 (* Refusals                                                                    *)
 (* -------------------------------------------------------------------------- *)
@@ -469,6 +508,8 @@ let suite =
     "clamp preserves comparison and branches" >:: test_clamp_conditional;
     "local helper closure" >:: test_local_helper_closure;
     "local helper is not an intrinsic" >:: test_local_helper_is_not_an_intrinsic;
+    "an f32 namesake is not an intrinsic" >:: test_f32_namesake_is_not_an_intrinsic;
+    "an f32 user operation is not an intrinsic" >:: test_f32_user_operation_is_not_an_intrinsic;
     "refuses while" >:: test_refuses_loop;
     "refuses loop hidden in a helper" >:: test_refuses_loop_hidden_in_helper;
     "refuses mutation" >:: test_refuses_mutation;

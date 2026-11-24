@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""G21a: run the source-generated NVIDIA artifacts on the actual device.
+
+`PLAN_gpu_kernels.md` G21a asks for the emitted PTX to be *run*, not only
+lowered: the recorded ABI checked against a real driver and device, the kernel
+launched, and its output compared with the KernelIR reference evaluator — first
+for one exact artifact, then for the v1 corpus.
+
+The device side belongs to the GPU crate: `safestos/gpu/src/nvlaunch.rs`
+(dlopen'd CUDA Driver API, `--features nvidia`) owns the plan — PTX target
+against the device's capability, five u64 words per memref, extent and arity,
+and the launch geometry (`block` = the workgroup the module declares,
+`grid = ceil(extent / block)`) — and `avm-nvlaunch launch` performs the upload,
+launch, sync and readback.
+
+What this script adds is the chain around it: for every corpus entry it
+publishes a G20b MLIR bundle for the *device's own chip* (PTX is not
+backward-compatible) and a WGSL bundle from the same source, runs the launch,
+and compares the readback with `avm-gpu reference` — the KernelIR evaluator, not
+a retyped expectation. Every launch is recorded in
+`mm0/proof_chain/nvidia/launch.toml`; `check` (the default) refuses a launch
+that differs from its record, `--write` refreshes the record.
+
+The named refusals are required as controls: a wrong extent, a wrong arity, a
+block larger than any device accepts, and a PTX target newer than the device
+(where the driver's own verdict is recorded). A `--block` override must also
+agree with the reference, so the grid path is measured rather than assumed.
+
+Exit: 0 every corpus launch agreed and every control refused; 1 a disagreement
+or a control that was not refused; 3 not runnable here (no device, no compiler,
+no `avm-nvlaunch`, no `avm-gpu`).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+COMPILER = ROOT / "_build/default/bin/austral.exe"
+GPU_BIN = ROOT / "safestos/gpu/target/release/avm-gpu"
+LAUNCH_BIN = ROOT / "safestos/gpu/target/release/avm-nvlaunch"
+RECORD = ROOT / "mm0/proof_chain/nvidia/launch.toml"
+FIXTURE = ("examples/gpu/pointwise/Pointwise.aui",
+           "examples/gpu/pointwise/Pointwise.aum")
+# The v1 corpus is `Pointwise`'s entries, the same 14 `scripts/gpu-source-check`
+# compares against C and KernelIR; `constantValue` is 0-ary and not in it.
+# Two entries call a helper, which G20a's MLIR emitter refuses by name; those
+# are kept here so the exclusion is measured on every run, not prose.
+UNARY = ["identity", "clamp", "invert", "twice"]
+BINARY = ["minimum", "difference", "add", "multiply", "bitAnd", "bitOr",
+          "bitXor", "mask"]
+NOT_LOWERED = ["addConstant", "polynomial"]
+# Every entry is launched at 65 (two 64-thread blocks), and one entry is
+# launched again at 1025 (17 blocks).
+EXTENTS = [(entry, 65) for entry in UNARY + BINARY] + [("add", 1025)]
+# An override below the declared workgroup splits the extent unevenly.
+OVERRIDE = ("add", 65, 32)
+
+
+def gap(message: str) -> int:
+    print(f"[gap] G21a: {message}")
+    return 3
+
+
+def fail(message: str) -> int:
+    print(f"[FAIL] G21a: {message}")
+    return 1
+
+
+def run(cmd: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def mlir_opt() -> str | None:
+    configured = os.environ.get("AUSTRAL_MLIR_OPT")
+    if configured and Path(configured).exists():
+        return configured
+    found = shutil.which("mlir-opt")
+    if found:
+        return found
+    for store in sorted(Path("/nix/store").glob("*mlir-1*")):
+        candidate = store / "bin" / "mlir-opt"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+class Job:
+    """One published artifact: its MLIR bundle, WGSL bundle and record."""
+
+    def __init__(self, work: Path, entry: str, extent: int, chip: str) -> None:
+        self.work = work
+        self.entry = entry
+        self.extent = extent
+        self.chip = chip
+        self.mlir = work / f"{entry}-{extent}"
+        self.wgsl = work / f"{entry}-{extent}-wgsl"
+        self.env = dict(os.environ)
+        self.env.setdefault(
+            "LD_LIBRARY_PATH", str(ROOT / "safestos/cranelift/target/release"))
+        self.env.setdefault("AUSTRAL_GPU_CHECKER", str(GPU_BIN))
+
+    def publish(self, kind: str, output: Path) -> None:
+        aui, aum = (str(ROOT / p) for p in FIXTURE)
+        args = [str(COMPILER), "compile", f"{aui},{aum}", f"--target-type={kind}",
+                f"--entrypoint=Pointwise:{self.entry}", f"--output={output}"]
+        if kind == "wgsl":
+            args.append("--gpu-numeric-profile=u32-modular-v1")
+        else:
+            args += [f"--gpu-static-elements={self.extent}",
+                     f"--gpu-chip={self.chip}"]
+            tool = mlir_opt()
+            if tool is None:
+                raise RuntimeError(
+                    "no mlir-opt: set AUSTRAL_MLIR_OPT or install LLVM")
+            self.env.setdefault("AUSTRAL_MLIR_OPT", tool)
+        out = run(args, env=self.env)
+        if out.returncode != 0:
+            raise RuntimeError(f"the {kind} compile refused for {self.entry}:\n"
+                               f"{(out.stderr or out.stdout).strip()}")
+        if not output.exists():
+            raise RuntimeError(f"the {kind} compile published nothing at {output}")
+
+    def table(self) -> list[tuple[int, int | None, int]]:
+        """The C corpus rows for this entry, in file order."""
+        rows = []
+        for line in (ROOT / "examples/gpu/pointwise/corpus.tsv").read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            entry, x, y, expected = line.split("\t")
+            if entry == self.entry:
+                rows.append((int(x), None if y == "-" else int(y), int(expected)))
+        if not rows:
+            raise RuntimeError(f"the corpus table has no {self.entry} rows")
+        return rows
+
+    def values(self) -> list[list[int]]:
+        """The table's values repeated to the launch extent.
+
+        The C corpus table is the independent oracle `scripts/gpu-source-check`
+        already pins; repeating its rows keeps the launch at one extent while
+        every table case is exercised in it.
+        """
+        rows = self.table()
+        n = len(rows)
+        x = [rows[i % n][0] for i in range(self.extent)]
+        if self.entry not in BINARY:
+            return [x]
+        y = [rows[i % n][1] for i in range(self.extent)]
+        return [x, y]
+
+    def table_expected(self) -> list[int]:
+        rows = self.table()
+        return [rows[i % len(rows)][2] for i in range(self.extent)]
+
+    def request(self, *suffix: str) -> Path:
+        operands = self.values()
+        path = self.work / ("-".join((self.entry, str(self.extent), *suffix))
+                            + ".json")
+        path.write_text(json.dumps(
+            {"inputs": operands + [[0] * self.extent]}))
+        return path
+
+    def reference(self) -> list[int]:
+        path = self.work / f"{self.entry}-{self.extent}-ref.json"
+        path.write_text(json.dumps({"inputs": self.values()}))
+        out = run([str(GPU_BIN), "reference", str(self.wgsl),
+                   "--inputs", str(path)])
+        if out.returncode != 0:
+            raise RuntimeError(f"the reference evaluator refused {self.entry}:\n"
+                               f"{(out.stderr or out.stdout).strip()}")
+        return [int(v) for v in json.loads(out.stdout)["output"]]
+
+    def launch(self, *extra: str, ptx: Path | None = None):
+        return run([str(LAUNCH_BIN), "launch", str(self.mlir),
+                    "--ptx", str(ptx or self.mlir / "kernel.ptx"),
+                    "--inputs", str(self.request(*extra)), *extra])
+
+
+def published(job: Job) -> None:
+    job.publish("mlir", job.mlir)
+    job.publish("wgsl", job.wgsl)
+
+
+def compare(job: Job, extra: tuple[str, ...] = (),
+            ptx: Path | None = None) -> dict:
+    """Launch once and require agreement with the KernelIR reference."""
+    result = job.launch(*extra, ptx=ptx)
+    if result.returncode == 77:
+        raise SystemExit(gap(
+            f"the launch reports no device ({result.stderr.strip()})"))
+    if result.returncode != 0:
+        raise RuntimeError(f"the launch of {job.entry} refused or failed:\n"
+                           f"{(result.stderr or result.stdout).strip()}")
+    launched = json.loads(result.stdout)
+    if launched.get("status") != "ok":
+        raise RuntimeError(f"the launch of {job.entry} reported "
+                           f"{launched.get('status')!r}")
+    output = [int(v) for v in launched["output"][-1]]
+    expected = job.reference()
+    if output != expected:
+        index = next(i for i, (a, b) in enumerate(zip(output, expected))
+                     if a != b)
+        raise RuntimeError(
+            f"{job.entry} at {job.extent} disagrees with the KernelIR reference "
+            f"at index {index}: device {output[index]}, reference "
+            f"{expected[index]}")
+    table = job.table_expected()
+    if output != table:
+        index = next(i for i, (a, b) in enumerate(zip(output, table))
+                     if a != b)
+        raise RuntimeError(
+            f"{job.entry} at {job.extent} disagrees with the C corpus table at "
+            f"index {index}: device {output[index]}, table {table[index]}")
+    meta = json.loads((job.mlir / "bundle.json").read_text())
+    ir_sha = next(d["sha256"] for d in meta["derivatives"]
+                  if d["stage"] == "kernelir")
+    ptx_bytes = (job.mlir / "kernel.ptx").read_bytes()
+    entry = {"entry": job.entry, "extent": job.extent,
+             "input_arity": meta["input_arity"],
+             "workgroup": meta["workgroup"], "block": launched["block"],
+             "grid": launched["grid"],
+             "ptx_params": launched["ptx_params"], "chip": launched["chip"],
+             "ptx_sha256": sha(ptx_bytes), "kernelir_sha256": ir_sha,
+             "output_sha256": sha(json.dumps(output).encode()),
+             "oracle": "avm-gpu reference (KernelIR evaluator, u32-modular-v1)",
+             "oracle_agrees": True,
+             "table_cases": len(job.table()), "table_agrees": True}
+    if "--block" in extra:
+        entry["block_override"] = launched["block"]
+    changed = sum(1 for a, b in zip(job.values()[0], output) if a != b)
+    # `identity`'s contract is to change nothing; every other entry must show
+    # the computation somewhere or the input never exercised it.
+    if changed == 0 and job.entry != "identity":
+        raise RuntimeError(f"{job.entry} at {job.extent} changed nothing: the "
+                           f"inputs never exercise the entry")
+    entry["changed"] = changed
+    return entry
+
+
+def refuse(job: Job, label: str, extra: tuple[str, ...],
+           ptx: Path | None = None, code: str | None = None) -> str:
+    refused = job.launch(*extra, ptx=ptx)
+    if refused.returncode == 0:
+        raise RuntimeError(f"control not refused: {label}")
+    try:
+        body = json.loads(refused.stderr or refused.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"control {label} failed without a refusal: "
+                           f"{refused.stderr.strip()[:200]}")
+    if body.get("status") != "refused":
+        raise RuntimeError(f"control {label} failed without a refusal: "
+                           f"{body.get('message', '')[:200]}")
+    if code is not None and body.get("refusal") != code:
+        raise RuntimeError(f"control {label} was refused as "
+                           f"{body.get('refusal')!r}, not {code!r}")
+    print(f"  [pass] G21a control refused: {label}")
+    return body.get("driver_verdict", "")
+
+
+def record_text(device: dict, entries: list[dict]) -> str:
+    lines = [
+        "# G21a: the launches this host measured.",
+        "# Written by scripts/gpu/launch --write; never hand-edited.",
+        "# The v1 corpus has 14 entries; `addConstant` and `polynomial` call a",
+        "# helper, which the MLIR emitter refuses (G20a), so 12 are launched.",
+        "",
+        "[device]",
+        f'name = "{device["device"]}"',
+        f'capability = "{device["capability"]}"',
+        f'driver_version = {device["driver_version"]}',
+        f'chip = "{device["chip"]}"',
+        f'launcher = "avm-nvlaunch launch"',
+        "",
+    ]
+    for e in entries:
+        lines.append("[[launch]]")
+        for key in ("entry", "extent", "input_arity", "workgroup", "block",
+                    "grid", "ptx_params", "chip", "changed", "ptx_sha256",
+                    "kernelir_sha256", "output_sha256", "oracle",
+                    "oracle_agrees", "table_cases", "table_agrees"):
+            value = e[key]
+            if isinstance(value, bool):
+                lines.append(f"{key} = {'true' if value else 'false'}")
+            elif isinstance(value, int):
+                lines.append(f"{key} = {value}")
+            else:
+                lines.append(f'{key} = "{value}"')
+        if "block_override" in e:
+            lines.append(f'block_override = {e["block_override"]}')
+        lines.append("")
+    return "\n".join(lines)
+
+
+def check_record(device: dict, entries: list[dict]) -> int:
+    if not RECORD.exists():
+        return fail(f"no launch record at {RECORD.relative_to(ROOT)}; run "
+                    f"`python3 scripts/gpu/launch --write` on the device")
+    recorded = tomllib.loads(RECORD.read_text())
+    problems = []
+    known = recorded.get("device", {})
+    for key, value in (("name", device["device"]),
+                       ("capability", device["capability"]),
+                       ("chip", device["chip"]),
+                       ("driver_version", device["driver_version"])):
+        if known.get(key) != value:
+            problems.append(f"device {key} is {value!r}, the record says "
+                            f"{known.get(key)!r} (a different device is a "
+                            f"different record, not a refresh)")
+    rows = {(r.get("entry"), r.get("extent"),
+             r.get("block_override")): r for r in recorded.get("launch", [])}
+    seen = set()
+    for e in entries:
+        key = (e["entry"], e["extent"], e.get("block_override"))
+        seen.add(key)
+        row = rows.get(key)
+        if row is None:
+            problems.append(f"the record has no launch for {key}")
+            continue
+        for field in ("input_arity", "workgroup", "block", "grid",
+                      "ptx_params", "chip", "ptx_sha256", "kernelir_sha256",
+                      "output_sha256", "changed", "oracle_agrees",
+                      "table_cases", "table_agrees"):
+            if row.get(field) != e[field]:
+                problems.append(f"{key}: {field} is {e[field]!r}, the record "
+                                f"says {row.get(field)!r}")
+    for key in rows:
+        if key not in seen:
+            problems.append(f"the record has a launch not measured now: {key}")
+    if problems:
+        for p in problems:
+            print(f"  [FAIL] G21a record: {p}")
+        return 1
+    print(f"  [pass] G21a record: {len(entries)} launch(es) match "
+          f"{RECORD.relative_to(ROOT)}")
+    return 0
+
+
+def check(write: bool) -> int:
+    if not COMPILER.exists():
+        return gap(f"the compiler is not built at {COMPILER.relative_to(ROOT)}")
+    if not GPU_BIN.exists():
+        return gap("avm-gpu is not built (cargo build --release --manifest-path "
+                   "safestos/gpu/Cargo.toml --bin avm-gpu)")
+    if not LAUNCH_BIN.exists():
+        return gap("avm-nvlaunch is not built (cargo build --release --features "
+                   "nvidia --manifest-path safestos/gpu/Cargo.toml "
+                   "--bin avm-nvlaunch)")
+    probe = run([str(LAUNCH_BIN), "probe"])
+    if probe.returncode == 77:
+        detail = probe.stderr.strip() or probe.stdout.strip()
+        return gap(f"no device or driver is available ({detail})")
+    if probe.returncode != 0:
+        return fail(f"the device probe failed: {probe.stderr.strip()}")
+    device = json.loads(probe.stdout)
+    print(f"  [detail] G21a device: {device['device']}, capability "
+          f"{device['capability']} ({device['chip']}), driver API "
+          f"{device['driver_version']}")
+    work = Path(tempfile.mkdtemp(prefix="avm-g21a-"))
+    try:
+        entries = []
+        jobs = {}
+        try:
+            for entry, extent in EXTENTS:
+                job = Job(work, entry, extent, device["chip"])
+                published(job)
+                jobs[(entry, extent)] = job
+                entries.append(compare(job))
+            entry, extent, block = OVERRIDE
+            entries.append(compare(jobs[(entry, extent)],
+                                   ("--block", str(block))))
+
+            clamp = jobs[("clamp", 65)]
+            refuse(clamp, "a wrong extent", ("--extent", "64"), code="extent-mismatch")
+            refuse(clamp, "a wrong arity", ("--arity", "2"), code="wrong-arity")
+            refuse(clamp, "a block no device accepts", ("--block", "2048"),
+                   code="block-too-large")
+            newer = work / "newer.ptx"
+            text = (clamp.mlir / "kernel.ptx").read_text()
+            newer.write_text(text.replace(f".target {device['chip']}",
+                                          ".target sm_90", 1))
+            verdict = refuse(clamp, "a PTX target newer than the device",
+                             (), ptx=newer, code="target-newer-than-device")
+            print(f"  [detail] G21a the driver refused that module itself: "
+                  f"{verdict}")
+            # The two helper-calling entries must be refused *before* any
+            # driver call, by the same message G20a owns.
+            for entry in NOT_LOWERED:
+                probe_job = Job(work, entry, 65, device["chip"])
+                try:
+                    probe_job.publish("mlir", probe_job.mlir)
+                except RuntimeError as exc:
+                    if "helper call is not lowered yet" not in str(exc):
+                        raise RuntimeError(
+                            f"{entry} was refused for the wrong reason: {exc}")
+                    print(f"  [pass] G21a control refused: {entry} is not "
+                          f"lowered (helper call, G20a's boundary)")
+                else:
+                    raise RuntimeError(
+                        f"{entry} now lowers: extend this corpus to launch it "
+                        f"rather than leaving it excluded")
+        except RuntimeError as exc:
+            return fail(str(exc))
+        except SystemExit as exc:
+            return int(exc.code)
+
+        grids = sorted({(e["grid"], e["block"]) for e in entries})
+        print(f"  [detail] G21a geometries measured: "
+              + ", ".join(f"{g}x{b}" for g, b in grids))
+        print(f"  [detail] G21a corpus: {len(entries)} launch(es) over "
+              f"{len({e['entry'] for e in entries})} entries agree with the "
+              f"KernelIR reference")
+        if write:
+            RECORD.parent.mkdir(parents=True, exist_ok=True)
+            RECORD.write_text(record_text(device, entries))
+            print(f"  [pass] G21a wrote {RECORD.relative_to(ROOT)}")
+            return 0
+        status = check_record(device, entries)
+        if status != 0:
+            return status
+        print(f"  [pass] G21a: the emitted PTX ran on {device['device']} for "
+              f"the v1 corpus and agreed with the KernelIR reference")
+        return 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    unknown = [a for a in args if a not in ("check", "--write")]
+    if unknown:
+        print(f"[gap] G21a: unknown argument(s) {unknown} (use `check` or "
+              f"`--write`)")
+        return 3
+    return check("--write" in args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

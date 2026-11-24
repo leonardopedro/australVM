@@ -1,0 +1,4 @@
+guard=Rejection original=3 minimized=2
+  seed=23 steps=2 actions=[admit:1/0:mint-unauthorised deliver:0] choices=[Content:content.request=1 Scheduling:sched.deliver=0 Fuel:fuel.depth=2]
+  outcome: the unauthorized mint is refused at slot 1 (UK-7001), the watermark is 1 and the replica is not halted; supply 0
+  fingerprint: cb97ca9cc977fa564755831fe26e89102972e5007e985e031868b32bf70d1f77

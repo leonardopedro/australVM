@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""G18: one unfer workload on an Austral-authored kernel, end to end.
+
+The card asks for an existing unfer operation (the amplitude scale behind
+`QuantumState::scale_and_add`) to run on a source-authored kernel, with a named
+oracle, explicit transfer costs, a visible CPU/absence path, and the feature-off
+build unchanged. This script is the check:
+
+  1. compile `examples/gpu/unfer-scale` under `--gpu-numeric-profile=wgsl-f32-v1`
+     with this repository's compiler and validate the bundle;
+  2. build `fock_sirk`'s default configuration (no feature) to show the
+     integration is opt-in and the default build is untouched;
+  3. build and run `fock_sirk/examples/austral_pointwise.rs` with
+     `--features austral-gpu`: it flattens a sparse `QuantumState` through the
+     existing `TensorState` path, narrows to f32, dispatches the kernel, and
+     compares bit for bit against unfer's own f64 arithmetic on the values the
+     kernel was handed;
+  4. require the run to report a physical adapter, zero mismatches and the
+     transfer timings (explicit copies — this is not zero-copy);
+  5. controls that must fail: a `u32-modular-v1` bundle (the example refuses a
+     non-f32 profile), and a fixture whose factor is 3.0 instead of 2.5 (the
+     kernel now disagrees with the 2.5 oracle, so the comparison is live).
+
+The unfer checkout is a sibling (`../unfer`, as the plan's G18 card names); a
+missing checkout, compiler, cargo or physical adapter is a `[gap]`, never a
+pass. `--require-hardware` makes a missing adapter exit 77 instead of passing
+the CPU half.
+
+Usage:
+  scripts/gpu/unfer-scale [--unfer DIR] [--require-hardware] [--skip-cargo]
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+FIXTURE = ROOT / "examples/gpu/unfer-scale"
+BUNDLE_CHECKER = ROOT / "safestos/gpu/target/release/avm-gpu"
+
+
+def env(bridge: bool = False) -> dict:
+    """The environment for a child process.
+
+    `LD_LIBRARY_PATH` is set **only** for the compiler, which loads the
+    cranelift bridge. It is deliberately absent for `avm-gpu` and for the unfer
+    example: on this host a set `LD_LIBRARY_PATH` changes which libc/Vulkan
+    search path the loader uses, and the example then cannot find the Vulkan
+    loader even though it finds it with the inherited (empty) variable. The
+    example needs nothing from this repository's shared objects.
+    """
+    e = dict(os.environ)
+    if bridge:
+        bridge_dir = ROOT / "safestos/cranelift/target/release"
+        e["LD_LIBRARY_PATH"] = f"{ROOT}:{bridge_dir}:" + e.get("LD_LIBRARY_PATH", "")
+        e["AUSTRAL_GPU_CHECKER"] = str(BUNDLE_CHECKER)
+    return e
+
+
+def run(cmd, cwd=None, timeout=900, bridge: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [str(c) for c in cmd],
+        cwd=str(cwd) if cwd else None,
+        env=env(bridge),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+class Failure(Exception):
+    pass
+
+
+def compile_bundle(compiler: Path, out: Path, aui: Path, aum: Path,
+                   profile: str | None) -> subprocess.CompletedProcess:
+    cmd = [
+        compiler,
+        "compile",
+        f"{aui},{aum}",
+        "--target-type=wgsl",
+        "--entrypoint=UnferScale:scale",
+        f"--output={out}",
+    ]
+    if profile:
+        cmd.append(f"--gpu-numeric-profile={profile}")
+    return run(cmd, bridge=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--unfer", default=str(ROOT.parent / "unfer"))
+    parser.add_argument("--compiler", default=str(ROOT / "austral"))
+    parser.add_argument("--require-hardware", action="store_true")
+    parser.add_argument("--skip-cargo", action="store_true")
+    args = parser.parse_args()
+
+    unfer = Path(args.unfer)
+    compiler = Path(args.compiler)
+    crate = unfer / "fock_sirk"
+    example = crate / "examples/austral_pointwise.rs"
+    for path, what in (
+        (crate, "unfer's fock_sirk checkout"),
+        (example, "the G18 example"),
+        (compiler, "compiler"),
+        (BUNDLE_CHECKER, "GPU bundle checker"),
+    ):
+        if not path.exists():
+            print(f"[gap] G18: {what} not found at {path}", file=sys.stderr)
+            return 3
+    if shutil.which("cargo") is None and not args.skip_cargo:
+        print("[gap] G18: cargo not found", file=sys.stderr)
+        return 3
+
+    with tempfile.TemporaryDirectory(prefix="unfer-scale-") as tmpname:
+        tmp = Path(tmpname)
+
+        # 1. The source-authored kernel, published by this repository.
+        bundle = tmp / "unfer-scale.avkg"
+        proc = compile_bundle(compiler, bundle, FIXTURE / "UnferScale.aui",
+                              FIXTURE / "UnferScale.aum", "wgsl-f32-v1")
+        if proc.returncode != 0:
+            raise Failure(f"compiling the f32 fixture failed:\n"
+                          f"{proc.stderr or proc.stdout}")
+        validate = run([BUNDLE_CHECKER, "validate", bundle])
+        if validate.returncode != 0:
+            raise Failure(f"validating the published bundle failed:\n{validate.stderr}")
+        info = json.loads(validate.stdout)
+        if info.get("numeric_profile") != "wgsl-f32-v1" or info.get("element") != "f32":
+            raise Failure(f"the fixture bundle is {info.get('numeric_profile')} / "
+                          f"{info.get('element')}, not wgsl-f32-v1 / f32")
+        print(f"  [pass] G18 kernel: UnferScale:scale published as "
+              f"{info['numeric_profile']} / {info['element']} "
+              f"(ir={info['ir_sha256'][:12]})")
+
+        # 2. The default build is unaffected: no feature, no new target.
+        if not args.skip_cargo:
+            default_build = run(
+                ["cargo", "build", "--offline", "-p", "fock_sirk", "--lib"],
+                cwd=unfer)
+            if default_build.returncode != 0:
+                raise Failure(f"the feature-off build failed:\n{default_build.stderr}")
+            print("  [pass] G18 feature-off: `cargo build -p fock_sirk` (no features) "
+                  "still builds; the example is gated by `required-features`")
+
+            build_env = env()
+            # The example must run on this host, whose Vulkan loader lives in
+            # the system libc's search path: link it with the system `cc`.
+            build_env.setdefault(
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER", "/usr/bin/cc")
+            build = subprocess.run(
+                [str(c) for c in
+                 ["cargo", "build", "--offline", "-p", "fock_sirk",
+                  "--example", "austral_pointwise", "--features", "austral-gpu"]],
+                cwd=str(unfer), env=build_env, capture_output=True, text=True,
+                timeout=900)
+            if build.returncode != 0:
+                raise Failure(f"building the G18 example failed:\n{build.stderr}")
+        binary = unfer / "target/debug/examples/austral_pointwise"
+        if not binary.exists():
+            raise Failure(f"the example binary is missing at {binary}")
+
+        # 3. The integration itself.
+        run_proc = run([binary, bundle])
+        if run_proc.returncode == 77:
+            print(run_proc.stdout.strip() or run_proc.stderr.strip(), file=sys.stderr)
+            print("[gap] G18: no physical adapter ran the kernel", file=sys.stderr)
+            return 77 if args.require_hardware else 3
+        if run_proc.returncode != 0:
+            raise Failure(f"the unfer example failed (exit {run_proc.returncode}):\n"
+                          f"{run_proc.stderr or run_proc.stdout}")
+        try:
+            report = json.loads(run_proc.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError) as exc:
+            raise Failure(f"the example did not print a report: {exc}\n{run_proc.stdout}")
+        if report.get("status") != "ok":
+            raise Failure(f"the example reported {report.get('status')}: {report}")
+        if report["real_mismatches"] or report["imag_mismatches"]:
+            raise Failure(f"the GPU disagrees with unfer's oracle: {report}")
+        if "Intel" not in report["adapter"] and "NVIDIA" not in report["adapter"]:
+            pass  # any physical adapter is fine; the run required one.
+        print(f"  [pass] G18 oracle: {2 * report['dim']} value(s) of {report['dim']} "
+              f"complex amplitude(s) match unfer's f64 scale cast to binary32 "
+              f"bit for bit on {report['adapter']}")
+        timing = report["timing_ms"]
+        print(f"  [detail] G18 transfer: {report['transfer_bytes']} byte(s) uploaded "
+              f"and the same back per component; prepare {timing['prepare']:.3f} ms, "
+              f"upload {timing['upload']:.3f} ms, submit {timing['submit']:.3f} ms "
+              f"over {report['iterations']} submission(s), readback "
+              f"{timing['readback']:.3f} ms; explicit copies, zero_copy="
+              f"{str(report['zero_copy']).lower()}")
+        print(f"  [detail] G18 cost: unfer's CPU oracle took "
+              f"{report['cpu_oracle_ms']:.4f} ms for the same scale; the narrowing "
+              f"f64 -> f32 changed {report['narrowing_differences']} of "
+              f"{2 * report['dim']} rounded value(s) relative to scaling in f64 and "
+              f"casting once, so at this size the integration costs more than it "
+              f"buys — no solver replacement is proposed")
+
+        # 4. Controls: each must fail for the named reason.
+        default_profile = tmp / "unfer-scale-u32.avkg"
+        proc = compile_bundle(compiler, default_profile, FIXTURE / "UnferScale.aui",
+                              FIXTURE / "UnferScale.aum", None)
+        if proc.returncode == 0:
+            refused = run([binary, default_profile])
+            if refused.returncode == 0:
+                raise Failure("control 'a default-profile bundle' was not refused")
+            if "wgsl-f32-v1" not in (refused.stderr + refused.stdout):
+                raise Failure("control 'a default-profile bundle' was refused for "
+                              f"the wrong reason: {refused.stderr.strip()}")
+            print("  [pass] G18 control refused: a u32-modular-v1 bundle under the "
+                  "f32 example")
+        else:
+            print("  [detail] G18 control: the default profile refuses the f32 "
+                  "fixture at compile time", file=sys.stderr)
+
+        wrong = tmp / "wrong"
+        wrong.mkdir()
+        for name in ("UnferScale.aui", "UnferScale.aum"):
+            text = (FIXTURE / name).read_text()
+            if name.endswith(".aum"):
+                text = text.replace("trappingMultiply(x, 2.5)",
+                                    "trappingMultiply(x, 3.0)")
+            (wrong / name).write_text(text)
+        wrong_bundle = tmp / "unfer-scale-3.0.avkg"
+        proc = compile_bundle(compiler, wrong_bundle, wrong / "UnferScale.aui",
+                              wrong / "UnferScale.aum", "wgsl-f32-v1")
+        if proc.returncode != 0:
+            raise Failure(f"the 3.0 control fixture did not compile:\n{proc.stderr}")
+        differed = run([binary, wrong_bundle])
+        if differed.returncode == 0:
+            raise Failure("control 'a kernel scaled by 3.0 against the 2.5 oracle' "
+                          "was not refused")
+        try:
+            report = json.loads(differed.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            report = {}
+        if (report.get("real_mismatches", 0) + report.get("imag_mismatches", 0)) == 0:
+            raise Failure("the 3.0 control failed without a mismatch count; the "
+                          f"refusal is not the comparison: {differed.stderr.strip()}")
+        print("  [pass] G18 control refused: a kernel scaled by 3.0, with the "
+              f"mismatch count ({report['real_mismatches'] + report['imag_mismatches']}"
+              ") naming the comparison")
+
+        print("  [pass] G18: an unfer amplitude scale runs on the Austral kernel, "
+              "matches unfer's oracle, and its costs are reported")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Failure as exc:
+        print(f"[FAIL] G18: {exc}", file=sys.stderr)
+        sys.exit(1)

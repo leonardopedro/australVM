@@ -1,0 +1,127 @@
+# target.toml — PC11's target-specific proof inventory.
+#
+# One target, named, with what is inspectable on *this* host and what is not.
+# `state` is one of:
+#
+#   inspectable  — a format or list this repository holds and checks, by name,
+#                  in `mm0/proof_chain/npu/quantdot.toml`
+#   declared     — a public format and an open compiler, but no artifact on this
+#                  host: nothing about it is measured here
+#   opaque       — the cut. The artifact has an identity, and no machine-checkable
+#                  semantics exists in this repository (or, for firmware, in
+#                  public form at all)
+#
+# `scripts/npu-profile check` holds every stage to one obligation in
+# `mm0/proof_chain/npu_operator.mm0`, requires an `opaque` stage to name its
+# prerequisite, and refuses an `inspectable` stage whose subject is not one of
+# the three the card asks for (operator, layout, DMA command) or the
+# quantization profile declared beside it.
+#
+# Written by hand, reviewed as data: this file is a claim about a *target*, not
+# a certificate. The one thing it must never do is call an opaque artifact
+# inspectable; `host_measured = false` is why every `declared` row is a `[gap]`
+# in the profile document rather than evidence.
+
+schema = "austral.npu.target.v1"
+target = "amd-xdna"
+target_long = "AMD XDNA Array NPU (Ryzen AI), AIE-ML compute tiles, ERT runtime"
+compiler = "Peano (Xilinx/llvm-aie) for one compute tile, IRON (Xilinx/mlir-aie) for the array"
+runtime = "XRT + amdxdna (accel) + ERT"
+device_family = "Phoenix / Hawk Point (4x5, 2560 KB L2), Strix Point (4x8, 4096 KB L2)"
+command_cap_bytes = 262144
+command_cap_source = "lib/npu_dma_gate.ml (MAX_NPU_SRAM, the WhyML-checked SRAM gate)"
+host_measured = false
+host_state = "no /dev/accel/accel0, no xrt-smi, no Peano or IRON on this host; nothing here was compiled for or run on an NPU"
+
+[[stage]]
+name = "operator"
+state = "inspectable"
+subject = "the admitted Austral step and the tensor descriptor it maps to"
+artifact = "mm0/proof_chain/npu/quantdot.toml ([operator], [shape])"
+note = "`QuantDot:dot4` compiles with the ordinary compiler; the descriptor names its arity, dtype and result type, and the script checks them against the interface text"
+
+[[stage]]
+name = "quantization"
+state = "inspectable"
+subject = "the profile parameters and the exact-accumulation bound"
+artifact = "mm0/proof_chain/npu/quantdot.toml ([numeric])"
+note = "zero point, both scales and the bound are declared; the script re-derives the bound from the i8 range and k by exhaustion, so a wrong bound is refused. The numeric bridge itself is PC12's, not this card's"
+
+[[stage]]
+name = "layout"
+state = "inspectable"
+subject = "row-major operand and output byte offsets over the declared 4x4x4 tile"
+artifact = "mm0/proof_chain/npu/quantdot.toml ([layout], [tile])"
+note = "all 16 outputs' operand and store offsets are recomputed and checked inside their declared buffers, and the stores partition C; only the row-major shape is reflected"
+
+[[stage]]
+name = "dma-command"
+state = "inspectable"
+subject = "the command list: opcode, direction, buffer, L2 offset, byte count"
+artifact = "mm0/proof_chain/npu/quantdot.toml ([[dma]])"
+note = "each command is checked against its buffer's extent and the SRAM gate's 256 KiB cap, and the commands are disjoint. This is the command *list*, not the hardware: the vendor opcode's meaning is `ctrlcode` below"
+
+[[stage]]
+name = "compiler-ir"
+state = "declared"
+subject = "the array IR: MLIR AIE dialect from IRON, single-core IR from Peano"
+artifact = "Xilinx/mlir-aie, Xilinx/llvm-aie"
+note = "both are open source and produce the artifacts below; neither is installed here, so no IR was captured for this target"
+prerequisite = "mlir-aie and Peano on the host, plus a device for anything to load onto"
+
+[[stage]]
+name = "overlay"
+state = "declared"
+subject = "stream-switch configuration plus the ELF for the compute tiles"
+identity = "AMD XDNA Array overlay, loaded on the spatial partition bound to the workload"
+artifact = "Xilinx/mlir-aie output (xclbin) and the AIE-ML tile ELF inside it"
+note = "the kernel documentation names both parts; the container is not decoded here, and no digest of a real overlay exists in this repository"
+prerequisite = "a compiled overlay for a real operator"
+
+[[stage]]
+name = "ctrlcode"
+state = "declared"
+subject = "the ERT command stream: a sequence of XAie_TxnOpcode"
+identity = "ctrlcode binary, executed by ERT in the workload context; XAIE_IO_BLOCKWRITE effects host DDR <-> L2 DMA"
+artifact = "XRT / AI Engine Run Time (XAie_TxnOpcode)"
+note = "the opcode names and the DMA effect are documented; the encoding is not checked here"
+
+[[stage]]
+name = "compute-tile-isa"
+state = "opaque"
+subject = "the AIE-ML VLIW instruction stream the tile ELF carries"
+identity = "AMD AIE-ML compute tile VLIW program, per the Versal AIE-ML Architecture Manual (AM020)"
+note = "there is no machine-checkable AIE-ML semantics in this repository, and the architecture manual is prose. This is the operator -> binary cut PC11 must name and may not cross"
+prerequisite = "a machine-checkable AIE-ML ISA model; nothing in this repository or in aie-rt provides one"
+
+[[stage]]
+name = "firmware"
+state = "opaque"
+subject = "the signed NPU firmware and its ERT instances on the microcontroller"
+identity = "vendor-signed firmware loaded through PSP (amdxdna boot flow)"
+note = "the driver does not interpret ctrlcode, and the firmware's scheduling and completion semantics are not public as a specification; a successful inference is not evidence about this layer"
+prerequisite = "vendor firmware documentation with a stated semantics; none is available"
+
+[[citations]]
+url = "https://docs.kernel.org/accel/amdxdna/amdnpu.html"
+establishes = "hardware description, the two application binaries (overlay and ctrlcode), XAie_TxnOpcode, XAIE_IO_BLOCKWRITE as the DMA opcode, the ERT/MERT split and the 2560/4096 KB L2 sizes"
+
+[[citations]]
+url = "https://github.com/Xilinx/mlir-aie"
+establishes = "IRON: the open array compiler that produces the xclbin and instruction stream"
+
+[[citations]]
+url = "https://github.com/Xilinx/llvm-aie"
+establishes = "Peano: the open LLVM-based compiler for one AIE compute tile"
+
+[[citations]]
+url = "https://github.com/Xilinx/XRT"
+establishes = "the XRT runtime stack the amdxdna shim plugs into"
+
+[[citations]]
+url = "https://github.com/amd/xdna-driver"
+establishes = "the amdxdna kernel driver and the XRT shim for NPU"
+
+# These are references, not evidence: nothing in this repository fetched them,
+# and `scripts/npu-profile` does not check them. They are recorded so a reviewer
+# can check the inventory's sentences against their sources.

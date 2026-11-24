@@ -432,6 +432,20 @@ explained gap(s), 0 failed` under `.#lean`
 ([transcript](docs/data/gate/2026-11-22-lean-shell-rust.log)), and `177 passed,
 4 explained gap(s), 0 failed` where only `python3` comes from a shell
 ([transcript](docs/data/gate/2026-11-22-nix-shell-python3.log)).
+
+**Re-recorded 2026-11-23 on `0b2d0c3d`, on a clean tree with `../unfer` at its
+`main` (`67feb84`), after the CI repairs:** the four counts are unchanged —
+`192`/`1`/`0` under the default shell
+([transcript](docs/data/gate/2026-11-23-default-shell.log)), `177`/`4`/`0`
+under `.#ocaml`
+([transcript](docs/data/gate/2026-11-23-ocaml-shell.log)), `178`/`3`/`0`
+under `.#lean`
+([transcript](docs/data/gate/2026-11-23-lean-shell-rust.log)) and `177`/`4`/`0`
+from the bare `nix-shell -p python3`
+([transcript](docs/data/gate/2026-11-23-nix-shell-python3.log)) — and the D00
+line is the only one that moved: 24 contract rows rather than 20, ending
+`measured against unfer 67feb84`, because the D10 rows landed upstream and this
+run resolves against a clean sibling tip rather than a mid-merge checkout.
 None of those numbers is a correction of the ones above; each is a different
 shell over the same checks, and the differences close exactly. The five
 approvals closed their five `[gap] W3: <artifact> has no approved statements`

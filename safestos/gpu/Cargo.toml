@@ -17,6 +17,21 @@ crate-type = ["rlib", "cdylib"]
 name = "avm-gpu"
 path = "src/bin/avm-gpu.rs"
 
+# G21a: launch the published NVIDIA artifact. Optional, like `device`: the
+# default build has no CUDA dependency at all, and this binary drives the
+# installed driver through dlopen rather than linking it.
+[[bin]]
+name = "avm-nvlaunch"
+path = "src/bin/avm-nvlaunch.rs"
+required-features = ["nvidia"]
+
+# PC10: the virtual/native boundary. `claim` and `identify` are CPU-only, so
+# this binary is built by default; `capture` needs the same optional `nvidia`
+# driver path as `avm-nvlaunch` and reports an unavailable driver otherwise.
+[[bin]]
+name = "avm-target"
+path = "src/bin/avm-target.rs"
+
 [dependencies]
 naga = { version = "=29.0.4", features = ["wgsl-in"] }
 serde = { version = "1", features = ["derive"] }
@@ -36,3 +51,7 @@ device = ["dep:wgpu", "dep:pollster"]
 # imply `device`: a CPU-only deployment can load the service and refuse a
 # `require_hardware` request instead of silently using the reference path.
 service = []
+# G21a: the CUDA Driver API backend. No crate dependency is added; the library
+# is opened with dlopen at run time, so enabling this feature does not require
+# a CUDA toolkit at build time.
+nvidia = []

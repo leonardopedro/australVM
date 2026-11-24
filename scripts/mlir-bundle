@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""G20b: publish a versioned MLIR artifact, and hold it to its digests.
+
+`check` compiles the same committed fixture twice, once through the WGSL target
+and once (twice) through the MLIR target:
+
+  * the WGSL bundle's `kernel.json` records the KernelIR identity;
+  * each MLIR bundle is `kernel.kernelir` + `kernel.mlir` + `kernel.ptx` +
+    `bundle.json`, and `gpu_proof verify-mlir-bundle` re-hashes all four and
+    re-derives the PTX ABI from the lowered bytes;
+  * both MLIR runs must agree byte-for-byte, and their KernelIR digest and bytes
+    must equal the WGSL bundle's — one KernelIR, two consumers.
+
+Then the refusals the card requires, each of which must name the offending
+input and publish nothing:
+
+  * a tampered lower artifact (PTX appended) is refused by the verifier;
+  * conflicting target options (`--gpu-numeric-profile=wgsl-f32-v1`,
+    `--gpu-operation=...`) are refused by the parser;
+  * a non-positive static extent is refused before compilation;
+  * a missing `mlir-opt` is a named refusal, not a crash — and a CPU target
+    still compiles with the same missing toolchain, so the default tools do not
+    depend on MLIR being installed.
+
+Nothing here verifies MLIR semantics or dispatches a GPU: verification and
+lowering are the pinned toolchain's, and capture is not preservation (PC09).
+
+Exit: 0 the bundles agree and every control refuses; 1 a disagreement; 3 the
+end-to-end check could not run here (no compiler or no `mlir-opt`), which is a
+`[gap]`, never a pass.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "examples/gpu/pointwise"
+ENTRY = "Pointwise:clamp"
+EXTENT = 65
+
+_exit = [0]
+
+
+def say(message: str) -> None:
+    print(message)
+
+
+def fail(message: str) -> None:
+    print(f"[FAIL] G20b: {message}")
+    _exit[0] = 1
+
+
+def gap(message: str) -> None:
+    print(f"[gap] G20b: {message}")
+    _exit[0] = 3
+
+
+def compiler() -> str | None:
+    for candidate in (os.environ.get("AUSTRAL_COMPILER"),
+                      str(ROOT / "_build/default/bin/austral.exe")):
+        if candidate and Path(candidate).exists():
+            return candidate
+    return shutil.which("austral")
+
+
+def mlir_opt() -> str | None:
+    override = os.environ.get("AUSTRAL_MLIR_OPT")
+    if override and Path(override).exists():
+        return override
+    toolchain = ROOT / "mm0/proof_chain/mlir/toolchain.toml"
+    if toolchain.exists():
+        import tomllib
+
+        try:
+            record = tomllib.loads(toolchain.read_text())
+            for row in record.get("tool", []):
+                if row.get("name") == "mlir-opt" and Path(row.get("path", "")).exists():
+                    return row["path"]
+        except Exception:  # noqa: BLE001 - a broken record is not a tool
+            pass
+    return shutil.which("mlir-opt")
+
+
+def environment() -> dict:
+    env = dict(os.environ)
+    if not env.get("AUSTRAL_GPU_CHECKER"):
+        for candidate in (ROOT / "safestos/gpu/target/release/avm-gpu",
+                          ROOT / "safestos/gpu/target/debug/avm-gpu"):
+            if candidate.exists():
+                env["AUSTRAL_GPU_CHECKER"] = str(candidate)
+                break
+    env["LD_LIBRARY_PATH"] = ":".join(
+        [str(ROOT), str(ROOT / "safestos/cranelift/target/release"),
+         env.get("LD_LIBRARY_PATH", "")]).rstrip(":")
+    return env
+
+
+def run(argv: list[str], env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True,
+                          env=env or environment())
+
+
+def compile_to(binary: str, outdir: Path, target: str, extra: list[str],
+               env: dict | None = None) -> subprocess.CompletedProcess:
+    aui = str(FIXTURE / "Pointwise.aui")
+    aum = str(FIXTURE / "Pointwise.aum")
+    has_extent = any(a.startswith("--gpu-static-elements") for a in extra)
+    extent = (["--gpu-static-elements=65"]
+              if target == "mlir" and not has_extent else [])
+    return run([binary, "compile", f"{aui},{aum}", f"--target-type={target}",
+                f"--entrypoint={ENTRY}", f"--output={outdir}",
+                *extent, *extra], env=env)
+
+
+def read_json(path: Path) -> dict:
+    return json.loads(path.read_text())
+
+
+def check(binary: str, work: Path) -> int:
+    tool = mlir_opt()
+    if tool is None:
+        gap("no mlir-opt on this host; the MLIR bundle target was not exercised")
+        return _exit[0]
+
+    env = environment()
+    env["AUSTRAL_MLIR_OPT"] = tool
+
+    # (1) one KernelIR, two consumers.
+    wgsl = work / "wgsl-bundle"
+    run_wgsl = compile_to(binary, wgsl, "wgsl",
+                          ["--gpu-numeric-profile=u32-modular-v1"], env=env)
+    if run_wgsl.returncode != 0:
+        fail("the WGSL bundle of the same fixture was not produced: "
+             + (run_wgsl.stderr or run_wgsl.stdout).strip()[:300])
+        return _exit[0]
+    wgsl_ir = read_json(wgsl / "kernel.json").get("ir_sha256", "")
+
+    first = work / "mlir-a"
+    second = work / "mlir-b"
+    for outdir in (first, second):
+        result = compile_to(binary, outdir, "mlir", [], env=env)
+        if result.returncode != 0:
+            fail(f"the MLIR bundle was not published to {outdir.name}: "
+                 + (result.stderr or result.stdout).strip()[:300])
+            return _exit[0]
+    say(f"  [detail] G20b published: KernelIR {wgsl_ir[:12]}…, "
+        f"{EXTENT} elements, {tool}")
+
+    # (2) repeatability, byte for byte.
+    for name in ("kernel.kernelir", "kernel.mlir", "kernel.ptx", "bundle.json"):
+        a = (first / name).read_bytes()
+        b = (second / name).read_bytes()
+        if a != b:
+            fail(f"two publications differ in {name}; the bundle is not repeatable")
+    bundle = read_json(first / "bundle.json")
+    mlir_ir = next(d.get("sha256", "") for d in bundle.get("derivatives", [])
+                   if d.get("stage") == "kernelir")
+    if mlir_ir != wgsl_ir:
+        fail(f"the MLIR bundle records KernelIR {mlir_ir[:12]}…, the WGSL bundle "
+             f"{wgsl_ir[:12]}… — the two targets disagree about their input")
+    # The WGSL bundle need not keep a kernelir file; compare only if it does.
+    wgsl_kernelir = wgsl / "kernel.kernelir"
+    if wgsl_kernelir.exists() and \
+            wgsl_kernelir.read_bytes() != (first / "kernel.kernelir").read_bytes():
+        fail("the two targets' canonical KernelIR bytes differ")
+
+    # (3) the published set verifies as a reader would read it.
+    proof = os.environ.get("GPU_PROOF_BIN") or str(ROOT / "_build/default/bin/gpu_proof.exe")
+    if not Path(proof).exists():
+        gap(f"`gpu_proof` is not built ({proof}), so the published set was not verified")
+        return _exit[0]
+    verified = run([proof, "verify-mlir-bundle", str(first)], env=env)
+    if verified.returncode != 0:
+        fail("the published bundle failed its own verifier: "
+             + (verified.stdout + verified.stderr).strip()[:300])
+    else:
+        say("  [detail] G20b: digests, emitter header and PTX ABI agree")
+
+    # (4) a tampered lower artifact is refused.
+    tampered = work / "tampered"
+    shutil.copytree(first, tampered)
+    with (tampered / "kernel.ptx").open("a") as ptx:
+        ptx.write("\n// tampered\n")
+    refused = run([proof, "verify-mlir-bundle", str(tampered)], env=env)
+    if refused.returncode == 0:
+        fail("a tampered PTX was accepted; the digest chain did not fire")
+    else:
+        say("  [pass] G20b control refused: a tampered lower artifact")
+
+    # (5) conflicting target options, refused before publication.
+    def refused_compile(label: str, extra: list[str], needle: str) -> None:
+        out = work / ("refused-" + label.replace(" ", "-"))
+        result = compile_to(binary, out, "mlir", extra, env=env)
+        message = result.stderr + result.stdout
+        if result.returncode == 0 or out.exists():
+            fail(f"control: {label} was accepted")
+        elif needle not in message:
+            fail(f"control: {label} was refused, but not for {needle!r}: "
+                 + message.strip()[:200])
+        else:
+            say(f"  [pass] G20b control refused: {label}")
+
+    refused_compile("a conflicting numeric profile",
+                    ["--gpu-numeric-profile=wgsl-f32-v1"], "mlir")
+    refused_compile("a WGSL-only staged reduction",
+                    ["--gpu-operation=add"], "gpu-operation")
+    refused_compile("a non-positive static extent",
+                    ["--gpu-static-elements=0"], "positive integer")
+
+    # (6) without MLIR installed, the MLIR target refuses by name and the CPU
+    #     target still works. An override that does not exist must not be taken
+    #     as a tool path.
+    stripped = dict(env)
+    stripped.pop("AUSTRAL_MLIR_OPT", None)
+    stripped["PATH"] = str(work / "empty-path")
+    Path(stripped["PATH"]).mkdir(exist_ok=True)
+    no_mlir = compile_to(binary, work / "no-mlir", "mlir", [], env=stripped)
+    if no_mlir.returncode == 0 or "mlir-opt" not in (no_mlir.stderr + no_mlir.stdout):
+        fail("a missing mlir-opt was not a named refusal")
+    else:
+        say("  [pass] G20b control refused: a missing MLIR toolchain is named")
+    bad_override = dict(stripped)
+    bad_override["AUSTRAL_MLIR_OPT"] = str(work / "does-not-exist/mlir-opt")
+    crash = compile_to(binary, work / "bad-override", "mlir", [], env=bad_override)
+    if crash.returncode == 0 or crash.returncode < 0:
+        fail("a nonexistent AUSTRAL_MLIR_OPT did not produce a named refusal")
+    else:
+        say("  [pass] G20b control refused: a nonexistent tool override is named")
+
+    # `--target-type=c` needs a `RootCapability` entry, so this control uses
+    # the CPU fixture rather than the GPU kernel; it is about the toolchain
+    # being optional, not about the kernel.
+    cpu = work / "cpu.c"
+    cpu_module = ROOT / "examples/native-fragment/NativeFragment.aum"
+    cpu_run = run([binary, "compile", str(cpu_module), "--target-type=c",
+                   "--entrypoint=NativeFragment:main", f"--output={cpu}"],
+                  env=stripped)
+    if cpu_run.returncode != 0 or not cpu.exists():
+        fail("the CPU target stopped working without MLIR installed: "
+             + (cpu_run.stderr or cpu_run.stdout).strip()[:200])
+    else:
+        say("  [pass] G20b: the CPU target still works without MLIR")
+
+    if _exit[0] == 0:
+        print("[pass] G20b: the published MLIR artifact is chained and repeatable")
+    return _exit[0]
+
+
+def main() -> int:
+    argparse.ArgumentParser(description=__doc__).parse_args()
+    binary = compiler()
+    if binary is None:
+        gap("no `austral` binary; build bin/austral.exe or set AUSTRAL_COMPILER")
+        return _exit[0]
+    with tempfile.TemporaryDirectory(prefix="g20b-") as tmp:
+        return check(binary, Path(tmp))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
