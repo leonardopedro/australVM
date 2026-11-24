@@ -39,3 +39,7 @@ C37	storage	U	unfer_ffi/src/outbox.rs	tested	docs/distributed/evidence/d15-outbo
 C38	storage	U	unfer_ffi/src/handles.rs	tested	docs/distributed/evidence/d15-outbox.log
 C39	consensus	U	unfer_consensus/tests/fence_invariant.rs	tested	docs/distributed/evidence/d21-fence-invariant.log
 C40	runtime	U	unfer_ffi/Cargo.toml	tested	docs/distributed/evidence/d15-outbox.log
+C41	consensus	U	unfer_protocol/src/types.rs	tested	docs/distributed/evidence/d14-job-transport.log
+C42	consensus	U	unfer_consensus/src/node.rs	tested	docs/distributed/evidence/d14-job-transport.log
+C43	consensus	U	unfer_consensus/tests/independent_nodes.rs	tested	docs/distributed/evidence/d14-job-transport.log
+C44	consensus	U	unfer_consensus/src/bin/unfer_node.rs	tested	docs/distributed/evidence/d14-job-transport.log

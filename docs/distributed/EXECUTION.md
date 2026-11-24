@@ -1595,7 +1595,7 @@ reached the sink but the settle could not be recorded" as its own error rather
 than as a clean failure, because retrying that blindly would apply the effect
 twice.
 
-**What is tested** (`unfer_consensus/tests/ordered_fencing.rs`, 8 cases, plus 8
+**What is tested** (`unfer_consensus/tests/ordered_fencing.rs`, 8 cases, plus 10
 unit cases in `jobs.rs`):
 
 ```text
@@ -1617,13 +1617,41 @@ A stale settle is not a lost update to be repaired later; it is a transition the
 state refuses, which is why the target is expressible as an invariant over the
 committed fence rather than over a lease interval.
 
-**What this is not.** Not a distributed lock: two nodes partitioned from each
-other must still exchange the claim through the consensus log for a single answer
-to exist, and what is proven here is that a stale fence cannot *commit*, not that
-a minority cannot compute. Not a wall-clock lease: no code path in `jobs.rs` or
+**Replicated claims (the transport follow-up).** The fence table above is per
+node, so a claim still has to reach every replica for two workers to get one
+answer. `unfer_protocol::JobOp` now carries `Register`, `Claim`, `Renew`,
+`Release`, `Fire` and `Disable` as signed `ConsensusTransaction::JobOp` entries.
+The fence is **derived from the committed slot order** by every replica; a
+command's `expected: JobFence` is only a compare-and-swap precondition (it names
+the fence the caller believes is current), never the fence the state will issue.
+A `Claim` therefore cannot choose its own epoch or generation. The application
+path (`node.rs::apply_job_op`) writes no `JournalRecord::Fence`: replaying the
+transition log reconstructs the same claims, so a restart cannot refuse a claim
+against itself or trip the D07 comparison.
+
+`unfer_node job --config node.json --job <name>` replays a node's durable ledger
+through the same application node and prints `state`, `holder`, `epoch` and
+`generation`. It reads the snapshot without taking the running node's lock, like
+`digest`.
+
+**Measured over the TLS transport** (`unfer_consensus/tests/independent_nodes.rs`,
+three processes, two live replicas, `--features network`): two workers submit a
+claim for the same job concurrently through different nodes. Slots 2 and 3 are
+both committed; exactly one applies and the other is a durable refusal. All three
+processes report the same holder, fence generation `1`, and digest. A `Fire`
+with `expected generation 2` (never issued) is committed and leaves the job
+claimed; a `Fire` with the current `(1,1)` moves it to fired. Evidence
+`docs/distributed/evidence/d14-job-transport.log`; the reproducibly measured
+subset is `1 passed, 0 failed`, and the full consensus suite on the same tree is
+`220 passed, 0 failed`.
+
+**What this is not.** Not a wall-clock lease: no code path in `jobs.rs` or
 `node.rs` reads a clock, and the plan's exclusion ("wall-clock leases being safe
 under arbitrary clock skew") is what that buys. Not enforcement for sinks that
-cannot enforce — named above, and left to D15.
+cannot enforce — named above, and left to D15. Not a replicated *effect*: the job
+lifecycle is in the log, but the sink call and its acknowledgement are still
+D15's outbox; a `Fire` records the committed lifecycle decision, not proof that
+an external effect happened.
 
 
 ### D15 — Durable outbox for approval-controlled effects
@@ -1703,5 +1731,5 @@ Three guard mutations are applied and each is caught with a witness: `StaleSettl
 | D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
 | D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 3 requests, 9 actions) executed 1342 of 7381 prefixes at depth 4 (545 pruned, 648 leaves, 21 s), 6904 of 66430 at depth 5 (2898 pruned, 3239 leaves, 153 s) and 33769 of 597871 at depth 6 (14617 pruned, 15400 leaves, 720 s on tmpfs), finding no violation at any depth; the 24 ms/prefix that dominated the first run was a per-ledger rebuild of the sparse-Merkle default chain, now computed once per process; 32 seeded walks of 12 steps reached 30 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault was handed to D13 and is now fenced (see the follow-up in this section) |
 | D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (24 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`; the D12 follow-up adds the halted-state fence (`d13-halted-state-fence.log`). Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it, though the idle-push follow-up in D11's section now repairs a rejoined replica without a new decision |
-| D14 | verified within stated scope (steps 1–3) | **new** `unfer_consensus/tests/ordered_fencing.rs`; U `unfer_consensus/src/jobs.rs` (fence table, sink interface), `src/node.rs` (durable claim/renew/release/fire commands), `src/storage.rs` (`JournalRecord::Fence`). A job claim is now the ordered fence `(deployment, resource, epoch, generation)` owned by the committed state, not a counter in the worker: claim refuses a held resource, renew/release/fire refuse any fence that is not current, generation overflow advances the epoch instead of wrapping, and the table is rebuilt from the journal on restart. Sinks enforce order themselves through `FencedSink`; a sink without that interface is declared unprotected (D15). 8 acceptance cases + 8 unit cases pass (`docs/distributed/evidence/d14-fencing.log`); the first D21 symbolic target is "the fence an effect was applied under is the fence the committed state held when the settle was recorded". |
-| D14–D26 | in progress | D15 durable outbox verified; D21 finite model check verified (induction/MM0 open); D16 next |
+| D14 | verified within stated scope (steps 1–3 + transport) | **new** `unfer_consensus/tests/ordered_fencing.rs`, `independent_nodes.rs`; U `unfer_consensus/src/jobs.rs` (fence table, sink interface), `src/node.rs` (durable claim/renew/release/fire commands + `apply_job_op`), `src/storage.rs` (`JournalRecord::Fence`), `unfer_protocol` (`JobOp`/`JobFence`). A job claim is now the ordered fence `(deployment, resource, epoch, generation)` owned by the committed state, not a counter in the worker: claim refuses a held resource, renew/release/fire refuse any fence that is not current, generation overflow advances the epoch instead of wrapping, and the table is rebuilt from the journal on restart. `ConsensusTransaction::JobOp` carries `Register`/`Claim`/`Renew`/`Release`/`Fire`/`Disable`; the fence is derived from committed slot order, and `expected` is only a precondition. Two processes contending over the TLS transport commit both claims but only one applies; all three replicas report the same holder, generation 1 and digest. Sinks enforce order themselves through `FencedSink`; a sink without that interface is declared unprotected (D15). 8 acceptance cases + 10 unit cases + the transport contention case pass (`docs/distributed/evidence/d14-fencing.log`, `d14-job-transport.log`); full consensus suite 220 passed, 0 failed. The first D21 symbolic target is "the fence an effect was applied under is the fence the committed state held when the settle was recorded". |
+| D14–D26 | in progress | D14 transport claims verified; D15 durable outbox verified; D21 finite model check verified (induction/MM0 open); D16 next |
