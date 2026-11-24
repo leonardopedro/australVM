@@ -247,6 +247,14 @@ def unify(pattern, actual, subst) -> bool:
     `tty c t a` has a variable the *conclusion* does not mention, so its value can
     only come from the subproof (`ax_deq_0` or a rule conclusion). Binding an
     unknown on either side is what lets the checker read it off.
+
+    A variable is resolved *through* the substitution as the walk reaches it, so
+    nothing is instantiated up front. That is what made the walk scale: eagerly
+    substituting into a goal at each proof node rebuilt and re-scanned the whole
+    term at every node, and on a 123 MB derivation the first 60 nodes took 96 s,
+    75 s of it deciding var-freeness of terms it had just rebuilt (§13.62). Terms
+    here are compared by reference, so a goal that a rule does not look into
+    costs nothing.
     """
     def bind(var: str, val):
         # Two unbound variables must not point at each other (`?x := ?y` then
@@ -260,6 +268,8 @@ def unify(pattern, actual, subst) -> bool:
         subst[var] = val
         return True
 
+    if pattern is actual:
+        return True
     if isinstance(pattern, str):
         if pattern.startswith("?"):
             if pattern in subst:
@@ -277,7 +287,7 @@ def unify(pattern, actual, subst) -> bool:
             p, a = force(pattern), force(actual)
             if p is not pattern or a is not actual:
                 return unify(p, a, subst)
-            raise Mismatch(pattern, actual)
+            raise Mismatch(instantiate(pattern, subst), instantiate(actual, subst))
         return True
     if isinstance(actual, str):
         if actual.startswith("?"):
@@ -287,24 +297,42 @@ def unify(pattern, actual, subst) -> bool:
         a = force(actual)
         if a is not actual:
             return unify(pattern, a, subst)
-        raise Mismatch(instantiate(pattern, subst), actual)
+        raise Mismatch(instantiate(pattern, subst), instantiate(actual, subst))
     if pattern[0] != actual[0] or len(pattern) != len(actual):
-        raise Mismatch(instantiate(pattern, subst), actual)
+        raise Mismatch(instantiate(pattern, subst), instantiate(actual, subst))
+    key = (id(pattern), id(actual))
+    if key in _PAIRS:
+        return True
     for p, a in zip(pattern[1:], actual[1:]):
         unify(p, a, subst)
+    # Only a var-free pair is cached: its unification cannot depend on what the
+    # substitution holds, now or later. The terms are retained with the key so
+    # their ids cannot be recycled into a different pair.
+    if _varless(pattern) and _varless(actual):
+        if len(_PAIRS) >= _PAIRS_MAX:
+            _PAIRS.clear()
+        _PAIRS[key] = (pattern, actual)
     return True
 
 
 VARPOOL: set[str] = set()
 
 
-# `id(term) -> (term, True)`: caching var-freeness is what makes the big
-# artifacts checkable at all, since `check` instantiates once per proof node.
-# Holding the term keeps its id from being reused by a later object; the bound
-# is what keeps that from retaining every goal the derivation builds (an
-# unbounded cache cost 6 GiB in 108 s, more than the rebuild it replaced).
+# `id(term) -> (term, True)`: var-freeness is asked once per distinct term, and
+# holding the term keeps its id from being reused by a later object. The bound
+# used to be 4096, which was enough while only `instantiate` asked; the ground
+# unification cache below asks once per distinct pair, so it is wider now.
 _VARLESS: dict[int, tuple] = {}
-_VARLESS_MAX = 4096
+_VARLESS_MAX = 1 << 20
+
+# `(id(p), id(a)) -> (p, a)` for pairs that unified successfully and contain no
+# `?`-variable. A ground term never changes under any substitution, so such a
+# verdict holds for the rest of the run and the pair can be answered by one dict
+# lookup instead of a walk. Without it the same pair is re-walked hundreds of
+# times: on the 123 MB derivation node 70 001 alone was 67 M unifications over
+# 1.45 M distinct pairs, each pair repeated ~29 times (§13.62).
+_PAIRS: dict[tuple[int, int], tuple] = {}
+_PAIRS_MAX = 1 << 20
 
 
 def _varless(t) -> bool:
@@ -361,10 +389,13 @@ def instantiate(t, subst):
     old recursive rebuild turned every sharing level back into a tree: on the
     88 MB artifact the self-check died with `MemoryError` at a 9 GiB cap after
     147 s, all of it in this function. Two properties fix that: a term that
-    mentions none of the substitution's variables is returned unchanged (the
-    common case once `check` has instantiated its goal), and the rebuild is
-    memoised on `id`, so a shared subtree is built once and the result is shared
-    too.
+    mentions none of the substitution's variables is returned unchanged, and the
+    rebuild is memoised on `id`, so a shared subtree is built once and the result
+    is shared too.
+
+    Nothing on the checking path calls this any more — `unify` resolves variables
+    as it walks (§13.62) — so it is now only used to build the terms a *failure*
+    is reported with, where cost does not matter.
     """
     if isinstance(t, str):
         return subst.get(t, t)
@@ -505,7 +536,6 @@ class Checker:
     def check(self, goal, proof, path):
         if self.failure is not None:
             return
-        goal = instantiate(goal, self.subst)
         if isinstance(proof, str):
             # A rule with no premises is applied by naming it (`ty_var0`), which
             # is the same spelling as a local fact — so it must be looked up in
@@ -517,7 +547,8 @@ class Checker:
                     unify(concl, goal, self.subst)
                 except Mismatch:
                     self.fail(path, f"`{proof}` cannot conclude the goal",
-                              concl, goal)
+                              instantiate(concl, self.subst),
+                              instantiate(goal, self.subst))
                     return
                 self.applied.append(proof)
                 return
@@ -530,7 +561,8 @@ class Checker:
                 unify(stmt, goal, self.subst)
             except Mismatch:
                 self.fail(path, f"{proof} proves a different statement",
-                          stmt, goal)
+                          instantiate(stmt, self.subst),
+                          instantiate(goal, self.subst))
                 return
             self.assumed.append(proof)
             return
@@ -545,7 +577,8 @@ class Checker:
             unify(concl, goal, self.subst)
         except Mismatch:
             self.fail(path, f"`{rule.name}` cannot conclude the goal",
-                      instantiate(concl, self.subst), goal)
+                      instantiate(concl, self.subst),
+                      instantiate(goal, self.subst))
             return
         args = proof[1:]
         if len(args) != len(premises):
@@ -553,8 +586,7 @@ class Checker:
                             f"but {len(args)} subproofs")
             return
         for i, (prem, arg) in enumerate(zip(premises, args), 1):
-            self.check(instantiate(prem, self.subst), arg,
-                       path + [f"{rule.name} premise {i}"])
+            self.check(prem, arg, path + [f"{rule.name} premise {i}"])
             if self.failure is not None:
                 return
 

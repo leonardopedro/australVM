@@ -35,3 +35,7 @@ C33	consensus	U	unfer_consensus/src/jobs.rs	tested	docs/distributed/evidence/d14
 C34	storage	U	unfer_consensus/src/storage.rs	tested	docs/distributed/evidence/d14-fencing.log
 C35	consensus	U	unfer_consensus/tests/ordered_fencing.rs	tested	docs/distributed/evidence/d14-fencing.log
 C36	runtime	U	.github/workflows/deep-schedules.yml	tested	docs/distributed/evidence/d12-schedules.log
+C37	storage	U	unfer_ffi/src/outbox.rs	tested	docs/distributed/evidence/d15-outbox.log
+C38	storage	U	unfer_ffi/src/handles.rs	tested	docs/distributed/evidence/d15-outbox.log
+C39	consensus	U	unfer_consensus/tests/fence_invariant.rs	tested	docs/distributed/evidence/d21-fence-invariant.log
+C40	runtime	U	unfer_ffi/Cargo.toml	tested	docs/distributed/evidence/d15-outbox.log
