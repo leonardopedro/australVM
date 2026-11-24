@@ -764,6 +764,76 @@ for each, its conclusion's head constant is not produced by any other rule, so i
 independent of the rest. Nothing in the theory is now provable that was not before; the gain is
 the five axioms that are gone.
 
+### 9.4 Re-decided 2026-11-24: lean2dk exists now, and the hop is still the wrong shape
+
+§9.1 said "no Lean → Dedukti translator exists". That sentence has expired and is worth
+correcting rather than repeating: [`Deducteam/lean2dk`](https://github.com/Deducteam/lean2dk)
+exists, is maintained, and is the Lean→Dedukti translator the ecosystem was missing. What it
+*is* matters for the decision, so the state of it is recorded here as the project itself
+describes it: work in progress; it runs a `Lean4Less` pre-translation into a smaller kernel
+("Lean⁻") whose rules Dedukti can encode directly; its most complete branch "translates and
+type-checks `Init.Data.Nat.Lemmas` end-to-end against a *patched* Dedukti kernel, and
+documents the required kernel patches and the constant-stubbing it relies on"; and its own
+reported scaling blocker is that "common subterms are duplicated in the output rather than
+shared", with work begun to share universe levels through auxiliary definitions. That is the
+same disease this document spent §13.54–§13.61 treating on this side of the port, in a system
+that has not treated it yet.
+
+Measured in the workspace today, so the comparison does not rest on a web claim:
+
+| fact | measurement |
+| --- | --- |
+| Dedukti/Lambdapi in the pinned toolchain | **absent** — `nix eval nixpkgs#lambdapi.version` and `nix eval nixpkgs#dedukti.version` (aarch64-linux, this host's pin) fail with *does not provide attribute*; neither binary is on `PATH`. A hop needs a from-source OCaml build outside the flake, plus the patched kernel lean2dk's branch documents. |
+| Dedukti → MM0 translator in the workspace | `unfer/logos/src/mm0/dk.rs`, 979 lines, front end only |
+| its fragment | 5 symbols (`zero`, `succ`, `plus`, `times`, `eq`); "This is not a λΠ kernel" is in its module docs; a `thm` that is not `refl`/citation/`sym`/`trans` is refused by name |
+| its gate | `scripts/logos2mm0` → **15 passed, 0 failed, 0 gapped**, of which 2 are the `dk` cases (`arith.dk` 4 rules + 8 theorems, `mm0-c` exit 0; `induction_gap.dk` refused, exit 1) |
+| fixtures | `unfer/logos/mm0/dk/arith.dk` and `induction_gap.dk`, 15-line arithmetic files |
+| the other MM0 emitters in tree | `lean2mm0` 2 158 lines + `lean-typing-proof` 3 706 + `lean-typing-check` 676 (the Lean route), `au2mm0` 926, `clif2mm0` 333, `ledger2mm0` 536, `logos2mm0` 386, `service_iso2mm0` 403, `rv64-model-mm0` 344, `liquid-split-mm0` 398 — every one of them translates *its own* object language into MM0's first-order language, and none consumes a dependently typed proof |
+
+The last row is the whole argument, and it is a property of the target rather than of Dedukti.
+MM0 is first-order: it has sorts, term constructors, axioms and `def`s, and no dependent
+products, no universes, no conversion. A derivation that arrives from Lean through Dedukti is
+still a λΠ-modulo derivation, so getting it into MM0 requires exactly the encoding this route
+already runs — terms as `Term` data, typing as the `tty` predicate, the rules of `cic_typing.mm0`
+— and the hop then adds a translation layer and a second conversion engine in front of it. The
+cost of the certificate is set by the encoding, not by the language that carried it to the
+encoding's door. Measured on the rows this document tracks (§9.1, §13.60, §13.61), export bytes
+→ `.mm0` + `.mm1`:
+
+| row | `lean4export` NDJSON | `.mm0` | `.mm1` |
+| --- | ---: | ---: | ---: |
+| `BookProof.Sirk.ChapterSirkTruncation` | 77 939 135 | 129 051 148 | 167 551 727 |
+| same, `LTP_DEF_BODY_MAX=8` | 77 939 135 | 84 722 867 | 167 551 727 |
+| `BookProof.Toolbox.ChapterFockPairPerturbation` | 407 779 898 | 181 124 846 | 214 696 868 |
+| `BookProof.Ns.ChapterNsOuterFockSingleTime`, 64 MiB floor | 457 360 266 | 9 007 611 844 | — (not in the gate) |
+
+Inserting Dedukti between the export and that encoding changes none of those numbers, because
+the bytes are spent expanding CIC terms into first-order data, not on the syntax that carried
+them.
+
+There is one shape in which the hop *does* pay, and it is not this one. Checking the Lean
+derivation *in Dedukti* and stopping there would be far cheaper in bytes — Dedukti is a shallow
+embedding, so its certificate is the proof term, not an encoding of it — and it would be an
+independent second checker for the same development, which is worth having for the reason
+nanoDa is ("is this proof a `sorry`?"). It is a different goal: it ends at Dedukti's kernel,
+not at `mm0-c`. As a *route to MM0* the hop is worse on every axis that can be measured and
+unavailable on the one that cannot:
+
+| axis | Lean 4 → MM0 directly (in tree) | Lean 4 → Dedukti → MM0 (today) |
+| --- | --- | --- |
+| Lean → next step | `lean4export` NDJSON, already produced and pinned | `lean2dk`, WIP, needs `Lean4Less` and a patched Dedukti kernel |
+| next step installed | yes (flake `packages.lean4export`) | no — not in the pinned nixpkgs, not on `PATH` |
+| Dedukti/Lambdapi → MM0 | not needed | does not exist; the in-tree `dk.rs` is Peano-only and 979 lines of front end |
+| what the extra stage removes from the certificate | — | nothing: MM0 still needs the first-order encoding |
+| trusted base | 26 named axioms in two theory files + the emitter + `mm0-c` | the same, plus a λΠ-modulo reducer, its kernel patches, and two translation layers |
+| the scaling problem | measured and being treated (§13.54–§13.61) | the same problem, reported unsolved by lean2dk's own authors |
+
+**Verdict.** Keep the direct route. Worth doing separately, if the goal is trust rather than
+`mm0-c`: run `lean2dk` + Dedukti as an independent audit next to nanoDa, because a second
+kernel that accepts the same development is evidence the direct route's 467 710 assumed leaves
+(§9.1) are assumptions about this project and not about Lean. That is a different claim from
+"the proof re-checks in MM0", and it does not shorten the port.
+
 ## Appendix — FOUNDATIONS and PROB modules
 
 `name decls` pairs; zero-declaration entries are import aggregators or scratch files.
