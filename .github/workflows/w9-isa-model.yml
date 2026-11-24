@@ -15,6 +15,17 @@
 # conversion, i.e. when the pins, the converter or the checked-in statements
 # drifted apart. It also re-runs `mm0-rs compile` + `mm0-c` on both stems, so a
 # green run means the root of trust still accepts them.
+#
+# Cost, so that widening the path lists below is a decision and not a surprise.
+# Measured on run 45273021909 (2026-11-23, warm nix cache): the job took 16.1
+# min wall, 15.5 of it in `make w9` — two `lean -> lean4export` runs (NDJSON
+# peaks of 340 MB and 783 MB, ~1.1 GB of workspace) followed by two `mm0-rs
+# compile` + `mm0-c` verifications. The derivation is the variance: the Sail
+# model rebuilds in ~28 min when the cache key (`**/*.nix`, `**/flake.lock`)
+# misses, so a flake bump is ~45 min cold. `timeout-minutes: 120` is the failure
+# bound, not the expected time. Every path added to either `paths:` list buys
+# that wall time on every matching pull request, which is the whole reason the
+# lists name three files instead of `scripts/**`.
 name: W9.1 ISA model conversion
 
 on:
@@ -49,9 +60,10 @@ jobs:
   convert:
     name: both stems convert and match the committed artifacts
     runs-on: ubuntu-latest
-    # Cold: ~28 min of Sail model build + two lean4export runs (340 MB and
-    # 783 MB) + mm0. The bound is generous so a slow runner reports a failure
-    # rather than a cancelled job that looks like an infrastructure blip.
+    # Warm it runs in ~16 min (measured, see the header); cold it adds the ~28
+    # min Sail model build, so ~45 min is the realistic ceiling. The bound is
+    # generous on purpose: a slow runner must report a failure rather than a
+    # cancelled job that reads like an infrastructure blip.
     timeout-minutes: 120
 
     steps:

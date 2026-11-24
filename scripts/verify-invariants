@@ -3972,6 +3972,57 @@ fi
 check "CI: every cache restore prefix list is newline-separated ($_ci_keys key(s), none with a comma)" \
     test -n "$_ci_keys" -a -z "$_ci_bad"
 
+# --- CI: every workflow `run:` body parses as bash ---------------------------
+# The second CI-only failure class, and the one this repo actually hit: a `run:`
+# step whose shell text does not parse, so the job dies before running anything
+# and the step conclusion is all a non-admin can read. The GPU source gate was
+# that case (apostrophes inside `bash -c '…'`, fixed by writing the script with a
+# quoted heredoc), and it is invisible locally because the broken text only ever
+# existed inside YAML. Every workflow here uses the default bash shell (no
+# `shell:` override is set), so `bash -n` is the right parser — for both the
+# inline `run: cmd` form and a `|`/`>` block scalar. This checks *syntax* only:
+# GitHub's own semantic keys (an unknown action input, a bad `needs:`) still
+# fail where they always did, which is why a clean scan is not a claim that the
+# workflow runs.
+_ci_run_dir="$(mktemp -d)"
+_ci_run_scan="$(awk -v dir="$_ci_run_dir" '
+    function ind(s) { match(s, /^[ \t]*/); return RLENGTH }
+    FNR == 1 { inblock = 0 }
+    {
+        line = $0
+        sub(/\r$/, "", line)
+        if (inblock) {
+            if (line ~ /^[ \t]*$/) { print line > cur; next }
+            if (ind(line) > base) { print line > cur; next }
+            inblock = 0
+        }
+        if (match(line, /^[ \t]*run:/)) {
+            val = substr(line, RLENGTH + 1)
+            sub(/^[ \t]+/, "", val)
+            sub(/[ \t]+$/, "", val)
+            n++
+            cur = sprintf("%s/%03d.sh", dir, n)
+            printf "# %s:%d\n", FILENAME, FNR > cur
+            printf "%s %s:%d\n", cur, FILENAME, FNR > (dir "/index")
+            if (val ~ /^[|>]/) { inblock = 1; base = ind(line); next }
+            print val > cur
+        }
+    }
+    END { printf "count %d\n", n }
+' "$repo_root"/.github/workflows/*.yml)"
+_ci_run_count="$(printf '%s\n' "$_ci_run_scan" | sed -n 's/^count //p')"
+_ci_run_bad=""
+while read -r _ci_sh _ci_where; do
+    if ! _ci_msg="$(bash -n "$_ci_sh" 2>&1)"; then
+        _ci_run_bad="$_ci_run_bad $_ci_where"
+        echo "  workflow run block does not parse: $_ci_where"
+        printf '%s\n' "$_ci_msg" | sed -n '1,2p' | sed 's/^/    /'
+    fi
+done < "$_ci_run_dir/index"
+rm -rf "$_ci_run_dir"
+check "CI: every workflow run: block parses as bash ($_ci_run_count block(s))" \
+    test "${_ci_run_count:-0}" -gt 0 -a -z "$_ci_run_bad"
+
 echo
 echo "verify-invariants: $PASSED passed, $GAPS explained gap(s), $FAILED failed"
 if [ "$FAILED" -gt 0 ]; then
