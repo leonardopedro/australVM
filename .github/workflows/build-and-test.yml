@@ -384,15 +384,21 @@ jobs:
   # `rustc` and sets LD_LIBRARY_PATH itself).
   nix-pkg:
     runs-on: ubuntu-latest
-    # Unlike jit-stack this job carries no cranelift target cache, so
-    # `make bridge` compiles the bridge from source and that step is where the
-    # cost varies: 17.6 min on `3e63054b`, 24.9 min on `6c8591b3` (measured
-    # 2026-11-23/24). The OCaml suite is a steady ~31 min and
-    # `verify-invariants` ~2. A 60-minute bound left 5.4 minutes of margin on
-    # the green run and then cut this job mid-suite on the slow end (started
-    # 08:34:14Z, cancelled 09:34:33Z) — a `cancelled` conclusion that was a
-    # timeout, not a superseded run. 90 minutes is the slow bridge build plus
-    # the suite plus slack; a genuinely hung step still stops at 90.
+    # `make bridge` used to be the step whose cost varied, because the job
+    # carried no target cache: 17.6 min on `3e63054b`, 24.9 min on `6c8591b3`
+    # (measured 2026-11-23/24). It now caches `safestos/cranelift/target` and
+    # `../unfer/target`, and 25.2 min on `ee68fe46` is that step on a *miss* —
+    # the first run of a key is the cold one, later ones are the measurement
+    # that matters. The OCaml suite (~31 min quiet, 39.9 min on `53422dfe` with
+    # three runs of this workflow sharing the runners) is now the long pole and
+    # `verify-invariants` is ~3.
+    #
+    # The 90-minute job bound is the outer net: a 25-minute cold bridge plus the
+    # suite's own 50-minute step bound plus the remaining ~7 leaves room for the
+    # step bound to fire first, with its own annotation, in every case. A
+    # genuinely hung step still stops at 90, and a `cancelled` conclusion here
+    # has twice been a timeout rather than a superseded run (started 08:34:14Z,
+    # cancelled 09:34:33Z).
     timeout-minutes: 90
 
     steps:
@@ -435,6 +441,12 @@ jobs:
       # and `jit-` only as a fallback for the shared `../unfer/target` side. A
       # shared key would also make the two jobs race to save one entry, and the
       # loser's save is discarded.
+      #
+      # A cache entry is only written when the job reaches this action's post
+      # step, and a step timeout (`ee68fe46`: the suite died at its 40-minute
+      # bound) ends the job with `Post Cache cranelift / unfer_ffi build`
+      # `skipped`. That is why the bound below the suite was raised with the
+      # measurement rather than left as the thing that decides the cache.
       - name: Cache cranelift / unfer_ffi build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # actions/cache@v4
         with:
@@ -493,8 +505,14 @@ jobs:
       # The OCaml suite is the slow half of the tree (build, typecheck and 18
       # test suites), so it gets its own step with a budget larger than the
       # local default; the elapsed seconds are printed for the job log.
+      #
+      # 40 minutes was exactly the green run's spend on `53422dfe` (39.9), so the
+      # next contended run died on this bound instead of on a defect: step 15
+      # ran 12:04:45Z→12:44:49Z on `ee68fe46` and the job's annotation reads "has
+      # timed out after 40 minutes". 50 keeps ~10 minutes over the worst measured
+      # run and still leaves the job bound the one that fires later.
       - name: OCaml suite (build, typecheck, tests)
-        timeout-minutes: 40
+        timeout-minutes: 50
         run: |
           start=$(date +%s)
           nix develop "git+file://$PWD#ocaml" -c make test

@@ -232,6 +232,17 @@ competing with a copy of itself. The two cases separate by duration: a
 superseded job dies within seconds of a newer push, a timed-out one dies on its
 bound to the minute.
 
+A third shape is the *step* bound, and it reads `failure` rather than
+`cancelled`: measured 2026-11-24 on `ee68fe46`, the `OCaml suite (build,
+typecheck, tests)` step ran its full 40 minutes (12:04:45Z→12:44:49Z) and the
+job's annotation says so — "The action 'OCaml suite (build, typecheck, tests)'
+has timed out after 40 minutes." The step before it had already passed, so the
+job's `failure` is a verdict about the bound, not about the tree: the previous
+green run had spent 39.9 of those 40 minutes on the same step. One side effect
+is worth knowing for caching: a step timeout ends the job before the cache
+action's post step, which then reads `skipped`, so a run that dies this way
+leaves no cache entry behind.
+
 So read the line in this order: a job that reads `cancelled` says nothing about
 the check it was running — it was cut, not failed, and a job that reports
 `failure` (or `timed_out`) is the only one that carries a verdict about the
