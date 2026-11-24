@@ -70,10 +70,13 @@ let test_compile_help_lists_shipped_flags_and_real_targets _ =
         with Not_found -> false)
   in
   (* The real target vocabulary, not the parser-rejected `bin`. *)
-  (* `wgsl` is shipped (the GPU backend's target), so the expected sentence is
-     the parser's whole vocabulary, not the pre-GPU three. *)
+  (* `wgsl` and `mlir` are both shipped (the GPU backend's targets), so the
+     expected sentence is the parser's whole vocabulary, not the pre-GPU three.
+     This has to be edited together with `CliEngine.compile_help_lines`: G20b
+     added `--target-type=mlir` to the parser and the help but not here, which
+     is why this suite was red. *)
   assert_bool "help must advertise `exe` as the default target"
-    (contains "One of `exe`, `tc`, `c`, `wgsl`. Default is `exe`.");
+    (contains "One of `exe`, `tc`, `c`, `wgsl`, `mlir`. Default is `exe`.");
   assert_bool "help must not advertise the parser-rejected `bin` value"
     (not (contains "`bin`"));
   (* Every shipped flag is discoverable. *)
