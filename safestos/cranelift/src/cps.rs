@@ -932,8 +932,7 @@ fn emit_stmt_list<M: Module>(
                     // shape `Waiting` token -> poll -> `Waiting` again) recurses
                     // once per poll and overflows the stack whenever completion
                     // takes longer than the recursion budget.
-                    if let Some(loop_block) =
-                        self_tail_target(caller_name, &func_name, args.len())
+                    if let Some(loop_block) = self_tail_target(caller_name, &func_name, args.len())
                     {
                         for (pname, val) in self_tail_params().iter().zip(args.iter()) {
                             if let Some(&var) = vars.get(pname) {
@@ -1304,9 +1303,7 @@ pub fn compile_cps_to_clif<M: Module>(jit: &mut M, data: &[u8]) -> Result<CpsMod
                 let block = mgr.create_block();
                 mgr.builder.ins().jump(block, &[]);
                 mgr.switch_to_block(block);
-                SELF_TAIL.with(|slot| {
-                    *slot.borrow_mut() = Some((block, param_names.clone()))
-                });
+                SELF_TAIL.with(|slot| *slot.borrow_mut() = Some((block, param_names.clone())));
                 Some(block)
             } else {
                 None
@@ -1357,11 +1354,25 @@ mod a10_live_grant_tests {
     use super::check_call_permission;
     use crate::auth;
 
+    /// The installed engine and the deployment principal are process-global,
+    /// and cargo runs the tests in this binary in parallel. Two tests here
+    /// install engines, so without a lock they swap each other's engine
+    /// mid-assertion: that passed on a many-core development host and failed on
+    /// a two-core CI runner (2026-11-23). Every test that installs an engine
+    /// takes this first; it is poisoning-tolerant because a test that panics
+    /// holding it must not fail the next one.
+    static AUTH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn auth_lock() -> std::sync::MutexGuard<'static, ()> {
+        AUTH_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// D08: one test for all context scenarios, because the installed engine is
     /// process-global and this binary's tests run in parallel — a second test
     /// mutating it would race this one through no fault of either.
     #[test]
     fn an_instance_context_is_the_authority_and_a_stale_one_is_refused() {
+        let _auth = auth_lock();
         let engine = auth::ManifestAuthEngine::from_toml_str(
             "[module]\nname = \"d08_a\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
         )
@@ -1387,8 +1398,8 @@ mod a10_live_grant_tests {
                 check_call_permission("run", "", "uk_version").is_ok(),
                 "A's own grant must authorize A, whatever principal was installed last"
             );
-            let denied = check_call_permission("run", "", "uk_evolve")
-                .expect_err("B's grant is not A's");
+            let denied =
+                check_call_permission("run", "", "uk_evolve").expect_err("B's grant is not A's");
             assert!(
                 denied.contains("d08_a") && !denied.contains("'d08_b'"),
                 "the refusal must name A as the principal, got: {denied}"
@@ -1411,8 +1422,8 @@ mod a10_live_grant_tests {
         // A revoked identity is refused before any grant is consulted: already
         // compiled code cannot keep using authority it obtained earlier.
         assert!(auth::revoke_instance(a.instance));
-        let stale = auth::check_instance_call(&a, "uk_version")
-            .expect_err("a revoked context is not live");
+        let stale =
+            auth::check_instance_call(&a, "uk_version").expect_err("a revoked context is not live");
         assert!(stale.contains("no longer live"), "got: {stale}");
         assert!(auth::check_instance_call(&b, "uk_evolve").is_ok());
 
@@ -1463,7 +1474,10 @@ mod a10_live_grant_tests {
         );
         let spoofed = auth::check_remote_use("node-8", &node, "Call", "uk_version")
             .expect_err("a context cannot certify its own node");
-        assert!(spoofed.contains("cannot certify its own node"), "got: {spoofed}");
+        assert!(
+            spoofed.contains("cannot certify its own node"),
+            "got: {spoofed}"
+        );
         let local = auth::bind_instance("d08_a", false);
         assert!(
             auth::check_remote_use("node-7", &local, "Call", "uk_version").is_err(),
@@ -1486,6 +1500,7 @@ mod a10_live_grant_tests {
     /// binary would race each other's engines.
     #[test]
     fn live_jit_denies_uk_calls_the_module_manifest_does_not_grant() {
+        let _auth = auth_lock();
         let engine = auth::ManifestAuthEngine::from_toml_str(
             "[module]\nname = \"a10_widget\"\n\n[grants]\nkernel = [\"uk_version\"]\n",
         )

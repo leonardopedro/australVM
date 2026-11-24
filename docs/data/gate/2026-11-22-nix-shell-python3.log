@@ -4,7 +4,7 @@
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
-[pass] D00 contracts: 20 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c (dirty)
+[pass] D00 contracts: 20 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer ad3ed80
 [pass] D00: distributed execution record and contract inventory are well-formed
 [pass] D00 checker refuses: duplicate inventory id
 [pass] D00 checker refuses: unknown status
@@ -101,6 +101,15 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] PC03: composition, discharge and premise controls
   [detail] 3 sorts, 19 term/def, 29 ax/thm — PC06 assembled word+relation+gpu_plan
   [detail] PC06 reuse: compose_bound at the clamp clause, the plan (n) and the plan at u256
+  [detail] PC06 cache: 29 theorem row(s) and 6 instance row(s) recomputed and matched
+  [detail] PC06 cache: a stronger premise moves plan_write_bound's statement digest and the row is refused
+  [detail] PC06 cache: an extra application is refused (applies/closure change; the replay refuses it too)
+  [detail] PC06 cache: a proof-position mention is a dependency (clamp_transport names PC05a's bound theorem without applying it)
+  [detail] PC06 cache: closing a lower obligation adds its row and leaves compose_bound's row byte-identical
+  [detail] PC06 cache: a shortened closure row is refused
+  [detail] PC06 alpha matrix: two binders collapsing onto one term are refused
+  [detail] PC06 alpha matrix: a statement with fewer premises is refused as an instance
+  [detail] PC06 alpha matrix: a binder the instance never instantiates is refused
   [detail] PC06 residual obligations (not discharged by MM0):
     O1: generated flat index is representable [Why3 goal index_representable (separate route, not MM0)]
     O2: guard implies the element/index bound [Why3 goal guard_implies_bound; consumed as plan_write_bound's hb]
@@ -140,6 +149,14 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
   [detail] dropping the consumed premise from the statement refuses the transport
   [detail] dropping the consumed premise from the proof refuses the transport
 [pass] PC05b: transported bound through the reflected edge
+  [detail] PC07 graph: 19 theorem row(s) match the proof terms
+  [detail] PC07 identity: ir_sha256 48caf04ea171… recorded by clamp_source, clamp_wgsl, clamp_transport
+[pass] PC07: the frozen chain replays and its declaration matches
+[pass] PC07: the chain checker's controls refuse and report separates
+  [detail] PC08 fragment: add — 22 byte(s), 7 instruction(s), 1 relocation(s), arch x86_64
+  [detail] PC08 imports: Austral.Pervasive::trappingAdd, au_alloc
+[pass] PC08: the captured host fragment decodes and is pinned
+[pass] PC08: the native edge's controls refuse
   [detail] isa-hypotheses: 4 pinned citation(s), 1 cited hypothesis/hypotheses (1 content-checked, 0 unchecked), 65 axiom(s) accounted for
 [pass] W8: an uncited or stale hypothesis is refused
 [pass] W8: an unchecked citation cannot be re-labelled as checked
@@ -172,17 +189,20 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] W9.3: the toy's shape figures match what mm0-rs counts (3 sorts, 18 term/def, 48 ax/thm)
   [detail] mutations refused: toy_jit_store_visible(refused), toy_jit_store_load_other(refused), toy_jit_two_cells_preserved(refused), toy_jit_fourth_store_drops_oldest(refused), toy_jit_recent_cells_readable(refused), toy_jit_third_store_kept(refused), toy_jit_refresh_keeps_other_cell(refused), toy_jit_refresh_keeps_other_cell(refused), toy_jit_two_cells_preserved(refused), toy_jit_refresh_keeps_held_cells(refused), toy_jit_refresh_no_new_held(refused), toy_width4_load_after_wide_store(refused), toy_width4_store_load_roundtrip(refused)
 [pass] W9.3: the toy's proofs depend on its axioms (mutating one refuses them)
-[gap]  W9.3: toy axioms not run against a concrete model (the witness could not be built here)
-[gap]  W9.3: the witness's axiom list not compared (the witness could not be built here)
-[gap]  W9.3: the domain-5 regression not run (the witness could not be built here)
-[gap]  W9.3: the Lean axiom list not compared (the witness could not be built here)
+  [detail] toy-witness: 20/20 axioms hold in the witness; 6/6 rejected candidates fail as they must
+[pass] W9.3: the toy's axioms hold in a concrete model (no counterexample)
+[pass] W9.3: the witness exercises all 20 axioms the toy declares
+  [detail] toy-witness: 5 atom(s) (0 = unset), 16276 memories (every shape of at most three cells)
+[pass] W9.3: the witness's verdicts do not change when the domain grows (27 rows at 4 and 5 atoms)
+  [detail] lean-witness: 20 axiom(s) proved for an arbitrary atom domain, 6 rejected candidate(s) proved false
+[pass] W9.3: a Lean development proves the same 20 axioms
 [pass] W9.3: the Lean development proves the toy's 28 theorems too
 [pass] W9.3: every Lean declaration rests on Lean's standard foundation only (48 audited)
 [pass] W9.3: the Lean file's code carries no sorry/admit/native_decide/ofReduceBool
   [detail] injected sorry at line 810: lean accepted the file (exit 0), the scan refused it
 [pass] W9.3: the no-sorry scan refuses an injected sorry that Lean itself accepts
 [pass] W9.3: the no-sorry scan does not count banned words inside comments
-[gap]  W9.3: rejected-candidate cross-check not run (the witness could not be built here)
+[pass] W9.3: both witnesses reject the same candidates
   [detail] lean mutations refused: put-no-truncation(refused@199), drop-keeps-written-address(refused@133), notfull-weakened-to-four(refused@236), narrow4-becomes-identity(refused@606), keep-order-becomes-put(refused@360)
 [pass] W9.3: the Lean model's proofs depend on its definitions (mutating one refuses them)
   [detail] flux1d probe: 4 identit(ies), 1000 states, max relative deviation 0.000e+00
@@ -278,12 +298,24 @@ mm0-comparator selftest: tampered approval refused — the approved file is what
 mm0-comparator selftest: OK — all three negative controls refuse
 [pass] W3: comparator self-test (all three negative controls refuse)
 logos CNL → DeltaNet → MM0 gate
-[gap]  cargo cannot link in this shell — no working C toolchain for it, so the emitter cannot be built here:
-        = note: /home/leo/.rustup/toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld: line 5: /nix/store/b5rxg3fjf23qax03mqw8pbv14gqn12sr-rustup-1.29.3/nix-support/ld-wrapper.sh: No such file or directory
-                collect2: error: ld returned 127 exit status
-        = note: /home/leo/.rustup/toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld: line 5: /nix/store/b5rxg3fjf23qax03mqw8pbv14gqn12sr-rustup-1.29.3/nix-support/ld-wrapper.sh: No such file or directory
-logos2mm0: 0 passed, 0 failed, 1 gapped
-[gap]  logos mm0: the fragment gate could not run here (the emitter cannot be built in this shell)
+[pass] emitter built (/home/leo/Projects/australVM/../unfer/target/debug/logos)
+[pass] theory compiles and re-checks (2 sorts, 9 term/def, 18 ax/thm)
+[pass] Kopperman theory compiles and re-checks (2 sorts, 33 term/def, 64 ax/thm)
+[pass] Kopperman/Mehler theory compiles and re-checks (2 sorts, 33 term/def, 68 ax/thm)
+[pass] claim corpus certifies (52 lines, every expectation held)
+[pass] kernel corpus cites flux1d_certificate (4 obligation(s), 1 honest unproved)
+[pass] kernel corpus refuses a certificate whose pinned sidecar digest does not match
+[pass] corpus wrote 39 certificate(s) and 1 goal(s)
+[pass] upstream corpus certifies (21 open claim(s) rewritten, 24 goal(s) for the induction-only theorems)
+[pass] Kopperman corpus certifies (39 lines, every expectation held)
+[pass] Kopperman corpus wrote 32 certificate(s) and 6 goal(s)
+[pass] dk front end certifies (4 rule(s) re-proved, 8 theorem(s), mm0-c re-checked)
+[pass] dk front end refuses a non-conversion (induction named, exit 1)
+[pass] questions answered: yes=0, no=2 (the contract callers branch on)
+[pass] tampered certificate rejected (5 → 4 no longer proves the statement)
+
+logos2mm0: 15 passed, 0 failed, 0 gapped
+[pass] logos mm0: CNL → DeltaNet → MM0 corpus verifies (and its anchor fires)
 [pass] memsafe: theory, emitter, both fixtures, ledgers and certificates present
 [pass] memsafe: certificate + ledger emitter present and executable
 ledger2mm0 check: OK — certificates are in sync with the pinned ledger and theory
@@ -360,4 +392,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 167 passed, 10 explained gap(s), 0 failed
+verify-invariants: 177 passed, 4 explained gap(s), 0 failed

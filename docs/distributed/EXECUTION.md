@@ -1000,6 +1000,544 @@ schema tests, but no test drives it through a real run — the demo's witness is
 `modhost`. `untrusted-native` remains U26's tier and is still refused by
 preflight.
 
+## D10 — canonical replicated commands and domain-separated signatures (2026-11-23, steps 1a–3 of 3)
+
+U **new** `unfer_protocol/src/distributed.rs`, `unfer_protocol/src/lib.rs`;
+tests `unfer_protocol/tests/distributed_wire.rs`.
+
+### Why the value had to change
+
+QuePaxa agrees on a `u64`. The command itself waits in `net.rs`'s
+`LedgerSnapshot::pending`, so a committed id names a `BTreeMap` entry on *this*
+process: a restarted peer, or a peer that never saw the submission, holds the
+slot and not the work. `ReplicatedValue` replaces that value with the command's
+bytes and gives "nothing here" its own variant instead of the reserved id
+`NOOP_VALUE = u64::MAX` — no integer is carved out of the command space, and
+there is no process-local id left to resolve.
+
+### The frame
+
+```text
+magic(4) = "UFDC" | version(u16 BE) | kind(u8) | body_len(u32 BE) | body
+kind 0 (noop):    body_len = 0
+kind 1 (command): body = schema(u16 BE, never 0) | payload
+```
+
+Every byte has one encoding: fixed widths, big-endian integers, no map, no
+float, no `serde_json` rendering to disagree about. `body_len` is checked
+against `MAX_BODY_BYTES` (1 MiB payload + the schema tag) from the header alone,
+before a buffer is reserved, so a 4 GiB claim costs a refused decode and not an
+allocation.
+
+| Rule | Refusal |
+|---|---|
+| wrong magic / version / kind | `BadMagic` / `UnsupportedVersion` / `UnknownKind` (the version is never guessed at) |
+| declared body larger than the bound | `BodyTooLong`, measured from the header |
+| no-op with bytes, command without a schema tag, schema 0 | `NoopWithBody` / `CommandBodyTooShort` / `ZeroSchema` |
+| fewer bytes than declared, at any prefix | `Truncated { needed, had }` |
+| a second frame behind the first, one byte of junk | `TrailingGarbage` (but `decode_frame` returns the first frame and its length, so a stream reads both) |
+| more unfinished bytes than one frame can carry | `BufferTooLong` on the streaming decoder |
+
+`FrameDecoder::push` takes arbitrary chunks and returns every complete frame in
+order, so partial and coalesced frames are the same code path.
+
+### The signature domain
+
+A signature covers `"unfer/distributed/command/v1"`, then
+`len(u16) | field` for **deployment, audience, schema, context**, then
+`len(u32) | frame`. Each element is length-tagged rather than delimiter-joined,
+so moving a byte across a field boundary changes the preimage (a test moves one
+byte from `deployment` into `audience` and asserts the two preimages differ).
+`SignatureVersion::Legacy` is the pre-D10 layout — `sha256(frame)`, no domain —
+kept so already-signed history still verifies; nothing new may use it.
+
+### The dependency's own limits (measured from `rust-quepaxa` 0.1.0)
+
+| Limit | Value | Where |
+|---|---|---|
+| wire version | `WIRE_VERSION: u16 = 4` | `network/wire.rs:7` |
+| deployment identity | `DeploymentId([u8; 16])` | `network/wire.rs:10` |
+| transport RPC frame | `DEFAULT_MAX_FRAME = 8 MiB`, length-prefixed `u32`, empty frame refused | `network/transport.rs:26`, `:590`, `:625` |
+| recorder/runtime snapshots | postcard, `StorageEnvelope` version-tagged | `network/codec.rs:125` |
+| submission journal (ours) | `MAX_JOURNAL_BYTES = 16 MiB` | `unfer_consensus/src/net.rs:52` |
+| batch ceilings (dependency defaults) | `max_batches_per_request`, `max_batch_bytes = 4 MiB`, `max_fetch_ids` | `network/batch.rs:278-287` |
+
+This wire's `MAX_FRAME_BYTES` is 1 MiB + 13 bytes, inside the transport's 8 MiB
+frame, so one replicated command is one RPC frame with nothing to fragment at
+the transport layer.
+
+### Witnesses (`unfer_protocol/tests/distributed_wire.rs`, 12)
+
+| Witness | Asserts |
+|---|---|
+| `both_decoders_accept_the_golden_vectors_and_re_encode_them` | a second decoder written independently of the module (explicit cursor) agrees with `decode_exact` on every pinned vector, and re-encoding reproduces the bytes |
+| `the_golden_vectors_use_every_declared_width` | the vectors pin the magic, the version and a header-only no-op |
+| `every_split_point_of_every_vector_streams_to_the_same_value` | every two-chunk split *and* byte-at-a-time streaming yield the same value, with nothing left buffered |
+| `coalesced_frames_decode_in_order` | three frames in one push and in 3-byte chunks decode to the same sequence |
+| `every_truncation_is_refused_and_names_what_it_needs` | every prefix is `Truncated`, and a truncated tail makes `finish()` refuse |
+| `trailing_garbage_is_refused_and_two_frames_are_not_one` | one junk byte is refused; two frames are two frames |
+| `an_oversized_body_is_refused_from_the_header_alone` | `MAX_BODY_BYTES + 1` and `u32::MAX` are refused before any payload exists |
+| `malformed_headers_are_refused_by_the_rule_they_break` | bad magic, version, kind, no-op-with-body, short body, schema 0 |
+| `a_command_is_bounded_at_construction_and_at_decode` | exactly-at-the-bound round-trips; one byte more is refused; an empty payload is legal |
+| `a_frame_for_another_deployment_audience_schema_or_context_has_another_preimage` | all four domain fields separate |
+| `domain_separation_is_length_tagged_not_delimited` | a shifted field boundary changes the preimage; an over-long field is refused by name |
+| `the_legacy_version_is_sha256_of_the_frame_alone` | legacy is `sha256(frame)` and ignores the domain; the new version differs from it |
+
+```
+$ cargo test -p unfer_protocol --offline   # EXIT=0: lib 353, cell_tool 4,
+                                           # distributed_wire 12, protocol 51, doctests 3
+$ cargo check -p unfer_consensus --offline # EXIT=0
+```
+
+Evidence: `docs/distributed/evidence/d10-unfer_protocol_tests.log`,
+`d10-unfer_consensus_check.log`.
+
+### The replicated value is what `net.rs` agrees on (step 3a)
+
+U `unfer_consensus/src/net.rs`.
+
+`NOOP_VALUE = u64::MAX` is gone. `NetworkCluster::build` names its gap filler
+with `.with_noop_value(ReplicatedValue::Noop)`, and the submission channel, the
+`StateMachine<ReplicatedValue>` impl and the pump all carry the value.
+
+A submission becomes a value whose payload is `id(u64 BE) |
+canonical_json(ConsensusTransaction)` under `LEDGER_TX_SCHEMA = 1`
+(`encode_ledger_value`/`decode_ledger_value`). The reservation id travels
+*inside* the payload, so a decision is self-describing: `append` learns which
+submission it applied from the bytes, and needs no map to look it up.
+
+| Before | Now |
+|---|---|
+| `append(Vec<u64>)`, looked up in `LedgerSnapshot::pending` | `append(Vec<ReplicatedValue>)`, decoded from the value |
+| a peer that never held the payload holds the slot and not the work | any replica applies the decision from its own bytes |
+| `pending` doubles as payload store and durability record | `outbox` is **only** this node's pre-proposal durability; it is drained by the decision and never read to apply one |
+| unknown id: silently skipped | unknown schema, short payload, undecodable bytes: refused by name, nothing committed |
+
+The renamed field keeps `#[serde(alias = "pending")]`, so a pre-D10 snapshot
+loads with its queued submissions in the outbox and re-proposes them instead of
+dropping work it had already acknowledged. `append` also removes an applied id
+from the outbox and de-duplicates by committed id, which is what makes a
+re-delivered decision (or the second replica sharing one ledger) a no-op.
+
+Witnesses in `net.rs`: a committed value applies on a ledger that never queued
+it (and its receipt answers with the slot the payload landed at); the outbox is
+drained by the decision and is not needed to apply it; an unknown schema, a
+payload shorter than its id and undecodable bytes are each refused with nothing
+committed; a no-op decision commits nothing and is not an error.
+
+```
+$ cargo test -p unfer_consensus --offline --features network --lib          # 162 passed
+$ cargo test -p unfer_consensus --offline --features network --test phase6_testnet
+                                                                            # 4 passed
+$ cargo test -p unfer_consensus --offline --features network --test request_identity
+                                                                            # 6 passed
+$ cargo test -p unfer_consensus --offline --features network --test power_cut
+                                                                            # 4 passed
+```
+
+Evidence: `docs/distributed/evidence/d10-net-lib.log`,
+`d10-net-phase6_testnet.log`, `d10-net-request_identity.log`,
+`d10-net-power_cut.log`.
+
+### Step 3b: `signing.rs` signs the domain-separated preimage
+
+U `unfer_consensus/src/signing.rs`. `canonical_frame` is now the unsigned
+canonical JSON on its own; `canonical_bytes` is `sha256(frame)` over it,
+byte-for-byte what it was.
+
+| Piece | Behaviour |
+|---|---|
+| `CONSENSUS_SIGNING_DOMAIN` | `deployment = "unfer"`, `audience = "unfer-consensus"`, `schema = "consensus-transaction"`, `context = "consensus"` |
+| `sign_transaction` | signs `signing_preimage(domain, canonical_frame(tx))` — the domain-separated layout |
+| `sign_transaction_legacy` | still produces `sha256(frame)`; kept only to witness or reproduce pre-D10 history |
+| `accepted_messages` | `[domain-separated, legacy]`, tried in that order |
+| `verify_transaction` / `verify_transaction_in` | accept either preimage, so signatures made before this patch keep verifying |
+| `verify_identity_op_as` | same dual acceptance, so a *new* identity op still authenticates at the ordered point against the stored key |
+| `verify_arctic_threshold` | same dual acceptance; the aggregate signatures the test helpers build cover `canonical_bytes`, so they verify through the legacy branch |
+
+Witnesses added: a legacy signature still verifies (and equals the legacy
+signer byte for byte); a new signature is *not* the legacy one, equals the
+domain-separated signer, verifies in its own domain, and is refused when the
+deployment, audience, schema or context is changed to anything else; altered
+bytes are refused under both layouts.
+
+The operation's `signature` field is 64 bytes and carries no version tag, so
+verification cannot know which layout a signature used and must try both. That
+is why legacy acceptance is a *compatibility window*, not a permanent rule:
+retiring it needs a deployment-wide signal that no pre-D10 signature remains,
+and until then a legacy signature over any frame that also verifies as a
+domain-separated one is accepted (the domain-separated one is checked first).
+
+```
+$ cargo test -p unfer_consensus --offline --features network --lib   # 162 passed (9 signing)
+$ cargo check -p unfer_identity -p unfer_taler -p unfer_data --offline # EXIT=0
+```
+
+Evidence: `docs/distributed/evidence/d10-net-lib.log`,
+`d10-consumers_check.log`.
+
+### What is not done yet
+
+* no live transport carries these frames yet (D11/D17).
+* `Legacy` signature acceptance cannot be retired until a deployment-wide
+  cutover signal exists; today the verifier tries both layouts.
+
+## D11 — one replica per process (2026-11-23, steps 1–3 of 3)
+
+U `unfer_consensus/src/net.rs`; **new** `unfer_consensus/src/bin/unfer_node.rs`,
+`unfer_consensus/tests/independent_nodes.rs` and the fixture configs that test
+writes; `unfer_consensus/Cargo.toml` (bin + test targets, both
+`required-features = ["network"]`).
+
+### Startup belongs to a process, not to a harness (step 1)
+
+| Piece | What it decides |
+|---|---|
+| `DeploymentConfig` | deployment id, lane, members (replica, address, certificate), accepted clients. Validated **before anything binds**: id non-zero, ≥2 members, replicas `1..=n` in order, addresses distinct, no certificate shared between two roles, client ids non-zero, unique and declared |
+| `NodeConfig` | which replica this process is, its own certificate **and key** (the key the deployment file never carries), an absolute `state_dir`, the RPC timeout |
+| `StateDirLock` | an exclusive lock on `<state_dir>/node.lock`, held for the process's lifetime. A second process pointed at a live directory fails with `locked by another node process`; the kernel releases it on a kill, so a restart is not blocked |
+| `SharedLedger::open` | a ledger with **no** submission pump. A standalone node receives complete values over TLS, so `allocate` refuses with a named error instead of queueing into a pump that is not there |
+| `start_node` / `start_replica` | one startup path for a server, recorder, runtime and state machine. `NetworkCluster` is now the in-process harness: two `start_replica` calls over one shared ledger and directory, plus the local pump |
+
+`unfer_node` has three commands. `serve --config node.json [--ready ready.json]`
+starts a node, publishes the address it actually bound (so a config may ask for
+port 0) and stops on SIGINT/SIGTERM. `submit --config client.json --to ADDR
+--id N --tx tx.json` is a **client**: it frames the value itself (`id` inside
+the payload, D10) and prints the outcome as JSON. `digest --config node.json`
+reads a node's durable committed log without taking its lock, which is how the
+test compares what two processes applied.
+
+Configuration is JSON with hex DER inside the file. That is deliberate: a
+fixture is self-contained, so two processes never resolve a shared path — which
+is exactly the shared state D11 forbids.
+
+### Three processes, disjoint state, identical digests (step 2)
+
+The test starts three processes with three state directories, three
+certificates and three ports, submits one transaction through node 1 and one
+through node 2, then compares `digest` output:
+
+| Check | Measured |
+|---|---|
+| each process publishes the port it was configured with | 3/3 |
+| digests after two commits | all three equal |
+| each directory holds only its own `node-<id>` and its own `ledger.json` | yes; no sibling replica's state |
+| a second `serve` on a live state directory | refused: `locked by another node process` |
+| a client config for deployment 2 submitting into deployment 1 | refused, non-zero exit |
+| the in-process harness still passes its suites | `phase6_testnet` 4, `request_identity` 6, `power_cut` 4 |
+
+### Stop one node, catch up on restart (step 3)
+
+1. Kill node 3 (SIGKILL), submit a third transaction through node 2. Both
+   survivors commit it; node 3's digest still reads `2:…` — a stopped process
+   does not apply what it missed.
+2. Restart node 3 on the same directory, address and identity: it rebinds the
+   port, and is one commit behind (`3:d5a7…` against the survivors' `4:…` once
+   the fourth decision lands).
+3. Submit a fourth transaction through node 1. The rejoined node converges on
+   the survivors' digest `4:6b0e9fc5…`, which is the digest of the **whole**
+   log — so it applied the decision it missed while it was down, not just the
+   new slot.
+
+```
+$ cargo test -p unfer_consensus --offline --features network --lib        # 167 passed
+$ cargo test -p unfer_consensus --offline --features network --test independent_nodes
+                                                                           # 1 passed
+$ cargo test -p unfer_consensus --offline --features network --test phase6_testnet   # 4
+$ cargo test -p unfer_consensus --offline --features network --test request_identity # 6
+$ cargo test -p unfer_consensus --offline --features network --test power_cut        # 4
+```
+
+Evidence: `docs/distributed/evidence/d11-lib.log`,
+`d11-independent.log` (its stderr line carries both digests),
+`d11-phase6_testnet.log`, `d11-request_identity.log`, `d11-power_cut.log`.
+
+### What is measured, and what is not
+
+* **Catch-up needs a decision — superseded, see the follow-up below.** As
+  measured here, the dependency informs a replica of decisions it missed
+  (`InformDecisions`) only when the cluster next decides, so a node restarted
+  while the cluster was idle stayed behind until then. The follow-up below
+  removes that dependency on a new decision; this paragraph is kept as the
+  measurement it was, not as current behaviour.
+* **No checkpoint export/import was needed**, so none was added: the recorder
+  and runtime snapshots plus the informed decisions reconstruct the log, and the
+  digest equality in the test is what proves it.
+* **Five configuration refusals are unit witnesses** in `net.rs`: zero
+  deployment id, members not consecutive from 1, two replicas on one address, a
+  relative state directory, and an occupied one (lock). A sixth — a client the
+  deployment does not declare — covers the client side.
+* **The harness is not a deployment.** `NetworkCluster` still runs two replicas
+  over one directory and one ledger on purpose; it is a labelled fixture, so the
+  failure modes it tests stay reproducible in one test binary.
+
+### Follow-up (2026-11-23): an idle cluster pushes, a rejoined replica no longer waits
+
+The gap above was that catch-up rode on the next decision. It no longer does:
+
+* every replica runs a `catch_up_loop` (`net.rs`) beside its server. Every
+  `CATCH_UP_INTERVAL` (200 ms) it takes its own committed head and asks each peer
+  `Status(head)`. A status probe answers "do you have this slot", so the peer's
+  frontier is found by **binary search** between what is already known and `head`
+  — a peer behind by one slot costs the same probes as a peer behind by a
+  million.
+* it then sends the missing decisions through the transport's own
+  `InformDecisions` request, in batches of `CATCH_UP_BATCH` (256). The peer's
+  recorder records them and its state machine applies them in slot order, exactly
+  as it would a live decision, so its ledger advances and persists.
+* the decisions come from the shared `NetworkConsensusHandler` the replica
+  already applies with (one `Arc`, `SharedSubmissionHandler`), not from a second
+  copy that could disagree with it. Nothing new is submitted, and the cluster
+  stays idle.
+
+Measured: after a replica was stopped, two decisions taken without it, and the
+process restarted, it reached the survivors' digest **3:…** with **no further
+submission** (`tests/independent_nodes.rs`), and `process/slow-replica-idle-catch-up`
+records the same for the process fixture. The crash matrix's slow-replica case is
+now an idle-catch-up assertion, not a "submit once more" one.
+
+Limits: this is the peers doing the looking, so a node whose peers are *all* down
+still waits for one to return (there is nothing to push it); and the probe/push
+cadence is a timer, measured 200–400 ms on this host, not an event.
+* SIGKILL is used here only to stop a process, not to inject a storage fault;
+  the crash matrix over these processes is D13.
+
+## D12 — deterministic fault scheduler over the production transition core (2026-11-23, steps 1–3 of 3)
+
+**New** `unfer_consensus/src/sim.rs` and
+`unfer_consensus/tests/distributed_schedules.rs`; `unfer_consensus/src/lib.rs`
+(publishes the module), `src/storage.rs` and `src/node.rs` (two test seams, see
+below).
+
+### The node is real; the environment is scheduled (step 1)
+
+The harness does not reimplement the node. Each replica is a `ConsensusNode`
+over its own real `TransitionLog`, and the things a test cannot control from
+outside become explicit inputs:
+
+| Input a process really gets | How the harness supplies it |
+|---|---|
+| which committed decisions this replica has learned | `EngineView::horizon`: `get_log` reveals only slots up to it |
+| whether it can reach the quorum to propose | `EngineView::writable`: a partitioned replica's `submit` is refused by the engine, not by the node |
+| what the next journal append returns | `TransitionLog::inject` via `ConsensusNode::inject_storage_fault` (`BeforeWrite`), which is the existing D07 fault point, re-compiled for the library so an integration test can arm it |
+| whether the process is running | `Crash` drops the node; `Restore` re-opens it over the same directory **and the same engine view**, so a restore-then-deliver is a catch-up |
+| duplicate and reordered requests | `Retry` re-sends the same request id and the same signed payload; `Deliver` is per replica, so replicas apply the same log at different times |
+
+The consensus engine is an assumption in this harness, stated rather than
+tested: one `Cluster` holds the decided log, and the harness decides who has
+learned what. Application order is an input. Ordering correctness is D11's
+QuePaxa dependency, not this task's claim.
+
+### Nondeterminism is registered (step 2)
+
+Every choice is recorded in a `Trace` with a class and a stable site id, and the
+classes are kept apart because a failure in one is a different claim:
+`Content` (which request, and whether it is a fresh or duplicated encoding — a
+bad client), `Scheduling` (deliver/partition/crash/restore — a bad host), and
+`Fuel` (how many steps a bounded run may take — a truncated run mistaken for a
+pass, so a run that stops on the bound says so). The generator is SplitMix64, not
+OS entropy: the same seed and the same action list reproduce the same trace and
+the same state fingerprint, which the replay test asserts, including that a
+*different* seed changes nothing when the action list is fixed.
+
+### The fixed domain, its bounds, and what pruning means (step 3)
+
+| Bound | Value |
+|---|---|
+| Clients | 2 (each with its own keypair, DID and durable request sequence) |
+| Replicas | 3 (each with its own directory, journal and engine view) |
+| Requests | 3 — an authorized mint (applies), a mint by the non-authority client (refused by the node itself, slot advances), and an identity create (applies through a second ledger) |
+| Action alphabet | 9 fixed actions (3 admits, 1 retry, 3 delivers, 1 partition, 1 crash) |
+| Depth | **4** in the default run, **5** in the `#[ignore]`d deep run |
+| Unpruned state space | 7381 / 66430 prefixes for depth 4 / 5 |
+| Executed, pruned, leaves | depth 4: **1342** executed, **545** pruned as equivalent, **648** leaves; depth 5: **6904**, **2898**, **3239** |
+| Violations | **none** at either depth |
+| Runtime | depth 4 **55 s**, depth 5 **325 s** on this aarch64 host (`d12-schedules.log`) |
+| Seeded walks (past the bound) | 32 runs × 12 steps, **30 distinct** final states, no violation |
+
+The depth-5 run is `a_deep_search_to_depth_five_finds_no_violation`, `#[ignore]`d
+because it takes minutes — not because its numbers are optional: they are the
+ones in this table, and the command is in `d12-schedules.log`. The cost is per
+prefix, not per entry: each prefix starts three real replicas with real journals
+(~40 ms), which is why the depth-5 search costs 325 s for 6904 prefixes and why
+it is a reported bound rather than a default test.
+
+Pruning is by `Sim::state_key` — decided log, per-replica watermark, liveness and
+state digest. Two prefixes with the same key are treated as admitting the same
+continuations, which holds only because the transition core is deterministic and
+every input beyond that key is an action in the trace. Retention pruning and a
+lost journal would break the equivalence; this domain does neither, and that is
+why the bound is a bound and not a proof.
+
+### The four guards, minimized
+
+Each guard is a schedule that a design missing the guard would fail. The
+schedule is minimized (one-removal-per-pass, repeated) and the minimized form is
+re-run, so the recorded witness is the shortest one the harness found:
+
+| Guard | Script → minimal | What the production core did on the minimal schedule |
+|---|---|---|
+| dedup | 3 → **3** | two committed entries for one mint (`2` slots), one application: supply **100**, both replicas applied 2 of 2 |
+| rejection | 3 → **2** | unauthorized mint refused at slot 1 (**UK-7001**), watermark **1**, not halted, supply 0 |
+| restart | 7 → **4** | a replica restarted over its journal applied 2 of 2 slots and holds the peer's digest `2:204b0b8d…` |
+| revoke | 8 → **4** | a replica that was down for create *and* revoke replays both in log order: revoked, applied 2, digest `2:221b71e0…` equal to its peer |
+
+`saves`: the traces are written to `docs/distributed/evidence/d12-traces/` (one
+`.trace` per guard, plus `bounded-search.txt` and `witnesses.txt`). The
+`UNFER_D12_TRACES` variable is what puts them there, so the evidence is
+regenerated rather than copied by hand.
+
+### What the harness observed and the docs must not smooth over
+
+A storage failure at slot 1 leaves the replica **halted with watermark 0** while
+its in-memory certificate ledger already shows the evaluated mint (supply 100,
+applied 0, UK-5011, `journal_error` set). Nothing is acknowledged and the
+watermark does not move, but the memory view of a halted node is not a state
+anyone may read. The test then proves the durable path does not double-count:
+crash, restore, and the slot applies exactly once.
+
+**Follow-up (2026-11-23): that memory can no longer be served.** The question was
+whether D11's `SharedLedger` — the other applying path — could serve state a node
+had evaluated but not recorded. Two findings, both now fixed rather than argued:
+
+* the ledger had the **same** divergence: `append` extended the in-memory bank
+  and the id → slot map and only then wrote `ledger.json`, so a failed snapshot
+  left slot *n* readable through `committed()`, `committed_since()` and
+  `receipt()` while the file did not have it. `append` now rolls the bank, the
+  map and the outbox back to the durable prefix when the snapshot fails, and
+  `allocate` drops a reservation it could not persist. Measured:
+  `a_decision_that_cannot_be_persisted_is_not_served` (read-only state dir →
+  `committed() == 0`, receipt `Unknown`, retry commits once) and
+  `a_reservation_that_cannot_be_persisted_is_not_kept`.
+* a `ConsensusNode` still exposes its memory through plain accessors, which cannot
+  fail on their own. It now has `servable()` — an error while halted or while the
+  last journal write failed — and the one serving surface in this workspace,
+  `DataPublisher::resolve`, checks it: on a halted node the memory still holds the
+  content (`node.content(&cid)` is `Some`) and `resolve` returns `None`
+  (`a_halted_node_does_not_serve_its_in_memory_state`).
+
+So the answer to the question asked is: not any more. A stopped node's memory is
+reachable only by code that ignores the refusal, and both surfaces that a caller
+could serve from now refuse.
+
+```text
+$ cargo test -p unfer_consensus --offline --features network
+unittests src/lib.rs          167 passed
+tests/distributed_schedules.rs 7 passed
+tests/independent_nodes.rs     1 passed
+tests/phase6_testnet.rs        4 passed
+tests/power_cut.rs             4 passed
+tests/request_identity.rs      6 passed
+                                                            EXIT=0
+```
+
+Evidence: `docs/distributed/evidence/d12-schedules.log` (the run above with its
+report lines), `d12-suites.log`, `d12-traces/`.
+
+### What this is not
+
+* A bounded search is not an all-run proof: 1342 prefixes of 7381 at depth 4 and
+  6904 of 66430 at depth 5, alphabet 9, plus the 32 walks — that is the whole
+  claim.
+* The consensus engine is an assumption. Nothing here says anything about
+  QuePaxa's ordering or liveness.
+* No real transport, filesystem or OS scheduler is involved; `FaultPoint` is the
+  existing D07 injection point, not a new fault model.
+* Wall-clock timers are not modelled: the harness has no time, only steps, which
+  is why the trace's classes are content, scheduling and fuel and not "deadline".
+
+## D13 — abrupt-crash and storage-recovery fault matrix (2026-11-23, steps 1–3 of 3)
+
+**New** `unfer_consensus/tests/crash_matrix.rs` (eleven cases),
+`unfer_consensus/tests/support/mod.rs` (the process fixture D11 and D13 share;
+`tests/independent_nodes.rs` now uses it, with the same assertions),
+`scripts/distributed-recovery` and `docs/distributed/evidence/d13-recovery.tsv`.
+
+### Two kinds of evidence, deliberately kept apart
+
+| Kind | How it is produced | What it can claim |
+|---|---|---|
+| Deterministic boundary | the D07 journal fault points (`BeforeWrite`, `HalfWrite`, `AfterWrite`), plus a real `chmod` and a real corrupt byte | repeatable statements about the crash protocol at an exact point |
+| Process crash | three `unfer_node` processes over TLS, `SIGKILL` at chosen offsets, restarted on the same directory | what a killed process does with files the kernel already has |
+
+Neither is a power-loss measurement. A `SIGKILL` returns nothing from the page
+cache that a disk with a volatile write cache might lose; no case here claims
+otherwise, and the plan's D13 distinction is preserved rather than blurred.
+
+### The six boundaries, and what each case measured
+
+| Plan boundary | Case | Measured outcome |
+|---|---|---|
+| before admission persistence | `fail-before-write` | applied **0**, halt `UK-5011`, `journal_error` set; restart applies slot 1 **once** (`applied=1 identities=1`) |
+| during the frame write | `fail-half-write` | **119** torn bytes on disk, recovery discards them (`applied=0`), then applies once |
+| after persistence, before reply | `fail-after-write` | uncertain sync halts; either the frame survived or it did not — `identities=1` in both worlds, never two |
+| after commit, before apply | `process/kill-mid-submit` ×5 | kill at 0/2/5/10/20 ms into a submission; every retry settled, `slots` grew by **exactly one** in all five |
+| after apply, before the snapshot | `process/slow-replica-snapshot` | a killed replica's snapshot read `1:` while the survivors had `3:` — the snapshot is written independently of the commit |
+| while a snapshot is published | `corrupt-record`, `conflicting-checkpoint` | a corrupt record is refused (`record checksum does not match its payload`), never replaced by an empty log; a journal that disagrees with the decided log halts at the named slot |
+
+Additional matrix rows, because they belong to the same protocol:
+
+* `permission` — the journal made read-only for this user: the next open is
+  refused with `Permission denied`, so a node cannot start on a log it cannot
+  write. A mode change *while the writer is open* does not stop it, because
+  access is fixed at open: that is recorded as the property of this design, not
+  as a passing test. Given the journal back, `applied=2 identities=2`.
+* `refusal` — a refused entry (UK-6003 on replay) is durable, advances the
+  slot, and is replayed rather than re-decided: `applied=2 identities=1`.
+* `journal-format` — the framing the matrix relies on: one record of 189 bytes
+  recovers as `records=1 last_slot=1 torn=0`.
+* `halted-state-fence` (follow-up to D12) — the ledger path of the matrix now
+  serves only what it persisted: a snapshot that fails rolls the in-memory bank,
+  id map and outbox back, and a `ConsensusNode` exposes `servable()` so a halted
+  node's evaluation is not served (`docs/distributed/evidence/d13-halted-state-fence.log`).
+
+### Quorum, and what a minority cannot do
+
+With two of three processes killed, a submission to the survivor **failed**
+(`submit_ok=false`) and the committed count did not move (`slots=1->1`). Healing
+the two replicas and retrying the same request identity produced exactly one
+slot (`2:…`), identical on all three. No coordinated write happened without a
+quorum, in either the refusal or the retry.
+
+### Slow replica, restated as a recovery claim
+
+Node 3 stopped while two more decisions were taken: its snapshot still read
+`1:` against the survivors' `3:`. Restarted on the same directory it read `1:`
+again — the log it did have, never an empty substitute — and then, with the
+cluster still idle, its peers pushed the two missed decisions and it held the
+**whole** log `3:…`, equal to theirs (`process/slow-replica-idle-catch-up`). One
+further decision then moved all three to `4:…`. The lag is a real, stated
+property — a replica's snapshot trails its commits — and the repair comes from
+its peers, not from a new decision and not from its own poll loop.
+
+```text
+$ cargo test -p unfer_consensus --offline --features network --test crash_matrix
+11 passed (8 deterministic, 3 process), 0 failed
+$ scripts/distributed-recovery --check
+distributed-recovery: fixture matches (24 case line(s), 0 gap(s))
+```
+
+Evidence: `docs/distributed/evidence/d13-recovery.tsv` (one line per case, with
+the values this host measured), `d13-crash_matrix.log` (the full run, including
+each assertion's output). `scripts/distributed-recovery` regenerates the fixture
+and `--check` compares the *shape* of the run — which cases ran and what each
+claimed — never the digests, which belong to one run.
+
+### What this is not
+
+* Not a power-loss claim, and not a filesystem-model claim: both need a storage
+  model this task does not build (D13's second paragraph names them).
+* The consensus engine's behaviour under partition is an assumption the harness
+  supplies (a submission without a quorum is refused by the transport); only the
+  *application* side is measured.
+* Catch-up no longer needs a decision — the idle-push follow-up in D11's section
+  is what made the slow-replica case here pass without a new submission — but it
+  does need a live peer: if every peer of a rejoined replica is down, only the
+  next decision will move it.
+* The kill offsets are chosen, not exhaustive: five points around a submission
+  are not every interleaving, and the deterministic cases cover the boundaries
+  the offsets cannot place exactly.
+
 ## Task status
 
 | Task | Status | Note |
@@ -1014,4 +1552,8 @@ preflight.
 | D07 | verified within stated scope | one framed, fsynced log; torn tail vs corruption vs uncertain; replay compares recorded outcomes and halts on a mismatch; an abrupt-kill child on tmpfs recovers with a contiguous prefix and continues |
 | D08 | verified within stated scope | per-instance immutable identity replaces the process-global principal; grants merge instead of replacing; revocation and swap retire an identity; strict profile admits only declared ABI symbols; `call_from_peer` is the production receiver and checks against the peer the transport authenticated |
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
-| D08–D26 | not started | D08 is next (scoped caller context, dynamic remote policy) |
+| D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
+| D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
+| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 3 requests, 9 actions) executed 1342 of 7381 prefixes at depth 4 (545 pruned, 648 leaves, 55 s) and 6904 of 66430 at depth 5 (2898 pruned, 3239 leaves, 325 s), finding no violation at either depth; 32 seeded walks of 12 steps reached 30 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault was handed to D13 and is now fenced (see the follow-up in this section) |
+| D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (24 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`; the D12 follow-up adds the halted-state fence (`d13-halted-state-fence.log`). Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it, though the idle-push follow-up in D11's section now repairs a rejoined replica without a new decision |
+| D14–D26 | not started | D14 is next: upgrade scheduled jobs to ordered fencing |

@@ -8,11 +8,15 @@ line is the summary the plan quotes.
 
 | file | command | tree | summary |
 |---|---|---|---|
-| [`2026-11-22-default-shell.log`](2026-11-22-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-22, `7bb7b3ca` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `188 passed, 1 explained gap(s), 0 failed` — only `W9.1`, which needs the lean shell; `PC05a`/`PC05b` replay here because this shell carries `packages.mm0` and `safestos/gpu`'s debug `avm-gpu` is built |
-| [`2026-11-22-ocaml-shell.log`](2026-11-22-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-22, `7bb7b3ca` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `173 passed, 4 explained gap(s), 0 failed` — `W9.1` and the three `why3` checks (`173 = 188 − 15`, `4 = 1 + 3`) |
-| [`2026-11-22-lean-shell-rust.log`](2026-11-22-lean-shell-rust.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `7bb7b3ca` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree — the shell with `pkgs.rustc`, `pkgs.cargo` and `pkgs.stdenv.cc` | `174 passed, 3 explained gap(s), 0 failed` — `W9.1` passes (`174 = 173 + 1`) and the three `why3` checks remain; the five `toy-witness` comparisons and `[pass] logos mm0` run here |
+| [`2026-11-23-default-shell.log`](2026-11-23-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-23, `0b2d0c3d`, on a clean tree against `unfer` at its `main` (`67feb84`) | `192 passed, 1 explained gap(s), 0 failed` — the same count as 2026-11-22; the only line that moved is D00, which now reads 24 contract rows (the D10 rows upstream added) and ends `measured against unfer 67feb84` |
+| [`2026-11-23-ocaml-shell.log`](2026-11-23-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-23, `0b2d0c3d`, on a clean tree, same sibling | `177 passed, 4 explained gap(s), 0 failed` — `192 − 15` Liquid passes become three `why3` gaps; only the D00 line differs from the 2026-11-22 run |
+| [`2026-11-23-lean-shell-rust.log`](2026-11-23-lean-shell-rust.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-23, `0b2d0c3d`, on a clean tree, same sibling | `178 passed, 3 explained gap(s), 0 failed` — `W9.1` passes here (`177 + 1`, `4 − 1`); only the D00 line differs |
+| [`2026-11-23-nix-shell-python3.log`](2026-11-23-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-23, `0b2d0c3d`, on a clean tree, same sibling | `177 passed, 4 explained gap(s), 0 failed` — no `why3` and no RV64 re-conversion; only the D00 line differs |
+| [`2026-11-22-default-shell.log`](2026-11-22-default-shell.log) | `nix develop "git+file://$PWD" -c bash scripts/verify-invariants` | 2026-11-22, `892b83bc` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `192 passed, 1 explained gap(s), 0 failed` — only `W9.1`, which needs the lean shell; `PC05a`/`PC05b` replay here because this shell carries `packages.mm0` and `safestos/gpu`'s debug `avm-gpu` is built |
+| [`2026-11-22-ocaml-shell.log`](2026-11-22-ocaml-shell.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/verify-invariants` | 2026-11-22, `892b83bc` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `177 passed, 4 explained gap(s), 0 failed` — `W9.1` and the three `why3` checks (`177 = 192 − 15`, `4 = 1 + 3`) |
+| [`2026-11-22-lean-shell-rust.log`](2026-11-22-lean-shell-rust.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `892b83bc` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree — the shell with `pkgs.rustc`, `pkgs.cargo` and `pkgs.stdenv.cc` | `178 passed, 3 explained gap(s), 0 failed` — `W9.1` passes (`178 = 177 + 1`) and the three `why3` checks remain; the five `toy-witness` comparisons and `[pass] logos mm0` run here |
 | [`2026-11-22-lean-shell.log`](2026-11-22-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-22, `c7237736`, on a clean tree — superseded by the row above after `ff53c29b` gave the shell a linker | `166 passed, 9 explained gap(s), 0 failed` — `W9.1` passes here; `why3` is absent (3), the witness cannot be built (5), and the logos emitter cannot link, whose gap quotes the sub-gate's own line |
-| [`2026-11-22-nix-shell-python3.log`](2026-11-22-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-22, `7bb7b3ca` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `167 passed, 10 explained gap(s), 0 failed` — no `why3` (3 Liquid checks), no Lean shell (`W9.1` plus the five `toy-witness` comparisons), and `cargo` cannot link, so the two logos lines are one gap |
+| [`2026-11-22-nix-shell-python3.log`](2026-11-22-nix-shell-python3.log) | `nix-shell -p python3 --run "bash scripts/verify-invariants"` | 2026-11-22, `892b83bc` (the merges of `79b29839`, the Lean-typing work and the capability-handle runtime, plus `mm0` in the shell, the quoted PC05 gap, the lock update the sibling's `nanoda_lib` move needs, and the nixpkgs bump with Lean pinned back to 4.30), on a clean tree | `177 passed, 4 explained gap(s), 0 failed` — no `why3` (3 Liquid checks) and no RV64 re-conversion (`W9.1`); this host's profile now carries `lean` (4.28.0) and a working `rustc`/`cc`, so the five `toy-witness` comparisons and the `logos` build that used to gap here (`167`/`10`/`0`) pass, leaving the bare and ocaml columns identical in count |
 | [`2026-11-21-w3-approval-state-drift-control.log`](2026-11-21-w3-approval-state-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-approval-state-drift-control` | 2026-11-21, `85a368eb` plus the drift-control transcript check and the certificate re-pin `1f8ce68f`'s CPS order forced | `w3-approval-state-drift-control: holds` — gate `165 passed, 3 explained gap(s), 5 failed`, the five being the lines the deleted copy feeds |
 | [`2026-11-21-w3-emitter-drift-control.log`](2026-11-21-w3-emitter-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-emitter-drift-control` | 2026-11-21, same tree as the row above | `w3-emitter-drift-control: holds` — gate `168 passed, 2 explained gap(s), 3 failed`, one drifted emitter cell and isa's approved copy with it |
 | [`2026-11-21-w3-drift-controls-cert-approved.log`](2026-11-21-w3-drift-controls-cert-approved.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/w3-drift-controls cert-approved` | 2026-11-21, same tree | `cert-approved: holds` — gate `170 passed, 2 explained gap(s), 1 failed`, the refinement's citations |
@@ -39,7 +43,7 @@ line is the summary the plan quotes.
 | [`2026-11-19-lean-shell.log`](2026-11-19-lean-shell.log) | `nix develop "git+file://$PWD#lean" -c bash scripts/verify-invariants` | 2026-11-19, same tree as the row above | `174 passed, 4 explained gap(s), 0 failed` |
 | [`2026-11-19-obj-drift-control.log`](2026-11-19-obj-drift-control.log) | `nix develop "git+file://$PWD#ocaml" -c bash scripts/obj-drift-control` | 2026-11-19, after the W5 object re-pin | `obj-drift-control: held` |
 
-The 2026-11-22 set re-runs the gate once per shell on `7bb7b3ca` — the merges of
+The 2026-11-22 set re-runs the gate once per shell on `892b83bc` — the merges of
 `origin/master` `79b29839`, the Lean-typing work and the capability-handle
 runtime after it, which added the
 D09 record, the `PC05b` transport and the `PC05a` replay, plus `packages.mm0` in
@@ -48,13 +52,20 @@ own reason, the workspace locks the sibling's `nanoda_lib` move needs, and the
 nixpkgs bump whose Lean stays pinned at 4.30 through `nixpkgs-lean` (the
 channel's 4.35 refuses the Sail model). Its D00 line reads 20 contract rows
 rather than 14 (upstream's D09 and distributed rows landed in between) and ends
-`measured against unfer c68470c (dirty)`, the suffix the sibling worktree's
-uncommitted changes earn.
-`devShells.default` reads `188`/`1`/`0`: `.#ocaml`'s 15 missing Liquid passes
-become its three `why3` gaps, so `173 = 188 − 15` and `4 = 1 + 3`. `.#lean`
-converts `W9.1` (`174 = 173 + 1`, `3 = 4 − 1`), and the bare `nix-shell -p
-python3` invocation — the one `AGENTS.md` documents — loses the Lean checks and
-the logos build (`167`/`10`/`0`). Both PC05 replays pass in every shell now: the
+`measured against unfer ad3ed80`, the sibling's committed tip; the earlier
+recordings on `7bb7b3ca` ended `(dirty)` because that worktree was mid-merge.
+Four checks landed after those recordings, all of them shell-independent: the
+two `PC07` lines (the frozen chain replays, and the chain checker's controls
+refuse and report separately) and the two `PC08` lines (the captured host
+fragment decodes and is pinned, and the native edge's controls refuse), which is
+why every column moved by four and no other line changed.
+`devShells.default` reads `192`/`1`/`0`: `.#ocaml`'s 15 missing Liquid passes
+become its three `why3` gaps, so `177 = 192 − 15` and `4 = 1 + 3`. `.#lean`
+converts `W9.1` (`178 = 177 + 1`, `3 = 4 − 1`). The bare `nix-shell -p python3`
+invocation — the one `AGENTS.md` documents — now reads `177`/`4`/`0` as well:
+this host's profile carries `lean` 4.28.0 and a `rustc`/`cc` that links, so the
+five `toy-witness` comparisons and the `logos` build no longer gap there, and
+only `why3` and `W9.1` remain missing. Both PC05 replays pass in every shell now: the
 earlier recordings on `395c74c3` gapped `PC05a` in all four, and three of those
 `[gap]` lines blamed `mm0-rs`/`mm0-c` when the missing piece was the
 `safestos/gpu` debug `avm-gpu` the script also needs — which is why the gate now
@@ -67,7 +78,8 @@ at `5d484b18` (the merge, which moved only the D00 row count), again at
 re-pin moved the digests, at `2ea08fcc` where the changed lines were the two PC05
 checks and their counts, at `b8d628de`, where the counts were unchanged and
 the toolchain moved (OCaml 5.5.2, Lean 4.30 from the pinned input), and finally
-at `7bb7b3ca`, where the D00 row count moved to 20.
+at `7bb7b3ca`, where the D00 row count moved to 20, and finally at `892b83bc`,
+where the four PC07/PC08 lines landed and D00 measures a clean sibling.
 
 The `lean` shell appears twice. The older row (`c7237736`) is what it reported
 while its `rustc`/`cargo` were the host's rustup shims, whose `cc` names a
@@ -191,6 +203,27 @@ both times, then once more after the bridge-copy check was added (`165 passed`,
 and `174 passed` under `.#lean`). That is the expected relation: a plan-only
 edit does not change the check list, and a re-pinned digest does not either — a
 new check does, and its line is in both logs.
+
+## A `cancelled` CI job is not a failing one
+
+These transcripts are produced locally, but the same counts are what CI's
+`verify-invariants` job re-derives, so the two can be read side by side — with
+one trap. GitHub cancels a run's still-running jobs when a new push supersedes
+it, and `nix-pkg` is by far the longest job in `Build and Test` (it builds the
+bridge, then runs the OCaml suite under `make test`). Measured 2026-11-23: on
+three consecutive commits it read `cancelled` in the `OCaml suite (build,
+typecheck, tests)` step, each time within a minute of a new upstream commit,
+while `avm-pkg`, `verify-invariants` and `build-and-test-linux` in the same run
+had already reported `success`. It then completed `success` on the first commit
+that stayed the branch tip for an hour.
+
+So read the line in this order: a job that reads `cancelled` says nothing about
+the check it was running — it was cut, not failed, and a job that reports
+`failure` (or `timed_out`) is the only one that carries a verdict about the
+tree. The authoritative signal for a commit is the run whose jobs all reached
+`success`; the commit before a cancellation is not evidence either way, and
+re-reading its annotation finds none, because a cancellation writes no
+annotation at all.
 
 The scripts are unedited stdout, so they contain absolute paths, temp-dir names
 and Nix store hashes from the recording host. The two gate transcripts open with

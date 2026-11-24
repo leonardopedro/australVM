@@ -303,8 +303,14 @@ pub extern "C" fn au_scalar_abi_version() -> u32 {
 /// (`u32`/`u64` bit patterns), `F32`/`F64` (`to_bits`), and nothing for
 /// `Unit`. Returns 0 on success, 1 on refusal (reason on the last-error
 /// channel), and writes the word to `out` only on success.
+///
+/// # Safety
+///
+/// `out` must be null or point to a `u64` this call may write. A null `out`
+/// is refused before any dereference; the caller owns the pointee and must
+/// keep it alive across the call.
 #[no_mangle]
-pub extern "C" fn au_scalar_encode(ty: u32, payload: u64, out: *mut u64) -> i32 {
+pub unsafe extern "C" fn au_scalar_encode(ty: u32, payload: u64, out: *mut u64) -> i32 {
     if out.is_null() {
         set_last_error("au_scalar_encode: null output pointer");
         return ABI_REFUSED;
@@ -346,8 +352,14 @@ pub extern "C" fn au_scalar_encode(ty: u32, payload: u64, out: *mut u64) -> i32 
 
 /// Decode a transport word into a logical value: the tag is returned in `out`
 /// (in the same numeric encoding as `ty`), the value's bits in `word`.
+///
+/// # Safety
+///
+/// `out` must be null or point to a `u64` this call may write. A null `out`
+/// is refused before any dereference; the caller owns the pointee and must
+/// keep it alive across the call.
 #[no_mangle]
-pub extern "C" fn au_scalar_decode(ty: u32, word: u64, out: *mut u64) -> i32 {
+pub unsafe extern "C" fn au_scalar_decode(ty: u32, word: u64, out: *mut u64) -> i32 {
     if out.is_null() {
         set_last_error("au_scalar_decode: null output pointer");
         return ABI_REFUSED;

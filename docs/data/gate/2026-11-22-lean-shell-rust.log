@@ -4,7 +4,7 @@
 [pass] S29: symbol_sync test cross-checks EXPECTED_SYMBOLS.txt
 OK: 92 uk_ + 5 uz_ census artifacts in sync.
 [pass] H2: unfer symbol census in sync with SYMBOL_REGISTRY (generated)
-[pass] D00 contracts: 20 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c68470c (dirty)
+[pass] D00 contracts: 20 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer ad3ed80
 [pass] D00: distributed execution record and contract inventory are well-formed
 [pass] D00 checker refuses: duplicate inventory id
 [pass] D00 checker refuses: unknown status
@@ -101,6 +101,15 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
 [pass] PC03: composition, discharge and premise controls
   [detail] 3 sorts, 19 term/def, 29 ax/thm — PC06 assembled word+relation+gpu_plan
   [detail] PC06 reuse: compose_bound at the clamp clause, the plan (n) and the plan at u256
+  [detail] PC06 cache: 29 theorem row(s) and 6 instance row(s) recomputed and matched
+  [detail] PC06 cache: a stronger premise moves plan_write_bound's statement digest and the row is refused
+  [detail] PC06 cache: an extra application is refused (applies/closure change; the replay refuses it too)
+  [detail] PC06 cache: a proof-position mention is a dependency (clamp_transport names PC05a's bound theorem without applying it)
+  [detail] PC06 cache: closing a lower obligation adds its row and leaves compose_bound's row byte-identical
+  [detail] PC06 cache: a shortened closure row is refused
+  [detail] PC06 alpha matrix: two binders collapsing onto one term are refused
+  [detail] PC06 alpha matrix: a statement with fewer premises is refused as an instance
+  [detail] PC06 alpha matrix: a binder the instance never instantiates is refused
   [detail] PC06 residual obligations (not discharged by MM0):
     O1: generated flat index is representable [Why3 goal index_representable (separate route, not MM0)]
     O2: guard implies the element/index bound [Why3 goal guard_implies_bound; consumed as plan_write_bound's hb]
@@ -140,6 +149,14 @@ lean2mm0 verify: mm0-c OK (quasi_rh_certificate) — the root of trust accepts t
   [detail] dropping the consumed premise from the statement refuses the transport
   [detail] dropping the consumed premise from the proof refuses the transport
 [pass] PC05b: transported bound through the reflected edge
+  [detail] PC07 graph: 19 theorem row(s) match the proof terms
+  [detail] PC07 identity: ir_sha256 48caf04ea171… recorded by clamp_source, clamp_wgsl, clamp_transport
+[pass] PC07: the frozen chain replays and its declaration matches
+[pass] PC07: the chain checker's controls refuse and report separates
+  [detail] PC08 fragment: add — 22 byte(s), 7 instruction(s), 1 relocation(s), arch x86_64
+  [detail] PC08 imports: Austral.Pervasive::trappingAdd, au_alloc
+[pass] PC08: the captured host fragment decodes and is pinned
+[pass] PC08: the native edge's controls refuse
   [detail] isa-hypotheses: 4 pinned citation(s), 1 cited hypothesis/hypotheses (1 content-checked, 0 unchecked), 65 axiom(s) accounted for
 [pass] W8: an uncited or stale hypothesis is refused
 [pass] W8: an unchecked citation cannot be re-labelled as checked
@@ -376,4 +393,4 @@ service_iso2mm0 verify: negative OK — a proof citing the wrong axis's pinned c
 [pass] L11c: the split pilot's facts are checked to erase
 [pass] H12: notes implemented dir has the four categories
 
-verify-invariants: 174 passed, 3 explained gap(s), 0 failed
+verify-invariants: 178 passed, 3 explained gap(s), 0 failed

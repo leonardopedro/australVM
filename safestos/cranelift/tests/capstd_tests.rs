@@ -157,7 +157,10 @@ mod d09 {
         // A directory capability is rooted in the state dir: a relative path
         // stays inside it, and the two ways out are refused before any I/O.
         let dh = caps.open(Kind::Dir).unwrap();
-        assert_eq!(caps.write(dh, "d09_mod", "notes/a.txt", b"hello").unwrap(), 5);
+        assert_eq!(
+            caps.write(dh, "d09_mod", "notes/a.txt", b"hello").unwrap(),
+            5
+        );
         assert_eq!(caps.read(dh, "d09_mod", "notes/a.txt").unwrap(), b"hello");
         let escape = caps
             .read(dh, "d09_mod", "../outside.txt")
@@ -189,7 +192,10 @@ mod d09 {
             .send(nh, "d09_mod", "node-8", b"ping")
             .expect_err("an unconfigured peer must be refused");
         assert!(denied.contains("not configured"), "got: {denied}");
-        assert!(sink_lines(&caps).is_empty(), "a denied send must not reach the sink");
+        assert!(
+            sink_lines(&caps).is_empty(),
+            "a denied send must not reach the sink"
+        );
 
         // An accepted frame is pending until the transport settles it.
         let id = caps.send(nh, "d09_mod", "node-7", b"ping").unwrap();
@@ -217,7 +223,10 @@ mod d09 {
         caps.close(nh, "d09_mod").unwrap();
         let by_id = caps.open(Kind::Net).unwrap();
         assert!(by_id > nh, "handle ids are not reused");
-        assert!(caps.query(nh, "d09_mod", id).is_err(), "a closed handle is gone");
+        assert!(
+            caps.query(nh, "d09_mod", id).is_err(),
+            "a closed handle is gone"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -240,7 +249,10 @@ mod d09 {
         let handle = {
             let _scope = auth::enter_caller(&context);
             let handle = austral_cranelift_bridge::capstd_mod::rs_cap_dir_open();
-            assert!(handle > 0, "the host installed capabilities for this instance");
+            assert!(
+                handle > 0,
+                "the host installed capabilities for this instance"
+            );
             let path = "ffi.txt";
             let written = unsafe {
                 austral_cranelift_bridge::capstd_mod::rs_cap_write(

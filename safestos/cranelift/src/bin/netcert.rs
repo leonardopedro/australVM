@@ -50,7 +50,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let json = unsafe { CStr::from_ptr(out) }.to_string_lossy().to_string();
-    unsafe { austral_cranelift_bridge::cranelift_free_string(out) };
+    austral_cranelift_bridge::cranelift_free_string(out);
 
     println!("{json}");
     // The report carries the verdict; the exit code mirrors it for shell callers.

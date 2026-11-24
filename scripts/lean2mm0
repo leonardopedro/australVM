@@ -2092,7 +2092,7 @@ def verify(results: list[tuple[str, str, str]]) -> None:
                   "absent (untracked toolchain state, not committed)")
             print("  provision: mm0-from-mm from-mm mm0/metamath/set.mm "
                   "-o mm0/metamath/set.mm0 mm0/metamath/set.mmu")
-            print("  then:      sed -i 's/^(pub //' mm0/metamath/set.mmu")
+            print("  then:      sed -i 's/^(pub /( /' mm0/metamath/set.mmu")
         else:
             ground_setmm_labels()
             for stem, mm0, mm1 in stmt:

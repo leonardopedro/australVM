@@ -309,7 +309,10 @@ fn peer_calls_are_served_only_for_the_declared_node() {
 
     let (code, stdout, stderr) = modhost(&["host", d, "--call", "run", "--peer", "node-8"]);
     assert_eq!(code, 1, "a different peer must be refused");
-    assert!(!stdout.contains("run: "), "no result for a refused call: {stdout}");
+    assert!(
+        !stdout.contains("run: "),
+        "no result for a refused call: {stdout}"
+    );
     assert!(stderr.contains("cannot certify its own node"), "{stderr}");
 
     // A module with no `[module] node` is local: it has no remote authority.

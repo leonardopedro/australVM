@@ -1,7 +1,9 @@
 //! D09 step 4: the Austral demo, end to end through the manifest gate.
 //!
 //! `umbrella/modules/distributed_io/module.cps` is the CPS the ordinary
-//! front-end emits for `DistributedIo.aum` (`gen_cps.sh` regenerates it). The
+//! front-end emits for `DistributedIo.aum` (`gen_cps.sh` regenerates it). It is
+//! committed (with an exception in `umbrella/.gitignore`) so this test runs on a
+//! fresh checkout, where the OCaml compiler that emits it has not been built. The
 //! module calls `rs_cap_dir_open` and `rs_cap_write`: capability verbs that do
 //! not exist in the module's own memory, only as host-issued handles.
 //!
@@ -57,7 +59,10 @@ fn the_granted_module_writes_through_its_capability() {
     let dir = stage("granted", &["rs_cap_dir_open", "rs_cap_write"]);
     let (code, stdout, stderr) = run(&dir);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.contains("compute: 25"), "the byte count of the frame: {stdout}");
+    assert!(
+        stdout.contains("compute: 25"),
+        "the byte count of the frame: {stdout}"
+    );
     let written = std::fs::read_to_string(dir.join(".state/note.txt"))
         .expect("the capability wrote the file inside the instance state dir");
     assert_eq!(written, "hello from distributed_io");

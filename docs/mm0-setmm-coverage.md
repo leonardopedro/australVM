@@ -652,12 +652,26 @@ alone makes the smallest one 1 943 261 107 B, and `mm0-rs` does not elaborate th
 kernel OOM-killed it three times (total-vm 18.6, 11.2, 19.9 GB) and a retry under
 `ulimit -v 20 GB` aborted at 19 989 504 kB after 50.5 s. What does elaborate is the axiom
 layer with the defs it names: a 378 205 914 B slice of both theories (imports stripped), the
-header and payload, 916 `def`s and 24 364 of the 24 423 axioms gives `mm0-rs` exit 0 in
+header and payload, 916 `def`s and 24 364 of the 24 423 axioms (built by `scripts/mm0-slice`,
+which reproduces it byte for byte) gives `mm0-rs` exit 0 in
 3 m 55.6 s (`3 sorts, 1223 term/def, 24385 ax/thm`, 13 799 368 kB peak RSS) and `mm0-c` exit 0
 in 2.9 s. That is 99.8 % of the row's axioms re-checked by the C verifier, with the `theorem`
 and 104 unreachable defs left out — the scope claim is the axiom-and-definition layer, not the
 final proof. `docs/lean4mm0.md` §13.57 has the table and the memory ratio (~36× the slice
-bytes; the ratio, not a bigger host, is what rules the whole file out).
+bytes; the ratio, not a bigger host, is what rules the whole file out). A smaller def-sharing
+floor is not a way in: the row re-emitted at `LTP_DEF_SHARE=64` is 55 544 970 829 B (−0.81 %),
+with 1 345 defs instead of 1 020 and a *larger* first body (3 999 411 320 B) — the writer's
+first body is fully expanded at any floor — while the 40 MB slice it yields is 1.6 % smaller
+and still peaks at 13 695 160 kB. §13.58 measures both floors.
+
+Splitting the bodies from the *inside* does bound them: `LTP_DEF_BODY_MAX` (§13.59) re-expands
+any body at or over its threshold and interns that body's own children, and the 56 GB row
+re-emitted at floor 64 with a 1 GiB threshold is 48 835 924 012 B (−12.1 %) with 1 727 defs and
+a largest body of **1 799 565 507 B** instead of 3 999 411 320 B. The 40 MB slice of it keeps
+all 1 727 defs in 371 968 196 B (`skipped_big=0`) and `mm0-rs compile` accepts it — exit 0,
+4 m 18.6 s, `3 sorts, 1563 term/def, 24386 ax/thm`. The pass is off by default below 1 GiB
+bodies and is byte-identical when off; what it does not yet do is recurse past its first
+split, because sizes recorded during a naming walk are not the fully expanded ones (§13.59).
 
 The re-probe only says that with its environment, which is why the number is quoted with it:
 `LTP_OBLIG_SHARE=1 LTP_OBLIG_CHUNK=2147483648 LTP_EXPRS_CACHE=20000 LTP_ENC_MAX=2MB

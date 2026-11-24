@@ -19,6 +19,12 @@
 # Rust ABI.
 name: GPU gates
 
+# `make bridge` defaults to `cargo build --offline` (see the Makefile); a fresh
+# CI runner has no warm registry, so the bridge build has to be allowed to
+# fetch. Empty, not unset: the Makefile's `?=` must see it defined.
+env:
+  CARGO_FLAGS: ""
+
 on:
   pull_request:
   push:
@@ -61,7 +67,15 @@ jobs:
 
       - name: GPU source gate
         run: |
-          nix develop -c bash -c '
+          # Which field or control failed is only visible in the gate's output,
+          # and job logs need admin rights: capture it and quote the tail as
+          # annotations.
+          #
+          # The script goes into a file rather than `bash -c '...'`: its
+          # comments contain apostrophes, which close a single-quoted argument,
+          # so the step was a shell syntax error (`unexpected EOF`, exit 2) on
+          # every run instead of a measurement (2026-11-23).
+          cat > "$RUNNER_TEMP/gpu-source-gate.sh" <<'SCRIPT'
             set -o pipefail
             export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release
             python3 scripts/check-gpu source | tee "$RUNNER_TEMP/gpu-source.log"
@@ -100,7 +114,16 @@ jobs:
               exit 1
             fi
             grep -q "bounded-fold-v1" "$refusal"
-          '
+          SCRIPT
+          status=0
+          out=$(nix develop -c bash "$RUNNER_TEMP/gpu-source-gate.sh" 2>&1) || status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            printf '%s\n' "$out" | tail -40 | while IFS= read -r line; do
+              echo "::error title=gpu source gate::$line"
+            done
+            exit "$status"
+          fi
 
       - name: Austral GPU-service host module type-checks
         run: |

@@ -1,0 +1,4 @@
+guard=Restart original=7 minimized=4
+  seed=23 steps=4 actions=[admit:0/0:mint-authorised admit:1/0:mint-unauthorised deliver:0 deliver:1] choices=[Content:content.request=0 Content:content.request=1 Scheduling:sched.deliver=0 Scheduling:sched.deliver=1 Fuel:fuel.depth=4]
+  outcome: a replica restarted over its journal applied 2 of 2 slot(s) and holds the same digest as its peer (2:204b0b8d72deae4e9969677491cfe3d8149bcd94d17b671145703ae5ec4e60ba)
+  fingerprint: 631630811fff36a66a4da6063d0d3a775685156f58cb6c6143b3576b46b90571

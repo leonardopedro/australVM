@@ -206,6 +206,27 @@ MM0=$(nix build "git+file://$PWD#mm0" --no-link --print-out-paths)
 PATH="$MM0/bin:$PATH" python3 scripts/native-edge check
 ```
 
+## The x86_64 re-derivation is an explained gap, not a pass
+
+`capture`/`check` re-derive the fragment by compiling it on the host. That needs
+a host whose backend emits x86_64, and every route was checked on 2026-11-23:
+
+| Route | State |
+|---|---|
+| this host | aarch64 (`uname -m`), so `cps2cell` emits `arch aarch64` and the closed x86_64 table refuses it; `check` probes the arch before decoding and reports `[gap] PC08: the capture was not re-derived here (this host compiles aarch64 …)` |
+| a second host | none reachable; no x86_64 machine or runner is configured for this workspace |
+| `rustup` cross | only `aarch64-unknown-linux-gnu` and `x86_64-linux-android` are installed — neither runs an x86_64 Linux binary here |
+| emulation | `podman` is present but the re-derivation runs the *OCaml compiler* (`austral`, `cps2cell`), which would have to be built for x86_64 first; no such build exists |
+| CI | `ubuntu-latest` is the only reachable x86_64 host: `.github/workflows/ci.yml` `test` job builds the tree's `austral` and `cps2cell`, builds the mm0 toolchain, and runs `python3 scripts/native-edge check` + `selftest`, so the re-derivation and the edge replay are measured there (this row used to say no job invoked the script) |
+
+So the decode-and-pin half is a measured pass on this host, and the
+byte-identical re-derivation is measured on the CI runner instead: the `test`
+job in `.github/workflows/ci.yml` builds `austral` + `cps2cell` + the mm0
+toolchain and runs `check` and `selftest`, which is the x86_64 half of this
+gate. On this aarch64 host `check` reports the gap by name and never as a pass;
+locally the full run still needs an x86_64 host running
+`python3 scripts/native-edge check`.
+
 ## What this is not, and what would close it
 
 - **Not a native profile.** The simulation obligation is open; the fragments are

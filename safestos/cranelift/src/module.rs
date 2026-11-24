@@ -445,10 +445,7 @@ impl ModuleHost {
                             Ok(paths) => {
                                 let staging = module_dir.join(".unfer-ecma");
                                 crate::ecma::EcmaSidecar::spawn(
-                                    module_dir,
-                                    &staging,
-                                    &manifest,
-                                    &paths,
+                                    module_dir, &staging, &manifest, &paths,
                                 )
                                 .map(|sidecar| {
                                     let name = manifest.name.clone();
@@ -468,11 +465,9 @@ impl ModuleHost {
                     }
                     #[cfg(not(feature = "ecmascript"))]
                     {
-                        Err(
-                            "archetype 'ecmascript' requires the 'ecmascript' feature \
+                        Err("archetype 'ecmascript' requires the 'ecmascript' feature \
                              (workerd sidecar)"
-                                .to_string(),
-                        )
+                            .to_string())
                     }
                 }
                 Ok(_) => std::fs::read(&cps_path)
@@ -494,7 +489,7 @@ impl ModuleHost {
                                 context,
                             },
                         )
-                    })
+                    }),
             }
         };
 

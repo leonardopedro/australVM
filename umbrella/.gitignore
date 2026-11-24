@@ -3,3 +3,6 @@
 /modules/rscrate/target/
 # emitted CPS snapshots (rendered from modules/*.aum at run time)
 *.cps
+# Exception: the D09 end-to-end test loads this CPS from a fresh checkout.
+# Regenerate with umbrella/modules/distributed_io/gen_cps.sh.
+!modules/distributed_io/module.cps
