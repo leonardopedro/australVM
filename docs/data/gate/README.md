@@ -243,8 +243,20 @@ is worth knowing for caching: a step timeout ends the job before the cache
 action's post step, which then reads `skipped`, so a run that dies this way
 leaves no cache entry behind. Measured either way: `ee68fe46` reports `Post
 Cache cranelift / unfer_ffi build` as `skipped`, while `0da4a26a` — same job,
-same step, the suite inside its new bound — reports it as `success`, and that is
-the run whose entry a later one can restore.
+same step, the suite inside its new bound — reports it as `success`. A `success`
+post step is still not an entry: the repository's cache list (2187 entries) has
+neither `nix-pkg-jit-…` nor the `jit-…` key jit-stack has used for the same two
+target directories, which is why that cache step was removed again after the
+measurement below rather than kept as an unverified claim.
+
+Moving `make bridge` meant measuring it first, and it did not move: 25.2 min on
+`ee68fe46` (cold), 24.7 on `0da4a26a` (the run that saved the entry), 24.2 on
+`fcc99fec` (the run that should have restored it). Splitting the recipe says why
+a target cache could not have helped much either way: a cold `cargo build
+--release --offline` of the bridge crate alone is 10m05s on the recording host,
+and the rest of the 24 minutes is the OCaml compiler build in the same recipe.
+The OCaml suite inside its 50-minute bound measured 39.5 min on `0da4a26a`, so
+the step order, not the bridge, is what the job's cost is made of.
 
 So read the line in this order: a job that reads `cancelled` says nothing about
 the check it was running — it was cut, not failed, and a job that reports
