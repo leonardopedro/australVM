@@ -84,6 +84,36 @@ def last_meaningful(text: str) -> str:
     return "(no output)"
 
 
+def tail_text(path: Path, limit: int = 8192) -> str:
+    """The last `limit` bytes of a log, decoded — never the whole file."""
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            if size > limit:
+                fh.seek(size - limit)
+            return fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def mm0_c_reason(err: Path, out: Path) -> str:
+    """What `mm0-c` decided, not the derivation it printed with the decision.
+
+    On rejection the checker prints its verdict and then the whole statement it
+    rejected, so the *last* line of its stderr is a fragment of that dump
+    (measured: 4.5 GB on `.TgtNodePres.kit._proof_1`). The verdict is the last
+    line *before* the `── the derivation ──` banner.
+    """
+    try:
+        with open(err, "r", errors="replace") as fh:
+            head = fh.read(8192)
+    except OSError:
+        head = ""
+    verdict = re.split(r"\n-+ ──", head)[0]
+    if verdict.strip():
+        return last_meaningful(verdict)
+    return last_meaningful(tail_text(err) + tail_text(out))
+
 def classify(reason: str) -> str:
     """One bucket per kind of missing support, keyed on the deriver's own words."""
     for pat, label in (
@@ -95,6 +125,10 @@ def classify(reason: str) -> str:
         (r"lambda against a non-Π", "λ checked against a non-Π type"),
         (r"failed to unify", "MM0 elaboration rejected the derivation"),
         (r"uses sorry|contains sorry", "outstanding obligation became sorry"),
+        # `mm0-c`'s heap is a fixed buffer, not the machine's memory: a
+        # derivation it rejects this way is a size its verifier cannot hold, and
+        # it dumps the derivation (gigabytes) before exiting.
+        (r"heap overflow", "over the checker's own heap"),
         (r"MemoryError|memory", "out of memory"),
     ):
         if re.search(pat, reason, re.I):
@@ -117,6 +151,12 @@ MM0_RS_TIMEOUT = int(os.environ.get("SCAN_MM0_RS_TIMEOUT", "240"))
 # takes the machine's memory with it, so the child is bounded on its own. A
 # capped allocation fails inside the child instead of OOM-killing the sweep.
 MM0_RS_MEM_GB = int(os.environ.get("SCAN_MM0_RS_MEM_GB", "10"))
+# `mm0-c` had no time budget because it never needed one: it re-checks a compiled
+# derivation in under a second. But it also dumps the whole derivation to stderr
+# when it rejects one (`heap overflow` on `.TgtNodePres.kit._proof_1` produced
+# more than 3.9 GB in ten minutes), so a rejected giant can run for as long as
+# its trace takes to write. Budget it, and overridable like the others.
+MM0_C_TIMEOUT = int(os.environ.get("SCAN_MM0_C_TIMEOUT", "900"))
 
 
 # ── the ledger of proved statements ──────────────────────────────────────────
@@ -510,6 +550,10 @@ def cap_mem(gb: int):
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["PATH"] = str(Path.home() / ".local" / "bin") + os.pathsep + env.get("PATH", "")
+    if "stdout" in kw or "stderr" in kw:
+        # The caller spills the child's output to files; `capture_output` and an
+        # explicit stream are mutually exclusive in `subprocess.run`.
+        return subprocess.run(cmd, text=True, env=env, **kw)
     return subprocess.run(cmd, capture_output=True, text=True, env=env, **kw)
 
 
@@ -714,9 +758,30 @@ def main() -> int:
             failed.append((short, "mm0-rs: " + last_meaningful(c.stdout + c.stderr)))
             print(f"  mm0-rs ✗ {short}: {failed[-1][1][:110]}")
             continue
-        k = run(["mm0-c", str(out / "full.mmb")], stdin=open(full0))
+        # `mm0-c`'s output is spilled to files, not captured: on rejection it
+        # prints the derivation it rejected, and that is tens of megabytes in
+        # the ordinary case and gigabytes on the largest chapters. Holding it in
+        # this process is what OOM-killed the namespace sweep twice, at 22 GB,
+        # with nothing else running on the host.
+        log0, log1 = out / "mm0-c.out", out / "mm0-c.err"
+        try:
+            try:
+                with open(full0) as fh0, open(log0, "w") as fo, open(log1, "w") as fe:
+                    k = run(["mm0-c", str(out / "full.mmb")], stdin=fh0,
+                            stdout=fo, stderr=fe, timeout=MM0_C_TIMEOUT)
+            finally:
+                # The transcript is evidence only until the reason is read out
+                # of it; the dump itself is not worth the disk (4.5 GB on the
+                # one measured so far).
+                reason = mm0_c_reason(log1, log0) if log1.exists() else "(no output)"
+                log0.unlink(missing_ok=True)
+                log1.unlink(missing_ok=True)
+        except subprocess.TimeoutExpired:
+            failed.append((short, f"mm0-c: over {MM0_C_TIMEOUT} s"))
+            print(f"  mm0-c ⏱ {short}: over {MM0_C_TIMEOUT} s")
+            continue
         if k.returncode != 0:
-            failed.append((short, "mm0-c: " + last_meaningful(k.stdout + k.stderr)))
+            failed.append((short, "mm0-c: " + reason))
             print(f"  mm0-c ✗ {short}: {failed[-1][1][:110]}")
             continue
         head = stem.with_suffix(".mm0").read_text()

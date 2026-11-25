@@ -5744,13 +5744,15 @@ the reason now reads as a size the machine cannot supply, not as an arbitrary ca
 102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs` (`§13.62`) scales to this: at
 251 MB the compile is both superlinear in time and past the available address space.
 
-**Where the namespace sweep stands.** It was paused at 475 verified of 3 975 declarations to
-let this measurement have the machine, with five non-passes on the log: `renameCore` (above),
-the `Φ` and `hΔ0` rejections that `§13.62b`'s `mm0_ident` fix has since turned into verdicts,
-and `emit` timeouts on `.EnvModelM.swapP` and `.swapTyP` at the default 240 s. Every finished
-row survives the pause in the ledger, so the resumed sweep replays those 475 as `memo` hits in
-about four minutes and continues past `.Expr`; the closures and the final failure histogram
-land only at the end of that resume, in `_build/conleche/model-scan.log`.
+**Where the namespace sweep stands.** The 475-declaration pause this section was written in is
+long past: the ledger now holds **1 389 verified of 3 975**, and every row in it is a pass. The
+five non-passes the paused log carried have since been decided one way or the other —
+`renameCore` is the measurement above, the `Φ` and `hΔ0` rejections became verdicts with
+`§13.62b`'s `mm0_ident` fix, and `.EnvModelM.swapP`/`.swapTyP` have `§13.62f`. Two later runs
+were OOM-killed at the same declaration, `.TgtNodePres.kit` the last line of each log; `§13.62h`
+reproduces the kill alone and fixes its cause. Every finished row survives in the ledger, so a
+resume replays the 1 389 as `memo` hits — about ten minutes — and the closures, the rules applied
+and the failure histogram land only at a clean exit, in `_build/conleche/model-scan.log`.
 
 ### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
 
@@ -5864,34 +5866,39 @@ for 12 h 8 min CPU**.
 
 | verdict | ledger at 1 196 rows (15:20) | ledger at 1 389 rows (16:36) |
 | --- | --- | --- |
-| same statement, under the declaration's own name | **1 196** | **1 389** |
-| same statement, under another declaration | **7** | **9** |
+| same statement, under the declaration's own name | **1 172** | **1 365** |
+| same statement, under another declaration | **31** | **33** |
 | digest the ledger has no row for | 2 762 | 2 567 |
 | no digest produced | 10 | 10 |
 | row exists, statement differs | **0** | **0** |
 
 **1 203 of 3 975 (30.3 %) match by statement** at the snapshot, and **1 398 (35.2 %)** on the
-ledger the sweep stopped with. In both runs the first row is *exactly* the ledger's row count:
-every row is re-identified from the export alone, and the second row is the re-export path doing
-what it was keyed for — a statement carried over because the bytes agree, not the names, 9 in the
-later run rather than 7 because the ledger had grown. They are the
-`_auto_1`/`_sparseCasesOn_1`/`match_1` helpers, and they collapse onto three statements:
-`.coverTo_addLfp._auto_1` and `.denote_pinned_const._auto_1` both match
+ledger the sweep stopped with. The first row is the ledger's *distinct* statement count, not its
+row count — 1 172 of 1 196 and 1 365 of 1 389 — because 24 rows are byte-identical to a twin's
+statement and the audit reports the first index entry for a digest (last paragraph below). The
+second row is the re-export path doing what it was keyed for — a statement carried over because
+the bytes agree, not the names: 31 and 33 rows, of which 24 are those twins and 7 and 9 are
+genuine cross-name matches (9 in the later run rather than 7 because the ledger had grown). They
+are the `_auto_1`/`_sparseCasesOn_1`/`match_1`/`_f` helpers, and they collapse onto five
+statements: `.coverTo_addLfp._auto_1` and `.denote_pinned_const._auto_1` both match
 `EnvModel.acval_pinned._auto_1`; `.openLamsM._sparseCasesOn_1`, `.piCount._sparseCasesOn_1` and
 `.piTail._sparseCasesOn_1` all match `PiConcl._sparseCasesOn_1`; `.piCount.match_1` and
-`.piTail.match_1` both match `Rules.PiChain.match_1`. Not one row is contradicted by the export it
+`.piTail.match_1` both match `Rules.PiChain.match_1`; `.WellDenoted_mkAppN_head._f` matches
+`Rules.mkAppN_head._f`, and `.ctxInstAtAV.match_1` matches `TeleEq.match_1`. Not one row is
+contradicted by the export it
 came from, in either run (0 of 1 196, 0 of 1 389), which is the result the two `§13.62e` fixes were
 for.
 
 The 2 762 and 2 567 are the sweep's unverified remainder, not disagreements — the namespace was
 still being swept when the first run went out, and the second column is the ledger it stopped with.
 That stop was not a clean one: at 16:35:04, after 3 h 51 min, the kernel OOM killer took processes
-in the sweep's own cgroup, `.TgtNodePres.kit` the last declaration on its log. The audit was sharing
-the host at the time (its own peak was 2.0 GB) and no per-process attribution survives, so the
-honest record is that two memory-hungry jobs ran together and one was killed. The sweep was
-restarted under a 22 GB `MemoryMax` and 4 GB of swap and resumed from the 1 389-row ledger as `memo`
-hits; the `--rekey` that preceded the second audit recomputed the same 475 legacy keys over those
-1 389 rows (1 365 distinct statements, 0 missing their retained statement).
+in the sweep's own cgroup, `.TgtNodePres.kit` the last declaration on its log. `§13.62h` reproduces
+that kill on the declaration after it with nothing else on the host, and finds the memory in the
+driver rather than in the audit (whose own peak was 2.0 GB); the sweep was restarted under a 22 GB
+`MemoryMax` and 4 GB of swap, resumed from the 1 389-row ledger as `memo` hits, and killed again at
+19:52 on the same declaration before the buffer was fixed. The `--rekey` that preceded the second
+audit recomputed the same 475 legacy keys over those 1 389 rows (1 365 distinct statements, 0
+missing their retained statement).
 
 The 10 with no digest are not budget-limited. A second run of just those at
 `SCAN_EMIT_TIMEOUT=1800` — 7.5× the bound that reported them — fails identically in under two
@@ -5906,3 +5913,34 @@ One more number to keep straight: the ledger's rows outnumber its distinct state
 row's statement (`.CtxOkP.forallE_body` and `.CtxOkS.forallE_body`, their `_ty` companions, …). That
 is also why the per-declaration log lists a few of a declaration's own rows under a twin's name:
 the index keeps a list per digest and the audit reports the first entry.
+
+### 13.62h The sweep's OOM was the driver holding the checker's 4.5 GB rejection trace
+
+`§13.62c` and `§13.62g` both ended at the same line, `.TgtNodePres.kit`, with the kernel OOM killer
+named and no process to blame. The declaration after it settles the question: run alone
+(`--only`, its own cgroup at `MemoryMax=20G` and `MemorySwapMax=2G`, nothing else on the host) it
+still takes the unit down. The kill is not a proof tool's: the driver holds **20.5 GB** (VmHWM
+20 662 696 kB, 18 GB of it anonymous heap) while its only child, `mm0-c`, sits at 186 MB.
+
+The memory was in the pipe. On this declaration `mm0-c` rejects the emitted `.mmb` (17 602 560
+bytes, from a 170 564 417-byte `.mm1` and 416 916 314 bytes of conversion obligations) with
+`at thm__proof_1: heap overflow`, and then prints the derivation it rejected: **4.5 GB of stderr in
+about eleven minutes**. `lean-proof-scan` ran both checkers with `capture_output=True`, so every
+byte of that dump had to be resident in the driver before the verdict could be read — at the 22 GB
+`MemoryMax` the cgroup killed the unit by the time the trace reached 20 GB. The audit sharing the
+host at 16:35 was not a factor; the 19:52 kill happened with no audit running at all.
+
+The fix is to stop reading a transcript into memory: the checker's two streams go to files in the
+work directory, only the verdict is read back — the last line before the `── the derivation ──`
+banner, since the *last* line of the file is a fragment of the dump — and the files are deleted once
+the reason is out. Re-measured after the fix, same declaration, same cgroup: **847 s wall, 9.0 GB
+peak (the `mm0-rs` bound, not the driver's), clean exit**, reporting `mm0-c: at thm__proof_1: heap
+overflow`. The 4.5 GB went to disk and was discarded.
+
+The rejection itself is not a budget. `mm0-c` takes no heap argument (`Incorrect args; use
+'mm0-c MMB-FILE < MM0-FILE'`), so its heap is a buffer fixed at compile time in the verifier: a
+derivation this wide does not fit it, which is a capacity fact about the checker and is now its own
+failure class (`over the checker's own heap`) instead of being reported as "out of memory". It also
+got a time budget for the first time (`SCAN_MM0_C_TIMEOUT`, 900 s): it never needed one while every
+rejection was small, and now a rejected giant cannot hold the sweep for as long as its trace takes
+to write.
