@@ -5808,10 +5808,10 @@ With both fixed, the same forced re-export probe returns **10 of 10 `same statem
 — no emitter, no `mm0-rs`, no `mm0-c`, about 8.5 s per declaration, which is the export index and
 not the proof. That is the path `§13.62b` keyed the ledger for, exercised for the first time.
 
-What is *not* measured is the whole namespace: 3 975 declarations at ~8.5 s is ≈9.4 h, the same
-order as a fresh sweep, so the whole-namespace re-export run and the `--rekey` of the live ledger
-both wait for the sweep to finish — the ledger is being appended to, and `--rekey` rewrites it in
-one pass.
+That left the whole namespace unasked, and the serial estimate — 3 975 declarations at ~8.5 s, ≈9.4 h
+— made it look like a second sweep. It is `§13.62g`: ten at a time, the same 8.5 s per declaration
+is 1 h 28 min of wall clock. The `--rekey` of the live ledger is the part that still waits for the
+sweep, because that ledger is being appended to and `--rekey` rewrites it in one pass.
 
 ### 13.62f The checker's budget raised to 24 GiB: `swapP` and `swapTyP` still do not close
 
@@ -5844,3 +5844,53 @@ Conclusion: raising `SCAN_MM0_RS_MEM_GB` does **not** close these two. They stay
 memory-limited failures — now with a measured floor (`>24 GiB` at a 10^6-rule term) instead of a
 default — and the honest next step is not a bigger budget but a checker that does not need one
 (`mm0-c` reads the same derivation from a `.mmb`, and the `.mmb` cannot be built without `mm0-rs`).
+
+### 13.62g The re-export question over the whole namespace: 1 203 of 3 975 match by statement
+
+`§13.62e` keyed the ledger on the statement and proved the key on ten declarations. Asking it of the
+3 975 could not be done through the sweep: the scan reaches the statement path only by falling
+through to an emit and both checkers when the name lookup misses, so every miss would have cost a
+proof. `--audit-statements` asks the question directly — for each declaration it runs
+`lean-typing-proof --spine --digest` (the export index and the encodes, no walk) and looks the
+sha256 up in the ledger's statement index. Nothing is emitted, neither checker runs, the ledger is
+only read, and the digests land in `<work>/statements.tsv`.
+
+Run over the full namespace against a copy of the live ledger `--rekey`ed first, so that the 475
+legacy rows carry band digests (1 196 rows, 1 172 distinct statements, 0 missing their retained
+statement), ten declarations at a time in a 16 GB cgroup: **1 h 27 min 38 s wall, 13 h 12 min 57 s
+CPU, 2.0 GB peak**. The 8.5 s per declaration of `§13.62e` is CPU, so the serial estimate of 9.4 h
+was the shape of the work rather than its wall clock.
+
+| verdict | declarations |
+| --- | --- |
+| same statement, under the declaration's own name | **1 196** |
+| same statement, under another declaration | **7** |
+| digest the ledger has no row for | 2 762 |
+| no digest produced | 10 |
+| row exists, statement differs | **0** |
+
+**1 203 of 3 975 (30.3 %) match by statement.** The 1 196 are exactly the ledger's rows, each
+re-identified from the export alone; the other 7 are the re-export path doing what it was keyed
+for — a statement carried over because the bytes agree, not the names. They are the
+`_auto_1`/`_sparseCasesOn_1`/`match_1` helpers, and they collapse onto three statements:
+`.coverTo_addLfp._auto_1` and `.denote_pinned_const._auto_1` both match
+`EnvModel.acval_pinned._auto_1`; `.openLamsM._sparseCasesOn_1`, `.piCount._sparseCasesOn_1` and
+`.piTail._sparseCasesOn_1` all match `PiConcl._sparseCasesOn_1`; `.piCount.match_1` and
+`.piTail.match_1` both match `Rules.PiChain.match_1`. Not one of the 1 196 rows is contradicted by the
+export it came from, which is the result the two `§13.62e` fixes were for.
+
+The 2 762 are the sweep's unverified remainder at the snapshot (the ledger was copied at 15:20 with
+1 196 of 3 975), not disagreements; the same audit is wired to run again over the finished ledger
+when the sweep exits.
+
+The 10 with no digest are not budget-limited. A second run of just those at
+`SCAN_EMIT_TIMEOUT=1800` — 7.5× the bound that reported them — fails identically in under two
+minutes each, in the export's JSON decode:
+`RecursionError: maximum recursion depth exceeded while decoding a JSON object`, for the deeply
+nested bodies of `.eqRecFit`, `.eqRecLaw`, `.genFit1_core`, `.genIhFree_run`, `.genNodeCalls`,
+`.genRule_residue`, `.quotIndFit`, `.quotIndLaw`, `.quotLiftFit` and `.quotLiftLaw`. That is depth,
+not time or memory, and it is the next thing the digest path needs.
+
+One more reason the table's first row is the row count while the statement index holds 1 172 keys:
+24 rows are byte-identical to another row's statement (`.CtxOkP.forallE_body` and
+`.CtxOkS.forallE_body`, their `_ty` companions, …).
