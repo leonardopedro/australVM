@@ -74,6 +74,9 @@ type cmd =
       allow_all: bool;
       auth_manifest: string option;
       emit_cps_path: string option;
+      (** U07: emit the CPS artifact and stop. No bridge initialization, no JIT
+          compile and no C output; `--emit-cps` is required. *)
+      emit_cps_only: bool;
       (** U11: write the canonical adapter descriptors for the foreign calls
           whose signature needs a generated wrapper. *)
       emit_adapters_path: string option;

@@ -57,6 +57,10 @@ val use_cps_jit : bool ref
 val jit_server_mode : bool ref
 val emit_cps_path : string option ref
 
+(** U07: emit the CPS artifact without initializing the bridge or compiling it.
+    No C output and no JIT fallback: an empty or failed lowering raises. *)
+val emit_cps_only : bool ref
+
 (** U11: where to write the canonical adapter descriptors the CPS lowering
     requires, in the form `umbrella/src/interface.rs` parses. *)
 val emit_adapters_path : string option ref

@@ -1143,6 +1143,37 @@ let debug_print_mono_module (mono_module: Mt.mono_module) =
         | _ -> Printf.printf "  Other declaration\n"
       ) decls
 
+(** The wire type name the CPS artifact encodes for a monomorphic type. This
+    is the type a compiled export actually crosses, not the source spelling. *)
+let cps_type_name (ty: mono_ty): string =
+  match mono_ty_to_cps_type ty with
+  | I64 -> "Int64"
+  | I32 -> "Int32"
+  | Bool -> "Bool"
+  | Unit -> "Unit"
+  | String -> "String"
+  | F64 -> "Float64"
+
+(** The typed exports a compile-only artifact carries: exactly the
+    function/constant declarations the CPS lowering turns into functions, with
+    their wire parameter and return types. Foreign declarations are imports,
+    not exports, so they are omitted. The names match {!build_cps_function}.
+*)
+let typed_exports (Mt.MonoModule (_, decls)): (string * string list * string) list =
+  let params (ps: Mt.mvalue_parameter list): string list =
+    List.map (fun (Mt.MValueParameter (_, ty)) -> cps_type_name ty) ps
+  in
+  List.filter_map (function
+    | Mt.MFunction (_, name, ps, ret_ty, _) ->
+        Some (ident_string name, params ps, cps_type_name ret_ty)
+    | Mt.MFunctionMonomorph (id, ps, ret_ty, _) ->
+        Some ("monomorph_" ^ show_mono_id id, params ps, cps_type_name ret_ty)
+    | Mt.MMethodMonomorph (id, ps, ret_ty, _) ->
+        Some ("method_" ^ show_mono_id id, params ps, cps_type_name ret_ty)
+    | Mt.MConstant (_, name, ty, _) ->
+        Some (ident_string name, [], cps_type_name ty)
+    | _ -> None) decls
+
 let debug_print_cps_functions (funcs: CpsGen.function_def list) =
   Printf.printf "CPS Functions: %d\n" (List.length funcs);
   List.iter (fun func ->

@@ -7,9 +7,12 @@
 pub mod adapters;
 pub mod cargo;
 pub mod cli;
+pub mod frontend;
 pub mod handles;
 pub mod interface;
 pub mod policy;
 pub mod process;
 pub mod project;
+pub mod provider;
+pub mod staging;
 pub mod trust;
