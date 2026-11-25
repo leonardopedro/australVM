@@ -1,0 +1,7 @@
+measured: unfer_consensus fence_invariant (offline, --nocapture)
+conformance coverage: 6 operations, 181 stale tokens presented, 0 accepted
+fence invariant: states=2116 transitions=507840 settled=3312 violations=0
+conformance: 4800 steps compared, 0 disagreements, 178 stale tokens presented, 0 accepted
+
+binary result:
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s

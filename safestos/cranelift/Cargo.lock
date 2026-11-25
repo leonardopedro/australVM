@@ -148,6 +148,7 @@ dependencies = [
  "sha2",
  "subtle",
  "tokio",
+ "unfer_protocol",
 ]
 
 [[package]]

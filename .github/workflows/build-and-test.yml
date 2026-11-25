@@ -14,6 +14,19 @@ on:
 env:
   CARGO_FLAGS: ""
 
+# One run per tree, newest wins. Without this, every push that lands while a
+# previous `Build and Test` is still going starts a second run beside it, and
+# the long jobs (both build the bridge from source on a 2-core runner) then
+# contend for the same runners: measured 2026-11-24, three runs on `master`
+# (08:34, 08:48, 09:07) were in flight together, and `nix-pkg`'s `make bridge`
+# step took 24.9 min where the same step took 17.6 min on a quiet branch — which
+# is what pushed it past its timeout. Cancelling the superseded run is correct
+# here: the verdict that matters is the newest commit's, and a `cancelled` job
+# carries no verdict about the tree (see `docs/data/gate/README.md`).
+concurrency:
+  group: build-and-test-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Upstream OCaml CI, migrated from nix-shell (23.05) to the flake ─
   # The fork links the cranelift JIT bridge (.so, DT_NEEDED, no rpath) into
@@ -371,7 +384,32 @@ jobs:
   # `rustc` and sets LD_LIBRARY_PATH itself).
   nix-pkg:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # `make bridge` is the step whose cost varies: 17.6 min on `3e63054b`,
+    # 24.9 min on `6c8591b3`, 25.2 on `ee68fe46`, 24.7 on `0da4a26a`, 24.2 on
+    # `fcc99fec` (measured 2026-11-23/24). The OCaml suite is the long pole and
+    # `verify-invariants` is ~3 (~31/39.5 min measured on the same runs).
+    #
+    # A cranelift target cache was tried and removed: `ee68fe46`→`0da4a26a` ran
+    # the step with `safestos/cranelift/target` + `../unfer/target` cached under
+    # `nix-pkg-jit-…` and nothing changed (24.7 min, then 24.2 on the run that
+    # should have hit), and no entry ever appears under that key *or* under the
+    # `jit-…` key jit-stack has used for its own cache — this repository's cache
+    # list reports 2187 entries, the first 200 of which hold 5.0 GB and whose two
+    # nix entries alone are 4.6 GB of GitHub's 10 GB budget, so a multi-gigabyte
+    # target archive is not what survives that. Even a hit
+    # could only remove the cargo half: a cold `cargo build --release --offline`
+    # of this crate alone measured 10m05s locally against the step's 24 min, and
+    # the rest is the OCaml compiler build in the same recipe (`dune build lib/
+    # bin/`), which a cargo cache cannot touch. Caching `_build` instead is the
+    # change that would move this number; it is not this step's to make.
+    #
+    # The 90-minute job bound is the outer net: a 25-minute cold bridge plus the
+    # suite's own 50-minute step bound plus the remaining ~7 leaves room for the
+    # step bound to fire first, with its own annotation, in every case. A
+    # genuinely hung step still stops at 90, and a `cancelled` conclusion here
+    # has twice been a timeout rather than a superseded run (started 08:34:14Z,
+    # cancelled 09:34:33Z).
+    timeout-minutes: 90
 
     steps:
       - name: Checkout australVM
@@ -448,8 +486,14 @@ jobs:
       # The OCaml suite is the slow half of the tree (build, typecheck and 18
       # test suites), so it gets its own step with a budget larger than the
       # local default; the elapsed seconds are printed for the job log.
+      #
+      # 40 minutes was exactly the green run's spend on `53422dfe` (39.9), so the
+      # next contended run died on this bound instead of on a defect: step 15
+      # ran 12:04:45Z→12:44:49Z on `ee68fe46` and the job's annotation reads "has
+      # timed out after 40 minutes". 50 keeps ~10 minutes over the worst measured
+      # run and still leaves the job bound the one that fires later.
       - name: OCaml suite (build, typecheck, tests)
-        timeout-minutes: 40
+        timeout-minutes: 50
         run: |
           start=$(date +%s)
           nix develop "git+file://$PWD#ocaml" -c make test

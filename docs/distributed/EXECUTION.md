@@ -1348,19 +1348,36 @@ the same state fingerprint, which the replay test asserts, including that a
 | Replicas | 3 (each with its own directory, journal and engine view) |
 | Requests | 3 — an authorized mint (applies), a mint by the non-authority client (refused by the node itself, slot advances), and an identity create (applies through a second ledger) |
 | Action alphabet | 9 fixed actions (3 admits, 1 retry, 3 delivers, 1 partition, 1 crash) |
-| Depth | **4** in the default run, **5** in the `#[ignore]`d deep run |
-| Unpruned state space | 7381 / 66430 prefixes for depth 4 / 5 |
-| Executed, pruned, leaves | depth 4: **1342** executed, **545** pruned as equivalent, **648** leaves; depth 5: **6904**, **2898**, **3239** |
-| Violations | **none** at either depth |
-| Runtime | depth 4 **55 s**, depth 5 **325 s** on this aarch64 host (`d12-schedules.log`) |
+| Depth | **4** in the default run, **5** and **6** in the `#[ignore]`d deep run (`UNFER_D12_DEPTH`) |
+| Unpruned state space | 7381 / 66430 / 597871 prefixes for depth 4 / 5 / 6 |
+| Executed, pruned, leaves | depth 4: **1342** executed, **545** pruned as equivalent, **648** leaves; depth 5: **6904**, **2898**, **3239**; depth 6: **33769**, **14617**, **15400** |
+| Violations | **none** at any of the three depths |
+| Runtime | depth 4 **21 s**, depth 5 **153 s** on the host filesystem; depth 5 **110 s** and depth 6 **720 s** with the journals on tmpfs (`d12-schedules.log`) |
 | Seeded walks (past the bound) | 32 runs × 12 steps, **30 distinct** final states, no violation |
 
-The depth-5 run is `a_deep_search_to_depth_five_finds_no_violation`, `#[ignore]`d
+The deep run is `a_deep_search_to_depth_five_finds_no_violation`, `#[ignore]`d
 because it takes minutes — not because its numbers are optional: they are the
-ones in this table, and the command is in `d12-schedules.log`. The cost is per
-prefix, not per entry: each prefix starts three real replicas with real journals
-(~40 ms), which is why the depth-5 search costs 325 s for 6904 prefixes and why
-it is a reported bound rather than a default test.
+ones in this table, and the commands are in `d12-schedules.log`. The nightly
+`.github/workflows/deep-schedules.yml` in U runs it (depth 5 by default, depth 6
+on dispatch) and writes the bounds line into the run summary, so the number here
+can be re-derived from a green run object instead of a transcript.
+
+**What it cost, and what was cut.** The first measurement of this domain took
+325 s at depth 5. Profiling the per-prefix cost found it was not the schedule at
+all: `SparseMerkle::empty()` rebuilt the 256-level default hash chain on every
+ledger construction, twice per replica, and in a debug build that is 3.9–4.9 ms —
+24 ms of every prefix, 90 % of the run. The chain depends only on the depth, so
+it is now computed once per process and shared (`certs.rs::default_chain`); the
+same numbers came out at 21 s and 153 s, which is also a check that the cache did
+not change a single ledger root (the `certs` unit tests compare them).
+
+What remains is the protocol under test: each applied transition writes a journal
+frame and `sync_data`s it, so a prefix costs roughly `depth × one sync`. That is
+why the medium is named in every row above — tmpfs is where depth 6 fits in a
+nightly window (**720 s**, 33769 prefixes), and it is the same protocol against a
+fast device, not a weaker one. It is *not* a power-loss claim: nothing in D12
+speaks to device-level durability, which is D13's subject and is measured there
+with real processes and real `chmod`/corruption.
 
 Pruning is by `Sim::state_key` — decided log, per-replica watermark, liveness and
 state digest. Two prefixes with the same key are treated as admitting the same
@@ -1436,9 +1453,9 @@ report lines), `d12-suites.log`, `d12-traces/`.
 
 ### What this is not
 
-* A bounded search is not an all-run proof: 1342 prefixes of 7381 at depth 4 and
-  6904 of 66430 at depth 5, alphabet 9, plus the 32 walks — that is the whole
-  claim.
+* A bounded search is not an all-run proof: 1342 prefixes of 7381 at depth 4,
+  6904 of 66430 at depth 5 and 33769 of 597871 at depth 6, alphabet 9, plus the
+  32 walks — that is the whole claim.
 * The consensus engine is an assumption. Nothing here says anything about
   QuePaxa's ordering or liveness.
 * No real transport, filesystem or OS scheduler is involved; `FaultPoint` is the
@@ -1538,6 +1555,174 @@ claimed — never the digests, which belong to one run.
   are not every interleaving, and the deterministic cases cover the boundaries
   the offsets cannot place exactly.
 
+### D14 — Ordered fencing for scheduled jobs
+
+A job claim used to be a generation counter held in the calling process. That is
+sufficient for one worker and useless for two: the counter a partitioned worker
+holds says nothing about what the committed state believes, and a lease-style
+answer would need synchronised clocks in a system whose premise is that they are
+not. So the token is a fence, and the committed state owns it.
+
+**The fence is `(deployment, resource, epoch, generation)`.** `epoch` is the
+reset point — it advances only when `generation` would overflow, or when a caller
+asks for it explicitly — and `generation` advances once per claim transition.
+Fences are ordered lexicographically on that pair, so "stale" means "not the
+current one", never "old in seconds". `FenceTable` in `unfer_consensus/src/jobs.rs`
+holds the current fence and holder per resource; a `ConsensusNode` owns one and
+rebuilds it from its journal (`storage::JournalRecord::Fence`), so a restart
+returns the fences that were written and no others.
+
+| Transition | What it does | What it refuses |
+|---|---|---|
+| claim | issues the next fence for an idle resource | a resource someone holds (`RESOURCE_HELD`) |
+| renew | a fresh generation for the same holder | any fence that is not current |
+| release | makes the current fence idle | a stale worker releasing a newer claim |
+| reclaim | takes over a *released* resource | a resource that was never released |
+| fire / disable | settles under the current fence | a stale or replayed completion |
+
+Round-robin stays where it was: `LeaderLease` is a *preference* about who will
+claim next. Correctness rests on the fence, so a wrong preference costs a refused
+claim, not a double fire.
+
+**The enforcement point is the sink, and only if it can enforce.** `FencedSink`
+is the interface: `OrderedMockSink` rejects any fence it has already passed, so
+an effect that was ordered after another cannot land before it — even if the node
+that admitted it never saw the newer claim. A sink *without* that interface
+cannot be protected by a fence, and this record does not claim one: D15 is where
+an unenforceable sink gets a durable outbox and reconciliation instead of a
+promise. The same honesty applies to the journal: `settle_job` reports "the effect
+reached the sink but the settle could not be recorded" as its own error rather
+than as a clean failure, because retrying that blindly would apply the effect
+twice.
+
+**What is tested** (`unfer_consensus/tests/ordered_fencing.rs`, 8 cases, plus 10
+unit cases in `jobs.rs`):
+
+```text
+$ cargo test -p unfer_consensus --test ordered_fencing
+two_partitioned_workers_cannot_both_lead ......... ok   B is refused with RESOURCE_HELD
+delayed_old_completion_is_refused ................ ok   the old fence cannot commit
+claim_and_settle_replay_are_refused .............. ok
+generation_overflow_advances_the_epoch ........... ok   (7,MAX) -> (8,1), never a wrap
+restart_rebuilds_fences_and_job_state ............ ok   claim survives, fired stays fired
+stale_release_of_a_newer_claim_is_refused ........ ok
+fence_transitions_are_durable_and_recover_last_wins  ok   3 records, last wins
+a_fenced_sink_enforces_order_without_asking_the_node  ok
+```
+
+**The first symbolic invariant target for D21** is the one the table above makes
+concrete: *for every resource and every settle, the fence under which the effect
+was applied is the fence the committed state held when the settle was recorded.*
+A stale settle is not a lost update to be repaired later; it is a transition the
+state refuses, which is why the target is expressible as an invariant over the
+committed fence rather than over a lease interval.
+
+**Replicated claims (the transport follow-up).** The fence table above is per
+node, so a claim still has to reach every replica for two workers to get one
+answer. `unfer_protocol::JobOp` now carries `Register`, `Claim`, `Renew`,
+`Release`, `Fire` and `Disable` as signed `ConsensusTransaction::JobOp` entries.
+The fence is **derived from the committed slot order** by every replica; a
+command's `expected: JobFence` is only a compare-and-swap precondition (it names
+the fence the caller believes is current), never the fence the state will issue.
+A `Claim` therefore cannot choose its own epoch or generation. The application
+path (`node.rs::apply_job_op`) writes no `JournalRecord::Fence`: replaying the
+transition log reconstructs the same claims, so a restart cannot refuse a claim
+against itself or trip the D07 comparison.
+
+`unfer_node job --config node.json --job <name>` replays a node's durable ledger
+through the same application node and prints `state`, `holder`, `epoch` and
+`generation`. It reads the snapshot without taking the running node's lock, like
+`digest`.
+
+**Measured over the TLS transport** (`unfer_consensus/tests/independent_nodes.rs`,
+three processes, two live replicas, `--features network`): two workers submit a
+claim for the same job concurrently through different nodes. Slots 2 and 3 are
+both committed; exactly one applies and the other is a durable refusal. All three
+processes report the same holder, fence generation `1`, and digest. A `Fire`
+with `expected generation 2` (never issued) is committed and leaves the job
+claimed; a `Fire` with the current `(1,1)` moves it to fired. Evidence
+`docs/distributed/evidence/d14-job-transport.log`; the reproducibly measured
+subset is `1 passed, 0 failed`, and the full consensus suite on the same tree is
+`220 passed, 0 failed`.
+
+**What this is not.** Not a wall-clock lease: no code path in `jobs.rs` or
+`node.rs` reads a clock, and the plan's exclusion ("wall-clock leases being safe
+under arbitrary clock skew") is what that buys. Not enforcement for sinks that
+cannot enforce — named above, and left to D15. Not a replicated *effect*: the job
+lifecycle is in the log, but the sink call and its acknowledgement are still
+D15's outbox; a `Fire` records the committed lifecycle decision, not proof that
+an external effect happened.
+
+### D15 — Durable outbox for approval-controlled effects
+
+**Files (unfer):** `unfer_ffi/src/outbox.rs` (new, ~700 lines incl. tests), `unfer_ffi/src/handles.rs`, `unfer_ffi/src/lib.rs`, `unfer_ffi/Cargo.toml` (+`sha2 = "0.10"`). **australVM:** evidence `docs/distributed/evidence/d15-outbox.log`.
+
+**What changed.** The outbox sits *under* the existing action queue; `ActionRecord` is unchanged and an applied action still ends `Approved` with a resolved record. The middle of `uk_action_apply` is now a durable protocol:
+
+1. **Intent before dispatch.** `EffectIntent` (request identity, principal, effect, resource, epoch, payload digest) is appended and flushed to the durable store before any sink is called.
+2. **Approval bound to the bytes.** `ApprovalBinding` names request, payload digest (`sha256` of canonical JSON), resource and epoch; resolution re-checks all four, so an approval replayed against an altered payload is refused before the sink sees it. The same check runs again immediately before the call, catching a revocation that happened while the operator was reading.
+3. **Three outcomes, three records.** `OutboxRecord::{Planned, Dispatching, Acknowledged, Retryable, Uncertain, Refused, Reconciled}`. `Acknowledged` is the sink saying it applied; `Retryable` the sink saying it did not and may be asked again; `Uncertain` is the honest one (marker went out, no ack) and waits for `Outbox::reconcile`.
+4. **Idempotency key never changes.** A retry — including the one a restart performs after a crash between sink call and ack — carries the first attempt's key, so a dedup sink applies once. A non-dedup sink goes to `Uncertain` and is never replayed automatically.
+
+**Sink contract.** `EffectSink` exposes `deduplicates`, `enforces_fence`, `apply`. A fence (D14) is required only when the sink can enforce it; a fence a sink ignores is refused rather than promised. `DispatchPolicy`/`AllowAll` is the policy hook at the execution point.
+
+**Recovery.** `handles::recover_durable` scans the trailing dispatch markers and marks them unknown-outcome via `outbox::unresolved_in`. A recovery bug found and fixed this turn: `recover_durable` minted a new handle per record, leaving a resolved action twice (pending ghost + approved); now one handle per id, latest record wins.
+
+**FFI mapping.** `Storage` failure → `Code::STORAGE_FAILED` (5011); `Uncertain`/`Unrecorded` → `UNKNOWN_OUTCOME` (1010); approval/policy/terminal → `CALL_DENIED` (4001). A resolved-record failure *after* a durable ack is 5011, not 1010 (the ack is the durability point). `uk_action_apply` uses the outbox when a durable store exists; the RAM-only inline path is retained.
+
+**What is tested** (`unfer_ffi --lib`, 188 passed, 0 failed; outbox subset 13 passed):
+
+```text
+$ cargo test -p unfer_ffi --lib --offline outbox
+outbox::tests::intent_is_durable_before_any_sink_is_called .... ok
+outbox::tests::approval_covers_request_resource_and_epoch_too . ok
+outbox::tests::approval_replay_on_an_altered_payload_is_refused_before_the_sink . ok
+outbox::tests::the_idempotency_key_covers_payload_and_request_identity . ok
+outbox::tests::a_fence_reaches_a_sink_that_enforces_order .... ok
+outbox::tests::a_fence_is_refused_before_a_sink_that_cannot_enforce_it . ok
+outbox::tests::crash_after_sink_success_before_ack_does_not_duplicate_at_a_dedup_sink . ok
+outbox::tests::no_dedup_sink_enters_reconciliation_instead_of_being_retried . ok
+outbox::tests::reusing_a_request_identity_for_a_different_payload_is_refused . ok
+outbox::tests::revoked_worker_fails_at_the_execution_point_and_never_reaches_the_sink . ok
+outbox::tests::retryable_failure_is_recorded_apart_from_acknowledgment . ok
+outbox::tests::open_checked_refuses_an_unreadable_effect_record . ok
+tests::approved_action_dispatches_through_the_outbox_end_to_end . ok
+```
+
+End-to-end: JSONL store, `outbox_kinds == ["planned","dispatching","acknowledged"]`, restart recovers `Approved` (not unknown-outcome), second apply returns `-4005` (`ACTION_ALREADY_RESOLVED`). `resolved_checkpoint_failure_surfaces_unknown_outcome` updated to `fail_on: 4` with a comment naming the outbox flush sequence (checkpoint 1, planned 2, dispatching 3, ack 4, resolved 5). Full consensus suite green (217 passed, 0 failed).
+
+**What this is not.** Not a second approval system: `uk_gate_approve`/`uk_action_apply` are unchanged. Not a delivery guarantee: it records what happened and says so when the record is missing. Not enforcement for sinks that cannot enforce — those go to reconciliation. Epoch 0 is used for local actions that have no authority epoch; this is documented, not invented.
+
+### D16 — One total Austral distributed transition
+
+**Files (australVM):** `examples/distributed/RequestState.{aui,aum}` (new), `examples/distributed/RequestStateReference.rs` (new), `test-programs/suites/028-distributed-request-state/` (new), `scripts/check-request-state` (new), `test-programs/runner.py` (suite wiring). **unfer:** none. **Evidence:** `docs/distributed/evidence/d16-request-state.log`.
+
+**The state machine.** The finite lifecycle is `Idle`, `Pending`, `Applied`, `Rejected`, with explicit `Submit`, `MatchingResponse`, `Retry` and `CancelWait` events. Every non-idle state carries the stable request id and the payload commitment (`held_request`, `held_digest`), so a response is checked against the identity and bytes the state actually accepted. `CancelWait` leaves the request `Pending`: cancellation is a local decision to stop waiting, not rollback. A matching response applies; a wrong request id leaves `Pending`; a matching id with a different digest rejects; a repeated response is a no-op. No arithmetic is performed, and the `maximum_int64` vector checks the bound without overflow.
+
+**The total fragment.** `step` carries `Liquid_Requires(Contract => "true")`, so the existing `TotalityCheck` gate checks it for T1 (no recursion), T2 (no `while`/`for`) and T4 (no foreign calls). No validator extension was needed: the transition uses only records, unions, `case`, `if` and return. `main` is outside the fragment and only prints the fixed vectors. The refusals are pinned as compiler fixtures: `002-refuse-foreign` (T4), `003-refuse-loop` (T2), `004-refuse-recursion` (T1).
+
+**Differential execution.** `scripts/check-request-state` compiles the same module through the CPS JIT (`--use-cps-jit`), compiles the independently written Rust reference, runs both on the fixed vectors, and diffs stdout. The reference is not generated from the C output. Measured: `12 vectors agree`; source digests in the evidence log (`RequestState.aum` `ed591b03…`, `RequestState.aui` `0573cae4…`, reference `d3ac6034…`). The `restart-resume` vector rebuilds `Pending` from the durable request id and digest and continues; continuation depends on no other state. `python3 test-programs/runner.py 028` passes all five cases (lifecycle, source-copy, and the three totality refusals).
+
+**What this is not.** Not a proof of the protocol: it is a total transition and a differential test on finite vectors. Compiler correctness remains a named trust boundary, as does the C compiler. The module does not call the network or a sink; it decides the lifecycle state, and D14/D15 carry that decision through consensus and the outbox.
+
+### D21 — Symbolic invariant (finite model check; induction open)
+
+**Files (unfer):** `unfer_consensus/tests/fence_invariant.rs` (new). **australVM:** evidence `docs/distributed/evidence/d21-fence-invariant.log`.
+
+**What is checked.** A finite-state model of the D14 fencing state machine (claim/renew/release/reclaim/fire, generation advance with epoch overflow, fence comparison) is explored by BFS over **every reachable state and every outgoing transition** — a complete model check of the finite abstraction, not a sampled trace:
+
+```text
+fence invariant: states=2116 transitions=507840 settled=3312 violations=0
+conformance: 4800 steps compared, 0 disagreements, 178 stale tokens presented, 0 accepted
+conformance coverage: 6 operations, 181 stale tokens presented, 0 accepted
+```
+
+Three guard mutations are applied and each is caught with a witness: `StaleSettle → I1`, `WrapGeneration → I2`, `StaleRelease → I3`. Differential conformance compares the model against the real `JobQueue` over 4800 steps with 0 disagreements. Two precision fixes were required and are recorded: the real successor rule is `generation + 1` up to `u64::MAX` (conformance passes `top = u64::MAX`, the model check passes `MAX_GEN = 3`), and "a release accepted on a stale fence" is a transition property checked in `explore`, not a state invariant.
+
+**The three D21 claims targeted:** repeated matching request preserves its result; authority epoch never decreases; a stale fence never changes the protected state. The fence-invariant test machine-checks the third (stale fence) concretely; the first two remain as stated targets for the symbolic proof.
+
+**What this is not.** This is **not** the MM0/Lean induction over arbitrary runs: the symbolic proof of initialization + one-step preservation + induction over finite runs (D21 step 2) and the audit of theory consistency against rejected axiom candidates (step 3) are still open, and are recorded as such rather than substituted with sampled traces. D20 (finite trace certificate in MM0) is a prerequisite and is not yet built. The model check is a consistency check over its finite domain, not a general consistency proof, and bitwidth premises must match execution (they do: `u64`).
+
 ## Task status
 
 | Task | Status | Note |
@@ -1554,8 +1739,9 @@ claimed — never the digests, which belong to one run.
 | D09 | verified within stated scope | `umbrella` pins artifact identity before build and load; the host issues per-instance directory and single-peer network handles; `rs_cap_*` bounds, copies and contains them; an Austral module compiled by the stock front-end writes through the handle, and the same module without the grant is refused with nothing written. Gaps named above (no live transport, directory capability only end to end, umbrella capability binding untested) |
 | D10 | verified within stated scope (steps 1a–3) | canonical versioned frame + explicit no-op + domain-separated preimage (`unfer_protocol` 353+4+12+51+3); `net.rs` replicates `ReplicatedValue`, applies from the decision, keeps only a local outbox (`unfer_consensus` lib 162, phase6 4, request_identity 6, power_cut 4); `signing.rs` signs the domain-separated frame and still verifies legacy layout; evidence `docs/distributed/evidence/d10-*.log`. Gaps: no live transport carried these frames when this row was written (D11 added one), and legacy signature acceptance cannot be retired without a cutover signal |
 | D11 | verified within stated scope (steps 1–3) | one replica per process from a validated `DeploymentConfig`/`NodeConfig`, an exclusive state-directory lock, a `SharedLedger` with no submission pump, and `unfer_node serve|submit|digest`; three processes with disjoint state commit identical digests, a second process on a live directory is refused, and a killed node converges on the survivors' full log after the next decision (`d11-independent.log`); harness suites still green (phase6 4, request_identity 6, power_cut 4) |
-| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 3 requests, 9 actions) executed 1342 of 7381 prefixes at depth 4 (545 pruned, 648 leaves, 55 s) and 6904 of 66430 at depth 5 (2898 pruned, 3239 leaves, 325 s), finding no violation at either depth; 32 seeded walks of 12 steps reached 30 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault was handed to D13 and is now fenced (see the follow-up in this section) |
+| D12 | verified within stated scope (steps 1–3) | `sim.rs` drives real `ConsensusNode`s over real journals, with delivery, quorum membership, journal outcome, crash and restore as explicit recorded inputs; bounded search of the fixed domain (2 clients, 3 replicas, 3 requests, 9 actions) executed 1342 of 7381 prefixes at depth 4 (545 pruned, 648 leaves, 21 s), 6904 of 66430 at depth 5 (2898 pruned, 3239 leaves, 153 s) and 33769 of 597871 at depth 6 (14617 pruned, 15400 leaves, 720 s on tmpfs), finding no violation at any depth; the 24 ms/prefix that dominated the first run was a per-ledger rebuild of the sparse-Merkle default chain, now computed once per process; 32 seeded walks of 12 steps reached 30 distinct states with no violation; four guards (dedup, rejection, restart, revoke) are witnessed by minimized schedules (3→3, 3→2, 7→4, 8→4) re-run against the production core; evidence `docs/distributed/evidence/d12-schedules.log`, `d12-suites.log`, `d12-traces/`. Limits: the consensus engine is an assumption, the search is bounded (not an all-run proof), and the halted-node in-memory divergence observed at a storage fault was handed to D13 and is now fenced (see the follow-up in this section) |
 | D13 | verified within stated scope (steps 1–3) | eleven cases: eight deterministic boundaries (journal `BeforeWrite`/`HalfWrite`/`AfterWrite`, a read-only journal, a corrupt record, a conflicting checkpoint, a refusal replay, the journal framing) and three real-process matrices (SIGKILL mid-submit at 0/2/5/10/20 ms, quorum loss and heal, slow-replica catch-up); each acknowledged slot survived, every logical request grew the log by at most one slot, no failed domain operation applied, and a corrupt journal was refused rather than replaced by empty state; evidence `docs/distributed/evidence/d13-recovery.tsv` (24 case lines, 0 gaps), `d13-crash_matrix.log`, regenerated by `scripts/distributed-recovery`; the D12 follow-up adds the halted-state fence (`d13-halted-state-fence.log`). Limits: a process crash is not a power-loss claim, the consensus engine's partition behaviour is an assumption, and a replica's snapshot trails its commits until the cluster informs it, though the idle-push follow-up in D11's section now repairs a rejoined replica without a new decision |
-| D14 | verified within stated scope (steps 1–5) | scheduled jobs are *ordered fenced* to the plan's tuple, not a local counter. The committed state owns one current `JobFence { deployment, resource, epoch, generation }` per resource, stored in the ledger snapshot (`net.rs` `LedgerSnapshot.jobs`, mutated only through `SharedLedger::with_jobs` under the ledger lock and persisted as one coherent snapshot). Transitions are explicit: `claim` at the current epoch (a replay by the same holder is idempotent, no generation bump), `renew` (new generation, same epoch), `release` (re-queue and supersede), `reclaim` (restart takeover), `take_over` (a later epoch supersedes a partitioned leader) and `settle`/`disable`; only the current fence (fence equality plus holder) settles the job or mutates its protected resource, so an old worker may keep computing but cannot commit. Ordering is `(epoch, generation)`; generation overflow is refused, never wrapped; no transition reads a clock; `FencedSink` models a sink *with* an enforcement interface and refuses a stale fence (a sink without one is not claimed to be fenced). Step 5 gives that command a durable submission path: `SharedLedger::allocate_job` persists it in a `job_outbox` (part of the same snapshot), proposes it to the pump, re-proposes it after a restart, and `append` clears the pending entry by content when the decision applies it — the same durability rule the transaction outbox follows. Step 4 makes the claim an ordered *command*: `JobCommand` (claim, take_over, renew, release, reclaim, settle, disable) is encoded under its own schema (`JOB_COMMAND_SCHEMA = 2`) as a replicated value, and `SharedLedger::append` dispatches by schema so both ledger transactions and job commands flow through the one ordered apply; a refused command is a deterministic no-op on every replica. Evidence: `unfer_consensus` job suite (17 tests, including `two_partitioned_workers_both_believing_they_lead`, `restart_reclaims_the_claimed_job`, `stale_release_cannot_release_a_newer_claim`, `claim_replay_by_the_same_holder_is_idempotent`, `generation_overflow_is_refused_not_wrapped`, `sink_rejects_a_stale_fence`), the node-level release/retry test, the network-feature witnesses `net::tests::the_job_fence_is_owned_and_durably_held_by_the_committed_ledger` (a claim survives a reopen, then a reclaim makes the old fence stale) and `net::tests::a_job_command_converges_across_replicas_and_a_refusal_mutates_nothing` (same command stream → identical fence on two ledgers; a superseded settle changes neither), `net::tests::an_allocated_job_command_is_durable_and_cleared_when_decided` (a pending claim survives a reopen and is re-proposed, then a decided one is not), and the full `unfer_consensus --features network --lib` suite (184 passed). First symbolic invariant target for D21: *a stale fence never changes the protected state*, over the claim/renew/release/reclaim/take_over/settle/disable vocabulary, with `FencedSink` as the executable witness that a rejected stale mutation appends no effect. Limits: the proposal path is the in-process submission pump (as the ledger path is); no live client or TLS endpoint sends a job command yet, and no external sink is driven end to end — that dispatch is D15's; enforcement beyond the deterministic ordering is the sink's, not this module's |
+| D14 | verified within stated scope (steps 1–5 + transport) | scheduled jobs are *ordered fenced* to the plan's tuple, not a local counter. The committed state owns one current `JobFence { deployment, resource, epoch, generation }` per resource, stored in the ledger snapshot (`net.rs` `LedgerSnapshot.jobs`, mutated only through `SharedLedger::with_jobs` under the ledger lock and persisted as one coherent snapshot). Transitions are explicit: `claim` at the current epoch (a replay by the same holder is idempotent, no generation bump), `renew` (new generation, same epoch), `release` (re-queue and supersede), `reclaim` (restart takeover), `take_over` (a later epoch supersedes a partitioned leader) and `settle`/`disable`; only the current fence (fence equality plus holder) settles the job or mutates its protected resource, so an old worker may keep computing but cannot commit. Ordering is `(epoch, generation)`; generation overflow is refused, never wrapped; no transition reads a clock; `FencedSink` models a sink *with* an enforcement interface and refuses a stale fence (a sink without one is not claimed to be fenced). Step 5 gives that command a durable submission path: `SharedLedger::allocate_job` persists it in a `job_outbox` (part of the same snapshot), proposes it to the pump, re-proposes it after a restart, and `append` clears the pending entry by content when the decision applies it — the same durability rule the transaction outbox follows. Step 4 makes the claim an ordered *command*: `JobCommand` (claim, take_over, renew, release, reclaim, settle, disable) is encoded under its own schema (`JOB_COMMAND_SCHEMA = 2`) as a replicated value, and `SharedLedger::append` dispatches by schema so both ledger transactions and job commands flow through the one ordered apply; a refused command is a deterministic no-op on every replica. Evidence: `unfer_consensus` job suite (17 tests, including `two_partitioned_workers_both_believing_they_lead`, `restart_reclaims_the_claimed_job`, `stale_release_cannot_release_a_newer_claim`, `claim_replay_by_the_same_holder_is_idempotent`, `generation_overflow_is_refused_not_wrapped`, `sink_rejects_a_stale_fence`), the node-level release/retry test, the network-feature witnesses `net::tests::the_job_fence_is_owned_and_durably_held_by_the_committed_ledger` (a claim survives a reopen, then a reclaim makes the old fence stale) and `net::tests::a_job_command_converges_across_replicas_and_a_refusal_mutates_nothing` (same command stream → identical fence on two ledgers; a superseded settle changes neither), `net::tests::an_allocated_job_command_is_durable_and_cleared_when_decided` (a pending claim survives a reopen and is re-proposed, then a decided one is not), and the full `unfer_consensus --features network --lib` suite (184 passed). First symbolic invariant target for D21: *a stale fence never changes the protected state*, over the claim/renew/release/reclaim/take_over/settle/disable vocabulary, with `FencedSink` as the executable witness that a rejected stale mutation appends no effect. Limits: the proposal path is the in-process submission pump (as the ledger path is); TLS transport contention now exercised (`d14-job-transport.log`: two processes contending commit both claims but only one applies; all three replicas report the same holder, generation 1 and digest); no external sink driven end to end (that dispatch is D15's), and no external sink is driven end to end — that dispatch is D15's; enforcement beyond the deterministic ordering is the sink's, not this module's |
 | D15 | verified within stated scope (steps 1–3) | effects go through a durable dispatcher, not inline. `unfer_ffi/src/dispatch.rs` commits an `EffectIntent` (request identity, principal, resource, epoch, effect, Observe/Mutate kind, payload digest) to the new `dispatches` stream and flushes it **before** any sink is called; the approval is an `Approval { request_id, resource, epoch, payload_digest }` that must bind the committed intent exactly, so a replayed approval for an altered payload, another resource or another epoch is refused; policy is rechecked at the execution point (the existing sensitive-forward latch is the policy wired into `uk_action_apply`), and the outcome is recorded as `Acknowledged`, `Retryable` or `Uncertain` — distinct durable states, never collapsed into "done". Retries reuse one idempotency key derived from the intent identity; `Uncertain` may be retried only at a sink whose `dedups()` is true, and an uncertain irreversible action at a non-dedup sink moves to `Reconciling` and is not replayed. `uk_action_apply` is the existing effect path that now uses the dispatcher end to end (when a durable store is configured; without one there is no durable commit, so the in-memory path remains), with `ActionRecord` gaining `kind` and `epoch` (serde-defaulted) recorded at submission. Evidence: 11 dispatcher unit tests (`approval_replay_on_an_altered_payload_is_refused`, `a_revoked_worker_fails_at_the_execution_point`, `crash_after_sink_success_before_acknowledgment_does_not_duplicate_at_a_dedup_sink`, `an_uncertain_irreversible_effect_enters_reconciliation_and_is_not_replayed`, `a_retry_reuses_the_same_idempotency_key`, `dispatch_without_a_durable_commit_is_refused_and_never_reaches_a_sink`, …), two FFI tests (`action_apply_dispatches_through_the_durable_dispatcher`, `a_sensitive_latched_principal_is_refused_at_the_execution_point`), `unfer_ffi` lib 188 passed, `unfer_protocol` lib 353 passed. Limits: the only sink is the in-process `local-inprocess` sink (no external network sink yet, so "at least one existing effect path" is the action queue's local effect), `uk_action_submit`'s immediate observe/vetted path still applies inline, reconciliation of a non-dedup uncertain action has no operator tooling beyond the durable `Reconciling` record, and existing `ActionRecord`s without `kind`/`epoch` read as Mutate/0. |
-| D16–D26 | not started | D16 is next |
+| D16 | verified within stated scope (steps 1–3) | **new** `examples/distributed/RequestState.{aui,aum}`, `RequestStateReference.rs`, `test-programs/suites/028-distributed-request-state/`, `scripts/check-request-state`; U `test-programs/runner.py`. Finite `Idle/Pending/Applied/Rejected` lifecycle with stable request id and payload digest; `step` is a contracted total function (no recursion, loops or foreign calls) accepted by the existing gate. The same 12 event vectors (including restart continuation) run through the CPS JIT and an independent Rust reference with identical stdout (`12 vectors agree`); source digests are recorded. Three compiler fixtures pin T4 (foreign call), T2 (loop) and T1 (recursion) refusals; `python3 test-programs/runner.py 028` passes 5/5. Compiler correctness and the C compiler remain named trust boundaries. |
+| D14–D26 | in progress | D14 transport claims verified; D15 durable outbox verified; D16 total request transition verified; D21 finite model check verified (induction/MM0 open); D17 next |

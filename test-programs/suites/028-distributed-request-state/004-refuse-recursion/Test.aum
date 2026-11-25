@@ -1,0 +1,14 @@
+module body Test is
+    pragma Liquid_Requires(Contract => "true");
+    function countdown(n: Int64): Int64 is
+        if n <= 0 then
+            return 0;
+        else
+            return countdown(n - 1);
+        end if;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

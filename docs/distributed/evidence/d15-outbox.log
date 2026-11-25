@@ -1,0 +1,20 @@
+measured: unfer_ffi --lib (offline)
+test result: ok. 188 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.24s
+
+outbox module tests (offline):
+test outbox::tests::a_fence_reaches_a_sink_that_enforces_order ... ok
+test outbox::tests::approval_covers_request_resource_and_epoch_too ... ok
+test outbox::tests::approval_replay_on_an_altered_payload_is_refused_before_the_sink ... ok
+test outbox::tests::crash_after_sink_success_before_ack_does_not_duplicate_at_a_dedup_sink ... ok
+test outbox::tests::intent_is_durable_before_any_sink_is_called ... ok
+test outbox::tests::a_fence_is_refused_before_a_sink_that_cannot_enforce_it ... ok
+test outbox::tests::open_checked_refuses_an_unreadable_effect_record ... ok
+test outbox::tests::no_dedup_sink_enters_reconciliation_instead_of_being_retried ... ok
+test outbox::tests::reusing_a_request_identity_for_a_different_payload_is_refused ... ok
+test outbox::tests::revoked_worker_fails_at_the_execution_point_and_never_reaches_the_sink ... ok
+test outbox::tests::the_idempotency_key_covers_payload_and_request_identity ... ok
+test outbox::tests::retryable_failure_is_recorded_apart_from_acknowledgment ... ok
+test tests::approved_action_dispatches_through_the_outbox_end_to_end ... ok
+
+consensus full suite (offline, --features network): all binaries green
+  172 + 0 + 11 + 7 + 4 + 1 + 8 + 4 + 4 + 6 + 0 = 217 passed, 0 failed (fence_invariant counted in the 4)

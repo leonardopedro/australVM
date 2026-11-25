@@ -3972,6 +3972,187 @@ fi
 check "CI: every cache restore prefix list is newline-separated ($_ci_keys key(s), none with a comma)" \
     test -n "$_ci_keys" -a -z "$_ci_bad"
 
+# --- CI: every workflow `run:` body parses as bash ---------------------------
+# The second CI-only failure class, and the one this repo actually hit: a `run:`
+# step whose shell text does not parse, so the job dies before running anything
+# and the step conclusion is all a non-admin can read. The GPU source gate was
+# that case (apostrophes inside `bash -c '…'`, fixed by writing the script with a
+# quoted heredoc), and it is invisible locally because the broken text only ever
+# existed inside YAML. Every workflow here uses the default bash shell (no
+# `shell:` override is set), so `bash -n` is the right parser — for both the
+# inline `run: cmd` form and a `|`/`>` block scalar. This checks *syntax* only:
+# GitHub's own semantic keys (an unknown action input, a bad `needs:`) still
+# fail where they always did, which is why a clean scan is not a claim that the
+# workflow runs.
+_ci_run_dir="$(mktemp -d)"
+_ci_run_scan="$(awk -v dir="$_ci_run_dir" '
+    function ind(s) { match(s, /^[ \t]*/); return RLENGTH }
+    FNR == 1 { inblock = 0 }
+    {
+        line = $0
+        sub(/\r$/, "", line)
+        if (inblock) {
+            if (line ~ /^[ \t]*$/) { print line > cur; next }
+            if (ind(line) > base) { print line > cur; next }
+            inblock = 0
+        }
+        if (match(line, /^[ \t]*run:/)) {
+            val = substr(line, RLENGTH + 1)
+            sub(/^[ \t]+/, "", val)
+            sub(/[ \t]+$/, "", val)
+            n++
+            cur = sprintf("%s/%03d.sh", dir, n)
+            printf "# %s:%d\n", FILENAME, FNR > cur
+            printf "%s %s:%d\n", cur, FILENAME, FNR > (dir "/index")
+            if (val ~ /^[|>]/) { inblock = 1; base = ind(line); next }
+            print val > cur
+        }
+    }
+    END { printf "count %d\n", n }
+' "$repo_root"/.github/workflows/*.yml)"
+_ci_run_count="$(printf '%s\n' "$_ci_run_scan" | sed -n 's/^count //p')"
+_ci_run_bad=""
+while read -r _ci_sh _ci_where; do
+    if ! _ci_msg="$(bash -n "$_ci_sh" 2>&1)"; then
+        _ci_run_bad="$_ci_run_bad $_ci_where"
+        echo "  workflow run block does not parse: $_ci_where"
+        printf '%s\n' "$_ci_msg" | sed -n '1,2p' | sed 's/^/    /'
+    fi
+done < "$_ci_run_dir/index"
+rm -rf "$_ci_run_dir"
+check "CI: every workflow run: block parses as bash ($_ci_run_count block(s))" \
+    test "${_ci_run_count:-0}" -gt 0 -a -z "$_ci_run_bad"
+
+# --- CI: the workflow surface a YAML parse would not catch --------------------
+# The scan above answers "does this text parse as shell"; this one answers "will
+# GitHub accept the reference", which is the other half of the class whose detail
+# lives only in a job log a non-admin cannot read. Four things are decidable
+# from the repository alone:
+#
+#   * a `uses:` that is not pinned to a 40-hex commit sha — the ref can move
+#     under the workflow, and a short or mistyped ref fails resolution at run
+#     time rather than here;
+#   * a pin whose trailing `# owner/repo@tag` label names a different action —
+#     the label is what a reviewer reads, so a bumped sha with a stale label is
+#     a review that says "v4" about a v3 pin;
+#   * a `runs-on:` label that is neither a hosted image nor self-hosted — a
+#     mistyped runner does not fail, it queues the job until someone notices;
+#   * a `needs:` naming a job the same file does not define, which is a workflow
+#     load error.
+#
+# What is *not* checked, and cannot be from here: an action's accepted inputs.
+# Those live in the action's own `action.yml`, which this repository does not
+# vendor, so a `with:` key the action does not accept stays GitHub's to reject.
+# Checking it would mean either network access in the gate or a hand-maintained
+# table of other people's inputs; neither is worth a check that could fail for a
+# reason the tree does not own. `strategy.matrix` is the same story: `include:`
+# and `fromJSON` mean a static key set is not sound.
+_ci_sem_dir="$(mktemp -d)"
+for _ci_wf in "$repo_root"/.github/workflows/*.yml; do
+    awk -v dir="$_ci_sem_dir" -v file="${_ci_wf##*/}" '
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            norm = line
+            if (match(norm, /^[ \t]*- /))
+                norm = substr(norm, 1, RLENGTH - 2) "  " substr(norm, RLENGTH + 1)
+            match(norm, /^[ \t]*/); ind = RLENGTH
+            if (norm ~ /^[ \t]*$/) next
+            if (norm ~ /^[ \t]*#/) next
+            if (norm ~ /^jobs:[ \t]*$/) { injobs = 1; inblock = 0; next }
+            if (ind == 0) injobs = 0
+            if (inblock) {
+                if (line ~ /^[ \t]*- /) {
+                    v = line; sub(/^[ \t]*- /, "", v); sub(/[ \t]+$/, "", v)
+                    printf "%s:%d\t%s\n", file, FNR, v >> (dir "/" inblock)
+                    next
+                }
+                inblock = 0
+            }
+            if (injobs && ind == 2 && norm ~ /^  [A-Za-z0-9_.-]+:[ \t]*$/) {
+                j = norm; sub(/^  /, "", j); sub(/:[ \t]*$/, "", j)
+                printf "%s\t%s\n", j, file >> (dir "/jobs")
+            }
+            if (norm ~ /^[ \t]*needs:/) {
+                v = norm; sub(/^[ \t]*needs:/, "", v); gsub(/^[ \t]+|[ \t]+$/, "", v)
+                if (v == "") { inblock = "needs"; next }
+                gsub(/[\[\]]/, "", v); n = split(v, parts, ",")
+                for (i = 1; i <= n; i++) {
+                    p = parts[i]; gsub(/^[ \t]+|[ \t]+$/, "", p)
+                    if (p != "") printf "%s:%d\t%s\n", file, FNR, p >> (dir "/needs")
+                }
+                next
+            }
+            if (norm ~ /^[ \t]*uses:/) {
+                v = norm; sub(/^[ \t]*uses:/, "", v); gsub(/^[ \t]+/, "", v)
+                printf "%s:%d\t%s\n", file, FNR, v >> (dir "/uses")
+                next
+            }
+            if (norm ~ /^[ \t]*runs-on:/) {
+                v = norm; sub(/^[ \t]*runs-on:/, "", v); gsub(/^[ \t]+|[ \t]+$/, "", v)
+                if (v == "") { inblock = "runson"; next }
+                printf "%s:%d\t%s\n", file, FNR, v >> (dir "/runson")
+            }
+        }
+    ' "$_ci_wf"
+done
+_ci_pins=0
+_ci_pin_bad=""
+_ci_labels=0
+_ci_label_bad=""
+while IFS="$(printf '\t')" read -r _ci_where _ci_raw; do
+    [ -n "$_ci_where" ] || continue
+    _ci_val="${_ci_raw%%#*}"
+    _ci_val="${_ci_val%"${_ci_val##*[! ]}"}"
+    case "$_ci_val" in ./* | docker://* | '') continue ;; esac
+    _ci_pins=$((_ci_pins + 1))
+    _ci_ref="${_ci_val##*@}"
+    _ci_repo="$(printf '%s' "${_ci_val%@*}" | cut -d/ -f1-2)"
+    printf '%s' "$_ci_ref" | grep -Eq '^[0-9a-f]{40}$' \
+        || _ci_pin_bad="$_ci_pin_bad $_ci_where"
+    case "$_ci_raw" in
+        *'#'*)
+            _ci_labels=$((_ci_labels + 1))
+            _ci_label="$(printf '%s' "${_ci_raw#*#}" | sed 's/^[[:space:]]*//; s/[[:space:]].*$//')"
+            [ "${_ci_label%@*}" = "$_ci_repo" ] \
+                || _ci_label_bad="$_ci_label_bad; $_ci_where says '$_ci_label' but pins '$_ci_repo'"
+            ;;
+        *) _ci_label_bad="$_ci_label_bad; $_ci_where has no label naming '$_ci_repo'" ;;
+    esac
+done < "$_ci_sem_dir/uses"
+_ci_runners=0
+_ci_runner_bad=""
+while IFS="$(printf '\t')" read -r _ci_where _ci_val; do
+    [ -n "$_ci_where" ] || continue
+    _ci_runners=$((_ci_runners + 1))
+    case "$_ci_val" in *'${{'* | *self-hosted*) continue ;; esac
+    printf '%s' "$_ci_val" | grep -Eq '^(ubuntu|windows|macos)-(latest|[0-9]+(\.[0-9]+)?)$' \
+        || _ci_runner_bad="$_ci_runner_bad; $_ci_where names '$_ci_val'"
+done < "$_ci_sem_dir/runson"
+_ci_needs=0
+_ci_need_bad=""
+if [ -s "$_ci_sem_dir/needs" ]; then
+    while IFS="$(printf '\t')" read -r _ci_where _ci_need; do
+        [ -n "$_ci_where" ] || continue
+        _ci_needs=$((_ci_needs + 1))
+        grep -qxF "$_ci_need$(printf '\t')${_ci_where%:*}" "$_ci_sem_dir/jobs" \
+            || _ci_need_bad="$_ci_need_bad; $_ci_where needs '$_ci_need'"
+    done < "$_ci_sem_dir/needs"
+fi
+rm -rf "$_ci_sem_dir"
+[ -n "$_ci_pin_bad" ] && echo "  action pin is not a 40-hex commit sha:${_ci_pin_bad}"
+[ -n "$_ci_label_bad" ] && echo "  action pin label names another action:${_ci_label_bad#; }"
+[ -n "$_ci_runner_bad" ] && echo "  runner label is not a hosted image or self-hosted:${_ci_runner_bad#; }"
+[ -n "$_ci_need_bad" ] && echo "  needs: names a job this file does not define:${_ci_need_bad#; }"
+check "CI: every workflow action pin is a 40-hex commit sha ($_ci_pins pin(s))" \
+    test "$_ci_pins" -gt 0 -a -z "$_ci_pin_bad"
+check "CI: every action pin's label names the action it pins ($_ci_labels labelled pin(s))" \
+    test "$_ci_labels" -gt 0 -a -z "$_ci_label_bad"
+check "CI: every workflow runner label is a hosted image or self-hosted ($_ci_runners runner(s))" \
+    test "$_ci_runners" -gt 0 -a -z "$_ci_runner_bad"
+check "CI: every workflow needs: names a job in the same file ($_ci_needs reference(s))" \
+    test -z "$_ci_need_bad"
+
 echo
 echo "verify-invariants: $PASSED passed, $GAPS explained gap(s), $FAILED failed"
 if [ "$FAILED" -gt 0 ]; then

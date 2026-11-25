@@ -217,10 +217,52 @@ while `avm-pkg`, `verify-invariants` and `build-and-test-linux` in the same run
 had already reported `success`. It then completed `success` on the first commit
 that stayed the branch tip for an hour.
 
+There is a second way to get the same word, and it is a real finding: a job cut
+by its own `timeout-minutes` also reports `cancelled`, with no annotation.
+Measured 2026-11-24 on `6c8591b3`: `nix-pkg` started 08:34:14Z and read
+`cancelled` at 09:34:33Z — exactly 60:19 of job time, in the same step, with
+`make bridge` having taken 24.9 minutes that run against 17.6 on the previous
+green one. The next commit's run had started at 09:07, 27 minutes earlier, so
+this was not a supersede either — `Build and Test` had no `concurrency:` group
+and three runs on `master` were in flight at once, which is where the extra
+seven minutes went. That is the bound being too tight, not the tree being wrong;
+the fix was to raise it (90 minutes, with the measured split in the job's
+comment) and to give the workflow its concurrency group, so the slow job stops
+competing with a copy of itself. The two cases separate by duration: a
+superseded job dies within seconds of a newer push, a timed-out one dies on its
+bound to the minute.
+
+A third shape is the *step* bound, and it reads `failure` rather than
+`cancelled`: measured 2026-11-24 on `ee68fe46`, the `OCaml suite (build,
+typecheck, tests)` step ran its full 40 minutes (12:04:45Z→12:44:49Z) and the
+job's annotation says so — "The action 'OCaml suite (build, typecheck, tests)'
+has timed out after 40 minutes." The step before it had already passed, so the
+job's `failure` is a verdict about the bound, not about the tree: the previous
+green run had spent 39.9 of those 40 minutes on the same step. One side effect
+is worth knowing for caching: a step timeout ends the job before the cache
+action's post step, which then reads `skipped`, so a run that dies this way
+leaves no cache entry behind. Measured either way: `ee68fe46` reports `Post
+Cache cranelift / unfer_ffi build` as `skipped`, while `0da4a26a` — same job,
+same step, the suite inside its new bound — reports it as `success`. A `success`
+post step is still not an entry: the repository's cache list (2187 entries) has
+neither `nix-pkg-jit-…` nor the `jit-…` key jit-stack has used for the same two
+target directories, which is why that cache step was removed again after the
+measurement below rather than kept as an unverified claim.
+
+Moving `make bridge` meant measuring it first, and it did not move: 25.2 min on
+`ee68fe46` (cold), 24.7 on `0da4a26a` (the run that saved the entry), 24.2 on
+`fcc99fec` (the run that should have restored it). Splitting the recipe says why
+a target cache could not have helped much either way: a cold `cargo build
+--release --offline` of the bridge crate alone is 10m05s on the recording host,
+and the rest of the 24 minutes is the OCaml compiler build in the same recipe.
+The OCaml suite inside its 50-minute bound measured 39.5 min on `0da4a26a`, so
+the step order, not the bridge, is what the job's cost is made of.
+
 So read the line in this order: a job that reads `cancelled` says nothing about
 the check it was running — it was cut, not failed, and a job that reports
 `failure` (or `timed_out`) is the only one that carries a verdict about the
-tree. The authoritative signal for a commit is the run whose jobs all reached
+tree. The one `cancelled` line that does carry a finding is the job that sat on
+its own timeout. The authoritative signal for a commit is the run whose jobs all reached
 `success`; the commit before a cancellation is not evidence either way, and
 re-reading its annotation finds none, because a cancellation writes no
 annotation at all.
