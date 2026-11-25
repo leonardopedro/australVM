@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# D17: execute the linear remote-resource wrappers end to end, diff the positive
+# transport's output, and run the host authority's adversarial tests.
+#
+# The compile-time refusals are test-programs/suites/022-distributed; this
+# script covers the half a compile-only fixture cannot reach: the JIT calls to
+# `au_dist_*`, token replay, and the umbrella's compile-only front-end.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BRIDGE="$ROOT/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+if [ ! -x "$ROOT/austral" ]; then
+    echo "check-distributed-wrappers: $ROOT/austral is not executable" >&2
+    exit 2
+fi
+if [ ! -f "$BRIDGE" ]; then
+    echo "check-distributed-wrappers: $BRIDGE is missing; run make bridge" >&2
+    exit 2
+fi
+if ! command -v gcc >/dev/null 2>&1; then
+    echo "check-distributed-wrappers: gcc not found on PATH" >&2
+    exit 2
+fi
+
+export LD_LIBRARY_PATH="$ROOT:$ROOT/safestos/cranelift/target/release:${LD_LIBRARY_PATH:-}"
+
+# The compile-time fixtures carry their own copies of the module so each can be
+# compiled without the repo root on the source path. Keep those copies honest.
+for fixture in "$ROOT"/test-programs/suites/022-distributed/00*; do
+    for source in Distributed.aui Distributed.aum; do
+        if ! cmp -s "$ROOT/stdlib/net/$source" "$fixture/$source"; then
+            echo "check-distributed-wrappers: $fixture/$source is stale" >&2
+            exit 1
+        fi
+    done
+done
+
+cat >"$TMP/expected.txt" <<'EOF'
+resource status=101
+request identity=7 digest=11
+submit status=0
+wait status=0
+d16-pending state=1 code=1
+respond status=0
+receipt status=2
+d16-applied state=2 code=2
+EOF
+
+"$ROOT/austral" compile \
+    "$ROOT/examples/distributed/RequestState.aui,$ROOT/examples/distributed/RequestState.aum" \
+    "$ROOT/stdlib/net/Distributed.aui,$ROOT/stdlib/net/Distributed.aum" \
+    "$ROOT/examples/distributed/RequestTransport.aum" \
+    --entrypoint=RequestTransport:main \
+    --target-type=c \
+    --output="$TMP/transport.c" \
+    --use-cps-jit \
+    --error-format=json >/dev/null
+
+gcc -fwrapv -Wno-builtin-declaration-mismatch "$TMP/transport.c" \
+    -L"$ROOT/safestos/cranelift/target/release" \
+    -Wl,-rpath,"$ROOT/safestos/cranelift/target/release" \
+    -laustral_cranelift_bridge -lm -ldl -lpthread \
+    -o "$TMP/transport.bin"
+"$TMP/transport.bin" >"$TMP/transport.out"
+if ! diff -u "$TMP/expected.txt" "$TMP/transport.out"; then
+    echo "check-distributed-wrappers: transport output changed" >&2
+    exit 1
+fi
+
+cargo test --manifest-path "$ROOT/safestos/cranelift/Cargo.toml" \
+    --lib --offline -- distributed:: >"$TMP/bridge-tests.log" 2>&1 || {
+    cat "$TMP/bridge-tests.log" >&2
+    echo "check-distributed-wrappers: bridge authority tests failed" >&2
+    exit 1
+}
+if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$TMP/bridge-tests.log"; then
+    cat "$TMP/bridge-tests.log" >&2
+    echo "check-distributed-wrappers: bridge authority tests did not report a pass" >&2
+    exit 1
+fi
+
+(cd "$ROOT/umbrella" && cargo test --offline --test distributed_request \
+    >"$TMP/umbrella-test.log" 2>&1) || {
+    cat "$TMP/umbrella-test.log" >&2
+    echo "check-distributed-wrappers: umbrella D17 test failed" >&2
+    exit 1
+}
+if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$TMP/umbrella-test.log"; then
+    cat "$TMP/umbrella-test.log" >&2
+    echo "check-distributed-wrappers: umbrella D17 test did not report a pass" >&2
+    exit 1
+fi
+
+echo "check-distributed-wrappers: transport vectors agree ($(wc -l <"$TMP/transport.out")) lines"
+echo "check-distributed-wrappers: $(grep -E 'test result: ok' "$TMP/bridge-tests.log" | tail -1)"
+echo "check-distributed-wrappers: $(grep -E 'test result: ok' "$TMP/umbrella-test.log" | tail -1)"
+echo "check-distributed-wrappers: Distributed.aui sha256=$(sha256sum "$ROOT/stdlib/net/Distributed.aui" | cut -d' ' -f1)"
+echo "check-distributed-wrappers: Distributed.aum sha256=$(sha256sum "$ROOT/stdlib/net/Distributed.aum" | cut -d' ' -f1)"
+echo "check-distributed-wrappers: RequestTransport.aum sha256=$(sha256sum "$ROOT/examples/distributed/RequestTransport.aum" | cut -d' ' -f1)"
+echo "check-distributed-wrappers: bridge au_dist symbols=$(nm -D --defined-only "$BRIDGE" | grep -c ' T au_dist_')"

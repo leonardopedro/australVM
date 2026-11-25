@@ -594,6 +594,15 @@ mod tests {
     }
 
     #[test]
+    fn forged_handles_are_refused() {
+        let mut a = authority_with_resource();
+        assert_eq!(a.authorize(9_999, 101), STATUS_NO_TOKEN);
+        assert_eq!(a.open_request(9_999, 7, 11), STATUS_NO_TOKEN);
+        assert_eq!(a.submit(9_999), STATUS_NO_REQUEST);
+        assert_eq!(a.release_resource(9_999), STATUS_NO_RESOURCE);
+    }
+
+    #[test]
     fn retry_reuses_the_identity_and_fence() {
         let mut a = authority_with_resource();
         let token = a.issue_token(101, 303, 202, 1);

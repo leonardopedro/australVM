@@ -1,0 +1,22 @@
+pragma Unsafe_Module;
+
+import Distributed (
+    PendingRequest,
+    disposeRequest
+);
+
+module body Test is
+    -- A linear request cannot be assigned to a second owner and then used
+    -- twice: the first `disposeRequest` consumes one alias, and the second
+    -- read is the copy the type system has to refuse.
+    function duplicate(request: PendingRequest): Int64 is
+        let copy: PendingRequest := request;
+        let first: Int64 := disposeRequest(request);
+        let second: Int64 := disposeRequest(copy);
+        return first + second;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

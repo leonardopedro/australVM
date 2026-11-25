@@ -1,0 +1,26 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    { "type": "text", "content": "Expected a value of type " },
+    { "type": "type", "content": "ResultReceipt" },
+    { "type": "text", "content": ", but got a value of type " },
+    { "type": "type", "content": "PendingRequest" },
+    { "type": "text", "content": "." }
+  ],
+  "span": {
+    "filename": "test-programs/suites/022-distributed/004-wrong-state/Test.aum",
+    "startp": { "line": 14, "column": 8 },
+    "end": { "line": 14, "column": 49 }
+  },
+  "context": [
+    [ 12, "    -- their states apart." ],
+    [
+      13,
+      "    function readPendingReceipt(request: PendingRequest): Int64 is"
+    ],
+    [ 14, "        let code: Int64 := receiptCode(&request);" ],
+    [ 15, "        let ignored: Int64 := disposeRequest(request);" ],
+    [ 16, "        return code;" ]
+  ]
+}

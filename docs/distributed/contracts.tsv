@@ -49,3 +49,11 @@ C47	runtime	A	examples/distributed/RequestStateReference.rs	tested	docs/distribu
 C48	runtime	A	scripts/check-request-state	tested	docs/distributed/evidence/d16-request-state.log
 C49	runtime	A	test-programs/suites/028-distributed-request-state	tested	docs/distributed/evidence/d16-request-state.log
 C50	runtime	A	test-programs/runner.py	tested	docs/distributed/evidence/d16-request-state.log
+C51	runtime	A	stdlib/net/Distributed.aui	tested	docs/distributed/evidence/d17-distributed-wrappers.log
+C52	runtime	A	stdlib/net/Distributed.aum	tested	docs/distributed/evidence/d17-distributed-wrappers.log
+C53	runtime	A	safestos/cranelift/src/distributed.rs	tested	docs/distributed/evidence/d17-distributed-wrappers.log
+C54	runtime	A	examples/distributed/RequestTransport.aum	tested	docs/distributed/evidence/d17-distributed-wrappers.log
+C55	runtime	A	test-programs/suites/022-distributed	tested	docs/distributed/evidence/d17-distributed-wrappers.log
+C56	runtime	A	scripts/check-distributed-wrappers	tested	docs/distributed/evidence/d17-distributed-wrappers.log
+C57	runtime	A	umbrella/modules/DistributedRequest.aum	tested	docs/distributed/evidence/d17-distributed-wrappers.log
+C58	runtime	A	umbrella/tests/distributed_request.rs	tested	docs/distributed/evidence/d17-distributed-wrappers.log

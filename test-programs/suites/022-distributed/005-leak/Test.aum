@@ -1,0 +1,17 @@
+pragma Unsafe_Module;
+
+import Distributed (
+    PendingRequest
+);
+
+module body Test is
+    -- Every state has an explicit disposal path. Returning with a live
+    -- request is a leak, not an implicit drop.
+    function leak(request: PendingRequest): ExitCode is
+        return ExitSuccess();
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

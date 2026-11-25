@@ -1,0 +1,255 @@
+-- D17: the Austral half of the remote-resource ownership protocol.
+--
+-- The runtime half is `safestos/cranelift/src/distributed.rs`. It checks the
+-- same identity fields for forged `Int64` calls, so a caller that bypasses the
+-- linear type still cannot turn one authority into two owners. The wire
+-- identity is `(request_id, digest, resource, deployment, owner, epoch)`; the
+-- handles in these records never leave this process.
+
+pragma Unsafe_Module;
+
+module body Distributed is
+    pragma Foreign_Import(External_Name => "au_dist_introduce");
+    function au_dist_introduce(
+        resource: Int64,
+        deployment: Int64,
+        owner: Int64,
+        epoch: Int64
+    ): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_issue_token");
+    function au_dist_issue_token(
+        resource: Int64,
+        owner: Int64,
+        deployment: Int64,
+        epoch: Int64
+    ): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_open_request");
+    function au_dist_open_request(token: Int64, request_id: Int64, digest: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_submit");
+    function au_dist_submit(request: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_retry");
+    function au_dist_retry(request: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_wait");
+    function au_dist_wait(request: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_cancel_wait");
+    function au_dist_cancel_wait(request: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_release_request");
+    function au_dist_release_request(request: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_receipt_code");
+    function au_dist_receipt_code(receipt: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_receipt_release");
+    function au_dist_receipt_release(receipt: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_authorize");
+    function au_dist_authorize(token: Int64, resource: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_release_token");
+    function au_dist_release_token(token: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_release_resource");
+    function au_dist_release_resource(resource: Int64): Int64 is end;
+
+    record PendingRequest: Linear is
+        handle: Int64;
+        request_id: Int64;
+        digest: Int64;
+    end;
+
+    record ResultReceipt: Linear is
+        handle: Int64;
+    end;
+
+    record RemoteResource: Linear is
+        handle: Int64;
+    end;
+
+    record AuthorityToken: Linear is
+        handle: Int64;
+    end;
+
+    function introduceResource(
+        resource_id: Int64,
+        deployment_id: Int64,
+        owner_id: Int64,
+        epoch: Int64
+    ): ResourceOutcome is
+        let handle: Int64 := au_dist_introduce(resource_id, deployment_id, owner_id, epoch);
+        if handle > 0 then
+            return Introduced(resource => RemoteResource(handle => handle));
+        else
+            return ResourceRefused(status => handle);
+        end if;
+    end;
+
+    generic [R: Region]
+    function issueToken(
+        resource: &[RemoteResource, R],
+        owner_id: Int64,
+        deployment_id: Int64,
+        epoch: Int64
+    ): TokenOutcome is
+        let handle: Int64 := au_dist_issue_token(
+            resource->handle,
+            owner_id,
+            deployment_id,
+            epoch
+        );
+        if handle > 0 then
+            return Granted(token => AuthorityToken(handle => handle));
+        else
+            return TokenRefused(status => handle);
+        end if;
+    end;
+
+    generic [R: Region]
+    function resourceIdentity(resource: &[RemoteResource, R]): Int64 is
+        return resource->handle;
+    end;
+
+    function openRequest(
+        token: AuthorityToken,
+        request_id: Int64,
+        digest: Int64
+    ): OpenOutcome is
+        let { handle: Int64 } := token;
+        let request: Int64 := au_dist_open_request(handle, request_id, digest);
+        if request > 0 then
+            return Opened(
+                request => PendingRequest(
+                    handle => request,
+                    request_id => request_id,
+                    digest => digest
+                )
+            );
+        else
+            return OpenRefused(status => request);
+        end if;
+    end;
+
+    generic [R: Region]
+    function requestIdentity(request: &[PendingRequest, R]): Int64 is
+        return request->request_id;
+    end;
+
+    generic [R: Region]
+    function requestDigest(request: &[PendingRequest, R]): Int64 is
+        return request->digest;
+    end;
+
+    function submit(request: PendingRequest): SubmitOutcome is
+        let { handle: Int64, request_id: Int64, digest: Int64 } := request;
+        let status: Int64 := au_dist_submit(handle);
+        let next: PendingRequest := PendingRequest(
+            handle => handle,
+            request_id => request_id,
+            digest => digest
+        );
+        if status = 0 then
+            return Submitted(sent => next);
+        else
+            return SubmitRefused(refused => next, status => status);
+        end if;
+    end;
+
+    function retry(request: PendingRequest): SubmitOutcome is
+        let { handle: Int64, request_id: Int64, digest: Int64 } := request;
+        let status: Int64 := au_dist_retry(handle);
+        let next: PendingRequest := PendingRequest(
+            handle => handle,
+            request_id => request_id,
+            digest => digest
+        );
+        if status = 1 then
+            return Submitted(sent => next);
+        else
+            return SubmitRefused(refused => next, status => status);
+        end if;
+    end;
+
+    function wait(request: PendingRequest): WaitOutcome is
+        let { handle: Int64, request_id: Int64, digest: Int64 } := request;
+        let outcome: Int64 := au_dist_wait(handle);
+        if outcome = 0 then
+            return Waiting(
+                still_pending => PendingRequest(
+                    handle => handle,
+                    request_id => request_id,
+                    digest => digest
+                )
+            );
+        else
+            if outcome > 0 then
+                if au_dist_receipt_code(outcome) = 2 then
+                    return AppliedReceipt(receipt => ResultReceipt(handle => outcome));
+                else
+                    return RejectedReceipt(receipt => ResultReceipt(handle => outcome));
+                end if;
+            else
+                return WaitRefused(
+                    stopped => PendingRequest(
+                        handle => handle,
+                        request_id => request_id,
+                        digest => digest
+                    ),
+                    status => outcome
+                );
+            end if;
+        end if;
+    end;
+
+    generic [R: Region]
+    function receiptCode(receipt: &[ResultReceipt, R]): Int64 is
+        return au_dist_receipt_code(receipt->handle);
+    end;
+
+    function cancelWait(request: PendingRequest): Int64 is
+        let {
+            handle: Int64,
+            request_id: Int64,
+            digest: Int64
+        } := request;
+        return au_dist_cancel_wait(handle);
+    end;
+
+    function disposeRequest(request: PendingRequest): Int64 is
+        let {
+            handle: Int64,
+            request_id: Int64,
+            digest: Int64
+        } := request;
+        return au_dist_release_request(handle);
+    end;
+
+    function disposeReceipt(receipt: ResultReceipt): Int64 is
+        let { handle: Int64 } := receipt;
+        return au_dist_receipt_release(handle);
+    end;
+
+    generic [R: Region]
+    function authorize(
+        token: AuthorityToken,
+        resource: &[RemoteResource, R]
+    ): Int64 is
+        let { handle: Int64 } := token;
+        return au_dist_authorize(handle, resource->handle);
+    end;
+
+    function disposeToken(token: AuthorityToken): Int64 is
+        let { handle: Int64 } := token;
+        return au_dist_release_token(handle);
+    end;
+
+    function disposeResource(resource: RemoteResource): Int64 is
+        let { handle: Int64 } := resource;
+        return au_dist_release_resource(handle);
+    end;
+end module body.
