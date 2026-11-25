@@ -5751,3 +5751,64 @@ and `emit` timeouts on `.EnvModelM.swapP` and `.swapTyP` at the default 240 s. E
 row survives the pause in the ledger, so the resumed sweep replays those 475 as `memo` hits in
 about four minutes and continues past `.Expr`; the closures and the final failure histogram
 land only at the end of that resume, in `_build/conleche/model-scan.log`.
+
+### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
+
+`§13.62c` left two rows with `emit: over 240 s`, which is a statement about the default
+`SCAN_EMIT_TIMEOUT`, not about the declarations. Re-measured the same way `renameCore` was —
+`--only` on the two names, `--no-memo` and a work directory of their own, `SCAN_EMIT_TIMEOUT=1800`,
+`SCAN_EMIT_MEM_GB=12`, in a cgroup of its own (`MemoryMax=14G`, `MemorySwapMax=4G`) so that a
+runaway emitter could not take the sweep down with it.
+
+Both emits finish. The unit ran 20 min 8.6 s and ended with `mm0-rs ✗` on both declarations —
+`over 10 GiB`, the checker's default `SCAN_MM0_RS_MEM_GB`, not a timeout anywhere. Timing the
+emitter alone, `/usr/bin/time` on each declaration: **`swapP` 274.9 s wall** (the unit consumed
+4 min 34.9 s over a 4 min 34.9 s wall, 1.2 G peak) and **`swapTyP` 877.6 s wall at 1 380 044 KiB
+peak RSS**. The artifacts `swapP` leaves are 938 390 099 bytes of `.mm0`, 1 002 097 670 of
+`.mm1` and 3 588 229 678 of conversion obligations; the emitter is a 1.3 GB process producing a
+5.5 GB artifact in five to fifteen minutes, not a process that fails to finish.
+
+So the answer is the opposite of the row's: 240 s was the limit, at 1.1× for `swapP` and 3.7× for
+`swapTyP`, and the declarations are *large but emittable*. What stops them now is the second
+bound — `mm0-rs` at 10 GiB — which this pass did not raise, so it says nothing about whether a
+bigger budget would close them. The sweep keeps them as failures, but the reason belongs to the
+checker's memory, and the `over 240 s` class it currently records is a default rather than a size.
+
+### 13.62e The statement key did not line up: `--digest` and the ledger disagreed
+
+Re-running the sweep did not need to *add* statement digests: every one of its 768 rows already
+carries a 64-hex `statement_sha256`, and the retained statements live under `stmt/<digest>/`. What
+the re-run exposed is that the key never matched. A same-export re-run replays rows by name (475
+`memo` hits and counting), so the statement-digest path — `digest_of()`, which exists to recognise
+a statement under a *different* export — fired zero times in every run so far. Forcing it with a
+ledger copy whose export column was replaced by a synthetic id, over ten declarations, matched
+none of them: all ten were emitted and re-verified from scratch.
+
+Two defects, both measured rather than inferred:
+
+1. **`lean-typing-proof --digest` hashed a different goal than `--spine` writes.** For an open goal
+   the artifact's band is `theorem thm_X: $ tty <ctx> <value> <type> $;` with the value the
+   emitter holds, while `--digest` read the declared type's spool. The two are byte-identical for
+   most declarations and differ for `ConLeche.Model.GenClsRd.hds`, `.GenClsRd.hψ` and
+   `.GenPreSem.live` — deterministically: two `--spine` runs of `.hds` produce the same band
+   (sha256 `0ed1fc23…`, 2 494 bytes) while `--digest` reported `40c53d6d…`. The pieces are now
+   selected the way the artifact selects them — `(val_path, ty_path)` when the value is closed
+   `(body, body_ty)` when it is open — and all five sampled declarations (`.hds`, `.hψ`, `.live`,
+   `.split`, the closed `.fvsP`) now reproduce their band exactly.
+2. **The first content ledger hashed the wrong span.** `.BlockCtorPick.fvsP`'s row records
+   `c62f65fe…`, which is the sha256 of the *whole retained file* — header, payload constants,
+   assumptions and the state prose — not of its goal band; that band hashes `23589abc…`, which is
+   what `--digest` now prints. No digest could ever have matched such a row. `lean-proof-scan
+   --rekey --memo=DIR` recomputes each row's key from the band of the statement it retained
+   (`STATED_MARK`) and deposits that band under `stmt/<digest>/`; it re-verifies nothing, because
+   the statement is not changing, only the way it is identified. On this ledger: **475 of 768 rows
+   recomputed**, a second run recomputes 0, and 0 rows were missing their statement.
+
+With both fixed, the same forced re-export probe returns **10 of 10 `same statement as` in 84.7 s**
+— no emitter, no `mm0-rs`, no `mm0-c`, about 8.5 s per declaration, which is the export index and
+not the proof. That is the path `§13.62b` keyed the ledger for, exercised for the first time.
+
+What is *not* measured is the whole namespace: 3 975 declarations at ~8.5 s is ≈9.4 h, the same
+order as a fresh sweep, so the whole-namespace re-export run and the `--rekey` of the live ledger
+both wait for the sweep to finish — the ledger is being appended to, and `--rekey` rewrites it in
+one pass.

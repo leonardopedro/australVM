@@ -136,6 +136,9 @@ LEDGER_COLUMNS = ("export", "theory", "mode", "declaration", "kind", "rules",
                   "assumptions", "statement_bytes", "statement_sha256",
                   "derivation_sha256", "derivation_bytes", "verified_at")
 GOAL_MARK = "-- ── the derivation ──\n"
+# The same marker in a retained statement: `statement_of_text` relabels it, and
+# the band below it is byte-for-byte the one `GOAL_MARK` introduces.
+STATED_MARK = "-- ── the statement, proved\n"
 
 
 def slug(nm: str) -> str:
@@ -204,8 +207,7 @@ def statement_of_text(text: str) -> str:
              "file cite\n"
              "-- another's proof. The ledger is what says this statement was "
              "derived.\n")
-    goal = goal.replace("-- ── the derivation ──",
-                        "-- ── the statement, proved", 1)
+    goal = goal.replace(GOAL_MARK[:-1], STATED_MARK[:-1], 1)
     return head + state + goal
 
 
@@ -237,6 +239,66 @@ def ledger_append(root: Path, full0_text: str, export_tag: str, theory_sha: str,
             path.stat().st_size, digest, deriv_sha, deriv_bytes,
             time.strftime("%Y-%m-%dT%H:%M:%S"))) + "\n")
     return path
+
+
+def ledger_rekey(root: Path) -> int:
+    """Recompute every row's statement key from the statement it retained.
+
+    The first content-keyed ledger hashed the *retained file* — header, payload
+    constants, assumptions and the state prose — instead of its goal band, so no
+    `--digest` could ever reproduce its key. The statement is still on disk, and
+    `STATED_MARK` names the band, so the key can be recomputed without
+    re-verifying anything: what the row proved does not change, only the way it
+    is identified. The band is also written under its own digest, which is where
+    a content-addressed ledger expects to find it; the old copy stays, since a
+    row that still names the old directory is not one this pass created.
+    """
+    index = root / "index.tsv"
+    if not index.exists():
+        raise SystemExit(f"--rekey: no ledger at {index}")
+    out: list[str] = []
+    rows = changed = missing = 0
+    for line in index.read_text().splitlines():
+        if not line or line.startswith("#"):
+            out.append(line)
+            continue
+        fields = line.split("\t")
+        row = dict(zip(LEDGER_COLUMNS, fields))
+        for col in LEDGER_COLUMNS:
+            row.setdefault(col, "")
+        rows += 1
+        name = slug(row["declaration"]) + ".mm0"
+        # Three layouts are searched: a row may name its export whole, name its
+        # export's prefix (the first content ledger's directories), or name the
+        # digest it was written under.
+        src = next((p for p in (root / "stmt" / row["export"] / name,
+                                root / "stmt" / row["export"][:12] / name,
+                                root / "stmt" / row["statement_sha256"][:12] / name)
+                    if p.exists()), None)
+        if src is None:
+            missing += 1
+            out.append(line)
+            continue
+        text = src.read_text()
+        if STATED_MARK not in text:
+            missing += 1
+            out.append(line)
+            continue
+        digest = hashlib.sha256(text.split(STATED_MARK, 1)[1].encode()).hexdigest()
+        if digest != row["statement_sha256"]:
+            row["statement_sha256"] = digest
+            changed += 1
+            dest = root / "stmt" / digest[:12] / name
+            if not dest.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(text)
+        out.append("\t".join(row[col] for col in LEDGER_COLUMNS))
+    tmp = index.with_suffix(".tsv.tmp")
+    tmp.write_text("\n".join(out) + "\n")
+    tmp.replace(index)
+    print(f"rekey  : {rows} row(s), {changed} statement key(s) recomputed,"
+          f" {missing} without a retained statement")
+    return 0
 
 
 def reread_ok(full0: Path, full1: Path, mmb: Path) -> str | None:
@@ -411,6 +473,12 @@ def main() -> int:
                     Path(a.split("=", 1)[1]).read_text().splitlines() if l.strip()}
         elif a.startswith("--adopt="):
             adopt_arg = a.split("=", 1)[1]
+    if "--rekey" in sys.argv:
+        # A ledger repair, not a scan: it needs the ledger and nothing else, and
+        # scans the export only if a row's statement is missing from disk.
+        if memo_arg is None:
+            raise SystemExit("--rekey needs --memo=DIR: it repairs a ledger")
+        return ledger_rekey(Path(memo_arg))
     export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
     extra = ["--spine"] + (["--defer-subst"] if defer else [])
     ledger: dict[tuple[str, str], dict[str, str]] | None

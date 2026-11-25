@@ -2063,20 +2063,25 @@ def main() -> int:
         goal_ctx = "tnil" if closed else inner_ctx
         h = hashlib.sha256()
         h.update(f"theorem {thm_name_d}: $ tty {goal_ctx} ".encode())
-        # The goal's term is a spool when the value is closed; hashed from disk
-        # in chunks so a 1.9 GB statement does not have to be materialised to be
-        # identified.
-        goal_term = val_path if closed else body
-        if isinstance(goal_term, Path):
-            with goal_term.open("rb") as sp:
-                for chunk in iter(lambda: sp.read(1 << 20), b""):
-                    h.update(chunk)
-        else:
-            h.update(goal_term.encode())
-        h.update(b" ")
-        with ty_path.open("rb") as sp:
-            for chunk in iter(lambda: sp.read(1 << 20), b""):
-                h.update(chunk)
+        # The goal's pieces must be the ones the artifact writes, not merely
+        # equivalent ones: a closed value is stated from its spool (hashed from
+        # disk in chunks, so a 1.9 GB statement does not have to be materialised
+        # to be identified), an open one from the encoding in hand. The type is
+        # selected the same way — reading the declared type's spool for an open
+        # goal hashed a rendering the artifact does not carry (§13.62c: `.hds`,
+        # `.hψ` and `.live` reproduced their artifacts' band under `--spine` and
+        # a different digest under `--digest`, so no ledger row could ever be
+        # matched by statement).
+        goal_term, goal_ty = (val_path, ty_path) if closed else (body, body_ty)
+        for i, piece in enumerate((goal_term, goal_ty)):
+            if i:
+                h.update(b" ")
+            if isinstance(piece, Path):
+                with piece.open("rb") as sp:
+                    for chunk in iter(lambda: sp.read(1 << 20), b""):
+                        h.update(chunk)
+            else:
+                h.update(piece.encode())
         h.update(b" $;\n")
         for p in (ty_path, val_path, _bodyty_path(stem)):
             p.unlink(missing_ok=True)
