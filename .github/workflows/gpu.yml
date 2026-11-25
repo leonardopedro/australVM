@@ -56,14 +56,31 @@ jobs:
 
       # The default checker build is CPU-only: Naga, strict parsing, reference
       # evaluation. wgpu is not part of this job by design.
+      #
+      # A failure here is a test name plus a message, or a link error, and job
+      # logs need admin rights: capture the output and quote the tail as
+      # annotations, the same way the gate below does. It matters because this
+      # step has failed with nothing but `exit code 101` twice already
+      # (`15c5c108`, then `d9f2199b` whose only change was docs and a script),
+      # and the local run of both commands passes — so the next occurrence
+      # should name its own cause instead of needing a re-run to guess.
       - name: build CPU-only checker + crate tests
         run: |
-          nix develop -c bash -c '
+          cat > "$RUNNER_TEMP/gpu-checker-tests.sh" <<'SCRIPT'
             set -o pipefail
             cargo test --locked --manifest-path safestos/gpu/Cargo.toml
             # G14 service ABI: CPU-only; handles/statuses/refusals, no device.
             cargo test --locked --features service --manifest-path safestos/gpu/Cargo.toml
-          '
+          SCRIPT
+          status=0
+          out=$(nix develop -c bash "$RUNNER_TEMP/gpu-checker-tests.sh" 2>&1) || status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -ne 0 ]; then
+            printf '%s\n' "$out" | tail -40 | while IFS= read -r line; do
+              echo "::error title=gpu checker tests::$line"
+            done
+            exit "$status"
+          fi
 
       - name: GPU source gate
         run: |
