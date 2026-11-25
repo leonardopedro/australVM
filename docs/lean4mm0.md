@@ -5701,6 +5701,15 @@ so the same statement proved for two exports is one file. A retained statement s
 as an `.mm0` (`mm0-rs`: 3 sorts, 66 term/def, 22 ax/thm, `sorry` warning, exit 0) — it is a
 statement that the ledger, not the file, says is proved.
 
+**The two failures the sweep attributed to "other".** The whole-namespace scan's only
+rejections were `ConLeche.Model.BlockData.Φ` and `.DynCtx.hΔ0`, both reported as
+`mm0-rs` failing with nothing but an elaboration summary. Re-running one shows the message the
+scan's last-line rule hid: `error: type or value expected` at the theorem head, because the
+emitter's name sanitiser kept `Φ` — Python calls it alphanumeric, MM0 wants ASCII. `mm0_ident`
+now keeps ASCII alphanumerics and `_` only, which is the class §13.62 fixed for the trailing
+prime; both declarations then verify (5 and 14 rules, 2 assumptions each), and
+`check-lean-typing-proof` is still 12 artifacts across 4 modes unchanged.
+
 **What a hit does not re-check.** A statement hit runs neither checker: it reuses a verdict
 about bytes that are equal. The row carries the derivation's sha256 and size, so the claim can
 be re-checked by hand, and the assumptions are not part of the key — a statement that was

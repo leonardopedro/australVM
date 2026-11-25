@@ -1905,6 +1905,19 @@ def spine(ex, eid):
     return cur, args
 
 
+def mm0_ident(s: str) -> str:
+    """A declaration name MM0's lexer will read as an identifier.
+
+    ASCII alphanumerics and `_`, nothing else: Python calls `Φ` alphanumeric and
+    `mm0-rs` answers `error: type or value expected` at the theorem head, which
+    cost the corpus sweep the two declarations whose names carry Greek
+    (`ConLeche.Model.BlockData.Φ`, `.DynCtx.hΔ0`) — the same class as the
+    trailing prime fixed in §13.62.
+    """
+    return "".join(c if (c.isascii() and c.isalnum()) or c == "_" else "_"
+                   for c in s)
+
+
 def main() -> int:
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     spine = "--spine" in sys.argv
@@ -2046,8 +2059,7 @@ def main() -> int:
         # the ledger's key a content key (§13.62b). The walk is skipped, which
         # is the difference between asking "what does this export state" and
         # "does its proof close".
-        thm_name_d = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
-                                      for c in target.split(".")[-1])
+        thm_name_d = "thm_" + mm0_ident(target.split(".")[-1])
         goal_ctx = "tnil" if closed else inner_ctx
         h = hashlib.sha256()
         h.update(f"theorem {thm_name_d}: $ tty {goal_ctx} ".encode())
@@ -2246,8 +2258,7 @@ def main() -> int:
     # The name is sanitised: MM0's lexer rejects Lean's trailing prime
     # (`thm_add_le'` was a parse error, so the artifact never reached the proof
     # at all and the run was counted as a failure of the derivation).
-    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
-                                 for c in target.split(".")[-1])
+    thm_name = "thm_" + mm0_ident(target.split(".")[-1])
     # The statement is written in pieces rather than built: its term texts are
     # gigabytes (§13.30), and the f-string that used to hold it kept a second
     # copy for the `.mm0` tail and a third for the `.mm1` one.
@@ -2403,8 +2414,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
     out += [f"term {n}: nat;" for n in NATS]
     out += ["", "-- ── assumptions ──"]
     path = Path(str(stem) + "_stopped.mm0")
-    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
-                                 for c in target.split(".")[-1])
+    thm_name = "thm_" + mm0_ident(target.split(".")[-1])
     # Bytes, not characters: the box-drawing rules in the prologue are three
     # bytes each, and this number is the offset a verifier seeks to.
     header = "\n".join(out) + "\n"
