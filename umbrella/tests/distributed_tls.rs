@@ -14,7 +14,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use austral_cranelift_bridge::distributed::{
-    apply, au_dist_reset, set_transport, Authority, Operation, Transport,
+    apply, au_dist_adopt_wire, au_dist_authorize, au_dist_introduce, au_dist_issue_token,
+    au_dist_open_request, au_dist_receipt_code, au_dist_receipt_release, au_dist_release_resource,
+    au_dist_reset, au_dist_respond, au_dist_retire, au_dist_retry, au_dist_submit,
+    au_dist_token_wire, au_dist_wait, set_transport, Authority, Operation, Transport,
+    RESULT_APPLIED, STATUS_ALREADY_SENT, STATUS_DUPLICATE, STATUS_NO_REQUEST, STATUS_NO_TOKEN,
+    STATUS_RETIRED_EPOCH, STATUS_STALE_RESOURCE,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -421,6 +426,51 @@ fn the_d17_wrappers_run_over_a_live_two_process_mutual_tls_transport() {
         panic!("the bridge must compile the D17 entry");
     }
     let result = austral_cranelift_bridge::execute_function(function);
+
+    // Replay refusals must survive the process boundary too. The module above
+    // has already released resource 101, so these calls start from a clean
+    // authority and use the same transport as every module verb.
+    assert_eq!(au_dist_introduce(101, 202, 303, 1), 101);
+    let token = au_dist_issue_token(101, 303, 202, 1);
+    let wire = au_dist_token_wire(token);
+    assert!(wire > 0);
+    assert_eq!(au_dist_release_resource(101), 0);
+    assert_eq!(au_dist_introduce(101, 202, 303, 1), 101);
+    assert_eq!(au_dist_adopt_wire(wire), STATUS_STALE_RESOURCE);
+    assert_eq!(au_dist_adopt_wire(wire), STATUS_STALE_RESOURCE);
+
+    let token = au_dist_issue_token(101, 303, 202, 1);
+    let request = au_dist_open_request(token, 7, 11);
+    assert!(request > 0);
+    let duplicate = au_dist_issue_token(101, 303, 202, 1);
+    assert_eq!(au_dist_open_request(duplicate, 7, 11), STATUS_DUPLICATE);
+    assert_eq!(au_dist_submit(request), 0);
+    assert_eq!(au_dist_respond(7, 11, 1), 0);
+    assert_eq!(au_dist_respond(7, 11, 1), STATUS_ALREADY_SENT);
+    let receipt = au_dist_wait(request);
+    assert!(receipt > 0);
+    assert_eq!(au_dist_receipt_code(receipt), RESULT_APPLIED);
+    assert_eq!(au_dist_respond(7, 11, 1), STATUS_NO_REQUEST);
+    assert_eq!(au_dist_receipt_release(receipt), 0);
+    assert_eq!(au_dist_release_resource(101), 0);
+
+    assert_eq!(au_dist_introduce(103, 202, 303, 1), 103);
+    let token = au_dist_issue_token(103, 303, 202, 1);
+    let retired_wire = au_dist_token_wire(token);
+    assert!(retired_wire > 0);
+    let token = au_dist_issue_token(103, 303, 202, 1);
+    let pending = au_dist_open_request(token, 9, 13);
+    assert_eq!(au_dist_submit(pending), 0);
+    assert_eq!(au_dist_retire(103, 2), 0);
+    assert_eq!(au_dist_retry(pending), STATUS_NO_REQUEST);
+    assert_eq!(au_dist_respond(9, 13, 1), STATUS_NO_REQUEST);
+    assert_eq!(au_dist_adopt_wire(retired_wire), STATUS_NO_TOKEN);
+    assert_eq!(au_dist_issue_token(103, 303, 202, 1), STATUS_RETIRED_EPOCH);
+    let fresh = au_dist_issue_token(103, 303, 202, 2);
+    assert!(fresh > 0);
+    assert_eq!(au_dist_authorize(fresh, 103), 0);
+    assert_eq!(au_dist_release_resource(103), 0);
+
     set_transport(None);
     wait_for_child(&mut child);
     let _ = std::fs::remove_dir_all(&dir);

@@ -40,6 +40,11 @@ pub const STATUS_STALE_RESOURCE: i64 = -15;
 /// it without limit. The cap is far above the D16/D17 vectors.
 const MAX_OUTBOX: usize = 64;
 
+/// Completed/disposed request ids are remembered until their resource
+/// incarnation ends, so a replay cannot name a second action. Keep that
+/// tombstone set bounded; a full set fails closed with `STATUS_CAPACITY`.
+const MAX_REQUEST_IDS: usize = 1 << 16;
+
 /// One D17 authority verb. The FFI functions below are thin wrappers over
 /// this enum so a live transport can carry the same operation to another
 /// process without changing the Austral surface.
@@ -179,6 +184,16 @@ struct Request {
 #[derive(Debug, Clone, Copy)]
 struct Receipt {
     code: i64,
+    resource: i64,
+    epoch: i64,
+    incarnation: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RequestIdTombstone {
+    resource: i64,
+    incarnation: i64,
+    epoch: i64,
 }
 
 /// The authority's state. A fresh one is created for each process; tests build
@@ -195,7 +210,7 @@ pub struct Authority {
     /// action while that incarnation is live, including after the local
     /// request object was waited on or disposed. The id is global because
     /// `respond` carries only the request id and digest.
-    request_ids: BTreeMap<i64, i64>,
+    request_ids: BTreeMap<i64, RequestIdTombstone>,
     /// wire id -> the token fields it carries and whether it was adopted.
     wires: BTreeMap<i64, (Token, bool)>,
 }
@@ -243,14 +258,33 @@ impl Authority {
         if !valid_identity(new_epoch) {
             return STATUS_INVALID;
         }
-        let Some(entry) = self.resources.get_mut(&resource) else {
-            return STATUS_NO_RESOURCE;
+        let (old_epoch, incarnation) = {
+            let Some(entry) = self.resources.get_mut(&resource) else {
+                return STATUS_NO_RESOURCE;
+            };
+            if new_epoch <= entry.epoch {
+                return STATUS_RETIRED_EPOCH;
+            }
+            let old_epoch = entry.epoch;
+            entry.epoch = new_epoch;
+            entry.generation = 0;
+            (old_epoch, entry.incarnation)
         };
-        if new_epoch <= entry.epoch {
-            return STATUS_RETIRED_EPOCH;
-        }
-        entry.epoch = new_epoch;
-        entry.generation = 0;
+        // Retiring an epoch ends every handle, receipt and id tombstone that
+        // belonged to it. The resource id itself stays live for the new epoch.
+        self.tokens
+            .retain(|_, token| !(token.resource == resource && token.epoch == old_epoch));
+        self.requests
+            .retain(|_, request| !(request.resource == resource && request.epoch == old_epoch));
+        self.receipts
+            .retain(|_, receipt| !(receipt.resource == resource && receipt.epoch == old_epoch));
+        self.wires
+            .retain(|_, (token, _)| !(token.resource == resource && token.epoch == old_epoch));
+        self.request_ids.retain(|_, tombstone| {
+            !(tombstone.resource == resource
+                && tombstone.incarnation == incarnation
+                && tombstone.epoch == old_epoch)
+        });
         STATUS_OK
     }
 
@@ -378,11 +412,21 @@ impl Authority {
         if self.request_ids.contains_key(&request_id) {
             return STATUS_DUPLICATE;
         }
+        if self.request_ids.len() >= MAX_REQUEST_IDS {
+            return STATUS_CAPACITY;
+        }
         let handle = self.mint();
         if handle < 0 {
             return handle;
         }
-        self.request_ids.insert(request_id, incarnation);
+        self.request_ids.insert(
+            request_id,
+            RequestIdTombstone {
+                resource: value.resource,
+                incarnation,
+                epoch: value.epoch,
+            },
+        );
         self.requests.insert(
             handle,
             Request {
@@ -575,6 +619,9 @@ impl Authority {
             } else {
                 RESULT_REJECTED
             },
+            resource: value.resource,
+            epoch: value.epoch,
+            incarnation: value.incarnation,
         };
         self.requests.remove(&request);
         let handle = self.mint();
@@ -644,8 +691,10 @@ impl Authority {
             .retain(|_, token| token.incarnation != entry.incarnation);
         self.requests
             .retain(|_, request| request.incarnation != entry.incarnation);
+        self.receipts
+            .retain(|_, receipt| receipt.incarnation != entry.incarnation);
         self.request_ids
-            .retain(|_, incarnation| *incarnation != entry.incarnation);
+            .retain(|_, tombstone| tombstone.incarnation != entry.incarnation);
         STATUS_OK
     }
 
@@ -902,9 +951,10 @@ mod tests {
         let token = a.issue_token(101, 303, 202, 1);
         assert!(token > 0);
         assert_eq!(a.retire(101, 2), STATUS_OK);
-        assert_eq!(a.authorize(token, 101), STATUS_RETIRED_EPOCH);
-        assert_eq!(a.token_wire(serializable), STATUS_RETIRED_EPOCH);
-        assert_eq!(a.adopt_wire(wire), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.issue_token(101, 303, 202, 1), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.authorize(token, 101), STATUS_NO_TOKEN);
+        assert_eq!(a.token_wire(serializable), STATUS_NO_TOKEN);
+        assert_eq!(a.adopt_wire(wire), STATUS_NO_TOKEN);
     }
 
     #[test]
@@ -1080,7 +1130,49 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_epoch_stops_every_pending_request_verb() {
+    fn releasing_a_resource_drops_its_receipts_and_request_ids() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let request = a.open_request(token, 7, 11);
+        assert_eq!(a.submit(request), STATUS_OK);
+        assert_eq!(a.respond(7, 11, 1), STATUS_OK);
+        let receipt = a.wait(request);
+        assert_eq!(a.receipt_code(receipt), RESULT_APPLIED);
+        assert!(!a.request_ids.is_empty());
+
+        assert_eq!(a.release_resource(101), STATUS_OK);
+        assert_eq!(a.receipt_code(receipt), STATUS_NO_REQUEST);
+        assert!(a.request_ids.is_empty());
+    }
+
+    #[test]
+    fn request_id_tombstones_are_bounded_and_release_clears_them() {
+        let mut a = authority_with_resource();
+        for id in 1..=MAX_REQUEST_IDS as i64 {
+            a.request_ids.insert(
+                id,
+                RequestIdTombstone {
+                    resource: 101,
+                    incarnation: 1,
+                    epoch: 1,
+                },
+            );
+        }
+        let token = a.issue_token(101, 303, 202, 1);
+        assert_eq!(
+            a.open_request(token, MAX_REQUEST_IDS as i64 + 1, 11),
+            STATUS_CAPACITY
+        );
+
+        assert_eq!(a.release_resource(101), STATUS_OK);
+        assert!(a.request_ids.is_empty());
+        assert_eq!(a.introduce(101, 202, 303, 1), 101);
+        let token = a.issue_token(101, 303, 202, 1);
+        assert!(a.open_request(token, 7, 11) > 0);
+    }
+
+    #[test]
+    fn retiring_an_epoch_drops_old_handles_and_frees_request_ids() {
         let mut a = authority_with_resource();
         let token = a.issue_token(101, 303, 202, 1);
         let unsent = a.open_request(token, 7, 11);
@@ -1090,12 +1182,25 @@ mod tests {
         let sent = a.open_request(token, 8, 12);
         assert_eq!(a.submit(sent), STATUS_OK);
 
+        let token = a.issue_token(101, 303, 202, 1);
+        let finished = a.open_request(token, 9, 13);
+        assert_eq!(a.submit(finished), STATUS_OK);
+        assert_eq!(a.respond(9, 13, 1), STATUS_OK);
+        let receipt = a.wait(finished);
+        assert_eq!(a.receipt_code(receipt), RESULT_APPLIED);
+
         assert_eq!(a.retire(101, 2), STATUS_OK);
-        assert_eq!(a.submit(unsent), STATUS_RETIRED_EPOCH);
-        assert_eq!(a.retry(sent), STATUS_RETIRED_EPOCH);
-        assert_eq!(a.cancel_wait(sent), STATUS_RETIRED_EPOCH);
-        assert_eq!(a.wait(sent), STATUS_RETIRED_EPOCH);
-        assert_eq!(a.respond(8, 12, 1), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.receipt_code(receipt), STATUS_NO_REQUEST);
+        assert_eq!(a.submit(unsent), STATUS_NO_REQUEST);
+        assert_eq!(a.retry(sent), STATUS_NO_REQUEST);
+        assert_eq!(a.cancel_wait(sent), STATUS_NO_REQUEST);
+        assert_eq!(a.wait(sent), STATUS_NO_REQUEST);
+        assert_eq!(a.respond(8, 12, 1), STATUS_NO_REQUEST);
+
+        // The new epoch starts with no ids or handles from the old one.
+        let token = a.issue_token(101, 303, 202, 2);
+        assert!(token > 0);
+        assert!(a.open_request(token, 7, 11) > 0);
     }
 
     #[test]
