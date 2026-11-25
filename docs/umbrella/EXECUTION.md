@@ -477,6 +477,28 @@ the global scope. This patch closes that gap for the driver path.
 |---|---|---|---|---|---|---|
 | U10 linkage (RTLD_LOCAL provider/adapter) | LNK01/LNK02, ABI03 | implemented for the driver path | git `1bd6fee3` + this dirty patch; reduced bridge features `cedar,tier1-rs` because the sibling `unfer` checkout is mid-merge | `cargo test --offline --test linking` → **1 passed**; `cargo test --offline --lib` → **96 passed**; `cargo test --offline --test entry --test cli --test policy` → **5 + 6 + 6 passed**. The test's provider C source and adapter both map locally; the adapter's `rs_link_probe__adapter` returns `7`. `readelf -d` of the built adapter records the absolute provider path as `NEEDED`, and a probe host confirmed the loader reuses the existing mapping (one `libp.so` object) rather than loading a second copy. | The admitted provider's address, the adapter's calls and the JIT-visible adapter symbol all come from named handles/registrations, not `RTLD_DEFAULT`. A preloaded same-named export cannot answer for the provider call. | The legacy `build_next`/`load` path (used by the existing reload tests) still maps globally and intentionally leaves the references unresolved; only the driver uses the linked-local path. The adapter crate links the provider by absolute path, so moving the provider file after the build would break the adapter load. Reload/bind tests have not been rerun through the local path. Default-feature builds remain blocked by the external `unfer` conflict. |
 
+## U10 — typed artifact pins and adapter data in the event
+
+The link half above bound the provider and adapter images. This half binds what
+flows through them: the module's exact typed signatures and the compiler-emitted
+adapter descriptor document are now pins in the same `trusted` record, checked
+before any descriptor-driven native work.
+
+### What changed
+
+| Path | Change |
+|---|---|
+| `umbrella/src/project.rs` | `TrustedArtifact` gains `signatures` (`[{name, params, returns}]`) and an optional `descriptor_sha256`. Both are optional for existing documents; when present, signatures are exact, names are unique, and the digest must be 64 hex digits. Nested unknown fields are named as `trusted.signatures[i].<field>`. |
+| `umbrella/src/trust.rs` | `sha256_bytes`; `verify_signatures` compares the artifact's typed exports to the pin as an exact set (missing, extra, renamed, retyped or changed-arity all refuse with the name and both signatures); `verify_descriptor` hashes the emitted document; `verify_artifact` runs both. An absent pin is not a claim, so it is not a refusal. |
+| `umbrella/src/main.rs` | After the front-end and before `build_adapters`/JIT, the merged typed exports and the last prefix's descriptor document are verified against the project pin. The `artifact` JSON event now carries `exports`, `adapters` (`kind`, `symbol`, canonical `descriptor` text per block) and `adapters_sha256`, alongside the CPS digest. |
+| `umbrella/tests/entry.rs` | Three new cases: a pinned signature with a different arity is refused before `RESULT`; a wrong `descriptor_sha256` is refused before native work; the artifact event's `exports`, empty `adapters`, and `adapters_sha256` are asserted. |
+
+### Ledger
+
+| Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
+|---|---|---|---|---|---|---|
+| U10 typed signatures + descriptor/provider digests | ABI03, ABI06, API03 | implemented for the driver path | this dirty patch; `umbrella/src/{project,trust,main}.rs`; `umbrella/tests/entry.rs`; reduced bridge features `cedar,tier1-rs` because the sibling `unfer` checkout is mid-merge | Reduced-feature `cargo test --offline --lib` → **103 passed, 0 failed** (new trust/project cases included); `cargo test --offline --test entry --test cli` → **8 + 6 passed**. The pin tests use a real stageprobe cdylib and the real `umbrella` binary: a signature pinned as `compute(Int64) -> Int64` against an artifact exporting `compute() -> Int64` exits 1 with `trusted signatures refused` and no `RESULT`; a `descriptor_sha256` of all zeroes exits 1 with `trusted descriptor refused` and no `RESULT`; the success event reports `exports[0].name == compute`, `adapters == []`, and `adapters_sha256 == sha256("")`. | A caller can pin an exact export name, parameter list and return type, and the compiler's adapter contract, before the artifact is used. The provider bytes are still checked by D09's `library_sha256` before `dlopen`; the descriptor is checked after the front-end but before any wrapper is built or loaded, because the descriptor only exists then. | Signature pins cover CPS wire types, not source-level Austral types; the descriptor pin is exact bytes of the last prefix's document, so a change in meta-comment text also refuses. Provider and descriptor pins are not signatures over the provider's behaviour. Default-feature Rust verification remains blocked by the external `unfer` conflict. |
+
 ## W9.3 gate run in the lean shell — blocked, results recorded
 
 Attempted exactly as documented:

@@ -74,10 +74,24 @@ pub struct Grant {
     pub symbol: String,
 }
 
-/// D09: the artifact identity a build/load authorization is pinned to. Building
-/// a crate runs its build scripts and mapping a cdylib runs its initializer, so
-/// the document names the exact dependency graph, feature set, library bytes and
-/// ABI exports that were approved — not merely "a crate" and "a provider".
+/// One typed module export the caller is willing to admit. The signature is the
+/// CPS wire contract, so a name-only pin cannot accept a changed arity or type.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedSignature {
+    pub name: String,
+    #[serde(default)]
+    pub params: Vec<String>,
+    pub returns: String,
+}
+
+/// D09/U10: the artifact identity a build/load authorization is pinned to.
+/// Building a crate runs its build scripts and mapping a cdylib runs its
+/// initializer, so the document names the exact dependency graph, feature set,
+/// library bytes and ABI exports that were approved — not merely "a crate" and
+/// "a provider". U10 adds the compiler-emitted adapter contract and the module's
+/// typed export signatures, both checked before the contract is used to build
+/// native wrappers.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrustedArtifact {
@@ -91,6 +105,14 @@ pub struct TrustedArtifact {
     /// Extern symbols the library must define, checked before `dlopen`.
     #[serde(default)]
     pub exports: Vec<String>,
+    /// Typed module exports, checked against the compile-only artifact before
+    /// any adapter is built or the JIT is invoked. Empty means no signature pin.
+    #[serde(default)]
+    pub signatures: Vec<TrustedSignature>,
+    /// SHA-256 (hex) of the compiler-emitted adapter document, checked before
+    /// native wrappers are generated from it. Absent means no descriptor pin.
+    #[serde(default)]
+    pub descriptor_sha256: Option<String>,
 }
 
 /// D09: the capabilities the running instance gets. Stated in the document so a
@@ -191,9 +213,30 @@ pub fn parse(path: &Path, text: &str) -> Result<Project, String> {
     reject_unknown_in(
         &value,
         "trusted",
-        &["lock_sha256", "features", "library_sha256", "exports"],
+        &[
+            "lock_sha256",
+            "features",
+            "library_sha256",
+            "exports",
+            "signatures",
+            "descriptor_sha256",
+        ],
         &mut unknown,
     );
+    if let Some(signatures) = value
+        .get("trusted")
+        .and_then(|t| t.get("signatures"))
+        .and_then(|s| s.as_array())
+    {
+        for (i, signature) in signatures.iter().enumerate() {
+            reject_unknown(
+                signature,
+                &format!("trusted.signatures[{i}]."),
+                &["name", "params", "returns"],
+                &mut unknown,
+            );
+        }
+    }
     if let Some(grants) = value.get("grants").and_then(|g| g.as_array()) {
         for (i, g) in grants.iter().enumerate() {
             reject_unknown(g, &format!("grants[{i}]."), &["symbol"], &mut unknown);
@@ -305,6 +348,32 @@ fn validate(path: &Path, p: &Project) -> Result<(), String> {
         for (i, name) in t.exports.iter().enumerate() {
             if name.trim().is_empty() {
                 problems.push(format!("`trusted.exports[{i}]` is empty"));
+            }
+        }
+        if let Some(digest) = &t.descriptor_sha256 {
+            if !is_sha256_hex(digest) {
+                problems.push(format!(
+                    "`trusted.descriptor_sha256` must be 64 hex digits, got {digest:?}"
+                ));
+            }
+        }
+        let mut names = std::collections::HashSet::new();
+        for (i, signature) in t.signatures.iter().enumerate() {
+            if signature.name.trim().is_empty() {
+                problems.push(format!("`trusted.signatures[{i}].name` is empty"));
+            } else if !names.insert(signature.name.as_str()) {
+                problems.push(format!(
+                    "`trusted.signatures[{i}].name` repeats `{}`; one exact signature per export",
+                    signature.name
+                ));
+            }
+            if signature.returns.trim().is_empty() {
+                problems.push(format!("`trusted.signatures[{i}].returns` is empty"));
+            }
+            for (j, param) in signature.params.iter().enumerate() {
+                if param.trim().is_empty() {
+                    problems.push(format!("`trusted.signatures[{i}].params[{j}]` is empty"));
+                }
             }
         }
     }
@@ -440,5 +509,49 @@ mod tests {
         let err = parse(p(), &BASE.replace("\"features\": []", "\"feature\": []"))
             .expect_err("unknown trusted field must be refused");
         assert!(err.contains("trusted.feature"), "{err}");
+    }
+
+    #[test]
+    fn typed_signatures_and_a_descriptor_digest_parse() {
+        let doc = BASE.replace(
+            "\"exports\": [\"rs_demo_checksum\"]",
+            "\"exports\": [\"rs_demo_checksum\"],\n             \"signatures\": [{\"name\": \"main\", \"params\": [], \"returns\": \"Int64\"}],\n             \"descriptor_sha256\": \"0000000000000000000000000000000000000000000000000000000000000003\"",
+        );
+        let parsed = parse(p(), &doc).expect("valid typed trust record");
+        let trusted = parsed.trusted.expect("trusted block");
+        assert_eq!(trusted.signatures.len(), 1);
+        assert_eq!(trusted.signatures[0].name, "main");
+        assert_eq!(trusted.signatures[0].returns, "Int64");
+        assert_eq!(
+            trusted.descriptor_sha256.as_deref(),
+            Some("0000000000000000000000000000000000000000000000000000000000000003")
+        );
+    }
+
+    #[test]
+    fn a_malformed_descriptor_digest_or_repeated_signature_is_named() {
+        let short = BASE.replace(
+            "\"exports\": [\"rs_demo_checksum\"]",
+            "\"exports\": [\"rs_demo_checksum\"], \"descriptor_sha256\": \"abc\"",
+        );
+        let err = parse(p(), &short).expect_err("short digest");
+        assert!(err.contains("trusted.descriptor_sha256"), "{err}");
+
+        let repeated = BASE.replace(
+            "\"exports\": [\"rs_demo_checksum\"]",
+            "\"exports\": [\"rs_demo_checksum\"], \"signatures\": [\n             {\"name\": \"main\", \"params\": [], \"returns\": \"Int64\"},\n             {\"name\": \"main\", \"params\": [], \"returns\": \"Int32\"}]"
+        );
+        let err = parse(p(), &repeated).expect_err("repeated signature");
+        assert!(err.contains("repeats `main`"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_signature_field_is_named_in_place() {
+        let doc = BASE.replace(
+            "\"exports\": [\"rs_demo_checksum\"]",
+            "\"exports\": [\"rs_demo_checksum\"], \"signatures\": [\n             {\"name\": \"main\", \"params\": [], \"ret\": \"Int64\"}]"
+        );
+        let err = parse(p(), &doc).expect_err("unknown signature field");
+        assert!(err.contains("trusted.signatures[0].ret"), "{err}");
     }
 }

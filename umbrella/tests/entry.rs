@@ -86,11 +86,32 @@ fn project_with_provider(dir: &Path, so: &Path) -> PathBuf {
 }
 
 fn project_with_providers(dir: &Path, providers: &[&Path]) -> PathBuf {
+    project_document(dir, providers, None, None)
+}
+
+fn project_document(
+    dir: &Path,
+    providers: &[&Path],
+    signatures: Option<serde_json::Value>,
+    descriptor_sha256: Option<&str>,
+) -> PathBuf {
     let path = dir.join("project.json");
     let so = providers[0];
     // D09: a load authorization names the exact library bytes it approves, so the
     // fixture pins the digest of the artifact it just built.
     let library_sha256 = umbrella::trust::sha256_file(so).expect("hash the fixture library");
+    let mut trusted = serde_json::json!({
+        "lock_sha256": "0".repeat(64),
+        "features": [],
+        "library_sha256": library_sha256,
+        "exports": ["stageprobe_version"]
+    });
+    if let Some(signatures) = signatures {
+        trusted["signatures"] = signatures;
+    }
+    if let Some(digest) = descriptor_sha256 {
+        trusted["descriptor_sha256"] = serde_json::Value::String(digest.to_string());
+    }
     std::fs::write(
         &path,
         serde_json::json!({
@@ -100,12 +121,7 @@ fn project_with_providers(dir: &Path, providers: &[&Path]) -> PathBuf {
             "build": {"allowed": false},
             "load": {"allowed": true, "providers": providers},
             "grants": [{"symbol": "rs_probe"}],
-            "trusted": {
-                "lock_sha256": "0".repeat(64),
-                "features": [],
-                "library_sha256": library_sha256,
-                "exports": ["stageprobe_version"]
-            }
+            "trusted": trusted
         })
         .to_string(),
     )
@@ -137,10 +153,17 @@ fn build_stageprobe(dir: &Path) -> PathBuf {
 fn run(dir: &Path, buffer: &[u8], entry: &str) -> Output {
     let so = build_stageprobe(dir);
     let project = project_with_provider(dir, &so);
+    run_with_project(dir, buffer, entry, &project, false)
+}
+
+fn run_with_project(dir: &Path, buffer: &[u8], entry: &str, project: &Path, json: bool) -> Output {
     let austral = fake_front_end(dir, buffer);
-    Command::new(env!("CARGO_BIN_EXE_umbrella"))
-        .arg("--project")
-        .arg(&project)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_umbrella"));
+    if json {
+        cmd.arg("--json");
+    }
+    cmd.arg("--project")
+        .arg(project)
         .arg("--austral")
         .arg(&austral)
         .arg("--entry")
@@ -235,4 +258,63 @@ fn a_missing_entry_is_refused_by_name() {
     let err = stderr(&out);
     assert!(err.contains("'other'") && err.contains("compute"), "{err}");
     assert!(!stdout(&out).contains("RESULT"), "{}", stdout(&out));
+}
+
+/// U10: a pinned typed signature is admitted exactly. `compute` takes no
+/// parameters and returns Int64, so a pin with a parameter must refuse before
+/// the entry can execute.
+#[test]
+fn a_changed_typed_signature_is_refused_before_invocation() {
+    let dir = scratch("signature-pin");
+    let so = build_stageprobe(&dir);
+    let project = project_document(
+        &dir,
+        &[&so],
+        Some(serde_json::json!([
+            {"name": "compute", "params": ["Int64"], "returns": "Int64"}
+        ])),
+        None,
+    );
+    let out = run_with_project(&dir, &cps("compute", 0, 0x01), "compute", &project, false);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("trusted signatures refused"), "{err}");
+    assert!(err.contains("`compute` pinned"), "{err}");
+    assert!(!stdout(&out).contains("RESULT"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_changed_descriptor_digest_is_refused_before_native_work() {
+    let dir = scratch("descriptor-pin");
+    let so = build_stageprobe(&dir);
+    let project = project_document(&dir, &[&so], None, Some(&"0".repeat(64)));
+    let out = run_with_project(&dir, &cps("compute", 0, 0x01), "compute", &project, false);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("trusted descriptor refused"), "{err}");
+    assert!(!stdout(&out).contains("RESULT"), "{}", stdout(&out));
+}
+
+/// U10: the typed artifact event names the exports and the descriptor blocks
+/// (with the digest a project can pin), not just their count.
+#[test]
+fn the_artifact_event_carries_exports_and_descriptor_data() {
+    let dir = scratch("artifact-event");
+    let so = build_stageprobe(&dir);
+    let project = project_with_provider(&dir, &so);
+    let out = run_with_project(&dir, &cps("compute", 0, 0x01), "compute", &project, true);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let event = stdout(&out)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "artifact")
+        .expect("artifact event");
+    assert_eq!(event["exports"][0]["name"], "compute");
+    assert_eq!(event["exports"][0]["returns"], "Int64");
+    assert_eq!(event["adapters"], serde_json::json!([]));
+    assert_eq!(
+        event["adapters_sha256"],
+        umbrella::trust::sha256_bytes(b""),
+        "the empty descriptor document is still identified by its digest"
+    );
 }
