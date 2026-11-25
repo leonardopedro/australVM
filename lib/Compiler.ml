@@ -47,6 +47,12 @@ open HtmlError
 let use_cps_jit = ref false
 let jit_server_mode = ref false
 let emit_cps_path = ref (None: string option)
+
+(* U07: write the CPS artifact and adapter descriptors, then stop. No bridge
+   initialization, no JIT compile and no target code: the artifact is the whole
+   product of this mode, so an unresolved symbol is a fact about the caller's
+   environment, not a lowering failure. CLI: `--emit-cps-only`. *)
+let emit_cps_only = ref false
 (* U11: the adapter descriptors the CPS lowering requires, in the canonical
    text form `umbrella/src/interface.rs` parses. *)
 let emit_adapters_path = ref (None: string option)
@@ -224,6 +230,66 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
       (fun () ->
           (* Phase 7: CPS JIT Integration Path *)
           if !use_cps_jit then begin
+            if !emit_cps_only then begin
+              (* Fail closed: this branch never falls back to the C backend. An
+                 unsupported lowering or an empty function list must leave no
+                 artifact, because a caller of this mode has no other output to
+                 run. *)
+              (try
+                 let (funcs, module_name) = Compiler_cps.compile_module_cps mono in
+                 (match !emit_adapters_path with
+                  | Some path ->
+                     (match Compiler_cps.write_adapter_descriptors path with
+                      | Ok () ->
+                         Printf.eprintf "CPS JIT: Emitted adapter descriptors to %s\n%!" path
+                      | Error msg ->
+                         austral_raise GenericError [
+                           ErrorText.Text "The compile-only artifact's adapter \
+                                           descriptors could not be written: ";
+                           ErrorText.Text msg;
+                           ErrorText.Break;
+                           ErrorText.Text "No CPS artifact was written." ])
+                  | None -> ());
+                 if funcs = [] then
+                   austral_raise GenericError [
+                     ErrorText.Text "The CPS lowering produced no functions for this \
+                                     module, so a compile-only artifact would be \
+                                     empty. No CPS artifact was written." ];
+                 let path =
+                   match !emit_cps_path with
+                   | Some p -> p
+                   | None ->
+                      austral_raise GenericError [
+                        ErrorText.Text "--emit-cps-only requires --emit-cps=<path>." ]
+                 in
+                 let binary = CpsGen.serialize_functions ~module_name funcs in
+                 (if Sys.getenv_opt "CPS_DEBUG" <> None then
+                    Compiler_cps.debug_print_cps_functions funcs);
+                 Compiler_cps.write_cps_binary funcs module_name path;
+                 Printf.eprintf "CPS JIT: module %s\n%!" module_name;
+                 Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
+                   (List.length funcs) (String.length binary);
+                 (* U07: the structured typed-export list. The CPS binary has
+                    parameter names but no parameter types; the monomorphic
+                    module still does, and these are the wire types the binary
+                    actually encodes. *)
+                 List.iter (fun (name, params, ret) ->
+                   Printf.eprintf "CPS JIT: export\t%s\t%s\t%s\n%!"
+                     name (String.concat "," params) ret)
+                   (Compiler_cps.typed_exports mono);
+                 Printf.eprintf "CPS JIT: Emitted CPS binary to %s\n%!" path;
+                 Compiler (env, compiler_code c)
+               with
+               | Austral_error _ as exn -> raise exn
+               | exn ->
+                  austral_raise GenericError [
+                    ErrorText.Text "The CPS lowering failed in compile-only mode, so \
+                                    no runnable artifact exists: ";
+                    ErrorText.Text (Printexc.to_string exn);
+                    ErrorText.Break;
+                    ErrorText.Text "No CPS artifact was written and the C backend \
+                                    was not used as a fallback." ])
+            end else begin
             try
               let (funcs, module_name) = Compiler_cps.compile_module_cps mono in
               (match !emit_adapters_path with
@@ -310,6 +376,7 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
               let unit_code: string = render_unit unit in
               let code: string = (compiler_code c) ^ "\n" ^ unit_code in
               Compiler (env, code)
+            end
 
           end
           else begin

@@ -1,0 +1,12 @@
+{
+  "module": "Test",
+  "kind": "Type Error",
+  "text": [
+    {
+      "type": "text",
+      "content": "T4 (§4.1): `impure` calls a foreign function; a refinement-level function must be pure — no `uk_*` symbols, no `@embed` wrappers"
+    }
+  ],
+  "span": null,
+  "context": null
+}

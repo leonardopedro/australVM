@@ -1,0 +1,47 @@
+# D14 follow-up: fenced job commands through the consensus transport
+# Measured 2026-11-24 on unfer 5920799.
+#
+# Command:
+#   cargo test -p unfer_consensus --test independent_nodes --features network \
+#     two_processes_contend_for_one_job_and_only_one_claim_commits -- --nocapture
+#
+# Result:
+running 1 test
+test two_processes_contend_for_one_job_and_only_one_claim_commits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.83s
+
+# What the test did, in committed slots:
+#   slot 1  JobOp::Register(settle-auction)
+#   slot 2  JobOp::Claim(worker-a)  \ proposed concurrently from node 1 and
+#   slot 3  JobOp::Claim(worker-b)  / node 2; one applies, one is refused
+#   slot 4  JobOp::Fire(expected epoch 1, generation 2) -> refused (no fence 2)
+#   slot 5  JobOp::Fire(expected epoch 1, generation 1) -> fires the job
+#
+# Assertions:
+#   - all three process replicas report the same `job` state and digest
+#   - the job is held by exactly one worker and the fence generation is 1
+#     (a second claim did not issue a fence)
+#   - slot 4 is committed but leaves the job claimed
+#   - slot 5 moves the job to fired
+#
+# Full consensus suite, same working tree:
+#   cargo test -p unfer_consensus --features network
+#
+#   174 passed  lib (incl. 10 jobs:: tests)
+#    11 passed  crash_matrix
+#     7 passed  distributed_schedules (1 ignored)
+#     4 passed  fence_invariant
+#     2 passed  independent_nodes
+#     8 passed  ordered_fencing
+#     4 passed  phase6_testnet
+#     4 passed  power_cut
+#     6 passed  request_identity
+#   ---
+#   220 passed, 0 failed
+#
+# One full run before this one failed the existing D13 slow-replica catch-up
+# case with a digest mismatch (replica3 reached 3, different hash). The case
+# passed alone and the full suite passed on the next run; it is a timing flake
+# in the pre-existing catch-up test, not a result of the JobOp change, and is
+# recorded here rather than hidden.

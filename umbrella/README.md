@@ -17,13 +17,15 @@ runs the whole extern-rust pipeline end to end:
    [`modules/rscrate`](modules/rscrate) (arbitrary crate; the artifact
    path comes from cargo's JSON stream, nothing about target layout is
    assumed);
-2. `dlopen(RTLD_NOW | RTLD_GLOBAL)` registers the cdylib — the bridge's
-   default import lookup (`dlsym(RTLD_DEFAULT)`) resolves the crate's
-   `rs_*` symbols with **zero australVM changes**;
+2. the cdylib is admitted explicitly: mapped `RTLD_LOCAL`, its declared
+   `rs_*` exports resolved through its own `dlsym` handle and registered
+   by address, while the generated adapter crate links that exact image.
+   A preloaded same-named export cannot answer for either;
 3. the stock **`austral` binary** is invoked as a subprocess
-   (`compile ... --use-cps-jit --allow-all --target-type=tc
-   --emit-cps=...`, the same flags modhost's `spawn_jit_server` uses) to
-   serialize [`modules/Demo.aum`](modules/Demo.aum) to CPS;
+   (`compile ... --use-cps-jit --emit-cps-only --target-type=tc
+   --emit-cps=... --emit-adapters=...`) to serialize
+   [`modules/Demo.aum`](modules/Demo.aum) to CPS without initializing the
+   bridge or invoking the crate;
 4. the **Cranelift bridge, linked as a plain path dependency**, loads
    [`module.toml`](module.toml) (`--manifest`, or explicit DenyAll
    without it), compiles the CPS with the manifest gate live, and calls

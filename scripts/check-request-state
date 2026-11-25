@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# D16: run the same finite request-lifecycle vectors through the Austral CPS JIT
+# and the independently written Rust reference, then diff stdout. Also records
+# the source digest that names what was compared.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$ROOT/examples/distributed/RequestState"
+REF="$ROOT/examples/distributed/RequestStateReference.rs"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+if ! command -v rustc >/dev/null 2>&1; then
+    echo "check-request-state: rustc not found on PATH" >&2
+    exit 2
+fi
+if [ ! -x "$ROOT/austral" ]; then
+    echo "check-request-state: $ROOT/austral is not executable" >&2
+    exit 2
+fi
+
+export LD_LIBRARY_PATH="$ROOT:$ROOT/safestos/cranelift/target/release:${LD_LIBRARY_PATH:-}"
+
+# The compiler must accept the contracted transition, which means the totality
+# gate ran over it, and the JIT must execute the lifecycle.
+"$ROOT/austral" compile "$SRC.aui,$SRC.aum" \
+    --entrypoint=Example.Distributed.RequestState:main \
+    --target-type=c \
+    --output="$TMP/austral.c" \
+    --use-cps-jit \
+    --error-format=json >/dev/null
+
+gcc -fwrapv -Wno-builtin-declaration-mismatch "$TMP/austral.c" -lm -o "$TMP/austral.bin"
+"$TMP/austral.bin" >"$TMP/austral.out"
+
+rustc --edition 2021 "$REF" -o "$TMP/reference.bin"
+"$TMP/reference.bin" >"$TMP/reference.out"
+
+if ! diff -u "$TMP/reference.out" "$TMP/austral.out"; then
+    echo "check-request-state: Austral JIT and Rust reference disagree" >&2
+    exit 1
+fi
+
+echo "check-request-state: $(wc -l <"$TMP/austral.out") vectors agree"
+echo "check-request-state: RequestState.aum sha256=$(sha256sum "$SRC.aum" | cut -d' ' -f1)"
+echo "check-request-state: RequestState.aui sha256=$(sha256sum "$SRC.aui" | cut -d' ' -f1)"
+echo "check-request-state: RequestStateReference.rs sha256=$(sha256sum "$REF" | cut -d' ' -f1)"

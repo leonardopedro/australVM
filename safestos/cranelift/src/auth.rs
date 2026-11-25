@@ -27,7 +27,7 @@ impl AuthorizationEngine for AllowAll {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ManifestAuthEngine {
     grants: HashMap<String, HashSet<String>>,
     effects: HashMap<String, HashSet<String>>,
@@ -83,6 +83,13 @@ impl ManifestAuthEngine {
     /// theory a verdict was proved against.
     pub fn liquid_qualifiers(&self) -> &[String] {
         &self.qualifiers
+    }
+
+    /// The principal this parsed manifest grants to. A single manifest names one
+    /// module; a merged engine's first key is the oldest loaded one, which is
+    /// only used as a fallback by a host that has no module document.
+    pub fn primary_principal(&self) -> Option<&str> {
+        self.grants.keys().next().map(String::as_str)
     }
 
     pub fn merge(&mut self, other: Self) {
@@ -403,6 +410,11 @@ pub struct InstanceContext {
     pub epoch: u64,
     /// D08 strict profile: only declared ABI registry entries are callable.
     pub strict: bool,
+    /// U09: the grants this instance was loaded with, snapshotted at bind.
+    /// `None` keeps the legacy process-global engine for binaries compiled
+    /// outside a module host; `Some` makes this instance's own policy the
+    /// authority, so loading or reloading another manifest cannot widen it.
+    pub policy: Option<Arc<ManifestAuthEngine>>,
 }
 
 impl InstanceContext {
@@ -415,6 +427,7 @@ impl InstanceContext {
             node: None,
             epoch: 0,
             strict,
+            policy: None,
         }
     }
 
@@ -466,13 +479,60 @@ pub fn bind_instance_for_node(
     strict: bool,
     node: Option<String>,
 ) -> InstanceContext {
-    let id = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
-    let context = InstanceContext::local(id, module, strict).delegated(None, node);
+    register_instance(
+        InstanceContext::local(next_instance_id(), module, strict).delegated(None, node),
+    )
+}
+
+/// Bind an instance with an immutable snapshot of the grants it was loaded
+/// with. The snapshot is what `check_instance_call` consults, so a later load
+/// that merges more grants under the same module name cannot widen this
+/// instance, and a narrowed reload does not inherit the earlier set.
+pub fn bind_instance_with_policy(
+    module: impl Into<String>,
+    strict: bool,
+    node: Option<String>,
+    policy: ManifestAuthEngine,
+) -> InstanceContext {
+    bind_instance_with_identity(module, strict, None, node, policy)
+}
+
+/// Bind an instance with all three identities: the grant principal (`module`),
+/// the delegating `user`, and the fresh `instance` id. `user` is recorded on the
+/// context and in diagnostics; it never becomes the grant principal, so a user
+/// cannot acquire a module's grants by being named here, nor the reverse.
+pub fn bind_instance_with_identity(
+    module: impl Into<String>,
+    strict: bool,
+    user: Option<String>,
+    node: Option<String>,
+    policy: ManifestAuthEngine,
+) -> InstanceContext {
+    let mut context =
+        InstanceContext::local(next_instance_id(), module, strict).delegated(user, node);
+    context.policy = Some(Arc::new(policy));
+    register_instance(context)
+}
+
+fn next_instance_id() -> u64 {
+    NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed)
+}
+
+fn register_instance(context: InstanceContext) -> InstanceContext {
     instance_registry()
         .write()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(id, context.clone());
+        .insert(context.instance, context.clone());
     context
+}
+
+/// The same instance identity with a different policy snapshot (a reload's
+/// compile-time view). The returned context is not registered; call
+/// [`rebind_instance_with_policy`] when the load succeeds.
+pub fn replace_policy(context: &InstanceContext, policy: ManifestAuthEngine) -> InstanceContext {
+    let mut replacement = context.clone();
+    replacement.policy = Some(Arc::new(policy));
+    replacement
 }
 
 /// Whether this context is still the registered one for its instance id. A
@@ -499,6 +559,17 @@ pub fn revoke_instance(instance: u64) -> bool {
 /// Move an instance to a new epoch (reload/hot-swap), returning the replacement
 /// context. The old one stops being live immediately.
 pub fn rebind_instance(context: &InstanceContext, module: impl Into<String>) -> InstanceContext {
+    let policy = context.policy.as_deref().cloned();
+    rebind_instance_with_policy(context, module, policy)
+}
+
+/// Move an instance to a new epoch with a new policy snapshot. `None` keeps the
+/// legacy global-engine behaviour (no per-instance policy).
+pub fn rebind_instance_with_policy(
+    context: &InstanceContext,
+    module: impl Into<String>,
+    policy: Option<ManifestAuthEngine>,
+) -> InstanceContext {
     let replacement = InstanceContext {
         instance: context.instance,
         module: module.into(),
@@ -506,12 +577,9 @@ pub fn rebind_instance(context: &InstanceContext, module: impl Into<String>) -> 
         node: context.node.clone(),
         epoch: context.epoch + 1,
         strict: context.strict,
+        policy: policy.map(Arc::new),
     };
-    instance_registry()
-        .write()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(replacement.instance, replacement.clone());
-    replacement
+    register_instance(replacement)
 }
 
 thread_local! {
@@ -649,7 +717,17 @@ pub fn check_instance_call(context: &InstanceContext, callee: &str) -> Result<()
             callee
         ));
     }
-    check(&context.module, "Call", callee)
+    match &context.policy {
+        Some(policy) => match policy.authorize(&context.module, "Call", callee) {
+            Ok(Decision::Allow) => Ok(()),
+            Ok(Decision::Deny) => Err(format!(
+                "UK-4001: Authorization denied — '{}' is not granted '{}'",
+                context.module, callee
+            )),
+            Err(e) => Err(e),
+        },
+        None => check(&context.module, "Call", callee),
+    }
 }
 
 /// The receiver side of the distributed/effect boundary.
@@ -948,5 +1026,77 @@ effects = ["y"]
         assert!(engine.is_effect_granted("my_module", "send_notification"));
         assert!(!engine.is_effect_granted("my_module", "run_experiment"));
         assert!(!engine.is_effect_granted("other", "send_notification"));
+    }
+
+    fn engine(module: &str, grants: &[&str]) -> ManifestAuthEngine {
+        let grants = grants
+            .iter()
+            .map(|g| format!("\"{g}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        ManifestAuthEngine::from_toml_str(&format!(
+            "[module]\nname = \"{module}\"\n[grants]\nkernel = [{grants}]\n"
+        ))
+        .expect("manifest")
+    }
+
+    #[test]
+    fn two_instances_do_not_share_their_grant_snapshots() {
+        let a = bind_instance_with_policy("u09_a", false, None, engine("u09_a", &["uk_version"]));
+        let b =
+            bind_instance_with_policy("u09_b", false, None, engine("u09_b", &["uk_model_free"]));
+        assert!(check_instance_call(&a, "uk_version").is_ok());
+        let err = check_instance_call(&a, "uk_model_free").expect_err("A cannot use B's grant");
+        assert!(err.contains("UK-4001"), "{err}");
+        assert!(check_instance_call(&b, "uk_model_free").is_ok());
+        let err = check_instance_call(&b, "uk_version").expect_err("B cannot use A's grant");
+        assert!(err.contains("UK-4001"), "{err}");
+    }
+
+    #[test]
+    fn a_user_delegator_is_recorded_without_becoming_the_grant_principal() {
+        let context = bind_instance_with_identity(
+            "u09_user",
+            false,
+            Some("did:unfer:alice".to_string()),
+            None,
+            engine("u09_user", &["uk_version"]),
+        );
+        assert_eq!(context.module, "u09_user");
+        assert_eq!(context.delegator.as_deref(), Some("did:unfer:alice"));
+        assert!(
+            context.label().contains("for did:unfer:alice"),
+            "{}",
+            context.label()
+        );
+        // The grant is the module's, not the user's; naming alice neither adds
+        // nor moves a permission.
+        assert!(check_instance_call(&context, "uk_version").is_ok());
+        assert!(check_instance_call(&context, "uk_model_free").is_err());
+    }
+
+    #[test]
+    fn a_narrowed_reload_does_not_inherit_the_old_grants() {
+        let broad = bind_instance_with_policy(
+            "u09_narrow",
+            false,
+            None,
+            engine("u09_narrow", &["uk_version", "uk_model_free"]),
+        );
+        assert!(check_instance_call(&broad, "uk_model_free").is_ok());
+
+        let narrow = rebind_instance_with_policy(
+            &broad,
+            "u09_narrow",
+            Some(engine("u09_narrow", &["uk_version"])),
+        );
+        assert!(check_instance_call(&narrow, "uk_version").is_ok());
+        let err = check_instance_call(&narrow, "uk_model_free")
+            .expect_err("the narrowed snapshot must not retain the earlier grant");
+        assert!(err.contains("UK-4001"), "{err}");
+        assert!(
+            check_instance_call(&broad, "uk_model_free").is_err(),
+            "the replaced instance is no longer live"
+        );
     }
 }

@@ -13,8 +13,7 @@
 //! declares the same table (one `-- op 0x.. name` line per entry) and the census
 //! checks that too, so the artifact cannot silently cover less than the decoder.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::cell::Cell;
 
 /// One instruction of the emitted subset.
 #[derive(Debug, Clone, Copy)]
@@ -203,35 +202,39 @@ pub fn parse_mm0_table(text: &str) -> Result<Vec<(u8, String)>, String> {
     Ok(out)
 }
 
-/// Opcodes consumed since the last [`clear`], as a 64-bit set (opcodes < 64).
-static SEEN: Mutex<u64> = Mutex::new(0);
-/// How many opcode reads happened at all, so "the census ran on a module" is
-/// distinguishable from "the census ran on nothing".
-static READS: AtomicU64 = AtomicU64::new(0);
+// The recording is **thread-local**, not process-global. A census is one module
+// compiled on one thread (`clear`, compile, `snapshot`), so per-thread state is
+// what the measurement means; a global set made the unit test below read another
+// test's compiles, because `cargo test` runs the lib's tests on parallel threads
+// and several of them compile modules (measured 2026-11-24: `reads == 3` failed
+// at `afc4e7e0` for exactly that reason, with no cache or workflow involvement).
+thread_local! {
+    /// Opcodes consumed since the last [`clear`], as a 64-bit set (opcodes < 64).
+    static SEEN: Cell<u64> = const { Cell::new(0) };
+    /// How many opcode reads happened at all, so "the census ran on a module" is
+    /// distinguishable from "the census ran on nothing".
+    static READS: Cell<u64> = const { Cell::new(0) };
+}
 
 /// Record that `opcode` was consumed. Called by `cps.rs` at each opcode read.
 pub fn note(opcode: u8) {
     if opcode < 64 {
-        if let Ok(mut set) = SEEN.lock() {
-            *set |= 1u64 << opcode;
-        }
+        SEEN.with(|set| set.set(set.get() | (1u64 << opcode)));
     }
-    READS.fetch_add(1, Ordering::Relaxed);
+    READS.with(|reads| reads.set(reads.get() + 1));
 }
 
 /// Clear the recording (before compiling the module under observation).
 pub fn clear() {
-    if let Ok(mut set) = SEEN.lock() {
-        *set = 0;
-    }
-    READS.store(0, Ordering::Relaxed);
+    SEEN.with(|set| set.set(0));
+    READS.with(|reads| reads.set(0));
 }
 
 /// The opcodes recorded, ascending, with how many opcode reads happened.
 pub fn snapshot() -> (Vec<u8>, u64) {
-    let set = SEEN.lock().map(|s| *s).unwrap_or(0);
+    let set = SEEN.with(|set| set.get());
     let hits: Vec<u8> = (0u8..64).filter(|b| set & (1u64 << b) != 0).collect();
-    (hits, READS.load(Ordering::Relaxed))
+    (hits, READS.with(|reads| reads.get()))
 }
 
 #[cfg(test)]
