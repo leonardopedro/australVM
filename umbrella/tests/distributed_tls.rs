@@ -18,8 +18,8 @@ use austral_cranelift_bridge::distributed::{
     au_dist_open_request, au_dist_receipt_code, au_dist_receipt_release, au_dist_release_resource,
     au_dist_reset, au_dist_respond, au_dist_retire, au_dist_retry, au_dist_submit,
     au_dist_token_wire, au_dist_wait, set_transport, Authority, Operation, Transport,
-    RESULT_APPLIED, STATUS_ALREADY_SENT, STATUS_DUPLICATE, STATUS_NO_REQUEST, STATUS_NO_TOKEN,
-    STATUS_RETIRED_EPOCH, STATUS_STALE_RESOURCE,
+    RESULT_APPLIED, STATUS_ALREADY_SENT, STATUS_CAPACITY, STATUS_DUPLICATE, STATUS_NO_REQUEST,
+    STATUS_NO_TOKEN, STATUS_RETIRED_EPOCH, STATUS_STALE_RESOURCE,
 };
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
@@ -290,7 +290,12 @@ fn d17_tls_server_child() {
     let connection = ServerConnection::new(Arc::new(config)).expect("server connection");
     let mut stream = StreamOwned::new(connection, socket);
 
-    let mut authority = Authority::default();
+    let mut authority = match std::env::var("D17_TLS_REQUEST_ID_LIMIT") {
+        Ok(limit) => {
+            Authority::with_request_id_limit(limit.parse().expect("numeric request limit"))
+        }
+        Err(_) => Authority::default(),
+    };
     loop {
         let mut frame = [0u8; FRAME];
         let mut filled = 0;
@@ -355,6 +360,7 @@ fn the_d17_wrappers_run_over_a_live_two_process_mutual_tls_transport() {
         .arg("--nocapture")
         .env("D17_TLS_SERVER", "1")
         .env("D17_TLS_DIR", &dir)
+        .env("D17_TLS_REQUEST_ID_LIMIT", "2")
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
@@ -470,6 +476,24 @@ fn the_d17_wrappers_run_over_a_live_two_process_mutual_tls_transport() {
     assert!(fresh > 0);
     assert_eq!(au_dist_authorize(fresh, 103), 0);
     assert_eq!(au_dist_release_resource(103), 0);
+
+    // The child's request-id cap is lowered to 2 for the harness, so the same
+    // capacity refusal is observable over TLS without 65k round trips.
+    assert_eq!(au_dist_introduce(104, 202, 303, 1), 104);
+    for id in 1..=2 {
+        let token = au_dist_issue_token(104, 303, 202, 1);
+        assert!(au_dist_open_request(token, id, 11) > 0);
+    }
+    let token = au_dist_issue_token(104, 303, 202, 1);
+    assert_eq!(au_dist_open_request(token, 3, 11), STATUS_CAPACITY);
+    assert_eq!(au_dist_release_resource(104), 0);
+    assert_eq!(au_dist_introduce(104, 202, 303, 1), 104);
+    let token = au_dist_issue_token(104, 303, 202, 1);
+    assert!(
+        au_dist_open_request(token, 3, 11) > 0,
+        "release frees the cap"
+    );
+    assert_eq!(au_dist_release_resource(104), 0);
 
     set_transport(None);
     wait_for_child(&mut child);
