@@ -252,7 +252,7 @@ def unify(pattern, actual, subst) -> bool:
     nothing is instantiated up front. That is what made the walk scale: eagerly
     substituting into a goal at each proof node rebuilt and re-scanned the whole
     term at every node, and on a 123 MB derivation the first 60 nodes took 96 s,
-    75 s of it deciding var-freeness of terms it had just rebuilt (§13.62). Terms
+    75 s of it deciding var-freeness of terms it had just rebuilt (§13.63). Terms
     here are compared by reference, so a goal that a rule does not look into
     costs nothing.
     """
@@ -330,7 +330,7 @@ _VARLESS_MAX = 1 << 20
 # verdict holds for the rest of the run and the pair can be answered by one dict
 # lookup instead of a walk. Without it the same pair is re-walked hundreds of
 # times: on the 123 MB derivation node 70 001 alone was 67 M unifications over
-# 1.45 M distinct pairs, each pair repeated ~29 times (§13.62).
+# 1.45 M distinct pairs, each pair repeated ~29 times (§13.63).
 _PAIRS: dict[tuple[int, int], tuple] = {}
 _PAIRS_MAX = 1 << 20
 
@@ -394,7 +394,7 @@ def instantiate(t, subst):
     is shared too.
 
     Nothing on the checking path calls this any more — `unify` resolves variables
-    as it walks (§13.62) — so it is now only used to build the terms a *failure*
+    as it walks (§13.63) — so it is now only used to build the terms a *failure*
     is reported with, where cost does not matter.
     """
     if isinstance(t, str):
