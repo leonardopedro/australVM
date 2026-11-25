@@ -5859,29 +5859,39 @@ Run over the full namespace against a copy of the live ledger `--rekey`ed first,
 legacy rows carry band digests (1 196 rows, 1 172 distinct statements, 0 missing their retained
 statement), ten declarations at a time in a 16 GB cgroup: **1 h 27 min 38 s wall, 13 h 12 min 57 s
 CPU, 2.0 GB peak**. The 8.5 s per declaration of `§13.62e` is CPU, so the serial estimate of 9.4 h
-was the shape of the work rather than its wall clock.
+was the shape of the work rather than its wall clock. The second run below took **74 min 32 s wall
+for 12 h 8 min CPU**.
 
-| verdict | declarations |
-| --- | --- |
-| same statement, under the declaration's own name | **1 196** |
-| same statement, under another declaration | **7** |
-| digest the ledger has no row for | 2 762 |
-| no digest produced | 10 |
-| row exists, statement differs | **0** |
+| verdict | ledger at 1 196 rows (15:20) | ledger at 1 389 rows (16:36) |
+| --- | --- | --- |
+| same statement, under the declaration's own name | **1 196** | **1 389** |
+| same statement, under another declaration | **7** | **9** |
+| digest the ledger has no row for | 2 762 | 2 567 |
+| no digest produced | 10 | 10 |
+| row exists, statement differs | **0** | **0** |
 
-**1 203 of 3 975 (30.3 %) match by statement.** The 1 196 are exactly the ledger's rows, each
-re-identified from the export alone; the other 7 are the re-export path doing what it was keyed
-for — a statement carried over because the bytes agree, not the names. They are the
+**1 203 of 3 975 (30.3 %) match by statement** at the snapshot, and **1 398 (35.2 %)** on the
+ledger the sweep stopped with. In both runs the first row is *exactly* the ledger's row count:
+every row is re-identified from the export alone, and the second row is the re-export path doing
+what it was keyed for — a statement carried over because the bytes agree, not the names, 9 in the
+later run rather than 7 because the ledger had grown. They are the
 `_auto_1`/`_sparseCasesOn_1`/`match_1` helpers, and they collapse onto three statements:
 `.coverTo_addLfp._auto_1` and `.denote_pinned_const._auto_1` both match
 `EnvModel.acval_pinned._auto_1`; `.openLamsM._sparseCasesOn_1`, `.piCount._sparseCasesOn_1` and
 `.piTail._sparseCasesOn_1` all match `PiConcl._sparseCasesOn_1`; `.piCount.match_1` and
-`.piTail.match_1` both match `Rules.PiChain.match_1`. Not one of the 1 196 rows is contradicted by the
-export it came from, which is the result the two `§13.62e` fixes were for.
+`.piTail.match_1` both match `Rules.PiChain.match_1`. Not one row is contradicted by the export it
+came from, in either run (0 of 1 196, 0 of 1 389), which is the result the two `§13.62e` fixes were
+for.
 
-The 2 762 are the sweep's unverified remainder at the snapshot (the ledger was copied at 15:20 with
-1 196 of 3 975), not disagreements; the same audit is wired to run again over the finished ledger
-when the sweep exits.
+The 2 762 and 2 567 are the sweep's unverified remainder, not disagreements — the namespace was
+still being swept when the first run went out, and the second column is the ledger it stopped with.
+That stop was not a clean one: at 16:35:04, after 3 h 51 min, the kernel OOM killer took processes
+in the sweep's own cgroup, `.TgtNodePres.kit` the last declaration on its log. The audit was sharing
+the host at the time (its own peak was 2.0 GB) and no per-process attribution survives, so the
+honest record is that two memory-hungry jobs ran together and one was killed. The sweep was
+restarted under a 22 GB `MemoryMax` and 4 GB of swap and resumed from the 1 389-row ledger as `memo`
+hits; the `--rekey` that preceded the second audit recomputed the same 475 legacy keys over those
+1 389 rows (1 365 distinct statements, 0 missing their retained statement).
 
 The 10 with no digest are not budget-limited. A second run of just those at
 `SCAN_EMIT_TIMEOUT=1800` — 7.5× the bound that reported them — fails identically in under two
@@ -5891,6 +5901,8 @@ nested bodies of `.eqRecFit`, `.eqRecLaw`, `.genFit1_core`, `.genIhFree_run`, `.
 `.genRule_residue`, `.quotIndFit`, `.quotIndLaw`, `.quotLiftFit` and `.quotLiftLaw`. That is depth,
 not time or memory, and it is the next thing the digest path needs.
 
-One more reason the table's first row is the row count while the statement index holds 1 172 keys:
-24 rows are byte-identical to another row's statement (`.CtxOkP.forallE_body` and
-`.CtxOkS.forallE_body`, their `_ty` companions, …).
+One more number to keep straight: the ledger's rows outnumber its distinct statements — 1 196 against
+1 172 at the snapshot, 1 389 against 1 365 later — because 24 rows are byte-identical to another
+row's statement (`.CtxOkP.forallE_body` and `.CtxOkS.forallE_body`, their `_ty` companions, …). That
+is also why the per-declaration log lists a few of a declaration's own rows under a twin's name:
+the index keeps a list per digest and the audit reports the first entry.
