@@ -73,6 +73,11 @@ let emit_derivations_path = ref (None: string option)
    linearity ledger and writes it as JSON. Off by default; when off the
    checker's hooks are no-ops and no ledger state is allocated. *)
 let emit_linearity_ledger_path = ref (None: string option)
+(* D18: `--liquid-required` makes the module manifest's required posture a
+   compiler input instead of an environment variable the caller may forget.
+   The ref is owned by `Compiler_plugin` so the liquid library can read it
+   without a dependency cycle on this module. *)
+let liquid_required = Compiler_plugin.liquid_required
 let jit_functions : (string, int64) Hashtbl.t = Hashtbl.create 16
 
 (* The binary most recently swapped into the JIT (set only on a successful

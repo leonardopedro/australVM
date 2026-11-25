@@ -359,12 +359,14 @@ let check (m : typed_module) : Compiler_plugin.verdict =
   | Some msg -> Compiler_plugin.VerdictReject msg
   | None ->
   dump m;
-  (* L5: hand the module to the Why3 driver when asked. Off unless
-     AUSTRAL_LIQUID_VERIFY is set, so the default build needs no prover. *)
+  (* L5/D18: hand the module to the Why3 driver when asked. `--liquid-required`
+     is itself a request, so a required manifest cannot skip the prover just
+     because AUSTRAL_LIQUID_VERIFY is absent. The default build stays
+     prover-free. *)
   let prove_verdict =
-    match Sys.getenv_opt "AUSTRAL_LIQUID_VERIFY" with
-    | None -> None
-    | Some _ -> LiquidWhy3.verify m
+    if !Compiler_plugin.liquid_required || Sys.getenv_opt "AUSTRAL_LIQUID_VERIFY" <> None
+    then LiquidWhy3.verify m
+    else None
   in
   (* L11d.2: the split lane's verdict is reported but never upgrades the MM0
      artifact — they are different claims over different vocabularies. Only a

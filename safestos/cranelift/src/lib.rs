@@ -32,6 +32,7 @@ pub mod policy;
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
 pub mod tidepool_mod;
+pub mod verification;
 
 #[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;

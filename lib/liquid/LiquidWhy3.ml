@@ -42,14 +42,16 @@ let why3_cli () : string =
   | Some c when c <> "" -> c
   | _ -> "why3"
 
-(** Is liquid checking required for this compilation? The module manifest is
-    not yet threaded into the compiler (that is L8), so the decision comes
-    from the environment for now; L8 replaces this with the `module.toml` read.
-    Absent means optional, which is why a missing engine is only a skip. *)
+(** Is liquid checking required for this compilation?
+
+    D18 makes the required posture a compiler input (`--liquid-required`) so a
+    caller cannot carry a manifest requirement that the compiler never sees.
+    The environment variable remains supported for existing drivers. *)
 let required () : bool =
-  match Sys.getenv_opt "AUSTRAL_LIQUID_REQUIRED" with
-  | Some ("1" | "true" | "required") -> true
-  | _ -> false
+  !Compiler_plugin.liquid_required
+  || (match Sys.getenv_opt "AUSTRAL_LIQUID_REQUIRED" with
+      | Some ("1" | "true" | "required") -> true
+      | _ -> false)
 
 (* ── goal bookkeeping ────────────────────────────────────────────────────── *)
 
@@ -190,12 +192,18 @@ let verdict ~(where_ : string) (o : outcome) : Compiler_plugin.verdict =
        Compiler_plugin.VerdictReject
          (Printf.sprintf
             "liquid: %s, and the module requires liquid checking \
-             (AUSTRAL_LIQUID_REQUIRED); install Why3 or unset the requirement"
+             (--liquid-required or AUSTRAL_LIQUID_REQUIRED); install Why3 or \
+             unset the requirement"
             msg)
-     else
+     else begin
        (* Structured skip: report it, do not fail the build, and do not pretend
-          the contracts were discharged. *)
+          the contracts were discharged. D18 makes the gap visible so an
+          optional profile is not silently indistinguishable from a proved
+          one. *)
+       Printf.eprintf "liquid: [gap] %s; optional mode continues without a \
+                       verdict\n%!" msg;
        Compiler_plugin.VerdictOk
+     end
 
 (* ── the `liquid.ok` sidecar (L8) ────────────────────────────────────────── *)
 

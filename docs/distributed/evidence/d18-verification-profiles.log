@@ -1,0 +1,55 @@
+# D18 verification profiles — measured 2026-11-25T11:32:36Z
+
+## scripts/check-verification-profile
+check-verification-profile: compiler required mode fails closed (missing and refused prover)
+check-verification-profile: optional mode reports the prover gap
+check-verification-profile: evidence gate accepts the complete profile and refuses every mutation
+check-verification-profile: strict profile refuses stub ids, non-crypto artifacts, AllowAll and LocalConsensus
+exit=0
+
+## cargo test verification/distributed/federation
+running 10 tests
+test verification::tests::an_incomplete_transition_cover_is_refused ... ok
+test verification::tests::a_complete_strict_profile_accepts_complete_evidence ... ok
+test verification::tests::cryptographic_ids_are_sha256_sized ... ok
+test verification::tests::legacy_liquid_only_keeps_its_old_gate ... ok
+test verification::tests::distributed_requires_strict_liquid_totality_and_identity ... ok
+test verification::tests::missing_evidence_fails_required_and_gaps_optional ... ok
+test verification::tests::strict_distributed_refuses_stub_ids_allow_all_and_local_consensus ... ok
+test verification::tests::unknown_verify_keys_are_refused ... ok
+test verification::tests::versioned_fields_require_a_version ... ok
+test verification::tests::stale_protocol_schema_and_proof_tier_are_refused ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.03s
+running 10 tests
+test distributed::tests::bounded_counters_refuse_overflow_and_capacity ... ok
+test distributed::tests::a_mismatched_digest_rejects_and_preserves_the_held_digest ... ok
+test distributed::tests::forged_handles_are_refused ... ok
+test distributed::tests::non_positive_identities_and_digests_are_refused ... ok
+test distributed::tests::replayed_wire_token_cannot_create_a_second_owner ... ok
+test distributed::tests::retired_epoch_is_refused ... ok
+test distributed::tests::request_transport_uses_a_fence_and_the_dispatch_protocol ... ok
+test distributed::tests::retry_reuses_the_identity_and_fence ... ok
+test distributed::tests::wrong_deployment_is_refused ... ok
+test distributed::tests::wrong_owner_is_refused ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.00s
+running 3 tests
+test federation::tests::strict_mode_refuses_local_consensus ... ok
+test federation::tests::the_non_federated_identity_is_labelled_a_stub ... ok
+test federation::tests::artifact_ids_are_cryptographic ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.00s
+
+## dune build + focused CLI tests
+warning: Git tree '/home/leo/Projects/australVM' is dirty
+dune_exit=0
+warning: Git tree '/home/leo/Projects/australVM' is dirty
+....
+Ran: 4 tests in: 0.11 seconds.
+OK
+....ERROR Sys_error("/nonexistent/mod.aum: No such file or directory")
+ERROR unknown command
+ERROR unknown function 'missing_fn'
+ERROR unknown command
+....
+Ran: 8 tests in: 0.13 seconds.
+OK
+cli_exit=0
