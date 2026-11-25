@@ -5537,3 +5537,86 @@ prefix. On the 167 MB Sirk derivation the fixed checker runs past a 10-minute ti
 to exit in seconds by failing at node 40, so this is the tool meeting the whole proof for the
 first time, not a regression in it. That cost is the honest state of it: the attribution is
 complete at hundreds of kilobytes and unfinished at 167 MB.
+
+### 13.62 A second corpus: the con-leche capstone, exported and verified in MM0
+
+Every corpus row so far was a `BookProof.*` chapter. The translation was asked for on a
+different project — the consistency proof of a checker in `../con-leche` — and it turned out
+to need nothing new from the toolchain beyond a toolchain: the export was the only thing
+missing.
+
+**The declaration.** `ConLeche.Model.no_proof_of_Empty_pure`
+(`../con-leche/ConLeche/Model/Fold.lean:548`, the capstone frozen in
+`Model/Capstone.lean`'s docstring): *the checker, running in a validating mode, never accepts
+a declaration stream in which some stored constant has type `Empty`.* Ten binders, hypotheses
+input-level only (the accepted run, the stored constant, its type), plus the `SetTheory V`
+parametricity. Its proof term is the λ that hands off to `no_proof_of_Empty_pure_of`.
+
+**The export did not exist, and could not be made with what the host had.** No `lean`, `lake`
+or `elan` on `PATH`; nixpkgs carries Lean **4.35.0** (`nix eval nixpkgs#lean4.version`) and no
+`lean4export` attribute at all, while the project pins `leanprover/lean4:v4.36.0`. So the
+toolchain went into the project's own gitignored state, not into `$HOME`: `elan`'s
+`elan-init` under `../con-leche/_out/elan`, toolchain `v4.36.0` installed there, and
+`lean4export` built from source at tag `v4.36.0-rc1` (the only 4.36 tag; it writes the same
+`3.1.0` NDJSON format the corpus fixtures use) against that toolchain. `lake` reports
+`5.0.0-src+611c117`, and `lake build ConLeche.Model.Fold:olean` completed all **1 106
+modules** of the package's dependency cone — the package has no dependencies of its own
+(`lakefile.lean`: "NO DEPENDENCIES"), so this is 311 k lines of Lean and nothing else.
+
+**The export.** `lake env lean4export ConLeche.Model.Fold -- ConLeche.Model.no_proof_of_Empty_pure`:
+
+| quantity | measured |
+| --- | ---: |
+| NDJSON | 507 370 115 B |
+| wall / peak RSS | 25.8 s / 1.80 GiB |
+| declarations in the closure | 27 748 |
+| of which `thm` / `def` / `induct` / `axiom` | 16 287 / 11 449 / 796 / 3 |
+
+The root narrows nothing about the payload, exactly as the `lean4export Mod -- roots` trap
+says: 27 747 of those declarations are the capstone's dependency closure (Lean core, the
+`Kernel`/`SetTheory` base, and the whole `Model` tier). The capstone is the *last* row.
+
+**The translation.** `scripts/lean-proof-scan` in spine mode — every application derived by
+`ty_app`, every λ by `ty_abs`, leaf typings assumed and counted — then both checkers:
+
+| declaration | rules applied | assumptions | verdict |
+| --- | ---: | ---: | --- |
+| `ConLeche.Model.no_proof_of_Empty_pure` | 35 | 15 | 2/2 verified |
+| `ConLeche.Model.no_proof_of_Empty_pure_of` | 65 | 36 | (same run) |
+
+The assembled artifact (`docs/cic.mm0` + `docs/cic_typing.mm0` prepended to the derivation —
+`lean-proof-scan` is what does that, the emitter writes the derivation alone):
+
+| file | bytes | checker verdict |
+| --- | ---: | --- |
+| `full.mm0` | 46 654 | `mm0-rs compile full.mm1` → 3 sorts, 66 term/def, 37 ax/thm, exit 0 |
+| `full.mm1` | 47 568 | elaborated without `sorry` |
+| `full.mmb` | 21 560 | `mm0-c full.mmb < full.mm0` → exit 0 |
+
+**The emitter defect the capstone found.** The root is named on the command line, and
+`scripts/lean-typing-proof` resolved that argument as a *substring* in declaration order. The
+capstone's name is a prefix of its own milestone (`…_pure` vs `…_pure_of`), and the milestone
+is exported first, so `…_pure` silently emitted the milestone's derivation (11 rules, body
+typing assumed) instead of the capstone's (35 rules, spine). An exact name now wins over a
+substring and anything else resolves as before — `scripts/check-lean-typing-proof` re-ran to
+all 12 golden artifacts across 4 modes, unchanged.
+
+**What this is and is not.** What `mm0-c` accepted is the *typing derivation* of the proof
+term in `cic_typing.mm0`'s judgment `tty ctx term type`: the proof term was taken apart into
+λ-abstractions and applications and each step rebuilt as a rule application. It is not a
+term-level proof of the theorem's mathematical content, and the 15 leaf assumptions are the
+typings of the constants and binders the term reaches, because the theory has no
+definitional-equality checker. The closure's other 27 746 declarations are not translated —
+only the corollary's own spine was; a namespace-wide scan is the next measurement, not a
+claim here.
+
+```sh
+# toolchain, in the target project's gitignored state
+ELAN_HOME=../con-leche/_out/elan PATH=$PWD/_out/elan/bin:$PATH
+lake build ConLeche.Model.Fold:olean
+lake env _out/l4e/.lake/build/bin/lean4export ConLeche.Model.Fold -- \
+  ConLeche.Model.no_proof_of_Empty_pure > _out/capstone.ndjson
+# translation + both checkers
+python3 scripts/lean-proof-scan ../con-leche/_out/capstone.ndjson \
+  ConLeche.Model.no_proof_of_Empty_pure <work-dir>
+```

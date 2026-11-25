@@ -21,16 +21,23 @@
 //! code inside it, and it is not a substitute for the separate untrusted-native
 //! tier.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+use crate::frontend::Export;
 use crate::project::Project;
+
+/// SHA-256 of bytes, lowercase hex.
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
 
 /// SHA-256 of a file, lowercase hex.
 pub fn sha256_file(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    Ok(hex(&Sha256::digest(&bytes)))
+    Ok(sha256_bytes(&bytes))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -180,6 +187,103 @@ pub fn verify_before_load(project: &Project, library: &Path) -> Result<(), Strin
     }
 }
 
+/// U10: the compile-only artifact's emitted adapter document must be the pinned
+/// contract. This runs after the front-end and *before* any wrapper is built or
+/// loaded, so a changed descriptor cannot reach native code. An absent pin is
+/// not a refusal: a project that does not pin a descriptor has not made that
+/// claim, while a pin that differs is always a refusal.
+pub fn verify_descriptor(project: &Project, document: &[u8]) -> Result<(), String> {
+    let Some(expected) = project
+        .trusted
+        .as_ref()
+        .and_then(|trusted| trusted.descriptor_sha256.as_deref())
+    else {
+        return Ok(());
+    };
+    let actual = sha256_bytes(document);
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "trusted descriptor refused: the compiler emitted sha256 {actual}, the project \
+             pins {expected}. Refusing to build native adapters from a contract that is \
+             not the approved one."
+        ));
+    }
+    Ok(())
+}
+
+/// U10: admit exactly the typed signatures the project pinned. A pin is an exact
+/// set comparison: a missing, extra, renamed or retyped export is a different
+/// contract, even when the export name alone still matches.
+pub fn verify_signatures(project: &Project, actual: &[Export]) -> Result<(), String> {
+    let Some(expected) = project
+        .trusted
+        .as_ref()
+        .filter(|trusted| !trusted.signatures.is_empty())
+        .map(|trusted| &trusted.signatures)
+    else {
+        return Ok(());
+    };
+
+    let expected: BTreeMap<&str, (&[String], &str)> = expected
+        .iter()
+        .map(|s| (s.name.as_str(), (s.params.as_slice(), s.returns.as_str())))
+        .collect();
+    let actual: BTreeMap<&str, (&[String], &str)> = actual
+        .iter()
+        .map(|s| (s.name.as_str(), (s.params.as_slice(), s.returns.as_str())))
+        .collect();
+
+    let missing: Vec<&str> = expected
+        .keys()
+        .filter(|name| !actual.contains_key(*name))
+        .copied()
+        .collect();
+    let unexpected: Vec<&str> = actual
+        .keys()
+        .filter(|name| !expected.contains_key(*name))
+        .copied()
+        .collect();
+    let changed: Vec<&str> = expected
+        .iter()
+        .filter_map(|(name, want)| actual.get(name).filter(|got| *got != want).map(|_| *name))
+        .collect();
+
+    if missing.is_empty() && unexpected.is_empty() && changed.is_empty() {
+        return Ok(());
+    }
+
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!("missing {missing:?}"));
+    }
+    if !unexpected.is_empty() {
+        parts.push(format!("unexpected {unexpected:?}"));
+    }
+    for name in changed {
+        let (want_params, want_returns) = expected[name];
+        let (got_params, got_returns) = actual[name];
+        parts.push(format!(
+            "`{name}` pinned {want_params:?} -> {want_returns}, artifact has \
+             {got_params:?} -> {got_returns}"
+        ));
+    }
+    Err(format!(
+        "trusted signatures refused: the artifact's typed exports do not match the \
+         project pin ({})",
+        parts.join("; ")
+    ))
+}
+
+/// Both U10 artifact pins, before descriptor-driven native work.
+pub fn verify_artifact(
+    project: &Project,
+    exports: &[Export],
+    descriptor_document: &[u8],
+) -> Result<(), String> {
+    verify_signatures(project, exports)?;
+    verify_descriptor(project, descriptor_document)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +346,8 @@ mod tests {
         ));
         verify_before_build(&project, &dir).expect("the pinned features");
         project.requested_features = vec!["fast".into(), "extra".into()];
-        let err = verify_before_build(&project, &dir).expect_err("an added feature must be refused");
+        let err =
+            verify_before_build(&project, &dir).expect_err("an added feature must be refused");
         assert!(err.contains("features"), "{err}");
         assert!(err.contains("extra"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -307,6 +412,62 @@ mod tests {
         assert!(err.contains("trusted load refused"), "{err}");
         assert!(err.contains("sha256"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_changed_typed_signature_is_refused() {
+        let project = project_with(&format!(
+            r#"{{"lock_sha256":"{}","features":[],"library_sha256":"{}","exports":["rs_demo"], "signatures":[{{"name":"main","params":[],"returns":"Int64"}}]}}"#,
+            "0".repeat(64),
+            "0".repeat(64)
+        ));
+        let admitted = Export {
+            name: "main".to_string(),
+            params: Vec::new(),
+            returns: "Int64".to_string(),
+        };
+        verify_signatures(&project, std::slice::from_ref(&admitted)).expect("the pinned signature");
+
+        let retyped = Export {
+            returns: "Int32".to_string(),
+            ..admitted.clone()
+        };
+        let err = verify_signatures(&project, &[retyped]).expect_err("a retyped export");
+        assert!(err.contains("trusted signatures refused"), "{err}");
+        assert!(err.contains("`main` pinned"), "{err}");
+        assert!(err.contains("Int32"), "{err}");
+
+        let extra_param = Export {
+            params: vec!["Int64".to_string()],
+            ..admitted.clone()
+        };
+        let err = verify_signatures(&project, &[extra_param]).expect_err("a changed arity");
+        assert!(err.contains("`main` pinned"), "{err}");
+
+        let renamed = Export {
+            name: "entry".to_string(),
+            ..admitted
+        };
+        let err = verify_signatures(&project, &[renamed]).expect_err("a renamed export");
+        assert!(err.contains("missing [\"main\"]"), "{err}");
+        assert!(err.contains("unexpected [\"entry\"]"), "{err}");
+    }
+
+    #[test]
+    fn a_changed_adapter_descriptor_is_refused_before_it_is_used() {
+        let document =
+            "schema 1\nabi scalar 1\nsymbol f__adapter\ntarget f\nparams \nreturns Int64\n";
+        let digest = sha256_bytes(document.as_bytes());
+        let project = project_with(&format!(
+            r#"{{"lock_sha256":"{}","features":[],"library_sha256":"{}","exports":["rs_demo"], "descriptor_sha256":"{digest}"}}"#,
+            "0".repeat(64),
+            "0".repeat(64)
+        ));
+        verify_descriptor(&project, document.as_bytes()).expect("the pinned document");
+        let err = verify_descriptor(&project, document.replace("Int64", "Int32").as_bytes())
+            .expect_err("a changed contract");
+        assert!(err.contains("trusted descriptor refused"), "{err}");
+        assert!(err.contains(&digest), "the refusal names the pin: {err}");
     }
 
     #[test]

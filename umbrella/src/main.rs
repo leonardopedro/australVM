@@ -542,8 +542,12 @@ fn main() {
     for export in artifacts.iter().flat_map(|a| a.exports.iter()) {
         exports_by_name.insert(export.name.clone(), export);
     }
-    let exports: Vec<serde_json::Value> = exports_by_name
+    let typed_exports: Vec<frontend::Export> = exports_by_name
         .values()
+        .map(|export| (*export).clone())
+        .collect();
+    let exports: Vec<serde_json::Value> = typed_exports
+        .iter()
         .map(|export| {
             serde_json::json!({
                 "name": export.name,
@@ -552,11 +556,51 @@ fn main() {
             })
         })
         .collect();
+    // The descriptor document is the contract the compiler emitted, so the
+    // event carries both the digest a project can pin and each block's
+    // canonical text. U10 checks the pin before any wrapper is generated.
+    let descriptor_document = artifacts
+        .last()
+        .map(|a| a.adapters.clone())
+        .unwrap_or_default();
+    let descriptors: Vec<serde_json::Value> = scalars
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "kind": "scalar",
+                "symbol": a.symbol,
+                "descriptor": a.descriptor_text(),
+            })
+        })
+        .chain(buffers.iter().map(|a| {
+            serde_json::json!({
+                "kind": "buffer",
+                "symbol": a.symbol,
+                "descriptor": a.descriptor_text(),
+            })
+        }))
+        .chain(handles.iter().map(|a| {
+            serde_json::json!({
+                "kind": "handle",
+                "symbol": a.symbol,
+                "descriptor": a.descriptor_text(),
+            })
+        }))
+        .collect();
+    let descriptors_sha256 = trust::sha256_bytes(descriptor_document.as_bytes());
+    if let Some((doc, _)) = &planned {
+        if let Err(e) = trust::verify_artifact(doc, &typed_exports, descriptor_document.as_bytes())
+        {
+            die(e);
+        }
+    }
     event(serde_json::json!({
         "event": "artifact",
         "modules": artifacts.iter().map(|a| a.modules.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()).collect::<Vec<_>>(),
         "module_names": module_names,
         "exports": exports,
+        "adapters": descriptors,
+        "adapters_sha256": descriptors_sha256,
         "functions": functions,
         "cps_bytes": cps_bytes,
         "cps_sha256": cps_sha256,
