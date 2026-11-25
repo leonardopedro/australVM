@@ -5769,10 +5769,10 @@ peak RSS**. The artifacts `swapP` leaves are 938 390 099 bytes of `.mm0`, 1 002 
 5.5 GB artifact in five to fifteen minutes, not a process that fails to finish.
 
 So the answer is the opposite of the row's: 240 s was the limit, at 1.1× for `swapP` and 3.7× for
-`swapTyP`, and the declarations are *large but emittable*. What stops them now is the second
-bound — `mm0-rs` at 10 GiB — which this pass did not raise, so it says nothing about whether a
-bigger budget would close them. The sweep keeps them as failures, but the reason belongs to the
-checker's memory, and the `over 240 s` class it currently records is a default rather than a size.
+`swapTyP`, and the declarations are *large but emittable*. What stops them is the second bound —
+`mm0-rs` at 10 GiB — which this pass did not raise; `§13.62f` raises it and answers that question
+(it does not close them). The sweep keeps them as failures, but the reason belongs to the checker's
+memory, and the `over 240 s` class it currently records is a default rather than a size.
 
 ### 13.62e The statement key did not line up: `--digest` and the ledger disagreed
 
@@ -5812,3 +5812,35 @@ What is *not* measured is the whole namespace: 3 975 declarations at ~8.5 s is �
 order as a fresh sweep, so the whole-namespace re-export run and the `--rekey` of the live ledger
 both wait for the sweep to finish — the ledger is being appended to, and `--rekey` rewrites it in
 one pass.
+
+### 13.62f The checker's budget raised to 24 GiB: `swapP` and `swapTyP` still do not close
+
+`§13.62d` left the two declarations failing on `mm0-rs: over 10 GiB` without moving that bound, so
+the next question is the obvious one: is 10 GiB the wall, or merely the first budget that happened
+to be set? Re-measured at three higher bounds, each in a cgroup of its own and with
+`SCAN_MM0_RS_TIMEOUT`/`--spine` unchanged unless stated.
+
+**16 GiB, full scan path** (`SCAN_EMIT_TIMEOUT=1800`, `SCAN_EMIT_MEM_GB=12`,
+`SCAN_MM0_RS_MEM_GB=16`, `SCAN_MM0_RS_TIMEOUT=1800`, `--only` + `--no-memo`): `swapP` rc=1 after
+339.5 s wall (peak RSS 16 753 120 KiB) and `swapTyP` after 863.3 s (peak 16 717 476 KiB), both
+`mm0-rs ✗ … over 16 GiB`. The emit is unchanged at ~275 s for `swapP`, so the checker spends about
+a minute climbing to the cap and then dies there — not a timeout at any bound.
+
+**24 GiB, checker only**, on the artifact pair the 16 GiB pass left behind (so the emit is not paid
+again): `full.mm1` 1 002 115 772 bytes for `swapP`, 1 470 648 668 for `swapTyP`. Both abort in
+`elab full.mm1` with "memory allocation of 112 bytes failed" (rc 134 = SIGABRT, the signal the scan
+already classifies) after **74 s at 23.1 GiB peak RSS** (`swapP`) and **56 s at 24.0 GiB**
+(`swapTyP`). More than doubling the default budget moves the failure by nothing except the number in
+the message.
+
+**26 GiB** was attempted and the cgroup OOM-killed it at 23.3 GB RSS + 1.4 GB swap peak (1 min
+16.7 s wall); on this 30 GB host the flag cannot be furnished, so the requirement itself is past
+what this machine can measure. The scaling is what the artifacts make obvious: 954 105 rules applied
+(`swapP`, 152 104 assumptions) and 1 536 069 (`swapTyP`, 229 859) against ~1.0 and ~1.5 GB of
+`.mm1` — the checker wants >24 GiB, more than 20× the bytes it reads, so neither the artifact nor
+the derivation is the problem, `mm0-rs`'s elaboration memory is.
+
+Conclusion: raising `SCAN_MM0_RS_MEM_GB` does **not** close these two. They stay in the sweep as
+memory-limited failures — now with a measured floor (`>24 GiB` at a 10^6-rule term) instead of a
+default — and the honest next step is not a bigger budget but a checker that does not need one
+(`mm0-c` reads the same derivation from a `.mmb`, and the `.mmb` cannot be built without `mm0-rs`).
