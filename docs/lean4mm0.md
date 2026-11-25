@@ -5632,8 +5632,10 @@ the obligation stream. Measured on the two capstone declarations: `scan/` went f
 the 46 654 B `full.mm0` alone, and the ledger costs 21 393 + 22 165 B of statement text and a
 12-column row per declaration.
 
-An entry is keyed on the export's sha256, the theory's bytes and the derivation mode, because
-those three are what the verdict was about: the same export rescanned — an interrupted sweep, a
+An entry is keyed on the export's sha256, the theory's bytes and the derivation mode — those
+three are what the verdict was about (§13.62b makes the statement's bytes the key that
+survives a re-export, keeping the export key as the free first lookup): the same export
+rescanned — an interrupted sweep, a
 `--only` subset followed by a whole-namespace one — is a hit, while a re-export, an edited
 `docs/cic*.mm0`, or a different mode is a miss by construction rather than by a guess at what
 "the same theorem" means. On a hit the scan emits nothing and runs neither checker; the rerun
@@ -5642,3 +5644,66 @@ the remaining 8.3 s being the export's index. `--no-memo` turns it off and `--ke
 keeps the derivation for reading. The statement file is a bare `.mm0` statement, so `mm0-rs`
 reports it as `sorry` — that is the honest reading of a proof that is not in the file, and the
 ledger row is what says the statement was derived.
+
+### 13.62b The ledger keyed on the statement, and adoption of a finished scan's artifacts
+
+§13.62a's key was the export's sha256, so a re-export of the same module invalidated every
+row: the theorems had not changed, the file had. The verdict was never about the file. It is
+about the *statement* — the goal band `theorem thm_X: $ tty ctx value type $` — so that is
+what the ledger now keys on, and the export key is kept only as the free first lookup.
+
+**Getting the statement without the proof.** The band is written by the emitter after the
+derivation, so hashing it from a fresh artifact means doing the work being avoided.
+`scripts/lean-typing-proof --digest` stops before the walk: it spools the type and value,
+builds the goal band's bytes in chunks, prints `sha256` and returns. It reproduces the
+artifact exactly — `--digest` on `ConLeche.Model.no_proof_of_Empty_pure` gives
+`b5df30c6d561…ef87e8d2`, byte-for-byte the sha256 of that artifact's band after its
+`-- ── the derivation ──` marker — and `scripts/check-lean-typing-proof` still reports all
+**12 artifacts across 4 modes unchanged**, so the new flag is inert for every existing output.
+
+**The lookup.** A scan tries the export key first (0.0 s, as before), and only if that misses
+*and* the declaration's name appears somewhere in the ledger does it spend a `--digest` run on
+the declaration. So a plain rerun of one export never pays for the mechanism, and a re-export
+pays for it once per declaration. Statements are reused only when their bytes are equal;
+nothing is inferred from the name. The theory's sha256 stays in the key — the same bytes mean
+different things in a different theory — while the *mode* no longer is, because whether a
+statement is true does not depend on how its proof was spelled; the row still records the mode
+that produced it.
+
+Measured on a re-export (the capstone export with one blank line prepended, so its sha256
+changes and every declaration's statement does not):
+
+| declaration | fresh derivation + both checkers | same statement, re-export |
+| --- | ---: | ---: |
+| `no_proof_of_Empty_pure` (35 rules) | 18.8 s scan / 27.9 s wall | 17.2 s scan / 26.5 s wall |
+| `CtxOkP.extend` (18 602 rules, 6 204 assumptions) | 45.1 s scan / 54.1 s wall | **8.9 s scan / 18.3 s wall** |
+
+The small pair barely moves: both sides are 8.3 s of export index per invocation, and at 35
+rules the derivation is not the cost. The 18 602-rule theorem is where the mechanism is worth
+its salt — 5.1× less scan time, with the remaining 8.9 s being that same index. That is the
+shape of the trade the user asked for: the lookup is paid per declaration, the derivation is
+saved per declaration, and only the second grows with the proof.
+
+**`--adopt=DIR`.** A ledger is more useful than the directory that produced it, and a
+finished scan's directory is not one: `full.mm0` is a statement with no proof. So `--adopt`
+re-checks each `full.mm0`/`full.mm1` pair under DIR with both checkers, registers the ones
+that still close under the statement digest (export column `-`: no export claims them), keeps
+the statement file, and discards the derivation exactly as a fresh pass does. Idempotent, and
+honest about what it cannot do: rerunning it on an already-discarded directory reports
+`0 registered, 0 already in the ledger, 2 skipped — no .mm1: its proof was discarded already`.
+Measured on the two capstone declarations: `2 registered … in 0.0 s` (both checkers on a
+35-rule artifact are sub-second), the directory left with `full.mm0` and the emitter's
+statement copy, and the scan that followed hit both declarations by statement digest with no
+emit and no checker run.
+
+Statement files are now content-addressed (`<work>.memo/stmt/<statement-sha12>/<name>.mm0`),
+so the same statement proved for two exports is one file. A retained statement still compiles
+as an `.mm0` (`mm0-rs`: 3 sorts, 66 term/def, 22 ax/thm, `sorry` warning, exit 0) — it is a
+statement that the ledger, not the file, says is proved.
+
+**What a hit does not re-check.** A statement hit runs neither checker: it reuses a verdict
+about bytes that are equal. The row carries the derivation's sha256 and size, so the claim can
+be re-checked by hand, and the assumptions are not part of the key — a statement that was
+proved is proved. What the key cannot see is a change in the emitter that would spell the same
+theorem differently; that produces a different band, hence a miss, which is the conservative
+direction.

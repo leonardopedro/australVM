@@ -15,12 +15,26 @@ is a rule the theory or the emitter does not have yet.
 What a verified declaration leaves behind is a statement that is proved — the
 derivation itself is megabytes that say exactly that, so it is discarded. The
 statement and the verdict go into a ledger (`<work-dir>.memo`, or `--memo=DIR`),
-and a declaration whose statement is already in it for the same export is not
-emitted or checked again: a sweep that was interrupted, or a subset scan
-followed by a superset one, resumes instead of restarting.
+and a declaration whose statement is already in it is not emitted or checked
+again: a sweep that was interrupted, a subset scan followed by a superset one,
+or a re-export of the same module resumes instead of restarting.
+
+The ledger has two keys, and the cheap one is tried first. A row is filed under
+the export that produced it, so re-scanning that export is a table lookup. It is
+also filed under the sha256 of its statement's bytes — the goal band, which is
+the whole of what was proved — so a *different* export that states the same
+construction is a hit too, once this scan has asked the emitter what that
+export states (`lean-typing-proof --digest`, which stops before the walk).
+Statements are byte-identical or they are not reused; nothing is guessed from
+the declaration's name.
+
+`--adopt=DIR` seeds the ledger from a completed scan's artifacts instead of a
+verdict: every `full.mm0`/`full.mm1` pair under DIR is re-checked by both
+checkers, and the ones that still close are registered. The proofs are then
+their own evidence only once, so they are discarded like a fresh sweep's.
 
 Usage: lean-proof-scan <export.ndjson> <module-prefix> <work-dir> [--defer-subst]
-       [--memo=DIR | --no-memo] [--keep-proofs]
+       [--memo=DIR | --no-memo] [--keep-proofs] [--adopt=DIR]
 
 Exit status is 0 when the scan itself ran (whatever it found), 1 when nothing
 in scope could be verified.
@@ -107,16 +121,21 @@ MM0_RS_MEM_GB = int(os.environ.get("SCAN_MM0_RS_MEM_GB", "10"))
 # ── the ledger of proved statements ──────────────────────────────────────────
 #
 # An entry is written only after `mm0-rs` and `mm0-c` have both accepted the
-# derivation, and it is keyed to the export that produced it (`Export.sha256`,
-# declaration name, kind). The verdict is about the statement's *text*, and the
-# text is what the derivation was about; recomputing it cheaply would mean
-# having the statement, which is the thing the ledger keeps. So the key is the
-# input: the same export rescanned (an interrupted sweep, a subset scan then a
-# superset one) is a hit, and a re-export is a miss by construction rather than
-# by a guess at what "the same theorem" means across two files.
+# derivation. It carries two keys: the export that produced it (`Export.sha256`,
+# declaration name, kind) and the sha256 of the statement it proved. The first
+# is free to look up and answers "was this exact sweep already done"; the second
+# is what survives a re-export, where every export sha changes and nothing about
+# the theorem does.
+#
+# The statement's digest is taken over the goal band alone — `theorem thm_X: $
+# tty ctx value type $` — not over the whole retained file, whose header names
+# the source export and counts the rules of the derivation that is being
+# discarded. Two things that state the same thing hash the same; two things that
+# were merely proved the same way do not.
 LEDGER_COLUMNS = ("export", "theory", "mode", "declaration", "kind", "rules",
                   "assumptions", "statement_bytes", "statement_sha256",
                   "derivation_sha256", "derivation_bytes", "verified_at")
+GOAL_MARK = "-- ── the derivation ──\n"
 
 
 def slug(nm: str) -> str:
@@ -124,7 +143,12 @@ def slug(nm: str) -> str:
 
 
 def ledger_read(root: Path) -> dict[tuple[str, str, str, str], dict[str, str]]:
-    """The last entry per (export, theory, mode, declaration)."""
+    """The last entry per (export, theory, mode, declaration).
+
+    A row shorter than the header is padded rather than dropped: the column set
+    is an interface to scans that are already running, and a row written by an
+    older one still knows its keys.
+    """
     index = root / "index.tsv"
     out: dict[tuple[str, str, str, str], dict[str, str]] = {}
     if not index.exists():
@@ -132,14 +156,30 @@ def ledger_read(root: Path) -> dict[tuple[str, str, str, str], dict[str, str]]:
     for line in index.read_text().splitlines():
         if not line or line.startswith("#"):
             continue
-        row = dict(zip(LEDGER_COLUMNS, line.split("\t")))
-        if len(row) == len(LEDGER_COLUMNS):
-            out[(row["export"], row["theory"], row["mode"],
-                 row["declaration"])] = row
+        fields = line.split("\t")
+        if not fields[0]:
+            continue
+        row = dict(zip(LEDGER_COLUMNS, fields))
+        for col in LEDGER_COLUMNS:
+            row.setdefault(col, "")
+        out[(row["export"], row["theory"], row["mode"],
+             row["declaration"])] = row
     return out
 
 
-def statement_of(full0: Path) -> str:
+def statement_digest(text: str) -> str:
+    """sha256 of the goal band: the statement, and nothing that describes its
+    derivation.
+
+    `lean-typing-proof --digest` hashes the same bytes from the export side, so a
+    scan can ask "does this export state what that ledger row proved" without
+    keeping the row's proof, and without trusting a name.
+    """
+    i = text.index(GOAL_MARK) + len(GOAL_MARK)
+    return hashlib.sha256(text[i:].encode()).hexdigest()
+
+
+def statement_of_text(text: str) -> str:
     """A verified `.mm0` minus its assumptions: the statement and its setting.
 
     The emitter writes the artifact in four bands — theory prefix, header,
@@ -150,9 +190,8 @@ def statement_of(full0: Path) -> str:
     refers to (the numerals MM0 will not read inside `$…$`) sits above the
     assumptions and stays.
     """
-    text = full0.read_text()
     head = text[:text.index("-- ── assumptions ──")]
-    goal = text[text.index("-- ── the derivation ──"):]
+    goal = text[text.index(GOAL_MARK[:-1]):]
     state = ("-- State         : PROVED — `mm0-rs compile` and `mm0-c` accepted "
              "the derivation of this\n"
              "--                 statement; the derivation itself was discarded "
@@ -170,12 +209,22 @@ def statement_of(full0: Path) -> str:
     return head + state + goal
 
 
-def ledger_append(root: Path, full0: Path, full1: Path, export_sha: str,
-                  theory_sha: str, mode: str, name: str, kind: str,
-                  rules: int, axs: int) -> Path:
-    dest = root / "stmt" / export_sha[:12]
+def ledger_append(root: Path, full0_text: str, export_tag: str, theory_sha: str,
+                  mode: str, name: str, kind: str, rules: int, axs: int,
+                  deriv_sha: str, deriv_bytes: int) -> Path:
+    """Register one verified statement and keep the statement itself.
+
+    The retained file is content-addressed (`stmt/<digest>/`): the same statement
+    proved for two exports is one file, and a row's statement is findable from
+    the row without a second column saying where it went.
+    """
+    # The digest is taken before the retained copy is written: the retained
+    # copy relabels the derivation marker, and the digest has to agree with
+    # what `lean-typing-proof --digest` computes from a fresh export.
+    digest = statement_digest(full0_text)
+    text = statement_of_text(full0_text)
+    dest = root / "stmt" / digest[:12]
     dest.mkdir(parents=True, exist_ok=True)
-    text = statement_of(full0)
     path = dest / (slug(name) + ".mm0")
     path.write_text(text)
     index = root / "index.tsv"
@@ -184,13 +233,138 @@ def ledger_append(root: Path, full0: Path, full1: Path, export_sha: str,
         if fresh:
             fh.write("# " + "\t".join(LEDGER_COLUMNS) + "\n")
         fh.write("\t".join(str(v) for v in (
-            export_sha, theory_sha, mode, name, kind, rules, axs,
-            path.stat().st_size,
-            hashlib.sha256(text.encode()).hexdigest(),
-            hashlib.sha256(full1.read_bytes()).hexdigest(),
-            full1.stat().st_size,
+            export_tag, theory_sha, mode, name, kind, rules, axs,
+            path.stat().st_size, digest, deriv_sha, deriv_bytes,
             time.strftime("%Y-%m-%dT%H:%M:%S"))) + "\n")
     return path
+
+
+def reread_ok(full0: Path, full1: Path, mmb: Path) -> str | None:
+    """Both checkers, again, on an artifact pair; `None` when it still closes.
+
+    A claim of "verified" that cannot be reproduced from the bytes is not one,
+    so adoption re-runs the same two commands a fresh sweep does rather than
+    trusting a file's presence.
+    """
+    try:
+        c = run(["mm0-rs", "compile", str(full1), str(mmb)],
+                timeout=MM0_RS_TIMEOUT, preexec_fn=cap_mem(MM0_RS_MEM_GB))
+    except subprocess.TimeoutExpired:
+        return f"mm0-rs: over {MM0_RS_TIMEOUT} s"
+    if c.returncode == -6 or "memory allocation" in (c.stdout + c.stderr):
+        return f"mm0-rs: over {MM0_RS_MEM_GB} GiB"
+    if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
+        return "mm0-rs: " + last_meaningful(c.stdout + c.stderr)
+    with full0.open() as fh:
+        k = run(["mm0-c", str(mmb)], stdin=fh)
+    mmb.unlink(missing_ok=True)
+    if k.returncode != 0:
+        return "mm0-c: " + last_meaningful(k.stdout + k.stderr)
+    return None
+
+
+def discard_proofs(d: Path) -> None:
+    """Remove a declaration's derivation and the emitter's copies of it.
+
+    `full.mm0` stays: it is the statement the ledger says was proved. Named
+    generously on purpose — a directory holding someone else's `.mm1` is not
+    touched, because the names are the emitter's own.
+    """
+    for p in (d / "full.mm1", d / "full.mmb", d / "full.mmb.tmp"):
+        p.unlink(missing_ok=True)
+    for p in d.glob("*_typing.mm1"):
+        p.unlink(missing_ok=True)
+    for p in d.glob("*_obligations.jsonl"):
+        p.unlink(missing_ok=True)
+
+
+def adopt(root: Path, memo_root: Path, prefix_text: str, theory_sha: str,
+          mode_tag: str, keep_proofs: bool,
+          known: dict[tuple[str, str, str, str], dict[str, str]]) -> None:
+    """Seed the ledger from a completed scan's artifacts, re-checking each one.
+
+    What a scan leaves is `full.mm0` (statement) and, when it was asked to keep
+    them, `full.mm1` (statement plus derivation). A ledger is worth more than
+    the directory: it is what a later export gets to reuse. So the pairs are
+    re-checked here, registered under the statement digest with `-` as their
+    export (no export claims them — they may predate this one), and then the
+    derivations are discarded exactly as a fresh pass discards its own.
+
+    A directory whose proofs were already discarded has nothing to re-check and
+    is reported as such: a ledger cannot be rebuilt from statements alone, which
+    is why the statements it holds claim a verification rather than perform one.
+    """
+    pairs = sorted(root.glob("*/full.mm0"))
+    have = {r["statement_sha256"] for r in known.values()
+            if r["theory"] == theory_sha and r["statement_sha256"]}
+    registered = already = 0
+    reasons: collections.Counter[str] = collections.Counter()
+    t0 = time.time()
+    for full0 in pairs:
+        text = full0.read_text()
+        m = re.search(r"^-- Declaration\s*: (\S+) \[(\w+)\]", text, re.M)
+        if m is None:
+            reasons["no `-- Declaration` header"] += 1
+            continue
+        name, kind = m.group(1), m.group(2)
+        short = name.split(".")[-1]
+        if not text.startswith(prefix_text):
+            reasons["theory prefix is not docs/cic*.mm0"] += 1
+            print(f"  adopt ✗ {short}: theory prefix is not docs/cic*.mm0")
+            continue
+        full1 = full0.with_name("full.mm1")
+        if not full1.exists():
+            reasons["no .mm1: its proof was discarded already"] += 1
+            continue
+        why = reread_ok(full0, full1, full0.with_name("full.mmb"))
+        digest = statement_digest(text)
+        if why is not None:
+            reasons[classify(why)] += 1
+            print(f"  adopt ✗ {short}: {why[:110]}")
+            continue
+        rules = int(re.search(r"^-- Rules applied : (\d+)", text, re.M).group(1))
+        axs = int(re.search(r"^-- Assumptions   : (\d+)", text, re.M).group(1))
+        if digest in have:
+            already += 1
+            if not keep_proofs:
+                discard_proofs(full0.parent)
+            continue
+        ledger_append(memo_root, text, "-", theory_sha, mode_tag, name, kind,
+                      rules, axs,
+                      hashlib.sha256(full1.read_bytes()).hexdigest(),
+                      full1.stat().st_size)
+        have.add(digest)
+        registered += 1
+        print(f"  adopt ✓ {short} [{kind}] rules={rules} assumptions={axs}"
+              f" (re-checked)")
+        if not keep_proofs:
+            discard_proofs(full0.parent)
+    print(f"adopt  : {registered} registered, {already} already in the ledger,"
+          f" {sum(reasons.values())} skipped of {len(pairs)} artifact(s)"
+          f" in {time.time() - t0:.1f} s")
+    for label, n in reasons.most_common():
+        print(f"  {n:3d}  {label}")
+    print()
+
+
+def digest_of(name: str, export_path: Path, out: Path) -> str | None:
+    """The statement digest of one declaration, from the export alone.
+
+    One `--digest` run costs what asking the export a question costs — the
+    index and the encodes — and not what proving the answer costs. `None` when
+    that run did not finish: the caller then emits as usual and the sweep's own
+    budgets report the declaration.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        r = run([str(EMITTER), str(export_path), name, str(out), "--spine",
+                 "--digest"], timeout=EMIT_TIMEOUT, preexec_fn=cap_mem(EMIT_MEM_GB))
+    except subprocess.TimeoutExpired:
+        return None
+    if r.returncode != 0:
+        return None
+    m = re.search(r"^digest\s*: ([0-9a-f]{64})$", r.stdout, re.M)
+    return m.group(1) if m else None
 
 
 def cap_mem(gb: int):
@@ -226,6 +400,7 @@ def main() -> int:
     # records what the chapter itself states is the only way to aim at it.
     only: set[str] | None = None
     memo_arg: str | None = None
+    adopt_arg: str | None = None
     for a in sys.argv[1:]:
         if a.startswith("--memo="):
             memo_arg = a.split("=", 1)[1]
@@ -234,6 +409,8 @@ def main() -> int:
         elif a.startswith("--only="):
             only = {l.strip() for l in
                     Path(a.split("=", 1)[1]).read_text().splitlines() if l.strip()}
+        elif a.startswith("--adopt="):
+            adopt_arg = a.split("=", 1)[1]
     export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
     extra = ["--spine"] + (["--defer-subst"] if defer else [])
     ledger: dict[tuple[str, str], dict[str, str]] | None
@@ -262,6 +439,15 @@ def main() -> int:
                    if s == ex.sha256 and t == theory_sha and m == mode_tag)
         print(f"ledger : {memo_root} ({here} of its {len(ledger)} entries are "
               f"this export + theory + mode)")
+    elif adopt_arg is not None:
+        raise SystemExit("--adopt needs a ledger to seed: drop --no-memo")
+    # `--adopt=DIR`: a completed scan's artifacts become ledger rows. Runs
+    # before the scope is scanned, so the declarations just adopted are hits.
+    if adopt_arg is not None and memo_root is not None and ledger is not None:
+        print(f"adopt  : re-checking the artifacts under {adopt_arg}")
+        adopt(Path(adopt_arg), memo_root, prefix_text, theory_sha, mode_tag,
+              keep_proofs, ledger)
+        ledger = ledger_read(memo_root)
     scope = [
         (nm, kind)
         for nm, (kind, rec, _i) in ex.decls.items()
@@ -291,7 +477,18 @@ def main() -> int:
     closed: list[tuple[str, str, int, int]] = []
     failed: list[tuple[str, str]] = []
     remembered = 0
+    by_statement = 0
     t0 = time.time()
+
+    # The statement-digest index over this theory, and the declarations it could
+    # answer for. `--digest` costs an export index per call, so it is only spent
+    # on a declaration some ledger row already knows: a plain re-run of one
+    # export never pays for it, a re-export pays for it once per declaration and
+    # gets the verification for free when the statement is the same bytes.
+    content = {r["statement_sha256"]: r for r in (ledger or {}).values()
+               if r["theory"] == theory_sha and r["statement_sha256"]}
+    known_names = {n for (_e, t, _m, n) in (ledger or {})
+                   if t == theory_sha and n.startswith(prefix)}
 
     for nm, kind in scope:
         short = nm[len(prefix):] if nm.startswith(prefix) else nm
@@ -307,6 +504,22 @@ def main() -> int:
                   f"(proved {row['verified_at']})")
             continue
         out = work / re.sub(r"[^A-Za-z0-9_]", "_", short).strip("_")
+        # Not this export, but the same declaration name was proved somewhere:
+        # ask the emitter what *this* export states and look that up. The
+        # emitter prints the digest of exactly the band the ledger keys on.
+        if content and nm in known_names:
+            dg = digest_of(nm, export_path, out)
+            crow = content.get(dg) if dg else None
+            if crow is not None and crow["kind"] == kind:
+                by_statement += 1
+                remembered += 1
+                closed.append((short, kind, int(crow["rules"]),
+                               int(crow["assumptions"])))
+                print(f"  memo  ✓ {short} [{kind}] rules={crow['rules']} "
+                      f"assumptions={crow['assumptions']} "
+                      f"(same statement as {crow['declaration']} of export "
+                      f"{crow['export'][:12]})")
+                continue
         # The emitter holds the whole derivation in memory, and on the largest
         # chapters that is tens of GB (`ChapterEsaClosureCore` reached 11.9 GB
         # on one declaration). Bound it like `mm0-rs` and say which bound was
@@ -369,25 +582,26 @@ def main() -> int:
             # The statement and its verdict outlive the proof; the proof does
             # not. `--keep-proofs` is for reading a derivation afterwards, not
             # for the sweep.
-            ledger_append(memo_root, full0, full1, ex.sha256, theory_sha,
-                          mode_tag, nm, kind, rules, axs)
+            ledger_append(memo_root, full0.read_text(), ex.sha256, theory_sha,
+                          mode_tag, nm, kind, rules, axs,
+                          hashlib.sha256(full1.read_bytes()).hexdigest(),
+                          full1.stat().st_size)
             if not keep_proofs:
                 # Both copies of the derivation go: the emitter's own `.mm1`
                 # and the assembled one, its binary, and the conversion
                 # obligations that existed to build it. What stays is
                 # `full.mm0`, the statement as `mm0-c` read it.
-                for p in (full1, out / "full.mmb", stem.with_suffix(".mm1"),
-                          stem.with_suffix(".mm0"),
-                          Path(str(stem) + "_obligations.jsonl")):
-                    p.unlink(missing_ok=True)
+                discard_proofs(out)
+                stem.with_suffix(".mm0").unlink(missing_ok=True)
                 discarded = ", proof discarded"
         print(f"  pass  ✓ {short} [{kind}] rules={rules} assumptions={axs}{discarded}")
 
     print()
     print(f"verified closures : {len(closed)}/{len(scope)}")
     if remembered:
-        print(f"memo hits         : {remembered} (proved in an earlier run of "
-              f"this export; not emitted, not re-checked)")
+        print(f"memo hits         : {remembered} (not emitted, not re-checked:"
+              f" {remembered - by_statement} for this export, {by_statement} "
+              f"where only the statement was the same bytes)")
     if closed:
         tot_r = sum(c[2] for c in closed)
         tot_a = sum(c[3] for c in closed)
