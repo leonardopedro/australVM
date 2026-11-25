@@ -94,9 +94,24 @@ if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$TMP/umbrella-test.log"; t
     exit 1
 fi
 
+# D17 live harness: the same module runs in this process while a child process
+# owns the authority behind a mutual-TLS loopback connection.
+(cd "$ROOT/umbrella" && cargo test --offline --test distributed_tls \
+    >"$TMP/umbrella-tls.log" 2>&1) || {
+    cat "$TMP/umbrella-tls.log" >&2
+    echo "check-distributed-wrappers: live two-process TLS harness failed" >&2
+    exit 1
+}
+if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed' "$TMP/umbrella-tls.log"; then
+    cat "$TMP/umbrella-tls.log" >&2
+    echo "check-distributed-wrappers: live two-process TLS harness did not report a pass" >&2
+    exit 1
+fi
+
 echo "check-distributed-wrappers: transport vectors agree ($(wc -l <"$TMP/transport.out")) lines"
 echo "check-distributed-wrappers: $(grep -E 'test result: ok' "$TMP/bridge-tests.log" | tail -1)"
 echo "check-distributed-wrappers: $(grep -E 'test result: ok' "$TMP/umbrella-test.log" | tail -1)"
+echo "check-distributed-wrappers: $(grep -E 'test result: ok' "$TMP/umbrella-tls.log" | tail -1) (live mutual TLS)"
 echo "check-distributed-wrappers: Distributed.aui sha256=$(sha256sum "$ROOT/stdlib/net/Distributed.aui" | cut -d' ' -f1)"
 echo "check-distributed-wrappers: Distributed.aum sha256=$(sha256sum "$ROOT/stdlib/net/Distributed.aum" | cut -d' ' -f1)"
 echo "check-distributed-wrappers: RequestTransport.aum sha256=$(sha256sum "$ROOT/examples/distributed/RequestTransport.aum" | cut -d' ' -f1)"

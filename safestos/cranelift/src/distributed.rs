@@ -39,6 +39,85 @@ pub const STATUS_CAPACITY: i64 = -14;
 /// it without limit. The cap is far above the D16/D17 vectors.
 const MAX_OUTBOX: usize = 64;
 
+/// One D17 authority verb. The FFI functions below are thin wrappers over
+/// this enum so a live transport can carry the same operation to another
+/// process without changing the Austral surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operation {
+    Reset,
+    Introduce {
+        resource: i64,
+        deployment: i64,
+        owner: i64,
+        epoch: i64,
+    },
+    Retire {
+        resource: i64,
+        new_epoch: i64,
+    },
+    IssueToken {
+        resource: i64,
+        owner: i64,
+        deployment: i64,
+        epoch: i64,
+    },
+    TokenWire {
+        token: i64,
+    },
+    AdoptWire {
+        wire: i64,
+    },
+    OpenRequest {
+        token: i64,
+        request_id: i64,
+        digest: i64,
+    },
+    Submit {
+        request: i64,
+    },
+    Retry {
+        request: i64,
+    },
+    Wait {
+        request: i64,
+    },
+    CancelWait {
+        request: i64,
+    },
+    ReleaseRequest {
+        request: i64,
+    },
+    Respond {
+        request_id: i64,
+        digest: i64,
+        accepted: i64,
+    },
+    ReceiptCode {
+        receipt: i64,
+    },
+    ReceiptRelease {
+        receipt: i64,
+    },
+    Authorize {
+        token: i64,
+        resource: i64,
+    },
+    ReleaseToken {
+        token: i64,
+    },
+    ReleaseResource {
+        resource: i64,
+    },
+}
+
+/// The D17 authority as reached from the FFI surface. The default is the
+/// in-process authority; a harness may install a transport to make the same
+/// verbs travel to an authority in another process. The local handles remain
+/// opaque words either way.
+pub trait Transport: Send {
+    fn call(&mut self, operation: Operation) -> i64;
+}
+
 /// Wire/authority identifiers are positive and below the i64 handle space.
 /// Keeping `0` and negatives out is what makes a stray sentinel look like a
 /// refusal instead of an authority or a resource.
@@ -487,6 +566,21 @@ fn authority() -> &'static Mutex<Authority> {
     AUTHORITY.get_or_init(|| Mutex::new(Authority::default()))
 }
 
+fn transport() -> &'static Mutex<Option<Box<dyn Transport>>> {
+    static TRANSPORT: OnceLock<Mutex<Option<Box<dyn Transport>>>> = OnceLock::new();
+    TRANSPORT.get_or_init(|| Mutex::new(None))
+}
+
+/// Install (or clear) the transport used by the FFI verbs. The harness owns
+/// the transport lifetime; clearing it returns the FFI surface to the local
+/// authority.
+pub fn set_transport(transport_value: Option<Box<dyn Transport>>) {
+    let mut slot = transport()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = transport_value;
+}
+
 fn with<R>(f: impl FnOnce(&mut Authority) -> R) -> R {
     let mut guard = authority()
         .lock()
@@ -494,22 +588,88 @@ fn with<R>(f: impl FnOnce(&mut Authority) -> R) -> R {
     f(&mut guard)
 }
 
+/// Apply an operation to this process's authority. The server side of a
+/// transport harness uses the same function, so both paths share validation.
+pub fn apply(authority: &mut Authority, operation: Operation) -> i64 {
+    match operation {
+        Operation::Reset => {
+            *authority = Authority::default();
+            0
+        }
+        Operation::Introduce {
+            resource,
+            deployment,
+            owner,
+            epoch,
+        } => authority.introduce(resource, deployment, owner, epoch),
+        Operation::Retire {
+            resource,
+            new_epoch,
+        } => authority.retire(resource, new_epoch),
+        Operation::IssueToken {
+            resource,
+            owner,
+            deployment,
+            epoch,
+        } => authority.issue_token(resource, owner, deployment, epoch),
+        Operation::TokenWire { token } => authority.token_wire(token),
+        Operation::AdoptWire { wire } => authority.adopt_wire(wire),
+        Operation::OpenRequest {
+            token,
+            request_id,
+            digest,
+        } => authority.open_request(token, request_id, digest),
+        Operation::Submit { request } => authority.submit(request),
+        Operation::Retry { request } => authority.retry(request),
+        Operation::Wait { request } => authority.wait(request),
+        Operation::CancelWait { request } => authority.cancel_wait(request),
+        Operation::ReleaseRequest { request } => authority.release_request(request),
+        Operation::Respond {
+            request_id,
+            digest,
+            accepted,
+        } => authority.respond(request_id, digest, accepted),
+        Operation::ReceiptCode { receipt } => authority.receipt_code(receipt),
+        Operation::ReceiptRelease { receipt } => authority.receipt_release(receipt),
+        Operation::Authorize { token, resource } => authority.authorize(token, resource),
+        Operation::ReleaseToken { token } => authority.release_token(token),
+        Operation::ReleaseResource { resource } => authority.release_resource(resource),
+    }
+}
+
+fn dispatch(operation: Operation) -> i64 {
+    {
+        let mut slot = transport()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(active) = slot.as_mut() {
+            return active.call(operation);
+        }
+    }
+    with(|authority| apply(authority, operation))
+}
+
 #[no_mangle]
 pub extern "C" fn au_dist_reset() -> i64 {
-    with(|a| {
-        *a = Authority::default();
-        0
-    })
+    dispatch(Operation::Reset)
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_introduce(resource: i64, deployment: i64, owner: i64, epoch: i64) -> i64 {
-    with(|a| a.introduce(resource, deployment, owner, epoch))
+    dispatch(Operation::Introduce {
+        resource,
+        deployment,
+        owner,
+        epoch,
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_retire(resource: i64, new_epoch: i64) -> i64 {
-    with(|a| a.retire(resource, new_epoch))
+    dispatch(Operation::Retire {
+        resource,
+        new_epoch,
+    })
 }
 
 #[no_mangle]
@@ -519,77 +679,90 @@ pub extern "C" fn au_dist_issue_token(
     deployment: i64,
     epoch: i64,
 ) -> i64 {
-    with(|a| a.issue_token(resource, owner, deployment, epoch))
+    dispatch(Operation::IssueToken {
+        resource,
+        owner,
+        deployment,
+        epoch,
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_token_wire(token: i64) -> i64 {
-    with(|a| a.token_wire(token))
+    dispatch(Operation::TokenWire { token })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_adopt_wire(wire: i64) -> i64 {
-    with(|a| a.adopt_wire(wire))
+    dispatch(Operation::AdoptWire { wire })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_open_request(token: i64, request_id: i64, digest: i64) -> i64 {
-    with(|a| a.open_request(token, request_id, digest))
+    dispatch(Operation::OpenRequest {
+        token,
+        request_id,
+        digest,
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_submit(request: i64) -> i64 {
-    with(|a| a.submit(request))
+    dispatch(Operation::Submit { request })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_retry(request: i64) -> i64 {
-    with(|a| a.retry(request))
+    dispatch(Operation::Retry { request })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_wait(request: i64) -> i64 {
-    with(|a| a.wait(request))
+    dispatch(Operation::Wait { request })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_cancel_wait(request: i64) -> i64 {
-    with(|a| a.cancel_wait(request))
+    dispatch(Operation::CancelWait { request })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_release_request(request: i64) -> i64 {
-    with(|a| a.release_request(request))
+    dispatch(Operation::ReleaseRequest { request })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_respond(request_id: i64, digest: i64, accepted: i64) -> i64 {
-    with(|a| a.respond(request_id, digest, accepted))
+    dispatch(Operation::Respond {
+        request_id,
+        digest,
+        accepted,
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_receipt_code(receipt: i64) -> i64 {
-    with(|a| a.receipt_code(receipt))
+    dispatch(Operation::ReceiptCode { receipt })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_receipt_release(receipt: i64) -> i64 {
-    with(|a| a.receipt_release(receipt))
+    dispatch(Operation::ReceiptRelease { receipt })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_authorize(token: i64, resource: i64) -> i64 {
-    with(|a| a.authorize(token, resource))
+    dispatch(Operation::Authorize { token, resource })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_release_token(token: i64) -> i64 {
-    with(|a| a.release_token(token))
+    dispatch(Operation::ReleaseToken { token })
 }
 
 #[no_mangle]
 pub extern "C" fn au_dist_release_resource(resource: i64) -> i64 {
-    with(|a| a.release_resource(resource))
+    dispatch(Operation::ReleaseResource { resource })
 }
 
 #[cfg(test)]
