@@ -35,6 +35,7 @@ their own evidence only once, so they are discarded like a fresh sweep's.
 
 Usage: lean-proof-scan <export.ndjson> <module-prefix> <work-dir> [--defer-subst]
        [--memo=DIR | --no-memo] [--keep-proofs] [--adopt=DIR]
+       [--audit-statements] [--rekey]
 
 Exit status is 0 when the scan itself ran (whatever it found), 1 when nothing
 in scope could be verified.
@@ -429,6 +430,74 @@ def digest_of(name: str, export_path: Path, out: Path) -> str | None:
     return m.group(1) if m else None
 
 
+def audit_statements(scope, export_path: Path, work: Path, ledger, theory_sha: str,
+                     prefix: str) -> int:
+    """The re-export question over a whole scope, without emitting or checking.
+
+    For every declaration it asks the emitter what *this* export states
+    (`--digest`, which stops before the walk) and looks that sha256 up in the
+    ledger's statement index. A hit is what a re-export would use to carry a
+    verdict over instead of re-proving it; a miss is either a statement the
+    ledger has not proved or one it proved as different bytes, and those are
+    reported apart. Neither checker runs, so a declaration costs the export
+    index and nothing else — measured 9.5 s / 487 MB, which is why the scope is
+    walked by several at a time (`SCAN_AUDIT_JOBS`, default 4).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    jobs = max(1, int(os.environ.get("SCAN_AUDIT_JOBS", "4")))
+    index: dict[str, list[dict[str, str]]] = collections.defaultdict(list)
+    own: dict[str, list[dict[str, str]]] = collections.defaultdict(list)
+    for r in ledger.values():
+        if r["theory"] != theory_sha:
+            continue
+        own[r["declaration"]].append(r)
+        if r["statement_sha256"]:
+            index[r["statement_sha256"]].append(r)
+
+    def one(item):
+        nm, _kind = item
+        return digest_of(nm, export_path, work / slug(nm))
+
+    verdicts: collections.Counter = collections.Counter()
+    rows = ["declaration\tdigest\tverdict\tmatch"]
+    print(f"audit  : {len(scope)} declarations, {jobs} at a time, "
+          f"{len(index)} statement key(s) in the ledger", flush=True)
+    with ThreadPoolExecutor(jobs) as pool:
+        for (nm, kind), dg in zip(scope, pool.map(one, scope)):
+            short = nm[len(prefix):] if nm.startswith(prefix) else nm
+            hit = dg and [r for r in index[dg] if r["kind"] == kind]
+            if dg is None:
+                verdict, match = "digest unavailable", ""
+            elif hit:
+                m = hit[0]
+                verdict = "same statement"
+                match = f"{m['declaration']} of export {m['export'][:12]}"
+                verdicts["own row" if m["declaration"] == nm
+                        else "another declaration"] += 1
+                print(f"  audit ✓ {short} [{kind}] same statement as {match}",
+                      flush=True)
+            elif any(r["statement_sha256"] for r in own.get(nm, ())):
+                verdict, match = "statement differs", ""
+            else:
+                verdict, match = "no ledger row", ""
+            verdicts[verdict] += 1
+            rows.append(f"{nm}\t{dg or ''}\t{verdict}\t{match}")
+    tsv = work / "statements.tsv"
+    tsv.write_text("\n".join(rows) + "\n")
+    total = len(scope)
+    same = verdicts["same statement"]
+    print()
+    print(f"audited           : {total}")
+    print(f"same statement    : {same}/{total} "
+          f"({verdicts['own row']} under the declaration's own name, "
+          f"{verdicts['another declaration']} under another)")
+    print(f"statement differs : {verdicts['statement differs']}")
+    print(f"no ledger row     : {verdicts['no ledger row']}")
+    print(f"digest unavailable: {verdicts['digest unavailable']}")
+    print(f"per-declaration   : {tsv}")
+    return same
+
+
 def cap_mem(gb: int):
     """A `preexec_fn` bounding a child's address space."""
     def apply() -> None:
@@ -541,6 +610,15 @@ def main() -> int:
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
+
+    # `--audit-statements`: answer the re-export question over the whole scope
+    # and stop. It writes the digests it read to `<work>/statements.tsv` and
+    # runs no checker, so it never appends to the ledger.
+    if "--audit-statements" in sys.argv:
+        if ledger is None:
+            raise SystemExit("--audit-statements needs a ledger: drop --no-memo")
+        audit_statements(scope, export_path, work, ledger, theory_sha, prefix)
+        return 0
 
     closed: list[tuple[str, str, int, int]] = []
     failed: list[tuple[str, str]] = []
