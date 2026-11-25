@@ -1053,8 +1053,10 @@ mod tests {
         let request = b.open_request(token, 7, 11);
         assert_eq!(b.submit(request), STATUS_OVERFLOW);
 
-        let mut c = Authority::default();
-        c.next_incarnation = i64::MAX;
+        let mut c = Authority {
+            next_incarnation: i64::MAX,
+            ..Authority::default()
+        };
         assert_eq!(c.introduce(101, 202, 303, 1), STATUS_OVERFLOW);
         assert!(!c.resources.contains_key(&101));
     }
