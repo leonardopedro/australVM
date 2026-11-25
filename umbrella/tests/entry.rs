@@ -6,7 +6,6 @@
 //! the declared signature the test's variable. A `RESULT` line on stdout is
 //! the invocation marker: it can only appear after the entry actually ran.
 
-
 mod support;
 
 use std::os::unix::fs::PermissionsExt;
@@ -73,15 +72,22 @@ fn fake_front_end(dir: &Path, buffer: &[u8]) -> PathBuf {
              [ -n \"$out\" ] && [ -n \"$adapters\" ] || exit 9\n\
              printf '%b' '{}' > \"$out\"\n\
              : > \"$adapters\"\n\
+             printf 'CPS JIT: module Entry\\nCPS JIT: Generated 1 functions ({} bytes)\\nCPS JIT: export\\tcompute\\t\\tInt64\\nCPS JIT: Emitted CPS binary to %s\\n' \"$out\" >&2\n\
              exit 0\n",
-            octal(buffer)
+            octal(buffer),
+            buffer.len()
         ),
     );
     path
 }
 
 fn project_with_provider(dir: &Path, so: &Path) -> PathBuf {
+    project_with_providers(dir, &[so])
+}
+
+fn project_with_providers(dir: &Path, providers: &[&Path]) -> PathBuf {
     let path = dir.join("project.json");
+    let so = providers[0];
     // D09: a load authorization names the exact library bytes it approves, so the
     // fixture pins the digest of the artifact it just built.
     let library_sha256 = umbrella::trust::sha256_file(so).expect("hash the fixture library");
@@ -92,7 +98,7 @@ fn project_with_provider(dir: &Path, so: &Path) -> PathBuf {
             "profile": "dev",
             "module": {"name": "entry", "sources": ["unused.aum"]},
             "build": {"allowed": false},
-            "load": {"allowed": true, "providers": [so]},
+            "load": {"allowed": true, "providers": providers},
             "grants": [{"symbol": "rs_probe"}],
             "trusted": {
                 "lock_sha256": "0".repeat(64),
@@ -153,6 +159,34 @@ fn stdout(out: &Output) -> String {
 
 fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn two_provider_libraries_are_refused_before_mapping() {
+    let dir = scratch("two-providers");
+    let so = build_stageprobe(&dir);
+    let project = project_with_providers(&dir, &[&so, &so]);
+    let austral = fake_front_end(&dir, &cps("compute", 0, 0x01));
+    let out = Command::new(env!("CARGO_BIN_EXE_umbrella"))
+        .arg("--project")
+        .arg(&project)
+        .arg("--austral")
+        .arg(&austral)
+        .arg("--entry")
+        .arg("compute")
+        .arg("--expect")
+        .arg("7")
+        .arg("--")
+        .arg(dir.join("M.aum"))
+        .output()
+        .expect("run umbrella");
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("declares 2 provider libraries"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&out).contains("RESULT"), "{}", stdout(&out));
 }
 
 #[test]

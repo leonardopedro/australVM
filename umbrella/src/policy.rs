@@ -230,9 +230,21 @@ where
 /// `dlsym(RTLD_DEFAULT)` resolver can see them. The handle is deliberately
 /// never closed — JIT'd code may call into it for the rest of the process.
 pub fn dlopen(path: &Path) -> Result<NonNull<c_void>, String> {
+    open(path, libc::RTLD_GLOBAL)
+}
+
+/// Map a library into a private scope. Its symbols are reachable only through
+/// this handle (`dlsym`), not from another image's undefined references. U08/U10
+/// use it for the provider and adapter crates now that adapters link the
+/// provider explicitly.
+pub fn dlopen_local(path: &Path) -> Result<NonNull<c_void>, String> {
+    open(path, libc::RTLD_LOCAL)
+}
+
+fn open(path: &Path, scope: libc::c_int) -> Result<NonNull<c_void>, String> {
     let cpath = CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|e| format!("path is not a valid CString: {e}"))?;
-    let handle = unsafe { libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
+    let handle = unsafe { libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | scope) };
     NonNull::new(handle).ok_or_else(|| unsafe {
         let e = libc::dlerror();
         if e.is_null() {

@@ -109,12 +109,24 @@ pub struct Capabilities {
     pub peers: Vec<String>,
 }
 
+/// U09: the user on whose behalf the instance acts. The module stays the grant
+/// principal (`[module] name`); this names the delegator in the instance
+/// identity and its diagnostics. Absent means no user was supplied.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Identity {
+    pub user: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub schema: u32,
     pub profile: Profile,
     pub module: Module,
+    /// U09: the delegating user, when the host has one.
+    #[serde(default)]
+    pub identity: Option<Identity>,
     #[serde(default)]
     pub build: BuildPermission,
     #[serde(default)]
@@ -162,13 +174,20 @@ pub fn parse(path: &Path, text: &str) -> Result<Project, String> {
             "grants",
             "trusted",
             "capabilities",
+            "identity",
         ],
         &mut unknown,
     );
     reject_unknown_in(&value, "module", &["name", "sources"], &mut unknown);
+    reject_unknown_in(&value, "identity", &["user"], &mut unknown);
     reject_unknown_in(&value, "build", &["allowed", "crate"], &mut unknown);
     reject_unknown_in(&value, "load", &["allowed", "providers"], &mut unknown);
-    reject_unknown_in(&value, "capabilities", &["state_dir", "peers"], &mut unknown);
+    reject_unknown_in(
+        &value,
+        "capabilities",
+        &["state_dir", "peers"],
+        &mut unknown,
+    );
     reject_unknown_in(
         &value,
         "trusted",
@@ -236,6 +255,12 @@ fn validate(path: &Path, p: &Project) -> Result<(), String> {
     }
     if p.module.name.trim().is_empty() {
         problems.push("`module.name` is empty".to_string());
+    }
+    if p.identity
+        .as_ref()
+        .is_some_and(|identity| identity.user.trim().is_empty())
+    {
+        problems.push("`identity.user` is empty".to_string());
     }
     if p.module.sources.is_empty() {
         problems.push("`module.sources` is empty".to_string());
@@ -310,6 +335,7 @@ mod tests {
         "schema": 1,
         "profile": "trusted-native",
         "module": {"name": "demo", "sources": ["Demo.aum"]},
+        "identity": {"user": "did:unfer:alice"},
         "build": {"allowed": true, "crate": "modules/rscrate"},
         "load": {"allowed": true, "providers": ["libdemo.so"]},
         "grants": [{"symbol": "rs_demo_checksum"}],
@@ -332,6 +358,17 @@ mod tests {
         assert_eq!(doc.profile, Profile::TrustedNative);
         assert!(doc.build.allowed);
         assert_eq!(doc.grants.len(), 1);
+        assert_eq!(
+            doc.identity.as_ref().map(|i| i.user.as_str()),
+            Some("did:unfer:alice")
+        );
+    }
+
+    #[test]
+    fn an_empty_user_identity_is_named() {
+        let err = parse(p(), &BASE.replace("did:unfer:alice", "   "))
+            .expect_err("an empty delegator is not an identity");
+        assert!(err.contains("`identity.user` is empty"), "{err}");
     }
 
     #[test]

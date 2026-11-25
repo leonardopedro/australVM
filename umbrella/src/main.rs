@@ -7,13 +7,17 @@
 //! 1. **cargo** builds an arbitrary crate (`modules/rscrate`) to a
 //!    cdylib — the `--message-format=json` stream yields the artifact
 //!    path, so no target-layout assumption is baked in;
-//! 2. **dlopen(RTLD_NOW | RTLD_GLOBAL)** registers that artifact in the
-//!    process; the bridge's default symbol lookup (dlsym RTLD_DEFAULT)
-//!    finds the crate's `rs_*` exports with zero australVM changes;
+//! 2. **explicit provider admission** maps that artifact `RTLD_LOCAL` and
+//!    resolves each declared export from its own `dlsym` handle, then registers
+//!    those exact addresses in the bridge before the JIT initializes. A
+//!    preloaded same-named export cannot win the registered JIT import.
+//!    Registration is not authorization: the manifest gate still decides every
+//!    call by name;
 //! 3. the stock **`austral` binary** (`compile ... --use-cps-jit
-//!    --allow-all --target-type=tc --emit-cps=...`, the same invocation
-//!    modhost's spawn_jit_server uses) serializes the module to CPS —
-//!    australVM never learns about the crate that was just built;
+//!    --emit-cps-only --target-type=tc --emit-cps=...`) lowers the module to
+//!    CPS without initializing the bridge or invoking the crate just built;
+//!    australVM never learns about that crate at this stage, and no
+//!    `--allow-all` grant is needed because nothing is compiled or run;
 //! 4. the **bridge, linked as a plain path dependency**, loads the
 //!    manifest grant list (or an explicit DenyAll), compiles the CPS
 //!    with the gate live, and the entry function execates in-process.
@@ -30,7 +34,7 @@ use std::sync::OnceLock;
 use austral_cranelift_bridge::{
     auth, compile_entry_i64, compile_to_function_named, cranelift_last_error, execute_function,
 };
-use umbrella::{cargo, cli, interface, policy, project, trust};
+use umbrella::{cargo, cli, frontend, interface, policy, project, provider, trust};
 
 /// U03's JSON event mode: stdout carries one typed event per line and human
 /// diagnostics stay on stderr. Set once, before any stage.
@@ -183,158 +187,73 @@ fn cargo_build(cli: &cli::Cli, crate_dir: &PathBuf) -> Result<PathBuf, String> {
     cargo::select_shared_artifact(&String::from_utf8_lossy(&out.stdout), &wanted)
 }
 
-// 2. `policy::dlopen` is the same RTLD_NOW|RTLD_GLOBAL mapping described in
-//    the module docs; it lives in the library so the stage test can map a
-//    fixture library through exactly the code the driver uses.
+// 2. `provider::ProviderSet::load` maps the admitted library RTLD_LOCAL and
+//    registers its declared exports. The adapter crates link that exact image,
+//    so neither provider nor adapter symbols rely on global scope.
 
-/// How long the front-end may run before its process group is killed. Generous
-/// on purpose: this bounds a hang, it does not police a slow machine.
-const FRONT_END_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
-
-/// 3. Stock front-end as a subprocess: exactly the invocation modhost's
-///    spawn_jit_server uses, minus the JIT-server transport, plus
-///    --emit-cps so we get the CPS binary on disk. No umbrella-specific
-///    code exists (or may exist) on the australVM side.
+/// 3. Stock front-end as a subprocess: the CPS lowering, and nothing else.
+///    U07's compile-only mode never initializes the bridge or invokes target
+///    code, so the artifact is the whole product. The frontend module owns the
+///    private staging, completion checks and hashes; this function only splits
+///    the source list into dependency prefixes.
 fn front_end(
     austral: &PathBuf,
     modules: &[PathBuf],
-    cps_out: &PathBuf,
-    adapters_out: &PathBuf,
+    liquid_required: bool,
 ) -> Result<
     (
-        Vec<Vec<u8>>,
+        Vec<frontend::Artifact>,
         Vec<interface::BufferAdapter>,
         Vec<interface::HandleAdapter>,
         Vec<interface::Adapter>,
     ),
     String,
 > {
-    // The front-end emits one CPS binary per module and each emission
-    // overwrites `--emit-cps`, so the file left behind holds only the last
-    // module. A module that calls another Austral module (e.g. one importing
-    // `stdlib/gpu/Jobs`) needs both bodies in the JIT module, so compile each
-    // prefix of the source list: prefix `i` ends at module `i` and therefore
-    // emits exactly that module's CPS, after its dependencies typed. This
-    // assumes the sources are listed in dependency order, which the compiler
-    // requires anyway.
+    // The front-end emits one CPS binary per run, covering the prefix of the
+    // source list it was given. Compile each prefix so every dependency body is
+    // in the JIT module as well as the entry module. This assumes the sources
+    // are listed in dependency order, which the compiler requires anyway.
     let prefixes: Vec<&[PathBuf]> = if modules.len() <= 1 {
         vec![modules]
     } else {
         (1..=modules.len()).map(|i| &modules[..i]).collect()
     };
-    let mut cps_paths: Vec<PathBuf> = Vec::new();
-    for (index, prefix) in prefixes.iter().enumerate() {
-        let out = if prefixes.len() == 1 {
-            cps_out.clone()
-        } else {
-            cps_out.with_extension(format!("{index}.cps"))
-        };
-        front_end_once(austral, prefix, &out, adapters_out)?;
-        cps_paths.push(out);
+    let mut artifacts = Vec::new();
+    for prefix in prefixes {
+        artifacts.push(frontend::compile(austral, prefix, liquid_required)?);
     }
-    let mut cps_binaries = Vec::new();
-    for path in &cps_paths {
-        let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        cps_binaries.push(bytes);
-        if path != cps_out {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-    let text = std::fs::read_to_string(adapters_out)
-        .map_err(|e| format!("read {}: {e}", adapters_out.display()))?;
+    let text = artifacts
+        .last()
+        .map(|a| a.adapters.clone())
+        .unwrap_or_default();
     // One document carries both block kinds: the scalar reader skips
     // `abi buffer` blocks and the buffer reader skips `abi scalar` ones, so a
     // module that calls both gets both wrappers.
     let adapters = interface::Adapter::parse_descriptors(&text)
-        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+        .map_err(|e| format!("adapter document: {e}"))?;
     let buffers = interface::BufferAdapter::parse_descriptors(&text)
-        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
+        .map_err(|e| format!("adapter document: {e}"))?;
     // U13: a handle block names an owned-value type; the reader numbers its
     // registries from 1, which is the owner tag the handle words carry.
     let handles = interface::HandleAdapter::parse_descriptors(&text)
-        .map_err(|e| format!("{}: {e}", adapters_out.display()))?;
-    Ok((cps_binaries, buffers, handles, adapters))
-}
-
-/// One front-end run over `modules`, writing that run's CPS to `cps_out`.
-fn front_end_once(
-    austral: &PathBuf,
-    modules: &[PathBuf],
-    cps_out: &PathBuf,
-    adapters_out: &PathBuf,
-) -> Result<(), String> {
-    let mut cmd = Command::new(austral);
-    // The dune-built front-end links libaustral_cranelift_bridge.so
-    // dynamically; Makefile targets and the nix dev shell carry it via
-    // LD_LIBRARY_PATH. A bare caller of the umbrella must not have to
-    // reproduce that environment, so prepend the bridge's cargo output
-    // dir when it is sitting next to the austral checkout (default
-    // layout).
-    if let Some(dir) = austral.parent() {
-        let bridge_dir = dir.join("safestos/cranelift/target/release");
-        if bridge_dir.join("libaustral_cranelift_bridge.so").exists() {
-            let mut lp = bridge_dir.display().to_string();
-            if let Some(old) = std::env::var_os("LD_LIBRARY_PATH") {
-                lp.push(':');
-                lp.push_str(&old.to_string_lossy());
-            }
-            cmd.env("LD_LIBRARY_PATH", lp);
-        }
-    }
-    // The front-end's own JIT attempt is advisory for this run. The wrapper
-    // crate the build needs does not exist yet, so an `<target>__adapter`
-    // symbol cannot resolve inside the front-end's process; this stage wants
-    // the CPS artifact and the descriptor, and stage 3.5 compiles the CPS
-    // again with the wrappers loaded. Fail-closed stays the default for every
-    // other caller (a module whose JIT compile failed cannot run).
-    cmd.env("CPS_JIT_ADVISORY", "1");
-    cmd.arg("compile");
-    for m in modules {
-        cmd.arg(m);
-    }
-    cmd.arg("--use-cps-jit")
-        .arg("--allow-all")
-        .arg("--target-type=tc")
-        .arg(format!("--emit-cps={}", cps_out.display()))
-        // U11: the CPS lowering names every `rs_*` call that needs a scalar
-        // adapter, and this document is how the build learns which wrappers to
-        // generate. An unrepresentable signature fails the front-end here, so
-        // no guessed layout can reach the JIT.
-        .arg(format!("--emit-adapters={}", adapters_out.display())); // U06: bounded child. A compiler that hangs must not hang umbrella, and a
-                                                                     // deadline is only meaningful if the whole process group is killed — the
-                                                                     // front-end spawns helpers of its own.
-    let outcome = umbrella::process::run(cmd, FRONT_END_DEADLINE)
-        .map_err(|e| format!("run {austral:?}: {e}"))?;
-    if outcome.timed_out {
-        return Err(format!(
-            "austral front-end exceeded its {:?} deadline and was killed \
-             with its process group\nstdout:\n{}\nstderr:\n{}",
-            FRONT_END_DEADLINE,
-            String::from_utf8_lossy(&outcome.stdout),
-            String::from_utf8_lossy(&outcome.stderr)
-        ));
-    }
-    if outcome.exit != umbrella::process::Exit::Code(0) {
-        return Err(format!(
-            "austral front-end failed: {:?}\nstdout:\n{}\nstderr:\n{}",
-            outcome.exit,
-            String::from_utf8_lossy(&outcome.stdout),
-            String::from_utf8_lossy(&outcome.stderr)
-        ));
-    }
-    Ok(())
+        .map_err(|e| format!("adapter document: {e}"))?;
+    Ok((artifacts, buffers, handles, adapters))
 }
 
 /// 3.5. Generate the wrappers the front-end asked for and load them where the
 ///      JIT can resolve them. Each adapter becomes one module (the generator
 ///      writes a file per adapter and each starts with the same `use`), all in
-///      one crate; the targets are already global because the crate's cdylib
-///      was dlopen'd in step 2, so `RTLD_NOW` can bind them. Every call is a
-///      new build at the next provider generation (see `adapters`), which is
-///      what lets a provider reload build and load a second crate here.
-fn build_adapters(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<PathBuf, String> {
-    let built = umbrella::adapters::build_next(adapters)?;
-    umbrella::adapters::load(&built)?;
+///      one crate. The crate is linked against the admitted provider by absolute
+///      path and mapped `RTLD_LOCAL`; its exports are registered by exact
+///      address, so neither provider nor adapter identity depends on global
+///      scope. Every call is a new build at the next provider generation (see
+///      `adapters`), which lets a provider reload build a second crate here.
+fn build_adapters(
+    adapters: &[interface::GeneratedAdapter<'_>],
+    provider: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let built = umbrella::adapters::build_next_against(adapters, Some(provider))?;
+    umbrella::adapters::load_for_jit(&built)?;
     Ok(built.path)
 }
 
@@ -342,13 +261,17 @@ fn build_adapters(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<PathBu
 ///     (stricter-loading path shared with deploy_hosts); without one, an
 ///     explicit DenyAll so the denied run is deterministic regardless of
 ///     feature configuration.
-fn install_auth(manifest: Option<&PathBuf>) -> Result<(), String> {
+fn install_auth(manifest: Option<&PathBuf>) -> Result<Option<auth::ManifestAuthEngine>, String> {
     match manifest {
         Some(p) => {
             let bytes = std::fs::read(p).map_err(|e| format!("read {p:?}: {e}"))?;
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|e| format!("manifest {p:?} is not UTF-8: {e}"))?;
+            let policy = auth::ManifestAuthEngine::from_toml_str(text)
+                .map_err(|e| format!("manifest auth error: {e}"))?;
             let rc = unsafe { auth::safestos_load_auth_manifest(bytes.as_ptr(), bytes.len()) };
             if rc == 1 {
-                Ok(())
+                Ok(Some(policy))
             } else {
                 Err(format!("manifest loader rejected {p:?}"))
             }
@@ -356,7 +279,7 @@ fn install_auth(manifest: Option<&PathBuf>) -> Result<(), String> {
         None => {
             auth::set_deny_all();
             auth::set_deployment_principal("anon".to_string());
-            Ok(())
+            Ok(None)
         }
     }
 }
@@ -375,6 +298,32 @@ fn jit_compile_module(cps: &[u8]) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// The provider exports the project declares. A pinned artifact names its ABI
+/// explicitly; either way, a granted `rs_*` symbol that the library really
+/// exports is added to the binding, so a preloaded same-named symbol cannot
+/// win a granted JIT import. Grants naming the bridge (`uk_*`/`uz_*`) or a
+/// generated adapter (`*__adapter`) are not provider exports and are left to
+/// their own resolution.
+fn provider_exports(
+    doc: &project::Project,
+    library: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    let available = trust::exports(library)?;
+    let mut declared = match &doc.trusted {
+        Some(trusted) => trusted.exports.clone(),
+        None => Vec::new(),
+    };
+    for grant in &doc.grants {
+        if !grant.symbol.starts_with("rs_") || grant.symbol.ends_with("__adapter") {
+            continue;
+        }
+        if available.iter().any(|s| s == &grant.symbol) && !declared.contains(&grant.symbol) {
+            declared.push(grant.symbol.clone());
+        }
+    }
+    Ok(declared)
 }
 
 fn jit_compile(cps: &[u8], entry: &str) -> Result<*const c_void, String> {
@@ -490,7 +439,8 @@ fn main() {
         eprintln!("umbrella: build not authorized; using {}", cdylib.display());
     }
 
-    // 2. dlopen → symbols reachable via the bridge's dlsym fallback.
+    // 2. explicit provider admission → declared exports bound to the exact
+    //    admitted image and registered before the JIT initializes.
     if !load_allowed {
         die(format!(
             "load is not authorized by the project; refusing to map {} \
@@ -500,20 +450,69 @@ fn main() {
     }
     // D09: the bytes that are about to be mapped must be the pinned artifact,
     // and it must define the pinned ABI exports. This runs after the build (the
-    // digest is of what was produced) and before `dlopen` (the initializer runs
+    // digest is of what was produced) and before mapping (the initializer runs
     // on load).
     if let Some((doc, _)) = &planned {
         if let Err(e) = trust::verify_before_load(doc, &cdylib) {
             die(e);
         }
     }
-    if let Err(e) = policy::dlopen(&cdylib) {
-        die(e);
+    // `ProviderSet` is retained to the end of `main`: the JIT bakes the
+    // registered addresses into code, so the mapping must outlive execution.
+    let mut _provider: Option<provider::ProviderSet> = None;
+    match &planned {
+        Some((doc, _)) => {
+            let providers = if build_allowed {
+                vec![cdylib.clone()]
+            } else {
+                doc.load.providers.clone()
+            };
+            if providers.len() != 1 {
+                die(format!(
+                    "the project declares {} provider libraries; this profile pins one \
+                     artifact identity per run, so a multi-provider binding needs the \
+                     per-provider ABI records U10 adds",
+                    providers.len()
+                ));
+            }
+            let declared = match provider_exports(doc, &providers[0]) {
+                Ok(exports) => exports,
+                Err(e) => die(e),
+            };
+            if declared.is_empty() {
+                die(
+                    "the project declares no provider exports; refusing to map a library \
+                     whose granted identity cannot be named"
+                        .to_string(),
+                );
+            }
+            match provider::ProviderSet::load(&providers, &declared) {
+                Ok(set) => {
+                    let names: Vec<&str> = set.exports().iter().map(|(n, _)| n.as_str()).collect();
+                    eprintln!(
+                        "umbrella: admitted provider {} with {} declared export(s): {}",
+                        providers[0].display(),
+                        names.len(),
+                        names.join(", ")
+                    );
+                    _provider = Some(set);
+                }
+                Err(e) => die(e),
+            }
+        }
+        // No project document means no declared provider identity. Keep the
+        // prototype's global mapping for that explicit DenyAll path; there is
+        // nothing to bind by name.
+        None => {
+            if let Err(e) = policy::dlopen(&cdylib) {
+                die(e);
+            }
+            eprintln!(
+                "umbrella: mapped {} (RTLD_NOW|RTLD_GLOBAL; no declared exports)",
+                cdylib.display()
+            );
+        }
     }
-    eprintln!(
-        "umbrella: dlopen'd {} (RTLD_NOW|RTLD_GLOBAL)",
-        cdylib.display()
-    );
 
     // A denied call is a separate decision: build and load already ran, and
     // the report above says so instead of claiming containment.
@@ -524,25 +523,54 @@ fn main() {
         }
     }
 
-    // 3. front-end subprocess → CPS bytes and the adapter descriptors.
-    let cps_out: PathBuf =
-        std::env::temp_dir().join(format!("umbrella-{}.cps", std::process::id()));
-    let adapters_out: PathBuf =
-        std::env::temp_dir().join(format!("umbrella-{}.adapters", std::process::id()));
-    let (cps_binaries, buffers, handles, scalars) =
-        match front_end(&austral, &modules, &cps_out, &adapters_out) {
-            Ok(b) => {
-                let _ = std::fs::remove_file(&cps_out);
-                let _ = std::fs::remove_file(&adapters_out);
-                b
-            }
+    // 3. front-end subprocess → a checked compile-only artifact and the
+    //    adapter descriptors. The staged outputs are gone by the time this
+    //    returns; only the verified bytes and hash remain.
+    let (artifacts, buffers, handles, scalars) =
+        match front_end(&austral, &modules, cli.liquid_required) {
+            Ok(b) => b,
             Err(e) => die(e),
         };
-    let cps_bytes: usize = cps_binaries.iter().map(Vec::len).sum();
+    let cps_bytes: usize = artifacts.iter().map(|a| a.cps.len()).sum();
+    let functions: usize = artifacts.iter().map(|a| a.functions).sum();
+    let cps_sha256 = frontend::digest(&artifacts);
+    let module_names: Vec<&str> = artifacts
+        .iter()
+        .flat_map(|a| a.module_names.iter().map(String::as_str))
+        .collect();
+    let mut exports_by_name = std::collections::BTreeMap::new();
+    for export in artifacts.iter().flat_map(|a| a.exports.iter()) {
+        exports_by_name.insert(export.name.clone(), export);
+    }
+    let exports: Vec<serde_json::Value> = exports_by_name
+        .values()
+        .map(|export| {
+            serde_json::json!({
+                "name": export.name,
+                "params": export.params,
+                "returns": export.returns,
+            })
+        })
+        .collect();
+    event(serde_json::json!({
+        "event": "artifact",
+        "modules": artifacts.iter().map(|a| a.modules.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        "module_names": module_names,
+        "exports": exports,
+        "functions": functions,
+        "cps_bytes": cps_bytes,
+        "cps_sha256": cps_sha256,
+        "liquid": match artifacts.first().map(|a| a.liquid) {
+            Some(frontend::Liquid::Required) => "required",
+            _ => "optional",
+        },
+    }));
     eprintln!(
-        "umbrella: front-end emitted {} module(s), {cps_bytes} bytes of CPS",
-        cps_binaries.len()
+        "umbrella: front-end emitted {} module(s), {functions} function(s), \
+         {cps_bytes} bytes of CPS (sha256 {cps_sha256})",
+        artifacts.len()
     );
+    let cps_binaries: Vec<Vec<u8>> = artifacts.into_iter().map(|a| a.cps).collect();
 
     // 3.5. The wrappers the descriptors ask for. Empty is a real answer: every
     //      call in the module was word-native and needs no mediation. Buffer
@@ -558,7 +586,7 @@ fn main() {
         eprintln!("umbrella: the module needs no adapters");
     } else {
         let names: Vec<&str> = adapters.iter().map(|a| a.symbol()).collect();
-        match build_adapters(&adapters) {
+        match build_adapters(&adapters, &cdylib) {
             Ok(path) => eprintln!(
                 "umbrella: built and loaded {} adapter wrapper(s) ({}) from {}",
                 adapters.len(),
@@ -569,10 +597,29 @@ fn main() {
         }
     }
 
-    // 4. in-process gate + compile + execute.
-    if let Err(e) = install_auth(cli.manifest.as_ref()) {
-        die(e);
-    }
+    // 4. in-process gate + compile + execute. U09: every run is bound to one
+    //    immutable instance whose own policy snapshot is the authority; the
+    //    global manifest install above remains for legacy callers and capstd.
+    let policy = match install_auth(cli.manifest.as_ref()) {
+        Ok(Some(policy)) => policy,
+        Ok(None) => auth::ManifestAuthEngine::new(),
+        Err(e) => die(e),
+    };
+    let module_name = planned
+        .as_ref()
+        .map(|(doc, _)| doc.module.name.clone())
+        .or_else(|| policy.primary_principal().map(str::to_string))
+        .unwrap_or_else(|| "anon".to_string());
+    let node = planned
+        .as_ref()
+        .and_then(|(doc, _)| doc.capabilities.as_ref())
+        .and_then(|caps| caps.peers.first().cloned());
+    let user = planned
+        .as_ref()
+        .and_then(|(doc, _)| doc.identity.as_ref())
+        .map(|identity| identity.user.clone());
+    let instance = auth::bind_instance_with_identity(module_name, false, user, node, policy);
+    let _scope = auth::enter_caller(&instance);
     // Every module but the entry one is compiled for its definitions only; the
     // entry binary is compiled last through the strict entry path. They share
     // the process-global JIT module, so cross-module calls resolve by name.
@@ -612,11 +659,6 @@ fn main() {
             } else {
                 project_dir.join(&caps.state_dir)
             };
-            let instance = austral_cranelift_bridge::auth::bind_instance_for_node(
-                doc.module.name.clone(),
-                false,
-                caps.peers.first().cloned(),
-            );
             match austral_cranelift_bridge::capstd_mod::caps::InstanceCaps::new(
                 doc.module.name.clone(),
                 &state_dir,
@@ -632,8 +674,8 @@ fn main() {
                     );
                     // The compiled entry runs inside this identity, so every gated
                     // call and every capability verb is attributed to *this*
-                    // instance rather than to whatever loaded last.
-                    let _scope = austral_cranelift_bridge::auth::enter_caller(&instance);
+                    // instance rather than to whatever loaded last. The caller
+                    // scope was entered before compilation; it is still active.
                     let result = execute_function(f);
                     if json_mode() {
                         event(serde_json::json!({"event": "done", "result": result}));

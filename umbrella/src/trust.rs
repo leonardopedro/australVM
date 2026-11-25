@@ -271,6 +271,7 @@ mod tests {
                 name: "demo".to_string(),
                 sources: vec![Path::new("Demo.aum").to_path_buf()],
             },
+            identity: None,
             build: project::BuildPermission {
                 allowed: true,
                 krate: Some(Path::new("crate").to_path_buf()),

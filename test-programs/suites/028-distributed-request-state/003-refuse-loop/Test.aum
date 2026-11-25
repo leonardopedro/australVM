@@ -1,0 +1,16 @@
+module body Test is
+    pragma Liquid_Requires(Contract => "true");
+    function sumTo(n: Int64): Int64 is
+        var i: Int64 := 0;
+        var total: Int64 := 0;
+        while i < n do
+            total := total + i;
+            i := i + 1;
+        end while;
+        return total;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

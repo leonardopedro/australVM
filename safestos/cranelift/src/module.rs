@@ -415,10 +415,11 @@ impl ModuleHost {
         // manifest happened to load last. The process-global deployment
         // principal is deliberately left alone: loading a module must not
         // redefine the authority of code compiled outside it.
-        let context = auth::bind_instance_for_node(
+        let context = auth::bind_instance_with_policy(
             manifest.name.clone(),
             manifest.strict,
             manifest.node.clone(),
+            engine.clone(),
         );
         let previous_grants = auth::install_module_grants(engine);
 
@@ -755,9 +756,14 @@ impl ModuleHost {
         // failed swap the grants are rolled back and the old handle — and its
         // live identity — stay in place.
         let current_context = old_handle.context.clone();
+        // U09: compile under the replacement's snapshot, so a narrowing swap
+        // cannot have a call admitted by the old grants, and a widening swap
+        // does not hand the old code the new authority.
+        let compile_context = auth::replace_policy(&current_context, engine.clone());
+        let policy = engine.clone();
         let previous_grants = auth::install_module_grants(engine);
         let built = {
-            let _scope = auth::enter_caller(&current_context);
+            let _scope = auth::enter_caller(&compile_context);
             if new_manifest.archetype == "ecmascript" {
                 #[cfg(feature = "ecmascript")]
                 {
@@ -808,7 +814,11 @@ impl ModuleHost {
         // The swap really happened: the old identity stops being live, so a
         // request that was already past its check under the previous code cannot
         // present that authority again.
-        handle.context = auth::rebind_instance(&current_context, handle.manifest.name.clone());
+        handle.context = auth::rebind_instance_with_policy(
+            &current_context,
+            handle.manifest.name.clone(),
+            Some(policy),
+        );
         self.modules.insert(module_name.to_string(), handle);
         Ok(())
     }

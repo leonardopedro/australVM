@@ -1,0 +1,48 @@
+module Example.Distributed.RequestState is
+    """
+    D16: one total distributed transition.
+
+    The lifecycle is finite and explicit: `Idle`, `Pending`, `Applied`,
+    `Rejected`. A request is identified by a stable `request` id and a payload
+    commitment (`digest`); both are carried in every non-idle state, so a
+    response can be checked against the bytes the state actually accepted.
+
+    `step` carries a `Liquid_Requires` contract, which puts it inside the Total
+    Austral Subset: no recursion, no loops, no foreign calls. `main` is outside
+    that fragment on purpose — it only prints the vectors.
+    """
+
+    union RequestState: Free is
+        case Idle;
+        case Pending is
+            held_request: Int64;
+            held_digest: Int64;
+        case Applied is
+            held_request: Int64;
+            held_digest: Int64;
+        case Rejected is
+            held_request: Int64;
+            held_digest: Int64;
+    end;
+
+    union RequestEvent: Free is
+        case Submit is
+            request: Int64;
+            digest: Int64;
+        case MatchingResponse is
+            request: Int64;
+            digest: Int64;
+        case Retry;
+        case CancelWait;
+    end;
+
+    record Transition: Free is
+        next: RequestState;
+        code: Int32;
+    end;
+
+    pragma Liquid_Requires(Contract => "true");
+    function step(state: RequestState, event: RequestEvent): Transition;
+
+    function main(): ExitCode;
+end module.

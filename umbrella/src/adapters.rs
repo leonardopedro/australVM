@@ -19,6 +19,10 @@ use crate::interface;
 pub struct AdapterCrate {
     pub path: PathBuf,
     pub generation: u32,
+    /// The symbols this crate exports for the JIT to call. With a local mapping
+    /// they are registered explicitly, so the JIT never falls back to global
+    /// scope to find an adapter.
+    pub exports: Vec<String>,
 }
 
 /// The bridge rlib the generated wrappers compile against. The wrappers call
@@ -62,6 +66,7 @@ pub fn build_at(
     adapters: &[interface::GeneratedAdapter<'_>],
     dir: &Path,
     generation: u32,
+    provider: Option<&Path>,
 ) -> Result<AdapterCrate, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let mut source = String::new();
@@ -76,14 +81,31 @@ pub fn build_at(
     let rlib = bridge_rlib()?;
     let deps = rlib.parent().unwrap_or(dir);
     let out = dir.join(format!("libumbrella_adapters_{generation}.so"));
-    let output = Command::new("rustc")
+    let mut command = Command::new("rustc");
+    command
         .arg("--crate-type=cdylib")
         .arg("--edition=2021")
         .arg("--crate-name=umbrella_adapters")
         .arg("-L")
         .arg(format!("dependency={}", deps.display()))
         .arg("--extern")
-        .arg(format!("austral_cranelift_bridge={}", rlib.display()))
+        .arg(format!("austral_cranelift_bridge={}", rlib.display()));
+    if let Some(provider) = provider {
+        // U10: link the admitted provider by absolute path. The dynamic loader
+        // records that absolute path as `DT_NEEDED`, so it reuses the image
+        // already mapped by `ProviderSet` instead of searching global scope or
+        // loading a second copy. The adapter can then be mapped `RTLD_LOCAL`.
+        let provider = std::fs::canonicalize(provider).map_err(|e| {
+            format!(
+                "cannot resolve provider {} for adapter linking: {e}",
+                provider.display()
+            )
+        })?;
+        command
+            .arg("-C")
+            .arg(format!("link-arg={}", provider.display()));
+    }
+    let output = command
         .arg("-o")
         .arg(&out)
         .arg(&file)
@@ -98,6 +120,7 @@ pub fn build_at(
     Ok(AdapterCrate {
         path: out,
         generation,
+        exports: adapters.iter().map(|a| a.symbol().to_string()).collect(),
     })
 }
 
@@ -140,20 +163,67 @@ extern "C" fn remove_scratch_dirs() {
 /// process-wide, so the crate a reload builds refuses the handles the previous
 /// one minted.
 pub fn build_next(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<AdapterCrate, String> {
+    build_next_against(adapters, None)
+}
+
+/// Build the next generation linked against the admitted provider. The legacy
+/// `build_next` leaves the reference unresolved for tests that map the provider
+/// globally themselves; the driver uses this form.
+pub fn build_next_against(
+    adapters: &[interface::GeneratedAdapter<'_>],
+    provider: Option<&Path>,
+) -> Result<AdapterCrate, String> {
     register_scratch_cleanup();
     let generation = interface::next_provider_generation();
     let dir = std::env::temp_dir().join(format!(
         "umbrella-adapters-{}-{generation}",
         std::process::id()
     ));
-    build_at(adapters, &dir, generation)
+    build_at(adapters, &dir, generation, provider)
 }
 
-/// Map an [`AdapterCrate`] into the process. `RTLD_NOW` binds the provider
-/// symbols the crate's wrapper code calls; `RTLD_GLOBAL` is what the bridge's
-/// `dlsym` fallback needs.
+/// Map an [`AdapterCrate`] into the process with the prototype's global scope.
+/// Kept for the reload tests, which preload their provider globally and call the
+/// wrappers directly. The driver uses [`load_for_jit`].
 pub fn load(built: &AdapterCrate) -> Result<(), String> {
     crate::policy::dlopen(&built.path).map(|_| ())
+}
+
+/// Map an adapter crate locally and register its exports by exact address, the
+/// shape the JIT needs when the provider is `RTLD_LOCAL`: the loader can find
+/// each adapter symbol through the crate's own handle, and a preloaded same-named
+/// export cannot answer instead.
+pub fn load_for_jit(built: &AdapterCrate) -> Result<(), String> {
+    let handle = crate::policy::dlopen_local(&built.path)
+        .map_err(|e| format!("map adapter crate {}: {e}", built.path.display()))?;
+    let existing = austral_cranelift_bridge::registered_static_symbols();
+    let mut resolved = Vec::with_capacity(built.exports.len());
+    for symbol in &built.exports {
+        let name = std::ffi::CString::new(symbol.as_str()).map_err(|e| format!("{symbol}: {e}"))?;
+        let address = unsafe { libc::dlsym(handle.as_ptr(), name.as_ptr()) };
+        if address.is_null() {
+            return Err(format!(
+                "adapter crate {} does not export `{symbol}`; the JIT import cannot \
+                 be bound to this build",
+                built.path.display()
+            ));
+        }
+        if let Some((_, old)) = existing.iter().find(|(n, _)| n == symbol) {
+            if *old != address as usize {
+                return Err(format!(
+                    "adapter export `{symbol}` collides with an existing static \
+                     registration at 0x{old:x} (selected 0x{:x})",
+                    address as usize
+                ));
+            }
+        }
+        resolved.push((symbol, address));
+    }
+    for (symbol, address) in resolved {
+        austral_cranelift_bridge::register_static_symbol(symbol, address as *const u8)
+            .map_err(|e| format!("adapter export `{symbol}`: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Resolve one symbol from one mapped image. `dlsym` here is scoped to the
