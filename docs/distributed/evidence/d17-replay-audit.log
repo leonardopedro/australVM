@@ -1,0 +1,32 @@
+# D17 adversarial replay audit
+# measured 2026-11-25T13:43:09Z
+
+$ bash scripts/check-distributed-wrappers
+EXIT=0
+check-distributed-wrappers: transport vectors agree (8) lines
+check-distributed-wrappers: test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.00s
+check-distributed-wrappers: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+check-distributed-wrappers: test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s (live mutual TLS)
+check-distributed-wrappers: Distributed.aui sha256=f51977c7eaa4d6999ac162c7df69bae18b6bb70e748c6611d383a583ccde1d8c
+check-distributed-wrappers: Distributed.aum sha256=cdca7df4670592b7a66139805add3b6f88e68a3faa992202ce48702481064483
+check-distributed-wrappers: RequestTransport.aum sha256=1bd803adb68ae52ec54d8ff8d8ae2d500aa92c3ce33800ca6db766a5446e2cae
+check-distributed-wrappers: bridge au_dist symbols=18
+
+$ cargo test --offline --manifest-path safestos/cranelift/Cargo.toml --lib -- distributed::
+test distributed::tests::a_reintroduced_resource_cannot_answer_a_stale_pending_request ... ok
+test distributed::tests::a_reintroduced_resource_cannot_revive_a_stale_token_or_wire ... ok
+test distributed::tests::a_request_id_cannot_be_active_on_two_resources_at_once ... ok
+test distributed::tests::a_request_id_names_one_action_while_its_incarnation_lives ... ok
+test distributed::tests::a_mismatched_digest_rejects_and_preserves_the_held_digest ... ok
+test distributed::tests::a_response_cannot_be_replayed_or_applied_twice ... ok
+test distributed::tests::a_retired_epoch_stops_every_pending_request_verb ... ok
+test distributed::tests::bounded_counters_refuse_overflow_and_capacity ... ok
+test distributed::tests::forged_handles_are_refused ... ok
+test distributed::tests::non_positive_identities_and_digests_are_refused ... ok
+test distributed::tests::replayed_wire_token_cannot_create_a_second_owner ... ok
+test distributed::tests::retired_epoch_is_refused ... ok
+test distributed::tests::request_transport_uses_a_fence_and_the_dispatch_protocol ... ok
+test distributed::tests::retry_reuses_the_identity_and_fence ... ok
+test distributed::tests::wrong_deployment_is_refused ... ok
+test distributed::tests::wrong_owner_is_refused ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.01s

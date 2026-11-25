@@ -34,6 +34,7 @@ pub const STATUS_ALREADY_SENT: i64 = -11;
 pub const STATUS_INVALID: i64 = -12;
 pub const STATUS_OVERFLOW: i64 = -13;
 pub const STATUS_CAPACITY: i64 = -14;
+pub const STATUS_STALE_RESOURCE: i64 = -15;
 
 /// A request outbox is a bounded local queue; retrying forever must not grow
 /// it without limit. The cap is far above the D16/D17 vectors.
@@ -138,6 +139,10 @@ struct Resource {
     owner: i64,
     epoch: i64,
     generation: i64,
+    /// Distinguishes successive introductions of the same resource id. A
+    /// token or request from a released incarnation must never authorize
+    /// against the next one, even when every caller-supplied field matches.
+    incarnation: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +151,7 @@ struct Token {
     deployment: i64,
     owner: i64,
     epoch: i64,
+    incarnation: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +169,7 @@ struct Request {
     deployment: i64,
     owner: i64,
     epoch: i64,
+    incarnation: i64,
     fence: i64,
     state: RequestState,
     attempts: u32,
@@ -179,10 +186,16 @@ struct Receipt {
 #[derive(Default)]
 pub struct Authority {
     next_handle: i64,
+    next_incarnation: i64,
     resources: BTreeMap<i64, Resource>,
     tokens: BTreeMap<i64, Token>,
     requests: BTreeMap<i64, Request>,
     receipts: BTreeMap<i64, Receipt>,
+    /// request id -> the resource incarnation it names. One id names one
+    /// action while that incarnation is live, including after the local
+    /// request object was waited on or disposed. The id is global because
+    /// `respond` carries only the request id and digest.
+    request_ids: BTreeMap<i64, i64>,
     /// wire id -> the token fields it carries and whether it was adopted.
     wires: BTreeMap<i64, (Token, bool)>,
 }
@@ -209,6 +222,10 @@ impl Authority {
         if self.resources.contains_key(&resource) {
             return STATUS_DUPLICATE;
         }
+        let Some(incarnation) = self.next_incarnation.checked_add(1) else {
+            return STATUS_OVERFLOW;
+        };
+        self.next_incarnation = incarnation;
         self.resources.insert(
             resource,
             Resource {
@@ -216,6 +233,7 @@ impl Authority {
                 owner,
                 epoch,
                 generation: 0,
+                incarnation,
             },
         );
         resource
@@ -252,6 +270,7 @@ impl Authority {
         if entry.epoch != epoch {
             return STATUS_RETIRED_EPOCH;
         }
+        let incarnation = entry.incarnation;
         let handle = self.mint();
         if handle < 0 {
             return handle;
@@ -263,14 +282,43 @@ impl Authority {
                 deployment,
                 owner,
                 epoch,
+                incarnation,
             },
         );
         handle
     }
 
+    fn token_status(&self, value: &Token) -> i64 {
+        let Some(entry) = self.resources.get(&value.resource) else {
+            return STATUS_NO_RESOURCE;
+        };
+        if entry.owner != value.owner {
+            return STATUS_WRONG_OWNER;
+        }
+        if entry.deployment != value.deployment {
+            return STATUS_WRONG_DEPLOYMENT;
+        }
+        if entry.epoch != value.epoch {
+            return STATUS_RETIRED_EPOCH;
+        }
+        if entry.incarnation != value.incarnation {
+            return STATUS_STALE_RESOURCE;
+        }
+        STATUS_OK
+    }
+
     /// Serialize a token to its wire identity *and consume the local handle*.
-    /// A serialized authority is therefore transferable, not copyable.
+    /// A serialized authority is therefore transferable, not copyable. A token
+    /// that no longer names a live incarnation is refused before it becomes a
+    /// wire value.
     pub fn token_wire(&mut self, token: i64) -> i64 {
+        let Some(value) = self.tokens.get(&token) else {
+            return STATUS_NO_TOKEN;
+        };
+        let status = self.token_status(value);
+        if status != STATUS_OK {
+            return status;
+        }
         let Some(value) = self.tokens.remove(&token) else {
             return STATUS_NO_TOKEN;
         };
@@ -292,6 +340,10 @@ impl Authority {
             return STATUS_REPLAY;
         }
         let token = token.clone();
+        let status = self.token_status(&token);
+        if status != STATUS_OK {
+            return status;
+        }
         let handle = self.mint();
         if handle < 0 {
             return handle;
@@ -322,10 +374,15 @@ impl Authority {
         if resource.epoch != value.epoch {
             return STATUS_RETIRED_EPOCH;
         }
+        let incarnation = resource.incarnation;
+        if self.request_ids.contains_key(&request_id) {
+            return STATUS_DUPLICATE;
+        }
         let handle = self.mint();
         if handle < 0 {
             return handle;
         }
+        self.request_ids.insert(request_id, incarnation);
         self.requests.insert(
             handle,
             Request {
@@ -335,6 +392,7 @@ impl Authority {
                 deployment: value.deployment,
                 owner: value.owner,
                 epoch: value.epoch,
+                incarnation: value.incarnation,
                 fence: 0,
                 state: RequestState::Pending,
                 attempts: 0,
@@ -360,6 +418,12 @@ impl Authority {
         let Some(resource) = self.resources.get_mut(&value.resource) else {
             return STATUS_NO_RESOURCE;
         };
+        if resource.incarnation != value.incarnation {
+            return STATUS_STALE_RESOURCE;
+        }
+        if resource.epoch != value.epoch {
+            return STATUS_RETIRED_EPOCH;
+        }
         let Some(next_generation) = resource.generation.checked_add(1) else {
             return STATUS_OVERFLOW;
         };
@@ -384,6 +448,15 @@ impl Authority {
         if value.outbox.len() >= MAX_OUTBOX {
             return STATUS_CAPACITY;
         }
+        let Some(resource) = self.resources.get(&value.resource) else {
+            return STATUS_NO_RESOURCE;
+        };
+        if resource.incarnation != value.incarnation {
+            return STATUS_STALE_RESOURCE;
+        }
+        if resource.epoch != value.epoch {
+            return STATUS_RETIRED_EPOCH;
+        }
         value.attempts = value.attempts.saturating_add(1);
         value.outbox.push("dispatching");
         1
@@ -395,6 +468,15 @@ impl Authority {
         };
         if value.outbox.len() >= MAX_OUTBOX {
             return STATUS_CAPACITY;
+        }
+        let Some(resource) = self.resources.get(&value.resource) else {
+            return STATUS_NO_RESOURCE;
+        };
+        if resource.incarnation != value.incarnation {
+            return STATUS_STALE_RESOURCE;
+        }
+        if resource.epoch != value.epoch {
+            return STATUS_RETIRED_EPOCH;
         }
         value.outbox.push("cancel_wait");
         // The authority still owns the request; cancellation is local.
@@ -442,6 +524,9 @@ impl Authority {
         if entry.epoch != epoch {
             return STATUS_RETIRED_EPOCH;
         }
+        if entry.incarnation != self.requests[&handle].incarnation {
+            return STATUS_STALE_RESOURCE;
+        }
         let Some(value) = self.requests.get_mut(&handle) else {
             return STATUS_NO_REQUEST;
         };
@@ -473,6 +558,15 @@ impl Authority {
             return STATUS_NO_REQUEST;
         };
         if value.state == RequestState::Pending {
+            let Some(resource) = self.resources.get(&value.resource) else {
+                return STATUS_NO_RESOURCE;
+            };
+            if resource.incarnation != value.incarnation {
+                return STATUS_STALE_RESOURCE;
+            }
+            if resource.epoch != value.epoch {
+                return STATUS_RETIRED_EPOCH;
+            }
             return 0;
         }
         let receipt = Receipt {
@@ -525,6 +619,9 @@ impl Authority {
         if entry.epoch != value.epoch {
             return STATUS_RETIRED_EPOCH;
         }
+        if entry.incarnation != value.incarnation {
+            return STATUS_STALE_RESOURCE;
+        }
         STATUS_OK
     }
 
@@ -537,11 +634,19 @@ impl Authority {
     }
 
     pub fn release_resource(&mut self, resource: i64) -> i64 {
-        if self.resources.remove(&resource).is_some() {
-            STATUS_OK
-        } else {
-            STATUS_NO_RESOURCE
-        }
+        let Some(entry) = self.resources.remove(&resource) else {
+            return STATUS_NO_RESOURCE;
+        };
+        // Live local handles for this incarnation die with the resource. A
+        // wire token may still be adopted (and is then refused as stale by its
+        // recorded incarnation), but it can never answer for the next one.
+        self.tokens
+            .retain(|_, token| token.incarnation != entry.incarnation);
+        self.requests
+            .retain(|_, request| request.incarnation != entry.incarnation);
+        self.request_ids
+            .retain(|_, incarnation| *incarnation != entry.incarnation);
+        STATUS_OK
     }
 
     #[cfg(test)]
@@ -790,10 +895,16 @@ mod tests {
     #[test]
     fn retired_epoch_is_refused() {
         let mut a = authority_with_resource();
+        let wire_token = a.issue_token(101, 303, 202, 1);
+        let wire = a.token_wire(wire_token);
+        assert!(wire > 0);
+        let serializable = a.issue_token(101, 303, 202, 1);
         let token = a.issue_token(101, 303, 202, 1);
         assert!(token > 0);
         assert_eq!(a.retire(101, 2), STATUS_OK);
         assert_eq!(a.authorize(token, 101), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.token_wire(serializable), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.adopt_wire(wire), STATUS_RETIRED_EPOCH);
     }
 
     #[test]
@@ -802,12 +913,16 @@ mod tests {
         let token = a.issue_token(101, 303, 202, 1);
         let wire = a.token_wire(token);
         assert!(wire > 0);
+        assert_eq!(a.token_wire(token), STATUS_NO_TOKEN);
         let adopted = a.adopt_wire(wire);
         assert!(adopted > 0);
         assert_eq!(a.adopt_wire(wire), STATUS_REPLAY);
         assert_eq!(a.authorize(adopted, 101), STATUS_OK);
+        assert_eq!(a.authorize(adopted, 101), STATUS_NO_TOKEN);
         // The original handle was consumed by serialization.
         assert_eq!(a.authorize(token, 101), STATUS_NO_TOKEN);
+        assert_eq!(a.release_resource(101), STATUS_OK);
+        assert_eq!(a.release_resource(101), STATUS_NO_RESOURCE);
     }
 
     #[test]
@@ -887,6 +1002,11 @@ mod tests {
         let token = b.issue_token(101, 303, 202, 1);
         let request = b.open_request(token, 7, 11);
         assert_eq!(b.submit(request), STATUS_OVERFLOW);
+
+        let mut c = Authority::default();
+        c.next_incarnation = i64::MAX;
+        assert_eq!(c.introduce(101, 202, 303, 1), STATUS_OVERFLOW);
+        assert!(!c.resources.contains_key(&101));
     }
 
     #[test]
@@ -899,5 +1019,113 @@ mod tests {
         assert_eq!(a.fence(101), 1);
         let outbox = a.outbox(request);
         assert_eq!(outbox, vec!["planned", "dispatching", "dispatching"]);
+    }
+
+    #[test]
+    fn a_reintroduced_resource_cannot_revive_a_stale_token_or_wire() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let wire = a.token_wire(token);
+        assert!(wire > 0);
+
+        assert_eq!(a.release_resource(101), STATUS_OK);
+        assert_eq!(a.introduce(101, 202, 303, 1), 101);
+
+        assert_eq!(a.adopt_wire(wire), STATUS_STALE_RESOURCE);
+        // Adoption does not consume a stale wire: retrying the same bytes is
+        // still refused, never converted into a current token.
+        assert_eq!(a.adopt_wire(wire), STATUS_STALE_RESOURCE);
+
+        let fresh = a.issue_token(101, 303, 202, 1);
+        assert!(fresh > 0);
+        assert_eq!(a.authorize(fresh, 101), STATUS_OK);
+    }
+
+    #[test]
+    fn a_reintroduced_resource_cannot_answer_a_stale_pending_request() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let request = a.open_request(token, 7, 11);
+        assert_eq!(a.submit(request), STATUS_OK);
+
+        assert_eq!(a.release_resource(101), STATUS_OK);
+        assert_eq!(a.introduce(101, 202, 303, 1), 101);
+
+        assert_eq!(a.respond(7, 11, 1), STATUS_NO_REQUEST);
+        assert_eq!(a.wait(request), STATUS_NO_REQUEST);
+        assert_eq!(a.retry(request), STATUS_NO_REQUEST);
+
+        // A fresh request with the same id is legal only because the old
+        // resource incarnation was released; it cannot inherit the old one.
+        let token = a.issue_token(101, 303, 202, 1);
+        let fresh = a.open_request(token, 7, 11);
+        assert!(fresh > 0);
+        assert_eq!(a.submit(fresh), STATUS_OK);
+        assert_eq!(a.respond(7, 11, 1), STATUS_OK);
+    }
+
+    #[test]
+    fn a_response_cannot_be_replayed_or_applied_twice() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let request = a.open_request(token, 7, 11);
+        assert_eq!(a.submit(request), STATUS_OK);
+        assert_eq!(a.respond(7, 11, 1), STATUS_OK);
+        assert_eq!(a.respond(7, 11, 1), STATUS_ALREADY_SENT);
+        let receipt = a.wait(request);
+        assert!(receipt > 0);
+        assert_eq!(a.receipt_code(receipt), RESULT_APPLIED);
+        assert_eq!(a.respond(7, 11, 1), STATUS_NO_REQUEST);
+        assert_eq!(a.wait(request), STATUS_NO_REQUEST);
+    }
+
+    #[test]
+    fn a_retired_epoch_stops_every_pending_request_verb() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let unsent = a.open_request(token, 7, 11);
+        assert!(unsent > 0);
+
+        let token = a.issue_token(101, 303, 202, 1);
+        let sent = a.open_request(token, 8, 12);
+        assert_eq!(a.submit(sent), STATUS_OK);
+
+        assert_eq!(a.retire(101, 2), STATUS_OK);
+        assert_eq!(a.submit(unsent), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.retry(sent), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.cancel_wait(sent), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.wait(sent), STATUS_RETIRED_EPOCH);
+        assert_eq!(a.respond(8, 12, 1), STATUS_RETIRED_EPOCH);
+    }
+
+    #[test]
+    fn a_request_id_names_one_action_while_its_incarnation_lives() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let request = a.open_request(token, 7, 11);
+        assert!(request > 0);
+
+        let duplicate = a.issue_token(101, 303, 202, 1);
+        assert_eq!(a.open_request(duplicate, 7, 11), STATUS_DUPLICATE);
+
+        assert_eq!(a.submit(request), STATUS_OK);
+        assert_eq!(a.respond(7, 11, 1), STATUS_OK);
+        let receipt = a.wait(request);
+        assert!(receipt > 0);
+
+        // The local request is gone, but a replay of its id is still the same
+        // action, not a new one.
+        let replay = a.issue_token(101, 303, 202, 1);
+        assert_eq!(a.open_request(replay, 7, 11), STATUS_DUPLICATE);
+    }
+
+    #[test]
+    fn a_request_id_cannot_be_active_on_two_resources_at_once() {
+        let mut a = authority_with_resource();
+        assert_eq!(a.introduce(102, 202, 303, 1), 102);
+        let first = a.issue_token(101, 303, 202, 1);
+        assert!(a.open_request(first, 7, 11) > 0);
+        let second = a.issue_token(102, 303, 202, 1);
+        assert_eq!(a.open_request(second, 7, 11), STATUS_DUPLICATE);
     }
 }
