@@ -5620,3 +5620,25 @@ lake env _out/l4e/.lake/build/bin/lean4export ConLeche.Model.Fold -- \
 python3 scripts/lean-proof-scan ../con-leche/_out/capstone.ndjson \
   ConLeche.Model.no_proof_of_Empty_pure <work-dir>
 ```
+
+**What a verified declaration leaves behind is a statement, not a proof (§13.62a).** A
+derivation is dozens of megabytes that say one thing — this statement has a proof both
+checkers accept — so `lean-proof-scan` now keeps that thing and drops the rest. On a pass it
+writes the statement (`<work>.memo/stmt/<export-sha12>/<name>.mm0`: the theory prefix, the
+payload numerals and the goal, with the assumptions and the derivation removed), appends the
+verdict to `<work>.memo/index.tsv`, and deletes `.mm1`, `.mmb`, the emitter's own copies and
+the obligation stream. Measured on the two capstone declarations: `scan/` went from
+46 654 + 47 568 + 21 560 B per declaration plus the emitter's 28 552 + 29 466 + 41 756 B to
+the 46 654 B `full.mm0` alone, and the ledger costs 21 393 + 22 165 B of statement text and a
+12-column row per declaration.
+
+An entry is keyed on the export's sha256, the theory's bytes and the derivation mode, because
+those three are what the verdict was about: the same export rescanned — an interrupted sweep, a
+`--only` subset followed by a whole-namespace one — is a hit, while a re-export, an edited
+`docs/cic*.mm0`, or a different mode is a miss by construction rather than by a guess at what
+"the same theorem" means. On a hit the scan emits nothing and runs neither checker; the rerun
+above reports both declarations as proved at 0.0 s of scan against 17.0 s emitting them, with
+the remaining 8.3 s being the export's index. `--no-memo` turns it off and `--keep-proofs`
+keeps the derivation for reading. The statement file is a bare `.mm0` statement, so `mm0-rs`
+reports it as `sorry` — that is the honest reading of a proof that is not in the file, and the
+ledger row is what says the statement was derived.

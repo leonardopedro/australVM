@@ -12,7 +12,15 @@ A declaration that the deriver cannot express is recorded with the reason it
 gave and the class of that reason, so the histogram is the worklist: each class
 is a rule the theory or the emitter does not have yet.
 
+What a verified declaration leaves behind is a statement that is proved — the
+derivation itself is megabytes that say exactly that, so it is discarded. The
+statement and the verdict go into a ledger (`<work-dir>.memo`, or `--memo=DIR`),
+and a declaration whose statement is already in it for the same export is not
+emitted or checked again: a sweep that was interrupted, or a subset scan
+followed by a superset one, resumes instead of restarting.
+
 Usage: lean-proof-scan <export.ndjson> <module-prefix> <work-dir> [--defer-subst]
+       [--memo=DIR | --no-memo] [--keep-proofs]
 
 Exit status is 0 when the scan itself ran (whatever it found), 1 when nothing
 in scope could be verified.
@@ -20,6 +28,7 @@ in scope could be verified.
 from __future__ import annotations
 
 import collections
+import hashlib
 import importlib.machinery
 import importlib.util
 import os
@@ -95,6 +104,95 @@ MM0_RS_TIMEOUT = int(os.environ.get("SCAN_MM0_RS_TIMEOUT", "240"))
 MM0_RS_MEM_GB = int(os.environ.get("SCAN_MM0_RS_MEM_GB", "10"))
 
 
+# ── the ledger of proved statements ──────────────────────────────────────────
+#
+# An entry is written only after `mm0-rs` and `mm0-c` have both accepted the
+# derivation, and it is keyed to the export that produced it (`Export.sha256`,
+# declaration name, kind). The verdict is about the statement's *text*, and the
+# text is what the derivation was about; recomputing it cheaply would mean
+# having the statement, which is the thing the ledger keeps. So the key is the
+# input: the same export rescanned (an interrupted sweep, a subset scan then a
+# superset one) is a hit, and a re-export is a miss by construction rather than
+# by a guess at what "the same theorem" means across two files.
+LEDGER_COLUMNS = ("export", "theory", "mode", "declaration", "kind", "rules",
+                  "assumptions", "statement_bytes", "statement_sha256",
+                  "derivation_sha256", "derivation_bytes", "verified_at")
+
+
+def slug(nm: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.]", "_", nm).strip("_")
+
+
+def ledger_read(root: Path) -> dict[tuple[str, str, str, str], dict[str, str]]:
+    """The last entry per (export, theory, mode, declaration)."""
+    index = root / "index.tsv"
+    out: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    if not index.exists():
+        return out
+    for line in index.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        row = dict(zip(LEDGER_COLUMNS, line.split("\t")))
+        if len(row) == len(LEDGER_COLUMNS):
+            out[(row["export"], row["theory"], row["mode"],
+                 row["declaration"])] = row
+    return out
+
+
+def statement_of(full0: Path) -> str:
+    """A verified `.mm0` minus its assumptions: the statement and its setting.
+
+    The emitter writes the artifact in four bands — theory prefix, header,
+    payload numerals, assumptions, then the goal. The goal is `tty …` at the
+    declaration's own type, and the assumptions are the leaf typings the
+    derivation consumed: they are not part of what was proved, and keeping them
+    would keep most of the proof's working set. Whatever the statement's text
+    refers to (the numerals MM0 will not read inside `$…$`) sits above the
+    assumptions and stays.
+    """
+    text = full0.read_text()
+    head = text[:text.index("-- ── assumptions ──")]
+    goal = text[text.index("-- ── the derivation ──"):]
+    state = ("-- State         : PROVED — `mm0-rs compile` and `mm0-c` accepted "
+             "the derivation of this\n"
+             "--                 statement; the derivation itself was discarded "
+             "after verification\n"
+             "--                 (its sha256 and size are in the ledger's "
+             "index.tsv).\n"
+             "-- As an `.mm0` file this is a bare statement, and `mm0-rs` will "
+             "report it as\n"
+             "-- `sorry`: the proof is not here, and nothing in MM0 lets one "
+             "file cite\n"
+             "-- another's proof. The ledger is what says this statement was "
+             "derived.\n")
+    goal = goal.replace("-- ── the derivation ──",
+                        "-- ── the statement, proved", 1)
+    return head + state + goal
+
+
+def ledger_append(root: Path, full0: Path, full1: Path, export_sha: str,
+                  theory_sha: str, mode: str, name: str, kind: str,
+                  rules: int, axs: int) -> Path:
+    dest = root / "stmt" / export_sha[:12]
+    dest.mkdir(parents=True, exist_ok=True)
+    text = statement_of(full0)
+    path = dest / (slug(name) + ".mm0")
+    path.write_text(text)
+    index = root / "index.tsv"
+    fresh = not index.exists()
+    with index.open("a") as fh:
+        if fresh:
+            fh.write("# " + "\t".join(LEDGER_COLUMNS) + "\n")
+        fh.write("\t".join(str(v) for v in (
+            export_sha, theory_sha, mode, name, kind, rules, axs,
+            path.stat().st_size,
+            hashlib.sha256(text.encode()).hexdigest(),
+            hashlib.sha256(full1.read_bytes()).hexdigest(),
+            full1.stat().st_size,
+            time.strftime("%Y-%m-%dT%H:%M:%S"))) + "\n")
+    return path
+
+
 def cap_mem(gb: int):
     """A `preexec_fn` bounding a child's address space."""
     def apply() -> None:
@@ -117,25 +215,53 @@ def main() -> int:
     # block), so the prefix is the namespace, not the file stem; `--limit` keeps
     # a namespace-wide scan to a bounded proof of concept.
     limit = 0
+    # The ledger of proved statements survives the work directory on purpose:
+    # the work directory is what a scan rebuilds, and re-verifying what was
+    # already verified is the cost the ledger exists to remove.
+    keep_proofs = "--keep-proofs" in sys.argv
     # `--only=FILE`: restrict the scope to names listed one per line. A chapter
     # export carries its whole dependency closure, in which the chapter's own
     # declarations are a few dozen out of tens of thousands, so a sample drawn
     # from the export at large is a sample of Mathlib — the roots file that
     # records what the chapter itself states is the only way to aim at it.
     only: set[str] | None = None
+    memo_arg: str | None = None
     for a in sys.argv[1:]:
-        if a.startswith("--limit="):
+        if a.startswith("--memo="):
+            memo_arg = a.split("=", 1)[1]
+        elif a.startswith("--limit="):
             limit = int(a.split("=", 1)[1])
         elif a.startswith("--only="):
             only = {l.strip() for l in
                     Path(a.split("=", 1)[1]).read_text().splitlines() if l.strip()}
     export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
     extra = ["--spine"] + (["--defer-subst"] if defer else [])
+    ledger: dict[tuple[str, str], dict[str, str]] | None
+    if memo_arg == "off" or "--no-memo" in sys.argv:
+        ledger = None
+        memo_root: Path | None = None
+    else:
+        memo_root = Path(memo_arg) if memo_arg else work.with_name(work.name + ".memo")
+        ledger = None  # filled once the export has an identity
+
 
     # Lazy: the scan only needs the declaration table, and materialising every
     # expression of a 460 MB export cost 7 GB before the first declaration was
     # emitted — the memory the emitter was blamed for.
     ex = l2m.Export(export_path, lazy=True)
+    # The verdict is about the statement *in this theory*, so the theory's own
+    # bytes and the derivation mode are part of an entry's identity: editing
+    # `docs/cic*.mm0` or asking for `--defer-subst` must not inherit a proof
+    # that was checked against something else.
+    prefix_text = theory_text()
+    theory_sha = hashlib.sha256(prefix_text.encode()).hexdigest()
+    mode_tag = "spine" + ("+defer" if defer else "")
+    if memo_root is not None:
+        ledger = ledger_read(memo_root)
+        here = sum(1 for (s, t, m, _n) in ledger
+                   if s == ex.sha256 and t == theory_sha and m == mode_tag)
+        print(f"ledger : {memo_root} ({here} of its {len(ledger)} entries are "
+              f"this export + theory + mode)")
     scope = [
         (nm, kind)
         for nm, (kind, rec, _i) in ex.decls.items()
@@ -161,14 +287,25 @@ def main() -> int:
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    prefix_text = theory_text()
 
     closed: list[tuple[str, str, int, int]] = []
     failed: list[tuple[str, str]] = []
+    remembered = 0
     t0 = time.time()
 
     for nm, kind in scope:
         short = nm[len(prefix):] if nm.startswith(prefix) else nm
+        # Already proved, for exactly this export: the statement is in the
+        # ledger, and the derivation that got it there is gone. Nothing is
+        # emitted and neither checker runs.
+        row = ledger.get((ex.sha256, theory_sha, mode_tag, nm)) if ledger else None
+        if row is not None and row["kind"] == kind:
+            remembered += 1
+            closed.append((short, kind, int(row["rules"]), int(row["assumptions"])))
+            print(f"  memo  ✓ {short} [{kind}] rules={row['rules']} "
+                  f"assumptions={row['assumptions']} "
+                  f"(proved {row['verified_at']})")
+            continue
         out = work / re.sub(r"[^A-Za-z0-9_]", "_", short).strip("_")
         # The emitter holds the whole derivation in memory, and on the largest
         # chapters that is tens of GB (`ChapterEsaClosureCore` reached 11.9 GB
@@ -227,10 +364,30 @@ def main() -> int:
         rules = int(re.search(r"Rules applied : (\d+)", head).group(1))
         axs = int(re.search(r"Assumptions   : (\d+)", head).group(1))
         closed.append((short, kind, rules, axs))
-        print(f"  pass  ✓ {short} [{kind}] rules={rules} assumptions={axs}")
+        discarded = ""
+        if ledger is not None and memo_root is not None:
+            # The statement and its verdict outlive the proof; the proof does
+            # not. `--keep-proofs` is for reading a derivation afterwards, not
+            # for the sweep.
+            ledger_append(memo_root, full0, full1, ex.sha256, theory_sha,
+                          mode_tag, nm, kind, rules, axs)
+            if not keep_proofs:
+                # Both copies of the derivation go: the emitter's own `.mm1`
+                # and the assembled one, its binary, and the conversion
+                # obligations that existed to build it. What stays is
+                # `full.mm0`, the statement as `mm0-c` read it.
+                for p in (full1, out / "full.mmb", stem.with_suffix(".mm1"),
+                          stem.with_suffix(".mm0"),
+                          Path(str(stem) + "_obligations.jsonl")):
+                    p.unlink(missing_ok=True)
+                discarded = ", proof discarded"
+        print(f"  pass  ✓ {short} [{kind}] rules={rules} assumptions={axs}{discarded}")
 
     print()
     print(f"verified closures : {len(closed)}/{len(scope)}")
+    if remembered:
+        print(f"memo hits         : {remembered} (proved in an earlier run of "
+              f"this export; not emitted, not re-checked)")
     if closed:
         tot_r = sum(c[2] for c in closed)
         tot_a = sum(c[3] for c in closed)
