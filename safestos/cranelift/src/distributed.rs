@@ -45,6 +45,11 @@ const MAX_OUTBOX: usize = 64;
 /// tombstone set bounded; a full set fails closed with `STATUS_CAPACITY`.
 const MAX_REQUEST_IDS: usize = 1 << 16;
 
+/// Released resources keep their wire values so adoption can distinguish a
+/// stale transfer from an unknown one. Bound that cache; under pressure stale
+/// wires are evicted first, and a cache full of live wires fails closed.
+const MAX_WIRES: usize = 1 << 16;
+
 /// One D17 authority verb. The FFI functions below are thin wrappers over
 /// this enum so a live transport can carry the same operation to another
 /// process without changing the Austral surface.
@@ -198,7 +203,6 @@ struct RequestIdTombstone {
 
 /// The authority's state. A fresh one is created for each process; tests build
 /// their own instead of sharing the FFI global.
-#[derive(Default)]
 pub struct Authority {
     next_handle: i64,
     next_incarnation: i64,
@@ -213,9 +217,38 @@ pub struct Authority {
     request_ids: BTreeMap<i64, RequestIdTombstone>,
     /// wire id -> the token fields it carries and whether it was adopted.
     wires: BTreeMap<i64, (Token, bool)>,
+    /// Test seam for the capacity refusal; production authorities use
+    /// `MAX_REQUEST_IDS`.
+    request_id_limit: usize,
+}
+
+impl Default for Authority {
+    fn default() -> Self {
+        Self {
+            next_handle: 0,
+            next_incarnation: 0,
+            resources: BTreeMap::new(),
+            tokens: BTreeMap::new(),
+            requests: BTreeMap::new(),
+            receipts: BTreeMap::new(),
+            request_ids: BTreeMap::new(),
+            wires: BTreeMap::new(),
+            request_id_limit: MAX_REQUEST_IDS,
+        }
+    }
 }
 
 impl Authority {
+    /// Build an authority whose request-id capacity can be reached cheaply by
+    /// the live transport harness. The production constructor is `default`.
+    #[doc(hidden)]
+    pub fn with_request_id_limit(limit: usize) -> Self {
+        Self {
+            request_id_limit: limit.max(1),
+            ..Self::default()
+        }
+    }
+
     fn mint(&mut self) -> i64 {
         match self.next_handle.checked_add(1) {
             Some(next) => {
@@ -353,6 +386,10 @@ impl Authority {
         if status != STATUS_OK {
             return status;
         }
+        let status = self.make_wire_room();
+        if status != STATUS_OK {
+            return status;
+        }
         let Some(value) = self.tokens.remove(&token) else {
             return STATUS_NO_TOKEN;
         };
@@ -362,6 +399,25 @@ impl Authority {
         }
         self.wires.insert(wire, (value, false));
         wire
+    }
+
+    /// Keep the wire cache bounded without losing the stale-transfer
+    /// distinction while there is room. Only wires for a released incarnation
+    /// or a retired epoch are evictable; live wires are not silently dropped.
+    fn make_wire_room(&mut self) -> i64 {
+        if self.wires.len() < MAX_WIRES {
+            return STATUS_OK;
+        }
+        self.wires.retain(|_, (token, _)| {
+            self.resources.get(&token.resource).is_some_and(|resource| {
+                resource.epoch == token.epoch && resource.incarnation == token.incarnation
+            })
+        });
+        if self.wires.len() < MAX_WIRES {
+            STATUS_OK
+        } else {
+            STATUS_CAPACITY
+        }
     }
 
     /// Adopt wire bytes exactly once. Replaying the same bytes is refused, so
@@ -412,7 +468,7 @@ impl Authority {
         if self.request_ids.contains_key(&request_id) {
             return STATUS_DUPLICATE;
         }
-        if self.request_ids.len() >= MAX_REQUEST_IDS {
+        if self.request_ids.len() >= self.request_id_limit {
             return STATUS_CAPACITY;
         }
         let handle = self.mint();
@@ -747,7 +803,9 @@ fn with<R>(f: impl FnOnce(&mut Authority) -> R) -> R {
 pub fn apply(authority: &mut Authority, operation: Operation) -> i64 {
     match operation {
         Operation::Reset => {
+            let limit = authority.request_id_limit;
             *authority = Authority::default();
+            authority.request_id_limit = limit;
             0
         }
         Operation::Introduce {
@@ -1143,6 +1201,81 @@ mod tests {
         assert_eq!(a.release_resource(101), STATUS_OK);
         assert_eq!(a.receipt_code(receipt), STATUS_NO_REQUEST);
         assert!(a.request_ids.is_empty());
+    }
+
+    #[test]
+    fn stale_wires_are_evicted_before_the_wire_cache_refuses() {
+        let mut a = authority_with_resource();
+        let stale = Token {
+            resource: 999,
+            deployment: 202,
+            owner: 303,
+            epoch: 1,
+            incarnation: 1,
+        };
+        for wire in 1..=MAX_WIRES as i64 {
+            a.wires.insert(wire, (stale.clone(), false));
+        }
+
+        let token = a.issue_token(101, 303, 202, 1);
+        let wire = a.token_wire(token);
+        assert!(wire > 0);
+        assert_eq!(a.wires.len(), 1, "stale wires should be reclaimed");
+    }
+
+    #[test]
+    fn a_rejected_response_receipt_lives_until_the_resource_is_released() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let request = a.open_request(token, 7, 11);
+        assert_eq!(a.submit(request), STATUS_OK);
+        assert_eq!(a.respond(7, 11, 0), STATUS_OK);
+        let receipt = a.wait(request);
+        assert!(receipt > 0);
+        assert_eq!(a.receipt_code(receipt), RESULT_REJECTED);
+        assert_eq!(a.release_resource(101), STATUS_OK);
+        assert_eq!(a.receipt_code(receipt), STATUS_NO_REQUEST);
+    }
+
+    #[test]
+    fn cancellation_alone_mints_no_receipt_and_keeps_the_request_terminal() {
+        let mut a = authority_with_resource();
+        let token = a.issue_token(101, 303, 202, 1);
+        let request = a.open_request(token, 7, 11);
+        assert_eq!(a.submit(request), STATUS_OK);
+        assert_eq!(a.cancel_wait(request), STATUS_OK);
+        assert_eq!(
+            a.wait(request),
+            0,
+            "cancellation leaves the request pending"
+        );
+        assert!(a.receipts.is_empty());
+
+        assert_eq!(a.respond(7, 11, 0), STATUS_OK);
+        let receipt = a.wait(request);
+        assert!(receipt > 0);
+        assert_eq!(a.receipt_code(receipt), RESULT_REJECTED);
+        assert_eq!(a.receipt_release(receipt), STATUS_OK);
+        assert_eq!(a.receipt_code(receipt), STATUS_NO_REQUEST);
+    }
+
+    #[test]
+    fn a_full_live_wire_cache_fails_closed_without_consuming_the_token() {
+        let mut a = authority_with_resource();
+        let live = Token {
+            resource: 101,
+            deployment: 202,
+            owner: 303,
+            epoch: 1,
+            incarnation: 1,
+        };
+        for wire in 1..=MAX_WIRES as i64 {
+            a.wires.insert(wire, (live.clone(), false));
+        }
+
+        let token = a.issue_token(101, 303, 202, 1);
+        assert_eq!(a.token_wire(token), STATUS_CAPACITY);
+        assert_eq!(a.authorize(token, 101), STATUS_OK);
     }
 
     #[test]
