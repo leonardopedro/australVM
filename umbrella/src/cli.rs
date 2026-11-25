@@ -27,6 +27,7 @@ pub const USAGE: &str = "usage: umbrella [--project <json>] [--manifest <toml>] 
        \x20            [--austral <bin>] [--cratedir <dir>] [--expect <i64>] [--json]\n\
        \x20            [--cargo-package <name>] [--target-dir <dir>]\n\
        \x20            [--profile dev|release] [--features <list>]... [--locked] [--offline]\n\
+       \x20            [--liquid-required]\n\
        \x20            [--] <module.aum>...\n\
        \x20      umbrella --help | --version";
 
@@ -49,6 +50,9 @@ pub struct Cli {
     pub features: Vec<String>,
     pub locked: bool,
     pub offline: bool,
+    /// U07: make a missing liquid engine a hard artifact failure instead of a
+    /// structured skip. Off by default, matching the compiler's optional mode.
+    pub liquid_required: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +286,13 @@ where
                 once(&mut seen, "offline")?;
                 cli.offline = true;
             }
+            "liquid-required" => {
+                if inline.is_some() {
+                    return Err(UsageError::new("`--liquid-required` takes no value"));
+                }
+                once(&mut seen, "liquid-required")?;
+                cli.liquid_required = true;
+            }
             "expect" => {
                 once(&mut seen, "expect")?;
                 let raw = take_value("expect", true)?;
@@ -493,6 +504,8 @@ mod tests {
         assert_eq!(cli.profile, Profile::Dev);
         assert_eq!(cli.features, vec!["a b".to_string(), "c".to_string()]);
         assert!(cli.locked && cli.offline);
+        assert!(!cli.liquid_required);
+        assert!(run(&["--liquid-required", "D.aum"]).liquid_required);
         // The default stays the prototype's release build.
         assert_eq!(run(&["D.aum"]).profile, Profile::Release);
         assert_eq!(Profile::parse("release"), Ok(Profile::Release));

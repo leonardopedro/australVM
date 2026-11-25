@@ -41,6 +41,7 @@ let test_compile_default _ =
                             allow_all = false;
                             auth_manifest = None;
                             emit_cps_path = None;
+                            emit_cps_only = false;
                             emit_adapters_path = None;
                             pkg_totality = false;
                             emit_derivations = None;

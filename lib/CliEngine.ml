@@ -89,7 +89,11 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_adapters_path; pkg_totality; emit_derivations; emit_linearity_ledger } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_cps_only; emit_adapters_path; pkg_totality; emit_derivations; emit_linearity_ledger } ->
+     if emit_cps_only && emit_cps_path = None then
+       err "--emit-cps-only requires --emit-cps=<path>.";
+     if emit_cps_only && (not use_cps_jit) && (not jit_server) then
+       err "--emit-cps-only requires --use-cps-jit (the CPS lowering).";
      validate_jit_server_target jit_server target;
      (match target with
       | WgslBundle _ | MlirBundle _ ->
@@ -120,6 +124,7 @@ let rec exec (cmd: cmd): unit =
      Compiler.use_cps_jit := use_cps_jit;
      Compiler.jit_server_mode := jit_server;
      Compiler.emit_cps_path := emit_cps_path;
+     Compiler.emit_cps_only := emit_cps_only;
      Compiler.emit_adapters_path := emit_adapters_path;
      Compiler.pkg_totality := pkg_totality;
      Compiler.emit_derivations_path := emit_derivations;
@@ -189,6 +194,7 @@ and compile_help_lines (): string list =
     "    --auth-manifest=<path>  Load a module.toml grant set into the JIT";
     "                    authorization engine.";
     "    --emit-cps      Save CPS binary IR to the given path.";
+    "    --emit-cps-only Emit the CPS artifact and stop: no bridge init, no JIT.";
     "    --emit-adapters Write the adapter descriptors the CPS lowering requires.";
     "    --pkg-totality[=true|false]  Package modules only: run the totality";
     "                    pass, which rejects while loops, recursion, foreign/embed";
