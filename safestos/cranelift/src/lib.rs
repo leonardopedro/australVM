@@ -18,6 +18,7 @@ pub mod auth;
 pub mod capstd_mod;
 pub mod capture;
 pub mod cps;
+pub mod distributed;
 #[cfg(feature = "ecmascript")]
 pub mod ecma;
 pub mod federation;
@@ -526,6 +527,12 @@ pub extern "C" fn cranelift_init() -> i64 {
             builder.symbol("__union_new", au_exit as *const u8);
             builder.symbol("__record_new", au_exit as *const u8);
             builder.symbol("__slot_get", au_exit as *const u8);
+
+            // D17: the host authority behind the linear `Distributed` wrappers.
+            // These are `au_*` runtime symbols: the manifest gate leaves them
+            // free (they are the runtime, not a kernel capability), but the
+            // module still has to declare each import it uses.
+            register_distributed_symbols(&mut builder);
 
             // Register the Austral.Pervasive::trapping* arithmetic intrinsics
             // (see au_trapping_* above): CPS-lowered `+ - * /` on Int64 call
@@ -1116,6 +1123,33 @@ pub(crate) const RS_FFI_SYMBOLS: &[KernelSymbol] = &[
     },
 ];
 
+fn register_distributed_symbols(builder: &mut JITBuilder) {
+    for sym in DISTRIBUTED_SYMBOLS {
+        builder.symbol(sym.name, sym.addr);
+    }
+}
+
+pub(crate) const DISTRIBUTED_SYMBOLS: &[KernelSymbol] = &[
+    KernelSymbol { name: "au_dist_reset", addr: distributed::au_dist_reset as *const u8 },
+    KernelSymbol { name: "au_dist_introduce", addr: distributed::au_dist_introduce as *const u8 },
+    KernelSymbol { name: "au_dist_retire", addr: distributed::au_dist_retire as *const u8 },
+    KernelSymbol { name: "au_dist_issue_token", addr: distributed::au_dist_issue_token as *const u8 },
+    KernelSymbol { name: "au_dist_token_wire", addr: distributed::au_dist_token_wire as *const u8 },
+    KernelSymbol { name: "au_dist_adopt_wire", addr: distributed::au_dist_adopt_wire as *const u8 },
+    KernelSymbol { name: "au_dist_open_request", addr: distributed::au_dist_open_request as *const u8 },
+    KernelSymbol { name: "au_dist_submit", addr: distributed::au_dist_submit as *const u8 },
+    KernelSymbol { name: "au_dist_retry", addr: distributed::au_dist_retry as *const u8 },
+    KernelSymbol { name: "au_dist_wait", addr: distributed::au_dist_wait as *const u8 },
+    KernelSymbol { name: "au_dist_cancel_wait", addr: distributed::au_dist_cancel_wait as *const u8 },
+    KernelSymbol { name: "au_dist_release_request", addr: distributed::au_dist_release_request as *const u8 },
+    KernelSymbol { name: "au_dist_respond", addr: distributed::au_dist_respond as *const u8 },
+    KernelSymbol { name: "au_dist_receipt_code", addr: distributed::au_dist_receipt_code as *const u8 },
+    KernelSymbol { name: "au_dist_receipt_release", addr: distributed::au_dist_receipt_release as *const u8 },
+    KernelSymbol { name: "au_dist_authorize", addr: distributed::au_dist_authorize as *const u8 },
+    KernelSymbol { name: "au_dist_release_token", addr: distributed::au_dist_release_token as *const u8 },
+    KernelSymbol { name: "au_dist_release_resource", addr: distributed::au_dist_release_resource as *const u8 },
+];
+
 #[cfg(feature = "tier1-rs")]
 fn register_rs_symbols(builder: &mut JITBuilder) {
     for sym in RS_FFI_SYMBOLS {
@@ -1564,6 +1598,7 @@ fn cranelift_swap_binary_impl(ir_ptr: *const u8, ir_len: usize) -> *const c_void
         builder.symbol("__union_new", au_exit as *const u8);
         builder.symbol("__record_new", au_exit as *const u8);
         builder.symbol("__slot_get", au_exit as *const u8);
+        register_distributed_symbols(&mut builder);
         register_trapping_symbols(&mut builder);
         register_float_symbols(&mut builder);
         #[cfg(feature = "unfer-kernel")]
