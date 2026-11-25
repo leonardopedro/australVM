@@ -5716,3 +5716,38 @@ be re-checked by hand, and the assumptions are not part of the key — a stateme
 proved is proved. What the key cannot see is a change in the emitter that would spell the same
 theorem differently; that produces a different band, hence a miss, which is the conservative
 direction.
+
+### 13.62c `renameCore` at twenty gigabytes: out of reach, not merely over budget
+
+`§13.62b`'s sweep stopped at `.EnvModelM.renameCore` with `over 10 GiB`, which is a statement
+about the bound it was given, not about the derivation. A budget only classifies a declaration
+as *large* if a bigger bound closes it, so the row was re-measured alone: `--only` on that one
+declaration, `--keep-proofs`, `SCAN_MM0_RS_MEM_GB=20`, `SCAN_MM0_RS_TIMEOUT=1200`, in a cgroup
+of its own (`MemoryMax=20G`, `MemorySwapMax=4G`) so that a runaway child could not take the
+sweep down with it.
+
+The emitter is not the problem and does not come close to the bound: it spends about two
+minutes and produces a 251 444 344-byte `full.mm1` (243 508 810 bytes of `.mm0` statement,
+631 633 116 bytes of conversion obligations), with the whole unit peaking at 7.8 GB before
+`mm0-rs` started. `mm0-rs compile` then grows without settling: 15.2 GB at about seven minutes,
+17.3 GB at eleven, 19.9 GB at fourteen, until the kernel OOM-killer ends the unit at 20 G
+memory plus 4 G swap — **15 min 44 s wall, 24 min CPU, no `.mmb` and so no `mm0-c` run**. The
+1200 s timeout was never reached; memory was.
+
+That answers the question the retry existed to ask, in the direction the row cannot show:
+`renameCore` is not a 10 GiB declaration that a 20 GiB sweep would absorb. A 251 MB proof term
+of this shape needs more memory than this machine has spare (20 GiB plus 4 GiB of swap was the
+whole margin), so it is **out of reach rather than over a chosen budget** — the earlier
+`10 GiB` label was the bound, but there is no bound below the machine's ceiling that would
+close it. It stays a failure in the sweep with the reason it was given; what changes is that
+the reason now reads as a size the machine cannot supply, not as an arbitrary cap. The
+102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs` (`§13.62`) scales to this: at
+251 MB the compile is both superlinear in time and past the available address space.
+
+**Where the namespace sweep stands.** It was paused at 475 verified of 3 975 declarations to
+let this measurement have the machine, with five non-passes on the log: `renameCore` (above),
+the `Φ` and `hΔ0` rejections that `§13.62b`'s `mm0_ident` fix has since turned into verdicts,
+and `emit` timeouts on `.EnvModelM.swapP` and `.swapTyP` at the default 240 s. Every finished
+row survives the pause in the ledger, so the resumed sweep replays those 475 as `memo` hits in
+about four minutes and continues past `.Expr`; the closures and the final failure histogram
+land only at the end of that resume, in `_build/conleche/model-scan.log`.
