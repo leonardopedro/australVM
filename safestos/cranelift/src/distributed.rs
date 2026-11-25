@@ -124,13 +124,7 @@ impl Authority {
         STATUS_OK
     }
 
-    pub fn issue_token(
-        &mut self,
-        resource: i64,
-        owner: i64,
-        deployment: i64,
-        epoch: i64,
-    ) -> i64 {
+    pub fn issue_token(&mut self, resource: i64, owner: i64, deployment: i64, epoch: i64) -> i64 {
         let Some(entry) = self.resources.get(&resource) else {
             return STATUS_NO_RESOURCE;
         };
@@ -420,7 +414,9 @@ fn authority() -> &'static Mutex<Authority> {
 }
 
 fn with<R>(f: impl FnOnce(&mut Authority) -> R) -> R {
-    let mut guard = authority().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = authority()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     f(&mut guard)
 }
 
