@@ -22,7 +22,7 @@ module LiquidVCProj
 
   (* --- verification conditions --- *)
 
-  (* g_dddc3015 — §5.6 APPLICATION (the caller proves the callee's Requires) *)
-  goal g_dddc3015: forall r: int. (true) -> (((__slot_X (r)) = (__slot_X (r))))
+  (* g_87ede782 — §5.6 APPLICATION (the caller proves the callee's Requires) *)
+  goal g_87ede782: forall r: int. (true) -> (((__slot_X (r)) = (__slot_X (r))))
 
 end

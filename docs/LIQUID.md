@@ -834,7 +834,7 @@ vs. `validate.rs` (logos):
 | `Pattern::Tag` structural patterns | **T3, by construction at `Tast`** — `typed_when` carries a constructor tag and binders and has no guard field, so a guarded or non-constructor `case` arm cannot exist by the time the gate runs (`TypingPass` rejects non-exhaustive matches first) |
 | exactly-once use / `clone` / `drop` | already enforced by `check_module_linearity`; liquid never weakens it |
 | refined bindings are immutable (T5) | **`TypingPass` first** — assigning to a parameter and mutably borrowing one are both rejected (`TypeErrors.cannot_assign_to_parameter`, `TypeErrors.cannot_borrow_param_mutably`); **`TotalityCheck` second** — it re-states T5 over contract-named parameters, so a loosening upstream fails as a T5 diagnostic rather than as an unsound goal |
-| errors at the violating node | span-accurate diagnostics via `LiquidParse`/blame mapping (goal→span mapping still blocked on spans in `Tast`; goals are named from the declaration id) |
+| errors at the violating node | span-accurate diagnostics via `LiquidParse`/blame mapping (goal→span mapping still blocked on spans in `Tast`; goals are named from the contract or call site they denote plus the judgment kind — never the declaration id, which is a global parse counter: adding a builtin shifted it and renamed every goal, churning all five pinned goldens on 2026-11-26. `to_mlw` refuses two goals sharing a name) |
 
 vs. stages (`PLAN_liquid_types.md`):
 

@@ -339,6 +339,43 @@ let count_occurrences ~(needle : string) (hay : string) : int =
   in
   if n = 0 then 0 else at 0 0
 
+(** The `g_…` goal names of an emitted `.mlw`, in order. *)
+let goal_names (mlw : string) : string list =
+  String.split_on_char '\n' mlw
+  |> List.filter_map (fun line ->
+         let l = String.trim line in
+         if not (String.starts_with ~prefix:"goal " l) then None
+         else
+           let rest = String.sub l 5 (String.length l - 5) in
+           match String.index_opt rest ':' with
+           | Some i -> Some (String.sub rest 0 i)
+           | None -> None)
+
+(** [hay] with [insert] after the first occurrence of [anchor]. *)
+let insert_after_first ~(anchor : string) ~(insert : string) (hay : string) :
+    string =
+  let n = String.length anchor in
+  let rec find i =
+    if i + n > String.length hay then
+      failwith (Printf.sprintf "LiquidVCTest: anchor %S not found" anchor)
+    else if String.sub hay i n = anchor then i + n
+    else find (i + 1)
+  in
+  let at = find 0 in
+  String.sub hay 0 at ^ insert ^ String.sub hay at (String.length hay - at)
+
+(** The same fixture with one contract-free function declared first.
+
+    The extra declaration shifts every later declaration's numeric id, which
+    is exactly what used to rename every goal: a goal name that includes that
+    id makes an unrelated addition churn every pinned golden. The name must
+    instead come from what the goal denotes. *)
+let probe_source_with_unrelated_decl : string =
+  insert_after_first ~anchor:"module body LiquidVCProbe is\n"
+    ~insert:
+      "    function unusedShift(x: Int64): Int64 is\n        return x;\n    end;\n\n"
+    probe_source
+
 (** Only the lines that are *logic*, not commentary.
 
     `to_mlw` echoes every contract string as a comment above the module, so
@@ -395,6 +432,24 @@ let test_golden_fold_matches_emitter (_ : OUnit2.test_ctxt) =
     ("the emitted fold .mlw drifted from the pinned golden.\n--- golden ---\n"
      ^ expected ^ "\n--- emitted ---\n" ^ actual)
     (expected = actual)
+
+(** A goal name identifies its contract and judgment, not the declaration's
+    position in an itinerary of ids: adding one unrelated function must leave
+    every name where it was. The control matters because the golden gates
+    cannot see this property — they compare one build's bytes against another
+    file and would happily follow the drift. *)
+let test_goal_names_ignore_unrelated_declarations (_ : OUnit2.test_ctxt) =
+  let work = workdir () in
+  (try Unix.mkdir work 0o755 with _ -> ());
+  let base = dump_mlw ~work ~name:"stable_base" probe_source in
+  let shifted =
+    dump_mlw ~work ~name:"stable_extra" probe_source_with_unrelated_decl
+  in
+  let before = goal_names base and after_ = goal_names shifted in
+  assert_bool "the fixture emitted no goal names" (before <> []);
+  assert_equal
+    ~printer:(fun names -> String.concat " " names)
+    ~msg:"an unrelated declaration renames the goals" before after_
 
 (* ── 2. the two new obligations are actually stated ─────────────────────── *)
 
@@ -649,6 +704,8 @@ let suite =
   "LiquidVCTest" >::: [
     "golden_matches_emitter" >:: test_golden_matches_emitter;
     "golden_fold_matches_emitter" >:: test_golden_fold_matches_emitter;
+    "goal_names_ignore_unrelated_declarations"
+    >:: test_goal_names_ignore_unrelated_declarations;
     "callsite_obligation_is_stated" >:: test_callsite_obligation_is_stated;
     "invariant_obligation_is_stated" >:: test_invariant_obligation_is_stated;
     "fold_premises_are_stated" >:: test_fold_premises_are_stated;
