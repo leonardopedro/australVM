@@ -1,0 +1,49 @@
+-- umbrella/modules/ResultImport.aum — U15b's Result shape.
+--
+-- `Result[Int64, Int64]` has a payload in *both* cases, exactly like `Either`,
+-- so it takes the same two-case checked transport: the provider writes
+-- `[tag, payload]` into an out pair and the wrapper validates both. The
+-- difference is only the names — `Ok` is the success payload, `Err` the
+-- failure payload — which the descriptor carries so neither side guesses.
+-- `computeOk` returns 11 only for the success tag with payload 7;
+-- `computeErr` returns 22 only for the failure tag with payload 9. Every
+-- checked call also exercises `<symbol>__free`, which the `match` lowering
+-- emits after copying the tag and slot it dispatches on.
+pragma Unsafe_Module;
+
+module body ResultImport is
+    pragma Foreign_Import(External_Name => "rs_parse");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_parse(flag: Nat64): Result[Int64, Int64] is
+    end;
+
+    function computeOk(): Int64 is
+        case rs_parse(1) of
+            when Ok(value: Int64) do
+                if value = 7 then
+                    return 11;
+                else
+                    return 0;
+                end if;
+            when Err(error: Int64) do
+                return 22;
+        end case;
+    end;
+
+    function computeErr(): Int64 is
+        case rs_parse(0) of
+            when Err(error: Int64) do
+                if error = 9 then
+                    return 22;
+                else
+                    return 0;
+                end if;
+            when Ok(value: Int64) do
+                return 11;
+        end case;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.
