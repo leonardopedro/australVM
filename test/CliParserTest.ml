@@ -44,6 +44,7 @@ let test_compile_default _ =
                             emit_cps_only = false;
                             emit_adapters_path = None;
                             pkg_totality = false;
+                            liquid_required = false;
                             emit_derivations = None;
                             emit_linearity_ledger = None
                           }

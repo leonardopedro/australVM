@@ -73,6 +73,19 @@ pub struct Artifact {
     pub liquid_notes: Vec<String>,
 }
 
+/// D18: read `[verify] liquid` from a module manifest so the front-end request
+/// follows the declared posture even when `--liquid-required` was not repeated
+/// on the umbrella command line. An unreadable/invalid profile is an error:
+/// silently falling back to optional would disable the requested check.
+pub fn manifest_requires_liquid(manifest: &Path) -> Result<bool, String> {
+    let text =
+        fs::read_to_string(manifest).map_err(|e| format!("read {}: {e}", manifest.display()))?;
+    let requirements =
+        austral_cranelift_bridge::verification::VerificationRequirements::from_toml_str(&text)
+            .map_err(|e| format!("verification profile {}: {e}", manifest.display()))?;
+    Ok(requirements.liquid.is_required())
+}
+
 /// Run the compiler over `modules` in compile-only mode.
 pub fn compile(
     austral: &Path,
@@ -105,6 +118,10 @@ pub fn compile(
     cmd.env_remove("CPS_JIT_ADVISORY");
     if liquid_required {
         cmd.env("AUSTRAL_LIQUID_REQUIRED", "1");
+        // D18: the explicit compiler input. The environment value remains for
+        // older drivers, but the manifest requirement no longer depends on an
+        // ambient variable the compiler might not read.
+        cmd.arg("--liquid-required");
     } else {
         cmd.env_remove("AUSTRAL_LIQUID_REQUIRED");
     }
@@ -459,10 +476,12 @@ mod tests {
         let a = compile(&f.austral, &f.modules(), true).expect("artifact");
         assert_eq!(a.liquid, Liquid::Required);
         assert!(f.env().contains("liquid=1"), "{}", f.env());
+        assert!(f.args().contains("--liquid-required"), "{}", f.args());
         // A second fixture proves the ambient value would otherwise leak in.
         let f2 = Fixture::new(&emit_ok_body(4, 1, 4));
         assert!(compile(&f2.austral, &f2.modules(), false).is_ok());
         assert!(f2.env().contains("liquid=unset"), "{}", f2.env());
+        assert!(!f2.args().contains("--liquid-required"), "{}", f2.args());
     }
 
     #[test]

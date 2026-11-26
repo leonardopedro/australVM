@@ -36,3 +36,9 @@ serde = { version = "1", features = ["derive"] }
 # D09: a trusted build is pinned by digests, so the umbrella needs the same
 # hasher the bridge already links (in the lock at 0.10.9, so `--offline` works).
 sha2 = "0.10"
+
+[dev-dependencies]
+# D17 live transport harness: mutual TLS between the requester process and the
+# authority process. Both crates are already in the bridge's offline cache.
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

@@ -33,6 +33,7 @@ pub mod policy;
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
 pub mod tidepool_mod;
+pub mod verification;
 
 #[cfg(feature = "cedar")]
 use policy::CEDAR_ENGINE;
@@ -1131,24 +1132,78 @@ fn register_distributed_symbols(builder: &mut JITBuilder) {
 }
 
 pub(crate) const DISTRIBUTED_SYMBOLS: &[KernelSymbol] = &[
-    KernelSymbol { name: "au_dist_reset", addr: distributed::au_dist_reset as *const u8 },
-    KernelSymbol { name: "au_dist_introduce", addr: distributed::au_dist_introduce as *const u8 },
-    KernelSymbol { name: "au_dist_retire", addr: distributed::au_dist_retire as *const u8 },
-    KernelSymbol { name: "au_dist_issue_token", addr: distributed::au_dist_issue_token as *const u8 },
-    KernelSymbol { name: "au_dist_token_wire", addr: distributed::au_dist_token_wire as *const u8 },
-    KernelSymbol { name: "au_dist_adopt_wire", addr: distributed::au_dist_adopt_wire as *const u8 },
-    KernelSymbol { name: "au_dist_open_request", addr: distributed::au_dist_open_request as *const u8 },
-    KernelSymbol { name: "au_dist_submit", addr: distributed::au_dist_submit as *const u8 },
-    KernelSymbol { name: "au_dist_retry", addr: distributed::au_dist_retry as *const u8 },
-    KernelSymbol { name: "au_dist_wait", addr: distributed::au_dist_wait as *const u8 },
-    KernelSymbol { name: "au_dist_cancel_wait", addr: distributed::au_dist_cancel_wait as *const u8 },
-    KernelSymbol { name: "au_dist_release_request", addr: distributed::au_dist_release_request as *const u8 },
-    KernelSymbol { name: "au_dist_respond", addr: distributed::au_dist_respond as *const u8 },
-    KernelSymbol { name: "au_dist_receipt_code", addr: distributed::au_dist_receipt_code as *const u8 },
-    KernelSymbol { name: "au_dist_receipt_release", addr: distributed::au_dist_receipt_release as *const u8 },
-    KernelSymbol { name: "au_dist_authorize", addr: distributed::au_dist_authorize as *const u8 },
-    KernelSymbol { name: "au_dist_release_token", addr: distributed::au_dist_release_token as *const u8 },
-    KernelSymbol { name: "au_dist_release_resource", addr: distributed::au_dist_release_resource as *const u8 },
+    KernelSymbol {
+        name: "au_dist_reset",
+        addr: distributed::au_dist_reset as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_introduce",
+        addr: distributed::au_dist_introduce as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_retire",
+        addr: distributed::au_dist_retire as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_issue_token",
+        addr: distributed::au_dist_issue_token as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_token_wire",
+        addr: distributed::au_dist_token_wire as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_adopt_wire",
+        addr: distributed::au_dist_adopt_wire as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_open_request",
+        addr: distributed::au_dist_open_request as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_submit",
+        addr: distributed::au_dist_submit as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_retry",
+        addr: distributed::au_dist_retry as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_wait",
+        addr: distributed::au_dist_wait as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_cancel_wait",
+        addr: distributed::au_dist_cancel_wait as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_release_request",
+        addr: distributed::au_dist_release_request as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_respond",
+        addr: distributed::au_dist_respond as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_receipt_code",
+        addr: distributed::au_dist_receipt_code as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_receipt_release",
+        addr: distributed::au_dist_receipt_release as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_authorize",
+        addr: distributed::au_dist_authorize as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_release_token",
+        addr: distributed::au_dist_release_token as *const u8,
+    },
+    KernelSymbol {
+        name: "au_dist_release_resource",
+        addr: distributed::au_dist_release_resource as *const u8,
+    },
 ];
 
 #[cfg(feature = "tier1-rs")]

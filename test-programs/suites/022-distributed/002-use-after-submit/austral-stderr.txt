@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "request" },
+    { "type": "text", "content": " has already been consumed." }
+  ],
+  "span": {
+    "filename": "test-programs/suites/022-distributed/002-use-after-submit/Test.aum",
+    "startp": { "line": 20, "column": 16 },
+    "end": { "line": 20, "column": 47 }
+  },
+  "context": [
+    [ 18, "            when Submitted(sent: PendingRequest) do" ],
+    [ 19, "                let ignored: Int64 := disposeRequest(sent);" ],
+    [ 20, "                return disposeRequest(request);" ],
+    [
+      21,
+      "            when SubmitRefused(refused: PendingRequest, status: Int64) do"
+    ],
+    [ 22, "                return disposeRequest(refused);" ]
+  ]
+}

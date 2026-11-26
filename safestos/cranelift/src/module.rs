@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::auth::{self, ManifestAuthEngine};
 use crate::cps::CpsModule;
+use crate::verification::VerificationRequirements;
 
 /// S19 (F18): gatekeeper provisioning modes, a replica of cloudflare's `disabled|optional|
 /// `enabled`. A side-effecting module archetype with `[gatekeeper] mode = "disabled"` has its
@@ -61,6 +62,10 @@ pub struct ModuleManifest {
     /// a node is the only kind a receiver will accept across the distributed
     /// boundary, and the value is configuration: a peer never supplies it.
     pub node: Option<String>,
+    /// D18: the optional versioned `[verify]` requirements. A legacy L8 table
+    /// (`liquid` only) keeps its old meaning; a versioned table is enforced
+    /// against `verification.ok` at load.
+    pub verification: VerificationRequirements,
 }
 
 impl ModuleManifest {
@@ -215,6 +220,16 @@ impl ModuleManifest {
                     .collect()
             })
             .unwrap_or_default();
+        // D18: parse the profile with its own strict reader. Unknown keys and
+        // versioned fields without a version are errors, not ignored data.
+        let verification = VerificationRequirements::from_toml_str(s)?;
+        let profile_errors = verification.manifest_errors(strict);
+        if !profile_errors.is_empty() {
+            return Err(format!(
+                "[verify] profile is inconsistent: {}",
+                profile_errors.join("; ")
+            ));
+        }
         Ok(Self {
             name,
             version,
@@ -233,6 +248,7 @@ impl ModuleManifest {
             gatekeeper_mode,
             strict,
             node,
+            verification,
         })
     }
 }
@@ -404,6 +420,12 @@ impl ModuleHost {
         let toml_str = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
         let manifest = ModuleManifest::from_toml_str(&toml_str)?;
+        // D18: a versioned distributed profile is load-bearing. A required
+        // profile without matching `verification.ok` fails before any code is
+        // compiled, and an optional one leaves a loggable gap.
+        let _verification_note = manifest
+            .verification
+            .check_evidence(module_dir, manifest.strict)?;
 
         let engine = ManifestAuthEngine::from_toml_str(&toml_str)
             .map_err(|e| format!("manifest auth error: {e}"))?;
@@ -676,6 +698,9 @@ impl ModuleHost {
         let toml_str = std::fs::read_to_string(&manifest_path)
             .map_err(|e| format!("cannot read {}: {e}", manifest_path.display()))?;
         let new_manifest = ModuleManifest::from_toml_str(&toml_str)?;
+        new_manifest
+            .verification
+            .check_evidence(new_module_dir, new_manifest.strict)?;
 
         if new_manifest.name != old_name {
             return Err(format!(
@@ -741,6 +766,15 @@ impl ModuleHost {
         if new_manifest.node != old_handle.manifest.node {
             return Err(
                 "UK-4001 swap rejected: the replacement changes the module's served node \
+                 (unload and load it again instead)"
+                    .to_string(),
+            );
+        }
+        // D18: evidence requirements are part of the module's posture, not a
+        // property a hot-swap may silently widen.
+        if new_manifest.verification != old_handle.manifest.verification {
+            return Err(
+                "UK-4001 swap rejected: the replacement changes the verification profile \
                  (unload and load it again instead)"
                     .to_string(),
             );

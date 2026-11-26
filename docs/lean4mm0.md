@@ -5620,3 +5620,327 @@ lake env _out/l4e/.lake/build/bin/lean4export ConLeche.Model.Fold -- \
 python3 scripts/lean-proof-scan ../con-leche/_out/capstone.ndjson \
   ConLeche.Model.no_proof_of_Empty_pure <work-dir>
 ```
+
+**What a verified declaration leaves behind is a statement, not a proof (§13.62a).** A
+derivation is dozens of megabytes that say one thing — this statement has a proof both
+checkers accept — so `lean-proof-scan` now keeps that thing and drops the rest. On a pass it
+writes the statement (`<work>.memo/stmt/<export-sha12>/<name>.mm0`: the theory prefix, the
+payload numerals and the goal, with the assumptions and the derivation removed), appends the
+verdict to `<work>.memo/index.tsv`, and deletes `.mm1`, `.mmb`, the emitter's own copies and
+the obligation stream. Measured on the two capstone declarations: `scan/` went from
+46 654 + 47 568 + 21 560 B per declaration plus the emitter's 28 552 + 29 466 + 41 756 B to
+the 46 654 B `full.mm0` alone, and the ledger costs 21 393 + 22 165 B of statement text and a
+12-column row per declaration.
+
+An entry is keyed on the export's sha256, the theory's bytes and the derivation mode — those
+three are what the verdict was about (§13.62b makes the statement's bytes the key that
+survives a re-export, keeping the export key as the free first lookup): the same export
+rescanned — an interrupted sweep, a
+`--only` subset followed by a whole-namespace one — is a hit, while a re-export, an edited
+`docs/cic*.mm0`, or a different mode is a miss by construction rather than by a guess at what
+"the same theorem" means. On a hit the scan emits nothing and runs neither checker; the rerun
+above reports both declarations as proved at 0.0 s of scan against 17.0 s emitting them, with
+the remaining 8.3 s being the export's index. `--no-memo` turns it off and `--keep-proofs`
+keeps the derivation for reading. The statement file is a bare `.mm0` statement, so `mm0-rs`
+reports it as `sorry` — that is the honest reading of a proof that is not in the file, and the
+ledger row is what says the statement was derived.
+
+### 13.62b The ledger keyed on the statement, and adoption of a finished scan's artifacts
+
+§13.62a's key was the export's sha256, so a re-export of the same module invalidated every
+row: the theorems had not changed, the file had. The verdict was never about the file. It is
+about the *statement* — the goal band `theorem thm_X: $ tty ctx value type $` — so that is
+what the ledger now keys on, and the export key is kept only as the free first lookup.
+
+**Getting the statement without the proof.** The band is written by the emitter after the
+derivation, so hashing it from a fresh artifact means doing the work being avoided.
+`scripts/lean-typing-proof --digest` stops before the walk: it spools the type and value,
+builds the goal band's bytes in chunks, prints `sha256` and returns. It reproduces the
+artifact exactly — `--digest` on `ConLeche.Model.no_proof_of_Empty_pure` gives
+`b5df30c6d561…ef87e8d2`, byte-for-byte the sha256 of that artifact's band after its
+`-- ── the derivation ──` marker — and `scripts/check-lean-typing-proof` still reports all
+**12 artifacts across 4 modes unchanged**, so the new flag is inert for every existing output.
+
+**The lookup.** A scan tries the export key first (0.0 s, as before), and only if that misses
+*and* the declaration's name appears somewhere in the ledger does it spend a `--digest` run on
+the declaration. So a plain rerun of one export never pays for the mechanism, and a re-export
+pays for it once per declaration. Statements are reused only when their bytes are equal;
+nothing is inferred from the name. The theory's sha256 stays in the key — the same bytes mean
+different things in a different theory — while the *mode* no longer is, because whether a
+statement is true does not depend on how its proof was spelled; the row still records the mode
+that produced it.
+
+Measured on a re-export (the capstone export with one blank line prepended, so its sha256
+changes and every declaration's statement does not):
+
+| declaration | fresh derivation + both checkers | same statement, re-export |
+| --- | ---: | ---: |
+| `no_proof_of_Empty_pure` (35 rules) | 18.8 s scan / 27.9 s wall | 17.2 s scan / 26.5 s wall |
+| `CtxOkP.extend` (18 602 rules, 6 204 assumptions) | 45.1 s scan / 54.1 s wall | **8.9 s scan / 18.3 s wall** |
+
+The small pair barely moves: both sides are 8.3 s of export index per invocation, and at 35
+rules the derivation is not the cost. The 18 602-rule theorem is where the mechanism is worth
+its salt — 5.1× less scan time, with the remaining 8.9 s being that same index. That is the
+shape of the trade the user asked for: the lookup is paid per declaration, the derivation is
+saved per declaration, and only the second grows with the proof.
+
+**`--adopt=DIR`.** A ledger is more useful than the directory that produced it, and a
+finished scan's directory is not one: `full.mm0` is a statement with no proof. So `--adopt`
+re-checks each `full.mm0`/`full.mm1` pair under DIR with both checkers, registers the ones
+that still close under the statement digest (export column `-`: no export claims them), keeps
+the statement file, and discards the derivation exactly as a fresh pass does. Idempotent, and
+honest about what it cannot do: rerunning it on an already-discarded directory reports
+`0 registered, 0 already in the ledger, 2 skipped — no .mm1: its proof was discarded already`.
+Measured on the two capstone declarations: `2 registered … in 0.0 s` (both checkers on a
+35-rule artifact are sub-second), the directory left with `full.mm0` and the emitter's
+statement copy, and the scan that followed hit both declarations by statement digest with no
+emit and no checker run.
+
+Statement files are now content-addressed (`<work>.memo/stmt/<statement-sha12>/<name>.mm0`),
+so the same statement proved for two exports is one file. A retained statement still compiles
+as an `.mm0` (`mm0-rs`: 3 sorts, 66 term/def, 22 ax/thm, `sorry` warning, exit 0) — it is a
+statement that the ledger, not the file, says is proved.
+
+**The two failures the sweep attributed to "other".** The whole-namespace scan's only
+rejections were `ConLeche.Model.BlockData.Φ` and `.DynCtx.hΔ0`, both reported as
+`mm0-rs` failing with nothing but an elaboration summary. Re-running one shows the message the
+scan's last-line rule hid: `error: type or value expected` at the theorem head, because the
+emitter's name sanitiser kept `Φ` — Python calls it alphanumeric, MM0 wants ASCII. `mm0_ident`
+now keeps ASCII alphanumerics and `_` only, which is the class §13.62 fixed for the trailing
+prime; both declarations then verify (5 and 14 rules, 2 assumptions each), and
+`check-lean-typing-proof` is still 12 artifacts across 4 modes unchanged.
+
+**What a hit does not re-check.** A statement hit runs neither checker: it reuses a verdict
+about bytes that are equal. The row carries the derivation's sha256 and size, so the claim can
+be re-checked by hand, and the assumptions are not part of the key — a statement that was
+proved is proved. What the key cannot see is a change in the emitter that would spell the same
+theorem differently; that produces a different band, hence a miss, which is the conservative
+direction.
+
+### 13.62c `renameCore` at twenty gigabytes: out of reach, not merely over budget
+
+`§13.62b`'s sweep stopped at `.EnvModelM.renameCore` with `over 10 GiB`, which is a statement
+about the bound it was given, not about the derivation. A budget only classifies a declaration
+as *large* if a bigger bound closes it, so the row was re-measured alone: `--only` on that one
+declaration, `--keep-proofs`, `SCAN_MM0_RS_MEM_GB=20`, `SCAN_MM0_RS_TIMEOUT=1200`, in a cgroup
+of its own (`MemoryMax=20G`, `MemorySwapMax=4G`) so that a runaway child could not take the
+sweep down with it.
+
+The emitter is not the problem and does not come close to the bound: it spends about two
+minutes and produces a 251 444 344-byte `full.mm1` (243 508 810 bytes of `.mm0` statement,
+631 633 116 bytes of conversion obligations), with the whole unit peaking at 7.8 GB before
+`mm0-rs` started. `mm0-rs compile` then grows without settling: 15.2 GB at about seven minutes,
+17.3 GB at eleven, 19.9 GB at fourteen, until the kernel OOM-killer ends the unit at 20 G
+memory plus 4 G swap — **15 min 44 s wall, 24 min CPU, no `.mmb` and so no `mm0-c` run**. The
+1200 s timeout was never reached; memory was.
+
+That answers the question the retry existed to ask, in the direction the row cannot show:
+`renameCore` is not a 10 GiB declaration that a 20 GiB sweep would absorb. A 251 MB proof term
+of this shape needs more memory than this machine has spare (20 GiB plus 4 GiB of swap was the
+whole margin), so it is **out of reach rather than over a chosen budget** — the earlier
+`10 GiB` label was the bound, but there is no bound below the machine's ceiling that would
+close it. It stays a failure in the sweep with the reason it was given; what changes is that
+the reason now reads as a size the machine cannot supply, not as an arbitrary cap. The
+102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs` (`§13.62`) scales to this: at
+251 MB the compile is both superlinear in time and past the available address space.
+
+**Where the namespace sweep stands.** The 475-declaration pause this section was written in is
+long past: the ledger now holds **1 389 verified of 3 975**, and every row in it is a pass. The
+five non-passes the paused log carried have since been decided one way or the other —
+`renameCore` is the measurement above, the `Φ` and `hΔ0` rejections became verdicts with
+`§13.62b`'s `mm0_ident` fix, and `.EnvModelM.swapP`/`.swapTyP` have `§13.62f`. Two later runs
+were OOM-killed at the same declaration, `.TgtNodePres.kit` the last line of each log; `§13.62h`
+reproduces the kill alone and fixes its cause. Every finished row survives in the ledger, so a
+resume replays the 1 389 as `memo` hits — about ten minutes — and the closures, the rules applied
+and the failure histogram land only at a clean exit, in `_build/conleche/model-scan.log`.
+
+### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
+
+`§13.62c` left two rows with `emit: over 240 s`, which is a statement about the default
+`SCAN_EMIT_TIMEOUT`, not about the declarations. Re-measured the same way `renameCore` was —
+`--only` on the two names, `--no-memo` and a work directory of their own, `SCAN_EMIT_TIMEOUT=1800`,
+`SCAN_EMIT_MEM_GB=12`, in a cgroup of its own (`MemoryMax=14G`, `MemorySwapMax=4G`) so that a
+runaway emitter could not take the sweep down with it.
+
+Both emits finish. The unit ran 20 min 8.6 s and ended with `mm0-rs ✗` on both declarations —
+`over 10 GiB`, the checker's default `SCAN_MM0_RS_MEM_GB`, not a timeout anywhere. Timing the
+emitter alone, `/usr/bin/time` on each declaration: **`swapP` 274.9 s wall** (the unit consumed
+4 min 34.9 s over a 4 min 34.9 s wall, 1.2 G peak) and **`swapTyP` 877.6 s wall at 1 380 044 KiB
+peak RSS**. The artifacts `swapP` leaves are 938 390 099 bytes of `.mm0`, 1 002 097 670 of
+`.mm1` and 3 588 229 678 of conversion obligations; the emitter is a 1.3 GB process producing a
+5.5 GB artifact in five to fifteen minutes, not a process that fails to finish.
+
+So the answer is the opposite of the row's: 240 s was the limit, at 1.1× for `swapP` and 3.7× for
+`swapTyP`, and the declarations are *large but emittable*. What stops them is the second bound —
+`mm0-rs` at 10 GiB — which this pass did not raise; `§13.62f` raises it and answers that question
+(it does not close them). The sweep keeps them as failures, but the reason belongs to the checker's
+memory, and the `over 240 s` class it currently records is a default rather than a size.
+
+### 13.62e The statement key did not line up: `--digest` and the ledger disagreed
+
+Re-running the sweep did not need to *add* statement digests: every one of its 768 rows already
+carries a 64-hex `statement_sha256`, and the retained statements live under `stmt/<digest>/`. What
+the re-run exposed is that the key never matched. A same-export re-run replays rows by name (475
+`memo` hits and counting), so the statement-digest path — `digest_of()`, which exists to recognise
+a statement under a *different* export — fired zero times in every run so far. Forcing it with a
+ledger copy whose export column was replaced by a synthetic id, over ten declarations, matched
+none of them: all ten were emitted and re-verified from scratch.
+
+Two defects, both measured rather than inferred:
+
+1. **`lean-typing-proof --digest` hashed a different goal than `--spine` writes.** For an open goal
+   the artifact's band is `theorem thm_X: $ tty <ctx> <value> <type> $;` with the value the
+   emitter holds, while `--digest` read the declared type's spool. The two are byte-identical for
+   most declarations and differ for `ConLeche.Model.GenClsRd.hds`, `.GenClsRd.hψ` and
+   `.GenPreSem.live` — deterministically: two `--spine` runs of `.hds` produce the same band
+   (sha256 `0ed1fc23…`, 2 494 bytes) while `--digest` reported `40c53d6d…`. The pieces are now
+   selected the way the artifact selects them — `(val_path, ty_path)` when the value is closed
+   `(body, body_ty)` when it is open — and all five sampled declarations (`.hds`, `.hψ`, `.live`,
+   `.split`, the closed `.fvsP`) now reproduce their band exactly.
+2. **The first content ledger hashed the wrong span.** `.BlockCtorPick.fvsP`'s row records
+   `c62f65fe…`, which is the sha256 of the *whole retained file* — header, payload constants,
+   assumptions and the state prose — not of its goal band; that band hashes `23589abc…`, which is
+   what `--digest` now prints. No digest could ever have matched such a row. `lean-proof-scan
+   --rekey --memo=DIR` recomputes each row's key from the band of the statement it retained
+   (`STATED_MARK`) and deposits that band under `stmt/<digest>/`; it re-verifies nothing, because
+   the statement is not changing, only the way it is identified. On this ledger: **475 of 768 rows
+   recomputed**, a second run recomputes 0, and 0 rows were missing their statement.
+
+With both fixed, the same forced re-export probe returns **10 of 10 `same statement as` in 84.7 s**
+— no emitter, no `mm0-rs`, no `mm0-c`, about 8.5 s per declaration, which is the export index and
+not the proof. That is the path `§13.62b` keyed the ledger for, exercised for the first time.
+
+That left the whole namespace unasked, and the serial estimate — 3 975 declarations at ~8.5 s, ≈9.4 h
+— made it look like a second sweep. It is `§13.62g`: ten at a time, the same 8.5 s per declaration
+is 1 h 28 min of wall clock. The `--rekey` of the live ledger is the part that still waits for the
+sweep, because that ledger is being appended to and `--rekey` rewrites it in one pass.
+
+### 13.62f The checker's budget raised to 24 GiB: `swapP` and `swapTyP` still do not close
+
+`§13.62d` left the two declarations failing on `mm0-rs: over 10 GiB` without moving that bound, so
+the next question is the obvious one: is 10 GiB the wall, or merely the first budget that happened
+to be set? Re-measured at three higher bounds, each in a cgroup of its own and with
+`SCAN_MM0_RS_TIMEOUT`/`--spine` unchanged unless stated.
+
+**16 GiB, full scan path** (`SCAN_EMIT_TIMEOUT=1800`, `SCAN_EMIT_MEM_GB=12`,
+`SCAN_MM0_RS_MEM_GB=16`, `SCAN_MM0_RS_TIMEOUT=1800`, `--only` + `--no-memo`): `swapP` rc=1 after
+339.5 s wall (peak RSS 16 753 120 KiB) and `swapTyP` after 863.3 s (peak 16 717 476 KiB), both
+`mm0-rs ✗ … over 16 GiB`. The emit is unchanged at ~275 s for `swapP`, so the checker spends about
+a minute climbing to the cap and then dies there — not a timeout at any bound.
+
+**24 GiB, checker only**, on the artifact pair the 16 GiB pass left behind (so the emit is not paid
+again): `full.mm1` 1 002 115 772 bytes for `swapP`, 1 470 648 668 for `swapTyP`. Both abort in
+`elab full.mm1` with "memory allocation of 112 bytes failed" (rc 134 = SIGABRT, the signal the scan
+already classifies) after **74 s at 23.1 GiB peak RSS** (`swapP`) and **56 s at 24.0 GiB**
+(`swapTyP`). More than doubling the default budget moves the failure by nothing except the number in
+the message.
+
+**26 GiB** was attempted and the cgroup OOM-killed it at 23.3 GB RSS + 1.4 GB swap peak (1 min
+16.7 s wall); on this 30 GB host the flag cannot be furnished, so the requirement itself is past
+what this machine can measure. The scaling is what the artifacts make obvious: 954 105 rules applied
+(`swapP`, 152 104 assumptions) and 1 536 069 (`swapTyP`, 229 859) against ~1.0 and ~1.5 GB of
+`.mm1` — the checker wants >24 GiB, more than 20× the bytes it reads, so neither the artifact nor
+the derivation is the problem, `mm0-rs`'s elaboration memory is.
+
+Conclusion: raising `SCAN_MM0_RS_MEM_GB` does **not** close these two. They stay in the sweep as
+memory-limited failures — now with a measured floor (`>24 GiB` at a 10^6-rule term) instead of a
+default — and the honest next step is not a bigger budget but a checker that does not need one
+(`mm0-c` reads the same derivation from a `.mmb`, and the `.mmb` cannot be built without `mm0-rs`).
+
+### 13.62g The re-export question over the whole namespace: 1 203 of 3 975 match by statement
+
+`§13.62e` keyed the ledger on the statement and proved the key on ten declarations. Asking it of the
+3 975 could not be done through the sweep: the scan reaches the statement path only by falling
+through to an emit and both checkers when the name lookup misses, so every miss would have cost a
+proof. `--audit-statements` asks the question directly — for each declaration it runs
+`lean-typing-proof --spine --digest` (the export index and the encodes, no walk) and looks the
+sha256 up in the ledger's statement index. Nothing is emitted, neither checker runs, the ledger is
+only read, and the digests land in `<work>/statements.tsv`.
+
+Run over the full namespace against a copy of the live ledger `--rekey`ed first, so that the 475
+legacy rows carry band digests (1 196 rows, 1 172 distinct statements, 0 missing their retained
+statement), ten declarations at a time in a 16 GB cgroup: **1 h 27 min 38 s wall, 13 h 12 min 57 s
+CPU, 2.0 GB peak**. The 8.5 s per declaration of `§13.62e` is CPU, so the serial estimate of 9.4 h
+was the shape of the work rather than its wall clock. The second run below took **74 min 32 s wall
+for 12 h 8 min CPU**.
+
+| verdict | ledger at 1 196 rows (15:20) | ledger at 1 389 rows (16:36) |
+| --- | --- | --- |
+| same statement, under the declaration's own name | **1 172** | **1 365** |
+| same statement, under another declaration | **31** | **33** |
+| digest the ledger has no row for | 2 762 | 2 567 |
+| no digest produced | 10 | 10 |
+| row exists, statement differs | **0** | **0** |
+
+**1 203 of 3 975 (30.3 %) match by statement** at the snapshot, and **1 398 (35.2 %)** on the
+ledger the sweep stopped with. The first row is the ledger's *distinct* statement count, not its
+row count — 1 172 of 1 196 and 1 365 of 1 389 — because 24 rows are byte-identical to a twin's
+statement and the audit reports the first index entry for a digest (last paragraph below). The
+second row is the re-export path doing what it was keyed for — a statement carried over because
+the bytes agree, not the names: 31 and 33 rows, of which 24 are those twins and 7 and 9 are
+genuine cross-name matches (9 in the later run rather than 7 because the ledger had grown). They
+are the `_auto_1`/`_sparseCasesOn_1`/`match_1`/`_f` helpers, and they collapse onto five
+statements: `.coverTo_addLfp._auto_1` and `.denote_pinned_const._auto_1` both match
+`EnvModel.acval_pinned._auto_1`; `.openLamsM._sparseCasesOn_1`, `.piCount._sparseCasesOn_1` and
+`.piTail._sparseCasesOn_1` all match `PiConcl._sparseCasesOn_1`; `.piCount.match_1` and
+`.piTail.match_1` both match `Rules.PiChain.match_1`; `.WellDenoted_mkAppN_head._f` matches
+`Rules.mkAppN_head._f`, and `.ctxInstAtAV.match_1` matches `TeleEq.match_1`. Not one row is
+contradicted by the export it
+came from, in either run (0 of 1 196, 0 of 1 389), which is the result the two `§13.62e` fixes were
+for.
+
+The 2 762 and 2 567 are the sweep's unverified remainder, not disagreements — the namespace was
+still being swept when the first run went out, and the second column is the ledger it stopped with.
+That stop was not a clean one: at 16:35:04, after 3 h 51 min, the kernel OOM killer took processes
+in the sweep's own cgroup, `.TgtNodePres.kit` the last declaration on its log. `§13.62h` reproduces
+that kill on the declaration after it with nothing else on the host, and finds the memory in the
+driver rather than in the audit (whose own peak was 2.0 GB); the sweep was restarted under a 22 GB
+`MemoryMax` and 4 GB of swap, resumed from the 1 389-row ledger as `memo` hits, and killed again at
+19:52 on the same declaration before the buffer was fixed. The `--rekey` that preceded the second
+audit recomputed the same 475 legacy keys over those 1 389 rows (1 365 distinct statements, 0
+missing their retained statement).
+
+The 10 with no digest are not budget-limited. A second run of just those at
+`SCAN_EMIT_TIMEOUT=1800` — 7.5× the bound that reported them — fails identically in under two
+minutes each, in the export's JSON decode:
+`RecursionError: maximum recursion depth exceeded while decoding a JSON object`, for the deeply
+nested bodies of `.eqRecFit`, `.eqRecLaw`, `.genFit1_core`, `.genIhFree_run`, `.genNodeCalls`,
+`.genRule_residue`, `.quotIndFit`, `.quotIndLaw`, `.quotLiftFit` and `.quotLiftLaw`. That is depth,
+not time or memory, and it is the next thing the digest path needs.
+
+One more number to keep straight: the ledger's rows outnumber its distinct statements — 1 196 against
+1 172 at the snapshot, 1 389 against 1 365 later — because 24 rows are byte-identical to another
+row's statement (`.CtxOkP.forallE_body` and `.CtxOkS.forallE_body`, their `_ty` companions, …). That
+is also why the per-declaration log lists a few of a declaration's own rows under a twin's name:
+the index keeps a list per digest and the audit reports the first entry.
+
+### 13.62h The sweep's OOM was the driver holding the checker's 4.5 GB rejection trace
+
+`§13.62c` and `§13.62g` both ended at the same line, `.TgtNodePres.kit`, with the kernel OOM killer
+named and no process to blame. The declaration after it settles the question: run alone
+(`--only`, its own cgroup at `MemoryMax=20G` and `MemorySwapMax=2G`, nothing else on the host) it
+still takes the unit down. The kill is not a proof tool's: the driver holds **20.5 GB** (VmHWM
+20 662 696 kB, 18 GB of it anonymous heap) while its only child, `mm0-c`, sits at 186 MB.
+
+The memory was in the pipe. On this declaration `mm0-c` rejects the emitted `.mmb` (17 602 560
+bytes, from a 170 564 417-byte `.mm1` and 416 916 314 bytes of conversion obligations) with
+`at thm__proof_1: heap overflow`, and then prints the derivation it rejected: **4.5 GB of stderr in
+about eleven minutes**. `lean-proof-scan` ran both checkers with `capture_output=True`, so every
+byte of that dump had to be resident in the driver before the verdict could be read — at the 22 GB
+`MemoryMax` the cgroup killed the unit by the time the trace reached 20 GB. The audit sharing the
+host at 16:35 was not a factor; the 19:52 kill happened with no audit running at all.
+
+The fix is to stop reading a transcript into memory: the checker's two streams go to files in the
+work directory, only the verdict is read back — the last line before the `── the derivation ──`
+banner, since the *last* line of the file is a fragment of the dump — and the files are deleted once
+the reason is out. Re-measured after the fix, same declaration, same cgroup: **847 s wall, 9.0 GB
+peak (the `mm0-rs` bound, not the driver's), clean exit**, reporting `mm0-c: at thm__proof_1: heap
+overflow`. The 4.5 GB went to disk and was discarded.
+
+The rejection itself is not a budget. `mm0-c` takes no heap argument (`Incorrect args; use
+'mm0-c MMB-FILE < MM0-FILE'`), so its heap is a buffer fixed at compile time in the verifier: a
+derivation this wide does not fit it, which is a capacity fact about the checker and is now its own
+failure class (`over the checker's own heap`) instead of being reported as "out of memory". It also
+got a time budget for the first time (`SCAN_MM0_C_TIMEOUT`, 900 s): it never needed one while every
+rejection was small, and now a rejected giant cannot hold the sweep for as long as its trace takes
+to write.

@@ -1705,6 +1705,129 @@ End-to-end: JSONL store, `outbox_kinds == ["planned","dispatching","acknowledged
 
 **What this is not.** Not a proof of the protocol: it is a total transition and a differential test on finite vectors. Compiler correctness remains a named trust boundary, as does the C compiler. The module does not call the network or a sink; it decides the lifecycle state, and D14/D15 carry that decision through consensus and the outbox.
 
+### D17 — Linear local wrappers for authenticated remote resources
+
+**Files (australVM):** `stdlib/net/Distributed.{aui,aum}` (new),
+`safestos/cranelift/src/distributed.rs` (new), `examples/distributed/RequestTransport.aum`
+(new), `test-programs/suites/022-distributed/` (new), `scripts/check-distributed-wrappers`
+(new), `umbrella/modules/DistributedRequest.aum`, `umbrella/tests/distributed_request.rs`
+and `umbrella/tests/distributed_tls.rs` (new), `umbrella/Cargo.toml` (mutual-TLS test
+dependencies), `test-programs/runner.py` (suite wiring). **unfer:** none. **Evidence:**
+`docs/distributed/evidence/d17-distributed-wrappers.log`,
+`d17-tls-harness.log` and `d17-replay-audit.log`.
+
+**The wrappers.** `PendingRequest`, `ResultReceipt`, `RemoteResource` and
+`AuthorityToken` are linear records over process-local host handles. The handle is
+never serialized: `(request_id, digest, resource, deployment, owner, epoch)` lives
+in the host authority, and a wrapper can only be produced by a foreign verb. The
+states are explicit — submit and retry consume the request and return the same
+wire identity; wait consumes it and returns either the same request or one
+receipt; cancel-wait stops only the local wait; every state has a disposal path.
+The host authority in `distributed.rs` keeps the D14 fence generation and the
+D15 `planned`/`dispatching`/`acknowledged` outbox sequence for each submitted
+request. This is the host authority itself, not the live QuePaxa transport or the
+durable outbox.
+
+**Measured.** `bash scripts/check-distributed-wrappers` compiles
+`RequestTransport` through the CPS JIT and links the generated C against the
+release bridge; its 8-line stdout is diffed (`transport vectors agree`). The
+same script runs the host authority's 22 tests: forged handles, wrong owner,
+wrong deployment, retired epoch, replayed wire token, mismatched digest, retry
+identity/fence, numeric/capacity guards, the fence/outbox path, and the replay
+and receipt-lifetime cases below (`test result: ok. 22 passed`).
+`python3 test-programs/runner.py 022-distributed` passes 5/5 compile-time
+fixtures (copy, use-after-submit, double receipt, wrong-state access, leak). The
+umbrella integration test compiles the module through the compile-only
+front-end and executes `run` in-process (`test result: ok. 1 passed`). Source
+digests are in the evidence log; the release bridge defines 18 `au_dist_*`
+symbols.
+
+**Live harness.** `distributed::Transport` is the FFI seam. Installing one with
+`distributed::set_transport` makes every `au_dist_*` verb dispatch as an
+`Operation` to that transport instead of the process's `Authority`; both sides
+share `apply`, so a remote authority runs exactly the same validation. The
+`distributed_tls` integration test generates a per-run CA plus server and client
+certificates, configures rustls with mutual client verification, spawns a child
+process that owns the `Authority`, and runs `DistributedRequest.aum` in the
+parent through the front-end and JIT. Every verb crosses a 41-byte framed TLS
+message and returns an 8-byte status; the module's `au_dist_respond` crosses the
+same path, so no response is injected in-process. The child rejects an
+unexpected EOF and exits only after the client's TLS `close_notify`. Measured:
+`test result: ok. 2 passed` (the harness plus its child entry), with the existing
+in-process tests still passing. The harness also sends the replay refusals over
+the same socket after the module run: stale wire adoption (`-15`), duplicate
+request id (`-2`), tombstone capacity (`-14`), replayed response (`-11`),
+retired-epoch cleanup (`NO_TOKEN`/`NO_REQUEST`) and the old-epoch token refusal
+(`-6`). The child's request-id cap is lowered to 2 for the harness so the
+capacity case does not need 65k round trips; the production default remains
+65,536. This is loopback
+mTLS with process isolation, not a consensus or durability layer.
+
+**Adversarial replay audit.** The authority now distinguishes a *resource
+incarnation* from its caller-supplied `(resource, deployment, owner, epoch)`
+tuple. Releasing a resource and introducing the same ID again gives the new
+resource a fresh incarnation, so stale tokens and requests cannot be carried
+forward:
+
+* `token_wire` twice returns `STATUS_NO_TOKEN`; a second `adopt_wire` of the same
+  bytes returns `STATUS_REPLAY`, and a second `authorize` of the adopted handle
+  returns `STATUS_NO_TOKEN`.
+* A wire captured before release cannot be adopted against the re-introduced
+  resource (`STATUS_STALE_RESOURCE`); release also drops that incarnation's
+  local tokens, requests and request-id tombstones, so forged local handles fail
+  with `STATUS_NO_TOKEN`/`STATUS_NO_REQUEST`.
+* Retiring an epoch drops that epoch's tokens, requests, receipts, wires and
+  request-id tombstones. Old handles fail with `STATUS_NO_TOKEN`/
+  `STATUS_NO_REQUEST`, and issuing a token for the old epoch returns
+  `STATUS_RETIRED_EPOCH`; the first request in the new epoch starts clean.
+* A request id names one action while its `(resource, incarnation, epoch)`
+  lives. Reusing it for an active request, a second live resource, a completed
+  request, or a disposed request returns `STATUS_DUPLICATE`; releasing the
+  resource or retiring the epoch frees it.
+* A response is accepted once (`STATUS_OK`); a replay returns
+  `STATUS_ALREADY_SENT`, and after the terminal `wait` consumes the request it
+  returns `STATUS_NO_REQUEST`. Incarnation overflow is refused before insertion
+  (`STATUS_OVERFLOW`).
+
+The tombstone set is bounded at 65,536 ids per authority; a full set fails
+closed with `STATUS_CAPACITY` and release/retirement reclaims it. The wire cache
+is bounded at 65,536 values: under pressure stale wires are evicted first, while
+a cache full of live wires refuses serialization with `STATUS_CAPACITY` without
+consuming the local token. Release drops receipts created by that incarnation,
+so an unreleased receipt cannot outlive its resource. A rejected response yields
+a `RESULT_REJECTED` receipt on `wait`; `cancel_wait` alone does not mint one and
+leaves the request pending. Both terminal receipts and pending requests are
+purged by release/retirement. Tombstones remain process-local, not a durable
+request book; the D06 consensus book remains the durable identity authority.
+The audit transcript is `docs/distributed/evidence/d17-replay-audit.log`.
+
+**Replay.** `token_wire` consumes the local token and `adopt_wire` accepts each
+wire id once. The test serializes a token, adopts it, then replays the same bytes
+and gets `STATUS_REPLAY`; the original handle is already gone, so there are not
+two authorized owners. Remote ownership transfer remains out of scope: resource
+exclusivity is the ordered authority's, not the copied bytes'.
+
+**What this is not.** The live harness reaches one D17 `Authority` directly over
+loopback mutual TLS; it is not the QuePaxa transport, does not order requests
+through consensus, and adds no crash recovery or durable outbox. The in-process
+authority remains the default when no transport is installed. The compile-time
+fixtures pin linearity diagnostics, not compiler soundness; compiler correctness
+remains a named trust boundary.
+
+### D18 — Enforceable distributed verification profiles
+
+**Files (australVM):** `safestos/cranelift/src/verification.rs` (new), `safestos/cranelift/src/{module,distributed,federation}.rs`, `safestos/cranelift/src/bin/modhost.rs`, `safestos/cranelift/src/lib.rs`, `lib/Compiler_plugin.{ml,mli}`, `lib/Compiler.{ml,mli}`, `lib/CliParser.{ml,mli}`, `lib/CliEngine.ml`, `lib/liquid/LiquidWhy3.ml`, `lib/liquid/LiquidCheck.ml`, `umbrella/src/{frontend,main}.rs`, `test/CliParserTest.ml`, `test/CliEngineTest.ml`, `scripts/check-verification-profile` (new). **unfer:** none. **Evidence:** `docs/distributed/evidence/d18-verification-profiles.log`.
+
+**A requirement the host reads.** A versioned `[verify]` table (`version = 1`) may state `liquid`, `totality`, `protocol`, `schema`, `proof_tier` (`none|smt|mm0`) and `distributed` (`off|optional|required`). Unknown keys and versioned fields without `version = 1` are refused, so a typo cannot look like an enforced policy. `distributed = "required"` also requires `[module] profile = "strict"`, required liquid and totality, protocol/schema identities, and proof tier `smt` or `mm0`. The legacy L8 table (`liquid` only, no version) keeps its old `liquid.ok` gate unchanged.
+
+**Evidence is separate from the claim.** A `verification.ok` sidecar records `version`, `liquid`, `totality`, `transitions`, `covered`, `protocol`, `schema`, `proof_tier`, `identity`, `artifact`, `authorizer` and `deployment`. `ModuleManifest::load` and hot swap run the same `VerificationRequirements::check_evidence` gate, and `modhost verify` exposes it directly. A required deployment fails on a missing sidecar, a short transition cover (`8/9`), a stale protocol/schema, a lower proof tier, a stub DID, a non-SHA-256 artifact id, `allow-all`, or `local-consensus`; an optional profile with no sidecar succeeds with a visible `[gap]` note. The compiler threads the required posture explicitly: `--liquid-required` sets `Compiler_plugin.liquid_required`, `LiquidWhy3.required()` reads it before its environment fallback, and `LiquidCheck` invokes the prover when either required mode or `AUSTRAL_LIQUID_VERIFY` asks. The umbrella front-end unions the CLI flag with the manifest posture rather than relying on the caller's environment.
+
+**Refinement at the FFI edge.** The D17 authority validates request ids/digests (`STATUS_INVALID`), checks generation with `checked_add` (`STATUS_OVERFLOW`), and caps the outbox at 64 (`STATUS_CAPACITY`) before minting or mutating state; these are the length/counter/epoch refinements this fragment supports, and they run before any unsafe boundary. Non-federated artifact identities are now SHA-256 with an explicit `sha256:` prefix and a labelled stub identity; federation exposes `create_consensus_node_strict`, which refuses `LocalConsensus`, and strict evidence refuses stub DIDs at the manifest gate. Local development modes remain available and labelled (`[gap]`, `authorizer = "allow-all"` is refused only when strict).
+
+**Measured.** `bash scripts/check-verification-profile` passes: required mode fails closed for a missing prover (exit 127) and for a prover that refuses `deterministic_goal`; optional mode exits 0 with `liquid: [gap]`; the complete strict profile is accepted at `9/9`, while the missing sidecar, an `8/9` cover, stale protocol/schema, `proof_tier = none`, a stub DID, a `deadbeef` artifact id, `allow-all` and `local-consensus` are each refused. `verification::` 10/10, `distributed::` 22/22 (the D17 replay and lifetime audits added twelve) and `federation::` 3/3 unit tests pass; `cargo test --manifest-path umbrella/Cargo.toml --offline` passes all suites; `dune build lib/ bin/ test/` and `CliParserTest`/`CliEngineTest` pass. Source digests and the exact transcript are in the evidence log.
+
+**What this is not.** The sidecar is a claimed result from the named tools, not an independently proof-checked certificate. SMT success remains Why3/solver evidence and finite transition coverage covers only the enumerated cases; no solver or MM0 checker is invoked by this gate. Compiler correctness remains a named trust boundary.
+
 ### D21 — Symbolic invariant (finite model check; induction open)
 
 **Files (unfer):** `unfer_consensus/tests/fence_invariant.rs` (new). **australVM:** evidence `docs/distributed/evidence/d21-fence-invariant.log`.
@@ -1744,4 +1867,6 @@ Three guard mutations are applied and each is caught with a witness: `StaleSettl
 | D14 | verified within stated scope (steps 1–5 + transport) | scheduled jobs are *ordered fenced* to the plan's tuple, not a local counter. The committed state owns one current `JobFence { deployment, resource, epoch, generation }` per resource, stored in the ledger snapshot (`net.rs` `LedgerSnapshot.jobs`, mutated only through `SharedLedger::with_jobs` under the ledger lock and persisted as one coherent snapshot). Transitions are explicit: `claim` at the current epoch (a replay by the same holder is idempotent, no generation bump), `renew` (new generation, same epoch), `release` (re-queue and supersede), `reclaim` (restart takeover), `take_over` (a later epoch supersedes a partitioned leader) and `settle`/`disable`; only the current fence (fence equality plus holder) settles the job or mutates its protected resource, so an old worker may keep computing but cannot commit. Ordering is `(epoch, generation)`; generation overflow is refused, never wrapped; no transition reads a clock; `FencedSink` models a sink *with* an enforcement interface and refuses a stale fence (a sink without one is not claimed to be fenced). Step 5 gives that command a durable submission path: `SharedLedger::allocate_job` persists it in a `job_outbox` (part of the same snapshot), proposes it to the pump, re-proposes it after a restart, and `append` clears the pending entry by content when the decision applies it — the same durability rule the transaction outbox follows. Step 4 makes the claim an ordered *command*: `JobCommand` (claim, take_over, renew, release, reclaim, settle, disable) is encoded under its own schema (`JOB_COMMAND_SCHEMA = 2`) as a replicated value, and `SharedLedger::append` dispatches by schema so both ledger transactions and job commands flow through the one ordered apply; a refused command is a deterministic no-op on every replica. Evidence: `unfer_consensus` job suite (17 tests, including `two_partitioned_workers_both_believing_they_lead`, `restart_reclaims_the_claimed_job`, `stale_release_cannot_release_a_newer_claim`, `claim_replay_by_the_same_holder_is_idempotent`, `generation_overflow_is_refused_not_wrapped`, `sink_rejects_a_stale_fence`), the node-level release/retry test, the network-feature witnesses `net::tests::the_job_fence_is_owned_and_durably_held_by_the_committed_ledger` (a claim survives a reopen, then a reclaim makes the old fence stale) and `net::tests::a_job_command_converges_across_replicas_and_a_refusal_mutates_nothing` (same command stream → identical fence on two ledgers; a superseded settle changes neither), `net::tests::an_allocated_job_command_is_durable_and_cleared_when_decided` (a pending claim survives a reopen and is re-proposed, then a decided one is not), and the full `unfer_consensus --features network --lib` suite (184 passed). First symbolic invariant target for D21: *a stale fence never changes the protected state*, over the claim/renew/release/reclaim/take_over/settle/disable vocabulary, with `FencedSink` as the executable witness that a rejected stale mutation appends no effect. Limits: the proposal path is the in-process submission pump (as the ledger path is); TLS transport contention now exercised (`d14-job-transport.log`: two processes contending commit both claims but only one applies; all three replicas report the same holder, generation 1 and digest); no external sink driven end to end (that dispatch is D15's), and no external sink is driven end to end — that dispatch is D15's; enforcement beyond the deterministic ordering is the sink's, not this module's |
 | D15 | verified within stated scope (steps 1–3) | effects go through a durable dispatcher, not inline. `unfer_ffi/src/dispatch.rs` commits an `EffectIntent` (request identity, principal, resource, epoch, effect, Observe/Mutate kind, payload digest) to the new `dispatches` stream and flushes it **before** any sink is called; the approval is an `Approval { request_id, resource, epoch, payload_digest }` that must bind the committed intent exactly, so a replayed approval for an altered payload, another resource or another epoch is refused; policy is rechecked at the execution point (the existing sensitive-forward latch is the policy wired into `uk_action_apply`), and the outcome is recorded as `Acknowledged`, `Retryable` or `Uncertain` — distinct durable states, never collapsed into "done". Retries reuse one idempotency key derived from the intent identity; `Uncertain` may be retried only at a sink whose `dedups()` is true, and an uncertain irreversible action at a non-dedup sink moves to `Reconciling` and is not replayed. `uk_action_apply` is the existing effect path that now uses the dispatcher end to end (when a durable store is configured; without one there is no durable commit, so the in-memory path remains), with `ActionRecord` gaining `kind` and `epoch` (serde-defaulted) recorded at submission. Evidence: 11 dispatcher unit tests (`approval_replay_on_an_altered_payload_is_refused`, `a_revoked_worker_fails_at_the_execution_point`, `crash_after_sink_success_before_acknowledgment_does_not_duplicate_at_a_dedup_sink`, `an_uncertain_irreversible_effect_enters_reconciliation_and_is_not_replayed`, `a_retry_reuses_the_same_idempotency_key`, `dispatch_without_a_durable_commit_is_refused_and_never_reaches_a_sink`, …), two FFI tests (`action_apply_dispatches_through_the_durable_dispatcher`, `a_sensitive_latched_principal_is_refused_at_the_execution_point`), `unfer_ffi` lib 188 passed, `unfer_protocol` lib 353 passed. Limits: the only sink is the in-process `local-inprocess` sink (no external network sink yet, so "at least one existing effect path" is the action queue's local effect), `uk_action_submit`'s immediate observe/vetted path still applies inline, reconciliation of a non-dedup uncertain action has no operator tooling beyond the durable `Reconciling` record, and existing `ActionRecord`s without `kind`/`epoch` read as Mutate/0. |
 | D16 | verified within stated scope (steps 1–3) | **new** `examples/distributed/RequestState.{aui,aum}`, `RequestStateReference.rs`, `test-programs/suites/028-distributed-request-state/`, `scripts/check-request-state`; U `test-programs/runner.py`. Finite `Idle/Pending/Applied/Rejected` lifecycle with stable request id and payload digest; `step` is a contracted total function (no recursion, loops or foreign calls) accepted by the existing gate. The same 12 event vectors (including restart continuation) run through the CPS JIT and an independent Rust reference with identical stdout (`12 vectors agree`); source digests are recorded. Three compiler fixtures pin T4 (foreign call), T2 (loop) and T1 (recursion) refusals; `python3 test-programs/runner.py 028` passes 5/5. Compiler correctness and the C compiler remain named trust boundaries. |
-| D14–D26 | in progress | D14 transport claims verified; D15 durable outbox verified; D16 total request transition verified; D21 finite model check verified (induction/MM0 open); D17 next |
+| D17 | verified within stated scope (steps 1–3 + live TLS harness) | **new** `stdlib/net/Distributed.{aui,aum}`, `safestos/cranelift/src/distributed.rs`, `examples/distributed/RequestTransport.aum`, `test-programs/suites/022-distributed/`, `scripts/check-distributed-wrappers`, `umbrella/modules/DistributedRequest.aum`, `umbrella/tests/distributed_request.rs`, `umbrella/tests/distributed_tls.rs`; U `test-programs/runner.py`, `umbrella/Cargo.toml`. Linear wrappers over host handles; `submit`/`retry` consume the request and preserve wire identity, `wait` returns pending or one receipt, and every state has an explicit disposal/cancel-wait. Five compile-time fixtures pin copy, use-after-submit, double receipt, wrong-state access and leak refusals; the host authority rejects forged handles, wrong owner/deployment, retired epochs and replayed wire tokens; resource incarnations, scoped bounded request-id tombstones, a bounded stale-wire cache, retired-epoch cleanup and receipt release close replay and lifetime leaks (`22 passed`, including the D17 replay audit). The positive transport agrees on 8 lines through the CPS JIT/C bridge, and the umbrella compile-only front-end plus in-process JIT executes the authored module (`1 passed`). The live harness installs a `distributed::Transport`, spawns a child `Authority`, connects both processes with per-run mutual TLS, and runs the same module with every `au_dist_*` verb crossing the socket (`2 passed`, clean TLS shutdown); `python3 test-programs/runner.py 022-distributed` passes 5/5; source digests and 18 `au_dist_*` symbols are recorded. Remote ownership transfer is out of scope; the harness reaches one authority directly, not through QuePaxa ordering or a durable outbox; compiler correctness remains a trust boundary. |
+| D18 | verified within stated scope | **new** `safestos/cranelift/src/verification.rs`, `scripts/check-verification-profile`; U `module.rs`, `distributed.rs`, `federation.rs`, `modhost.rs`, compiler/CLI/liquid seams, umbrella posture. Versioned `[verify]` requirements and a separate `verification.ok` sidecar are enforced at load, swap and `modhost verify`; unknown/versionless fields are refused. `--liquid-required` is an explicit compiler input. Required mode fails on a missing or refusing prover, optional mode reports `[gap]`; strict evidence refuses an incomplete cover, stale protocol/schema, low proof tier, stub DID, non-SHA-256 artifact, `allow-all` and `local-consensus` (`10/10` verification tests). D17 counters/ids are checked before unsafe FFI (`STATUS_INVALID`/`OVERFLOW`/`CAPACITY`/`STALE_RESOURCE`, `22/22 distributed`); non-federated artifact ids are SHA-256 (`3/3 federation`). SMT verdicts remain solver evidence and the sidecar is not a checked certificate. |
+| D14–D26 | in progress | D14 transport claims verified; D15 durable outbox verified; D16 total request transition verified; D21 finite model check verified (induction/MM0 open); D17 verified; D18 verified; D19 next |

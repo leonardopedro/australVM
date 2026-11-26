@@ -36,6 +36,12 @@ type entry =
 
 let registry : entry list ref = ref []
 
+(** D18: the compile-wide required-liquid posture. It lives on the plugin seam
+    because the liquid library cannot depend on `Compiler` (that would be a
+    cycle); `Compiler.liquid_required` aliases this ref, so the CLI has one
+    place to set and the liquid passes one place to read. *)
+let liquid_required = ref false
+
 let entry_name = function
   | Gate (name, _) -> name
   | Typed (name, _) -> name

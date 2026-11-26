@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# D18: exercise the versioned verification profile end to end.
+#
+# Three claims are checked here:
+#   * the compiler accepts `--liquid-required` as an input and fails when the
+#     prover is missing or refuses a goal, while optional mode exits 0 with a
+#     visible `[gap]`;
+#   * `modhost verify` refuses missing/incomplete/mismatched evidence and the
+#     strict-profile identity fallbacks;
+#   * the D17 authority refuses non-positive identities, oversized digests and
+#     counter/queue overflow before returning a handle.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MODHOST="$ROOT/safestos/cranelift/target/release/modhost"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+fail() {
+    echo "check-verification-profile: $*" >&2
+    exit 1
+}
+
+[ -x "$ROOT/austral" ] || fail "$ROOT/austral is not executable"
+[ -x "$MODHOST" ] || fail "$MODHOST is missing; run make bridge"
+
+export LD_LIBRARY_PATH="$ROOT:$ROOT/safestos/cranelift/target/release:${LD_LIBRARY_PATH:-}"
+export AUSTRAL_LIQUID_DUMP="$TMP/liquid"
+mkdir -p "$AUSTRAL_LIQUID_DUMP"
+
+# ── 1. required mode is a compiler input ────────────────────────────────────
+MISSING="$TMP/no-why3"
+cat >"$MISSING" <<'EOF'
+#!/bin/sh
+echo "why3: command not found" >&2
+exit 127
+EOF
+chmod +x "$MISSING"
+
+compile_contract() {
+    local out="$1"
+    shift
+    "$ROOT/austral" compile \
+        "$ROOT/examples/distributed/RequestState.aui,$ROOT/examples/distributed/RequestState.aum" \
+        --target-type=tc "$@" >"$TMP/stdout" 2>"$TMP/stderr"
+}
+
+if WHY3_CLI="$MISSING" AUSTRAL_LIQUID_VERIFY=1 \
+    compile_contract required --liquid-required; then
+    fail "required mode accepted a missing prover"
+fi
+grep -q 'requires liquid checking' "$TMP/stderr" \
+    || fail "required refusal did not name the requirement"
+grep -q 'liquid:' "$TMP/stderr" || fail "required refusal had no liquid diagnostic"
+
+if ! WHY3_CLI="$MISSING" AUSTRAL_LIQUID_VERIFY=1 compile_contract optional; then
+    fail "optional mode should exit 0 when the prover is missing"
+fi
+grep -q 'liquid: \[gap\]' "$TMP/stderr" \
+    || fail "optional mode did not report the missing-prover gap"
+
+REFUSING="$TMP/refusing-why3"
+cat >"$REFUSING" <<'EOF'
+#!/bin/sh
+echo "File x, line 1, characters 1-2: Unproved goal"
+echo "File x, line 1, characters 1-2: deterministic_goal"
+exit 1
+EOF
+chmod +x "$REFUSING"
+
+if WHY3_CLI="$REFUSING" AUSTRAL_LIQUID_VERIFY=1 \
+    compile_contract corrupt --liquid-required; then
+    fail "required mode accepted a refused goal"
+fi
+grep -q 'deterministic_goal' "$TMP/stderr" \
+    || fail "required refusal did not name the refused goal"
+
+# ── 2. the profile/evidence gate ────────────────────────────────────────────
+PROFILE="$TMP/profile"
+mkdir -p "$PROFILE"
+cat >"$PROFILE/module.toml" <<'EOF'
+[module]
+name = "ProfileFixture"
+profile = "strict"
+
+[grants]
+kernel = []
+
+[verify]
+version = 1
+liquid = "required"
+totality = "required"
+protocol = "unfer-consensus/v1"
+schema = "distributed-request/v1"
+proof_tier = "smt"
+distributed = "required"
+EOF
+
+write_evidence() {
+    local dir="$1"
+    shift
+    local liquid="${1:-proved}" totality="${2:-covered}" covered="${3:-9}"
+    local protocol="${4:-unfer-consensus/v1}" schema="${5:-distributed-request/v1}"
+    local tier="${6:-smt}" identity="${7:-did:unfer:test:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
+    local artifact="${8:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
+    local authorizer="${9:-manifest}" deployment="${10:-network}"
+    cat >"$dir/verification.ok" <<EOF
+version = 1
+liquid = $liquid
+totality = $totality
+transitions = 9
+covered = $covered
+protocol = $protocol
+schema = $schema
+proof_tier = $tier
+identity = $identity
+artifact = $artifact
+authorizer = $authorizer
+deployment = $deployment
+EOF
+}
+
+check_accepted() {
+    local dir="$1" needle="$2"
+    if ! "$MODHOST" verify "$dir" >"$TMP/verify.out" 2>"$TMP/verify.err"; then
+        cat "$TMP/verify.out" "$TMP/verify.err" >&2
+        fail "expected verification acceptance for $dir"
+    fi
+    grep -q "$needle" "$TMP/verify.out" \
+        || fail "acceptance note did not contain $needle"
+}
+
+check_refused() {
+    local dir="$1" needle="$2"
+    if "$MODHOST" verify "$dir" >"$TMP/verify.out" 2>"$TMP/verify.err"; then
+        cat "$TMP/verify.out" >&2
+        fail "expected verification refusal for $dir"
+    fi
+    grep -q "$needle" "$TMP/verify.err" \
+        || { cat "$TMP/verify.err" >&2; fail "refusal did not name $needle"; }
+}
+
+write_evidence "$PROFILE"
+check_accepted "$PROFILE" "9/9"
+
+rm "$PROFILE/verification.ok"
+check_refused "$PROFILE" "VerificationEvidenceMissing"
+
+write_evidence "$PROFILE" proved covered 8
+check_refused "$PROFILE" "8/9"
+
+write_evidence "$PROFILE" proved covered 9 unfer-consensus/v2
+check_refused "$PROFILE" "protocol"
+
+write_evidence "$PROFILE" proved covered 9 unfer-consensus/v1 distributed-request/v2
+check_refused "$PROFILE" "schema"
+
+write_evidence "$PROFILE" proved covered 9 unfer-consensus/v1 distributed-request/v1 none
+check_refused "$PROFILE" "proof tier"
+
+write_evidence "$PROFILE" proved covered 9 unfer-consensus/v1 distributed-request/v1 smt did:unfer:stub:ProfileFixture
+check_refused "$PROFILE" "Stub"
+
+write_evidence "$PROFILE" proved covered 9 unfer-consensus/v1 distributed-request/v1 smt \
+    did:unfer:test:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+    deadbeef
+check_refused "$PROFILE" "ArtifactId"
+
+write_evidence "$PROFILE" proved covered 9 unfer-consensus/v1 distributed-request/v1 smt \
+    did:unfer:test:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+    0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef allow-all
+check_refused "$PROFILE" "AllowAll"
+
+write_evidence "$PROFILE" proved covered 9 unfer-consensus/v1 distributed-request/v1 smt \
+    did:unfer:test:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+    0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef manifest local-consensus
+check_refused "$PROFILE" "LocalConsensus"
+
+# Optional profile: missing evidence is a gap, not a failure.
+OPTIONAL="$TMP/optional"
+mkdir -p "$OPTIONAL"
+cat >"$OPTIONAL/module.toml" <<'EOF'
+[module]
+name = "OptionalFixture"
+
+[verify]
+version = 1
+liquid = "optional"
+EOF
+check_accepted "$OPTIONAL" "\[gap\]"
+
+# A strict distributed profile without the strict module profile is refused at
+# parse time, not silently downgraded.
+BAD="$TMP/bad-profile"
+mkdir -p "$BAD"
+cat >"$BAD/module.toml" <<'EOF'
+[module]
+name = "BadFixture"
+
+[verify]
+version = 1
+distributed = "required"
+EOF
+check_refused "$BAD" "profile = \"strict\""
+
+echo "check-verification-profile: compiler required mode fails closed (missing and refused prover)"
+echo "check-verification-profile: optional mode reports the prover gap"
+echo "check-verification-profile: evidence gate accepts the complete profile and refuses every mutation"
+echo "check-verification-profile: strict profile refuses stub ids, non-crypto artifacts, AllowAll and LocalConsensus"

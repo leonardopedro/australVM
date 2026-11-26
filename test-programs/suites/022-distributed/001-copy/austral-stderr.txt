@@ -1,0 +1,21 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "request" },
+    { "type": "text", "content": " has already been consumed." }
+  ],
+  "span": {
+    "filename": "test-programs/suites/022-distributed/001-copy/Test.aum",
+    "startp": { "line": 14, "column": 8 },
+    "end": { "line": 14, "column": 52 }
+  },
+  "context": [
+    [ 12, "    function duplicate(request: PendingRequest): Int64 is" ],
+    [ 13, "        let copy: PendingRequest := request;" ],
+    [ 14, "        let first: Int64 := disposeRequest(request);" ],
+    [ 15, "        let second: Int64 := disposeRequest(copy);" ],
+    [ 16, "        return first + second;" ]
+  ]
+}

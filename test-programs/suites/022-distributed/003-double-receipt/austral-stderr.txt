@@ -1,0 +1,24 @@
+{
+  "module": "Test",
+  "kind": "Linearity Error",
+  "text": [
+    { "type": "text", "content": "The variable " },
+    { "type": "code", "content": "request" },
+    { "type": "text", "content": " has already been consumed." }
+  ],
+  "span": {
+    "filename": "test-programs/suites/022-distributed/003-double-receipt/Test.aum",
+    "startp": { "line": 24, "column": 16 },
+    "end": { "line": 24, "column": 47 }
+  },
+  "context": [
+    [ 22, "            when Waiting(still_pending: PendingRequest) do" ],
+    [
+      23,
+      "                let ignored: Int64 := disposeRequest(still_pending);"
+    ],
+    [ 24, "                return disposeRequest(request);" ],
+    [ 25, "            when AppliedReceipt(receipt: ResultReceipt) do" ],
+    [ 26, "                return disposeReceipt(receipt);" ]
+  ]
+}

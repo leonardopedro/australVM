@@ -86,7 +86,7 @@ let test_compile_help_lists_shipped_flags_and_real_targets _ =
          (Printf.sprintf "help must mention --%s" flag)
          (contains (Printf.sprintf "--%s" flag)))
     ["jit-server"; "allow-all"; "auth-manifest"; "use-cps-jit";
-     "no-entrypoint"; "emit-cps"; "target-type"]
+     "no-entrypoint"; "emit-cps"; "target-type"; "liquid-required"]
 
 (* `--jit-server` on any target but `tc` is silently ignored pre-fix: the
    compile produces an artifact, the stdin `call|swap|exit` protocol never

@@ -54,8 +54,18 @@
 
           # Rust toolchain for the cranelift JIT bridge ("make bridge"
           # rebuilds safestos/cranelift against this environment's glibc).
+          #
+          # `clippy` and `rustfmt` belong here for the same reason `mm0` does:
+          # they are not implied by `cargo`, so without them they come from the
+          # host profile. `rustc`/`cargo` resolve to this shell's 1.99.1 while a
+          # profile `clippy-driver` is whatever the host last installed (1.99.0
+          # measured 2026-11-26), and the two cannot read each other's rmeta —
+          # `cargo clippy` then fails with `E0514: found crate … compiled by an
+          # incompatible version of rustc`, which reads as a broken checkout.
           rustc
           cargo
+          clippy
+          rustfmt
 
           # The frozen MM0 toolchain (packages.mm0 below). The gate's PC05a/
           # PC05b replays need `mm0-rs`/`mm0-c`, and a host profile that happens
@@ -358,8 +368,12 @@
           buildInputs = with pkgs; [
             gmp
             python311
+            # Same toolchain as `default`: clippy/rustfmt pinned to this
+            # shell's rustc, not to a host profile's (see the note there).
             rustc
             cargo
+            clippy
+            rustfmt
             ocamlPackages.ocaml
             ocamlPackages.dune_3
             ocamlPackages.findlib
