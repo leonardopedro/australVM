@@ -44,7 +44,7 @@ $ scripts/check-channel-contracts
 [pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
 
 $ scripts/check-distributed-contracts
-[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer dbfb961
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer c286c07
 
 $ scripts/check-distributed-wrappers
 CPS JIT: 2 functions compiled
@@ -60,3 +60,15 @@ check-distributed-wrappers: Distributed.aum sha256=cdca7df4670592b7a66139805add3
 check-distributed-wrappers: RequestTransport.aum sha256=1bd803adb68ae52ec54d8ff8d8ae2d500aa92c3ce33800ca6db766a5446e2cae
 check-distributed-wrappers: bridge au_dist symbols=18
 check-distributed-wrappers: bridge au_channel symbols=4
+
+$ cargo test --offline -p unfer_consensus --features network --lib the_live_submission_contract_is_ordered_and_exactly_once
+running 1 test
+test net::tests::the_live_submission_contract_is_ordered_and_exactly_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 178 filtered out; finished in 0.00s
+
+$ cargo test --offline -p unfer_consensus --features network --lib the_marker_gate_refuses_a_contract_without_its_markers
+running 1 test
+test net::tests::the_marker_gate_refuses_a_contract_without_its_markers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 178 filtered out; finished in 0.00s
