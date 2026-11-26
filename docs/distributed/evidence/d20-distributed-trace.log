@@ -1,0 +1,29 @@
+$ scripts/distributed2mm0 selftest
+distributed2mm0 selftest: refused response-request — event 3: accept identity (8, 11, 1) does not match the pending request (7, 11, 1)
+distributed2mm0 selftest: refused response-digest — event 3: accept identity (7, 12, 1) does not match the pending request (7, 11, 1)
+distributed2mm0 selftest: refused response-epoch — event 3: accept identity (7, 11, 2) does not match the pending request (7, 11, 1)
+distributed2mm0 selftest: refused event-order — event 2: accept from pending, not durable
+distributed2mm0 selftest: refused persistence — event 2: accept from pending, not durable
+distributed2mm0 selftest: OK — all five trace mutations are refused
+
+$ scripts/distributed2mm0 check
+distributed2mm0 check: OK — artifact in sync with pinned trace and theory
+
+$ scripts/distributed2mm0 verify
+distributed2mm0 verify: mm0-rs + mm0-c OK — every transition re-checked
+distributed2mm0 verify: mm0-rs rejected mutant response-request
+distributed2mm0 verify: mm0-rs rejected mutant response-digest
+distributed2mm0 verify: mm0-rs rejected mutant response-epoch
+distributed2mm0 verify: mm0-rs rejected mutant event-order
+distributed2mm0 verify: mm0-rs rejected mutant persistence
+distributed2mm0 verify: OK — clean trace accepted, five mutants rejected
+
+$ mm0-rs compile mm0/distributed_trace.mm1 /tmp/distributed_trace.mmb
+elab distributed_trace.mm1
+elabbed distributed_trace.mm1
+5 sorts, 21 term/def, 10 ax/thm
+
+$ CARGO_NET_OFFLINE=true ./scripts/verify-invariants
+[pass] D20: distributed trace certificate is in sync with its pinned trace
+[pass] D20: trace accepted and five mutants rejected by mm0-rs + mm0-c
+verify-invariants: 201 passed, 12 explained gap(s), 0 failed

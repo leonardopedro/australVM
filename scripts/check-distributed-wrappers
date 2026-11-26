@@ -70,6 +70,35 @@ if ! diff -u "$TMP/expected.txt" "$TMP/transport.out"; then
     exit 1
 fi
 
+# D19: the Austral wrapper obtains its markers from the host, not from a local
+# Boolean or a copied integer.
+cat >"$TMP/expected-contract.txt" <<'EOF'
+contract ordered=1
+contract exactly_once=1
+contract release=0
+EOF
+
+"$ROOT/austral" compile \
+    "$ROOT/stdlib/net/ChannelContract.aui,$ROOT/stdlib/net/ChannelContract.aum" \
+    "$ROOT/examples/distributed/ChannelContractProbe.aum" \
+    --entrypoint=ChannelContractProbe:main \
+    --target-type=c \
+    --output="$TMP/channel-contract.c" \
+    --use-cps-jit \
+    --error-format=json >/dev/null
+
+gcc -fwrapv -Wno-builtin-declaration-mismatch "$TMP/channel-contract.c" \
+    -L"$ROOT/safestos/cranelift/target/release" \
+    -Wl,-rpath,"$ROOT/safestos/cranelift/target/release" \
+    -laustral_cranelift_bridge -lm -ldl -lpthread \
+    -o "$TMP/channel-contract.bin"
+"$TMP/channel-contract.bin" >"$TMP/channel-contract.out"
+if ! diff -u "$TMP/expected-contract.txt" "$TMP/channel-contract.out"; then
+    echo "check-distributed-wrappers: channel-contract output changed" >&2
+    exit 1
+fi
+echo "check-distributed-wrappers: channel-contract probe agrees (3) lines"
+
 cargo test --manifest-path "$ROOT/safestos/cranelift/Cargo.toml" \
     --lib --offline -- distributed:: >"$TMP/bridge-tests.log" 2>&1 || {
     cat "$TMP/bridge-tests.log" >&2
@@ -116,3 +145,4 @@ echo "check-distributed-wrappers: Distributed.aui sha256=$(sha256sum "$ROOT/stdl
 echo "check-distributed-wrappers: Distributed.aum sha256=$(sha256sum "$ROOT/stdlib/net/Distributed.aum" | cut -d' ' -f1)"
 echo "check-distributed-wrappers: RequestTransport.aum sha256=$(sha256sum "$ROOT/examples/distributed/RequestTransport.aum" | cut -d' ' -f1)"
 echo "check-distributed-wrappers: bridge au_dist symbols=$(nm -D --defined-only "$BRIDGE" | grep -c ' T au_dist_')"
+echo "check-distributed-wrappers: bridge au_channel symbols=$(nm -D --defined-only "$BRIDGE" | grep -c ' T au_channel_')"

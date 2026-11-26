@@ -1,0 +1,15 @@
+{
+  "name": "request_lifecycle",
+  "events": [
+    { "op": "open", "request": 7, "digest": 11, "epoch": 1 },
+    { "op": "submit" },
+    { "op": "persist" },
+    { "op": "accept", "request": 7, "digest": 11, "epoch": 1 },
+    { "op": "release" },
+    { "op": "open", "request": 8, "digest": 12, "epoch": 1 },
+    { "op": "submit" },
+    { "op": "persist" },
+    { "op": "reject", "request": 8, "digest": 12, "epoch": 1 },
+    { "op": "release" }
+  ]
+}
