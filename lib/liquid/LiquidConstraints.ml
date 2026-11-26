@@ -189,8 +189,16 @@ let hash_key (parts : string list) : string =
     parts;
   Printf.sprintf "%08x" !h
 
-let goal_name (decl : int) (name : string) (kind : string) : string =
-  "g_" ^ (hash_key [ string_of_int decl; name; kind ])
+(* A goal's name is derived from what it *denotes* — the contract or call
+   site it comes from, plus the judgment kind — and nothing else. The name used
+   to include the declaration's numeric id, which is a global parse counter:
+   adding a builtin shifted every id and renamed every goal in every goldens
+   file (measured 2026-11-26, when `lib/BuiltIn.ml` gained three). A name is
+   already unique inside a module, because every caller passes a key that
+   carries the function and, where one function has many obligations, the call
+   index; `to_mlw` refuses a duplicate rather than let Why3 reject the file. *)
+let goal_name (name : string) (kind : string) : string =
+  "g_" ^ (hash_key [ name; kind ])
 
 (* ── the contract table ──────────────────────────────────────────────────── *)
 
@@ -278,7 +286,7 @@ let rec spine_env (env : LiquidInfer.temp_env) (s : tstmt) :
   | _ -> env
 
 (* A direct builder, kept separate so the signature stays readable. *)
-let make_return_goal ~(decl : int) ~(name : string) ~(kind : LiquidTypes.contract_kind)
+let make_return_goal ~(name : string) ~(kind : LiquidTypes.contract_kind)
     ~(ensures : string) ~(req : string option) ~(params : string list)
     ~(ret_sort : string) ~(body : tstmt option)
     ~(temps : LiquidInfer.temp_env) : goal option =
@@ -341,7 +349,7 @@ let make_return_goal ~(decl : int) ~(name : string) ~(kind : LiquidTypes.contrac
     in
     Some
       {
-        gname = goal_name decl name kind_tag;
+        gname = goal_name name kind_tag;
         grule = rule;
         gbinder = "forall " ^ binders ^ ". ";
         gassumes =
@@ -485,6 +493,21 @@ let to_mlw (c : t) : string =
     line "\n";
   end;
   line "  (* --- verification conditions --- *)\n";
+  (* Names are keyed by what the goal denotes (`goal_name`), so a collision
+     means a caller passed the same key twice. Stop here, naming it, rather
+     than let Why3 refuse the file with a parse error whose exit status reads
+     downstream as a prover's "no". *)
+  let seen = Hashtbl.create 17 in
+  List.iter
+    (fun (g : goal) ->
+      if Hashtbl.mem seen g.gname then
+        failwith
+          (Printf.sprintf
+             "LiquidConstraints: two obligations share the goal name %s; a \
+              goal name must identify its contract and judgment uniquely"
+             g.gname);
+      Hashtbl.replace seen g.gname ())
+    c.goals;
   List.iter
     (fun g ->
        line "\n  (* %s — %s *)\n" g.gname g.grule;
@@ -659,7 +682,7 @@ let rec calls_in_stmt (env : LiquidInfer.temp_env) (acc : call_site list)
     rejects a correct program. What it must not do is stay silent about the
     direction — see the module header. *)
 let callsite_goal ~(caller : string) ~(caller_params : string list)
-    ~(caller_req : string option) ~(decl : int) ~(index : int)
+    ~(caller_req : string option) ~(index : int)
     ~(temps : LiquidInfer.temp_env) ~(callee : callee)
     ~(actuals : texpr list) : goal option =
   if List.length actuals <> List.length callee.callee_params then None
@@ -696,7 +719,7 @@ let callsite_goal ~(caller : string) ~(caller_params : string list)
                  Some
                    {
                      gname =
-                       goal_name decl
+                       goal_name
                          (Printf.sprintf "%s_calls_%s_%d" caller
                             callee.callee_name index)
                          "requires";
@@ -751,7 +774,7 @@ let combine_assumes (req : string option) (facts : LiquidTypes.formula list) :
     shows up as a missing obligation rather than a wrong one. *)
 let range_goal ~(caller : string) ~(caller_params : string list)
     ~(caller_req : string option) ~(facts : LiquidTypes.formula list)
-    ~(decl : int) ~(index : int) ~(call : call_site) : goal option =
+    ~(index : int) ~(call : call_site) : goal option =
   match call.cs_rt with
   | None -> None
   | Some rt -> (
@@ -783,7 +806,7 @@ let range_goal ~(caller : string) ~(caller_params : string list)
              Some
                {
                  gname =
-                   goal_name decl
+                   goal_name
                      (Printf.sprintf "%s_%s_%d" caller op index)
                      "range";
                  grule =
@@ -971,7 +994,7 @@ let forall_binder (params : string list) (extra : string list) : string =
     plus the goal's own binders. *)
 let step_premise_goal ~(caller_params : string list)
     ~(caller_req : string option) ~(facts : LiquidTypes.formula list)
-    ~(decl : int) ~(name : string) ~(step : string)
+    ~(name : string) ~(step : string)
     ~(invf : LiquidTypes.formula) ~(theory : theory_fn list) : goal option =
   match List.find_opt (fun (f : theory_fn) -> f.tname = step) theory with
   | Some f when List.length f.tparams = 2 ->
@@ -989,7 +1012,7 @@ let step_premise_goal ~(caller_params : string list)
      if in_scope ante_f && in_scope cons_f then
        Some
          {
-           gname = goal_name decl name "foldstep";
+           gname = goal_name name "foldstep";
            grule = "§5.9 FOLD (step half)";
            gbinder = forall_binder caller_params [ "__elem"; "__acc" ];
            gassumes = combine_assumes caller_req facts;
@@ -1033,7 +1056,7 @@ let step_premise_goal ~(caller_params : string list)
     substituted with a term. *)
 let fold_goals ~(caller : string) ~(caller_params : string list)
     ~(caller_req : string option) ~(facts : LiquidTypes.formula list)
-    ~(decl : int) ~(index : int) ~(fold_id : int) ~(fold_params : string list)
+    ~(index : int) ~(fold_id : int) ~(fold_params : string list)
     ~(names_by_id : (int, string) Hashtbl.t) ~(theory : theory_fn list)
     ~(invf : LiquidTypes.formula option) ~(call : call_site) : goal list =
   (* §4.4's shape: step, seed, list; no declared invariant, no premises.
@@ -1055,7 +1078,7 @@ let fold_goals ~(caller : string) ~(caller_params : string list)
            in
            let base =
              {
-               gname = goal_name decl (Printf.sprintf "%s_fold_%d" caller index) "fold";
+               gname = goal_name (Printf.sprintf "%s_fold_%d" caller index) "fold";
                grule = "§5.9 FOLD (init half)";
                gbinder = forall_binder caller_params [];
                gassumes = combine_assumes caller_req facts;
@@ -1089,7 +1112,7 @@ let fold_goals ~(caller : string) ~(caller_params : string list)
                 | Some step -> (
                    match
                      step_premise_goal ~caller_params ~caller_req
-                       ~facts ~decl
+                       ~facts
                        ~name:(Printf.sprintf "%s_fold_step_%d" caller index)
                        ~step ~invf ~theory
                    with
@@ -1239,7 +1262,7 @@ let generate (m : typed_module) : t option =
       List.concat_map
         (fun d ->
           match d with
-          | TFunction (id, _, fname, _, params, _, body, _, pragmas)
+          | TFunction (_, _, fname, _, params, _, body, _, pragmas)
             when List.exists is_contract pragmas ->
              let caller = Identifier.ident_string fname in
              let caller_params = param_names params in
@@ -1278,7 +1301,7 @@ let generate (m : typed_module) : t option =
                          | Some callee -> (
                             match
                               callsite_goal ~caller ~caller_params
-                                ~caller_req:req_str ~decl:(decl_key id)
+                                ~caller_req:req_str
                                 ~index:i ~temps:cs.cs_env ~callee
                                 ~actuals:cs.cs_args
                             with
@@ -1292,7 +1315,7 @@ let generate (m : typed_module) : t option =
                     let range =
                       match
                         range_goal ~caller ~caller_params ~caller_req
-                          ~facts ~decl:(decl_key id) ~index:i ~call:cs
+                          ~facts ~index:i ~call:cs
                       with                       | Some g -> [ g ]
                        | None -> []
                     in                    (* §5.9: the fold's init and step premises, for a call to
@@ -1302,7 +1325,7 @@ let generate (m : typed_module) : t option =
                       | None -> []
                       | Some (fold_id, fold_params, _) ->
                          fold_goals ~caller ~caller_params ~caller_req ~facts
-                           ~decl:(decl_key id) ~index:i ~fold_id ~fold_params
+                           ~index:i ~fold_id ~fold_params
                            ~names_by_id ~theory ~invf:fold_inv ~call:cs
                     in
                     (* §5.9 through a pending parameter: the callee's fold
@@ -1331,7 +1354,6 @@ let generate (m : typed_module) : t option =
                                             step_premise_goal
                                               ~caller_params
                                               ~caller_req ~facts
-                                              ~decl:(decl_key id)
                                               ~name:(
                                                 Printf.sprintf "%s_steparg_%d_%s"
                                                   caller i p)
@@ -1361,11 +1383,6 @@ let generate (m : typed_module) : t option =
                 | _ -> false)
               decls
           in
-          let decl_id =
-            match decl with
-            | Some (TFunction (id, _, _, _, _, _, _, _, _)) -> decl_key id
-            | _ -> 0
-          in
           let body =
             match decl with
             | Some (TFunction (_, _, _, _, _, _, b, _, _)) -> Some b
@@ -1378,7 +1395,7 @@ let generate (m : typed_module) : t option =
             List.assoc_opt e.cname requires
           in
           match
-            make_return_goal ~decl:decl_id ~name:e.cname ~kind:e.ckind
+            make_return_goal ~name:e.cname ~kind:e.ckind
               ~ensures:e.csrc ~req ~params:e.cparams ~ret_sort:"int"
               ~body ~temps
           with

@@ -29,16 +29,16 @@ module LiquidVCArith
 
   (* --- verification conditions --- *)
 
-  (* g_5e5b6947 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_5e5b6947: forall n: int, __result: int. ((n >= 0 /\ (__result = (n)))) -> __result >= n
+  (* g_83a850b6 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
+  goal g_83a850b6: forall n: int, __result: int. ((n >= 0 /\ (__result = (n)))) -> __result >= n
 
-  (* g_a61e1049 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_a61e1049: forall n: int, __result: int. ((n >= 1 /\ (__result = ((atLeast ((n - 1))))))) -> __result >= 0
+  (* g_f01e8507 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
+  goal g_f01e8507: forall n: int, __result: int. ((n >= 1 /\ (__result = ((atLeast ((n - 1))))))) -> __result >= 0
 
-  (* g_5406f904 — §6 RANGE (the result stays inside its machine type's range) *)
-  goal g_5406f904: forall n: int. ((n >= 1 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((-9223372036854775808 <= (n - 1)) /\ (9223372036854775807 >= (n - 1)))
+  (* g_cfe2c67e — §6 RANGE (the result stays inside its machine type's range) *)
+  goal g_cfe2c67e: forall n: int. ((n >= 1 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((-9223372036854775808 <= (n - 1)) /\ (9223372036854775807 >= (n - 1)))
 
-  (* g_a5fb0a77 — §5.6 APPLICATION (the caller proves the callee's Requires) *)
-  goal g_a5fb0a77: forall n: int. (n >= 1) -> (((n - 1) >= 0))
+  (* g_8c4d8c2d — §5.6 APPLICATION (the caller proves the callee's Requires) *)
+  goal g_8c4d8c2d: forall n: int. (n >= 1) -> (((n - 1) >= 0))
 
 end
