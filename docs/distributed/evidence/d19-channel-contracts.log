@@ -72,3 +72,88 @@ running 1 test
 test net::tests::the_marker_gate_refuses_a_contract_without_its_markers ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 178 filtered out; finished in 0.00s
+
+# ── The peer-decision boundary (H02, H03, H11) ───────────────────────────────
+# The census caught the first version of the receive gate: the marker and the
+# call were pushed apart by the inserted check, and the gate refused it.
+
+$ python3 scripts/check-channel-contracts
+[fail] D19 inventory row H11: marker at .../unfer_consensus/src/net.rs:1422 is not near a receive hook
+[fail] D19 .../unfer_consensus/src/net.rs:1430: receive hook has no D19-HOOK marker nearby
+# Fixed by keeping the marker adjacent to the call and the gate above it.
+
+$ cargo test --offline -p unfer_protocol --lib channel_contracts
+test channel_contracts::tests::the_consensus_decision_contract_is_ordered_and_frame_bounded ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 353 filtered out; finished in 0.01s
+
+$ cargo test --offline -p unfer_protocol --lib
+test result: ok. 368 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.91s
+
+$ cargo test --offline -p unfer_consensus --features network --lib net::tests
+test net::tests::the_decision_gate_refuses_unordered_or_oversize_frames ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.09s
+
+$ cargo test --offline -p unfer_consensus --features network --test phase6_testnet
+test phase6_nodes_survive_full_cluster_restart ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.39s
+
+$ python3 scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+
+$ python3 scripts/check-distributed-contracts
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer 7b20b24
+
+# ── The recorder RPC client (H04) ────────────────────────────────────────────
+
+$ cargo test --offline -p unfer_protocol --lib channel_contracts
+test channel_contracts::tests::the_recorder_rpc_contract_is_pinned_and_can_carry_a_batch ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 353 filtered out; finished in 0.01s
+
+$ cargo test --offline -p unfer_protocol --lib
+test result: ok. 369 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+
+$ cargo test --offline -p unfer_consensus --features network --lib net::tests
+test net::tests::the_recorder_gate_refuses_plaintext_or_an_undersized_bound ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.08s
+
+$ cargo test --offline -p unfer_consensus --features network --test phase6_testnet
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s
+
+$ python3 scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+
+$ python3 scripts/check-distributed-contracts
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer b9e6593
+
+# ── The in-process admission point (H12) ─────────────────────────────────────
+
+$ cargo test --offline -p unfer_protocol --lib channel_contracts
+test channel_contracts::tests::the_inprocess_admission_contract_is_request_identity_exactly_once ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 353 filtered out; finished in 0.00s
+
+$ cargo test --offline -p unfer_protocol --lib
+test result: ok. 370 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+
+$ cargo test --offline -p unfer_consensus --features network --lib node::tests
+test node::tests::the_inprocess_admission_boundary_satisfies_its_gate ... ok
+test node::tests::the_inprocess_admission_gate_refuses_each_missing_premise ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 152 filtered out; finished in 0.70s
+
+$ cargo test --offline -p unfer_consensus --features network --lib
+test result: ok. 183 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.23s
+
+$ cargo test --offline -p unfer_consensus --features network --test phase6_testnet
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+$ python3 scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+
+$ python3 scripts/check-distributed-contracts
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer f013a51

@@ -5744,25 +5744,63 @@ the reason now reads as a size the machine cannot supply, not as an arbitrary ca
 102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs` (`§13.62`) scales to this: at
 251 MB the compile is both superlinear in time and past the available address space.
 
-**Where the namespace sweep stands.** The 475-declaration pause this section was written in is
-long past: the ledger now holds **2 473 verified of 3 975**, and every row in it is a pass. The
-five non-passes the paused log carried have since been decided one way or the other —
+The non-passes the paused log carried have since been decided one way or the other —
 `renameCore` is the measurement above, the `Φ` and `hΔ0` rejections became verdicts with
 `§13.62b`'s `mm0_ident` fix, and `.EnvModelM.swapP`/`.swapTyP` have `§13.62f`. Two later runs
 were OOM-killed at the same declaration, `.TgtNodePres.kit` the last line of each log; `§13.62h`
-reproduces the kill alone, `§13.62j` fixes its cause in the checker, and `§13.62k` fixes the reason
-reader that was recording derivations as verdicts.
+reproduces the kill alone, `§13.62j` fixes its cause in the checker and closes the declaration,
+and `§13.62k` fixes the reason reader that was recording derivations as verdicts. What the reader
+then read on `.declQuotPB_at` — `at sd1254: store overflow` — is `§13.62l`: a second checker
+constant that is 31 % short, not a rejection.
+
+<!-- 13.62c-sweep:begin -->
+**Where the namespace sweep stands**, as the log read at
+`2026-11-26T15:17`. The run in flight has decided
+**2451 of the 3975 declarations**, and the ledger holds **2476 rows,
+every one of them a pass** — a row is appended only for a declaration
+`mm0-c` accepted, so a declaration that failed leaves none. The histogram
+below is what the log has printed so far; it is not folded as a verdict,
+because its largest class names a bound:
+
+| class | rows |
+| --- | ---: |
+| `mm0-rs ✗ over 10 GiB` | 22 |
+| `mm0-rs ⏱ over 240 s` | 10 |
+| `emit ⏱ over 240 s` | 5 |
+| `mm0-c ✗ at sd1254: store overflow` | 1 |
+
+(22 of those rows are the `over 10 GiB` class alone.)
+
+**Nothing in that histogram is classified here yet.** A bound names a
+size only once a bigger one has been tried, and the re-measurement of the
+22 `over 10 GiB` rows at 20 G runs behind the sweep
+(`probe-10gib.sh`, its output in `probe-10gib.log`), rather than being
+assumed: their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`
+against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
+and not the result.
+<!-- 13.62c-sweep:end -->
+
+**Why the failures stay out of the ledger.** The ledger has no verdict column, and both of its
+memo paths — the exact `(export, theory, mode, declaration)` row and the statement-digest index
+built over `statement_sha256` — read every row as a pass: the first does `int(row["rules"])` and
+prints `memo ✓`. A classified failure written into it would therefore turn into a hit that skips
+the declaration, and a later fix to the driver or the checker would become unmeasurable — which
+is exactly what `§13.62h`–`§13.62l` each did to a row that had failed under the old code. So the
+20 G verdicts live in the sweep's log, the exit report and the block above, and re-entering them
+would first need a `verdict` column, memo lookups filtered on it, and a deliberate re-check path
+for rows marked failed. Until then a failed declaration leaves no row, and that is the ledger's
+meaning: what it holds was verified.
 
 Every finished row survives in the ledger, so a resume replays the finished set as `memo` hits —
 minutes, not the hours the real work took — which is why the run was restarted once per defect
 (the recursion limit, the reader, the checker's heap) instead of exiting on a histogram that
-counts a fixed defect's output: 2 472 rows replayed after the first restart, 2 473 after the third.
-The closures, the rules applied and the failure histogram land only at a clean exit, in
-`_build/conleche/model-scan.log`; `_build/conleche/sweep-exit-report.md` collects them together
-with the post-exit `--rekey` and the statement audit. **They are not folded here yet** — the run
-in flight is the first one whose every class is a property of the declaration rather than of the
-driver or the checker, and the fold happens when it exits. Until then the only number this
-section can state without guessing is the ledger's: 2 473 verified, 0 recorded as failed.
+counts a fixed defect's output. The block above is *rendered*, not transcribed:
+`_build/conleche/fold-sweep.py` reads `model-scan.log` for the closures, the rules applied and the
+per-row verdicts, the ledger for its row count, and `probe-10gib.log` for the 20 G verdicts, and
+rewrites everything between the two markers. The chain that runs it (`chain-after-sweep.sh`) is
+one unit: wait for the sweep, `--rekey` and audit (`sweep-exit-report.md`), probe, fold. The
+histogram is also stamped across the `STORE_SIZE` rebuild `§13.62l` describes (14:20), the one
+checker change made mid-run: rows decided before it met a 2^26 store, rows after it 2^27.
 
 ### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
 
@@ -6023,21 +6061,26 @@ sweep was restarted on the installed checker, so `over the checker's own heap` i
 class the run can produce unless a larger derivation outgrows 2^17 — the class meant "this
 checker's constant", not "this derivation is wrong".
 
-That restart also needed the driver to stop resolving the checker by name: inside `nix develop`
-the `mm0-c` on `PATH` is the nixpkgs package
-(`/nix/store/…-mm0-0.1.0-unstable-2026-09-30/bin/mm0-c`), so an installed rebuild is unreachable
-however fresh it is — the first restart after the rebuild would have measured the package again.
-The driver now takes the path from `SCAN_MM0_C` (default `mm0-c`, overridable like the other
-bounds), and the sweep runs with `SCAN_MM0_C=/home/leo/.local/bin/mm0-c`, visible in the unit's
-environment. Checked both ways: one declaration through the override (`.declBasisPB_emptyK`,
-8 447 rules, **17.0 s, pass**) and the same run pointed at a path that does not exist, which stops
-with `FileNotFoundError` instead of falling back to the package.
+That restart also needed the driver to stop resolving the checker by name. Inside `nix develop` the
+name resolves two ways, measured both: `nix develop -c bash -c 'command -v mm0-c'` gives the nixpkgs
+package (`/nix/store/…-mm0-0.1.0-unstable-2026-09-30/bin/mm0-c`), while `nix develop -c bash -lc
+'command -v mm0-c'` gives `/home/leo/.local/bin/mm0-c` — the login shell puts `~/.local/bin` ahead
+of the store paths. The sweep's own shape is the second one (`bash -lc` outside, `nix develop -c
+python3` inside), so it already resolved the installed rebuild; that is consistent with the part-6
+log, where `.TgtNodePres.kit._proof_1` is no longer a non-pass but `pass ✓` — 65 334 rules, a
+170 564 417-byte derivation, reachable only by a checker that exits 0 on it. The stock copy, run on
+the preserved artifact with its dump discarded, was still running at 120 s (it spends the time
+producing the rejection dump `§13.62k` describes); the installed build exits 0 in 1.78 s. Because
+the resolution depends on the shape of the shell, the driver takes the path from `SCAN_MM0_C`
+(default `mm0-c`, overridable like the other bounds) and the sweep runs with
+`SCAN_MM0_C=/home/leo/.local/bin/mm0-c`, visible in the unit's environment. Checked both ways: one
+declaration through the override (`.declBasisPB_emptyK`, 8 447 rules, **17.0 s, pass**) and the same
+run pointed at a path that does not exist, which stops with `FileNotFoundError` instead of falling
+back to the package.
 
-No second row in the run hit that class. The only other `mm0-c` non-pass in the part-4 log,
-`.declQuotPB_at`, is a rejection whose verdict the reason reader did not capture — it returned a
-fragment of the rejected statement (`ucc (tsucc (tsucc …`) instead of the checker's line. That is
-a defect in the driver's reason extraction, separate from this capacity question; `§13.62k`
-diagnoses and fixes it.
+No second row in the run hit *that* class, and none can while the heap is 2^17: the next `mm0-c`
+non-pass, `.declQuotPB_at`, is a capacity fact about a different buffer — `§13.62k` finds the reader
+that was hiding its verdict, and `§13.62l` measures the shortfall.
 
 ### 13.62k The reason reader read the wrong end of the dump: `.declQuotPB_at`'s verdict
 
@@ -6074,3 +6117,60 @@ yield the verdict; the no-header and empty-stream cases yield their line and `(n
 sweep was restarted on this reader as well, so the failure histogram it exits with names
 classes instead of quoting derivations — the reason `§13.62c`'s closures could not be folded from
 the part-4 log.
+
+In the sweep it does read the checker's line. `§13.62j`'s fragment is now
+
+```
+mm0-c ✗ .declQuotPB_at: mm0-c: at sd1254: store overflow
+```
+
+— a named statement, the checker's own reason, and a class the histogram can count. What that
+verdict means is `§13.62l`.
+
+### 13.62l The second buffer: `.declQuotPB_at`'s store was 31 % short
+
+`§13.62k`'s verdict is a capacity fact of the same family as `§13.62j`'s heap, on a different
+buffer: the derivation is 10 570 rules and 3 838 assumptions, a 6 051 136-byte `full.mmb` against
+a 118 588 845-byte `full.mm0`, and what it runs out of is the checker's expression arena,
+`STORE_SIZE (1 << 26)` bytes — 64 MB. `§13.62j`'s `_proof_1` used 19 % of that arena; this one
+needs more than all of it. The `-2x` measurement build doubled only the heap, so a copy with
+`STORE_SIZE (1 << 27)` and `-DHIGHWATER` was built from the same sources (`_build/mm0-c-store2x`,
+`gcc -O2`, nothing else changed) and the artifact the sweep kept for the failed declaration — a
+non-pass leaves its work directory behind — checks at that size:
+
+**exit 0, 2.54 s wall, 208 892 KB peak**, and the counters say which buffer was binding:
+
+| buffer | highwater | size | used |
+| --- | --- | --- | --- |
+| store | **87 780 488** | 67 108 864 → 134 217 728 | 131 % of the default, 65 % of 2× |
+| proof heap | 5 433 | 131 072 | 4 % |
+| unify heap | 3 653 | 65 536 | 6 % |
+| stack | 423 | 65 536 | 0.6 % |
+| unify stack | 91 | 256 | 36 % |
+| hypothesis stack | 3 | 256 | 1 % |
+
+The shortfall is 20 671 624 bytes — 31 % of one buffer — and no other buffer reaches 6 % of its
+size (the 36 % is 91 entries of a 256-entry stack). So the row is *large*, not *wrong*: `store
+overflow` names the checker's constant, exactly as `heap overflow` did in `§13.62h`. Raising
+`STORE_SIZE` upstream is the same one-line question the heap answered, and the answer is the same:
+`STORE_SIZE (1 << 27)` now sits in `../mm0-rs/mm0-c/verifier_types.c` (committed there as
+`445757e`), and the normal build (`gcc -O2`, no `-D` flags) was installed over
+`~/.local/bin/mm0-c`. The installed binary re-verifies both artifacts: `.declQuotPB_at` **exit 0
+in 1.59 s, 208 900 KB peak**, and `§13.62j`'s `_proof_1` still **exit 0 in 1.97 s, 195 644 KB**, so
+the wider arena costs 64 MB more of static array (64 → 128 MB) and no time worth reporting.
+
+The whole pipeline was then re-run on that one declaration rather than trusting the checker stage
+alone: `--only` on `ConLeche.Model.declQuotPB_at`, a ledger of its own, `SCAN_MM0_C` on the
+installed build, in a transient unit capped at 12 G — **`pass ✓ .declQuotPB_at [thm] rules=10570
+assumptions=3838`, 87.1 s elapsed, 1/1 verified closures**. Its row is now in the live ledger
+(2 476 entries): the sweep is that file's only writer until it exits, so the row and its retained
+`stmt/` file were appended exactly as `ledger_append` writes them — one atomic append — instead of
+pointing a second scan at the same ledger.
+
+One consequence has to be stated where the fold reads it: the checker was replaced *while the
+sweep was running* (installed by `mv`, so the running process kept its old inode and no
+`ETXTBSY`), which means the rows it checked before 14:20 met `STORE_SIZE 2^26` and the rows after
+it meet 2^27. The exit histogram is therefore stamped across one checker rebuild — the only such
+boundary in it, and the reason a `store overflow` row can only come from the early part. Had it
+been left alone, the run would have been homogeneous; it was repaired on request, and the mixed
+histogram is cheaper than replaying 2 100 rows to recover a property that is now known.
