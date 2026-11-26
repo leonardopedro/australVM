@@ -6127,6 +6127,14 @@ overflow` names the checker's constant, exactly as `heap overflow` did in `§13.
 in 1.59 s, 208 900 KB peak**, and `§13.62j`'s `_proof_1` still **exit 0 in 1.97 s, 195 644 KB**, so
 the wider arena costs 64 MB more of static array (64 → 128 MB) and no time worth reporting.
 
+The whole pipeline was then re-run on that one declaration rather than trusting the checker stage
+alone: `--only` on `ConLeche.Model.declQuotPB_at`, a ledger of its own, `SCAN_MM0_C` on the
+installed build, in a transient unit capped at 12 G — **`pass ✓ .declQuotPB_at [thm] rules=10570
+assumptions=3838`, 87.1 s elapsed, 1/1 verified closures**. Its row is now in the live ledger
+(2 476 entries): the sweep is that file's only writer until it exits, so the row and its retained
+`stmt/` file were appended exactly as `ledger_append` writes them — one atomic append — instead of
+pointing a second scan at the same ledger.
+
 One consequence has to be stated where the fold reads it: the checker was replaced *while the
 sweep was running* (installed by `mv`, so the running process kept its old inode and no
 `ETXTBSY`), which means the rows it checked before 14:20 met `STORE_SIZE 2^26` and the rows after
