@@ -121,23 +121,29 @@ jobs:
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/unfer.git ../unfer
       - name: Checkout dynamic-arctic as sibling (unfer_consensus dep)
         run: git clone --depth 1 --branch main https://github.com/leonardopedro/dynamic-arctic.git ../dynamic-arctic
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # dtolnay/rust-toolchain@stable
+      # This job runs `make lint` — the same command a developer runs — rather
+      # than its own cargo lines, so the two cannot drift. That means the
+      # devshell, not a runner-installed toolchain: `clippy` and `rustfmt` are
+      # shell inputs there (AGENTS.md, measured 2026-11-26), because a toolchain
+      # that arrives from the host profile instead of the shell is a different
+      # build from the one `cargo` was compiled against (`E0514`).
+      - name: install nix
+        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703  # nixbuild/nix-quick-install-action@v30
+
+      - name: nix cache
+        uses: nix-community/cache-nix-action@d8cff2f74b9341e0d90fbf3c0c0212a161ceaef6  # nix-community/cache-nix-action@v6
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c  # Swatinem/rust-cache@v2
-        with:
-          workspaces: safestos/cranelift
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
+
       # Clippy is enforced with -D warnings: the bridge was swept clean (round
       # 21) — every FFI entry point carries an explicit
       # `#[allow(clippy::not_unsafe_ptr_arg_deref)]` for its C ABI pointers.
-      - run: cargo clippy --manifest-path safestos/cranelift/Cargo.toml --all-targets -- -D warnings
-      # Formatting is enforced too (round-21 follow-up): the bridge crate was
-      # made fmt-clean with the pinned 1.99.0 rustfmt (rust-toolchain.toml
-      # governs every cargo invocation here, so the runner's default stable
-      # never drifts the gate — unlike an unpinned @nightly format job).
-      # Scoped via --manifest-path so the sibling path deps (unfer,
-      # dynamic-arctic) are never reformatted by this job.
-      - run: cargo fmt --manifest-path safestos/cranelift/Cargo.toml -- --check
+      # Formatting is checked in the same run. Both are scoped by
+      # `--manifest-path` inside the target, so the sibling path deps (unfer,
+      # dynamic-arctic) are neither linted nor reformatted by this job.
+      - name: make lint (clippy -D warnings + fmt --check)
+        run: make lint
 
   # ---------------------------------------------------------------------------
   # Phase D: the Lean4 → DeltaNets → MM0 certificate gate (docs/lean4mm0.md §5).
