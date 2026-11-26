@@ -15,10 +15,15 @@
 # FILE holds the command's combined output; `--status` is its exit status, which
 # this script re-exits (only on the enforced path). Enforcement defaults to the
 # `AVM_LATENCY_REFERENCE=1` environment variable, exactly as the step reads it;
-# the flags exist so `selftest` can pin both branches on any host.
+# the flags exist so `selftest` can pin both branches on any host. The expected
+# output of every case is `avm-hot-bench-report.golden`, next to this script,
+# which `selftest` diffs against byte for byte.
 set -uo pipefail
 
 SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
+# The exact output of every selftest case. It sits next to this script so the
+# annotation text is in the repo, not only in a CI run.
+GOLDEN=$(dirname "$SELF")/avm-hot-bench-report.golden
 
 report() {  # STATUS FILE ENFORCED(0|1)
     local status=$1 out=$2 enforced=$3 line
@@ -42,25 +47,38 @@ report() {  # STATUS FILE ENFORCED(0|1)
 }
 
 # ── selftest ────────────────────────────────────────────────────────────────
-# The three paths, plus the environment default: the number has to reach the
-# annotation on a red enforced run, the warning branch has to stay green, and a
-# pass must carry no annotation at all.
+# Each case's output is diffed against its block in `avm-hot-bench-report.golden`,
+# byte for byte — the report, every annotation and the `[gap]` line and its
+# number — and its exit status is checked. The environment default is a case of
+# its own, because the step reads it.
 selftest() {
     local tmp failed=0
+    [ -f "$GOLDEN" ] || { printf 'selftest: missing %s\n' "$GOLDEN" >&2; exit 2; }
     tmp=$(mktemp -d) || { echo "selftest: no temporary directory" >&2; exit 2; }
     SELFTEST_TMP=$tmp
     trap 'rm -rf "$SELFTEST_TMP"' EXIT
 
     say() { printf '  %s\n' "$*"; }
     bad() { printf 'selftest: FAIL %s\n' "$*" >&2; failed=1; }
-    has() { grep -qF -- "$3" "$2" || bad "$1: missing line '$3'"; }
-    has_not() { ! grep -qF -- "$3" "$2" || bad "$1: unexpected line '$3'"; }
-    count() { # label file needle expected
-        local n
-        n=$(grep -cF -- "$3" "$2")
-        [ "$n" = "$4" ] || bad "$1: '$3' appears $n time(s), expected $4"
-    }
     same_rc() { [ "$(cat "$2.rc")" = "$1" ] || bad "$3: exit $(cat "$2.rc"), expected $1"; }
+    block() { # case -> that case's lines from the golden file
+        awk -v want="[$1]" '
+            /^#/ { next }
+            /^\[[A-Za-z0-9_-]+\]$/ { inside = ($0 == want); next }
+            inside { print }
+        ' "$GOLDEN"
+    }
+    expect_golden() { # label base case
+        local label=$1 base=$2 case=$3
+        if ! grep -qxF -- "[$case]" "$GOLDEN"; then
+            bad "$label: no [$case] block in $(basename "$GOLDEN")"
+            return
+        fi
+        if ! diff -u <(block "$case") "$base.out" > "$base.diff"; then
+            bad "$label: output differs from $(basename "$GOLDEN") [$case]"
+            sed 's/^/      /' "$base.diff" >&2
+        fi
+    }
     run() { # base log status [flag...]; writes <base>.out and <base>.rc
         local base=$1 log=$2 status=$3
         shift 3
@@ -76,8 +94,7 @@ selftest() {
         'hot-bench: ok' > "$tmp/pass.log"
     run "$tmp/pass" "$tmp/pass.log" 0
     same_rc 0 "$tmp/pass" "pass path"
-    has "pass path" "$tmp/pass.out" 'hot-bench: fault-in 6.5 ms (limit 15 ms)'
-    has_not "pass path" "$tmp/pass.out" '::'
+    expect_golden "pass path" "$tmp/pass" pass
 
     # Enforced miss: every one of the last three lines is an error, the whole
     # output is printed once, and the exit status is the command's.
@@ -88,31 +105,20 @@ selftest() {
     printf '%s\n' 'hot-bench: 1 of 2 row(s) missed' >> "$tmp/miss.log"
     run "$tmp/enforced" "$tmp/miss.log" 1 --reference
     same_rc 1 "$tmp/enforced" "enforced path"
-    has "enforced path" "$tmp/enforced.out" \
-        '::error title=hot-bench::hot-bench: FAIL fault-in 22.4 ms exceeds 15 ms'
-    has "enforced path" "$tmp/enforced.out" \
-        '::error title=hot-bench::hot-bench: 1 of 2 row(s) missed'
-    count "enforced path" "$tmp/enforced.out" 'hot-bench: acquire 30 ns (limit 1 us)' 1
-    has_not "enforced path" "$tmp/enforced.out" '::warning'
-    has_not "enforced path" "$tmp/enforced.out" 'hot-bench: acquire 30 ns (limit 1 us)::'
+    expect_golden "enforced path" "$tmp/enforced" enforced
 
     # Hosted runner: a warning with the numbers, the `[gap]` line, exit 0 — the
     # step must not fail a tree because the runner is shared.
     run "$tmp/hosted" "$tmp/miss.log" 1 --not-reference
     same_rc 0 "$tmp/hosted" "hosted path"
-    has "hosted path" "$tmp/hosted.out" \
-        '::warning title=hot-store latency (not enforced on this runner)::hot-bench: 1 of 2 row(s) missed'
-    has "hosted path" "$tmp/hosted.out" \
-        '[gap] hot-store latency rows measured, not enforced here (hosted runner; set AVM_LATENCY_REFERENCE=1 on a reference machine):'
-    has "hosted path" "$tmp/hosted.out" 'hot-bench: 1 of 2 row(s) missed'
-    has_not "hosted path" "$tmp/hosted.out" '::error'
+    expect_golden "hosted path" "$tmp/hosted" hosted
 
     # The environment default the CI step actually relies on.
     env -u AVM_LATENCY_REFERENCE AVM_LATENCY_REFERENCE=1 \
         bash "$SELF" --status 1 "$tmp/miss.log" > "$tmp/env.out" 2>&1
     echo $? > "$tmp/env.out.rc"
     same_rc 1 "$tmp/env.out" "env default path"
-    has "env default path" "$tmp/env.out" '::error title=hot-bench::'
+    expect_golden "env default path" "$tmp/env" enforced
 
     # Usage, before anything is printed.
     bash "$SELF" --bogus "$tmp/pass.log" > "$tmp/usage.out" 2>&1
@@ -121,6 +127,7 @@ selftest() {
 
     if [ "$failed" -eq 0 ]; then
         say "selftest: pass, enforced, enforced-by-env, hosted and usage paths all hold"
+        say "selftest: output matches $(basename "$GOLDEN") byte for byte"
         return 0
     fi
     return 1

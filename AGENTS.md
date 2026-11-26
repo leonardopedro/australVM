@@ -118,9 +118,11 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   `::error` annotations on failure, and the "did not compile" line when no
   `test result:` appeared). `--status` is cargo's exit status, which the script
   exits with, so the step still fails on a red suite. `selftest` exercises the
-  green, red, compile-failure and usage paths against fixtures — the red path is
-  the one the step is read through, so it has its own case — and the avm-pkg job
-  runs it before `cargo test` (`build-and-test.yml`), which is what keeps it
+  green, red, compile-failure and usage paths, diffing each case's output
+  against its block in `scripts/avm-test-census.golden` — levels, both titles
+  and the message text byte for byte, not by substring — so the red path, the
+  one the step is read through, has its own case. The avm-pkg job runs
+  `selftest` before `cargo test` (`build-and-test.yml`), which is what keeps it
   from rotting. `make annotation-selftests` runs it and
   `scripts/avm-hot-bench-report`'s selftest locally (plain bash: no dune, no
   bridge).
@@ -132,7 +134,8 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   plus the `[gap]` line, its number and exit 0 on a hosted runner. Enforcement
   defaults to `AVM_LATENCY_REFERENCE=1` (what the step reads); the flags exist
   for `selftest`, which pins pass, enforced, enforced-by-env, hosted and usage
-  paths.
+  paths by diffing each against `scripts/avm-hot-bench-report.golden` byte for
+  byte, the `[gap]` line and its number included.
 - `scripts/ci-logs` — reads a GitHub Actions job's log through the REST API
   with `GH_TOKEN` (or `GITHUB_TOKEN`) from the environment, because the web log
   needs admin rights. No arguments: the latest run on the current branch, its

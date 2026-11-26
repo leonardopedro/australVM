@@ -1,0 +1,38 @@
+# The exact stdout `scripts/avm-hot-bench-report` writes for each fixture in its
+# `selftest`, one block per case: the report itself (printed once), then the
+# annotation set that case selects — none on a pass, the last three lines as
+# `::error title=hot-bench::` on an enforced miss, the same three as
+# `::warning title=hot-store latency (not enforced on this runner)::` plus the
+# `[gap]` line and its number on a hosted runner.
+#
+# `selftest` diffs its output against the matching block and fails on any
+# difference; it does not grep for substrings, so a changed title, a reordered
+# line or a dropped `[gap]` is a red selftest. The `enforced` block serves both
+# ways of selecting enforcement (`--reference` and `AVM_LATENCY_REFERENCE=1`),
+# because the step reads the latter and the two must not diverge.
+#
+# Edit by hand when the reporting is meant to change. There is deliberately no
+# regeneration flag: a script that rewrites the file it is checked against can
+# never report a drift.
+[pass]
+hot-bench: acquire 30 ns (limit 1 us)
+hot-bench: fault-in 6.5 ms (limit 15 ms)
+hot-bench: ok
+[enforced]
+hot-bench: acquire 30 ns (limit 1 us)
+hot-bench: fault-in 22.4 ms (limit 15 ms)
+hot-bench: FAIL fault-in 22.4 ms exceeds 15 ms
+hot-bench: 1 of 2 row(s) missed
+::error title=hot-bench::hot-bench: fault-in 22.4 ms (limit 15 ms)
+::error title=hot-bench::hot-bench: FAIL fault-in 22.4 ms exceeds 15 ms
+::error title=hot-bench::hot-bench: 1 of 2 row(s) missed
+[hosted]
+hot-bench: acquire 30 ns (limit 1 us)
+hot-bench: fault-in 22.4 ms (limit 15 ms)
+hot-bench: FAIL fault-in 22.4 ms exceeds 15 ms
+hot-bench: 1 of 2 row(s) missed
+::warning title=hot-store latency (not enforced on this runner)::hot-bench: fault-in 22.4 ms (limit 15 ms)
+::warning title=hot-store latency (not enforced on this runner)::hot-bench: FAIL fault-in 22.4 ms exceeds 15 ms
+::warning title=hot-store latency (not enforced on this runner)::hot-bench: 1 of 2 row(s) missed
+[gap] hot-store latency rows measured, not enforced here (hosted runner; set AVM_LATENCY_REFERENCE=1 on a reference machine):
+hot-bench: 1 of 2 row(s) missed

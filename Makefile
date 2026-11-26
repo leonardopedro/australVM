@@ -186,10 +186,11 @@ check-census:
 # That job reports through annotations because a failed step's log needs admin
 # rights: the per-binary test census (`scripts/avm-test-census`) and the
 # hot-store smoke's error/warning split (`scripts/avm-hot-bench-report`). Both
-# scripts carry a `selftest` over fixtures, and the job runs each one before the
-# step that depends on it; this target is the same two commands on a host where
-# the runner is not available. Plain bash, no dune and no bridge, so it works
-# even where the flake does not build.
+# scripts carry a `selftest` that diffs its output against a checked-in golden
+# file (`scripts/*.golden`), and the job runs each one before the step that
+# depends on it; this target is the same two commands on a host where the runner
+# is not available. Plain bash, no dune and no bridge, so it works even where
+# the flake does not build.
 .PHONY: annotation-selftests
 annotation-selftests:
 	@bash scripts/avm-test-census selftest
