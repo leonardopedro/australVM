@@ -14,18 +14,26 @@ on:
 env:
   CARGO_FLAGS: ""
 
-# One run per tree, newest wins. Without this, every push that lands while a
-# previous `Build and Test` is still going starts a second run beside it, and
-# the long jobs (both build the bridge from source on a 2-core runner) then
-# contend for the same runners: measured 2026-11-24, three runs on `master`
-# (08:34, 08:48, 09:07) were in flight together, and `nix-pkg`'s `make bridge`
-# step took 24.9 min where the same step took 17.6 min on a quiet branch — which
-# is what pushed it past its timeout. Cancelling the superseded run is correct
-# here: the verdict that matters is the newest commit's, and a `cancelled` job
-# carries no verdict about the tree (see `docs/data/gate/README.md`).
+# One run per tree, so the long jobs (both build the bridge from source on a
+# 2-core runner) never compete with a copy of themselves: measured 2026-11-24,
+# three runs on `master` (08:34, 08:48, 09:07) were in flight together, and
+# `nix-pkg`'s `make bridge` step took 24.9 min where the same step took 17.6 min
+# on a quiet branch — which is what pushed it past its timeout.
+#
+# PRs cancel their superseded run: the verdict that matters is the newest
+# commit's, and a `cancelled` job carries no verdict about the tree (see
+# `docs/data/gate/README.md`).
+#
+# `master` queues instead (measured 2026-11-25/26: 53 of the last 60 master push
+# runs were `cancelled`, 4 succeeded, and the green runs needed an 80–99 minute
+# window). A full run takes ~80 min, so cancelling on master's push cadence
+# kills every run before `jit-stack`/`nix-pkg` finish and the branch never gets a
+# verdict. GitHub keeps at most one *pending* run per group, so a newer push
+# still drops an intermediate pending one — what changes is that a run already
+# in flight is never killed, so master gets a completed verdict per window.
 concurrency:
   group: build-and-test-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ── Upstream OCaml CI, migrated from nix-shell (23.05) to the flake ─
