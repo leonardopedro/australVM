@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# avm-hot-bench-report — the avm-pkg CI job's hot-store smoke reporting half, as
+# a unit that can be tested.
+#
+# The job runs `avm-pkg hot-bench --require` on a release binary. On a hosted
+# runner the two §3 rows are *measured, not enforced* (a noisy neighbour turns
+# the same tree red: measured 2026-11-23), so the step reports them as a `[gap]`
+# with the numbers and exits 0; on a reference machine
+# (`AVM_LATENCY_REFERENCE=1`) a miss is an `::error`, because the log of a failed
+# step needs admin rights and the failure has to arrive with its number.
+#
+# Usage:   avm-hot-bench-report [--status N] [--reference|--not-reference] FILE
+#          avm-hot-bench-report selftest
+#
+# FILE holds the command's combined output; `--status` is its exit status, which
+# this script re-exits (only on the enforced path). Enforcement defaults to the
+# `AVM_LATENCY_REFERENCE=1` environment variable, exactly as the step reads it;
+# the flags exist so `selftest` can pin both branches on any host.
+set -uo pipefail
+
+SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
+
+report() {  # STATUS FILE ENFORCED(0|1)
+    local status=$1 out=$2 enforced=$3 line
+    cat "$out"
+    if [ "$status" -eq 0 ]; then
+        return 0
+    fi
+    if [ "$enforced" -eq 1 ]; then
+        tail -3 "$out" | while IFS= read -r line; do
+            printf '::error title=hot-bench::%s\n' "$line"
+        done
+        return "$status"
+    fi
+    tail -3 "$out" | while IFS= read -r line; do
+        printf '::warning title=hot-store latency (not enforced on this runner)::%s\n' "$line"
+    done
+    printf '%s %s\n' "[gap] hot-store latency rows measured, not enforced here" \
+        "(hosted runner; set AVM_LATENCY_REFERENCE=1 on a reference machine):"
+    tail -1 "$out"
+    return 0
+}
+
+# ── selftest ────────────────────────────────────────────────────────────────
+# The three paths, plus the environment default: the number has to reach the
+# annotation on a red enforced run, the warning branch has to stay green, and a
+# pass must carry no annotation at all.
+selftest() {
+    local tmp failed=0
+    tmp=$(mktemp -d) || { echo "selftest: no temporary directory" >&2; exit 2; }
+    SELFTEST_TMP=$tmp
+    trap 'rm -rf "$SELFTEST_TMP"' EXIT
+
+    say() { printf '  %s\n' "$*"; }
+    bad() { printf 'selftest: FAIL %s\n' "$*" >&2; failed=1; }
+    has() { grep -qF -- "$3" "$2" || bad "$1: missing line '$3'"; }
+    has_not() { ! grep -qF -- "$3" "$2" || bad "$1: unexpected line '$3'"; }
+    count() { # label file needle expected
+        local n
+        n=$(grep -cF -- "$3" "$2")
+        [ "$n" = "$4" ] || bad "$1: '$3' appears $n time(s), expected $4"
+    }
+    same_rc() { [ "$(cat "$2.rc")" = "$1" ] || bad "$3: exit $(cat "$2.rc"), expected $1"; }
+    run() { # base log status [flag...]; writes <base>.out and <base>.rc
+        local base=$1 log=$2 status=$3
+        shift 3
+        env -u AVM_LATENCY_REFERENCE bash "$SELF" --status "$status" "$@" \
+            "$log" > "$base.out" 2>&1
+        echo $? > "$base.rc"
+    }
+
+    # A reference-machine pass: the report is printed, nothing is annotated.
+    printf '%s\n' \
+        'hot-bench: acquire 30 ns (limit 1 us)' \
+        'hot-bench: fault-in 6.5 ms (limit 15 ms)' \
+        'hot-bench: ok' > "$tmp/pass.log"
+    run "$tmp/pass" "$tmp/pass.log" 0
+    same_rc 0 "$tmp/pass" "pass path"
+    has "pass path" "$tmp/pass.out" 'hot-bench: fault-in 6.5 ms (limit 15 ms)'
+    has_not "pass path" "$tmp/pass.out" '::'
+
+    # Enforced miss: every one of the last three lines is an error, the whole
+    # output is printed once, and the exit status is the command's.
+    printf '%s\n' \
+        'hot-bench: acquire 30 ns (limit 1 us)' \
+        'hot-bench: fault-in 22.4 ms (limit 15 ms)' > "$tmp/miss.log"
+    printf '%s\n' 'hot-bench: FAIL fault-in 22.4 ms exceeds 15 ms' >> "$tmp/miss.log"
+    printf '%s\n' 'hot-bench: 1 of 2 row(s) missed' >> "$tmp/miss.log"
+    run "$tmp/enforced" "$tmp/miss.log" 1 --reference
+    same_rc 1 "$tmp/enforced" "enforced path"
+    has "enforced path" "$tmp/enforced.out" \
+        '::error title=hot-bench::hot-bench: FAIL fault-in 22.4 ms exceeds 15 ms'
+    has "enforced path" "$tmp/enforced.out" \
+        '::error title=hot-bench::hot-bench: 1 of 2 row(s) missed'
+    count "enforced path" "$tmp/enforced.out" 'hot-bench: acquire 30 ns (limit 1 us)' 1
+    has_not "enforced path" "$tmp/enforced.out" '::warning'
+    has_not "enforced path" "$tmp/enforced.out" 'hot-bench: acquire 30 ns (limit 1 us)::'
+
+    # Hosted runner: a warning with the numbers, the `[gap]` line, exit 0 — the
+    # step must not fail a tree because the runner is shared.
+    run "$tmp/hosted" "$tmp/miss.log" 1 --not-reference
+    same_rc 0 "$tmp/hosted" "hosted path"
+    has "hosted path" "$tmp/hosted.out" \
+        '::warning title=hot-store latency (not enforced on this runner)::hot-bench: 1 of 2 row(s) missed'
+    has "hosted path" "$tmp/hosted.out" \
+        '[gap] hot-store latency rows measured, not enforced here (hosted runner; set AVM_LATENCY_REFERENCE=1 on a reference machine):'
+    has "hosted path" "$tmp/hosted.out" 'hot-bench: 1 of 2 row(s) missed'
+    has_not "hosted path" "$tmp/hosted.out" '::error'
+
+    # The environment default the CI step actually relies on.
+    env -u AVM_LATENCY_REFERENCE AVM_LATENCY_REFERENCE=1 \
+        bash "$SELF" --status 1 "$tmp/miss.log" > "$tmp/env.out" 2>&1
+    echo $? > "$tmp/env.out.rc"
+    same_rc 1 "$tmp/env.out" "env default path"
+    has "env default path" "$tmp/env.out" '::error title=hot-bench::'
+
+    # Usage, before anything is printed.
+    bash "$SELF" --bogus "$tmp/pass.log" > "$tmp/usage.out" 2>&1
+    echo $? > "$tmp/usage.out.rc"
+    same_rc 2 "$tmp/usage.out" "usage path"
+
+    if [ "$failed" -eq 0 ]; then
+        say "selftest: pass, enforced, enforced-by-env, hosted and usage paths all hold"
+        return 0
+    fi
+    return 1
+}
+
+usage() {
+    printf 'usage: %s [--status N] [--reference|--not-reference] FILE\n       %s selftest\n' \
+        "$(basename "$SELF")" "$(basename "$SELF")" >&2
+    exit 2
+}
+
+main() {
+    case "${1:-}" in
+        selftest) [ $# -eq 1 ] || usage; selftest; exit $? ;;
+        -h | --help) usage ;;
+    esac
+    local status=0 enforced=${AVM_LATENCY_REFERENCE:-0}
+    [ "$enforced" = "1" ] || enforced=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --status)
+                [ $# -ge 2 ] || usage
+                case "$2" in '' | *[!0-9]*) usage ;; esac
+                status=$2
+                shift 2
+                ;;
+            --status=*)
+                case "${1#--status=}" in '' | *[!0-9]*) usage ;; esac
+                status=${1#--status=}
+                shift
+                ;;
+            --reference) enforced=1; shift ;;
+            --not-reference) enforced=0; shift ;;
+            -*) usage ;;
+            *) break ;;
+        esac
+    done
+    [ $# -eq 1 ] || usage
+    [ -f "$1" ] || { printf '%s: no such output: %s\n' "$(basename "$SELF")" "$1" >&2; exit 2; }
+    report "$status" "$1" "$enforced"
+    exit $?
+}
+
+main "$@"
