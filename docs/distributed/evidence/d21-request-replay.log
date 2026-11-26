@@ -1,34 +1,41 @@
 $ cargo test --offline -p unfer_consensus --features network --test request_replay_invariant -- --nocapture
 running 3 tests
-test the_request_replay_invariant_holds_over_every_reachable_state ... ok
-test each_replay_mutation_is_caught_with_a_witness ... ok
+replay conformance: 3200 steps compared, 0 disagreements, 60 replays answered, 15 below retention, 35 at capacity, 25 incarnation-limited, 106 retirements
 test the_model_and_the_real_admission_book_agree_on_every_step ... ok
+mutation DuplicateFresh: caught (R1 a repeated matching request was admitted as fresh) after 1 step(s), last: record p0#1 seq 1 digest 0
+request replay: states=1801 transitions=97254 duplicates=3294 conflicts=3294 settled=3294 below_retention=3510 at_capacity=9504 exhausted=912 violations=0
+test the_request_replay_invariant_holds_over_every_reachable_state ... ok
+mutation PruneRevives: caught (R3 a request at or below the retained floor is still retained) after 2 step(s), last: record p0#1 seq 1 digest 0
+mutation SettleAny: caught (R4 a settled outcome was rewritten) after 2 step(s), last: settle p0#1 seq 1 -> Pending
+mutation CrossIncarnation: caught (R5 a request in another incarnation was treated as this retry) after 1 step(s), last: admit p0#2 seq 1 digest 0
+mutation EvictAtCapacity: caught (R6 the retained entry count exceeds the capacity) after 2 step(s), last: record p0#2 seq 1 digest 0
+mutation IgnoreIncarnationLimit: caught (R6 a principal holds more incarnations than the limit) after 3 step(s), last: record p0#3 seq 1 digest 0
+test each_replay_mutation_is_caught_with_a_witness ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.98s
 
-request replay: states=57 transitions=969 duplicates=90 conflicts=90 settled=90 violations=0
-mutation DuplicateFresh: caught (R1 a repeated matching request was admitted as fresh) after 1 step(s), last: record seq 1 digest 0
-mutation PruneRevives: caught (R3 a request at or below the retained floor is still retained) after 2 step(s), last: record seq 1 digest 0
-mutation SettleAny: caught (R4 a settled outcome was rewritten) after 2 step(s), last: settle seq 1 -> Pending
-replay conformance: 2000 steps compared, 0 disagreements, 70 replays answered
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
-
-# The abstraction: one client scope (deployment/principal/incarnation), sequence
-# numbers 1 and 2, payload digests 0 and 1, outcomes Pending / Accepted(slot) /
-# Rejected, and a retained floor 0..=2. `admit` is a probe (&self); `record`
-# requires the model's Fresh answer; `settle` requires Pending; `acknowledge`
-# raises the floor only when the scope already has a window, exactly as the real
-# book does.
+# The abstraction: three client incarnations of one principal in the exhaustive
+# search (four windows over two principals in conformance), sequence numbers 1
+# and 2 per window, payload digests 0 and 1, outcomes Pending / Accepted(slot) /
+# Rejected, a retained floor 0..=2, a two-entry capacity (three in conformance)
+# and a per-principal incarnation limit and scope budget. `admit` is a probe
+# (&self); `record` requires the model's Fresh answer; `settle` requires Pending;
+# `acknowledge` raises the floor only when the scope already has a window;
+# `retire` removes a window wholesale (the one forgetting transition without a
+# floor, which is why the client rule forbids retrying a retired incarnation).
 #
-# The four claims checked on every reachable state and every transition:
+# The six claims checked on every reachable state and every transition:
 #   R1 a repeated matching request is answered with its recorded result, never
 #      Fresh, and a recorded id is not recorded again;
 #   R2 the same id with a different digest is a Conflict and changes nothing;
 #   R3 a sequence at or below the floor is refused and never revived;
-#   R4 a settled outcome is not rewritten.
+#   R4 a settled outcome is not rewritten;
+#   R5 incarnations are separate namespaces and a step changes no other scope;
+#   R6 retained entries, live windows and per-principal incarnations stay inside
+#      their bounds, and a full book refuses rather than evicting.
 #
 # Differential conformance drives the real AdmissionBook with the same legal
-# steps and compares the verdict and the observable state (digest, outcome,
-# floor) after every step.
+# steps and compares the verdict, every window's digest/outcome/floor and the
+# retained count after every step.
 
 $ python3 scripts/check-distributed-contracts
-[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer d0ac0d5
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer f013a51

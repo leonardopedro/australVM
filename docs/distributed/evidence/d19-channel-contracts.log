@@ -129,3 +129,31 @@ $ python3 scripts/check-channel-contracts
 
 $ python3 scripts/check-distributed-contracts
 [pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer b9e6593
+
+# ── The in-process admission point (H12) ─────────────────────────────────────
+
+$ cargo test --offline -p unfer_protocol --lib channel_contracts
+test channel_contracts::tests::the_inprocess_admission_contract_is_request_identity_exactly_once ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 353 filtered out; finished in 0.00s
+
+$ cargo test --offline -p unfer_protocol --lib
+test result: ok. 370 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+
+$ cargo test --offline -p unfer_consensus --features network --lib node::tests
+test node::tests::the_inprocess_admission_boundary_satisfies_its_gate ... ok
+test node::tests::the_inprocess_admission_gate_refuses_each_missing_premise ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 152 filtered out; finished in 0.70s
+
+$ cargo test --offline -p unfer_consensus --features network --lib
+test result: ok. 183 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.23s
+
+$ cargo test --offline -p unfer_consensus --features network --test phase6_testnet
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s
+
+$ python3 scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+
+$ python3 scripts/check-distributed-contracts
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer f013a51
