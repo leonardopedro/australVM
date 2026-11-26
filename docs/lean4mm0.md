@@ -5766,7 +5766,9 @@ The closures, the rules applied and the failure histogram land only at a clean e
 with the post-exit `--rekey` and the statement audit. **They are not folded here yet** — the run
 in flight is the first one whose every class is a property of the declaration rather than of the
 driver or the checker, and the fold happens when it exits. Until then the only number this
-section can state without guessing is the ledger's: 2 474 verified, 0 recorded as failed.
+section can state without guessing is the ledger's: 2 474 verified, 0 recorded as failed. The
+histogram it exits with is also stamped across the `STORE_SIZE` rebuild `§13.62l` describes
+(14:20), the one checker change made mid-run.
 
 ### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
 
@@ -6118,6 +6120,17 @@ non-pass leaves its work directory behind — checks at that size:
 The shortfall is 20 671 624 bytes — 31 % of one buffer — and no other buffer reaches 6 % of its
 size (the 36 % is 91 entries of a 256-entry stack). So the row is *large*, not *wrong*: `store
 overflow` names the checker's constant, exactly as `heap overflow` did in `§13.62h`. Raising
-`STORE_SIZE` upstream is the same one-line question the heap answered, and it was deliberately
-left alone while this sweep runs, so the histogram it exits with records the class at its real
-size instead of as the artifact of a mid-run rebuild.
+`STORE_SIZE` upstream is the same one-line question the heap answered, and the answer is the same:
+`STORE_SIZE (1 << 27)` now sits in `../mm0-rs/mm0-c/verifier_types.c` (committed there as
+`445757e`), and the normal build (`gcc -O2`, no `-D` flags) was installed over
+`~/.local/bin/mm0-c`. The installed binary re-verifies both artifacts: `.declQuotPB_at` **exit 0
+in 1.59 s, 208 900 KB peak**, and `§13.62j`'s `_proof_1` still **exit 0 in 1.97 s, 195 644 KB**, so
+the wider arena costs 64 MB more of static array (64 → 128 MB) and no time worth reporting.
+
+One consequence has to be stated where the fold reads it: the checker was replaced *while the
+sweep was running* (installed by `mv`, so the running process kept its old inode and no
+`ETXTBSY`), which means the rows it checked before 14:20 met `STORE_SIZE 2^26` and the rows after
+it meet 2^27. The exit histogram is therefore stamped across one checker rebuild — the only such
+boundary in it, and the reason a `store overflow` row can only come from the early part. Had it
+been left alone, the run would have been homogeneous; it was repaired on request, and the mixed
+histogram is cheaper than replaying 2 100 rows to recover a property that is now known.
