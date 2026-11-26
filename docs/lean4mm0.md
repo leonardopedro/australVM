@@ -5780,16 +5780,21 @@ against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
 and not the result.
 <!-- 13.62c-sweep:end -->
 
-**Why the failures stay out of the ledger.** The ledger has no verdict column, and both of its
-memo paths — the exact `(export, theory, mode, declaration)` row and the statement-digest index
-built over `statement_sha256` — read every row as a pass: the first does `int(row["rules"])` and
-prints `memo ✓`. A classified failure written into it would therefore turn into a hit that skips
-the declaration, and a later fix to the driver or the checker would become unmeasurable — which
-is exactly what `§13.62h`–`§13.62l` each did to a row that had failed under the old code. So the
-20 G verdicts live in the sweep's log, the exit report and the block above, and re-entering them
-would first need a `verdict` column, memo lookups filtered on it, and a deliberate re-check path
-for rows marked failed. Until then a failed declaration leaves no row, and that is the ledger's
-meaning: what it holds was verified.
+**Failures, the ledger, and which bound measured them.** The ledger now has a `verdict` column
+(`pass`/`failed`) and a `reason`, appended after the existing twelve so a row written before them
+still lines up and reads as a pass; `proved()` gates both memo paths — the exact
+`(export, theory, mode, declaration)` row and the statement-digest index over
+`statement_sha256` — so a recorded failure is measured again next run instead of becoming a hit
+that skips the declaration. `--record-failures` writes those rows (`rules=0`, the checker's own
+words as the reason), off by default because a 10 GiB row costs minutes. Until it existed a
+failed declaration left no row at all, which is why every row this sweep wrote is a pass.
+
+What the ledger still cannot express is *which bound* measured a failure. A row's identity is the
+export, the theory, the mode and the declaration; the sweep's 10 GiB is in none of them, so a
+`failed: mm0-rs: over 10 GiB` row and the 20 G re-measurement of the same declaration would land
+under one key with two different caps, and the last one written would describe the other. That is
+why the 20 G verdicts stay in `probe-10gib.log`, the exit report and the block above, where the
+cap is a column: entering them needs the bound in the key, not just the verdict in the row.
 
 Every finished row survives in the ledger, so a resume replays the finished set as `memo` hits —
 minutes, not the hours the real work took — which is why the run was restarted once per defect
