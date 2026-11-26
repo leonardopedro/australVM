@@ -110,6 +110,16 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   as an explained gap, never as a false failure.
 - `scripts/check-links` — relative markdown links resolve
   (CI: `.github/workflows/linkcheck.yml`).
+- `scripts/ci-logs` — reads a GitHub Actions job's log through the REST API
+  with `GH_TOKEN` (or `GITHUB_TOKEN`) from the environment, because the web log
+  needs admin rights. No arguments: the latest run on the current branch, its
+  job/step table, and the log of every failed job; `--list`, `--run <id>`,
+  `--job <substr>`, `--branch`. The log endpoint's 302 is followed by hand so
+  the token is never sent to the signed storage URL. A missing token is exit 2
+  with the export line, never an unauthenticated fallback (60 requests/hour is
+  how the 403 rate-limit wall appeared). The repo comes from `origin`.
+  `python3` is not on the host PATH, so run it as
+  `nix-shell -p python3 --run "scripts/ci-logs …"`.
 - `scripts/au2mm0` — reflects an Austral kernel's obligations to integer
   polynomials and decides them twice (symbolic expansion + exact sampling),
   refusing `div`/`float` as a gap. `emit` writes
