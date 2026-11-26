@@ -34,6 +34,22 @@ impl From<std::io::Error> for LaunchError {
     }
 }
 
+/// `read`, retrying `EINTR`.
+///
+/// `read_exact` and `write_all` already retry it; the hand-rolled header loop
+/// in [`Launcher::request`] is the crate's only raw `read`, and a signal
+/// delivered while it waits (the parallel test harness, a supervisor reaping a
+/// child) must not turn a good response into `LaunchError::Io` (observed as
+/// `Interrupted system call (os error 4)` at `vm.info`, 2026-11-26).
+fn read_retrying<R: Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+    loop {
+        match reader.read(buf) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => return other,
+        }
+    }
+}
+
 pub struct Launcher {
     socket: PathBuf,
 }
@@ -77,7 +93,7 @@ impl Launcher {
         let mut head_bytes: Vec<u8> = Vec::new();
         let mut byte = [0u8; 1];
         loop {
-            let n = stream.read(&mut byte)?;
+            let n = read_retrying(&mut stream, &mut byte)?;
             if n == 0 {
                 break;
             }
@@ -355,6 +371,34 @@ mod tests {
             body.len(),
             body
         )
+    }
+
+    /// A reader that is interrupted once before it answers — the shape that
+    /// made `vm.info` fail on 2026-11-26.
+    struct InterruptedOnce {
+        interrupted: bool,
+    }
+
+    impl Read for InterruptedOnce {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+            }
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            buf[0] = b'x';
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn header_read_retries_eintr_instead_of_failing_the_launch() {
+        let mut src = InterruptedOnce { interrupted: false };
+        let mut byte = [0u8; 1];
+        assert_eq!(read_retrying(&mut src, &mut byte).unwrap(), 1);
+        assert_eq!(&byte, b"x");
     }
 
     #[test]
