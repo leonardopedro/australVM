@@ -5744,38 +5744,51 @@ the reason now reads as a size the machine cannot supply, not as an arbitrary ca
 102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs` (`§13.62`) scales to this: at
 251 MB the compile is both superlinear in time and past the available address space.
 
-**Where the namespace sweep stands.** The 475-declaration pause this section was written in is
-long past: the ledger now holds **2 474 verified of 3 975**, and every row in it is a pass. The
-non-passes the paused log carried have since been decided one way or the other —
+The non-passes the paused log carried have since been decided one way or the other —
 `renameCore` is the measurement above, the `Φ` and `hΔ0` rejections became verdicts with
 `§13.62b`'s `mm0_ident` fix, and `.EnvModelM.swapP`/`.swapTyP` have `§13.62f`. Two later runs
 were OOM-killed at the same declaration, `.TgtNodePres.kit` the last line of each log; `§13.62h`
-reproduces the kill alone, `§13.62j` fixes its cause in the checker and closes the declaration
-(`_proof_1` is one of the 2 474 rows, `pass ✓` at 11:36, and no longer a timeout), and `§13.62k`
-fixes the reason reader that was recording derivations as verdicts. What the reader then read on
-`.declQuotPB_at` — `at sd1254: store overflow` — is `§13.62l`: a second checker constant that is
-31 % short, not a rejection.
+reproduces the kill alone, `§13.62j` fixes its cause in the checker and closes the declaration,
+and `§13.62k` fixes the reason reader that was recording derivations as verdicts. What the reader
+then read on `.declQuotPB_at` — `at sd1254: store overflow` — is `§13.62l`: a second checker
+constant that is 31 % short, not a rejection.
 
-The histogram's largest class is `mm0-rs ✗ over 10 GiB` — 15 rows at 14:43 and still counting —
-and this section's own method says they are *not* yet classified: a bound names a size only once a
-bigger one has been tried. Their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`, against
-`renameCore`'s 251 MB that exceeded 24 G, so the expectation is *out of reach*, but the
-re-measurement of each at 20 G is queued to run behind the sweep (`_build/conleche/probe-10gib.sh`,
-writing `_build/conleche/probe-10gib.log`) rather than assumed here.
+<!-- 13.62c-sweep:begin -->
+**Where the namespace sweep stands.** The run in flight has decided
+**2421 of the 3975 declarations**, and the ledger holds **2476 rows,
+every one of them a pass** — a row is appended only for a declaration
+`mm0-c` accepted, so a declaration that failed leaves none. The histogram
+below is what the log has printed so far; it is not folded as a verdict,
+because its largest class names a bound:
+
+| class | rows |
+| --- | ---: |
+| `mm0-rs ✗ over 10 GiB` | 17 |
+| `mm0-rs ⏱ over 240 s` | 10 |
+| `emit ⏱ over 240 s` | 4 |
+| `mm0-c ✗ at sd1254: store overflow` | 1 |
+
+(17 of those rows are the `over 10 GiB` class alone.)
+
+**Nothing in that histogram is classified here yet.** A bound names a
+size only once a bigger one has been tried, and the re-measurement of the
+17 `over 10 GiB` rows at 20 G runs behind the sweep
+(`probe-10gib.sh`, its output in `probe-10gib.log`), rather than being
+assumed: their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`
+against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
+and not the result.
+<!-- 13.62c-sweep:end -->
 
 Every finished row survives in the ledger, so a resume replays the finished set as `memo` hits —
 minutes, not the hours the real work took — which is why the run was restarted once per defect
 (the recursion limit, the reader, the checker's heap) instead of exiting on a histogram that
-counts a fixed defect's output: 2 472 rows replayed after the first restart, and the run in flight
-replays 2 474.
-The closures, the rules applied and the failure histogram land only at a clean exit, in
-`_build/conleche/model-scan.log`; `_build/conleche/sweep-exit-report.md` collects them together
-with the post-exit `--rekey` and the statement audit. **They are not folded here yet** — the run
-in flight is the first one whose every class is a property of the declaration rather than of the
-driver or the checker, and the fold happens when it exits. Until then the only number this
-section can state without guessing is the ledger's: 2 474 verified, 0 recorded as failed. The
-histogram it exits with is also stamped across the `STORE_SIZE` rebuild `§13.62l` describes
-(14:20), the one checker change made mid-run.
+counts a fixed defect's output. The block above is *rendered*, not transcribed:
+`_build/conleche/fold-sweep.py` reads `model-scan.log` for the closures, the rules applied and the
+per-row verdicts, the ledger for its row count, and `probe-10gib.log` for the 20 G verdicts, and
+rewrites everything between the two markers. The chain that runs it (`chain-after-sweep.sh`) is
+one unit: wait for the sweep, `--rekey` and audit (`sweep-exit-report.md`), probe, fold. The
+histogram is also stamped across the `STORE_SIZE` rebuild `§13.62l` describes (14:20), the one
+checker change made mid-run: rows decided before it met a 2^26 store, rows after it 2^27.
 
 ### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
 
