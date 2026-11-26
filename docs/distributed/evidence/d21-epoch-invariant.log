@@ -1,7 +1,8 @@
-# The abstraction: one resource, two holders, four job states, epochs 1..=4 and
-# generations 1..=2. `take_over(e)` is accepted only when `e` strictly exceeds
-# the current epoch; a generation advance keeps the epoch and a takeover starts
-# generation 1 at the new one.
+# The abstraction: two resources, two holders, four job states each, epochs
+# 1..=4 and generations 1..=2. Every step names one resource, so the search
+# covers interleavings across resources. `take_over(e)` is accepted only when
+# `e` strictly exceeds that resource's current epoch; a generation advance keeps
+# the epoch and a takeover starts generation 1 at the new one.
 #
 # The four claims checked on every reachable state and every transition:
 #   E1 a takeover is accepted only under a strictly greater epoch;
@@ -9,22 +10,25 @@
 #   E3 a committed fence never has epoch 0;
 #   E4 a takeover installs generation 1 at the new epoch.
 #
-# Differential conformance drives the real JobQueue with the same steps and
-# compares the accept/refuse answer and the observable state (fence, holder,
-# released flag, job state) after every step.
+# Differential conformance drives the real JobQueue with the same steps on both
+# resources and compares the accept/refuse answer and the observable state
+# (both fences, holders, released flags, job states) after every step.
 
 $ cargo test --offline -p unfer_consensus --features network --test epoch_invariant -- --nocapture
 running 3 tests
-mutation EqualEpochTakeOver: caught (E1 a takeover was accepted under a non-superseding epoch) after 1 step(s), last: take over at epoch 1 as w0 under no fence
-epoch invariant: states=41 transitions=4018 takeovers_accepted=80 takeovers_refused=248 effects=32 violations=0
+epoch invariant: resources=2 states=1681 transitions=329476 takeovers_accepted=6560 takeovers_refused=20336 effects=2624 violations=0
 test the_authority_epoch_never_decreases_over_every_reachable_state ... ok
-mutation EpochRollback: caught (E2 an accepted transition lowered the committed epoch) after 1 step(s), last: take over at epoch 1 as w0 under no fence
-mutation EpochWrapAtTop: caught (E2 an accepted transition lowered the committed epoch) after 2 step(s), last: renew as w0 under (epoch 4, generation 2)
-mutation TakeOverGeneration: caught (E4 a takeover inherited the previous generation) after 0 step(s), last: take over at epoch 1 as w0 under no fence
-test each_epoch_mutation_is_caught_with_a_witness ... ok
-epoch conformance: 3600 steps compared, 0 disagreements, 215 takeovers accepted, 1239 refused, 271 epoch advances
+epoch conformance: 3600 steps compared, 0 disagreements, 390 takeovers accepted, 1008 refused, 508 epoch advances, resources touched [true, true]
 test the_model_and_the_real_job_queue_agree_on_every_step ... ok
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+mutation EqualEpochTakeOver: caught (E1 a takeover was accepted under a non-superseding epoch) after 1 step(s), last: take over r0 at epoch 1 as w0 under no fence
+mutation EpochRollback: caught (E2 an accepted transition lowered the committed epoch) after 1 step(s), last: take over r0 at epoch 1 as w0 under no fence
+mutation EpochWrapAtTop: caught (E2 an accepted transition lowered the committed epoch) after 2 step(s), last: renew r0 as w0 under (epoch 4, generation 2)
+mutation TakeOverGeneration: caught (E4 a takeover inherited the previous generation) after 0 step(s), last: take over r0 at epoch 1 as w0 under no fence
+test each_epoch_mutation_is_caught_with_a_witness ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+# The symbolic counterpart of the same claim (arbitrary runs, one resource) is
+# checked by scripts/check-why3-epoch; see d21-why3-epoch.log.
 
 $ python3 scripts/check-distributed-contracts
-[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer f013a51
+[pass] D00 contracts: 98 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer 33a8ee6

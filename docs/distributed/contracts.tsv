@@ -95,3 +95,5 @@ C93	proof	A	mm0/fixtures/distributed_request_trace.json	tested	docs/distributed/
 C94	storage	U	unfer_protocol/src/storage_contracts.rs	tested	docs/distributed/evidence/d19-storage-contracts.log
 C95	storage	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d19-storage-contracts.log
 C96	runtime	U	unfer_protocol/src/simulator_contracts.rs	tested	docs/distributed/evidence/d19-simulator-contract.log
+C97	storage	U	unfer_protocol/src/storage_contracts.rs	tested	docs/distributed/evidence/d19-monotone-snapshot.log
+C98	proof	A	docs/distributed/why3/epoch_monotonicity.mlw	tested	docs/distributed/evidence/d21-why3-epoch.log
