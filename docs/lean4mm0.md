@@ -6023,6 +6023,16 @@ sweep was restarted on the installed checker, so `over the checker's own heap` i
 class the run can produce unless a larger derivation outgrows 2^17 — the class meant "this
 checker's constant", not "this derivation is wrong".
 
+That restart also needed the driver to stop resolving the checker by name: inside `nix develop`
+the `mm0-c` on `PATH` is the nixpkgs package
+(`/nix/store/…-mm0-0.1.0-unstable-2026-09-30/bin/mm0-c`), so an installed rebuild is unreachable
+however fresh it is — the first restart after the rebuild would have measured the package again.
+The driver now takes the path from `SCAN_MM0_C` (default `mm0-c`, overridable like the other
+bounds), and the sweep runs with `SCAN_MM0_C=/home/leo/.local/bin/mm0-c`, visible in the unit's
+environment. Checked both ways: one declaration through the override (`.declBasisPB_emptyK`,
+8 447 rules, **17.0 s, pass**) and the same run pointed at a path that does not exist, which stops
+with `FileNotFoundError` instead of falling back to the package.
+
 No second row in the run hit that class. The only other `mm0-c` non-pass in the part-4 log,
 `.declQuotPB_at`, is a rejection whose verdict the reason reader did not capture — it returned a
 fragment of the rejected statement (`ucc (tsucc (tsucc …`) instead of the checker's line. That is

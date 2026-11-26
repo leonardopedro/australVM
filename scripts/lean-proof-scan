@@ -206,6 +206,11 @@ MM0_RS_MEM_GB = int(os.environ.get("SCAN_MM0_RS_MEM_GB", "10"))
 # more than 3.9 GB in ten minutes), so a rejected giant can run for as long as
 # its trace takes to write. Budget it, and overridable like the others.
 MM0_C_TIMEOUT = int(os.environ.get("SCAN_MM0_C_TIMEOUT", "900"))
+# Which checker, by path. Inside `nix develop` the PATH `mm0-c` is the nixpkgs
+# package, so a checker rebuilt from `../mm0-rs` (the heap repair in §13.62j) is
+# unreachable by name no matter where it is installed; a rebuild that the sweep
+# silently does not use is worse than no rebuild at all.
+MM0_C = os.environ.get("SCAN_MM0_C", "mm0-c")
 
 
 # ── the ledger of proved statements ──────────────────────────────────────────
@@ -408,7 +413,7 @@ def reread_ok(full0: Path, full1: Path, mmb: Path) -> str | None:
     if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
         return "mm0-rs: " + last_meaningful(c.stdout + c.stderr)
     with full0.open() as fh:
-        k = run(["mm0-c", str(mmb)], stdin=fh)
+        k = run([MM0_C, str(mmb)], stdin=fh)
     mmb.unlink(missing_ok=True)
     if k.returncode != 0:
         return "mm0-c: " + last_meaningful(k.stdout + k.stderr)
@@ -816,7 +821,7 @@ def main() -> int:
         try:
             try:
                 with open(full0) as fh0, open(log0, "w") as fo, open(log1, "w") as fe:
-                    k = run(["mm0-c", str(out / "full.mmb")], stdin=fh0,
+                    k = run([MM0_C, str(out / "full.mmb")], stdin=fh0,
                             stdout=fo, stderr=fe, timeout=MM0_C_TIMEOUT)
             finally:
                 # The transcript is evidence only until the reason is read out
