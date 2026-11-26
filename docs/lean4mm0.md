@@ -5756,6 +5756,13 @@ fixes the reason reader that was recording derivations as verdicts. What the rea
 `.declQuotPB_at` — `at sd1254: store overflow` — is `§13.62l`: a second checker constant that is
 31 % short, not a rejection.
 
+The histogram's largest class is `mm0-rs ✗ over 10 GiB` — 15 rows at 14:43 and still counting —
+and this section's own method says they are *not* yet classified: a bound names a size only once a
+bigger one has been tried. Their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`, against
+`renameCore`'s 251 MB that exceeded 24 G, so the expectation is *out of reach*, but the
+re-measurement of each at 20 G is queued to run behind the sweep (`_build/conleche/probe-10gib.sh`,
+writing `_build/conleche/probe-10gib.log`) rather than assumed here.
+
 Every finished row survives in the ledger, so a resume replays the finished set as `memo` hits —
 minutes, not the hours the real work took — which is why the run was restarted once per defect
 (the recursion limit, the reader, the checker's heap) instead of exiting on a histogram that
