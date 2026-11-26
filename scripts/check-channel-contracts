@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""D19: validate the channel-hook census against its source markers.
+
+The inventory (`docs/distributed/channel-hooks.tsv`) names every production
+send, receive, timer, retry, storage and simulator hook that a D19 contract
+covers. Each hook carries a `// D19-HOOK: Hxx` marker at its site. This checker
+requires the two directions to agree:
+
+  * every inventory row resolves to one marker in one file, and the row's
+    contract exists in `docs/distributed/contracts.tsv`;
+  * every marker in the scanned trees has an inventory row;
+  * every occurrence of a known hook primitive has a marker nearby, so a new
+    send/retry/storage call fails the census until it is registered.
+
+The scan is deliberately shallow: it proves the sites are *listed*, not that a
+contract's semantic fields are true. `--selftest` mutates a row or a source line
+and requires the corresponding refusal.
+
+Usage:
+  scripts/check-channel-contracts [--inventory PATH] [--contracts PATH]
+  scripts/check-channel-contracts --selftest
+
+Exit codes: 0 valid, 1 problems, 2 usage.
+"""
+
+import argparse
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+UNFER = ROOT.parent / "unfer"
+DEFAULT_INVENTORY = ROOT / "docs/distributed/channel-hooks.tsv"
+DEFAULT_CONTRACTS = ROOT / "docs/distributed/contracts.tsv"
+
+COLUMNS = ["id", "contract", "repo", "path", "kind", "status"]
+KINDS = {"send", "receive", "timer", "retry", "storage", "simulator"}
+STATUSES = {"tested", "pending", "gap"}
+REPOS = {"A", "U"}
+MARKER = re.compile(r"//\s*D19-HOOK:\s*(H\d+)")
+HOOK_PATTERNS = {
+    "send": [
+        re.compile(r"\.submit\("),
+        re.compile(r"TlsSubmitClient::new\("),
+        re.compile(r"TlsRecorderClient::new\("),
+    ],
+    "receive": [
+        re.compile(r"\.receive_decisions\("),
+        re.compile(r"NetworkNodeServer::bind\("),
+    ],
+    "timer": [re.compile(r"tokio::time::sleep\(")],
+    "retry": [re.compile(r"fn catch_up_loop")],
+    "storage": [
+        re.compile(r"FileRuntimeStore::new\("),
+        re.compile(r"FileRecorderStore::new\("),
+        re.compile(r"FileSubmissionJournal::open\("),
+        re.compile(r"impl LedgerFile"),
+    ],
+    "simulator": [re.compile(r"impl ConsensusEngine for SharedEngine")],
+}
+SCAN_ROOTS = [
+    UNFER / "unfer_consensus/src",
+    UNFER / "unfer_protocol/src",
+    UNFER / "unfer_ffi/src",
+    ROOT / "safestos/cranelift/src",
+]
+MARKER_RADIUS = 5
+
+
+def parse_tsv(text):
+    problems = []
+    lines = [
+        line
+        for line in text.splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    if not lines:
+        return [], ["the inventory has no header row"]
+    header = lines[0].split("\t")
+    if header != COLUMNS:
+        return [], [f"header is {header}, expected {COLUMNS}"]
+    rows = []
+    for lineno, line in enumerate(lines[1:], start=2):
+        cells = line.split("\t")
+        if len(cells) != len(COLUMNS):
+            problems.append(
+                f"line {lineno}: {len(cells)} column(s), expected {len(COLUMNS)}"
+            )
+            continue
+        row = dict(zip(COLUMNS, cells))
+        row["_line"] = lineno
+        rows.append(row)
+    return rows, problems
+
+
+def resolve(repo, relative):
+    base = ROOT if repo == "A" else UNFER
+    return base / relative
+
+
+def contract_ids(path):
+    ids = set()
+    lines = path.read_text().splitlines() if path.exists() else []
+    for line in lines:
+        if not line.strip() or line.startswith("#"):
+            continue
+        cells = line.split("\t")
+        if cells and re.fullmatch(r"C\d+", cells[0]):
+            ids.add(cells[0])
+    return ids
+
+
+def validate_rows(rows, contracts):
+    problems = []
+    seen = set()
+    for row in rows:
+        where = f"hook line {row['_line']} ({row['id'] or '<empty id>'})"
+        if not re.fullmatch(r"H\d+", row["id"]):
+            problems.append(f"{where}: id is not Hnn")
+        elif row["id"] in seen:
+            problems.append(f"{where}: duplicate hook id")
+        else:
+            seen.add(row["id"])
+        if row["contract"] not in contracts:
+            problems.append(
+                f"{where}: contract {row['contract']!r} is not in contracts.tsv"
+            )
+        if row["repo"] not in REPOS:
+            problems.append(f"{where}: unknown repo {row['repo']!r}")
+        if row["kind"] not in KINDS:
+            problems.append(f"{where}: unknown kind {row['kind']!r}")
+        if row["status"] not in STATUSES:
+            problems.append(f"{where}: unknown status {row['status']!r}")
+        if row["repo"] in REPOS and row["path"]:
+            if not resolve(row["repo"], row["path"]).exists():
+                problems.append(f"{where}: path does not exist: {row['path']}")
+    return problems
+
+
+def markers_in_file(path):
+    found = []
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return found
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        match = MARKER.search(line)
+        if match:
+            found.append((match.group(1), lineno))
+    return found
+
+
+def marker_map(roots):
+    markers = {}
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.rs")):
+            for hook, lineno in markers_in_file(path):
+                markers.setdefault(hook, []).append((path, lineno))
+    return markers
+
+
+def scan_unmarked(path):
+    """Return lines with a known hook primitive that has no nearby marker."""
+    problems = []
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return problems
+    # A production hook is everything before the first in-file test module.
+    text = text.split("#[cfg(test)]", 1)[0]
+    lines = text.splitlines()
+    for lineno, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("use ") or stripped.startswith("//"):
+            continue
+        for kind, patterns in HOOK_PATTERNS.items():
+            if not any(pattern.search(line) for pattern in patterns):
+                continue
+            low = max(1, lineno - MARKER_RADIUS)
+            high = min(len(lines), lineno + MARKER_RADIUS)
+            nearby = any(
+                MARKER.search(lines[index - 1])
+                for index in range(low, high + 1)
+            )
+            if not nearby:
+                problems.append(
+                    f"{path}:{lineno}: {kind} hook has no D19-HOOK marker nearby"
+                )
+    return problems
+
+
+def check(rows, contracts, markers, roots):
+    problems = list(validate_rows(rows, contracts))
+    by_id = {row["id"]: row for row in rows if row["id"]}
+    registered = set(by_id)
+    observed = set(markers)
+    for hook in sorted(observed - registered):
+        first = markers[hook][0]
+        problems.append(
+            f"marker {hook} at {first[0]}:{first[1]} has no inventory row"
+        )
+    for hook in sorted(registered - observed):
+        problems.append(f"inventory row {hook} has no D19-HOOK marker")
+
+    for hook, row in sorted(by_id.items()):
+        where = f"inventory row {hook}"
+        if row["repo"] not in REPOS or not row["path"]:
+            continue
+        expected = resolve(row["repo"], row["path"])
+        hits = [
+            (path, lineno)
+            for path, lineno in markers.get(hook, [])
+        ]
+        if len(hits) != 1:
+            problems.append(
+                f"{where}: expected one marker in {row['path']}, found {len(hits)}"
+            )
+            continue
+        path, lineno = hits[0]
+        if path.resolve() != expected.resolve():
+            problems.append(
+                f"{where}: marker is in {path}, inventory says {expected}"
+            )
+            continue
+        lines = path.read_text().splitlines()
+        low = max(1, lineno - MARKER_RADIUS)
+        high = min(len(lines), lineno + MARKER_RADIUS)
+        context = "\n".join(lines[low - 1:high])
+        patterns = HOOK_PATTERNS.get(row["kind"], [])
+        if not any(pattern.search(context) for pattern in patterns):
+            problems.append(
+                f"{where}: marker at {path}:{lineno} is not near a {row['kind']} hook"
+            )
+
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.rs")):
+            problems.extend(scan_unmarked(path))
+    return problems
+
+
+def selftest():
+    contracts = {"C81", "C82", "C83", "C84"}
+    good = (
+        "id\tcontract\trepo\tpath\tkind\tstatus\n"
+        "H01\tC81\tU\tunfer_consensus/src/net.rs\tsend\ttested\n"
+    )
+    controls = []
+
+    def control(name, inventory_text, markers, expect):
+        rows, parse_problems = parse_tsv(inventory_text)
+        problems = list(parse_problems) + check(rows, contracts, markers, [])
+        hit = any(expect in problem for problem in problems)
+        controls.append((name, hit, problems))
+
+    net = UNFER / "unfer_consensus/src/net.rs"
+    control(
+        "duplicate hook id",
+        good + "H01\tC81\tU\tunfer_consensus/src/net.rs\tsend\ttested\n",
+        {"H01": [(net, 1)]},
+        "duplicate hook id",
+    )
+    control(
+        "unknown kind",
+        "id\tcontract\trepo\tpath\tkind\tstatus\n"
+        "H02\tC81\tU\tunfer_consensus/src/net.rs\tpost\ttested\n",
+        {"H02": [(net, 1)]},
+        "unknown kind",
+    )
+    control(
+        "unknown contract",
+        "id\tcontract\trepo\tpath\tkind\tstatus\n"
+        "H03\tC99\tU\tunfer_consensus/src/net.rs\tsend\ttested\n",
+        {"H03": [(net, 1)]},
+        "not in contracts.tsv",
+    )
+    control(
+        "missing marker",
+        good,
+        {},
+        "has no D19-HOOK marker",
+    )
+    control(
+        "orphan marker",
+        good,
+        {"H01": [(net, 1)], "H99": [(net, 2)]},
+        "has no inventory row",
+    )
+    control(
+        "wrong file",
+        good,
+        {"H01": [(UNFER / "unfer_consensus/src/node.rs", 1)]},
+        "inventory says",
+    )
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "hook.rs"
+        source.write_text("fn send_it() { self.0.submit(x); }\n")
+        problems = scan_unmarked(source)
+        hit = any("has no D19-HOOK marker nearby" in problem for problem in problems)
+        controls.append(("unmarked hook", hit, problems))
+
+    failed = [name for name, hit, _ in controls if not hit]
+    for name, hit, problems in controls:
+        if hit:
+            print(f"[pass] D19 checker refuses: {name}")
+        else:
+            print(f"[fail] D19 checker accepted: {name} ({problems})")
+    if failed:
+        print(f"[fail] D19 selftest: {len(failed)} control(s) did not fire")
+        return 1
+    print(f"[pass] D19 selftest: {len(controls)} mutation control(s) refused")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
+    ap.add_argument("--contracts", default=str(DEFAULT_CONTRACTS))
+    ap.add_argument("--selftest", action="store_true")
+    args = ap.parse_args()
+    if args.selftest:
+        return selftest()
+
+    inventory_path = Path(args.inventory)
+    if not inventory_path.exists():
+        print(f"[fail] D19 inventory missing: {inventory_path}")
+        return 1
+    rows, problems = parse_tsv(inventory_path.read_text())
+    contracts = contract_ids(Path(args.contracts))
+    markers = marker_map(SCAN_ROOTS)
+    problems.extend(check(rows, contracts, markers, SCAN_ROOTS))
+    if problems:
+        for problem in problems:
+            print(f"[fail] D19 {problem}")
+        return 1
+    kinds = sorted({row["kind"] for row in rows})
+    print(
+        f"[pass] D19 channel census: {len(rows)} hook(s) across "
+        f"{len({row['path'] for row in rows})} file(s), kinds {', '.join(kinds)}, "
+        "every marker registered and every known hook marked"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
