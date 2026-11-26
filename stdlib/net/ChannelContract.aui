@@ -1,0 +1,34 @@
+"""
+D19: an Austral handle over a host-checked channel contract.
+
+The host owns the contract and the two markers. `acquire` can only return a
+handle after the host has built the live submission contract; `provesOrdered`
+and `provesExactlyOnce` ask the host, and a released or forged handle is
+refused. The linear type prevents copying the handle in Austral; it does not
+replace the host's check.
+"""
+
+module ChannelContract is
+    type LiveSubmissionContract: Linear;
+
+    union AcquireOutcome: Linear is
+        case Acquired is
+            contract: LiveSubmissionContract;
+        case AcquireRefused is
+            status: Int64;
+    end;
+
+    function acquire(): AcquireOutcome;
+
+    generic [R: Region]
+    function provesOrdered(
+        contract: &[LiveSubmissionContract, R]
+    ): Int64;
+
+    generic [R: Region]
+    function provesExactlyOnce(
+        contract: &[LiveSubmissionContract, R]
+    ): Int64;
+
+    function release(contract: LiveSubmissionContract): Int64;
+end module.

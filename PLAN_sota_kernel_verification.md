@@ -914,6 +914,7 @@ the artifact, so `mm0-c` checks them too.
   | `mm0/store_projection.mm0` | the load+store projection claim, three pinned cites, a certificate naming the approval | 11 | none — states its own vocabulary | `[pass]`, approved in `mm0/approved/`; the claim itself stays unproved (§W9.3) | `5c201a800d1190c5074ecc07cbb5bd3c1f74dbf05148097f064ece4ec73af5a2` |
   | `mm0/store_projection_toy.mm0` | the toy model's 28 theorem *statements* and its 20 cited axioms (proofs live in the `.mm1`, checked by `mm0-c`) | 70 | none — compile+check is the gate | `[pass]`, approved in `mm0/approved/` | `abed1393972165e893db24bc34325017ae4f7b94be3284f8f4e33415369a220e` |
   | `mm0/liquid_split.mm0` | L11d's split law: extent conservation, disjoint halves and non-interference of the halves' writes, all guarded by `ok_split`; 10 residual premises, 10 proved theorems, no `sorry` | 41 | `scripts/liquid-split-mm0 check` — **registered** in `EMITTERS` | `[pass]`, approved in `mm0/approved/` | `00aff128a87dd3e2d95b96e262713d4c081aba9489ec222b3153a63a58f96e5b` |
+  | `mm0/distributed_trace.mm0` | D20's finite request trace: one 10-event run of the state-bound automaton, with accept/reject requiring `st_durable` and carrying the pending request's exact `(request, digest, epoch)`; five trace mutations are refused | 42 | `scripts/distributed2mm0 check` — **registered** in `EMITTERS` | `[gap]`, awaiting owner commit | — |
 
   The fifth row is L11d's split law (`PLAN_liquid_types.md` L11d), which that
   card asks to keep as a single reviewed held-out statement. `mm0/liquid_split.mm0`
