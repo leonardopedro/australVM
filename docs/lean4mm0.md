@@ -5906,7 +5906,8 @@ minutes each, in the export's JSON decode:
 `RecursionError: maximum recursion depth exceeded while decoding a JSON object`, for the deeply
 nested bodies of `.eqRecFit`, `.eqRecLaw`, `.genFit1_core`, `.genIhFree_run`, `.genNodeCalls`,
 `.genRule_residue`, `.quotIndFit`, `.quotIndLaw`, `.quotLiftFit` and `.quotLiftLaw`. That is depth,
-not time or memory, and it is the next thing the digest path needs.
+not time or memory, and `§13.62i` is the depth: one recursion limit, raised, after which all ten
+digest and none of them is a parse failure.
 
 One more number to keep straight: the ledger's rows outnumber its distinct statements — 1 196 against
 1 172 at the snapshot, 1 389 against 1 365 later — because 24 rows are byte-identical to another
@@ -5940,7 +5941,75 @@ overflow`. The 4.5 GB went to disk and was discarded.
 The rejection itself is not a budget. `mm0-c` takes no heap argument (`Incorrect args; use
 'mm0-c MMB-FILE < MM0-FILE'`), so its heap is a buffer fixed at compile time in the verifier: a
 derivation this wide does not fit it, which is a capacity fact about the checker and is now its own
-failure class (`over the checker's own heap`) instead of being reported as "out of memory". It also
+failure class (`over the checker's own heap`) instead of being reported as "out of memory".
+`§13.62j` measures that capacity: the buffer is compile-time constant, the shortfall is 6 % of it,
+and at twice the size the same artifact verifies in 1.9 s. It also
 got a time budget for the first time (`SCAN_MM0_C_TIMEOUT`, 900 s): it never needed one while every
 rejection was small, and now a rejected giant cannot hold the sweep for as long as its trace takes
 to write.
+
+### 13.62i The ten undigested statements were a recursion limit, not a parse failure
+
+`§13.62g` left ten declarations with `no digest produced` even at `SCAN_EMIT_TIMEOUT=1800`, and the
+row could be read as an export those declarations defeat. Run alone with the traceback kept, it is
+not the decode: the frames go `Deriver._enc` → `_enc_tokens` → `self.exprs[eid]` → `json.loads`, and
+the scanner raises `RecursionError: maximum recursion depth exceeded while decoding a JSON object`
+because *it* is called a thousand frames down, not because the record is deep. The records are four
+braces deep at most — measured by scanning every one of the export's 9 361 371 lines for its
+per-line nesting, which peaks at 4 — so the depth belongs to the derivation walk. A limit one
+frame from the top is a limit, and the statements were never the problem.
+
+The fix is one line in `scripts/lean2mm0` (which both the emitter and `lean-proof-scan` import):
+raise the interpreter's limit to at least 20 000. Four thousand already decodes `.eqRecFit` and
+returns digest `253ff17f…` in **10.0 s / 470 MB**, the same digest `20 000` and `60 000` return in
+10.0 s / 486 MB, so the margin above what this export needs costs nothing measurable.
+
+Re-audited with `--only` on the ten names against the live ledger: `digest unavailable: 0` (from
+10), `statement differs: 0`, `no ledger row: 10` — the ten fall in the sweep's unproved remainder,
+which is the verdict their neighbours get and not a gap in the digest path. **All 3 975 declarations
+now have a statement digest.**
+
+The same limit was behind 24 of the sweep's `emit ✗` rows, in five wordings — "in comparison",
+"getting the repr of an object", "getting the str of an object", "decoding a JSON object" and the
+bare message — because the limit is reached through whichever C entry point runs deep in the walk.
+`.eqRecFit` re-emitted after the fix: **139.5 s, 414 754 840 B `.mm0`, 414 808 796 B `.mm1`,
+2 800 990 631 B of conversion obligations**, so what those rows needed was the limit and not a
+smaller term. Whether they close is now the `mm0-rs` budget question of `§13.62c`, not a crash in
+the decoder. The sweep was restarted on the fix (its 2 472 ledger rows replay as `memo` hits) so the
+failure histogram it exits with counts this class at its real size rather than as its own.
+
+### 13.62j The checker's heap was 6 % short: `.TgtNodePres.kit._proof_1` verifies at twice the size
+
+`§13.62h` called the `mm0-c` rejection a capacity fact, which is a claim one can check, because the
+capacity is a compile-time constant. In the checker's `verifier_types.c` the proof heap is
+`HEAP_SIZE 65536` `u32` entries — 256 KB, beside `STORE_SIZE` 2^26 bytes, `UNIFY_HEAP_SIZE` 65 536
+and a 65 536-entry stack. `mm0-c` takes no argument for it, but it is a `#define`: the seven checker
+sources were copied to `_build/mm0-c-big` and `_build/mm0-c-2x` (with `-DHIGHWATER` on the second)
+and built with `gcc -O2`, leaving `../mm0-rs/mm0-c` and the installed `~/.local/bin/mm0-c`
+untouched.
+
+The artifact is the one the previous sweep left behind, kept under `_build/conleche/mm0c-heap/`
+(`full.mmb` 17 602 560 B against a 165 512 236-byte `full.mm0`). At the default heap it reproduces
+`§13.62h`'s `heap overflow`. At `HEAP_SIZE (1 << 17)` — twice the default, 512 KB — it **verifies:
+exit 0 in 1.9 s wall, 195 MB peak RSS**, and the highwater counters say how close it was:
+
+| buffer | highwater | size | used |
+| --- | --- | --- | --- |
+| proof heap | **69 478** | 65 536 → 131 072 | 106 % of the default, 53 % of 2× |
+| store | 12 737 020 | 67 108 864 | 19 % |
+| unify heap | 4 846 | 65 536 | 7 % |
+| stack | 200 | 65 536 | 0.3 % |
+| unify stack | 44 | 256 | 17 % |
+
+Exit 0 is past the checker's own `not all sorts / terms / theorems proved` checks and its sorry
+check, so the derivation is accepted, not merely un-rejected. The shortfall was **6.0 % of one
+buffer** — 3 942 entries — and no other buffer was within a factor of five. The repair is a
+one-line change upstream in `mm0-c` (or a growable heap); until the installed checker carries it,
+the sweep keeps this row in `over the checker's own heap`, and the class means "this checker's
+constant", not "this derivation is wrong".
+
+No second row in the run hit that class. The only other `mm0-c` non-pass in the part-4 log,
+`.declQuotPB_at`, is a rejection whose verdict the reason reader did not capture — it returned a
+fragment of the rejected statement (`ucc (tsucc (tsucc …`) instead of the checker's line — which is
+a defect in the driver's reason extraction, separate from this capacity question and not fixed
+here.
