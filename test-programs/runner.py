@@ -324,6 +324,11 @@ DEFAULT_SUITES: tuple[str, ...] = (
     "020-liquid-syntax",
     "021-virtio",
     "022-gpu",
+    # 022-distributed: D17's linear wrappers. Five compile-time fixtures pin the
+    # refusals the wrapper types exist for (copy, use-after-submit, double
+    # receipt, wrong-state access, leak); the positive transport and the host
+    # authority's forged-ID/replay cases run in scripts/check-distributed-wrappers.
+    "022-distributed",
     "023-liquid-index-closure",
     "023-runner-loader",
     "024-gpu-jobs",

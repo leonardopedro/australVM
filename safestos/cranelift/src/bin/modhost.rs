@@ -2,6 +2,7 @@
 //!
 //! Subcommands:
 //!   authorize   <manifest.toml> <module> <uk_symbol> [--json]  — check authorization
+//!   verify      <module-dir> [--json]  — check the D18 verification profile/evidence
 //!   host        <module-dir> --call <ep> [--args ...] [--args-json <json>] [--repeat N] [--swap <dir>] [--peer <node>] [--json]
 //!
 //!   `--peer <node>` treats the call as arriving from that authenticated peer:
@@ -30,7 +31,7 @@
 
 use austral_cranelift_bridge::auth::{self, ManifestAuthEngine};
 use austral_cranelift_bridge::liquid_attest;
-use austral_cranelift_bridge::module::ModuleHost;
+use austral_cranelift_bridge::module::{ModuleHost, ModuleManifest};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -40,6 +41,7 @@ const USAGE_AUTHORIZE: &str =
 const USAGE_HOST: &str = "usage: modhost host <module-dir> --call <ep> [--args ...] \
                            [--args-json <json>] [--repeat N] [--swap <dir>] \
                            [--peer <node>] [--json]";
+const USAGE_VERIFY: &str = "usage: modhost verify <module-dir> [--json]";
 const USAGE_LEGACY: &str =
     "usage: modhost host-legacy <austral-path> <module-src>... -- <entrypoint>...";
 
@@ -139,28 +141,86 @@ fn cmd_authorize(manifest_path: &str, principal: &str, symbol: &str, json: bool)
     }
 }
 
-/// Read a module's `[verify]` posture and run the attestation gate.
+/// Read a module's `[verify]` posture and run the D18 profile/evidence gate.
 ///
 /// Returns `Ok(note)` to proceed, `Err(reason)` to refuse. A missing or
 /// unparseable `module.toml` is not an attestation failure: the module simply
-/// declares nothing about liquid types, which is `off`.
-fn liquid_posture(module_dir: &Path) -> Result<String, String> {
+/// declares nothing about verification. The legacy `liquid.ok` gate stays
+/// active alongside the versioned `verification.ok` gate.
+fn verification_posture(module_dir: &Path) -> Result<String, String> {
     let manifest_path = module_dir.join("module.toml");
     let toml = match std::fs::read_to_string(&manifest_path) {
         Ok(t) => t,
         Err(_) => return liquid_attest::verify_module(module_dir, auth::LiquidMode::Off),
     };
-    let engine = ManifestAuthEngine::from_toml_str(&toml)
-        .map_err(|e| format!("LiquidManifestInvalid: {}: {}", manifest_path.display(), e))?;
+    let manifest = ModuleManifest::from_toml_str(&toml).map_err(|e| {
+        format!(
+            "VerificationManifestInvalid: {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    let engine = ManifestAuthEngine::from_toml_str(&toml).map_err(|e| {
+        format!(
+            "VerificationManifestInvalid: {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
     let mode = engine.liquid_mode();
     let quals = engine.liquid_qualifiers();
-    liquid_attest::verify_module(module_dir, mode).map(|note| {
-        if quals.is_empty() {
-            note
-        } else {
-            format!("{} (qualifiers: {})", note, quals.join(", "))
+    // A versioned profile is attested by `verification.ok`, which records the
+    // liquid verdict alongside the other requirements. Running the legacy
+    // `liquid.ok` gate as well would demand a second, redundant artifact.
+    let legacy_mode = if manifest.verification.requires_evidence() {
+        auth::LiquidMode::Off
+    } else {
+        mode
+    };
+    let liquid_note = liquid_attest::verify_module(module_dir, legacy_mode)?;
+    let profile_note = manifest
+        .verification
+        .check_evidence(module_dir, manifest.strict)?;
+    let mut notes = vec![liquid_note, profile_note];
+    notes.retain(|n| !n.is_empty() && n != "verification profile is legacy/off");
+    if !quals.is_empty() {
+        notes.push(format!("qualifiers: {}", quals.join(", ")));
+    }
+    Ok(notes.join("; "))
+}
+
+fn cmd_verify(args: &[String]) -> ExitCode {
+    let json = args.iter().skip(2).any(|t| t == "--json");
+    let positional: Vec<&str> = args
+        .iter()
+        .skip(2)
+        .filter(|t| t.as_str() != "--json")
+        .map(String::as_str)
+        .collect();
+    if positional.len() != 1 {
+        return usage_error("verify takes exactly one module directory", USAGE_VERIFY);
+    }
+    let module_dir = Path::new(positional[0]);
+    match verification_posture(module_dir) {
+        Ok(note) => {
+            emit(
+                json,
+                serde_json::json!({"event": "verification", "accepted": true, "note": note}),
+            );
+            if !json {
+                println!("modhost: verification accepted: {note}");
+            }
+            ExitCode::SUCCESS
         }
-    })
+        Err(reason) => {
+            emit(
+                json,
+                serde_json::json!({"event": "error", "kind": "verification_refused", "detail": reason}),
+            );
+            eprintln!("modhost: refusing verification: {reason}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn cmd_host(args: &[String]) -> ExitCode {
@@ -279,7 +339,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
     // `authorize` already uses, rather than a second TOML reader: the `[verify]`
     // section was added to that struct additively, so one parse answers both
     // "what may this module call" and "what has this module proved".
-    match liquid_posture(module_dir) {
+    match verification_posture(module_dir) {
         Err(e) => {
             emit(
                 json,
@@ -315,7 +375,7 @@ fn cmd_host(args: &[String]) -> ExitCode {
         // A hot swap is the easiest way to get unverified bytes into a live
         // process, so the attestation gate has to run again here and not only
         // at cold load.
-        match liquid_posture(Path::new(sd)) {
+        match verification_posture(Path::new(sd)) {
             Err(e) => {
                 emit(
                     json,
@@ -510,6 +570,7 @@ fn main() -> ExitCode {
     let pre_end = args.iter().position(|a| a == "--").unwrap_or(args.len());
     if args[1..pre_end].iter().any(|a| a == "--help" || a == "-h") {
         println!("{USAGE_AUTHORIZE}");
+        println!("{USAGE_VERIFY}");
         println!("{USAGE_HOST}");
         println!("{USAGE_LEGACY}");
         return ExitCode::SUCCESS;
@@ -529,6 +590,7 @@ fn main() -> ExitCode {
             }
             cmd_authorize(positional[0], positional[1], positional[2], json)
         }
+        Some("verify") => cmd_verify(&args),
         Some("host") => {
             if args.len() < 3 {
                 eprintln!("{USAGE_HOST}");
@@ -570,6 +632,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!("{USAGE_AUTHORIZE}");
+            eprintln!("{USAGE_VERIFY}");
             eprintln!("{USAGE_HOST}");
             eprintln!("{USAGE_LEGACY}");
             ExitCode::from(2)

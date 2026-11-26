@@ -579,11 +579,23 @@ fn main() {
         }
     }
 
+    // D18: a manifest's `[verify] liquid = "required"` is a compiler input,
+    // not just host metadata. The CLI flag can also request it (and is unioned
+    // with the manifest, never used to downgrade it).
+    let liquid_required = cli.liquid_required
+        || match cli.manifest.as_ref() {
+            Some(path) => match frontend::manifest_requires_liquid(path) {
+                Ok(required) => required,
+                Err(e) => die(e),
+            },
+            None => false,
+        };
+
     // 3. front-end subprocess → a checked compile-only artifact and the
     //    adapter descriptors. The staged outputs are gone by the time this
     //    returns; only the verified bytes and hash remain.
     let (artifacts, buffers, handles, scalars) =
-        match front_end(&austral, &modules, cli.liquid_required) {
+        match front_end(&austral, &modules, liquid_required) {
             Ok(b) => b,
             Err(e) => die(e),
         };

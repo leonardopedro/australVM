@@ -1,0 +1,22 @@
+pragma Unsafe_Module;
+
+import Distributed (
+    PendingRequest,
+    receiptCode,
+    disposeRequest
+);
+
+module body Test is
+    -- A receipt accessor is not callable on a pending request. The two
+    -- wrappers share an `Int64` handle at runtime, but the type system keeps
+    -- their states apart.
+    function readPendingReceipt(request: PendingRequest): Int64 is
+        let code: Int64 := receiptCode(&request);
+        let ignored: Int64 := disposeRequest(request);
+        return code;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

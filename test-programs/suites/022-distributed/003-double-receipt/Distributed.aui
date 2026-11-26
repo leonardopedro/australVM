@@ -1,0 +1,130 @@
+"""
+D17: linear local wrappers for authenticated remote resources.
+
+Every value below is a linear token over a host-managed handle. The handle is
+process-local and is never serialized; the authority state behind it names the
+request id, payload digest, resource, deployment, owner and epoch. A wrapper is
+produced only by the foreign verbs in the body, so module code cannot fabricate
+one from an `Int64`.
+
+The protocol states are explicit:
+
+  PendingRequest  -- submitted locally; retry/wait/cancel-wait still possible
+  ResultReceipt   -- a terminal result, consumed exactly once
+  RemoteResource  -- an introduced resource, consumed by its disposal
+  AuthorityToken  -- a one-use grant, consumed by use or request opening
+
+`submit` and `retry` consume the `PendingRequest` and return the *same* wire
+identity. `wait` consumes it and returns either the same request (still pending)
+or a receipt; a receipt cannot be requested twice because the first `wait`
+consumed the request. Cancellation-wait is local: it stops this caller waiting,
+it does not roll the remote effect back.
+"""
+
+module Distributed is
+    type PendingRequest: Linear;
+    type ResultReceipt: Linear;
+    type RemoteResource: Linear;
+    type AuthorityToken: Linear;
+
+    union ResourceOutcome: Linear is
+        case Introduced is
+            resource: RemoteResource;
+        case ResourceRefused is
+            status: Int64;
+    end;
+
+    union TokenOutcome: Linear is
+        case Granted is
+            token: AuthorityToken;
+        case TokenRefused is
+            status: Int64;
+    end;
+
+    union OpenOutcome: Linear is
+        case Opened is
+            request: PendingRequest;
+        case OpenRefused is
+            status: Int64;
+    end;
+
+    union SubmitOutcome: Linear is
+        case Submitted is
+            sent: PendingRequest;
+        case SubmitRefused is
+            refused: PendingRequest;
+            status: Int64;
+    end;
+
+    union WaitOutcome: Linear is
+        case Waiting is
+            still_pending: PendingRequest;
+        case AppliedReceipt is
+            receipt: ResultReceipt;
+        case RejectedReceipt is
+            receipt: ResultReceipt;
+        case WaitRefused is
+            stopped: PendingRequest;
+            status: Int64;
+    end;
+
+    function introduceResource(
+        resource_id: Int64,
+        deployment_id: Int64,
+        owner_id: Int64,
+        epoch: Int64
+    ): ResourceOutcome;
+
+    generic [R: Region]
+    function issueToken(
+        resource: &[RemoteResource, R],
+        owner_id: Int64,
+        deployment_id: Int64,
+        epoch: Int64
+    ): TokenOutcome;
+
+    generic [R: Region]
+    function resourceIdentity(resource: &[RemoteResource, R]): Int64;
+
+    function openRequest(
+        token: AuthorityToken,
+        request_id: Int64,
+        digest: Int64
+    ): OpenOutcome;
+
+    generic [R: Region]
+    function requestIdentity(request: &[PendingRequest, R]): Int64;
+
+    generic [R: Region]
+    function requestDigest(request: &[PendingRequest, R]): Int64;
+
+    function submit(request: PendingRequest): SubmitOutcome;
+
+    """Retry consumes the request and returns it with unchanged identity/fence."""
+    function retry(request: PendingRequest): SubmitOutcome;
+
+    """Wait returns the same request while pending, or one consumed receipt."""
+    function wait(request: PendingRequest): WaitOutcome;
+
+    generic [R: Region]
+    function receiptCode(receipt: &[ResultReceipt, R]): Int64;
+
+    """Stop waiting locally. The remote request remains pending at the authority."""
+    function cancelWait(request: PendingRequest): Int64;
+
+    """Drop a local request token without cancelling the remote request."""
+    function disposeRequest(request: PendingRequest): Int64;
+
+    function disposeReceipt(receipt: ResultReceipt): Int64;
+
+    """Consume a one-use token by exercising its resource."""
+    generic [R: Region]
+    function authorize(
+        token: AuthorityToken,
+        resource: &[RemoteResource, R]
+    ): Int64;
+
+    function disposeToken(token: AuthorityToken): Int64;
+
+    function disposeResource(resource: RemoteResource): Int64;
+end module.

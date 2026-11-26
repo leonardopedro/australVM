@@ -1,0 +1,119 @@
+pragma Unsafe_Module;
+
+import Distributed (
+    RemoteResource,
+    PendingRequest,
+    ResultReceipt,
+    AuthorityToken,
+    ResourceOutcome,
+    Introduced,
+    ResourceRefused,
+    TokenOutcome,
+    Granted,
+    TokenRefused,
+    OpenOutcome,
+    Opened,
+    OpenRefused,
+    SubmitOutcome,
+    Submitted,
+    SubmitRefused,
+    WaitOutcome,
+    Waiting,
+    AppliedReceipt,
+    RejectedReceipt,
+    WaitRefused,
+    introduceResource,
+    issueToken,
+    openRequest,
+    submit,
+    wait,
+    receiptCode,
+    disposeRequest,
+    disposeReceipt,
+    disposeResource
+);
+
+module body DistributedRequest is
+    pragma Foreign_Import(External_Name => "au_dist_respond");
+    function au_dist_respond(request_id: Int64, digest: Int64, accepted: Int64): Int64 is end;
+
+    function finish(request: PendingRequest, resource: RemoteResource): Int64 is
+        case wait(request) of
+            when AppliedReceipt(receipt: ResultReceipt) do
+                let one: Int64 := disposeReceipt(receipt);
+                let two: Int64 := disposeResource(resource);
+                return 0;
+            when RejectedReceipt(receipt: ResultReceipt) do
+                let one: Int64 := disposeReceipt(receipt);
+                let two: Int64 := disposeResource(resource);
+                return 1;
+            when Waiting(still_pending: PendingRequest) do
+                let one: Int64 := disposeRequest(still_pending);
+                let two: Int64 := disposeResource(resource);
+                return 1;
+            when WaitRefused(stopped: PendingRequest, status: Int64) do
+                let one: Int64 := disposeRequest(stopped);
+                let two: Int64 := disposeResource(resource);
+                return 1;
+        end case;
+    end;
+
+    function run(): Int64 is
+        case introduceResource(101, 202, 303, 1) of
+            when Introduced(resource: RemoteResource) do
+                case issueToken(&resource, 303, 202, 1) of
+                    when Granted(token: AuthorityToken) do
+                        case openRequest(token, 7, 11) of
+                            when Opened(request: PendingRequest) do
+                                case submit(request) of
+                                    when Submitted(sent: PendingRequest) do
+                                        case wait(sent) of
+                                            when Waiting(still_pending: PendingRequest) do
+                                                let ignored: Int64 := au_dist_respond(7, 11, 1);
+                                                return finish(still_pending, resource);
+                                            when AppliedReceipt(receipt: ResultReceipt) do
+                                                let one: Int64 := disposeReceipt(receipt);
+                                                let two: Int64 := disposeResource(resource);
+                                                return 0;
+                                            when RejectedReceipt(receipt: ResultReceipt) do
+                                                let one: Int64 := disposeReceipt(receipt);
+                                                let two: Int64 := disposeResource(resource);
+                                                return 1;
+                                            when WaitRefused(
+                                                stopped: PendingRequest,
+                                                status: Int64
+                                            ) do
+                                                let one: Int64 := disposeRequest(stopped);
+                                                let two: Int64 := disposeResource(resource);
+                                                return 1;
+                                        end case;
+                                    when SubmitRefused(
+                                        refused: PendingRequest,
+                                        status: Int64
+                                    ) do
+                                        let one: Int64 := disposeRequest(refused);
+                                        let two: Int64 := disposeResource(resource);
+                                        return 1;
+                                end case;
+                            when OpenRefused(status: Int64) do
+                                let ignored: Int64 := disposeResource(resource);
+                                return 1;
+                        end case;
+                    when TokenRefused(status: Int64) do
+                        let ignored: Int64 := disposeResource(resource);
+                        return 1;
+                end case;
+            when ResourceRefused(status: Int64) do
+                return 1;
+        end case;
+    end;
+
+    function main(): ExitCode is
+        let code: Int64 := run();
+        if code = 0 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.

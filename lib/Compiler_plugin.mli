@@ -35,6 +35,11 @@ type gate_pass =
 
 type typed_pass = Stages.Tast.typed_module -> verdict
 
+(** D18: require liquid verification for this compilation. The liquid passes
+    read this ref; `Compiler.liquid_required` aliases it so the CLI and the
+    plugin library share one switch without a dependency cycle. *)
+val liquid_required : bool ref
+
 (** Register a gate pass, replacing any existing pass of the same name. *)
 val register : name:string -> gate_pass -> unit
 

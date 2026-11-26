@@ -1,0 +1,37 @@
+pragma Unsafe_Module;
+
+import Distributed (
+    PendingRequest,
+    ResultReceipt,
+    WaitOutcome,
+    Waiting,
+    AppliedReceipt,
+    RejectedReceipt,
+    WaitRefused,
+    wait,
+    disposeRequest,
+    disposeReceipt
+);
+
+module body Test is
+    -- A wait consumes the request. The `Waiting` branch returns the same
+    -- request, never a second handle to the old binding; reading the old
+    -- binding after the case is the double-receipt path.
+    function waitThenWait(request: PendingRequest): Int64 is
+        case wait(request) of
+            when Waiting(still_pending: PendingRequest) do
+                let ignored: Int64 := disposeRequest(still_pending);
+                return disposeRequest(request);
+            when AppliedReceipt(receipt: ResultReceipt) do
+                return disposeReceipt(receipt);
+            when RejectedReceipt(receipt: ResultReceipt) do
+                return disposeReceipt(receipt);
+            when WaitRefused(stopped: PendingRequest, status: Int64) do
+                return disposeRequest(stopped);
+        end case;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

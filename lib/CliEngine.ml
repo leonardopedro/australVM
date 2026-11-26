@@ -89,7 +89,7 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_cps_only; emit_adapters_path; pkg_totality; emit_derivations; emit_linearity_ledger } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_cps_only; emit_adapters_path; pkg_totality; liquid_required; emit_derivations; emit_linearity_ledger } ->
      if emit_cps_only && emit_cps_path = None then
        err "--emit-cps-only requires --emit-cps=<path>.";
      if emit_cps_only && (not use_cps_jit) && (not jit_server) then
@@ -127,6 +127,7 @@ let rec exec (cmd: cmd): unit =
      Compiler.emit_cps_only := emit_cps_only;
      Compiler.emit_adapters_path := emit_adapters_path;
      Compiler.pkg_totality := pkg_totality;
+     Compiler.liquid_required := liquid_required;
      Compiler.emit_derivations_path := emit_derivations;
      Compiler.emit_linearity_ledger_path := emit_linearity_ledger;
      (* C output is a cell to be linked later: a symbol the JIT cannot
@@ -201,6 +202,9 @@ and compile_help_lines (): string list =
     "                    I/O, and other constructs whose termination cannot be";
     "                    proven. Off by default; plans record each derivation as";
     "                    proven only when this flag ran.";
+    "    --liquid-required  Require liquid verification: a missing or";
+    "                    inconclusive prover fails the compile instead of being";
+    "                    reported as a structured skip.";
     "    --emit-derivations=<path>  Export this module's Derivation constants";
     "                    as plan JSON (merging with an existing file).";
     "    --emit-linearity-ledger=<path>  Export the linearity checker's";

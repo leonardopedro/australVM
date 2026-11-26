@@ -261,6 +261,7 @@ type cmd =
       emit_cps_only: bool;
       emit_adapters_path: string option;
       pkg_totality: bool;
+      liquid_required: bool;
       emit_derivations: string option;
       (** Export the linearity ledger — the checker's linear-resource and
           borrow decisions — as JSON to this path (docs/memsafe.md §3). *)
@@ -542,6 +543,13 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
     | None ->
        (false, arglist)
   in
+  (* Parse --liquid-required flag (D18: make required liquid verification a
+     compiler input rather than an ambient environment variable). *)
+  let (liquid_required, arglist) =
+    match pop_bool_flag arglist "liquid-required" with
+    | Some arglist -> (true, arglist)
+    | None -> (false, arglist)
+  in
   (* Parse --emit-derivations=<path> flag (avm-pkg: export the module's
      Derivation constants as plan JSON) *)
   let (emit_derivations, arglist) =
@@ -562,7 +570,7 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; emit_cps_only = emit_cps_only; emit_adapters_path = emit_adapters_path; pkg_totality = pkg_totality; emit_derivations = emit_derivations; emit_linearity_ledger = emit_linearity_ledger; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; emit_cps_only = emit_cps_only; emit_adapters_path = emit_adapters_path; pkg_totality = pkg_totality; liquid_required = liquid_required; emit_derivations = emit_derivations; emit_linearity_ledger = emit_linearity_ledger; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

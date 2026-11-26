@@ -83,6 +83,9 @@ type cmd =
       (** Run the package totality pass (avm-pkg: rejects unbounded
           constructs in package modules). *)
       pkg_totality: bool;
+      (** D18: require liquid verification; a missing or inconclusive prover is
+          a compile error, not a structured skip. *)
+      liquid_required: bool;
       (** Export the module's `Derivation` constants as plan JSON to this
           path (avm-pkg), merging with an existing file. *)
       emit_derivations: string option;

@@ -77,6 +77,10 @@ val emit_derivations_path : string option ref
     (docs/memsafe.md §3). *)
 val emit_linearity_ledger_path : string option ref
 
+(** D18: require liquid verification. A missing/inconclusive prover is a
+    compile error rather than a structured skip. *)
+val liquid_required : bool ref
+
 (** Hash table of compiled JIT function pointers keyed by function name. *)
 val jit_functions : (string, int64) Hashtbl.t
 

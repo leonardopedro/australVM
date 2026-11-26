@@ -1,0 +1,185 @@
+-- D17/D16: one request through the linear wrappers, the host fence/outbox
+-- seam, and the total transition. `au_dist_respond` is the authority's side
+-- of the exchange, not a caller capability: the module cannot make a response
+-- arrive, it can only wait for one.
+pragma Unsafe_Module;
+
+import Example.Distributed.RequestState (
+    RequestState,
+    RequestEvent,
+    Transition,
+    Pending,
+    Applied,
+    Rejected,
+    Idle,
+    MatchingResponse,
+    Retry,
+    Submit,
+    step
+);
+import Distributed (
+    introduceResource,
+    issueToken,
+    resourceIdentity,
+    openRequest,
+    requestIdentity,
+    requestDigest,
+    submit,
+    wait,
+    receiptCode,
+    disposeRequest,
+    disposeReceipt,
+    disposeResource,
+    ResourceOutcome,
+    Introduced,
+    ResourceRefused,
+    TokenOutcome,
+    Granted,
+    TokenRefused,
+    OpenOutcome,
+    Opened,
+    OpenRefused,
+    SubmitOutcome,
+    Submitted,
+    SubmitRefused,
+    WaitOutcome,
+    Waiting,
+    AppliedReceipt,
+    RejectedReceipt,
+    WaitRefused,
+    RemoteResource,
+    PendingRequest,
+    ResultReceipt,
+    AuthorityToken
+);
+
+module body RequestTransport is
+    pragma Foreign_Import(External_Name => "au_dist_reset");
+    function au_dist_reset(): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_dist_respond");
+    function au_dist_respond(request_id: Int64, digest: Int64, accepted: Int64): Int64 is end;
+
+    function tag(state: RequestState): Int32 is
+        case state of
+            when Idle do
+                return 0;
+            when Pending(held_request: Int64, held_digest: Int64) do
+                return 1;
+            when Applied(held_request: Int64, held_digest: Int64) do
+                return 2;
+            when Rejected(held_request: Int64, held_digest: Int64) do
+                return 3;
+        end case;
+    end;
+
+    function report(label: Span[Nat8, Static], transition: Transition): Unit is
+        print(label);
+        print(" state=");
+        print(tag(transition.next));
+        print(" code=");
+        printLn(transition.code);
+        return nil;
+    end;
+
+    function reportStatus(label: Span[Nat8, Static], status: Int64): Unit is
+        print(label);
+        print(" status=");
+        printLn(status);
+        return nil;
+    end;
+
+    function failRequest(request: PendingRequest, resource: RemoteResource): ExitCode is
+        let one: Int64 := disposeRequest(request);
+        let two: Int64 := disposeResource(resource);
+        return ExitFailure();
+    end;
+
+    function failReceipt(receipt: ResultReceipt, resource: RemoteResource): ExitCode is
+        let one: Int64 := disposeReceipt(receipt);
+        let two: Int64 := disposeResource(resource);
+        return ExitFailure();
+    end;
+
+    function finish(request: PendingRequest, resource: RemoteResource): ExitCode is
+        case wait(request) of
+            when AppliedReceipt(receipt: ResultReceipt) do
+                let code: Int64 := receiptCode(&receipt);
+                reportStatus("receipt", code);
+                let after: Transition := step(
+                    Applied(held_request => 7, held_digest => 11),
+                    MatchingResponse(request => 7, digest => 11)
+                );
+                report("d16-applied", after);
+                let one: Int64 := disposeReceipt(receipt);
+                let two: Int64 := disposeResource(resource);
+                return ExitSuccess();
+            when RejectedReceipt(receipt: ResultReceipt) do
+                return failReceipt(receipt, resource);
+            when Waiting(still_pending: PendingRequest) do
+                return failRequest(still_pending, resource);
+            when WaitRefused(stopped: PendingRequest, status: Int64) do
+                return failRequest(stopped, resource);
+        end case;
+    end;
+
+    function run(resource: RemoteResource): ExitCode is
+        case issueToken(&resource, 303, 202, 1) of
+            when Granted(token: AuthorityToken) do
+                case openRequest(token, 7, 11) of
+                    when Opened(request: PendingRequest) do
+                        print("request identity=");
+                        print(requestIdentity(&request));
+                        print(" digest=");
+                        printLn(requestDigest(&request));
+                        case submit(request) of
+                            when Submitted(sent: PendingRequest) do
+                                reportStatus("submit", 0);
+                                case wait(sent) of
+                                    when Waiting(still_pending: PendingRequest) do
+                                        reportStatus("wait", 0);
+                                        let before: Transition := step(
+                                            Pending(held_request => 7, held_digest => 11),
+                                            Retry()
+                                        );
+                                        report("d16-pending", before);
+                                        let response: Int64 := au_dist_respond(7, 11, 1);
+                                        reportStatus("respond", response);
+                                        return finish(still_pending, resource);
+                                    when AppliedReceipt(receipt: ResultReceipt) do
+                                        return failReceipt(receipt, resource);
+                                    when RejectedReceipt(receipt: ResultReceipt) do
+                                        return failReceipt(receipt, resource);
+                                    when WaitRefused(
+                                        stopped: PendingRequest,
+                                        status: Int64
+                                    ) do
+                                        return failRequest(stopped, resource);
+                                end case;
+                            when SubmitRefused(
+                                refused: PendingRequest,
+                                status: Int64
+                            ) do
+                                return failRequest(refused, resource);
+                        end case;
+                    when OpenRefused(status: Int64) do
+                        let ignored: Int64 := disposeResource(resource);
+                        return ExitFailure();
+                end case;
+            when TokenRefused(status: Int64) do
+                let ignored: Int64 := disposeResource(resource);
+                return ExitFailure();
+        end case;
+    end;
+
+    function main(): ExitCode is
+        let reset: Int64 := au_dist_reset();
+        case introduceResource(101, 202, 303, 1) of
+            when Introduced(resource: RemoteResource) do
+                reportStatus("resource", resourceIdentity(&resource));
+                return run(resource);
+            when ResourceRefused(status: Int64) do
+                return ExitFailure();
+        end case;
+    end;
+end module body.

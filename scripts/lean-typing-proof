@@ -15,7 +15,9 @@ What is derived, and what is assumed, are both counted and printed:
             because this prototype has no definitional-equality checker: that
             is the deltanet's job (`tdefeq_iso` in the theory).
 
-Usage: lean-typing-proof <export.ndjson> <decl-name-substring> <out-dir> [--spine]
+Usage: lean-typing-proof <export.ndjson> <decl-name-substring> <out-dir> [--spine
+       | --digest] [--defer-subst]; `--digest` prints the statement's sha256 and stops
+       before the derivation
 
 Without `--spine` the body's typing is one axiom (the smallest artifact that
 closes the statement). With `--spine` the body's applications are derived with
@@ -1903,10 +1905,27 @@ def spine(ex, eid):
     return cur, args
 
 
+def mm0_ident(s: str) -> str:
+    """A declaration name MM0's lexer will read as an identifier.
+
+    ASCII alphanumerics and `_`, nothing else: Python calls `Φ` alphanumeric and
+    `mm0-rs` answers `error: type or value expected` at the theorem head, which
+    cost the corpus sweep the two declarations whose names carry Greek
+    (`ConLeche.Model.BlockData.Φ`, `.DynCtx.hΔ0`) — the same class as the
+    trailing prime fixed in §13.62.
+    """
+    return "".join(c if (c.isascii() and c.isalnum()) or c == "_" else "_"
+                   for c in s)
+
+
 def main() -> int:
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     spine = "--spine" in sys.argv
     defer = "--defer-subst" in sys.argv
+    # `--digest`: the goal band's sha256, without the walk (§13.62b). It reads
+    # the same spools `--spine` reads and stops before the derivation, so its
+    # cost is the export index plus the two encodes, not the proof search.
+    digest = "--digest" in sys.argv
     export_path, want, out_dir = Path(argv[0]), argv[1], Path(argv[2])
     # Profit mode is two runs (§13.56): the first counts what the artifact's
     # text repeats, the second emits with that answer instead of a size floor.
@@ -2004,6 +2023,72 @@ def main() -> int:
     n_lam = count_lam(ex, rec["value"])
     n_pi = len(binders)
 
+    # The value is a term in the *local context* the type's Π spine introduces
+    # (Lean exports `theorem foo (x : α) : P x := proof` with `proof` referring
+    # to x by fvar, not by a λ), so what gets derived is the open judgment
+    # `tty ctx value body_type` — no `ty_abs` for the binders, and no peeling of
+    # λs the value may or may not have. A value that *does* carry a λ spine is
+    # typed by `ty_abs` inside the derivation, against the Π it is checked at.
+    #
+    # Computed before the derivation's sinks exist, because `--digest` reads the
+    # goal these two decide and must not leave a sink behind (§13.62b).
+    ctxs = ["tnil"]
+    for a in binders:
+        ctxs.append(f"(tcons {a} {ctxs[-1]})")
+    ctx = ctxs[-1]
+    body_eid = rec["value"]
+    # A value that carries the type's whole λ spine can be closed (`tty tnil
+    # value type`, one `ty_abs` per binder); one that does not is a term in the
+    # local context, and only the open judgment `tty ctx value body_type` is
+    # statable. Which holds is a property of the export, so it is measured, not
+    # assumed.
+    closed = n_lam == len(binders)
+    if closed:
+        for _ in range(len(binders)):
+            body_eid = ex.exprs[body_eid]["lam"]["body"]
+    # A closed value is stated by its own text, so the stripped body is only
+    # needed when it is the statement's term or an assumed typing's term.
+    body = None if (closed and spine) else enc.enc(body_eid)
+    inner_ctx = ctxs[-1]
+
+    if digest:
+        # `--digest`: sha256 of the goal band `--spine` would write, and nothing
+        # else. The band is `theorem thm_X: $ tty ctx value type $;\n`, the one
+        # place a statement's bytes live, so a caller holding an artifact can
+        # compare without a second emitter run — that comparison is what makes
+        # the ledger's key a content key (§13.62b). The walk is skipped, which
+        # is the difference between asking "what does this export state" and
+        # "does its proof close".
+        thm_name_d = "thm_" + mm0_ident(target.split(".")[-1])
+        goal_ctx = "tnil" if closed else inner_ctx
+        h = hashlib.sha256()
+        h.update(f"theorem {thm_name_d}: $ tty {goal_ctx} ".encode())
+        # The goal's pieces must be the ones the artifact writes, not merely
+        # equivalent ones: a closed value is stated from its spool (hashed from
+        # disk in chunks, so a 1.9 GB statement does not have to be materialised
+        # to be identified), an open one from the encoding in hand. The type is
+        # selected the same way — reading the declared type's spool for an open
+        # goal hashed a rendering the artifact does not carry (§13.62c: `.hds`,
+        # `.hψ` and `.live` reproduced their artifacts' band under `--spine` and
+        # a different digest under `--digest`, so no ledger row could ever be
+        # matched by statement).
+        goal_term, goal_ty = (val_path, ty_path) if closed else (body, body_ty)
+        for i, piece in enumerate((goal_term, goal_ty)):
+            if i:
+                h.update(b" ")
+            if isinstance(piece, Path):
+                with piece.open("rb") as sp:
+                    for chunk in iter(lambda: sp.read(1 << 20), b""):
+                        h.update(chunk)
+            else:
+                h.update(piece.encode())
+        h.update(b" $;\n")
+        for p in (ty_path, val_path, _bodyty_path(stem)):
+            p.unlink(missing_ok=True)
+        print(f"target   : {target}")
+        print(f"digest   : {h.hexdigest()}")
+        return 0
+
     # The obligation file is opened *before* the derivation, and the deriver
     # writes each obligation into it as it is created: retaining them instead
     # cost 24.5 kB per obligation and reached 10 GiB on `adjoint_aeval` (§13.25).
@@ -2032,31 +2117,6 @@ def main() -> int:
     # thread does not need to know which branch of `main` built the deriver).
     box: dict = {"d": d_pre}
     start_trace(ex, enc, lambda: box["d"])
-    ctxs = ["tnil"]
-    for a in binders:
-        ctxs.append(f"(tcons {a} {ctxs[-1]})")
-    ctx = ctxs[-1]
-
-    # The value is a term in the *local context* the type's Π spine introduces
-    # (Lean exports `theorem foo (x : α) : P x := proof` with `proof` referring
-    # to x by fvar, not by a λ), so what gets derived is the open judgment
-    # `tty ctx value body_type` — no `ty_abs` for the binders, and no peeling of
-    # λs the value may or may not have. A value that *does* carry a λ spine is
-    # typed by `ty_abs` inside the derivation, against the Π it is checked at.
-    body_eid = rec["value"]
-    # A value that carries the type's whole λ spine can be closed (`tty tnil
-    # value type`, one `ty_abs` per binder); one that does not is a term in the
-    # local context, and only the open judgment `tty ctx value body_type` is
-    # statable. Which holds is a property of the export, so it is measured, not
-    # assumed.
-    closed = n_lam == len(binders)
-    if closed:
-        for _ in range(len(binders)):
-            body_eid = ex.exprs[body_eid]["lam"]["body"]
-    # A closed value is stated by its own text, so the stripped body is only
-    # needed when it is the statement's term or an assumed typing's term.
-    body = None if (closed and spine) else enc.enc(body_eid)
-    inner_ctx = ctxs[-1]
 
     if spine:
         d = d_pre
@@ -2203,8 +2263,7 @@ def main() -> int:
     # The name is sanitised: MM0's lexer rejects Lean's trailing prime
     # (`thm_add_le'` was a parse error, so the artifact never reached the proof
     # at all and the run was counted as a failure of the derivation).
-    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
-                                 for c in target.split(".")[-1])
+    thm_name = "thm_" + mm0_ident(target.split(".")[-1])
     # The statement is written in pieces rather than built: its term texts are
     # gigabytes (§13.30), and the f-string that used to hold it kept a second
     # copy for the `.mm0` tail and a third for the `.mm1` one.
@@ -2360,8 +2419,7 @@ def stop_walk_emit(stop: StopWalk, d, oblig_sink, ax_fh, ax_path, stem,
     out += [f"term {n}: nat;" for n in NATS]
     out += ["", "-- ── assumptions ──"]
     path = Path(str(stem) + "_stopped.mm0")
-    thm_name = "thm_" + "".join(c if c.isalnum() or c == "_" else "_"
-                                 for c in target.split(".")[-1])
+    thm_name = "thm_" + mm0_ident(target.split(".")[-1])
     # Bytes, not characters: the box-drawing rules in the prologue are three
     # bytes each, and this number is the offset a verifier seeks to.
     header = "\n".join(out) + "\n"
