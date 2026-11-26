@@ -18,6 +18,13 @@ module Austral.Pervasive is
             right: R;
     end;
 
+    union Result[T: Type, E: Type]: Type is
+        case Ok is
+            value: T;
+        case Err is
+            error: E;
+    end;
+
     generic [T: Type, R: Region]
     function spanLength(sp: Span[T, R]): Index;
 

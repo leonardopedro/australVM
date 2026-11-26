@@ -27,6 +27,14 @@ module body WidgetHandle is
         hi: Int64;
     end;
 
+    -- A held view: the two words `__borrow` writes. A claim is live until
+    -- `release`, and `(0, 0)` is the refusal the module checks the status word
+    -- for, so a failed borrow never reads as a claim on some other registry.
+    record View: Free is
+        w0: Int64;
+        w1: Int64;
+    end;
+
     function adopt(lo: Int64, hi: Int64): Widget is
         return Widget(lo => lo, hi => hi);
     end;
@@ -38,7 +46,7 @@ module body WidgetHandle is
     -- `avm_widget__dispose`. Both parameters are 64-bit scalars, so the call
     -- itself is word-native: the words cross as they are.
     pragma Foreign_Import(External_Name => "avm_widget");
-    pragma Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor", Destructor => "avm_widget_dtor", Params => "2", Use => "avm_widget_read");
+    pragma Handle_Ownership(Object => "widget", Constructor => "avm_widget_ctor", Destructor => "avm_widget_dtor", Params => "2", Use => "avm_widget_read", Write => "avm_widget_write");
     function widgetDispose(lo: Int64, hi: Int64): Int64 is end;
 
     -- The constructor wrapper the generator renders from the same descriptor:
@@ -55,6 +63,26 @@ module body WidgetHandle is
     -- `Pointer[Word]` is that one-word out slot; a refusal leaves it untouched.
     pragma Foreign_Import(External_Name => "avm_widget__use");
     function widgetUse(lo: Int64, hi: Int64, out: Pointer[Word]): Int64 is end;
+
+    -- The module-held view's three imports. `__borrow` writes a two-word
+    -- token into a `Pointer[Pair]`, `__view` reads one word through that
+    -- token, and `__release` discharges it. The token is checked against the
+    -- live claims, so releasing it twice or using it after release is refused
+    -- rather than reading a value that has moved on.
+    pragma Foreign_Import(External_Name => "avm_widget__borrow");
+    function widgetBorrow(lo: Int64, hi: Int64, out: Pointer[Pair]): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "avm_widget__view");
+    function widgetView(w0: Int64, w1: Int64, out: Pointer[Word]): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "avm_widget__borrow_mut");
+    function widgetBorrowMut(lo: Int64, hi: Int64, out: Pointer[Pair]): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "avm_widget__write");
+    function widgetWrite(w0: Int64, w1: Int64, value: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "avm_widget__release");
+    function widgetRelease(w0: Int64, w1: Int64): Int64 is end;
 
     -- The scoped borrow's callback: an ordinary Austral function, used as a
     -- value. The JIT hands the wrapper its *address*; the wrapper resolves the
@@ -82,6 +110,49 @@ module body WidgetHandle is
         end if;
     end;
 
+    generic [R: Region]
+    function holdView(widget: &[Widget, R]): View is
+        var token: Pair := Pair(lo => 0, hi => 0);
+        let status: Int64 := widgetBorrow(widget->lo, widget->hi, refMutToPointer(&!token));
+        if status = 0 then
+            return View(w0 => token.lo, w1 => token.hi);
+        else
+            return View(w0 => 0, w1 => 0);
+        end if;
+    end;
+
+    generic [R: Region]
+    function viewRead(view: &[View, R]): Int64 is
+        var word: Word := Word(value => -1);
+        let status: Int64 := widgetView(view->w0, view->w1, refMutToPointer(&!word));
+        if status = 0 then
+            let { value: Int64 } := word;
+            return value;
+        else
+            return -1;
+        end if;
+    end;
+
+    generic [R: Region]
+    function holdViewMut(widget: &[Widget, R]): View is
+        var token: Pair := Pair(lo => 0, hi => 0);
+        let status: Int64 := widgetBorrowMut(widget->lo, widget->hi, refMutToPointer(&!token));
+        if status = 0 then
+            return View(w0 => token.lo, w1 => token.hi);
+        else
+            return View(w0 => 0, w1 => 0);
+        end if;
+    end;
+
+    function viewWrite(view: View, value: Int64): Int64 is
+        return widgetWrite(view.w0, view.w1, value);
+    end;
+
+    function release(view: View): Int64 is
+        let { w0: Int64, w1: Int64 } := view;
+        return widgetRelease(w0, w1);
+    end;
+
     function dispose(widget: Widget): Int64 is
         -- Destructuring is what discharges the linear obligation; the two
         -- words go back to the registry, which is the only place that decides
@@ -98,6 +169,16 @@ module body WidgetHandle is
         var pair: Pair := Pair(lo => -1, hi => -1);
         let status: Int64 := widgetNew(7, 9, refMutToPointer(&!pair));
         let widget: Widget := adopt(pair.lo, pair.hi);
+        -- The held view: a claim lives from `borrow` until `release`, across
+        -- statements, and `dispose` below could not run before `release`.
+        let view: View := holdView(&widget);
+        let seenWord: Int64 := viewRead(&view);
+        let released: Int64 := release(view);
+        -- The exclusive view: write 21 through it, then release. The value the
+        -- plain read below returns is therefore the written one.
+        let mutableView: View := holdViewMut(&widget);
+        let wrote: Int64 := viewWrite(mutableView, 21);
+        let releasedMut: Int64 := release(mutableView);
         let readWord: Int64 := read(&widget);
         -- The scoped borrow: the handle is lent to `onBorrow` for one call, and
         -- the word the callback returns comes back through `lent`.
@@ -108,11 +189,27 @@ module body WidgetHandle is
         -- `-1` is `read`'s refusal sentinel, so a provider word of `-1` is not
         -- reachable here; the point of these lines is the calls, not the value.
         if status = 0 then
-            if readWord /= -1 then
-                if borrowed = 0 then
-                    if value = 1 then
-                        if outcome = 0 then
-                            return ExitSuccess();
+            if released = 0 then
+                if wrote = 0 then
+                    if releasedMut = 0 then
+                        if seenWord /= -1 then
+                            if readWord /= -1 then
+                                if borrowed = 0 then
+                                    if value = 1 then
+                                        if outcome = 0 then
+                                            return ExitSuccess();
+                                        else
+                                            return ExitFailure();
+                                        end if;
+                                    else
+                                        return ExitFailure();
+                                    end if;
+                                else
+                                    return ExitFailure();
+                                end if;
+                            else
+                                return ExitFailure();
+                            end if;
                         else
                             return ExitFailure();
                         end if;

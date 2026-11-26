@@ -125,7 +125,7 @@
 -- file cites the claim it models by digest.
 --
 -- theory coverage: used=put,get,init,unset,veq,vne,notfull,held unused=none
--- cites: mm0/store_projection.mm0 sha256=24b932749766344e3febf6e202698fd2e01879ed796d4a3413e8cdfea08a0ce8
+-- cites: mm0/store_projection.mm0 sha256=c612213b18f9f270e4383e9ab5b507bde8965b9484786e2a2222a4efe2431690
 
 provable sort Prop;
 delimiter $ ( ) $;

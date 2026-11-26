@@ -23,6 +23,9 @@ pub struct AdapterCrate {
     /// they are registered explicitly, so the JIT never falls back to global
     /// scope to find an adapter.
     pub exports: Vec<String>,
+    /// Symbols a later reload calls on this build to retire its retained
+    /// callbacks. Empty for a crate with no instance-lifetime callbacks.
+    pub retire_symbols: Vec<String>,
 }
 
 /// The bridge rlib the generated wrappers compile against. The wrappers call
@@ -120,7 +123,8 @@ pub fn build_at(
     Ok(AdapterCrate {
         path: out,
         generation,
-        exports: adapters.iter().map(|a| a.symbol().to_string()).collect(),
+        exports: adapters.iter().flat_map(|a| a.exported_symbols()).collect(),
+        retire_symbols: adapters.iter().flat_map(|a| a.retirement_symbols()).collect(),
     })
 }
 
@@ -194,6 +198,11 @@ pub fn load(built: &AdapterCrate) -> Result<(), String> {
 /// each adapter symbol through the crate's own handle, and a preloaded same-named
 /// export cannot answer instead.
 pub fn load_for_jit(built: &AdapterCrate) -> Result<(), String> {
+    // A reload retires the *previous* builds' retained callbacks before the
+    // next table becomes visible. The JIT code that registered them is
+    // replaced, so a provider that kept a callback pointer must be refused at
+    // that pointer rather than call into stale code.
+    retire_older_than(built.generation)?;
     let handle = crate::policy::dlopen_local(&built.path)
         .map_err(|e| format!("map adapter crate {}: {e}", built.path.display()))?;
     let existing = austral_cranelift_bridge::registered_static_symbols();
@@ -222,6 +231,59 @@ pub fn load_for_jit(built: &AdapterCrate) -> Result<(), String> {
     for (symbol, address) in resolved {
         austral_cranelift_bridge::register_static_symbol(symbol, address as *const u8)
             .map_err(|e| format!("adapter export `{symbol}`: {e}"))?;
+    }
+    // Keep the image (never unmapped: the forwarders still point into it) and
+    // the hooks a later reload must call.
+    let mut previous = match LOADED.lock() {
+        Ok(previous) => previous,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    previous.push((
+        built.generation,
+        handle.as_ptr() as usize,
+        built.retire_symbols.clone(),
+    ));
+    Ok(())
+}
+
+/// Loaded adapter crates, oldest first: `(generation, image, retire hooks)`.
+/// The image is kept as an address because a raw pointer is not `Send`; the
+/// library is never unmapped, so it stays valid.
+static LOADED: std::sync::Mutex<Vec<(u32, usize, Vec<String>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Retire every already-loaded build older than `next`. Each build exposes its
+/// own hook inside its own image, so `dlsym` is scoped to that image: two
+/// generations export the same hook name.
+fn retire_older_than(next: u32) -> Result<(), String> {
+    let loaded = match LOADED.lock() {
+        Ok(loaded) => loaded,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for (generation, image, hooks) in loaded.iter() {
+        if *generation >= next {
+            continue;
+        }
+        for hook in hooks {
+            let name = std::ffi::CString::new(hook.as_str())
+                .map_err(|e| format!("{hook}: {e}"))?;
+            let address = unsafe { libc::dlsym(*image as *mut libc::c_void, name.as_ptr()) };
+            if address.is_null() {
+                return Err(format!(
+                    "generation {generation} does not export `{hook}`; the retained \
+                     callbacks of the replaced build cannot be retired"
+                ));
+            }
+            // SAFETY: the generated hook is `extern \"C\" fn(u32) -> i64`.
+            let retire: unsafe extern "C" fn(u32) -> i64 =
+                unsafe { std::mem::transmute(address) };
+            let status = unsafe { retire(*generation) };
+            if status != 0 {
+                return Err(format!(
+                    "`{hook}` refused to retire generation {generation} (status {status})"
+                ));
+            }
+        }
     }
     Ok(())
 }

@@ -51,8 +51,11 @@ type pragma =
       destructor symbols, and the constructor's arity in 64-bit words. The
       optional last component is the provider's reader (`*mut c_void -> i64`),
       which the generated `<target>__use` wrapper calls; without it the handle
-      can be created and destroyed but not read. *)
-  | HandleOwnershipPragma of string * string * string * int * string option
+      can be created and destroyed but not read. The optional sixth component
+      is the provider's writer (a pointer and one `i64` word), which the
+      generated `<target>__borrow_mut`/`<target>__write` wrappers use; without
+      it a module can hold a read-only view but cannot write. *)
+  | HandleOwnershipPragma of string * string * string * int * string option * string option
 
 (** Whether a variable is immutable or mutable. *)
 type mutability =

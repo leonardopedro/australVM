@@ -473,12 +473,13 @@ let rec monomorphize_decl (env: env) (decl: typed_decl): (mdecl option * env) =
      let handle =
        List.find_map (function
            | Common.HandleOwnershipPragma (type_name, constructor, destructor,
-                                           arity, accessor) ->
+                                           arity, accessor, writer) ->
               Some { mh_type_name = type_name;
                      mh_constructor = constructor;
                      mh_destructor = destructor;
                      mh_params = arity;
-                     mh_use = accessor }
+                     mh_use = accessor;
+                     mh_write = writer }
            | _ -> None) pragmas
      in
      let (env, params) = monomorphize_params env params in

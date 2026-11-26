@@ -184,6 +184,13 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// The provider fixture's initializer appends `load` to `stages.log` when it is
+/// actually mapped, so the log tells "refused before mapping" apart from
+/// "mapped and then refused".
+fn stages(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("stages.log")).unwrap_or_default()
+}
+
 #[test]
 fn two_provider_libraries_are_refused_before_mapping() {
     let dir = scratch("two-providers");
@@ -281,6 +288,13 @@ fn a_changed_typed_signature_is_refused_before_invocation() {
     assert!(err.contains("trusted signatures refused"), "{err}");
     assert!(err.contains("`compute` pinned"), "{err}");
     assert!(!stdout(&out).contains("RESULT"), "{}", stdout(&out));
+    // The pin is checked before admission, so the provider's initializer never
+    // ran; before this ordering the marker read `load`.
+    assert!(
+        !stages(&dir).contains("load"),
+        "a refused contract must not map a provider: {:?}",
+        stages(&dir)
+    );
 }
 
 #[test]
@@ -293,6 +307,52 @@ fn a_changed_descriptor_digest_is_refused_before_native_work() {
     let err = stderr(&out);
     assert!(err.contains("trusted descriptor refused"), "{err}");
     assert!(!stdout(&out).contains("RESULT"), "{}", stdout(&out));
+    assert!(
+        !stages(&dir).contains("load"),
+        "a refused descriptor must not map a provider: {:?}",
+        stages(&dir)
+    );
+}
+
+/// U10: a successful artifact can produce the pins its project document needs,
+/// so the trust record is generated from what actually ran instead of copied by
+/// hand. Every pin in the file must match the artifact and descriptor the run
+/// admitted.
+#[test]
+fn a_successful_artifact_can_emit_its_trust_record() {
+    let dir = scratch("trust-record");
+    let so = build_stageprobe(&dir);
+    let project = project_with_provider(&dir, &so);
+    let record_path = dir.join("pins.json");
+    let austral = fake_front_end(&dir, &cps("compute", 0, 0x01));
+    let out = Command::new(env!("CARGO_BIN_EXE_umbrella"))
+        .arg("--project")
+        .arg(&project)
+        .arg("--austral")
+        .arg(&austral)
+        .arg("--emit-trust-record")
+        .arg(&record_path)
+        .arg("--entry")
+        .arg("compute")
+        .arg("--expect")
+        .arg("7")
+        .arg("--")
+        .arg(dir.join("M.aum"))
+        .output()
+        .expect("run umbrella");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let record: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&record_path).expect("the record was written"),
+    )
+    .expect("the record is JSON");
+    assert_eq!(record["signatures"][0]["name"], "compute");
+    assert_eq!(record["signatures"][0]["params"], serde_json::json!([]));
+    assert_eq!(record["signatures"][0]["returns"], "Int64");
+    assert_eq!(
+        record["descriptor_sha256"],
+        umbrella::trust::sha256_bytes(b""),
+        "the empty adapter document is pinned by its digest"
+    );
 }
 
 /// U10: the typed artifact event names the exports and the descriptor blocks

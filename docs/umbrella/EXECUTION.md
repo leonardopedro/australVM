@@ -490,14 +490,15 @@ before any descriptor-driven native work.
 |---|---|
 | `umbrella/src/project.rs` | `TrustedArtifact` gains `signatures` (`[{name, params, returns}]`) and an optional `descriptor_sha256`. Both are optional for existing documents; when present, signatures are exact, names are unique, and the digest must be 64 hex digits. Nested unknown fields are named as `trusted.signatures[i].<field>`. |
 | `umbrella/src/trust.rs` | `sha256_bytes`; `verify_signatures` compares the artifact's typed exports to the pin as an exact set (missing, extra, renamed, retyped or changed-arity all refuse with the name and both signatures); `verify_descriptor` hashes the emitted document; `verify_artifact` runs both. An absent pin is not a claim, so it is not a refusal. |
-| `umbrella/src/main.rs` | After the front-end and before `build_adapters`/JIT, the merged typed exports and the last prefix's descriptor document are verified against the project pin. The `artifact` JSON event now carries `exports`, `adapters` (`kind`, `symbol`, canonical `descriptor` text per block) and `adapters_sha256`, alongside the CPS digest. |
-| `umbrella/tests/entry.rs` | Three new cases: a pinned signature with a different arity is refused before `RESULT`; a wrong `descriptor_sha256` is refused before native work; the artifact event's `exports`, empty `adapters`, and `adapters_sha256` are asserted. |
+| `umbrella/src/main.rs` | The merged typed exports and the last prefix's descriptor document are verified against the project pin **before `ProviderSet::load`**: the provider identity checks still run before the front-end, but the mapping itself waits for the typed gate, so a refused contract never runs a provider initializer. After a successful artifact, `--emit-trust-record <path>` writes the pins `trust::trust_record` derives (signatures sorted by name, plus `descriptor_sha256`) as a fragment for the project's `trusted` block. The `artifact` JSON event carries `exports`, `adapters` (`kind` and `abi_version` as separate fields beside `symbol` and the canonical `descriptor` text) and `adapters_sha256`, alongside the CPS digest. |
+| `umbrella/src/cli.rs` | `--emit-trust-record <json>`: single-valued, non-empty path, refused twice like any other single-valued option. |
+| `umbrella/tests/entry.rs` | Five new cases: a pinned signature with a different arity is refused before `RESULT`; a wrong `descriptor_sha256` is refused before native work; both refusal cases also assert the stageprobe's `stages.log` holds no `load` marker (the probe appends it only when the cdylib's initializer runs); the artifact event's `exports`, empty `adapters`, and `adapters_sha256` are asserted; and a successful run's `--emit-trust-record` file carries the admitted `compute() -> Int64` signature and `sha256("")` descriptor pin. |
 
 ### Ledger
 
 | Task/substep | Case IDs | Status | Source/tool/feature identity | Command and evidence | Oracle/result | Remaining limits |
 |---|---|---|---|---|---|---|
-| U10 typed signatures + descriptor/provider digests | ABI03, ABI06, API03 | implemented for the driver path | this dirty patch; `umbrella/src/{project,trust,main}.rs`; `umbrella/tests/entry.rs`; reduced bridge features `cedar,tier1-rs` because the sibling `unfer` checkout is mid-merge | Reduced-feature `cargo test --offline --lib` → **103 passed, 0 failed** (new trust/project cases included); `cargo test --offline --test entry --test cli` → **8 + 6 passed**. The pin tests use a real stageprobe cdylib and the real `umbrella` binary: a signature pinned as `compute(Int64) -> Int64` against an artifact exporting `compute() -> Int64` exits 1 with `trusted signatures refused` and no `RESULT`; a `descriptor_sha256` of all zeroes exits 1 with `trusted descriptor refused` and no `RESULT`; the success event reports `exports[0].name == compute`, `adapters == []`, and `adapters_sha256 == sha256("")`. | A caller can pin an exact export name, parameter list and return type, and the compiler's adapter contract, before the artifact is used. The provider bytes are still checked by D09's `library_sha256` before `dlopen`; the descriptor is checked after the front-end but before any wrapper is built or loaded, because the descriptor only exists then. | Signature pins cover CPS wire types, not source-level Austral types; the descriptor pin is exact bytes of the last prefix's document, so a change in meta-comment text also refuses. Provider and descriptor pins are not signatures over the provider's behaviour. Default-feature Rust verification remains blocked by the external `unfer` conflict. |
+| U10 typed signatures + descriptor/provider digests, generated trust record, contract-before-mapping | ABI03, ABI06, API03 | implemented for the driver path | this dirty patch; `umbrella/src/{project,trust,main,cli}.rs`; `umbrella/tests/entry.rs`; reduced bridge features `cedar,tier1-rs` because the sibling `unfer` checkout is mid-merge | Reduced-feature `cargo test --offline --lib` → **105 passed, 0 failed** (new trust/project/cli cases included); `cargo test --offline --test entry --test cli` → **9 + 6 passed**. The pin tests use a real stageprobe cdylib and the real `umbrella` binary: a signature pinned as `compute(Int64) -> Int64` against an artifact exporting `compute() -> Int64` exits 1 with `trusted signatures refused` and no `RESULT`; a `descriptor_sha256` of all zeroes exits 1 with `trusted descriptor refused` and no `RESULT`; the success event reports `exports[0].name == compute`, `adapters == []`, and `adapters_sha256 == sha256("")`; a successful `--emit-trust-record` run writes a JSON fragment whose signature and digest pins parse back as the project's `trusted` fields; and both refusal tests leave the provider fixture's `stages.log` without `load`, which is the regression that the mapping used to print before the pins were checked. | A caller can pin an exact export name, parameter list and return type, and the compiler's adapter contract, before the artifact is used, and can generate those pins from an admitted run instead of copying them by hand. The provider bytes are still checked by D09's `library_sha256` before `dlopen`; the descriptor is checked after the front-end but before any wrapper is built or loaded, because the descriptor only exists then. Provider mapping now follows that check, so a tampered contract cannot run a provider initializer. | Signature pins cover CPS wire types, not source-level Austral types; the descriptor pin is exact bytes of the last prefix's document, so a change in meta-comment text also refuses. Provider and descriptor pins are not signatures over the provider's behaviour. Default-feature Rust verification remains blocked by the external `unfer` conflict. |
 
 ## W9.3 gate run in the lean shell — blocked, results recorded
 
@@ -1257,3 +1258,500 @@ Only literals, mediated calls, Float64 arithmetic and float comparisons carry a
 float; a Float32 that goes through a slot or a record field is still one opaque
 word, so nothing in the JIT checks the width for you, and a Float32 comparison
 is correct because widening cannot fail, not because the width was checked.
+
+## U14 — borrowed views over owned handles (runtime boundary)
+
+A handle is a value the table owns, but a module also needs to *look at* that
+value without consuming it, and a second path that could mutate or destroy it
+while a view is live would be a use-after-free dressed as a borrow. The table
+now has claims: `borrow` mints an immutable view token and `borrow_mut` an
+exclusive one, `release` discharges the token, and every conflicting operation
+is refused while a claim is live.
+
+**What is checked, and where.** `Borrow` is deliberately neither `Clone` nor
+`Copy`, so one claim has exactly one token and `release` takes it by value; a
+token this registry did not issue — or one already released — is
+`HandleError::UnknownBorrow` rather than a second decrement. Claims are kept per
+slot, so:
+
+* any number of immutable claims coexist (a group borrow, several readers);
+* a mutable claim is refused while any claim is live, and a new claim of any
+  kind is refused while a mutable claim is live;
+* `get` is refused while a mutable claim is live (no `&T` beside a `&mut T`),
+  `get_mut` while any claim is live, and `take`/`destroy` while any claim is
+  live — a borrowed value cannot be replaced or freed under its view;
+* `get_borrowed`/`get_mut_borrowed` are the paths through a token: reading
+  works for either claim, mutation only for the exclusive one, and a copied
+  handle's own `get_mut` stays refused while the claim is live — so the token
+  is the capability and the handle is not;
+* `borrow_words`/`borrow_mut_words` are the same checks over the two module
+  words, so a caller never has to rebuild a `Handle` to take a view.
+
+The Chest/Gem shape is the test `replacing_a_child_while_its_view_is_live_is_refused`:
+a view of the child is taken, `destroy`/`take` of the child is refused with
+`Borrowed`, and only after `release` may the child be replaced. The old handle
+then resolves to `Stale` because the slot generation moved on, so the stale view
+cannot name the replacement. `a_group_borrow_coexists_and_a_mutable_claim_excludes_everything`
+checks the group/conflict rules in both directions (including a write through
+`get_mut_borrowed` and the refusal of the handle's own `get_mut`),
+`a_live_borrow_blocks_mutation_and_destruction_until_released` checks that
+reading is what a view may do and every write is refused, and
+`a_token_from_another_registry_is_refused` checks that a foreign token cannot
+touch another table.
+
+**Which guarantee is static, which runtime.** The module side is static where
+U13 made it so: `Widget` is `Linear`, so forgetting or double-disposing a handle
+is a type error, and no module can fabricate a handle from two integers. The
+borrow rules above are **runtime** checks at the registry boundary. `__use` and
+`__dispose` take no claim; they are single-word operations under the registry
+mutex and the slot generation checks.
+
+**A module-held view.** The `__with` callback scopes a borrow to one call, which
+is not the same as a module *holding* a view across statements. Three generated
+wrappers make that possible, and `WidgetHandle` uses them:
+
+* `<target>__borrow(lo, hi, out)` mints an immutable claim and writes its
+two-word token through `out` (claim id and owner tag); a null `out`, a stale
+pair or a foreign owner is refused and the out slot is untouched;
+* `<target>__view(w0, w1, out)` reads the provider's word through the token,
+rendered only when the descriptor names a provider reader (it calls that
+reader); a released or foreign token is refused;
+* `<target>__release(w0, w1)` discharges the claim; releasing twice is
+`UnknownBorrow`, so a copied token cannot decrement someone else's claim;
+* when the descriptor also names a writer, `<target>__borrow_mut(lo, hi, out)`
+mints an exclusive token and `<target>__write(w0, w1, value)` calls that provider
+writer under the claim. An immutable token is refused by
+`get_words_view_mut`, so a reader's view cannot become a writer's; a writer
+panic is caught like a reader panic.
+
+On the module side `type View: Free` is opaque, `holdView(widget): View` mints
+a read-only view (`0`/`0` on refusal), `holdViewMut(widget): View` mints the
+exclusive one, `viewRead(view)` reads through either token, `viewWrite(view,
+value)` mutates through the exclusive one and `release(view)` discharges it.
+`WidgetHandle.main` is the whole path from source: mint, adopt, hold a view,
+read through it, release it, hold the exclusive view, write through it, release
+it, then read through `__use`, lend through `__with` and dispose. The registry
+refuses `__dispose` while either view is held, so a module that disposes before
+releasing gets a status word, not a freed value; the compiler cannot see the
+ordering, so this half is runtime.
+The borrowed-view guarantee is thus split: **static** for ownership and
+linearity (`Widget` is `Linear`), **runtime** for view lifetime and handle
+validity.
+
+`__with` remains the callback-scoped form and is safe by exclusion: it holds
+the registry mutex for the callback, so a concurrent `__dispose` waits rather
+than invalidating the borrow, at the cost of a non-reentrant callback. A
+module still cannot call *through* the function value it hands `__with`
+(`MFptrCall` is a call by name), which is why the held view exists.
+
+**Evidence.** `cargo test --offline --lib handles` in `safestos/cranelift` →
+13 passed (the 3 U13 registry tests, 8 borrow/view tests and the mutable-token
+test); `cargo test --offline --lib` → 90 passed, 0 failed; `rustfmt --check`
+clean on `src/handles.rs`. In `umbrella`, `cargo test --offline --lib
+interface` → 30 passed (including the rendered-wrapper assertions and the
+`write`-line parse/validate cases), and `cargo test --offline --test handles`
+→ 21 passed, including:
+
+* `a_held_view_blocks_disposal_until_the_module_releases_it` — a view is
+minted and read, `__dispose` is refused while it is held, release lets the same
+words dispose exactly once, and a second release or post-release read is
+refused;
+* `a_mutable_view_writes_and_the_write_is_visible_after_release` — a read-only
+token's `__write` is refused, an exclusive token writes, still blocks disposal,
+reads the written word through `__view`, and after release the value `__use`
+returns is the written one while the released token cannot write again;
+* the two `reexport` tests, exercising the claims and the word tokens only
+through `umbrella::handles`, so the re-export and the bridge's table are the
+same definition rather than two types that happen to agree.
+
+`bash scripts/check-adapter-descriptors` → 6 scalar/buffer + 1 handle golden
+match. The updated `WidgetHandle` compiles from source (`./austral compile ...
+--target-type=c` → exit 0); its `abi handle 1` golden gained exactly one line,
+`write avm_widget_write`, and was re-recorded deliberately in this change. The
+three new wrappers are generated from the descriptor rather than described in
+it.
+
+**Not yet carried:** the exclusive view exists only when the descriptor names a
+`write` line, so a provider that exposes no writer gets no mutation wrapper at
+all — the generator never invents a writer symbol. A write carries exactly one
+64-bit word; wider payloads need a buffer adapter or a handle. A claim is not
+scoped to a thread or a reactor: it is per registry and released explicitly, so
+lexical scoping for host callers is still the caller's to enforce. There is no
+compiler-negative fixture for releasing a view after disposal — the module
+ordering is checked at the registry boundary, not by the type system. U15's
+payload and panic rules are separate.
+
+## U15 — the result/panic status ABI in the generated wrappers (bounded start)
+
+The handle wrappers already returned a status word beside the payload they wrote
+through `out`; U15 makes that ABI named and checked, and stops a provider panic
+from crossing it.
+
+**The status words.** `safestos/cranelift/src/handles.rs` defines
+`STATUS_OK = 0` (done), `STATUS_REFUSED = 1` (the host refused — a bad, stale or
+foreign word, a null out, a null callback — so no provider code ran) and
+`STATUS_PANIC = 2` (a provider panic was caught). `Status::from_word` is the one
+decoder: the three words map to `Ok`/`Refused`/`Panic` and every other value is
+`Err(word)`. That is what keeps a payload out of the status channel: `-1`,
+`i64::MIN` and `i64::MAX` are not statuses, and `Status::from_word` returns them
+as the unrecognised value rather than reading a legitimate domain result as a
+failure. The generated wrappers use the constants instead of bare `0`/`1`, so
+the ABI is one spelling.
+
+**Panics.** The generated handle module declares the provider's constructor and
+reader in an `extern "C-unwind"` block; the destructor stays in an `extern "C"`
+block because `ProviderValue::drop` calls it through that ABI. Every provider
+call the wrapper makes is wrapped in
+`std::panic::catch_unwind(std::panic::AssertUnwindSafe(...))`:
+
+* `__new` — a panicking constructor returns `STATUS_PANIC`, writes no handle and
+  stores no value, so the table has nothing to clean up;
+* `__use` and `__view` — a panicking reader returns `STATUS_PANIC` and leaves the
+  out slot untouched, so no old word can be mistaken for a fresh read;
+* `__with` — a callback that unwinds is caught the same way; the claim and the
+  value stay live, so `__dispose` can still run.
+
+A provider built with `panic=abort` never unwinds: the process aborts and this
+is a **worker crash**, not a catchable status. The generated module says so in
+its own comment. A panicking destructor is also not caught (it runs inside
+`ProviderValue::drop`, not through a wrapper call) and is a provider fault.
+
+**Evidence.** Bridge `cargo test --offline --lib handles` → 12 passed
+(`a_status_word_is_checked_and_domain_edges_are_not_statuses` covers the three
+words and the rejected edges `-1`, `i64::MIN`, `i64::MAX`, `3`). Umbrella
+`cargo test --offline --lib interface` → 28 passed, including the render
+assertions for the status imports, the `C-unwind` block, `catch_unwind` at each
+site and the named statuses. `cargo test --offline --test handles
+a_panicking_provider_is_a_status_word_and_keeps_the_value_live` → 1 passed over
+a compiled wrapper crate: a panicking constructor returns `STATUS_PANIC` with
+no handle and no stored value; a live value whose reader panics returns
+`STATUS_PANIC` with the out slot untouched, and remains releaseable and
+disposable; the same through a held view. The ordinary path still reports
+`STATUS_OK`/`STATUS_REFUSED` — `the_reading_wrapper_hands_back_the_provider_value`
+→ 1 passed. `a_panic_abort_provider_aborts_the_worker_instead_of_reporting_a_status`
+compiles a self-contained `panic=abort` child binary that calls a panicking
+`extern "C-unwind"` provider through the same `std::panic::catch_unwind` site
+the rendered wrapper uses, and requires `SIGABRT`, so the "worker crash, not a
+status" contract is measured rather than only documented. It does not link the
+bridge rlib: this toolchain refuses to link a crate whose `crate-type` includes
+`cdylib` into a `panic=abort` binary ("requires panic strategy `unwind`"), which
+is a toolchain restriction, not a change in the contract; the whole file is 22
+passed before U16 and 24 passed after it.
+
+**Checked scalar/buffer channel.** The payload wrappers keep their ABI (a
+payload return, abort on a bad word or a provider panic), and `interface.rs`
+renders an additive checked form per descriptor:
+`<symbol>__checked(words..., out: *mut u64) -> i64`. It declares the provider
+`extern "C-unwind"`, decodes the words before the call (`STATUS_REFUSED` on a
+word that does not decode, a negative buffer length, a null buffer with a
+non-zero length, or a null out slot), catches a provider panic as
+`STATUS_PANIC`, and writes the encoded payload only on success. A module opts
+in by importing the checked symbol explicitly, so no existing module changes.
+`cargo test --offline --test checked_adapters` → 1 passed: success writes the
+payload, a boolean word `2` is `STATUS_REFUSED` with the out slot untouched, a
+panicking provider is `STATUS_PANIC` with the out slot untouched, a null out is
+refused, and a later call still succeeds. `--lib interface` → 31 passed with
+the render assertion that the checked form uses `C-unwind`, the three statuses
+and the out write, while the payload form keeps `extern "C"`.
+
+**Not yet carried:** the checked scalar/buffer form is opt-in at the symbol
+level, not selected by the compiler for an ordinary `rs_*` import, so a module
+that keeps the payload import still aborts on a bad word or a provider panic.
+`Result`/`Option` tags and owned-output cleanup after a failure are U15's next
+steps, not carried here. The `panic=abort` crash is now
+exercised by the child-process fixture above, and the module's convenience
+`read` still collapses a refusal to `-1`, so a
+provider result of `-1` is indistinguishable at the module level (the wrapper's
+`out` slot and status word are not).
+
+## U16 — scoped synchronous callbacks behind checked tokens (bounded start)
+
+A callback crosses two boundaries at once: a native library may retain the
+function pointer and its context, and the JIT code that issued them can be
+retired. The bounded start makes the host able to refuse a call *before* it
+jumps, and it removes the lock the old `__with` held across the callback.
+
+**The registry.** `safestos/cranelift/src/callbacks.rs` adds
+`CallbackRegistry`, `CallbackScope`, `CallbackToken`, `CallbackPolicy`,
+`Lifetime` (`Call`/`Instance`), `ThreadAffinity` (`CallerThread`/`AnyThread`),
+`Reentrancy` (`Forbidden`/`Nested`) and `ErrorPolicy`
+(`StatusWord`/`RetireOnPanic`). `invoke` checks, in this order, a null token,
+the generation retirement watermark, the token's generation, the scope's
+closed flag, the token's slot, the registration thread and the reentrancy
+depth. Only then does it copy the function pointer and context out, **drop the
+mutex**, and call under `catch_unwind`. A `Call` token is one-shot: after its
+first invocation it is retired, so a library that retained it and calls again
+is refused by identity. `retire`, `close` and
+`CallbackRegistry::retire_generations_through` are the explicit retirement
+paths; dropping a scope closes it and clears its registrations.
+
+**The wrapper.** `render_handle_wrapper_at` renders `__with` as: resolve the
+handle, read the provider pointer, mint an **immutable claim** with
+`borrow_to_words` and drop the table lock; open a `CallbackPolicy` with
+`Lifetime::Call`, `ThreadAffinity::CallerThread`, `Reentrancy::Forbidden` and
+`ErrorPolicy::StatusWord`; register the caller's callback with the provider
+pointer as its context; `invoke` it; drop the scope; release the claim on every
+path (including a scope-open failure). A nested `__with` on the same handle is
+valid because immutable claims coexist and neither call holds the lock; a
+`__borrow_mut`, `__write` or `__dispose` during the callback is refused by the
+live claim. The callback declares `extern "C-unwind"` so a `panic=unwind`
+provider can unwind into the catch; a `panic=abort` provider still aborts the
+process (worker crash).
+
+**Thread identity without TLS.** `std::thread::current()` inside a generated
+cdylib registers a thread-local destructor in that image; after `dlclose` the
+destructor points at unmapped code and the process faults at teardown (measured
+as a SIGSEGV after the test body, only when `__with` had run). The registry
+therefore compares `libc::pthread_self()` instead, which has no such
+bookkeeping. On a non-unix host the key is `0`, so affinity is inert there; the
+generated wrappers and fixtures are unix builds.
+
+**Evidence.** Bridge `cargo test --offline --lib --no-default-features
+--features cedar,tier1-rs callbacks` → 12 passed: direct-oracle argument/result
+identity, one-shot `Call` token and reusable `Instance` token, a token from
+another scope and the null token refused without a jump, a retired generation
+refused before the jump, wrong-thread refused and `AnyThread` allowed, forbidden
+reentrancy refused while the nested case succeeds (both prove no lock is held
+across the callback), a panic is `Panicked` with `StatusWord` keeping the token
+and `RetireOnPanic` retiring it, and `close` refuses every token and clears the
+registrations. Umbrella `cargo test --offline --lib interface` → 31 passed,
+including the render assertions that `__with` claims, registers through a scope,
+drops the table lock before the scope opens and releases the claim after the
+invoke. `cargo test --offline --test handles` → 24 passed, including
+`a_callback_panic_is_a_status_word_and_the_value_survives` (a panicking
+trampoline in the fixture library returns `STATUS_PANIC`, writes no out word,
+leaves the value live and disposable, and the claim is released on the panic
+path) and `a_callback_cannot_mutate_the_value_it_borrowed` (during the callback
+`__borrow_mut` is refused by the live claim while a nested `__with` succeeds and
+returns its own word; after the callback the same `__borrow_mut`/`__write`
+succeed and the written value is read back). The panicking trampoline lives in
+the fixture library rather than the test binary because a panic raised in one
+Rust runtime and caught in another is a foreign exception Rust refuses to catch.
+
+**Not yet carried.** This is the synchronous, call-scoped half of U16. No CPS
+first-class callback value exists yet, so the only module-visible use is the
+`__with` borrow; the `CallbackPolicy` is fixed by the generator rather than
+described in the adapter document; the bridge can retire a provider generation,
+but no host call site calls `retire_generations_through` on reload yet; retained
+`Instance` callbacks, thread-hop callbacks in production and a per-descriptor
+callback policy belong to the next card. The `panic=abort` fixture no longer
+links the bridge rlib because this toolchain refuses to link a `cdylib` crate
+type into a `panic=abort` binary, so it reproduces the catch site rather than
+the rendered wrapper.
+
+## U21 — rendering provider wrappers from a descriptor document (bounded start)
+
+`umbrella --descriptor-document <file> --emit-wrappers <dir>` is a render-only
+path: it reads the text `austral compile --emit-adapters` writes, parses the
+`abi scalar`, `abi buffer` and `abi handle` blocks with the same parsers the
+build path uses, renders each wrapper and writes one combined `mod wN { … }`
+source to `<dir>/wrappers.rs`. It never starts cargo, the front-end or the JIT,
+and it refuses a document with no adapter blocks, a malformed block, or a run
+that also names modules (exit 2 for the grammar error, 1 for the operational
+one). The CLI test writes a scalar document with a fake `cargo` on PATH and
+requires exit 0 plus the rendered `rs_scale__adapter` wrapper and its native
+signature, with the cargo marker absent; a comment-only document is refused with
+`no adapter blocks`. `cargo test --offline --lib cli` → 17 passed and
+`cargo test --offline --test cli` → 8 passed.
+
+This is rendering, not building: it does not compile the generated source, link
+a provider, or choose a provider generation. Those stay on the build path
+(`adapters::build_at`, called by a module run).
+
+**Retained instance callbacks and reload retirement (2026-11-25).** A `__with`
+callback is call-scoped and one-shot. A provider that keeps the pointer needs an
+instance scope, so every handle wrapper now renders three more exports beside
+`<target>__with`: `<target>__with__retain(lo, hi, callback)` opens an
+instance-lifetime scope at the crate's `PROVIDER_GENERATION`, checks the handle
+through the same registry, registers the callback and keeps the checked token;
+`<target>__with__invoke_retained(lo, hi, out)` is the host seam onto the same
+trampoline (the token is reusable, and a caught panic is `STATUS_PANIC`); and
+`<target>__with__retire_callbacks(generation)` closes every retained scope at or
+below that generation and retires it in the registry. `load_for_jit` records each
+mapped crate and, before loading the next generation, calls the previous
+builds' own retirement hooks through their own image (`dlsym` is image-scoped:
+every generation exports the same hook name). The hook is `dlsym`ed from the
+crate the host already has, so no second symbol table is needed.
+
+**The provider protocol.** A retained callback is useless to native code unless
+the provider can invoke it, so the handle descriptor gained an optional
+`subscribe <symbol>` line. When it is present, `__retain` also calls the
+provider's subscription entry point with `(owner_ptr, dispatch, slot)`: `dispatch`
+is `unsafe extern "C-unwind" fn(slot: *mut c_void, out: *mut i64) -> i64` and
+`slot` is an opaque registry id, not a pointer into the wrapper's memory. The
+provider stores the pair and calls `dispatch(slot, &mut value)` whenever the
+event arrives. The wrapper crate stays mapped for the process, so the slot
+stays valid; retirement closes the scope behind the id, and the trampoline
+returns `STATUS_REFUSED` instead of jumping into replaced JIT code. A provider
+that refuses the subscription (non-zero) makes `__retain` drop the entry, close
+the scope and return refusal: no token survives a failed handoff. The line is
+canonical text after `write` and before `params`; the compiler does not emit it
+yet, so it is a host/descriptor extension that the parser and renderer share.
+
+**Policy from the descriptor.** The handle descriptor's optional `callback`
+line names `lifetime=call|instance`, `thread=caller|any`,
+`reentrancy=forbidden|nested` and `error=status|retire`, in that canonical
+order. Every field is optional and an absent one keeps the wrapper's previous
+fixed value, so a descriptor written before the line renders exactly what it
+used to. `lifetime` gates the retained API as a whole: `call` renders no
+`__retain`/`__invoke_retained`/retirement hook, and a descriptor naming both
+`lifetime=call` and `subscribe` is refused (a call-scoped callback cannot be
+handed to a provider). `thread`, `reentrancy` and `error` feed both the
+`__with` scope and the retained scope; `reentrancy` and `error` default
+differently per wrapper (`forbidden`/`status` for `__with`, `nested`/`retire`
+for a retained token) so an unset field changes nothing.
+
+Evidence: `cargo test --offline --test callbacks_retained` → 3 passed. The first
+builds two real wrapper generations against a provider cdylib, mints a handle in
+generation one, retains a callback and invokes it twice through the host seam
+(16 from the provider's value each time), loads generation two through
+`load_for_jit`, and asserts the first build's retained token is now refused with
+the out slot untouched while generation two retains and invokes its own. The
+second is the provider protocol: the provider stores the dispatch/slot pair and
+the *test calls the provider's own `fire` export*, which invokes the trampoline
+it was handed (16 twice); after the reload the same provider call is refused
+with the out slot untouched, and the second generation's subscription replaces
+the pair and returns 3. A failure to retire would return 16 a third time; a
+retirement that cleared all generations would also refuse generation two. The
+third test is the policy: the canonical text keeps `thread=any
+reentrancy=nested error=retire`, the rendered `__with` and retained scopes
+carry `ThreadAffinity::AnyThread` / `Reentrancy::Nested` /
+`ErrorPolicy::RetireOnPanic`, `lifetime=call` removes the retained API and its
+retirement hook, `lifetime=call` with a `subscribe` symbol is refused, and at
+run time a retained token opened on the test thread is refused (status 1, no
+value) by a spawned thread under the default caller affinity and accepted
+(16) under `thread=any`.
+
+Limitations: `Reentrancy::Nested` and `RetireOnPanic` are the instance policy,
+so a panicking retained callback retires that token. Affinity is checked
+between the scope's opening thread and the invoking thread, so the `thread`
+field changes behavior only for a retained token invoked later: a `__with`
+scope is opened by the caller inside the same call. The compiler emits neither
+the `callback` line nor a `subscribe` symbol yet (no `Handle_Ownership` pragma
+for them), so a module compiled from source gets the defaults and cannot
+request the provider protocol without the host editing its descriptor. A
+`panic=abort` provider still aborts the worker, and a panic in a *different*
+dylib's panic runtime cannot be caught (`Rust cannot catch foreign
+exceptions`), so retention assumes the provider does not unwind.
+
+**Result/Option tags (bounded start, 2026-11-25).** The scalar descriptor now
+carries `status checked` plus `failure <tag>` / `success <tag>`, and the
+generated `<symbol>__checked` returns the `Option` union pointer directly: tag
+at offset 0, encoded payload at offset 8, which is the layout the `match`
+lowering already reads. A word that does not decode, a provider panic, or an
+unencodable payload returns the failure tag, so a refusal never reaches the
+module as the payload word. The compiler half detects an `rs_*` import whose
+declared result is the built-in `Option[T]` (cases `None` then `Some`, scalar
+payload; tags from the union's own layout), emits the status lines in
+`adapter_block`, and lowers the call to `<symbol>__checked` instead of the
+payload symbol. The payload wrapper is still rendered, so a caller naming the
+plain symbol is unchanged.
+
+Evidence: `cargo test --offline --lib interface` → 32 passed, including
+`a_checked_option_descriptor_renders_a_tagged_union_wrapper` (canonical
+round-trip, distinct tags, the union allocation, the shared failure value and
+the five refusals); `cargo test --offline --test checked_adapters` → 3 passed. Two of them measure
+the wrapper in isolation (the provider and the rendered Option wrapper in one
+cdylib: `Some` is tag 1 with the encoded payload at offset 8, a bad `Bool` word
+and a provider panic are tag 0 with no payload, a false flag is still a
+successful `Some`). The third is the live path:
+`the_jit_calls_the_checked_wrapper_the_compiler_selected` runs the real
+front-end over `umbrella/modules/CheckedOption.aum`, asserts the emitted
+descriptor carries `status checked` with tags 0/1, builds and loads the
+wrappers through `load_for_jit`, compiles the emitted CPS and executes it. The
+module returns 11 only when the JIT's `match` reads tag 1 and payload 7 from
+the union; a wrong tag, a payload-word return or an unselected checked wrapper
+returns a different number. `dune build lib/ bin/ -j 4` under `nix develop
+"git+file://$PWD#ocaml"` → exit 0.
+
+**How the selection reaches the lowering (2026-11-25).** The typer admits
+exactly the built-in `Option[T]` with an adapter-scalar payload:
+`TypingPass.checked_option_result` resolves the `NamedType`, requires the
+`Austral.Pervasive` declaration, and checks the `None` (no payload) / `Some`
+(one slot) shape. It records `(failure tag, success tag, payload)` in
+`lib/CheckedOptions.ml`, keyed by the external symbol. That indirection is
+load-bearing: a foreign signature can name a union monomorph whose definition
+was emitted in the importing module, so `Compiler_cps`'s own
+`MUnionMonomorph` table does not hold that id — without the typer's record the
+result looks like a non-scalar and the descriptor is refused. The CPS pass
+uses the record to set the descriptor's `returns` (the mono form of the admitted
+scalar) and registers a synthetic `None`/`Some` layout under the signature's id,
+so the JIT's `match` compares a loaded tag against the union order rather than
+the source order of the `when` clauses. The tags written to the descriptor are
+read back from the layout the `match` lowering actually holds for that id — a
+module that uses the union itself carries its own `MUnionMonomorph`, whose case
+order is not always the declaration order the typer saw. With no local layout
+the registered `None`/`Some` shape is that layout, so both paths agree with the
+dispatch.
+
+**Either and Result (two payload-bearing cases, 2026-11-25).** `Either[L, R]`
+and `Result[T, E]` are the named two-case unions an `rs_*` result may declare
+whose cases both hold a value, so a refusal is not an empty case. They take one
+transport: the scalar descriptor grows four optional lines — `union Either`,
+`failure-case Left`, `success-case Right`, `failure-payload Int64` (or `union
+Result`, `failure-case Err`, `success-case Ok`) — and the wrapper's provider
+writes `[tag, payload]` into an out pair (`fn target(params..., out: *mut
+u64) -> i64`; status `0` means filled). The wrapper validates the tag (failure,
+success, else refusal) and decodes/re-encodes the payload at the case's
+declared scalar type; a non-zero status, a panic, an unknown tag or an
+undecodable payload all return the failure tag with payload `0`. A
+`failure-payload` line is what selects this form, so an `Option` descriptor is
+byte-identical to before.
+
+The admitted set is the typer's `checked_payload_unions` table
+(`Either`/`Left`/`Right`, `Result`/`Err`/`Ok`), and `Result` is now a built-in
+of `Austral.Pervasive` (`Ok` is argument 0, `Err` argument 1). The tags are the
+ones the JIT reads, not the ones the declaration suggests. `EitherImport.aum`'s
+own `Either[Int64, Int64]` monomorph lists `Right` before `Left`, so the
+descriptor emits `failure 1` / `success 0`, and the provider must write tag 0
+for `Right` and 1 for `Left` (the descriptor's tags, not Rust's enum order).
+`ResultImport.aum`'s `Result` monomorph lists `Err` before `Ok`, so its
+descriptor emits `failure 0` / `success 1`; the Result test reads those tags
+back from the descriptor and writes the provider against them, which is the tag
+test for that shape.
+
+**Owned-output cleanup (2026-11-25).** The checked wrapper allocates the union
+it returns (`Box::into_raw`), so it also exports `<symbol>__free`. The `match`
+lowering copies the tag and every slot a case binds into locals, calls the free
+symbol, and only then dispatches on the copies: a `return` inside a case cannot
+skip the release, and no case body reads freed memory. The free function
+recognises the wrapper's own static refusal value (and null) and does not free
+it; every answered call is a one-allocation Box. The transport admits scalar
+payloads, so a copied word owns nothing and needs no release of its own.
+The conversion tables are sequenced explicitly in `MBlock` (`let first = … in
+let second = …`) because OCaml's right-to-left argument evaluation would
+otherwise register a temp's ownership after the `match` that consumes it.
+
+Evidence: `cargo test --offline --test either_adapters` → 4 passed. The
+descriptor test measures both case names, the tags and the round-trip, refuses
+a partial union block, and requires the `__free` export; the wrapper test
+measures both cases and every refusal through the real ABI (wrong payload,
+unknown tag, non-zero status, a `Bool` word of 2) plus freeing an answered
+union, freeing the shared refusal value, and a null release; the two live tests
+run the real front-end over `umbrella/modules/EitherImport.aum` and
+`ResultImport.aum`, assert the emitted descriptor carries the union, both case
+names and `failure-payload Int64` with the layout's tags (Either 1/0, Result
+0/1), build and load the wrapper, require the CPS to name
+`<symbol>__free`, compile it, and execute `computeRight` → 11 / `computeLeft` →
+22 and `computeOk` → 11 / `computeErr` → 22. `cargo test --offline --lib --test
+checked_adapters --test callbacks_retained` → 110/3/3 passed; `dune build lib/
+bin/ -j 4` under `nix develop "git+file://$PWD#ocaml"` → exit 0. Both fixtures
+are in `scripts/cps-corpus` (marked `@cps`, because the checked call is
+JIT-only and the C backend refuses the generated symbol): `scripts/isa-census
+--corpus` → 14 modules, 992 opcode reads, 23 distinct, 23 declared, 0
+uncovered, and the empty `UNREACHABLE_OPCODES` pin still holds.
+
+Limitations: a `Result`/`Either` whose error case is empty is not admitted
+(the `Option` arm is name-based). The release is emitted for the `match` that
+consumes the call — directly, or through the local/temp the value is bound to
+(the table follows the name until the match, and a rebinding clears it). A
+result that is never matched, or whose name is rebound first, is not released —
+a leak, not a wrong free, and the linear type system makes the unconsumed value
+a type error in the fixtures' shape. A provider in a separate
+dylib cannot have its panic caught by the wrapper's `catch_unwind` (`Rust
+cannot catch foreign exceptions`: each Rust dylib carries its own panic
+runtime), so the live test's provider does not panic; the
+caught-panic-to-failure mapping is measured in the same-crate wrapper tests. A
+checked Option import whose union monomorph is missing locally is resolved by
+shape; the compiler refuses rather than guesses when more than one
+`Option`-shaped layout exists.
