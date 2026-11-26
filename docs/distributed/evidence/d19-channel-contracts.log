@@ -104,4 +104,4 @@ $ python3 scripts/check-channel-contracts
 [pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
 
 $ python3 scripts/check-distributed-contracts
-[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer dbb7e4e
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer 7b20b24
