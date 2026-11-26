@@ -5754,8 +5754,9 @@ then read on `.declQuotPB_at` — `at sd1254: store overflow` — is `§13.62l`:
 constant that is 31 % short, not a rejection.
 
 <!-- 13.62c-sweep:begin -->
-**Where the namespace sweep stands.** The run in flight has decided
-**2421 of the 3975 declarations**, and the ledger holds **2476 rows,
+**Where the namespace sweep stands**, as the log read at
+`2026-11-26T15:17`. The run in flight has decided
+**2451 of the 3975 declarations**, and the ledger holds **2476 rows,
 every one of them a pass** — a row is appended only for a declaration
 `mm0-c` accepted, so a declaration that failed leaves none. The histogram
 below is what the log has printed so far; it is not folded as a verdict,
@@ -5763,16 +5764,16 @@ because its largest class names a bound:
 
 | class | rows |
 | --- | ---: |
-| `mm0-rs ✗ over 10 GiB` | 17 |
+| `mm0-rs ✗ over 10 GiB` | 22 |
 | `mm0-rs ⏱ over 240 s` | 10 |
-| `emit ⏱ over 240 s` | 4 |
+| `emit ⏱ over 240 s` | 5 |
 | `mm0-c ✗ at sd1254: store overflow` | 1 |
 
-(17 of those rows are the `over 10 GiB` class alone.)
+(22 of those rows are the `over 10 GiB` class alone.)
 
 **Nothing in that histogram is classified here yet.** A bound names a
 size only once a bigger one has been tried, and the re-measurement of the
-17 `over 10 GiB` rows at 20 G runs behind the sweep
+22 `over 10 GiB` rows at 20 G runs behind the sweep
 (`probe-10gib.sh`, its output in `probe-10gib.log`), rather than being
 assumed: their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`
 against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
