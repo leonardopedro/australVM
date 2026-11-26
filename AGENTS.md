@@ -113,6 +113,15 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   as an explained gap, never as a false failure.
 - `scripts/check-links` — relative markdown links resolve
   (CI: `.github/workflows/linkcheck.yml`).
+- `scripts/avm-test-census [--status N] <log>` — the avm-pkg CI step's test
+  census (one `::notice`/`::error` annotation per test binary, the log tail as
+  `::error` annotations on failure, and the "did not compile" line when no
+  `test result:` appeared). `--status` is cargo's exit status, which the script
+  exits with, so the step still fails on a red suite. `selftest` exercises the
+  green, red, compile-failure and usage paths against fixtures — the red path is
+  the one the step is read through, so it has its own case — and the avm-pkg job
+  runs it before `cargo test` (`build-and-test.yml`), which is what keeps it
+  from rotting.
 - `scripts/ci-logs` — reads a GitHub Actions job's log through the REST API
   with `GH_TOKEN` (or `GITHUB_TOKEN`) from the environment, because the web log
   needs admin rights. No arguments: the latest run on the current branch, its

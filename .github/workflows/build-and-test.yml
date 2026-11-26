@@ -331,58 +331,22 @@ jobs:
       # reported as annotations, which the run page shows on its own: one line
       # per test binary (name + passed/failed/ignored) plus the tail of any
       # failure. A compile error leaves no `test result:` line, so the census
-      # says that instead of printing nothing.
+      # says that instead of printing nothing. The census itself is
+      # `scripts/avm-test-census`, so its failure path (`::error` level, the
+      # tail annotations, the compile-failure line) has a fixture in the repo and
+      # the `selftest` below runs in the job that depends on it.
       - name: Run avm-pkg tests (142 passed / 6 ignored, 7 binaries, measured 2026-11-26)
         working-directory: safestos/pkg
         run: |
           # `pipefail` is load-bearing: without it `tee`'s 0 would report a
           # failing `cargo test` as a green step.
           set -o pipefail
+          bash "$GITHUB_WORKSPACE/scripts/avm-test-census" selftest
           log="$RUNNER_TEMP/avm-pkg-tests.log"
           status=0
           cargo test --workspace 2>&1 | tee "$log" || status=$?
-          # Cargo colours its output on the runner even through a pipe, so the
-          # escape sequences are stripped before the `Running`/`Doc-tests`
-          # prefixes are matched: with them in place every line was attributed
-          # to an empty binary name (observed on 3b47bfdc). Empty doc-test runs
-          # are skipped, both for noise and because GitHub shows at most ten
-          # annotations per step.
-          awk '
-            {
-              line = $0
-              gsub(/\033\[[0-9;]*m/, "", line)
-              if (line ~ /^[[:space:]]*Running /) {
-                if (match(line, /\(([^)]*)\)/)) {
-                  bin = substr(line, RSTART + 1, RLENGTH - 2)
-                  sub(/.*\//, "", bin)
-                  sub(/-[0-9a-f]+$/, "", bin)
-                } else {
-                  split(line, f, /[[:space:]]+/)
-                  bin = f[3]; sub(/.*\//, "", bin); sub(/\..*/, "", bin)
-                }
-              } else if (line ~ /^[[:space:]]*Doc-tests /) {
-                sub(/^[[:space:]]*Doc-tests[[:space:]]+/, "", line)
-                bin = "doc-tests " line
-              } else if (line ~ /^test result:/) {
-                sub(/; finished in .*/, "", line)
-                if (bin ~ /^doc-tests / && line ~ / 0 passed; 0 failed/) next
-                printf "%s: %s\n", bin, line
-              }
-            }
-          ' "$log" > "$RUNNER_TEMP/census.txt"
-          if [ ! -s "$RUNNER_TEMP/census.txt" ]; then
-            echo "[avm-pkg] no test binary reported a result: the workspace did not compile" > "$RUNNER_TEMP/census.txt"
-          fi
-          if [ "$status" -eq 0 ]; then level=notice; else level=error; fi
-          while IFS= read -r line; do
-            echo "::$level title=avm-pkg test census::$line"
-          done < "$RUNNER_TEMP/census.txt"
-          if [ "$status" -ne 0 ]; then
-            tail -20 "$log" | while IFS= read -r line; do
-              echo "::error title=avm-pkg test output::$line"
-            done
-          fi
-          exit "$status"
+          # Exits with cargo's status, so the step still fails on a red suite.
+          bash "$GITHUB_WORKSPACE/scripts/avm-test-census" --status "$status" "$log"
 
       # The two §3 hot-store rows as a smoke, on a release binary because a
       # debug build's per-call overhead would measure the wrong thing: a
