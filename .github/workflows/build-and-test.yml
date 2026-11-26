@@ -327,7 +327,7 @@ jobs:
           restore-keys: |
             avm-pkg-${{ runner.os }}-
 
-      - name: Run avm-pkg tests (130 passed / 6 ignored, 7 binaries, measured 2026-11-18)
+      - name: Run avm-pkg tests (141 passed / 6 ignored, 7 binaries, measured 2026-11-26)
         run: cargo test --workspace
         working-directory: safestos/pkg
 
