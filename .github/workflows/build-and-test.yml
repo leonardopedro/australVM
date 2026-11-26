@@ -337,8 +337,11 @@ jobs:
 
       # The log of a failed step needs admin rights, so the per-binary split is
       # reported as annotations, which the run page shows on its own: one line
-      # per test binary (name + passed/failed/ignored) plus the tail of any
-      # failure. A compile error leaves no `test result:` line, so the census
+      # per test binary (name + passed/failed/ignored) plus, on failure, the
+      # lines the census does not already carry (`failures:`, the test names,
+      # the `error:` line) — not the `Compiling`/`Running`/`test result:` lines
+      # it repeats, since GitHub shows ten annotations per step. A compile
+      # error leaves no `test result:` line, so the census
       # says that instead of printing nothing. The census itself is
       # `scripts/avm-test-census`, so its failure path (`::error` level, the
       # tail annotations, the compile-failure line) has a fixture in the repo and
