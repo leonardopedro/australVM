@@ -103,6 +103,17 @@ from mm0_emit import (  # noqa: E402  (sibling module, not a package)
     trust_split_line,
 )
 
+# A derivation is walked by recursion (`Deriver._enc`), and a `json.loads`
+# reached from inside that walk counts its own frames against Python's limit:
+# at the default 1 000 the scanner raised `RecursionError: maximum recursion
+# depth exceeded while decoding a JSON object` on 10 of `ConLeche.Model`'s
+# declarations, which left them without a statement digest (§13.62i). That is
+# a limit, not a parse failure: 4 000 decodes `.eqRecFit` (measured), and the
+# record's own nesting is 4 deep, so the depth is the walk's. 20 000 leaves
+# room for terms deeper than this export carries and stays far from the C
+# stack.
+sys.setrecursionlimit(max(sys.getrecursionlimit(), 20_000))
+
 # ── paths ────────────────────────────────────────────────────────────────
 
 AVM = Path(__file__).resolve().parent.parent          # australVM/
