@@ -1,0 +1,43 @@
+$ cargo test --offline -p unfer_protocol --lib channel_contracts
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running unittests src/lib.rs (target/debug/deps/unfer_protocol-76f461d596f970e0)
+
+running 13 tests
+test channel_contracts::tests::a_local_timeout_is_not_a_completeness_frontier ... ok
+test channel_contracts::tests::a_capacity_needs_a_positive_bound ... ok
+test channel_contracts::tests::a_nonmonotone_decision_with_an_ordered_close_is_accepted ... ok
+test channel_contracts::tests::a_nonmonotone_decision_without_completeness_is_refused ... ok
+test channel_contracts::tests::a_quorum_threshold_cannot_exceed_its_members ... ok
+test channel_contracts::tests::a_packet_count_is_not_a_quorum ... ok
+test channel_contracts::tests::an_ineligible_member_never_counts_toward_quorum ... ok
+test channel_contracts::tests::an_unordered_fold_refuses_subtraction ... ok
+test channel_contracts::tests::at_least_once_does_not_promote_itself ... ok
+test channel_contracts::tests::exactly_once_marker_needs_exactly_once_delivery ... ok
+test channel_contracts::tests::per_connection_dedup_cannot_be_exactly_once ... ok
+test channel_contracts::tests::per_connection_fifo_does_not_order_a_reconnect_retry ... ok
+test channel_contracts::tests::total_order_orders_a_reconnect_retry ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 353 filtered out; finished in 0.00s
+
+
+$ cargo test --offline -p unfer_protocol --lib
+test ingest::tests::the_fuzz_properties_hold_over_a_generated_corpus ... ok
+
+test result: ok. 366 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+
+
+$ scripts/check-channel-contracts --selftest
+[pass] D19 checker refuses: duplicate hook id
+[pass] D19 checker refuses: unknown kind
+[pass] D19 checker refuses: unknown contract
+[pass] D19 checker refuses: missing marker
+[pass] D19 checker refuses: orphan marker
+[pass] D19 checker refuses: wrong file
+[pass] D19 checker refuses: unmarked hook
+[pass] D19 selftest: 7 mutation control(s) refused
+
+$ scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+
+$ scripts/check-distributed-contracts
+[pass] D00 contracts: 84 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer 1026b4d
