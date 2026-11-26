@@ -1,0 +1,45 @@
+# D21 (claim 2): the authority-epoch monotonicity claim, proved symbolically
+# with Why3 instead of only model-checked over a finite state space.
+#
+# Theory: docs/distributed/why3/epoch_monotonicity.mlw
+# Gate:   scripts/check-why3-epoch (runs Why3 with -P z3 only, requires every
+#         goal Valid, and pins the goal count so an emptied theory cannot pass).
+#
+# Proved: step_preserves_wf (E3), step_non_decreasing (E2),
+# accepted_takeover_strictly_raises (E1/E4), stale_takeover_changes_nothing
+# (E1), first_epoch_is_authority, and run_non_decreasing (induction over the
+# operation list: any run ends at an epoch at least where it started).
+
+$ why3 --version
+Why3 platform, version 1.8.2
+
+$ bash scripts/check-why3-epoch
+File "docs/distributed/why3/epoch_monotonicity.mlw", line 84, characters 4-37:
+Goal step_preserves_wf.
+Prover result is: Valid (0.00s, 4334 steps).
+
+File "docs/distributed/why3/epoch_monotonicity.mlw", line 87, characters 4-51:
+Goal step_non_decreasing.
+Prover result is: Valid (0.01s, 7717 steps).
+
+File "docs/distributed/why3/epoch_monotonicity.mlw", line 90, character 4 to line 92, character 33:
+Goal accepted_takeover_strictly_raises.
+Prover result is: Valid (0.01s, 5458 steps).
+
+File "docs/distributed/why3/epoch_monotonicity.mlw", line 95, characters 4-56:
+Goal stale_takeover_changes_nothing.
+Prover result is: Valid (0.01s, 6243 steps).
+
+File "docs/distributed/why3/epoch_monotonicity.mlw", line 98, character 4 to line 99, character 27:
+Goal first_epoch_is_authority.
+Prover result is: Valid (0.01s, 10234 steps).
+
+File docs/distributed/why3/epoch_monotonicity.mlw:
+Goal run_non_decreasing'vc.
+Prover result is: Valid (0.19s, 607298 steps).
+PASS: 6/6 goals valid (why3 1.8.2)
+
+# Why3's prover table does not recognise Z3 5.1.0 and says so during
+# `why3 config detect`, but it loads the prover and discharges every goal. The
+# theory uses mathematical integers; the wrapping u64 top of the real
+# next_position is checked separately in unfer_consensus/src/jobs.rs.

@@ -1,35 +1,36 @@
+# H05-H07, H10: a restart reads what the previous incarnation wrote, so the
+# premise is the publish protocol. The contract records writer/reader, schema,
+# sync side, recovery rule and reader count; `atomic_snapshot()` is the marker.
+# The ledger additionally declares the monotone rule documented in
+# d19-monotone-snapshot.log.
+
 $ cargo test --offline -p unfer_protocol --lib storage_contracts
-running 6 tests
+running 9 tests
 test storage_contracts::tests::a_contract_with_two_writers_has_no_publish_order ... ok
-test storage_contracts::tests::every_live_storage_contract_yields_the_marker ... ok
+test storage_contracts::tests::a_watermark_refuses_a_sequence_below_the_one_it_published ... ok
+test storage_contracts::tests::a_watermark_seeded_from_a_load_refuses_the_state_it_loaded_over ... ok
 test storage_contracts::tests::a_synced_replace_and_a_torn_tail_log_both_yield_the_marker ... ok
+test storage_contracts::tests::every_live_storage_contract_yields_the_marker ... ok
 test storage_contracts::tests::only_the_journal_claims_a_byte_bound ... ok
+test storage_contracts::tests::only_the_ledger_declares_a_monotone_publish_rule ... ok
 test storage_contracts::tests::publishing_the_name_before_the_sync_yields_no_marker ... ok
 test storage_contracts::tests::resetting_a_damaged_snapshot_yields_no_marker ... ok
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 370 filtered out; finished in 0.00s
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 375 filtered out; finished in 0.00s
 
 $ cargo test --offline -p unfer_consensus --features network --lib net::tests
-running 22 tests
+running 23 tests
 test net::tests::the_storage_gate_refuses_a_snapshot_that_is_not_crash_safe ... ok
-test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 162 filtered out; finished in 0.09s
+test net::tests::a_stale_writer_cannot_publish_an_older_ledger_state ... ok
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 166 filtered out; finished in 0.08s
 
 $ cargo test --offline -p unfer_protocol --lib
-running 376 tests
-test storage_contracts::tests::a_contract_with_two_writers_has_no_publish_order ... ok
-test storage_contracts::tests::a_synced_replace_and_a_torn_tail_log_both_yield_the_marker ... ok
-test storage_contracts::tests::every_live_storage_contract_yields_the_marker ... ok
-test storage_contracts::tests::only_the_journal_claims_a_byte_bound ... ok
-test storage_contracts::tests::publishing_the_name_before_the_sync_yields_no_marker ... ok
-test storage_contracts::tests::resetting_a_damaged_snapshot_yields_no_marker ... ok
-test result: ok. 376 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s
+test result: ok. 384 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
 
 $ cargo test --offline -p unfer_consensus --features network --lib
-running 184 tests
-test net::tests::the_storage_gate_refuses_a_snapshot_that_is_not_crash_safe ... ok
-test result: ok. 184 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.36s
+test result: ok. 189 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.02s
 
 $ cargo test --offline -p unfer_consensus --features network --test phase6_testnet
-running 4 tests
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
 
 $ python3 scripts/check-channel-contracts
@@ -44,5 +45,3 @@ $ python3 scripts/check-channel-contracts --selftest
 [pass] D19 checker refuses: wrong file
 [pass] D19 checker refuses: unmarked hook
 [pass] D19 selftest: 7 mutation control(s) refused
-$ python3 scripts/check-distributed-contracts
-[pass] D00 contracts: 95 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer 5aa0ee0
