@@ -32,22 +32,22 @@ module LiquidFoldPremises
 
   (* --- verification conditions --- *)
 
-  (* g_16d205c2 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_16d205c2: forall e: int, acc: int, __result: int. ((true /\ (__result = (acc)))) -> __result >= acc
+  (* g_88af2b43 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
+  goal g_88af2b43: forall e: int, acc: int, __result: int. ((true /\ (__result = (acc)))) -> __result >= acc
 
-  (* g_ba46f553 — §5.9 FOLD (result half; the step obligation needs §4.4) *)
-  goal g_ba46f553: forall f: int, init: int, xs: int, __result: int. ((init >= 0 /\ (__result = (init)))) -> __result >= 0
+  (* g_4864987a — §5.9 FOLD (result half; the step obligation needs §4.4) *)
+  goal g_4864987a: forall f: int, init: int, xs: int, __result: int. ((init >= 0 /\ (__result = (init)))) -> __result >= 0
 
-  (* g_061755fa — §5.9 FOLD (init half) *)
-  goal g_061755fa: forall n: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((0 >= 0))
+  (* g_73fc4c97 — §5.9 FOLD (init half) *)
+  goal g_73fc4c97: forall n: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((0 >= 0))
 
-  (* g_295f370f — §5.9 FOLD (step half) *)
-  goal g_295f370f: forall n: int, __elem: int, __acc: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((__acc >= 0)) -> (((step (__elem) (__acc)) >= 0))
+  (* g_cb829400 — §5.9 FOLD (step half) *)
+  goal g_cb829400: forall n: int, __elem: int, __acc: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((__acc >= 0)) -> (((step (__elem) (__acc)) >= 0))
 
-  (* g_68b270dc — §5.9 FOLD (init half) *)
-  goal g_68b270dc: forall n: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((0 >= 0))
+  (* g_90c63b5b — §5.9 FOLD (init half) *)
+  goal g_90c63b5b: forall n: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((0 >= 0))
 
-  (* g_6baf9aa9 — §5.9 FOLD (step half) *)
-  goal g_6baf9aa9: forall n: int, __elem: int, __acc: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((__acc >= 0)) -> (((step (__elem) (__acc)) >= 0))
+  (* g_ec93a414 — §5.9 FOLD (step half) *)
+  goal g_ec93a414: forall n: int, __elem: int, __acc: int. ((n >= 0 /\ (((-9223372036854775808 <= n) /\ (9223372036854775807 >= n))))) -> ((__acc >= 0)) -> (((step (__elem) (__acc)) >= 0))
 
 end
