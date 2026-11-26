@@ -341,21 +341,33 @@ jobs:
           log="$RUNNER_TEMP/avm-pkg-tests.log"
           status=0
           cargo test --workspace 2>&1 | tee "$log" || status=$?
+          # Cargo colours its output on the runner even through a pipe, so the
+          # escape sequences are stripped before the `Running`/`Doc-tests`
+          # prefixes are matched: with them in place every line was attributed
+          # to an empty binary name (observed on 3b47bfdc). Empty doc-test runs
+          # are skipped, both for noise and because GitHub shows at most ten
+          # annotations per step.
           awk '
-            /^[[:space:]]*Running / {
-              bin = $0
-              if (match(bin, /\(([^)]*)\)/)) {
-                bin = substr(bin, RSTART + 1, RLENGTH - 2)
-                sub(/.*\//, "", bin)
-                sub(/-[0-9a-f]+$/, "", bin)
-              } else { bin = $2; sub(/.*\//, "", bin); sub(/\..*/, "", bin) }
-              next
-            }
-            /^[[:space:]]*Doc-tests / { bin = "doc-tests " $2; next }
-            /^test result:/ {
+            {
               line = $0
-              sub(/; finished in .*/, "", line)
-              printf "%s: %s\n", bin, line
+              gsub(/\033\[[0-9;]*m/, "", line)
+              if (line ~ /^[[:space:]]*Running /) {
+                if (match(line, /\(([^)]*)\)/)) {
+                  bin = substr(line, RSTART + 1, RLENGTH - 2)
+                  sub(/.*\//, "", bin)
+                  sub(/-[0-9a-f]+$/, "", bin)
+                } else {
+                  split(line, f, /[[:space:]]+/)
+                  bin = f[3]; sub(/.*\//, "", bin); sub(/\..*/, "", bin)
+                }
+              } else if (line ~ /^[[:space:]]*Doc-tests /) {
+                sub(/^[[:space:]]*Doc-tests[[:space:]]+/, "", line)
+                bin = "doc-tests " line
+              } else if (line ~ /^test result:/) {
+                sub(/; finished in .*/, "", line)
+                if (bin ~ /^doc-tests / && line ~ / 0 passed; 0 failed/) next
+                printf "%s: %s\n", bin, line
+              }
             }
           ' "$log" > "$RUNNER_TEMP/census.txt"
           if [ ! -s "$RUNNER_TEMP/census.txt" ]; then
