@@ -18,6 +18,7 @@ pub mod auth;
 pub mod callbacks;
 pub mod capstd_mod;
 pub mod capture;
+pub mod channel_contracts;
 pub mod cps;
 pub mod distributed;
 #[cfg(feature = "ecmascript")]
@@ -1203,6 +1204,22 @@ pub(crate) const DISTRIBUTED_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol {
         name: "au_dist_release_resource",
         addr: distributed::au_dist_release_resource as *const u8,
+    },
+    KernelSymbol {
+        name: "au_channel_acquire",
+        addr: channel_contracts::au_channel_acquire as *const u8,
+    },
+    KernelSymbol {
+        name: "au_channel_ordered",
+        addr: channel_contracts::au_channel_ordered as *const u8,
+    },
+    KernelSymbol {
+        name: "au_channel_exactly_once",
+        addr: channel_contracts::au_channel_exactly_once as *const u8,
+    },
+    KernelSymbol {
+        name: "au_channel_release",
+        addr: channel_contracts::au_channel_release as *const u8,
     },
 ];
 

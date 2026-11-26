@@ -1,0 +1,106 @@
+-- distributed finite trace certificate (D20, generated).
+--
+-- Source trace: mm0/fixtures/distributed_request_trace.json (sha256 0f4e5bb299809ee61d2f3a5ffe67caa1be1a0cf1adedcb1491b1367c4b41bd36)
+-- Target theory: docs/distributed.mm0 (sha256 9fe8030eaafb51895413ca8ccfa44f9d9659e4865a279f8e97fa32c9dfda56d4)
+-- trace length: 10
+-- transitions exercised: t_accept,t_open,t_persist,t_reject,t_release_applied,t_release_rejected,t_submit
+-- trust-split: structural=10 grounded=0 certificates=1
+-- theory coverage: used=e_open,e_submit,e_persist,e_accept,e_reject,e_release,tl_nil,tl_cons unused=st_idle,st_pending,st_durable,st_applied,st_rejected,trans,run
+-- assumptions: consensus ordering, D17 authority identity, TLS authentication
+-- assumed: 0 (-)
+
+-- distributed.mm0 — the D20 finite request-lifecycle theory.
+--
+-- The certificate is about one finite trace, not all runs. A trace is a word
+-- over the bounded event alphabet below; a proof is one `run_cons` per event,
+-- so mm0-c re-checks each transition instead of trusting the emitter.
+--
+-- The state carries the request identity (request id, payload digest, epoch).
+-- A matching response is an event with the same three values, and the
+-- durability boundary is a state transition: accept/reject are only reachable
+-- from `st_durable`, never directly from `st_pending`. The theory therefore
+-- rejects:
+--
+--   * a response with a changed request id, payload digest or epoch;
+--   * a response before the persistence boundary;
+--   * an event order that never reaches the response state;
+--   * a trace that ends with an unreleased receipt.
+--
+-- This is a finite trace certificate (D20), not an all-run safety proof. The
+-- consensus engine and the D17 authority remain assumptions outside this file.
+
+provable sort Prop;
+
+sort nat;                       -- request id, payload digest, epoch
+sort St;                        -- lifecycle state
+sort Ev;                        -- one request event
+sort L;                         -- a finite trace
+
+delimiter $ ( ) $;
+
+-- ── States ───────────────────────────────────────────────────────────────
+
+term st_idle: St;
+term st_pending (request: nat) (digest: nat) (epoch: nat): St;
+term st_durable (request: nat) (digest: nat) (epoch: nat): St;
+term st_applied (request: nat) (digest: nat) (epoch: nat): St;
+term st_rejected (request: nat) (digest: nat) (epoch: nat): St;
+
+-- ── Events ───────────────────────────────────────────────────────────────
+
+term e_open (request: nat) (digest: nat) (epoch: nat): Ev;
+term e_submit: Ev;
+term e_persist: Ev;
+term e_accept (request: nat) (digest: nat) (epoch: nat): Ev;
+term e_reject (request: nat) (digest: nat) (epoch: nat): Ev;
+term e_release: Ev;
+
+-- ── The transition relation ──────────────────────────────────────────────
+-- One axiom per edge. There is deliberately no `st_pending -> e_accept` or
+-- `st_pending -> e_reject`: a response before persistence has no rule.
+
+term trans (s: St) (e: Ev) (s2: St): Prop;
+
+axiom t_open (request digest epoch: nat):
+  $ trans st_idle (e_open request digest epoch) (st_pending request digest epoch) $;
+
+axiom t_submit (request digest epoch: nat):
+  $ trans (st_pending request digest epoch) e_submit (st_pending request digest epoch) $;
+
+axiom t_persist (request digest epoch: nat):
+  $ trans (st_pending request digest epoch) e_persist (st_durable request digest epoch) $;
+
+axiom t_accept (request digest epoch: nat):
+  $ trans (st_durable request digest epoch) (e_accept request digest epoch)
+      (st_applied request digest epoch) $;
+
+axiom t_reject (request digest epoch: nat):
+  $ trans (st_durable request digest epoch) (e_reject request digest epoch)
+      (st_rejected request digest epoch) $;
+
+axiom t_release_applied (request digest epoch: nat):
+  $ trans (st_applied request digest epoch) e_release st_idle $;
+
+axiom t_release_rejected (request digest epoch: nat):
+  $ trans (st_rejected request digest epoch) e_release st_idle $;
+
+-- ── Traces and runs ──────────────────────────────────────────────────────
+
+term tl_nil: L;
+term tl_cons (e: Ev) (l: L): L;
+
+term run (l: L) (s: St) (s2: St): Prop;
+
+axiom run_nil (s: St): $ run tl_nil s s $;
+
+axiom run_cons (e: Ev) (l: L) (s: St) (s2: St) (s3: St):
+  $ trans s e s2 $ > $ run l s2 s3 $ > $ run (tl_cons e l) s s3 $;
+
+term n1: nat; prefix n1: $1$ prec max;
+term n7: nat; prefix n7: $7$ prec max;
+term n8: nat; prefix n8: $8$ prec max;
+term n11: nat; prefix n11: $11$ prec max;
+term n12: nat; prefix n12: $12$ prec max;
+
+def distributed_request_lifecycle_timeline: L = $  (tl_cons (e_open 7 11 1) (tl_cons e_submit (tl_cons e_persist (tl_cons (e_accept 7 11 1) (tl_cons e_release (tl_cons (e_open 8 12 1) (tl_cons e_submit (tl_cons e_persist (tl_cons (e_reject 8 12 1) (tl_cons e_release tl_nil))))))))))  $;
+pub theorem distributed_request_lifecycle: $ run distributed_request_lifecycle_timeline st_idle st_idle $ = '(run_cons t_open (run_cons t_submit (run_cons t_persist (run_cons t_accept (run_cons t_release_applied (run_cons t_open (run_cons t_submit (run_cons t_persist (run_cons t_reject (run_cons t_release_rejected run_nil))))))))));
