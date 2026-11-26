@@ -1,0 +1,50 @@
+-- umbrella/modules/EitherImport.aum — U15b's named two-case union.
+--
+-- `Either[Int64, Int64]` is the second aggregate result the typer admits across
+-- an `rs_*` boundary. Both cases carry a payload, so the checked wrapper cannot
+-- use an empty failure case to signal a refusal: its provider writes `[tag,
+-- payload]` into an out pair instead. The descriptor names the union and its
+-- cases; the tags are the indices of the layout the JIT's `match` reads, which
+-- for this module's `Either` monomorph is `Right` = 0 and `Left` = 1. The
+-- provider therefore writes tag 0 for `Right(7)` and tag 1 for `Left(9)`.
+-- `computeRight` returns 11 only when the JIT reads the success tag with
+-- payload 7; `computeLeft` returns 22 only when it reads the failure tag with
+-- payload 9.
+pragma Unsafe_Module;
+
+module body EitherImport is
+    pragma Foreign_Import(External_Name => "rs_choose");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_choose(flag: Nat64): Either[Int64, Int64] is
+    end;
+
+    function computeRight(): Int64 is
+        case rs_choose(1) of
+            when Right(right: Int64) do
+                if right = 7 then
+                    return 11;
+                else
+                    return 0;
+                end if;
+            when Left(left: Int64) do
+                return 22;
+        end case;
+    end;
+
+    function computeLeft(): Int64 is
+        case rs_choose(0) of
+            when Left(left: Int64) do
+                if left = 9 then
+                    return 22;
+                else
+                    return 0;
+                end if;
+            when Right(right: Int64) do
+                return 11;
+        end case;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

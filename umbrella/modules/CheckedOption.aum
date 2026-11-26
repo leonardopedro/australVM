@@ -1,0 +1,36 @@
+-- umbrella/modules/CheckedOption.aum — U15's compiler-selected checked wrapper.
+--
+-- The import declares `Option[Int64]`, which is the one aggregate result the
+-- typer admits across an `rs_*` boundary. The compiler must select the checked
+-- wrapper: the descriptor carries `status checked` with the union's own tags,
+-- and the CPS call targets `rs_lookup__adapter__checked` instead of the payload
+-- wrapper. `compute` returns 11 only when the JIT's `match` reads tag 1 and
+-- payload 7 from the union the wrapper allocated. The refusal and caught-panic
+-- paths are measured in `umbrella/tests/checked_adapters.rs`, where the
+-- provider and the wrapper share one crate and therefore one panic runtime (a
+-- provider in a separate dylib cannot be caught).
+pragma Unsafe_Module;
+
+module body CheckedOption is
+    pragma Foreign_Import(External_Name => "rs_lookup");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_lookup(flag: Bool): Option[Int64] is
+    end;
+
+    function compute(): Int64 is
+        case rs_lookup(true) of
+            when Some(value: Int64) do
+                if value = 7 then
+                    return 11;
+                else
+                    return 0;
+                end if;
+            when None do
+                return 22;
+        end case;
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.
