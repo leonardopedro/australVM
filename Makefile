@@ -182,6 +182,23 @@ check-typing-proof:
 check-census:
 	@bash scripts/check-census
 
+# ── Lint: the CI `clippy (deny warnings)` step, locally ──────────────────────
+# Two reasons this enters the shell itself instead of trusting the caller's
+# PATH. clippy is not implied by `cargo`, so a shell without it resolves
+# `clippy-driver` from the host profile — measured 2026-11-26 as 1.99.0 against
+# the devshell's rustc 1.99.1, which fails with `E0514: found crate … compiled by
+# an incompatible version of rustc` before it lints a single line. And both
+# `clippy` and `rustfmt` are shell inputs now (flake.nix), so `nix develop` is
+# what makes the pair match this checkout. Claims nothing about the tree: it
+# checks the crate CI checks, with CI's flags.
+.PHONY: lint
+lint:
+	@nix develop "git+file://$(CURDIR)#ocaml" -c bash -c '\
+	  set -o pipefail; set -e; \
+	  cargo clippy --manifest-path safestos/cranelift/Cargo.toml --all-targets -- -D warnings; \
+	  cargo fmt --manifest-path safestos/cranelift/Cargo.toml -- --check; \
+	  echo "--- lint clean: clippy -D warnings and fmt --check (safestos/cranelift)"'
+
 .PHONY: drift-controls
 drift-controls: | check-bridge-fresh stage-bridge
 	@echo "--- drift controls: one full gate run each, $(DRIFT_JOBS) at a time"

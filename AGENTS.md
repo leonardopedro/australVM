@@ -61,6 +61,12 @@ in-process via native `uk_*` symbols registered in the JIT.
   `scripts/toy-witness` compiles `scripts/toy-witness.rs` with `rustc` on every
   run (no cargo, no build directory) and exits 2 when `rustc` is missing, which
   `verify-invariants` reports as a `[gap]`.
+  The same rule covers the Rust-side checks: `clippy` and `rustfmt` are **shell
+  inputs**, not host tools (measured 2026-11-26 — the devshell had neither, so
+  `clippy-driver` came from the user profile at 1.99.0 while the shell's `rustc`
+  was 1.99.1, and `cargo clippy` died with `E0514: found crate … compiled by an
+  incompatible version of rustc`). Keep them listed in `devShells.default` and
+  `devShells.ocaml`, and run lint through the shell: `make lint`.
 - **When `nix develop` itself will not build (measured 2026-11-13, aarch64).**
   This channel's `alt-ergo` fails inside its own build (`ocamlopt: I/O error:
   as --debug-prefix-map …` — no assembler reachable in that sandbox), and since
