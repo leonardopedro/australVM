@@ -252,3 +252,69 @@ fn build_stageprobe(dir: &Path) -> PathBuf {
     );
     target.join("release/libstageprobe.so")
 }
+
+/// U21 bounded start: a compiler-emitted descriptor document, on its own, is
+/// enough to write the provider wrappers. The same blocks the build path parses
+/// are rendered into one `wrappers.rs`, and no cargo/front-end/JIT runs.
+#[test]
+fn a_descriptor_document_renders_wrappers_without_a_build() {
+    let dir = scratch("wrappers");
+    let (tools, cargo_marker) = fake_cargo(&dir);
+    let document = dir.join("adapters.txt");
+    std::fs::write(
+        &document,
+        "schema 1\nabi scalar 1\nsymbol rs_scale__adapter\ntarget rs_scale\n\
+         params Int32,Float64\nreturns Float64\n",
+    )
+    .expect("write descriptor document");
+    let out = dir.join("rendered");
+
+    let output = run_with_path(
+        bin()
+            .arg("--descriptor-document")
+            .arg(&document)
+            .arg("--emit-wrappers")
+            .arg(&out),
+        &tools,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let source = std::fs::read_to_string(out.join("wrappers.rs")).expect("wrappers.rs");
+    assert!(
+        source.contains("pub extern \"C\" fn rs_scale__adapter("),
+        "the scalar wrapper is rendered from the document: {source}"
+    );
+    assert!(
+        source.contains("fn rs_scale(a0: i32, a1: f64) -> f64;"),
+        "the native target keeps its declared signature: {source}"
+    );
+    assert!(
+        !cargo_marker.exists(),
+        "render-only must not spawn a cargo build"
+    );
+}
+
+#[test]
+fn a_descriptor_document_without_adapter_blocks_is_refused() {
+    let dir = scratch("wrappers-empty");
+    let document = dir.join("adapters.txt");
+    std::fs::write(&document, "# a comment-only document describes no adapters\n")
+        .expect("write descriptor document");
+    let output = bin()
+        .arg("--descriptor-document")
+        .arg(&document)
+        .arg("--emit-wrappers")
+        .arg(dir.join("rendered"))
+        .output()
+        .expect("run umbrella");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no adapter blocks"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

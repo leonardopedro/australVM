@@ -340,6 +340,21 @@ let handle_ownership_accessor ~use_symbol =
     Text ", so it must be a non-empty plain identifier and must not be the constructor or the destructor: reading a value and creating or freeing it cannot share one provider symbol."
   ]
 
+let handle_ownership_writer ~write_symbol =
+  austral_raise DeclarationError [
+    Text "Invalid ";
+    Code "Write";
+    Text " symbol ";
+    Code write_symbol;
+    Text " in a ";
+    Code "Handle_Ownership";
+    Text " pragma. It names the provider's writer, which the generated ";
+    Code "__write";
+    Text " wrapper calls as ";
+    Code "unsafe extern \"C\" fn(*mut c_void, i64)";
+    Text ", so it must be a non-empty plain identifier and must not be the constructor, the destructor or the reader: writing a value and reading, creating or freeing it cannot share one provider symbol."
+  ]
+
 let handle_ownership_shape () =
   austral_raise DeclarationError [
     Text "A ";

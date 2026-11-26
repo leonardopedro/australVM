@@ -99,6 +99,45 @@ fn with_defaults(cli: umbrella::cli::Cli) -> umbrella::cli::Cli {
     cli
 }
 
+/// Render the provider wrappers a compiler-emitted descriptor document asks
+/// for. The document is the text `austral compile --emit-adapters` writes, so
+/// this path never needs the front-end, cargo or the JIT: it parses the same
+/// blocks the build path parses and writes the same combined `mod wN { … }`
+/// crate source `adapters::build_at` renders.
+fn render_wrapper_document(
+    document: &std::path::Path,
+    dir: &std::path::Path,
+) -> Result<(usize, PathBuf), String> {
+    let text = std::fs::read_to_string(document)
+        .map_err(|e| format!("cannot read descriptor document {}: {e}", document.display()))?;
+    let scalars = interface::Adapter::parse_descriptors(&text)?;
+    let buffers = interface::BufferAdapter::parse_descriptors(&text)?;
+    let handles = interface::HandleAdapter::parse_descriptors(&text)?;
+    let adapters: Vec<interface::GeneratedAdapter<'_>> = scalars
+        .iter()
+        .map(interface::GeneratedAdapter::Scalar)
+        .chain(buffers.iter().map(interface::GeneratedAdapter::Buffer))
+        .chain(handles.iter().map(interface::GeneratedAdapter::Handle))
+        .collect();
+    if adapters.is_empty() {
+        return Err(format!(
+            "{} contains no adapter blocks (`abi scalar`, `abi buffer` or `abi handle`)",
+            document.display()
+        ));
+    }
+    let mut source = String::new();
+    for (index, adapter) in adapters.iter().enumerate() {
+        let wrapper = adapter
+            .render()
+            .map_err(|e| format!("render {}: {e}", adapter.symbol()))?;
+        source.push_str(&format!("mod w{index} {{\n{wrapper}\n}}\n"));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let file = dir.join("wrappers.rs");
+    std::fs::write(&file, source).map_err(|e| format!("write {}: {e}", file.display()))?;
+    Ok((adapters.len(), file))
+}
+
 /// 1. cargo build the crate and hand back its cdylib path.
 ///
 /// U05: the artifact is identified, not guessed. `cargo metadata --no-deps`
@@ -359,6 +398,32 @@ fn main() {
         cli::Action::Run => {}
     }
     let cli = with_defaults(parsed.cli);
+
+    // U21 bounded start: a descriptor document on its own is enough to render
+    // the provider wrappers. No cargo, no front-end, no dlopen.
+    if let Some(document) = &cli.descriptor_document {
+        let dir = cli
+            .emit_wrappers
+            .as_ref()
+            .expect("`--descriptor-document` is paired with `--emit-wrappers`");
+        match render_wrapper_document(document, dir) {
+            Ok((count, file)) => {
+                event(serde_json::json!({
+                    "event": "wrappers",
+                    "count": count,
+                    "path": file.display().to_string(),
+                }));
+                eprintln!(
+                    "umbrella: rendered {count} provider wrapper(s) from {} to {}",
+                    document.display(),
+                    file.display()
+                );
+                return;
+            }
+            Err(e) => die(e),
+        }
+    }
+
     let austral = cli.austral.clone().expect("default front-end path");
     let default_crate_dir = cli.crate_dir.clone().expect("default crate dir");
 
@@ -440,7 +505,10 @@ fn main() {
     }
 
     // 2. explicit provider admission → declared exports bound to the exact
-    //    admitted image and registered before the JIT initializes.
+    //    admitted image and registered before the JIT initializes. The identity
+    //    checks run here, but the mapping itself waits for step 3's typed
+    //    contract check: a tampered signature or descriptor must never cause a
+    //    provider initializer to run.
     if !load_allowed {
         die(format!(
             "load is not authorized by the project; refusing to map {} \
@@ -457,10 +525,9 @@ fn main() {
             die(e);
         }
     }
-    // `ProviderSet` is retained to the end of `main`: the JIT bakes the
-    // registered addresses into code, so the mapping must outlive execution.
-    let mut _provider: Option<provider::ProviderSet> = None;
-    match &planned {
+    // What step 2b will map, decided here so every refusal that does not need
+    // the artifact still happens before the front-end runs.
+    let admission: Option<(Vec<PathBuf>, Vec<String>)> = match &planned {
         Some((doc, _)) => {
             let providers = if build_allowed {
                 vec![cdylib.clone()]
@@ -486,19 +553,7 @@ fn main() {
                         .to_string(),
                 );
             }
-            match provider::ProviderSet::load(&providers, &declared) {
-                Ok(set) => {
-                    let names: Vec<&str> = set.exports().iter().map(|(n, _)| n.as_str()).collect();
-                    eprintln!(
-                        "umbrella: admitted provider {} with {} declared export(s): {}",
-                        providers[0].display(),
-                        names.len(),
-                        names.join(", ")
-                    );
-                    _provider = Some(set);
-                }
-                Err(e) => die(e),
-            }
+            Some((providers, declared))
         }
         // No project document means no declared provider identity. Keep the
         // prototype's global mapping for that explicit DenyAll path; there is
@@ -511,8 +566,9 @@ fn main() {
                 "umbrella: mapped {} (RTLD_NOW|RTLD_GLOBAL; no declared exports)",
                 cdylib.display()
             );
+            None
         }
-    }
+    };
 
     // A denied call is a separate decision: build and load already ran, and
     // the report above says so instead of claiming containment.
@@ -568,6 +624,7 @@ fn main() {
         .map(|a| {
             serde_json::json!({
                 "kind": "scalar",
+                "abi_version": a.abi_version,
                 "symbol": a.symbol,
                 "descriptor": a.descriptor_text(),
             })
@@ -575,6 +632,7 @@ fn main() {
         .chain(buffers.iter().map(|a| {
             serde_json::json!({
                 "kind": "buffer",
+                "abi_version": a.abi_version,
                 "symbol": a.symbol,
                 "descriptor": a.descriptor_text(),
             })
@@ -582,6 +640,7 @@ fn main() {
         .chain(handles.iter().map(|a| {
             serde_json::json!({
                 "kind": "handle",
+                "abi_version": a.abi_version,
                 "symbol": a.symbol,
                 "descriptor": a.descriptor_text(),
             })
@@ -592,6 +651,50 @@ fn main() {
         if let Err(e) = trust::verify_artifact(doc, &typed_exports, descriptor_document.as_bytes())
         {
             die(e);
+        }
+    }
+
+    // U10: the pins this admitted artifact implies, written where a caller can
+    // paste them into the project document. Emitted only after the check above,
+    // so the record describes bytes that passed their trust gate.
+    if let Some(path) = &cli.emit_trust_record {
+        let record = trust::trust_record(&typed_exports, descriptor_document.as_bytes());
+        let text = match serde_json::to_string_pretty(&record) {
+            Ok(text) => text,
+            Err(e) => die(format!("cannot render the trust record: {e}")),
+        };
+        if let Err(e) = std::fs::write(path, format!("{text}\n")) {
+            die(format!(
+                "cannot write the trust record {}: {e}",
+                path.display()
+            ));
+        }
+        eprintln!(
+            "umbrella: wrote trust record for {} export(s) to {}",
+            typed_exports.len(),
+            path.display()
+        );
+    }
+
+    // 2b. The typed contract is admitted above, so only now may the provider be
+    //     mapped: its initializer must not run for a contract the project has
+    //     not approved. `ProviderSet` is retained to the end of `main`: the JIT
+    //     bakes the registered addresses into code, so the mapping must outlive
+    //     execution.
+    let mut _provider: Option<provider::ProviderSet> = None;
+    if let Some((providers, declared)) = admission {
+        match provider::ProviderSet::load(&providers, &declared) {
+            Ok(set) => {
+                let names: Vec<&str> = set.exports().iter().map(|(n, _)| n.as_str()).collect();
+                eprintln!(
+                    "umbrella: admitted provider {} with {} declared export(s): {}",
+                    providers[0].display(),
+                    names.len(),
+                    names.join(", ")
+                );
+                _provider = Some(set);
+            }
+            Err(e) => die(e),
         }
     }
     event(serde_json::json!({

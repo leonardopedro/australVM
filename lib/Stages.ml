@@ -603,6 +603,7 @@ module Mtast = struct
       mh_destructor: string;
       mh_params: int;
       mh_use: string option;
+      mh_write: string option;
     }
 
   and concrete_method =

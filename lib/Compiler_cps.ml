@@ -113,7 +113,80 @@ type adapter_requirement = {
   ar_target: string;
   ar_params: mono_ty list;
   ar_result: mono_ty;
+  (* U15: `(failure tag, success tag)` when the declared result is the
+     built-in `Option[T]` and the compiler selected the checked wrapper. The
+     block names the tags so the wrapper never guesses the union's case
+     order. *)
+  ar_checked: (int * int) option;
+  (* U15b: when the checked union carries a payload in *both* cases
+     ([Either[L, R]]), the descriptor also names the union, its case names and
+     the failure payload's scalar type: `(union, failure case, success case,
+     failure payload)`. The wrapper's provider then writes `[tag, payload]`,
+     because a tagless word cannot say which case a value belongs to. Absent
+     for the `Option` shape, so its block is unchanged. *)
+  ar_checked_union: (string * string * string * string) option;
 }
+
+(* U15: the call-site side of a checked Option import. The descriptor names
+   `<symbol>__checked`, which returns the union pointer the JIT already
+   represents (`tag` at offset 0, payload at offset 8), so the module's
+   `match` reads a real tag and a refusal or panic is `None`. *)
+type checked_option = {
+  co_checked_symbol: string;
+  co_payload: mono_ty;
+  co_failure_tag: int;
+  co_success_tag: int;
+  (* `None` for the `Option` shape (the failure case is empty); `Some left`
+     for `Either[L, R]`, whose `Left` payload the wrapper must encode and
+     whose tag the module's `match` reads. *)
+  co_failure_payload: mono_ty option;
+  co_union_name: string;
+  co_failure_case: string;
+  co_success_case: string;
+  (* U15c: the checked wrapper allocates the union it returns, so the generated
+     crate also exports `<symbol>__free`. The `match` lowering releases the
+     union after copying the tag and slots it dispatches on, which is what
+     keeps the module from leaking one allocation per checked call. *)
+  co_free_symbol: string;
+}
+
+let checked_option_adapters = Hashtbl.create 4
+
+(* U15c: checked-adapter results live in a local between the call and the
+   `match` that consumes them (the monomorphizer hoists the scrutinee into a
+   temporary). Keyed by the JIT variable name: the `match` lowering releases the
+   union and drops the entry, so one linear value has one release. *)
+let checked_owned_locals : (string, string) Hashtbl.t = Hashtbl.create 4
+
+(* The `<symbol>__free` export a checked adapter's result must be released
+   with, when `expr` is a call to that adapter. *)
+let checked_call_free (expr: Mt.mexpr): string option =
+  match expr with
+  | Mt.MConcreteFuncall (decl_id, _, _, _) ->
+      Option.map (fun co -> co.co_free_symbol)
+        (Hashtbl.find_opt checked_option_adapters decl_id)
+  | _ -> None
+
+(* Record whether `name` now owns a checked-adapter union; any other value
+   clears a previous ownership so a rebound name is never released twice. *)
+let register_checked_owned (name: string) (src: Mt.mexpr): unit =
+  match checked_call_free src with
+  | Some free -> Hashtbl.replace checked_owned_locals name free
+  | None -> Hashtbl.remove checked_owned_locals name
+
+(* The release a `match` must emit for its scrutinee, and the local to forget
+   when the value came through a variable. *)
+let rec checked_scrutinee_free (expr: Mt.mexpr): (string * string option) option =
+  match expr with
+  | Mt.MConcreteFuncall (decl_id, _, _, _) ->
+      Option.map (fun co -> (co.co_free_symbol, None))
+        (Hashtbl.find_opt checked_option_adapters decl_id)
+  | Mt.MLocalVar (id, _) | Mt.MTemporary (id, _) | Mt.MParamVar (id, _) ->
+      let name = ident_string id in
+      Option.map (fun free -> (free, Some name))
+        (Hashtbl.find_opt checked_owned_locals name)
+  | Mt.MCast (e, _) | Mt.MTypecast (e, _) -> checked_scrutinee_free e
+  | _ -> None
 
 let required_adapters : (string, adapter_requirement) Hashtbl.t = Hashtbl.create 8
 
@@ -128,6 +201,7 @@ type handle_requirement = {
   hr_destructor: string;
   hr_params: int;
   hr_use: string option;
+  hr_write: string option;
 }
 
 let required_handles : (string, handle_requirement) Hashtbl.t = Hashtbl.create 4
@@ -333,9 +407,23 @@ let adapter_block (req: adapter_requirement): (string, string) result =
              (fun ty -> match adapter_scalar_name ty with Some n -> n | None -> assert false)
              req.ar_params
          in
+         let status_lines =
+           match req.ar_checked, req.ar_checked_union with
+           | None, _ -> ""
+           | Some (failure, success), None ->
+             Printf.sprintf "status checked\nfailure %d\nsuccess %d\n"
+               failure success
+           | Some (failure, success), Some (union, fcase, scase, fpayload) ->
+             Printf.sprintf
+               "status checked\nfailure %d\nsuccess %d\nunion %s\nfailure-case \
+                %s\nsuccess-case %s\nfailure-payload %s\n"
+               failure success union fcase scase fpayload
+         in
          Ok (Printf.sprintf
-               "schema 1\nabi scalar 1\nsymbol %s\ntarget %s\nparams %s\nreturns %s\n"
-               req.ar_symbol req.ar_target (String.concat "," names) returns))
+               "schema 1\nabi scalar 1\nsymbol %s\ntarget %s\nparams %s\nreturns \
+                %s\n%s"
+               req.ar_symbol req.ar_target (String.concat "," names) returns
+               status_lines))
 
 (* Canonical text: fixed field order, one fact per line, descriptors sorted by
    symbol, blocks separated by a blank line. Regenerating is byte-identical.
@@ -346,19 +434,25 @@ let adapter_block (req: adapter_requirement): (string, string) result =
    registry tag is not written: the generator numbers registries when it reads
    the document. *)
 let handle_block (req: handle_requirement): string =
-  (* `use` is optional and sits where `HandleAdapter::descriptor_text` puts it:
-     after the destructor and before `params`. A provider without a reader
-     still gets the constructor and destructor wrappers. *)
+  (* `use`/`write` are optional and sit where `HandleAdapter::descriptor_text`
+     puts them: after the destructor, in that order, before `params`. A
+     provider without a reader still gets the constructor and destructor
+     wrappers, and one without a writer gets no mutation wrapper. *)
   let use_line =
     match req.hr_use with
     | Some accessor -> Printf.sprintf "use %s\n" accessor
     | None -> ""
   in
+  let write_line =
+    match req.hr_write with
+    | Some writer -> Printf.sprintf "write %s\n" writer
+    | None -> ""
+  in
   Printf.sprintf
     "schema 1\nabi handle 1\nsymbol %s__new\ntarget %s\ntype %s\nconstructor %s\n\
-     destructor %s\n%sparams %d\n"
+     destructor %s\n%s%sparams %d\n"
     req.hr_target req.hr_target req.hr_type_name req.hr_constructor
-    req.hr_destructor use_line req.hr_params
+    req.hr_destructor use_line write_line req.hr_params
 
 let adapter_descriptors_text (): (string, string) result =
   let items =
@@ -435,6 +529,83 @@ let rec find_union_case_offset cases target_tag_name current_offset =
         current_offset
       else
         find_union_case_offset rest target_tag_name (current_offset + 1)
+
+(* U15: an `rs_*` import whose declared result is the built-in `Option[T]` is
+   the one shape the compiler can hand back as a tagged union: `None` has no
+   payload and `Some` carries one scalar. Anything else keeps the bare payload
+   word. The tags are the union's own indices (case order is `None`, `Some` in
+   the pervasive declaration), read from the layout the `match` lowering uses. *)
+(* The layout of `Option[T]`, or `None` when these cases are not that shape.
+   Only `None` (no payload) and `Some` (one payload) qualify; a union with the
+   same case names but another shape is not the builtin. *)
+let option_layout cases =
+  let case name =
+    List.find_opt
+      (function MonoCase (n, _) -> Identifier.ident_string n = name)
+      cases
+  in
+  match case "None", case "Some" with
+  | Some (MonoCase (_, [])), Some (MonoCase (_, [MonoSlot (_, payload)])) ->
+    (match adapter_scalar_name payload with Some _ -> Some payload | None -> None)
+  | _ -> None
+
+let checked_option_of ~symbol ~result : checked_option option =
+  let cases_for id =
+    match Hashtbl.find_opt union_layouts id with
+    | Some cases -> Some cases
+    | None ->
+      (* A foreign signature can name a union monomorph whose definition was
+         emitted in the module that exports the interface, so this module's
+         `MUnionMonomorph` declarations do not hold that id. The shape is still
+         decidable when exactly one `Option`-shaped layout exists; with two
+         payload types the choice would be a guess, so it stays undescribed (an
+         error) instead. *)
+      let candidates =
+        Hashtbl.fold
+          (fun _ cases acc ->
+            match option_layout cases with Some _ -> cases :: acc | None -> acc)
+          union_layouts []
+      in
+      (match candidates with [cases] -> Some cases | _ -> None)
+  in
+  match result with
+  | MonoNamedType id ->
+    (match cases_for id with
+     | None -> None
+     | Some cases ->
+       (match option_layout cases with
+        | None -> None
+        | Some payload ->
+          let case name =
+            List.find (fun (MonoCase (n, _)) -> Identifier.ident_string n = name) cases
+          in
+          let none = case "None" and some = case "Some" in
+          (match none, some with
+           | MonoCase (n, []), MonoCase (s, _) ->
+             Some {
+               co_checked_symbol = symbol ^ "__checked";
+               co_payload = payload;
+               co_failure_tag = find_union_case_offset cases n 0;
+               co_success_tag = find_union_case_offset cases s 0;
+               co_failure_payload = None;
+               co_union_name = "Option";
+               co_failure_case = Identifier.ident_string n;
+               co_success_case = Identifier.ident_string s;
+               co_free_symbol = symbol ^ "__free";
+             }
+           | _ -> None)))
+  | _ -> None
+
+(* The typer resolved the union declaration and recorded the checked-wrapper
+   decision; the payload it admitted is one of the adapter scalars, so its mono
+   form is total here. *)
+let mono_ty_of_checked_payload (ty: Type.ty): mono_ty option =
+  match ty with
+  | Type.Boolean -> Some MonoBoolean
+  | Type.Integer (signedness, width) -> Some (MonoInteger (signedness, width))
+  | Type.SingleFloat -> Some MonoSingleFloat
+  | Type.DoubleFloat -> Some MonoDoubleFloat
+  | _ -> None
 
 let find_record_slot_offset id name =
   match Hashtbl.find_opt record_layouts id with
@@ -679,6 +850,13 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       in
       if is_exit_success then
         App ("au_exit", [IntLit 0L])
+      else if Hashtbl.mem checked_option_adapters decl_id then
+        (* The compiler selected the checked wrapper for this import: it returns
+           the Option union directly, so the call-site type and the `match`
+           lowering already agree and no out slot or status branch is needed. *)
+        App
+          ( (Hashtbl.find checked_option_adapters decl_id).co_checked_symbol,
+            narrow_args_for decl_id args )
       else if Hashtbl.mem foreign_functions decl_id then
         App (Hashtbl.find foreign_functions decl_id, narrow_args_for decl_id args)
       else if Hashtbl.mem foreign_functions_by_name (ident_string (original_name q)) then
@@ -894,8 +1072,10 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       (* Use the unqualified name: MLet declares the local under `ident_string id`,
          but the qualified debug name (e.g. "T1::x") would assign a *different*
          JIT variable, leaving the declared one at its zero-init. *)
+      register_checked_owned (ident_string (original_name q)) src;
       Assign (ident_string (original_name q), narrow_float_literal (local_type q) src)
   | Mt.MInitialAssign (q, src) ->
+      register_checked_owned (ident_string (original_name q)) src;
       Assign (ident_string (original_name q), narrow_float_literal (local_type q) src)
   | Mt.MIf (cond, then_stmt, else_stmt) ->
       If (convert_expr cond, convert_stmt then_stmt, convert_stmt else_stmt)
@@ -914,7 +1094,7 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
             (* Primitive: compare directly *)
             Let (tag_name, Var tmp_name, Skip)
       in
-      let case_stmts = List.mapi (fun i (Mtast.MTypedWhen (tag, bindings, body)) ->
+      let case_stmts fetch = List.mapi (fun i (Mtast.MTypedWhen (tag, bindings, body)) ->
         (* Compute the numeric index of this tag in the union layout *)
         let tag_idx = match scrutinee_ty with
           | MonoNamedType id ->
@@ -923,24 +1103,60 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
                | None -> i)
           | _ -> i
         in
-        (* Bind union fields: load from offsets 8, 16, ... *)
+        (* Bind union fields: `fetch j` is where slot `j`'s value comes from *)
         let binding_stmts = List.mapi (fun j (Mtast.MonoBinding { rename; _ }) ->
-          let offset = (j + 1) * 8 in
-          Let (ident_string rename,
-               App ("__slot_get", [Var tmp_name; IntLit (Int64.of_int offset)]),
-               Skip)
+          Let (ident_string rename, fetch j, Skip)
         ) bindings in
         let body_stmt = convert_stmt body in
         let combined = List.fold_right (fun s acc -> Block (s, acc)) binding_stmts body_stmt in
         (Int64.of_int tag_idx, combined)
       ) whens in
+      let dispatch fetch = Match (Var tag_name, case_stmts fetch, Skip) in
+      let slot j =
+        App ("__slot_get", [Var tmp_name; IntLit (Int64.of_int ((j + 1) * 8))])
+      in
+      (* U15c: a checked adapter call returns a union the wrapper allocated
+         (`Box::into_raw`). Copy the tag and every slot a case binds into
+         locals, release the union, then dispatch on the copies: a `return`
+         inside a case cannot skip the release, and no case body reads memory
+         that was freed. The transport admits scalar payloads, so a copied word
+         owns nothing and needs no release of its own. A result bound to a
+         local is covered through `checked_owned_locals`, which follows the
+         name to this match; a rebinding clears the record (a leak at worst,
+         never a second free). *)
+      let checked_free, owned_local = match checked_scrutinee_free expr with
+        | Some (free, owned) -> (Some free, owned)
+        | None -> (None, None)
+      in
+      (match owned_local with
+       | Some name -> Hashtbl.remove checked_owned_locals name
+       | None -> ());
       (* 0x0A, not a chain of `If`s. The JIT's match instruction evaluates the
          scrutinee once and dispatches on the tag, which is exactly what the
          chain computed — but as one instruction the tag dispatch is visible to
          the census and to the ISA model, instead of being a control-flow
          pattern the lowering hid. The empty default branch reproduces the old
          `Skip` for a tag no case names. *)
-      Block (scrutinee_let, Block (tag_load, Match (Var tag_name, case_stmts, Skip)))
+      (match checked_free with
+       | None ->
+         Block (scrutinee_let, Block (tag_load, dispatch slot))
+       | Some free ->
+         let max_bindings =
+           List.fold_left
+             (fun acc (Mtast.MTypedWhen (_, bindings, _)) ->
+               max acc (List.length bindings))
+             0 whens
+         in
+         let slot_lets =
+           List.init max_bindings (fun j ->
+               Let ("__match_slot" ^ string_of_int j, slot j, Skip))
+         in
+         let body =
+           Block (dispatch (fun j -> Var ("__match_slot" ^ string_of_int j)),
+                  Discard (App (free, [Var tmp_name])))
+         in
+         let body = List.fold_right (fun s acc -> Block (s, acc)) slot_lets body in
+         Block (scrutinee_let, Block (tag_load, body)))
   | Mt.MWhile (cond, body) ->
       While (convert_expr cond, convert_stmt body)
   | Mt.MFor (id, start_expr, end_expr, body) ->
@@ -973,13 +1189,21 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       in
       Let (ident_string rename, reference, convert_stmt body)
   | Mt.MBlock (s1, s2) ->
-      Block (convert_stmt s1, convert_stmt s2)
+      (* Sequence the conversions explicitly: OCaml would evaluate the two
+         arguments right-to-left, so a statement's side effects on the
+         conversion tables (`local_types`, and `checked_owned_locals` for
+         U15c) would run after the statements that read them. The emitted
+         block is the same either way. *)
+      let first = convert_stmt s1 in
+      let second = convert_stmt s2 in
+      Block (first, second)
   | Mt.MDiscarding expr ->
       Discard (convert_expr expr)
   | Mt.MReturn expr ->
       Return (narrow_float_literal !current_return_type expr)
   | Mt.MLetTmp (id, ty, expr) ->
       Hashtbl.replace local_types (ident_string id) ty;
+      register_checked_owned (ident_string id) expr;
       Let (ident_string id, narrow_float_literal ty expr, Skip)
   | Mt.MAssignTmp (id, expr) ->
       let ty = match Hashtbl.find_opt local_types (ident_string id) with
@@ -1062,6 +1286,14 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
 let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list * string) =
   match mono_module with
   | Mt.MonoModule (name, decls) ->
+      (* U15: union layouts must be known before the foreign pass classifies an
+         `Option` result, regardless of where the union declaration sits. *)
+      List.iter
+        (function
+          | Mt.MUnionMonomorph (id, cases) ->
+            Hashtbl.replace union_layouts id cases
+          | _ -> ())
+        decls;
       (* First pass: collect record layouts and foreign function mappings *)
       List.iter (function
         | Mt.MRecordMonomorph (id, slots) -> Hashtbl.replace record_layouts id slots
@@ -1082,17 +1314,133 @@ let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list 
                     hr_constructor = h.mh_constructor;
                     hr_destructor = h.mh_destructor;
                     hr_params = h.mh_params;
-                    hr_use = h.mh_use }
+                    hr_use = h.mh_use;
+                    hr_write = h.mh_write }
              | None -> ());
             let ext_name =
               if is_rust_import ext_name && foreign_needs_adapter params rt then begin
                 let symbol = adapter_symbol ext_name in
-                Hashtbl.replace required_adapters symbol
-                  { ar_symbol = symbol;
-                    ar_target = ext_name;
-                    ar_params =
-                      List.map (function Mt.MValueParameter (_, ty) -> ty) params;
-                    ar_result = rt };
+                let all_scalar =
+                  List.for_all
+                    (function Mt.MValueParameter (_, ty) ->
+                      adapter_scalar_name ty <> None)
+                    params
+                in
+                let checked =
+                  if all_scalar then
+                    match CheckedOptions.find ext_name with
+                    | Some decision ->
+                      (match mono_ty_of_checked_payload decision.CheckedOptions.payload with
+                       | Some payload ->
+                         let failure_payload =
+                           match decision.failure_payload with
+                           | None -> Some None
+                           | Some ty ->
+                             Option.map
+                               (fun p -> Some p)
+                               (mono_ty_of_checked_payload ty)
+                         in
+                         (match failure_payload with
+                          | Some failure_payload ->
+                            Some {
+                              co_checked_symbol = symbol ^ "__checked";
+                              co_payload = payload;
+                              co_failure_tag = decision.failure_tag;
+                              co_success_tag = decision.success_tag;
+                              co_failure_payload = failure_payload;
+                              co_union_name = decision.union_name;
+                              co_failure_case = decision.failure_case;
+                              co_success_case = decision.success_case;
+                              co_free_symbol = symbol ^ "__free";
+                            }
+                          | None -> checked_option_of ~symbol ~result:rt)
+                       | None -> checked_option_of ~symbol ~result:rt)
+                    | None -> checked_option_of ~symbol ~result:rt
+                  else None
+                in
+                (match checked with
+                 | Some co ->
+                   (* The JIT's `match` compares a loaded tag against the union's
+                      *declaration-order* index. An imported union has no
+                      `MUnionMonomorph` declaration in this module, so without
+                      a layout the lowering falls back to the source order of
+                      the `when` clauses, which is not the same thing. The
+                      typer's decision supplies the declaration order
+                      (`None` then `Some`), so register the shape under the
+                      signature's id. *)
+                   (match rt with
+                    | MonoNamedType result_id ->
+                      if not (Hashtbl.mem union_layouts result_id) then
+                        (match co.co_failure_payload with
+                         | None ->
+                           Hashtbl.replace union_layouts result_id
+                             [ MonoCase (make_ident "None", []);
+                               MonoCase
+                                 (make_ident "Some",
+                                  [ MonoSlot (make_ident "value", co.co_payload) ]) ]
+                         | Some left ->
+                           (* `Either` carries a payload in both cases, so the
+                              layout has one slot per case and the tag decides
+                              which type the slot holds. The tags are the
+                              declaration indices, which the typer pinned to
+                              0 and 1 before this record existed. *)
+                           Hashtbl.replace union_layouts result_id
+                             [ MonoCase
+                                 (make_ident co.co_failure_case,
+                                  [ MonoSlot (make_ident "value", left) ]);
+                               MonoCase
+                                 (make_ident co.co_success_case,
+                                  [ MonoSlot (make_ident "value", co.co_payload) ]) ])
+                                        | _ -> ());
+                   (* The descriptor's tags must be the indices of the layout
+                      the `match` lowering reads, and a module that uses the
+                      union itself carries its own monomorph — whose case
+                      order is not always the declaration order the typer saw.
+                      Read the tags back from that layout instead of trusting
+                      the typer's order; with no layout (an imported union) the
+                      registered shape above is the layout, so this is the
+                      same answer. *)
+                   let co =
+                     match rt with
+                     | MonoNamedType result_id ->
+                       (match Hashtbl.find_opt union_layouts result_id with
+                        | Some cases ->
+                          { co with
+                            co_failure_tag =
+                              find_union_case_offset cases
+                                (make_ident co.co_failure_case) 0;
+                            co_success_tag =
+                              find_union_case_offset cases
+                                (make_ident co.co_success_case) 0 }
+                        | None -> co)
+                     | _ -> co
+                   in
+                   Hashtbl.replace checked_option_adapters id co;
+                   Hashtbl.replace required_adapters symbol
+                     { ar_symbol = symbol;
+                       ar_target = ext_name;
+                       ar_params =
+                         List.map (function Mt.MValueParameter (_, ty) -> ty) params;
+                       ar_result = co.co_payload;
+                       ar_checked = Some (co.co_failure_tag, co.co_success_tag);
+                       ar_checked_union =
+                         Option.map
+                           (fun left ->
+                             (co.co_union_name, co.co_failure_case,
+                              co.co_success_case,
+                              match adapter_scalar_name left with
+                              | Some name -> name
+                              | None -> assert false))
+                           co.co_failure_payload }
+                 | None ->
+                   Hashtbl.replace required_adapters symbol
+                     { ar_symbol = symbol;
+                       ar_target = ext_name;
+                       ar_params =
+                         List.map (function Mt.MValueParameter (_, ty) -> ty) params;
+                       ar_result = rt;
+                       ar_checked = None;
+                       ar_checked_union = None });
                 symbol
               end else ext_name
             in

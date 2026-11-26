@@ -15,6 +15,7 @@ pub mod adapters;
 #[cfg(feature = "arctic-auth")]
 pub mod arctic_auth;
 pub mod auth;
+pub mod callbacks;
 pub mod capstd_mod;
 pub mod capture;
 pub mod cps;

@@ -48,54 +48,87 @@ fi
 # otherwise be refused by the default-deny engine before it could be counted.
 # The grant question belongs to `modhost`, and nothing here is executed.
 #
-# dir:module[:sources] — the module name is the declared one, not the directory
-# name, which is why it is written down instead of derived.
+# dir:module[:sources] — the directory is relative to the repo root and the
+# module name is the declared one, not the directory name, which is why both
+# are written down instead of derived. `sources` defaults to the directory's
+# `.aui` (if any) plus its first `.aum`.
 entries=(
-    "verified-kernel/flux1d:Flux1d"
-    "fib:Example.Fibonacci"
-    "union:Example.Union"
-    "record:Example.Record"
-    "generic-union:Example.GenericUnion"
-    "named-argument:Example.NamedArgument"
-    "identity:Example.Identity"
-    "kernel:TestKernel:UnferKernel.aui,UnferKernel.aum TestKernel.aum"
-    "memory-ops:Example.MemoryOps"
+    "examples/verified-kernel/flux1d:Flux1d"
+    "examples/fib:Example.Fibonacci"
+    "examples/union:Example.Union"
+    "examples/record:Example.Record"
+    "examples/generic-union:Example.GenericUnion"
+    "examples/named-argument:Example.NamedArgument"
+    "examples/identity:Example.Identity"
+    "examples/kernel:TestKernel:UnferKernel.aui,UnferKernel.aum TestKernel.aum"
+    "examples/memory-ops:Example.MemoryOps"
     # W9.2 coverage entries: these three are in the corpus for the opcodes only
     # *they* emit, not for what they compute. `control-flow` is the deliberate
     # one (`while`, `cmp_gt`/`cmp_lte`/`cmp_gte`/`cmp_neq`, `or`, `not`, and the
     # `for`-loop `add`); `generic-record` and `ffi` are the two remaining
     # examples that compile on the CPS path and they contribute `string_lit`.
-    "control-flow:Example.ControlFlow"
-    "generic-record:Example.GenericRecord"
-    "ffi:Example.FFI"
+    "examples/control-flow:Example.ControlFlow"
+    "examples/generic-record:Example.GenericRecord"
+    "examples/ffi:Example.FFI"
+    # U15b/U15c: the two-payload unions. They are here for the call path the
+    # checked wrappers add — a call to `<symbol>__checked`, a `match` on its
+    # tag, and the `<symbol>__free` release the U15c cleanup emits — not for
+    # their arithmetic. Both modules live under `umbrella/modules/` because
+    # their providers are the `rs_*` fixtures the umbrella tests build.
+    # `@cps` because the checked call is JIT-only: the C backend refuses the
+    # generated adapter symbol, and this corpus only measures CPS bytes.
+    "umbrella/modules:EitherImport@cps:EitherImport.aum"
+    "umbrella/modules:ResultImport@cps:ResultImport.aum"
 )
 
 for entry in "${entries[@]}"; do
     dir="${entry%%:*}"
     rest="${entry#*:}"
     mod="${rest%%:*}"
+    # `module@cps` marks an entry whose CPS is measurable but whose C backend
+    # path is not (the checked-adapter call has no C rendering).
+    cps_only=0
+    if [[ "$mod" == *@cps ]]; then
+        mod="${mod%@cps}"
+        cps_only=1
+    fi
     if [ "$rest" = "$mod" ]; then
         # A module with an interface is one comma pair; a body-only module
         # (`memory-ops`) is just the `.aum`, so the `.aui` probe may fail.
-        aui=$(cd "$ROOT/examples/$dir" && ls *.aui 2>/dev/null | head -1)
-        aum=$(cd "$ROOT/examples/$dir" && ls *.aum | head -1)
+        aui=$(cd "$ROOT/$dir" && ls *.aui 2>/dev/null | head -1)
+        aum=$(cd "$ROOT/$dir" && ls *.aum | head -1)
         if [ -n "$aui" ]; then srcs=("$aui,$aum"); else srcs=("$aum"); fi
     else
         read -r -a srcs <<< "${rest#*:}"
     fi
-    name="$(basename "$dir")"
-    if ! ( cd "$ROOT/examples/$dir" \
+    # The module's own name is the output stem: the directory basename is not
+    # unique once two fixtures share `umbrella/modules`.
+    name="${mod##*.}"
+    emit_args=(--emit-cps="$DEST/$name.cps")
+    target="c"
+    if [ "$cps_only" -eq 1 ]; then
+        # `--emit-cps-only` pairs with the `tc` target: the `c` target always
+        # expects `--output`, and the CPS-only path takes no `--entrypoint`.
+        emit_args+=(--emit-cps-only)
+        target="tc"
+        entry_args=()
+    else
+        emit_args+=(--output="$DEST/$name.c")
+        entry_args=(--entrypoint="$mod:main")
+    fi
+    if ! ( cd "$ROOT/$dir" \
         && LD_LIBRARY_PATH="$(dirname "$bridge"):$ROOT" "$austral" compile "${srcs[@]}" \
-            --entrypoint="$mod:main" --use-cps-jit --allow-all \
-            --target-type=c \
-            --emit-cps="$DEST/$name.cps" --output="$DEST/$name.c" ) \
+            "${entry_args[@]}" --use-cps-jit --allow-all \
+            --target-type="$target" "${emit_args[@]}" ) \
             >"$DEST/$name.log" 2>&1; then
-        echo "cps-corpus: [gap] examples/$dir did not compile — corpus incomplete" >&2
+        echo "cps-corpus: [gap] $dir did not compile — corpus incomplete" >&2
         tail -3 "$DEST/$name.log" >&2
         exit 2
     fi
-    if ! grep -q '[1-9][0-9]* functions compiled' "$DEST/$name.log"; then
-        echo "cps-corpus: [gap] examples/$dir compiled no function — nothing to measure" >&2
+    # `--emit-cps-only` reports `Generated N functions`; a full C compile
+    # reports `N functions compiled`.
+    if ! grep -Eq '([1-9][0-9]* functions compiled|Generated [1-9][0-9]* functions)' "$DEST/$name.log"; then
+        echo "cps-corpus: [gap] $dir compiled no function — nothing to measure" >&2
         exit 2
     fi
     echo "$DEST/$name.cps"

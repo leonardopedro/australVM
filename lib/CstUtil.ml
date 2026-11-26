@@ -222,9 +222,11 @@ let make_pragma name args =
                    | _ -> raise_err ()) args
             | _ -> raise_err ()
           in
-          let known = ["Object"; "Constructor"; "Destructor"; "Params"; "Use"] in
+          let known =
+            ["Object"; "Constructor"; "Destructor"; "Params"; "Use"; "Write"]
+          in
           List.iter (fun (k, _) -> if not (List.mem k known) then raise_err ()) fields;
-          if List.length fields < 4 || List.length fields > 5 then raise_err ();
+          if List.length fields < 4 || List.length fields > 6 then raise_err ();
           let field name =
             match List.assoc_opt name fields with
             | Some v -> v
@@ -237,7 +239,7 @@ let make_pragma name args =
           in
           HandleOwnershipPragma
             (field "Object", field "Constructor", field "Destructor", params,
-             List.assoc_opt "Use" fields)
+             List.assoc_opt "Use" fields, List.assoc_opt "Write" fields)
         else
         let liquid_kind = String.sub s 7 (String.length s - 7) in
         let is_liquid = String.length s > 7 && String.sub s 0 7 = "Liquid_" in

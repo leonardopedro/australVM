@@ -29,6 +29,31 @@ module WidgetHandle is
     generic [R: Region]
     function read(widget: &[Widget, R]): Int64;
 
+    -- U14 — a view the module holds across statements. `holdView` mints a
+    -- claim in the same registry as the handle and returns its token (both
+    -- words 0 when refused); `viewRead` reads the provider's word through the
+    -- token; `release` discharges the claim. While a token is held, `dispose`
+    -- of the value it names is refused, so a view can never outlive the value
+    -- it refers to.
+    type View: Free;
+
+    generic [R: Region]
+    function holdView(widget: &[Widget, R]): View;
+
+    -- The exclusive view: while this token is held no reader or other writer
+    -- can claim the value, and `viewWrite` is the only mutation path.
+    generic [R: Region]
+    function holdViewMut(widget: &[Widget, R]): View;
+
+    generic [R: Region]
+    function viewRead(view: &[View, R]): Int64;
+
+    -- Write one word through a mutable view. A read-only view is refused by the
+    -- registry (status 1), and a provider that panics reports status 2.
+    function viewWrite(view: View, value: Int64): Int64;
+
+    function release(view: View): Int64;
+
     -- The dispose path: destructures the linear record (the obligation is
     -- discharged there) and returns the wrapper's status word — 0 done,
     -- non-zero refused.

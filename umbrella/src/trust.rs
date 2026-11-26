@@ -274,6 +274,29 @@ pub fn verify_signatures(project: &Project, actual: &[Export]) -> Result<(), Str
     ))
 }
 
+/// U10: the pins an admitted artifact implies, as the fragment a project
+/// document's `trusted` block carries. The caller produces this only after the
+/// artifact was verified (or had nothing pinned), so a generated record always
+/// describes the bytes that ran, never a contract the run refused.
+pub fn trust_record(exports: &[Export], descriptor_document: &[u8]) -> serde_json::Value {
+    let mut sorted: Vec<&Export> = exports.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let signatures: Vec<serde_json::Value> = sorted
+        .iter()
+        .map(|export| {
+            serde_json::json!({
+                "name": export.name,
+                "params": export.params,
+                "returns": export.returns,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "signatures": signatures,
+        "descriptor_sha256": sha256_bytes(descriptor_document),
+    })
+}
+
 /// Both U10 artifact pins, before descriptor-driven native work.
 pub fn verify_artifact(
     project: &Project,
@@ -468,6 +491,55 @@ mod tests {
             .expect_err("a changed contract");
         assert!(err.contains("trusted descriptor refused"), "{err}");
         assert!(err.contains(&digest), "the refusal names the pin: {err}");
+    }
+
+    #[test]
+    fn the_generated_trust_record_carries_the_admitted_pins() {
+        let document =
+            "schema 1\nabi scalar 1\nsymbol f__adapter\ntarget f\nparams \nreturns Int64\n";
+        let exports = vec![
+            Export {
+                name: "zeta".to_string(),
+                params: vec!["Int64".to_string()],
+                returns: "Nat64".to_string(),
+            },
+            Export {
+                name: "alpha".to_string(),
+                params: Vec::new(),
+                returns: "Int64".to_string(),
+            },
+        ];
+        let record = trust_record(&exports, document.as_bytes());
+        // The record is a `trusted` fragment: exactly the two fields the parser
+        // accepts for these pins, with signatures ordered by name so a
+        // regeneration is byte-identical.
+        assert_eq!(record["signatures"][0]["name"], "alpha");
+        assert_eq!(record["signatures"][1]["name"], "zeta");
+        assert_eq!(
+            record["signatures"][1]["params"],
+            serde_json::json!(["Int64"])
+        );
+        assert_eq!(record["signatures"][1]["returns"], "Nat64");
+        assert_eq!(
+            record["descriptor_sha256"],
+            sha256_bytes(document.as_bytes())
+        );
+
+        // And the fragment parses back as the pin it claims to be, so a
+        // generated record cannot be one the project document refuses.
+        let text = format!(
+            r#"{{"schema":1,"profile":"trusted-native",
+                 "module":{{"name":"demo","sources":["Demo.aum"]}},
+                 "build":{{"allowed":false}},
+                 "load":{{"allowed":false}},
+                 "trusted":{{"lock_sha256":"{}","library_sha256":"{}","exports":["rs_demo"],
+                   "signatures":{},"descriptor_sha256":{}}}}}"#,
+            "0".repeat(64),
+            "0".repeat(64),
+            record["signatures"],
+            record["descriptor_sha256"]
+        );
+        project::parse(Path::new("example.json"), &text).expect("the generated pins parse");
     }
 
     #[test]

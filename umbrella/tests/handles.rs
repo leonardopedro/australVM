@@ -234,6 +234,80 @@ fn take_moves_the_value_out_and_leaves_the_handle_stale() {
     assert_eq!(&*drops.borrow(), &[5], "the value was not dropped again");
 }
 
+#[test]
+fn borrow_claims_work_through_the_umbrella_reexport() {
+    // `umbrella::handles` is a re-export of the bridge's table, not a second
+    // type; these calls name nothing outside it, so a split definition would
+    // not compile here.
+    let drops = drops();
+    let mut registry = registry();
+    let handle = registry.insert(tracked(1, &drops)).expect("insert");
+
+    // A group of immutable views: readers coexist, writes and destruction are
+    // refused while any of them is live.
+    let first = registry.borrow(handle).expect("borrow");
+    let second = registry.borrow(handle).expect("borrow");
+    assert_eq!(registry.get_borrowed(&first).expect("read").id, 1);
+    assert_eq!(registry.get_borrowed(&second).expect("read").id, 1);
+    assert!(matches!(
+        registry.get_mut(handle),
+        Err(HandleError::Borrowed { mutable: false, .. })
+    ));
+    assert!(matches!(
+        registry.destroy(handle),
+        Err(HandleError::Borrowed { mutable: false, .. })
+    ));
+    assert!(
+        drops.borrow().is_empty(),
+        "a refused destroy dropped nothing"
+    );
+
+    registry.release(first).expect("release");
+    registry.release(second).expect("release");
+
+    // An exclusive claim is the only mutation path, and it excludes reads.
+    let edit = registry.borrow_mut(handle).expect("exclusive");
+    registry.get_mut_borrowed(&edit).expect("write").id = 2;
+    assert!(matches!(
+        registry.get(handle),
+        Err(HandleError::Borrowed { mutable: true, .. })
+    ));
+    registry.release(edit).expect("release");
+    assert_eq!(registry.get(handle).expect("read").id, 2);
+
+    registry.destroy(handle).expect("destroy");
+    assert_eq!(&*drops.borrow(), &[2], "the mutated value was dropped once");
+}
+
+#[test]
+fn a_held_view_token_round_trips_through_the_umbrella_reexport() {
+    let drops = drops();
+    let mut registry = registry();
+    let handle = registry.insert(tracked(3, &drops)).expect("insert");
+    let (lo, hi) = handle.to_words();
+
+    // The module-facing form: a two-word token, read and released by its words.
+    let (w0, w1) = registry.borrow_to_words(lo, hi).expect("view");
+    assert_eq!(registry.get_words_view(w0, w1).expect("read").id, 3);
+    assert!(matches!(
+        registry.destroy_words(lo, hi),
+        Err(HandleError::Borrowed { mutable: false, .. })
+    ));
+
+    registry.release_words(w0, w1).expect("release");
+    assert!(matches!(
+        registry.get_words_view(w0, w1),
+        Err(HandleError::UnknownBorrow { .. })
+    ));
+    assert!(matches!(
+        registry.release_words(w0, w1),
+        Err(HandleError::UnknownBorrow { .. })
+    ));
+
+    registry.destroy_words(lo, hi).expect("destroy");
+    assert_eq!(&*drops.borrow(), &[3], "the value was dropped once");
+}
+
 // ── the generated `__new`/`__dispose` wrappers, through the real ABI ────────
 //
 // The registry above is the table. These tests are the other half: wrappers
@@ -247,6 +321,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use umbrella::handles::{STATUS_OK, STATUS_PANIC};
 use umbrella::interface::{
     render_handle_wrapper, GeneratedAdapter, HandleAdapter, DESCRIPTOR_SCHEMA, HANDLE_ABI_VERSION,
 };
@@ -334,6 +409,9 @@ fn handle_adapter(
         params: 1,
         owner,
         use_symbol: accessor.map(str::to_string),
+        write_symbol: None,
+        subscribe_symbol: None,
+        callback: Default::default(),
     }
 }
 
@@ -390,9 +468,25 @@ pub unsafe extern "C" fn widget_read(ptr: *mut core::ffi::c_void) -> i64 {
     *(ptr as *mut i64)
 }
 
+#[export_name = "avm_widget_write"]
+pub unsafe extern "C-unwind" fn widget_write(ptr: *mut core::ffi::c_void, value: i64) {
+    if !ptr.is_null() {
+        *(ptr as *mut i64) = value;
+    }
+}
+
 #[export_name = "avm_widget_drops"]
 pub extern "C" fn widget_drops() -> i64 {
     WIDGET_DROPS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+// U16: a panicking callback trampoline in the same library as the wrapper.
+// The catch in `__with` and this panic share one Rust runtime; a panic raised
+// in another DSO is a foreign exception Rust refuses to catch, so the fixture
+// (like a real host trampoline) keeps the panic on its own side of the ABI.
+#[export_name = "avm_widget_panicking_callback"]
+pub unsafe extern "C-unwind" fn widget_panicking_callback(_ptr: *mut core::ffi::c_void) -> i64 {
+    panic!("the callback failed");
 }
 
 #[export_name = "avm_gadget_drops"]
@@ -400,11 +494,47 @@ pub extern "C" fn gadget_drops() -> i64 {
     GADGET_DROPS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+// U15: a provider that panics through the `C-unwind` ABI the wrappers
+// declare. Its constructor refuses a negative value by panicking and its
+// reader always panics, so both catch sites are exercised; the value it does
+// create stays live and disposable.
+static FAULT_LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+#[export_name = "avm_fault_ctor"]
+pub extern "C-unwind" fn fault_ctor(value: i64) -> *mut core::ffi::c_void {
+    if value < 0 {
+        panic!("the provider constructor failed");
+    }
+    FAULT_LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Box::into_raw(Box::new(value)) as *mut core::ffi::c_void
+}
+
+#[export_name = "avm_fault_dtor"]
+pub unsafe extern "C" fn fault_dtor(ptr: *mut core::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    FAULT_LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    drop(Box::from_raw(ptr as *mut i64));
+}
+
+#[export_name = "avm_fault_read"]
+pub extern "C-unwind" fn fault_read(_ptr: *mut core::ffi::c_void) -> i64 {
+    panic!("the provider reader failed");
+}
+
+#[export_name = "avm_fault_live"]
+pub extern "C" fn fault_live() -> i64 {
+    FAULT_LIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 "##,
     );
-    let widget = handle_adapter("avm_widget", "widget", 1, Some("avm_widget_read"));
+    let mut widget = handle_adapter("avm_widget", "widget", 1, Some("avm_widget_read"));
+    widget.write_symbol = Some("avm_widget_write".to_string());
     let gadget = handle_adapter("avm_gadget", "gadget", 2, None);
-    for (i, adapter) in [&widget, &gadget].iter().enumerate() {
+    let fault = handle_adapter("avm_fault", "fault", 3, Some("avm_fault_read"));
+    for (i, adapter) in [&widget, &gadget, &fault].iter().enumerate() {
         source.push_str(&format!(
             "mod w{i} {{\n{}\n}}\n",
             render_handle_wrapper(adapter).expect("render")
@@ -489,6 +619,10 @@ impl Library {
         unsafe { std::mem::transmute(self.symbol(name)) }
     }
 
+    fn write_fn(&self, name: &str) -> unsafe extern "C" fn(i64, i64, i64) -> i64 {
+        unsafe { std::mem::transmute(self.symbol(name)) }
+    }
+
     #[allow(clippy::type_complexity)]
     fn with_fn(
         &self,
@@ -496,7 +630,7 @@ impl Library {
     ) -> unsafe extern "C" fn(
         i64,
         i64,
-        Option<unsafe extern "C" fn(*mut libc::c_void) -> i64>,
+        Option<unsafe extern "C-unwind" fn(*mut libc::c_void) -> i64>,
         *mut i64,
     ) -> i64 {
         unsafe { std::mem::transmute(self.symbol(name)) }
@@ -695,7 +829,7 @@ static WITH_SEEN: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::n
 
 /// The "Austral callback": it is handed the provider's own pointer, sees the
 /// value for the duration of the call, and gives one word back.
-unsafe extern "C" fn widget_double(ptr: *mut libc::c_void) -> i64 {
+unsafe extern "C-unwind" fn widget_double(ptr: *mut libc::c_void) -> i64 {
     WITH_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     if ptr.is_null() {
         return -1;
@@ -800,6 +934,390 @@ fn the_scoped_borrow_lends_the_value_and_keeps_it_live() {
     );
     assert_eq!(unsafe { widget_dispose(live[0], live[1]) }, 0);
     assert_eq!(unsafe { widget_live() }, 0);
+}
+
+// U16: the callback runs without the registry lock, under an immutable claim,
+// through a call-scoped checked token. The three properties are observable from
+// outside: a panic is a status word, a nested call is allowed, and a mutation
+// of the lent value is refused until the callback has returned.
+thread_local! {
+    static LENT_WORDS: std::cell::Cell<(i64, i64)> = const { std::cell::Cell::new((0, 0)) };
+    static NESTED_STATUS: std::cell::Cell<i64> = const { std::cell::Cell::new(i64::MIN) };
+    static MUTATE_STATUS: std::cell::Cell<i64> = const { std::cell::Cell::new(i64::MIN) };
+}
+
+static WITH_POINTER: std::sync::OnceLock<
+    unsafe extern "C" fn(
+        i64,
+        i64,
+        Option<unsafe extern "C-unwind" fn(*mut libc::c_void) -> i64>,
+        *mut i64,
+    ) -> i64,
+> = std::sync::OnceLock::new();
+static BORROW_MUT_POINTER: std::sync::OnceLock<
+    unsafe extern "C" fn(i64, i64, *mut i64) -> i64,
+> = std::sync::OnceLock::new();
+
+unsafe extern "C-unwind" fn inner_reader(ptr: *mut libc::c_void) -> i64 {
+    if ptr.is_null() {
+        return -1;
+    }
+    *(ptr as *mut i64) + 1
+}
+
+unsafe extern "C-unwind" fn rooted_callback(ptr: *mut libc::c_void) -> i64 {
+    let (lo, hi) = LENT_WORDS.with(|words| words.get());
+    let borrow_mut = *BORROW_MUT_POINTER.get().expect("borrow_mut installed");
+    let widget_with = *WITH_POINTER.get().expect("with installed");
+
+    // A mutation of the borrowed value is refused by the live claim, but it is
+    // a status, not a deadlock or a second mutable reference.
+    let mut token = [0i64; 2];
+    let mutate = unsafe { borrow_mut(lo, hi, token.as_mut_ptr()) };
+    MUTATE_STATUS.with(|status| status.set(mutate));
+
+    // A second immutable borrow through a nested `__with` is valid: the claims
+    // coexist and neither holds the table lock.
+    let mut nested = [-1i64; 1];
+    let nested_status = unsafe { widget_with(lo, hi, Some(inner_reader), nested.as_mut_ptr()) };
+    NESTED_STATUS.with(|status| status.set(nested_status));
+
+    if ptr.is_null() || mutate == 0 || nested_status != 0 {
+        return -1;
+    }
+    *(ptr as *mut i64) + nested[0]
+}
+
+#[test]
+fn a_callback_panic_is_a_status_word_and_the_value_survives() {
+    let lib = Library::open(&fresh_library("with-panic"));
+    let widget_new = lib.new_fn("avm_widget__new");
+    let widget_with = lib.with_fn("avm_widget__with");
+    let widget_dispose = lib.dispose_fn("avm_widget__dispose");
+    let widget_live = lib.count_fn("avm_widget_live");
+    let widget_drops = lib.count_fn("avm_widget_drops");
+
+    let panicking: unsafe extern "C-unwind" fn(*mut libc::c_void) -> i64 =
+        unsafe { std::mem::transmute(lib.symbol("avm_widget_panicking_callback")) };
+
+    let mut words = [0i64; 2];
+    assert_eq!(unsafe { widget_new(41, words.as_mut_ptr()) }, 0);
+
+    let mut out = [-7i64; 1];
+    assert_eq!(
+        unsafe { widget_with(words[0], words[1], Some(panicking), out.as_mut_ptr()) },
+        2,
+        "a caught callback panic is `STATUS_PANIC`, not a value"
+    );
+    assert_eq!(out[0], -7, "a panicking callback writes no out word");
+    assert_eq!(unsafe { widget_live() }, 1, "the panic did not destroy");
+
+    // The claim was released on the panic path too, so the caller can still
+    // destroy the value it lent.
+    assert_eq!(unsafe { widget_dispose(words[0], words[1]) }, 0);
+    assert_eq!(unsafe { widget_drops() }, 1);
+}
+
+#[test]
+fn a_callback_cannot_mutate_the_value_it_borrowed() {
+    let lib = Library::open(&fresh_library("with-claim"));
+    let widget_new = lib.new_fn("avm_widget__new");
+    let widget_with = lib.with_fn("avm_widget__with");
+    let widget_borrow_mut = lib.use_fn("avm_widget__borrow_mut");
+    let widget_write = lib.write_fn("avm_widget__write");
+    let widget_release = lib.dispose_fn("avm_widget__release");
+    let widget_use = lib.use_fn("avm_widget__use");
+    let widget_dispose = lib.dispose_fn("avm_widget__dispose");
+    let widget_live = lib.count_fn("avm_widget_live");
+    let widget_drops = lib.count_fn("avm_widget_drops");
+
+    WITH_POINTER
+        .set(widget_with)
+        .unwrap_or_else(|_| panic!("installed once"));
+    BORROW_MUT_POINTER
+        .set(widget_borrow_mut)
+        .unwrap_or_else(|_| panic!("installed once"));
+
+    let mut words = [0i64; 2];
+    assert_eq!(unsafe { widget_new(41, words.as_mut_ptr()) }, 0);
+    LENT_WORDS.with(|lent| lent.set((words[0], words[1])));
+
+    let mut out = [-1i64; 1];
+    assert_eq!(
+        unsafe { widget_with(words[0], words[1], Some(rooted_callback), out.as_mut_ptr()) },
+        0,
+        "a nested valid callback and a refused mutation are both statuses"
+    );
+    assert_eq!(out[0], 83, "the callback saw 41 and its nested call saw 42");
+    assert_ne!(
+        MUTATE_STATUS.with(|status| status.get()),
+        0,
+        "the live claim refused the mutation"
+    );
+    assert_eq!(
+        NESTED_STATUS.with(|status| status.get()),
+        0,
+        "a nested immutable borrow is valid"
+    );
+    assert_eq!(unsafe { widget_live() }, 1, "no refusal destroyed the value");
+
+    // After the callback the claim is gone, so the same mutation succeeds.
+    let mut token = [0i64; 2];
+    assert_eq!(unsafe { widget_borrow_mut(words[0], words[1], token.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { widget_write(token[0], token[1], 99) }, 0);
+    assert_eq!(unsafe { widget_release(token[0], token[1]) }, 0);
+
+    let mut read = [-1i64; 1];
+    assert_eq!(unsafe { widget_use(words[0], words[1], read.as_mut_ptr()) }, 0);
+    assert_eq!(read[0], 99, "the post-callback mutation is the module's");
+
+    assert_eq!(unsafe { widget_dispose(words[0], words[1]) }, 0);
+    assert_eq!(unsafe { widget_drops() }, 1);
+}
+
+#[test]
+fn a_held_view_blocks_disposal_until_the_module_releases_it() {
+    let lib = Library::open(&fresh_library("view"));
+    let widget_new = lib.new_fn("avm_widget__new");
+    let widget_borrow = lib.use_fn("avm_widget__borrow");
+    let widget_view = lib.use_fn("avm_widget__view");
+    let widget_release = lib.dispose_fn("avm_widget__release");
+    let widget_dispose = lib.dispose_fn("avm_widget__dispose");
+    let widget_live = lib.count_fn("avm_widget_live");
+    let widget_drops = lib.count_fn("avm_widget_drops");
+
+    let mut words = [0i64; 2];
+    assert_eq!(unsafe { widget_new(41, words.as_mut_ptr()) }, 0);
+
+    // 1. The module mints a view token and reads through it.
+    let mut token = [0i64; 2];
+    assert_eq!(
+        unsafe { widget_borrow(words[0], words[1], token.as_mut_ptr()) },
+        0,
+        "a live handle can be viewed"
+    );
+    assert_ne!(token, [0, 0], "the token is not the refusal pair");
+    let mut out = [-1i64; 1];
+    assert_eq!(
+        unsafe { widget_view(token[0], token[1], out.as_mut_ptr()) },
+        0,
+        "the held view reads the provider's word"
+    );
+    assert_eq!(out[0], 41);
+
+    // 2. While the module holds the view, disposal is refused — the value
+    //    cannot be freed under a token the module still has.
+    assert_ne!(
+        unsafe { widget_dispose(words[0], words[1]) },
+        0,
+        "a held view blocks disposal"
+    );
+    assert_eq!(unsafe { widget_live() }, 1);
+    assert_eq!(unsafe { widget_drops() }, 0);
+
+    // 3. After the release the same words dispose exactly once, and the token
+    //    is dead: a second release and a post-release read are refusals that
+    //    leave the out slot untouched.
+    assert_eq!(unsafe { widget_release(token[0], token[1]) }, 0);
+    assert_ne!(
+        unsafe { widget_release(token[0], token[1]) },
+        0,
+        "a token is released once"
+    );
+    let mut untouched = [-9i64; 1];
+    assert_ne!(
+        unsafe { widget_view(token[0], token[1], untouched.as_mut_ptr()) },
+        0,
+        "a released view reads nothing"
+    );
+    assert_eq!(untouched[0], -9, "a refusal does not write the out slot");
+    assert_eq!(unsafe { widget_dispose(words[0], words[1]) }, 0);
+    assert_eq!(unsafe { widget_drops() }, 1);
+
+    // 4. A null out and the zero token are refusals, not claims: the module
+    //    checking only the status word can never release claim 0.
+    assert_ne!(
+        unsafe { widget_borrow(words[0], words[1], std::ptr::null_mut()) },
+        0,
+        "a null out pointer is refused"
+    );
+    assert_ne!(
+        unsafe { widget_view(0, 0, out.as_mut_ptr()) },
+        0,
+        "the zero token names no view"
+    );
+    assert_ne!(unsafe { widget_release(0, 0) }, 0);
+}
+
+#[test]
+fn a_panic_abort_provider_aborts_the_worker_instead_of_reporting_a_status() {
+    // The generated wrappers catch an unwinding panic with
+    // `std::panic::catch_unwind`. A provider built with `panic = "abort"`
+    // never unwinds: the process aborts, which is the documented worker-crash
+    // contract, not a `STATUS_PANIC` word.
+    //
+    // The fixture is self-contained instead of linking the bridge rlib: this
+    // toolchain refuses to link a crate whose `crate-type` includes `cdylib`
+    // into a `panic=abort` binary ("requires panic strategy `unwind`"). The
+    // catch site below is the same `catch_unwind` the rendered wrapper uses.
+    let dir = scratch("abort");
+    let file = dir.join("main.rs");
+    let source = r##"
+#[export_name = "fault_provider"]
+pub extern "C-unwind" fn fault_provider() {
+    panic!("the provider panicked");
+}
+
+fn main() {
+    let caught = std::panic::catch_unwind(|| unsafe { fault_provider() });
+    if caught.is_ok() {
+        // Reaching this line would mean the abort was swallowed.
+        std::process::exit(0);
+    }
+    std::process::exit(3);
+}
+"##;
+    std::fs::write(&file, source).expect("write abort fixture");
+    let out = dir.join("abort-provider");
+    let output = {
+        let _build = native_build_lock();
+        Command::new("rustc")
+            .arg("--edition=2021")
+            .arg("-C")
+            .arg("panic=abort")
+            .arg("--crate-name=abort_provider")
+            .arg("-o")
+            .arg(&out)
+            .arg(&file)
+            .output()
+            .expect("spawn rustc")
+    };
+    assert!(
+        output.status.success(),
+        "the abort fixture must compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let status = Command::new(&out).status().expect("run the abort fixture");
+    use std::os::unix::process::ExitStatusExt;
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGABRT),
+        "a `panic=abort` provider must crash the worker, not return a status: {status:?}"
+    );
+}
+
+#[test]
+fn a_mutable_view_writes_and_the_write_is_visible_after_release() {
+    let lib = Library::open(&fresh_library("mutview"));
+    let widget_new = lib.new_fn("avm_widget__new");
+    let widget_borrow = lib.use_fn("avm_widget__borrow");
+    let widget_borrow_mut = lib.use_fn("avm_widget__borrow_mut");
+    let widget_write = lib.write_fn("avm_widget__write");
+    let widget_view = lib.use_fn("avm_widget__view");
+    let widget_use = lib.use_fn("avm_widget__use");
+    let widget_release = lib.dispose_fn("avm_widget__release");
+    let widget_dispose = lib.dispose_fn("avm_widget__dispose");
+
+    let mut words = [0i64; 2];
+    assert_eq!(unsafe { widget_new(41, words.as_mut_ptr()) }, 0);
+
+    // 1. A read-only token is not a writer: the registry refuses it.
+    let mut reader = [0i64; 2];
+    assert_eq!(
+        unsafe { widget_borrow(words[0], words[1], reader.as_mut_ptr()) },
+        STATUS_OK
+    );
+    assert_ne!(
+        unsafe { widget_write(reader[0], reader[1], 7) },
+        STATUS_OK,
+        "an immutable view cannot write"
+    );
+    assert_eq!(unsafe { widget_release(reader[0], reader[1]) }, STATUS_OK);
+
+    // 2. An exclusive token writes, still blocks disposal, and the value reads
+    //    back through the token while the view is live.
+    let mut token = [0i64; 2];
+    assert_eq!(
+        unsafe { widget_borrow_mut(words[0], words[1], token.as_mut_ptr()) },
+        STATUS_OK
+    );
+    assert_ne!(
+        unsafe { widget_dispose(words[0], words[1]) },
+        STATUS_OK,
+        "a mutable view still blocks disposal"
+    );
+    assert_eq!(unsafe { widget_write(token[0], token[1], 7) }, STATUS_OK);
+    let mut out = [-1i64; 1];
+    assert_eq!(
+        unsafe { widget_view(token[0], token[1], out.as_mut_ptr()) },
+        STATUS_OK
+    );
+    assert_eq!(out[0], 7);
+    assert_eq!(unsafe { widget_release(token[0], token[1]) }, STATUS_OK);
+
+    // 3. The write is what the provider now holds: `__use` reads it, and a
+    //    released token cannot write again.
+    assert_ne!(
+        unsafe { widget_write(token[0], token[1], 9) },
+        STATUS_OK,
+        "a released token is not a writer"
+    );
+    assert_eq!(
+        unsafe { widget_use(words[0], words[1], out.as_mut_ptr()) },
+        STATUS_OK
+    );
+    assert_eq!(out[0], 7, "the mutation is visible after the view ends");
+    assert_eq!(unsafe { widget_dispose(words[0], words[1]) }, STATUS_OK);
+}
+
+#[test]
+fn a_panicking_provider_is_a_status_word_and_keeps_the_value_live() {
+    let lib = Library::open(&fresh_library("panic"));
+    let fault_new = lib.new_fn("avm_fault__new");
+    let fault_use = lib.use_fn("avm_fault__use");
+    let fault_borrow = lib.use_fn("avm_fault__borrow");
+    let fault_view = lib.use_fn("avm_fault__view");
+    let fault_release = lib.dispose_fn("avm_fault__release");
+    let fault_dispose = lib.dispose_fn("avm_fault__dispose");
+    let fault_live = lib.count_fn("avm_fault_live");
+
+    // 1. A panicking constructor is caught before the ABI: the status says so
+    //    and nothing is stored or written through `out`.
+    let mut words = [-9i64; 2];
+    assert_eq!(
+        unsafe { fault_new(-1, words.as_mut_ptr()) },
+        STATUS_PANIC,
+        "a provider panic is not read as success or refusal"
+    );
+    assert_eq!(words, [-9, -9], "a caught panic writes no handle");
+    assert_eq!(unsafe { fault_live() }, 0, "no value was stored");
+
+    // 2. A live value whose reader panics: the panic becomes a status, the out
+    //    slot stays untouched, and the value is still live and disposable.
+    assert_eq!(unsafe { fault_new(5, words.as_mut_ptr()) }, STATUS_OK);
+    let mut out = [-9i64; 1];
+    assert_eq!(
+        unsafe { fault_use(words[0], words[1], out.as_mut_ptr()) },
+        STATUS_PANIC
+    );
+    assert_eq!(out[0], -9, "a panicking reader writes nothing");
+
+    // 3. The same through a held view; the claim survives the panic, so the
+    //    module can still release and dispose, and the value dies once.
+    let mut token = [0i64; 2];
+    assert_eq!(
+        unsafe { fault_borrow(words[0], words[1], token.as_mut_ptr()) },
+        STATUS_OK
+    );
+    assert_eq!(
+        unsafe { fault_view(token[0], token[1], out.as_mut_ptr()) },
+        STATUS_PANIC
+    );
+    assert_eq!(out[0], -9);
+    assert_eq!(unsafe { fault_release(token[0], token[1]) }, STATUS_OK);
+    assert_eq!(unsafe { fault_dispose(words[0], words[1]) }, STATUS_OK);
+    assert_eq!(unsafe { fault_live() }, 0);
 }
 
 /// A tiny provider for the reload test. Its symbols are named apart from the

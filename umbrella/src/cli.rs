@@ -27,7 +27,8 @@ pub const USAGE: &str = "usage: umbrella [--project <json>] [--manifest <toml>] 
        \x20            [--austral <bin>] [--cratedir <dir>] [--expect <i64>] [--json]\n\
        \x20            [--cargo-package <name>] [--target-dir <dir>]\n\
        \x20            [--profile dev|release] [--features <list>]... [--locked] [--offline]\n\
-       \x20            [--liquid-required]\n\
+       \x20            [--liquid-required] [--emit-trust-record <json>]\n\
+       \x20            [--descriptor-document <file> --emit-wrappers <dir>]\n\
        \x20            [--] <module.aum>...\n\
        \x20      umbrella --help | --version";
 
@@ -53,6 +54,16 @@ pub struct Cli {
     /// U07: make a missing liquid engine a hard artifact failure instead of a
     /// structured skip. Off by default, matching the compiler's optional mode.
     pub liquid_required: bool,
+    /// U10: write the signature and descriptor pins the admitted artifact
+    /// implies, so a project document can be generated instead of copied by
+    /// hand.
+    pub emit_trust_record: Option<PathBuf>,
+    /// U21 bounded start: the compiler-emitted adapter document to render
+    /// wrappers from, without compiling or loading a module.
+    pub descriptor_document: Option<PathBuf>,
+    /// Where the rendered `wrappers.rs` is written. Required with
+    /// `descriptor_document`, and meaningless without it.
+    pub emit_wrappers: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +304,27 @@ where
                 once(&mut seen, "liquid-required")?;
                 cli.liquid_required = true;
             }
+            "emit-trust-record" => {
+                once(&mut seen, "emit-trust-record")?;
+                cli.emit_trust_record = Some(path_value(
+                    take_value("emit-trust-record", false)?,
+                    "emit-trust-record",
+                )?);
+            }
+            "descriptor-document" => {
+                once(&mut seen, "descriptor-document")?;
+                cli.descriptor_document = Some(path_value(
+                    take_value("descriptor-document", false)?,
+                    "descriptor-document",
+                )?);
+            }
+            "emit-wrappers" => {
+                once(&mut seen, "emit-wrappers")?;
+                cli.emit_wrappers = Some(path_value(
+                    take_value("emit-wrappers", false)?,
+                    "emit-wrappers",
+                )?);
+            }
             "expect" => {
                 once(&mut seen, "expect")?;
                 let raw = take_value("expect", true)?;
@@ -312,7 +344,20 @@ where
         i += 1;
     }
 
-    if cli.modules.is_empty() && cli.project.is_none() {
+    if cli.descriptor_document.is_some() != cli.emit_wrappers.is_some() {
+        return Err(UsageError::new(
+            "`--descriptor-document` and `--emit-wrappers` are used together: one \
+             names the compiler's document, the other where to write its wrappers",
+        ));
+    }
+    if cli.descriptor_document.is_some() {
+        if !cli.modules.is_empty() || cli.project.is_some() {
+            return Err(UsageError::new(
+                "`--descriptor-document` renders wrappers only; do not pass modules \
+                 or `--project` in the same run",
+            ));
+        }
+    } else if cli.modules.is_empty() && cli.project.is_none() {
         return Err(UsageError::new(
             "at least one .aum module source is required (or `--project`)",
         ));
@@ -512,6 +557,32 @@ mod tests {
     }
 
     #[test]
+    fn a_trust_record_path_is_single_valued_and_never_empty() {
+        assert_eq!(
+            run(&["--emit-trust-record", "pins.json", "D.aum"]).emit_trust_record,
+            Some(PathBuf::from("pins.json"))
+        );
+        assert_eq!(
+            run(&["--emit-trust-record=pins.json", "D.aum"]).emit_trust_record,
+            Some(PathBuf::from("pins.json"))
+        );
+        assert!(p(&[
+            "--emit-trust-record",
+            "a.json",
+            "--emit-trust-record",
+            "b.json",
+            "D.aum"
+        ])
+        .unwrap_err()
+        .0
+        .contains("duplicate option `--emit-trust-record`"));
+        assert!(p(&["--emit-trust-record=", "D.aum"])
+            .unwrap_err()
+            .0
+            .contains("non-empty path"));
+    }
+
+    #[test]
     fn build_option_errors_are_usage_errors() {
         for (args, needle) in [
             (vec!["--profile", "fast", "D.aum"], "unknown profile"),
@@ -542,5 +613,43 @@ mod tests {
             .unwrap_err()
             .0
             .contains("takes no value"));
+    }
+
+    #[test]
+    fn descriptor_document_and_emit_wrappers_are_paired() {
+        let cli = run(&[
+            "--descriptor-document",
+            "adapters.txt",
+            "--emit-wrappers",
+            "out",
+        ]);
+        assert_eq!(
+            cli.descriptor_document.as_deref(),
+            Some(std::path::Path::new("adapters.txt"))
+        );
+        assert_eq!(
+            cli.emit_wrappers.as_deref(),
+            Some(std::path::Path::new("out"))
+        );
+        assert!(cli.modules.is_empty(), "render-only needs no module");
+
+        assert!(p(&["--descriptor-document", "adapters.txt"])
+            .unwrap_err()
+            .0
+            .contains("used together"));
+        assert!(p(&["--emit-wrappers", "out"])
+            .unwrap_err()
+            .0
+            .contains("used together"));
+        assert!(p(&[
+            "--descriptor-document",
+            "adapters.txt",
+            "--emit-wrappers",
+            "out",
+            "D.aum",
+        ])
+        .unwrap_err()
+        .0
+        .contains("renders wrappers only"));
     }
 }

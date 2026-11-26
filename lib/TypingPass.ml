@@ -631,6 +631,126 @@ let is_adapter_protocol_type (ty: ty): bool =
   | Address _ | Pointer _ -> is_buffer_protocol_type ty
   | _ -> is_adapter_scalar_type ty
 
+(* U15: the one aggregate result an `rs_*` import may declare is the built-in
+   `Option[T]` with a scalar payload. It is not a buffer-protocol type and has
+   no adapter encoding of its own, so admitting it here is a decision about the
+   *checked* wrapper: `Compiler_cps` selects `<symbol>__checked`, which returns
+   the union pointer the JIT's `match` lowering already reads (tag at 0,
+   payload at 8), and the descriptor names the union's own tags.
+
+   The shape is read from the resolved declaration, not from the annotation: a
+   `NamedType` could name any user union called `Option`, and only the builtin
+   one has the `None`/`Some` case layout the lowered `match` expects. The
+   payload is the type argument, and it must be an adapter scalar — the checked
+   wrapper encodes it through the same `encode`/`decode` as every other scalar. *)
+let checked_option_result (env: env) (ty: ty): (int * int * ty) option =
+  match ty with
+  | NamedType (name, [payload], _) when is_adapter_scalar_type payload ->
+    (match get_decl_by_name env (qident_to_sident name) with
+     | Some (Union { id; mod_id; _ }) ->
+       if mod_name_string (module_name_from_id env mod_id) <> "Austral.Pervasive" then None
+       else
+         (* The environment stores declarations newest-first, so the declared
+            case order is the reverse of `get_union_cases`. The descriptor's
+            tags are the union's indices, which is what the JIT compares a
+            loaded tag against. *)
+         let cases = List.rev (get_union_cases env id) in
+         let index case_name =
+           let rec go i = function
+             | [] -> None
+             | UnionCase { name = n; _ } :: rest ->
+               if ident_string n = case_name then Some i else go (i + 1) rest
+             | _ :: rest -> go (i + 1) rest
+           in
+           go 0 cases
+         and slots case_name =
+           List.find_map
+             (function
+               | UnionCase { name = n; slots; _ } when ident_string n = case_name ->
+                 Some slots
+               | _ -> None)
+             cases
+         in
+         (match slots "None", slots "Some", index "None", index "Some" with
+          | Some [], Some [TypedSlot (_, _)], Some failure, Some success ->
+            Some (failure, success, payload)
+          | _ -> None)
+     | _ -> None)
+  | _ -> None
+
+(* The named two-case unions an `rs_*` result may declare: a builtin union
+   with an adapter-scalar payload in *both* cases. `Either[L, R]` (`Left` is
+   the failure, `Right` the success) and `Result[T, E]` (`Err` is the failure,
+   `Ok` the success — the Result shape) take the same transport. Unlike
+   `Option`, a refusal cannot be encoded as the empty failure case, so the
+   checked wrapper's provider writes a tag beside the payload (see
+   `render_wrapper_checked_union`); the descriptor names the union, its cases
+   and the failure payload's type so neither side guesses.
+
+   The admitted set is the table below, so a new builtin of the same shape is
+   one entry rather than a second lowering. Both tags must be the declaration
+   indices 0 and 1: the wrapper returns the provider's tag unchanged, and the
+   JIT compares that word against the lowering's slot-list position, so a
+   union whose cases are not the first two indices has no layout this module
+   can register. *)
+
+(* `(union, failure case, success case, failure argument, success argument)`:
+   the argument indices are into the instantiated type arguments, because
+   `Either` puts its failure payload first and `Result` puts it second. *)
+let checked_payload_unions =
+  [ ("Either", "Left", "Right", 0, 1);
+    ("Result", "Err", "Ok", 1, 0) ]
+
+let checked_payload_union_result (env: env) (ty: ty)
+  : (int * int * string * string * string * ty * ty) option =
+  match ty with
+  | NamedType (name, args, _)
+    when List.length args = 2 && List.for_all is_adapter_scalar_type args ->
+    let union_name = ident_string (original_name name) in
+    (match List.find_opt
+             (fun (n, _, _, _, _) -> n = union_name)
+             checked_payload_unions
+     with
+     | None -> None
+     | Some (_, failure_case, success_case, failure_arg, success_arg) ->
+       (match get_decl_by_name env (qident_to_sident name) with
+        | Some (Union { id; mod_id; _ }) ->
+          if mod_name_string (module_name_from_id env mod_id) <> "Austral.Pervasive" then None
+          else
+            let cases = List.rev (get_union_cases env id) in
+            let index case_name =
+              let rec go i = function
+                | [] -> None
+                | UnionCase { name = n; _ } :: rest ->
+                  if ident_string n = case_name then Some i else go (i + 1) rest
+                | _ :: rest -> go (i + 1) rest
+              in
+              go 0 cases
+            and slot_count case_name =
+              List.find_map
+                (function
+                  | UnionCase { name = n; slots; _ } when ident_string n = case_name ->
+                    Some (List.length slots)
+                  | _ -> None)
+                cases
+            in
+            (* The payload types are the *instantiated* type arguments, not
+               the declaration's slots: a generic union's slot type is its
+               parameter (`L`/`R`, `T`/`E`), which no monomorph can encode.
+               `Option` already reads its payload this way. *)
+            (match
+               slot_count failure_case, slot_count success_case,
+               index failure_case, index success_case
+             with
+             | Some 1, Some 1, Some failure, Some success
+               when (failure = 0 && success = 1) || (failure = 1 && success = 0) ->
+               Some (failure, success, union_name, failure_case, success_case,
+                     List.nth args failure_arg, List.nth args success_arg)
+             | _ -> None)
+        | _ -> None))
+  | _ -> None
+
+
 (* The word-native half of the interop contract, mirroring
    `Compiler_cps.is_word_native`: such a call keeps the declared symbol and
    never builds an adapter descriptor. *)
@@ -651,7 +771,7 @@ let is_buffer_type (ty: ty): bool =
    modes are hard errors: a tier-1 declaration with a malformed or missing
    contract must not silently default to "borrowed", because the default
    would be exactly the unsafe reading. *)
-let check_rust_ownership ~(external_name: string) ~(params: value_parameter list) ~(rt: ty) (owners: string list) (ret: string): unit =
+let check_rust_ownership ~(env: env) ~(external_name: string) ~(params: value_parameter list) ~(rt: ty) (owners: string list) (ret: string): unit =
   if not (is_rs_external_name external_name) then
     Errors.rust_ownership_not_tier1 ~name:external_name;
   if List.length owners <> List.length params then
@@ -675,10 +795,27 @@ let check_rust_ownership ~(external_name: string) ~(params: value_parameter list
         Errors.rust_ownership_shape ~ty;
       if not (is_adapter_protocol_type ty) then
         Errors.rust_adapter_unsupported ~ty) params;
-  if not (is_buffer_protocol_type rt) then
-    Errors.rust_ownership_shape ~ty:rt;
-  if not (is_adapter_protocol_type rt) then
-    Errors.rust_adapter_unsupported ~ty:rt;
+  (match checked_option_result env rt with
+   | Some (failure_tag, success_tag, payload) ->
+     CheckedOptions.record ~external_name
+       { CheckedOptions.failure_tag; success_tag; payload;
+         union_name = "Option"; failure_case = "None"; success_case = "Some";
+         failure_payload = None }
+   | None ->
+   (match checked_payload_union_result env rt with
+    | Some (failure_tag, success_tag, union_name, failure_case, success_case,
+            failure_payload, success_payload) ->
+      CheckedOptions.record ~external_name
+        { CheckedOptions.failure_tag; success_tag; payload = success_payload;
+          union_name; failure_case; success_case;
+          failure_payload = Some failure_payload }
+    | None ->
+     begin
+    if not (is_buffer_protocol_type rt) then
+      Errors.rust_ownership_shape ~ty:rt;
+    if not (is_adapter_protocol_type rt) then
+      Errors.rust_adapter_unsupported ~ty:rt
+     end));
   (* U11 step 3 / U12: an adapter-mediated call may carry a byte buffer only in
      the shape `abi buffer` describes — Nat8 buffers, each immediately followed
      by its 64-bit length, with a scalar result, and (version 2) 64-bit integer
@@ -774,7 +911,7 @@ let check_handle_ownership
     ~(external_name: string)
     ~(params: value_parameter list)
     ~(rt: ty)
-    (type_name, constructor, destructor, arity, accessor): unit =
+    (type_name, constructor, destructor, arity, accessor, writer): unit =
   (* A wrapper name in the target would make the derived symbol ambiguous
      (`w__dispose__dispose`), and the type name is rendered into the
      registry's type tag, so both are plain identifiers. *)
@@ -793,6 +930,14 @@ let check_handle_ownership
          || use_symbol = constructor
          || use_symbol = destructor
       then Errors.handle_ownership_accessor ~use_symbol);
+  (match writer with
+   | None -> ()
+   | Some write_symbol ->
+      if not (is_plain_ident write_symbol)
+         || write_symbol = constructor
+         || write_symbol = destructor
+         || Some write_symbol = accessor
+      then Errors.handle_ownership_writer ~write_symbol);
   let _ = arity in
   match params with
   | [ValueParameter (_, lo); ValueParameter (_, hi)] when is_word64 lo && is_word64 hi
@@ -847,8 +992,8 @@ let recognized = List.for_all (fun p ->
           and handle_ownership = List.find_map (fun p ->
             match p with
             | HandleOwnershipPragma (type_name, constructor, destructor, arity,
-                                     accessor) ->
-               Some (type_name, constructor, destructor, arity, accessor)
+                                     accessor, writer) ->
+               Some (type_name, constructor, destructor, arity, accessor, writer)
             | _ -> None) pragmas
           in
           let _ =
@@ -863,7 +1008,7 @@ let recognized = List.for_all (fun p ->
                 | None ->
                    Errors.rust_ownership_not_foreign ()
                 | Some s ->
-                   check_rust_ownership ~external_name:s ~params ~rt owners ret)
+                   check_rust_ownership ~env ~external_name:s ~params ~rt owners ret)
           in
           let _ =
             (* A Handle_Ownership pragma is an import contract too: it names

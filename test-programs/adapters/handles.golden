@@ -11,4 +11,5 @@ type widget
 constructor avm_widget_ctor
 destructor avm_widget_dtor
 use avm_widget_read
+write avm_widget_write
 params 2

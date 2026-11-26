@@ -76,7 +76,7 @@
 -- declarations, and the ISA model the projection has to reach. A stale digest
 -- means this comment is describing files that have since changed, and the gate
 -- fails.
--- cites: mm0/clif.mm0 sha256=973a104eda557a71cf6dcd996f5f6783ca6b13252fa0c7ccc2a4a889c3a84155
+-- cites: mm0/clif.mm0 sha256=dfe8194f99bd7bd02fe5b071caa648112f39e2772046e0b9167f021175f73745
 -- cites: mm0/statements/rv64_memory.mm0 sha256=ab0e372d5288bafcc18813cd2f610e266cc04468061a5f6f7713004ddfdffa5b
 -- cites: mm0/isa.mm0 sha256=4c3c28bc0002aad445d2c98713127e108af93f43f3f12fdc99b851051253a74b
 --
