@@ -121,7 +121,18 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   green, red, compile-failure and usage paths against fixtures — the red path is
   the one the step is read through, so it has its own case — and the avm-pkg job
   runs it before `cargo test` (`build-and-test.yml`), which is what keeps it
-  from rotting.
+  from rotting. `make annotation-selftests` runs it and
+  `scripts/avm-hot-bench-report`'s selftest locally (plain bash: no dune, no
+  bridge).
+- `scripts/avm-hot-bench-report [--status N] [--reference|--not-reference]
+  <out>` — the avm-pkg job's hot-store smoke reporting half. It prints the
+  report, then: nothing on success; the last three lines as `::error
+  title=hot-bench::` and exit with the status on an enforced miss; the last
+  three as `::warning title=hot-store latency (not enforced on this runner)::`
+  plus the `[gap]` line, its number and exit 0 on a hosted runner. Enforcement
+  defaults to `AVM_LATENCY_REFERENCE=1` (what the step reads); the flags exist
+  for `selftest`, which pins pass, enforced, enforced-by-env, hosted and usage
+  paths.
 - `scripts/ci-logs` — reads a GitHub Actions job's log through the REST API
   with `GH_TOKEN` (or `GITHUB_TOKEN`) from the environment, because the web log
   needs admin rights. No arguments: the latest run on the current branch, its

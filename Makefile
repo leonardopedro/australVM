@@ -182,6 +182,19 @@ check-typing-proof:
 check-census:
 	@bash scripts/check-census
 
+# ── The avm-pkg job's annotation paths, without CI ──────────────────────────
+# That job reports through annotations because a failed step's log needs admin
+# rights: the per-binary test census (`scripts/avm-test-census`) and the
+# hot-store smoke's error/warning split (`scripts/avm-hot-bench-report`). Both
+# scripts carry a `selftest` over fixtures, and the job runs each one before the
+# step that depends on it; this target is the same two commands on a host where
+# the runner is not available. Plain bash, no dune and no bridge, so it works
+# even where the flake does not build.
+.PHONY: annotation-selftests
+annotation-selftests:
+	@bash scripts/avm-test-census selftest
+	@bash scripts/avm-hot-bench-report selftest
+
 # ── Lint: the CI `clippy (deny warnings)` step, locally ──────────────────────
 # Two reasons this enters the shell itself instead of trusting the caller's
 # PATH. clippy is not implied by `cargo`, so a shell without it resolves
