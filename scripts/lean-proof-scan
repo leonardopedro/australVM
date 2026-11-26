@@ -163,6 +163,33 @@ def mm0_c_reason(err: Path, out: Path) -> str:
     # quote a dump fragment as if it were the checker's decision.
     return last_meaningful(tail_text(out))
 
+def cgroup_mem_gb() -> float | None:
+    """This process's cgroup `memory.max`, when one is set and readable.
+
+    A row's own `RLIMIT_AS` is not always the bound that killed it: a cgroup
+    `MemoryMax` below that cap sends SIGKILL first, and then the bound the row
+    hit is the smaller of the two. The scan reads its own limit so the label
+    names the bound that really applied instead of the one it configured.
+    """
+    try:
+        rel = next(line.split(":", 2)[2]
+                   for line in Path("/proc/self/cgroup").read_text().splitlines()
+                   if line.startswith("0::"))
+        text = (Path("/sys/fs/cgroup") / rel.lstrip("/") / "memory.max").read_text().strip()
+        return None if text == "max" else int(text) / (1 << 30)
+    except (StopIteration, OSError, ValueError):
+        return None
+
+
+CGROUP_GB = cgroup_mem_gb()
+
+
+def bound_gb(cap: int) -> str:
+    """The bound a child in this process's cgroup can actually reach."""
+    v = cap if CGROUP_GB is None else min(cap, CGROUP_GB)
+    return str(int(v)) if float(v).is_integer() else f"{v:.1f}"
+
+
 def classify(reason: str) -> str:
     """One bucket per kind of missing support, keyed on the deriver's own words."""
     for pat, label in (
@@ -182,7 +209,7 @@ def classify(reason: str) -> str:
         # The scan's own budgets, named as the log names them: a row that hit one
         # is measured, not rejected, and the two are kept apart because only the
         # time budget is a statement about size.
-        (r"over \d+ GiB", "over the memory bound"),
+        (r"over [\d.]+ GiB", "over the memory bound"),
         (r"over \d+ s\b", "over the time bound"),
         (r"MemoryError|memory", "out of memory"),
     ):
@@ -469,8 +496,8 @@ def reread_ok(full0: Path, full1: Path, mmb: Path) -> str | None:
                 timeout=MM0_RS_TIMEOUT, preexec_fn=cap_mem(MM0_RS_MEM_GB))
     except subprocess.TimeoutExpired:
         return f"mm0-rs: over {MM0_RS_TIMEOUT} s"
-    if c.returncode == -6 or "memory allocation" in (c.stdout + c.stderr):
-        return f"mm0-rs: over {MM0_RS_MEM_GB} GiB"
+    if c.returncode in (-6, -9) or "memory allocation" in (c.stdout + c.stderr):
+        return f"mm0-rs: over {bound_gb(MM0_RS_MEM_GB)} GiB"
     if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
         return "mm0-rs: " + last_meaningful(c.stdout + c.stderr)
     with full0.open() as fh:
@@ -843,9 +870,12 @@ def main() -> int:
             print(f"  emit  ⏱ {short}: over {EMIT_TIMEOUT} s")
             continue
         if r.returncode != 0:
-            if r.returncode == -6 or "MemoryError" in (r.stdout + r.stderr):
-                failed.append((short, f"emit: over {EMIT_MEM_GB} GiB"))
-                print(f"  emit  ✗ {short}: over {EMIT_MEM_GB} GiB")
+            # `-6` is the row's own `RLIMIT_AS` refusing an allocation; `-9` is
+            # a SIGKILL, which is what a cgroup's `MemoryMax` sends. Both are
+            # the bound, and neither is a statement about the derivation.
+            if r.returncode in (-6, -9) or "MemoryError" in (r.stdout + r.stderr):
+                failed.append((short, f"emit: over {bound_gb(EMIT_MEM_GB)} GiB"))
+                print(f"  emit  ✗ {short}: over {bound_gb(EMIT_MEM_GB)} GiB")
             else:
                 failed.append((short, last_meaningful(r.stdout + r.stderr)))
                 print(f"  emit  ✗ {short}: {failed[-1][1][:110]}")
@@ -871,9 +901,9 @@ def main() -> int:
             failed.append((short, f"mm0-rs: over {MM0_RS_TIMEOUT} s"))
             print(f"  mm0-rs ⏱ {short}: over {MM0_RS_TIMEOUT} s")
             continue
-        if c.returncode == -6 or "memory allocation" in (c.stdout + c.stderr):
-            failed.append((short, f"mm0-rs: over {MM0_RS_MEM_GB} GiB"))
-            print(f"  mm0-rs ✗ {short}: over {MM0_RS_MEM_GB} GiB")
+        if c.returncode in (-6, -9) or "memory allocation" in (c.stdout + c.stderr):
+            failed.append((short, f"mm0-rs: over {bound_gb(MM0_RS_MEM_GB)} GiB"))
+            print(f"  mm0-rs ✗ {short}: over {bound_gb(MM0_RS_MEM_GB)} GiB")
             continue
         if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
             failed.append((short, "mm0-rs: " + last_meaningful(c.stdout + c.stderr)))

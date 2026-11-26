@@ -5755,9 +5755,9 @@ constant that is 31 % short, not a rejection.
 
 <!-- 13.62c-sweep:begin -->
 **Where the namespace sweep stands**, as the log read at
-`2026-11-26T16:05`. The run in flight has decided
-**2486 of the 3975 declarations**, and the ledger holds **2476 rows**,
-**2476 of them passes** and **0 recorded failures** — a
+`2026-11-26T15:35`. The run in flight has decided
+**2465 of the 3975 declarations**, and the ledger holds **2569 rows**,
+**2569 of them passes** and **0 recorded failures** — a
 row is appended for a declaration `mm0-c` accepted, or with
 `--record-failures` to say how a failed one was measured. The histogram
 below is what the log has printed so far; it is not folded as a verdict,
@@ -5765,32 +5765,44 @@ because its largest class names a bound:
 
 | class | rows |
 | --- | ---: |
-| `mm0-rs ✗ over 10 GiB` | 27 |
+| `mm0-rs ✗ over 10 GiB` | 25 |
 | `mm0-rs ⏱ over 240 s` | 10 |
 | `emit ⏱ over 240 s` | 6 |
 | `mm0-c ✗ at sd1254: store overflow` | 1 |
 
-(27 of those rows are the `over 10 GiB` class alone.)
+(25 of those rows are memory bounds: `mm0-rs ✗ over 10 GiB`.)
 
 **Nothing in that histogram is classified here yet.** A bound names a
 size only once a bigger one has been tried, and the re-measurement of the
-27 `over 10 GiB` rows at 20 G runs behind the sweep
+25 `over 10 GiB` rows at 20 G runs behind the sweep
 (`probe-10gib.sh`, its output in `probe-10gib.log`), rather than being
 assumed: their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`
 against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
 and not the result.
 <!-- 13.62c-sweep:end -->
 
-**Three runs, joined by declaration.** The block above is a union, not one run. The sweep that
+**Six runs, joined by declaration.** The block above is a union, not one run. The sweep that
 started at 12:30 was ended by the kernel's OOM killer at 15:39 with 1 510 of 3 975 declarations
 left (`systemctl` recorded `oom-kill`; the unit peaked at 10.3 GB, with a test scan of mine
-running beside it and taking the host past 30 GB). At 15:45 two shards were started over disjoint
-interleaved halves of what remained — interleaved because the tail is not uniform and a
+running beside it and taking the host past 30 GB). Two shards ran from 15:45 over disjoint
+*interleaved* halves of what remained — interleaved because the tail is not uniform and a
 contiguous split would hand one shard every `genIh*` monster — each in a 12 G cgroup with the
-same per-row bounds as the sweep, so a row's verdict does not depend on which shard measured it.
-All three write into the same ledger, and `merge-logs.py` joins them by declaration, last write
-wins: no declaration can be counted twice, and the closures and histogram above are therefore
-what one run over the whole namespace would have produced.
+sweep's own 10 GiB bounds, so a row's verdict did not depend on its measurer. They decided 162
+declarations in 45 minutes (97 of them substantive, the rest memo hits), at peaks of 11.16 GB and
+11.02 GB: the tail is memory-saturated, and three shards at that bound would need 33 GB on a
+30.8 GB host, which is the overcommit that caused the kill in the first place.
+
+So from 16:45 the remaining 1 348 declarations ran as **three** shards in 8 G cgroups with both
+per-row bounds lowered to 6 GiB. That is a *different measurement*, not a smaller version of the
+same one: its rows are recorded as their own class (`mm0-rs ✗ over 6 GiB`), and the probe table
+re-measures them at 20 G exactly like the 10 GiB ones, with the bound each row was recorded under
+as a column — the two classes are never folded into each other. Two details make a bound
+attributable rather than a guess: each shard sets `OOMPolicy=continue`, so a cgroup kill takes the
+child and not the unit, and a SIGKILL is classified as the bound it hit (`returncode in (-6, -9)`,
+labelled with `min(cap, cgroup)` read from `/proc/self/cgroup`) instead of being reported as a
+checker's rejection. All six runs write into the same ledger, and `merge-logs.py` joins them by
+declaration, last write wins: no declaration is counted twice, so the closures and histogram
+above are what one run over the whole namespace would have produced.
 
 **Failures, the ledger, and which bound measured them.** The ledger now has a `verdict` column
 (`pass`/`failed`) and a `reason`, appended after the existing twelve so a row written before them
