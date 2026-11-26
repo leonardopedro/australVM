@@ -5779,6 +5779,17 @@ against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
 and not the result.
 <!-- 13.62c-sweep:end -->
 
+**Why the failures stay out of the ledger.** The ledger has no verdict column, and both of its
+memo paths — the exact `(export, theory, mode, declaration)` row and the statement-digest index
+built over `statement_sha256` — read every row as a pass: the first does `int(row["rules"])` and
+prints `memo ✓`. A classified failure written into it would therefore turn into a hit that skips
+the declaration, and a later fix to the driver or the checker would become unmeasurable — which
+is exactly what `§13.62h`–`§13.62l` each did to a row that had failed under the old code. So the
+20 G verdicts live in the sweep's log, the exit report and the block above, and re-entering them
+would first need a `verdict` column, memo lookups filtered on it, and a deliberate re-check path
+for rows marked failed. Until then a failed declaration leaves no row, and that is the ledger's
+meaning: what it holds was verified.
+
 Every finished row survives in the ledger, so a resume replays the finished set as `memo` hits —
 minutes, not the hours the real work took — which is why the run was restarted once per defect
 (the recursion limit, the reader, the checker's heap) instead of exiting on a histogram that
