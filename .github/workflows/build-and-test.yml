@@ -342,7 +342,9 @@ jobs:
       # says that instead of printing nothing. The census itself is
       # `scripts/avm-test-census`, so its failure path (`::error` level, the
       # tail annotations, the compile-failure line) has a fixture in the repo and
-      # the `selftest` below runs in the job that depends on it.
+      # the `selftest` below runs in the job that depends on it. The expected
+      # annotation lines are `scripts/avm-test-census.golden`, diffed byte for
+      # byte, so the text a reader will see is reviewable here.
       - name: Run avm-pkg tests (142 passed / 6 ignored, 7 binaries, measured 2026-11-26)
         working-directory: safestos/pkg
         run: |
@@ -377,7 +379,8 @@ jobs:
       # still has to arrive with its number, and the job log needs admin
       # rights) or as a `::warning` plus the `[gap]` line on a hosted runner.
       # Its `selftest` runs first and pins all three paths and both ways of
-      # selecting them.
+      # selecting them, diffing each against
+      # `scripts/avm-hot-bench-report.golden` byte for byte.
       - name: Hot-store latency smoke (acquire < 1 µs, 50 MiB fault-in < 15 ms)
         run: |
           bash "$GITHUB_WORKSPACE/scripts/avm-hot-bench-report" selftest
