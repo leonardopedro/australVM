@@ -105,3 +105,27 @@ $ python3 scripts/check-channel-contracts
 
 $ python3 scripts/check-distributed-contracts
 [pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer 7b20b24
+
+# ── The recorder RPC client (H04) ────────────────────────────────────────────
+
+$ cargo test --offline -p unfer_protocol --lib channel_contracts
+test channel_contracts::tests::the_recorder_rpc_contract_is_pinned_and_can_carry_a_batch ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 353 filtered out; finished in 0.01s
+
+$ cargo test --offline -p unfer_protocol --lib
+test result: ok. 369 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+
+$ cargo test --offline -p unfer_consensus --features network --lib net::tests
+test net::tests::the_recorder_gate_refuses_plaintext_or_an_undersized_bound ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.08s
+
+$ cargo test --offline -p unfer_consensus --features network --test phase6_testnet
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s
+
+$ python3 scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+
+$ python3 scripts/check-distributed-contracts
+[pass] D00 contracts: 93 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer b9e6593
