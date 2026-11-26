@@ -94,3 +94,4 @@ C92	proof	A	mm0/distributed_trace.mm1	tested	docs/distributed/evidence/d20-distr
 C93	proof	A	mm0/fixtures/distributed_request_trace.json	tested	docs/distributed/evidence/d20-distributed-trace.log
 C94	storage	U	unfer_protocol/src/storage_contracts.rs	tested	docs/distributed/evidence/d19-storage-contracts.log
 C95	storage	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d19-storage-contracts.log
+C96	runtime	U	unfer_protocol/src/simulator_contracts.rs	tested	docs/distributed/evidence/d19-simulator-contract.log
